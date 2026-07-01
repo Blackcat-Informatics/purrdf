@@ -53,6 +53,40 @@ pub const PURRDF_QOBJECT: &str = "https://blackcatinformatics.ca/purrdf/qObject"
 /// PURRDF quoted literal object property.
 pub const PURRDF_QOBJECTLITERAL: &str = "https://blackcatinformatics.ca/purrdf/qObjectLiteral";
 
+/// The statement-metadata reification vocabulary the JSON-LD-star downcast emits.
+///
+/// Parametric so a consumer ontology supplies its own terms rather than purrdf's
+/// neutral default: purrdf is a namespace-neutral toolkit, but the reified
+/// statement-metadata class/predicates are the CONSUMER's vocabulary (e.g. gmeow's
+/// `gmeow:StatementMetadata` / `gmeow:qSubject`). [`Default`] yields the
+/// `PURRDF_*` IRIs; pass an explicit vocab to [`jsonld_to_statement_metadata_nquads_with`]
+/// / [`yamlld_to_statement_metadata_nquads_with`] to lower into another namespace.
+#[derive(Debug, Clone, Copy)]
+pub struct StatementMetadataVocab<'a> {
+    /// The reifier's `rdf:type` (the statement-metadata class IRI).
+    pub statement_metadata: &'a str,
+    /// The quoted-subject predicate IRI.
+    pub q_subject: &'a str,
+    /// The quoted-predicate predicate IRI.
+    pub q_predicate: &'a str,
+    /// The quoted-object predicate IRI (IRI / blank-node objects).
+    pub q_object: &'a str,
+    /// The quoted-object predicate IRI for literal objects.
+    pub q_object_literal: &'a str,
+}
+
+impl Default for StatementMetadataVocab<'static> {
+    fn default() -> Self {
+        Self {
+            statement_metadata: PURRDF_STATEMENT_METADATA,
+            q_subject: PURRDF_QSUBJECT,
+            q_predicate: PURRDF_QPREDICATE,
+            q_object: PURRDF_QOBJECT,
+            q_object_literal: PURRDF_QOBJECTLITERAL,
+        }
+    }
+}
+
 // Longest-namespace-first prefix table (mirrors `src/purrdf_tools/config.py`).
 include!("lpg_prefixes.rs");
 
@@ -968,6 +1002,19 @@ fn parse_value_object(
 pub fn jsonld_to_purrdf_statement_metadata_nquads(
     json_bytes: &[u8],
 ) -> Result<String, RdfDiagnostic> {
+    jsonld_to_statement_metadata_nquads_with(json_bytes, &StatementMetadataVocab::default())
+}
+
+/// Downcast JSON-LD-star bytes to statement-metadata N-Quads in an explicit
+/// reification vocabulary (see [`StatementMetadataVocab`]).
+///
+/// The namespace-parametric core of [`jsonld_to_purrdf_statement_metadata_nquads`]:
+/// a consumer ontology passes its own class/predicate IRIs so the lowered cells
+/// carry the consumer's vocabulary, not purrdf's neutral default.
+pub fn jsonld_to_statement_metadata_nquads_with(
+    json_bytes: &[u8],
+    vocab: &StatementMetadataVocab<'_>,
+) -> Result<String, RdfDiagnostic> {
     let dataset = parse_jsonld(json_bytes)?;
 
     // Flatten the carrier back to the source-faithful quad stream, re-materializing the
@@ -1005,18 +1052,18 @@ pub fn jsonld_to_purrdf_statement_metadata_nquads(
             out.push(RdfQuad::new(
                 r.clone(),
                 RDF_TYPE,
-                RdfTerm::iri(PURRDF_STATEMENT_METADATA),
+                RdfTerm::iri(vocab.statement_metadata),
             ));
-            out.push(RdfQuad::new(r.clone(), PURRDF_QSUBJECT, s.clone()));
+            out.push(RdfQuad::new(r.clone(), vocab.q_subject, s.clone()));
             out.push(RdfQuad::new(
                 r.clone(),
-                PURRDF_QPREDICATE,
+                vocab.q_predicate,
                 RdfTerm::iri(p.clone()),
             ));
             let q_object_pred = if matches!(o, RdfTerm::Literal(_)) {
-                PURRDF_QOBJECTLITERAL
+                vocab.q_object_literal
             } else {
-                PURRDF_QOBJECT
+                vocab.q_object
             };
             out.push(RdfQuad::new(r.clone(), q_object_pred, o.clone()));
         } else if reifier_quotes.contains_key(&quad.subject) {
@@ -1135,7 +1182,19 @@ fn block_mapping_value(s: &str) -> Option<&str> {
 pub fn yamlld_to_purrdf_statement_metadata_nquads(
     yaml_bytes: &[u8],
 ) -> Result<String, RdfDiagnostic> {
-    jsonld_to_purrdf_statement_metadata_nquads(yamlld_to_jsonld(yaml_bytes)?.as_bytes())
+    yamlld_to_statement_metadata_nquads_with(yaml_bytes, &StatementMetadataVocab::default())
+}
+
+/// Downcast YAML-LD-star bytes to statement-metadata N-Quads in an explicit
+/// reification vocabulary (see [`StatementMetadataVocab`]).
+///
+/// The namespace-parametric core of [`yamlld_to_purrdf_statement_metadata_nquads`];
+/// routes through [`yamlld_to_jsonld`] then [`jsonld_to_statement_metadata_nquads_with`].
+pub fn yamlld_to_statement_metadata_nquads_with(
+    yaml_bytes: &[u8],
+    vocab: &StatementMetadataVocab<'_>,
+) -> Result<String, RdfDiagnostic> {
+    jsonld_to_statement_metadata_nquads_with(yamlld_to_jsonld(yaml_bytes)?.as_bytes(), vocab)
 }
 
 // ── diagnostic constructors ─────────────────────────────────────────────────────────
