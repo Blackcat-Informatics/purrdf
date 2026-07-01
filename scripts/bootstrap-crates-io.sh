@@ -66,6 +66,23 @@ crate_version_exists() {
   esac
 }
 
+crate_record_exists() {
+  local crate="$1"
+  local status
+  status="$(curl -sS -H "User-Agent: purrdf-release/${VERSION} (paudley@blackcatinformatics.ca)" \
+    -o /tmp/purrdf-crate-record.json -w "%{http_code}" \
+    "https://crates.io/api/v1/crates/${crate}")"
+  case "$status" in
+    200) return 0 ;;
+    404) return 1 ;;
+    *)
+      cat /tmp/purrdf-crate-record.json
+      echo "Unexpected crates.io status ${status} for ${crate}" >&2
+      exit 1
+      ;;
+  esac
+}
+
 wait_for_crate_version() {
   local crate="$1"
   for _ in $(seq 1 30); do
@@ -106,9 +123,15 @@ for idx in "${!crates[@]}"; do
     echo "${crate} ${VERSION} already exists on crates.io; skipping"
     continue
   fi
+  record_exists_before=false
+  if crate_record_exists "$crate"; then
+    record_exists_before=true
+  fi
   cargo publish -p "$crate" --locked --no-verify
   wait_for_crate_version "$crate"
-  if ((idx + 1 < ${#crates[@]})) && [[ "${PUBLISH_COOLDOWN_SECONDS}" != "0" ]]; then
+  if [[ "$record_exists_before" == "false" ]] \
+    && ((idx + 1 < ${#crates[@]})) \
+    && [[ "${PUBLISH_COOLDOWN_SECONDS}" != "0" ]]; then
     sleep "${PUBLISH_COOLDOWN_SECONDS}"
   fi
 done
