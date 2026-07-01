@@ -37,8 +37,10 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Install Rust (nightly)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: nightly
 
       - id: version
         name: Verify tag matches Python and Rust package versions
@@ -62,7 +64,11 @@ jobs:
 
       - name: Build Python distributions
         working-directory: bindings/python
-        run: uv build --out-dir dist
+        run: >
+          uv run --no-project --with 'maturin>=1.7,<2'
+          maturin build --manifest-path Cargo.toml
+          --release --out dist --sdist
+          --compatibility manylinux_2_34
 
       - name: Attest build provenance
         id: attest
@@ -117,3 +123,4 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
           attestations: true
+          skip-existing: true
