@@ -31,3 +31,9 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Blackcat-Informatics/purrdf"
 homepage = "https://blackcatinformatics.ca/projects/purrdf"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"

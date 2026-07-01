@@ -81,6 +81,37 @@ The workflow publishes crates in dependency order and skips any crate/version
 that already exists on crates.io, which keeps reruns safe after a partial
 publish.
 
+## PyPI Release
+
+The Python package is published by `.github/workflows/release-pypi.yaml` from
+tags named `py-v<version>`. The workflow builds `bindings/python`, verifies that
+the tag matches both `bindings/python/pyproject.toml` and
+`bindings/python/Cargo.toml`, attests the Python distributions, attaches an SPDX
+SBOM, and publishes to PyPI through Trusted Publishing.
+
+Configure the PyPI pending publisher exactly as:
+
+| Field | Value |
+| --- | --- |
+| Project | `purrdf` |
+| Publisher | GitHub |
+| Repository | `Blackcat-Informatics/purrdf` |
+| Workflow | `release-pypi.yaml` |
+| Environment | `(none)` |
+
+The Python extension wheel uses the workspace Rust `release` profile. That
+profile enables portable high-optimization settings: `opt-level = 3`, fat LTO,
+one codegen unit, and stripped symbols. It deliberately does not use
+`target-cpu=native`, because PyPI wheels must stay portable beyond the GitHub
+runner CPU.
+
+After the release commit is on `main` and the pending publisher is configured:
+
+```sh
+git tag py-v0.1.1
+git push origin py-v0.1.1
+```
+
 ## Verification
 
 Download a published crate and verify its GitHub attestation:

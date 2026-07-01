@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+name: Publish purrdf to PyPI
+
+# Publish the Python ``purrdf`` package via PyPI trusted publishing (OIDC).
+# Pending publisher:
+#   Project: purrdf
+#   Publisher: GitHub
+#   Repository: Blackcat-Informatics/purrdf
+#   Workflow: release-pypi.yaml
+#   Environment: none
+
+permissions: {}
+
+on:
+  push:
+    tags:
+      - "py-v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
+      attestations: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - id: version
+        name: Verify tag matches Python and Rust package versions
+        run: |
+          python_version="$(python3 -c "import tomllib; print(tomllib.load(open('bindings/python/pyproject.toml','rb'))['project']['version'])")"
+          rust_version="$(python3 -c "import tomllib; print(tomllib.load(open('bindings/python/Cargo.toml','rb'))['package']['version'])")"
+          tag_version="${GITHUB_REF_NAME#py-v}"
+          if [ "$python_version" != "$tag_version" ]; then
+            echo "::error::Tag version (${tag_version}) does not match bindings/python/pyproject.toml version (${python_version})"
+            exit 1
+          fi
+          if [ "$rust_version" != "$tag_version" ]; then
+            echo "::error::Tag version (${tag_version}) does not match bindings/python/Cargo.toml version (${rust_version})"
+            exit 1
+          fi
+          echo "version=${python_version}" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: false
+
+      - name: Build Python distributions
+        working-directory: bindings/python
+        run: uv build --out-dir dist
+
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: bindings/python/dist/*
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: bindings/python
+          format: spdx-json
+          output-file: sbom-pypi-purrdf.spdx.json
+          upload-artifact: false
+
+      - name: Attest SBOM for Python distributions
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: bindings/python/dist/*
+          sbom-path: sbom-pypi-purrdf.spdx.json
+
+      - name: Upload attestation bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: attestation-pypi-purrdf
+          path: ${{ steps.attest.outputs.bundle-path }}
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sbom-pypi-purrdf
+          path: sbom-pypi-purrdf.spdx.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dist-pypi-purrdf
+          path: bindings/python/dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: dist-pypi-purrdf
+          path: dist
+
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          attestations: true
