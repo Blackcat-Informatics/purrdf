@@ -32,4 +32,5 @@ manifest-path = "Cargo.toml"
 module-name = "purrdf.purrdf_native"
 python-source = "python/src"
 bindings = "pyo3"
+include = [{ path = "rust-toolchain.toml", format = "sdist" }]
 exclude = ["**/__pycache__/*", "**/*.pyc"]
