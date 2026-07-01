@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-xsd"
+description = "Native, zero-dependency XSD value space (parse, value-space equality/ordering, canonical lexical mapping, SPARQL numeric promotion) for the RDF 1.2 query stack — replaces oxsdatatypes (purrdf S1, EPIC #906)"
+version = "0.1.0"
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["xsd", "rdf", "rdf-12", "value-space", "sparql"]
+
+[lib]
+# rlib-only, ZERO runtime dependencies: this crate is a leaf foundation. It must
+# stay wasm-clean and must not pull any oxigraph-family crate (it replaces
+# `oxsdatatypes`). It does NOT depend on `purrdf-core` — the dependency points
+# the other way, later.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_xsd"
+
+[dev-dependencies]
+# Colored line-diffs on assert_eq! failure (repo convention). Drop-in per test file.
+pretty_assertions = "1"
+# Round-trip / canonicalization property tests (lexical -> value -> canonical).
+proptest = "1"

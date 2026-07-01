@@ -1,0 +1,13 @@
+# Competency question: "What gender values does PURRDF recognise?" Expected: the
+# purrdf:Gender value individuals — woman, man, non-binary, agender, genderfluid,
+# genderqueer, bigender, demigirl, demiboy, Two-Spirit, questioning, … plus any
+# freshly minted self-described individuals. Gender values are VALUES, not Person
+# subclasses — extend by adding individuals (the inclusive-without-overtyping rule).
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?gender ?label WHERE {
+    ?gender a purrdf:Gender .
+    OPTIONAL { ?gender <http://www.w3.org/2000/01/rdf-schema#label> ?label . }
+}
+ORDER BY ?gender

@@ -1,0 +1,28 @@
+---
+source: crates/sparql-results/tests/results_corpus.rs
+expression: "text(&books(), SparqlResultsFormat::Xml, &ResultProvenance::default())"
+---
+<?xml version="1.0"?>
+<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+  <head>
+    <variable name="book"/>
+    <variable name="title"/>
+  </head>
+  <results>
+    <result>
+      <binding name="book"><uri>http://example.org/book/book6</uri></binding>
+      <binding name="title"><literal>Harry Potter and the Half-Blood Prince</literal></binding>
+    </result>
+    <result>
+      <binding name="book"><uri>http://example.org/book/book7</uri></binding>
+      <binding name="title"><literal xml:lang="fr">Harry Potter et l'Ordre du Phénix</literal></binding>
+    </result>
+    <result>
+      <binding name="title"><literal>Anonymous Anthology</literal></binding>
+    </result>
+    <result>
+      <binding name="book"><bnode>draft</bnode></binding>
+      <binding name="title"><literal datatype="http://www.w3.org/2001/XMLSchema#integer">5</literal></binding>
+    </result>
+  </results>
+</sparql>

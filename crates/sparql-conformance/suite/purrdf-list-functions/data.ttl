@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The three-element rdf:List (x y z) used by every case in this manifest, anchored
+# at :q :list so a BGP can bind the list head. Turtle collection syntax expands to
+# the rdf:first/rdf:rest/rdf:nil cell chain.
+@prefix : <http://purrdf.test/list#> .
+
+:q :list ( :x :y :z ) .

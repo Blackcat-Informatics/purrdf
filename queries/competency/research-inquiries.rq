@@ -1,0 +1,15 @@
+# Competency question: "Open research inquiries by theme and status"
+# Expected: Procedures of type procedureTypeResearchPlan with inquiryStatus
+# pending or running, grouped by inquiryTheme.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT ?inquiry ?theme ?status WHERE {
+    ?inquiry a purrdf:Procedure .
+    ?inquiry purrdf:procedureType purrdf:procedureTypeResearchPlan .
+    ?inquiry purrdf:inquiryStatus ?status .
+    ?inquiry purrdf:inquiryTheme ?theme .
+    FILTER(?status IN (purrdf:executionStatusPending, purrdf:executionStatusRunning))
+}
+ORDER BY ?theme ?status

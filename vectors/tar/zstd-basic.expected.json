@@ -1,0 +1,29 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/tar-vector/v1",
+  "fixture": "zstd-basic",
+  "kind": "roundtrip",
+  "input": "zstd-basic.tar.zst",
+  "from_tar_args": [],
+  "roundtrip": true,
+  "diagnostics": [],
+  "expected_entries": [
+    {
+      "path": "docs",
+      "kind": "directory",
+      "mode": 493
+    },
+    {
+      "path": "docs/data.bin",
+      "kind": "file",
+      "size": 4,
+      "mode": 384
+    },
+    {
+      "path": "docs/readme.txt",
+      "kind": "file",
+      "size": 12,
+      "mode": 420
+    }
+  ],
+  "folded_nq": "zstd-basic.folded.nq"
+}

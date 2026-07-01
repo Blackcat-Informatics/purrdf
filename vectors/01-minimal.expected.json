@@ -1,0 +1,26 @@
+{
+ "blobs": {},
+ "diagnostics": [],
+ "mode": "default",
+ "nquads": [
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Cat\"@en ."
+ ],
+ "opaque_reasons": [],
+ "profiles": [
+  "dist"
+ ],
+ "quads": 1,
+ "segment_heads": [
+  "ec5a15cbe3b79c333712d64ed83a70e69a2d1be8c1316835727e5d5219823cd9"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 3
+}

@@ -1,0 +1,14 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+# Bug #597 regression: the data carries an @x-purrdf-afrikaans lang tag whose
+# private-use subtag ("afrikaans", 9 chars) exceeds BCP-47's 8-char limit.
+# The strict N-Triples parser rejects the whole file; lenient parsing ingests
+# it so the shape can be validated. ex:alice has one ex:name, so it conforms.
+ex:PersonShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:property [
+        sh:path ex:name ;
+        sh:minCount 1 ;
+    ] .

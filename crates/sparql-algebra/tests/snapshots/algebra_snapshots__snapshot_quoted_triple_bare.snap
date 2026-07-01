@@ -1,0 +1,41 @@
+---
+source: crates/sparql-algebra/tests/algebra_snapshots.rs
+expression: "parse(\"SELECT ?r WHERE { ?r rdf:reifies << ?s purrdf:p ?o >> }\")"
+---
+Select {
+    pattern: Project {
+        inner: Bgp {
+            patterns: [
+                TriplePattern {
+                    subject: Variable(
+                        ?r,
+                    ),
+                    predicate: NamedNode(
+                        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies>,
+                    ),
+                    object: Triple(
+                        TriplePattern {
+                            subject: Variable(
+                                ?s,
+                            ),
+                            predicate: NamedNode(
+                                <https://x/p>,
+                            ),
+                            object: Variable(
+                                ?o,
+                            ),
+                        },
+                    ),
+                },
+            ],
+        },
+        variables: [
+            ?r,
+        ],
+    },
+    dataset: QueryDataset {
+        default: [],
+        named: [],
+    },
+    base_iri: None,
+}

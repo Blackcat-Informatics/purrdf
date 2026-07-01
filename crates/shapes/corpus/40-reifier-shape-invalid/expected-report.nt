@@ -1,0 +1,11 @@
+_:r0 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/ns#alice> .
+_:r0 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/ns#knows> .
+_:r0 <http://www.w3.org/ns/shacl#value> <<( <http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> )>> .
+_:r0 <http://www.w3.org/ns/shacl#sourceShape> <http://example.org/ns#ProvenanceShape> .
+_:r0 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#ReifierShapeConstraintComponent> .
+_:r0 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r0 <http://www.w3.org/ns/shacl#resultMessage> "source required" .
+_:r0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:report <http://www.w3.org/ns/shacl#result> _:r0 .
+_:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+_:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationReport> .

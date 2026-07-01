@@ -1,0 +1,10 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:CommitmentShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Commitment ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:select "SELECT $this WHERE { $this <http://example.org/ns#committedAgent> ?x . $this <http://example.org/ns#beneficiary> ?x }" ;
+    ] .

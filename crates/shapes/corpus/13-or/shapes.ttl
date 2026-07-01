@@ -1,0 +1,13 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:ValShape
+    a sh:NodeShape ;
+    sh:targetNode ex:val ;
+    sh:property [
+        sh:path ex:p ;
+        sh:or (
+            [ sh:nodeKind sh:IRI ]
+            [ sh:nodeKind sh:BlankNode ]
+        ) ;
+    ] .

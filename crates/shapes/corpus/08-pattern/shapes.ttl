@@ -1,0 +1,10 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:AccountShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Account ;
+    sh:property [
+        sh:path ex:username ;
+        sh:pattern "^[a-z0-9]+$" ;
+    ] .

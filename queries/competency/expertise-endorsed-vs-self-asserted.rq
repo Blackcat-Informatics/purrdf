@@ -1,0 +1,33 @@
+# Competency question: "Which skill proficiencies are self-asserted versus endorsed by a third party?"
+# Expected: each SkillProficiency labelled as 'self-asserted' when no third-party
+# Attestation vouches for it, and 'endorsed' when an Attestation exists whose
+# attester differs from the proficiency's agent.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?proficiency ?agent ?skill ?assertionKind WHERE {
+    {
+        ?proficiency a purrdf:SkillProficiency ;
+                     purrdf:skillProficiencyAgent ?agent ;
+                     purrdf:skillProficiencyOf ?skill .
+        FILTER NOT EXISTS {
+            ?attestation a purrdf:Attestation ;
+                         purrdf:attestedSubject ?proficiency ;
+                         purrdf:attester ?attester .
+            FILTER(?attester != ?agent)
+        }
+        BIND("self-asserted" AS ?assertionKind)
+    }
+    UNION
+    {
+        ?proficiency a purrdf:SkillProficiency ;
+                     purrdf:skillProficiencyAgent ?agent ;
+                     purrdf:skillProficiencyOf ?skill .
+        ?attestation a purrdf:Attestation ;
+                     purrdf:attestedSubject ?proficiency ;
+                     purrdf:attester ?attester .
+        FILTER(?attester != ?agent)
+        BIND("endorsed" AS ?assertionKind)
+    }
+}
+ORDER BY ?proficiency

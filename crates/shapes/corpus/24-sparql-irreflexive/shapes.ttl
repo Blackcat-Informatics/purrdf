@@ -1,0 +1,12 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:CounterGoalShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Goal ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:message "A goal must not be its own counter-goal" ;
+        sh:severity sh:Violation ;
+        sh:select "SELECT $this WHERE { $this <http://example.org/ns#counterGoal> $this }" ;
+    ] .

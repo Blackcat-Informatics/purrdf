@@ -1,0 +1,10 @@
+# Competency question: "What digital storage media does PURRDF recognise?"
+# Expected: the StorageMedium value individuals (cloud service, local filesystem,
+# object store, content-addressed store, physical disk, removable media).
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?medium WHERE {
+    ?medium a purrdf:StorageMedium .
+}
+ORDER BY ?medium

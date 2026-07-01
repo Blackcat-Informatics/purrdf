@@ -1,0 +1,11 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:MeasurementShape
+    a sh:NodeShape ;
+    sh:targetNode ex:measurement ;
+    sh:property [
+        sh:path ex:value ;
+        sh:datatype xsd:decimal ;
+    ] .

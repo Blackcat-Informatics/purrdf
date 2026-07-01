@@ -1,0 +1,26 @@
+{
+ "blobs": {},
+ "diagnostics": [],
+ "mode": "default",
+ "nquads": [
+  "_:b0 <http://www.w3.org/2000/01/rdf-schema#label> \"anonymous\" ."
+ ],
+ "opaque_reasons": [],
+ "profiles": [
+  "generic"
+ ],
+ "quads": 1,
+ "segment_heads": [
+  "38604fa8d6003c18d1cedc297013e21da48354ff8f491346c74412a68293605b"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 3
+}

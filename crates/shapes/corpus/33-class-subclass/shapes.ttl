@@ -1,0 +1,15 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+# Bug #599 regression (the purrdf:ExpressionRealizesWorkShape pattern):
+# sh:class ex:Work must accept a value typed by an asserted subclass of Work.
+# ex:work1 is an ex:MusicalWork and ex:MusicalWork rdfs:subClassOf ex:Work is
+# asserted → w1 conforms. ex:thing2 is an ex:Banana (no asserted subclass edge
+# to Work) → w2 violates sh:class.
+ex:RealizesShape
+    a sh:NodeShape ;
+    sh:targetSubjectsOf ex:realizes ;
+    sh:property [
+        sh:path ex:realizes ;
+        sh:class ex:Work ;
+    ] .

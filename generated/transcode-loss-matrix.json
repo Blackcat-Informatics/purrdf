@@ -1,0 +1,1066 @@
+[
+  {
+    "code": "canonical-rdf12-projection",
+    "from": "gts",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "gts",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "datalog-projection",
+    "from": "gts",
+    "to": "datalog",
+    "intentional": true,
+    "note": "Projection to Datalog: non-rule axioms and existentials outside the Datalog fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "gts",
+    "to": "datalog",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "gufo-projection",
+    "from": "gts",
+    "to": "gufo",
+    "intentional": true,
+    "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "gts",
+    "to": "gufo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "rdf12-star-jsonld-rejected",
+    "from": "gts",
+    "to": "jsonld",
+    "intentional": true,
+    "note": "The JSON-LD 1.1 serializer rejects RDF-1.2 quoted triples; reifying triples and their annotations are dropped (use jsonld-star or yaml-ld-star to retain them)."
+  },
+  {
+    "code": "n3-projection",
+    "from": "gts",
+    "to": "n3",
+    "intentional": true,
+    "note": "Projection to Notation3 rules: validation-only and non-rule constructs are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "gts",
+    "to": "n3",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "gts",
+    "to": "nemo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "nemo-projection",
+    "from": "gts",
+    "to": "nemo",
+    "intentional": true,
+    "note": "Projection to Nemo existential rules: constructs outside the supported rule fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "gts",
+    "to": "ntriples",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "gts",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "owl-dl-projection",
+    "from": "gts",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "Projection to OWL 2 DL: rules and constructs outside the decidable DL fragment are dropped; the result is a sound view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "gts",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "owl-el-projection",
+    "from": "gts",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "gts",
+    "to": "owl-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "gts",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "gts",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "gts",
+    "to": "turtle",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "canonical-rdf12-projection",
+    "from": "jsonld",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "datalog-projection",
+    "from": "jsonld",
+    "to": "datalog",
+    "intentional": true,
+    "note": "Projection to Datalog: non-rule axioms and existentials outside the Datalog fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld",
+    "to": "datalog",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "gufo-projection",
+    "from": "jsonld",
+    "to": "gufo",
+    "intentional": true,
+    "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld",
+    "to": "gufo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "n3-projection",
+    "from": "jsonld",
+    "to": "n3",
+    "intentional": true,
+    "note": "Projection to Notation3 rules: validation-only and non-rule constructs are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld",
+    "to": "n3",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld",
+    "to": "nemo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "nemo-projection",
+    "from": "jsonld",
+    "to": "nemo",
+    "intentional": true,
+    "note": "Projection to Nemo existential rules: constructs outside the supported rule fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld",
+    "to": "ntriples",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "owl-dl-projection",
+    "from": "jsonld",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "Projection to OWL 2 DL: rules and constructs outside the decidable DL fragment are dropped; the result is a sound view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "owl-el-projection",
+    "from": "jsonld",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld",
+    "to": "owl-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld",
+    "to": "turtle",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "canonical-rdf12-projection",
+    "from": "jsonld-star",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld-star",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "datalog-projection",
+    "from": "jsonld-star",
+    "to": "datalog",
+    "intentional": true,
+    "note": "Projection to Datalog: non-rule axioms and existentials outside the Datalog fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld-star",
+    "to": "datalog",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "gufo-projection",
+    "from": "jsonld-star",
+    "to": "gufo",
+    "intentional": true,
+    "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld-star",
+    "to": "gufo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "rdf12-star-jsonld-rejected",
+    "from": "jsonld-star",
+    "to": "jsonld",
+    "intentional": true,
+    "note": "The JSON-LD 1.1 serializer rejects RDF-1.2 quoted triples; reifying triples and their annotations are dropped (use jsonld-star or yaml-ld-star to retain them)."
+  },
+  {
+    "code": "n3-projection",
+    "from": "jsonld-star",
+    "to": "n3",
+    "intentional": true,
+    "note": "Projection to Notation3 rules: validation-only and non-rule constructs are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld-star",
+    "to": "n3",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld-star",
+    "to": "nemo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "nemo-projection",
+    "from": "jsonld-star",
+    "to": "nemo",
+    "intentional": true,
+    "note": "Projection to Nemo existential rules: constructs outside the supported rule fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld-star",
+    "to": "ntriples",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld-star",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "owl-dl-projection",
+    "from": "jsonld-star",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "Projection to OWL 2 DL: rules and constructs outside the decidable DL fragment are dropped; the result is a sound view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld-star",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "owl-el-projection",
+    "from": "jsonld-star",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld-star",
+    "to": "owl-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld-star",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "jsonld-star",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "jsonld-star",
+    "to": "turtle",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "canonical-rdf12-projection",
+    "from": "nquads",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "nquads",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "datalog-projection",
+    "from": "nquads",
+    "to": "datalog",
+    "intentional": true,
+    "note": "Projection to Datalog: non-rule axioms and existentials outside the Datalog fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "nquads",
+    "to": "datalog",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "gufo-projection",
+    "from": "nquads",
+    "to": "gufo",
+    "intentional": true,
+    "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "nquads",
+    "to": "gufo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "rdf12-star-jsonld-rejected",
+    "from": "nquads",
+    "to": "jsonld",
+    "intentional": true,
+    "note": "The JSON-LD 1.1 serializer rejects RDF-1.2 quoted triples; reifying triples and their annotations are dropped (use jsonld-star or yaml-ld-star to retain them)."
+  },
+  {
+    "code": "n3-projection",
+    "from": "nquads",
+    "to": "n3",
+    "intentional": true,
+    "note": "Projection to Notation3 rules: validation-only and non-rule constructs are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "nquads",
+    "to": "n3",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "nquads",
+    "to": "nemo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "nemo-projection",
+    "from": "nquads",
+    "to": "nemo",
+    "intentional": true,
+    "note": "Projection to Nemo existential rules: constructs outside the supported rule fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "nquads",
+    "to": "ntriples",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "nquads",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "owl-dl-projection",
+    "from": "nquads",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "Projection to OWL 2 DL: rules and constructs outside the decidable DL fragment are dropped; the result is a sound view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "nquads",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "owl-el-projection",
+    "from": "nquads",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "nquads",
+    "to": "owl-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "nquads",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "nquads",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "nquads",
+    "to": "turtle",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "canonical-rdf12-projection",
+    "from": "ntriples",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure is dropped."
+  },
+  {
+    "code": "datalog-projection",
+    "from": "ntriples",
+    "to": "datalog",
+    "intentional": true,
+    "note": "Projection to Datalog: non-rule axioms and existentials outside the Datalog fragment are dropped."
+  },
+  {
+    "code": "gufo-projection",
+    "from": "ntriples",
+    "to": "gufo",
+    "intentional": true,
+    "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "rdf12-star-jsonld-rejected",
+    "from": "ntriples",
+    "to": "jsonld",
+    "intentional": true,
+    "note": "The JSON-LD 1.1 serializer rejects RDF-1.2 quoted triples; reifying triples and their annotations are dropped (use jsonld-star or yaml-ld-star to retain them)."
+  },
+  {
+    "code": "n3-projection",
+    "from": "ntriples",
+    "to": "n3",
+    "intentional": true,
+    "note": "Projection to Notation3 rules: validation-only and non-rule constructs are dropped."
+  },
+  {
+    "code": "nemo-projection",
+    "from": "ntriples",
+    "to": "nemo",
+    "intentional": true,
+    "note": "Projection to Nemo existential rules: constructs outside the supported rule fragment are dropped."
+  },
+  {
+    "code": "owl-dl-projection",
+    "from": "ntriples",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "Projection to OWL 2 DL: rules and constructs outside the decidable DL fragment are dropped; the result is a sound view."
+  },
+  {
+    "code": "owl-el-projection",
+    "from": "ntriples",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "ntriples",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
+  },
+  {
+    "code": "canonical-rdf12-projection",
+    "from": "owl-rdf12",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure is dropped."
+  },
+  {
+    "code": "datalog-projection",
+    "from": "owl-rdf12",
+    "to": "datalog",
+    "intentional": true,
+    "note": "Projection to Datalog: non-rule axioms and existentials outside the Datalog fragment are dropped."
+  },
+  {
+    "code": "gufo-projection",
+    "from": "owl-rdf12",
+    "to": "gufo",
+    "intentional": true,
+    "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "rdf12-star-jsonld-rejected",
+    "from": "owl-rdf12",
+    "to": "jsonld",
+    "intentional": true,
+    "note": "The JSON-LD 1.1 serializer rejects RDF-1.2 quoted triples; reifying triples and their annotations are dropped (use jsonld-star or yaml-ld-star to retain them)."
+  },
+  {
+    "code": "n3-projection",
+    "from": "owl-rdf12",
+    "to": "n3",
+    "intentional": true,
+    "note": "Projection to Notation3 rules: validation-only and non-rule constructs are dropped."
+  },
+  {
+    "code": "nemo-projection",
+    "from": "owl-rdf12",
+    "to": "nemo",
+    "intentional": true,
+    "note": "Projection to Nemo existential rules: constructs outside the supported rule fragment are dropped."
+  },
+  {
+    "code": "owl-dl-projection",
+    "from": "owl-rdf12",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "Projection to OWL 2 DL: rules and constructs outside the decidable DL fragment are dropped; the result is a sound view."
+  },
+  {
+    "code": "owl-el-projection",
+    "from": "owl-rdf12",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "owl-rdf12",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
+  },
+  {
+    "code": "canonical-rdf12-projection",
+    "from": "rdfxml",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure is dropped."
+  },
+  {
+    "code": "datalog-projection",
+    "from": "rdfxml",
+    "to": "datalog",
+    "intentional": true,
+    "note": "Projection to Datalog: non-rule axioms and existentials outside the Datalog fragment are dropped."
+  },
+  {
+    "code": "gufo-projection",
+    "from": "rdfxml",
+    "to": "gufo",
+    "intentional": true,
+    "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "n3-projection",
+    "from": "rdfxml",
+    "to": "n3",
+    "intentional": true,
+    "note": "Projection to Notation3 rules: validation-only and non-rule constructs are dropped."
+  },
+  {
+    "code": "nemo-projection",
+    "from": "rdfxml",
+    "to": "nemo",
+    "intentional": true,
+    "note": "Projection to Nemo existential rules: constructs outside the supported rule fragment are dropped."
+  },
+  {
+    "code": "owl-dl-projection",
+    "from": "rdfxml",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "Projection to OWL 2 DL: rules and constructs outside the decidable DL fragment are dropped; the result is a sound view."
+  },
+  {
+    "code": "owl-el-projection",
+    "from": "rdfxml",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "canonical-rdf12-projection",
+    "from": "trig",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "trig",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "datalog-projection",
+    "from": "trig",
+    "to": "datalog",
+    "intentional": true,
+    "note": "Projection to Datalog: non-rule axioms and existentials outside the Datalog fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "trig",
+    "to": "datalog",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "gufo-projection",
+    "from": "trig",
+    "to": "gufo",
+    "intentional": true,
+    "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "trig",
+    "to": "gufo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "rdf12-star-jsonld-rejected",
+    "from": "trig",
+    "to": "jsonld",
+    "intentional": true,
+    "note": "The JSON-LD 1.1 serializer rejects RDF-1.2 quoted triples; reifying triples and their annotations are dropped (use jsonld-star or yaml-ld-star to retain them)."
+  },
+  {
+    "code": "n3-projection",
+    "from": "trig",
+    "to": "n3",
+    "intentional": true,
+    "note": "Projection to Notation3 rules: validation-only and non-rule constructs are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "trig",
+    "to": "n3",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "trig",
+    "to": "nemo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "nemo-projection",
+    "from": "trig",
+    "to": "nemo",
+    "intentional": true,
+    "note": "Projection to Nemo existential rules: constructs outside the supported rule fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "trig",
+    "to": "ntriples",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "trig",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "owl-dl-projection",
+    "from": "trig",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "Projection to OWL 2 DL: rules and constructs outside the decidable DL fragment are dropped; the result is a sound view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "trig",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "owl-el-projection",
+    "from": "trig",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "trig",
+    "to": "owl-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "trig",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "trig",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "trig",
+    "to": "turtle",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "canonical-rdf12-projection",
+    "from": "turtle",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure is dropped."
+  },
+  {
+    "code": "datalog-projection",
+    "from": "turtle",
+    "to": "datalog",
+    "intentional": true,
+    "note": "Projection to Datalog: non-rule axioms and existentials outside the Datalog fragment are dropped."
+  },
+  {
+    "code": "gufo-projection",
+    "from": "turtle",
+    "to": "gufo",
+    "intentional": true,
+    "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "rdf12-star-jsonld-rejected",
+    "from": "turtle",
+    "to": "jsonld",
+    "intentional": true,
+    "note": "The JSON-LD 1.1 serializer rejects RDF-1.2 quoted triples; reifying triples and their annotations are dropped (use jsonld-star or yaml-ld-star to retain them)."
+  },
+  {
+    "code": "n3-projection",
+    "from": "turtle",
+    "to": "n3",
+    "intentional": true,
+    "note": "Projection to Notation3 rules: validation-only and non-rule constructs are dropped."
+  },
+  {
+    "code": "nemo-projection",
+    "from": "turtle",
+    "to": "nemo",
+    "intentional": true,
+    "note": "Projection to Nemo existential rules: constructs outside the supported rule fragment are dropped."
+  },
+  {
+    "code": "owl-dl-projection",
+    "from": "turtle",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "Projection to OWL 2 DL: rules and constructs outside the decidable DL fragment are dropped; the result is a sound view."
+  },
+  {
+    "code": "owl-el-projection",
+    "from": "turtle",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "turtle",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
+  },
+  {
+    "code": "canonical-rdf12-projection",
+    "from": "yaml-ld-star",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "yaml-ld-star",
+    "to": "canonical-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "datalog-projection",
+    "from": "yaml-ld-star",
+    "to": "datalog",
+    "intentional": true,
+    "note": "Projection to Datalog: non-rule axioms and existentials outside the Datalog fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "yaml-ld-star",
+    "to": "datalog",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "gufo-projection",
+    "from": "yaml-ld-star",
+    "to": "gufo",
+    "intentional": true,
+    "note": "Projection to gUFO foundational classes: structure without a gUFO correspondence is dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "yaml-ld-star",
+    "to": "gufo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "rdf12-star-jsonld-rejected",
+    "from": "yaml-ld-star",
+    "to": "jsonld",
+    "intentional": true,
+    "note": "The JSON-LD 1.1 serializer rejects RDF-1.2 quoted triples; reifying triples and their annotations are dropped (use jsonld-star or yaml-ld-star to retain them)."
+  },
+  {
+    "code": "n3-projection",
+    "from": "yaml-ld-star",
+    "to": "n3",
+    "intentional": true,
+    "note": "Projection to Notation3 rules: validation-only and non-rule constructs are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "yaml-ld-star",
+    "to": "n3",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "yaml-ld-star",
+    "to": "nemo",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "nemo-projection",
+    "from": "yaml-ld-star",
+    "to": "nemo",
+    "intentional": true,
+    "note": "Projection to Nemo existential rules: constructs outside the supported rule fragment are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "yaml-ld-star",
+    "to": "ntriples",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "yaml-ld-star",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "owl-dl-projection",
+    "from": "yaml-ld-star",
+    "to": "owl-dl",
+    "intentional": true,
+    "note": "Projection to OWL 2 DL: rules and constructs outside the decidable DL fragment are dropped; the result is a sound view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "yaml-ld-star",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "owl-el-projection",
+    "from": "yaml-ld-star",
+    "to": "owl-el",
+    "intentional": true,
+    "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "yaml-ld-star",
+    "to": "owl-rdf12",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "yaml-ld-star",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  },
+  {
+    "code": "rdf12-star-unrepresentable",
+    "from": "yaml-ld-star",
+    "to": "rdfxml",
+    "intentional": true,
+    "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "yaml-ld-star",
+    "to": "turtle",
+    "intentional": true,
+    "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
+  }
+]

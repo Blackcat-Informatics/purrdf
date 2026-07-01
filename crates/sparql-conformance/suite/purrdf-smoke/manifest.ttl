@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# A PURRDF-owned smoke manifest in the W3C mf: shape, proving the conformance
+# harness end-to-end (SELECT multiset, ASK boolean, expression-valued GROUP BY)
+# alongside the vendored W3C suite.
+
+@prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt:  <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix :    <http://purrdf.test/smoke#> .
+
+:manifest a mf:Manifest ;
+    mf:entries ( :groupCount :askTrue :exprGroup :serviceJoin :goodSyntax :badSyntax ) .
+
+:groupCount a mf:QueryEvaluationTest ;
+    mf:name "GROUP BY ?v with COUNT(*)" ;
+    mf:action [ qt:query <group-count.rq> ; qt:data <data.ttl> ] ;
+    mf:result <group-count.srx> .
+
+:askTrue a mf:QueryEvaluationTest ;
+    mf:name "ASK that holds" ;
+    mf:action [ qt:query <ask.rq> ; qt:data <data.ttl> ] ;
+    mf:result <ask.srx> .
+
+:exprGroup a mf:QueryEvaluationTest ;
+    mf:name "expression-valued GROUP BY (?v + ?v AS ?z)" ;
+    mf:action [ qt:query <expr-group.rq> ; qt:data <data.ttl> ] ;
+    mf:result <expr-group.srx> .
+
+:serviceJoin a mf:QueryEvaluationTest ;
+    mf:name "SERVICE joins remote bindings (in-memory endpoint)" ;
+    mf:action [ qt:query <service.rq> ; qt:data <data.ttl> ;
+                qt:serviceData [ qt:endpoint <http://purrdf.test/ep> ; qt:data <endpoint.ttl> ] ] ;
+    mf:result <service.srx> .
+
+:goodSyntax a mf:PositiveSyntaxTest11 ;
+    mf:name "well-formed aggregate query parses" ;
+    mf:action <good-syntax.rq> .
+
+:badSyntax a mf:NegativeSyntaxTest11 ;
+    mf:name "aggregate in GROUP BY key is rejected" ;
+    mf:action <bad-syntax.rq> .

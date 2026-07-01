@@ -1,0 +1,4 @@
+PREFIX g: <https://blackcatinformatics.ca/purrdf/>
+PREFIX : <http://purrdf.test/list#>
+CONSTRUCT { :out :has ?s }
+WHERE { ?q :list ?l . BIND(g:listSlice(?l, 1, 3) AS ?s) }

@@ -1,0 +1,5 @@
+<https://data.example/unmapped/source> <https://blackcatinformatics.ca/projects/gts/okf#body> "blake3:88d4065353b00fabb64ff68c3f97d3f5d9f9d31f109e6cae2ac7ff537bf40137" .
+<https://data.example/unmapped/source> <https://blackcatinformatics.ca/projects/gts/okf#path> "source.md" .
+<https://data.example/unmapped/source> <https://blackcatinformatics.ca/projects/gts/okf#resource> <https://data.example/unmapped/source> .
+<https://data.example/unmapped/source> <https://blackcatinformatics.ca/projects/gts/okf#title> "Sidecar Source" .
+<https://data.example/unmapped/source> <https://blackcatinformatics.ca/projects/gts/okf#type> "Concept" .

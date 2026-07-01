@@ -1,0 +1,13 @@
+# Native verify QC — purrdf:hasSkill is NOT a strict subproperty of
+# purrdf:knowsAbout. Skill (tacit can-do) and knowing-about (propositional) come
+# apart, so a skill is only DEFEASIBLE evidence (logic:skillEvidenceForKnowsAbout)
+# for knowing-about, never a strict rdfs:subPropertyOf entailment. If the strict
+# subproperty edge is present in the reasoned graph, this returns a row → FAILURE.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT ?sub WHERE {
+    VALUES ?sub { purrdf:hasSkill }
+    ?sub rdfs:subPropertyOf purrdf:knowsAbout .
+}

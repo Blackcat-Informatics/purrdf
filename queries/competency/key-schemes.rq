@@ -1,0 +1,11 @@
+# Competency question: "What cryptographic key schemes does PURRDF recognise for
+# the keys an agent holds?" Expected: the KeyScheme individuals (OpenPGP, X.509,
+# SSH, Nostr). Schemes are values, not key subclasses — extend by adding
+# individuals, so this query keeps working as new schemes are added.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?scheme WHERE {
+    ?scheme a purrdf:KeyScheme .
+}
+ORDER BY ?scheme

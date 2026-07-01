@@ -1,0 +1,17 @@
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix ex:  <http://example.org/ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# sh:minExclusive: the value must be strictly greater than the bound. ex:item1's
+# weight is exactly 0, which equals the exclusive lower bound and therefore
+# VIOLATES (unlike sh:minInclusive, where 0 would pass).
+
+ex:MeasureShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Measure ;
+    sh:property [
+        sh:path ex:weight ;
+        sh:minExclusive 0 ;
+        sh:severity sh:Violation ;
+        sh:message "weight must be strictly positive" ;
+    ] .

@@ -1,0 +1,17 @@
+{
+  "schema": "gts-mmr-proof-v1",
+  "hash": "blake3-256",
+  "preimage": "gts-mmr-v1",
+  "count": 4,
+  "leaf_index": 2,
+  "frame_id": "0303030303030303030303030303030303030303030303030303030303030303",
+  "root": "c24901580895f06da6f51ee3d1ec215890c2ecb611a9e5729579bf967717a738",
+  "peak_index": 0,
+  "peaks": [
+    {"height": 2, "hash": "60a262c4be2ad5c440ff1ad3aa99e0429bf0c134846f15cc3f627406f8a7c287"}
+  ],
+  "path": [
+    {"side": "right", "parent_height": 1, "hash": "780d7b99b86d5be1820a32faf15cf97035bc81df5a2be1e5491a16207249cf92"},
+    {"side": "left", "parent_height": 2, "hash": "f88a99eb07d2064c5a71b2857c1acac127de0ce973c7a23f97ebc054de7e70f4"}
+  ]
+}

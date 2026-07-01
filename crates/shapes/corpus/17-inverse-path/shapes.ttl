@@ -1,0 +1,10 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:OrphanShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Orphan ;
+    sh:property [
+        sh:path [ sh:inversePath ex:hasMember ] ;
+        sh:minCount 1 ;
+    ] .

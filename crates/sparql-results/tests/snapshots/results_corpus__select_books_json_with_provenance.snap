@@ -1,0 +1,5 @@
+---
+source: crates/sparql-results/tests/results_corpus.rs
+expression: "text(&books(), SparqlResultsFormat::Json, &populated_provenance())"
+---
+{"head":{"vars":["book","title"]},"results":{"bindings":[{"book":{"type":"uri","value":"http://example.org/book/book6"},"title":{"type":"literal","value":"Harry Potter and the Half-Blood Prince","datatype":"http://www.w3.org/2001/XMLSchema#string"}},{"book":{"type":"uri","value":"http://example.org/book/book7"},"title":{"type":"literal","value":"Harry Potter et l'Ordre du Phénix","xml:lang":"fr"}},{"title":{"type":"literal","value":"Anonymous Anthology","datatype":"http://www.w3.org/2001/XMLSchema#string"}},{"book":{"type":"bnode","value":"draft"},"title":{"type":"literal","value":"5","datatype":"http://www.w3.org/2001/XMLSchema#integer"}}]},"purrdf":{"queryForm":"select","queryHash":"sha256:cafebabe","engine":"purrdf-sparql-eval","solutions":[{"sources":["http://example.org/graph/library"]}]}}

@@ -1,0 +1,28 @@
+{
+ "blobs": {},
+ "diagnostics": [],
+ "mode": "default",
+ "nquads": [
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"42\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"hi\"@en .",
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"plain\" ."
+ ],
+ "opaque_reasons": [],
+ "profiles": [
+  "generic"
+ ],
+ "quads": 3,
+ "segment_heads": [
+  "e2067134651bc41f2c0dea6d264a3c54c9cd1741ec49b119a89ac6146e1fc57e"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 6
+}

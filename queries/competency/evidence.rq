@@ -1,0 +1,38 @@
+# Competency question: "What evidential warrant and source-typing vocabulary does
+# PURRDF provide for evidence-backed claims?"
+# Expected: EvidenceClass, SourceIndependence, SourceTier, CoverageDepth value
+# individuals, plus the five linking properties.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+
+SELECT ?term WHERE {
+    {
+        ?term a owl:Class .
+        FILTER(?term IN (
+            purrdf:EvidenceClass,
+            purrdf:SourceIndependence,
+            purrdf:SourceTier,
+            purrdf:CoverageDepth
+        ))
+    } UNION {
+        ?term a purrdf:EvidenceClass .
+    } UNION {
+        ?term a purrdf:SourceIndependence .
+    } UNION {
+        ?term a purrdf:SourceTier .
+    } UNION {
+        ?term a purrdf:CoverageDepth .
+    } UNION {
+        ?term rdfs:domain purrdf:CitationAct .
+        FILTER(?term IN (
+            purrdf:hasEvidenceClass,
+            purrdf:sourceIndependence,
+            purrdf:sourceTier,
+            purrdf:coverageDepth,
+            purrdf:supportsNotability
+        ))
+    }
+}
+ORDER BY ?term

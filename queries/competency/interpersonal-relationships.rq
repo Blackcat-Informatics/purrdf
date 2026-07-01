@@ -1,0 +1,11 @@
+# Competency question: "What kinds of interpersonal relationship does PURRDF model
+# as first-class (reified) ties?" Expected: InterpersonalRelationship and its
+# subclasses (professional, acquaintance).
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT ?relationship WHERE {
+    ?relationship rdfs:subClassOf* purrdf:InterpersonalRelationship .
+}
+ORDER BY ?relationship

@@ -1,0 +1,5 @@
+<http://example.org/ns#w1> <http://example.org/ns#realizes> <http://example.org/ns#work1> .
+<http://example.org/ns#work1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#MusicalWork> .
+<http://example.org/ns#MusicalWork> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Work> .
+<http://example.org/ns#w2> <http://example.org/ns#realizes> <http://example.org/ns#thing2> .
+<http://example.org/ns#thing2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Banana> .

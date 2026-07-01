@@ -1,0 +1,11 @@
+# Audit (#55): claims grouped by the model vantage and generating invocation —
+# 'which model said this, under which call?' as one query.
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+SELECT ?model ?invocation (COUNT(?claim) AS ?claims) WHERE {
+    ?claim a purrdf:StandpointClaim ;
+           purrdf:vantage ?model .
+    ?model a purrdf:SoftwareAgent .
+    OPTIONAL { ?claim purrdf:wasGeneratedBy ?invocation . }
+}
+GROUP BY ?model ?invocation
+ORDER BY ?model

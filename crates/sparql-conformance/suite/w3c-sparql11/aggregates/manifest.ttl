@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# A curated subset of the W3C SPARQL 1.1 aggregates test group, selecting the
+# cases that exercise the exotic-aggregation surface (expression-valued
+# GROUP BY, multi-condition HAVING, SUM). Queries and data are vendored verbatim
+# from w3c/rdf-tests; expected results are reconstructed to an equivalent SRX
+# (see PROVENANCE.md). This selector manifest is PURRDF-authored.
+
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt: <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix :   <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/aggregates/manifest#> .
+
+:manifest a mf:Manifest ;
+    mf:entries ( :agg-group-builtin :agg-sum-01 :agg-multiple-having ) .
+
+:agg-group-builtin a mf:QueryEvaluationTest ;
+    mf:name "GROUP BY with a built-in function (DATATYPE)" ;
+    mf:action [ qt:query <agg-group-builtin.rq> ; qt:data <agg-numeric.ttl> ] ;
+    mf:result <agg-group-builtin.srx> .
+
+:agg-sum-01 a mf:QueryEvaluationTest ;
+    mf:name "SUM over a decimal column" ;
+    mf:action [ qt:query <agg-sum-01.rq> ; qt:data <agg-numeric.ttl> ] ;
+    mf:result <agg-sum-01.srx> .
+
+:agg-multiple-having a mf:QueryEvaluationTest ;
+    mf:name "HAVING: multiple conditions" ;
+    mf:action [ qt:query <agg-multiple-having.rq> ; qt:data <agg-numeric.ttl> ] ;
+    mf:result <agg-multiple-having.srx> .

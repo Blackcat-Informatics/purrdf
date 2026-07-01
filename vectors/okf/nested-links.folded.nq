@@ -1,0 +1,29 @@
+<https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/schema.md> <https://blackcatinformatics.ca/projects/gts/okf#body> "blake3:1c9a1567c2865600d44ac79bd4ba261c667aca5b2e8ddfec14a5d9bedf744376" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/schema.md> <https://blackcatinformatics.ca/projects/gts/okf#path> "concepts/schema.md" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/schema.md> <https://blackcatinformatics.ca/projects/gts/okf#title> "Event Schema" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/schema.md> <https://blackcatinformatics.ca/projects/gts/okf#type> "Schema" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/table.md> <https://blackcatinformatics.ca/projects/gts/okf#body> "blake3:09307da293a9ad66f835e957986ce14159cb034f3bcd804545c41b40cc4e4f5b" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/table.md> <https://blackcatinformatics.ca/projects/gts/okf#links> <https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/schema.md> .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/table.md> <https://blackcatinformatics.ca/projects/gts/okf#path> "concepts/table.md" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/table.md> <https://blackcatinformatics.ca/projects/gts/okf#title> "Events Table" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/table.md> <https://blackcatinformatics.ca/projects/gts/okf#type> "Table" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/index.md> <https://blackcatinformatics.ca/projects/gts/okf#body> "blake3:43f15d60ea728f597adf84fafe005eabb6a919daba2a604e64a06be83c7a01af" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/index.md> <https://blackcatinformatics.ca/projects/gts/okf#links> <https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/schema.md> .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/index.md> <https://blackcatinformatics.ca/projects/gts/okf#links> <https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/schema.md> .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/index.md> <https://blackcatinformatics.ca/projects/gts/okf#links> <https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/table.md> .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/index.md> <https://blackcatinformatics.ca/projects/gts/okf#path> "index.md" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/index.md> <https://blackcatinformatics.ca/projects/gts/okf#tag> "navigation" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/index.md> <https://blackcatinformatics.ca/projects/gts/okf#title> "Warehouse Index" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/index.md> <https://blackcatinformatics.ca/projects/gts/okf#type> "Index" .
+_:okf_link_1_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/table.md> <https://blackcatinformatics.ca/projects/gts/okf#links> <https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/schema.md> )>> .
+_:okf_link_1_0 <https://blackcatinformatics.ca/projects/gts/okf#linkOccurrence> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+_:okf_link_1_0 <https://blackcatinformatics.ca/projects/gts/okf#linkText> "Schema" .
+_:okf_link_2_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://blackcatinformatics.ca/projects/gts/okf/doc/index.md> <https://blackcatinformatics.ca/projects/gts/okf#links> <https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/schema.md> )>> .
+_:okf_link_2_0 <https://blackcatinformatics.ca/projects/gts/okf#linkOccurrence> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+_:okf_link_2_0 <https://blackcatinformatics.ca/projects/gts/okf#linkText> "Schema" .
+_:okf_link_2_1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://blackcatinformatics.ca/projects/gts/okf/doc/index.md> <https://blackcatinformatics.ca/projects/gts/okf#links> <https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/table.md> )>> .
+_:okf_link_2_1 <https://blackcatinformatics.ca/projects/gts/okf#linkOccurrence> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+_:okf_link_2_1 <https://blackcatinformatics.ca/projects/gts/okf#linkText> "Events" .
+_:okf_link_2_2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://blackcatinformatics.ca/projects/gts/okf/doc/index.md> <https://blackcatinformatics.ca/projects/gts/okf#links> <https://blackcatinformatics.ca/projects/gts/okf/doc/concepts/schema.md> )>> .
+_:okf_link_2_2 <https://blackcatinformatics.ca/projects/gts/okf#linkOccurrence> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
+_:okf_link_2_2 <https://blackcatinformatics.ca/projects/gts/okf#linkText> "Schema again" .

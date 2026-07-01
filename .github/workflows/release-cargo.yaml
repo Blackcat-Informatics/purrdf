@@ -1,0 +1,199 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+name: Release Cargo purrdf workspace
+
+# On a rust-v* tag, verify, package, attest, and publish the purrdf workspace
+# crates to crates.io via crates.io Trusted Publishing (GitHub Actions OIDC).
+# Requires one Trusted Publisher entry on crates.io for each published crate:
+#   Publisher: GitHub Actions
+#   Owner: Blackcat-Informatics
+#   Repo: purrdf
+#   Workflow: release-cargo.yaml
+#   Environment: (none)
+
+on:
+  push:
+    tags:
+      - 'rust-v*'
+
+concurrency:
+  group: release-cargo-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Verify tag matches workspace crate versions
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          expected = os.environ["GITHUB_REF_NAME"].removeprefix("rust-v")
+          metadata = json.loads(
+              subprocess.check_output(
+                  ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+                  text=True,
+              )
+          )
+          mismatches = []
+          for package in metadata["packages"]:
+              if package["version"] != expected:
+                  mismatches.append(
+                      f'{package["name"]}: {package["version"]} != {expected}'
+                  )
+          if mismatches:
+              print("Tag version does not match every workspace crate:", file=sys.stderr)
+              print("\n".join(mismatches), file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Verify workspace
+        run: |
+          cargo fmt --all --check
+          cargo check --workspace --lib --tests --locked
+          python3 scripts/check-no-features.py
+          bash scripts/check-generated.sh
+          cargo check --locked --target wasm32-unknown-unknown --lib \
+            -p purrdf-events \
+            -p purrdf-iri \
+            -p purrdf-xsd \
+            -p purrdf-gts \
+            -p purrdf-core \
+            -p purrdf-sparql-algebra \
+            -p purrdf-sparql-results \
+            -p purrdf-sparql-eval \
+            -p purrdf \
+            -p purrdf-slice \
+            -p purrdf-shapes \
+            -p purrdf-wasm
+          cargo build --locked --release --target wasm32-unknown-unknown \
+            -p purrdf-wasm --lib
+          test -s target/wasm32-unknown-unknown/release/purrdf_wasm.wasm
+          cargo test -p purrdf-gts --test transport --locked
+          cargo test -p purrdf-slice --locked
+
+      - name: Package release crates
+        run: |
+          set -euo pipefail
+
+          rm -rf target/package
+          cargo package --workspace \
+            --exclude purrdf-python \
+            --exclude purrdf-capi \
+            --exclude purrdf-sparql-conformance \
+            --locked \
+            --no-verify
+
+      - name: Attest build provenance for crates
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: target/package/*.crate
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom-purrdf-crates.spdx.json
+          upload-artifact: false
+
+      - name: Attest SBOM for crates
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: target/package/*.crate
+          sbom-path: sbom-purrdf-crates.spdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sbom-purrdf-crates
+          path: sbom-purrdf-crates.spdx.json
+
+      - name: Authenticate to crates.io (trusted publishing / OIDC)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - name: Publish workspace crates to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          version="${VERSION#rust-v}"
+          crates=(
+            purrdf-events
+            purrdf-iri
+            purrdf-xsd
+            purrdf-gts
+            purrdf-core
+            purrdf-sparql-algebra
+            purrdf-sparql-results
+            purrdf-sparql-eval
+            purrdf
+            purrdf-slice
+            purrdf-shapes
+            purrdf-wasm
+          )
+
+          crate_version_exists() {
+            local crate="$1"
+            local status
+            status="$(curl -sS -o /tmp/purrdf-crate-version.json -w "%{http_code}" \
+              "https://crates.io/api/v1/crates/${crate}/${version}")"
+            case "$status" in
+              200) return 0 ;;
+              404) return 1 ;;
+              *)
+                cat /tmp/purrdf-crate-version.json
+                echo "Unexpected crates.io status ${status} for ${crate} ${version}" >&2
+                exit 1
+                ;;
+            esac
+          }
+
+          wait_for_crate_version() {
+            local crate="$1"
+            for _ in $(seq 1 30); do
+              if crate_version_exists "$crate"; then
+                return 0
+              fi
+              sleep 10
+            done
+            echo "Timed out waiting for crates.io to expose ${crate} ${version}" >&2
+            exit 1
+          }
+
+          for crate in "${crates[@]}"; do
+            if crate_version_exists "$crate"; then
+              echo "${crate} ${version} already exists on crates.io; skipping"
+              continue
+            fi
+            cargo publish -p "$crate" --locked --no-verify
+            wait_for_crate_version "$crate"
+            # Give the registry index a short propagation window before publishing
+            # dependents that name the freshly-published version.
+            sleep 15
+          done

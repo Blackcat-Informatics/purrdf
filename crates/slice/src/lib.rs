@@ -1,0 +1,50 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! `purrdf-slice` — native slice catalog: manifest-based discovery, typed
+//! artifact inventory, and content-addressed IDs for the PURRDF ontology slices.
+
+pub mod analysis;
+pub mod artifact;
+pub mod cache;
+pub mod catalog;
+pub mod claim_view;
+pub mod diagnostics;
+pub mod dsl_stats_emit;
+pub mod error;
+pub mod fix_deps;
+pub mod list_functions;
+pub mod mapping_support;
+pub mod ownership;
+pub mod prefix_emit;
+pub mod prefix_lint;
+pub mod rdf_query;
+pub mod standpoint_emit;
+pub mod standpoint_modality;
+
+pub use analysis::{
+    bundle_content_id, emit_analysis_graph, is_forbidden_edge, AnalysisError, AnalysisGraph,
+    ANALYSIS_GRAPH_IRI, COMPUTED_PROFILE_MEMBERSHIP, COMPUTED_SLICE_DEPENDENCY,
+    DEPENDENCY_EVIDENCE, DEPENDENCY_STATUS, TERM_COVERAGE,
+};
+pub use artifact::{ArtifactRecord, ArtifactRole};
+pub use cache::{
+    dependency_closure, link_unit_key, link_units, product_unit, product_unit_key, source_unit_key,
+    CacheKey, LinkUnit, Phase, ProductUnit, ToolchainContext,
+};
+pub use catalog::{ManifestView, SliceCatalog, SliceRecord, SliceTier};
+pub use claim_view::{emit_claim_view, CLAIM_VIEW_FILE};
+pub use diagnostics::ProjectionDiagnostic;
+pub use dsl_stats_emit::emit_dsl_stats;
+pub use error::SliceError;
+pub use fix_deps::{compute_fix_deps, ManifestPatch};
+pub use list_functions::emit_list_functions;
+pub use ownership::{
+    ArtifactEvidence, DependencyEdge, EdgeEvidence, EdgeKind, OwnershipAnalyzer,
+    OwnershipDiagnostic, OwnershipReport, OwnershipStatus, ReconciliationStatus, SliceIri,
+    TermOwnership,
+};
+pub use prefix_emit::{emit_core_prefixes, emit_jsonld_context, CORE_PREFIXES_IRI};
+pub use prefix_lint::lint_prefix_consistency;
+pub use rdf_query::NamedNode;
+pub use standpoint_emit::emit_standpoint_sets;

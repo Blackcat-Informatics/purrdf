@@ -1,0 +1,60 @@
+---
+source: crates/sparql-algebra/tests/algebra_snapshots.rs
+expression: "parse_update(\"DELETE { ?s purrdf:p ?o } INSERT { ?s purrdf:q ?o } WHERE { ?s purrdf:p ?o }\")"
+---
+Update {
+    operations: [
+        DeleteInsert {
+            delete: [
+                QuadPattern {
+                    triple: TriplePattern {
+                        subject: Variable(
+                            ?s,
+                        ),
+                        predicate: NamedNode(
+                            <https://x/p>,
+                        ),
+                        object: Variable(
+                            ?o,
+                        ),
+                    },
+                    graph: None,
+                },
+            ],
+            insert: [
+                QuadPattern {
+                    triple: TriplePattern {
+                        subject: Variable(
+                            ?s,
+                        ),
+                        predicate: NamedNode(
+                            <https://x/q>,
+                        ),
+                        object: Variable(
+                            ?o,
+                        ),
+                    },
+                    graph: None,
+                },
+            ],
+            with: None,
+            using: [],
+            pattern: Bgp {
+                patterns: [
+                    TriplePattern {
+                        subject: Variable(
+                            ?s,
+                        ),
+                        predicate: NamedNode(
+                            <https://x/p>,
+                        ),
+                        object: Variable(
+                            ?o,
+                        ),
+                    },
+                ],
+            },
+        },
+    ],
+    base_iri: None,
+}

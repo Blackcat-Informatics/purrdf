@@ -1,0 +1,13 @@
+# Audit (#55): per-claim grounded-span counts by polarity — the mechanical
+# substrate of faithfulness (AIS: coverage over groundedIn links).
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+SELECT ?claim (COUNT(?span) AS ?spans) (SUM(IF(?polarity = purrdf:polarityRefutes, 1, 0)) AS ?refuting) WHERE {
+    ?claim a purrdf:StandpointClaim ;
+           purrdf:observationMethod purrdf:methodLlmExtraction .
+    OPTIONAL {
+        ?claim purrdf:groundedIn ?span .
+        ?span purrdf:supportPolarity ?polarity .
+    }
+}
+GROUP BY ?claim
+ORDER BY ?claim

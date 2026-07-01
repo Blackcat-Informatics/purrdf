@@ -1,0 +1,18 @@
+# Competency question 7 (Music EPIC #306): Kirana-gharana memberships of
+# Raga Yaman performances, with suppressed memberships excluded by displayable.
+#
+# Expected fixture bindings: three memberships for 1960, 1975, and 1980;
+# the contested membership with displayable false must be excluded.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?membership ?performance ?authority ?confidence
+WHERE {
+    ?membership a purrdf:VersionMembership ;
+                purrdf:versionSet purrdf:fixtureRagaYamanKiranaSet ;
+                purrdf:versionMember ?performance ;
+                purrdf:membershipAuthority ?authority ;
+                purrdf:confidence ?confidence ;
+                purrdf:displayable true .
+}
+ORDER BY ?membership

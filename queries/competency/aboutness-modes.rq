@@ -1,0 +1,14 @@
+# Competency question: "What aboutness modes can an information carrier bear
+# toward its subject — and is the mention/use space spanned with no privileged
+# winner?"
+# Expected: exactly purrdf:aboutnessDescribes (mention: reports, quotes, depicts,
+# analyzes) and purrdf:aboutnessEnacts (use: performs, demands, exemplifies,
+# embodies) — the fourth domain-free epistemic axis (#349, EPIC #348). Text
+# about deception is not text that deceives.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?mode WHERE {
+    ?mode a purrdf:AboutnessMode .
+}
+ORDER BY ?mode

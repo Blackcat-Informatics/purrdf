@@ -1,0 +1,1 @@
+<http://example.org/ns#val> <http://example.org/ns#p> "123"^^<http://www.w3.org/2001/XMLSchema#integer> .

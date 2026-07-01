@@ -1,0 +1,2 @@
+this	o
+[Some(Blank { label: "bn", scope: BlankScope(0) }), Some(Iri("http://ex/carol"))]

@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Expected graph for the loss-aware CONSTRUCT. The template kept only the inner
+# triple `ex:alice ex:age 42`, dropping the reifier `ex:r1`, so the engine emits
+# an in-band `logic:ProjectionLoss` declaration recording the dropped reifier
+# layer. The loss node is a deterministic content-derived blank node; canonical
+# N-Quads comparison relabels blanks, so any blank label here is fine.
+@prefix ex:    <http://ex/> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix logic: <https://blackcatinformatics.ca/logic/> .
+
+ex:alice ex:age 42 .
+
+_:loss a logic:ProjectionLoss ;
+       logic:lossCode "reifier-layer-dropped"^^xsd:string ;
+       logic:lostReifies <<( ex:alice ex:age 42 )>> .

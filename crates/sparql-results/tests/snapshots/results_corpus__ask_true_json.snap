@@ -1,0 +1,5 @@
+---
+source: crates/sparql-results/tests/results_corpus.rs
+expression: "text(&SparqlResult::Boolean(true), SparqlResultsFormat::Json,\n&ResultProvenance::default())"
+---
+{"head":{},"boolean":true}

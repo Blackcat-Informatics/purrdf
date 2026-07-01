@@ -1,0 +1,14 @@
+# Competency question: "What directions can an exemplar carry, and is the
+# trichotomy closed?"
+# Expected: exactly purrdf:polarityPositive (emulate), purrdf:polarityNegative
+# (avoid), and purrdf:polarityCautionary (the boundary case that LOOKS
+# positive but redirects — the anti-pattern with a correct-criterion
+# redirect). Closed by design (#353, EPIC #348): finer judgement nuance
+# belongs in the rationale and the anchored range, not in new polarities.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?polarity WHERE {
+    ?polarity a purrdf:ExemplarPolarity .
+}
+ORDER BY ?polarity

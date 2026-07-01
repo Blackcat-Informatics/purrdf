@@ -1,0 +1,33 @@
+{
+ "blobs": {
+  "blake3:5e3ac5b5789bc0253664d02f30aeb1d9d5d5ee78c3f32c10258cb416f5592297": {
+   "mt": "text/plain",
+   "size": 17
+  }
+ },
+ "diagnostics": [
+  "StreamableLayoutError"
+ ],
+ "mode": "default",
+ "nquads": [
+  "_:m0 <https://w3id.org/gts/stream#digest> \"blake3:5e3ac5b5789bc0253664d02f30aeb1d9d5d5ee78c3f32c10258cb416f5592297\" ."
+ ],
+ "opaque_reasons": [],
+ "profiles": [
+  "generic"
+ ],
+ "quads": 1,
+ "segment_heads": [
+  "0d6c7546275dd873a0934ffd5c8f6a83fc5fbc7a29158b53020d8f5b85cc376e"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": true,
+   "covered": 3,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 3
+}

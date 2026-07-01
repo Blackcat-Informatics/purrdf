@@ -1,0 +1,4 @@
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX ex:  <http://ex/>
+CONSTRUCT { ?r ex:asserts <<( ?s ?p ?o )>> }
+WHERE { ?r rdf:reifies <<( ?s ?p ?o )>> }

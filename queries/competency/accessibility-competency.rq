@@ -1,0 +1,28 @@
+# Competency queries for the accessibility layer (#102).
+# These queries demonstrate that the ontology can answer real-world
+# accessibility questions.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+# Q1: Find all locations that have a wheelchair accessibility feature
+#     and NO wheelchair barrier.
+SELECT ?place WHERE {
+    ?place purrdf:hasAccessibilityFeature purrdf:facetWheelchair .
+    FILTER NOT EXISTS {
+        ?place purrdf:hasBarrier purrdf:facetWheelchair .
+    }
+}
+
+# Q2: Find all accessibility assertions made by a given vantage.
+SELECT ?assertion ?subject ?facet ?polarity WHERE {
+    ?assertion a purrdf:AccessibilityAssertion ;
+        purrdf:assertionSubject ?subject ;
+        purrdf:assertionFacet ?facet ;
+        purrdf:assertionPolarity ?polarity ;
+        purrdf:vantage ?vantage .
+}
+
+# Q3: Which locations have barriers for a specific facet?
+SELECT ?place ?facet WHERE {
+    ?place purrdf:hasBarrier ?facet .
+}

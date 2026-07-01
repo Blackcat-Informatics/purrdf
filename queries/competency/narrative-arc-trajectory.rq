@@ -1,0 +1,17 @@
+# Competency question: "What is a character's emotional trajectory in
+# discourse order, per analyzing vantage — and where do analyzers disagree?"
+# Expected over instance data: (vantage, ordinal, state) rows ordered by
+# vantage then position — the syuzhet-CSV primitive (#361, EPIC #358).
+# Disagreement is two vantages' rows at one ordinal with different states:
+# visible, never resolved (Principle 9). Over the bare ontology: no rows.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?vantage ?ordinal ?state WHERE {
+    ?sample a purrdf:ArcSample ;
+        purrdf:vantage ?vantage ;
+        purrdf:samplePosition ?pos ;
+        purrdf:sampleState ?state .
+    ?pos purrdf:positionOrdinal ?ordinal .
+}
+ORDER BY ?vantage ?ordinal

@@ -1,0 +1,55 @@
+---
+source: crates/sparql-algebra/tests/algebra_snapshots.rs
+expression: "parse(\"SELECT ?t (COUNT(?x) AS ?c) WHERE { ?x a ?t } GROUP BY ?t\")"
+---
+Select {
+    pattern: Project {
+        inner: Extend {
+            inner: Group {
+                inner: Bgp {
+                    patterns: [
+                        TriplePattern {
+                            subject: Variable(
+                                ?x,
+                            ),
+                            predicate: NamedNode(
+                                <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>,
+                            ),
+                            object: Variable(
+                                ?t,
+                            ),
+                        },
+                    ],
+                },
+                variables: [
+                    ?t,
+                ],
+                aggregates: [
+                    (
+                        ?__purrdf_agg_0,
+                        FunctionCall {
+                            function: Count,
+                            expression: Variable(
+                                ?x,
+                            ),
+                            distinct: false,
+                        },
+                    ),
+                ],
+            },
+            variable: ?c,
+            expression: Variable(
+                ?__purrdf_agg_0,
+            ),
+        },
+        variables: [
+            ?t,
+            ?c,
+        ],
+    },
+    dataset: QueryDataset {
+        default: [],
+        named: [],
+    },
+    base_iri: None,
+}

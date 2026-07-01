@@ -1,0 +1,5 @@
+<http://example.org/ns#p1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Individual> .
+<http://example.org/ns#p1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#AxisOne> .
+<http://example.org/ns#p1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#AxisTwo> .
+<http://example.org/ns#p2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Individual> .
+<http://example.org/ns#p2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#AxisOne> .

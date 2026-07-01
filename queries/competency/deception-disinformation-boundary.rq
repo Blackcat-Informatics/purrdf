@@ -1,0 +1,44 @@
+# Competency question: "Walk a propagation chain and label each hop as
+# disinformation or misinformation based on the per-node boundary."
+#
+# Disinformation = held ≠ projected at this node (divergence + intent claim).
+# Misinformation  = held ≈ projected at this node (no divergence) + veridicalityUntrue.
+# The boundary is local to each propagation hop, not a global label.
+# Issue #217.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX prov:  <http://www.w3.org/ns/prov#>
+
+SELECT ?event ?label ?hopType WHERE {
+    ?event a purrdf:Event .
+
+    # Case A: Disinformation — this node is the origin of deception.
+    # heldStandpoint and projectedStandpoint diverge (both present, distinct claims)
+    # AND a deceptiveIntentClaim is attributed to this event.
+    OPTIONAL {
+        ?event purrdf:heldStandpoint ?heldClaim .
+        ?event purrdf:projectedStandpoint ?projectedClaim .
+        FILTER(?heldClaim != ?projectedClaim)
+        ?event purrdf:deceptiveIntentClaim ?intentClaim .
+        BIND("disinformation" AS ?labelA)
+    }
+
+    # Case B: Misinformation — this node sincerely reshares an untrue claim.
+    # heldStandpoint ≈ projectedStandpoint (either both present and same, or only projected)
+    # AND the projected claim is tagged veridicalityUntrue.
+    # AND no deceptiveIntentClaim is present at this node.
+    OPTIONAL {
+        ?event purrdf:projectedStandpoint ?projClaim .
+        ?projClaim purrdf:claimVeridicality purrdf:veridicalityUntrue .
+        FILTER NOT EXISTS { ?event purrdf:deceptiveIntentClaim ?anyIntent }
+        FILTER NOT EXISTS {
+            ?event purrdf:heldStandpoint ?heldClaim2 .
+            FILTER(?heldClaim2 != ?projClaim)
+        }
+        BIND("misinformation" AS ?labelB)
+    }
+
+    BIND(COALESCE(?labelA, ?labelB) AS ?label)
+    BIND(COALESCE(?label, "unknown") AS ?hopType)
+}
+ORDER BY ?event

@@ -1,0 +1,23 @@
+# ROBOT verify QC (#211) — Every CitationAct must have exactly one
+# citingEntity, one citedEntity, and one citationIntent.
+# Any returned row is a FAILURE.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?citation ?missing WHERE {
+    ?citation a purrdf:CitationAct .
+    {
+        BIND("citingEntity" AS ?missing)
+        FILTER NOT EXISTS { ?citation purrdf:citingEntity ?e }
+    }
+    UNION
+    {
+        BIND("citedEntity" AS ?missing)
+        FILTER NOT EXISTS { ?citation purrdf:citedEntity ?w }
+    }
+    UNION
+    {
+        BIND("citationIntent" AS ?missing)
+        FILTER NOT EXISTS { ?citation purrdf:citationIntent ?i }
+    }
+}

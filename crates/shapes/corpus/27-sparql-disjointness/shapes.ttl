@@ -1,0 +1,10 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:AxisOrthogonalityShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Individual ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:select "SELECT $this WHERE { $this a ?a , ?b . FILTER(STR(?a) < STR(?b)) FILTER(?a IN (<http://example.org/ns#AxisOne>, <http://example.org/ns#AxisTwo>)) FILTER(?b IN (<http://example.org/ns#AxisOne>, <http://example.org/ns#AxisTwo>)) }" ;
+    ] .

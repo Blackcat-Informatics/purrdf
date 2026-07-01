@@ -1,0 +1,12 @@
+# Competency question: "Which events are omissions?"
+# An omission = deception event with heldStandpoint but no projectedStandpoint.
+# Expected: event-omission-001.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?event WHERE {
+    ?event purrdf:eventType purrdf:eventTypeOmission .
+    ?event purrdf:heldStandpoint ?heldClaim .
+    FILTER NOT EXISTS { ?event purrdf:projectedStandpoint ?anyProjected . }
+}
+ORDER BY ?event

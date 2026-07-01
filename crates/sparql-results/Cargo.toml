@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-sparql-results"
+description = "Native, wasm-clean serializer for the SPARQL result model (SELECT/ASK/CONSTRUCT) to SPARQL Results JSON/XML/CSV/TSV plus a provenance-carrying purrdf extension — the canonical results-serialization authority replacing the oxigraph-family `sparesults` (purrdf S9, EPIC #906)"
+version = "0.1.0"
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["sparql", "rdf", "rdf-12", "results", "serialization"]
+
+[lib]
+# rlib-only, wasm-clean leaf: serializes the `purrdf-core` SparqlResult egress
+# model to the four W3C SPARQL Results formats + a provenance extension. It must
+# NOT pull any oxigraph-family crate (it replaces the oxigraph-family `sparesults`)
+# and depends on `purrdf-core`.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_sparql_results"
+
+[dependencies]
+purrdf-core = { path = "../rdf-core", version = "0.1.0" }
+
+[dev-dependencies]
+pretty_assertions = "1"
+insta = "1"

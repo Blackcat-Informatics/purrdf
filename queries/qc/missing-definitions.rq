@@ -1,0 +1,11 @@
+# QC check (ROBOT verify style): every PURRDF class must have a skos:definition.
+# A non-empty result set is a failure. Run with `robot verify --queries …`.
+
+PREFIX owl:  <http://www.w3.org/2002/07/owl#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+
+SELECT ?class WHERE {
+    ?class a owl:Class .
+    FILTER(STRSTARTS(STR(?class), "https://blackcatinformatics.ca/purrdf/"))
+    FILTER NOT EXISTS { ?class skos:definition ?def }
+}

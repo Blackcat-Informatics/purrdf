@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The purrdf EXTEND conformance suite: six RDF-1.2 / purrdf
+# capabilities that incumbent SPARQL engines (rdflib, oxigraph) cannot express,
+# all PASSING on the native NativeSparqlEngine.
+#
+#   1. triple-term binding   — a quoted triple flows as a first-class solution value
+#   2. reifier querying      — bind a reifier + its inner s/p/o from the side-table
+#   3. annotation querying   — bind a reifier's annotation value
+#   4. standpoint poset      — purrdf:heldIn is poset-aware (held / not-held controls)
+#   5. loss-aware CONSTRUCT   — dropping the reifier layer emits an in-band
+#                               logic:ProjectionLoss declaration (+ no-loss control)
+#   6. world × standpoint     — a named-graph world triple joins a standpoint-held
+#                               reifier, proving both scoping axes in one query
+#
+# On world/standpoint scoping: the reification layer (reifiers/annotations) has NO
+# graph dimension — reifier_quads always yields g: None (default graph). Reifiers
+# are scoped by the standpoint POSET, not by named graphs. The genuine end-to-end
+# proof of world + standpoint is therefore a JOIN: a named-graph world triple
+# (GRAPH ?world { … }) joined with a default-graph standpoint-held reifier via
+# purrdf:heldIn. The harness loads qt:graphData into named graphs to support this
+# case. See :standpointWorld below.
+
+@prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt:  <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix :    <http://purrdf.test/extend#> .
+
+:manifest a mf:Manifest ;
+    mf:entries (
+        :tripleTermBinding
+        :reifierQuery
+        :annotationQuery
+        :standpointHeld
+        :standpointNotHeld
+        :lossAwareConstruct
+        :lossControlConstruct
+        :standpointWorld
+    ) .
+
+:tripleTermBinding a mf:QueryEvaluationTest ;
+    mf:name "triple-term binds as a first-class solution value" ;
+    mf:action [ qt:query <triple-term.rq> ; qt:data <reified.ttl> ] ;
+    mf:result <triple-term.srx> .
+
+:reifierQuery a mf:QueryEvaluationTest ;
+    mf:name "reifier querying binds the reifier and its inner s/p/o" ;
+    mf:action [ qt:query <reifier.rq> ; qt:data <reified.ttl> ] ;
+    mf:result <reifier.srx> .
+
+:annotationQuery a mf:QueryEvaluationTest ;
+    mf:name "annotation querying binds a reifier's annotation value" ;
+    mf:action [ qt:query <annotation.rq> ; qt:data <reified.ttl> ] ;
+    mf:result <annotation.srx> .
+
+:standpointHeld a mf:QueryEvaluationTest ;
+    mf:name "purrdf:heldIn — claim held in a sharper frame counts as held in the broader one" ;
+    mf:action [ qt:query <standpoint-held.rq> ; qt:data <standpoint.ttl> ] ;
+    mf:result <standpoint-held.srx> .
+
+:standpointNotHeld a mf:QueryEvaluationTest ;
+    mf:name "purrdf:heldIn — false for an unrelated frame (poset-aware, not always-true)" ;
+    mf:action [ qt:query <standpoint-not-held.rq> ; qt:data <standpoint.ttl> ] ;
+    mf:result <standpoint-not-held.srx> .
+
+:lossAwareConstruct a mf:QueryEvaluationTest ;
+    mf:name "loss-aware CONSTRUCT emits in-band logic:ProjectionLoss when the reifier layer is dropped" ;
+    mf:action [ qt:query <loss-lossy.rq> ; qt:data <reified.ttl> ] ;
+    mf:result <loss-lossy.ttl> .
+
+:lossControlConstruct a mf:QueryEvaluationTest ;
+    mf:name "no-loss control: carrying the reifier emits no logic:ProjectionLoss" ;
+    mf:action [ qt:query <loss-control.rq> ; qt:data <reified.ttl> ] ;
+    mf:result <loss-control.ttl> .
+
+:standpointWorld a mf:QueryEvaluationTest ;
+    mf:name "world × standpoint: a named-graph world triple joins a standpoint-held reifier" ;
+    mf:action [ qt:query <standpoint-world.rq> ; qt:data <standpoint.ttl> ; qt:graphData <world.ttl> ] ;
+    mf:result <standpoint-world.srx> .

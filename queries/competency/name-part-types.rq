@@ -1,0 +1,12 @@
+# Competency question: "What name-part kinds does PURRDF recognise across the
+# world's naming systems?" Expected: the NamePartType value individuals — given,
+# surname, patronymic, the Spanish paternal/maternal pair, the Arabic
+# ism/kunya/nasab/laqab/nisba set, mononym, filename stem/extension, … Kinds are
+# values, not subclasses — extend by adding individuals.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?namePartType WHERE {
+    ?namePartType a purrdf:NamePartType .
+}
+ORDER BY ?namePartType

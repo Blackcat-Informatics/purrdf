@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# A curated entry from the W3C SPARQL 1.1 subquery test group: subquery13
+# ("Subqueries don't inject bindings") exercises a nested SELECT whose inner
+# variable scope is independent of the outer query. Query and data are vendored
+# verbatim from w3c/rdf-tests; the expected result is reconstructed to an
+# equivalent SRX (see PROVENANCE.md). This selector manifest is PURRDF-authored.
+
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt: <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix :   <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/subquery/manifest#> .
+
+:manifest a mf:Manifest ;
+    mf:entries ( :subquery13 ) .
+
+:subquery13 a mf:QueryEvaluationTest ;
+    mf:name "Subqueries don't inject bindings" ;
+    mf:action [ qt:query <sq13.rq> ; qt:data <sq13.ttl> ] ;
+    mf:result <sq13.srx> .

@@ -1,0 +1,44 @@
+{
+  "name": "purrdf",
+  "version": "0.1.0",
+  "description": "A wasm32, in-memory RDF 1.2 engine with an idiomatic RDF/JS (DataFactory/Dataset/Stream) API. Quoted-triple terms and directional literals included.",
+  "type": "module",
+  "license": "MIT OR Apache-2.0",
+  "author": "Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Blackcat-Informatics/purrdf"
+  },
+  "keywords": [
+    "rdf",
+    "rdf-1.2",
+    "rdf-star",
+    "rdfjs",
+    "wasm",
+    "turtle",
+    "n-quads"
+  ],
+  "main": "./index.mjs",
+  "module": "./index.mjs",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs"
+    }
+  },
+  "files": [
+    "index.mjs",
+    "index.d.ts",
+    "pkg/purrdf_wasm.js",
+    "pkg/purrdf_wasm.d.ts",
+    "pkg/purrdf_wasm_bg.wasm",
+    "pkg/purrdf_wasm_bg.wasm.d.ts"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

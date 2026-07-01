@@ -1,0 +1,28 @@
+{
+ "blobs": {},
+ "diagnostics": [
+  "MissingKey"
+ ],
+ "mode": "default",
+ "nquads": [],
+ "opaque_reasons": [
+  "missing-key"
+ ],
+ "profiles": [
+  "generic"
+ ],
+ "quads": 0,
+ "segment_heads": [
+  "475114a3339de892b189783055032fe171a3c1441c7400233bf1500140428b89"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 0
+}

@@ -1,0 +1,2 @@
+<http://example.org/ns#doc> <http://example.org/ns#author> <http://example.org/ns#bob> .
+<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Animal> .

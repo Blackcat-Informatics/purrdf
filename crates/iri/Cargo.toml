@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-iri"
+description = "Native, zero-dependency IRI/URI value space (RFC-3987 IRI + RFC-3986 URI parse/validate, reference resolution, syntax normalization, CURIE/prefix expansion) for the RDF 1.2 query stack — replaces oxiri (purrdf S2, EPIC #906)"
+version = "0.1.0"
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["iri", "uri", "rfc3987", "rdf", "curie"]
+
+[lib]
+# rlib-only, ZERO runtime dependencies: this crate is a leaf foundation. It must
+# stay wasm-clean and must not pull any oxigraph-family crate (it replaces
+# `oxiri`). It does NOT depend on `purrdf-core` — the dependency points the
+# other way, later.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_iri"
+
+[dev-dependencies]
+# Colored line-diffs on assert_eq! failure (repo convention). Drop-in per test file.
+pretty_assertions = "1"
+# Round-trip / idempotency property tests (parse -> serialize, normalize twice).
+proptest = "1"

@@ -1,0 +1,560 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/vector-manifest/v1",
+  "manifest_version": 1,
+  "manifest_scope": "profiles",
+  "corpus_revision": "git:repository-commit-containing-manifest",
+  "generated_by": "scripts/check_vector_manifest.py --write",
+  "vectors": [
+    {
+      "id": "20-language-tag-discipline",
+      "title": "language tag discipline",
+      "input": {
+        "path": "vectors/20-language-tag-discipline.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "profile-layout",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "validating-tool",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/20-language-tag-discipline.expected.json",
+        "diagnostics": [],
+        "expected_head": "a8ec32a0d3ec961c760aa1922d6c393a31eb93202fe379ac006e07472a907a6f",
+        "segment_heads": [
+          "a8ec32a0d3ec961c760aa1922d6c393a31eb93202fe379ac006e07472a907a6f"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for profile-layout."
+    },
+    {
+      "id": "21-degenerate-composition",
+      "title": "degenerate composition",
+      "input": {
+        "path": "vectors/21-degenerate-composition.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "profile-layout",
+        "resilience-negative",
+        "streaming-property"
+      ],
+      "tiers": [
+        "validating-tool"
+      ],
+      "expected": {
+        "graph": "vectors/21-degenerate-composition.expected.json",
+        "diagnostics": [],
+        "expected_head": "a82da8a0dc04952ea7a72ee965cc1d1184cf3eb9634e1170df9c81fb0454573c",
+        "segment_heads": [
+          "ec5a15cbe3b79c333712d64ed83a70e69a2d1be8c1316835727e5d5219823cd9",
+          "a82da8a0dc04952ea7a72ee965cc1d1184cf3eb9634e1170df9c81fb0454573c"
+        ],
+        "opaque_reasons": [],
+        "exit_code": 1,
+        "stderr_contains": [
+          "hide every quad"
+        ]
+      },
+      "notes": "Top-level GTS conformance vector for profile-layout, resilience-negative."
+    },
+    {
+      "id": "23-files-profile-tree",
+      "title": "files profile tree",
+      "input": {
+        "path": "vectors/23-files-profile-tree.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "files-profile"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "profile-layout",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "validating-tool",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/23-files-profile-tree.expected.json",
+        "diagnostics": [],
+        "expected_head": "66393ff9894510de68b2f90d044cc140f8b0be28fa6b48009ace458730c59166",
+        "segment_heads": [
+          "66393ff9894510de68b2f90d044cc140f8b0be28fa6b48009ace458730c59166"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for profile-layout."
+    },
+    {
+      "id": "24-files-profile-dedup",
+      "title": "files profile dedup",
+      "input": {
+        "path": "vectors/24-files-profile-dedup.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "files-profile"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "profile-layout",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "validating-tool",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/24-files-profile-dedup.expected.json",
+        "diagnostics": [],
+        "expected_head": "012df77a610013a876ad1a8440b5891d6bb5b1e943ab2692c9817897be268d8d",
+        "segment_heads": [
+          "012df77a610013a876ad1a8440b5891d6bb5b1e943ab2692c9817897be268d8d"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for profile-layout."
+    },
+    {
+      "id": "25-streamable-source",
+      "title": "streamable source",
+      "input": {
+        "path": "vectors/25-streamable-source.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "cose-sign1"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "profile-layout",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "validating-tool",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/25-streamable-source.expected.json",
+        "diagnostics": [],
+        "expected_head": "45fedc5f478f1cfbb7fefddb3dc4555b2fd929966f5a4dd086f2ef91c8869418",
+        "segment_heads": [
+          "45fedc5f478f1cfbb7fefddb3dc4555b2fd929966f5a4dd086f2ef91c8869418"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for profile-layout."
+    },
+    {
+      "id": "25b-streamable-compacted",
+      "title": "streamable compacted",
+      "input": {
+        "path": "vectors/25b-streamable-compacted.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "cose-sign1",
+        "streamable-index"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "profile-layout",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "validating-tool",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/25b-streamable-compacted.expected.json",
+        "diagnostics": [],
+        "expected_head": "ebbd43fdb48021f0ee80a4c352abe43cf0e5b7fe8676d5a917492bd0c27db6ae",
+        "segment_heads": [
+          "ebbd43fdb48021f0ee80a4c352abe43cf0e5b7fe8676d5a917492bd0c27db6ae"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for profile-layout."
+    },
+    {
+      "id": "26-streamable-lie",
+      "title": "streamable lie",
+      "input": {
+        "path": "vectors/26-streamable-lie.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "streamable-index"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "profile-layout",
+        "resilience-negative",
+        "streaming-property"
+      ],
+      "tiers": [
+        "validating-tool"
+      ],
+      "expected": {
+        "graph": "vectors/26-streamable-lie.expected.json",
+        "diagnostics": [
+          "StreamableLayoutError"
+        ],
+        "expected_head": "0d6c7546275dd873a0934ffd5c8f6a83fc5fbc7a29158b53020d8f5b85cc376e",
+        "segment_heads": [
+          "0d6c7546275dd873a0934ffd5c8f6a83fc5fbc7a29158b53020d8f5b85cc376e"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for profile-layout, resilience-negative."
+    },
+    {
+      "id": "27-streamable-tail",
+      "title": "streamable tail",
+      "input": {
+        "path": "vectors/27-streamable-tail.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "streamable-index"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "profile-layout",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "validating-tool",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/27-streamable-tail.expected.json",
+        "diagnostics": [],
+        "expected_head": "08508fa509c7293ee050495444926c3f2231b302b9922310e54a5724305fc5f8",
+        "segment_heads": [
+          "08508fa509c7293ee050495444926c3f2231b302b9922310e54a5724305fc5f8"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for profile-layout."
+    },
+    {
+      "id": "okf-bigquery-join",
+      "title": "OKF bundle fixture: BigQuery join model",
+      "input": {
+        "path": "vectors/okf/bigquery-join",
+        "media_type": "application/vnd.blackcat.gts.okf-bundle"
+      },
+      "mode": "profile-verify",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "okf"
+      ],
+      "subsets": [
+        "okf-bundle"
+      ],
+      "tiers": [
+        "profile-aware-tool"
+      ],
+      "expected": {
+        "graph": "vectors/okf/bigquery-join.folded.nq",
+        "diagnostics": [],
+        "expected_head": null,
+        "documents": 3
+      },
+      "notes": "Pins a synthetic BigQuery-style OKF bundle with schema-table prose, resource IRIs, typed extension fields, and cross-document joins."
+    },
+    {
+      "id": "okf-extensions",
+      "title": "OKF bundle fixture: producer extensions",
+      "input": {
+        "path": "vectors/okf/extensions",
+        "media_type": "application/vnd.blackcat.gts.okf-bundle"
+      },
+      "mode": "profile-verify",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "okf"
+      ],
+      "subsets": [
+        "okf-bundle"
+      ],
+      "tiers": [
+        "profile-aware-tool"
+      ],
+      "expected": {
+        "graph": "vectors/okf/extensions.folded.nq",
+        "diagnostics": [],
+        "expected_head": null,
+        "documents": 1
+      },
+      "notes": "Pins producer extension key projection for integer, decimal, boolean, null, sequence, and nested-object frontmatter values."
+    },
+    {
+      "id": "okf-full-frontmatter",
+      "title": "OKF bundle fixture: full frontmatter",
+      "input": {
+        "path": "vectors/okf/full-frontmatter",
+        "media_type": "application/vnd.blackcat.gts.okf-bundle"
+      },
+      "mode": "profile-verify",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "okf"
+      ],
+      "subsets": [
+        "okf-bundle"
+      ],
+      "tiers": [
+        "profile-aware-tool"
+      ],
+      "expected": {
+        "graph": "vectors/okf/full-frontmatter.folded.nq",
+        "diagnostics": [],
+        "expected_head": null,
+        "documents": 1
+      },
+      "notes": "Pins the standard OKF frontmatter fields: title, description, resource, tags, and timestamp."
+    },
+    {
+      "id": "okf-minimal",
+      "title": "OKF bundle fixture: minimal document",
+      "input": {
+        "path": "vectors/okf/minimal",
+        "media_type": "application/vnd.blackcat.gts.okf-bundle"
+      },
+      "mode": "profile-verify",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "okf"
+      ],
+      "subsets": [
+        "okf-bundle"
+      ],
+      "tiers": [
+        "profile-aware-tool"
+      ],
+      "expected": {
+        "graph": "vectors/okf/minimal.folded.nq",
+        "diagnostics": [],
+        "expected_head": null,
+        "documents": 1
+      },
+      "notes": "Pins the smallest accepted OKF document with only required type metadata."
+    },
+    {
+      "id": "okf-nested-links",
+      "title": "OKF bundle fixture: nested links",
+      "input": {
+        "path": "vectors/okf/nested-links",
+        "media_type": "application/vnd.blackcat.gts.okf-bundle"
+      },
+      "mode": "profile-verify",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "okf"
+      ],
+      "subsets": [
+        "okf-bundle"
+      ],
+      "tiers": [
+        "profile-aware-tool"
+      ],
+      "expected": {
+        "graph": "vectors/okf/nested-links.folded.nq",
+        "diagnostics": [],
+        "expected_head": null,
+        "documents": 3
+      },
+      "notes": "Pins nested directories, index.md, relative Markdown links, repeated links, and link annotation ordering."
+    },
+    {
+      "id": "okf-unmapped-sidecar",
+      "title": "OKF bundle fixture: unmapped sidecar",
+      "input": {
+        "path": "vectors/okf/unmapped-sidecar",
+        "media_type": "application/vnd.blackcat.gts.okf-bundle"
+      },
+      "mode": "profile-verify",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "okf"
+      ],
+      "subsets": [
+        "okf-bundle"
+      ],
+      "tiers": [
+        "profile-aware-tool"
+      ],
+      "expected": {
+        "graph": "vectors/okf/unmapped-sidecar.folded.nq",
+        "diagnostics": [],
+        "expected_head": null,
+        "documents": 1,
+        "unmapped_sidecar": "vectors/okf/unmapped-sidecar.expected-unmapped.nq"
+      },
+      "notes": "Pins the clean OKF import projection and the companion Rust sidecar test for out-of-profile RDF export."
+    },
+    {
+      "id": "security-nested-recursion-limit",
+      "title": "security policy fixture: nested-recursion-limit",
+      "input": {
+        "path": "vectors/security/nested-recursion-limit.json",
+        "media_type": "application/json"
+      },
+      "mode": "profile-verify",
+      "negative": true,
+      "required_capabilities": [
+        "trust-policy",
+        "nested-gts"
+      ],
+      "subsets": [
+        "security-policy"
+      ],
+      "tiers": [
+        "full-reader",
+        "profile-aware-tool"
+      ],
+      "expected": {
+        "graph": null,
+        "diagnostics": [
+          "RecursionLimit"
+        ],
+        "expected_head": null,
+        "fields": [
+          "expected_diagnostics",
+          "id",
+          "max_depth",
+          "mode",
+          "negative",
+          "notes",
+          "required_capabilities",
+          "schema",
+          "tiers",
+          "title"
+        ]
+      },
+      "notes": "Pins security-policy diagnostics and profile findings."
+    },
+    {
+      "id": "security-profile-policy",
+      "title": "security policy fixture: profile-policy",
+      "input": {
+        "path": "vectors/security/profile-policy.json",
+        "media_type": "application/json"
+      },
+      "mode": "profile-verify",
+      "negative": true,
+      "required_capabilities": [
+        "trust-policy",
+        "nested-gts"
+      ],
+      "subsets": [
+        "security-policy"
+      ],
+      "tiers": [
+        "full-reader",
+        "profile-aware-tool"
+      ],
+      "expected": {
+        "graph": null,
+        "diagnostics": [],
+        "expected_head": null,
+        "fields": [
+          "expected_findings",
+          "id",
+          "mode",
+          "negative",
+          "notes",
+          "required_capabilities",
+          "schema",
+          "tiers",
+          "title"
+        ],
+        "profile_findings": [
+          "ProfileSignerTrustNotEvaluated",
+          "ProfileSignerUntrusted",
+          "OpaqueRecipientKidPublic"
+        ]
+      },
+      "notes": "Pins security-policy diagnostics and profile findings."
+    }
+  ]
+}

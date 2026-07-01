@@ -1,0 +1,3 @@
+<http://example.org/ns#item1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Thing> .
+<http://example.org/ns#item1> <http://example.org/ns#declaredPath> <http://example.org/ns#someValue> .
+<http://example.org/ns#item1> <http://example.org/ns#declaredPath> <http://example.org/ns#badValue> .

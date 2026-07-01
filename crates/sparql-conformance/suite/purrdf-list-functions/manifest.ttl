@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# PURRDF rdf:List SPARQL extension functions, exercised through the W3C mf: harness.
+# Scalar readers (listLength/listGet/listIndexOf/listContains) assert a SELECT
+# solution against an .srx; the value-constructing functions (listSlice/listConcat)
+# assert a CONSTRUCT graph, compared as canonical (RDFC-1.0) N-Quads so the freshly
+# minted rdf:List cell blanks match isomorphically.
+
+@prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt:  <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix :    <http://purrdf.test/list-functions#> .
+
+:manifest a mf:Manifest ;
+    mf:entries ( :listLength :listGet :listIndexOf :listContains :listSlice :listConcat
+                 :listIndexOfTermExact :listContainsTermExact ) .
+
+:listLength a mf:QueryEvaluationTest ;
+    mf:name "purrdf:listLength counts list members" ;
+    mf:action [ qt:query <length.rq> ; qt:data <data.ttl> ] ;
+    mf:result <length.srx> .
+
+:listGet a mf:QueryEvaluationTest ;
+    mf:name "purrdf:listGet returns the member at a zero-based index" ;
+    mf:action [ qt:query <get.rq> ; qt:data <data.ttl> ] ;
+    mf:result <get.srx> .
+
+:listIndexOf a mf:QueryEvaluationTest ;
+    mf:name "purrdf:listIndexOf returns the index of the first occurrence" ;
+    mf:action [ qt:query <index-of.rq> ; qt:data <data.ttl> ] ;
+    mf:result <index-of.srx> .
+
+:listContains a mf:QueryEvaluationTest ;
+    mf:name "purrdf:listContains tests membership" ;
+    mf:action [ qt:query <contains.rq> ; qt:data <data.ttl> ] ;
+    mf:result <contains.srx> .
+
+:listSlice a mf:QueryEvaluationTest ;
+    mf:name "purrdf:listSlice constructs the half-open sub-list [start, end)" ;
+    mf:action [ qt:query <slice.rq> ; qt:data <data.ttl> ] ;
+    mf:result <slice.ttl> .
+
+:listConcat a mf:QueryEvaluationTest ;
+    mf:name "purrdf:listConcat constructs the concatenation of two lists" ;
+    mf:action [ qt:query <concat.rq> ; qt:data <data.ttl> ] ;
+    mf:result <concat.ttl> .
+
+# Term-exact (not value-space) membership: a member "1"^^xsd:integer is matched by
+# the same term but NOT by the value-equal "1"^^xsd:decimal — pinning the equality
+# the logic oracle (Prolog unification) also uses.
+:listIndexOfTermExact a mf:QueryEvaluationTest ;
+    mf:name "purrdf:listIndexOf matches by RDF term identity, not value-space" ;
+    mf:action [ qt:query <index-of-typed.rq> ; qt:data <data-typed.ttl> ] ;
+    mf:result <index-of-typed.srx> .
+
+:listContainsTermExact a mf:QueryEvaluationTest ;
+    mf:name "purrdf:listContains matches by RDF term identity, not value-space" ;
+    mf:action [ qt:query <contains-typed.rq> ; qt:data <data-typed.ttl> ] ;
+    mf:result <contains-typed.srx> .

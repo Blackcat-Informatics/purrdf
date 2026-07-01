@@ -1,0 +1,20 @@
+# Competency question: "Which events are impersonations?"
+# An impersonation = deception event where a projected identity claim's subject
+# differs from the deceiver.
+# Expected: event-impersonation-001 (from dsl/statements/deception.ttl).
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?event WHERE {
+    ?event purrdf:eventType purrdf:eventTypeImpersonation .
+    ?event purrdf:heldStandpoint ?heldClaim .
+    ?event purrdf:projectedStandpoint ?projectedClaim .
+    ?heldClaim purrdf:claimModality purrdf:refuted .
+    ?projectedClaim purrdf:claimModality purrdf:unequivocal .
+    OPTIONAL {
+        ?facet a purrdf:IdentityFacet .
+        ?facet purrdf:observedFeature ?event .
+        ?facet purrdf:facetSubject ?victim .
+    }
+}
+ORDER BY ?event

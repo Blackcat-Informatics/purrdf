@@ -1,0 +1,2 @@
+<http://example.org/ns#user> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Account> .
+<http://example.org/ns#user> <http://example.org/ns#username> "invalid user" .

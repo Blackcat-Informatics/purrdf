@@ -1,0 +1,13 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:IdentityShape
+    a sh:NodeShape ;
+    sh:target [
+        a sh:SPARQLTarget ;
+        sh:select "SELECT ?this WHERE { ?this a <http://example.org/ns#Person> . FILTER(STRSTARTS(STR(?this), \"http://example.org/ns#\")) }" ;
+    ] ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:select "SELECT $this WHERE { $this a ?a , ?b . FILTER(STR(?a) < STR(?b)) FILTER(?a IN (<http://example.org/ns#AxisX>, <http://example.org/ns#AxisY>)) FILTER(?b IN (<http://example.org/ns#AxisX>, <http://example.org/ns#AxisY>)) }" ;
+    ] .

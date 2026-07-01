@@ -1,0 +1,3 @@
+PREFIX g: <https://blackcatinformatics.ca/purrdf/>
+PREFIX : <http://purrdf.test/list#>
+SELECT ?n WHERE { ?q :list ?l . BIND(g:listLength(?l) AS ?n) }

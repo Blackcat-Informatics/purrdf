@@ -1,0 +1,15 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/tar-vector/v1",
+  "fixture": "danger-traversal",
+  "kind": "from-tar-refusal",
+  "input": "danger-traversal.tar",
+  "from_tar_args": [],
+  "roundtrip": false,
+  "diagnostics": [
+    "path traversal not allowed"
+  ],
+  "expected_error_contains": [
+    "path traversal not allowed"
+  ],
+  "expected_entries": []
+}

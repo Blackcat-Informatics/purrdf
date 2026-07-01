@@ -1,0 +1,33 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/tar-vector/v1",
+  "fixture": "danger-symlink-escape",
+  "kind": "extract-refusal",
+  "input": "danger-symlink-escape.tar",
+  "from_tar_args": [
+    "--allow-symlinks"
+  ],
+  "extract_args": [
+    "--allow-symlinks"
+  ],
+  "roundtrip": false,
+  "diagnostics": [
+    "symlink target escapes destination"
+  ],
+  "expected_error_contains": [
+    "symlink target escapes destination"
+  ],
+  "expected_entries": [
+    {
+      "path": "links",
+      "kind": "directory",
+      "mode": 493
+    },
+    {
+      "path": "links/outside",
+      "kind": "symlink",
+      "link_target": "../../outside",
+      "mode": 511
+    }
+  ],
+  "folded_nq": "danger-symlink-escape.folded.nq"
+}

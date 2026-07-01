@@ -1,0 +1,1 @@
+<http://example.org/ns#measurement> <http://example.org/ns#value> "1e3"^^<http://www.w3.org/2001/XMLSchema#decimal> .

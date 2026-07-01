@@ -1,0 +1,4 @@
+<http://example.org/ns#red> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Color> .
+<http://example.org/ns#red> <http://example.org/ns#hex> "#FF0000" .
+<http://example.org/ns#purple> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Color> .
+<http://example.org/ns#purple> <http://example.org/ns#hex> "#800080" .

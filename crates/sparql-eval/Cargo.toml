@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-sparql-eval"
+description = "Native, RDF-1.2-first multiset SPARQL evaluator over the DatasetView read trait in interned TermId space — the runtime that consumes purrdf-sparql-algebra (S5) and replaces the oxigraph-family spareval on the query path (purrdf S6, EPIC #906)"
+version = "0.1.0"
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["sparql", "rdf", "rdf-12", "evaluator", "query"]
+
+[lib]
+# rlib-only, wasm-clean: the SPARQL evaluation runtime of the native query stack.
+# It must NOT pull any oxigraph-family crate (it replaces the oxigraph-family
+# `spareval`). It consumes the wasm-clean `purrdf-sparql-algebra` (#911) front-end,
+# evaluates over the `purrdf-core` (#885) IR `DatasetView` in interned `TermId`
+# space and uses
+# `purrdf-xsd` (#907) for FILTER/BIND/ORDER value-space semantics.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_sparql_eval"
+
+[dependencies]
+# The IR + DatasetView read trait + SparqlEngine seam, in TermId space.
+purrdf-core = { path = "../rdf-core", version = "0.1.0" }
+# The query algebra this crate evaluates (parser + GraphPattern/Expression AST).
+purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.0" }
+# The XSD value space for FILTER/BIND/ORDER: value-space equality/ordering
+# (value_cmp/value_eq), effective boolean value, and the numeric tower.
+purrdf-xsd = { path = "../xsd", version = "0.1.0" }
+# Pure-Rust, wasm-clean regex engine for the SPARQL REGEX/REPLACE built-ins. Already
+# in the workspace lock; pulls only regex-automata/regex-syntax/aho-corasick/memchr
+# (no oxigraph-family edge — gated by `make rdf-core-hygiene`).
+regex = "1"
+# Fixed-key, non-cryptographic hashing for deterministic in-memory evaluator maps.
+# Keeps the wasm-clean dependency path by disabling ahash's runtime RNG feature.
+ahash = { version = "0.8", default-features = false }
+# RustCrypto hash crates — all wasm-safe (no getrandom; pure software).
+md-5 = { version = "0.10", default-features = false }
+sha1 = { version = "0.10", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+# SPARQL Results reader for decoding remote SERVICE responses. Wasm-clean
+# (hand-rolled, no serde). No oxigraph-family edge.
+purrdf-sparql-results = { path = "../sparql-results", version = "0.1.0" }
+
+[dev-dependencies]
+# Colored line-diffs on assert_eq! failure (repo convention).
+pretty_assertions = "1"
+# Criterion for the EXISTS-decorrelation perf bench. Defaults off
+# (no plotters/rayon) like the sibling crates, so `make bench` stays lean and no
+# oxigraph-family edge enters the dev tree (gated by `make rdf-core-hygiene`).
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+# `EXISTS` decorrelation: naive per-row inner re-eval vs cached inner, measured
+# head-to-head over a synthetic 1k-row anti-join. Report-only; `make bench` lane
+# only — excluded from `make check`.
+name = "exists_decorrelation"
+harness = false
+
+[[bench]]
+# Cost-based BGP join-planner latency on a skewed multi-join star, at two scales.
+# A regression watch on planning + eval cost (the structural heuristic was removed,
+# so there is no wall-time A/B; the deterministic win is a `bgp` unit test).
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "cost_based_bgp_planner"
+harness = false

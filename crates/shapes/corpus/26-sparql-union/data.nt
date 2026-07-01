@@ -1,0 +1,6 @@
+<http://example.org/ns#f1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Frame> .
+<http://example.org/ns#f1> <http://example.org/ns#axis> <http://example.org/ns#discourse> .
+<http://example.org/ns#f1> <http://example.org/ns#storyTimeOf> <http://example.org/ns#e1> .
+<http://example.org/ns#f2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Frame> .
+<http://example.org/ns#f2> <http://example.org/ns#axis> <http://example.org/ns#story> .
+<http://example.org/ns#f2> <http://example.org/ns#storyTimeOf> <http://example.org/ns#e2> .

@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-sparql-conformance"
+description = "Native W3C SPARQL 1.1 conformance harness: discovers mf: test manifests, runs the native purrdf-sparql-eval engine, and diffs against expected SPARQL Results (SRX/SRJ) / canonical N-Quads. Federated SERVICE tests resolve through an in-memory RemoteQuerySource (no network). Zero oxigraph Store."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# The engine under test + its algebra front-end.
+purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.0" }
+purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.0" }
+# Native Turtle/TriG/N-Quads loader (parse_dataset) + RDFC-1.0 canonicalization,
+# both oxigraph-Store-free.
+purrdf = { path = "../rdf", version = "0.1.0" }
+purrdf-core = { path = "../rdf-core", version = "0.1.0" }
+# Hand-rolled SPARQL Results readers for the expected SRX/SRJ files.
+purrdf-sparql-results = { path = "../sparql-results", version = "0.1.0" }
+# UTF-8 path type used by the datatest-stable harness signature.
+camino = "1"
+
+[dev-dependencies]
+datatest-stable = "0.3"
+
+[[test]]
+name = "sparql_conformance"
+harness = false
+
+# PURRDF-owned native regression corpus. This deliberately avoids the historical
+# ontology query corpus and does not load generated/dist/purrdf.gts; the broad
+# W3C / extension coverage stays in the manifest-driven `sparql_conformance` test.
+[[test]]
+name = "corpus_conformance"
+harness = true

@@ -1,0 +1,39 @@
+---
+source: crates/sparql-algebra/tests/algebra_snapshots.rs
+expression: "parse(\"SELECT ?x WHERE { ?d purrdf:members/rdf:rest*/rdf:first ?x }\")"
+---
+Select {
+    pattern: Project {
+        inner: Path {
+            subject: Variable(
+                ?d,
+            ),
+            path: Sequence(
+                Sequence(
+                    NamedNode(
+                        <https://x/members>,
+                    ),
+                    ZeroOrMore(
+                        NamedNode(
+                            <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>,
+                        ),
+                    ),
+                ),
+                NamedNode(
+                    <http://www.w3.org/1999/02/22-rdf-syntax-ns#first>,
+                ),
+            ),
+            object: Variable(
+                ?x,
+            ),
+        },
+        variables: [
+            ?x,
+        ],
+    },
+    dataset: QueryDataset {
+        default: [],
+        named: [],
+    },
+    base_iri: None,
+}

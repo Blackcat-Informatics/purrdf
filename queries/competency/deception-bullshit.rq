@@ -1,0 +1,14 @@
+# Competency question: "Which events are bullshit?"
+# Bullshit = held modality = bullshit, projected unequivocal.
+# Expected: event-bullshit-001.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?event WHERE {
+    ?event purrdf:eventType purrdf:eventTypeBullshit .
+    ?event purrdf:heldStandpoint ?heldClaim .
+    ?event purrdf:projectedStandpoint ?projectedClaim .
+    ?heldClaim purrdf:claimModality purrdf:bullshit .
+    ?projectedClaim purrdf:claimModality purrdf:unequivocal .
+}
+ORDER BY ?event

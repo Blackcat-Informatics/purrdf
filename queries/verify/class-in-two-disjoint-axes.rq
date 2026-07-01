@@ -1,0 +1,23 @@
+# ROBOT verify QC (#39) — anti-overtyping on the reasoned graph (CONSTITUTION P9).
+# No class may be a subclass — ASSERTED OR INFERRED — of two axes that the
+# ontology DECLARES disjoint (co-members of an owl:AllDisjointClasses set). The
+# disjointness is read from the matrix itself, not assumed from a hardcoded list,
+# so the check cannot drift from the authored axioms. This is the TBox dual of the
+# IdentityAxisOrthogonalityShape data-check, and it earns the reasoned graph: the
+# transitive rdfs:subClassOf+ fires on subclass chains the reasoner closes, not
+# just asserted edges. Any row is a FAILURE (such a class would be unsatisfiable).
+
+PREFIX rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX owl:   <http://www.w3.org/2002/07/owl#>
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?class ?axisA ?axisB WHERE {
+    # Bind the axis pair to a DECLARED disjointness set (both are members).
+    ?disjoint a owl:AllDisjointClasses ;
+              owl:members/rdf:rest*/rdf:first ?axisA ;
+              owl:members/rdf:rest*/rdf:first ?axisB .
+    FILTER(STR(?axisA) < STR(?axisB))
+    ?class rdfs:subClassOf+ ?axisA , ?axisB .
+    FILTER(?class NOT IN (?axisA, ?axisB, owl:Nothing))
+}

@@ -1,0 +1,30 @@
+# Competency question: "What deception-related event types and veridicality values does PURRDF model?"
+# Expected: eventTypeDeception, eventTypeLie, eventTypePaltering, eventTypeOmission,
+#           eventTypeDistortion, eventTypeBullshit, eventTypeSelfDeception,
+#           eventTypeFabrication, eventTypeForgery, eventTypeImpersonation,
+#           eventTypeDisinformation,
+#           ClaimVeridicality, veridicalityUntrue, veridicalityLicensedFalsehood.
+# Issues #215, #216, #217.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?deceptionType WHERE {
+    { ?deceptionType a purrdf:EventType . FILTER(?deceptionType IN (
+        purrdf:eventTypeDeception,
+        purrdf:eventTypeLie,
+        purrdf:eventTypePaltering,
+        purrdf:eventTypeOmission,
+        purrdf:eventTypeDistortion,
+        purrdf:eventTypeBullshit,
+        purrdf:eventTypeSelfDeception,
+        purrdf:eventTypeFabrication,
+        purrdf:eventTypeForgery,
+        purrdf:eventTypeImpersonation,
+        purrdf:eventTypeDisinformation
+    )) }
+    UNION
+    { BIND(purrdf:ClaimVeridicality AS ?deceptionType) }
+    UNION
+    { ?deceptionType a purrdf:ClaimVeridicality }
+}
+ORDER BY ?deceptionType

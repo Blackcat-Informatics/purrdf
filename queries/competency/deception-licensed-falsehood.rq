@@ -1,0 +1,16 @@
+# Competency question (negative): "Is a fiction claim ever flagged as a lie?"
+# A claim asserted accordingTo a NarrativeReferenceFrame with licensed-falsehood
+# veridicality must NOT be returned as a lie.
+# Expected: empty result — the safety property holds.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?fictionClaim WHERE {
+    ?fictionClaim purrdf:accordingTo ?narrativeFrame .
+    ?fictionClaim purrdf:claimVeridicality purrdf:veridicalityLicensedFalsehood .
+    FILTER EXISTS {
+        ?deceptionEvent purrdf:eventType purrdf:eventTypeLie .
+        ?deceptionEvent purrdf:projectedStandpoint ?fictionClaim .
+    }
+}
+ORDER BY ?fictionClaim

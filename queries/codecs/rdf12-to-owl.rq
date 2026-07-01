@@ -1,0 +1,26 @@
+# Inverse codec: RDF 1.2 / RDF* reifying triples -> OWL axiom-annotation normal form.
+#
+# Reads the generated RDF 1.2 form and reconstructs the plain-RDF owl:Axiom
+# reification (owl:Axiom + owl:annotatedSource/Property/Target + annotations) so the
+# round-trip can be checked for isomorphism in rdflib, which cannot parse RDF 1.2
+# triple terms. The native statements generator runs this shape of projection to PROVE the
+# RDF 1.2 serialization and the OWL downcast encode the same statement metadata
+# (CONSTITUTION Principle 7 — verified by construction). Reifier IRIs are named, so
+# the isomorphism is exact. Requires a SPARQL 1.2 engine (Apache Jena >= 5.4).
+
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+CONSTRUCT {
+    ?s ?p ?o .
+    ?reifier a owl:Axiom ;
+        owl:annotatedSource ?s ;
+        owl:annotatedProperty ?p ;
+        owl:annotatedTarget ?o ;
+        ?annProp ?annVal .
+}
+WHERE {
+    ?reifier rdf:reifies <<( ?s ?p ?o )>> .
+    ?reifier ?annProp ?annVal .
+    FILTER(?annProp NOT IN ( rdf:type, rdf:reifies ))
+}

@@ -1,0 +1,32 @@
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix ex:  <http://example.org/ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# SHACL-AF sh:prefixes (spec §5.2.1): the sh:select query below uses the
+# prefixed names ex:Person / ex:email rather than full <IRI>s. The validator
+# must resolve the sh:prefixes → sh:declare map and prepend a PREFIX header
+# before the query reaches oxigraph's SPARQL parser (which has no SHACL
+# awareness). Without that resolution the query is unparsable ("Prefix not
+# found") — this case is the regression guard for that resolution.
+#
+# ex:alice is an ex:Person with no ex:email, so the constraint fires once.
+
+ex:prefixDecls
+    sh:declare [
+        sh:prefix "ex" ;
+        sh:namespace "http://example.org/ns#"^^xsd:anyURI ;
+    ] .
+
+ex:PersonShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:prefixes ex:prefixDecls ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:message "Person must declare an ex:email" ;
+        sh:severity sh:Violation ;
+        sh:select """SELECT $this WHERE {
+  $this a ex:Person .
+  FILTER NOT EXISTS { $this ex:email ?e . }
+}""" ;
+    ] .

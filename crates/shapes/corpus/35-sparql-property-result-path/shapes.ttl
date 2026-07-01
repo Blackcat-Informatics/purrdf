@@ -1,0 +1,30 @@
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix ex:  <http://example.org/ns#> .
+
+# Regression: sh:sparql on a sh:property shape that projects ?path — the
+# query-bound ?path must be preserved and NOT clobbered by the property
+# shape's declared sh:path.
+#
+# The property shape declares sh:path ex:declaredPath but the SPARQL query
+# BINDs ex:queriedPath as ?path.  The expected report must carry
+# sh:resultPath ex:queriedPath — proving the fix in eval_property_shape()
+# that only stamps the declared path when result_path is None.
+#
+# ex:item1 has ex:badValue as one of its ex:declaredPath values, which makes
+# the query fire once.
+
+ex:ThingShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Thing ;
+    sh:property [
+        sh:path ex:declaredPath ;
+        sh:sparql [
+            a sh:SPARQLConstraint ;
+            sh:message "Detected a bad value via query-overridden path" ;
+            sh:severity sh:Violation ;
+            sh:select """SELECT $this ?path WHERE {
+  $this <http://example.org/ns#declaredPath> <http://example.org/ns#badValue> .
+  BIND(<http://example.org/ns#queriedPath> AS ?path)
+}""" ;
+        ] ;
+    ] .

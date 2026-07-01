@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Curated entries from the W3C SPARQL 1.1 federated `service` test group. Each
+# remote endpoint's data is carried IN the manifest via
+# `qt:serviceData [ qt:endpoint <ep> ; qt:data <file> ]`, so the harness resolves
+# every endpoint through an in-memory source and the whole group runs OFFLINE and
+# deterministically (no socket). Queries, endpoint data, and expected results are
+# vendored verbatim from w3c/rdf-tests; this selector manifest is PURRDF-authored.
+
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix qt: <http://www.w3.org/2001/sw/DataAccess/tests/test-query#> .
+@prefix :   <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/service/manifest#> .
+
+:manifest a mf:Manifest ;
+    mf:entries ( :service1 :service2 :service3 :service4a :service5 :service6 :service7 ) .
+
+:service1 a mf:QueryEvaluationTest ;
+    mf:name "SERVICE test 1" ;
+    mf:action [ qt:query <service01.rq> ;
+                qt:data <data01.ttl> ;
+                qt:serviceData [ qt:endpoint <http://example.org/sparql> ; qt:data <data01endpoint.ttl> ] ] ;
+    mf:result <service01.srx> .
+
+:service2 a mf:QueryEvaluationTest ;
+    mf:name "SERVICE test 2" ;
+    mf:action [ qt:query <service02.rq> ;
+                qt:serviceData [ qt:endpoint <http://example1.org/sparql> ; qt:data <data02endpoint1.ttl> ] ;
+                qt:serviceData [ qt:endpoint <http://example2.org/sparql> ; qt:data <data02endpoint2.ttl> ] ] ;
+    mf:result <service02.srx> .
+
+:service3 a mf:QueryEvaluationTest ;
+    mf:name "SERVICE test 3" ;
+    mf:action [ qt:query <service03.rq> ;
+                qt:serviceData [ qt:endpoint <http://example1.org/sparql> ; qt:data <data03endpoint1.ttl> ] ;
+                qt:serviceData [ qt:endpoint <http://example2.org/sparql> ; qt:data <data03endpoint2.ttl> ] ] ;
+    mf:result <service03.srx> .
+
+:service4a a mf:QueryEvaluationTest ;
+    mf:name "SERVICE test 4a" ;
+    mf:action [ qt:query <service04a.rq> ;
+                qt:data <data04.ttl> ;
+                qt:serviceData [ qt:endpoint <http://example.org/sparql> ; qt:data <data04endpoint.ttl> ] ] ;
+    mf:result <service04.srx> .
+
+:service5 a mf:QueryEvaluationTest ;
+    mf:name "SERVICE test 5" ;
+    mf:action [ qt:query <service05.rq> ;
+                qt:data <data05.ttl> ;
+                qt:serviceData [ qt:endpoint <http://example1.org/sparql> ; qt:data <data05endpoint1.ttl> ] ;
+                qt:serviceData [ qt:endpoint <http://example2.org/sparql> ; qt:data <data05endpoint2.ttl> ] ] ;
+    mf:result <service05.srx> .
+
+:service6 a mf:QueryEvaluationTest ;
+    mf:name "SERVICE test 6" ;
+    mf:action [ qt:query <service06.rq> ;
+                qt:serviceData [ qt:endpoint <http://example1.org/sparql> ; qt:data <data06endpoint1.ttl> ] ] ;
+    mf:result <service06.srx> .
+
+:service7 a mf:QueryEvaluationTest ;
+    mf:name "SERVICE test 7" ;
+    mf:action [ qt:query <service07.rq> ;
+                qt:data <data07.ttl> ] ;
+    mf:result <service07.srx> .

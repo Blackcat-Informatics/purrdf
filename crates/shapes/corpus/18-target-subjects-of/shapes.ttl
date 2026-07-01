@@ -1,0 +1,10 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:SenderShape
+    a sh:NodeShape ;
+    sh:targetSubjectsOf ex:email ;
+    sh:property [
+        sh:path ex:verified ;
+        sh:minCount 1 ;
+    ] .

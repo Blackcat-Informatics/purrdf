@@ -1,0 +1,5 @@
+<http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> .
+<http://example.org/ns#claim1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> )>> .
+<http://example.org/ns#claim1> <http://example.org/ns#source> <http://example.org/ns#doc1> .
+<http://example.org/ns#claim2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> )>> .
+<http://example.org/ns#claim2> <http://example.org/ns#source> <http://example.org/ns#doc2> .

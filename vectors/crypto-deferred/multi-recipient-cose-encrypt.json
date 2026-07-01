@@ -1,0 +1,48 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/crypto-deferred-vector/v1",
+  "id": "multi-recipient-cose-encrypt",
+  "title": "COSE_Encrypt descriptor with two ECDH-ES+A256KW recipients",
+  "deferred": true,
+  "status": "deferred-outside-v1-conformance",
+  "negative": false,
+  "cose_type": "COSE_Encrypt",
+  "codec": "cose-encrypt",
+  "content_encryption": {
+    "alg": "A256GCM",
+    "iv": "101112131415161718191a1b",
+    "ciphertext": "ciphertext-and-tag-placeholder",
+    "plaintext": "7665726966696564206964207265636f7264"
+  },
+  "key_management": {
+    "alg": "ECDH-ES+A256KW",
+    "curve": "P-256",
+    "wrap_alg": "A256KW",
+    "cek_bits": 256
+  },
+  "recipients": [
+    {
+      "kid": "anon:00000000000000000000000000000001",
+      "alg": "ECDH-ES+A256KW",
+      "wrap_alg": "A256KW",
+      "ephemeral_public_key": "p256-ephemeral-recipient-1-placeholder",
+      "encrypted_key": "wrapped-cek-recipient-1-placeholder"
+    },
+    {
+      "kid": "anon:00000000000000000000000000000002",
+      "alg": "ECDH-ES+A256KW",
+      "wrap_alg": "A256KW",
+      "ephemeral_public_key": "p256-ephemeral-recipient-2-placeholder",
+      "encrypted_key": "wrapped-cek-recipient-2-placeholder"
+    }
+  ],
+  "expected_diagnostics": [],
+  "expected": {
+    "recipient_count": 2,
+    "unwrap_success_kids": [
+      "anon:00000000000000000000000000000001",
+      "anon:00000000000000000000000000000002"
+    ],
+    "opaque_reason": null
+  },
+  "notes": "Contract descriptor only: implementations must not claim COSE_Encrypt/ECDH support until byte vectors replace placeholders and interop tests pass."
+}

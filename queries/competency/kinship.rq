@@ -1,0 +1,11 @@
+# Competency question: "Which kinship relationships between persons does PURRDF define?"
+# Expected: hasParent, hasChild, hasSpouse, hasSibling.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT ?relationship WHERE {
+    ?relationship rdfs:domain purrdf:Person ;
+                  rdfs:range purrdf:Person .
+}
+ORDER BY ?relationship

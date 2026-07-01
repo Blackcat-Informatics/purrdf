@@ -1,0 +1,2 @@
+<http://example.org/ns#stmt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Statement> .
+<http://example.org/ns#stmt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> )>> .

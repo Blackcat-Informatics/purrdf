@@ -1,0 +1,2 @@
+<http://example.org/ns#post> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Post> .
+<http://example.org/ns#post> <http://example.org/ns#slug> "this-is-a-very-long-slug-that-exceeds-the-limit" .

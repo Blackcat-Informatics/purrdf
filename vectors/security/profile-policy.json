@@ -1,0 +1,15 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/security-vector/v1",
+  "id": "profile-policy",
+  "title": "profile trust policy is separate from COSE signature validity",
+  "mode": "profile-verify",
+  "negative": true,
+  "required_capabilities": ["cose-sign1", "profile-policy"],
+  "tiers": ["profile-aware-tool"],
+  "expected_findings": [
+    "ProfileSignerTrustNotEvaluated",
+    "ProfileSignerUntrusted",
+    "OpaqueRecipientKidPublic"
+  ],
+  "notes": "A cryptographically valid signature is not a deployment-trusted signer and does not make a graph claim true; opaque-profile high-privacy recipients must use pseudonymous kid values."
+}

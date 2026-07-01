@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Check workspace
+        run: cargo check --workspace --lib --tests --locked
+
+      - name: Enforce no Cargo features
+        run: python3 scripts/check-no-features.py
+
+      - name: Check generated artifacts
+        run: bash scripts/check-generated.sh
+
+  wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Check release crates on wasm32
+        run: |
+          cargo check --locked --target wasm32-unknown-unknown --lib \
+            -p purrdf-events \
+            -p purrdf-iri \
+            -p purrdf-xsd \
+            -p purrdf-gts \
+            -p purrdf-core \
+            -p purrdf-sparql-algebra \
+            -p purrdf-sparql-results \
+            -p purrdf-sparql-eval \
+            -p purrdf \
+            -p purrdf-slice \
+            -p purrdf-shapes \
+            -p purrdf-wasm
+
+      - name: Build wasm package artifact
+        run: |
+          cargo build --locked --release --target wasm32-unknown-unknown \
+            -p purrdf-wasm --lib
+          test -s target/wasm32-unknown-unknown/release/purrdf_wasm.wasm
+
+  benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Compile benchmark harnesses
+        run: |
+          cargo bench -p purrdf-gts --no-run --locked
+          cargo bench -p purrdf-core --no-run --locked
+          cargo bench -p purrdf --bench native_codecs --no-run --locked
+          cargo bench -p purrdf-sparql-eval --no-run --locked
+          cargo bench -p purrdf-shapes --bench validate --no-run --locked

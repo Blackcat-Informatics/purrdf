@@ -1,0 +1,72 @@
+---
+source: crates/sparql-algebra/tests/algebra_snapshots.rs
+expression: "parse(\"SELECT ?k WHERE { { ?a a purrdf:X } UNION { ?a a purrdf:Y } OPTIONAL { ?a purrdf:p ?b } BIND(\\\"x\\\" AS ?k) }\")"
+---
+Select {
+    pattern: Project {
+        inner: Extend {
+            inner: LeftJoin {
+                left: Union {
+                    left: Bgp {
+                        patterns: [
+                            TriplePattern {
+                                subject: Variable(
+                                    ?a,
+                                ),
+                                predicate: NamedNode(
+                                    <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>,
+                                ),
+                                object: NamedNode(
+                                    <https://x/X>,
+                                ),
+                            },
+                        ],
+                    },
+                    right: Bgp {
+                        patterns: [
+                            TriplePattern {
+                                subject: Variable(
+                                    ?a,
+                                ),
+                                predicate: NamedNode(
+                                    <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>,
+                                ),
+                                object: NamedNode(
+                                    <https://x/Y>,
+                                ),
+                            },
+                        ],
+                    },
+                },
+                right: Bgp {
+                    patterns: [
+                        TriplePattern {
+                            subject: Variable(
+                                ?a,
+                            ),
+                            predicate: NamedNode(
+                                <https://x/p>,
+                            ),
+                            object: Variable(
+                                ?b,
+                            ),
+                        },
+                    ],
+                },
+                expression: None,
+            },
+            variable: ?k,
+            expression: Literal(
+                "x"^^<http://www.w3.org/2001/XMLSchema#string>,
+            ),
+        },
+        variables: [
+            ?k,
+        ],
+    },
+    dataset: QueryDataset {
+        default: [],
+        named: [],
+    },
+    base_iri: None,
+}

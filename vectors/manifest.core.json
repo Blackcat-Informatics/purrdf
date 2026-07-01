@@ -1,0 +1,1012 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/vector-manifest/v1",
+  "manifest_version": 1,
+  "manifest_scope": "core",
+  "corpus_revision": "git:repository-commit-containing-manifest",
+  "generated_by": "scripts/check_vector_manifest.py --write",
+  "vectors": [
+    {
+      "id": "01-minimal",
+      "title": "minimal",
+      "input": {
+        "path": "vectors/01-minimal.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "streaming-property",
+        "wire-core",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/01-minimal.expected.json",
+        "diagnostics": [],
+        "expected_head": "ec5a15cbe3b79c333712d64ed83a70e69a2d1be8c1316835727e5d5219823cd9",
+        "segment_heads": [
+          "ec5a15cbe3b79c333712d64ed83a70e69a2d1be8c1316835727e5d5219823cd9"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for wire-core."
+    },
+    {
+      "id": "02-zstd-frame",
+      "title": "zstd frame",
+      "input": {
+        "path": "vectors/02-zstd-frame.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "zstd"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "streaming-property",
+        "wire-core",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/02-zstd-frame.expected.json",
+        "diagnostics": [],
+        "expected_head": "4bdbb88d5c994034359346c2c66fe46bb0f9c3670365086cdf3a8282c6bd5c9f",
+        "segment_heads": [
+          "4bdbb88d5c994034359346c2c66fe46bb0f9c3670365086cdf3a8282c6bd5c9f"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for wire-core."
+    },
+    {
+      "id": "03-unknown-codec",
+      "title": "unknown codec",
+      "input": {
+        "path": "vectors/03-unknown-codec.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/03-unknown-codec.expected.json",
+        "diagnostics": [
+          "UnknownCodec"
+        ],
+        "expected_head": "c1a7904a4f39644ce4bf9e3611ee6479d013bc32a053f4a1f3374a6ecc56bc75",
+        "segment_heads": [
+          "c1a7904a4f39644ce4bf9e3611ee6479d013bc32a053f4a1f3374a6ecc56bc75"
+        ],
+        "opaque_reasons": [
+          "unknown-codec"
+        ]
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "04-damaged-frame",
+      "title": "damaged frame",
+      "input": {
+        "path": "vectors/04-damaged-frame.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/04-damaged-frame.expected.json",
+        "diagnostics": [
+          "DamagedFrame"
+        ],
+        "expected_head": "32841558b4bf6f48474b12ed45ffcd10bc75b7a9bbf3bf82b0cb2b325cbf23ab",
+        "segment_heads": [
+          "32841558b4bf6f48474b12ed45ffcd10bc75b7a9bbf3bf82b0cb2b325cbf23ab"
+        ],
+        "opaque_reasons": [
+          "damaged"
+        ]
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "05-torn-append",
+      "title": "torn append",
+      "input": {
+        "path": "vectors/05-torn-append.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/05-torn-append.expected.json",
+        "diagnostics": [
+          "TornAppendError"
+        ],
+        "expected_head": "32841558b4bf6f48474b12ed45ffcd10bc75b7a9bbf3bf82b0cb2b325cbf23ab",
+        "segment_heads": [
+          "32841558b4bf6f48474b12ed45ffcd10bc75b7a9bbf3bf82b0cb2b325cbf23ab"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "06-header-tampered",
+      "title": "header tampered",
+      "input": {
+        "path": "vectors/06-header-tampered.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "wire-core"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/06-header-tampered.expected.json",
+        "diagnostics": [
+          "EmptyFile"
+        ],
+        "expected_head": null,
+        "segment_heads": [],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for wire-core, resilience-negative."
+    },
+    {
+      "id": "09-suppression",
+      "title": "suppression",
+      "input": {
+        "path": "vectors/09-suppression.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "graph-fold",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/09-suppression.expected.json",
+        "diagnostics": [],
+        "expected_head": "85804a99b69a5836915af4732d5ec0dd98f76ca4799a3a434f02e5d96ff592f3",
+        "segment_heads": [
+          "85804a99b69a5836915af4732d5ec0dd98f76ca4799a3a434f02e5d96ff592f3"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for graph-fold."
+    },
+    {
+      "id": "11-datatype-defaulting",
+      "title": "datatype defaulting",
+      "input": {
+        "path": "vectors/11-datatype-defaulting.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "graph-fold",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/11-datatype-defaulting.expected.json",
+        "diagnostics": [],
+        "expected_head": "e2067134651bc41f2c0dea6d264a3c54c9cd1741ec49b119a89ac6146e1fc57e",
+        "segment_heads": [
+          "e2067134651bc41f2c0dea6d264a3c54c9cd1741ec49b119a89ac6146e1fc57e"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for graph-fold."
+    },
+    {
+      "id": "12-conflicting-reifier",
+      "title": "conflicting reifier",
+      "input": {
+        "path": "vectors/12-conflicting-reifier.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "graph-fold",
+        "streaming-property"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/12-conflicting-reifier.expected.json",
+        "diagnostics": [
+          "ConflictingReifier"
+        ],
+        "expected_head": "e1c08aefe8730ac0c8d68390d62d521feac1c57d4cf317fa8333c59712bcd15a",
+        "segment_heads": [
+          "e1c08aefe8730ac0c8d68390d62d521feac1c57d4cf317fa8333c59712bcd15a"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for graph-fold."
+    },
+    {
+      "id": "13-position-constraint",
+      "title": "position constraint",
+      "input": {
+        "path": "vectors/13-position-constraint.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "graph-fold",
+        "streaming-property"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/13-position-constraint.expected.json",
+        "diagnostics": [
+          "PositionConstraint"
+        ],
+        "expected_head": "67886a25e8aa57ccf93ce15385779f5d5a712d1b70c543eb4e43e55089512299",
+        "segment_heads": [
+          "67886a25e8aa57ccf93ce15385779f5d5a712d1b70c543eb4e43e55089512299"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for graph-fold."
+    },
+    {
+      "id": "14-bnode-label",
+      "title": "bnode label",
+      "input": {
+        "path": "vectors/14-bnode-label.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "graph-fold",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/14-bnode-label.expected.json",
+        "diagnostics": [],
+        "expected_head": "38604fa8d6003c18d1cedc297013e21da48354ff8f491346c74412a68293605b",
+        "segment_heads": [
+          "38604fa8d6003c18d1cedc297013e21da48354ff8f491346c74412a68293605b"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for graph-fold."
+    },
+    {
+      "id": "15-two-segment-union",
+      "title": "two segment union",
+      "input": {
+        "path": "vectors/15-two-segment-union.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "graph-fold",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/15-two-segment-union.expected.json",
+        "diagnostics": [],
+        "expected_head": "98107c76e919812b5e941d2f48ab6555259457966f0fc2ff2b5e2105434410b4",
+        "segment_heads": [
+          "b0ac8f878a40292b5dd97917c29b60502b3a7c94110cd8edcfd2296e862b7b2a",
+          "98107c76e919812b5e941d2f48ab6555259457966f0fc2ff2b5e2105434410b4"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for graph-fold."
+    },
+    {
+      "id": "15b-anon-bnode-union",
+      "title": "anon bnode union",
+      "input": {
+        "path": "vectors/15b-anon-bnode-union.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "graph-fold",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/15b-anon-bnode-union.expected.json",
+        "diagnostics": [],
+        "expected_head": "6e051220a13670651aa8b81321f09dfed3bdb69b0efde8e73972643d04433d0c",
+        "segment_heads": [
+          "edc328a53ab307d2694825edea3e89423b477f29e62ef334e939d49c51c0631c",
+          "6e051220a13670651aa8b81321f09dfed3bdb69b0efde8e73972643d04433d0c"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for graph-fold."
+    },
+    {
+      "id": "16-composed-round-trip",
+      "title": "composed round trip",
+      "input": {
+        "path": "vectors/16-composed-round-trip.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "graph-fold",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/16-composed-round-trip.expected.json",
+        "diagnostics": [],
+        "expected_head": "98107c76e919812b5e941d2f48ab6555259457966f0fc2ff2b5e2105434410b4",
+        "segment_heads": [
+          "b0ac8f878a40292b5dd97917c29b60502b3a7c94110cd8edcfd2296e862b7b2a",
+          "98107c76e919812b5e941d2f48ab6555259457966f0fc2ff2b5e2105434410b4"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for graph-fold."
+    },
+    {
+      "id": "17-pre-segment-hard-fail",
+      "title": "pre segment hard fail",
+      "input": {
+        "path": "vectors/17-pre-segment-hard-fail.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "pre-segment",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/17-pre-segment-hard-fail.expected.json",
+        "diagnostics": [
+          "SegmentBoundary"
+        ],
+        "expected_head": "b0ac8f878a40292b5dd97917c29b60502b3a7c94110cd8edcfd2296e862b7b2a",
+        "segment_heads": [
+          "b0ac8f878a40292b5dd97917c29b60502b3a7c94110cd8edcfd2296e862b7b2a"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "18-cross-segment-suppression",
+      "title": "cross segment suppression",
+      "input": {
+        "path": "vectors/18-cross-segment-suppression.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "graph-fold",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/18-cross-segment-suppression.expected.json",
+        "diagnostics": [],
+        "expected_head": "0b3fec5018c1f23ceb58d425399a3cb7ca42947e032e16a74bbc2760c29f4581",
+        "segment_heads": [
+          "b0ac8f878a40292b5dd97917c29b60502b3a7c94110cd8edcfd2296e862b7b2a",
+          "0b3fec5018c1f23ceb58d425399a3cb7ca42947e032e16a74bbc2760c29f4581"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for graph-fold."
+    },
+    {
+      "id": "19-profile-union-opacity",
+      "title": "profile union opacity",
+      "input": {
+        "path": "vectors/19-profile-union-opacity.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/19-profile-union-opacity.expected.json",
+        "diagnostics": [
+          "UnknownCodec"
+        ],
+        "expected_head": "53cab38818eac1be750f8735a040df5375214a88c3044d8299c67290619402b8",
+        "segment_heads": [
+          "b0ac8f878a40292b5dd97917c29b60502b3a7c94110cd8edcfd2296e862b7b2a",
+          "53cab38818eac1be750f8735a040df5375214a88c3044d8299c67290619402b8"
+        ],
+        "opaque_reasons": [
+          "unknown-codec"
+        ]
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "22-inline-blob",
+      "title": "inline blob",
+      "input": {
+        "path": "vectors/22-inline-blob.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "inline-blob"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "graph-fold",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/22-inline-blob.expected.json",
+        "diagnostics": [],
+        "expected_head": "57951c9705f566a6b541a4701f59470866b01a87d4b16a5136d4be09adb9a38b",
+        "segment_heads": [
+          "57951c9705f566a6b541a4701f59470866b01a87d4b16a5136d4be09adb9a38b"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for graph-fold."
+    },
+    {
+      "id": "28-empty-file",
+      "title": "empty file",
+      "input": {
+        "path": "vectors/28-empty-file.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/28-empty-file.expected.json",
+        "diagnostics": [
+          "EmptyFile"
+        ],
+        "expected_head": null,
+        "segment_heads": [],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "28b-non-header-item",
+      "title": "non header item",
+      "input": {
+        "path": "vectors/28b-non-header-item.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/28b-non-header-item.expected.json",
+        "diagnostics": [
+          "DamagedFrame"
+        ],
+        "expected_head": null,
+        "segment_heads": [],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "28c-unsupported-version",
+      "title": "unsupported version",
+      "input": {
+        "path": "vectors/28c-unsupported-version.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/28c-unsupported-version.expected.json",
+        "diagnostics": [
+          "DamagedFrame"
+        ],
+        "expected_head": "498bc3ae56f045a2476021a7ef74cff7f3ef154bd9fa763f06e9091680611e39",
+        "segment_heads": [
+          "498bc3ae56f045a2476021a7ef74cff7f3ef154bd9fa763f06e9091680611e39"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "28d-unknown-frame-type",
+      "title": "unknown frame type",
+      "input": {
+        "path": "vectors/28d-unknown-frame-type.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/28d-unknown-frame-type.expected.json",
+        "diagnostics": [
+          "UnknownFrameType"
+        ],
+        "expected_head": "4ff3402a85b11cd0318c3ce4dfb5a1ea42edacc6c08af88a2f33535dbe3b46eb",
+        "segment_heads": [
+          "4ff3402a85b11cd0318c3ce4dfb5a1ea42edacc6c08af88a2f33535dbe3b46eb"
+        ],
+        "opaque_reasons": [
+          "unknown-frame-type"
+        ]
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "28e-forward-term-reference",
+      "title": "forward term reference",
+      "input": {
+        "path": "vectors/28e-forward-term-reference.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/28e-forward-term-reference.expected.json",
+        "diagnostics": [
+          "ForwardReference"
+        ],
+        "expected_head": "62f04b64f5f9600eb58e9299c6326282bceb4eb445246240d4922a53a218ad0d",
+        "segment_heads": [
+          "62f04b64f5f9600eb58e9299c6326282bceb4eb445246240d4922a53a218ad0d"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "28f-malformed-transform-shape",
+      "title": "malformed transform shape",
+      "input": {
+        "path": "vectors/28f-malformed-transform-shape.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/28f-malformed-transform-shape.expected.json",
+        "diagnostics": [
+          "DamagedFrame"
+        ],
+        "expected_head": "2e0bb896eb50bce31c719b74950a7924bbd2038448450e05ae3fea8cfc07e94a",
+        "segment_heads": [
+          "2e0bb896eb50bce31c719b74950a7924bbd2038448450e05ae3fea8cfc07e94a"
+        ],
+        "opaque_reasons": [
+          "damaged"
+        ]
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "28g-damaged-compressed-payload",
+      "title": "damaged compressed payload",
+      "input": {
+        "path": "vectors/28g-damaged-compressed-payload.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "zstd"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/28g-damaged-compressed-payload.expected.json",
+        "diagnostics": [
+          "DamagedFrame"
+        ],
+        "expected_head": "30e3dcd80bb7d61127e16fdf81c533ef0bc6a288798a88dc963e5c8e0c4440aa",
+        "segment_heads": [
+          "30e3dcd80bb7d61127e16fdf81c533ef0bc6a288798a88dc963e5c8e0c4440aa"
+        ],
+        "opaque_reasons": [
+          "damaged"
+        ]
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "28h-malformed-security-metadata",
+      "title": "malformed security metadata",
+      "input": {
+        "path": "vectors/28h-malformed-security-metadata.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "cose-encrypt0"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "resilience-negative",
+        "streaming-property",
+        "total-reader"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader"
+      ],
+      "expected": {
+        "graph": "vectors/28h-malformed-security-metadata.expected.json",
+        "diagnostics": [
+          "MissingKey"
+        ],
+        "expected_head": "475114a3339de892b189783055032fe171a3c1441c7400233bf1500140428b89",
+        "segment_heads": [
+          "475114a3339de892b189783055032fe171a3c1441c7400233bf1500140428b89"
+        ],
+        "opaque_reasons": [
+          "missing-key"
+        ]
+      },
+      "notes": "Top-level GTS conformance vector for total-reader, resilience-negative."
+    },
+    {
+      "id": "29-deterministic-writer",
+      "title": "deterministic writer",
+      "input": {
+        "path": "vectors/29-deterministic-writer.gts",
+        "media_type": "application/vnd.blackcat.gts+cbor-seq"
+      },
+      "mode": "permissive-read",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "inline-blob"
+      ],
+      "subsets": [
+        "corpus-generator-determinism",
+        "streaming-property",
+        "writer-determinism"
+      ],
+      "tiers": [
+        "baseline-reader",
+        "streaming-reader",
+        "writer"
+      ],
+      "expected": {
+        "graph": "vectors/29-deterministic-writer.expected.json",
+        "diagnostics": [],
+        "expected_head": "afb4d5fdd7a202fb49df369d9b5729a7101b1f0b7e4fc02ad83f0399e21d1449",
+        "segment_heads": [
+          "afb4d5fdd7a202fb49df369d9b5729a7101b1f0b7e4fc02ad83f0399e21d1449"
+        ],
+        "opaque_reasons": []
+      },
+      "notes": "Top-level GTS conformance vector for writer-determinism."
+    }
+  ]
+}

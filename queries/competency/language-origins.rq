@@ -1,0 +1,12 @@
+# Competency question: "What language origins does PURRDF recognise — including
+# AI-generated and formal/programming languages?" Expected: the LanguageOrigin
+# value individuals (natural, constructed-*, AI-generated, programming, creole,
+# reconstructed, …). Origins are values, not subclasses — extend by adding
+# individuals.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?origin WHERE {
+    ?origin a purrdf:LanguageOrigin .
+}
+ORDER BY ?origin

@@ -1,0 +1,15 @@
+# Audit (#55): show claims contradicted by a higher-confidence claim.
+# The Contradiction relator SURFACES the conflict; this query ranks NOTHING —
+# it reports which side carries less stated confidence so a consumer can
+# investigate. Both claims remain (P9: no single winner).
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX xsd:   <http://www.w3.org/2001/XMLSchema#>
+SELECT ?claim ?rival ?confidence ?rivalConfidence WHERE {
+    ?contradiction a purrdf:Contradiction ;
+                   purrdf:contradictsClaim ?claim, ?rival .
+    FILTER (?claim != ?rival)
+    ?claim purrdf:confidence ?confidence .
+    ?rival purrdf:confidence ?rivalConfidence .
+    FILTER (xsd:decimal(?rivalConfidence) > xsd:decimal(?confidence))
+}
+ORDER BY ?claim

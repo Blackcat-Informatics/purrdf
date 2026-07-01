@@ -1,0 +1,12 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/security-vector/v1",
+  "id": "nested-recursion-limit",
+  "title": "nested GTS recursion must stop at the configured depth",
+  "mode": "full-reader-nested",
+  "negative": true,
+  "required_capabilities": ["nested-gts"],
+  "tiers": ["full-reader"],
+  "max_depth": 1,
+  "expected_diagnostics": ["RecursionLimit"],
+  "notes": "A bundle containing a nested bundle containing a GTS graph must expose the first nested subgraph and stop before the grandchild when max_depth is 1."
+}

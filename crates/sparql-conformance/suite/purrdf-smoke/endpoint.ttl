@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# The in-memory SERVICE endpoint graph: only ex:a carries a name.
+@prefix ex: <http://ex/> .
+
+ex:a ex:name "Ann" .

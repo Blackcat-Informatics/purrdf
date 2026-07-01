@@ -1,0 +1,10 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:ColorShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Color ;
+    sh:property [
+        sh:path ex:hex ;
+        sh:in ( "#FF0000" "#00FF00" "#0000FF" ) ;
+    ] .

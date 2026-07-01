@@ -1,0 +1,153 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">PURRDF black cat graph transport logo</title>
+  <desc id="desc">A stylized black cat head holding a small append-only chain of content-addressed graph frames, linked by a blue spine with red, yellow, and green content-id accents.</desc>
+  <defs>
+    <filter id="soft-white-glow" x="-12%" y="-12%" width="124%" height="124%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="#ffffff" flood-opacity="0.78"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="#ffffff" flood-opacity="0.72"/>
+    </filter>
+    <style>
+      /* Color tokens: cat #111214, paper #fffdf5, ink #111214, feature #ffffff, red #ea4335, blue #4285f4, yellow #fbbc05, green #34a853 */
+      .cat { fill: #111214; }
+      .feature { fill: #ffffff; }
+      .feature-stroke { fill: none; stroke: #ffffff; stroke-linecap: round; stroke-linejoin: round; }
+      .ink-stroke { fill: none; stroke: #111214; stroke-linecap: round; stroke-linejoin: round; }
+      .node { fill: #fffdf5; stroke: #111214; stroke-width: 8; }
+      .frame { fill: #fffdf5; stroke: #111214; stroke-width: 8; }
+      .edge { fill: none; stroke-linecap: round; }
+      .content-line { fill: none; stroke: #111214; stroke-width: 6; stroke-linecap: round; }
+    </style>
+  </defs>
+
+  <!--
+    Logo system note (PURRDF variant):
+    - #cat-head-core is shared verbatim with the purrdf family.
+    - #service-chain is this repo's service object: an append-only log — three
+      content-addressed data frames linked head-to-tail by a chain spine —
+      replacing the purrdf-ontology #service-graph while preserving the cat
+      silhouette. It depicts the GTS narrow waist: a single-file CBOR sequence of
+      segments chained by BLAKE3 content-id.
+    - Accent colors are isolated to the #service-chain (blue chain spine,
+      red/yellow/green content-id dots) for theming.
+  -->
+
+  <g id="purrdf-logo" filter="url(#soft-white-glow)">
+    <g id="cat-head-core">
+      <path id="cat-silhouette" class="cat" d="
+        M512 268
+        C548 268 583 272 616 282
+        C677 204 777 116 811 119
+        C833 154 842 280 825 374
+        C820 405 813 434 804 459
+        C820 474 842 481 864 478
+        C853 507 827 529 794 540
+        C817 551 841 555 867 552
+        C850 580 817 601 776 607
+        C737 694 635 750 512 750
+        C389 750 287 694 248 607
+        C207 601 174 580 157 552
+        C183 555 207 551 230 540
+        C197 529 171 507 160 478
+        C182 481 204 474 220 459
+        C211 434 204 405 199 374
+        C182 280 191 154 213 119
+        C247 116 347 204 408 282
+        C441 272 476 268 512 268 Z"/>
+
+      <path id="left-inner-ear" class="feature" d="
+        M251 173
+        C289 192 360 250 399 318
+        C364 337 330 355 299 374
+        C267 312 247 235 251 173 Z"/>
+      <path id="right-inner-ear" class="feature" d="
+        M773 173
+        C735 192 664 250 625 318
+        C660 337 694 355 725 374
+        C757 312 777 235 773 173 Z"/>
+
+      <path id="left-eye" class="feature" d="
+        M307 458
+        C352 427 420 426 474 459
+        C430 501 358 503 307 458 Z"/>
+      <path id="right-eye" class="feature" d="
+        M550 459
+        C604 426 672 427 717 458
+        C666 503 594 501 550 459 Z"/>
+
+      <path id="left-pupil" class="cat" d="
+        M386 442
+        C407 470 407 527 386 555
+        C365 527 365 470 386 442 Z"/>
+      <path id="right-pupil" class="cat" d="
+        M638 442
+        C659 470 659 527 638 555
+        C617 527 617 470 638 442 Z"/>
+      <path id="left-eye-spark" class="feature" d="M396 461 C404 474 403 493 396 508 C386 493 387 474 396 461 Z"/>
+      <path id="right-eye-spark" class="feature" d="M648 461 C656 474 655 493 648 508 C638 493 639 474 648 461 Z"/>
+
+      <path id="left-brow" class="feature-stroke" stroke-width="9" d="M307 422 C358 397 432 405 474 447"/>
+      <path id="right-brow" class="feature-stroke" stroke-width="9" d="M717 422 C666 397 592 405 550 447"/>
+
+      <path id="nose" class="feature" d="
+        M475 570
+        C491 558 533 558 549 570
+        C544 586 528 601 512 614
+        C496 601 480 586 475 570 Z"/>
+
+      <g id="whiskers" stroke-width="7">
+        <path class="feature-stroke" d="M226 552 C293 541 354 546 409 566"/>
+        <path class="feature-stroke" d="M236 585 C301 572 361 578 416 599"/>
+        <path class="feature-stroke" d="M798 552 C731 541 670 546 615 566"/>
+        <path class="feature-stroke" d="M788 585 C723 572 663 578 608 599"/>
+      </g>
+    </g>
+
+    <g id="service-chain">
+      <!-- the append-only chain spine (blue), drawn under the frames -->
+      <path id="chain-spine" class="edge" stroke="#4285f4" stroke-width="13" d="M438 668 L438 848"/>
+
+      <!-- three content-addressed frames (append-only log of CBOR segments) -->
+      <g id="frames">
+        <rect class="frame" x="449" y="636" width="150" height="64" rx="14"/>
+        <rect class="frame" x="449" y="726" width="150" height="64" rx="14"/>
+        <rect class="frame" x="449" y="816" width="150" height="64" rx="14"/>
+      </g>
+
+      <!-- chain links / content-ids: where the spine binds each frame -->
+      <circle id="link-top"    class="node" cx="438" cy="668" r="14"/>
+      <circle id="link-mid"    class="node" cx="438" cy="758" r="14"/>
+      <circle id="link-bottom" class="node" cx="438" cy="848" r="14"/>
+
+      <!-- per-frame content-id accent dots -->
+      <circle id="cid-top"    cx="479" cy="668" r="11" fill="#ea4335"/>
+      <circle id="cid-mid"    cx="479" cy="758" r="11" fill="#fbbc05"/>
+      <circle id="cid-bottom" cx="479" cy="848" r="11" fill="#34a853"/>
+
+      <!-- frame payload lines -->
+      <g id="payload-lines">
+        <path class="content-line" d="M505 656 L575 656"/>
+        <path class="content-line" d="M505 680 L552 680"/>
+        <path class="content-line" d="M505 746 L575 746"/>
+        <path class="content-line" d="M505 770 L552 770"/>
+        <path class="content-line" d="M505 836 L575 836"/>
+        <path class="content-line" d="M505 860 L552 860"/>
+      </g>
+    </g>
+
+    <g id="mouth-bite" class="cat">
+      <path id="upper-mouth" d="
+        M459 604
+        C474 621 492 629 512 629
+        C532 629 550 621 565 604
+        L565 637
+        C552 633 545 642 540 657
+        C527 650 518 640 512 627
+        C506 640 497 650 484 657
+        C479 642 472 633 459 637 Z"/>
+      <path id="left-tiny-fang" d="M446 615 L471 615 L459 638 Z"/>
+      <path id="right-tiny-fang" d="M553 615 L578 615 L565 638 Z"/>
+    </g>
+  </g>
+</svg>

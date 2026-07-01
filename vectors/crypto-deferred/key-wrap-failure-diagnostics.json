@@ -1,0 +1,24 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/crypto-deferred-vector/v1",
+  "id": "key-wrap-failure-diagnostics",
+  "title": "Malformed or unauthentic key-wrap reports KeyWrapFailed",
+  "deferred": true,
+  "status": "deferred-outside-v1-conformance",
+  "negative": true,
+  "cose_type": "COSE_Encrypt",
+  "codec": "cose-encrypt",
+  "recipient_fault": {
+    "kid": "anon:00000000000000000000000000000001",
+    "alg": "ECDH-ES+A256KW",
+    "fault": "aes-key-wrap-authentication-failed"
+  },
+  "expected_diagnostics": [
+    "KeyWrapFailed"
+  ],
+  "expected": {
+    "opaque_reason": "missing-key",
+    "plaintext_available": false,
+    "strict_verify_exit_code": 1
+  },
+  "notes": "Malformed ECDH recipient headers or AES-KW authentication failures are recoverable opacity failures, not permission to expose plaintext or claim a successful decrypt."
+}

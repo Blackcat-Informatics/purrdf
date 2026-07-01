@@ -1,0 +1,29 @@
+# mapping_set_id: https://blackcatinformatics.ca/purrdf/mappings/accessibility
+# mapping_set_version: 0.1.0
+# license: https://creativecommons.org/licenses/by/4.0/
+# mapping_tool: purrdf regenerate (mappings)
+# mapping_tool_version: 0.1.0
+# mapping_date: 2026-06-03
+# comment: "Accessibility alignments \u2014 schema.org, WHO ICF, IndoorGML/IMDF, and SOSA."
+# curie_map:
+#   fhir: http://hl7.org/fhir/
+#   purrdf: https://blackcatinformatics.ca/purrdf/
+#   schema: https://schema.org/
+#   semapv: https://w3id.org/semapv/vocab/
+#   skos: http://www.w3.org/2004/02/skos/core#
+#   sosa: http://www.w3.org/ns/sosa/
+subject_id	predicate_id	object_id	object_label	mapping_justification	confidence	comment
+purrdf:AccessibilityAssertion	skos:closeMatch	sosa:Observation		semapv:ManualMappingCuration	0.7	sosa:Observation is the generic observation class; purrdf:AccessibilityAssertion is a specialised gufo:Relator for accessibility claims. Both carry provenance and result.
+purrdf:facetAuditory	skos:closeMatch	fhir:sid/icf#b2	Sensory functions and pain	semapv:ManualMappingCuration	0.8	ICF b2 covers sensory functions including hearing.
+purrdf:facetAuditory	skos:closeMatch	fhir:sid/icf#e125	Products and technology for communication	semapv:ManualMappingCuration	0.8	ICF e125 covers assistive products for communication including hearing aids and induction loops.
+purrdf:facetClearance	skos:closeMatch	fhir:sid/icf#d4	Mobility	semapv:ManualMappingCuration	0.7	ICF d4 (Mobility) encompasses the spatial requirements for physical clearance.
+purrdf:facetCognitive	skos:closeMatch	fhir:sid/icf#b1	Mental functions	semapv:ManualMappingCuration	0.8	ICF b1 covers mental functions including cognitive processes.
+purrdf:facetCognitive	skos:closeMatch	fhir:sid/icf#e140	Products and technology for education	semapv:ManualMappingCuration	0.7	ICF e140 covers assistive products for learning and education, relevant to cognitive access.
+purrdf:facetLifeSupport	skos:closeMatch	fhir:sid/icf#e5	Services, systems and policies	semapv:ManualMappingCuration	0.7	ICF e5 covers services, systems and policies including health and medical services relevant to life-support access.
+purrdf:facetStepFree	skos:closeMatch	fhir:sid/icf#d4	Mobility	semapv:ManualMappingCuration	0.8	ICF d4 (Mobility) encompasses step-free locomotion.
+purrdf:facetVisual	skos:closeMatch	fhir:sid/icf#b2	Sensory functions and pain	semapv:ManualMappingCuration	0.8	ICF b2 covers sensory functions including vision.
+purrdf:facetVisual	skos:closeMatch	fhir:sid/icf#e135	Products and technology for communication	semapv:ManualMappingCuration	0.8	ICF e135 covers assistive products for communication including visual aids.
+purrdf:facetWheelchair	skos:closeMatch	fhir:sid/icf#d4	Mobility	semapv:ManualMappingCuration	0.8	ICF d4 (Mobility) encompasses wheelchair and step-free locomotion.
+purrdf:facetWheelchair	skos:closeMatch	fhir:sid/icf#e115	Products and technology for personal mobility	semapv:ManualMappingCuration	0.8	ICF e115 covers assistive products for personal mobility (wheelchairs, walkers, ramps).
+purrdf:hasAccessibilityFeature	skos:closeMatch	schema:accessibilityFeature		semapv:ManualMappingCuration	0.8	schema:accessibilityFeature is a flat textual enum on Place/CreativeWork; PURRDF hasAccessibilityFeature is an object property ranging over AccessibilityFacet individuals. Directional lossy projection.
+purrdf:hasBarrier	skos:closeMatch	schema:accessibilityHazard		semapv:ManualMappingCuration	0.75	schema:accessibilityHazard is a flat textual enum for hazards; PURRDF hasBarrier is an object property ranging over AccessibilityFacet individuals. Directional lossy projection.

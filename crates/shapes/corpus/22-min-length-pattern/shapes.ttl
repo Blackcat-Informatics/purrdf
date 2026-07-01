@@ -1,0 +1,11 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:PostShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Post ;
+    sh:property [
+        sh:path ex:slug ;
+        sh:minLength 1 ;
+        sh:pattern "^[a-z0-9-]{1,20}$" ;
+    ] .

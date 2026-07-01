@@ -1,0 +1,11 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:ProductShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Product ;
+    sh:property [
+        sh:path ex:rating ;
+        sh:minInclusive 5 ;
+    ] .

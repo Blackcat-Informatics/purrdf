@@ -1,0 +1,12 @@
+# Competency question: "Through which properties does a message reach its
+# participants?" Expected: the RFC 5322 role properties, all ranging on the
+# purrdf:EmailAddress seam (which joins the message to people and accounts).
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT ?role WHERE {
+    ?role rdfs:domain purrdf:EmailMessage ;
+          rdfs:range purrdf:EmailAddress .
+}
+ORDER BY ?role

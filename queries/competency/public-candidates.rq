@@ -1,0 +1,22 @@
+# public-candidates.rq (#225)
+# SELECT facts that are safe candidates for projection to a given public consumer.
+# ?consumer is an optional filter parameter: if left unbound the query returns
+# candidates for all consumers; callers may restrict results by binding ?consumer
+# via initial bindings or a VALUES clause (e.g. VALUES ?consumer { purrdf:consumerPublicSite }).
+# A fact is a public candidate when:
+#   - it has a disclosure policy that is NOT internalOnly / sensitive / neverPublic
+#   - it is explicitly eligible for the given consumer
+#   - it is not marked displayable false (suppressed)
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?fact ?policy WHERE {
+    ?fact purrdf:hasDisclosurePolicy ?policy .
+    ?fact purrdf:eligibleForConsumer ?consumer .
+    FILTER(?policy NOT IN (
+        purrdf:policyInternalOnly,
+        purrdf:policySensitive,
+        purrdf:policyNeverPublic
+    ))
+    FILTER NOT EXISTS { ?fact purrdf:displayable false }
+}

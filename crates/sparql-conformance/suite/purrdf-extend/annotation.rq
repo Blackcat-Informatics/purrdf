@@ -1,0 +1,6 @@
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX ex:  <http://ex/>
+SELECT ?r ?av WHERE {
+  ?r rdf:reifies <<( ?s ?p ?o )>> .
+  ?r ex:certainty ?av .
+}

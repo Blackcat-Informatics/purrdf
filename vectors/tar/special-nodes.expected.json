@@ -1,0 +1,55 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/tar-vector/v1",
+  "fixture": "special-nodes",
+  "kind": "roundtrip",
+  "input": "special-nodes.tar",
+  "from_tar_args": [
+    "--allow-special",
+    "--owner"
+  ],
+  "roundtrip": true,
+  "diagnostics": [],
+  "expected_entries": [
+    {
+      "path": "dev",
+      "kind": "directory",
+      "mode": 493,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff"
+    },
+    {
+      "path": "dev/loop0",
+      "kind": "blockdev",
+      "mode": 384,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff",
+      "dev_major": 7,
+      "dev_minor": 0
+    },
+    {
+      "path": "dev/pipe",
+      "kind": "fifo",
+      "mode": 416,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff"
+    },
+    {
+      "path": "dev/tty0",
+      "kind": "chardev",
+      "mode": 384,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff",
+      "dev_major": 4,
+      "dev_minor": 0
+    }
+  ],
+  "folded_nq": "special-nodes.folded.nq"
+}

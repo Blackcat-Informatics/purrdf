@@ -1,0 +1,13 @@
+# Negative test: every AccessibilityAssertion must have a subject, facet, and polarity.
+# An orphan assertion (missing any of these) is an error.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?assertion WHERE {
+    ?assertion a purrdf:AccessibilityAssertion .
+    FILTER (
+        NOT EXISTS { ?assertion purrdf:assertionSubject ?subject } ||
+        NOT EXISTS { ?assertion purrdf:assertionFacet ?facet } ||
+        NOT EXISTS { ?assertion purrdf:assertionPolarity ?polarity }
+    )
+}

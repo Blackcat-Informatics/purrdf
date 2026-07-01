@@ -1,0 +1,12 @@
+# Competency question: "What life-event types does PURRDF cover?"
+# Expected: the open purrdf:EventType value vocabulary (eventTypeBirth, …Death,
+# …Marriage, …Burial, …Census, …). Life events are no longer a subclass taxonomy:
+# the kind of an event is a VALUE (purrdf:eventType), absorbed from the former
+# genealogy LifeEvent subclasses into the universal events module (#41).
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?eventType WHERE {
+    ?eventType a purrdf:EventType .
+}
+ORDER BY ?eventType

@@ -1,0 +1,9 @@
+<https://data.example/datasets/customer-events> <https://blackcatinformatics.ca/projects/gts/okf#body> "blake3:988ca0370acfa50d93734caa90b7d2bd3053b81131f4254bdb8c66292c661d81" .
+<https://data.example/datasets/customer-events> <https://blackcatinformatics.ca/projects/gts/okf#description> "Event stream for checkout activity." .
+<https://data.example/datasets/customer-events> <https://blackcatinformatics.ca/projects/gts/okf#path> "profile.md" .
+<https://data.example/datasets/customer-events> <https://blackcatinformatics.ca/projects/gts/okf#resource> <https://data.example/datasets/customer-events> .
+<https://data.example/datasets/customer-events> <https://blackcatinformatics.ca/projects/gts/okf#tag> "analytics" .
+<https://data.example/datasets/customer-events> <https://blackcatinformatics.ca/projects/gts/okf#tag> "pii-free" .
+<https://data.example/datasets/customer-events> <https://blackcatinformatics.ca/projects/gts/okf#timestamp> "2026-06-19T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://data.example/datasets/customer-events> <https://blackcatinformatics.ca/projects/gts/okf#title> "Customer Events" .
+<https://data.example/datasets/customer-events> <https://blackcatinformatics.ca/projects/gts/okf#type> "Dataset" .

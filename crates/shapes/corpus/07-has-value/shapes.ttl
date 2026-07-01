@@ -1,0 +1,10 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:VehicleShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Vehicle ;
+    sh:property [
+        sh:path ex:fuel ;
+        sh:hasValue ex:petrol ;
+    ] .

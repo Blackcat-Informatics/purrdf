@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The no-loss control: the template carries the reifier `?r` (and the triple term
+# as a quoted-triple object under a plain `ex:asserts` predicate), so the reifier
+# layer is NOT dropped and NO `logic:ProjectionLoss` triple is emitted. The output
+# is exactly the one re-projected quad.
+@prefix ex:  <http://ex/> .
+
+ex:r1 ex:asserts <<( ex:alice ex:age 42 )>> .

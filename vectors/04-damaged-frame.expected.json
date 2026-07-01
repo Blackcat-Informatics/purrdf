@@ -1,0 +1,28 @@
+{
+ "blobs": {},
+ "diagnostics": [
+  "DamagedFrame"
+ ],
+ "mode": "default",
+ "nquads": [],
+ "opaque_reasons": [
+  "damaged"
+ ],
+ "profiles": [
+  "generic"
+ ],
+ "quads": 0,
+ "segment_heads": [
+  "32841558b4bf6f48474b12ed45ffcd10bc75b7a9bbf3bf82b0cb2b325cbf23ab"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 0
+}

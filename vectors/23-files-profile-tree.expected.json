@@ -1,0 +1,48 @@
+{
+ "blobs": {
+  "blake3:d7894ae9716d38d2dfad0ec55424ca321ee12453d51f1b3adeb77d0475ed988c": {
+   "mt": "text/plain",
+   "size": 5
+  },
+  "blake3:ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f": {
+   "mt": "text/plain",
+   "size": 5
+  }
+ },
+ "diagnostics": [],
+ "mode": "default",
+ "nquads": [
+  "_:f0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://w3id.org/gts/files#FileEntry> .",
+  "_:f0 <https://w3id.org/gts/files#digest> \"blake3:ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f\" .",
+  "_:f0 <https://w3id.org/gts/files#mediaType> \"text/plain\" .",
+  "_:f0 <https://w3id.org/gts/files#mode> \"420\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+  "_:f0 <https://w3id.org/gts/files#modified> \"2023-11-14T22:13:20Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime> .",
+  "_:f0 <https://w3id.org/gts/files#path> \"hello.txt\" .",
+  "_:f0 <https://w3id.org/gts/files#size> \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+  "_:f1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://w3id.org/gts/files#FileEntry> .",
+  "_:f1 <https://w3id.org/gts/files#digest> \"blake3:d7894ae9716d38d2dfad0ec55424ca321ee12453d51f1b3adeb77d0475ed988c\" .",
+  "_:f1 <https://w3id.org/gts/files#mediaType> \"text/plain\" .",
+  "_:f1 <https://w3id.org/gts/files#mode> \"420\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+  "_:f1 <https://w3id.org/gts/files#modified> \"2023-11-14T22:13:20Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime> .",
+  "_:f1 <https://w3id.org/gts/files#path> \"subdir/world.txt\" .",
+  "_:f1 <https://w3id.org/gts/files#size> \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> ."
+ ],
+ "opaque_reasons": [],
+ "profiles": [
+  "files"
+ ],
+ "quads": 14,
+ "segment_heads": [
+  "66393ff9894510de68b2f90d044cc140f8b0be28fa6b48009ace458730c59166"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 24
+}

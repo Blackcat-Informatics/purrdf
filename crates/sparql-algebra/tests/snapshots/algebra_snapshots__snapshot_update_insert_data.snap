@@ -1,0 +1,45 @@
+---
+source: crates/sparql-algebra/tests/algebra_snapshots.rs
+expression: "parse_update(\"INSERT DATA { purrdf:s purrdf:p purrdf:o . GRAPH purrdf:g { purrdf:s purrdf:p purrdf:o2 } }\")"
+---
+Update {
+    operations: [
+        InsertData {
+            data: [
+                QuadPattern {
+                    triple: TriplePattern {
+                        subject: NamedNode(
+                            <https://x/s>,
+                        ),
+                        predicate: NamedNode(
+                            <https://x/p>,
+                        ),
+                        object: NamedNode(
+                            <https://x/o>,
+                        ),
+                    },
+                    graph: None,
+                },
+                QuadPattern {
+                    triple: TriplePattern {
+                        subject: NamedNode(
+                            <https://x/s>,
+                        ),
+                        predicate: NamedNode(
+                            <https://x/p>,
+                        ),
+                        object: NamedNode(
+                            <https://x/o2>,
+                        ),
+                    },
+                    graph: Some(
+                        NamedNode(
+                            <https://x/g>,
+                        ),
+                    ),
+                },
+            ],
+        },
+    ],
+    base_iri: None,
+}

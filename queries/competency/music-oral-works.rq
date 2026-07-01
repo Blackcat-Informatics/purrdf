@@ -1,0 +1,29 @@
+# Competency question 6 (Music EPIC #306): MusicalWorks with no notated
+# Expression but at least three performances.
+#
+# Expected fixture binding: purrdf:fixtureOralRagaYamanWork
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?work (COUNT(DISTINCT ?expression) AS ?performanceCount)
+WHERE {
+    ?work a purrdf:MusicalWork .
+    ?expression a purrdf:Expression ;
+                purrdf:realizes ?work ;
+                purrdf:realizationMode ?mode .
+    FILTER (?mode IN (
+        purrdf:realizationModePerformed,
+        purrdf:realizationModeImprovised,
+        purrdf:realizationModeOral
+    ))
+
+    # Ensure no notated Expression exists for the same work.
+    FILTER NOT EXISTS {
+        ?notatedExpression a purrdf:Expression ;
+                           purrdf:realizes ?work ;
+                           purrdf:realizationMode purrdf:realizationModeNotated .
+    }
+}
+GROUP BY ?work
+HAVING (COUNT(DISTINCT ?expression) >= 3)
+ORDER BY ?work

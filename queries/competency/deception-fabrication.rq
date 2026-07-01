@@ -1,0 +1,20 @@
+# Competency question: "Which events are fabrications?"
+# A fabrication = deception event with a false CreativeWork whose provenance is refuted.
+# Expected: event-fabrication-001 (from dsl/statements/deception.ttl).
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?event WHERE {
+    ?event purrdf:eventType purrdf:eventTypeFabrication .
+    ?event purrdf:heldStandpoint ?heldClaim .
+    ?event purrdf:projectedStandpoint ?projectedClaim .
+    ?heldClaim purrdf:claimModality purrdf:refuted .
+    ?projectedClaim purrdf:claimModality purrdf:unequivocal .
+    OPTIONAL {
+        ?event purrdf:implicates ?work .
+        ?work a purrdf:CreativeWork .
+        ?verification a purrdf:VerificationResult .
+        ?verification purrdf:hasVerificationStatus purrdf:verificationStatusFailed .
+    }
+}
+ORDER BY ?event

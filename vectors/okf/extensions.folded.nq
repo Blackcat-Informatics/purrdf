@@ -1,0 +1,10 @@
+<https://blackcatinformatics.ca/projects/gts/okf/doc/metrics.md> <https://blackcatinformatics.ca/projects/gts/okf#active> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/metrics.md> <https://blackcatinformatics.ca/projects/gts/okf#body> "blake3:ecfadd2fff90c9b05f7406f5e67bc7866c68865d22436fa69dbefa1f8c3bbe2f" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/metrics.md> <https://blackcatinformatics.ca/projects/gts/okf#count> "7"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/metrics.md> <https://blackcatinformatics.ca/projects/gts/okf#optional> "null"^^<https://blackcatinformatics.ca/projects/gts/okf#json> .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/metrics.md> <https://blackcatinformatics.ca/projects/gts/okf#path> "metrics.md" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/metrics.md> <https://blackcatinformatics.ca/projects/gts/okf#producer> "{\"name\":\"fixture-generator\",\"version\":1}"^^<https://blackcatinformatics.ca/projects/gts/okf#json> .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/metrics.md> <https://blackcatinformatics.ca/projects/gts/okf#ratio> "0.625"^^<http://www.w3.org/2001/XMLSchema#decimal> .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/metrics.md> <https://blackcatinformatics.ca/projects/gts/okf#thresholds> "[0.25,0.75]"^^<https://blackcatinformatics.ca/projects/gts/okf#json> .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/metrics.md> <https://blackcatinformatics.ca/projects/gts/okf#title> "Session Quality" .
+<https://blackcatinformatics.ca/projects/gts/okf/doc/metrics.md> <https://blackcatinformatics.ca/projects/gts/okf#type> "Metric" .

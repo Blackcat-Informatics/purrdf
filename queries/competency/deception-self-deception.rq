@@ -1,0 +1,11 @@
+# Competency question: "Which events are self-deception?"
+# Self-deception = same agent in deceiver and deceived roles.
+# Expected: event-self-deception-001 (when participation data is present).
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?event ?agent WHERE {
+    ?event purrdf:eventType purrdf:eventTypeSelfDeception .
+    ?event purrdf:hasParticipant ?agent .
+}
+ORDER BY ?event

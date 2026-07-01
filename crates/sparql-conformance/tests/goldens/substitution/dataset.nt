@@ -1,0 +1,6 @@
+<http://ex/alice> <http://ex/knows> <http://ex/bob> .
+<http://ex/alice> <http://ex/age> "30"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://ex/bob> <http://ex/knows> <http://ex/carol> .
+<http://ex/bob> <http://ex/age> "17"^^<http://www.w3.org/2001/XMLSchema#integer> .
+_:bn <http://ex/knows> <http://ex/carol> .
+<http://ex/carol> <http://ex/member> <http://ex/club> .

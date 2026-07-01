@@ -1,0 +1,10 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:DeadnameShape
+    a sh:NodeShape ;
+    sh:targetClass ex:PersonName ;
+    sh:sparql [
+        sh:severity sh:Warning ;
+        sh:select "SELECT $this WHERE { $this <http://example.org/ns#namePurpose> <http://example.org/ns#deadname> FILTER NOT EXISTS { $this <http://example.org/ns#displayable> \"false\"^^<http://www.w3.org/2001/XMLSchema#boolean> } }" ;
+    ] .

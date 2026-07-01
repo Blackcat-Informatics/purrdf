@@ -1,0 +1,29 @@
+{
+ "blobs": {},
+ "diagnostics": [
+  "SegmentBoundary"
+ ],
+ "mode": "pre-segment",
+ "nquads": [
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Cat\"@en .",
+  "_:b0 <http://www.w3.org/2000/01/rdf-schema#label> \"Cat\"@en ."
+ ],
+ "opaque_reasons": [],
+ "profiles": [
+  "dist"
+ ],
+ "quads": 2,
+ "segment_heads": [
+  "b0ac8f878a40292b5dd97917c29b60502b3a7c94110cd8edcfd2296e862b7b2a"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 4
+}

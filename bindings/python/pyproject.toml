@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "purrdf"
+version = "0.1.0"
+description = "Python bindings for the PURRDF RDF 1.2 kernel, GTS carrier, SHACL, and slice tooling"
+readme = "../../README.md"
+requires-python = ">=3.13"
+license = "MIT OR Apache-2.0"
+authors = [
+  { name = "Blackcat Informatics Inc.", email = "paudley@blackcatinformatics.ca" },
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Rust",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://blackcatinformatics.ca/projects/purrdf"
+Repository = "https://github.com/Blackcat-Informatics/purrdf"
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+module-name = "purrdf.purrdf_native"
+python-source = "python/src"
+bindings = "pyo3"
+exclude = ["**/__pycache__/*", "**/*.pyc"]

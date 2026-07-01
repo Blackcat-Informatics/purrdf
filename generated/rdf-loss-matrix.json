@@ -1,0 +1,16 @@
+[
+  {
+    "code": "blob-bytes-absent",
+    "from": "rdf-1.2-dataset",
+    "to": "gts",
+    "intentional": true,
+    "note": "Blob payloads are preserved as content-addressed references (the blob_id digest plus the origin file id), never materialized into the RDF IR, which must stay value-light for arbitrarily large payloads (e.g. multi-terabyte data dumps). A destination GTS carries the reference; the payload bytes are streamed origin->destination on demand (deferred materialization)."
+  },
+  {
+    "code": "bnode-scope-flatten",
+    "from": "gts",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing per-segment blank-node scope; the distinct scopes are recovered only via the streaming-event importer."
+  }
+]

@@ -1,0 +1,14 @@
+# Audit (#55): show claims whose source is stale — the evidentiary bytes may
+# no longer say what they said when the claim was asserted: the chunk's
+# source was modified AFTER the claim's assertion time.
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX xsd:   <http://www.w3.org/2001/XMLSchema#>
+SELECT ?claim ?source ?assertedAt ?sourceModifiedAt WHERE {
+    ?claim purrdf:groundedIn ?span ;
+           purrdf:assertedAt ?assertedAt .
+    ?span purrdf:spanOfChunk ?chunk .
+    ?chunk purrdf:chunkOf ?source .
+    ?source purrdf:sourceModifiedAt ?sourceModifiedAt .
+    FILTER (?sourceModifiedAt > ?assertedAt)
+}
+ORDER BY ?claim

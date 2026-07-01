@@ -1,0 +1,9 @@
+# Competency question: "What citation intents does PURRDF support?"
+# Expected: the ten CitationIntent seed individuals.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?intent WHERE {
+    ?intent a purrdf:CitationIntent .
+}
+ORDER BY ?intent

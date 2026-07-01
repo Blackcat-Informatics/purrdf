@@ -1,0 +1,9 @@
+---
+source: crates/sparql-results/tests/results_corpus.rs
+expression: "text(&books(), SparqlResultsFormat::Tsv, &ResultProvenance::default())"
+---
+?book	?title
+<http://example.org/book/book6>	"Harry Potter and the Half-Blood Prince"
+<http://example.org/book/book7>	"Harry Potter et l'Ordre du Phénix"@fr
+	"Anonymous Anthology"
+_:draft	"5"^^<http://www.w3.org/2001/XMLSchema#integer>

@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# A single-element rdf:List whose member is the typed literal "1"^^xsd:integer,
+# used to pin the term-exact (not value-space) membership semantics: a value-equal
+# but differently-typed term ("1"^^xsd:decimal) must NOT match.
+@prefix :    <http://purrdf.test/list#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+:q :list ( "1"^^xsd:integer ) .

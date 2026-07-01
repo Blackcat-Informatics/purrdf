@@ -1,0 +1,15 @@
+# Competency question: "Which events are distortions?"
+# A distortion = held claim probable (or otherwise qualified) and projected
+# claim sharpened to unequivocal — a modality shift without literal falsification.
+# Expected: event-distortion-001 (from dsl/statements/deception.ttl).
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?event WHERE {
+    ?event purrdf:eventType purrdf:eventTypeDistortion .
+    ?event purrdf:heldStandpoint ?heldClaim .
+    ?event purrdf:projectedStandpoint ?projectedClaim .
+    ?heldClaim purrdf:claimModality purrdf:probable .
+    ?projectedClaim purrdf:claimModality purrdf:unequivocal .
+}
+ORDER BY ?event

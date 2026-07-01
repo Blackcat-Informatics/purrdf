@@ -1,0 +1,9 @@
+PREFIX g:   <https://blackcatinformatics.ca/purrdf/>
+PREFIX :    <http://purrdf.test/list#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+# The exact term is at index 0; the value-equal xsd:decimal term is absent (unbound).
+SELECT ?exact ?distinct WHERE {
+  ?q :list ?l .
+  BIND(g:listIndexOf(?l, "1"^^xsd:integer) AS ?exact)
+  BIND(g:listIndexOf(?l, "1"^^xsd:decimal) AS ?distinct)
+}

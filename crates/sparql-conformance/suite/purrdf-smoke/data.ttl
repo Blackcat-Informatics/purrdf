@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+@prefix ex:  <http://ex/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:a ex:v "1"^^xsd:integer .
+ex:b ex:v "2"^^xsd:integer .
+ex:c ex:v "1"^^xsd:integer .

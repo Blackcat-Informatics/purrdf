@@ -1,0 +1,28 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
+
+ex:PersonShape
+    a sh:NodeShape ;
+    sh:targetNode ex:alice ;
+    sh:property ex:KnowsShape .
+
+ex:KnowsShape
+    a sh:PropertyShape ;
+    purrdf:graphBoxRole purrdf:boxCBox ;
+    sh:path ex:knows ;
+    sh:message "knowledge claims need statement context" ;
+    sh:reificationRequired true ;
+    sh:reifierShape ex:ProvenanceShape .
+
+ex:ProvenanceShape
+    a sh:NodeShape ;
+    purrdf:graphBoxRole purrdf:boxCBox ;
+    sh:property ex:SourceShape .
+
+ex:SourceShape
+    a sh:PropertyShape ;
+    sh:path ex:source ;
+    sh:minCount 1 ;
+    sh:severity sh:Warning ;
+    sh:message "source recommended" .

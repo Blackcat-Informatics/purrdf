@@ -1,0 +1,36 @@
+{
+ "blobs": {
+  "blake3:572759598054983f55a7e11fb63d5e9068c0e51ce82eaf20ff6c2e8208771619": {
+   "mt": "text/plain",
+   "size": 10
+  },
+  "blake3:a798e35bebd1ab922596845ee52997f97680b6b7c81ecbd3e67cbd45c46be6eb": {
+   "mt": "image/webp",
+   "size": 100
+  }
+ },
+ "diagnostics": [],
+ "mode": "default",
+ "nquads": [
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Cat\"@en .",
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Chat\"@fr ."
+ ],
+ "opaque_reasons": [],
+ "profiles": [
+  "generic"
+ ],
+ "quads": 2,
+ "segment_heads": [
+  "45fedc5f478f1cfbb7fefddb3dc4555b2fd929966f5a4dd086f2ef91c8869418"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 1,
+ "terms": 4
+}

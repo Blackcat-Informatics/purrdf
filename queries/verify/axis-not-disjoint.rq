@@ -1,0 +1,26 @@
+# ROBOT verify QC (#39) — orthogonality matrix integrity (CONSTITUTION P9).
+# Each of the seven orthogonal identity axes MUST be a member of an
+# owl:AllDisjointClasses set, so the reasoner can reject an individual placed in
+# two of them (see ontology/modules/gender.ttl and
+# tests/test_identity_orthogonality.py). If any axis is missing from the
+# disjointness matrix, this returns a row → FAILURE.
+
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?axis WHERE {
+    VALUES ?axis {
+        purrdf:GenderIdentity
+        purrdf:GenderExpression
+        purrdf:SexAssignedAtBirth
+        purrdf:SexualOrientation
+        purrdf:RomanticOrientation
+        purrdf:PronounSet
+        purrdf:Honorific
+    }
+    FILTER NOT EXISTS {
+        ?disjoint a owl:AllDisjointClasses ;
+                  owl:members/rdf:rest*/rdf:first ?axis .
+    }
+}

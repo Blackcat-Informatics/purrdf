@@ -1,0 +1,26 @@
+{
+ "blobs": {},
+ "diagnostics": [
+  "ForwardReference"
+ ],
+ "mode": "default",
+ "nquads": [],
+ "opaque_reasons": [],
+ "profiles": [
+  "generic"
+ ],
+ "quads": 0,
+ "segment_heads": [
+  "62f04b64f5f9600eb58e9299c6326282bceb4eb445246240d4922a53a218ad0d"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 1
+}

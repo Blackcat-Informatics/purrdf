@@ -1,0 +1,31 @@
+{
+ "blobs": {
+  "blake3:2f5db56b69f8fe7a63e8c0a2dd683297b7eab80fcdcefb782cab97ab00d9a252": {
+   "mt": "image/webp",
+   "size": 21
+  }
+ },
+ "diagnostics": [],
+ "mode": "default",
+ "nquads": [
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Cat\"@en ."
+ ],
+ "opaque_reasons": [],
+ "profiles": [
+  "generic"
+ ],
+ "quads": 1,
+ "segment_heads": [
+  "57951c9705f566a6b541a4701f59470866b01a87d4b16a5136d4be09adb9a38b"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 3
+}

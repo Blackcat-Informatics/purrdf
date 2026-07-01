@@ -1,0 +1,2 @@
+<http://example.org/ns#parent> <http://example.org/ns#child> <http://example.org/ns#kid> .
+<http://example.org/ns#kid> <http://example.org/ns#age> "notanumber"^^<http://www.w3.org/2001/XMLSchema#string> .

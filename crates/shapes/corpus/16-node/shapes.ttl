@@ -1,0 +1,18 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:KidShape
+    a sh:NodeShape ;
+    sh:property [
+        sh:path ex:age ;
+        sh:datatype xsd:integer ;
+    ] .
+
+ex:ParentShape
+    a sh:NodeShape ;
+    sh:targetNode ex:parent ;
+    sh:property [
+        sh:path ex:child ;
+        sh:node ex:KidShape ;
+    ] .

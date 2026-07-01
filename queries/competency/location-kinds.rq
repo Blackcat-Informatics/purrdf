@@ -1,0 +1,11 @@
+# Competency question: "What kinds of location does PURRDF model as first-class
+# (structurally distinct) classes?" Expected: Location and its subclasses Place,
+# VirtualLocation, StorageLocation.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT ?kind WHERE {
+    ?kind rdfs:subClassOf* purrdf:Location .
+}
+ORDER BY ?kind

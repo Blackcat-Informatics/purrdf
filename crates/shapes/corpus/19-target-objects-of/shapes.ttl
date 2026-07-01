@@ -1,0 +1,10 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:KnownShape
+    a sh:NodeShape ;
+    sh:targetObjectsOf ex:knows ;
+    sh:property [
+        sh:path ex:name ;
+        sh:minCount 1 ;
+    ] .

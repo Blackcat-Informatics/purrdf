@@ -1,0 +1,33 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/crypto-deferred-vector/v1",
+  "id": "wrong-key-opacity",
+  "title": "Wrong recipient private key preserves opacity",
+  "deferred": true,
+  "status": "deferred-outside-v1-conformance",
+  "negative": true,
+  "cose_type": "COSE_Encrypt",
+  "codec": "cose-encrypt",
+  "held_keys": [
+    {
+      "kid": "anon:00000000000000000000000000000001",
+      "kind": "wrong-private-key"
+    }
+  ],
+  "expected_diagnostics": [
+    "KeyWrapFailed"
+  ],
+  "expected": {
+    "opaque_reason": "missing-key",
+    "must_preserve_cleartext_fields": [
+      "id",
+      "prev",
+      "t",
+      "x",
+      "to",
+      "pub",
+      "sig"
+    ],
+    "plaintext_available": false
+  },
+  "notes": "A held key for the right kid but wrong private material must not reveal content; the reader records KeyWrapFailed and preserves the encrypted frame as opaque."
+}

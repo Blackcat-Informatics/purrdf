@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+/target/
+**/target/
+/.venv/
+**/.venv/
+/.mypy_cache/
+/.pytest_cache/
+__pycache__/
+*.egg-info/

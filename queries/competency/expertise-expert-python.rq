@@ -1,0 +1,18 @@
+# Competency question: "Which agents have expert-level proficiency in a given skill?"
+# Expected: agent IRIs for proficiencies whose level is one of the expert-level
+# individuals across the Dreyfus, NIH, and assessed skill scales.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?agent ?skill ?level WHERE {
+    ?proficiency a purrdf:SkillProficiency ;
+                 purrdf:skillProficiencyAgent ?agent ;
+                 purrdf:skillProficiencyOf ?skill ;
+                 purrdf:skillProficiencyLevel ?level .
+    VALUES ?level {
+        purrdf:dreyfusExpert
+        purrdf:nihExpert
+        purrdf:assessedExpert
+    }
+}
+ORDER BY ?agent ?skill

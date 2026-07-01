@@ -1,0 +1,15 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# Bug #598 regression: oxigraph canonicalizes "3"^^xsd:nonNegativeInteger to
+# "3"^^xsd:integer in the store. A shape requiring xsd:nonNegativeInteger must
+# still accept the in-range value 3 (m1 conforms) and reject the out-of-range
+# value -2 (m2 violates), matching pySHACL.
+ex:DimShape
+    a sh:NodeShape ;
+    sh:targetSubjectsOf ex:dim ;
+    sh:property [
+        sh:path ex:dim ;
+        sh:datatype xsd:nonNegativeInteger ;
+    ] .

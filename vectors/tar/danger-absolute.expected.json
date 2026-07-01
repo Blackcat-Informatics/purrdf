@@ -1,0 +1,15 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/tar-vector/v1",
+  "fixture": "danger-absolute",
+  "kind": "from-tar-refusal",
+  "input": "danger-absolute.tar",
+  "from_tar_args": [],
+  "roundtrip": false,
+  "diagnostics": [
+    "absolute or drive-relative path not allowed"
+  ],
+  "expected_error_contains": [
+    "absolute or drive-relative path not allowed"
+  ],
+  "expected_entries": []
+}

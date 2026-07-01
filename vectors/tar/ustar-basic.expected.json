@@ -1,0 +1,43 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/tar-vector/v1",
+  "fixture": "ustar-basic",
+  "kind": "roundtrip",
+  "input": "ustar-basic.tar",
+  "from_tar_args": [
+    "--owner"
+  ],
+  "roundtrip": true,
+  "diagnostics": [],
+  "expected_entries": [
+    {
+      "path": "docs",
+      "kind": "directory",
+      "mode": 493,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff"
+    },
+    {
+      "path": "docs/data.bin",
+      "kind": "file",
+      "size": 4,
+      "mode": 384,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff"
+    },
+    {
+      "path": "docs/readme.txt",
+      "kind": "file",
+      "size": 12,
+      "mode": 420,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff"
+    }
+  ],
+  "folded_nq": "ustar-basic.folded.nq"
+}

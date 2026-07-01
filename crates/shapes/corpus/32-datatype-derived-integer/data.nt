@@ -1,0 +1,2 @@
+<http://example.org/ns#m1> <http://example.org/ns#dim> "3"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<http://example.org/ns#m2> <http://example.org/ns#dim> "-2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .

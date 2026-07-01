@@ -1,0 +1,296 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/vector-manifest/v1",
+  "manifest_version": 1,
+  "manifest_scope": "transforms",
+  "corpus_revision": "git:repository-commit-containing-manifest",
+  "generated_by": "scripts/check_vector_manifest.py --write",
+  "vectors": [
+    {
+      "id": "tar-danger-absolute",
+      "title": "tar refusal fixture: absolute path",
+      "input": {
+        "path": "vectors/tar/danger-absolute.tar",
+        "media_type": "application/x-tar"
+      },
+      "mode": "profile-verify",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "files-profile",
+        "tar"
+      ],
+      "subsets": [
+        "tar-archive"
+      ],
+      "tiers": [
+        "transform-tool"
+      ],
+      "expected": {
+        "graph": null,
+        "diagnostics": [
+          "absolute or drive-relative path not allowed"
+        ],
+        "expected_head": null,
+        "fixture_kind": "from-tar-refusal",
+        "entries": 0
+      },
+      "notes": "Pins refusal of tar entries with absolute paths."
+    },
+    {
+      "id": "tar-danger-symlink-escape",
+      "title": "tar refusal fixture: symlink escape",
+      "input": {
+        "path": "vectors/tar/danger-symlink-escape.tar",
+        "media_type": "application/x-tar"
+      },
+      "mode": "profile-verify",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "files-profile",
+        "tar"
+      ],
+      "subsets": [
+        "tar-archive"
+      ],
+      "tiers": [
+        "transform-tool"
+      ],
+      "expected": {
+        "graph": "vectors/tar/danger-symlink-escape.folded.nq",
+        "diagnostics": [
+          "symlink target escapes destination"
+        ],
+        "expected_head": null,
+        "fixture_kind": "extract-refusal",
+        "entries": 2
+      },
+      "notes": "Pins extraction refusal for symlink targets that escape the destination."
+    },
+    {
+      "id": "tar-danger-traversal",
+      "title": "tar refusal fixture: parent traversal",
+      "input": {
+        "path": "vectors/tar/danger-traversal.tar",
+        "media_type": "application/x-tar"
+      },
+      "mode": "profile-verify",
+      "negative": true,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "files-profile",
+        "tar"
+      ],
+      "subsets": [
+        "tar-archive"
+      ],
+      "tiers": [
+        "transform-tool"
+      ],
+      "expected": {
+        "graph": null,
+        "diagnostics": [
+          "path traversal not allowed"
+        ],
+        "expected_head": null,
+        "fixture_kind": "from-tar-refusal",
+        "entries": 0
+      },
+      "notes": "Pins refusal of tar entries containing parent-directory traversal."
+    },
+    {
+      "id": "tar-gnu-links",
+      "title": "tar fixture: GNU links and long path",
+      "input": {
+        "path": "vectors/tar/gnu-links.tar",
+        "media_type": "application/x-tar"
+      },
+      "mode": "profile-verify",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "files-profile",
+        "tar"
+      ],
+      "subsets": [
+        "tar-archive"
+      ],
+      "tiers": [
+        "transform-tool"
+      ],
+      "expected": {
+        "graph": "vectors/tar/gnu-links.folded.nq",
+        "diagnostics": [],
+        "expected_head": null,
+        "fixture_kind": "roundtrip",
+        "entries": 5
+      },
+      "notes": "Pins GNU long path, symlink, hardlink, owner, and deduplicated payload import."
+    },
+    {
+      "id": "tar-gzip-basic",
+      "title": "tar fixture: gzip-compressed tar",
+      "input": {
+        "path": "vectors/tar/gzip-basic.tar.gz",
+        "media_type": "application/gzip"
+      },
+      "mode": "profile-verify",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "files-profile",
+        "tar",
+        "gzip"
+      ],
+      "subsets": [
+        "tar-archive"
+      ],
+      "tiers": [
+        "transform-tool"
+      ],
+      "expected": {
+        "graph": "vectors/tar/gzip-basic.folded.nq",
+        "diagnostics": [],
+        "expected_head": null,
+        "fixture_kind": "roundtrip",
+        "entries": 3
+      },
+      "notes": "Pins transparent gzip-compressed tar import."
+    },
+    {
+      "id": "tar-pax-metadata",
+      "title": "tar fixture: PAX metadata",
+      "input": {
+        "path": "vectors/tar/pax-metadata.tar",
+        "media_type": "application/x-tar"
+      },
+      "mode": "profile-verify",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "files-profile",
+        "tar"
+      ],
+      "subsets": [
+        "tar-archive"
+      ],
+      "tiers": [
+        "transform-tool"
+      ],
+      "expected": {
+        "graph": "vectors/tar/pax-metadata.folded.nq",
+        "diagnostics": [],
+        "expected_head": null,
+        "fixture_kind": "roundtrip",
+        "entries": 2
+      },
+      "notes": "Pins PAX subsecond mtime, comment, and SCHILY xattr-style records."
+    },
+    {
+      "id": "tar-special-nodes",
+      "title": "tar fixture: special node metadata",
+      "input": {
+        "path": "vectors/tar/special-nodes.tar",
+        "media_type": "application/x-tar"
+      },
+      "mode": "profile-verify",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "files-profile",
+        "tar"
+      ],
+      "subsets": [
+        "tar-archive"
+      ],
+      "tiers": [
+        "transform-tool"
+      ],
+      "expected": {
+        "graph": "vectors/tar/special-nodes.folded.nq",
+        "diagnostics": [],
+        "expected_head": null,
+        "fixture_kind": "roundtrip",
+        "entries": 4
+      },
+      "notes": "Pins fifo, character-device, and block-device metadata import."
+    },
+    {
+      "id": "tar-ustar-basic",
+      "title": "tar fixture: USTAR basic tree",
+      "input": {
+        "path": "vectors/tar/ustar-basic.tar",
+        "media_type": "application/x-tar"
+      },
+      "mode": "profile-verify",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "files-profile",
+        "tar"
+      ],
+      "subsets": [
+        "tar-archive"
+      ],
+      "tiers": [
+        "transform-tool"
+      ],
+      "expected": {
+        "graph": "vectors/tar/ustar-basic.folded.nq",
+        "diagnostics": [],
+        "expected_head": null,
+        "fixture_kind": "roundtrip",
+        "entries": 3
+      },
+      "notes": "Pins USTAR regular-file, directory, owner, and mode import."
+    },
+    {
+      "id": "tar-zstd-basic",
+      "title": "tar fixture: zstd-compressed tar",
+      "input": {
+        "path": "vectors/tar/zstd-basic.tar.zst",
+        "media_type": "application/zstd"
+      },
+      "mode": "profile-verify",
+      "negative": false,
+      "required_capabilities": [
+        "cbor",
+        "blake3",
+        "identity",
+        "files-profile",
+        "tar",
+        "zstd"
+      ],
+      "subsets": [
+        "tar-archive"
+      ],
+      "tiers": [
+        "transform-tool"
+      ],
+      "expected": {
+        "graph": "vectors/tar/zstd-basic.folded.nq",
+        "diagnostics": [],
+        "expected_head": null,
+        "fixture_kind": "roundtrip",
+        "entries": 3
+      },
+      "notes": "Pins transparent zstd-compressed tar import."
+    }
+  ]
+}

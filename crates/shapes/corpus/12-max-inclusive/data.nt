@@ -1,0 +1,2 @@
+<http://example.org/ns#exam> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Exam> .
+<http://example.org/ns#exam> <http://example.org/ns#score> "110"^^<http://www.w3.org/2001/XMLSchema#integer> .

@@ -1,0 +1,5 @@
+SPDX-FileCopyrightText: W3C <https://www.w3.org/>
+SPDX-License-Identifier: LicenseRef-W3C-Test-Suite
+
+Vendored verbatim from w3c/rdf-tests (https://github.com/w3c/rdf-tests),
+sparql/sparql11/, main branch, fetched 2026-06-26. See ../PROVENANCE.md.

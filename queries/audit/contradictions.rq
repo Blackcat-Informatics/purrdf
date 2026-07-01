@@ -1,0 +1,10 @@
+# Audit (#55): every surfaced contradiction with its kind and detector —
+# the conflicts, visible, never resolved by rank (P9).
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+SELECT ?contradiction ?kind ?detector ?claim WHERE {
+    ?contradiction a purrdf:Contradiction ;
+                   purrdf:contradictsClaim ?claim .
+    OPTIONAL { ?contradiction purrdf:contradictionKind ?kind . }
+    OPTIONAL { ?contradiction purrdf:detectedBy ?detector . }
+}
+ORDER BY ?contradiction ?claim

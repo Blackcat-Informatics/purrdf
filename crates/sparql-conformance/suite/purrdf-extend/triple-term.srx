@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+  <head><variable name="t"/></head>
+  <results>
+    <result>
+      <binding name="t">
+        <triple>
+          <subject><uri>http://ex/alice</uri></subject>
+          <predicate><uri>http://ex/age</uri></predicate>
+          <object><literal datatype="http://www.w3.org/2001/XMLSchema#integer">42</literal></object>
+        </triple>
+      </binding>
+    </result>
+  </results>
+</sparql>

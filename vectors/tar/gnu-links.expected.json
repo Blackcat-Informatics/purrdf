@@ -1,0 +1,64 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/tar-vector/v1",
+  "fixture": "gnu-links",
+  "kind": "roundtrip",
+  "input": "gnu-links.tar",
+  "from_tar_args": [
+    "--allow-symlinks",
+    "--owner"
+  ],
+  "roundtrip": true,
+  "diagnostics": [],
+  "expected_entries": [
+    {
+      "path": "data",
+      "kind": "directory",
+      "mode": 493,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff"
+    },
+    {
+      "path": "data/current.txt",
+      "kind": "symlink",
+      "link_target": "source.txt",
+      "mode": 511,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff"
+    },
+    {
+      "path": "data/hard.txt",
+      "kind": "hardlink",
+      "link_target": "data/source.txt",
+      "mode": 416,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff"
+    },
+    {
+      "path": "data/source.txt",
+      "kind": "file",
+      "size": 23,
+      "mode": 416,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff"
+    },
+    {
+      "path": "data/nested-nested-nested-nested-nested-nested-nested-nested-nested-nested-nested-nested-nested-nested-nested-payload.txt",
+      "kind": "file",
+      "size": 18,
+      "mode": 420,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff"
+    }
+  ],
+  "folded_nq": "gnu-links.folded.nq"
+}

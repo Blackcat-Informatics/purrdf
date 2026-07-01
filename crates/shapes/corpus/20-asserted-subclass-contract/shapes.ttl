@@ -1,0 +1,17 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+# Bug #599 contract: SHACL class membership (§4.2.5) honors rdfs:subClassOf
+# edges ASSERTED in the data graph. This is NOT OWL inference — no reasoner is
+# run; we read the subClassOf triples that exist and materialize nothing.
+#
+# ex:bob is an ex:Employee and ex:Employee rdfs:subClassOf ex:Person is asserted,
+# so bob IS a SHACL instance of ex:Person and a focus node here; lacking ex:name
+# it violates sh:minCount. ex:alice (a direct Person with a name) conforms.
+ex:PersonShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:property [
+        sh:path ex:name ;
+        sh:minCount 1 ;
+    ] .

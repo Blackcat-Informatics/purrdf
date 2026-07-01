@@ -1,0 +1,27 @@
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix ex:  <http://example.org/ns#> .
+
+# Regression: sh:sparql on a sh:property shape — $this must bind to the
+# focus node (ex:alice), NOT to the path value (ex:bob).
+#
+# The query fires when the focus node has ex:name "Bob".  ex:alice's name is
+# "Alice", so the constraint must NOT fire (conforms = true).
+#
+# Under the pre-fix bug, $this was taken from value_nodes.first() which
+# yielded ex:bob (the ex:knows object).  ex:bob's name IS "Bob", so the
+# buggy code produced a spurious violation.
+
+ex:PersonShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:property [
+        sh:path ex:knows ;
+        sh:sparql [
+            a sh:SPARQLConstraint ;
+            sh:message "Focus node must not have ex:name 'Bob'" ;
+            sh:severity sh:Violation ;
+            sh:select """SELECT $this WHERE {
+  $this <http://example.org/ns#name> \"Bob\" .
+}""" ;
+        ] ;
+    ] .

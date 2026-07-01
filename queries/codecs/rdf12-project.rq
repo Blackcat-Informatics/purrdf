@@ -1,0 +1,32 @@
+# Codec: OWL axiom-annotation downcast -> RDF 1.2 / RDF* reifying triples.
+#
+# Both forms are GENERATED from the canonical statement DSL (dsl/statements/) by
+# `purrdf regenerate` statements generator (CONSTITUTION Principles 2-4). The canonical model is
+# RDF 1.2 / RDF*; the OWL 2 axiom-annotation form is the reasoning-lossless
+# DOWNCAST that OWL 2 DL reasoners consume. This CONSTRUCT re-expresses each
+# owl:Axiom (the rdflib-emittable downcast) as its asserted triple plus an RDF 1.2
+# reifier carrying the annotations, so Jena can emit the triple-term lead artifact.
+# The inverse (rdf12-to-owl.rq) normalizes the RDF 1.2 form back for the
+# round-trip isomorphism check (CONSTITUTION Principle 7).
+#
+# Requires a SPARQL 1.2 engine (Apache Jena >= 5.4) — RDF 1.2 is a required,
+# verified output, not an optional add-on.
+
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+CONSTRUCT {
+    ?s ?p ?o .
+    ?axiom rdf:reifies <<( ?s ?p ?o )>> .
+    ?axiom ?annProp ?annVal .
+}
+WHERE {
+    ?axiom a owl:Axiom ;
+           owl:annotatedSource ?s ;
+           owl:annotatedProperty ?p ;
+           owl:annotatedTarget ?o ;
+           ?annProp ?annVal .
+    FILTER(?annProp NOT IN (
+        rdf:type, owl:annotatedSource, owl:annotatedProperty, owl:annotatedTarget
+    ))
+}

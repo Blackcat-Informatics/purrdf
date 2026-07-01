@@ -1,0 +1,8 @@
+---
+source: crates/sparql-results/tests/results_corpus.rs
+assertion_line: 421
+expression: raw
+---
+?term	?note
+"مرحبا"@ar--rtl	"right-to-left greeting"
+"a, \"b\" & <c>"	"hello"@en--ltr

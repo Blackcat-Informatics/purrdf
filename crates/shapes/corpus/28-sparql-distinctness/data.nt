@@ -1,0 +1,6 @@
+<http://example.org/ns#c1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Commitment> .
+<http://example.org/ns#c1> <http://example.org/ns#committedAgent> <http://example.org/ns#agentA> .
+<http://example.org/ns#c1> <http://example.org/ns#beneficiary> <http://example.org/ns#agentA> .
+<http://example.org/ns#c2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Commitment> .
+<http://example.org/ns#c2> <http://example.org/ns#committedAgent> <http://example.org/ns#agentA> .
+<http://example.org/ns#c2> <http://example.org/ns#beneficiary> <http://example.org/ns#agentB> .

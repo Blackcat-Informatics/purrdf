@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-gts"
+description = "PURRDF GTS container engine: CBOR-sequence append-only graph transport reader, writer, folder, and verifier"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+homepage = "https://blackcatinformatics.ca/projects/purrdf"
+repository = "https://github.com/Blackcat-Informatics/purrdf"
+readme = "README.md"
+keywords = ["rdf", "cbor", "gts", "knowledge-graph", "linked-data"]
+
+[dependencies]
+# emojihash + randomart visual fingerprints, published from
+# Blackcat-Informatics/visual-hashing.
+visual-hashing = "0.1.3"
+blake3 = "1"
+ciborium = "0.2"
+flate2 = "1"
+# pure-Rust zstd encoder/decoder — no C toolchain, wasm-friendly
+structured-zstd = "0.0.40"
+time = { version = "0.3", features = ["formatting", "parsing"] }
+filetime = "0.2"
+# pure-Rust Ed25519 (COSE_Sign1, §9.2) — deterministic per RFC 8032, wasm-friendly
+ed25519-dalek = "2"
+# pure-Rust SHA-1 — only for OpenPGP v4 key fingerprints (RFC 4880 §12.2), not
+# used as a general-purpose hash; wasm-friendly
+sha1 = "0.11"
+# pure-Rust AES-256-GCM (COSE_Encrypt0, §9.3). Callers provide the nonce/IV
+# through the portable core API, so this crate does not need an OS RNG.
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+
+[dev-dependencies]
+# Authoring hot-path regression watch. Defaults off like sibling crates so the
+# bench lane stays lightweight and report-only.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+# GTS writer/codec authoring hot paths: rsyncable zstd block compression and
+# deterministic graph snapshot emission. Report-only; excluded from check.
+name = "authoring"
+harness = false

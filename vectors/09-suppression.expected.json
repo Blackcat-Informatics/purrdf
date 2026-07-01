@@ -1,0 +1,24 @@
+{
+ "blobs": {},
+ "diagnostics": [],
+ "mode": "default",
+ "nquads": [],
+ "opaque_reasons": [],
+ "profiles": [
+  "generic"
+ ],
+ "quads": 0,
+ "segment_heads": [
+  "85804a99b69a5836915af4732d5ec0dd98f76ca4799a3a434f02e5d96ff592f3"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 1,
+ "terms": 1
+}

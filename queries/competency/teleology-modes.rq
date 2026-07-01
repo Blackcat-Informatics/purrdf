@@ -1,0 +1,18 @@
+# Competency question: "What grades of intentional commitment can PURRDF
+# record, and how do they divide between intrinsic modes and relators?"
+# Expected: purrdf:Desire and purrdf:Intention as subclasses of
+# purrdf:IntentionalMode (intrinsic — one bearer), and purrdf:Commitment as a
+# logic:Relator (social — committed agent + distinct beneficiaries). The
+# commitment-graded trichotomy of the teleology core slice (#350, EPIC #348).
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX logic: <https://blackcatinformatics.ca/logic/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT ?mode WHERE {
+    { ?mode rdfs:subClassOf purrdf:IntentionalMode . }
+    UNION
+    { ?mode rdfs:subClassOf logic:Relator .
+      FILTER(?mode = purrdf:Commitment) }
+}
+ORDER BY ?mode

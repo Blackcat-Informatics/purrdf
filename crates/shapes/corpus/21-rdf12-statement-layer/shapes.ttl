@@ -1,0 +1,11 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+ex:StmtShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Statement ;
+    sh:property [
+        sh:path rdf:reifies ;
+        sh:minCount 1 ;
+    ] .

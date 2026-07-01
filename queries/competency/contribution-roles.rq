@@ -1,0 +1,9 @@
+# Competency question: "What contribution roles does PURRDF support?"
+# Expected: the canonical CRediT role individuals plus legacy seeds.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?role WHERE {
+    ?role a purrdf:ContributionRole .
+}
+ORDER BY ?role

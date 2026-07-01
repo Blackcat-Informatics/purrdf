@@ -1,0 +1,67 @@
+{
+ "blobs": {
+  "blake3:572759598054983f55a7e11fb63d5e9068c0e51ce82eaf20ff6c2e8208771619": {
+   "mt": "text/plain",
+   "size": 10
+  },
+  "blake3:a798e35bebd1ab922596845ee52997f97680b6b7c81ecbd3e67cbd45c46be6eb": {
+   "mt": "image/webp",
+   "size": 100
+  }
+ },
+ "diagnostics": [],
+ "mode": "default",
+ "nquads": [
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Cat\"@en .",
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Chat\"@fr .",
+  "_:c <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://w3id.org/gts/stream#Compaction> .",
+  "_:c <https://w3id.org/gts/stream#agent> \"gts-compact\" .",
+  "_:c <https://w3id.org/gts/stream#sourceHead> \"blake3:45fedc5f478f1cfbb7fefddb3dc4555b2fd929966f5a4dd086f2ef91c8869418\" .",
+  "_:c <https://w3id.org/gts/stream#timestamp> \"2026-01-01T00:00:00Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime> .",
+  "_:m0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://w3id.org/gts/stream#Manifestation> .",
+  "_:m0 <https://w3id.org/gts/stream#digest> \"blake3:572759598054983f55a7e11fb63d5e9068c0e51ce82eaf20ff6c2e8208771619\" .",
+  "_:m0 <https://w3id.org/gts/stream#mediaType> \"text/plain\" .",
+  "_:m0 <https://w3id.org/gts/stream#order> \"0\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+  "_:m0 <https://w3id.org/gts/stream#role> \"primary\" .",
+  "_:m0 <https://w3id.org/gts/stream#size> \"10\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+  "_:m1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://w3id.org/gts/stream#Manifestation> .",
+  "_:m1 <https://w3id.org/gts/stream#digest> \"blake3:a798e35bebd1ab922596845ee52997f97680b6b7c81ecbd3e67cbd45c46be6eb\" .",
+  "_:m1 <https://w3id.org/gts/stream#mediaType> \"image/webp\" .",
+  "_:m1 <https://w3id.org/gts/stream#order> \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+  "_:m1 <https://w3id.org/gts/stream#role> \"primary\" .",
+  "_:m1 <https://w3id.org/gts/stream#size> \"100\"^^<http://www.w3.org/2001/XMLSchema#integer> .",
+  "_:s0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://w3id.org/gts/stream#DetachedSignature> .",
+  "_:s0 <https://w3id.org/gts/stream#cose> \"0oRDoQEnoQRKdmVjdG9yLWtlefZYQCSLk-qEXiNEhvKcx0YXQQawRW6wmeY4AUepwfbNbvGv-wpegxcYiuUnYslEh9n2j39jNZRpROt2TnzKTqrivQQ\" .",
+  "_:s0 <https://w3id.org/gts/stream#sourceFrame> \"blake3:765a13e1485bc53c8459a3853484e239bf8274489e8f4e069dcc52a3e69b6312\" .",
+  "_:s1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://w3id.org/gts/stream#DetachedSignature> .",
+  "_:s1 <https://w3id.org/gts/stream#cose> \"0oRDoQEnoQRKdmVjdG9yLWtlefZYQLai2rG1NgATXnvNdFLaJkkEwAY_bTdCfbK1t-K18XmExP4i4TdYuxhzRhmKAYTDE2m0-GjMjY_JZnVaeTVAOQY\" .",
+  "_:s1 <https://w3id.org/gts/stream#sourceFrame> \"blake3:4ba504257dec2e1b221fa88ec02827b19561aa560f7da7e375c11589134b2853\" .",
+  "_:s2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://w3id.org/gts/stream#DetachedSignature> .",
+  "_:s2 <https://w3id.org/gts/stream#cose> \"0oRDoQEnoQRKdmVjdG9yLWtlefZYQOHqA-rtTEAhI3Sto6X59HnGZVv-aAJIFdq_Qfv2BtWIKtPff359zXDkozotTBNPAwvvAfBzS55sw-bJaa8XPgw\" .",
+  "_:s2 <https://w3id.org/gts/stream#sourceFrame> \"blake3:fa90a8ecd9f92c5ec811c20e7813759daac62e9eca54a6229c2e41707b4500eb\" .",
+  "_:s3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://w3id.org/gts/stream#DetachedSignature> .",
+  "_:s3 <https://w3id.org/gts/stream#cose> \"0oRDoQEnoQRKdmVjdG9yLWtlefZYQFdJgFupXtzj76Ra4DKDAqINAP-0u6IyleL_3nsFk2iOrBbW98tR9BMAP1uhCuG0KuDxIdMJLKZ5_SK495phZAE\" .",
+  "_:s3 <https://w3id.org/gts/stream#sourceFrame> \"blake3:f345c0ddac9019d4a0cc99a2e1aec5fc20d4b4200abe98c464551e113c4b6409\" .",
+  "_:s4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://w3id.org/gts/stream#DetachedSignature> .",
+  "_:s4 <https://w3id.org/gts/stream#cose> \"0oRDoQEnoQRKdmVjdG9yLWtlefZYQBLIpEhDDrDs67TIP7nu_rEAuTussWRWfZhHKlr8WjV9_2TCWsjH5dz2QvT4ePlDaNBvO3WGCX4bCr4sXPaPlgI\" .",
+  "_:s4 <https://w3id.org/gts/stream#sourceFrame> \"blake3:45fedc5f478f1cfbb7fefddb3dc4555b2fd929966f5a4dd086f2ef91c8869418\" ."
+ ],
+ "opaque_reasons": [],
+ "profiles": [
+  "generic"
+ ],
+ "quads": 33,
+ "segment_heads": [
+  "ebbd43fdb48021f0ee80a4c352abe43cf0e5b7fe8676d5a917492bd0c27db6ae"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": true,
+   "covered": 7,
+   "tail": 0
+  }
+ ],
+ "suppressions": 1,
+ "terms": 52
+}

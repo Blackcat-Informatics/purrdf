@@ -1,0 +1,10 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:TagShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Tag ;
+    sh:property [
+        sh:path ex:name ;
+        sh:minLength 3 ;
+    ] .

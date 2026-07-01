@@ -1,0 +1,5 @@
+<http://example.org/ns#person1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .
+<http://example.org/ns#person1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#AxisX> .
+<http://example.org/ns#person1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#AxisY> .
+<http://example.org/ns#person2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .
+<http://example.org/ns#person2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#AxisX> .

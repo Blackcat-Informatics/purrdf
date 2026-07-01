@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Standpoint-poset data for the purrdf:heldIn EXTEND case. The claim `ex:claim`
+# reifies `<< ex:earth ex:shape ex:sphere >>` from the vantage of the sharper
+# frame `ex:geodesy`, which DIRECTLY sharpens (is more specific than) the broader
+# frame `ex:commonSense` (the materialized poset edge the engine reads — it does
+# NOT compute transitive closure). So a claim held in `ex:geodesy` counts as held
+# in `ex:commonSense`. No incumbent SPARQL engine can express this poset-aware
+# "held-in-a-broader-frame" relation.
+@prefix ex:     <http://ex/> .
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix purrdf:  <https://blackcatinformatics.ca/purrdf/> .
+
+ex:claim rdf:reifies <<( ex:earth ex:shape ex:sphere )>> ;
+         purrdf:accordingTo ex:geodesy .
+
+ex:geodesy purrdf:sharpens ex:commonSense .

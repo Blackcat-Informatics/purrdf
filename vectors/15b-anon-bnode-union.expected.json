@@ -1,0 +1,35 @@
+{
+ "blobs": {},
+ "diagnostics": [],
+ "mode": "default",
+ "nquads": [
+  "_:s0._anon0 <http://www.w3.org/2000/01/rdf-schema#label> \"anon\"@en .",
+  "_:s0._anon3 <http://www.w3.org/2000/01/rdf-schema#label> \"anon\"@en .",
+  "_:s1._anon4 <http://www.w3.org/2000/01/rdf-schema#label> \"anon2\"@en ."
+ ],
+ "opaque_reasons": [],
+ "profiles": [
+  "dist",
+  "generic"
+ ],
+ "quads": 3,
+ "segment_heads": [
+  "edc328a53ab307d2694825edea3e89423b477f29e62ef334e939d49c51c0631c",
+  "6e051220a13670651aa8b81321f09dfed3bdb69b0efde8e73972643d04433d0c"
+ ],
+ "segments": 2,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  },
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 6
+}

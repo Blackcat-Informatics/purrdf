@@ -1,0 +1,36 @@
+{
+ "blobs": {},
+ "diagnostics": [],
+ "mode": "default",
+ "nquads": [
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Cat\"@en .",
+  "<https://example.org/Dog> <http://www.w3.org/2000/01/rdf-schema#label> \"Dog\"@en .",
+  "_:s0.b0 <http://www.w3.org/2000/01/rdf-schema#label> \"Cat\"@en .",
+  "_:s1.b0 <http://www.w3.org/2000/01/rdf-schema#label> \"Dog\"@en ."
+ ],
+ "opaque_reasons": [],
+ "profiles": [
+  "dist",
+  "music"
+ ],
+ "quads": 4,
+ "segment_heads": [
+  "b0ac8f878a40292b5dd97917c29b60502b3a7c94110cd8edcfd2296e862b7b2a",
+  "98107c76e919812b5e941d2f48ab6555259457966f0fc2ff2b5e2105434410b4"
+ ],
+ "segments": 2,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  },
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 7
+}

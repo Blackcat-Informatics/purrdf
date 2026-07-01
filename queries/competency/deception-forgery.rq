@@ -1,0 +1,22 @@
+# Competency question: "Which events are forgeries?"
+# A forgery = deception event mimicking a specific genuine artifact with failed signature.
+# Expected: event-forgery-001 (from dsl/statements/deception.ttl).
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?event WHERE {
+    ?event purrdf:eventType purrdf:eventTypeForgery .
+    ?event purrdf:heldStandpoint ?heldClaim .
+    ?event purrdf:projectedStandpoint ?projectedClaim .
+    ?heldClaim purrdf:claimModality purrdf:refuted .
+    ?projectedClaim purrdf:claimModality purrdf:unequivocal .
+    OPTIONAL {
+        ?event purrdf:implicates ?forgedWork .
+        ?forgedWork a purrdf:CreativeWork .
+        ?forgedWork purrdf:counterpartOf ?genuineWork .
+        ?signature a purrdf:CryptographicSignature .
+        ?signature purrdf:signatureOf ?forgedWork .
+        ?signature purrdf:hasVerificationStatus purrdf:verificationStatusFailed .
+    }
+}
+ORDER BY ?event

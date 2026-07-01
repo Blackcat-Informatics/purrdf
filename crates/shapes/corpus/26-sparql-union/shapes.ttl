@@ -1,0 +1,16 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+# Exercises SPARQL UNION evaluation. Per SHACL-AF §3.4.2, each solution row of a
+# sh:select query IS a violation, so the query deliberately SELECTs the
+# mismatched-anchor pattern (discourse-axis node carrying a story-time link, or
+# vice versa) and reports those nodes. f1 matches one UNION branch and is flagged;
+# f2 pairs its axis with the matching time link and is correctly NOT selected.
+# (Not an inverted query — the SELECT→violation mapping is intentional.)
+ex:NarrativeFrameShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Frame ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:select "SELECT $this WHERE { { $this <http://example.org/ns#axis> <http://example.org/ns#discourse> . $this <http://example.org/ns#storyTimeOf> ?x } UNION { $this <http://example.org/ns#axis> <http://example.org/ns#story> . $this <http://example.org/ns#discourseTimeOf> ?x } }" ;
+    ] .

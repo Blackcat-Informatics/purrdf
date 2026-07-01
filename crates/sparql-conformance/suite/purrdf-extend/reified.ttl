@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# RDF-1.2 reifier data for the purrdf-extend EXTEND suite. The reified statement
+# `<< ex:alice ex:age 42 >>` is NOT asserted as a plain quad — it lives only in
+# the reifier side-table, named by the reifier `ex:r1`, which also carries one
+# annotation (`ex:certainty "high"`). This is the shape incumbent SPARQL engines
+# (rdflib, oxigraph) cannot query: there is no triple to match, only a reifier.
+@prefix ex:  <http://ex/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:r1 rdf:reifies <<( ex:alice ex:age 42 )>> ;
+      ex:certainty "high" .

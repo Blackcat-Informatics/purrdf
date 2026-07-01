@@ -1,0 +1,5 @@
+---
+source: crates/sparql-results/tests/results_corpus.rs
+expression: "text(&edge_cases(), SparqlResultsFormat::Json, &ResultProvenance::default())"
+---
+{"head":{"vars":["term","note"]},"results":{"bindings":[{"term":{"type":"literal","value":"مرحبا","xml:lang":"ar","dir":"rtl"},"note":{"type":"literal","value":"right-to-left greeting","datatype":"http://www.w3.org/2001/XMLSchema#string"}},{"term":{"type":"literal","value":"a, \"b\" & <c>","datatype":"http://www.w3.org/2001/XMLSchema#string"},"note":{"type":"literal","value":"hello","xml:lang":"en","dir":"ltr"}}]}}

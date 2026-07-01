@@ -1,0 +1,10 @@
+# Competency question: "What kinds of agent does PURRDF model?"
+# Expected (skeleton): purrdf:Agent and its subclasses Person and Organization.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT ?agentKind WHERE {
+    ?agentKind rdfs:subClassOf* purrdf:Agent .
+}
+ORDER BY ?agentKind

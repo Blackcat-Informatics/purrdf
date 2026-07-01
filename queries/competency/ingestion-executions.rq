@@ -1,0 +1,18 @@
+# Competency question: "Ingestion executions that produced claims but no events"
+# Expected: Executions of type procedureTypeIngestion whose stepOutput includes
+# an Observation (claim) but no Event.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT ?execution WHERE {
+    ?execution a purrdf:Execution .
+    ?execution purrdf:executesProcedure / purrdf:procedureType purrdf:procedureTypeIngestion .
+    ?execution purrdf:executesStep / purrdf:stepOutput ?output .
+    ?output a purrdf:Observation .
+    FILTER NOT EXISTS {
+        ?execution purrdf:executesStep / purrdf:stepOutput ?event .
+        ?event a purrdf:Event .
+    }
+}
+ORDER BY ?execution

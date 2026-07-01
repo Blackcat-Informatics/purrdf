@@ -1,0 +1,11 @@
+# Competency question: "What language-proficiency levels does PURRDF model, and on
+# which scales?" Expected: the ProficiencyLevel value individuals — the CEFR band
+# (A1–C2) plus scale-free native/heritage — each tied to its scale by
+# purrdf:levelScale. The leveled detail lives on the reified purrdf:LanguageProficiency.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?level WHERE {
+    ?level a purrdf:ProficiencyLevel .
+}
+ORDER BY ?level

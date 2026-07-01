@@ -1,0 +1,11 @@
+# Competency question: "What pronoun sets does PURRDF ship as values, and are they
+# independent of sex?" Expected: the PronounSet value individuals (she/her,
+# he/him, they/them, it/its, xe/xem, ze/hir, ey/em, any, ask). Sex/gender
+# independent — any further set is expressed by filling the five form properties.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+
+SELECT ?pronounSet WHERE {
+    ?pronounSet a purrdf:PronounSet .
+}
+ORDER BY ?pronounSet

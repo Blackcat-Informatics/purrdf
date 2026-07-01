@@ -1,0 +1,25 @@
+# Competency question: "What are the core procedure / execution / step terms in PURRDF?"
+# Expected: Procedure, ProcedureStep, Execution, ControlFlow, DataFlow, and key properties.
+
+PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+
+SELECT ?term WHERE {
+    {
+        ?term rdfs:subClassOf* purrdf:Procedure .
+    } UNION {
+        ?term rdfs:subClassOf* purrdf:ProcedureStep .
+    } UNION {
+        ?term rdfs:subClassOf* purrdf:Execution .
+    } UNION {
+        ?term rdfs:subClassOf* purrdf:ControlFlow .
+    } UNION {
+        ?term rdfs:subClassOf* purrdf:DataFlow .
+    } UNION {
+        ?term a owl:ObjectProperty ;
+            rdfs:domain ?domain .
+        FILTER(?domain IN (purrdf:Procedure, purrdf:ProcedureStep, purrdf:Execution, purrdf:ControlFlow, purrdf:DataFlow))
+    }
+}
+ORDER BY ?term

@@ -1,0 +1,1 @@
+SELECT ?z WHERE { ?x <http://ex/v> ?v } GROUP BY (SUM(?v) AS ?z)

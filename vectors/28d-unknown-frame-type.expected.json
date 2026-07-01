@@ -1,0 +1,28 @@
+{
+ "blobs": {},
+ "diagnostics": [
+  "UnknownFrameType"
+ ],
+ "mode": "default",
+ "nquads": [],
+ "opaque_reasons": [
+  "unknown-frame-type"
+ ],
+ "profiles": [
+  "generic"
+ ],
+ "quads": 0,
+ "segment_heads": [
+  "4ff3402a85b11cd0318c3ce4dfb5a1ea42edacc6c08af88a2f33535dbe3b46eb"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 0,
+ "terms": 0
+}

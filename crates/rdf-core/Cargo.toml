@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-core"
+description = "PURRDF RDF 1.2 oxigraph-free kernel: model, diagnostics, IR, store traits, and event ingestion"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["rdf", "rdf-12", "ir", "diagnostics", "linked-data"]
+
+[lib]
+# rlib-only oxigraph-free / PyO3-free kernel. Python bindings live under
+# `bindings/python`; this crate is the ring-fenced core that MUST NOT pull
+# oxigraph or PyO3 into its dependency tree (#885 / purrdf P2b).
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_core"
+
+[dependencies]
+# The permissive RDF 1.2 ingestion protocol (purrdf P6 #840): this crate provides
+# the `DatasetSink` adapter that folds an `RdfEventSink` event stream into a frozen
+# `RdfDataset`, plus the frozen-IR-replay `FrozenDatasetSource`. The protocol crate
+# is dependency-free and uses the same `MIT OR Apache-2.0` license as this crate.
+purrdf-events = { path = "../rdf-events", version = "0.1.0" }
+# Fixed-key, non-cryptographic hashing for in-memory IR lookup tables. The tables
+# never persist hash values and equality still resolves collisions; this replaces
+# SipHash on hot value-index paths without introducing runtime randomness.
+ahash = { version = "0.8", default-features = false }
+# Raw `HashTable` for the store-once builder interner/dedup (#880 P3c): each term/
+# row is owned ONCE by its `Vec`, the table holds only indices. `>= 0.14.2` because
+# the `HashTable` type was introduced in 0.14.2 (0.14.0/0.14.1 lack it).
+hashbrown = "0.14.2"
+# Tab-separated body parser for the native SSSOM codec (#848): handles quoting,
+# flexible column counts, and by-name column access. The SSSOM `#`-prefixed YAML
+# header is parsed bespoke (PURRDF owns the format); `csv` only parses the body.
+csv = "1"
+# Content-addressed blob digest for the content store (#820). Same version as the
+# sibling kernel crates (logic/validate/slice).
+sha2 = "0.10"
+
+[dev-dependencies]
+# Rich colored line-diffs on assert_eq! failure (#871). Drop-in: a shadowing
+# `use pretty_assertions::assert_eq;` per test file; identical on pass.
+pretty_assertions = "1"
+proptest = "1"
+# Acceleration-program baselines (#630/#819 C1 Task 7); light feature set matching
+# the sibling crates (logic/shacl/validate): criterion's plotters/rayon defaults are
+# off so `make bench` builds fast and the cargo-bench stdout summary is all we need.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+# IR layout / operational-metrics harness: AoS-vs-SoA(-vs-predicate-adjacency)
+# iteration + allocated-bytes/count/peak reporting. Satisfies the #819 RFC gate
+# "Layout is chosen by benchmark, not asserted". `make bench` lane only — excluded
+# from `make check`.
+name = "ir_layout"
+harness = false
+
+[[bench]]
+# COW `MutableDataset` measured-hypothesis harness (#839 P5): the shipped copy-on-
+# write suppression-delta dataset benched head-to-head against a simple hash-indexed
+# value-quad store, on a build/mutate/query workload. Reports both; asserts no winner.
+# `make bench` lane only — excluded from `make check`.
+name = "mutable"
+harness = false

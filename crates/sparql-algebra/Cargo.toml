@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-sparql-algebra"
+description = "Native, wasm-clean SPARQL 1.1/1.2 parser → RDF 1.2-native query algebra AST (quoted triple terms, property paths, FILTER/BIND/VALUES, solution modifiers, GROUP BY) for the RDF 1.2 query stack — replaces the direct oxigraph-family SPARQL-parser dependency (purrdf S5, EPIC #906)"
+version = "0.1.0"
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["sparql", "rdf", "rdf-12", "algebra", "parser"]
+
+[lib]
+# rlib-only, wasm-clean leaf: the SPARQL front-end of the native query stack. It
+# must NOT pull any oxigraph-family crate (it replaces the oxigraph-family SPARQL
+# parser). It builds
+# only on the two CLOSED foundation leaves `purrdf-iri` (#908) and `purrdf-xsd`
+# (#907); it deliberately does NOT depend on `purrdf-core` (whose terms are
+# dataset-interned `TermId` and which pulls a `gts` default feature).
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_sparql_algebra"
+
+[dependencies]
+purrdf-iri = { path = "../iri", version = "0.1.0" }
+purrdf-xsd = { path = "../xsd", version = "0.1.0" }
+
+[dev-dependencies]
+# Colored line-diffs on assert_eq! failure (repo convention).
+pretty_assertions = "1"
+# Property tests (lexer round-trips, parser robustness).
+proptest = "1"
+# Byte-unit AST snapshots for representative queries (repo golden convention).
+insta = "1"

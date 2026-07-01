@@ -1,0 +1,30 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/crypto-deferred-vector/v1",
+  "id": "missing-key-opacity",
+  "title": "No matching recipient key preserves opacity",
+  "deferred": true,
+  "status": "deferred-outside-v1-conformance",
+  "negative": true,
+  "cose_type": "COSE_Encrypt",
+  "codec": "cose-encrypt",
+  "held_keys": [],
+  "recipients": [
+    {
+      "kid": "anon:00000000000000000000000000000001",
+      "alg": "ECDH-ES+A256KW"
+    },
+    {
+      "kid": "anon:00000000000000000000000000000002",
+      "alg": "ECDH-ES+A256KW"
+    }
+  ],
+  "expected_diagnostics": [
+    "MissingKey"
+  ],
+  "expected": {
+    "opaque_reason": "missing-key",
+    "plaintext_available": false,
+    "recipient_count": 2
+  },
+  "notes": "Readers without any matching recipient private key must preserve the frame as opaque with MissingKey rather than failing the whole fold."
+}

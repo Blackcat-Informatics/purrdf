@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+SELECT ?s ?n WHERE {
+  ?s <http://ex/v> ?val
+  SERVICE <http://purrdf.test/ep> { ?s <http://ex/name> ?n }
+}

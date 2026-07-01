@@ -1,0 +1,1 @@
+SELECT (SUM(?v) AS ?s) WHERE { ?x <http://ex/v> ?v }

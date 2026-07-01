@@ -1,0 +1,47 @@
+{
+  "schema": "https://blackcatinformatics.ca/gts/tar-vector/v1",
+  "fixture": "pax-metadata",
+  "kind": "roundtrip",
+  "input": "pax-metadata.tar",
+  "from_tar_args": [
+    "--owner"
+  ],
+  "roundtrip": true,
+  "diagnostics": [],
+  "expected_entries": [
+    {
+      "path": "meta",
+      "kind": "directory",
+      "mode": 488,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff"
+    },
+    {
+      "path": "meta/pax.txt",
+      "kind": "file",
+      "size": 13,
+      "mode": 416,
+      "uid": 1000,
+      "gid": 100,
+      "user_name": "alice",
+      "group_name": "staff",
+      "pax_records": [
+        {
+          "key": "SCHILY.xattr.user.alpha",
+          "value": "alpha-value"
+        },
+        {
+          "key": "comment",
+          "value": "subsecond mtime and xattr-style metadata"
+        },
+        {
+          "key": "mtime",
+          "value": "1787000200.123456789"
+        }
+      ]
+    }
+  ],
+  "folded_nq": "pax-metadata.folded.nq"
+}

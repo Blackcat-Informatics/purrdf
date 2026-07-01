@@ -1,0 +1,10 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:WidgetShape
+    a sh:NodeShape ;
+    sh:targetNode ex:thing ;
+    sh:xone (
+        [ sh:nodeKind sh:Literal ]
+        [ sh:nodeKind sh:BlankNode ]
+    ) .

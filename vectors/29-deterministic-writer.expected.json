@@ -1,0 +1,33 @@
+{
+ "blobs": {
+  "blake3:c6b8e46c66743a333d50e1f02b41b17d132127c109460873342f16c076ee38b6": {
+   "mt": "text/plain",
+   "size": 21
+  }
+ },
+ "diagnostics": [],
+ "mode": "default",
+ "nquads": [
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Cat\"@en <https://example.org/graph> .",
+  "<https://example.org/stmt1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Cat\"@en )>> <https://example.org/graph> .",
+  "<https://example.org/stmt1> <https://example.org/confidence> \"0.9\" <https://example.org/graph> ."
+ ],
+ "opaque_reasons": [],
+ "profiles": [
+  "dist"
+ ],
+ "quads": 1,
+ "segment_heads": [
+  "afb4d5fdd7a202fb49df369d9b5729a7101b1f0b7e4fc02ad83f0399e21d1449"
+ ],
+ "segments": 1,
+ "streamable": [
+  {
+   "claimed": false,
+   "covered": 0,
+   "tail": 0
+  }
+ ],
+ "suppressions": 1,
+ "terms": 7
+}
