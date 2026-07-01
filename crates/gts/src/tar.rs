@@ -145,7 +145,7 @@ fn write_tar_stream<W: Write>(
     }
     writer
         .write_all(&ZERO_BLOCK)
-        .and_then(|_| writer.write_all(&ZERO_BLOCK))
+        .and_then(|()| writer.write_all(&ZERO_BLOCK))
         .map_err(|err| TarError::new(format!("finish tar stream: {err}")))
 }
 
@@ -219,7 +219,7 @@ impl HeaderMetadata {
                 _ => None,
             },
             typeflag,
-            mode: entry.mode.unwrap_or(default_mode(entry.kind)),
+            mode: entry.mode.unwrap_or_else(|| default_mode(entry.kind)),
             mtime: parse_mtime(entry.modified.as_deref())?,
             uid: entry.uid.unwrap_or(0),
             gid: entry.gid.unwrap_or(0),
@@ -378,7 +378,7 @@ fn parse_mtime(value: Option<&str>) -> Result<u64, TarError> {
 }
 
 fn write_path_fields(header: &mut [u8; BLOCK], path: &str) -> Result<(), TarError> {
-    if path.as_bytes().len() <= 100 {
+    if path.len() <= 100 {
         write_bytes_field(&mut header[0..100], path.as_bytes());
         return Ok(());
     }
@@ -392,13 +392,13 @@ fn write_path_fields(header: &mut [u8; BLOCK], path: &str) -> Result<(), TarErro
 }
 
 fn split_ustar_path(path: &str) -> Option<(&str, &str)> {
-    if path.as_bytes().len() > 255 {
+    if path.len() > 255 {
         return None;
     }
     for (idx, _) in path.match_indices('/').rev() {
         let prefix = &path[..idx];
         let name = &path[idx + 1..];
-        if !name.is_empty() && prefix.as_bytes().len() <= 155 && name.as_bytes().len() <= 100 {
+        if !name.is_empty() && prefix.len() <= 155 && name.len() <= 100 {
             return Some((prefix, name));
         }
     }
@@ -406,11 +406,11 @@ fn split_ustar_path(path: &str) -> Option<(&str, &str)> {
 }
 
 fn fits_tar_path(path: &str) -> bool {
-    path.as_bytes().len() <= 100 || split_ustar_path(path).is_some()
+    path.len() <= 100 || split_ustar_path(path).is_some()
 }
 
 fn fits_tar_field(value: &str, width: usize) -> bool {
-    value.as_bytes().len() <= width
+    value.len() <= width
 }
 
 fn write_bytes_field(field: &mut [u8], value: &[u8]) {
@@ -447,7 +447,7 @@ fn pax_header_name(path: &str) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or("entry");
     let name = format!("PaxHeaders.0/{leaf}");
-    if name.as_bytes().len() <= 100 {
+    if name.len() <= 100 {
         name
     } else {
         "PaxHeaders.0/entry".to_string()
@@ -1037,7 +1037,7 @@ mod tests {
         )
         .unwrap();
         let mut graph = crate::reader::read(&bytes, true, None);
-        let entries = crate::files::read_entries(&graph).unwrap();
+        let entries = read_entries(&graph).unwrap();
         let entry = entries.get("a/b.txt").unwrap();
         assert_eq!(entry.size, Some(5));
         let digest = entry.digest.as_deref().unwrap();

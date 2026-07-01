@@ -49,6 +49,7 @@ fn loss_matrix_json() -> String {
 /// the graph (RDFC-aware blank handling), so re-running is idempotent.
 #[pyfunction]
 #[pyo3(signature = (turtle_bytes, extra_prefixes=Vec::new()))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn canonicalize_turtle(
     turtle_bytes: &[u8],
     extra_prefixes: Vec<(String, String)>,
@@ -63,7 +64,7 @@ fn canonicalize_turtle(
 /// Called by the unified `purrdf_native` cdylib (#630) to populate the
 /// `purrdf_native.rdf` submodule; the legacy `import purrdf` name resolves to
 /// that same submodule object via a Python shim.
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(project_statements_rdf12, m)?)?;
     m.add_function(wrap_pyfunction!(normalize_rdf12_to_owl, m)?)?;
     m.add_function(wrap_pyfunction!(loss_matrix_json, m)?)?;

@@ -328,7 +328,7 @@ fn capture_substitution_goldens(goldens: &Path) -> usize {
             subst: vec![(
                 "this".to_owned(),
                 TermValue::Blank {
-                    label: blank_label.clone(),
+                    label: blank_label,
                     scope: BlankScope::DEFAULT,
                 },
             )],

@@ -259,7 +259,6 @@ pub fn canonical_base64(bytes: &[u8]) -> String {
             out.push(char::from(BASE64_ALPHABET[(a >> 2) as usize]));
             out.push(char::from(BASE64_ALPHABET[((a & 0x03) << 4) as usize]));
             out.push('=');
-            out.push('=');
         } else {
             // remainder == 2
             let (a, b) = (bytes[base], bytes[base + 1]);
@@ -268,8 +267,10 @@ pub fn canonical_base64(bytes: &[u8]) -> String {
                 BASE64_ALPHABET[((a & 0x03) << 4 | b >> 4) as usize],
             ));
             out.push(char::from(BASE64_ALPHABET[((b & 0x0F) << 2) as usize]));
-            out.push('=');
         }
+        // Both remainder arms end with one shared padding '='; remainder == 1 adds
+        // its second '=' above, keeping the emitted bytes identical.
+        out.push('=');
     }
 
     out

@@ -105,7 +105,7 @@ fn days_from_civil(y: i64, m: u8, d: u8) -> i64 {
     let m = i64::from(m);
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + i64::from(d) - 1; // [0,365]
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
-    era * 146097 + doe - 719_468
+    era * 146_097 + doe - 719_468
 }
 
 /// Convert Unix epoch seconds (UTC) to an xsd:dateTime value using Howard Hinnant's
@@ -127,7 +127,7 @@ pub fn datetime_from_unix_seconds(secs: i64) -> DateTime {
     let z = days + 719_468;
     let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
     let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
     let y = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
@@ -141,8 +141,8 @@ pub fn datetime_from_unix_seconds(secs: i64) -> DateTime {
 
     let hour = (tod / 3600) as u8;
     let minute = ((tod % 3600) / 60) as u8;
-    let second_whole = (tod % 60) as i128;
-    let second = crate::numeric::Decimal::from_parts(second_whole, 0);
+    let second_whole = i128::from(tod % 60);
+    let second = Decimal::from_parts(second_whole, 0);
 
     DateTime {
         year: y,
@@ -467,10 +467,10 @@ fn parse_year_str<'a>(
     s: &'a str,
 ) -> Result<(i64, &'a str), XsdError> {
     let neg = s.starts_with('-');
-    let digits_start = if neg { 1 } else { 0 };
+    let digits_start = usize::from(neg);
     let rest = &s[digits_start..];
     // Find how many leading ASCII digits there are.
-    let n_digits = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
+    let n_digits = rest.bytes().take_while(u8::is_ascii_digit).count();
     if n_digits < 4 {
         return Err(invalid(dt, lexical, "year must be at least 4 digits"));
     }
@@ -982,36 +982,37 @@ impl Duration {
         let mins = (rem % 3600) / 60;
         let secs = rem % 60;
 
+        use std::fmt::Write as _;
         let mut out = String::new();
         if neg {
             out.push('-');
         }
         out.push('P');
         if years > 0 {
-            out.push_str(&format!("{years}Y"));
+            let _ = write!(out, "{years}Y");
         }
         if rem_months > 0 {
-            out.push_str(&format!("{rem_months}M"));
+            let _ = write!(out, "{rem_months}M");
         }
         if days > 0 {
-            out.push_str(&format!("{days}D"));
+            let _ = write!(out, "{days}D");
         }
         let has_time = hours > 0 || mins > 0 || secs > 0 || !frac.is_zero();
         if has_time {
             out.push('T');
             if hours > 0 {
-                out.push_str(&format!("{hours}H"));
+                let _ = write!(out, "{hours}H");
             }
             if mins > 0 {
-                out.push_str(&format!("{mins}M"));
+                let _ = write!(out, "{mins}M");
             }
             if secs > 0 || !frac.is_zero() {
                 if frac.is_zero() {
-                    out.push_str(&format!("{secs}S"));
+                    let _ = write!(out, "{secs}S");
                 } else {
                     let canon = frac.canonical_lexical();
                     let digits = canon.split_once('.').map_or("", |(_, f)| f);
-                    out.push_str(&format!("{secs}.{digits}S"));
+                    let _ = write!(out, "{secs}.{digits}S");
                 }
             }
         }

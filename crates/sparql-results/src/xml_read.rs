@@ -191,17 +191,17 @@ impl Element {
     }
 
     /// The first direct child element named `name`.
-    fn child(&self, name: &str) -> Option<&Element> {
+    fn child(&self, name: &str) -> Option<&Self> {
         self.child_elements().find(|e| e.name == name)
     }
 
     /// All direct child elements named `name`.
-    fn children_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Element> {
+    fn children_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Self> {
         self.child_elements().filter(move |e| e.name == name)
     }
 
     /// All direct child elements (text nodes skipped).
-    fn child_elements(&self) -> impl Iterator<Item = &Element> {
+    fn child_elements(&self) -> impl Iterator<Item = &Self> {
         self.children.iter().filter_map(|n| match n {
             Node::Element(e) => Some(e),
             Node::Text(_) => None,
@@ -395,9 +395,8 @@ impl<'a> XmlParser<'a> {
         self.skip_ws();
         self.expect(b'=')?;
         self.skip_ws();
-        let quote = match self.peek() {
-            Some(q @ (b'"' | b'\'')) => q,
-            _ => return Err(fmt("attribute value must be quoted")),
+        let Some(quote @ (b'"' | b'\'')) = self.peek() else {
+            return Err(fmt("attribute value must be quoted"));
         };
         self.pos += 1;
         let start = self.pos;

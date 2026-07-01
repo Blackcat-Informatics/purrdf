@@ -160,12 +160,13 @@ fn parse_inner(s: &str, mode: Mode) -> Result<Iri> {
     }
 
     // fragment: '#' then the rest.
-    let mut fragment: Option<Range<usize>> = None;
-    if idx < bytes.len() && bytes[idx] == b'#' {
+    let fragment: Option<Range<usize>> = if idx < bytes.len() && bytes[idx] == b'#' {
         let fstart = idx + 1;
         validate_fragment(&s[fstart..], fstart, mode)?;
-        fragment = Some(fstart..s.len());
-    }
+        Some(fstart..s.len())
+    } else {
+        None
+    };
 
     Ok(Iri {
         text: s.to_owned(),

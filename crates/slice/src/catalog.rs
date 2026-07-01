@@ -29,7 +29,7 @@ const PURRDF_SLICE_PROFILE: &str = "https://blackcatinformatics.ca/purrdf/sliceP
 const PURRDF_SLICE_DEPENDS_ON: &str = "https://blackcatinformatics.ca/purrdf/sliceDependsOn";
 const PURRDF_SLICE_CLASS: &str = "https://blackcatinformatics.ca/purrdf/Slice";
 
-/// The tier of a slice in the PURRDF taxonomy.
+/// The tier of a slice in the PurRDF taxonomy.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SliceTier {
     Core,
@@ -42,10 +42,10 @@ impl SliceTier {
     fn from_iri(iri: &str) -> Self {
         let base = PURRDF;
         match iri.strip_prefix(base) {
-            Some("tierCore") => SliceTier::Core,
-            Some("tierExtension") => SliceTier::Extension,
-            Some("tierDomain") => SliceTier::Domain,
-            _ => SliceTier::Unknown(iri.to_string()),
+            Some("tierCore") => Self::Core,
+            Some("tierExtension") => Self::Extension,
+            Some("tierDomain") => Self::Domain,
+            _ => Self::Unknown(iri.to_string()),
         }
     }
 }
@@ -80,6 +80,7 @@ pub struct ManifestView {
 
 /// A fully-loaded slice record: manifest view, manifest IR dataset, and artifact
 /// inventory.
+#[derive(Debug)]
 pub struct SliceRecord {
     /// The parsed manifest fields.
     pub manifest: ManifestView,
@@ -113,6 +114,7 @@ impl SliceRecord {
 }
 
 /// The slice catalog: a collection of discovered and loaded slice records.
+#[derive(Debug)]
 pub struct SliceCatalog {
     records: Vec<SliceRecord>,
 }
@@ -381,6 +383,8 @@ fn compute_semantic_digest(bytes: &[u8], path: &Path) -> Result<String, SliceErr
     Ok(hex_sha256(canonical.as_bytes()))
 }
 
+// Artifact classification is deliberately byte-exact on lowercase extensions.
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
 fn is_rdf_file(path: &str) -> bool {
     path.ends_with(".ttl") || path.ends_with(".nt") || path.ends_with(".nq")
 }
@@ -472,13 +476,13 @@ mod tests {
     /// with `SliceError::InvalidManifest` naming both subjects.
     #[test]
     fn find_slice_iri_rejects_multiple_slice_subjects() {
-        let ttl = r#"
+        let ttl = r"
 @prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
 
 <https://example.org/slice/alpha> a purrdf:Slice .
 <https://example.org/slice/beta>  a purrdf:Slice .
-"#;
+";
         let path = Path::new("manifest.ttl");
         let ds = parse_manifest(ttl.as_bytes(), path).expect("should parse without error");
         let result = find_slice_iri(&ds);
@@ -506,10 +510,10 @@ mod tests {
     #[test]
     fn compute_semantic_digest_handles_nt_artifacts() {
         // The same single triple expressed in two formats.
-        let turtle_bytes = br#"
+        let turtle_bytes = br"
 @prefix ex: <https://example.org/> .
 ex:subject ex:predicate ex:object .
-"#;
+";
         let nt_bytes = b"<https://example.org/subject> <https://example.org/predicate> <https://example.org/object> .\n";
 
         let ttl_path = Path::new("data.ttl");

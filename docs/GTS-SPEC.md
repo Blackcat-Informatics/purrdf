@@ -40,9 +40,9 @@ against the shared vector corpus. Report errata and propose changes there. Core 
 additions, and optional-standard profile promotion follow the
 [GTS governance process](./GTS-GOVERNANCE.md).
 
-GTS is ontology-independent. PURRDF is a primary downstream consumer and distribution use case
-for GTS, but GTS readers and writers do not require PURRDF vocabulary, tooling, or semantics.
-Domain-specific profiles, including PURRDF and music-package profiles, are layered above the
+GTS is ontology-independent. PurRDF is a primary downstream consumer and distribution use case
+for GTS, but GTS readers and writers do not require PurRDF vocabulary, tooling, or semantics.
+Domain-specific profiles, including PurRDF and music-package profiles, are layered above the
 core format.
 
 ## Document history
@@ -1265,8 +1265,8 @@ The status values used by this specification are:
 | `stream` | optional-standard | Streaming vocabulary and publication layout support used by §3.3 and §10.1. | None; layout checks are reader/tool diagnostics, not new frame grammar. |
 | `image` | experimental | Blob representations plus descriptive metadata and analysis frames. | None. |
 | `ai-package` | experimental | A concept plus logic, observations, opinions, refuted claims, embeddings, and data. | None. |
-| `music-package` | domain-specific | PURRDF music transport conventions; informative here, specified by the downstream profile. | None. |
-| PURRDF distribution profiles | domain-specific | Downstream PURRDF package conventions layered on GTS distribution artifacts. | None. |
+| `music-package` | domain-specific | PurRDF music transport conventions; informative here, specified by the downstream profile. | None. |
+| PurRDF distribution profiles | domain-specific | Downstream PurRDF package conventions layered on GTS distribution artifacts. | None. |
 | `agent-memory` | domain-specific | Application conventions for memory, belief revision, suppression, and provenance. | None. |
 
 Profiles constrain conventions, not the wire format; a `generic` reader reads all profile
@@ -1323,14 +1323,14 @@ are maintained in [`GTS-GOVERNANCE.md`](./GTS-GOVERNANCE.md).
 
 This subsection defines a profile/projection-writer rule, not a Baseline Reader requirement.
 
-A producer's graph payload MAY carry **internal private-use language tags** (e.g. PURRDF's
+A producer's graph payload MAY carry **internal private-use language tags** (e.g. PurRDF's
 `x-purrdf-*`): the payload of a `dist` or `ai-package` segment *is* the canonical form, and
 canonical forms keep their internal tags. Every **projection section** — docs blobs, derived
 views, down-projected representations, anything generated *for an external consumer* — MUST
 carry **public BCP 47 tags only**; a producer that leaks private-use tags into a projection
 section MUST fail at write time, not warn (vector 20). The boundary is per *role*, not per
 file: one package legitimately carries a canonical payload with internal tags beside
-public-tagged docs sections. (This mirrors the PURRDF generator framework's internal-tag leak
+public-tagged docs sections. (This mirrors the PurRDF generator framework's internal-tag leak
 gate; the reference producer reuses its `retag` machinery at the section boundary.)
 
 ### 13.2 The `files` profile (optional-standard)
@@ -1343,7 +1343,7 @@ without implementing archive tooling.
 
 **Namespace.** The profile owns a small, spec-defined vocabulary at
 `https://w3id.org/gts/files#` (prefix `files`). GTS independence means an unpacker MUST NOT
-require PURRDF, schema.org, or any other ontology to read the archive; the vocabulary is
+require PurRDF, schema.org, or any other ontology to read the archive; the vocabulary is
 authored in the spec and carried as literal IRIs in the graph.
 
 | term | IRI | shape |
@@ -1452,14 +1452,14 @@ explicit `--include-suppressed` override when the operator intentionally wants r
 **Relationship to other vocabularies.** The profile is deliberately self-contained, but the
 terms align by reference to common surface vocabularies: `files:size` ↔ schema.org
 `contentSize`, `files:mediaType` ↔ schema.org `encodingFormat`, `files:modified` ↔ NFO
-`fileLastModified`, `files:path` ↔ NFO `fileName`. These alignments live in PURRDF's mapping
+`fileLastModified`, `files:path` ↔ NFO `fileName`. These alignments live in PurRDF's mapping
 DSL; the files profile itself does not depend on them.
 
 ### 13.3 The `stream` vocabulary (optional-standard)
 
 The streamable layout state (§3.3) and streamable compaction (§10.1) use a small,
 optional-standard vocabulary at `https://w3id.org/gts/stream#` (prefix `stream`) — the same
-independence decision as the `files` profile (§13.2): no PURRDF or external ontology is required
+independence decision as the `files` profile (§13.2): no PurRDF or external ontology is required
 to stream a photo archive; the terms are authored here and carried as literal IRIs in the graph.
 The vocabulary is deliberately distinct from `files#` (the two compose: a `files` archive that
 is also streamable describes each file once as a `files:FileEntry` and once as a
@@ -1517,16 +1517,16 @@ class is reserved for the opposite rot — a claimed layout the bytes contradict
 ### 13.4 Domain profile example: `music-package` (informative)
 
 This subsection is an informative example of a domain-specific profile. A Baseline Reader,
-Writer, or verifier is not required to implement PURRDF vocabulary, music-domain rules, notation
+Writer, or verifier is not required to implement PurRDF vocabulary, music-domain rules, notation
 projection rules, or the `music-package` validator to be conformant with core GTS.
 
 The `music-package` profile can be defined as a single-segment GTS that carries frame-relative
 musical content: a `MusicalWork`/`MusicalExpression`, its `Voice`s and `MusicalSegment`s,
 `TuningSystem` and `MusicalTimeFrame` reference frames, atomic `ToneEvent`s,
 `DegreeOfFreedom` declarations, and standpoint-indexed analysis claims. It is the canonical
-transport form for the PURRDF music slice and the input to notation projections.
+transport form for the PurRDF music slice and the input to notation projections.
 
-**Namespace.** The profile reuses the PURRDF music vocabulary
+**Namespace.** The profile reuses the PurRDF music vocabulary
 (`https://blackcatinformatics.ca/purrdf/`). A `music-package` is not required to be a `dist`
 profile: it may carry only the musical content graph plus any projection blobs, and it MAY rely on
 an external `dist` snapshot for vocabulary definitions.

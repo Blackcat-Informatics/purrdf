@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/Blackcat-Informatics/purrdf">
-    <img src="https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg" alt="PURRDF logo" width="120" height="120">
+    <img src="https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg" alt="PurRDF logo" width="120" height="120">
   </a>
 </p>
 
@@ -16,7 +16,7 @@
 
 > **An LLM output is a claim, not a truth.**
 
-`purrdf-shapes` is an oxigraph-backed SHACL Core validator for the PURRDF
+`purrdf-shapes` is an oxigraph-backed SHACL Core validator for the PurRDF
 ontology toolchain. It validates an RDF 1.2 data graph against a SHACL shapes
 graph with no inference (parity with pySHACL `inference="none"`), using the
 non-SPARQL constraint/target surface. SPARQL-based constraints and targets
@@ -85,7 +85,7 @@ Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`,
 ## Project and community
 
 `purrdf-shapes` is developed by [Blackcat Informatics® Inc.](https://blackcatinformatics.ca)
-as part of the [PURRDF ontology and tooling](https://github.com/Blackcat-Informatics/purrdf)
+as part of the [PurRDF ontology and tooling](https://github.com/Blackcat-Informatics/purrdf)
 suite. See EPIC #575 for the full roadmap.
 
 Related packages:

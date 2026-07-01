@@ -423,7 +423,7 @@ class RdfDataset:
     def to_gts(self, profile: str = ...) -> bytes: ...
 
 # ── Native SSSOM codec (bindings/python/src/py_sssom.rs, #848) ──────────────────
-# Parse + validate + RDF serialize for PURRDF SSSOM TSV mapping artifacts — the
+# Parse + validate + RDF serialize for PurRDF SSSOM TSV mapping artifacts — the
 # in-repo replacement for the external `sssom` package. `validate_sssom` returns
 # one `SssomDiagnostic` dict per diagnostic (a parse failure surfaces as a single
 # `severity="FATAL"`, `check="parse"` dict); a clean file yields `[]`.

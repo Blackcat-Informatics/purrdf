@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! JSON-LD `@graph` projector for PURRDF instance data (#700).
+//! JSON-LD `@graph` projector for PurRDF instance data (#700).
 //!
 //! Walks an oxigraph data graph (the default graph) and emits a JSON-LD document
 //! `{ "@context": {<prefix map>}, "@graph": [ <node objects> ] }`. The projection
@@ -128,7 +128,7 @@ fn project_subject_data<G: ShaclDataGraph>(data: &G, subject: &Term) -> Value {
     }
 
     for (key, mut objects) in by_pred {
-        objects.sort_by_key(|t| t.to_string());
+        objects.sort_by_key(ToString::to_string);
         let values: Vec<Value> = objects.iter().map(project_value).collect();
         let v = if values.len() == 1 {
             values.into_iter().next().unwrap()
@@ -167,7 +167,7 @@ fn project_value(term: &Term) -> Value {
         }
         // Quoted triple (RDF-1.2) and any other term: stringify (statement-layer
         // reifiers are projected via @annotation, not as plain object values).
-        other => Value::String(other.to_string()),
+        other @ Term::Triple(_) => Value::String(other.to_string()),
     }
 }
 
@@ -215,11 +215,11 @@ mod tests {
         crate::text_ingest::parse_turtle_to_dataset(ttl).expect("Turtle parse")
     }
 
-    const PREFIXES_TTL: &str = r#"
+    const PREFIXES_TTL: &str = r"
         @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
         @prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
         @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
-    "#;
+    ";
 
     #[test]
     fn test_project_graph_envelope_and_context() {
@@ -246,9 +246,9 @@ mod tests {
     #[test]
     fn test_object_property_is_node_ref() {
         let store = load(&format!(
-            r#"{PREFIXES_TTL}
+            r"{PREFIXES_TTL}
             purrdf:org purrdf:member purrdf:alice .
-        "#
+        "
         ));
         let doc = project_graph(&store);
         let graph = doc["@graph"].as_array().unwrap();

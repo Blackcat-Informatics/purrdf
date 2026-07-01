@@ -72,6 +72,7 @@ impl TermId {
     /// Turtle serializer in particular — can address terms by position within a
     /// SINGLE dataset. It remains dataset-local and is never serialized or
     /// compared across datasets (C0.8).
+    #[inline]
     pub fn index(self) -> usize {
         // The stored value is `index + 1` (id 0 is the niche sentinel), so the
         // dense index is one less. Never underflows: the inner is `>= 1`.
@@ -87,6 +88,7 @@ impl TermId {
     /// (rather than wrapping) if `index` is `u32::MAX`, since `index + 1` would
     /// overflow the id space — the largest dense index is `u32::MAX - 1`, so the
     /// table can hold up to `u32::MAX` terms.
+    #[inline]
     pub fn from_index(index: u32) -> Self {
         let raw = index
             .checked_add(1)
@@ -99,8 +101,8 @@ impl TermId {
 // The NonZeroU32 niche is the load-bearing P3a invariant (#837): it is *why*
 // `Option<TermId>` — and the `g` graph slot of every quad row — costs no extra
 // word. These compile-time assertions fail the build if the niche ever regresses.
-const _: () = assert!(std::mem::size_of::<TermId>() == 4);
-const _: () = assert!(std::mem::size_of::<Option<TermId>>() == 4);
+const _: () = assert!(size_of::<TermId>() == 4);
+const _: () = assert!(size_of::<Option<TermId>>() == 4);
 
 /// Blank-node scope. Participates in the interning key (C0.2): two blank nodes
 /// from different scopes are distinct even with the same label; two blank nodes in
@@ -225,9 +227,9 @@ pub enum TermValue {
     },
     /// A triple term, identified structurally by its `(s, p, o)` **values** (C0.3).
     Triple {
-        s: Box<TermValue>,
-        p: Box<TermValue>,
-        o: Box<TermValue>,
+        s: Box<Self>,
+        p: Box<Self>,
+        o: Box<Self>,
     },
 }
 
@@ -235,13 +237,13 @@ impl TermValue {
     /// An IRI term from its full string.
     #[inline]
     pub fn iri(value: impl Into<String>) -> Self {
-        TermValue::Iri(value.into())
+        Self::Iri(value.into())
     }
 
     /// A blank node in the default scope, from its bare label.
     #[inline]
     pub fn blank(label: impl Into<String>) -> Self {
-        TermValue::Blank {
+        Self::Blank {
             label: label.into(),
             scope: BlankScope::DEFAULT,
         }
@@ -250,7 +252,7 @@ impl TermValue {
     /// A plain `xsd:string` literal (datatype expanded per C0.1).
     #[inline]
     pub fn simple_literal(lexical_form: impl Into<String>) -> Self {
-        TermValue::Literal {
+        Self::Literal {
             lexical_form: lexical_form.into(),
             datatype: XSD_STRING.to_owned(),
             language: None,
@@ -261,7 +263,7 @@ impl TermValue {
     /// A typed literal with an explicit datatype IRI.
     #[inline]
     pub fn typed_literal(lexical_form: impl Into<String>, datatype: impl Into<String>) -> Self {
-        TermValue::Literal {
+        Self::Literal {
             lexical_form: lexical_form.into(),
             datatype: datatype.into(),
             language: None,
@@ -273,7 +275,7 @@ impl TermValue {
     /// **lowercased** for the identity key per C0.1).
     #[inline]
     pub fn lang_literal(lexical_form: impl Into<String>, language: impl AsRef<str>) -> Self {
-        TermValue::Literal {
+        Self::Literal {
             lexical_form: lexical_form.into(),
             datatype: RDF_LANG_STRING.to_owned(),
             language: Some(language.as_ref().to_lowercase()),
@@ -285,7 +287,7 @@ impl TermValue {
     #[inline]
     pub fn as_iri(&self) -> Option<&str> {
         match self {
-            TermValue::Iri(iri) => Some(iri.as_str()),
+            Self::Iri(iri) => Some(iri.as_str()),
             _ => None,
         }
     }
@@ -294,7 +296,7 @@ impl TermValue {
     #[inline]
     pub fn as_blank(&self) -> Option<(&str, BlankScope)> {
         match self {
-            TermValue::Blank { label, scope } => Some((label.as_str(), *scope)),
+            Self::Blank { label, scope } => Some((label.as_str(), *scope)),
             _ => None,
         }
     }
@@ -302,19 +304,19 @@ impl TermValue {
     /// `true` iff this term is an IRI.
     #[inline]
     pub fn is_iri(&self) -> bool {
-        matches!(self, TermValue::Iri(_))
+        matches!(self, Self::Iri(_))
     }
 
     /// `true` iff this term is a literal.
     #[inline]
     pub fn is_literal(&self) -> bool {
-        matches!(self, TermValue::Literal { .. })
+        matches!(self, Self::Literal { .. })
     }
 
     /// `true` iff this term is a blank node.
     #[inline]
     pub fn is_blank(&self) -> bool {
-        matches!(self, TermValue::Blank { .. })
+        matches!(self, Self::Blank { .. })
     }
 }
 
@@ -328,16 +330,16 @@ impl TermValue {
 impl core::hash::Hash for TermValue {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         match self {
-            TermValue::Iri(iri) => {
+            Self::Iri(iri) => {
                 0u8.hash(state);
                 iri.hash(state);
             }
-            TermValue::Blank { label, scope } => {
+            Self::Blank { label, scope } => {
                 1u8.hash(state);
                 label.hash(state);
                 scope.hash(state);
             }
-            TermValue::Literal {
+            Self::Literal {
                 lexical_form,
                 datatype,
                 language,
@@ -349,7 +351,7 @@ impl core::hash::Hash for TermValue {
                 language.hash(state);
                 direction.hash(state);
             }
-            TermValue::Triple { s, p, o } => {
+            Self::Triple { s, p, o } => {
                 3u8.hash(state);
                 s.hash(state);
                 p.hash(state);
@@ -376,8 +378,8 @@ mod tests {
     #[test]
     fn term_id_option_uses_the_nonzero_niche() {
         // The whole point of P3a: `Option<TermId>` rides the NonZeroU32 niche.
-        assert_eq!(std::mem::size_of::<Option<TermId>>(), 4);
-        assert_eq!(std::mem::size_of::<TermId>(), 4);
+        assert_eq!(size_of::<Option<TermId>>(), 4);
+        assert_eq!(size_of::<TermId>(), 4);
     }
 
     #[test]

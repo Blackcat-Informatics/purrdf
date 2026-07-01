@@ -39,17 +39,17 @@ pub enum IriError {
 impl fmt::Display for IriError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            IriError::Empty => f.write_str("empty IRI/URI string"),
-            IriError::MissingScheme => f.write_str("missing scheme"),
-            IriError::BadScheme(s) => write!(f, "malformed scheme: {s:?}"),
-            IriError::BadPercentEncoding(at) => {
+            Self::Empty => f.write_str("empty IRI/URI string"),
+            Self::MissingScheme => f.write_str("missing scheme"),
+            Self::BadScheme(s) => write!(f, "malformed scheme: {s:?}"),
+            Self::BadPercentEncoding(at) => {
                 write!(f, "malformed percent-encoding at byte {at}")
             }
-            IriError::DisallowedChar(c, at) => {
+            Self::DisallowedChar(c, at) => {
                 write!(f, "disallowed character {c:?} at byte {at}")
             }
-            IriError::BadAuthority(why) => write!(f, "malformed authority: {why}"),
-            IriError::NonAbsoluteBase(b) => {
+            Self::BadAuthority(why) => write!(f, "malformed authority: {why}"),
+            Self::NonAbsoluteBase(b) => {
                 write!(f, "base IRI is not absolute (no scheme): {b:?}")
             }
         }

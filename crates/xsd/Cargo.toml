@@ -4,12 +4,17 @@
 [package]
 name = "purrdf-xsd"
 description = "Native, zero-dependency XSD value space (parse, value-space equality/ordering, canonical lexical mapping, SPARQL numeric promotion) for the RDF 1.2 query stack — replaces oxsdatatypes (purrdf S1, EPIC #906)"
-version = "0.1.1"
+version.workspace = true
 edition.workspace = true
 repository.workspace = true
 license.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
 readme = "README.md"
 keywords = ["xsd", "rdf", "rdf-12", "value-space", "sparql"]
+
+[lints]
+workspace = true
 
 [lib]
 # rlib-only, ZERO runtime dependencies: this crate is a leaf foundation. It must
@@ -22,6 +27,6 @@ name = "purrdf_xsd"
 
 [dev-dependencies]
 # Colored line-diffs on assert_eq! failure (repo convention). Drop-in per test file.
-pretty_assertions = "1"
+pretty_assertions = { workspace = true }
 # Round-trip / canonicalization property tests (lexical -> value -> canonical).
-proptest = "1"
+proptest = { workspace = true }

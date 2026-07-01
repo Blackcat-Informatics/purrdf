@@ -35,6 +35,7 @@ use crate::{
 
 /// An in-memory RDF 1.2 quad store with SPARQL. Mirrors the oxigraph Python `Store`.
 #[pyclass(name = "Store")]
+#[derive(Debug)]
 pub struct PyStore {
     inner: MutableDataset,
     /// Monotonic per-load counter that isolates blank-node label scopes across
@@ -201,8 +202,8 @@ impl PyStore {
     }
 
     /// Iterate the store's quads (a snapshot taken at iteration time).
-    fn __iter__(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<PyQuadIter>> {
-        let quads = slf
+    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyQuadIter>> {
+        let quads = self
             .inner
             .quads_for_pattern(None, None, None, GraphMatchValue::Any)
             .iter()
@@ -228,7 +229,7 @@ impl PyStore {
         // Heap-box the Arc so its address is stable; the destructor reclaims the box
         // (dropping the held Arc) when the capsule is collected.
         let boxed: Box<Arc<RdfDataset>> = Box::new(snapshot);
-        let addr = (&*boxed as *const Arc<RdfDataset>) as usize;
+        let addr = (&raw const *boxed) as usize;
         let keepalive = boxed;
         // SAFETY: `addr` is the address of the `Arc<RdfDataset>` owned by `keepalive`,
         // moved into the destructor closure; it stays live and at a stable address for
@@ -287,6 +288,7 @@ impl PyStore {
 /// An in-memory quad set supporting RDFC-1.0 canonicalization. Mirrors
 /// the oxigraph Python `Dataset`.
 #[pyclass(name = "Dataset")]
+#[derive(Debug)]
 pub struct PyDataset {
     /// The accumulated quads, deduplicated by content (set semantics).
     quads: Vec<RdfQuad>,
@@ -318,15 +320,15 @@ impl PyDataset {
 
     /// Canonicalize blank-node labels in place under `algorithm` (native RDFC-1.0).
     fn canonicalize(&mut self, algorithm: PyCanonicalizationAlgorithm) {
-        self.quads = super::canon::canonicalize_quads(std::mem::take(&mut self.quads), algorithm);
+        self.quads = super::canon::canonicalize_quads(&self.quads, algorithm);
     }
 
     fn __len__(&self) -> usize {
         self.quads.len()
     }
 
-    fn __iter__(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<PyQuadIter>> {
-        let quads = slf.quads.clone();
+    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyQuadIter>> {
+        let quads = self.quads.clone();
         Py::new(py, PyQuadIter { quads, pos: 0 })
     }
 }
@@ -342,6 +344,7 @@ impl PyDataset {
 
 /// Iterator over a [`PyDataset`]'s / [`PyStore`]'s quads (snapshot at iteration time).
 #[pyclass(name = "QuadIter")]
+#[derive(Debug)]
 pub struct PyQuadIter {
     pub(crate) quads: Vec<RdfQuad>,
     pub(crate) pos: usize,
@@ -515,7 +518,7 @@ fn value_to_rdf_term(value: &TermValue) -> RdfTerm {
             language,
             direction,
         } => RdfTerm::Literal(RdfLiteral {
-            datatype: collapse_synthetic_datatype(datatype, language),
+            datatype: collapse_synthetic_datatype(datatype, language.as_ref()),
             lexical_form: lexical_form.clone(),
             language: language.clone(),
             direction: *direction,
@@ -530,7 +533,7 @@ fn value_to_rdf_term(value: &TermValue) -> RdfTerm {
 
 /// Drop the synthetic `xsd:string` / `rdf:langString` datatype the value model always
 /// carries, leaving the owned model's plain / lang literals datatype-less.
-fn collapse_synthetic_datatype(datatype: &str, language: &Option<String>) -> Option<String> {
+fn collapse_synthetic_datatype(datatype: &str, language: Option<&String>) -> Option<String> {
     if language.is_some() {
         return (datatype != RDF_LANG_STRING).then(|| datatype.to_owned());
     }
@@ -647,7 +650,7 @@ mod tests {
         // address, then read the Arc back through the raw pointer (as the consumer
         // does after `pointer_checked`).
         let boxed: Box<Arc<RdfDataset>> = Box::new(snapshot);
-        let addr = (&*boxed as *const Arc<RdfDataset>) as usize;
+        let addr = (&raw const *boxed) as usize;
         // SAFETY: `addr` is the live address of the Arc owned by `boxed` (test-local).
         let borrowed: &Arc<RdfDataset> = unsafe { &*(addr as *const Arc<RdfDataset>) };
         assert_eq!(borrowed.quad_count(), 2);

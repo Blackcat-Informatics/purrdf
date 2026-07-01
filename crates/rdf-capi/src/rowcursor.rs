@@ -20,6 +20,7 @@ use crate::term::{render_value, PurrdfTermView};
 /// `TermValue`; those pointers stay valid for the cursor's life (documented
 /// conservatively as "until the next `_next`/`_free`"). The C side never frees a
 /// `PurrdfStr.ptr`. Single-threaded.
+#[derive(Debug)]
 pub struct PurrdfRowCursor {
     variables: Vec<CString>,
     rows: Vec<Vec<Option<TermValue>>>,
@@ -49,7 +50,7 @@ impl PurrdfRowCursor {
     }
 
     /// Heap-allocate as a handle pointer.
-    pub(crate) fn into_raw(self) -> *mut PurrdfRowCursor {
+    pub(crate) fn into_raw(self) -> *mut Self {
         Box::into_raw(Box::new(self))
     }
 }
@@ -63,14 +64,16 @@ pub unsafe extern "C" fn purrdf_rowcursor_variable_count(
     rc: *const PurrdfRowCursor,
     out: *mut usize,
 ) -> i32 {
-    ffi_guard!(PurrdfStatus::Panic as i32, {
-        if rc.is_null() || out.is_null() {
-            return PurrdfStatus::NullPointer as i32;
-        }
-        let rc = &*rc;
-        *out = rc.variables.len();
-        PurrdfStatus::Ok as i32
-    })
+    unsafe {
+        ffi_guard!(PurrdfStatus::Panic as i32, {
+            if rc.is_null() || out.is_null() {
+                return PurrdfStatus::NullPointer as i32;
+            }
+            let rc = &*rc;
+            *out = rc.variables.len();
+            PurrdfStatus::Ok as i32
+        })
+    }
 }
 
 /// Write a borrowed, NUL-terminated variable name for column `i` to `*out`.
@@ -84,19 +87,21 @@ pub unsafe extern "C" fn purrdf_rowcursor_variable_name(
     i: usize,
     out: *mut *const c_char,
 ) -> i32 {
-    ffi_guard!(PurrdfStatus::Panic as i32, {
-        if rc.is_null() || out.is_null() {
-            return PurrdfStatus::NullPointer as i32;
-        }
-        let rc = &*rc;
-        match rc.variables.get(i) {
-            Some(name) => {
-                *out = name.as_ptr();
-                PurrdfStatus::Ok as i32
+    unsafe {
+        ffi_guard!(PurrdfStatus::Panic as i32, {
+            if rc.is_null() || out.is_null() {
+                return PurrdfStatus::NullPointer as i32;
             }
-            None => PurrdfStatus::InvalidArgument as i32,
-        }
-    })
+            let rc = &*rc;
+            match rc.variables.get(i) {
+                Some(name) => {
+                    *out = name.as_ptr();
+                    PurrdfStatus::Ok as i32
+                }
+                None => PurrdfStatus::InvalidArgument as i32,
+            }
+        })
+    }
 }
 
 /// Advance to the next solution row. Returns `PurrdfStatus::CursorExhausted`
@@ -106,18 +111,20 @@ pub unsafe extern "C" fn purrdf_rowcursor_variable_name(
 /// `rc` must be a live row cursor.
 #[no_mangle]
 pub unsafe extern "C" fn purrdf_rowcursor_next(rc: *mut PurrdfRowCursor) -> i32 {
-    ffi_guard!(PurrdfStatus::Panic as i32, {
-        if rc.is_null() {
-            return PurrdfStatus::NullPointer as i32;
-        }
-        let rc = &mut *rc;
-        if rc.next >= rc.rows.len() {
-            return PurrdfStatus::CursorExhausted as i32;
-        }
-        rc.current = Some(rc.next);
-        rc.next += 1;
-        PurrdfStatus::Ok as i32
-    })
+    unsafe {
+        ffi_guard!(PurrdfStatus::Panic as i32, {
+            if rc.is_null() {
+                return PurrdfStatus::NullPointer as i32;
+            }
+            let rc = &mut *rc;
+            if rc.next >= rc.rows.len() {
+                return PurrdfStatus::CursorExhausted as i32;
+            }
+            rc.current = Some(rc.next);
+            rc.next += 1;
+            PurrdfStatus::Ok as i32
+        })
+    }
 }
 
 /// Read the term in `column` of the CURRENT row. `out_bound` receives `0` when
@@ -135,30 +142,32 @@ pub unsafe extern "C" fn purrdf_rowcursor_term(
     out_view: *mut PurrdfTermView,
     out_bound: *mut u8,
 ) -> i32 {
-    ffi_guard!(PurrdfStatus::Panic as i32, {
-        if rc.is_null() || out_view.is_null() || out_bound.is_null() {
-            return PurrdfStatus::NullPointer as i32;
-        }
-        let rc = &*rc;
-        let Some(row_index) = rc.current else {
-            return PurrdfStatus::InvalidArgument as i32;
-        };
-        let row = &rc.rows[row_index];
-        let Some(cell) = row.get(column) else {
-            return PurrdfStatus::InvalidArgument as i32;
-        };
-        match cell {
-            Some(value) => {
-                render_value(value, &mut *out_view);
-                *out_bound = 1;
+    unsafe {
+        ffi_guard!(PurrdfStatus::Panic as i32, {
+            if rc.is_null() || out_view.is_null() || out_bound.is_null() {
+                return PurrdfStatus::NullPointer as i32;
             }
-            None => {
-                *out_view = PurrdfTermView::empty();
-                *out_bound = 0;
+            let rc = &*rc;
+            let Some(row_index) = rc.current else {
+                return PurrdfStatus::InvalidArgument as i32;
+            };
+            let row = &rc.rows[row_index];
+            let Some(cell) = row.get(column) else {
+                return PurrdfStatus::InvalidArgument as i32;
+            };
+            match cell {
+                Some(value) => {
+                    render_value(value, &mut *out_view);
+                    *out_bound = 1;
+                }
+                None => {
+                    *out_view = PurrdfTermView::empty();
+                    *out_bound = 0;
+                }
             }
-        }
-        PurrdfStatus::Ok as i32
-    })
+            PurrdfStatus::Ok as i32
+        })
+    }
 }
 
 /// Release a row cursor handle. No-op on null.
@@ -167,9 +176,11 @@ pub unsafe extern "C" fn purrdf_rowcursor_term(
 /// `rc` must be null or a live row cursor not already freed.
 #[no_mangle]
 pub unsafe extern "C" fn purrdf_rowcursor_free(rc: *mut PurrdfRowCursor) {
-    ffi_guard!((), {
-        if !rc.is_null() {
-            drop(Box::from_raw(rc));
-        }
-    })
+    unsafe {
+        ffi_guard!((), {
+            if !rc.is_null() {
+                drop(Box::from_raw(rc));
+            }
+        });
+    }
 }

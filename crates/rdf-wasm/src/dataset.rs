@@ -26,7 +26,7 @@ use crate::term::{Quad, Term, TermInner};
 /// A `Variable` term is the RDF/JS idiom for a wildcard position in `match()` (the same
 /// role an omitted/`undefined` argument plays), so it lowers to `None` rather than
 /// erroring — only a concrete RDF term constrains the position.
-fn pattern_value(term: &Option<Term>) -> Result<Option<TermValue>, JsError> {
+fn pattern_value(term: Option<&Term>) -> Result<Option<TermValue>, JsError> {
     match term {
         None => Ok(None),
         Some(t) if matches!(t.inner, TermInner::Variable(_)) => Ok(None),
@@ -38,12 +38,13 @@ fn pattern_value(term: &Option<Term>) -> Result<Option<TermValue>, JsError> {
 }
 
 /// Map an engine diagnostic to a JS error.
-pub(crate) fn diag_to_err(diag: RdfDiagnostic) -> JsError {
+pub(crate) fn diag_to_err(diag: &RdfDiagnostic) -> JsError {
     JsError::new(&diag.to_string())
 }
 
 /// An RDF/JS `DatasetCore` backed by the engine's COW mutable dataset.
 #[wasm_bindgen]
+#[derive(Debug)]
 pub struct Dataset {
     pub(crate) inner: MutableDataset,
 }
@@ -51,7 +52,9 @@ pub struct Dataset {
 impl Dataset {
     /// An empty frozen base — the COW root for a dataset with no parsed content.
     fn empty_base() -> Result<MutableDataset, JsError> {
-        let base = RdfDatasetBuilder::new().freeze().map_err(diag_to_err)?;
+        let base = RdfDatasetBuilder::new()
+            .freeze()
+            .map_err(|e| diag_to_err(&e))?;
         Ok(MutableDataset::new(base))
     }
 }
@@ -60,8 +63,8 @@ impl Dataset {
 impl Dataset {
     /// An empty dataset.
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Result<Dataset, JsError> {
-        Ok(Dataset {
+    pub fn new() -> Result<Self, JsError> {
+        Ok(Self {
             inner: Self::empty_base()?,
         })
     }
@@ -71,11 +74,12 @@ impl Dataset {
     /// `format` is a media type or short name (turtle/ntriples/nquads/trig/rdfxml).
     /// Ill-typed literals are preserved verbatim (RDFLib parity), not rejected.
     #[wasm_bindgen(js_name = parse)]
-    pub fn parse(input: &str, format: &str, base: Option<String>) -> Result<Dataset, JsError> {
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn parse(input: &str, format: &str, base: Option<String>) -> Result<Self, JsError> {
         let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
-        let dataset =
-            parse_dataset(input.as_bytes(), media_type, base.as_deref()).map_err(diag_to_err)?;
-        Ok(Dataset {
+        let dataset = parse_dataset(input.as_bytes(), media_type, base.as_deref())
+            .map_err(|e| diag_to_err(&e))?;
+        Ok(Self {
             inner: MutableDataset::new(dataset),
         })
     }
@@ -88,7 +92,7 @@ impl Dataset {
     /// the other text formats).
     #[wasm_bindgen(js_name = serialize)]
     pub fn serialize(&self, format: &str) -> Result<String, JsError> {
-        let frozen = self.inner.freeze().map_err(diag_to_err)?;
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         // JSON-LD rides the separate first-party codec path (it is not a
         // `NativeRdfFormat`), so route it before the media-type resolution.
         let normalized = format.trim().to_ascii_lowercase();
@@ -97,11 +101,11 @@ impl Dataset {
             "jsonld" | "json-ld" | "application/ld+json"
         ) {
             return purrdf::native_codecs::jsonld::serialize_dataset_to_jsonld(&frozen)
-                .map_err(diag_to_err);
+                .map_err(|e| diag_to_err(&e));
         }
         let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
-        let bytes =
-            serialize_dataset(&frozen, media_type, SerializeGraph::Dataset).map_err(diag_to_err)?;
+        let bytes = serialize_dataset(&frozen, media_type, SerializeGraph::Dataset)
+            .map_err(|e| diag_to_err(&e))?;
         String::from_utf8(bytes)
             .map_err(|e| JsError::new(&format!("serialization produced non-UTF-8 bytes: {e}")))
     }
@@ -147,16 +151,17 @@ impl Dataset {
     /// quads. An omitted (`undefined`) position is a wildcard; `defaultGraph()` matches
     /// only the default graph, a named node matches that graph.
     #[wasm_bindgen(js_name = match)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn match_pattern(
         &self,
         subject: Option<Term>,
         predicate: Option<Term>,
         object: Option<Term>,
         graph: Option<Term>,
-    ) -> Result<Dataset, JsError> {
-        let s = pattern_value(&subject)?;
-        let p = pattern_value(&predicate)?;
-        let o = pattern_value(&object)?;
+    ) -> Result<Self, JsError> {
+        let s = pattern_value(subject.as_ref())?;
+        let p = pattern_value(predicate.as_ref())?;
+        let o = pattern_value(object.as_ref())?;
         // The graph slot needs the three-way Any / Default / Named distinction that a
         // bare Option<TermValue> cannot express. A `Variable` graph term is a wildcard
         // (`Any`), like an omitted argument — never resolved as a named graph.
@@ -183,7 +188,7 @@ impl Dataset {
         for qv in &matched {
             out.insert(qv.clone());
         }
-        Ok(Dataset { inner: out })
+        Ok(Self { inner: out })
     }
 }
 

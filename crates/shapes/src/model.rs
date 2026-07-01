@@ -263,7 +263,7 @@ pub mod sh {
         "http://www.w3.org/ns/shacl#ClosedConstraintComponent";
 }
 
-/// PURRDF namespace constants (`https://blackcatinformatics.ca/purrdf/`).
+/// PurRDF namespace constants (`https://blackcatinformatics.ca/purrdf/`).
 pub mod purrdf {
     pub const GRAPH_BOX_ROLE: &str = "https://blackcatinformatics.ca/purrdf/graphBoxRole";
 

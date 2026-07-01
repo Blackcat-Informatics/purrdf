@@ -75,7 +75,7 @@ fn collect_sources(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), SliceError>
             collect_sources(&path, out)?;
         } else if matches!(
             path.extension().and_then(|s| s.to_str()),
-            Some("ttl") | Some("rq")
+            Some("ttl" | "rq")
         ) {
             out.push(path);
         }
@@ -147,7 +147,7 @@ pub fn lint_prefix_consistency(root: &Path) -> Result<Vec<ProjectionDiagnostic>,
             }
         })
         .collect();
-    diagnostics.sort_by(|a, b| a.cmp_severity_check_instance(b));
+    diagnostics.sort_by(ProjectionDiagnostic::cmp_severity_check_instance);
     Ok(diagnostics)
 }
 

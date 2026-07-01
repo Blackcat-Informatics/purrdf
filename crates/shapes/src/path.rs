@@ -75,7 +75,7 @@ fn eval_inner<G: ShaclDataGraph>(store: &G, focus: &Term, path: &Path) -> Vec<Te
             // For any inner path, find all nodes `n` such that focus ∈ eval(n, inner).
             // This requires scanning every subject in the store — only Predicate inner
             // is needed for the corpus, but we keep it total.
-            inner_path => {
+            inner_path @ Path::Inverse(_) => {
                 // Collect all distinct subjects from the default graph.
                 let all_subjects: Vec<Term> = {
                     let mut subjects: Vec<Term> = store
@@ -118,12 +118,12 @@ mod tests {
         IrDataGraph::new(dataset)
     }
 
-    const DATA: &str = r#"
+    const DATA: &str = r"
         @prefix ex: <http://example.org/ns#> .
         ex:a ex:p ex:b .
         ex:a ex:p ex:c .
         ex:d ex:q ex:a .
-    "#;
+    ";
 
     fn nn(iri: &str) -> Term {
         Term::NamedNode(NamedNode::new_unchecked(iri))

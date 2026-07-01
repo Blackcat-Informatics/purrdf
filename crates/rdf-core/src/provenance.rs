@@ -5,7 +5,7 @@
 //!
 //! This module realizes the normative S0 provenance contract from
 //! `docs/design/820-slices-first-class.md`. The types here are **kernel-generic**:
-//! there is **no** `SliceId` or any PURRDF-specific concept in this module. The
+//! there is **no** `SliceId` or any PurRDF-specific concept in this module. The
 //! slice layer (`purrdf-slice`) is responsible for interpreting unit kinds.
 //!
 //! ## Core types
@@ -155,7 +155,7 @@ impl fmt::Display for OriginKind {
 /// `SliceId` field cannot represent this; `AttributionRole` keeps the roles
 /// distinct and auditable.
 ///
-/// These variants are kernel-generic — no PURRDF-specific concept here. The slice
+/// These variants are kernel-generic — no PurRDF-specific concept here. The slice
 /// layer interprets which `UnitId` maps to which slice IRI.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -557,8 +557,7 @@ impl DatasetProvenance {
                 // public projection is total.
                 let kind = self
                     .unit_kind(occ.unit)
-                    .map(OriginKind::to_string)
-                    .unwrap_or_else(|| "unknown-kind".to_owned());
+                    .map_or_else(|| "unknown-kind".to_owned(), OriginKind::to_string);
                 let artifact_path = self.artifacts.path(occ.artifact).to_owned();
                 (
                     quad_index,

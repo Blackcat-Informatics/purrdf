@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! PURRDF-owned native SPARQL regression corpus.
+//! PurRDF-owned native SPARQL regression corpus.
 //!
 //! This test intentionally does **not** load `generated/dist/purrdf.gts` and does not
 //! replay the historical ontology query corpus. The manifest-driven harness in
@@ -80,11 +80,11 @@ fn regression_cases() -> Vec<RegressionCase> {
             name: "property_path_transitive_closure",
             data: CORE_DATA_TTL,
             format: NativeRdfFormat::Turtle,
-            query: r#"
+            query: r"
                 SELECT ?friend WHERE {
                     <http://purrdf.test/alice> <http://purrdf.test/knows>+ ?friend
                 }
-            "#,
+            ",
             expected: Expected::Rows(concat!(
                 "friend\n",
                 "[Some(Iri(\"http://purrdf.test/bob\"))]\n",
@@ -95,7 +95,7 @@ fn regression_cases() -> Vec<RegressionCase> {
             name: "exists_filter_reuses_outer_bindings",
             data: CORE_DATA_TTL,
             format: NativeRdfFormat::Turtle,
-            query: r#"
+            query: r"
                 SELECT ?person WHERE {
                     ?person <http://purrdf.test/knows> ?friend .
                     FILTER EXISTS {
@@ -103,7 +103,7 @@ fn regression_cases() -> Vec<RegressionCase> {
                         FILTER(?age > 18)
                     }
                 }
-            "#,
+            ",
             expected: Expected::Rows(concat!(
                 "person\n",
                 "[Some(Iri(\"http://purrdf.test/alice\"))]\n",
@@ -113,20 +113,20 @@ fn regression_cases() -> Vec<RegressionCase> {
             name: "ask_path_sequence",
             data: CORE_DATA_TTL,
             format: NativeRdfFormat::Turtle,
-            query: r#"
+            query: r"
                 ASK {
                     <http://purrdf.test/alice>
                         <http://purrdf.test/knows>/<http://purrdf.test/knows>
                         <http://purrdf.test/carol>
                 }
-            "#,
+            ",
             expected: Expected::Ask(true),
         },
         RegressionCase {
             name: "construct_canonical_graph",
             data: CORE_DATA_TTL,
             format: NativeRdfFormat::Turtle,
-            query: r#"
+            query: r"
                 CONSTRUCT {
                     ?person <http://purrdf.test/summary> ?name
                 }
@@ -134,7 +134,7 @@ fn regression_cases() -> Vec<RegressionCase> {
                     ?person <http://purrdf.test/name> ?name
                     FILTER(?person = <http://purrdf.test/alice>)
                 }
-            "#,
+            ",
             expected: Expected::GraphNTriples(
                 r#"<http://purrdf.test/alice> <http://purrdf.test/summary> "Alice" .
 "#,

@@ -161,9 +161,9 @@ impl Severity {
     /// Stable lowercase rendering used by CLI diagnostics.
     pub fn as_str(self) -> &'static str {
         match self {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-            Severity::Info => "info",
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Info => "info",
         }
     }
 }
@@ -246,7 +246,7 @@ pub fn evaluate_profile_policy(
         }
     };
     let declared: BTreeSet<String> = if graph.segment_profiles.is_empty() {
-        ["generic".to_string()].into_iter().collect()
+        std::iter::once("generic".to_string()).collect()
     } else {
         graph.segment_profiles.iter().cloned().collect()
     };

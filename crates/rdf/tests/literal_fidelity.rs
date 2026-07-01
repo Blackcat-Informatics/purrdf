@@ -97,9 +97,8 @@ fn assert_text_fidelity(format: NativeRdfFormat, f: &Fidelity) {
     let token = expected_text_token(f);
     assert!(
         text.contains(&token),
-        "{:?}: raw output must carry the verbatim lexical form + full datatype IRI {token:?}, \
+        "{format:?}: raw output must carry the verbatim lexical form + full datatype IRI {token:?}, \
          got:\n{text}",
-        format,
     );
 
     let after = parse_dataset(&bytes, format.media_type(), None).expect("native parse");

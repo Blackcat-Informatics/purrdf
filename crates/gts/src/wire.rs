@@ -69,7 +69,11 @@ pub fn blake3_256(data: &[u8]) -> Vec<u8> {
 
 /// Lowercase hex of a byte string.
 pub fn hex(data: &[u8]) -> String {
-    data.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write as _;
+    data.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
 }
 
 /// A `blake3:<hex>` content digest for inline blob addressing (§12).

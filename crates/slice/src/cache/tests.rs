@@ -5,6 +5,7 @@
 //! composition (RFC #820 §12 / §8, child S6a). All fixtures are hermetic
 //! (`tempfile`); no repository state is read.
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use tempfile::TempDir;
@@ -36,10 +37,10 @@ fn write_slice(
     let dir = parent.join(dirname);
     std::fs::create_dir_all(&dir).unwrap();
 
-    let depends_on: String = deps
-        .iter()
-        .map(|(dep_iri, _)| format!("    purrdf:sliceDependsOn <{dep_iri}> ;\n"))
-        .collect();
+    let depends_on: String = deps.iter().fold(String::new(), |mut out, (dep_iri, _)| {
+        let _ = writeln!(out, "    purrdf:sliceDependsOn <{dep_iri}> ;");
+        out
+    });
 
     // Content is keyed on the slice IRI, NEVER the directory name, so a copy at a
     // different path is byte-identical (the rename-invariance fixture relies on
@@ -61,11 +62,13 @@ fn write_slice(
 
     // Module: define `term`, reference each dep term. A leading comment lets the
     // raw bytes vary while the canonical RDF stays identical.
-    let refs: String = deps
-        .iter()
-        .enumerate()
-        .map(|(i, (_, dep_term))| format!("<{term}> purrdf:refP{i} <{dep_term}> .\n"))
-        .collect();
+    let refs: String =
+        deps.iter()
+            .enumerate()
+            .fold(String::new(), |mut out, (i, (_, dep_term))| {
+                let _ = writeln!(out, "<{term}> purrdf:refP{i} <{dep_term}> .");
+                out
+            });
     let module = format!(
         r#"{module_comment}@prefix purrdf: <{PURRDF}> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
@@ -243,12 +246,12 @@ fn profile_closure_transitive() {
     assert_eq!(closure.len(), 3);
 
     let product = product_unit(&catalog, &edges, std::slice::from_ref(&a_iri));
-    assert_eq!(product.seeds, vec![a_iri.clone()]);
+    assert_eq!(product.seeds, vec![a_iri]);
     assert_eq!(product.closure.len(), 3);
 
     // C alone closes to just {C}.
     let c_closure = dependency_closure(&catalog, &edges, std::slice::from_ref(&c_iri));
-    assert_eq!(c_closure, vec![c_iri.clone()]);
+    assert_eq!(c_closure, vec![c_iri]);
 }
 
 /// Extra guard: a dependency-output digest change DOES invalidate the

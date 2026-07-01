@@ -19,6 +19,7 @@ use crate::term::{parse_direction, Quad, Term, TermInner};
 /// An RDF/JS `DataFactory`. Stateless except for the auto-generated blank-node
 /// counter (`blankNode()` with no argument mints a fresh label).
 #[wasm_bindgen]
+#[derive(Debug)]
 pub struct DataFactory {
     /// Monotonic source of auto-generated blank-node labels. A plain counter (NOT an
     /// RNG): wasm32-unknown-unknown has no entropy backend, and deterministic labels
@@ -38,8 +39,8 @@ impl Default for DataFactory {
 #[wasm_bindgen]
 impl DataFactory {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> DataFactory {
-        DataFactory::default()
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// `namedNode(value)` → a `NamedNode` term.
@@ -96,9 +97,9 @@ impl DataFactory {
         &self,
         value: String,
         language: String,
-        direction: String,
+        direction: &str,
     ) -> Result<Term, JsError> {
-        let direction = parse_direction(&direction).map_err(|e| JsError::new(&e))?;
+        let direction = parse_direction(direction).map_err(|e| JsError::new(&e))?;
         Ok(Term::literal(RdfLiteral {
             lexical_form: value,
             datatype: None,
@@ -228,7 +229,7 @@ mod tests {
     fn directional_literal_carries_the_wedge() {
         let f = DataFactory::new();
         let lit = f
-            .directional_literal("שלום".to_owned(), "he".to_owned(), "rtl".to_owned())
+            .directional_literal("שלום".to_owned(), "he".to_owned(), "rtl")
             .unwrap();
         assert_eq!(lit.term_type(), "Literal");
         assert_eq!(lit.language(), "he");

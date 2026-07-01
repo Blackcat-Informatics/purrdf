@@ -39,13 +39,13 @@ use purrdf_sparql_eval::{evaluate_query, EvalCtx};
 /// single-row inner result.
 fn knows_dataset(n: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let knows = b.intern_iri("http://ex/knows".to_owned());
-    let member = b.intern_iri("http://ex/member".to_owned());
-    let club = b.intern_iri("http://ex/club".to_owned());
+    let knows = b.intern_iri("http://ex/knows");
+    let member = b.intern_iri("http://ex/member");
+    let club = b.intern_iri("http://ex/club");
     let mut first_obj = None;
     for i in 0..n {
-        let s = b.intern_iri(format!("http://ex/s{i}"));
-        let o = b.intern_iri(format!("http://ex/o{i}"));
+        let s = b.intern_iri(&format!("http://ex/s{i}"));
+        let o = b.intern_iri(&format!("http://ex/o{i}"));
         b.push_quad(s, knows, o, None);
         if first_obj.is_none() {
             first_obj = Some(o);
@@ -65,18 +65,18 @@ fn knows_dataset(n: usize) -> Arc<RdfDataset> {
 /// produce outer rows that leave `?o` unbound (the scan-branch shape).
 fn hub_dataset(n_outer: usize, m_inner: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let knows = b.intern_iri("http://ex/knows".to_owned());
-    let likes = b.intern_iri("http://ex/likes".to_owned());
-    let member = b.intern_iri("http://ex/member".to_owned());
-    let hub = b.intern_iri("http://ex/hub".to_owned());
+    let knows = b.intern_iri("http://ex/knows");
+    let likes = b.intern_iri("http://ex/likes");
+    let member = b.intern_iri("http://ex/member");
+    let hub = b.intern_iri("http://ex/hub");
     for i in 0..n_outer {
-        let s = b.intern_iri(format!("http://ex/s{i}"));
-        let z = b.intern_iri(format!("http://ex/z{i}"));
+        let s = b.intern_iri(&format!("http://ex/s{i}"));
+        let z = b.intern_iri(&format!("http://ex/z{i}"));
         b.push_quad(s, knows, hub, None);
         b.push_quad(s, likes, z, None);
     }
     for j in 0..m_inner {
-        let m = b.intern_iri(format!("http://ex/m{j}"));
+        let m = b.intern_iri(&format!("http://ex/m{j}"));
         b.push_quad(hub, member, m, None);
     }
     b.freeze().expect("freeze")

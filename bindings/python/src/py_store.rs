@@ -55,13 +55,13 @@ mod store;
 mod term;
 mod xsd;
 
-pub use io::{parse_quads, PyRdfFormat};
+pub(crate) use io::{parse_quads, PyRdfFormat};
 
 use pyo3::prelude::*;
 
 /// Register the native Store / term / SPARQL surface on the `purrdf` module.
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<io::PyRdfFormat>()?;
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyRdfFormat>()?;
     m.add_class::<canon::PyCanonicalizationAlgorithm>()?;
     m.add_class::<term::PyNamedNode>()?;
     m.add_class::<term::PyBlankNode>()?;

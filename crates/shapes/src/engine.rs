@@ -166,7 +166,7 @@ fn resolve_focus_nodes<G: ShaclDataGraph>(
     }
 
     // Sort for a stable, deterministic ordering across iterations.
-    nodes.sort_by_key(|a| a.to_string());
+    nodes.sort_by_key(ToString::to_string);
     nodes
 }
 
@@ -241,9 +241,12 @@ where
             a.source_shape.to_string(),
             a.result_path
                 .as_ref()
-                .map(|t| t.to_string())
+                .map(ToString::to_string)
                 .unwrap_or_default(),
-            a.value.as_ref().map(|t| t.to_string()).unwrap_or_default(),
+            a.value
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
         );
         let kb = (
             b.focus_node.to_string(),
@@ -251,9 +254,12 @@ where
             b.source_shape.to_string(),
             b.result_path
                 .as_ref()
-                .map(|t| t.to_string())
+                .map(ToString::to_string)
                 .unwrap_or_default(),
-            b.value.as_ref().map(|t| t.to_string()).unwrap_or_default(),
+            b.value
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
         );
         ka.cmp(&kb)
     });
@@ -427,13 +433,13 @@ mod tests {
     use crate::report::Severity;
     use crate::shapes::Shapes;
 
-    const PREFIXES: &str = r#"
+    const PREFIXES: &str = r"
         @prefix sh:   <http://www.w3.org/ns/shacl#> .
         @prefix ex:   <http://example.org/ns#> .
         @prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
         @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
-    "#;
+    ";
 
     fn load_data_nt(nt: &str) -> Arc<RdfDataset> {
         crate::text_ingest::parse_ntriples_to_dataset(nt).expect("data N-Triples must parse")
@@ -524,7 +530,7 @@ mod tests {
             "http://example.org/ns#b",
         ]
         .into_iter()
-        .map(|value| builder.intern_iri(value.to_owned()))
+        .map(|value| builder.intern_iri(value))
         .collect();
         builder.push_quad(ids[0], ids[1], ids[2], None);
         let dataset = builder.freeze().expect("valid test dataset");
@@ -559,14 +565,14 @@ mod tests {
     #[test]
     fn target_class_min_count_violating() {
         let shapes_ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:PersonShape a sh:NodeShape ;
                 sh:targetClass ex:Person ;
                 sh:property [
                     sh:path ex:name ;
                     sh:minCount 1 ;
                 ] .
-            "#
+            "
         );
         // ex:alice is a Person but has no ex:name
         let data_nt = "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n";
@@ -594,14 +600,14 @@ mod tests {
     #[test]
     fn target_class_min_count_conforming() {
         let shapes_ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:PersonShape a sh:NodeShape ;
                 sh:targetClass ex:Person ;
                 sh:property [
                     sh:path ex:name ;
                     sh:minCount 1 ;
                 ] .
-            "#
+            "
         );
         let data_nt = concat!(
             "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
@@ -620,14 +626,14 @@ mod tests {
     #[test]
     fn target_subjects_of() {
         let shapes_ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:KnowerShape a sh:NodeShape ;
                 sh:targetSubjectsOf ex:knows ;
                 sh:property [
                     sh:path ex:label ;
                     sh:minCount 1 ;
                 ] .
-            "#
+            "
         );
         // ex:alice knows ex:bob, but alice has no ex:label
         let data_nt = "<http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> .\n";
@@ -651,14 +657,14 @@ mod tests {
     #[test]
     fn target_objects_of() {
         let shapes_ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:KnownShape a sh:NodeShape ;
                 sh:targetObjectsOf ex:knows ;
                 sh:property [
                     sh:path ex:label ;
                     sh:minCount 1 ;
                 ] .
-            "#
+            "
         );
         // ex:alice knows ex:bob, bob has no ex:label
         let data_nt = "<http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> .\n";
@@ -685,14 +691,14 @@ mod tests {
     #[test]
     fn target_class_honors_asserted_subclass() {
         let shapes_ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:PersonShape a sh:NodeShape ;
                 sh:targetClass ex:Person ;
                 sh:property [
                     sh:path ex:name ;
                     sh:minCount 1 ;
                 ] .
-            "#
+            "
         );
         // ex:bob is typed ex:Employee, and ex:Employee rdfs:subClassOf ex:Person
         // is ASSERTED → bob is a SHACL instance of ex:Person → it is a focus node
@@ -722,11 +728,11 @@ mod tests {
     #[test]
     fn target_class_unasserted_subclass_not_reached() {
         let shapes_ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:PersonShape a sh:NodeShape ;
                 sh:targetClass ex:Person ;
                 sh:property [ sh:path ex:name ; sh:minCount 1 ; ] .
-            "#
+            "
         );
         // ex:carol is an ex:Robot; no ex:Robot rdfs:subClassOf ex:Person triple
         // exists → carol is not a Person-instance → conforms.
@@ -746,7 +752,7 @@ mod tests {
     #[test]
     fn deactivated_shape_produces_no_results() {
         let shapes_ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:PersonShape a sh:NodeShape ;
                 sh:targetClass ex:Person ;
                 sh:deactivated true ;
@@ -754,7 +760,7 @@ mod tests {
                     sh:path ex:name ;
                     sh:minCount 1 ;
                 ] .
-            "#
+            "
         );
         // alice is a Person with no ex:name — would fail if shape were active
         let data_nt = "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n";
@@ -774,14 +780,14 @@ mod tests {
     #[test]
     fn determinism_same_results_twice() {
         let shapes_ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:PersonShape a sh:NodeShape ;
                 sh:targetClass ex:Person ;
                 sh:property [
                     sh:path ex:name ;
                     sh:minCount 1 ;
                 ] .
-            "#
+            "
         );
         // Two persons, both missing ex:name, to get multiple results
         let data_nt = concat!(
@@ -809,8 +815,8 @@ mod tests {
                     r.focus_node.to_string(),
                     r.source_constraint_component.to_string(),
                     r.source_shape.to_string(),
-                    r.result_path.as_ref().map(|t| t.to_string()),
-                    r.value.as_ref().map(|t| t.to_string()),
+                    r.result_path.as_ref().map(ToString::to_string),
+                    r.value.as_ref().map(ToString::to_string),
                     r.severity,
                 )
             })
@@ -823,8 +829,8 @@ mod tests {
                     r.focus_node.to_string(),
                     r.source_constraint_component.to_string(),
                     r.source_shape.to_string(),
-                    r.result_path.as_ref().map(|t| t.to_string()),
-                    r.value.as_ref().map(|t| t.to_string()),
+                    r.result_path.as_ref().map(ToString::to_string),
+                    r.value.as_ref().map(ToString::to_string),
                     r.severity,
                 )
             })
@@ -847,14 +853,14 @@ mod tests {
     #[test]
     fn target_node_explicit() {
         let shapes_ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:AliceShape a sh:NodeShape ;
                 sh:targetNode ex:alice ;
                 sh:property [
                     sh:path ex:name ;
                     sh:minCount 1 ;
                 ] .
-            "#
+            "
         );
         // ex:alice explicitly targeted; no ex:name triple
         let data_nt = "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n";
@@ -875,7 +881,7 @@ mod tests {
     #[test]
     fn warning_result_makes_report_non_conforming() {
         let shapes_ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:WarnShape a sh:NodeShape ;
                 sh:targetClass ex:Thing ;
                 sh:severity sh:Warning ;
@@ -884,7 +890,7 @@ mod tests {
                     sh:minCount 1 ;
                     sh:severity sh:Warning ;
                 ] .
-            "#
+            "
         );
         let data_nt = "<http://example.org/ns#x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Thing> .\n";
 

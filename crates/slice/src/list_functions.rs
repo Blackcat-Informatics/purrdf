@@ -11,8 +11,8 @@
 //! (`crates/logic/src/reason`) and the native SPARQL engine executes directly
 //! (`crates/sparql-eval`, the `purrdf:list*` custom functions).
 //!
-//! Unlike `functions.fno.ttl` (PURRDF→external projection transforms derived from
-//! the mapping DSL) these are *primitives* — they bind no PURRDF data predicate, so
+//! Unlike `functions.fno.ttl` (PurRDF→external projection transforms derived from
+//! the mapping DSL) these are *primitives* — they bind no PurRDF data predicate, so
 //! their parameters/outputs carry `fno:type` (the RDF type guard) but no
 //! `fno:predicate`. This is a hand-shaped catalog like `dsl/mappings/transforms.fno.ttl`,
 //! but emitted into `generated/` so it ships in the bundle. The output is fixed
@@ -154,7 +154,7 @@ const PARAMS: &[ListTerm] = &[
     },
 ];
 
-/// The PURRDF namespace prefix the function/param/output IRIs are minted under.
+/// The PurRDF namespace prefix the function/param/output IRIs are minted under.
 const PURRDF_NS: &str = "https://blackcatinformatics.ca/purrdf/";
 
 /// The document node banner (`rdfs:comment` after `to_quads`, like

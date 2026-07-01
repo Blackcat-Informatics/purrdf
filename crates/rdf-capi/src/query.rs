@@ -27,22 +27,26 @@ unsafe fn run_query(
     query: *const c_char,
     base_iri: *const c_char,
 ) -> Result<SparqlResult, PurrdfError> {
-    let query = cstr_to_str(query)?;
-    let base_iri = opt_cstr_to_str(base_iri)?;
-    // Evaluate over the frozen `Arc<RdfDataset>` directly via the native engine —
-    // no oxigraph `Store` round-trip. `NativeSparqlEngine::query` is the single
-    // `SparqlEngine` impl (#887/#912); its `Dataset` IS the `Arc<RdfDataset>` the
-    // handle already owns.
-    NativeSparqlEngine::new()
-        .query(
-            PurrdfDataset::arc(dataset),
-            SparqlRequest {
-                query,
-                base_iri,
-                substitutions: &[],
-            },
-        )
-        .map_err(|diagnostic| PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic))
+    unsafe {
+        let query = cstr_to_str(query)?;
+        let base_iri = opt_cstr_to_str(base_iri)?;
+        // Evaluate over the frozen `Arc<RdfDataset>` directly via the native engine —
+        // no oxigraph `Store` round-trip. `NativeSparqlEngine::query` is the single
+        // `SparqlEngine` impl (#887/#912); its `Dataset` IS the `Arc<RdfDataset>` the
+        // handle already owns.
+        NativeSparqlEngine::new()
+            .query(
+                PurrdfDataset::arc(dataset),
+                SparqlRequest {
+                    query,
+                    base_iri,
+                    substitutions: &[],
+                },
+            )
+            .map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic)
+            })
+    }
 }
 
 /// Execute a SPARQL query. The result shape is reported in `*out_kind`:
@@ -65,45 +69,47 @@ pub unsafe extern "C" fn purrdf_query(
     out_boolean: *mut u8,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    ffi_try!(out_error, {
-        if dataset.is_null() || query.is_null() || out_kind.is_null() {
-            return Err(PurrdfError::new(
-                PurrdfStatus::NullPointer,
-                "null pointer argument to purrdf_query",
-            ));
-        }
-        match run_query(dataset, query, base_iri)? {
-            SparqlResult::Solutions {
-                variables, rows, ..
-            } => {
-                if out_rows.is_null() {
-                    return Err(PurrdfError::new(
-                        PurrdfStatus::NullPointer,
-                        "out_rows is null for a SELECT result",
-                    ));
-                }
-                *out_kind = KIND_SOLUTIONS;
-                *out_rows = PurrdfRowCursor::new(variables, rows).into_raw();
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || query.is_null() || out_kind.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_query",
+                ));
             }
-            SparqlResult::Graph(graph) => {
-                if out_graph.is_null() {
-                    return Err(PurrdfError::new(
-                        PurrdfStatus::NullPointer,
-                        "out_graph is null for a CONSTRUCT/DESCRIBE result",
-                    ));
+            match run_query(dataset, query, base_iri)? {
+                SparqlResult::Solutions {
+                    variables, rows, ..
+                } => {
+                    if out_rows.is_null() {
+                        return Err(PurrdfError::new(
+                            PurrdfStatus::NullPointer,
+                            "out_rows is null for a SELECT result",
+                        ));
+                    }
+                    *out_kind = KIND_SOLUTIONS;
+                    *out_rows = PurrdfRowCursor::new(variables, rows).into_raw();
                 }
-                *out_kind = KIND_GRAPH;
-                *out_graph = PurrdfDataset::into_raw(graph);
-            }
-            SparqlResult::Boolean(value) => {
-                *out_kind = KIND_BOOLEAN;
-                if !out_boolean.is_null() {
-                    *out_boolean = value as u8;
+                SparqlResult::Graph(graph) => {
+                    if out_graph.is_null() {
+                        return Err(PurrdfError::new(
+                            PurrdfStatus::NullPointer,
+                            "out_graph is null for a CONSTRUCT/DESCRIBE result",
+                        ));
+                    }
+                    *out_kind = KIND_GRAPH;
+                    *out_graph = PurrdfDataset::into_raw(graph);
+                }
+                SparqlResult::Boolean(value) => {
+                    *out_kind = KIND_BOOLEAN;
+                    if !out_boolean.is_null() {
+                        *out_boolean = u8::from(value);
+                    }
                 }
             }
-        }
-        Ok(PurrdfStatus::Ok)
-    })
+            Ok(PurrdfStatus::Ok)
+        })
+    }
 }
 
 /// Execute a SPARQL query and serialize the result to the SPARQL 1.1 Query
@@ -122,29 +128,31 @@ pub unsafe extern "C" fn purrdf_query_json(
     out_buffer: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    ffi_try!(out_error, {
-        if dataset.is_null() || query.is_null() || out_buffer.is_null() {
-            return Err(PurrdfError::new(
-                PurrdfStatus::NullPointer,
-                "null pointer argument to purrdf_query_json",
-            ));
-        }
-        let result = run_query(dataset, query, base_iri)?;
-        // Delegate to the canonical SPARQL-Results serializer (purrdf S9). An
-        // empty `ResultProvenance` yields byte-identical pure W3C SRJ for
-        // SELECT/ASK; the CONSTRUCT-graph path is rendered by the crate's
-        // wasm-clean rdf-core N-Triples writer.
-        let outcome = purrdf_sparql_results::to_json(
-            &result,
-            &purrdf_sparql_results::ResultProvenance::default(),
-        )
-        .map_err(|e| {
-            PurrdfError::new(
-                PurrdfStatus::QueryError,
-                format!("SPARQL results JSON serialization failed: {e}"),
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || query.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_query_json",
+                ));
+            }
+            let result = run_query(dataset, query, base_iri)?;
+            // Delegate to the canonical SPARQL-Results serializer (purrdf S9). An
+            // empty `ResultProvenance` yields byte-identical pure W3C SRJ for
+            // SELECT/ASK; the CONSTRUCT-graph path is rendered by the crate's
+            // wasm-clean rdf-core N-Triples writer.
+            let outcome = purrdf_sparql_results::to_json(
+                &result,
+                &purrdf_sparql_results::ResultProvenance::default(),
             )
-        })?;
-        *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
-        Ok(PurrdfStatus::Ok)
-    })
+            .map_err(|e| {
+                PurrdfError::new(
+                    PurrdfStatus::QueryError,
+                    format!("SPARQL results JSON serialization failed: {e}"),
+                )
+            })?;
+            *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
 }

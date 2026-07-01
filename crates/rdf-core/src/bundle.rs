@@ -357,7 +357,7 @@ impl From<ContentStoreError> for BundleError {
     fn from(e: ContentStoreError) -> Self {
         match e {
             ContentStoreError::DigestMismatch { stored, actual } => {
-                BundleError::DigestMismatch { stored, actual }
+                Self::DigestMismatch { stored, actual }
             }
         }
     }
@@ -371,6 +371,7 @@ impl From<ContentStoreError> for BundleError {
 /// Construct with [`RdfBundle::new`] then stage units / artifacts / blobs with the
 /// builder methods, or recover a serialized bundle with [`RdfBundle::load`] (which
 /// validates every digest and every structural invariant before returning `Ok`).
+#[derive(Debug)]
 pub struct RdfBundle {
     /// The immutable, value-interned RDF 1.2 dataset — the hot graph. Shared
     /// via `Arc` because `RdfDataset` is a frozen, non-clonable value (#819 C1).
@@ -560,9 +561,9 @@ mod tests {
     /// A tiny frozen dataset with one triple — hermetic, no `slices/` tree.
     fn tiny_dataset() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s".to_string());
-        let p = b.intern_iri("http://example.org/p".to_string());
-        let o = b.intern_iri("http://example.org/o".to_string());
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
         b.push_quad(s, p, o, None);
         b.freeze().expect("valid dataset")
     }

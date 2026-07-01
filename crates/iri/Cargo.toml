@@ -4,12 +4,17 @@
 [package]
 name = "purrdf-iri"
 description = "Native, zero-dependency IRI/URI value space (RFC-3987 IRI + RFC-3986 URI parse/validate, reference resolution, syntax normalization, CURIE/prefix expansion) for the RDF 1.2 query stack — replaces oxiri (purrdf S2, EPIC #906)"
-version = "0.1.1"
+version.workspace = true
 edition.workspace = true
 repository.workspace = true
 license.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
 readme = "README.md"
 keywords = ["iri", "uri", "rfc3987", "rdf", "curie"]
+
+[lints]
+workspace = true
 
 [lib]
 # rlib-only, ZERO runtime dependencies: this crate is a leaf foundation. It must
@@ -22,6 +27,6 @@ name = "purrdf_iri"
 
 [dev-dependencies]
 # Colored line-diffs on assert_eq! failure (repo convention). Drop-in per test file.
-pretty_assertions = "1"
+pretty_assertions = { workspace = true }
 # Round-trip / idempotency property tests (parse -> serialize, normalize twice).
-proptest = "1"
+proptest = { workspace = true }

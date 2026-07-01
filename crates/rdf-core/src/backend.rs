@@ -66,11 +66,11 @@ impl TermFactory for RdfDatasetBuilder {
     }
 
     fn intern_iri_value(&mut self, iri: &str) -> TermId {
-        self.intern_iri(iri.to_owned())
+        self.intern_iri(iri)
     }
 
     fn intern_blank_value(&mut self, label: &str, scope: BlankScope) -> TermId {
-        self.intern_blank(label.to_owned(), scope)
+        self.intern_blank(label, scope)
     }
 
     fn intern_literal_value(&mut self, literal: RdfLiteral) -> TermId {
@@ -215,7 +215,7 @@ mod tests {
         let triple = TermValue::Triple {
             s: Box::new(s.clone()),
             p: Box::new(p.clone()),
-            o: Box::new(o.clone()),
+            o: Box::new(o),
         };
 
         let mut builder = RdfDatasetBuilder::new();

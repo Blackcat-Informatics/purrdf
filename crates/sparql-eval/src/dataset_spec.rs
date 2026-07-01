@@ -179,12 +179,12 @@ impl GraphScope {
         mut f: impl FnMut(QuadIds),
     ) {
         match self {
-            GraphScope::One(gm) => {
+            Self::One(gm) => {
                 for q in dataset.quads_for_pattern(s, p, o, *gm) {
                     f(q);
                 }
             }
-            GraphScope::Merge(gs) => {
+            Self::Merge(gs) => {
                 for &g in gs {
                     for q in dataset.quads_for_pattern(s, p, o, GraphMatch::Named(g)) {
                         f(q);

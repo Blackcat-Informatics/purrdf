@@ -92,7 +92,7 @@ pub fn to_writer(
     apply_lookaside(&state, &mut graph, lookaside.clone());
     graph.terms = state.terms;
 
-    Writer::deterministic(&graph, profile).map_err(codec_error_to_diagnostic)
+    Writer::deterministic(&graph, profile).map_err(|err| codec_error_to_diagnostic(&err))
 }
 
 /// Convert a frozen [`RdfDataset`] directly into canonical GTS bytes. See
@@ -102,7 +102,7 @@ pub fn to_gts(
     lookaside: &RdfLookaside,
     profile: &str,
 ) -> Result<Vec<u8>, RdfDiagnostic> {
-    to_writer(dataset, lookaside, profile).map(|writer| writer.into_bytes())
+    to_writer(dataset, lookaside, profile).map(Writer::into_bytes)
 }
 
 struct InternState {
@@ -398,7 +398,7 @@ fn metadata_value_to_cbor(value: &RdfMetadataValue) -> Value {
     }
 }
 
-fn codec_error_to_diagnostic(err: CodecError) -> RdfDiagnostic {
+fn codec_error_to_diagnostic(err: &CodecError) -> RdfDiagnostic {
     RdfDiagnostic::error("gts-writer-codec", err.to_string())
 }
 
@@ -416,12 +416,12 @@ mod tests {
     /// the test-side inverse of the writer's owned-boundary resolution.
     fn intern_owned(b: &mut RdfDatasetBuilder, term: &RdfTerm) -> TermId {
         match term {
-            RdfTerm::Iri(iri) => b.intern_iri(iri.clone()),
-            RdfTerm::BlankNode(label) => b.intern_blank(label.clone(), BlankScope::DEFAULT),
+            RdfTerm::Iri(iri) => b.intern_iri(iri),
+            RdfTerm::BlankNode(label) => b.intern_blank(label, BlankScope::DEFAULT),
             RdfTerm::Literal(lit) => b.intern_literal(lit.clone()),
             RdfTerm::Triple(t) => {
                 let s = intern_owned(b, &t.subject);
-                let p = b.intern_iri(t.predicate.clone());
+                let p = b.intern_iri(&t.predicate);
                 let o = intern_owned(b, &t.object);
                 b.intern_triple(s, p, o)
             }
@@ -438,7 +438,7 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         for q in quads {
             let s = intern_owned(&mut b, &q.subject);
-            let p = b.intern_iri(q.predicate.clone());
+            let p = b.intern_iri(&q.predicate);
             let o = intern_owned(&mut b, &q.object);
             let g = q.graph_name.as_ref().map(|g| intern_owned(&mut b, g));
             b.push_quad(s, p, o, g);
@@ -446,14 +446,14 @@ mod tests {
         for r in reifiers {
             let rid = intern_owned(&mut b, &r.reifier);
             let s = intern_owned(&mut b, &r.statement.subject);
-            let p = b.intern_iri(r.statement.predicate.clone());
+            let p = b.intern_iri(&r.statement.predicate);
             let o = intern_owned(&mut b, &r.statement.object);
             let triple = b.intern_triple(s, p, o);
             b.push_reifier(rid, triple);
         }
         for a in annotations {
             let rid = intern_owned(&mut b, &a.reifier);
-            let p = b.intern_iri(a.predicate.clone());
+            let p = b.intern_iri(&a.predicate);
             let o = intern_owned(&mut b, &a.object);
             b.push_annotation(rid, p, o);
         }
@@ -561,7 +561,7 @@ mod tests {
             )],
             &[RdfReifier::new(reifier.clone(), statement)],
             &[RdfAnnotation::new(
-                reifier.clone(),
+                reifier,
                 "https://example.org/confidence",
                 RdfTerm::literal(RdfLiteral::typed(
                     "0.9",
@@ -590,7 +590,7 @@ mod tests {
             &[],
             &[
                 RdfReifier::new(RdfTerm::blank_node("r1"), statement.clone()),
-                RdfReifier::new(RdfTerm::blank_node("r2"), statement.clone()),
+                RdfReifier::new(RdfTerm::blank_node("r2"), statement),
             ],
             &[],
         );
@@ -649,8 +649,7 @@ mod tests {
             reason: Some("test suppression".to_owned()),
             by: None,
             targets: vec![RdfMetadataValue::Map(
-                [("kind".to_owned(), RdfMetadataValue::Text("quad".to_owned()))]
-                    .into_iter()
+                std::iter::once(("kind".to_owned(), RdfMetadataValue::Text("quad".to_owned())))
                     .collect(),
             )],
         });

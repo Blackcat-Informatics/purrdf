@@ -37,18 +37,18 @@ impl Severity {
     /// The `sh:` IRI string for this severity level.
     pub fn iri(&self) -> &'static str {
         match self {
-            Severity::Violation => sh::VIOLATION,
-            Severity::Warning => sh::WARNING,
-            Severity::Info => sh::INFO,
+            Self::Violation => sh::VIOLATION,
+            Self::Warning => sh::WARNING,
+            Self::Info => sh::INFO,
         }
     }
 
     /// Parse a severity from its IRI string, returning `None` if unrecognised.
-    pub fn from_iri(s: &str) -> Option<Severity> {
+    pub fn from_iri(s: &str) -> Option<Self> {
         match s {
-            "http://www.w3.org/ns/shacl#Violation" => Some(Severity::Violation),
-            "http://www.w3.org/ns/shacl#Warning" => Some(Severity::Warning),
-            "http://www.w3.org/ns/shacl#Info" => Some(Severity::Info),
+            "http://www.w3.org/ns/shacl#Violation" => Some(Self::Violation),
+            "http://www.w3.org/ns/shacl#Warning" => Some(Self::Warning),
+            "http://www.w3.org/ns/shacl#Info" => Some(Self::Info),
             _ => None,
         }
     }
@@ -73,9 +73,9 @@ pub struct ValidationResult {
     pub severity: Severity,
     /// An optional human-readable message.
     pub message: Option<String>,
-    /// PURRDF graph-box roles attached to the source shape, if any.
+    /// PurRDF graph-box roles attached to the source shape, if any.
     pub source_box_roles: Vec<NamedNode>,
-    /// PURRDF graph-box roles attached to the result path/predicate, if any.
+    /// PurRDF graph-box roles attached to the result path/predicate, if any.
     pub path_box_roles: Vec<NamedNode>,
     /// Deterministic union of source/path/component roles relevant to this result.
     pub result_box_roles: Vec<NamedNode>,
@@ -94,7 +94,7 @@ impl ValidationResult {
     /// a triple term.
     ///
     /// This lets a consumer render the focus without naming the (oxigraph) [`Term`] type
-    /// in its own surface (EPIC #906) — it is the exact value-extraction the PURRDF
+    /// in its own surface (EPIC #906) — it is the exact value-extraction the PurRDF
     /// scoreboard's `shacl_term_to_str` performed.
     #[must_use]
     pub fn focus_value(&self) -> String {
@@ -106,7 +106,7 @@ impl ValidationResult {
         }
     }
 
-    /// Apply optional PURRDF graph-box role metadata to this result.
+    /// Apply optional PurRDF graph-box role metadata to this result.
     pub fn apply_box_roles(&mut self, source_roles: &[NamedNode], path_roles: &[NamedNode]) {
         self.source_box_roles = dedup_roles(source_roles);
         self.path_box_roles = dedup_roles(path_roles);
@@ -279,8 +279,8 @@ impl ValidationReport {
             .map(|r| {
                 (
                     r.focus_node.to_string(),
-                    r.result_path.as_ref().map(|t| t.to_string()),
-                    r.value.as_ref().map(|t| t.to_string()),
+                    r.result_path.as_ref().map(ToString::to_string),
+                    r.value.as_ref().map(ToString::to_string),
                     r.source_constraint_component.to_string(),
                     r.source_shape.to_string(),
                     r.severity,

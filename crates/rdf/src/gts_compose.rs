@@ -59,7 +59,7 @@ type CanonTables = (
 /// One interned term plus its content-sort key. Mirrors `gts.model.Term` rows
 /// in the Python `_Interner`, but carries the datatype as the IRI STRING (the
 /// post-canonicalization id is assigned later) so the sort key is value-stable.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct TermRow {
     kind: TermKind,
     value: String,
@@ -73,7 +73,7 @@ struct TermRow {
 /// Term ids are append-order during ingestion (process-unstable), then re-id'd
 /// by content in [`Self::canonical_tables`] so the emitted bytes are a pure
 /// function of the inputs.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct SnapshotBuilder {
     terms: Vec<TermRow>,
     /// Intern index keyed by `(kind, value, datatype-or-empty, lang-or-empty)`,
@@ -338,7 +338,7 @@ impl SnapshotBuilder {
             std::collections::BTreeSet::new();
         for &(s, p, o, g) in &self.quads {
             let g = g.map(|g| remap[g]);
-            let gkey = g.map(|g| g as i64).unwrap_or(-1);
+            let gkey = g.map_or(-1, |g| g as i64);
             quad_set.insert((gkey, remap[s], remap[p], remap[o], g));
         }
         let quads: Vec<(usize, usize, usize, Option<usize>)> = quad_set
@@ -444,6 +444,7 @@ fn iv(n: usize) -> Value {
 
 /// A `(data, media_type, rep)` content-addressed blob row riding ahead of the
 /// snapshot frame.
+#[derive(Debug)]
 pub struct BlobRow {
     /// The decoded blob bytes.
     pub data: Vec<u8>,
@@ -848,9 +849,9 @@ mod tests {
             .blob_meta
             .iter()
             .filter_map(|(_, meta)| match meta {
-                ciborium::value::Value::Map(items) => items.iter().find_map(|(key, value)| {
-                    if matches!(key, ciborium::value::Value::Text(k) if k == "rep") {
-                        if let ciborium::value::Value::Text(rep) = value {
+                Value::Map(items) => items.iter().find_map(|(key, value)| {
+                    if matches!(key, Value::Text(k) if k == "rep") {
+                        if let Value::Text(rep) = value {
                             return Some(rep.clone());
                         }
                     }

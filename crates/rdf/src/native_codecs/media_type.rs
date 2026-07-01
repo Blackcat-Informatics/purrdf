@@ -33,11 +33,11 @@ impl NativeRdfFormat {
     /// rows in [`classify`].
     pub fn media_type(self) -> &'static str {
         match self {
-            NativeRdfFormat::Turtle => "text/turtle",
-            NativeRdfFormat::TriG => "application/trig",
-            NativeRdfFormat::NTriples => "application/n-triples",
-            NativeRdfFormat::NQuads => "application/n-quads",
-            NativeRdfFormat::RdfXml => "application/rdf+xml",
+            Self::Turtle => "text/turtle",
+            Self::TriG => "application/trig",
+            Self::NTriples => "application/n-triples",
+            Self::NQuads => "application/n-quads",
+            Self::RdfXml => "application/rdf+xml",
         }
     }
 
@@ -45,7 +45,7 @@ impl NativeRdfFormat {
     /// and RDF/XML are single-graph syntaxes, so a `SerializeGraph::Dataset` request
     /// against them falls back to the default graph (see `serialize.rs`).
     pub fn supports_datasets(self) -> bool {
-        matches!(self, NativeRdfFormat::TriG | NativeRdfFormat::NQuads)
+        matches!(self, Self::TriG | Self::NQuads)
     }
 }
 

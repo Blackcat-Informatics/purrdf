@@ -88,7 +88,7 @@ fn tier_token(tier: &SliceTier) -> String {
 
 /// A single packaged artifact within a slice (role + logical path + digests).
 #[pyclass(name = "ArtifactRecord", module = "purrdf_slice", skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PyArtifactRecord {
     inner: ArtifactRecord,
 }
@@ -138,7 +138,7 @@ impl PyArtifactRecord {
 
 /// The validated, typed projection of one slice's `manifest.ttl`.
 #[pyclass(name = "ManifestView", module = "purrdf_slice", skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PyManifestView {
     inner: ManifestView,
 }
@@ -193,7 +193,7 @@ impl PyManifestView {
 
 /// One discovered slice: its manifest view plus its typed artifact inventory.
 #[pyclass(name = "SliceRecord", module = "purrdf_slice", skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PySliceRecord {
     manifest: PyManifestView,
     artifacts: Vec<PyArtifactRecord>,
@@ -203,7 +203,7 @@ pub struct PySliceRecord {
 
 impl PySliceRecord {
     fn from_record(rec: &SliceRecord) -> Self {
-        PySliceRecord {
+        Self {
             manifest: PyManifestView {
                 inner: rec.manifest.clone(),
             },
@@ -251,6 +251,7 @@ impl PySliceRecord {
 /// The native slice catalog: manifest-based discovery of every slice under a
 /// root directory, the authoritative slice machinery (#820 S8).
 #[pyclass(name = "SliceCatalog", module = "purrdf_slice")]
+#[derive(Debug)]
 pub struct PySliceCatalog {
     inner: SliceCatalog,
 }
@@ -260,10 +261,10 @@ impl PySliceCatalog {
     /// Discover every slice under `root` (globs `*/*/manifest.ttl`), parsing
     /// each manifest and inventorying its artifacts.
     #[staticmethod]
-    fn discover(root: &str) -> PyResult<PySliceCatalog> {
+    fn discover(root: &str) -> PyResult<Self> {
         let catalog = SliceCatalog::discover(Path::new(root))
             .map_err(|e| PyValueError::new_err(format!("slice catalog discovery failed: {e}")))?;
-        Ok(PySliceCatalog { inner: catalog })
+        Ok(Self { inner: catalog })
     }
 
     /// Every discovered slice record (sorted by IRI).
@@ -305,7 +306,7 @@ impl PySliceCatalog {
 
 /// One computed manifest patch: the on-disk path plus original and patched text.
 #[pyclass(name = "ManifestPatch", module = "purrdf_slice", skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PyManifestPatch {
     inner: ManifestPatch,
 }
@@ -335,7 +336,7 @@ impl PyManifestPatch {
 
 /// One computed cross-slice dependency edge with its reconciliation verdict.
 #[pyclass(name = "DependencyEdge", module = "purrdf_slice", skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PyDependencyEdge {
     from_slice: String,
     to_slice: String,
@@ -345,7 +346,7 @@ pub struct PyDependencyEdge {
 
 impl PyDependencyEdge {
     fn from_edge(edge: &DependencyEdge) -> Self {
-        PyDependencyEdge {
+        Self {
             from_slice: edge.from_slice.clone(),
             to_slice: edge.to_slice.clone(),
             reconciliation: reconciliation_token(edge.reconciliation),
@@ -415,6 +416,7 @@ fn ownership_error_string(diag: &OwnershipDiagnostic) -> Option<String> {
 
 /// The complete result of an ownership + dependency analysis.
 #[pyclass(name = "OwnershipReport", module = "purrdf_slice")]
+#[derive(Debug)]
 pub struct PyOwnershipReport {
     inner: OwnershipReport,
 }
@@ -440,7 +442,7 @@ impl PyOwnershipReport {
         // Unowned terms (an isDefinedBy with no physical origin) are surfaced
         // via the per-term status table.
         for owner in self.inner.ownership.values() {
-            if let OwnershipStatus::Unowned = owner.status {
+            if owner.status == OwnershipStatus::Unowned {
                 out.push(format!(
                     "{term} rdfs:isDefinedBy {declared} — no slice physically \
                      defines this term (#329)",
@@ -477,12 +479,13 @@ fn tier_priority(tier: Option<&SliceTier>) -> u8 {
     match tier {
         Some(SliceTier::Core) => 0,
         Some(SliceTier::Extension) => 1,
-        Some(SliceTier::Domain) | Some(SliceTier::Unknown(_)) | None => 2,
+        Some(SliceTier::Domain | SliceTier::Unknown(_)) | None => 2,
     }
 }
 
 /// The native ownership + dependency analyzer over a [`PySliceCatalog`].
 #[pyclass(name = "OwnershipAnalyzer", module = "purrdf_slice")]
+#[derive(Debug)]
 pub struct PyOwnershipAnalyzer {
     report: OwnershipReport,
     /// Per-slice numeric tier, resolved once from the catalog manifests, so the
@@ -502,7 +505,7 @@ impl PyOwnershipAnalyzer {
     /// all authored artifact raw digests are captured here too, so the
     /// PyO3-free analysis-graph emitter can be driven entirely from owned data.
     #[new]
-    fn new(catalog: &PySliceCatalog) -> PyResult<PyOwnershipAnalyzer> {
+    fn new(catalog: &PySliceCatalog) -> PyResult<Self> {
         let report = OwnershipAnalyzer::new(&catalog.inner)
             .analyze()
             .map_err(|e| PyValueError::new_err(format!("ownership analysis failed: {e}")))?;
@@ -518,7 +521,7 @@ impl PyOwnershipAnalyzer {
             }
         }
         raw_digests.sort_unstable();
-        Ok(PyOwnershipAnalyzer {
+        Ok(Self {
             report,
             tier_of,
             raw_digests,
@@ -591,7 +594,7 @@ impl PyOwnershipAnalyzer {
 }
 
 /// Register the `purrdf_slice` engine surface into the given module.
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyArtifactRecord>()?;
     m.add_class::<PyManifestView>()?;
     m.add_class::<PySliceRecord>()?;

@@ -73,58 +73,73 @@ fn any_graph() -> PurrdfGraphMatch {
 }
 
 unsafe fn view_str(view: &PurrdfTermView) -> String {
-    if view.lexical.len == 0 {
-        return String::new();
+    unsafe {
+        if view.lexical.len == 0 {
+            return String::new();
+        }
+        let bytes = std::slice::from_raw_parts(view.lexical.ptr, view.lexical.len);
+        String::from_utf8_lossy(bytes).into_owned()
     }
-    let bytes = std::slice::from_raw_parts(view.lexical.ptr, view.lexical.len);
-    String::from_utf8_lossy(bytes).into_owned()
 }
 
 /// Drain a cursor, returning each row's (subject, predicate, object) lexical and
 /// object kind as i32.
 unsafe fn drain(cursor: *mut PurrdfCursor) -> Vec<(String, String, String, i32)> {
-    let mut rows = Vec::new();
-    loop {
-        let (mut s, mut p, mut o, mut g) = (out_view(), out_view(), out_view(), out_view());
-        let mut has_graph: u8 = 0;
-        let rc = purrdf_cursor_next(cursor, &mut s, &mut p, &mut o, &mut g, &mut has_graph);
-        if rc == PurrdfStatus::CursorExhausted as i32 {
-            break;
+    unsafe {
+        let mut rows = Vec::new();
+        loop {
+            let (mut s, mut p, mut o, mut g) = (out_view(), out_view(), out_view(), out_view());
+            let mut has_graph: u8 = 0;
+            let rc = purrdf_cursor_next(
+                cursor,
+                &raw mut s,
+                &raw mut p,
+                &raw mut o,
+                &raw mut g,
+                &raw mut has_graph,
+            );
+            if rc == PurrdfStatus::CursorExhausted as i32 {
+                break;
+            }
+            assert_eq!(rc, PurrdfStatus::Ok as i32);
+            rows.push((view_str(&s), view_str(&p), view_str(&o), o.kind));
         }
-        assert_eq!(rc, PurrdfStatus::Ok as i32);
-        rows.push((view_str(&s), view_str(&p), view_str(&o), o.kind));
+        rows
     }
-    rows
 }
 
 /// Parse a Turtle/N-Triples snippet, returning the owned dataset handle.
 unsafe fn parse(media: &str, doc: &str) -> *mut PurrdfDataset {
-    let media = CString::new(media).unwrap();
-    let mut dataset: *mut PurrdfDataset = std::ptr::null_mut();
-    let mut error: *mut PurrdfError = std::ptr::null_mut();
-    let status = purrdf_parse(
-        doc.as_ptr(),
-        doc.len(),
-        media.as_ptr(),
-        std::ptr::null(),
-        std::ptr::null(),
-        &mut dataset,
-        &mut error,
-    );
-    assert_eq!(status, PurrdfStatus::Ok as i32, "parse should succeed");
-    assert!(error.is_null());
-    assert!(!dataset.is_null());
-    dataset
+    unsafe {
+        let media = CString::new(media).unwrap();
+        let mut dataset: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_parse(
+            doc.as_ptr(),
+            doc.len(),
+            media.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut dataset,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32, "parse should succeed");
+        assert!(error.is_null());
+        assert!(!dataset.is_null());
+        dataset
+    }
 }
 
 unsafe fn buffer_bytes(buf: *const PurrdfBuffer) -> Vec<u8> {
-    let mut ptr: *const u8 = std::ptr::null();
-    let mut len: usize = 0;
-    assert_eq!(
-        purrdf_buffer_data(buf, &mut ptr, &mut len),
-        PurrdfStatus::Ok as i32
-    );
-    std::slice::from_raw_parts(ptr, len).to_vec()
+    unsafe {
+        let mut ptr: *const u8 = std::ptr::null();
+        let mut len: usize = 0;
+        assert_eq!(
+            purrdf_buffer_data(buf, &raw mut ptr, &raw mut len),
+            PurrdfStatus::Ok as i32
+        );
+        std::slice::from_raw_parts(ptr, len).to_vec()
+    }
 }
 
 #[test]
@@ -134,7 +149,7 @@ fn abi_version_is_beta_0_1_0() {
         minor: 9,
         patch: 9,
     };
-    let status = unsafe { purrdf_abi_version(&mut version) };
+    let status = unsafe { purrdf_abi_version(&raw mut version) };
     assert_eq!(status, PurrdfStatus::Ok as i32);
     assert_eq!(version.major, PURRDF_ABI_MAJOR);
     assert_eq!(version.minor, PURRDF_ABI_MINOR);
@@ -166,11 +181,11 @@ fn parse_counts_quads_and_terms() {
         let mut quads: usize = 0;
         let mut terms: usize = 0;
         assert_eq!(
-            purrdf_dataset_quad_count(dataset, &mut quads),
+            purrdf_dataset_quad_count(dataset, &raw mut quads),
             PurrdfStatus::Ok as i32
         );
         assert_eq!(
-            purrdf_dataset_term_count(dataset, &mut terms),
+            purrdf_dataset_term_count(dataset, &raw mut terms),
             PurrdfStatus::Ok as i32
         );
         assert_eq!(quads, 1);
@@ -191,9 +206,9 @@ fn serialize_round_trips_through_ntriples() {
             dataset,
             media.as_ptr(),
             std::ptr::null(),
-            &mut buffer,
-            &mut dropped,
-            &mut error,
+            &raw mut buffer,
+            &raw mut dropped,
+            &raw mut error,
         );
         assert_eq!(status, PurrdfStatus::Ok as i32);
         assert!(error.is_null());
@@ -207,7 +222,7 @@ fn serialize_round_trips_through_ntriples() {
         // Re-parse the serialized output; it must yield the same single quad.
         let reparsed = parse("application/n-triples", &text);
         let mut quads: usize = 0;
-        purrdf_dataset_quad_count(reparsed, &mut quads);
+        purrdf_dataset_quad_count(reparsed, &raw mut quads);
         assert_eq!(quads, 1);
 
         purrdf_buffer_free(buffer);
@@ -229,8 +244,8 @@ fn parse_rejects_malformed_turtle_without_aborting() {
             media.as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
-            &mut dataset,
-            &mut error,
+            &raw mut dataset,
+            &raw mut error,
         );
         assert_eq!(status, PurrdfStatus::ParseError as i32);
         assert!(dataset.is_null());
@@ -253,9 +268,9 @@ fn serialize_rejects_unknown_media_type() {
             dataset,
             media.as_ptr(),
             std::ptr::null(),
-            &mut buffer,
+            &raw mut buffer,
             std::ptr::null_mut(),
-            &mut error,
+            &raw mut error,
         );
         assert_eq!(status, PurrdfStatus::UnsupportedFormat as i32);
         assert!(buffer.is_null());
@@ -283,9 +298,9 @@ fn cursor_iterates_all_quads() {
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
-            &graph,
-            &mut cursor,
-            &mut error,
+            &raw const graph,
+            &raw mut cursor,
+            &raw mut error,
         );
         assert_eq!(status, PurrdfStatus::Ok as i32);
         assert!(error.is_null());
@@ -311,12 +326,12 @@ fn cursor_filters_by_subject() {
         let mut error: *mut PurrdfError = std::ptr::null_mut();
         purrdf_quads_for_pattern(
             dataset,
-            &s_view,
+            &raw const s_view,
             std::ptr::null(),
             std::ptr::null(),
-            &graph,
-            &mut cursor,
-            &mut error,
+            &raw const graph,
+            &raw mut cursor,
+            &raw mut error,
         );
         let rows = drain(cursor);
         assert_eq!(rows.len(), 2);
@@ -337,12 +352,12 @@ fn cursor_for_absent_term_is_empty_not_error() {
         let mut error: *mut PurrdfError = std::ptr::null_mut();
         let status = purrdf_quads_for_pattern(
             dataset,
-            &s_view,
+            &raw const s_view,
             std::ptr::null(),
             std::ptr::null(),
-            &graph,
-            &mut cursor,
-            &mut error,
+            &raw const graph,
+            &raw mut cursor,
+            &raw mut error,
         );
         assert_eq!(status, PurrdfStatus::Ok as i32);
         assert!(error.is_null());
@@ -364,9 +379,9 @@ fn cursor_survives_dataset_free() {
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
-            &graph,
-            &mut cursor,
-            &mut error,
+            &raw const graph,
+            &raw mut cursor,
+            &raw mut error,
         );
         // Free the dataset BEFORE iterating — the cursor's Arc pin keeps the arena alive.
         purrdf_dataset_free(dataset);
@@ -396,14 +411,21 @@ fn quoted_triple_object_renders_to_ntriples() {
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
-            &graph,
-            &mut cursor,
-            &mut error,
+            &raw const graph,
+            &raw mut cursor,
+            &raw mut error,
         );
 
         let (mut s, mut p, mut o, mut g) = (out_view(), out_view(), out_view(), out_view());
         let mut has_graph: u8 = 0;
-        let rc = purrdf_cursor_next(cursor, &mut s, &mut p, &mut o, &mut g, &mut has_graph);
+        let rc = purrdf_cursor_next(
+            cursor,
+            &raw mut s,
+            &raw mut p,
+            &raw mut o,
+            &raw mut g,
+            &raw mut has_graph,
+        );
         assert_eq!(rc, PurrdfStatus::Ok as i32);
         // The object is a quoted triple: kind Triple, empty lexical, non-zero id.
         assert_eq!(o.kind, PurrdfTermKind::Triple as i32);
@@ -413,7 +435,8 @@ fn quoted_triple_object_renders_to_ntriples() {
         // Materialize it via the N-Triples convenience path.
         let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
         let mut term_error: *mut PurrdfError = std::ptr::null_mut();
-        let status = purrdf_term_to_ntriples(dataset, &o, &mut buffer, &mut term_error);
+        let status =
+            purrdf_term_to_ntriples(dataset, &raw const o, &raw mut buffer, &raw mut term_error);
         assert_eq!(status, PurrdfStatus::Ok as i32);
         assert!(term_error.is_null());
         let token = String::from_utf8(buffer_bytes(buffer)).unwrap();
@@ -427,70 +450,80 @@ fn quoted_triple_object_renders_to_ntriples() {
 }
 
 unsafe fn quad_count(dataset: *const PurrdfDataset) -> usize {
-    let mut count: usize = 0;
-    assert_eq!(
-        purrdf_dataset_quad_count(dataset, &mut count),
-        PurrdfStatus::Ok as i32
-    );
-    count
+    unsafe {
+        let mut count: usize = 0;
+        assert_eq!(
+            purrdf_dataset_quad_count(dataset, &raw mut count),
+            PurrdfStatus::Ok as i32
+        );
+        count
+    }
 }
 
 unsafe fn graph_of(doc: &str) -> *mut PurrdfGraph {
-    let dataset = parse("application/n-triples", doc);
-    let mut graph: *mut PurrdfGraph = std::ptr::null_mut();
-    assert_eq!(
-        purrdf_graph_from_dataset(dataset, &mut graph),
-        PurrdfStatus::Ok as i32
-    );
-    purrdf_dataset_free(dataset);
-    graph
+    unsafe {
+        let dataset = parse("application/n-triples", doc);
+        let mut graph: *mut PurrdfGraph = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_graph_from_dataset(dataset, &raw mut graph),
+            PurrdfStatus::Ok as i32
+        );
+        purrdf_dataset_free(dataset);
+        graph
+    }
 }
 
 unsafe fn insert(graph: *mut PurrdfGraph, s: &str, p: &str, o: &str) -> u8 {
-    let (sv, pv, ov) = (iri_view(s), iri_view(p), iri_view(o));
-    let mut changed: u8 = 0;
-    let mut error: *mut PurrdfError = std::ptr::null_mut();
-    let status = purrdf_graph_insert(
-        graph,
-        &sv,
-        &pv,
-        &ov,
-        std::ptr::null(),
-        &mut changed,
-        &mut error,
-    );
-    assert_eq!(status, PurrdfStatus::Ok as i32);
-    assert!(error.is_null());
-    changed
+    unsafe {
+        let (sv, pv, ov) = (iri_view(s), iri_view(p), iri_view(o));
+        let mut changed: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_graph_insert(
+            graph,
+            &raw const sv,
+            &raw const pv,
+            &raw const ov,
+            std::ptr::null(),
+            &raw mut changed,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        changed
+    }
 }
 
 unsafe fn remove(graph: *mut PurrdfGraph, s: &str, p: &str, o: &str) -> u8 {
-    let (sv, pv, ov) = (iri_view(s), iri_view(p), iri_view(o));
-    let mut changed: u8 = 0;
-    let mut error: *mut PurrdfError = std::ptr::null_mut();
-    let status = purrdf_graph_remove(
-        graph,
-        &sv,
-        &pv,
-        &ov,
-        std::ptr::null(),
-        &mut changed,
-        &mut error,
-    );
-    assert_eq!(status, PurrdfStatus::Ok as i32);
-    assert!(error.is_null());
-    changed
+    unsafe {
+        let (sv, pv, ov) = (iri_view(s), iri_view(p), iri_view(o));
+        let mut changed: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_graph_remove(
+            graph,
+            &raw const sv,
+            &raw const pv,
+            &raw const ov,
+            std::ptr::null(),
+            &raw mut changed,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        changed
+    }
 }
 
 unsafe fn freeze(graph: *const PurrdfGraph) -> *mut PurrdfDataset {
-    let mut frozen: *mut PurrdfDataset = std::ptr::null_mut();
-    let mut error: *mut PurrdfError = std::ptr::null_mut();
-    assert_eq!(
-        purrdf_graph_freeze(graph, &mut frozen, &mut error),
-        PurrdfStatus::Ok as i32
-    );
-    assert!(error.is_null());
-    frozen
+    unsafe {
+        let mut frozen: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_graph_freeze(graph, &raw mut frozen, &raw mut error),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        frozen
+    }
 }
 
 #[test]
@@ -536,26 +569,28 @@ fn graph_reinsert_unsuppresses_a_removed_base_quad() {
 }
 
 unsafe fn run_select(dataset: *const PurrdfDataset, query: &str) -> *mut PurrdfRowCursor {
-    let cq = CString::new(query).unwrap();
-    let mut kind: i32 = -1;
-    let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
-    let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
-    let mut boolean: u8 = 0;
-    let mut error: *mut PurrdfError = std::ptr::null_mut();
-    let status = purrdf_query(
-        dataset,
-        cq.as_ptr(),
-        std::ptr::null(),
-        &mut kind,
-        &mut rows,
-        &mut graph,
-        &mut boolean,
-        &mut error,
-    );
-    assert_eq!(status, PurrdfStatus::Ok as i32);
-    assert!(error.is_null());
-    assert_eq!(kind, 0, "expected a SELECT (Solutions) result");
-    rows
+    unsafe {
+        let cq = CString::new(query).unwrap();
+        let mut kind: i32 = -1;
+        let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+        let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut boolean: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            &raw mut kind,
+            &raw mut rows,
+            &raw mut graph,
+            &raw mut boolean,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert_eq!(kind, 0, "expected a SELECT (Solutions) result");
+        rows
+    }
 }
 
 #[test]
@@ -566,13 +601,13 @@ fn select_lists_subjects() {
 
         let mut var_count: usize = 0;
         assert_eq!(
-            purrdf_rowcursor_variable_count(rows, &mut var_count),
+            purrdf_rowcursor_variable_count(rows, &raw mut var_count),
             PurrdfStatus::Ok as i32
         );
         assert_eq!(var_count, 1);
         let mut name_ptr: *const std::os::raw::c_char = std::ptr::null();
         assert_eq!(
-            purrdf_rowcursor_variable_name(rows, 0, &mut name_ptr),
+            purrdf_rowcursor_variable_name(rows, 0, &raw mut name_ptr),
             PurrdfStatus::Ok as i32
         );
         assert_eq!(std::ffi::CStr::from_ptr(name_ptr).to_str().unwrap(), "s");
@@ -582,7 +617,7 @@ fn select_lists_subjects() {
             let mut view = out_view();
             let mut bound: u8 = 0;
             assert_eq!(
-                purrdf_rowcursor_term(rows, 0, &mut view, &mut bound),
+                purrdf_rowcursor_term(rows, 0, &raw mut view, &raw mut bound),
                 PurrdfStatus::Ok as i32
             );
             assert_eq!(bound, 1);
@@ -614,11 +649,11 @@ fn ask_returns_boolean() {
             dataset,
             cq.as_ptr(),
             std::ptr::null(),
-            &mut kind,
-            &mut rows,
-            &mut graph,
-            &mut boolean,
-            &mut error,
+            &raw mut kind,
+            &raw mut rows,
+            &raw mut graph,
+            &raw mut boolean,
+            &raw mut error,
         );
         assert_eq!(status, PurrdfStatus::Ok as i32);
         assert_eq!(kind, 2);
@@ -641,11 +676,11 @@ fn construct_returns_graph() {
             dataset,
             cq.as_ptr(),
             std::ptr::null(),
-            &mut kind,
-            &mut rows,
-            &mut graph,
-            &mut boolean,
-            &mut error,
+            &raw mut kind,
+            &raw mut rows,
+            &raw mut graph,
+            &raw mut boolean,
+            &raw mut error,
         );
         assert_eq!(status, PurrdfStatus::Ok as i32);
         assert_eq!(kind, 1);
@@ -667,8 +702,8 @@ fn query_json_has_sparql_results_shape() {
             dataset,
             cq.as_ptr(),
             std::ptr::null(),
-            &mut buffer,
-            &mut error,
+            &raw mut buffer,
+            &raw mut error,
         );
         assert_eq!(status, PurrdfStatus::Ok as i32);
         assert!(error.is_null());
@@ -697,7 +732,7 @@ fn rowcursor_reports_unbound_optional() {
             let mut view = out_view();
             let mut bound: u8 = 1;
             assert_eq!(
-                purrdf_rowcursor_term(rows, 1, &mut view, &mut bound),
+                purrdf_rowcursor_term(rows, 1, &raw mut view, &raw mut bound),
                 PurrdfStatus::Ok as i32
             );
             if bound == 0 {
@@ -711,25 +746,34 @@ fn rowcursor_reports_unbound_optional() {
 }
 
 unsafe fn to_gts(dataset: *const PurrdfDataset) -> Vec<u8> {
-    let profile = CString::new("dist").unwrap();
-    let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
-    let mut error: *mut PurrdfError = std::ptr::null_mut();
-    let status = purrdf_to_gts(dataset, profile.as_ptr(), &mut buffer, &mut error);
-    assert_eq!(status, PurrdfStatus::Ok as i32);
-    assert!(error.is_null());
-    let bytes = buffer_bytes(buffer);
-    purrdf_buffer_free(buffer);
-    bytes
+    unsafe {
+        let profile = CString::new("dist").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_to_gts(dataset, profile.as_ptr(), &raw mut buffer, &raw mut error);
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let bytes = buffer_bytes(buffer);
+        purrdf_buffer_free(buffer);
+        bytes
+    }
 }
 
 unsafe fn from_gts(bytes: &[u8]) -> *mut PurrdfDataset {
-    let mut dataset: *mut PurrdfDataset = std::ptr::null_mut();
-    let mut error: *mut PurrdfError = std::ptr::null_mut();
-    let status = purrdf_from_gts(bytes.as_ptr(), bytes.len(), &mut dataset, &mut error);
-    assert_eq!(status, PurrdfStatus::Ok as i32);
-    assert!(error.is_null());
-    assert!(!dataset.is_null());
-    dataset
+    unsafe {
+        let mut dataset: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_from_gts(
+            bytes.as_ptr(),
+            bytes.len(),
+            &raw mut dataset,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert!(!dataset.is_null());
+        dataset
+    }
 }
 
 #[test]
@@ -764,7 +808,7 @@ fn gts_star_roundtrip_preserves_the_statement_layer() {
 
         let mut restored: *mut PurrdfDataset = std::ptr::null_mut();
         let mut error: *mut PurrdfError = std::ptr::null_mut();
-        let status = purrdf_from_gts(gts.as_ptr(), gts.len(), &mut restored, &mut error);
+        let status = purrdf_from_gts(gts.as_ptr(), gts.len(), &raw mut restored, &raw mut error);
 
         // The star round-trip now SUCCEEDS — no GtsError, a live restored handle.
         assert_eq!(
@@ -787,7 +831,7 @@ fn gts_star_roundtrip_preserves_the_statement_layer() {
             lookaside: 0,
         };
         assert_eq!(
-            purrdf_capabilities(restored, &mut caps),
+            purrdf_capabilities(restored, &raw mut caps),
             PurrdfStatus::Ok as i32
         );
         assert_eq!(caps.quoted_triples, 1, "the quoted triple must survive");
@@ -814,7 +858,7 @@ fn capabilities_reflect_the_dataset() {
         // A plain graph has no star features.
         let plain = parse("application/n-triples", THREE_QUADS);
         assert_eq!(
-            purrdf_capabilities(plain, &mut caps),
+            purrdf_capabilities(plain, &raw mut caps),
             PurrdfStatus::Ok as i32
         );
         assert_eq!(caps.quoted_triples, 0);
@@ -827,7 +871,7 @@ fn capabilities_reflect_the_dataset() {
             "<https://e/a> <https://e/b> <<( <https://e/s> <https://e/p> <https://e/o> )>> .",
         );
         assert_eq!(
-            purrdf_capabilities(star, &mut caps),
+            purrdf_capabilities(star, &raw mut caps),
             PurrdfStatus::Ok as i32
         );
         assert_eq!(
@@ -869,7 +913,12 @@ fn invalid_term_kind_yields_invalid_argument() {
         };
         let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
         let mut error: *mut PurrdfError = std::ptr::null_mut();
-        let status = purrdf_term_to_ntriples(std::ptr::null(), &view, &mut buffer, &mut error);
+        let status = purrdf_term_to_ntriples(
+            std::ptr::null(),
+            &raw const view,
+            &raw mut buffer,
+            &raw mut error,
+        );
         assert_eq!(
             status,
             PurrdfStatus::InvalidArgument as i32,
@@ -908,7 +957,12 @@ fn invalid_direction_yields_invalid_argument() {
         };
         let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
         let mut error: *mut PurrdfError = std::ptr::null_mut();
-        let status = purrdf_term_to_ntriples(std::ptr::null(), &view, &mut buffer, &mut error);
+        let status = purrdf_term_to_ntriples(
+            std::ptr::null(),
+            &raw const view,
+            &raw mut buffer,
+            &raw mut error,
+        );
         assert_eq!(
             status,
             PurrdfStatus::InvalidArgument as i32,
@@ -937,9 +991,9 @@ fn invalid_graph_match_kind_yields_invalid_argument() {
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
-            &graph,
-            &mut cursor,
-            &mut error,
+            &raw const graph,
+            &raw mut cursor,
+            &raw mut error,
         );
         assert_eq!(
             status,

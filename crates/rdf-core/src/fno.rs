@@ -4,7 +4,7 @@
 //! Native FnO (W3C Function Ontology) typed model + serializer.
 //!
 //! This is the PyO3-free Rust FnO model and serializer (#848). It carries a single,
-//! fully-resolved **catalog** of the PURRDF projection-function surface
+//! fully-resolved **catalog** of the PurRDF projection-function surface
 //! (`generated/projections/functions.fno.ttl`) into an owned RDF quad set and
 //! serializes it to N-Triples text.
 //!
@@ -58,7 +58,7 @@ const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 const FNO: &str = "https://w3id.org/function/ontology#";
 /// The `https://w3id.org/function/vocabulary/mapping#` (fnom) namespace.
 const FNOM: &str = "https://w3id.org/function/vocabulary/mapping#";
-/// The PURRDF namespace (`purrdf:ProjectionFunction`).
+/// The PurRDF namespace (`purrdf:ProjectionFunction`).
 ///
 /// `pub` so the `purrdf-slice` FnO emitter can populate
 /// [`FnFunction::kind_types`] with the projection-function type for the
@@ -66,7 +66,7 @@ const FNOM: &str = "https://w3id.org/function/vocabulary/mapping#";
 pub const PURRDF_PROJECTION_FUNCTION: &str =
     "https://blackcatinformatics.ca/purrdf/ProjectionFunction";
 
-/// The PURRDF-internal language tag every localizable literal carries until the
+/// The PurRDF-internal language tag every localizable literal carries until the
 /// projection boundary retags it to public BCP-47.
 const X_PURRDF_ENGLISH: &str = "x-purrdf-english";
 
@@ -129,7 +129,7 @@ pub struct FnFunction {
 #[derive(Debug, Clone)]
 pub struct FnOutput {
     pub iri: String,
-    /// `fno:predicate` — the PURRDF predicate the output realises. `None` for
+    /// `fno:predicate` — the PurRDF predicate the output realises. `None` for
     /// primitives (the list functions bind no data predicate).
     pub predicate: Option<String>,
     /// `fno:type` — the output's range IRI.
@@ -144,7 +144,7 @@ pub struct FnOutput {
 #[derive(Debug, Clone)]
 pub struct FnParam {
     pub iri: String,
-    /// `fno:predicate` — the source PURRDF predicate. `None` for primitives (the
+    /// `fno:predicate` — the source PurRDF predicate. `None` for primitives (the
     /// list functions bind no data predicate).
     pub predicate: Option<String>,
     /// `fno:type` — the predicate's ontology `rdfs:range` (the fail-closed type).

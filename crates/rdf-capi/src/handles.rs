@@ -12,6 +12,7 @@ use crate::status::PurrdfStatus;
 /// A frozen, immutable RDF-1.2 dataset. Wraps `Arc<RdfDataset>`, so it is
 /// `Send + Sync`: it may be read concurrently from multiple threads. Release
 /// with `purrdf_dataset_free`.
+#[derive(Debug)]
 pub struct PurrdfDataset(pub(crate) Arc<RdfDataset>);
 
 /// Compile-time proof of the `Send + Sync` guarantee documented on
@@ -25,8 +26,8 @@ const _: fn() = || {
 
 impl PurrdfDataset {
     /// Wrap a frozen dataset as a heap-owned handle pointer.
-    pub(crate) fn into_raw(dataset: Arc<RdfDataset>) -> *mut PurrdfDataset {
-        Box::into_raw(Box::new(PurrdfDataset(dataset)))
+    pub(crate) fn into_raw(dataset: Arc<RdfDataset>) -> *mut Self {
+        Box::into_raw(Box::new(Self(dataset)))
     }
 
     /// Borrow the inner `Arc` from a non-null handle pointer (used where an
@@ -34,16 +35,16 @@ impl PurrdfDataset {
     ///
     /// # Safety
     /// `ptr` must be a live `PurrdfDataset` handle.
-    pub(crate) unsafe fn arc<'a>(ptr: *const PurrdfDataset) -> &'a Arc<RdfDataset> {
-        &(*ptr).0
+    pub(crate) unsafe fn arc<'a>(ptr: *const Self) -> &'a Arc<RdfDataset> {
+        unsafe { &(*ptr).0 }
     }
 
     /// Borrow the frozen dataset from a non-null handle pointer.
     ///
     /// # Safety
     /// `ptr` must be a live `PurrdfDataset` handle.
-    pub(crate) unsafe fn dataset<'a>(ptr: *const PurrdfDataset) -> &'a RdfDataset {
-        &(*ptr).0
+    pub(crate) unsafe fn dataset<'a>(ptr: *const Self) -> &'a RdfDataset {
+        unsafe { &(*ptr).0 }
     }
 }
 
@@ -53,11 +54,13 @@ impl PurrdfDataset {
 /// `dataset` must be null or a live dataset handle not already freed.
 #[no_mangle]
 pub unsafe extern "C" fn purrdf_dataset_free(dataset: *mut PurrdfDataset) {
-    ffi_guard!((), {
-        if !dataset.is_null() {
-            drop(Box::from_raw(dataset));
-        }
-    })
+    unsafe {
+        ffi_guard!((), {
+            if !dataset.is_null() {
+                drop(Box::from_raw(dataset));
+            }
+        });
+    }
 }
 
 /// Write the number of quads in the dataset to `*out`.
@@ -69,13 +72,15 @@ pub unsafe extern "C" fn purrdf_dataset_quad_count(
     dataset: *const PurrdfDataset,
     out: *mut usize,
 ) -> i32 {
-    ffi_guard!(PurrdfStatus::Panic as i32, {
-        if dataset.is_null() || out.is_null() {
-            return PurrdfStatus::NullPointer as i32;
-        }
-        *out = (*dataset).0.quad_count();
-        PurrdfStatus::Ok as i32
-    })
+    unsafe {
+        ffi_guard!(PurrdfStatus::Panic as i32, {
+            if dataset.is_null() || out.is_null() {
+                return PurrdfStatus::NullPointer as i32;
+            }
+            *out = (*dataset).0.quad_count();
+            PurrdfStatus::Ok as i32
+        })
+    }
 }
 
 /// Write the number of interned terms in the dataset to `*out`.
@@ -87,11 +92,13 @@ pub unsafe extern "C" fn purrdf_dataset_term_count(
     dataset: *const PurrdfDataset,
     out: *mut usize,
 ) -> i32 {
-    ffi_guard!(PurrdfStatus::Panic as i32, {
-        if dataset.is_null() || out.is_null() {
-            return PurrdfStatus::NullPointer as i32;
-        }
-        *out = (*dataset).0.term_count();
-        PurrdfStatus::Ok as i32
-    })
+    unsafe {
+        ffi_guard!(PurrdfStatus::Panic as i32, {
+            if dataset.is_null() || out.is_null() {
+                return PurrdfStatus::NullPointer as i32;
+            }
+            *out = (*dataset).0.term_count();
+            PurrdfStatus::Ok as i32
+        })
+    }
 }

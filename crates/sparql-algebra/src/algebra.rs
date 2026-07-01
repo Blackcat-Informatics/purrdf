@@ -76,10 +76,10 @@ impl Query {
     /// The query's `FROM` / `FROM NAMED` dataset clause (empty = the store default).
     pub fn dataset(&self) -> &QueryDataset {
         match self {
-            Query::Select { dataset, .. }
-            | Query::Construct { dataset, .. }
-            | Query::Describe { dataset, .. }
-            | Query::Ask { dataset, .. } => dataset,
+            Self::Select { dataset, .. }
+            | Self::Construct { dataset, .. }
+            | Self::Describe { dataset, .. }
+            | Self::Ask { dataset, .. } => dataset,
         }
     }
 }
@@ -332,15 +332,23 @@ fn fmt_literal(l: &Literal) -> String {
 /// Render a `DELETE`/`INSERT` template (a list of [`QuadPattern`]s) as the body of
 /// a `{ ... }` block, grouping graph-scoped patterns into `GRAPH g { ... }`.
 fn fmt_quad_pattern_body(quads: &[QuadPattern]) -> String {
+    use core::fmt::Write as _;
+
     let mut out = String::new();
     for q in quads {
+        // Writing to a `String` is infallible, so the `write!` results are ignored.
         match &q.graph {
-            None => out.push_str(&format!("{} . ", fmt_triple_pattern(&q.triple))),
-            Some(g) => out.push_str(&format!(
-                "GRAPH {} {{ {} . }} ",
-                fmt_named_node_pattern(g),
-                fmt_triple_pattern(&q.triple),
-            )),
+            None => {
+                let _ = write!(out, "{} . ", fmt_triple_pattern(&q.triple));
+            }
+            Some(g) => {
+                let _ = write!(
+                    out,
+                    "GRAPH {} {{ {} . }} ",
+                    fmt_named_node_pattern(g),
+                    fmt_triple_pattern(&q.triple),
+                );
+            }
         }
     }
     out.trim_end().to_owned()
@@ -472,52 +480,52 @@ pub enum GraphPattern {
     /// Conjunction (`Join`) of two patterns.
     Join {
         /// Left operand.
-        left: Box<GraphPattern>,
+        left: Box<Self>,
         /// Right operand.
-        right: Box<GraphPattern>,
+        right: Box<Self>,
     },
     /// `OPTIONAL` (left outer join), with an optional join condition (a `FILTER`
     /// lifted into the `OPTIONAL` per §18.2.2.3).
     LeftJoin {
         /// Left (required) operand.
-        left: Box<GraphPattern>,
+        left: Box<Self>,
         /// Right (optional) operand.
-        right: Box<GraphPattern>,
+        right: Box<Self>,
         /// The join-condition expression, if the `OPTIONAL` had a `FILTER`.
         expression: Option<Expression>,
     },
     /// A correlated/lateral join (`LATERAL`), kept for algebra completeness.
     Lateral {
         /// Left operand.
-        left: Box<GraphPattern>,
+        left: Box<Self>,
         /// Right operand, evaluated per left solution.
-        right: Box<GraphPattern>,
+        right: Box<Self>,
     },
     /// `FILTER expr` over an inner pattern.
     Filter {
         /// The filter expression.
         expr: Expression,
         /// The pattern being filtered.
-        inner: Box<GraphPattern>,
+        inner: Box<Self>,
     },
     /// `UNION` of two patterns.
     Union {
         /// Left operand.
-        left: Box<GraphPattern>,
+        left: Box<Self>,
         /// Right operand.
-        right: Box<GraphPattern>,
+        right: Box<Self>,
     },
     /// `GRAPH name { ... }`.
     Graph {
         /// The named-graph IRI or variable.
         name: NamedNodePattern,
         /// The inner pattern scoped to that graph.
-        inner: Box<GraphPattern>,
+        inner: Box<Self>,
     },
     /// `BIND(expression AS variable)` — `Extend` in algebra.
     Extend {
         /// The pattern being extended.
-        inner: Box<GraphPattern>,
+        inner: Box<Self>,
         /// The newly bound variable.
         variable: Variable,
         /// The expression whose value it binds.
@@ -526,9 +534,9 @@ pub enum GraphPattern {
     /// `MINUS` (set difference on compatible solutions).
     Minus {
         /// Left operand.
-        left: Box<GraphPattern>,
+        left: Box<Self>,
         /// Right operand (solutions to subtract).
-        right: Box<GraphPattern>,
+        right: Box<Self>,
     },
     /// `SERVICE` (federated query). In scope structurally; the evaluator may
     /// reject it. `silent` is the `SILENT` flag.
@@ -536,7 +544,7 @@ pub enum GraphPattern {
         /// The service endpoint IRI or variable.
         name: NamedNodePattern,
         /// The pattern sent to the endpoint.
-        inner: Box<GraphPattern>,
+        inner: Box<Self>,
         /// Whether the `SILENT` keyword was present.
         silent: bool,
     },
@@ -550,31 +558,31 @@ pub enum GraphPattern {
     /// `ORDER BY`.
     OrderBy {
         /// The pattern being ordered.
-        inner: Box<GraphPattern>,
+        inner: Box<Self>,
         /// The ordered list of sort keys.
         expression: Vec<OrderExpression>,
     },
     /// Projection (`SELECT` variable list, or `SELECT *`).
     Project {
         /// The pattern being projected.
-        inner: Box<GraphPattern>,
+        inner: Box<Self>,
         /// The projected variables.
         variables: Vec<Variable>,
     },
     /// `DISTINCT`.
     Distinct {
         /// The pattern whose solutions are de-duplicated.
-        inner: Box<GraphPattern>,
+        inner: Box<Self>,
     },
     /// `REDUCED`.
     Reduced {
         /// The pattern whose solutions may be de-duplicated.
-        inner: Box<GraphPattern>,
+        inner: Box<Self>,
     },
     /// `LIMIT`/`OFFSET`.
     Slice {
         /// The pattern being sliced.
-        inner: Box<GraphPattern>,
+        inner: Box<Self>,
         /// The `OFFSET` (0 if absent).
         start: usize,
         /// The `LIMIT`, if present.
@@ -583,7 +591,7 @@ pub enum GraphPattern {
     /// `GROUP BY` + aggregates.
     Group {
         /// The pattern being grouped.
-        inner: Box<GraphPattern>,
+        inner: Box<Self>,
         /// The grouping key variables.
         variables: Vec<Variable>,
         /// The `(output variable, aggregate)` pairs.
@@ -597,32 +605,32 @@ pub enum PropertyPathExpression {
     /// A single predicate IRI.
     NamedNode(NamedNode),
     /// `^path` — inverse.
-    Reverse(Box<PropertyPathExpression>),
+    Reverse(Box<Self>),
     /// `p1 / p2` — sequence.
-    Sequence(Box<PropertyPathExpression>, Box<PropertyPathExpression>),
+    Sequence(Box<Self>, Box<Self>),
     /// `p1 | p2` — alternative.
-    Alternative(Box<PropertyPathExpression>, Box<PropertyPathExpression>),
+    Alternative(Box<Self>, Box<Self>),
     /// `path*` — zero or more.
-    ZeroOrMore(Box<PropertyPathExpression>),
+    ZeroOrMore(Box<Self>),
     /// `path+` — one or more.
-    OneOrMore(Box<PropertyPathExpression>),
+    OneOrMore(Box<Self>),
     /// `path?` — zero or one.
-    ZeroOrOne(Box<PropertyPathExpression>),
+    ZeroOrOne(Box<Self>),
     /// `!(p1|...|pn)` — negated property set.
     NegatedPropertySet(Vec<NamedNode>),
-    /// `path{min,max}` — **bounded repetition** (a PURRDF extension *beyond* SPARQL
+    /// `path{min,max}` — **bounded repetition** (a PurRDF extension *beyond* SPARQL
     /// 1.1 §9, which has only `*`/`+`/`?`).  `max == None` means unbounded (`{n,}`);
     /// `max == Some(min)` is exactly-`n` (`{n}`).  The invariant `min <= max` (when
     /// `max` is `Some`) is enforced at construction by the parser.
     Range {
         /// The repeated sub-path.
-        inner: Box<PropertyPathExpression>,
+        inner: Box<Self>,
         /// Inclusive lower bound on repetitions.
         min: u32,
         /// Inclusive upper bound; `None` ⇒ unbounded.
         max: Option<u32>,
     },
-    /// A **predicate wildcard** matching ANY predicate (a PURRDF extension beyond
+    /// A **predicate wildcard** matching ANY predicate (a PurRDF extension beyond
     /// SPARQL 1.1 §9, which can only name predicates).  Optionally scoped to a
     /// predicate namespace IRI prefix (`namespace`), bounding the otherwise
     /// unbounded fan-out.
@@ -635,7 +643,7 @@ pub enum PropertyPathExpression {
 
 impl core::fmt::Display for PropertyPathExpression {
     /// Serialize a property path to its SPARQL surface syntax.  The standard
-    /// operators round-trip with the parser; the two PURRDF extensions render as
+    /// operators round-trip with the parser; the two PurRDF extensions render as
     /// `path{min,max}` (bounded repetition — round-trips) and `<any>` / `<any:ns>`
     /// (predicate wildcard — **emit-only**, no parse, per `LOGIC-PATHS.md`).
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -706,43 +714,43 @@ pub enum Expression {
     /// `BOUND(?v)`.
     Bound(Variable),
     /// Logical `||`.
-    Or(Box<Expression>, Box<Expression>),
+    Or(Box<Self>, Box<Self>),
     /// Logical `&&`.
-    And(Box<Expression>, Box<Expression>),
+    And(Box<Self>, Box<Self>),
     /// `=`.
-    Equal(Box<Expression>, Box<Expression>),
+    Equal(Box<Self>, Box<Self>),
     /// `sameTerm(a, b)`.
-    SameTerm(Box<Expression>, Box<Expression>),
+    SameTerm(Box<Self>, Box<Self>),
     /// `>`.
-    Greater(Box<Expression>, Box<Expression>),
+    Greater(Box<Self>, Box<Self>),
     /// `>=`.
-    GreaterOrEqual(Box<Expression>, Box<Expression>),
+    GreaterOrEqual(Box<Self>, Box<Self>),
     /// `<`.
-    Less(Box<Expression>, Box<Expression>),
+    Less(Box<Self>, Box<Self>),
     /// `<=`.
-    LessOrEqual(Box<Expression>, Box<Expression>),
+    LessOrEqual(Box<Self>, Box<Self>),
     /// `+`.
-    Add(Box<Expression>, Box<Expression>),
+    Add(Box<Self>, Box<Self>),
     /// `-` (binary).
-    Subtract(Box<Expression>, Box<Expression>),
+    Subtract(Box<Self>, Box<Self>),
     /// `*`.
-    Multiply(Box<Expression>, Box<Expression>),
+    Multiply(Box<Self>, Box<Self>),
     /// `/`.
-    Divide(Box<Expression>, Box<Expression>),
+    Divide(Box<Self>, Box<Self>),
     /// Unary `+`.
-    UnaryPlus(Box<Expression>),
+    UnaryPlus(Box<Self>),
     /// Unary `-`.
-    UnaryMinus(Box<Expression>),
+    UnaryMinus(Box<Self>),
     /// `!`.
-    Not(Box<Expression>),
+    Not(Box<Self>),
     /// `expr IN (list)`.
-    In(Box<Expression>, Vec<Expression>),
+    In(Box<Self>, Vec<Self>),
     /// `IF(cond, then, else)`.
-    If(Box<Expression>, Box<Expression>, Box<Expression>),
+    If(Box<Self>, Box<Self>, Box<Self>),
     /// `COALESCE(list)`.
-    Coalesce(Vec<Expression>),
+    Coalesce(Vec<Self>),
     /// A built-in or custom function call.
-    FunctionCall(Function, Vec<Expression>),
+    FunctionCall(Function, Vec<Self>),
     /// `EXISTS { pattern }` (`NOT EXISTS` is `Not(Exists(...))`).
     Exists(Box<GraphPattern>),
 }
@@ -860,13 +868,13 @@ impl PurrdfFn {
     #[must_use]
     pub const fn local_name(self) -> &'static str {
         match self {
-            PurrdfFn::HeldIn => "heldIn",
-            PurrdfFn::ListLength => "listLength",
-            PurrdfFn::ListGet => "listGet",
-            PurrdfFn::ListIndexOf => "listIndexOf",
-            PurrdfFn::ListContains => "listContains",
-            PurrdfFn::ListSlice => "listSlice",
-            PurrdfFn::ListConcat => "listConcat",
+            Self::HeldIn => "heldIn",
+            Self::ListLength => "listLength",
+            Self::ListGet => "listGet",
+            Self::ListIndexOf => "listIndexOf",
+            Self::ListContains => "listContains",
+            Self::ListSlice => "listSlice",
+            Self::ListConcat => "listConcat",
         }
     }
 
@@ -875,13 +883,13 @@ impl PurrdfFn {
     #[must_use]
     pub fn from_local_name(name: &str) -> Option<Self> {
         match name {
-            "heldIn" => Some(PurrdfFn::HeldIn),
-            "listLength" => Some(PurrdfFn::ListLength),
-            "listGet" => Some(PurrdfFn::ListGet),
-            "listIndexOf" => Some(PurrdfFn::ListIndexOf),
-            "listContains" => Some(PurrdfFn::ListContains),
-            "listSlice" => Some(PurrdfFn::ListSlice),
-            "listConcat" => Some(PurrdfFn::ListConcat),
+            "heldIn" => Some(Self::HeldIn),
+            "listLength" => Some(Self::ListLength),
+            "listGet" => Some(Self::ListGet),
+            "listIndexOf" => Some(Self::ListIndexOf),
+            "listContains" => Some(Self::ListContains),
+            "listSlice" => Some(Self::ListSlice),
+            "listConcat" => Some(Self::ListConcat),
             _ => None,
         }
     }

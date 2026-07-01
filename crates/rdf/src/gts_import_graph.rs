@@ -99,14 +99,14 @@ impl GraphInterner {
             )
             .with_location(self.location(gts_id)));
         };
-        Ok(self.builder.intern_iri(iri))
+        Ok(self.builder.intern_iri(&iri))
     }
 
     fn intern_blank(&mut self, gts_id: usize) -> TermId {
         // MOVE the blank label out; all folded blanks share the flattened scope.
         let label = std::mem::take(&mut self.terms[gts_id].value)
             .unwrap_or_else(|| format!("gts_bnode_{gts_id}"));
-        self.builder.intern_blank(label, FLATTENED_BLANK_SCOPE)
+        self.builder.intern_blank(&label, FLATTENED_BLANK_SCOPE)
     }
 
     fn intern_literal(&mut self, gts_id: usize, depth: usize) -> Result<TermId, RdfDiagnostic> {

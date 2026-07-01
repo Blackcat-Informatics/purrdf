@@ -92,7 +92,7 @@ mod tests {
     use std::collections::HashSet;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}"))
     }
 
     /// A sink that records the stream and checks the term-before-reference

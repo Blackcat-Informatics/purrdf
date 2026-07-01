@@ -341,6 +341,8 @@ fn default_catalog() -> Vec<(i64, Codec)> {
 }
 
 /// Accumulate a GTS log as a CBOR Sequence.
+// `SigningKey`'s `Debug` impl redacts the secret scalar, so deriving is safe here.
+#[derive(Debug)]
 pub struct Writer {
     name_to_id: HashMap<String, i64>,
     prev: Vec<u8>,
@@ -735,7 +737,7 @@ impl Writer {
         self.types.push(frame_type.to_string());
         self.frame_ids.push(id.clone());
         append_canonical(&Value::Map(frame), &mut self.buf);
-        self.prev = id.clone();
+        self.prev.clone_from(&id);
         Ok(id)
     }
 
@@ -1086,8 +1088,7 @@ fn term_identity_value(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> Val
                 "triple".into(),
                 Value::Null,
                 term.reifier
-                    .map(|rid| Value::from(rid as u64))
-                    .unwrap_or(Value::Null),
+                    .map_or(Value::Null, |rid| Value::from(rid as u64)),
             ]),
         },
     };
@@ -1096,7 +1097,7 @@ fn term_identity_value(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> Val
 }
 
 fn text_or_null(value: Option<&str>) -> Value {
-    value.map(Value::from).unwrap_or(Value::Null)
+    value.map_or(Value::Null, Value::from)
 }
 
 fn remap_id(old_to_new: &[usize], tid: usize) -> usize {
@@ -1166,9 +1167,10 @@ fn remap_suppression_target(target: &Value, old_to_new: &[usize]) -> Value {
                     let remapped = ids
                         .iter()
                         .map(|id| {
-                            value_idx(id)
-                                .map(|tid| Value::from(remap_id(old_to_new, tid) as u64))
-                                .unwrap_or_else(|| id.clone())
+                            value_idx(id).map_or_else(
+                                || id.clone(),
+                                |tid| Value::from(remap_id(old_to_new, tid) as u64),
+                            )
                         })
                         .collect();
                     return (key.clone(), Value::Array(remapped));

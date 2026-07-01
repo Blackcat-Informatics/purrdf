@@ -74,7 +74,7 @@ fn xsi_type<'a>(node: roxmltree::Node<'a, '_>) -> Option<&'a str> {
         .map(|a| a.value())
 }
 
-fn element_text_f64(node: roxmltree::Node, name: &str) -> Result<f64, OptError> {
+fn element_text_f64(node: roxmltree::Node<'_, '_>, name: &str) -> Result<f64, OptError> {
     let child = child_element(node, name).ok_or_else(|| {
         opt_err(format!(
             "missing <{name}> under <{}>",
@@ -89,7 +89,7 @@ fn element_text_f64(node: roxmltree::Node, name: &str) -> Result<f64, OptError> 
         .map_err(|e| opt_err(format!("<{name}> value {text:?} is not a number: {e}")))
 }
 
-fn element_text_bool(node: roxmltree::Node, name: &str) -> Result<bool, OptError> {
+fn element_text_bool(node: roxmltree::Node<'_, '_>, name: &str) -> Result<bool, OptError> {
     let child = child_element(node, name).ok_or_else(|| {
         opt_err(format!(
             "missing <{name}> under <{}>",

@@ -7,7 +7,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 `purrdf-sparql-results` serializes and reads the SPARQL result model used by the
 native query stack. It supports SPARQL Results JSON, XML, CSV, and TSV plus an
-additive PURRDF provenance extension where the format can carry one.
+additive PurRDF provenance extension where the format can carry one.
 
 ## Source Map
 

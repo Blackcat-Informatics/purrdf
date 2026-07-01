@@ -26,14 +26,125 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.3"
 edition = "2021"
+rust-version = "1.96"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Blackcat-Informatics/purrdf"
 homepage = "https://blackcatinformatics.ca/projects/purrdf"
+
+# Single source of truth for every dependency version in the workspace.
+# Member crates inherit with `dep.workspace = true`; per-crate feature
+# additions stay at the use site (workspace features merge additively).
+# Where a use site needs default features OFF, they are disabled HERE and
+# re-enabled per crate with `default-features = true` where required.
+[workspace.dependencies]
+# --- internal crates (paths are relative to the WORKSPACE ROOT) ---
+purrdf = { path = "crates/purrdf", version = "0.1.3" }
+purrdf-core = { path = "crates/rdf-core", version = "0.1.3" }
+purrdf-events = { path = "crates/rdf-events", version = "0.1.3" }
+purrdf-gts = { path = "crates/gts", version = "0.1.3" }
+purrdf-iri = { path = "crates/iri", version = "0.1.3" }
+purrdf-rdf = { path = "crates/rdf", version = "0.1.3" }
+purrdf-shapes = { path = "crates/shapes", version = "0.1.3" }
+purrdf-slice = { path = "crates/slice", version = "0.1.3" }
+purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "0.1.3" }
+purrdf-sparql-eval = { path = "crates/sparql-eval", version = "0.1.3" }
+purrdf-sparql-results = { path = "crates/sparql-results", version = "0.1.3" }
+purrdf-xsd = { path = "crates/xsd", version = "0.1.3" }
+
+# --- external crates ---
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+ahash = { version = "0.8", default-features = false }
+blake3 = "1"
+camino = "1"
+ciborium = "0.2"
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+csv = "1"
+datatest-stable = "0.3"
+ed25519-dalek = "2"
+filetime = "0.2"
+flate2 = "1"
+# `HashTable` requires >= 0.14.2 (introduced there); tracked on 0.15.
+hashbrown = "0.15"
+hex = "0.4"
+insta = "1.48"
+md-5 = { version = "0.10", default-features = false }
+petgraph = { version = "0.8", default-features = false }
+pretty_assertions = "1"
+proptest = "1"
+pyo3 = { version = "0.29", features = ["abi3-py313", "extension-module"] }
+rayon = "1"
+regex = "1"
+roxmltree = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Maintained continuation of the archived serde_yaml 0.9 (same API; the
+# `serde_yaml` name is kept at use sites via this package rename).
+serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
+# digest-0.10 family, matching sha2/md-5.
+sha1 = { version = "0.10", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+structured-zstd = "0.0.40"
+tempfile = "3"
+time = { version = "0.3", features = ["formatting", "parsing"] }
+visual-hashing = "0.1.3"
+# EXACT pin: the `wasm-bindgen` CLI that generates the JS bindings must match
+# the library version byte-for-byte or it refuses to run. `make wasm-pkg` and
+# the CI Node lane install `wasm-bindgen-cli@0.2.125` to match this.
+wasm-bindgen = "=0.2.125"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+rust-2018-idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Pedantic/nursery opt-outs, each with a reason. Keep this list short and
+# justified; prefer fixing code over widening it.
+module_name_repetitions = "allow"     # purrdf_core::RdfDataset-style names are deliberate
+missing_errors_doc = "allow"          # error semantics live on the error types themselves
+missing_panics_doc = "allow"          # panics are programming errors, documented at the assert
+must_use_candidate = "allow"          # blanket #[must_use] adds noise; applied by hand where it guards bugs
+option_if_let_else = "allow"          # nursery: frequently less readable than the match it replaces
+redundant_pub_crate = "allow"         # nursery: conflicts with unreachable_pub on binary/test targets
+doc_markdown = "allow"                # 500+ backtick nits on spec terms (RDF/XML, JSON-LD); revisit with doc-valid-idents
+missing_const_for_fn = "allow"        # nursery: noisy and often wrong about intentionally non-const APIs
+too_long_first_doc_paragraph = "allow" # cosmetic doc layout only
+cast_possible_truncation = "allow"    # u32 id/offset space is asserted at construction; casts are deliberate
+cast_possible_wrap = "allow"          # ditto
+cast_sign_loss = "allow"              # ditto
+cast_precision_loss = "allow"         # XSD numeric promotion is spec-defined; losses are intentional
+unnecessary_wraps = "allow"           # Result-shaped codec seams are kept uniform even where infallible today
+unused_self = "allow"                 # method-shaped APIs kept uniform across backends
+many_single_char_names = "allow"      # s/p/o/g is the canonical RDF idiom
+similar_names = "allow"               # subject/predicate/object families trip this constantly
+too_many_lines = "allow"              # refactors are planned work, not lint chores
+single_match_else = "allow"           # stylistic; match reads better at codec branch points
+match_same_arms = "allow"             # duplicate arms often document distinct spec cases
+if_not_else = "allow"                 # stylistic
+items_after_statements = "allow"      # test-local helpers read better in place
+zero_sized_map_values = "allow"       # HashMap<K, ()> is used deliberately for entry-API patterns
+unnecessary_debug_formatting = "allow" # {:?} in diagnostics is deliberate; message text is golden-locked
+float_cmp = "allow"                   # XSD value-space equality is spec-exact by design
 
 [profile.release]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
+
+# Benchmarks inherit release but keep symbols so perf/flamegraph work.
+[profile.bench]
+debug = true
+strip = "none"
+
+# Optimize third-party deps (crypto, compression, regex) even in dev builds so
+# the proptest/conformance test loop stays fast; workspace members are excluded.
+[profile.dev.package."*"]
+opt-level = 2

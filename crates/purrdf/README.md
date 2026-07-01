@@ -1,6 +1,6 @@
 # purrdf
 
-Umbrella Rust API for PURRDF.
+Umbrella Rust API for PurRDF.
 
 This crate re-exports the RDF 1.2 implementation surface and includes the
-first-class slice and SHACL/ShEx shape crates.
+first-class slice and SHACL shape crates.

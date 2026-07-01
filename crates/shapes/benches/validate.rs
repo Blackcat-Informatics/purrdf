@@ -92,20 +92,19 @@ ex:HierarchyShape a sh:NodeShape ;
     let rdf_type = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
     let sub_class_of = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 
+    use std::fmt::Write as _;
     for i in 1..40_usize {
-        nt.push_str(&format!(
-            "<{ex}C{i}> <{sub_class_of}> <{ex}C{}>  .\n",
-            i - 1
-        ));
+        let _ = writeln!(nt, "<{ex}C{i}> <{sub_class_of}> <{ex}C{}>  .", i - 1);
     }
 
     // 3000 typed nodes: spread across leaf class C39 (all reachable via closure)
     for i in 0..3000_usize {
-        nt.push_str(&format!("<{ex}item{i}> <{rdf_type}> <{ex}C39> .\n"));
-        nt.push_str(&format!("<{ex}item{i}> <{ex}label> \"item-{i}\" .\n"));
-        nt.push_str(&format!(
-            "<{ex}item{i}> <{ex}value> \"{i}\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n"
-        ));
+        let _ = writeln!(nt, "<{ex}item{i}> <{rdf_type}> <{ex}C39> .");
+        let _ = writeln!(nt, "<{ex}item{i}> <{ex}label> \"item-{i}\" .");
+        let _ = writeln!(
+            nt,
+            "<{ex}item{i}> <{ex}value> \"{i}\"^^<http://www.w3.org/2001/XMLSchema#integer> ."
+        );
     }
 
     (nt, shapes_ttl)

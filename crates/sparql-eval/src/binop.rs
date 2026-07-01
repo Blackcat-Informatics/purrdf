@@ -240,7 +240,7 @@ fn merge(
 pub(crate) fn eval_left_join(
     left: &GraphPattern,
     right: &GraphPattern,
-    expression: &Option<Expression>,
+    expression: Option<&Expression>,
     ctx: &mut EvalCtx<'_>,
 ) -> Result<SolutionSeq, EvalError> {
     let l = eval(left, ctx)?;
@@ -260,7 +260,7 @@ fn left_outer_join_filtered(
     expr: &Expression,
     ctx: &mut EvalCtx<'_>,
 ) -> Result<SolutionSeq, EvalError> {
-    let out = std::rc::Rc::new(l.schema.union(&r.schema));
+    let out = Rc::new(l.schema.union(&r.schema));
     let out_len = out.len();
     let left_len = l.schema.len();
     let right_to_out = right_to_out_map(&r.schema, &out);
@@ -370,7 +370,7 @@ pub(crate) fn eval_minus(
         .collect();
 
     Ok(SolutionSeq {
-        schema: l.schema.clone(),
+        schema: l.schema,
         rows,
     })
 }
@@ -390,12 +390,12 @@ mod tests {
         // :a :knows :b ; :likes :cake .
         // :b :likes :tea .
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows".to_owned());
-        let likes = b.intern_iri("http://ex/likes".to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bb = b.intern_iri("http://ex/b".to_owned());
-        let cake = b.intern_iri("http://ex/cake".to_owned());
-        let tea = b.intern_iri("http://ex/tea".to_owned());
+        let knows = b.intern_iri("http://ex/knows");
+        let likes = b.intern_iri("http://ex/likes");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let cake = b.intern_iri("http://ex/cake");
+        let tea = b.intern_iri("http://ex/tea");
         b.push_quad(a, knows, bb, None);
         b.push_quad(a, likes, cake, None);
         b.push_quad(bb, likes, tea, None);
@@ -538,7 +538,7 @@ mod tests {
         // s∈{a,b}: a knows b (match), b knows nothing (unmatched → ?f unbound).
         let left = bgp(vp("s"), pred("http://ex/likes"), vp("o"));
         let right = bgp(vp("s"), pred("http://ex/knows"), vp("f"));
-        let seq = eval_left_join(&left, &right, &None, &mut ctx).expect("optional");
+        let seq = eval_left_join(&left, &right, None, &mut ctx).expect("optional");
         assert_eq!(seq.len(), 2);
         let f = seq.schema.index_of(&Variable::new("f")).unwrap();
         // Exactly one row leaves ?f bound (s=a) and one leaves it unbound (s=b).
@@ -559,7 +559,8 @@ mod tests {
             Box::new(Expression::Variable(Variable::new("s"))),
             Box::new(Expression::Variable(Variable::new("f"))),
         ));
-        let seq = eval_left_join(&left, &right, &cond, &mut ctx).expect("filtered optional");
+        let seq =
+            eval_left_join(&left, &right, cond.as_ref(), &mut ctx).expect("filtered optional");
         assert_eq!(seq.len(), 2);
         let f = seq.schema.index_of(&Variable::new("f")).unwrap();
         assert!(seq.rows.iter().all(|r| r[f].is_none()));

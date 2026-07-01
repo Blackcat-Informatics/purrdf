@@ -6,7 +6,7 @@
 //! libpurrdf statically reuses the permissive `purrdf-gts` Rust crate (via the
 //! oxigraph-free `gts_write` / `import_gts_events` core), so a language shim
 //! links `libpurrdf` ALONE and still reads/writes `.gts` containers — the spec's
-//! "one shared library, not two" clause (PURRDF-PLAN P8).
+//! "one shared library, not two" clause (PurRDF-PLAN P8).
 //!
 //! GTS is a lossless container: both the plain-graph data AND the full RDF-1.2
 //! statement layer (quoted triples + reifier bindings) survive the round-trip.
@@ -43,27 +43,29 @@ pub unsafe extern "C" fn purrdf_from_gts(
     out_dataset: *mut *mut PurrdfDataset,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    ffi_try!(out_error, {
-        if bytes.is_null() || out_dataset.is_null() {
-            return Err(PurrdfError::new(
-                PurrdfStatus::NullPointer,
-                "null pointer argument to purrdf_from_gts",
-            ));
-        }
-        let slice = std::slice::from_raw_parts(bytes, len);
-        // The canonical fold-back: read the GTS container into a graph, then
-        // import the graph into the IR. `import_gts_graph` resolves `to_gts`'s
-        // reifier bindings (including forward references), so the RDF-1.2
-        // statement layer survives the round-trip.
-        let graph = read_graph(slice, true).map_err(|diagnostic| {
-            PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
-        })?;
-        let bundle = import_gts_graph(graph).map_err(|diagnostic| {
-            PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
-        })?;
-        *out_dataset = PurrdfDataset::into_raw(bundle.dataset);
-        Ok(PurrdfStatus::Ok)
-    })
+    unsafe {
+        ffi_try!(out_error, {
+            if bytes.is_null() || out_dataset.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_from_gts",
+                ));
+            }
+            let slice = std::slice::from_raw_parts(bytes, len);
+            // The canonical fold-back: read the GTS container into a graph, then
+            // import the graph into the IR. `import_gts_graph` resolves `to_gts`'s
+            // reifier bindings (including forward references), so the RDF-1.2
+            // statement layer survives the round-trip.
+            let graph = read_graph(slice, true).map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
+            })?;
+            let bundle = import_gts_graph(graph).map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
+            })?;
+            *out_dataset = PurrdfDataset::into_raw(bundle.dataset);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
 }
 
 /// Write a frozen dataset to canonical GTS container bytes under `profile`
@@ -80,21 +82,25 @@ pub unsafe extern "C" fn purrdf_to_gts(
     out_buffer: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    ffi_try!(out_error, {
-        if dataset.is_null() || profile.is_null() || out_buffer.is_null() {
-            return Err(PurrdfError::new(
-                PurrdfStatus::NullPointer,
-                "null pointer argument to purrdf_to_gts",
-            ));
-        }
-        let profile = cstr_to_str(profile)?;
-        let bytes = to_gts(
-            PurrdfDataset::dataset(dataset),
-            &RdfLookaside::default(),
-            profile,
-        )
-        .map_err(|diagnostic| PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic))?;
-        *out_buffer = PurrdfBuffer::into_raw(bytes);
-        Ok(PurrdfStatus::Ok)
-    })
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || profile.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_to_gts",
+                ));
+            }
+            let profile = cstr_to_str(profile)?;
+            let bytes = to_gts(
+                PurrdfDataset::dataset(dataset),
+                &RdfLookaside::default(),
+                profile,
+            )
+            .map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
+            })?;
+            *out_buffer = PurrdfBuffer::into_raw(bytes);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
 }

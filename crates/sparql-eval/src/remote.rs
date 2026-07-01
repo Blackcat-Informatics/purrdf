@@ -64,9 +64,9 @@ pub enum RemoteError {
 impl core::fmt::Display for RemoteError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            RemoteError::Transport(m) => write!(f, "transport: {m}"),
-            RemoteError::Decode(m) => write!(f, "decode: {m}"),
-            RemoteError::Disabled => write!(f, "federation disabled"),
+            Self::Transport(m) => write!(f, "transport: {m}"),
+            Self::Decode(m) => write!(f, "decode: {m}"),
+            Self::Disabled => write!(f, "federation disabled"),
         }
     }
 }
@@ -176,7 +176,7 @@ fn ingest(resolved: ResolvedBindings, ctx: &mut EvalCtx<'_>) -> SolutionSeq {
 /// and evaluated against it with [`NativeSparqlEngine`](crate::NativeSparqlEngine)
 /// semantics. Deterministic and network-free — the test/conformance vehicle for
 /// `SERVICE`.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct LocalRemoteQuerySource {
     datasets: HashMap<String, Arc<RdfDataset>>,
 }
@@ -232,10 +232,10 @@ mod tests {
     /// `:a :knows :x`, `:a :knows :y` (the local graph).
     fn local() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows".to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let x = b.intern_iri("http://ex/x".to_owned());
-        let y = b.intern_iri("http://ex/y".to_owned());
+        let knows = b.intern_iri("http://ex/knows");
+        let a = b.intern_iri("http://ex/a");
+        let x = b.intern_iri("http://ex/x");
+        let y = b.intern_iri("http://ex/y");
         b.push_quad(a, knows, x, None);
         b.push_quad(a, knows, y, None);
         b.freeze().expect("freeze")
@@ -244,8 +244,8 @@ mod tests {
     /// `:x :name "X"` (the remote endpoint graph) — only :x has a name.
     fn endpoint() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let name = b.intern_iri("http://ex/name".to_owned());
-        let x = b.intern_iri("http://ex/x".to_owned());
+        let name = b.intern_iri("http://ex/name");
+        let x = b.intern_iri("http://ex/x");
         let xn = b.intern_literal(RdfLiteral::simple("X"));
         b.push_quad(x, name, xn, None);
         b.freeze().expect("freeze")

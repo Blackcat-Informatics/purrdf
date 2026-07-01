@@ -25,6 +25,7 @@ use crate::{dataset_from_bytes, gts_write, NativeRdfFormat, RdfDataset, RdfLooka
 
 /// A Python handle to a frozen [`RdfDataset`].
 #[pyclass(name = "RdfDataset", frozen)]
+#[derive(Debug)]
 pub struct PyRdfDataset {
     inner: Arc<RdfDataset>,
 }
@@ -85,7 +86,7 @@ fn rdf_format(format: PyRdfFormat) -> NativeRdfFormat {
 
 // PyRdfDataset is registered via `py_gts::register`; no standalone `register` here
 // beyond the class add, which `register` performs.
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRdfDataset>()?;
     Ok(())
 }

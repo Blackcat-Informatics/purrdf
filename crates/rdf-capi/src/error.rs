@@ -14,6 +14,7 @@ use purrdf_core::RdfDiagnostic;
 use crate::status::PurrdfStatus;
 
 /// An owned error: a status code plus a NUL-terminated message. Opaque to C.
+#[derive(Debug)]
 pub struct PurrdfError {
     pub(crate) code: PurrdfStatus,
     pub(crate) message: CString,
@@ -60,12 +61,14 @@ pub(crate) fn store_error(out: *mut *mut PurrdfError, err: PurrdfError) {
 /// yet freed.
 #[no_mangle]
 pub unsafe extern "C" fn purrdf_error_code(err: *const PurrdfError) -> i32 {
-    ffi_guard!(PurrdfStatus::Panic as i32, {
-        if err.is_null() {
-            return PurrdfStatus::Panic as i32;
-        }
-        (*err).code as i32
-    })
+    unsafe {
+        ffi_guard!(PurrdfStatus::Panic as i32, {
+            if err.is_null() {
+                return PurrdfStatus::Panic as i32;
+            }
+            (*err).code as i32
+        })
+    }
 }
 
 /// Return the borrowed, NUL-terminated message of an error. Valid until
@@ -75,12 +78,14 @@ pub unsafe extern "C" fn purrdf_error_code(err: *const PurrdfError) -> i32 {
 /// Same contract as [`purrdf_error_code`].
 #[no_mangle]
 pub unsafe extern "C" fn purrdf_error_message(err: *const PurrdfError) -> *const c_char {
-    ffi_guard!(std::ptr::null(), {
-        if err.is_null() {
-            return std::ptr::null();
-        }
-        (*err).message.as_ptr()
-    })
+    unsafe {
+        ffi_guard!(std::ptr::null(), {
+            if err.is_null() {
+                return std::ptr::null();
+            }
+            (*err).message.as_ptr()
+        })
+    }
 }
 
 /// Release an error handle. No-op on null. Idempotent only in the sense that the
@@ -91,11 +96,13 @@ pub unsafe extern "C" fn purrdf_error_message(err: *const PurrdfError) -> *const
 /// already freed.
 #[no_mangle]
 pub unsafe extern "C" fn purrdf_error_free(err: *mut PurrdfError) {
-    ffi_guard!((), {
-        if !err.is_null() {
-            drop(Box::from_raw(err));
-        }
-    })
+    unsafe {
+        ffi_guard!((), {
+            if !err.is_null() {
+                drop(Box::from_raw(err));
+            }
+        });
+    }
 }
 
 #[cfg(test)]

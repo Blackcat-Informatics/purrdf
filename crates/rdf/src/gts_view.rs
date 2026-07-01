@@ -9,6 +9,7 @@
 //! dictionary-encoded database rows.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use purrdf_gts::model::{BlobEntry, Graph, Quad, Term, TermKind, Triple3};
 
@@ -52,7 +53,7 @@ pub type ReifierRow = (usize, usize, usize, usize);
 pub type AnnotationRow = (usize, usize, usize);
 pub type BlobRow = (String, Vec<u8>);
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RelationalRows {
     pub terms: Vec<TermRow>,
     pub quads: Vec<QuadRow>,
@@ -324,9 +325,9 @@ impl GtsFoldView {
                 self.tag_map
                     .get(lang)
                     .cloned()
-                    .unwrap_or_else(|| lang.to_string())
+                    .unwrap_or_else(|| lang.clone())
             } else {
-                lang.to_string()
+                lang.clone()
             };
             if !public.eq_ignore_ascii_case("en") {
                 tags.insert(public.to_ascii_lowercase());
@@ -420,7 +421,7 @@ impl GtsFoldView {
 
     fn build_quad_indexes(&mut self) {
         for &(s, p, o, g) in &self.graph.quads {
-            let scope = g.map(ScopeKey::Named).unwrap_or(ScopeKey::Default);
+            let scope = g.map_or(ScopeKey::Default, ScopeKey::Named);
             for key in [scope, ScopeKey::All] {
                 self.spo
                     .entry(key)
@@ -637,7 +638,7 @@ fn is_internal_tag(lang: &str) -> bool {
 
 fn rank_language(lang: &str) -> (u8, String) {
     let lower = lang.to_ascii_lowercase();
-    let rank = if lower == "x-purrdf-english" { 0 } else { 1 };
+    let rank = u8::from(lower != "x-purrdf-english");
     (rank, lower)
 }
 
@@ -656,20 +657,19 @@ fn render_term(graph: &Graph, tid: usize) -> String {
         TermKind::Bnode => term
             .value
             .as_ref()
-            .map(|value| format!("_:{value}"))
-            .unwrap_or_else(|| format!("_:b{tid}")),
+            .map_or_else(|| format!("_:b{tid}"), |value| format!("_:{value}")),
         TermKind::Literal => render_literal(graph, term),
-        TermKind::Triple => graph
-            .reifier(term.reifier.unwrap_or(tid))
-            .map(|(s, p, o)| {
+        TermKind::Triple => graph.reifier(term.reifier.unwrap_or(tid)).map_or_else(
+            || format!("_:unbound_triple_{tid}"),
+            |(s, p, o)| {
                 format!(
                     "<<( {} {} {} )>>",
                     render_term(graph, s),
                     render_term(graph, p),
                     render_term(graph, o)
                 )
-            })
-            .unwrap_or_else(|| format!("_:unbound_triple_{tid}")),
+            },
+        ),
     }
 }
 
@@ -696,7 +696,9 @@ fn nt_escape(value: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
             c => out.push(c),
         }
     }

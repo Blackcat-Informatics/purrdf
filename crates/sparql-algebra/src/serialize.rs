@@ -22,7 +22,7 @@
 //!   `Group`) re-materialize as a braced **sub-`SELECT`** `{ SELECT ... }`, the
 //!   shape the parser produces for an inline subquery.
 //!
-//! The PURRDF predicate-wildcard path extension (`<any>`) is emit-only (no parse),
+//! The PurRDF predicate-wildcard path extension (`<any>`) is emit-only (no parse),
 //! exactly as documented on [`crate::algebra::PropertyPathExpression`]'s
 //! `Display`; a path carrying it does not round-trip, which is the established
 //! contract.
@@ -294,7 +294,7 @@ fn fmt_subselect(s: &mut String, p: &GraphPattern) {
             let as_targets: std::collections::HashSet<&Variable> =
                 select_exprs.iter().map(|(v, _)| *v).collect();
             let mut plain_emitted = false;
-            for v in vars.iter() {
+            for v in vars {
                 if as_targets.contains(v) {
                     continue;
                 }

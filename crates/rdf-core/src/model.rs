@@ -140,6 +140,7 @@ impl RdfTriple {
         }
     }
 
+    #[must_use]
     pub fn with_location(mut self, location: RdfLocation) -> Self {
         if !location.is_empty() {
             self.location = Some(location);
@@ -169,11 +170,13 @@ impl RdfQuad {
         }
     }
 
+    #[must_use]
     pub fn in_graph(mut self, graph_name: RdfTerm) -> Self {
         self.graph_name = Some(graph_name);
         self
     }
 
+    #[must_use]
     pub fn with_location(mut self, location: RdfLocation) -> Self {
         if !location.is_empty() {
             self.location = Some(location);
@@ -199,6 +202,7 @@ impl RdfReifier {
         }
     }
 
+    #[must_use]
     pub fn with_location(mut self, location: RdfLocation) -> Self {
         if !location.is_empty() {
             self.location = Some(location);
@@ -226,6 +230,7 @@ impl RdfAnnotation {
         }
     }
 
+    #[must_use]
     pub fn with_location(mut self, location: RdfLocation) -> Self {
         if !location.is_empty() {
             self.location = Some(location);

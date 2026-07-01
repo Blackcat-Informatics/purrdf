@@ -109,7 +109,7 @@ impl Object {
     /// The IRI, if this object is a named node (`oxigraph` `Term::NamedNode` arm).
     pub fn as_named(&self) -> Option<&str> {
         match self {
-            Object::Named(iri) => Some(iri.as_str()),
+            Self::Named(iri) => Some(iri.as_str()),
             _ => None,
         }
     }
@@ -203,7 +203,7 @@ impl Dataset {
     }
 
     /// Parse RDF text `bytes` of `media_type` into a fresh dataset. `context` labels
-    /// parse errors. Lenient on PURRDF's `@x-purrdf-*` language tags (the native codecs
+    /// parse errors. Lenient on PurRDF's `@x-purrdf-*` language tags (the native codecs
     /// are fully lenient).
     pub fn parse(bytes: &[u8], media_type: &str, context: &str) -> Result<Self, SliceError> {
         let ds = parse_dataset(bytes, media_type, None)
@@ -391,9 +391,8 @@ impl Dataset {
             let Some(s) = subject_of(&self.ds, q.s) else {
                 continue;
             };
-            let p = match self.ds.resolve(q.p) {
-                TermRef::Iri(iri) => iri,
-                _ => continue,
+            let TermRef::Iri(p) = self.ds.resolve(q.p) else {
+                continue;
             };
             let o = object_of(&self.ds, q.o);
             let g = q.g.and_then(|gid| match self.ds.resolve(gid) {
@@ -489,6 +488,7 @@ fn owned_clone_of(ds: &RdfDataset) -> RdfDataset {
 /// per `add`, C0.2) — the native equivalent of the old per-source blank-prefix
 /// scoping. Quads dedup at [`freeze`](Self::freeze) (C0.5), matching the old
 /// `Store::insert` set semantics.
+#[derive(Debug)]
 pub struct DatasetAccumulator {
     builder: RdfDatasetBuilder,
 }

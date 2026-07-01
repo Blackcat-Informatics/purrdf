@@ -62,7 +62,7 @@ pub enum AnalysisError {
 impl std::fmt::Display for AnalysisError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AnalysisError::SelfAttestationViolation { found } => write!(
+            Self::SelfAttestationViolation { found } => write!(
                 f,
                 "self-attestation guard violation: authored input contains \
                  the analysis graph IRI {found:?}; the analysis graph must \
@@ -417,13 +417,7 @@ mod tests {
             EdgeKind::Ontology,
             ReconciliationStatus::Matched,
         )];
-        let tier_of = |iri: &SliceIri| -> u8 {
-            if iri.ends_with("coreSlice") {
-                0
-            } else {
-                1
-            }
-        };
+        let tier_of = |iri: &SliceIri| -> u8 { u8::from(!iri.ends_with("coreSlice")) };
         let result = emit_analysis_graph(&edges, "", &[], &tc(), tier_of, |_| 0).unwrap();
         assert!(result.turtle_body.contains("\"forbidden\""));
         assert_eq!(result.forbidden_count, 1);

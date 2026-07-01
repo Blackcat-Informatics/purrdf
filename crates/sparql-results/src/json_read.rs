@@ -212,20 +212,20 @@ enum Json {
     Bool(bool),
     Number(String),
     String(String),
-    Array(Vec<Json>),
-    Object(Vec<(String, Json)>),
+    Array(Vec<Self>),
+    Object(Vec<(String, Self)>),
 }
 
 impl Json {
     fn as_str(&self) -> Option<&str> {
         match self {
-            Json::String(s) => Some(s),
+            Self::String(s) => Some(s),
             _ => None,
         }
     }
-    fn as_object(&self) -> Option<&[(String, Json)]> {
+    fn as_object(&self) -> Option<&[(String, Self)]> {
         match self {
-            Json::Object(o) => Some(o),
+            Self::Object(o) => Some(o),
             _ => None,
         }
     }

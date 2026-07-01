@@ -10,6 +10,7 @@
 //! its datatype (the whole point of the native codec: byte-for-byte lexical fidelity).
 
 use crate::RdfDiagnostic;
+use std::fmt::Write as _;
 
 /// The kind of a serialization term.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,9 +121,11 @@ fn escape_iri(iri: &str) -> String {
     for ch in iri.chars() {
         match ch {
             '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
-                out.push_str(&format!("\\u{:04X}", ch as u32));
+                let _ = write!(out, "\\u{:04X}", ch as u32);
             }
-            c if c.is_control() || c == ' ' => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c if c.is_control() || c == ' ' => {
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
             c => out.push(c),
         }
     }
@@ -146,7 +149,9 @@ fn escape_literal(lex: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
             c => out.push(c),
         }
     }

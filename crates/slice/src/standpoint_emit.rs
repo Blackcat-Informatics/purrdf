@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Native standpoint-projection emission — PURRDF's hand-authored
+//! Native standpoint-projection emission — PurRDF's hand-authored
 //! `generated/queries/standpoint-*.rq` SPARQL CONSTRUCT projections (#861).
 //!
 //! Unlike the per-profile SPARQL projections (the correspondence lowerings), these
@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use crate::error::SliceError;
 use crate::mapping_support::{prefix_block, GENERATED_BANNER};
 
-/// PURRDF's ontology IRI (no trailing slash), mirroring `config.ONTOLOGY_IRI`.
+/// PurRDF's ontology IRI (no trailing slash), mirroring `config.ONTOLOGY_IRI`.
 const ONTOLOGY_IRI: &str = "https://blackcatinformatics.ca/purrdf";
 
 /// The committed file names for the seven standpoint projections (six peer-model

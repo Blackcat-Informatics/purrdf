@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 /// Capability flags exposed by an RDF dataset/import boundary.
+// Each capability is an independent yes/no feature probe, not an encoded state
+// machine — a bitflags/enum rewrite would only obscure the public API.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RdfStoreCapabilities {
     pub named_graphs: bool,

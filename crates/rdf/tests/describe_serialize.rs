@@ -15,10 +15,10 @@ const S: &str = "https://e/s";
 #[test]
 fn describe_round_trips_through_every_serializer() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(S.to_owned());
-    let p = b.intern_iri("https://e/p".to_owned());
-    let o = b.intern_iri("https://e/o".to_owned());
-    let label = b.intern_iri("https://e/label".to_owned());
+    let s = b.intern_iri(S);
+    let p = b.intern_iri("https://e/p");
+    let o = b.intern_iri("https://e/o");
+    let label = b.intern_iri("https://e/label");
     let hi = b.intern_literal(RdfLiteral::simple("hi"));
     b.push_quad(s, p, o, None);
     b.push_quad(s, label, hi, None);

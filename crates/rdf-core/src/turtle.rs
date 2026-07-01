@@ -28,6 +28,7 @@
 //! - Triple term (RDF 1.2): `<< <s> <p> <o> >>` (the reifier-shorthand form)
 
 use crate::{RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTriple};
+use std::fmt::Write as _;
 
 /// Percent-encode a string the way Python's `urllib.parse.quote(value, safe="")`
 /// does: every byte that is not an *unreserved* URI character
@@ -46,7 +47,7 @@ fn percent_encode(value: &str) -> String {
             out.push(byte as char);
         } else {
             out.push('%');
-            out.push_str(&format!("{byte:02X}"));
+            let _ = write!(out, "{byte:02X}");
         }
     }
     out
@@ -80,7 +81,7 @@ fn escape_literal(value: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if (c as u32) < 0x20 || c as u32 == 0x7f => {
-                out.push_str(&format!("\\u{:04X}", c as u32))
+                let _ = write!(out, "\\u{:04X}", c as u32);
             }
             c => out.push(c),
         }
@@ -125,9 +126,11 @@ fn escape_iri(iri: &str) -> String {
     for ch in iri.chars() {
         match ch {
             '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
-                out.push_str(&format!("\\u{:04X}", ch as u32));
+                let _ = write!(out, "\\u{:04X}", ch as u32);
             }
-            c if c.is_control() || c == ' ' => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c if c.is_control() || c == ' ' => {
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
             c => out.push(c),
         }
     }
@@ -192,7 +195,7 @@ pub fn emit_reifier(reifier: &RdfReifier, annotations: &[(String, String)]) -> S
     let statement = emit_triple_term(&reifier.statement);
     let mut out = format!("{subject} <{RDF_REIFIES}> {statement}");
     for (predicate, object) in annotations {
-        out.push_str(&format!(" ;\n   <{predicate}> {object}"));
+        let _ = write!(out, " ;\n   <{predicate}> {object}");
     }
     out.push_str(" .\n");
     out
@@ -208,10 +211,10 @@ pub fn emit_resource(subject: &str, properties: &[(String, String)]) -> String {
     let mut first = true;
     for (predicate, object) in properties {
         if first {
-            out.push_str(&format!(" <{predicate}> {object}"));
+            let _ = write!(out, " <{predicate}> {object}");
             first = false;
         } else {
-            out.push_str(&format!(" ;\n   <{predicate}> {object}"));
+            let _ = write!(out, " ;\n   <{predicate}> {object}");
         }
     }
     out.push_str(" .\n");

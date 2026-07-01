@@ -4,14 +4,14 @@
 //! Native SSSOM (Simple Standard for Sharing Ontology Mappings) codec.
 //!
 //! This is the PyO3-free Rust replacement for the `sssom` PyPI package's
-//! parse + validate behaviour (#848). It carries the PURRDF mapping artifacts
+//! parse + validate behaviour (#848). It carries the PurRDF mapping artifacts
 //! (`generated/mappings/*.sssom.tsv`) in and out of an owned IR and adds a
 //! native RDF serializer the Python toolkit never had (the SUBSUME/ENHANCE
 //! deliverable).
 //!
-//! ## The SSSOM TSV format (as PURRDF writes it)
+//! ## The SSSOM TSV format (as PurRDF writes it)
 //!
-//! A PURRDF SSSOM file is a YAML-ish `#`-prefixed metadata header followed by a
+//! A PurRDF SSSOM file is a YAML-ish `#`-prefixed metadata header followed by a
 //! tab-separated mapping table:
 //!
 //! ```text
@@ -31,7 +31,7 @@
 //! stand in here only because doc comments forbid raw tabs.)
 //!
 //! Scalar header lines are `# key: value`; the nested `# curie_map:` block is a
-//! set of indented `#   prefix: uri` lines. PURRDF *owns* this format, so the
+//! set of indented `#   prefix: uri` lines. PurRDF *owns* this format, so the
 //! header is parsed bespoke — no YAML library. (The Python `_sssom_for_validation`
 //! shim only existed to satisfy sssom-py's YAML reader; the native codec needs no
 //! such crutch.) Trailing `# #…` provenance comments after the TSV header row are
@@ -72,12 +72,12 @@ const SSSOM_NS: &str = "https://w3id.org/sssom/";
 /// `sssom.validators.DEFAULT_VALIDATION_TYPES` into the frozen golden. The native
 /// validator implements the two *reachable-through-parse* checks of this set
 /// (`PrefixMapCompleteness`, `JsonSchema`); `StrictCurieFormat` is unreachable
-/// because PURRDF never emits a pipe-bearing entity slot. Exposed so a consumer can
+/// because PurRDF never emits a pipe-bearing entity slot. Exposed so a consumer can
 /// report the parity surface it covers.
 pub const SSSOM_DEFAULT_VALIDATION_TYPES: &[&str] =
     &["JsonSchema", "PrefixMapCompleteness", "StrictCurieFormat"];
 
-/// The canonical SSSOM column order PURRDF writes.
+/// The canonical SSSOM column order PurRDF writes.
 const SSSOM_ORDER: &[&str] = &[
     "subject_id",
     "subject_label",
@@ -89,7 +89,7 @@ const SSSOM_ORDER: &[&str] = &[
     "comment",
 ];
 
-/// The columns PURRDF always emits, even when blank for every row.
+/// The columns PurRDF always emits, even when blank for every row.
 const SSSOM_ALWAYS: &[&str] = &[
     "subject_id",
     "predicate_id",
@@ -105,9 +105,9 @@ const SSSOM_ALWAYS: &[&str] = &[
 
 /// The SSSOM metadata header.
 ///
-/// The named scalars cover everything PURRDF writes; any other `# key: value`
+/// The named scalars cover everything PurRDF writes; any other `# key: value`
 /// scalar is preserved verbatim in [`extra`](SssomMeta::extra) so nothing is lost
-/// (maximal information flow). The `comment` value is kept *as authored* — PURRDF
+/// (maximal information flow). The `comment` value is kept *as authored* — PurRDF
 /// JSON-quotes it (`"…—…"`), which this codec round-trips byte-for-byte
 /// rather than re-interpreting.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -127,8 +127,8 @@ pub struct SssomMeta {
 
 /// A single SSSOM mapping (one TSV data row).
 ///
-/// The named columns cover PURRDF's [`SSSOM_ORDER`]; any other column is preserved
-/// verbatim in [`extras`](SssomMapping::extras) so a non-PURRDF SSSOM file still
+/// The named columns cover PurRDF's [`SSSOM_ORDER`]; any other column is preserved
+/// verbatim in [`extras`](SssomMapping::extras) so a non-PurRDF SSSOM file still
 /// round-trips losslessly.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SssomMapping {
@@ -184,7 +184,7 @@ impl SssomDiagnostic {
 // Parsing
 // --------------------------------------------------------------------------- //
 
-/// Parse a PURRDF SSSOM TSV document into an owned [`SssomMappingSet`].
+/// Parse a PurRDF SSSOM TSV document into an owned [`SssomMappingSet`].
 ///
 /// The `#`-prefixed header (scalars + the nested `curie_map:` block) is parsed
 /// bespoke; the TSV body is parsed with the `csv` crate (tab delimiter, flexible
@@ -213,7 +213,7 @@ pub fn parse_tsv(text: &str) -> Result<SssomMappingSet, RdfDiagnostic> {
     let meta = parse_header(&lines[..header_idx])?;
 
     // The body is the column-header row plus the data rows. `#` provenance
-    // comments (PURRDF emits its trailer block right after the column header when
+    // comments (PurRDF emits its trailer block right after the column header when
     // there are zero rows, or interleaved) and blank lines are not mappings; skip
     // them while recording each kept line's original 1-based source line number,
     // so a diagnostic reports the true line even when a comment is interleaved
@@ -246,18 +246,18 @@ fn parse_header(lines: &[&str]) -> Result<SssomMeta, RdfDiagnostic> {
             continue;
         }
         // A `# #…` line is a trailer/provenance comment (the second '#' makes it
-        // YAML-invisible). PURRDF emits these
+        // YAML-invisible). PurRDF emits these
         // after the curie_map block but still inside the leading `#` region; they
         // are never header scalars or curie entries, so skip them outright (they
         // do NOT close an open curie_map block — more curie entries can follow in
-        // principle, though PURRDF always writes the trailer last).
+        // principle, though PurRDF always writes the trailer last).
         if body.trim_start().starts_with('#') {
             continue;
         }
 
         // `#   prefix: uri` (two+ leading spaces) inside a `curie_map:` block.
         // The block is "open" from the `# curie_map:` line until a non-indented
-        // scalar (or end of header). PURRDF indents curie entries with three
+        // scalar (or end of header). PurRDF indents curie entries with three
         // spaces; accept any indent of one or more.
         let is_indented = body.starts_with(' ') && body.trim_start() != body;
         if in_curie_map && is_indented {
@@ -289,7 +289,7 @@ fn parse_header(lines: &[&str]) -> Result<SssomMeta, RdfDiagnostic> {
             "curie_map" => {
                 // The nested-block opener: `# curie_map:` with an empty value.
                 // A non-empty inline value (e.g. the broken `[unclosed` fixture)
-                // is a malformed flow sequence PURRDF never emits — reject it the
+                // is a malformed flow sequence PurRDF never emits — reject it the
                 // way sssom-py's YAML reader does (it raised a FATAL parse error).
                 if !value.is_empty() {
                     return Err(RdfDiagnostic::error(
@@ -318,7 +318,7 @@ fn parse_header(lines: &[&str]) -> Result<SssomMeta, RdfDiagnostic> {
 /// Split a `key: value` scalar at the first `": "` (or a trailing `":"`).
 ///
 /// Returns `None` if there is no colon at all. The value is the remainder
-/// verbatim (no YAML unquoting — PURRDF owns the format and the comment value is
+/// verbatim (no YAML unquoting — PurRDF owns the format and the comment value is
 /// kept as authored for byte-stable round-trips).
 fn split_key_value(scalar: &str) -> Option<(&str, &str)> {
     let idx = scalar.find(':')?;
@@ -544,7 +544,7 @@ fn validate_confidence(mapping: &SssomMapping, out: &mut Vec<SssomDiagnostic>) {
 /// The CURIE prefix of an entity reference, or `None` if it is not a CURIE.
 ///
 /// A CURIE is `prefix:reference` with a non-empty prefix that is *not* a scheme of
-/// an absolute IRI (`http://`, `https://`, …). PURRDF writes bare absolute URIs for
+/// an absolute IRI (`http://`, `https://`, …). PurRDF writes bare absolute URIs for
 /// unregistered namespaces, which must not be mistaken for a `http`/`https` CURIE
 /// prefix.
 fn curie_prefix(entity: &str) -> Option<&str> {
@@ -579,28 +579,32 @@ fn mapping_instance(mapping: &SssomMapping) -> Option<String> {
 // TSV serialization
 // --------------------------------------------------------------------------- //
 
-/// Serialize a mapping set back to canonical PURRDF SSSOM TSV.
+/// Serialize a mapping set back to canonical PurRDF SSSOM TSV.
 ///
 /// Emits the metadata header, then the `_SSSOM_ORDER` columns (always-on columns
 /// plus any optional column some row populates), then rows sorted by
-/// `(subject_id, predicate_id, object_id)` — matching the PURRDF SSSOM writer
+/// `(subject_id, predicate_id, object_id)` — matching the PurRDF SSSOM writer
 /// closely enough that `parse ∘ serialize_tsv` is stable (round-trip-stable). IDs
 /// are kept as authored (CURIEs are not expanded).
 pub fn serialize_tsv(set: &SssomMappingSet) -> String {
     let mut lines: Vec<String> = Vec::new();
     let meta = &set.meta;
 
-    push_scalar(&mut lines, "mapping_set_id", &meta.mapping_set_id);
-    push_scalar(&mut lines, "mapping_set_version", &meta.mapping_set_version);
-    push_scalar(&mut lines, "license", &meta.license);
-    push_scalar(&mut lines, "mapping_tool", &meta.mapping_tool);
+    push_scalar(&mut lines, "mapping_set_id", meta.mapping_set_id.as_ref());
+    push_scalar(
+        &mut lines,
+        "mapping_set_version",
+        meta.mapping_set_version.as_ref(),
+    );
+    push_scalar(&mut lines, "license", meta.license.as_ref());
+    push_scalar(&mut lines, "mapping_tool", meta.mapping_tool.as_ref());
     push_scalar(
         &mut lines,
         "mapping_tool_version",
-        &meta.mapping_tool_version,
+        meta.mapping_tool_version.as_ref(),
     );
-    push_scalar(&mut lines, "mapping_date", &meta.mapping_date);
-    push_scalar(&mut lines, "comment", &meta.comment);
+    push_scalar(&mut lines, "mapping_date", meta.mapping_date.as_ref());
+    push_scalar(&mut lines, "comment", meta.comment.as_ref());
     for (key, value) in &meta.extra {
         lines.push(format!("# {key}: {value}"));
     }
@@ -621,7 +625,7 @@ pub fn serialize_tsv(set: &SssomMappingSet) -> String {
         })
         .collect();
     // Append any preserved extra (non-SSSOM-core) columns captured on parse so a
-    // `parse → serialize_tsv` round-trip is lossless for non-PURRDF inputs. The
+    // `parse → serialize_tsv` round-trip is lossless for non-PurRDF inputs. The
     // union of `extras` keys across rows is sorted (BTreeSet) for deterministic
     // output; these keys are disjoint from SSSOM_ORDER by construction (parse_row
     // routes only unknown columns into `extras`).
@@ -652,7 +656,7 @@ pub fn serialize_tsv(set: &SssomMappingSet) -> String {
 }
 
 /// Push a `# key: value` header line when the scalar is present.
-fn push_scalar(lines: &mut Vec<String>, key: &str, value: &Option<String>) {
+fn push_scalar(lines: &mut Vec<String>, key: &str, value: Option<&String>) {
     if let Some(value) = value {
         lines.push(format!("# {key}: {value}"));
     }
@@ -677,7 +681,7 @@ fn cell(mapping: &SssomMapping, column: &str) -> String {
 }
 
 /// Format a confidence as the shortest round-trip-stable decimal (`0.7`, not
-/// `0.70`), matching the PURRDF writer.
+/// `0.70`), matching the PurRDF writer.
 fn format_confidence(value: f64) -> String {
     // Rust's default float formatting already drops trailing zeros and prints the
     // shortest decimal that round-trips, so `0.7_f64` → "0.7" and `1.0` → "1".
@@ -875,7 +879,7 @@ purrdf:A\tskos:exactMatch\tpurrdf:B\tsemapv:ManualMappingCuration\t1:1
 
     #[test]
     fn serialize_preserves_unknown_columns_roundtrip() {
-        // A non-PURRDF SSSOM file carrying an extra column must survive
+        // A non-PurRDF SSSOM file carrying an extra column must survive
         // parse → serialize_tsv (lossless round-trip), not be silently dropped
         // because the column set is built only from SSSOM_ORDER (H-1 / #855).
         let doc = "\

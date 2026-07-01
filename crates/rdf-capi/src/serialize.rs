@@ -33,31 +33,33 @@ pub unsafe extern "C" fn purrdf_serialize(
     out_statement_rows_dropped: *mut usize,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    ffi_try!(out_error, {
-        if dataset.is_null() || media_type.is_null() || out_buffer.is_null() {
-            return Err(PurrdfError::new(
-                PurrdfStatus::NullPointer,
-                "null pointer argument to purrdf_serialize",
-            ));
-        }
-        let media = cstr_to_str(media_type)?;
-        let base_iri = opt_cstr_to_str(base_iri)?;
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || media_type.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_serialize",
+                ));
+            }
+            let media = cstr_to_str(media_type)?;
+            let base_iri = opt_cstr_to_str(base_iri)?;
 
-        // The media-type registry is the single source of truth (no duplicated map).
-        let format = classify(media).map_err(|diagnostic| {
-            PurrdfError::from_diagnostic(PurrdfStatus::UnsupportedFormat, &diagnostic)
-        })?;
+            // The media-type registry is the single source of truth (no duplicated map).
+            let format = classify(media).map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::UnsupportedFormat, &diagnostic)
+            })?;
 
-        let outcome =
-            serialize_dataset_to_format(PurrdfDataset::dataset(dataset), format, base_iri)
-                .map_err(|diagnostic| {
-                    PurrdfError::from_diagnostic(PurrdfStatus::SerializeError, &diagnostic)
-                })?;
+            let outcome =
+                serialize_dataset_to_format(PurrdfDataset::dataset(dataset), format, base_iri)
+                    .map_err(|diagnostic| {
+                        PurrdfError::from_diagnostic(PurrdfStatus::SerializeError, &diagnostic)
+                    })?;
 
-        if !out_statement_rows_dropped.is_null() {
-            *out_statement_rows_dropped = outcome.statement_rows_dropped;
-        }
-        *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
-        Ok(PurrdfStatus::Ok)
-    })
+            if !out_statement_rows_dropped.is_null() {
+                *out_statement_rows_dropped = outcome.statement_rows_dropped;
+            }
+            *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
 }

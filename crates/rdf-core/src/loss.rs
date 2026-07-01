@@ -455,6 +455,7 @@ fn push_bool_field(out: &mut String, key: &str, value: bool) {
 
 /// Escape a string per the JSON string grammar (RFC 8259) into `out`.
 fn escape_json_into(out: &mut String, value: &str) {
+    use std::fmt::Write as _;
     for ch in value.chars() {
         match ch {
             '"' => out.push_str("\\\""),
@@ -465,7 +466,7 @@ fn escape_json_into(out: &mut String, value: &str) {
             '\u{08}' => out.push_str("\\b"),
             '\u{0c}' => out.push_str("\\f"),
             c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
+                let _ = write!(out, "\\u{:04x}", c as u32);
             }
             c => out.push(c),
         }
@@ -647,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "projection")]
     fn pair_loss_panics_on_projection_source() {
         let _ = pair_loss_ledger("owl-dl", "turtle");
     }

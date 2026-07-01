@@ -52,9 +52,9 @@ fn http_transport_decodes_remote_bindings() {
 #[test]
 fn service_clause_federates_through_injected_http_transport() {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://ex/p".to_owned());
-    let s = b.intern_iri("http://ex/s".to_owned());
-    let o = b.intern_iri("http://ex/o".to_owned());
+    let p = b.intern_iri("http://ex/p");
+    let s = b.intern_iri("http://ex/s");
+    let o = b.intern_iri("http://ex/o");
     b.push_quad(s, p, o, None);
     let dataset = b.freeze().expect("freeze");
 

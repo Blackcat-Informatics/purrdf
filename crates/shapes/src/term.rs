@@ -42,7 +42,7 @@ impl NamedNode {
     /// lexical well-formedness at ingest).
     #[inline]
     pub fn new_unchecked(iri: impl Into<String>) -> Self {
-        NamedNode(iri.into())
+        Self(iri.into())
     }
 
     /// The IRI string.
@@ -72,7 +72,7 @@ impl std::fmt::Display for NamedNode {
 
 impl From<&str> for NamedNode {
     fn from(s: &str) -> Self {
-        NamedNode(s.to_owned())
+        Self(s.to_owned())
     }
 }
 
@@ -91,7 +91,7 @@ impl Literal {
     /// A plain `xsd:string` literal.
     #[inline]
     pub fn new_simple_literal(value: impl Into<String>) -> Self {
-        Literal {
+        Self {
             lexical: value.into(),
             datatype: XSD_STRING.to_owned(),
             language: None,
@@ -102,7 +102,7 @@ impl Literal {
     /// A typed literal with an explicit datatype IRI.
     #[inline]
     pub fn new_typed_literal(value: impl Into<String>, datatype: NamedNode) -> Self {
-        Literal {
+        Self {
             lexical: value.into(),
             datatype: datatype.0,
             language: None,
@@ -116,7 +116,7 @@ impl Literal {
         value: impl Into<String>,
         language: impl Into<String>,
     ) -> Self {
-        Literal {
+        Self {
             lexical: value.into(),
             datatype: RDF_LANG_STRING.to_owned(),
             language: Some(language.into()),
@@ -131,7 +131,7 @@ impl Literal {
         language: impl Into<String>,
         direction: RdfTextDirection,
     ) -> Self {
-        Literal {
+        Self {
             lexical: value.into(),
             datatype: RDF_LANG_STRING.to_owned(),
             language: Some(language.into()),
@@ -175,7 +175,7 @@ pub struct Triple {
 impl Triple {
     #[inline]
     pub fn new(subject: Term, predicate: NamedNode, object: Term) -> Self {
-        Triple {
+        Self {
             subject,
             predicate,
             object,
@@ -201,14 +201,14 @@ impl Term {
     /// Construct a blank-node term from its label.
     #[inline]
     pub fn blank(label: impl Into<String>) -> Self {
-        Term::BlankNode(label.into())
+        Self::BlankNode(label.into())
     }
 
     /// The blank-node label, if this term is a blank node.
     #[inline]
     pub fn blank_label(&self) -> Option<&str> {
         match self {
-            Term::BlankNode(b) => Some(b.as_str()),
+            Self::BlankNode(b) => Some(b.as_str()),
             _ => None,
         }
     }
@@ -216,7 +216,7 @@ impl Term {
     /// Whether this term can occupy a subject position (IRI or blank node).
     #[inline]
     pub fn is_subject(&self) -> bool {
-        matches!(self, Term::NamedNode(_) | Term::BlankNode(_))
+        matches!(self, Self::NamedNode(_) | Self::BlankNode(_))
     }
 
     /// Convert this native term into the owned [`RdfTerm`] model — used when
@@ -224,9 +224,9 @@ impl Term {
     pub fn to_rdf_term(&self) -> ::purrdf::RdfTerm {
         use purrdf::{RdfLiteral, RdfTerm, RdfTriple};
         match self {
-            Term::NamedNode(n) => RdfTerm::iri(n.0.clone()),
-            Term::BlankNode(b) => RdfTerm::blank_node(b.clone()),
-            Term::Literal(l) => {
+            Self::NamedNode(n) => RdfTerm::iri(n.0.clone()),
+            Self::BlankNode(b) => RdfTerm::blank_node(b.clone()),
+            Self::Literal(l) => {
                 // The owned model carries `datatype: None` for a plain `xsd:string`
                 // and for a language-tagged literal (the tag implies rdf:langString);
                 // an explicit datatype otherwise — matching how the codec round-trips.
@@ -242,7 +242,7 @@ impl Term {
                     direction: l.direction,
                 })
             }
-            Term::Triple(t) => RdfTerm::triple(RdfTriple::new(
+            Self::Triple(t) => RdfTerm::triple(RdfTriple::new(
                 t.subject.to_rdf_term(),
                 t.predicate.0.clone(),
                 t.object.to_rdf_term(),
@@ -254,17 +254,17 @@ impl Term {
     /// substitution value and the canonical lookup key.
     pub fn to_term_value(&self) -> TermValue {
         match self {
-            Term::NamedNode(n) => TermValue::Iri(n.0.clone()),
+            Self::NamedNode(n) => TermValue::Iri(n.0.clone()),
             // The IR conversion scope-qualified the label; round-trip it in the
             // DEFAULT scope (single-scope data is byte-unchanged).
-            Term::BlankNode(b) => TermValue::blank(b.clone()),
-            Term::Literal(l) => TermValue::Literal {
+            Self::BlankNode(b) => TermValue::blank(b.clone()),
+            Self::Literal(l) => TermValue::Literal {
                 lexical_form: l.lexical.clone(),
                 datatype: l.datatype.clone(),
                 language: l.language.clone(),
                 direction: l.direction,
             },
-            Term::Triple(t) => TermValue::Triple {
+            Self::Triple(t) => TermValue::Triple {
                 s: Box::new(t.subject.to_term_value()),
                 p: Box::new(t.predicate.to_term_value_iri()),
                 o: Box::new(t.object.to_term_value()),
@@ -287,7 +287,7 @@ impl Term {
     /// keeps its fast path.
     pub fn lookup_term_values(&self) -> Vec<TermValue> {
         match self {
-            Term::BlankNode(b) => {
+            Self::BlankNode(b) => {
                 let mut keys = vec![TermValue::blank(b.clone())];
                 if let Some((label, scope)) = split_scope_suffix(b) {
                     keys.push(TermValue::Blank {
@@ -331,10 +331,10 @@ impl std::fmt::Display for Term {
     /// deterministic sort key and report identity depend on this.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Term::NamedNode(n) => write!(f, "<{}>", n.0),
-            Term::BlankNode(b) => write!(f, "_:{b}"),
-            Term::Literal(l) => write!(f, "{}", render_literal(l)),
-            Term::Triple(t) => write!(f, "<<( {} <{}> {} )>>", t.subject, t.predicate.0, t.object),
+            Self::NamedNode(n) => write!(f, "<{}>", n.0),
+            Self::BlankNode(b) => write!(f, "_:{b}"),
+            Self::Literal(l) => write!(f, "{}", render_literal(l)),
+            Self::Triple(t) => write!(f, "<<( {} <{}> {} )>>", t.subject, t.predicate.0, t.object),
         }
     }
 }
@@ -360,6 +360,7 @@ fn render_literal(l: &Literal) -> String {
 /// Escape a literal lexical form exactly as oxigraph's N-Triples literal writer:
 /// `\\ \" \n \r \t` plus C0 control characters as `\u00XX`.
 fn escape_literal(s: &str) -> String {
+    use std::fmt::Write as _;
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {
@@ -369,7 +370,7 @@ fn escape_literal(s: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04X}", c as u32));
+                let _ = write!(out, "\\u{:04X}", c as u32);
             }
             other => out.push(other),
         }

@@ -44,8 +44,8 @@ fn validate(py: Python<'_>, shapes_ttl: &str, data_nt: &str) -> PyResult<Py<PyAn
     for r in &report.results {
         let d = PyDict::new(py);
         d.set_item("focus", r.focus_node.to_string())?;
-        d.set_item("path", r.result_path.as_ref().map(|t| t.to_string()))?;
-        d.set_item("value", r.value.as_ref().map(|t| t.to_string()))?;
+        d.set_item("path", r.result_path.as_ref().map(ToString::to_string))?;
+        d.set_item("value", r.value.as_ref().map(ToString::to_string))?;
         d.set_item("severity", r.severity.iri())?;
         d.set_item("component", r.source_constraint_component.as_str())?;
         d.set_item("source_shape", r.source_shape.to_string())?;
@@ -54,19 +54,23 @@ fn validate(py: Python<'_>, shapes_ttl: &str, data_nt: &str) -> PyResult<Py<PyAn
             let roles: Vec<&str> = r
                 .source_box_roles
                 .iter()
-                .map(|role| role.as_str())
+                .map(purrdf_shapes::term::NamedNode::as_str)
                 .collect();
             d.set_item("source_box_roles", roles)?;
         }
         if !r.path_box_roles.is_empty() {
-            let roles: Vec<&str> = r.path_box_roles.iter().map(|role| role.as_str()).collect();
+            let roles: Vec<&str> = r
+                .path_box_roles
+                .iter()
+                .map(purrdf_shapes::term::NamedNode::as_str)
+                .collect();
             d.set_item("path_box_roles", roles)?;
         }
         if !r.result_box_roles.is_empty() {
             let roles: Vec<&str> = r
                 .result_box_roles
                 .iter()
-                .map(|role| role.as_str())
+                .map(purrdf_shapes::term::NamedNode::as_str)
                 .collect();
             d.set_item("result_box_roles", roles)?;
         }
@@ -83,6 +87,7 @@ fn validate(py: Python<'_>, shapes_ttl: &str, data_nt: &str) -> PyResult<Py<PyAn
 /// `validate_nt(data_nt)` for each data graph. The Rust orchestration path in
 /// `purrdf-validate` borrows the parsed shapes via [`Self::validate_against_dataset`].
 #[pyclass(name = "Shapes")]
+#[derive(Debug)]
 pub struct PyShapes {
     inner: purrdf_shapes::shapes::Shapes,
 }
@@ -101,17 +106,17 @@ impl PyShapes {
 #[pymethods]
 impl PyShapes {
     #[new]
-    fn new(shapes_ttl: String) -> PyResult<Self> {
+    fn new(shapes_ttl: &str) -> PyResult<Self> {
         let inner =
-            engine::parse_shapes(&shapes_ttl).map_err(pyo3::exceptions::PyValueError::new_err)?;
+            engine::parse_shapes(shapes_ttl).map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(Self { inner })
     }
 
     /// Validate an N-Triples data graph against these parsed shapes.
-    fn validate_nt(&self, data_nt: String) -> PyResult<PyValidationReport> {
+    fn validate_nt(&self, data_nt: &str) -> PyResult<PyValidationReport> {
         // Native codec ingest (#909): lenient on private-use language tags, every
         // malformed line reported in one pass. The engine runs over the frozen IR.
-        let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&data_nt)
+        let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
             .map_err(|errors| pyo3::exceptions::PyValueError::new_err(errors.join("\n")))?;
         let report = engine::validate_dataset(data.as_ref(), &self.inner)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -151,13 +156,14 @@ impl PyShapes {
 /// Wraps the Rust [`crate::report::ValidationReport`] and exposes `conforms`,
 /// the list of result dicts, and a canonical N-Triples serialization.
 #[pyclass(name = "ValidationReport")]
+#[derive(Debug)]
 pub struct PyValidationReport {
-    inner: purrdf_shapes::report::ValidationReport,
+    inner: ValidationReport,
 }
 
 impl PyValidationReport {
     /// Construct from a Rust [`crate::report::ValidationReport`].
-    pub fn new(inner: purrdf_shapes::report::ValidationReport) -> Self {
+    pub fn new(inner: ValidationReport) -> Self {
         Self { inner }
     }
 }
@@ -175,8 +181,8 @@ impl PyValidationReport {
         for r in &self.inner.results {
             let d = PyDict::new(py);
             d.set_item("focus", r.focus_node.to_string())?;
-            d.set_item("path", r.result_path.as_ref().map(|t| t.to_string()))?;
-            d.set_item("value", r.value.as_ref().map(|t| t.to_string()))?;
+            d.set_item("path", r.result_path.as_ref().map(ToString::to_string))?;
+            d.set_item("value", r.value.as_ref().map(ToString::to_string))?;
             d.set_item("severity", r.severity.iri())?;
             d.set_item("component", r.source_constraint_component.as_str())?;
             d.set_item("source_shape", r.source_shape.to_string())?;
@@ -185,19 +191,23 @@ impl PyValidationReport {
                 let roles: Vec<&str> = r
                     .source_box_roles
                     .iter()
-                    .map(|role| role.as_str())
+                    .map(purrdf_shapes::term::NamedNode::as_str)
                     .collect();
                 d.set_item("source_box_roles", roles)?;
             }
             if !r.path_box_roles.is_empty() {
-                let roles: Vec<&str> = r.path_box_roles.iter().map(|role| role.as_str()).collect();
+                let roles: Vec<&str> = r
+                    .path_box_roles
+                    .iter()
+                    .map(purrdf_shapes::term::NamedNode::as_str)
+                    .collect();
                 d.set_item("path_box_roles", roles)?;
             }
             if !r.result_box_roles.is_empty() {
                 let roles: Vec<&str> = r
                     .result_box_roles
                     .iter()
-                    .map(|role| role.as_str())
+                    .map(purrdf_shapes::term::NamedNode::as_str)
                     .collect();
                 d.set_item("result_box_roles", roles)?;
             }
@@ -218,7 +228,7 @@ impl PyValidationReport {
 /// `Shapes` / `ValidationReport` wrappers used by the Rust-native orchestration
 /// in `purrdf-validate`. Called by the unified `purrdf_native` cdylib (#630) to
 /// populate the `purrdf_native.shacl` submodule.
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate, m)?)?;
     m.add_class::<PyShapes>()?;
     m.add_class::<PyValidationReport>()?;

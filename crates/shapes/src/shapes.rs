@@ -43,7 +43,7 @@ pub enum Path {
     /// A plain IRI predicate path (`ex:name`).
     Predicate(NamedNode),
     /// An inverse path (`[ sh:inversePath ex:parent ]`).
-    Inverse(Box<Path>),
+    Inverse(Box<Self>),
 }
 
 /// A SHACL target declaration on a node shape.
@@ -176,7 +176,7 @@ pub struct PropertyShape {
     pub severity: Severity,
     /// Optional human-readable message.
     pub message: Option<String>,
-    /// Optional PURRDF ABox/TBox/RBox/CBox role annotations on this property shape.
+    /// Optional PurRDF ABox/TBox/RBox/CBox role annotations on this property shape.
     pub box_roles: Vec<NamedNode>,
 }
 
@@ -197,7 +197,7 @@ pub struct Shape {
     pub message: Option<String>,
     /// Whether `sh:deactivated true` is set.
     pub deactivated: bool,
-    /// Optional PURRDF ABox/TBox/RBox/CBox role annotations on this shape.
+    /// Optional PurRDF ABox/TBox/RBox/CBox role annotations on this shape.
     pub box_roles: Vec<NamedNode>,
 }
 
@@ -423,7 +423,7 @@ impl<'s> Parser<'s> {
         self.objects_of(subject, predicate).into_iter().next()
     }
 
-    /// Collect deterministic PURRDF graph-box role annotations from a shape node.
+    /// Collect deterministic PurRDF graph-box role annotations from a shape node.
     fn box_roles_of(&self, subject: &Term) -> Vec<NamedNode> {
         let mut roles: Vec<NamedNode> = self
             .objects_of(subject, purrdf::GRAPH_BOX_ROLE)
@@ -483,9 +483,10 @@ impl<'s> Parser<'s> {
                 }
             }
         }
+        use std::fmt::Write as _;
         let mut header = String::new();
         for (prefix, namespace) in map {
-            header.push_str(&format!("PREFIX {prefix}: <{namespace}>\n"));
+            let _ = writeln!(header, "PREFIX {prefix}: <{namespace}>");
         }
         header
     }
@@ -552,18 +553,17 @@ impl<'s> Parser<'s> {
         // -- Deactivated --
         let deactivated = self
             .first_object_of(id, sh::DEACTIVATED)
-            .map(|t| match &t {
+            .is_some_and(|t| match &t {
                 Term::Literal(lit) => lit.value() == "true",
                 _ => false,
-            })
-            .unwrap_or(false);
+            });
 
         // -- Targets (only for top-level node shapes; anonymous shapes have none) --
         let targets = self.parse_targets(id)?;
 
         // -- Property shapes (via sh:property) --
         let mut property_shape_nodes: Vec<Term> = self.objects_of(id, sh::PROPERTY);
-        property_shape_nodes.sort_by_key(|t| t.to_string());
+        property_shape_nodes.sort_by_key(ToString::to_string);
         let mut property_shapes = Vec::new();
         for ps_node in property_shape_nodes {
             property_shapes.push(self.parse_property_shape(&ps_node)?);
@@ -633,7 +633,7 @@ impl<'s> Parser<'s> {
 
         // sh:targetNode
         let mut tn: Vec<Term> = self.objects_of(id, sh::TARGET_NODE);
-        tn.sort_by_key(|t| t.to_string());
+        tn.sort_by_key(ToString::to_string);
         for t in tn {
             targets.push(Target::Node(t));
         }
@@ -772,7 +772,7 @@ impl<'s> Parser<'s> {
 
         // sh:languageIn — an RDF list of language-tag string literals
         let mut lang_in_lists: Vec<Term> = self.objects_of(id, sh::LANGUAGE_IN);
-        lang_in_lists.sort_by_key(|t| t.to_string());
+        lang_in_lists.sort_by_key(ToString::to_string);
         for list_head in lang_in_lists {
             let items = self.walk_rdf_list(&list_head, id)?;
             let mut tags: Vec<String> = Vec::with_capacity(items.len());
@@ -791,7 +791,7 @@ impl<'s> Parser<'s> {
 
         // sh:not — a single nested shape (mirrors sh:node)
         let mut not_refs: Vec<Term> = self.objects_of(id, sh::NOT);
-        not_refs.sort_by_key(|t| t.to_string());
+        not_refs.sort_by_key(ToString::to_string);
         for not_ref in not_refs {
             let inner = self.parse_node_shape(not_ref)?;
             constraints.push(Constraint::Not(Box::new(inner)));
@@ -801,15 +801,14 @@ impl<'s> Parser<'s> {
         // Only emit the constraint when sh:closed is true.
         let is_closed = self
             .first_object_of(id, sh::CLOSED)
-            .map(|t| match &t {
+            .is_some_and(|t| match &t {
                 Term::Literal(lit) => lit.value() == "true",
                 _ => false,
-            })
-            .unwrap_or(false);
+            });
         if is_closed {
             let mut ignored: Vec<NamedNode> = Vec::new();
             let mut ignored_lists: Vec<Term> = self.objects_of(id, sh::IGNORED_PROPERTIES);
-            ignored_lists.sort_by_key(|t| t.to_string());
+            ignored_lists.sort_by_key(ToString::to_string);
             for list_head in ignored_lists {
                 for item in self.walk_rdf_list(&list_head, id)? {
                     match item {
@@ -840,40 +839,40 @@ impl<'s> Parser<'s> {
 
         // sh:minInclusive / sh:maxInclusive
         let mut min_inc: Vec<Term> = self.objects_of(id, sh::MIN_INCLUSIVE);
-        min_inc.sort_by_key(|t| t.to_string());
+        min_inc.sort_by_key(ToString::to_string);
         for t in min_inc {
             constraints.push(Constraint::MinInclusive(t));
         }
 
         let mut max_inc: Vec<Term> = self.objects_of(id, sh::MAX_INCLUSIVE);
-        max_inc.sort_by_key(|t| t.to_string());
+        max_inc.sort_by_key(ToString::to_string);
         for t in max_inc {
             constraints.push(Constraint::MaxInclusive(t));
         }
 
         // sh:minExclusive / sh:maxExclusive
         let mut min_exc: Vec<Term> = self.objects_of(id, sh::MIN_EXCLUSIVE);
-        min_exc.sort_by_key(|t| t.to_string());
+        min_exc.sort_by_key(ToString::to_string);
         for t in min_exc {
             constraints.push(Constraint::MinExclusive(t));
         }
 
         let mut max_exc: Vec<Term> = self.objects_of(id, sh::MAX_EXCLUSIVE);
-        max_exc.sort_by_key(|t| t.to_string());
+        max_exc.sort_by_key(ToString::to_string);
         for t in max_exc {
             constraints.push(Constraint::MaxExclusive(t));
         }
 
         // sh:hasValue
         let mut hv: Vec<Term> = self.objects_of(id, sh::HAS_VALUE);
-        hv.sort_by_key(|t| t.to_string());
+        hv.sort_by_key(ToString::to_string);
         for t in hv {
             constraints.push(Constraint::HasValue(t));
         }
 
         // sh:in
         let mut in_lists: Vec<Term> = self.objects_of(id, sh::IN);
-        in_lists.sort_by_key(|t| t.to_string());
+        in_lists.sort_by_key(ToString::to_string);
         for list_head in in_lists {
             let items = self.walk_rdf_list(&list_head, id)?;
             constraints.push(Constraint::In(items));
@@ -907,21 +906,21 @@ impl<'s> Parser<'s> {
 
         // sh:and / sh:or / sh:xone — each is an RDF list of shape nodes
         let mut and_lists: Vec<Term> = self.objects_of(id, sh::AND);
-        and_lists.sort_by_key(|t| t.to_string());
+        and_lists.sort_by_key(ToString::to_string);
         for list_head in and_lists {
             let members = self.parse_shape_list(&list_head, id)?;
             constraints.push(Constraint::And(members));
         }
 
         let mut or_lists: Vec<Term> = self.objects_of(id, sh::OR);
-        or_lists.sort_by_key(|t| t.to_string());
+        or_lists.sort_by_key(ToString::to_string);
         for list_head in or_lists {
             let members = self.parse_shape_list(&list_head, id)?;
             constraints.push(Constraint::Or(members));
         }
 
         let mut xone_lists: Vec<Term> = self.objects_of(id, sh::XONE);
-        xone_lists.sort_by_key(|t| t.to_string());
+        xone_lists.sort_by_key(ToString::to_string);
         for list_head in xone_lists {
             let members = self.parse_shape_list(&list_head, id)?;
             constraints.push(Constraint::Xone(members));
@@ -929,7 +928,7 @@ impl<'s> Parser<'s> {
 
         // sh:node
         let mut node_refs: Vec<Term> = self.objects_of(id, sh::NODE);
-        node_refs.sort_by_key(|t| t.to_string());
+        node_refs.sort_by_key(ToString::to_string);
         for node_ref in node_refs {
             let inner = self.parse_node_shape(node_ref)?;
             constraints.push(Constraint::Node(Box::new(inner)));
@@ -939,7 +938,7 @@ impl<'s> Parser<'s> {
         // The blank node may or may not carry rdf:type sh:SPARQLConstraint;
         // we require only sh:select (which must be a SELECT query).
         let mut sparql_cnodes: Vec<Term> = self.objects_of(id, sh::SPARQL);
-        sparql_cnodes.sort_by_key(|t| t.to_string());
+        sparql_cnodes.sort_by_key(ToString::to_string);
         for c_node in sparql_cnodes {
             // sh:select is required.
             let raw_select = self
@@ -1055,7 +1054,7 @@ impl<'s> Parser<'s> {
             .any(|t| matches!(t, Term::Literal(lit) if lit.value() == "true"));
 
         let mut reifier_shape_nodes: Vec<Term> = self.objects_of(ps_node, sh::REIFIER_SHAPE);
-        reifier_shape_nodes.sort_by_key(|t| t.to_string());
+        reifier_shape_nodes.sort_by_key(ToString::to_string);
         if (!reifier_shape_nodes.is_empty() || reification_required)
             && !matches!(path, Path::Predicate(_))
         {
@@ -1262,20 +1261,20 @@ mod tests {
         from_dataset(dataset)
     }
 
-    const PREFIXES: &str = r#"
+    const PREFIXES: &str = r"
         @prefix sh:   <http://www.w3.org/ns/shacl#> .
         @prefix ex:   <http://example.org/ns#> .
         @prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
         @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
-    "#;
+    ";
 
     // ── Test 1: targetClass + sh:property with minCount/maxCount ──────────────
 
     #[test]
     fn test_target_class_and_property_min_max_count() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:PersonShape a sh:NodeShape ;
                 sh:targetClass ex:Person ;
                 sh:property [
@@ -1283,7 +1282,7 @@ mod tests {
                     sh:minCount 1 ;
                     sh:maxCount 1 ;
                 ] .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
@@ -1309,7 +1308,7 @@ mod tests {
             Path::Predicate(nn) => {
                 assert_eq!(nn.as_str(), "http://example.org/ns#name");
             }
-            other => panic!("expected Path::Predicate, got {other:?}"),
+            other @ Path::Inverse(_) => panic!("expected Path::Predicate, got {other:?}"),
         }
 
         // Constraints must include MinCount(1) and MaxCount(1)
@@ -1330,13 +1329,13 @@ mod tests {
     #[test]
     fn test_or_with_two_predicate_path_members() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:AltShape a sh:NodeShape ;
                 sh:or (
                     [ sh:path ex:a ; sh:minCount 1 ]
                     [ sh:path ex:b ; sh:minCount 1 ]
                 ) .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
@@ -1379,14 +1378,14 @@ mod tests {
     #[test]
     fn test_inverse_path() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:InverseShape a sh:NodeShape ;
                 sh:targetClass ex:Child ;
                 sh:property [
                     sh:path [ sh:inversePath ex:parent ] ;
                     sh:minCount 1 ;
                 ] .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
@@ -1401,9 +1400,9 @@ mod tests {
                 Path::Predicate(nn) => {
                     assert_eq!(nn.as_str(), "http://example.org/ns#parent");
                 }
-                other => panic!("expected inner Predicate, got {other:?}"),
+                other @ Path::Inverse(_) => panic!("expected inner Predicate, got {other:?}"),
             },
-            other => panic!("expected Path::Inverse, got {other:?}"),
+            other @ Path::Predicate(_) => panic!("expected Path::Inverse, got {other:?}"),
         }
     }
 
@@ -1606,7 +1605,7 @@ mod tests {
     #[test]
     fn test_qualified_value_shape_returns_err() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:QShape a sh:NodeShape ;
                 sh:targetClass ex:Bar ;
                 sh:property [
@@ -1614,7 +1613,7 @@ mod tests {
                     sh:qualifiedValueShape [ sh:class ex:Item ] ;
                     sh:qualifiedMinCount 1 ;
                 ] .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let result = from_store(&store);
@@ -1677,11 +1676,11 @@ mod tests {
     #[test]
     fn test_node_kind_iri() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:IriShape a sh:NodeShape ;
                 sh:targetClass ex:Resource ;
                 sh:nodeKind sh:IRI .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
@@ -1726,14 +1725,14 @@ mod tests {
     #[test]
     fn test_and_constraint() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:AndShape a sh:NodeShape ;
                 sh:targetClass ex:Entity ;
                 sh:and (
                     [ sh:class ex:Named ]
                     [ sh:nodeKind sh:IRI ]
                 ) .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("parse must succeed");
@@ -1751,14 +1750,14 @@ mod tests {
     #[test]
     fn test_zero_or_more_path_returns_err() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:StarShape a sh:NodeShape ;
                 sh:targetClass ex:Node ;
                 sh:property [
                     sh:path [ sh:zeroOrMorePath ex:link ] ;
                     sh:minCount 0 ;
                 ] .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let result = from_store(&store);
@@ -1771,7 +1770,7 @@ mod tests {
     #[test]
     fn test_reifier_shape_requires_predicate_path() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:ContextualShape a sh:NodeShape ;
                 sh:targetClass ex:Node ;
                 sh:property [
@@ -1780,7 +1779,7 @@ mod tests {
                 ] .
 
             ex:StatementContextShape a sh:NodeShape .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let result = from_store(&store);
@@ -1800,14 +1799,14 @@ mod tests {
     #[test]
     fn test_max_length_parses() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:MaxLenShape a sh:NodeShape ;
                 sh:targetClass ex:Tag ;
                 sh:property [
                     sh:path ex:code ;
                     sh:maxLength 5 ;
                 ] .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:maxLength must parse");
@@ -1856,11 +1855,11 @@ mod tests {
     #[test]
     fn test_not_parses() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:NotShape a sh:NodeShape ;
                 sh:targetClass ex:Thing ;
                 sh:not [ sh:nodeKind sh:Literal ] .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:not must parse");
@@ -1885,13 +1884,13 @@ mod tests {
     #[test]
     fn test_closed_parses() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:ClosedShape a sh:NodeShape ;
                 sh:targetClass ex:Person ;
                 sh:closed true ;
                 sh:ignoredProperties ( rdf:type ex:extra ) ;
                 sh:property [ sh:path ex:name ] .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:closed must parse");
@@ -1941,12 +1940,12 @@ mod tests {
     #[test]
     fn test_closed_false_emits_nothing() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:OpenShape a sh:NodeShape ;
                 sh:targetClass ex:Person ;
                 sh:closed false ;
                 sh:property [ sh:path ex:name ] .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let shapes = from_store(&store).expect("sh:closed false must parse");
@@ -1963,14 +1962,14 @@ mod tests {
     #[test]
     fn test_reification_required_requires_predicate_path() {
         let ttl = format!(
-            r#"{PREFIXES}
+            r"{PREFIXES}
             ex:ContextualShape a sh:NodeShape ;
                 sh:targetClass ex:Node ;
                 sh:property [
                     sh:path [ sh:inversePath ex:knows ] ;
                     sh:reificationRequired true ;
                 ] .
-        "#
+        "
         );
         let store = load_store(&ttl);
         let result = from_store(&store);

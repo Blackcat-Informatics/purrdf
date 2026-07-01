@@ -106,9 +106,7 @@ fn workspace_root() -> PathBuf {
         if dir.join("crates").is_dir() && dir.join("Cargo.toml").is_file() {
             return dir;
         }
-        if !dir.pop() {
-            panic!("gts-codec-hygiene: could not locate the workspace root (no ancestor with a `crates/` dir)");
-        }
+        assert!(dir.pop(), "gts-codec-hygiene: could not locate the workspace root (no ancestor with a `crates/` dir)");
     }
 }
 
@@ -475,11 +473,11 @@ mod tests {
 
     #[test]
     fn rule1_flags_purrdf_gts_anywhere_in_native_codecs() {
-        let with_codec = r#"
+        let with_codec = r"
 fn serialize(d: &RdfDataset) -> String {
     purrdf_gts::nquads::to_nquads(&gts_graph_from(d))
 }
-"#;
+";
         let v = scan_native_codecs_violations("crates/rdf/src/native_codecs/x.rs", with_codec);
         assert!(
             v.iter().any(|(t, _)| t == "purrdf_gts"),
@@ -491,7 +489,7 @@ fn serialize(d: &RdfDataset) -> String {
     fn rule1_flags_oxigraph_even_in_test_region() {
         // RULE 1 scans the WHOLE file (prod AND test), so an oxigraph oracle in a
         // native_codecs test must ALSO be flagged — the seam is totally clean.
-        let with_test_oracle = r#"
+        let with_test_oracle = r"
 fn parse(b: &[u8]) -> RdfDataset { native(b) }
 
 #[cfg(test)]
@@ -499,7 +497,7 @@ mod tests {
     use oxigraph::store::Store;
     fn oracle() { let _ = Store::new(); }
 }
-"#;
+";
         let v =
             scan_native_codecs_violations("crates/rdf/src/native_codecs/x.rs", with_test_oracle);
         assert!(
@@ -510,10 +508,10 @@ mod tests {
 
     #[test]
     fn rule1_clean_native_source_is_not_flagged() {
-        let clean = r#"
+        let clean = r"
 use crate::native_codecs::ser_model::SerGraph;
 fn serialize(g: &SerGraph) -> String { native_nquads(g) }
-"#;
+";
         let v = scan_native_codecs_violations("crates/rdf/src/native_codecs/x.rs", clean);
         assert!(
             v.is_empty(),
@@ -554,7 +552,7 @@ fn serialize(g: &SerGraph) -> String { native_nquads(g) }
         // purrdf-gts is the purrdf.gts container layer ONLY: a codec call in a #[cfg(test)]
         // oracle is JUST AS BANNED as in production. Test oracles must re-render through the
         // native purrdf codecs, so RULE 2 scans the test region too.
-        let with_test_codec = r#"
+        let with_test_codec = r"
 fn f() { native(); }
 
 #[cfg(test)]
@@ -562,7 +560,7 @@ mod tests {
     #[test]
     fn oracle() { let nq = purrdf_gts::nquads::to_nquads(&g); }
 }
-"#;
+";
         let v = scan_gts_codec_entrypoints("crates/x/src/y.rs", with_test_codec);
         assert!(
             v.iter().any(|(t, _)| t == "purrdf_gts::nquads::"),
@@ -572,10 +570,10 @@ mod tests {
 
     #[test]
     fn rule2_doc_comment_mention_is_not_flagged() {
-        let doc = r#"
+        let doc = r"
 /// The native inverse of the old `purrdf_gts::nquads::to_nquads` + re-parse round-trip.
 fn f() { native(); }
-"#;
+";
         let v = scan_gts_codec_entrypoints("crates/x/src/y.rs", doc);
         assert!(
             v.is_empty(),
@@ -618,7 +616,7 @@ fn f() {
 
     #[test]
     fn rule3_excludes_the_cfg_test_region() {
-        let with_test_ox = r#"
+        let with_test_ox = r"
 fn f() { native(); }
 
 #[cfg(test)]
@@ -626,7 +624,7 @@ mod tests {
     use oxigraph::store::Store;
     fn oracle() { let _ = Store::new(); }
 }
-"#;
+";
         let v = scan_oxigraph_production("crates/x/src/y.rs", with_test_ox);
         assert!(
             v.is_empty(),

@@ -14,6 +14,7 @@ use crate::manifest::{SparqlTestCase, TestKind};
 const BASE: &str = "http://purrdf.test/manifest/";
 
 /// The outcome of running a case (before comparison against the expected result).
+#[derive(Debug)]
 pub enum RunOutcome {
     /// A `QueryEvaluationTest` result.
     Eval(SparqlResult),

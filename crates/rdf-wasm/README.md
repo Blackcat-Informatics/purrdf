@@ -9,10 +9,10 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 [`purrdf`](../purrdf) umbrella crate and surfaced to JavaScript/TypeScript through the
 [RDF/JS](https://rdf.js.org/) community spec (`DataFactory`, `DatasetCore`,
 `Stream`/`Sink`). It is parcel **P10** of the purrdf program
-(EPIC #832, [`docs/design/PURRDF-PLAN.md`](../../docs/design/PURRDF-PLAN.md)).
+(EPIC #832, [`docs/design/PurRDF-PLAN.md`](../../docs/design/PurRDF-PLAN.md)).
 
 This crate (`purrdf-wasm`) is the Rust cdylib; the published npm/ESM package lives
-in [`js/`](./js/) and is named **`purrdf`**.
+in [`js/`](./js/) and is named **`@blackcatinformatics/purrdf`**.
 
 ## The RDF-1.2 wedge
 
@@ -21,7 +21,7 @@ literals**. purrdf's `DataFactory` exposes both — the deliberate "overcome, do
 inherit" extension to stock RDF/JS:
 
 ```js
-import { ready, DataFactory, Dataset } from "purrdf";
+import { ready, DataFactory, Dataset } from "@blackcatinformatics/purrdf";
 
 await ready(); // one-time async wasm instantiation
 

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Unified Python extension module for PURRDF.
+//! Unified Python extension module for PurRDF.
 //!
 //! The Rust crates remain PyO3-free. This crate owns the CPython extension
 //! boundary and delegates into the public Rust crate APIs.

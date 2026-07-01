@@ -3,7 +3,7 @@
 
 # purrdf-rdf
 
-`purrdf-rdf` is the first-party RDF 1.2 adapter layer over the PURRDF kernel. It
+`purrdf-rdf` is the first-party RDF 1.2 adapter layer over the PurRDF kernel. It
 depends on and re-exports the oxigraph-free [`purrdf-core`](../rdf-core) crate
 (the shared RDF model, diagnostics, interned IR, store traits, `DatasetView`, and
 GTS readers) and adds parsing/materialization, Turtle normalization, statement

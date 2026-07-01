@@ -52,6 +52,7 @@ impl SparqlParser {
 
     /// Set an implicit base IRI used to resolve relative IRI references that
     /// appear before any in-query `BASE` declaration.
+    #[must_use]
     pub fn with_base_iri(mut self, base_iri: impl Into<String>) -> Self {
         self.base_iri = Some(base_iri.into());
         self
@@ -116,8 +117,7 @@ impl Parser {
     fn span(&self) -> usize {
         self.tokens
             .get(self.pos)
-            .map(|s| s.start)
-            .unwrap_or_else(|| self.tokens.last().map(|s| s.end).unwrap_or(0))
+            .map_or_else(|| self.tokens.last().map_or(0, |s| s.end), |s| s.start)
     }
 
     fn bump(&mut self) -> Option<Token> {
@@ -461,10 +461,10 @@ impl Parser {
             loop {
                 match self.peek() {
                     Some(Token::Variable(_)) => {
-                        targets.push(NamedNodePattern::Variable(self.expect_var()?))
+                        targets.push(NamedNodePattern::Variable(self.expect_var()?));
                     }
-                    Some(Token::Iri(_)) | Some(Token::PrefixedName(_, _)) => {
-                        targets.push(NamedNodePattern::NamedNode(self.expect_iri_node()?))
+                    Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
+                        targets.push(NamedNodePattern::NamedNode(self.expect_iri_node()?));
                     }
                     _ => break,
                 }
@@ -805,7 +805,7 @@ impl Parser {
                 break;
             } else if self.eat_kw("GRAPH") {
                 let graph = self.parse_var_or_iri_name()?;
-                self.collect_quad_group(Some(graph), is_delete, &mut quads)?;
+                self.collect_quad_group(Some(&graph), is_delete, &mut quads)?;
             } else if self.eat(&Token::Dot) {
                 // statement separator between triple blocks
             } else {
@@ -832,7 +832,7 @@ impl Parser {
     /// `graph` and pushing the resulting quad patterns into `quads`.
     fn collect_quad_group(
         &mut self,
-        graph: Option<NamedNodePattern>,
+        graph: Option<&NamedNodePattern>,
         is_delete: bool,
         quads: &mut Vec<QuadPattern>,
     ) -> Result<()> {
@@ -852,7 +852,7 @@ impl Parser {
             }
             quads.push(QuadPattern {
                 triple,
-                graph: graph.clone(),
+                graph: graph.cloned(),
             });
         }
         Ok(())
@@ -1124,8 +1124,8 @@ impl Parser {
                 // Last element: terminate the chain with rdf:nil.
                 triples.push(TriplePattern {
                     subject: node,
-                    predicate: rest_pred.clone(),
-                    object: nil.clone(),
+                    predicate: rest_pred,
+                    object: nil,
                 });
                 break;
             }
@@ -1274,7 +1274,7 @@ impl Parser {
                 self.pos += 1;
                 PropertyPathExpression::ZeroOrOne(Box::new(primary))
             }
-            // `{n}` / `{n,}` / `{n,m}` / `{,m}` — bounded repetition (a PURRDF
+            // `{n}` / `{n,}` / `{n,m}` / `{,m}` — bounded repetition (a PurRDF
             // extension beyond SPARQL 1.1 §9; symmetric parse for the serializer).
             Some(Token::LBrace) => self.parse_path_range(primary)?,
             _ => primary,
@@ -1282,7 +1282,7 @@ impl Parser {
     }
 
     /// Parse a bounded-repetition postfix `{n}` / `{n,}` / `{n,m}` / `{,m}` — a
-    /// PURRDF extension beyond SPARQL 1.1 §9.  The opening `{` is the current token.
+    /// PurRDF extension beyond SPARQL 1.1 §9.  The opening `{` is the current token.
     /// Hard-fails (no silent degradation) on an empty `{}`, a non-integer bound,
     /// or a lower bound exceeding the upper bound.
     fn parse_path_range(
@@ -1360,7 +1360,7 @@ impl Parser {
             )));
         }
         match self.peek() {
-            Some(Token::Iri(_)) | Some(Token::PrefixedName(_, _)) => {
+            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
                 Ok(PropertyPathExpression::NamedNode(self.expect_iri_node()?))
             }
             Some(Token::LParen) => {
@@ -1418,7 +1418,7 @@ impl Parser {
     fn parse_term_pattern(&mut self) -> Result<TermPattern> {
         match self.peek() {
             Some(Token::Variable(_)) => Ok(TermPattern::Variable(self.expect_var()?)),
-            Some(Token::Iri(_)) | Some(Token::PrefixedName(_, _)) => {
+            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
                 Ok(TermPattern::NamedNode(self.expect_iri_node()?))
             }
             Some(Token::BlankNodeLabel(_)) => {
@@ -1431,10 +1431,9 @@ impl Parser {
                 self.pos += 1;
                 Ok(TermPattern::BlankNode(self.fresh_anon()))
             }
-            Some(Token::StringLit(_))
-            | Some(Token::Integer(_))
-            | Some(Token::Decimal(_))
-            | Some(Token::Double(_)) => Ok(TermPattern::Literal(self.parse_literal()?)),
+            Some(
+                Token::StringLit(_) | Token::Integer(_) | Token::Decimal(_) | Token::Double(_),
+            ) => Ok(TermPattern::Literal(self.parse_literal()?)),
             Some(Token::Word(w)) if w == "true" || w == "false" => {
                 let b = matches!(self.bump(), Some(Token::Word(w)) if w == "true");
                 Ok(TermPattern::Literal(Literal::new_typed(
@@ -1576,7 +1575,6 @@ impl Parser {
                 }
                 bindings.push(row);
             }
-            self.expect(&Token::RBrace)?;
         } else {
             // VALUES ?a { v v ... }
             variables.push(self.expect_var()?);
@@ -1584,8 +1582,8 @@ impl Parser {
             while !self.at(&Token::RBrace) {
                 bindings.push(vec![self.parse_data_cell()?]);
             }
-            self.expect(&Token::RBrace)?;
         }
+        self.expect(&Token::RBrace)?;
         Ok(GraphPattern::Values {
             variables,
             bindings,
@@ -1602,7 +1600,7 @@ impl Parser {
 
     fn parse_ground_term(&mut self) -> Result<GroundTerm> {
         match self.peek() {
-            Some(Token::Iri(_)) | Some(Token::PrefixedName(_, _)) => {
+            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
                 Ok(GroundTerm::NamedNode(self.expect_iri_node()?))
             }
             Some(Token::TripleOpen) => {
@@ -1739,7 +1737,7 @@ impl Parser {
     fn order_key_ahead(&self) -> bool {
         matches!(
             self.peek(),
-            Some(Token::Variable(_)) | Some(Token::LParen) | Some(Token::Iri(_))
+            Some(Token::Variable(_) | Token::LParen | Token::Iri(_))
         ) || matches!(self.peek(), Some(Token::Word(w)) if is_builtin_function(w))
     }
 
@@ -1933,13 +1931,10 @@ impl Parser {
                 Ok(e)
             }
             Some(Token::Variable(_)) => Ok(Expression::Variable(self.expect_var()?)),
-            Some(Token::Iri(_)) | Some(Token::PrefixedName(_, _)) => {
-                self.parse_iri_or_function(aggs)
-            }
-            Some(Token::StringLit(_))
-            | Some(Token::Integer(_))
-            | Some(Token::Decimal(_))
-            | Some(Token::Double(_)) => Ok(Expression::Literal(self.parse_literal()?)),
+            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => self.parse_iri_or_function(aggs),
+            Some(
+                Token::StringLit(_) | Token::Integer(_) | Token::Decimal(_) | Token::Double(_),
+            ) => Ok(Expression::Literal(self.parse_literal()?)),
             Some(Token::TripleOpen) => Err(ParseError::unsupported(
                 "quoted triple in expression position",
             )),
@@ -2663,7 +2658,7 @@ mod tests {
         let nil = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
         let pred = |p: &TriplePattern| match &p.predicate {
             NamedNodePattern::NamedNode(n) => n.as_str().to_owned(),
-            other => panic!("unexpected predicate {other:?}"),
+            other @ NamedNodePattern::Variable(_) => panic!("unexpected predicate {other:?}"),
         };
         assert_eq!(patterns.iter().filter(|p| pred(p) == first).count(), 3);
         assert_eq!(patterns.iter().filter(|p| pred(p) == rest).count(), 3);
@@ -2934,7 +2929,7 @@ mod tests {
         );
     }
 
-    // ── Bounded repetition {n,m} + predicate wildcard (#1010 PURRDF extensions) ──
+    // ── Bounded repetition {n,m} + predicate wildcard (#1010 PurRDF extensions) ──
 
     fn path_of(q: &str) -> PropertyPathExpression {
         match unproject(select_pattern(q)) {

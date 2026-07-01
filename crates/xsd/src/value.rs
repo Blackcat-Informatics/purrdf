@@ -6,7 +6,7 @@
 //! `XsdValue` is a **value-space** representation: parsing maps a lexical form into
 //! the abstract value it denotes. It is deliberately NOT a term-identity key —
 //! parsing discards the lexical form, so `"1"^^xsd:integer` and `"01"^^xsd:integer`
-//! both become [`XsdValue::Integer`]`{ value: 1, datatype: Integer }` even though
+//! both become [`XsdValue::Integer`] with `{ value: 1, datatype: Integer }` even though
 //! they are DISTINCT RDF terms (`sameTerm` is false). RDF term identity (`sameTerm`)
 //! is the IR's `(lexical, datatype, language)` tuple, NOT this type. Consequently
 //! `XsdValue` intentionally implements neither `PartialEq`/`Eq`/`Hash` (which would
@@ -73,18 +73,18 @@ impl XsdValue {
     #[must_use]
     pub fn datatype(&self) -> XsdDatatype {
         match self {
-            XsdValue::Integer { datatype, .. } => *datatype,
-            XsdValue::Decimal(_) => XsdDatatype::Decimal,
-            XsdValue::Float(_) => XsdDatatype::Float,
-            XsdValue::Double(_) => XsdDatatype::Double,
-            XsdValue::Boolean(_) => XsdDatatype::Boolean,
-            XsdValue::String(_) => XsdDatatype::String,
-            XsdValue::DateTime(_) => XsdDatatype::DateTime,
-            XsdValue::Date(_) => XsdDatatype::Date,
-            XsdValue::Time(_) => XsdDatatype::Time,
-            XsdValue::Duration(d) => d.datatype(),
-            XsdValue::Gregorian(g) => g.datatype(),
-            XsdValue::Binary { datatype, .. } => *datatype,
+            Self::Integer { datatype, .. } => *datatype,
+            Self::Decimal(_) => XsdDatatype::Decimal,
+            Self::Float(_) => XsdDatatype::Float,
+            Self::Double(_) => XsdDatatype::Double,
+            Self::Boolean(_) => XsdDatatype::Boolean,
+            Self::String(_) => XsdDatatype::String,
+            Self::DateTime(_) => XsdDatatype::DateTime,
+            Self::Date(_) => XsdDatatype::Date,
+            Self::Time(_) => XsdDatatype::Time,
+            Self::Duration(d) => d.datatype(),
+            Self::Gregorian(g) => g.datatype(),
+            Self::Binary { datatype, .. } => *datatype,
         }
     }
 
@@ -92,18 +92,18 @@ impl XsdValue {
     #[must_use]
     pub fn canonical_lexical(&self) -> String {
         match self {
-            XsdValue::Integer { value, .. } => value.to_string(),
-            XsdValue::Decimal(d) => d.canonical_lexical(),
-            XsdValue::Float(f) => crate::numeric::canonical_float(*f),
-            XsdValue::Double(d) => crate::numeric::canonical_double(*d),
-            XsdValue::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
-            XsdValue::String(s) => s.clone(),
-            XsdValue::DateTime(v) => v.canonical_lexical(),
-            XsdValue::Date(v) => v.canonical_lexical(),
-            XsdValue::Time(v) => v.canonical_lexical(),
-            XsdValue::Duration(v) => v.canonical_lexical(),
-            XsdValue::Gregorian(v) => v.canonical_lexical(),
-            XsdValue::Binary { bytes, datatype } => {
+            Self::Integer { value, .. } => value.to_string(),
+            Self::Decimal(d) => d.canonical_lexical(),
+            Self::Float(f) => crate::numeric::canonical_float(*f),
+            Self::Double(d) => crate::numeric::canonical_double(*d),
+            Self::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
+            Self::String(s) => s.clone(),
+            Self::DateTime(v) => v.canonical_lexical(),
+            Self::Date(v) => v.canonical_lexical(),
+            Self::Time(v) => v.canonical_lexical(),
+            Self::Duration(v) => v.canonical_lexical(),
+            Self::Gregorian(v) => v.canonical_lexical(),
+            Self::Binary { bytes, datatype } => {
                 // Only two binary datatypes exist; the constructor in `parse` guarantees
                 // the variant carries HexBinary or Base64Binary. Use a total two-arm form.
                 if *datatype == XsdDatatype::Base64Binary {
@@ -219,7 +219,7 @@ pub enum XsdError {
 impl std::fmt::Display for XsdError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            XsdError::InvalidLexical {
+            Self::InvalidLexical {
                 datatype,
                 lexical,
                 reason,
@@ -228,7 +228,7 @@ impl std::fmt::Display for XsdError {
                 "invalid lexical form {lexical:?} for <{}>: {reason}",
                 datatype.iri()
             ),
-            XsdError::OutOfRange {
+            Self::OutOfRange {
                 datatype,
                 lexical,
                 reason,
@@ -237,10 +237,10 @@ impl std::fmt::Display for XsdError {
                 "lexical form {lexical:?} is out of representable range for <{}>: {reason}",
                 datatype.iri()
             ),
-            XsdError::DivisionByZero { datatype } => {
+            Self::DivisionByZero { datatype } => {
                 write!(f, "division by zero for <{}>", datatype.iri())
             }
-            XsdError::TypeMismatch { reason } => write!(f, "type mismatch: {reason}"),
+            Self::TypeMismatch { reason } => write!(f, "type mismatch: {reason}"),
         }
     }
 }

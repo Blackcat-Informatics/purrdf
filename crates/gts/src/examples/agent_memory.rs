@@ -100,7 +100,7 @@ pub struct RecallOptions<'a> {
     pub include_suppressed: bool,
 }
 
-impl<'a> Default for RecallOptions<'a> {
+impl Default for RecallOptions<'_> {
     fn default() -> Self {
         Self {
             query: "",
@@ -125,18 +125,16 @@ pub enum MemoryError {
 impl fmt::Display for MemoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MemoryError::Io(err) => write!(f, "{err}"),
-            MemoryError::EmptyClaim => f.write_str("a claim needs text"),
-            MemoryError::InvalidConfidence => {
+            Self::Io(err) => write!(f, "{err}"),
+            Self::EmptyClaim => f.write_str("a claim needs text"),
+            Self::InvalidConfidence => {
                 f.write_str("confidence must be finite and in the range [0, 1]")
             }
-            MemoryError::EmptyTool => f.write_str("a tool call needs a tool agent IRI"),
-            MemoryError::EmptyInvocation => {
+            Self::EmptyTool => f.write_str("a tool call needs a tool agent IRI"),
+            Self::EmptyInvocation => {
                 f.write_str("invocation must be a non-empty IRI when supplied")
             }
-            MemoryError::EmptyGeneratedEntity => {
-                f.write_str("generated entity IRIs must be non-empty")
-            }
+            Self::EmptyGeneratedEntity => f.write_str("generated entity IRIs must be non-empty"),
         }
     }
 }
@@ -145,7 +143,7 @@ impl std::error::Error for MemoryError {}
 
 impl From<std::io::Error> for MemoryError {
     fn from(err: std::io::Error) -> Self {
-        MemoryError::Io(err)
+        Self::Io(err)
     }
 }
 

@@ -27,7 +27,7 @@
 //!   `DISTINCT`/`REDUCED`. See [`solution`].
 //! - **Property paths in-engine (S8 #914).** The `Path` graph pattern is evaluated
 //!   over the same indexed surface, wasm-safe, covering the full algebra
-//!   (`* + ? / | ^ !()` and the PURRDF `{n,m}` / `<any>` extensions) — see the
+//!   (`* + ? / | ^ !()` and the PurRDF `{n,m}` / `<any>` extensions) — see the
 //!   `path` module.
 //! - **Hard-fail, no degraded fallback.** A well-formed but out-of-scope algebra
 //!   node (`SERVICE`, `LATERAL`, SPARQL `UPDATE`) or an unimplemented builtin is a

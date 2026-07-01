@@ -209,7 +209,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 /// reifiers and pass 2 classifies the reifier subjects' rows as annotations. Term
 /// interning is shared across all rows, so identical terms collapse to one id exactly as
 /// on the oxigraph path.
-pub fn dataset_from_ser_graph(graph: &SerGraph) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+pub(crate) fn dataset_from_ser_graph(graph: &SerGraph) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     dataset_from_ser_graph_impl(graph, false)
 }
 
@@ -220,7 +220,7 @@ pub fn dataset_from_ser_graph(graph: &SerGraph) -> Result<Arc<RdfDataset>, RdfDi
 /// (which were captured over a flattened store). The statement layer (`rdf:reifies`
 /// reifiers + annotations) has no graph dimension, so only the base-quad graph
 /// component changes.
-pub fn flattened_dataset_from_ser_graph(
+pub(crate) fn flattened_dataset_from_ser_graph(
     graph: &SerGraph,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     dataset_from_ser_graph_impl(graph, true)
@@ -251,7 +251,7 @@ fn dataset_from_ser_graph_impl(
             continue;
         }
         let subject = interner.intern(&mut builder, reifier_id)?;
-        let predicate = builder.intern_iri(RDF_REIFIES.to_owned());
+        let predicate = builder.intern_iri(RDF_REIFIES);
         let s = interner.intern(&mut builder, s)?;
         let p = interner.intern(&mut builder, p)?;
         let o = interner.intern(&mut builder, o)?;
@@ -358,7 +358,7 @@ impl SerInterner<'_> {
                             "GTS IRI term requires a non-empty value",
                         )
                     })?;
-                Ok(FoldNode::Term(builder.intern_iri(iri.to_owned())))
+                Ok(FoldNode::Term(builder.intern_iri(iri)))
             }
             SerTermKind::Bnode => {
                 let label = term
@@ -366,7 +366,7 @@ impl SerInterner<'_> {
                     .clone()
                     .unwrap_or_else(|| format!("gts_bnode_{gts_id}"));
                 Ok(FoldNode::Term(
-                    builder.intern_blank(label, BlankScope::DEFAULT),
+                    builder.intern_blank(&label, BlankScope::DEFAULT),
                 ))
             }
             SerTermKind::Literal => {

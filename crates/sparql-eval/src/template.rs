@@ -103,7 +103,7 @@ pub(crate) fn instantiate_predicate(
     predicate: &NamedNodePattern,
     row: &Solution,
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &EvalCtx<'_>,
 ) -> Option<TermValue> {
     match predicate {
         NamedNodePattern::NamedNode(n) => Some(named_node_to_value(n)),

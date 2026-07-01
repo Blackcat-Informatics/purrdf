@@ -4,7 +4,7 @@
 //! SHACL → JSON Schema (draft 2020-12) + OpenAPI 3.1 emitter (#700).
 //!
 //! Compiles a parsed [`Shapes`] graph into a closed-world JSON Schema describing
-//! the JSON-LD projection of PURRDF instance data (see [`crate::instance`]). The
+//! the JSON-LD projection of PurRDF instance data (see [`crate::instance`]). The
 //! emitter and the projector share ONE CURIE-compaction / value-shaping
 //! convention so a projected node always validates against the schema this
 //! module produces (Task 6 proves the round trip over every slice example).
@@ -36,7 +36,7 @@ use serde_json::{json, Map, Value};
 use crate::shapes::{Constraint, NodeKindValue, Path, Shape, Shapes, Target};
 use crate::term::Term;
 
-/// The PURRDF namespace (matches `crate::model::purrdf`).
+/// The PurRDF namespace (matches `crate::model::purrdf`).
 const PURRDF_NS: &str = "https://blackcatinformatics.ca/purrdf/";
 const LOGIC_NS: &str = "https://blackcatinformatics.ca/logic/";
 const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -84,7 +84,7 @@ pub fn local_name(iri: &str) -> String {
     local.to_owned()
 }
 
-/// Whether an IRI is in the PURRDF namespace (object refs to purrdf classes get a
+/// Whether an IRI is in the PurRDF namespace (object refs to purrdf classes get a
 /// `$ref`; external classes get a permissive node-ref / string).
 fn is_purrdf(iri: &str) -> bool {
     iri.starts_with(PURRDF_NS)
@@ -301,7 +301,7 @@ fn root_schema(defs: &Map<String, Value>) -> Value {
             "@context": true,
             "@graph": {
                 "type": "array",
-                "items": node_ref.clone()
+                "items": node_ref
             }
         }
     });
@@ -312,7 +312,7 @@ fn root_schema(defs: &Map<String, Value>) -> Value {
         "title": "PURRDF instance schema (SHACL-derived, closed-world)",
         "$defs": Value::Object(defs.clone()),
         "type": "object",
-        "anyOf": [graph_envelope, node_ref.clone()],
+        "anyOf": [graph_envelope, node_ref],
         "properties": {
             "@context": true,
             "@graph": {
@@ -500,9 +500,6 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx) -> Value {
         json!({ "$ref": "#/$defs/Annotation" }),
     );
 
-    // Track declared property keys for sh:closed → additionalProperties: false.
-    let mut declared_keys: Vec<String> = Vec::new();
-
     // Group property-shape constraints by JSON key. A node shape may carry
     // SEVERAL `sh:property` blocks for the SAME path (e.g. one `sh:minCount 1`
     // and one `sh:maxCount 1`), and their blank-node ids are randomly minted by
@@ -532,7 +529,6 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx) -> Value {
     }
 
     for (key, constraints) in &by_key {
-        declared_keys.push(key.clone());
         let (value_schema, is_required) = compile_property(constraints, &shape_iri, key, ctx);
         if is_required {
             required.push(key.clone());
@@ -770,14 +766,14 @@ fn compile_property(
     }
 
     if !enum_values.is_empty() {
-        enum_values.sort_by_key(|a| a.to_string());
+        enum_values.sort_by_key(ToString::to_string);
         enum_values.dedup();
         value.insert("enum".to_owned(), Value::Array(enum_values));
     }
 
     if !alts.is_empty() {
         // Stable order, de-duplicated.
-        alts.sort_by_key(|a| a.to_string());
+        alts.sort_by_key(ToString::to_string);
         alts.dedup();
         if alts.len() == 1 {
             // Fold the single alternative into the value map.
@@ -800,7 +796,7 @@ fn compile_property(
     let single = Value::Object(value);
 
     // Required iff minCount >= 1.
-    let is_required = min_count.map(|n| n >= 1).unwrap_or(false);
+    let is_required = min_count.is_some_and(|n| n >= 1);
 
     // Cardinality wrapping: maxCount==1 → single; else array.
     //
@@ -834,7 +830,7 @@ fn compile_property(
         let array_form = Value::Object(arr);
 
         // A single value is permissible exactly when minCount <= 1.
-        let allow_single = min_count.map(|n| n <= 1).unwrap_or(true);
+        let allow_single = min_count.is_none_or(|n| n <= 1);
         if allow_single {
             json!({ "anyOf": [single, array_form] })
         } else {
@@ -881,9 +877,7 @@ fn datatype_value_schema(dt_iri: &str) -> Value {
 
 /// The bare-scalar schema for an xsd datatype (no JSON-LD wrapper).
 fn scalar_schema_for_datatype(dt_iri: &str) -> Value {
-    let local = if let Some(l) = dt_iri.strip_prefix(XSD_NS) {
-        l
-    } else {
+    let Some(local) = dt_iri.strip_prefix(XSD_NS) else {
         // Non-xsd datatype: treat the lexical form as a string.
         return json!({ "type": "string" });
     };
@@ -934,7 +928,7 @@ fn term_lexical(term: &Term) -> String {
         Term::Literal(lit) => lit.value().to_owned(),
         Term::NamedNode(n) => n.as_str().to_owned(),
         Term::BlankNode(b) => b.as_str().to_owned(),
-        other => other.to_string(),
+        other @ Term::Triple(_) => other.to_string(),
     }
 }
 
@@ -946,7 +940,7 @@ fn term_enum_value(term: &Term) -> Value {
         Term::NamedNode(n) => Value::String(compact_iri(n.as_str())),
         Term::Literal(lit) => Value::String(lit.value().to_owned()),
         Term::BlankNode(b) => Value::String(b.as_str().to_owned()),
-        other => Value::String(other.to_string()),
+        other @ Term::Triple(_) => Value::String(other.to_string()),
     }
 }
 
@@ -967,7 +961,7 @@ fn term_const_value(term: &Term) -> Value {
             }
         }
         Term::BlankNode(b) => json!({ "@id": format!("_:{}", b.as_str()) }),
-        other => Value::String(other.to_string()),
+        other @ Term::Triple(_) => Value::String(other.to_string()),
     }
 }
 
@@ -992,13 +986,13 @@ mod tests {
     use super::*;
     use crate::shapes::from_dataset;
 
-    const PREFIXES: &str = r#"
+    const PREFIXES: &str = r"
         @prefix sh:    <http://www.w3.org/ns/shacl#> .
         @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
         @prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
         @prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
         @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
-    "#;
+    ";
 
     fn compile_ttl(body: &str) -> CompiledSchema {
         let ttl = format!("{PREFIXES}{body}");
@@ -1023,12 +1017,12 @@ mod tests {
         // (#700 Gap D). A KNOWN non-purrdf prefix (e.g. logic:) is accepted — see
         // `logic_target_class_keyed_by_curie`.
         compile_ttl(
-            r#"
+            r"
             @prefix ex: <https://example.org/> .
             ex:PersonShape a sh:NodeShape ;
                 sh:targetClass ex:Person ;
                 sh:property [ sh:path purrdf:name ; sh:minCount 1 ] .
-        "#,
+        ",
         );
     }
 
@@ -1038,13 +1032,13 @@ mod tests {
         // by the full CURIE and discriminates `@type` on that same CURIE, so a
         // closed-world logic node is enforced exactly like a purrdf node (#772).
         let schema = schema_of(&compile_ttl(
-            r#"
+            r"
             @prefix logic: <https://blackcatinformatics.ca/logic/> .
             logic:CandidateShape a sh:NodeShape ;
                 sh:targetClass logic:FormalizationCandidate ;
                 sh:property [ sh:path logic:candidateSourceHash ;
                               sh:minCount 1 ; sh:datatype xsd:string ] .
-        "#,
+        ",
         ));
         // The body is keyed by the CURIE, not a bare local name.
         assert!(
@@ -1096,12 +1090,12 @@ mod tests {
     #[test]
     fn test_required_from_min_count_and_array_vs_single() {
         let c = compile_ttl(
-            r#"
+            r"
             purrdf:PersonShape a sh:NodeShape ;
                 sh:targetClass purrdf:Person ;
                 sh:property [ sh:path purrdf:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
                 sh:property [ sh:path purrdf:nickname ; sh:datatype xsd:string ] .
-            "#,
+            ",
         );
         let schema = schema_of(&c);
         let person = def(&schema, "Person");
@@ -1133,12 +1127,12 @@ mod tests {
     #[test]
     fn test_datatype_type_and_format() {
         let c = compile_ttl(
-            r#"
+            r"
             purrdf:EventShape a sh:NodeShape ;
                 sh:targetClass purrdf:Event ;
                 sh:property [ sh:path purrdf:at ; sh:maxCount 1 ; sh:datatype xsd:dateTime ] ;
                 sh:property [ sh:path purrdf:count ; sh:maxCount 1 ; sh:datatype xsd:integer ] .
-            "#,
+            ",
         );
         let schema = schema_of(&c);
         let event = def(&schema, "Event");
@@ -1193,13 +1187,13 @@ mod tests {
     #[test]
     fn test_closed_additional_properties_false() {
         let c = compile_ttl(
-            r#"
+            r"
             purrdf:ClosedShape a sh:NodeShape ;
                 sh:targetClass purrdf:Sealed ;
                 sh:closed true ;
                 sh:ignoredProperties ( rdf:type ) ;
                 sh:property [ sh:path purrdf:only ; sh:maxCount 1 ; sh:datatype xsd:string ] .
-            "#,
+            ",
         );
         let schema = schema_of(&c);
         let sealed = def(&schema, "Sealed");
@@ -1211,11 +1205,11 @@ mod tests {
     #[test]
     fn test_not_constraint() {
         let c = compile_ttl(
-            r#"
+            r"
             purrdf:NotShape a sh:NodeShape ;
                 sh:targetClass purrdf:Thing ;
                 sh:not [ sh:nodeKind sh:Literal ] .
-            "#,
+            ",
         );
         let schema = schema_of(&c);
         let thing = def(&schema, "Thing");
@@ -1253,13 +1247,13 @@ mod tests {
     #[test]
     fn test_object_property_uses_ref() {
         let c = compile_ttl(
-            r#"
+            r"
             purrdf:OrgShape a sh:NodeShape ;
                 sh:targetClass purrdf:Organization ;
                 sh:property [ sh:path purrdf:member ; sh:maxCount 1 ; sh:class purrdf:Person ] .
             purrdf:PersonShape a sh:NodeShape ;
                 sh:targetClass purrdf:Person .
-            "#,
+            ",
         );
         let schema = schema_of(&c);
         let member = &def(&schema, "Organization")["properties"]["purrdf:member"];
@@ -1272,11 +1266,11 @@ mod tests {
     #[test]
     fn test_annotation_def_present_and_root_envelope() {
         let c = compile_ttl(
-            r#"
+            r"
             purrdf:PersonShape a sh:NodeShape ;
                 sh:targetClass purrdf:Person ;
                 sh:property [ sh:path purrdf:name ; sh:datatype xsd:string ] .
-            "#,
+            ",
         );
         let schema = schema_of(&c);
         // $defs/Annotation exists.
@@ -1299,12 +1293,12 @@ mod tests {
     #[test]
     fn test_deactivated_shape_skipped() {
         let c = compile_ttl(
-            r#"
+            r"
             purrdf:GoneShape a sh:NodeShape ;
                 sh:targetClass purrdf:Gone ;
                 sh:deactivated true ;
                 sh:property [ sh:path purrdf:x ; sh:datatype xsd:string ] .
-            "#,
+            ",
         );
         let schema = schema_of(&c);
         assert!(
@@ -1316,11 +1310,11 @@ mod tests {
     #[test]
     fn test_openapi_embeds_components_schemas() {
         let c = compile_ttl(
-            r#"
+            r"
             purrdf:PersonShape a sh:NodeShape ;
                 sh:targetClass purrdf:Person ;
                 sh:property [ sh:path purrdf:name ; sh:datatype xsd:string ] .
-            "#,
+            ",
         );
         let openapi: Value = serde_json::from_str(&c.openapi_json).expect("openapi JSON");
         assert_eq!(openapi["openapi"], json!("3.1.0"));
@@ -1363,7 +1357,7 @@ mod tests {
         // `haunts` property) has NONE — so no `$defs/Ghost` is emitted and a ref
         // to it would dangle. Also exercise sh:node (inline) and @annotation.
         let c = compile_ttl(
-            r#"
+            r"
             purrdf:OrgShape a sh:NodeShape ;
                 sh:targetClass purrdf:Organization ;
                 sh:node [ sh:property [ sh:path purrdf:label ; sh:datatype xsd:string ] ] ;
@@ -1371,12 +1365,12 @@ mod tests {
                 sh:property [ sh:path purrdf:haunts ; sh:maxCount 1 ; sh:class purrdf:Ghost ] .
             purrdf:PersonShape a sh:NodeShape ;
                 sh:targetClass purrdf:Person .
-            "#,
+            ",
         );
         let schema = schema_of(&c);
 
         // Collect the set of emitted $defs keys.
-        let defs: std::collections::BTreeSet<String> = schema["$defs"]
+        let defs: BTreeSet<String> = schema["$defs"]
             .as_object()
             .expect("$defs object")
             .keys()
@@ -1444,11 +1438,11 @@ mod tests {
         // `then` and fail Thing's `required` — i.e. the discrimination exists and
         // Thing actually requires purrdf:req.
         let c = compile_ttl(
-            r#"
+            r"
             purrdf:ThingShape a sh:NodeShape ;
                 sh:targetClass purrdf:Thing ;
                 sh:property [ sh:path purrdf:req ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
-            "#,
+            ",
         );
         let schema = schema_of(&c);
 
@@ -1525,12 +1519,12 @@ mod tests {
 
     #[test]
     fn test_determinism_byte_stable() {
-        let body = r#"
+        let body = r"
             purrdf:PersonShape a sh:NodeShape ;
                 sh:targetClass purrdf:Person ;
                 sh:property [ sh:path purrdf:name ; sh:minCount 1 ; sh:datatype xsd:string ] ;
                 sh:property [ sh:path purrdf:age ; sh:maxCount 1 ; sh:datatype xsd:integer ] .
-        "#;
+        ";
         let a = compile_ttl(body);
         let b = compile_ttl(body);
         assert_eq!(

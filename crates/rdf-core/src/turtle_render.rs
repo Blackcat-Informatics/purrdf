@@ -23,6 +23,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt::Write as _;
 
 use crate::model::RdfTextDirection;
 use crate::{RdfDataset, TermId, TermRef};
@@ -211,7 +212,7 @@ impl<'a> Renderer<'a> {
         let mut header = String::new();
         for (p, ns) in &self.prefixes {
             if used.contains(p) {
-                header.push_str(&format!("@prefix {p}: <{ns}> .\n"));
+                let _ = writeln!(header, "@prefix {p}: <{ns}> .");
             }
         }
         if header.is_empty() {
@@ -266,9 +267,9 @@ impl<'a> Renderer<'a> {
                     " ,"
                 };
                 if oi == 0 {
-                    out.push_str(&format!("{indent}{pred_str} {rendered}{terminator}\n"));
+                    let _ = writeln!(out, "{indent}{pred_str} {rendered}{terminator}");
                 } else {
-                    out.push_str(&format!("{indent}    {rendered}{terminator}\n"));
+                    let _ = writeln!(out, "{indent}    {rendered}{terminator}");
                 }
             }
         }
@@ -313,12 +314,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_inline_bnode(&self, id: TermId, depth: usize) -> String {
-        if self
-            .by_subject
-            .get(&id)
-            .map(BTreeMap::is_empty)
-            .unwrap_or(true)
-        {
+        if self.by_subject.get(&id).is_none_or(BTreeMap::is_empty) {
             return "[]".to_string();
         }
         let mut inner = String::new();
@@ -761,9 +757,11 @@ fn escape_iri(iri: &str) -> String {
     for c in iri.chars() {
         match c {
             '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
-                out.push_str(&format!("\\u{:04X}", c as u32));
+                let _ = write!(out, "\\u{:04X}", c as u32);
             }
-            c if c.is_control() || c == ' ' => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c if c.is_control() || c == ' ' => {
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
             c => out.push(c),
         }
     }
@@ -787,7 +785,9 @@ fn quote(value: &str) -> String {
         for c in pre.chars() {
             match c {
                 '\n' => escaped.push('\n'),
-                c if c.is_control() => escaped.push_str(&format!("\\u{:04X}", c as u32)),
+                c if c.is_control() => {
+                    let _ = write!(escaped, "\\u{:04X}", c as u32);
+                }
                 c => escaped.push(c),
             }
         }
@@ -801,7 +801,9 @@ fn quote(value: &str) -> String {
                 '\\' => out.push_str("\\\\"),
                 '\t' => out.push_str("\\t"),
                 '\r' => out.push_str("\\r"),
-                c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+                c if c.is_control() => {
+                    let _ = write!(out, "\\u{:04X}", c as u32);
+                }
                 c => out.push(c),
             }
         }
@@ -842,17 +844,17 @@ mod tests {
     fn renders_rdf12_reifier_flat() {
         use crate::ir::builder::RdfDatasetBuilder;
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://ex/s".to_string());
-        let p = b.intern_iri("https://ex/p".to_string());
-        let o = b.intern_iri("https://ex/o".to_string());
-        let r = b.intern_iri("https://ex/r".to_string());
-        let conf = b.intern_iri("https://ex/conf".to_string());
+        let s = b.intern_iri("https://ex/s");
+        let p = b.intern_iri("https://ex/p");
+        let o = b.intern_iri("https://ex/o");
+        let r = b.intern_iri("https://ex/r");
+        let conf = b.intern_iri("https://ex/conf");
         b.push_quad(s, p, o, None);
         let tt = b.intern_triple(s, p, o);
         b.push_reifier(r, tt);
         b.push_annotation(r, conf, o);
         let ds = b.freeze().unwrap();
-        let out = render(&ds, &[("rdf".to_string(), super::RDF.to_string())]);
+        let out = render(&ds, &[("rdf".to_string(), RDF.to_string())]);
         // The reifier renders FLAT — the quoted triple inline, the annotation alongside
         // — never nested into an intermediate `[ rdf:reifies … ]` blank (#1155).
         assert!(

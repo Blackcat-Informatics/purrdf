@@ -3,13 +3,18 @@
 
 [package]
 name = "purrdf-shapes"
-description = "PURRDF SHACL validation engine core: native RDF 1.2 SHACL Core validator, gated against the SHACL conformance corpus"
-version = "0.1.1"
+description = "PurRDF SHACL validation engine core: native RDF 1.2 SHACL Core validator, gated against the SHACL conformance corpus"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "shacl", "validation", "knowledge-graph", "rdf-12"]
+
+[lints]
+workspace = true
 
 [lib]
 # rlib-only: Python bindings live in `bindings/python`, so this crate stays
@@ -22,31 +27,33 @@ path = "src/lib.rs"
 # SHACL-SPARQL queries (ASK/CONSTRUCT/DESCRIBE) — they parse but cannot bind ?this
 # and would panic at eval. Use SparqlParser to parse and match Query::Select.
 # Replaces the oxigraph-family SPARQL parser.
-purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.1" }
+purrdf-sparql-algebra = { workspace = true }
 # Native SPARQL engine (crates/sparql-eval): the single SparqlEngine impl over the
 # frozen IR. Replaces oxigraph's SPARQL 1.1 engine for SHACL-AF sh:sparql /
 # sh:SPARQLTarget evaluation (EPIC #906).
-purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.1" }
+purrdf-sparql-eval = { workspace = true }
 # sh:pattern regex constraint.
-regex = "1"
+regex = { workspace = true }
 # JSON Schema / OpenAPI emitter (#700). NO `preserve_order` feature: we rely on
 # serde_json's default BTreeMap-backed Map so object keys serialize sorted for
 # deterministic, byte-stable output.
-serde_json = "1"
+serde_json = { workspace = true }
 # Shared PyO3-free RDF 1.2 kernel and native GTS/text-codec boundary (#648).
-purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.1.1" }
+# NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
+# at an inheriting use site, and the workspace key `purrdf` is the umbrella.
+purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.1.3" }
 # Native DOM parser for reading vendored openEHR OPT XML directly (openehr_opt
 # module): navigates the OPT's C_DV_QUANTITY magnitude interval structurally
 # rather than transcribing bounds by hand. Same version pin as crates/rdf and
 # crates/music.
-roxmltree = "0.20"
+roxmltree = { workspace = true }
 
 [dev-dependencies]
-purrdf-gts = { path = "../gts", version = "0.1.1" }
-purrdf-slice = { path = "../slice", version = "0.1.1" }
-proptest = "1"
+purrdf-gts = { workspace = true }
+purrdf-slice = { workspace = true }
+proptest = { workspace = true }
 # Acceleration-program baselines (#630, Phase 0); light feature set, see crates/logic.
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+criterion = { workspace = true }
 
 [[bench]]
 name = "validate"

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::fmt;
+use std::fmt::Write as _;
 
 /// Severity for RDF ingestion, conversion, and adapter diagnostics.
 ///
@@ -66,36 +67,43 @@ impl RdfLocation {
         }
     }
 
+    #[must_use]
     pub fn with_line(mut self, line: u32) -> Self {
         self.line = Some(line);
         self
     }
 
+    #[must_use]
     pub fn with_column(mut self, column: u32) -> Self {
         self.column = Some(column);
         self
     }
 
+    #[must_use]
     pub fn with_gts_term(mut self, term_id: usize) -> Self {
         self.gts_term_id = Some(term_id);
         self
     }
 
+    #[must_use]
     pub fn with_gts_quad(mut self, quad_index: usize) -> Self {
         self.gts_quad_index = Some(quad_index);
         self
     }
 
+    #[must_use]
     pub fn with_gts_reifier(mut self, reifier_id: usize) -> Self {
         self.gts_reifier_id = Some(reifier_id);
         self
     }
 
+    #[must_use]
     pub fn with_gts_frame(mut self, frame_index: usize) -> Self {
         self.gts_frame_index = Some(frame_index);
         self
     }
 
+    #[must_use]
     pub fn with_gts_segment(mut self, segment_index: usize) -> Self {
         self.gts_segment_index = Some(segment_index);
         self
@@ -129,19 +137,19 @@ impl RdfLocation {
             }
         }
         if let Some(term_id) = self.gts_term_id {
-            out.push_str(&format!(" term#{term_id}"));
+            let _ = write!(out, " term#{term_id}");
         }
         if let Some(quad_index) = self.gts_quad_index {
-            out.push_str(&format!(" quad#{quad_index}"));
+            let _ = write!(out, " quad#{quad_index}");
         }
         if let Some(reifier_id) = self.gts_reifier_id {
-            out.push_str(&format!(" reifier#{reifier_id}"));
+            let _ = write!(out, " reifier#{reifier_id}");
         }
         if let Some(frame_index) = self.gts_frame_index {
-            out.push_str(&format!(" frame#{frame_index}"));
+            let _ = write!(out, " frame#{frame_index}");
         }
         if let Some(segment_index) = self.gts_segment_index {
-            out.push_str(&format!(" segment#{segment_index}"));
+            let _ = write!(out, " segment#{segment_index}");
         }
         out
     }
@@ -164,6 +172,7 @@ impl RdfLoss {
         }
     }
 
+    #[must_use]
     pub fn with_location(mut self, location: RdfLocation) -> Self {
         if !location.is_empty() {
             self.location = Some(Box::new(location));
@@ -199,11 +208,13 @@ impl RdfDiagnostic {
         Self::new(RdfSeverity::Error, code, message)
     }
 
+    #[must_use]
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self
     }
 
+    #[must_use]
     pub fn with_location(mut self, location: RdfLocation) -> Self {
         if !location.is_empty() {
             self.location = Some(Box::new(location));

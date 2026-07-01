@@ -22,11 +22,11 @@ pub enum SliceError {
 impl std::fmt::Display for SliceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SliceError::Io(e) => write!(f, "I/O error: {e}"),
-            SliceError::Parse(msg) => write!(f, "RDF parse error: {msg}"),
-            SliceError::InvalidManifest(msg) => write!(f, "invalid manifest: {msg}"),
-            SliceError::InvalidPath(msg) => write!(f, "invalid path: {msg}"),
-            SliceError::DigestMismatch { expected, actual } => {
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::Parse(msg) => write!(f, "RDF parse error: {msg}"),
+            Self::InvalidManifest(msg) => write!(f, "invalid manifest: {msg}"),
+            Self::InvalidPath(msg) => write!(f, "invalid path: {msg}"),
+            Self::DigestMismatch { expected, actual } => {
                 write!(f, "digest mismatch: expected {expected}, got {actual}")
             }
         }
@@ -36,7 +36,7 @@ impl std::fmt::Display for SliceError {
 impl std::error::Error for SliceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            SliceError::Io(e) => Some(e),
+            Self::Io(e) => Some(e),
             _ => None,
         }
     }
@@ -44,6 +44,6 @@ impl std::error::Error for SliceError {
 
 impl From<std::io::Error> for SliceError {
     fn from(e: std::io::Error) -> Self {
-        SliceError::Io(e)
+        Self::Io(e)
     }
 }

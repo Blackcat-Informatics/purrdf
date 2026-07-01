@@ -105,6 +105,7 @@ impl NativeSparqlEngine {
 
     /// Install a host `GraphResolver` so SPARQL `LOAD <iri>` can fetch its source.
     /// Without one, LOAD hard-fails (`native-sparql-load-no-resolver`) unless SILENT.
+    #[must_use]
     pub fn with_resolver(mut self, resolver: Arc<dyn GraphResolver>) -> Self {
         self.resolver = Some(resolver);
         self
@@ -147,7 +148,7 @@ fn evaluate_with_substitutions(
     prepared: &PreparedQuery,
     substitutions: &[(String, TermValue)],
     ctx: &mut EvalCtx<'_>,
-) -> Result<crate::eval::Outcome, RdfDiagnostic> {
+) -> Result<Outcome, RdfDiagnostic> {
     let eval_err = |e: crate::error::EvalError| {
         RdfDiagnostic::error("native-sparql-query-eval", e.to_string())
     };
@@ -234,10 +235,10 @@ mod tests {
     fn neq_on_distinct_iris_is_true_not_error() {
         // A→B→C plus the forbidden transitive A→C, all purrdf:counterpartOf.
         let mut b = RdfDatasetBuilder::new();
-        let cp = b.intern_iri("http://ex/cp".to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bn = b.intern_iri("http://ex/b".to_owned());
-        let c = b.intern_iri("http://ex/c".to_owned());
+        let cp = b.intern_iri("http://ex/cp");
+        let a = b.intern_iri("http://ex/a");
+        let bn = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
         b.push_quad(a, cp, bn, None);
         b.push_quad(bn, cp, c, None);
         b.push_quad(a, cp, c, None);
@@ -274,10 +275,10 @@ mod tests {
     fn social() -> Arc<RdfDataset> {
         // :a :knows :b ; :a :name "Ann" .
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows".to_owned());
-        let name = b.intern_iri("http://ex/name".to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bb = b.intern_iri("http://ex/b".to_owned());
+        let knows = b.intern_iri("http://ex/knows");
+        let name = b.intern_iri("http://ex/name");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
         let ann = b.intern_literal(RdfLiteral::simple("Ann"));
         b.push_quad(a, knows, bb, None);
         b.push_quad(a, name, ann, None);
@@ -307,13 +308,13 @@ mod tests {
     ///   _:bn :p  :z    (blank-node subject — a SHACL blank focus)
     fn subst_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p".to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bb = b.intern_iri("http://ex/b".to_owned());
-        let x = b.intern_iri("http://ex/x".to_owned());
-        let y = b.intern_iri("http://ex/y".to_owned());
-        let z = b.intern_iri("http://ex/z".to_owned());
-        let bn = b.intern_blank("bn".to_owned(), BlankScope::DEFAULT);
+        let p = b.intern_iri("http://ex/p");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let x = b.intern_iri("http://ex/x");
+        let y = b.intern_iri("http://ex/y");
+        let z = b.intern_iri("http://ex/z");
+        let bn = b.intern_blank("bn", BlankScope::DEFAULT);
         b.push_quad(a, p, x, None);
         b.push_quad(bb, p, y, None);
         b.push_quad(bn, p, z, None);
@@ -464,11 +465,11 @@ mod tests {
         // value properties or neither. The pre-bound focus must be visible inside
         // FILTER/EXISTS; otherwise the EXISTS probes become whole-dataset globals.
         let mut b = RdfDatasetBuilder::new();
-        let iri_prop = b.intern_iri("http://ex/cellValueIri".to_owned());
-        let lit_prop = b.intern_iri("http://ex/cellValueLiteral".to_owned());
-        let one = b.intern_iri("http://ex/one".to_owned());
-        let both = b.intern_iri("http://ex/both".to_owned());
-        let value = b.intern_iri("http://ex/value".to_owned());
+        let iri_prop = b.intern_iri("http://ex/cellValueIri");
+        let lit_prop = b.intern_iri("http://ex/cellValueLiteral");
+        let one = b.intern_iri("http://ex/one");
+        let both = b.intern_iri("http://ex/both");
+        let value = b.intern_iri("http://ex/value");
         let lit = b.intern_literal(RdfLiteral::simple("literal"));
         b.push_quad(one, iri_prop, value, None);
         b.push_quad(both, iri_prop, value, None);
@@ -554,14 +555,14 @@ mod tests {
     ///   ex:g2:   (a,p,y), (a,p,shared)
     fn multigraph() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p".to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let dflt = b.intern_iri("http://ex/dflt".to_owned());
-        let x = b.intern_iri("http://ex/x".to_owned());
-        let y = b.intern_iri("http://ex/y".to_owned());
-        let shared = b.intern_iri("http://ex/shared".to_owned());
-        let g1 = b.intern_iri("http://ex/g1".to_owned());
-        let g2 = b.intern_iri("http://ex/g2".to_owned());
+        let p = b.intern_iri("http://ex/p");
+        let a = b.intern_iri("http://ex/a");
+        let dflt = b.intern_iri("http://ex/dflt");
+        let x = b.intern_iri("http://ex/x");
+        let y = b.intern_iri("http://ex/y");
+        let shared = b.intern_iri("http://ex/shared");
+        let g1 = b.intern_iri("http://ex/g1");
+        let g2 = b.intern_iri("http://ex/g2");
         b.push_quad(a, p, dflt, None);
         b.push_quad(a, p, x, Some(g1));
         b.push_quad(a, p, shared, Some(g1));
@@ -719,8 +720,8 @@ mod tests {
     fn loadable() -> Arc<RdfDataset> {
         // :loaded :p "v" .
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://ex/loaded".to_owned());
-        let p = b.intern_iri("http://ex/p".to_owned());
+        let s = b.intern_iri("http://ex/loaded");
+        let p = b.intern_iri("http://ex/p");
         let o = b.intern_literal(RdfLiteral::simple("v"));
         b.push_quad(s, p, o, None);
         b.freeze().expect("freeze loadable")
@@ -946,13 +947,13 @@ mod tests {
     /// `:r1 :a 1 ; :b 2`, `:r2 :a 1 ; :b 2`, `:r3 :a 2 ; :b 3`.
     fn numbers() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let pa = b.intern_iri("http://ex/a".to_owned());
-        let pb = b.intern_iri("http://ex/b".to_owned());
+        let pa = b.intern_iri("http://ex/a");
+        let pb = b.intern_iri("http://ex/b");
         let int = |b: &mut RdfDatasetBuilder, n: &str| {
             b.intern_literal(RdfLiteral::typed(n.to_owned(), XSD_INT.to_owned()))
         };
         for (subj, a, bv) in [("r1", "1", "2"), ("r2", "1", "2"), ("r3", "2", "3")] {
-            let s = b.intern_iri(format!("http://ex/{subj}"));
+            let s = b.intern_iri(&format!("http://ex/{subj}"));
             let av = int(&mut b, a);
             b.push_quad(s, pa, av, None);
             let bvv = int(&mut b, bv);
@@ -968,7 +969,7 @@ mod tests {
             SparqlResult::Solutions { rows, .. } => {
                 let mut out: Vec<Vec<String>> = rows
                     .iter()
-                    .map(|r| r.iter().map(render_cell).collect())
+                    .map(|r| r.iter().map(|c| render_cell(c.as_ref())).collect())
                     .collect();
                 out.sort();
                 out
@@ -977,7 +978,7 @@ mod tests {
         }
     }
 
-    fn render_cell(cell: &Option<TermValue>) -> String {
+    fn render_cell(cell: Option<&TermValue>) -> String {
         match cell {
             None => "UNBOUND".to_owned(),
             Some(TermValue::Iri(i)) => format!("<{i}>"),
@@ -1081,8 +1082,8 @@ mod tests {
         match r {
             SparqlResult::Solutions { rows, .. } => {
                 assert_eq!(rows.len(), 1);
-                assert_eq!(render_cell(&rows[0][0]), "4"); // SUM = 1+1+2
-                assert_eq!(render_cell(&rows[0][1]), "3"); // COUNT = 3
+                assert_eq!(render_cell(rows[0][0].as_ref()), "4"); // SUM = 1+1+2
+                assert_eq!(render_cell(rows[0][1].as_ref()), "3"); // COUNT = 3
                 assert!(rows[0][2].is_some(), "the ratio must be bound");
             }
             other => panic!("expected solutions, got {other:?}"),
@@ -1119,11 +1120,11 @@ mod tests {
     /// count (3 vs 2) so a different `stats_fingerprint`.
     fn social_plus() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows".to_owned());
-        let name = b.intern_iri("http://ex/name".to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bb = b.intern_iri("http://ex/b".to_owned());
-        let c = b.intern_iri("http://ex/c".to_owned());
+        let knows = b.intern_iri("http://ex/knows");
+        let name = b.intern_iri("http://ex/name");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
         let ann = b.intern_literal(RdfLiteral::simple("Ann"));
         b.push_quad(a, knows, bb, None);
         b.push_quad(a, knows, c, None);

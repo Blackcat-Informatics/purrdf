@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `purrdf-core` -- oxigraph-free, PyO3-free RDF 1.2 kernel for the PURRDF Rust workspace.
+//! `purrdf-core` -- oxigraph-free, PyO3-free RDF 1.2 kernel for the PurRDF Rust workspace.
 //!
 //! This crate is the ring-fenced core (#885 / purrdf P2b) extracted out of
 //! `purrdf`: the immutable value-interned IR, the owned value model, structured
@@ -43,7 +43,7 @@ pub mod fno;
 pub mod ir;
 // Generic provenance sidecar for the immutable RDF 1.2 dataset (#820 S2):
 // UnitId/ArtifactId/OriginSetId newtypes, interners, AssertionOccurrence,
-// DatasetProvenance, and the provenance gate. No PURRDF-specific concepts here.
+// DatasetProvenance, and the provenance gate. No PurRDF-specific concepts here.
 pub mod lookaside;
 pub mod provenance;
 // The machine-readable RDF↔GTS loss ledger and its drift-gated matrix (#819 C0).
@@ -51,7 +51,7 @@ pub mod loss;
 pub mod model;
 // Native SSSOM (Simple Standard for Sharing Ontology Mappings) TSV codec +
 // validator + RDF serializer (#848). PyO3-free; replaces the `sssom` PyPI
-// package's parse+validate behaviour for the PURRDF mapping artifacts.
+// package's parse+validate behaviour for the PurRDF mapping artifacts.
 pub mod sssom;
 pub mod store;
 pub mod turtle;

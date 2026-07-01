@@ -75,13 +75,13 @@ impl EvalError {
 impl core::fmt::Display for EvalError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            EvalError::Parse(msg) => write!(f, "SPARQL parse error: {msg}"),
-            EvalError::Unsupported(what) => {
+            Self::Parse(msg) => write!(f, "SPARQL parse error: {msg}"),
+            Self::Unsupported(what) => {
                 write!(f, "unsupported in sparql-eval (S6 scope): {what}")
             }
-            EvalError::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
-            EvalError::Remote(msg) => write!(f, "SERVICE federation error: {msg}"),
-            EvalError::Data(msg) => write!(f, "malformed RDF input: {msg}"),
+            Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
+            Self::Remote(msg) => write!(f, "SERVICE federation error: {msg}"),
+            Self::Data(msg) => write!(f, "malformed RDF input: {msg}"),
         }
     }
 }
@@ -90,7 +90,7 @@ impl std::error::Error for EvalError {}
 
 impl From<ParseError> for EvalError {
     fn from(err: ParseError) -> Self {
-        EvalError::Parse(err.to_string())
+        Self::Parse(err.to_string())
     }
 }
 

@@ -87,7 +87,7 @@ struct CompiledPattern {
 /// (non-blank) variables.
 pub(crate) fn eval_bgp(
     patterns: &[TriplePattern],
-    ctx: &mut EvalCtx<'_>,
+    ctx: &EvalCtx<'_>,
 ) -> Result<SolutionSeq, EvalError> {
     // The empty BGP is the identity table Z: one solution binding nothing.
     if patterns.is_empty() {
@@ -498,7 +498,7 @@ fn cost_order_dp(compiled: &[CompiledPattern], base: &[f64], t: f64, n_cols: usi
         assert!(
             COST_DP_MAX_PATTERNS <= 15,
             "COST_DP_MAX_PATTERNS must be ≤ 15 so every index fits in a 4-bit nibble"
-        )
+        );
     };
 
     let full: usize = (1usize << n) - 1;
@@ -673,17 +673,14 @@ fn compile_pattern(
     schema: &VarSchema,
     dataset: &RdfDataset,
 ) -> Result<Option<CompiledPattern>, EvalError> {
-    let s = match compile_term(&pattern.subject, schema, dataset)? {
-        Some(pos) => pos,
-        None => return Ok(None),
+    let Some(s) = compile_term(&pattern.subject, schema, dataset)? else {
+        return Ok(None);
     };
-    let p = match compile_predicate(&pattern.predicate, schema, dataset) {
-        Some(pos) => pos,
-        None => return Ok(None),
+    let Some(p) = compile_predicate(&pattern.predicate, schema, dataset) else {
+        return Ok(None);
     };
-    let o = match compile_term(&pattern.object, schema, dataset)? {
-        Some(pos) => pos,
-        None => return Ok(None),
+    let Some(o) = compile_term(&pattern.object, schema, dataset)? else {
+        return Ok(None);
     };
     Ok(Some(CompiledPattern { s, p, o }))
 }
@@ -726,17 +723,14 @@ fn compile_triple_pos(
     schema: &VarSchema,
     dataset: &RdfDataset,
 ) -> Result<Option<TriplePos>, EvalError> {
-    let s = match compile_term(&triple.subject, schema, dataset)? {
-        Some(pos) => pos,
-        None => return Ok(None),
+    let Some(s) = compile_term(&triple.subject, schema, dataset)? else {
+        return Ok(None);
     };
-    let p = match compile_predicate(&triple.predicate, schema, dataset) {
-        Some(pos) => pos,
-        None => return Ok(None),
+    let Some(p) = compile_predicate(&triple.predicate, schema, dataset) else {
+        return Ok(None);
     };
-    let o = match compile_term(&triple.object, schema, dataset)? {
-        Some(pos) => pos,
-        None => return Ok(None),
+    let Some(o) = compile_term(&triple.object, schema, dataset)? else {
+        return Ok(None);
     };
     Ok(Some(TriplePos { s, p, o }))
 }
@@ -1003,11 +997,11 @@ mod tests {
     ///   :carol :knows :alice .
     fn social_graph() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows".to_owned());
-        let name = b.intern_iri("http://ex/name".to_owned());
-        let alice = b.intern_iri("http://ex/alice".to_owned());
-        let bob = b.intern_iri("http://ex/bob".to_owned());
-        let carol = b.intern_iri("http://ex/carol".to_owned());
+        let knows = b.intern_iri("http://ex/knows");
+        let name = b.intern_iri("http://ex/name");
+        let alice = b.intern_iri("http://ex/alice");
+        let bob = b.intern_iri("http://ex/bob");
+        let carol = b.intern_iri("http://ex/carol");
         let alice_name = b.intern_literal(RdfLiteral::simple("Alice"));
         b.push_quad(alice, knows, bob, None);
         b.push_quad(bob, knows, carol, None);
@@ -1043,8 +1037,8 @@ mod tests {
         patterns: &[TriplePattern],
         vars: &[&str],
     ) -> Vec<Vec<Option<TermValue>>> {
-        let mut ctx = EvalCtx::new(ds);
-        let seq = eval_bgp(patterns, &mut ctx).expect("bgp");
+        let ctx = EvalCtx::new(ds);
+        let seq = eval_bgp(patterns, &ctx).expect("bgp");
         let cols: Vec<usize> = vars
             .iter()
             .map(|v| {
@@ -1150,9 +1144,9 @@ mod tests {
     fn repeated_variable_requires_self_loop() {
         // A graph with one genuine self-loop and one non-loop edge.
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p".to_owned());
-        let x = b.intern_iri("http://ex/x".to_owned());
-        let y = b.intern_iri("http://ex/y".to_owned());
+        let p = b.intern_iri("http://ex/p");
+        let x = b.intern_iri("http://ex/x");
+        let y = b.intern_iri("http://ex/y");
         b.push_quad(x, p, x, None); // self-loop
         b.push_quad(x, p, y, None); // not a loop
         let ds = b.freeze().expect("freeze");
@@ -1183,8 +1177,8 @@ mod tests {
             pred("http://ex/knows"),
             var_pos("o"),
         )];
-        let mut ctx = EvalCtx::new(&ds);
-        let seq = eval_bgp(&patterns, &mut ctx).expect("bgp");
+        let ctx = EvalCtx::new(&ds);
+        let seq = eval_bgp(&patterns, &ctx).expect("bgp");
         // Only ?o is a real column; the blank slot was projected away.
         assert_eq!(seq.schema.vars(), &[Variable::new("o")]);
         assert_eq!(seq.len(), 3); // three knows-edges, one row each.
@@ -1202,9 +1196,9 @@ mod tests {
     /// from the side-tables, not from `quads`.
     fn reified_graph() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let age = b.intern_iri("http://ex/age".to_owned());
-        let alice = b.intern_iri("http://ex/alice".to_owned());
-        let bob = b.intern_iri("http://ex/bob".to_owned());
+        let age = b.intern_iri("http://ex/age");
+        let alice = b.intern_iri("http://ex/alice");
+        let bob = b.intern_iri("http://ex/bob");
         let forty_two = b.intern_literal(RdfLiteral::typed(
             "42",
             "http://www.w3.org/2001/XMLSchema#integer",
@@ -1214,12 +1208,12 @@ mod tests {
             "http://www.w3.org/2001/XMLSchema#integer",
         ));
         let statement = b.intern_triple(alice, age, forty_two);
-        let r1 = b.intern_iri("http://ex/r1".to_owned());
-        let reifies = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies".to_owned());
-        let confidence = b.intern_iri("http://ex/confidence".to_owned());
-        let source = b.intern_iri("http://ex/source".to_owned());
+        let r1 = b.intern_iri("http://ex/r1");
+        let reifies = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies");
+        let confidence = b.intern_iri("http://ex/confidence");
+        let source = b.intern_iri("http://ex/source");
         let high = b.intern_literal(RdfLiteral::simple("high"));
-        let census = b.intern_iri("http://ex/census".to_owned());
+        let census = b.intern_iri("http://ex/census");
 
         // The interned `reifies` id is the virtual predicate; keep it referenced.
         let _ = reifies;
@@ -1505,19 +1499,19 @@ mod tests {
 
     fn skewed_graph() -> Skewed {
         let mut b = RdfDatasetBuilder::new();
-        let hot = b.intern_iri("http://ex/hot".to_owned());
-        let mid = b.intern_iri("http://ex/mid".to_owned());
-        let rare = b.intern_iri("http://ex/rare".to_owned());
-        let hub = b.intern_iri("http://ex/hub".to_owned());
+        let hot = b.intern_iri("http://ex/hot");
+        let mid = b.intern_iri("http://ex/mid");
+        let rare = b.intern_iri("http://ex/rare");
+        let hub = b.intern_iri("http://ex/hub");
         for i in 0..20 {
-            let leaf = b.intern_iri(format!("http://ex/hot{i}"));
+            let leaf = b.intern_iri(&format!("http://ex/hot{i}"));
             b.push_quad(hub, hot, leaf, None);
         }
         for i in 0..5 {
-            let leaf = b.intern_iri(format!("http://ex/mid{i}"));
+            let leaf = b.intern_iri(&format!("http://ex/mid{i}"));
             b.push_quad(hub, mid, leaf, None);
         }
-        let only = b.intern_iri("http://ex/rare0".to_owned());
+        let only = b.intern_iri("http://ex/rare0");
         b.push_quad(hub, rare, only, None);
         Skewed {
             ds: b.freeze().expect("freeze"),
@@ -1590,7 +1584,7 @@ mod tests {
         let p1 = cp(Pos::Slot(2), Pos::Bound(g.rare), Pos::Slot(3)); // 1, disconnected
         let order = plan(&g.ds, &[p0, p1]);
         assert_eq!(order, vec![1, 0]); // cheaper disconnected pattern first.
-        let mut sorted = order.clone();
+        let mut sorted = order;
         sorted.sort_unstable();
         assert_eq!(sorted, vec![0, 1]); // a genuine permutation of 0..n.
     }
@@ -1636,9 +1630,9 @@ mod tests {
     #[test]
     fn all_ground_bgp_orders_without_panicking() {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p".to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let c = b.intern_iri("http://ex/c".to_owned());
+        let p = b.intern_iri("http://ex/p");
+        let a = b.intern_iri("http://ex/a");
+        let c = b.intern_iri("http://ex/c");
         b.push_quad(a, p, c, None);
         b.push_quad(c, p, a, None);
         let ds = b.freeze().expect("freeze");
@@ -1647,7 +1641,7 @@ mod tests {
         let p1 = cp(Pos::Bound(c), Pos::Bound(p), Pos::Bound(a)); // card 1
         let order = plan(&ds, &[p0, p1]);
         assert_eq!(order, vec![0, 1]);
-        let mut sorted = order.clone();
+        let mut sorted = order;
         sorted.sort_unstable();
         assert_eq!(sorted, vec![0, 1]);
     }
@@ -1666,7 +1660,7 @@ mod tests {
         let order = plan(&g.ds, &[p0, p1, p2]);
         // Ascending cardinality: rare (idx 2), mid (idx 1), hot (idx 0).
         assert_eq!(order, vec![2, 1, 0]);
-        let mut sorted = order.clone();
+        let mut sorted = order;
         sorted.sort_unstable();
         assert_eq!(sorted, vec![0, 1, 2]); // valid permutation, every spoke present.
     }
@@ -1725,7 +1719,7 @@ mod tests {
             .map(|i| cp(Pos::Slot(i), Pos::Bound(g.hot), Pos::Slot(i + 1)))
             .collect();
         let order = plan(&g.ds, &compiled);
-        let mut sorted = order.clone();
+        let mut sorted = order;
         sorted.sort_unstable();
         assert_eq!(sorted, (0..n).collect::<Vec<_>>());
     }
@@ -1793,8 +1787,8 @@ mod tests {
         for k in 1..=order.len() {
             let prefix: Vec<TriplePattern> =
                 order[..k].iter().map(|&i| patterns[i].clone()).collect();
-            let mut ctx = EvalCtx::new(ds);
-            total += eval_bgp(&prefix, &mut ctx).expect("bgp").rows.len();
+            let ctx = EvalCtx::new(ds);
+            total += eval_bgp(&prefix, &ctx).expect("bgp").rows.len();
         }
         total
     }
@@ -1807,11 +1801,11 @@ mod tests {
     fn cost_order_materialises_fewer_rows_than_structural() {
         // Skewed fixture: hub --pred--> N leaves, for N ∈ {20, 10, 5, 1}.
         let mut b = RdfDatasetBuilder::new();
-        let hub = b.intern_iri("http://ex/hub".to_owned());
+        let hub = b.intern_iri("http://ex/hub");
         for (name, count) in [("hot", 20), ("warm", 10), ("mid", 5), ("rare", 1)] {
-            let pred_id = b.intern_iri(format!("http://ex/{name}"));
+            let pred_id = b.intern_iri(&format!("http://ex/{name}"));
             for i in 0..count {
-                let leaf = b.intern_iri(format!("http://ex/{name}{i}"));
+                let leaf = b.intern_iri(&format!("http://ex/{name}{i}"));
                 b.push_quad(hub, pred_id, leaf, None);
             }
         }

@@ -34,15 +34,16 @@ impl XfailReason {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            XfailReason::UnsupportedConstruct => "unsupported-construct",
-            XfailReason::PendingService => "pending-service",
-            XfailReason::NonDeterministic => "non-deterministic",
-            XfailReason::UpstreamErratum => "upstream-erratum",
+            Self::UnsupportedConstruct => "unsupported-construct",
+            Self::PendingService => "pending-service",
+            Self::NonDeterministic => "non-deterministic",
+            Self::UpstreamErratum => "upstream-erratum",
         }
     }
 }
 
 /// One registered expected failure: a case-IRI local-name suffix plus its reason.
+#[derive(Debug)]
 pub struct Xfail {
     /// Match when the case IRI ends with this string (usually its local name).
     pub iri_suffix: &'static str,

@@ -103,9 +103,7 @@ fn main() -> ExitCode {
     };
     let mut sink = CountingSink::default();
     let result = read_to_sink_from_reader(file, ReadOptions::new(true, None), &mut sink);
-    let peak = linux_peak_kib()
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "null".to_string());
+    let peak = linux_peak_kib().map_or_else(|| "null".to_string(), |value| value.to_string());
     println!(
         concat!(
             "{{",

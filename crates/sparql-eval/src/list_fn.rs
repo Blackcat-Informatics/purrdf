@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The PURRDF `rdf:List` SPARQL extension functions.
+//! The PurRDF `rdf:List` SPARQL extension functions.
 //!
 //! These bind the FnO list primitives — `listLength`, `listGet`, `listIndexOf`,
 //! `listSlice`, `listConcat`, `listContains` — to executable SPARQL extension
@@ -39,7 +39,7 @@ const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
 const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
 const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 
-/// Evaluate a PURRDF `rdf:List` extension function.
+/// Evaluate a PurRDF `rdf:List` extension function.
 ///
 /// The parser has already resolved the call to a [`PurrdfFn`] variant, so this is a
 /// total dispatch over the six list functions. The result follows the usual
@@ -455,17 +455,17 @@ mod tests {
     /// `ex:q ex:list ex:l0` so a BGP can bind the head.
     fn list_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri(super::RDF_FIRST.to_owned());
-        let rest = b.intern_iri(super::RDF_REST.to_owned());
-        let nil = b.intern_iri(super::RDF_NIL.to_owned());
-        let l0 = b.intern_iri("http://ex/l0".to_owned());
-        let l1 = b.intern_iri("http://ex/l1".to_owned());
-        let l2 = b.intern_iri("http://ex/l2".to_owned());
-        let x = b.intern_iri("http://ex/x".to_owned());
-        let y = b.intern_iri("http://ex/y".to_owned());
-        let z = b.intern_iri("http://ex/z".to_owned());
-        let q = b.intern_iri("http://ex/q".to_owned());
-        let list = b.intern_iri("http://ex/list".to_owned());
+        let first = b.intern_iri(super::RDF_FIRST);
+        let rest = b.intern_iri(super::RDF_REST);
+        let nil = b.intern_iri(super::RDF_NIL);
+        let l0 = b.intern_iri("http://ex/l0");
+        let l1 = b.intern_iri("http://ex/l1");
+        let l2 = b.intern_iri("http://ex/l2");
+        let x = b.intern_iri("http://ex/x");
+        let y = b.intern_iri("http://ex/y");
+        let z = b.intern_iri("http://ex/z");
+        let q = b.intern_iri("http://ex/q");
+        let list = b.intern_iri("http://ex/list");
         b.push_quad(l0, first, x, None);
         b.push_quad(l0, rest, l1, None);
         b.push_quad(l1, first, y, None);
@@ -622,14 +622,14 @@ mod tests {
     fn cyclic_list_is_a_hard_data_error() {
         // l0 -> first x, rest l1 ; l1 -> first y, rest l0  (a cycle, no rdf:nil).
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri(super::RDF_FIRST.to_owned());
-        let rest = b.intern_iri(super::RDF_REST.to_owned());
-        let nil = b.intern_iri(super::RDF_NIL.to_owned()); // present so the walk starts
-        let l0 = b.intern_iri("http://ex/l0".to_owned());
-        let l1 = b.intern_iri("http://ex/l1".to_owned());
-        let x = b.intern_iri("http://ex/x".to_owned());
-        let y = b.intern_iri("http://ex/y".to_owned());
-        let z = b.intern_iri("http://ex/z".to_owned());
+        let first = b.intern_iri(super::RDF_FIRST);
+        let rest = b.intern_iri(super::RDF_REST);
+        let nil = b.intern_iri(super::RDF_NIL); // present so the walk starts
+        let l0 = b.intern_iri("http://ex/l0");
+        let l1 = b.intern_iri("http://ex/l1");
+        let x = b.intern_iri("http://ex/x");
+        let y = b.intern_iri("http://ex/y");
+        let z = b.intern_iri("http://ex/z");
         b.push_quad(l0, first, x, None);
         b.push_quad(l0, rest, l1, None);
         b.push_quad(l1, first, y, None);
@@ -655,10 +655,10 @@ mod tests {
         const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
         const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri(super::RDF_FIRST.to_owned());
-        let rest = b.intern_iri(super::RDF_REST.to_owned());
-        let nil = b.intern_iri(super::RDF_NIL.to_owned());
-        let l0 = b.intern_iri("http://ex/l0".to_owned());
+        let first = b.intern_iri(super::RDF_FIRST);
+        let rest = b.intern_iri(super::RDF_REST);
+        let nil = b.intern_iri(super::RDF_NIL);
+        let l0 = b.intern_iri("http://ex/l0");
         let one_int = b.intern_literal(RdfLiteral::typed("1", XSD_INTEGER));
         b.push_quad(l0, first, one_int, None);
         b.push_quad(l0, rest, nil, None);
@@ -692,14 +692,14 @@ mod tests {
     fn torn_list_missing_rest_is_a_hard_data_error() {
         // l0 -> first x, rest l1 ; l1 -> first y  (no rdf:rest on the 2nd cell).
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri(super::RDF_FIRST.to_owned());
-        let rest = b.intern_iri(super::RDF_REST.to_owned());
-        let nil = b.intern_iri(super::RDF_NIL.to_owned());
-        let l0 = b.intern_iri("http://ex/l0".to_owned());
-        let l1 = b.intern_iri("http://ex/l1".to_owned());
-        let x = b.intern_iri("http://ex/x".to_owned());
-        let y = b.intern_iri("http://ex/y".to_owned());
-        let z = b.intern_iri("http://ex/z".to_owned());
+        let first = b.intern_iri(super::RDF_FIRST);
+        let rest = b.intern_iri(super::RDF_REST);
+        let nil = b.intern_iri(super::RDF_NIL);
+        let l0 = b.intern_iri("http://ex/l0");
+        let l1 = b.intern_iri("http://ex/l1");
+        let x = b.intern_iri("http://ex/x");
+        let y = b.intern_iri("http://ex/y");
+        let z = b.intern_iri("http://ex/z");
         b.push_quad(l0, first, x, None);
         b.push_quad(l0, rest, l1, None);
         b.push_quad(l1, first, y, None);
@@ -717,12 +717,12 @@ mod tests {
     fn torn_list_interior_missing_first_is_a_hard_data_error() {
         // l0 -> first x, rest l1 ; l1 -> rest nil  (no rdf:first on the interior cell).
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri(super::RDF_FIRST.to_owned());
-        let rest = b.intern_iri(super::RDF_REST.to_owned());
-        let nil = b.intern_iri(super::RDF_NIL.to_owned());
-        let l0 = b.intern_iri("http://ex/l0".to_owned());
-        let l1 = b.intern_iri("http://ex/l1".to_owned());
-        let x = b.intern_iri("http://ex/x".to_owned());
+        let first = b.intern_iri(super::RDF_FIRST);
+        let rest = b.intern_iri(super::RDF_REST);
+        let nil = b.intern_iri(super::RDF_NIL);
+        let l0 = b.intern_iri("http://ex/l0");
+        let l1 = b.intern_iri("http://ex/l1");
+        let x = b.intern_iri("http://ex/x");
         b.push_quad(l0, first, x, None);
         b.push_quad(l0, rest, l1, None);
         // l1 has rdf:rest but no rdf:first — torn, and `members` is already non-empty
@@ -741,12 +741,12 @@ mod tests {
         // A cell carrying two rdf:first quads is ambiguous — hard-fail rather than
         // pick an iteration-order-dependent branch.
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri(super::RDF_FIRST.to_owned());
-        let rest = b.intern_iri(super::RDF_REST.to_owned());
-        let nil = b.intern_iri(super::RDF_NIL.to_owned());
-        let l0 = b.intern_iri("http://ex/l0".to_owned());
-        let x = b.intern_iri("http://ex/x".to_owned());
-        let y = b.intern_iri("http://ex/y".to_owned());
+        let first = b.intern_iri(super::RDF_FIRST);
+        let rest = b.intern_iri(super::RDF_REST);
+        let nil = b.intern_iri(super::RDF_NIL);
+        let l0 = b.intern_iri("http://ex/l0");
+        let x = b.intern_iri("http://ex/x");
+        let y = b.intern_iri("http://ex/y");
         b.push_quad(l0, first, x, None);
         b.push_quad(l0, first, y, None); // a second rdf:first — malformed
         b.push_quad(l0, rest, nil, None);

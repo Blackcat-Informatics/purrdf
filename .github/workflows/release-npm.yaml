@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+name: Release npm purrdf
+
+# On an npm-v* tag, build the wasm engine, verify, and publish the
+# `@blackcatinformatics/purrdf` package to the npm registry.
+#
+# Auth, in order of preference:
+#   1. npm trusted publishing (OIDC) — requires a Trusted Publisher configured
+#      on npmjs.com for this package:
+#        Publisher: GitHub Actions · Owner: Blackcat-Informatics · Repo: purrdf
+#        Workflow: release-npm.yaml · Environment: (none)
+#   2. the NPM_TOKEN repository secret — bootstrap only, for the very first
+#      publish (a trusted publisher can only be configured once the package
+#      exists). Delete the token and the secret after configuring the trusted
+#      publisher; the workflow then uses OIDC automatically.
+
+on:
+  push:
+    tags:
+      - 'npm-v*'
+
+concurrency:
+  group: release-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Validate tag matches package version
+        working-directory: crates/rdf-wasm/js
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#npm-v}"
+          PKG_VERSION="$(node -p 'require("./package.json").version')"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag version $TAG_VERSION does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-bindgen-cli (must match the workspace wasm-bindgen pin)
+        run: |
+          PIN="$(grep -oP 'wasm-bindgen = "=\K[0-9.]+' Cargo.toml)"
+          test -n "$PIN" || { echo "could not read the wasm-bindgen pin from Cargo.toml"; exit 1; }
+          cargo install wasm-bindgen-cli --version "$PIN" --locked
+
+      - name: Install binaryen (wasm-opt)
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: Build the wasm package
+        run: make wasm-pkg
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+
+      - name: Upgrade npm (trusted publishing needs npm >= 11.5.1)
+        run: npm install -g npm@latest
+
+      - name: Run the Node real-execution test suite
+        working-directory: crates/rdf-wasm/js
+        run: node --test tests/*.test.mjs
+
+      - name: Pack the tarball (for attestation + SBOM)
+        working-directory: crates/rdf-wasm/js
+        run: npm pack
+
+      - name: Attest build provenance for the tarball
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: crates/rdf-wasm/js/*.tgz
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: crates/rdf-wasm/js
+          format: spdx-json
+          output-file: sbom-npm-purrdf.spdx.json
+          upload-artifact: false
+
+      - name: Attest SBOM for npm tarball
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: crates/rdf-wasm/js/*.tgz
+          sbom-path: sbom-npm-purrdf.spdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sbom-npm-purrdf
+          path: sbom-npm-purrdf.spdx.json
+
+      - name: Upload packed tarball
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dist-npm-purrdf
+          path: crates/rdf-wasm/js/*.tgz
+
+      - name: Publish to npm
+        working-directory: crates/rdf-wasm/js
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # With no NPM_TOKEN secret, npm authenticates via the GitHub OIDC token
+        # and the configured Trusted Publisher; npm's own sigstore provenance is
+        # generated automatically (in addition to the GitHub attestation above).
+        # The token branch exists only to bootstrap the first publish.
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
+            NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish --access public
+            rm -f "$HOME/.npmrc"
+          else
+            npm publish --access public
+          fi

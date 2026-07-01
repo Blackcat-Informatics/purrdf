@@ -185,6 +185,6 @@ fn contract_skips_empty_prefix_binding() {
         Some("ex:Thing")
     );
     // With ONLY an empty-prefix binding, contraction yields nothing (not ":X").
-    let only_empty: PrefixMap = [("", "http://example.org/")].into_iter().collect();
+    let only_empty: PrefixMap = std::iter::once(("", "http://example.org/")).collect();
     assert_eq!(contract("http://example.org/Thing", &only_empty), None);
 }

@@ -20,6 +20,7 @@ use crate::{RdfDataset, RdfTerm, RdfTriple, SparqlResult, TermValue};
 
 /// SELECT results, materialized. Mirrors the oxigraph Python `QuerySolutions`.
 #[pyclass(name = "QuerySolutions")]
+#[derive(Debug)]
 pub struct PyQuerySolutions {
     variables: Vec<String>,
     rows: Vec<Vec<Option<RdfTerm>>>,
@@ -61,6 +62,7 @@ impl PyQuerySolutions {
 
 /// A single SELECT solution row. Mirrors the oxigraph Python `QuerySolution`.
 #[pyclass(name = "QuerySolution")]
+#[derive(Debug)]
 pub struct PyQuerySolution {
     variables: Vec<String>,
     row: Vec<Option<RdfTerm>>,
@@ -101,6 +103,7 @@ impl PyQuerySolution {
 
 /// CONSTRUCT results, materialized. Mirrors the oxigraph Python `QueryTriples`.
 #[pyclass(name = "QueryTriples")]
+#[derive(Debug)]
 pub struct PyQueryTriples {
     pub(crate) triples: Vec<RdfTriple>,
     pos: usize,
@@ -140,6 +143,7 @@ impl PyQueryTriples {
 
 /// An ASK result. Mirrors the oxigraph Python `QueryBoolean`.
 #[pyclass(name = "QueryBoolean")]
+#[derive(Debug)]
 pub struct PyQueryBoolean {
     value: bool,
 }
@@ -227,7 +231,7 @@ pub(crate) fn term_value_to_rdf(value: TermValue) -> RdfTerm {
             // The native IR carries the datatype IRI by value (always present); the
             // owned model keeps a plain `xsd:string` / lang `rdf:langString` literal
             // datatype-less, so collapse those back to `None` for term parity.
-            datatype: collapse_synthetic_datatype(&datatype, &language),
+            datatype: collapse_synthetic_datatype(&datatype, language.as_ref()),
             lexical_form,
             language,
             direction,
@@ -246,7 +250,7 @@ const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langSt
 /// Drop the `TermValue` synthetic datatype IRI when it is the one the owned model
 /// leaves implicit: `xsd:string` for a plain literal, `rdf:langString` for a
 /// language-tagged one. Any other datatype is kept verbatim.
-fn collapse_synthetic_datatype(datatype: &str, language: &Option<String>) -> Option<String> {
+fn collapse_synthetic_datatype(datatype: &str, language: Option<&String>) -> Option<String> {
     if language.is_some() {
         return (datatype != RDF_LANG_STRING).then(|| datatype.to_owned());
     }

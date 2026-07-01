@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Native DSL surface-count emission — PURRDF's committed, drift-gated
+//! Native DSL surface-count emission — PurRDF's committed, drift-gated
 //! `generated/mappings/dsl-stats.json` (#861).
 //!
 //! Emits the counts summary over the SAME merged mapping-DSL source set every
@@ -103,6 +103,7 @@ fn render_stats(
     mapping_sets: u64,
     projections: u64,
 ) -> String {
+    use std::fmt::Write as _;
     let mut out = String::new();
     out.push_str("{\n");
 
@@ -119,16 +120,16 @@ fn render_stats(
                 out.push_str(",\n");
             }
             first = false;
-            out.push_str(&format!("  {}: {count}", json_string(file)));
+            let _ = write!(out, "  {}: {count}", json_string(file));
         }
         out.push_str("\n }");
     }
     out.push_str(",\n");
 
-    out.push_str(&format!(" \"equivalences\": {equivalences},\n"));
-    out.push_str(&format!(" \"functions\": {functions},\n"));
-    out.push_str(&format!(" \"mapping_sets\": {mapping_sets},\n"));
-    out.push_str(&format!(" \"projections\": {projections}\n"));
+    let _ = writeln!(out, " \"equivalences\": {equivalences},");
+    let _ = writeln!(out, " \"functions\": {functions},");
+    let _ = writeln!(out, " \"mapping_sets\": {mapping_sets},");
+    let _ = writeln!(out, " \"projections\": {projections}");
     out.push_str("}\n");
     out
 }

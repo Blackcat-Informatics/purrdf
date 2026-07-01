@@ -28,7 +28,7 @@ fn collect_rq(dir: &Path, out: &mut Vec<PathBuf>) {
         let path = entry.unwrap().path();
         if path.is_dir() {
             collect_rq(&path, out);
-        } else if path.extension().map(|x| x == "rq").unwrap_or(false) {
+        } else if path.extension().is_some_and(|x| x == "rq") {
             out.push(path);
         }
     }

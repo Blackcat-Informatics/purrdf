@@ -126,9 +126,8 @@ pub fn collect_corpus_files() -> Vec<PathBuf> {
 }
 
 fn collect_rq_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
     for entry in entries.flatten() {
         let path = entry.path();

@@ -111,7 +111,7 @@ fn config() -> ProptestConfig {
 /// property would pass trivially on always-empty reports.
 #[test]
 fn shapes_detect_violations() {
-    let data = format!("<{EX}s0> <{RDF_TYPE}> <{EX}Thing> .\n<{EX}s0> <{EX}val> \"oops\" .",);
+    let data = format!("<{EX}s0> <{RDF_TYPE}> <{EX}Thing> .\n<{EX}s0> <{EX}val> \"oops\" .");
     let report = validate_graphs(&data, SHAPES_TTL).expect("validate");
     assert!(
         !report.result_tuples().is_empty(),
@@ -129,7 +129,7 @@ proptest! {
         extra in prop::collection::vec(arb_fact(), 0..8),
     ) {
         let base_nt = to_ntriples(&base);
-        let mut combined = base.clone();
+        let mut combined = base;
         combined.extend(extra);
         let combined_nt = to_ntriples(&combined);
 

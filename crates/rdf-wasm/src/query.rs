@@ -43,22 +43,25 @@ impl Dataset {
     /// `LOAD` clause (unresolvable in-browser) throws a JsError — never a silent
     /// empty result.
     #[wasm_bindgen(js_name = query)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn query(&self, sparql: &str, base: Option<String>) -> Result<String, JsError> {
         // Compact the COW delta to a frozen, shareable base the evaluator reads.
-        let frozen = self.inner.freeze().map_err(diag_to_err)?;
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         let engine = NativeSparqlEngine::new();
         let request = SparqlRequest {
             query: sparql,
             base_iri: base.as_deref(),
             substitutions: &[],
         };
-        let result = engine.query(&frozen, request).map_err(diag_to_err)?;
+        let result = engine
+            .query(&frozen, request)
+            .map_err(|e| diag_to_err(&e))?;
         match result {
             // CONSTRUCT / DESCRIBE: emit the result graph as Turtle through the one
             // native serialization seam.
             SparqlResult::Graph(graph) => {
                 let bytes = serialize_dataset(&graph, "text/turtle", SerializeGraph::Dataset)
-                    .map_err(diag_to_err)?;
+                    .map_err(|e| diag_to_err(&e))?;
                 String::from_utf8(bytes)
                     .map_err(|e| JsError::new(&format!("CONSTRUCT result is not valid UTF-8: {e}")))
             }

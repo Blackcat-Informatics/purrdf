@@ -1,8 +1,8 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-labelledby="t d">
-  <title id="t">PURRDF</title>
-  <desc id="d">RDF 1.2 primitives, GTS graph transport, SHACL and ShEx shapes, and SPARQL support.</desc>
+  <title id="t">PurRDF</title>
+  <desc id="d">RDF 1.2 primitives and codecs, SPARQL, SHACL validation, and GTS graph transport for Rust, Python, WebAssembly, and C.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0b0f17"/>
@@ -27,7 +27,7 @@
 
   <rect width="1280" height="640" fill="url(#bg)"/>
 
-  <!-- PURRDF logo (cat + append-only chain), reused from docs/purrdf-logo.svg -->
+  <!-- PurRDF logo (cat + RDF triple), reused from docs/purrdf-logo.svg -->
   <g transform="translate(48,98) scale(0.435)" filter="url(#glow)">
     <g class="cat-head-core">
       <path class="cat" d="M512 268 C548 268 583 272 616 282 C677 204 777 116 811 119 C833 154 842 280 825 374 C820 405 813 434 804 459 C820 474 842 481 864 478 C853 507 827 529 794 540 C817 551 841 555 867 552 C850 580 817 601 776 607 C737 694 635 750 512 750 C389 750 287 694 248 607 C207 601 174 580 157 552 C183 555 207 551 230 540 C197 529 171 507 160 478 C182 481 204 474 220 459 C211 434 204 405 199 374 C182 280 191 154 213 119 C247 116 347 204 408 282 C441 272 476 268 512 268 Z"/>
@@ -49,21 +49,20 @@
         <path class="feature-stroke" d="M788 585 C723 572 663 578 608 599"/>
       </g>
     </g>
-    <g class="service-chain">
-      <path class="edge" stroke="#4285f4" stroke-width="13" d="M438 668 L438 848"/>
-      <rect class="frame" x="449" y="636" width="150" height="64" rx="14"/>
-      <rect class="frame" x="449" y="726" width="150" height="64" rx="14"/>
-      <rect class="frame" x="449" y="816" width="150" height="64" rx="14"/>
-      <circle class="node" cx="438" cy="668" r="14"/>
-      <circle class="node" cx="438" cy="758" r="14"/>
-      <circle class="node" cx="438" cy="848" r="14"/>
-      <circle cx="479" cy="668" r="11" fill="#ea4335"/>
-      <circle cx="479" cy="758" r="11" fill="#fbbc05"/>
-      <circle cx="479" cy="848" r="11" fill="#34a853"/>
+    <g class="service-triple">
+      <path class="edge" stroke="#4285f4" stroke-width="12" d="M538 682 L629 760"/>
+      <polygon fill="#4285f4" points="647,776 635,750 620,768"/>
+      <path class="edge" stroke="#ea4335" stroke-width="12" d="M490 686 L437 746"/>
+      <polygon fill="#ea4335" points="420,766 428,738 446,754"/>
+      <path class="edge" stroke="#34a853" stroke-width="12" d="M639 798 L474 798"/>
+      <polygon fill="#34a853" points="444,798 470,786 470,810"/>
+      <circle class="node" cx="512" cy="660" r="34"/>
+      <circle class="node" cx="672" cy="798" r="33"/>
+      <rect class="frame" x="292" y="766" width="150" height="64" rx="14"/>
+      <circle cx="326" cy="798" r="11" fill="#fbbc05"/>
       <g class="content-line">
-        <path d="M505 656 L575 656"/><path d="M505 680 L552 680"/>
-        <path d="M505 746 L575 746"/><path d="M505 770 L552 770"/>
-        <path d="M505 836 L575 836"/><path d="M505 860 L552 860"/>
+        <path d="M352 784 L412 784"/>
+        <path d="M352 812 L389 812"/>
       </g>
     </g>
     <g class="cat">
@@ -74,28 +73,26 @@
   </g>
 
   <!-- Text block -->
-  <text class="title" x="566" y="214" font-size="128" fill="#ffffff" letter-spacing="2">PURRDF</text>
-  <text class="body" x="570" y="282" font-size="44" fill="#c9d6e8">RDF primitives and graph transport</text>
-  <text class="body" x="570" y="354" font-size="32" fill="#7fa8ff">GTS, SHACL, ShEx, SPARQL, and native codecs.</text>
+  <text class="title" x="566" y="204" font-size="122" fill="#ffffff" letter-spacing="2">PurRDF</text>
+  <text class="body" x="570" y="272" font-size="40" fill="#c9d6e8">The RDF 1.2 toolkit with a purr</text>
+  <text class="body" x="570" y="336" font-size="28" fill="#7fa8ff">Turtle · TriG · N-Quads · RDF/XML · JSON-LD</text>
+  <text class="body" x="570" y="376" font-size="28" fill="#7fa8ff">SPARQL 1.2 · SHACL · RDFC-1.0 · GTS transport</text>
 
   <!-- Language chips -->
   <g class="body" font-size="30" fill="#dbe4f0">
-    <circle cx="582" cy="430" r="11" fill="#ea4335"/><text x="602" y="440">Rust</text>
-    <circle cx="712" cy="430" r="11" fill="#4285f4"/><text x="732" y="440">Python</text>
-    <circle cx="876" cy="430" r="11" fill="#34a853"/><text x="896" y="440">Go</text>
-    <circle cx="968" cy="430" r="11" fill="#fbbc05"/><text x="988" y="440">TypeScript</text>
-    <circle cx="582" cy="472" r="11" fill="#7b3f98"/><text x="602" y="482">Smalltalk</text>
-    <circle cx="782" cy="472" r="11" fill="#ff6f00"/><text x="802" y="482">Kotlin</text>
+    <circle cx="582" cy="442" r="11" fill="#ea4335"/><text x="602" y="452">Rust</text>
+    <circle cx="712" cy="442" r="11" fill="#4285f4"/><text x="732" y="452">Python</text>
+    <circle cx="876" cy="442" r="11" fill="#fbbc05"/><text x="896" y="452">WebAssembly</text>
+    <circle cx="1146" cy="442" r="11" fill="#34a853"/><text x="1166" y="452">C</text>
   </g>
 
-  <text class="mono" x="570" y="506" font-size="23" fill="#7488a0">content-addressed · append-only · MIT OR Apache-2.0</text>
+  <text class="mono" x="570" y="506" font-size="23" fill="#7488a0">one behavior in every language · MIT OR Apache-2.0</text>
 
   <!-- Accent bar -->
   <g>
-    <rect x="0" y="628" width="256" height="12" fill="#ea4335"/>
-    <rect x="256" y="628" width="256" height="12" fill="#4285f4"/>
-    <rect x="512" y="628" width="256" height="12" fill="#fbbc05"/>
-    <rect x="768" y="628" width="256" height="12" fill="#34a853"/>
-    <rect x="1024" y="628" width="256" height="12" fill="#7b3f98"/>
+    <rect x="0" y="628" width="320" height="12" fill="#ea4335"/>
+    <rect x="320" y="628" width="320" height="12" fill="#4285f4"/>
+    <rect x="640" y="628" width="320" height="12" fill="#fbbc05"/>
+    <rect x="960" y="628" width="320" height="12" fill="#34a853"/>
   </g>
 </svg>

@@ -61,7 +61,7 @@ pub(crate) type ExistsCacheKey = (usize, (u8, u32), u64);
 /// EXISTS` anti-join from N per-row index rebuilds into N O(1)/scan probes.
 pub(crate) struct ExistsInner {
     /// The inner pattern's unconstrained result (outer-row-independent).
-    pub inner: Rc<crate::solution::SolutionSeq>,
+    pub inner: Rc<SolutionSeq>,
     /// Shared columns between the outer schema and `inner.schema`, as
     /// `(outer_ordinal, inner_ordinal)` pairs (the probe's join key).
     pub shared: Vec<(usize, usize)>,
@@ -95,7 +95,7 @@ pub(crate) fn schema_fingerprint(schema: &crate::solution::VarSchema) -> u64 {
 /// materialised as triples (Principle 12). A stale or colliding key is at worst a
 /// suboptimal order (the reorder is a permutation of a commutative join), never an
 /// incorrect result, so the fingerprint can be cheap.
-pub type BgpOrderCache = std::cell::RefCell<DetHashMap<(u64, u64), std::sync::Arc<[usize]>>>;
+pub type BgpOrderCache = std::cell::RefCell<DetHashMap<(u64, u64), Arc<[usize]>>>;
 
 /// The mutable evaluation context threaded through [`eval`].
 pub struct EvalCtx<'d> {
@@ -164,6 +164,21 @@ pub struct EvalCtx<'d> {
     /// output, and the native `query` egress into `SparqlResult::Solutions::aux`. Empty
     /// whenever no constructing builtin ran.
     pub(crate) constructed: Vec<(TermValue, TermValue, TermValue)>,
+}
+
+impl core::fmt::Debug for EvalCtx<'_> {
+    /// Summarized: the injected `SERVICE` source (`remote`) is a plain `dyn`
+    /// trait object and the per-query caches are noise, so only the scalar
+    /// evaluation state is shown.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EvalCtx")
+            .field("active_graph", &self.active_graph)
+            .field("bnode_counter", &self.bnode_counter)
+            .field("now", &self.now)
+            .field("rng_state", &self.rng_state)
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'d> EvalCtx<'d> {
@@ -303,7 +318,7 @@ pub fn eval(pattern: &GraphPattern, ctx: &mut EvalCtx<'_>) -> Result<SolutionSeq
             left,
             right,
             expression,
-        } => crate::binop::eval_left_join(left, right, expression, ctx),
+        } => crate::binop::eval_left_join(left, right, expression.as_ref(), ctx),
         GraphPattern::Minus { left, right } => crate::binop::eval_minus(left, right, ctx),
         GraphPattern::Filter { expr, inner } => crate::expr::eval_filter(expr, inner, ctx),
         GraphPattern::Extend {
@@ -341,7 +356,7 @@ pub fn eval(pattern: &GraphPattern, ctx: &mut EvalCtx<'_>) -> Result<SolutionSeq
         } => crate::remote::eval_service(name, inner, *silent, ctx),
         // Implemented incrementally over the remaining S6 build tasks; until then
         // (and permanently, for out-of-scope nodes) a hard error names the construct.
-        other => Err(EvalError::Unsupported(format!(
+        other @ GraphPattern::Lateral { .. } => Err(EvalError::Unsupported(format!(
             "graph pattern `{}` is not yet implemented in sparql-eval",
             pattern_kind(other)
         ))),
@@ -477,13 +492,13 @@ mod tests {
         // triple position (no expression correlation), so the uncorrelated fast path
         // is taken and the inner index must be reused across the three outer rows.
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_owned());
-        let cls = b.intern_iri("http://ex/Class".to_owned());
-        let stereo = b.intern_iri("http://ex/stereo".to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bb = b.intern_iri("http://ex/b".to_owned());
-        let c = b.intern_iri("http://ex/c".to_owned());
-        let s = b.intern_iri("http://ex/S".to_owned());
+        let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+        let cls = b.intern_iri("http://ex/Class");
+        let stereo = b.intern_iri("http://ex/stereo");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
+        let s = b.intern_iri("http://ex/S");
         b.push_quad(a, ty, cls, None);
         b.push_quad(bb, ty, cls, None);
         b.push_quad(c, ty, cls, None);

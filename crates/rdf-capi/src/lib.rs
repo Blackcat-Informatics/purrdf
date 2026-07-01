@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! # libpurrdf — the PURRDF purrdf semantic RDF-1.2 C-ABI (purrdf P8, #842)
+//! # libpurrdf — the PurRDF purrdf semantic RDF-1.2 C-ABI (purrdf P8, #842)
 //!
 //! A stable, SemVer-disciplined `extern "C"` surface over the native
 //! `purrdf` semantic stack. It is the rich companion to the permissive
@@ -59,7 +59,7 @@ macro_rules! ffi_try {
             ::core::result::Result::Err(panic) => {
                 let err = $crate::error::PurrdfError::new(
                     $crate::status::PurrdfStatus::Panic,
-                    $crate::panic_message(panic),
+                    $crate::panic_message(panic.as_ref()),
                 );
                 $crate::error::store_error(err_out, err);
                 $crate::status::PurrdfStatus::Panic as i32
@@ -94,7 +94,7 @@ pub mod term;
 pub mod version;
 
 /// Render a caught panic payload as a human-readable message.
-pub(crate) fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).to_string()
     } else if let Some(message) = payload.downcast_ref::<String>() {
@@ -111,15 +111,17 @@ pub(crate) fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 /// `ptr` must be null or point to a NUL-terminated C string valid for the
 /// returned reference's lifetime.
 pub(crate) unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Result<&'a str, PurrdfError> {
-    if ptr.is_null() {
-        return Err(PurrdfError::new(
-            PurrdfStatus::NullPointer,
-            "null C string pointer",
-        ));
+    unsafe {
+        if ptr.is_null() {
+            return Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                "null C string pointer",
+            ));
+        }
+        CStr::from_ptr(ptr)
+            .to_str()
+            .map_err(|_| PurrdfError::new(PurrdfStatus::InvalidUtf8, "C string is not valid UTF-8"))
     }
-    CStr::from_ptr(ptr)
-        .to_str()
-        .map_err(|_| PurrdfError::new(PurrdfStatus::InvalidUtf8, "C string is not valid UTF-8"))
 }
 
 /// Borrow an optional C string: null → `None`, otherwise `Some(&str)`.
@@ -129,9 +131,11 @@ pub(crate) unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Result<&'a str, Purr
 pub(crate) unsafe fn opt_cstr_to_str<'a>(
     ptr: *const c_char,
 ) -> Result<Option<&'a str>, PurrdfError> {
-    if ptr.is_null() {
-        Ok(None)
-    } else {
-        Ok(Some(cstr_to_str(ptr)?))
+    unsafe {
+        if ptr.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(cstr_to_str(ptr)?))
+        }
     }
 }

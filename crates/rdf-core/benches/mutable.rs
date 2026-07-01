@@ -40,10 +40,10 @@ fn iri(n: &str) -> TermValue {
 /// A deterministic base of `BASE_QUADS` quads: `(s{n}, p, o{n})`.
 fn build_base() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p".to_string());
+    let p = b.intern_iri("http://example.org/p");
     for n in 0..BASE_QUADS {
-        let s = b.intern_iri(format!("http://example.org/s{n}"));
-        let o = b.intern_iri(format!("http://example.org/o{n}"));
+        let s = b.intern_iri(&format!("http://example.org/s{n}"));
+        let o = b.intern_iri(&format!("http://example.org/o{n}"));
         b.push_quad(s, p, o, None);
     }
     b.freeze().expect("base freezes")
@@ -87,7 +87,7 @@ impl SimpleStore {
                 q.g.map(|g| resolve(base, g)),
             ));
         }
-        SimpleStore { quads }
+        Self { quads }
     }
 
     fn insert(&mut self, q: QuadValues) -> bool {

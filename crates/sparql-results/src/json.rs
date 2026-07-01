@@ -183,6 +183,8 @@ fn query_form(result: &SparqlResult) -> &'static str {
 
 /// Append a JSON-escaped string literal (including the surrounding quotes).
 fn json_string(value: &str, out: &mut String) {
+    use core::fmt::Write as _;
+
     out.push('"');
     for ch in value.chars() {
         match ch {
@@ -192,7 +194,8 @@ fn json_string(value: &str, out: &mut String) {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
+                // Writing to a `String` is infallible; the escape bytes are unchanged.
+                let _ = write!(out, "\\u{:04x}", c as u32);
             }
             c => out.push(c),
         }
@@ -210,7 +213,7 @@ fn json_string(value: &str, out: &mut String) {
 /// Returns [`crate::error::Error::MalformedTerm`] if a [`TermValue::Triple`]
 /// arm's predicate is not an IRI. RDF predicates must be IRIs; emitting a
 /// non-IRI predicate would produce structurally invalid SRJ output.
-fn json_binding(value: &TermValue, out: &mut String) -> Result<(), crate::error::Error> {
+fn json_binding(value: &TermValue, out: &mut String) -> Result<(), Error> {
     match value {
         TermValue::Iri(iri) => {
             out.push_str("{\"type\":\"uri\",\"value\":");
@@ -248,7 +251,7 @@ fn json_binding(value: &TermValue, out: &mut String) -> Result<(), crate::error:
             // RDF predicates must be IRIs; a non-IRI predicate has no valid SRJ
             // "predicate" form → hard-fail per the serializer contract.
             if !matches!(p.as_ref(), TermValue::Iri(_)) {
-                return Err(crate::error::Error::MalformedTerm(
+                return Err(Error::MalformedTerm(
                     "triple-term predicate is not an IRI".to_string(),
                 ));
             }
@@ -410,7 +413,7 @@ mod tests {
         let err = to_json(&result, &ResultProvenance::default())
             .expect_err("non-IRI predicate must be rejected");
         assert!(
-            matches!(err, crate::error::Error::MalformedTerm(_)),
+            matches!(err, Error::MalformedTerm(_)),
             "expected MalformedTerm, got: {err:?}"
         );
     }
@@ -434,7 +437,7 @@ mod tests {
         let err = to_json(&result, &ResultProvenance::default())
             .expect_err("bnode predicate must be rejected");
         assert!(
-            matches!(err, crate::error::Error::MalformedTerm(_)),
+            matches!(err, Error::MalformedTerm(_)),
             "expected MalformedTerm, got: {err:?}"
         );
     }

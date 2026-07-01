@@ -1,4 +1,4 @@
-# PURRDF Cutover
+# PurRDF Cutover
 
 This is the cutover checklist for replacing the in-tree RDF/GTS carrier stack in
 `gmeow-ontology` with this repository.
@@ -72,7 +72,7 @@ attestation checks.
 `purrdf-capi` stays out of the core crates.io lane because it is a native C ABI
 artifact rather than a wasm-capable crate.
 
-## Purrdf Gates
+## PurRDF Gates
 
 Run these before using the cutover worktree:
 

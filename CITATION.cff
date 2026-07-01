@@ -1,0 +1,43 @@
+cff-version: 1.2.0
+message: "If you use PurRDF, please cite it as below."
+title: "PurRDF — the RDF 1.2 toolkit with a purr"
+abstract: >-
+  PurRDF is a from-scratch, dependency-light Rust toolkit for RDF 1.2 that carries one
+  engine — and one behavior — into Rust, Python, WebAssembly/JavaScript, and C. It
+  provides an immutable, value-interned RDF 1.2 dataset IR (triple terms, reifiers,
+  base-direction literals); first-party codecs for Turtle, TriG, N-Triples, N-Quads,
+  RDF/XML, JSON-LD, and YAML-LD; W3C RDFC-1.0 dataset canonicalization; a native
+  SPARQL 1.1/1.2 parser, algebra, and multiset evaluator with SPARQL Results
+  JSON/XML/CSV/TSV; a SHACL Core validation engine; and the GTS single-file,
+  content-addressed, append-only graph transport. The workspace deliberately exposes
+  no optional Cargo features — as a data carrier it guarantees byte-identical
+  semantics for every consumer — and its behavior is gated by W3C SPARQL, SHACL,
+  RDFC-1.0, and frozen cross-language GTS conformance corpora.
+type: software
+authors:
+  - name: "Blackcat Informatics® Inc."
+    website: "https://blackcatinformatics.ca/"
+  - family-names: "Audley"
+    given-names: "Patrick"
+    orcid: "https://orcid.org/0000-0003-4382-7625"
+version: "0.1.3"
+date-released: "2026-07-01"
+license:
+  - Apache-2.0
+  - MIT
+url: "https://blackcatinformatics.ca/projects/purrdf"
+repository-code: "https://github.com/Blackcat-Informatics/purrdf"
+keywords:
+  - rdf
+  - rdf-1.2
+  - sparql
+  - shacl
+  - json-ld
+  - turtle
+  - knowledge-graph
+  - linked-data
+  - canonicalization
+  - graph-transport
+  - rust
+  - python
+  - webassembly

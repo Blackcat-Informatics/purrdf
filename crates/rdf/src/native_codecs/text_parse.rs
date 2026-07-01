@@ -71,14 +71,14 @@ enum Node {
         direction: Option<String>,
         datatype: Option<String>,
     },
-    Triple(Box<Node>, Box<Node>, Box<Node>),
+    Triple(Box<Self>, Box<Self>, Box<Self>),
 }
 
 /// Parse RDF text of one of the four line/Turtle-family `format`s into the first-party
 /// in-memory [`SerGraph`] that the downstream statement-layer fold consumes. Mirrors the
 /// `from_*` structure exactly (see the module note) so the resulting IR is byte-identical
 /// to the prior purrdf-gts path, with the UCHAR-in-IRI gap fixed.
-pub fn parse_to_gts_graph(
+pub(super) fn parse_to_gts_graph(
     format: NativeRdfFormat,
     text: &str,
     base_iri: Option<&str>,
@@ -116,7 +116,7 @@ fn parse_lines(text: &str, allow_graph: bool) -> Result<Vec<Statement>, RdfDiagn
             continue;
         }
         let tokens = tokenize(line).map_err(|e| err(format!("{e} in {line:?}")))?;
-        let mut cursor = TokenCursor::new(&tokens, line);
+        let mut cursor = TokenCursor::new(tokens, line);
         let mut nodes = Vec::new();
         while !cursor.at_statement_end() {
             nodes.push(cursor.term(allow_graph)?);
@@ -141,14 +141,18 @@ fn parse_lines(text: &str, allow_graph: bool) -> Result<Vec<Statement>, RdfDiagn
 }
 
 /// A cursor over one line's lexer tokens, parsing N-Triples/N-Quads terms.
+///
+/// The cursor OWNS its token buffer (discarded after the line is parsed), so
+/// [`bump`](Self::bump) can MOVE each consumed token out instead of deep-cloning
+/// its `String` payload.
 struct TokenCursor<'a> {
-    tokens: &'a [Spanned],
+    tokens: Vec<Spanned>,
     pos: usize,
     line: &'a str,
 }
 
 impl<'a> TokenCursor<'a> {
-    fn new(tokens: &'a [Spanned], line: &'a str) -> Self {
+    fn new(tokens: Vec<Spanned>, line: &'a str) -> Self {
         Self {
             tokens,
             pos: 0,
@@ -160,8 +164,14 @@ impl<'a> TokenCursor<'a> {
         self.tokens.get(self.pos).map(|s| &s.token)
     }
 
+    /// Consume the current token, MOVING it out of the owned buffer (a cheap
+    /// `Token::Dot` placeholder is left behind; the cursor never re-reads a
+    /// consumed position — `peek` looks only at `pos`, which has advanced).
     fn bump(&mut self) -> Option<Token> {
-        let t = self.tokens.get(self.pos).map(|s| s.token.clone());
+        let t = self
+            .tokens
+            .get_mut(self.pos)
+            .map(|s| std::mem::replace(&mut s.token, Token::Dot));
         if t.is_some() {
             self.pos += 1;
         }
@@ -496,7 +506,7 @@ impl<'a> DocParser<'a> {
                 }
                 let graph = self.term(None)?;
                 self.expect(&Token::LBrace)?;
-                self.graph_block(graph)?;
+                self.graph_block(&graph)?;
                 continue;
             }
             let first = self.term(None)?;
@@ -504,9 +514,9 @@ impl<'a> DocParser<'a> {
                 if !self.allow_named_graphs {
                     return Err(err("Turtle input cannot contain graph blocks"));
                 }
-                self.graph_block(first)?;
+                self.graph_block(&first)?;
             } else {
-                self.statement_after_subject(first, None)?;
+                self.statement_after_subject(&first, None)?;
             }
         }
         Ok(self.statements)
@@ -656,13 +666,13 @@ impl<'a> DocParser<'a> {
             Some(Token::LBracket) => self.blank_node_property_list(graph),
             Some(Token::LParen) => self.collection(graph),
             Some(Token::StringLit(_)) => self.literal(),
-            Some(Token::Integer(_)) | Some(Token::Decimal(_)) | Some(Token::Double(_)) => {
+            Some(Token::Integer(_) | Token::Decimal(_) | Token::Double(_)) => {
                 self.numeric_literal("")
             }
             // A signed numeric literal `+N` / `-N`: the lexer emits the sign as a
             // separate `Plus`/`Minus` token, so consume it and fold it back into the
             // lexical form (kept verbatim, e.g. `-200.0`), matching purrdf-gts.
-            Some(Token::Plus) | Some(Token::Minus)
+            Some(Token::Plus | Token::Minus)
                 if matches!(
                     self.peek2(),
                     Some(Token::Integer(_) | Token::Decimal(_) | Token::Double(_))
@@ -868,7 +878,7 @@ impl<'a> DocParser<'a> {
         }
     }
 
-    fn graph_block(&mut self, graph: Node) -> Result<(), RdfDiagnostic> {
+    fn graph_block(&mut self, graph: &Node) -> Result<(), RdfDiagnostic> {
         if !matches!(graph, Node::Iri(_) | Node::Bnode(_)) {
             return Err(err("graph block name must be an IRI or blank node"));
         }
@@ -876,32 +886,32 @@ impl<'a> DocParser<'a> {
             if self.peek().is_none() {
                 return Err(err("unterminated graph block"));
             }
-            let subject = self.term(Some(&graph))?;
-            self.statement_after_subject_in_graph(subject, &graph)?;
+            let subject = self.term(Some(graph))?;
+            self.statement_after_subject_in_graph(&subject, graph)?;
         }
         Ok(())
     }
 
     fn statement_after_subject(
         &mut self,
-        subject: Node,
+        subject: &Node,
         graph: Option<&Node>,
     ) -> Result<(), RdfDiagnostic> {
         // A self-asserting subject (reifying triple or blank-node property list) may
         // end immediately at `.`; a plain subject still needs a predicate-object list.
         if !self.at(&Token::Dot) {
-            self.predicate_object_list(&subject, graph)?;
+            self.predicate_object_list(subject, graph)?;
         }
         self.expect(&Token::Dot)
     }
 
     fn statement_after_subject_in_graph(
         &mut self,
-        subject: Node,
+        subject: &Node,
         graph: &Node,
     ) -> Result<(), RdfDiagnostic> {
         if !(self.at(&Token::Dot) || self.at(&Token::RBrace)) {
-            self.predicate_object_list(&subject, Some(graph))?;
+            self.predicate_object_list(subject, Some(graph))?;
         }
         // The trailing `.` is optional for the final statement before `}`.
         if self.eat(&Token::Dot) || self.at(&Token::RBrace) {
@@ -1070,8 +1080,15 @@ impl<'a> DocParser<'a> {
         self.tokens.get(self.pos + 1).map(|s| &s.token)
     }
 
+    /// Consume the current token, MOVING it out of the owned buffer (a cheap
+    /// `Token::Dot` placeholder is left behind; nothing re-reads a consumed
+    /// position — `peek`/`peek2` look only at `pos` and beyond, which advance
+    /// monotonically).
     fn bump(&mut self) -> Option<Token> {
-        let t = self.tokens.get(self.pos).map(|s| s.token.clone());
+        let t = self
+            .tokens
+            .get_mut(self.pos)
+            .map(|s| std::mem::replace(&mut s.token, Token::Dot));
         if t.is_some() {
             self.pos += 1;
         }
@@ -1215,8 +1232,7 @@ fn resolve_relative_iri(base: &str, raw: &str) -> String {
         } else {
             base_path
                 .rfind('/')
-                .map(|index| &base_path[..=index])
-                .unwrap_or("")
+                .map_or("", |index| &base_path[..=index])
         };
         format!("{base_dir}{raw_path}")
     };
@@ -1227,93 +1243,150 @@ fn resolve_relative_iri(base: &str, raw: &str) -> String {
 // build_gts: lower the flat statement list to an in-memory SerGraph
 // ───────────────────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum TermKey {
-    Atom {
-        kind: AtomKind,
-        value: String,
-        lang: Option<String>,
-        direction: Option<String>,
-        datatype: Option<String>,
-    },
-    Triple(usize, usize, usize),
+/// Fixed-key hash of an atom's identity components. Any hash would do for
+/// byte-determinism — term ids come from `terms` push order, never from
+/// hash-iteration order — so a fixed-key `AHasher` just keeps SipHash off the hot
+/// interning path (same pattern as `purrdf-core`'s `ir::builder::hash_of`).
+fn hash_atom(
+    kind: SerTermKind,
+    value: &str,
+    lang: Option<&str>,
+    direction: Option<&str>,
+    datatype: Option<usize>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = ahash::AHasher::default();
+    let tag: u8 = match kind {
+        SerTermKind::Iri => 0,
+        SerTermKind::Bnode => 1,
+        SerTermKind::Literal => 2,
+        SerTermKind::Triple => unreachable!("triple terms are keyed structurally, not as atoms"),
+    };
+    tag.hash(&mut hasher);
+    value.hash(&mut hasher);
+    lang.hash(&mut hasher);
+    direction.hash(&mut hasher);
+    datatype.hash(&mut hasher);
+    hasher.finish()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum AtomKind {
-    Iri,
-    Bnode,
-    Literal,
+/// Re-hash a STORED atom row byte-identically to [`hash_atom`] over the same
+/// components (needed when the hash table resizes). Only atom rows (never
+/// `SerTermKind::Triple`) live in the atoms table, so `value` is always present.
+fn hash_stored_atom(term: &SerTerm) -> u64 {
+    hash_atom(
+        term.kind,
+        term.value
+            .as_deref()
+            .expect("atom rows always carry a value"),
+        term.lang.as_deref(),
+        term.direction.as_deref(),
+        term.datatype,
+    )
+}
+
+/// Whether a stored atom row equals the borrowed lookup components. Keyed on the
+/// datatype's interned ID rather than its string: equal datatype strings always
+/// intern to the same id (and vice versa), so equality is unchanged.
+fn atom_matches(
+    term: &SerTerm,
+    kind: SerTermKind,
+    value: &str,
+    lang: Option<&str>,
+    direction: Option<&str>,
+    datatype: Option<usize>,
+) -> bool {
+    term.kind == kind
+        && term.value.as_deref() == Some(value)
+        && term.lang.as_deref() == lang
+        && term.direction.as_deref() == direction
+        && term.datatype == datatype
 }
 
 /// The first-seen-order term interner, reproducing `from_nquads`'s `Interner`
 /// so `dataset_from_ser_graph` re-interns its builder in the identical order.
+///
+/// **Store-once** (the `ir::builder::store_once` pattern): `terms` is the sole
+/// owner of every atom's strings; `atoms` holds only `u32` indices into it, with
+/// hash/eq that look INTO `terms`. First-seen order is untouched — ids still come
+/// exclusively from `terms` push order.
 struct Interner {
-    ids: HashMap<TermKey, usize>,
+    /// Index table over the atom rows of `terms` (store-once dedup).
+    atoms: hashbrown::HashTable<u32>,
+    /// Structural dedup for triple terms; the key is three term ids (no strings).
+    triples: HashMap<SerTriple3, usize>,
     terms: Vec<SerTerm>,
 }
 
 impl Interner {
     fn new() -> Self {
         Self {
-            ids: HashMap::new(),
+            atoms: hashbrown::HashTable::new(),
+            triples: HashMap::new(),
             terms: Vec::new(),
         }
     }
 
+    /// Insert-or-find an atom row by its borrowed components, storing the strings
+    /// exactly once (on first sight) in `terms`.
+    fn intern_atom(
+        &mut self,
+        kind: SerTermKind,
+        value: &str,
+        lang: Option<&str>,
+        direction: Option<&str>,
+        datatype: Option<usize>,
+    ) -> usize {
+        let Self { atoms, terms, .. } = self;
+        let hash = hash_atom(kind, value, lang, direction, datatype);
+        if let Some(&id) = atoms.find(hash, |&i| {
+            atom_matches(&terms[i as usize], kind, value, lang, direction, datatype)
+        }) {
+            return id as usize;
+        }
+        let id = terms.len();
+        terms.push(SerTerm {
+            kind,
+            value: Some(value.to_owned()),
+            datatype,
+            lang: lang.map(str::to_owned),
+            direction: direction.map(str::to_owned),
+            reifier: None,
+        });
+        let id32 = u32::try_from(id).expect("term table exceeds u32::MAX entries");
+        atoms.insert_unique(hash, id32, |&i| hash_stored_atom(&terms[i as usize]));
+        id
+    }
+
     fn atom(&mut self, node: &Node) -> usize {
-        let (kind, value, lang, direction, datatype) = match node {
-            Node::Iri(value) => (AtomKind::Iri, value.clone(), None, None, None),
-            Node::Bnode(value) => (AtomKind::Bnode, value.clone(), None, None, None),
+        match node {
+            Node::Iri(value) => self.intern_atom(SerTermKind::Iri, value, None, None, None),
+            Node::Bnode(value) => self.intern_atom(SerTermKind::Bnode, value, None, None, None),
             Node::Literal {
                 value,
                 lang,
                 direction,
                 datatype,
-            } => (
-                AtomKind::Literal,
-                value.clone(),
-                lang.clone(),
-                direction.clone(),
-                datatype.clone(),
-            ),
+            } => {
+                // A literal's datatype IRI is interned as its own IRI term (first-seen),
+                // just as purrdf-gts does, so the term table matches. Interning it BEFORE
+                // the literal lookup preserves first-seen order exactly: on a literal
+                // cache hit the datatype was already interned at the literal's first
+                // sighting, so this is a pure lookup; on a miss the prior code interned
+                // it before pushing the literal too.
+                let datatype_id = datatype
+                    .as_deref()
+                    .map(|iri| self.intern_atom(SerTermKind::Iri, iri, None, None, None));
+                self.intern_atom(
+                    SerTermKind::Literal,
+                    value,
+                    lang.as_deref(),
+                    direction.as_deref(),
+                    datatype_id,
+                )
+            }
             Node::Triple(..) => unreachable!("atom() is never called on a triple node"),
-        };
-        let key = TermKey::Atom {
-            kind,
-            value: value.clone(),
-            lang: lang.clone(),
-            direction: direction.clone(),
-            datatype: datatype.clone(),
-        };
-        if let Some(id) = self.ids.get(&key) {
-            return *id;
         }
-        // A literal's datatype IRI is interned as its own IRI term (first-seen), just
-        // as purrdf-gts does, so the term table matches.
-        let datatype_id = if kind == AtomKind::Literal {
-            datatype
-                .as_ref()
-                .map(|iri| self.atom(&Node::Iri(iri.clone())))
-        } else {
-            None
-        };
-        let ser_kind = match kind {
-            AtomKind::Iri => SerTermKind::Iri,
-            AtomKind::Bnode => SerTermKind::Bnode,
-            AtomKind::Literal => SerTermKind::Literal,
-        };
-        let id = self.terms.len();
-        self.terms.push(SerTerm {
-            kind: ser_kind,
-            value: Some(value),
-            datatype: datatype_id,
-            lang,
-            direction,
-            reifier: None,
-        });
-        self.ids.insert(key, id);
-        id
     }
 
     fn node(&mut self, node: &Node, reifiers: &mut Vec<(usize, SerTriple3)>) -> usize {
@@ -1322,8 +1395,7 @@ impl Interner {
                 let s = self.node(s, reifiers);
                 let p = self.node(p, reifiers);
                 let o = self.node(o, reifiers);
-                let key = TermKey::Triple(s, p, o);
-                if let Some(id) = self.ids.get(&key) {
+                if let Some(id) = self.triples.get(&(s, p, o)) {
                     return *id;
                 }
                 let id = self.terms.len();
@@ -1339,7 +1411,7 @@ impl Interner {
                     direction: None,
                     reifier: Some(id),
                 });
-                self.ids.insert(key, id);
+                self.triples.insert((s, p, o), id);
                 reifiers.push((id, (s, p, o)));
                 id
             }

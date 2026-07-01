@@ -63,18 +63,21 @@ impl VerifyOptions {
     }
 
     /// Use an out-of-band trusted public key instead of embedded metadata.
+    #[must_use]
     pub fn with_armored_key(mut self, armored: impl Into<String>) -> Self {
         self.armored_key = Some(armored.into());
         self
     }
 
     /// Set whether unsigned files are accepted.
+    #[must_use]
     pub fn require_signatures(mut self, value: bool) -> Self {
         self.require_signatures = value;
         self
     }
 
     /// Apply deployment-level signer/profile trust rules.
+    #[must_use]
     pub fn trust_policy(mut self, policy: TrustPolicy) -> Self {
         self.trust_policy = policy;
         self

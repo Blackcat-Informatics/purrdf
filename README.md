@@ -1,37 +1,234 @@
-# purrdf
+<!--
+SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+SPDX-License-Identifier: MIT OR Apache-2.0
+-->
+<p align="center">
+  <a href="https://blackcatinformatics.ca/projects/purrdf">
+    <img src="./docs/purrdf-logo.svg" alt="PurRDF logo — a black cat holding an RDF triple" width="128" height="128">
+  </a>
+</p>
 
-PURRDF is the extracted RDF toolkit from the GMEOW stack. It owns the RDF 1.2
-primitive model, native text/XML/JSON-LD adapters, GTS transport integration,
-SHACL/shape validation, SPARQL support, slice/dataset carrier IR, and language
-bindings.
+<h1 align="center">PurRDF</h1>
 
-This branch is the copy-and-rename staging branch. The source repositories stay
-read-only until purrdf is published and the later cutover branch in
-`gmeow-ontology` can replace the old in-tree crates.
+<p align="center">
+  <em>The RDF 1.2 toolkit with a purr: primitives, codecs, SPARQL, SHACL, and graph transport.</em>
+</p>
 
-## Layout
+<p align="center">
+  <strong>One RDF engine. One behavior. Every language.</strong>
+</p>
 
-- `crates/rdf-core`: transport-independent RDF primitives, diagnostics, IR, and
-  store traits.
-- `crates/rdf`: top-level purrdf Rust API and first-class GTS/text-codec
-  adapters.
-- `crates/gts`: inlined GTS container engine, stripped of standalone native RDF
-  text/native-store codecs.
-- `crates/slice`: carrier IR for ontology slices, dataset-level wrappers,
-  ownership/dependency analysis, and projection inputs.
-- `crates/shapes`: SHACL and shape validation.
-- `crates/sparql-*`: SPARQL parser, evaluator, result handling, and conformance.
-- `crates/iri`, `crates/xsd`, `crates/rdf-events`: support crates.
-- `python`: Python package sources copied as `purrdf`.
-- `docs` and `vectors`: GTS specification assets and conformance vectors.
+<p align="center">
+  <a href="https://github.com/Blackcat-Informatics/purrdf/actions/workflows/ci.yaml"><img src="https://github.com/Blackcat-Informatics/purrdf/actions/workflows/ci.yaml/badge.svg" alt="CI"></a>
+  <a href="https://crates.io/crates/purrdf"><img src="https://img.shields.io/crates/v/purrdf.svg?label=crates.io" alt="crates.io"></a>
+  <a href="https://pypi.org/project/purrdf/"><img src="https://img.shields.io/pypi/v/purrdf.svg?label=PyPI" alt="PyPI"></a>
+  <a href="https://www.npmjs.com/package/@blackcatinformatics/purrdf"><img src="https://img.shields.io/npm/v/%40blackcatinformatics%2Fpurrdf.svg?label=npm" alt="npm"></a>
+  <a href="./LICENSING.md"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
+  <img src="https://img.shields.io/badge/MSRV-1.96-orange.svg" alt="MSRV 1.96">
+</p>
 
-## Validation
+---
+
+## Why does this exist?
+
+RDF tooling fragments along two axes.
+
+**Across languages**: every ecosystem has its own parser, with its own bugs, its own
+corner-case interpretations, and its own subset of the spec. Move a graph from a Rust
+service to a Python pipeline to a browser and you have silently changed what the data
+means three times.
+
+**Across time**: [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) — triple terms,
+reifiers, base-direction literals — is where the standard is going, and almost no
+incumbent library carries it.
+
+PurRDF exists so that a graph is **the same graph everywhere**. It is a from-scratch,
+dependency-light Rust core — parser to SPARQL engine to SHACL validator to binary
+transport — carried verbatim into Python, WebAssembly/JavaScript, and C. There are
+deliberately **no Cargo feature flags** anywhere in the workspace (CI enforces this):
+a data carrier must not have optional behavior, so every consumer gets the same
+byte-identical semantics.
+
+PurRDF is the data backbone of the [GMEOW](https://github.com/Blackcat-Informatics/gmeow-ontology)
+stack and the reference home of the [GTS](./docs/GTS-SPEC.md) graph-transport engine,
+but it assumes nothing about your ontology or application.
+
+## What's inside
+
+- **RDF 1.2 primitives** — an immutable, value-interned dataset IR (`TermId` space,
+  string arena, copy-on-write mutation), with triple terms in object position,
+  reifier/annotation side-tables, and base-direction literals (`rdf:dirLangString`).
+- **Native codecs** — first-party parsers/serializers for **Turtle, TriG, N-Triples,
+  N-Quads, RDF/XML, JSON-LD (star), and YAML-LD**; byte-deterministic output.
+- **Canonicalization** — W3C **RDFC-1.0** dataset canonicalization, tested against the
+  W3C fixture suite.
+- **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator over the interned
+  IR (property paths, aggregates, EXISTS decorrelation, cost-based BGP planning,
+  injectable SERVICE federation), gated by the W3C SPARQL 1.1 conformance harness.
+  Results in SPARQL JSON/XML/CSV/TSV.
+- **SHACL Core validation** — a native validator gated against the SHACL conformance
+  corpus, plus scoped SHACL 1.2 draft support for reifier shapes. (ShEx is planned;
+  see [`docs/CUTOVER.md`](./docs/CUTOVER.md).)
+- **GTS graph transport** — a single-file, content-addressed, append-only container
+  for RDF 1.2 graphs and the binaries they reference: BLAKE3-chained CBOR segments,
+  deterministic fold, COSE signing/encryption, pure-Rust crypto (wasm-friendly).
+  Spec in [`docs/GTS-SPEC.md`](./docs/GTS-SPEC.md), frozen cross-language conformance
+  vectors in [`vectors/`](./vectors/).
+- **Slices, mappings, and provenance** — a manifest-based slice catalog with
+  content-addressed artifact IDs, an explicit RDF↔GTS **loss ledger**
+  ([`generated/rdf-loss-matrix.json`](./generated/rdf-loss-matrix.json)), SSSOM
+  mapping TSV support, and an FnO function-catalog codec.
+- **Zero-dependency foundations** — `purrdf-iri` (RFC 3987/3986) and `purrdf-xsd`
+  (XSD 1.1 value space) have no runtime dependencies at all; `purrdf-events` (the
+  object-safe ingestion seam) has none either.
+
+## Quickstart
+
+### Rust
 
 ```sh
-make metadata
-make check
+cargo add purrdf
 ```
 
-See `PROVENANCE.md` for the source commits and extraction policy.
-See `docs/CUTOVER.md` for the `gmeow-ontology` cutover checklist.
-See `docs/RELEASE.md` for the crates.io trusted-publishing release process.
+```rust
+use purrdf::{parse_dataset, serialize_dataset, RdfDatasetBuilder, RdfLiteral, SerializeGraph};
+
+// Build a dataset in interned TermId space.
+let mut b = RdfDatasetBuilder::new();
+let alice = b.intern_iri("https://example.org/alice");
+let knows = b.intern_iri("http://xmlns.com/foaf/0.1/knows");
+let bob = b.intern_iri("https://example.org/bob");
+let name = b.intern_iri("http://xmlns.com/foaf/0.1/name");
+let hi = b.intern_literal(RdfLiteral::simple("Alice"));
+b.push_quad(alice, knows, bob, None);
+b.push_quad(alice, name, hi, None);
+let ds = b.freeze().expect("freeze");
+
+// Serialize to any native codec and parse back, losslessly.
+let ttl = serialize_dataset(&ds, "text/turtle", SerializeGraph::Dataset).unwrap();
+let back = parse_dataset(&ttl, "text/turtle", None).unwrap();
+assert_eq!(back.quad_count(), 2);
+```
+
+### Python
+
+```sh
+pip install purrdf
+```
+
+```python
+import purrdf
+
+quads = purrdf.parse(
+    '<https://example.org/alice> <http://xmlns.com/foaf/0.1/name> "Alice" .',
+    purrdf.RdfFormat.TURTLE,
+)
+
+from purrdf_native import shacl
+report = shacl.validate(shapes_ttl=my_shapes, data_nt=my_data)
+print(report["conforms"])
+```
+
+The Python package also ships an [rdflib compatibility layer](./bindings/python/python/src/purrdf/compat/rdflib/)
+and GTS relational exports (`gts_to_sqlite`, `gts_to_duckdb`, `gts_to_parquet`).
+
+### JavaScript / WebAssembly
+
+An [RDF/JS](https://rdf.js.org/)-shaped API (`DataFactory` / `Dataset` / `Stream`)
+over the same engine, including the RDF 1.2 features no incumbent RDF/JS library
+carries — quoted triple terms and base-direction literals:
+
+```js
+import { ready, DataFactory, Dataset } from "@blackcatinformatics/purrdf";
+
+await ready(); // one-time async wasm instantiation
+
+const f = new DataFactory();
+const rtl = f.directionalLiteral("مرحبا", "ar", "rtl");
+
+const ds = new Dataset();
+ds.add(f.quad(f.namedNode("https://ex/s"), f.namedNode("https://ex/says"), rtl));
+
+const nq = ds.serialize("nquads");           // directions survive the round-trip
+const reparsed = Dataset.parse(nq, "nquads");
+```
+
+See [`crates/rdf-wasm`](./crates/rdf-wasm/) (`make wasm-pkg` builds the ESM package).
+
+### C
+
+`libpurrdf` ([`crates/rdf-capi`](./crates/rdf-capi/)) exposes parse, serialize,
+pattern iteration, copy-on-write mutation, SPARQL, and GTS round-trips behind a
+panic-safe C ABI with a committed header ([`include/purrdf.h`](./crates/rdf-capi/include/purrdf.h))
+that CI checks for drift. Built with cargo-c: `make capi-build`.
+
+## Crate map
+
+| Crate | What it is |
+| --- | --- |
+| [`purrdf`](./crates/purrdf/) | Umbrella facade: the RDF surface at the root, `slice` and `shapes` as modules. Start here. |
+| [`purrdf-rdf`](./crates/rdf/) | RDF 1.2 implementation: native codecs, GTS adapters, describe, canonicalization entry points. |
+| [`purrdf-core`](./crates/rdf-core/) | The kernel: interned IR, diagnostics, store traits, provenance, loss ledger, RDFC-1.0. |
+| [`purrdf-gts`](./crates/gts/) | GTS container engine: reader, writer, fold, verify, COSE sign/encrypt. |
+| [`purrdf-sparql-algebra`](./crates/sparql-algebra/) | SPARQL 1.1/1.2 parser → query algebra AST. |
+| [`purrdf-sparql-eval`](./crates/sparql-eval/) | Multiset SPARQL evaluator in interned `TermId` space. |
+| [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL results JSON/XML/CSV/TSV, plus a provenance-carrying extension. |
+| [`purrdf-shapes`](./crates/shapes/) | SHACL Core validation engine. |
+| [`purrdf-slice`](./crates/slice/) | Slice catalog: manifests, typed artifacts, ownership/dependency analysis. |
+| [`purrdf-iri`](./crates/iri/) | Zero-dependency IRI/URI parsing, resolution, normalization, CURIEs. |
+| [`purrdf-xsd`](./crates/xsd/) | Zero-dependency XSD 1.1 value space with SPARQL numeric promotion. |
+| [`purrdf-events`](./crates/rdf-events/) | Zero-dependency object-safe RDF event sink/source seam. |
+| [`purrdf-wasm`](./crates/rdf-wasm/) | The wasm32 engine behind the `purrdf` ESM package. |
+| [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI (unpublished; built via cargo-c). |
+| [`purrdf-sparql-conformance`](./crates/sparql-conformance/) | W3C SPARQL conformance harness (unpublished). |
+
+## Fast by measurement, not by assertion
+
+The IR keeps every term **once** in a string arena addressed by copyable
+`NonZeroU32` ids, hashes with fixed-key `ahash` everywhere hot, and freezes datasets
+into `Box<[QuadRow]>` tables with lazy ordinal permutation indexes (~4 bytes/quad
+per axis). Performance claims are backed by criterion benchmarks rather than
+adjectives — `crates/rdf-core/benches/ir_layout.rs` measures AoS vs. SoA vs.
+predicate-adjacency layouts (allocation counts, high-water mark, end-to-end
+latency), and the shipped layout is whichever wins. Run them with `make bench`.
+
+## Conformance
+
+- **SPARQL** — W3C SPARQL 1.1 test suite via `purrdf-sparql-conformance`.
+- **SHACL** — gated against the SHACL Core conformance corpus (parity with pySHACL,
+  `inference="none"`).
+- **RDFC-1.0** — W3C canonicalization fixtures (`crates/rdf/tests/fixtures/rdfc/`).
+- **GTS** — the frozen, byte-exact cross-language vector corpus in
+  [`vectors/`](./vectors/), shared with the other GTS engines.
+
+## Development
+
+```sh
+make metadata   # regenerate + verify generated artifacts
+make check      # fmt, build, tests, hygiene gates
+make bench      # criterion benchmarks
+```
+
+Releases are tag-driven with OIDC trusted publishing (crates.io and PyPI), with
+build-provenance attestations and SPDX SBOMs — see [`docs/RELEASE.md`](./docs/RELEASE.md).
+
+## The GMEOW family
+
+PurRDF is the library layer of a small family of linked-data projects:
+
+- [`gmeow-ontology`](https://github.com/Blackcat-Informatics/gmeow-ontology) — the
+  GMEOW reasoning-centric super-vocabulary and its publishing toolchain (PurRDF's
+  primary consumer).
+- [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) — the GTS
+  specification and its multi-language engines; PurRDF hosts the Rust engine.
+
+Extraction history and source commits: [`PROVENANCE.md`](./PROVENANCE.md).
+Brand assets and usage: [`docs/BRAND.md`](./docs/BRAND.md).
+
+## License
+
+Licensed under either of [Apache License 2.0](./LICENSE-APACHE) or
+[MIT license](./LICENSE-MIT) at your option, as described in
+[`LICENSING.md`](./LICENSING.md).
+
+If you use PurRDF in research, please cite it — see [`CITATION.cff`](./CITATION.cff).

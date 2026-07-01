@@ -152,7 +152,7 @@ impl EdgeKind {
     pub fn is_semantic(self) -> bool {
         matches!(
             self,
-            EdgeKind::Ontology | EdgeKind::Shape | EdgeKind::Mapping | EdgeKind::Query
+            Self::Ontology | Self::Shape | Self::Mapping | Self::Query
         )
     }
 }
@@ -216,7 +216,7 @@ pub enum OwnershipDiagnostic {
         from_slice: SliceIri,
         to_slice: SliceIri,
     },
-    /// A vocabulary term in the PURRDF namespace (typed as an OWL/RDFS concept)
+    /// A vocabulary term in the PurRDF namespace (typed as an OWL/RDFS concept)
     /// has no `rdfs:isDefinedBy` declaration in any slice.  Non-fatal: the term
     /// is recorded in the ownership table with `OwnershipStatus::Unowned` and
     /// surfaced as a diagnostic, but does not by itself fail validation.
@@ -257,6 +257,7 @@ impl OwnershipReport {
 ///
 /// Holds a borrow of the [`SliceCatalog`]; [`OwnershipAnalyzer::analyze`]
 /// produces the full [`OwnershipReport`].
+#[derive(Debug)]
 pub struct OwnershipAnalyzer<'a> {
     catalog: &'a SliceCatalog,
 }
@@ -279,7 +280,7 @@ impl<'a> OwnershipAnalyzer<'a> {
         // isDefinedBy occurrence (its raw load origin, per RFC §10 step 2/4).
         let mut claims: BTreeMap<NamedNode, BTreeSet<SliceIri>> = BTreeMap::new();
         let mut physical: BTreeMap<NamedNode, ArtifactEvidence> = BTreeMap::new();
-        // `declared_terms` = every PURRDF subject typed as an OWL/RDFS vocabulary
+        // `declared_terms` = every PurRDF subject typed as an OWL/RDFS vocabulary
         // construct (owl:Class, owl:ObjectProperty, …) in any ownership-bearing
         // artifact.  Terms here but absent from `claims` have no rdfs:isDefinedBy
         // and are emitted as OwnershipStatus::Unowned.
@@ -295,7 +296,7 @@ impl<'a> OwnershipAnalyzer<'a> {
                 let store = parse_rdf_artifact(artifact)?;
                 // Collect rdfs:isDefinedBy claims.
                 for (subject, owner) in collect_is_defined_by(&store) {
-                    // Only PURRDF vocabulary terms are owned.
+                    // Only PurRDF vocabulary terms are owned.
                     if !subject.as_str().starts_with(PURRDF_NS) {
                         continue;
                     }
@@ -306,12 +307,14 @@ impl<'a> OwnershipAnalyzer<'a> {
                     // Physical origin = the artifact that carries this triple,
                     // keyed once (first wins — artifacts iterate in sorted
                     // logical-path order for determinism).
-                    physical.entry(subject.clone()).or_insert(ArtifactEvidence {
-                        slice: slice_iri.clone(),
-                        role: artifact.role.clone(),
-                        logical_path: artifact.logical_path.clone(),
-                        raw_digest: artifact.raw_digest.clone(),
-                    });
+                    physical
+                        .entry(subject.clone())
+                        .or_insert_with(|| ArtifactEvidence {
+                            slice: slice_iri.clone(),
+                            role: artifact.role.clone(),
+                            logical_path: artifact.logical_path.clone(),
+                            raw_digest: artifact.raw_digest.clone(),
+                        });
                 }
                 // Collect declared vocabulary terms (typed subjects in PURRDF_NS).
                 for term in collect_declared_terms(&store) {
@@ -424,9 +427,8 @@ impl<'a> OwnershipAnalyzer<'a> {
         for record in self.catalog.records() {
             let from = record.manifest.slice_iri.clone();
             for artifact in &record.artifacts {
-                let kind = match edge_kind_for_role(&artifact.role) {
-                    Some(k) => k,
-                    None => continue,
+                let Some(kind) = edge_kind_for_role(&artifact.role) else {
+                    continue;
                 };
                 let from_evidence = ArtifactEvidence {
                     slice: from.clone(),
@@ -489,10 +491,7 @@ impl<'a> OwnershipAnalyzer<'a> {
                     })
             });
 
-            let declared = declared_deps
-                .get(&from)
-                .map(|s| s.contains(&to))
-                .unwrap_or(false);
+            let declared = declared_deps.get(&from).is_some_and(|s| s.contains(&to));
 
             let reconciliation = if !kind.is_semantic() {
                 // Non-semantic edges never reconcile; they are evidence-only.
@@ -611,7 +610,7 @@ fn collect_is_defined_by(store: &Dataset) -> Vec<(NamedNode, SliceIri)> {
     out
 }
 
-/// Collect every PURRDF-namespaced subject typed as an OWL/RDFS vocabulary
+/// Collect every PurRDF-namespaced subject typed as an OWL/RDFS vocabulary
 /// construct (`owl:Class`, `owl:ObjectProperty`, etc.) in the given dataset.
 /// These are "declared terms" that must have an `rdfs:isDefinedBy` or they will
 /// be flagged as `OwnershipStatus::Unowned`.

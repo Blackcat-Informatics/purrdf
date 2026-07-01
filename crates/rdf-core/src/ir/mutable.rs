@@ -524,8 +524,8 @@ impl MutableDataset {
 /// primitive `freeze` drives every table through.
 fn intern_value(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
     match value {
-        TermValue::Iri(iri) => builder.intern_iri(iri.clone()),
-        TermValue::Blank { label, scope } => builder.intern_blank(label.clone(), *scope),
+        TermValue::Iri(iri) => builder.intern_iri(iri),
+        TermValue::Blank { label, scope } => builder.intern_blank(label, *scope),
         TermValue::Literal {
             lexical_form,
             datatype,
@@ -626,9 +626,9 @@ impl DatasetMut for MutableDataset {
                 Some(v) => self.find_value(v).map(Some).ok_or(()),
             }
         };
-        let (sb, pb, ob) = match (resolve_bound(s), resolve_bound(p), resolve_bound(o)) {
-            (Ok(sb), Ok(pb), Ok(ob)) => (sb, pb, ob),
-            _ => return Vec::new(),
+        let (Ok(sb), Ok(pb), Ok(ob)) = (resolve_bound(s), resolve_bound(p), resolve_bound(o))
+        else {
+            return Vec::new();
         };
         // The graph filter, in MutTermId space. The named graph is matched BY VALUE
         // (resolved without minting), so both a base-named and a delta-only-named
@@ -670,9 +670,9 @@ impl GraphMatchMut {
     #[inline]
     fn matches(self, g: Option<MutTermId>) -> bool {
         match self {
-            GraphMatchMut::Any => true,
-            GraphMatchMut::Default => g.is_none(),
-            GraphMatchMut::Named(id) => g == Some(id),
+            Self::Any => true,
+            Self::Default => g.is_none(),
+            Self::Named(id) => g == Some(id),
         }
     }
 }
@@ -745,17 +745,17 @@ mod tests {
     /// A base with three quads: (a,p,b), (a,p,c), (b,p,c) — and one reifier+annotation.
     fn base3() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://example.org/a".to_string());
-        let p = b.intern_iri("http://example.org/p".to_string());
-        let bb = b.intern_iri("http://example.org/b".to_string());
-        let c = b.intern_iri("http://example.org/c".to_string());
+        let a = b.intern_iri("http://example.org/a");
+        let p = b.intern_iri("http://example.org/p");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
         b.push_quad(a, p, bb, None);
         b.push_quad(a, p, c, None);
         b.push_quad(bb, p, c, None);
         // A reifier + annotation over the (a,p,b) triple term.
         let triple = b.intern_triple(a, p, bb);
-        let r = b.intern_iri("http://example.org/r".to_string());
-        let conf = b.intern_iri("http://example.org/confidence".to_string());
+        let r = b.intern_iri("http://example.org/r");
+        let conf = b.intern_iri("http://example.org/confidence");
         let score = b.intern_literal(RdfLiteral::typed(
             "0.9",
             "http://www.w3.org/2001/XMLSchema#decimal",
@@ -895,10 +895,10 @@ mod tests {
     #[test]
     fn named_graph_quads_round_trip() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s".to_string());
-        let p = b.intern_iri("http://example.org/p".to_string());
-        let o = b.intern_iri("http://example.org/o".to_string());
-        let g = b.intern_iri("http://example.org/g".to_string());
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        let g = b.intern_iri("http://example.org/g");
         b.push_quad(s, p, o, Some(g));
         let base = b.freeze().unwrap();
 
@@ -923,9 +923,9 @@ mod tests {
         // base TermId), so a TermId-keyed filter could never name it; the value-based
         // GraphMatchValue::Named resolves it via the delta interner.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s".to_string());
-        let p = b.intern_iri("http://example.org/p".to_string());
-        let o = b.intern_iri("http://example.org/o".to_string());
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
         b.push_quad(s, p, o, None); // default-graph base quad; no g2 anywhere
         let base = b.freeze().unwrap();
 
@@ -1022,10 +1022,10 @@ mod tests {
         // the surviving located quad's location (across the base-ord → new-handle →
         // frozen-sort remap) while dropping the suppressed one.
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://example.org/a".to_string());
-        let p = b.intern_iri("http://example.org/p".to_string());
-        let bb = b.intern_iri("http://example.org/b".to_string());
-        let c = b.intern_iri("http://example.org/c".to_string());
+        let a = b.intern_iri("http://example.org/a");
+        let p = b.intern_iri("http://example.org/p");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
 
         // (a,p,b) gets a location; (a,p,c) does not.
         let h_ab = b.next_quad_handle();

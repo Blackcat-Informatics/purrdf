@@ -168,9 +168,9 @@ mod tests {
 
     fn dataset_with_one_iri() -> std::sync::Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://example.org/s".to_owned());
-        let p = b.intern_iri("https://example.org/p".to_owned());
-        let o = b.intern_iri("https://example.org/o".to_owned());
+        let s = b.intern_iri("https://example.org/s");
+        let p = b.intern_iri("https://example.org/p");
+        let o = b.intern_iri("https://example.org/o");
         b.push_quad(s, p, o, None);
         b.freeze().expect("freeze")
     }
@@ -243,8 +243,8 @@ mod tests {
         // A literal interned in the dataset resolves back to the same value space,
         // exercising the datatype-id → IRI expansion in `term_id_to_value`.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://example.org/s".to_owned());
-        let p = b.intern_iri("https://example.org/p".to_owned());
+        let s = b.intern_iri("https://example.org/s");
+        let p = b.intern_iri("https://example.org/p");
         let o = b.intern_literal(RdfLiteral {
             lexical_form: "42".to_owned(),
             datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),

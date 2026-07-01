@@ -54,7 +54,7 @@ impl Query {
     /// injection-only [`GroundTerm::BlankNode`] (so a blank-node focus node is
     /// pre-bound through the identical rewrite).
     #[must_use]
-    pub fn substitute_variable(self, var: &Variable, value: GroundTerm) -> Query {
+    pub fn substitute_variable(self, var: &Variable, value: GroundTerm) -> Self {
         let seed = GraphPattern::Values {
             variables: vec![var.clone()],
             bindings: vec![vec![Some(value)]],
@@ -73,44 +73,44 @@ impl Query {
     /// also the hook the evaluator's blank-node pre-binding reuses (it descends the
     /// same wrappers to join its singleton seed at the identical position).
     #[must_use]
-    pub fn map_core_pattern(self, f: impl FnOnce(GraphPattern) -> GraphPattern) -> Query {
+    pub fn map_core_pattern(self, f: impl FnOnce(GraphPattern) -> GraphPattern) -> Self {
         match self {
-            Query::Select {
+            Self::Select {
                 pattern,
                 dataset,
                 base_iri,
-            } => Query::Select {
+            } => Self::Select {
                 pattern: map_core_pattern(pattern, f),
                 dataset,
                 base_iri,
             },
-            Query::Construct {
+            Self::Construct {
                 template,
                 pattern,
                 dataset,
                 base_iri,
-            } => Query::Construct {
+            } => Self::Construct {
                 template,
                 pattern: map_core_pattern(pattern, f),
                 dataset,
                 base_iri,
             },
-            Query::Describe {
+            Self::Describe {
                 pattern,
                 targets,
                 dataset,
                 base_iri,
-            } => Query::Describe {
+            } => Self::Describe {
                 pattern: map_core_pattern(pattern, f),
                 targets,
                 dataset,
                 base_iri,
             },
-            Query::Ask {
+            Self::Ask {
                 pattern,
                 dataset,
                 base_iri,
-            } => Query::Ask {
+            } => Self::Ask {
                 pattern: map_core_pattern(pattern, f),
                 dataset,
                 base_iri,

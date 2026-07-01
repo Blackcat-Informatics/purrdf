@@ -47,7 +47,8 @@ pub struct TransportKey {
 }
 
 /// Signing material loaded from an unencrypted OpenPGP Ed25519 secret-key block.
-#[derive(Clone)]
+// `SigningKey`'s `Debug` impl redacts the secret scalar, so deriving is safe here.
+#[derive(Clone, Debug)]
 pub struct OpenPgpSigningKey {
     signing_key: SigningKey,
     kid: String,
@@ -396,7 +397,7 @@ pub fn parse_transport_key(armored: &str) -> Result<TransportKey> {
         let (raw, pub_body): ([u8; 32], Vec<u8>) = match tag {
             6 => {
                 let (raw, _) = parse_ed25519_public_material(&body)?;
-                (raw, body.clone())
+                (raw, body)
             }
             5 => {
                 let (raw, end) = parse_ed25519_public_material(&body)?;
@@ -607,8 +608,7 @@ mod tests {
     #[test]
     fn secret_signing_key_rejects_public_armor() {
         let err = parse_secret_signing_key(&fixture("test_key.pub.asc"), None)
-            .err()
-            .expect("public armor is rejected as signing material");
+            .expect_err("public armor is rejected as signing material");
         assert!(err.0.contains("no secret-key packet"));
     }
 
@@ -619,9 +619,8 @@ mod tests {
             body[pub_end] = 254;
         });
 
-        let err = parse_secret_signing_key(&armor, None)
-            .err()
-            .expect("encrypted secret key is rejected");
+        let err =
+            parse_secret_signing_key(&armor, None).expect_err("encrypted secret key is rejected");
         assert!(err.0.contains("encrypted secret keys are not supported"));
     }
 
@@ -640,8 +639,7 @@ mod tests {
         });
 
         let err = parse_secret_signing_key(&armor, None)
-            .err()
-            .expect("bad secret-key checksum is rejected");
+            .expect_err("bad secret-key checksum is rejected");
         assert!(err.0.contains("checksum mismatch"));
     }
 
@@ -652,8 +650,7 @@ mod tests {
         });
 
         let err = parse_secret_signing_key(&armor, None)
-            .err()
-            .expect("unexpected secret-key trailer is rejected");
+            .expect_err("unexpected secret-key trailer is rejected");
         assert!(err.0.contains("unsupported secret-key packet structure"));
     }
 
@@ -665,8 +662,7 @@ mod tests {
         });
 
         let err = parse_secret_signing_key(&armor, None)
-            .err()
-            .expect("mismatched public and secret material is rejected");
+            .expect_err("mismatched public and secret material is rejected");
         assert!(err.0.contains("does not match public key material"));
     }
 
@@ -676,16 +672,14 @@ mod tests {
             body[5] = 1;
         });
         let err = parse_secret_signing_key(&wrong_algorithm, None)
-            .err()
-            .expect("unsupported algorithm is rejected");
+            .expect_err("unsupported algorithm is rejected");
         assert!(err.0.contains("unsupported public-key algorithm 1"));
 
         let v5 = mutated_secret_armor(|body| {
             body[0] = 5;
         });
         let err = parse_secret_signing_key(&v5, None)
-            .err()
-            .expect("unsupported OpenPGP version is rejected");
+            .expect_err("unsupported OpenPGP version is rejected");
         assert!(err.0.contains("only OpenPGP v4 public keys are supported"));
     }
 }

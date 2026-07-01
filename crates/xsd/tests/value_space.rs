@@ -561,7 +561,7 @@ fn hex_binary_case_insensitive_value_equality() {
     let lower = parse("0f", D::HexBinary).unwrap();
     assert_eq!(
         value_cmp(&upper, &lower),
-        Some(std::cmp::Ordering::Equal),
+        Some(Ordering::Equal),
         "\"0F\" and \"0f\" are value-equal hexBinary"
     );
 }

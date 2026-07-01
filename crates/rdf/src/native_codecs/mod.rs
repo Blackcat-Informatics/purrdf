@@ -27,7 +27,7 @@ pub(crate) mod ser_model;
 // `fold_statement_layer` (one fold, no drift) — #909 Task 1.
 pub(crate) mod parse;
 mod serialize;
-// First-party JSON-LD-star / YAML-LD-star codec: serializes the frozen IR to the PURRDF
+// First-party JSON-LD-star / YAML-LD-star codec: serializes the frozen IR to the PurRDF
 // JSON-LD-star / YAML-LD-star surface and parses it back, walking the
 // same first-party `SerGraph` the RDF text serializers use. The lowest crate the rdf /
 // validate / pipeline consumers share, so all three call it here (the codec previously
@@ -121,9 +121,9 @@ mod tests {
     #[test]
     fn basic_graph_round_trips() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s".to_owned());
-        let p = b.intern_iri("https://e/p".to_owned());
-        let o = b.intern_iri("https://e/o".to_owned());
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
         b.push_quad(s, p, o, None);
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "text/turtle");
@@ -136,12 +136,12 @@ mod tests {
     #[test]
     fn reifier_and_annotation_round_trip() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s".to_owned());
-        let p = b.intern_iri("https://e/p".to_owned());
-        let o = b.intern_iri("https://e/o".to_owned());
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
         let triple = b.intern_triple(s, p, o);
-        let r = b.intern_iri("https://e/r".to_owned());
-        let conf = b.intern_iri("https://e/confidence".to_owned());
+        let r = b.intern_iri("https://e/r");
+        let conf = b.intern_iri("https://e/confidence");
         let val = b.intern_literal(RdfLiteral::typed(
             "0.9",
             "http://www.w3.org/2001/XMLSchema#decimal",
@@ -156,8 +156,8 @@ mod tests {
     #[test]
     fn rtl_literal_round_trips() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s".to_owned());
-        let p = b.intern_iri("https://e/p".to_owned());
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
         let lit = b.intern_literal(RdfLiteral {
             lexical_form: "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}".to_owned(),
             datatype: None,
@@ -172,11 +172,11 @@ mod tests {
     #[test]
     fn quoted_triple_term_round_trips() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s".to_owned());
-        let p = b.intern_iri("https://e/p".to_owned());
-        let o = b.intern_iri("https://e/o".to_owned());
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
         let inner = b.intern_triple(s, p, o);
-        let asserts = b.intern_iri("https://e/asserts".to_owned());
+        let asserts = b.intern_iri("https://e/asserts");
         b.push_quad(s, asserts, inner, None);
         let ds = b.freeze().expect("freeze");
         // FINDING (#909): purrdf-gts 0.9.5's `to_turtle`/`to_ntriples`/`to_trig`/
@@ -195,10 +195,10 @@ mod tests {
         // Two same-label blanks in different scopes are distinct; the qualified label
         // (`x` vs `x.s1`) survives the round trip as two distinct blank nodes.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s".to_owned());
-        let p = b.intern_iri("https://e/p".to_owned());
-        let b0 = b.intern_blank("x".to_owned(), BlankScope(0));
-        let b1 = b.intern_blank("x".to_owned(), BlankScope(1));
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
+        let b0 = b.intern_blank("x", BlankScope(0));
+        let b1 = b.intern_blank("x", BlankScope(1));
         b.push_quad(s, p, b0, None);
         b.push_quad(s, p, b1, None);
         let ds = b.freeze().expect("freeze");
@@ -226,8 +226,8 @@ mod tests {
         ];
         for (lexical, datatype) in cases {
             let mut b = RdfDatasetBuilder::new();
-            let s = b.intern_iri("https://e/s".to_owned());
-            let p = b.intern_iri("https://e/p".to_owned());
+            let s = b.intern_iri("https://e/s");
+            let p = b.intern_iri("https://e/p");
             let lit = b.intern_literal(RdfLiteral::typed(lexical, datatype));
             b.push_quad(s, p, lit, None);
             let ds = b.freeze().expect("freeze");
@@ -270,11 +270,11 @@ mod tests {
     #[test]
     fn backend_serializes_default_graph_without_named_rows() {
         let mut b = RdfDatasetBuilder::new();
-        let default_s = b.intern_iri("https://e/default-s".to_owned());
-        let named_s = b.intern_iri("https://e/named-s".to_owned());
-        let p = b.intern_iri("https://e/p".to_owned());
-        let o = b.intern_iri("https://e/o".to_owned());
-        let g = b.intern_iri("https://e/g".to_owned());
+        let default_s = b.intern_iri("https://e/default-s");
+        let named_s = b.intern_iri("https://e/named-s");
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
+        let g = b.intern_iri("https://e/g");
         b.push_quad(default_s, p, o, None);
         b.push_quad(named_s, p, o, Some(g));
         let ds = b.freeze().expect("freeze");

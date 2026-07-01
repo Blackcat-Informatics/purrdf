@@ -77,8 +77,8 @@ struct Node {
     start: usize,
     end: usize,
     hash: Vec<u8>,
-    left: Option<Box<Node>>,
-    right: Option<Box<Node>>,
+    left: Option<Box<Self>>,
+    right: Option<Box<Self>>,
 }
 
 fn uint(n: usize) -> Value {
@@ -343,6 +343,7 @@ pub fn verify_proof(proof: &Proof) -> Result<(), String> {
 }
 
 fn json_escape(text: &str) -> String {
+    use std::fmt::Write as _;
     let mut out = String::new();
     for ch in text.chars() {
         match ch {
@@ -351,7 +352,9 @@ fn json_escape(text: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
             c => out.push(c),
         }
     }
@@ -361,29 +364,26 @@ fn json_escape(text: &str) -> String {
 impl Proof {
     /// Render the stable detached proof JSON form.
     pub fn to_json(&self) -> String {
+        use std::fmt::Write as _;
         let mut out = String::new();
         out.push_str("{\n");
-        out.push_str(&format!(
-            "  \"schema\": \"{}\",\n",
-            json_escape(PROOF_SCHEMA)
-        ));
-        out.push_str(&format!(
-            "  \"hash\": \"{}\",\n",
-            json_escape(HASH_ALGORITHM)
-        ));
-        out.push_str(&format!(
-            "  \"preimage\": \"{}\",\n",
+        let _ = writeln!(out, "  \"schema\": \"{}\",", json_escape(PROOF_SCHEMA));
+        let _ = writeln!(out, "  \"hash\": \"{}\",", json_escape(HASH_ALGORITHM));
+        let _ = writeln!(
+            out,
+            "  \"preimage\": \"{}\",",
             json_escape(PREIMAGE_VERSION)
-        ));
-        out.push_str(&format!("  \"count\": {},\n", self.count));
-        out.push_str(&format!("  \"leaf_index\": {},\n", self.leaf_index));
-        out.push_str(&format!("  \"frame_id\": \"{}\",\n", hex(&self.frame_id)));
-        out.push_str(&format!("  \"root\": \"{}\",\n", hex(&self.root)));
-        out.push_str(&format!("  \"peak_index\": {},\n", self.peak_index));
+        );
+        let _ = writeln!(out, "  \"count\": {},", self.count);
+        let _ = writeln!(out, "  \"leaf_index\": {},", self.leaf_index);
+        let _ = writeln!(out, "  \"frame_id\": \"{}\",", hex(&self.frame_id));
+        let _ = writeln!(out, "  \"root\": \"{}\",", hex(&self.root));
+        let _ = writeln!(out, "  \"peak_index\": {},", self.peak_index);
         out.push_str("  \"peaks\": [\n");
         for (index, peak) in self.peaks.iter().enumerate() {
-            out.push_str(&format!(
-                "    {{\"height\": {}, \"hash\": \"{}\"}}{}\n",
+            let _ = writeln!(
+                out,
+                "    {{\"height\": {}, \"hash\": \"{}\"}}{}",
                 peak.height,
                 hex(&peak.hash),
                 if index + 1 == self.peaks.len() {
@@ -391,7 +391,7 @@ impl Proof {
                 } else {
                     ","
                 }
-            ));
+            );
         }
         out.push_str("  ],\n");
         out.push_str("  \"path\": [\n");
@@ -400,8 +400,9 @@ impl Proof {
                 ProofSide::Left => "left",
                 ProofSide::Right => "right",
             };
-            out.push_str(&format!(
-                "    {{\"side\": \"{}\", \"parent_height\": {}, \"hash\": \"{}\"}}{}\n",
+            let _ = writeln!(
+                out,
+                "    {{\"side\": \"{}\", \"parent_height\": {}, \"hash\": \"{}\"}}{}",
                 side,
                 step.parent_height,
                 hex(&step.hash),
@@ -410,7 +411,7 @@ impl Proof {
                 } else {
                     ","
                 }
-            ));
+            );
         }
         out.push_str("  ]\n");
         out.push_str("}\n");
@@ -429,8 +430,8 @@ enum Json {
     Bool,
     Number(u64),
     String(String),
-    Array(Vec<Json>),
-    Object(Vec<(String, Json)>),
+    Array(Vec<Self>),
+    Object(Vec<(String, Self)>),
 }
 
 struct JsonParser<'a> {
@@ -623,7 +624,7 @@ impl<'a> JsonParser<'a> {
         if self.bytes.get(self.pos) == Some(&b'0') {
             self.pos += 1;
         } else {
-            while self.bytes.get(self.pos).is_some_and(|b| b.is_ascii_digit()) {
+            while self.bytes.get(self.pos).is_some_and(u8::is_ascii_digit) {
                 self.pos += 1;
             }
         }
@@ -726,7 +727,8 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
 
 /// Parse a raw 32-byte hex id, accepting an optional `blake3:` prefix.
 pub fn parse_hex_32(input: &str) -> Result<Vec<u8>, String> {
-    let raw = input.trim().strip_prefix("blake3:").unwrap_or(input.trim());
+    let trimmed = input.trim();
+    let raw = trimmed.strip_prefix("blake3:").unwrap_or(trimmed);
     if raw.len() != 64 {
         return Err("expected a 32-byte hex value".to_string());
     }
@@ -819,7 +821,7 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> 
                 Some(Value::Bytes(prev)) if prev.as_slice() == expected_prev.as_slice() => {}
                 _ => return Err(format!("item {abs_item} prev mismatch")),
             }
-            expected_prev = computed.clone();
+            expected_prev.clone_from(&computed);
             frame_ids.push(computed);
             if map_get(frame, "t").and_then(as_text) == Some("index") {
                 let Some(Value::Map(index_payload)) = map_get(frame, "d") else {

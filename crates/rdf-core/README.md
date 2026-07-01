@@ -3,7 +3,7 @@
 
 # purrdf-core
 
-`purrdf-core` is the oxigraph-free RDF 1.2 kernel for the PURRDF Rust
+`purrdf-core` is the oxigraph-free RDF 1.2 kernel for the PurRDF Rust
 workspace. It owns the shared RDF model, RDF diagnostics, the interned IR
 (`TermId`/`RdfDataset`), store traits, `DatasetView`, and the oxigraph-free GTS
 readers.

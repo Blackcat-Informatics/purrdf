@@ -7,7 +7,7 @@
 //! The documentation site exports each term's (and each slice's) RDF in every
 //! serialization format. To do that it needs the subgraph that *describes* a subject.
 //! A plain CBD (outgoing triples + forward blank closure) would under-represent the
-//! very thing PURRDF exists to showcase: the **incoming** links — `skos:exactMatch`
+//! very thing PurRDF exists to showcase: the **incoming** links — `skos:exactMatch`
 //! targets, `rdfs:subPropertyOf`/`subClassOf` children, authority back-references. So
 //! `describe` returns the **symmetric** CBD:
 //!
@@ -35,6 +35,7 @@ use crate::{QuadIds, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, TermId, TermR
 /// endpoint index **once**, so extracting the SCBD of many subjects (one per exported
 /// term/slice) is cheap — each extraction is a bounded graph walk over the index, not
 /// a full re-scan of the dataset.
+#[derive(Debug)]
 pub struct Describer<'a> {
     dataset: &'a RdfDataset,
     /// term id → the quads that touch it as subject or object.
@@ -366,11 +367,11 @@ mod tests {
         // S -> _:b (restriction) -> onProperty target. The blank closure must bring the
         // blank's own triples along, both hops.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S.to_string());
-        let has = b.intern_iri("https://e/hasRestriction".to_string());
-        let bnode = b.intern_blank("r1".to_string(), crate::BlankScope::DEFAULT);
-        let on = b.intern_iri("https://e/onProperty".to_string());
-        let target = b.intern_iri("https://e/target".to_string());
+        let s = b.intern_iri(S);
+        let has = b.intern_iri("https://e/hasRestriction");
+        let bnode = b.intern_blank("r1", crate::BlankScope::DEFAULT);
+        let on = b.intern_iri("https://e/onProperty");
+        let target = b.intern_iri("https://e/target");
         b.push_quad(s, has, bnode, None);
         b.push_quad(bnode, on, target, None);
         let ds = b.freeze().unwrap();
@@ -401,14 +402,14 @@ mod tests {
     fn includes_reifiers_about_the_subject() {
         // S p o, with a reifier annotating that statement (a certainty note).
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S.to_string());
-        let p = b.intern_iri("https://e/p".to_string());
-        let o = b.intern_iri("https://e/o".to_string());
+        let s = b.intern_iri(S);
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
         b.push_quad(s, p, o, None);
         let triple_term = b.intern_triple(s, p, o);
-        let reifier = b.intern_blank("stmt1".to_string(), crate::BlankScope::DEFAULT);
+        let reifier = b.intern_blank("stmt1", crate::BlankScope::DEFAULT);
         b.push_reifier(reifier, triple_term);
-        let certainty = b.intern_iri("https://e/certainty".to_string());
+        let certainty = b.intern_iri("https://e/certainty");
         let high = b.intern_literal(RdfLiteral::simple("high"));
         b.push_annotation(reifier, certainty, high);
         let ds = b.freeze().unwrap();
@@ -445,16 +446,16 @@ mod tests {
         // (`_:stmt ex:author ex:alice`). That describing quad must ride along with the
         // reifier — a plain forward walk would drop it, leaving a dangling blank.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S.to_string());
-        let p = b.intern_iri("https://e/p".to_string());
-        let o = b.intern_iri("https://e/o".to_string());
+        let s = b.intern_iri(S);
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
         b.push_quad(s, p, o, None);
         let triple_term = b.intern_triple(s, p, o);
-        let reifier = b.intern_blank("stmt1".to_string(), crate::BlankScope::DEFAULT);
+        let reifier = b.intern_blank("stmt1", crate::BlankScope::DEFAULT);
         b.push_reifier(reifier, triple_term);
         // A plain triple describing the blank reifier itself.
-        let author = b.intern_iri("https://e/author".to_string());
-        let alice = b.intern_iri("https://e/alice".to_string());
+        let author = b.intern_iri("https://e/author");
+        let alice = b.intern_iri("https://e/alice");
         b.push_quad(reifier, author, alice, None);
         let ds = b.freeze().unwrap();
 
@@ -482,19 +483,19 @@ mod tests {
         // side-table does not live in `by_endpoint`, so without folding the annotation
         // harvest into the walk that blank would dangle.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S.to_string());
-        let p = b.intern_iri("https://e/p".to_string());
-        let o = b.intern_iri("https://e/o".to_string());
+        let s = b.intern_iri(S);
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
         b.push_quad(s, p, o, None);
         let triple_term = b.intern_triple(s, p, o);
-        let reifier = b.intern_blank("stmt1".to_string(), crate::BlankScope::DEFAULT);
+        let reifier = b.intern_blank("stmt1", crate::BlankScope::DEFAULT);
         b.push_reifier(reifier, triple_term);
-        let source = b.intern_iri("https://e/source".to_string());
-        let prov = b.intern_blank("prov".to_string(), crate::BlankScope::DEFAULT);
+        let source = b.intern_iri("https://e/source");
+        let prov = b.intern_blank("prov", crate::BlankScope::DEFAULT);
         b.push_annotation(reifier, source, prov);
         // The blank provenance node's own describing triple (a plain quad).
-        let by = b.intern_iri("https://e/by".to_string());
-        let agent = b.intern_iri("https://e/agent".to_string());
+        let by = b.intern_iri("https://e/by");
+        let agent = b.intern_iri("https://e/agent");
         b.push_quad(prov, by, agent, None);
         let ds = b.freeze().unwrap();
 
@@ -524,22 +525,22 @@ mod tests {
         // binding on the reifier id (rather than only the annotation harvest) would skip
         // closing the second triple's endpoints and drop the blank.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S.to_string());
-        let p1 = b.intern_iri("https://e/p1".to_string());
-        let o1 = b.intern_iri("https://e/o1".to_string());
-        let p2 = b.intern_iri("https://e/p2".to_string());
-        let blank = b.intern_blank("bo".to_string(), crate::BlankScope::DEFAULT);
+        let s = b.intern_iri(S);
+        let p1 = b.intern_iri("https://e/p1");
+        let o1 = b.intern_iri("https://e/o1");
+        let p2 = b.intern_iri("https://e/p2");
+        let blank = b.intern_blank("bo", crate::BlankScope::DEFAULT);
         // Only the first triple is asserted as a plain quad; the second exists solely as
         // a reified statement.
         b.push_quad(s, p1, o1, None);
         let t1 = b.intern_triple(s, p1, o1);
         let t2 = b.intern_triple(s, p2, blank);
-        let reifier = b.intern_blank("stmt".to_string(), crate::BlankScope::DEFAULT);
+        let reifier = b.intern_blank("stmt", crate::BlankScope::DEFAULT);
         b.push_reifier(reifier, t1);
         b.push_reifier(reifier, t2);
         // The blank object of the second reified triple carries its own describing triple.
-        let deep = b.intern_iri("https://e/deep".to_string());
-        let val = b.intern_iri("https://e/val".to_string());
+        let deep = b.intern_iri("https://e/deep");
+        let val = b.intern_iri("https://e/val");
         b.push_quad(blank, deep, val, None);
         let ds = b.freeze().unwrap();
 

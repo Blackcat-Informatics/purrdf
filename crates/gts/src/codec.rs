@@ -59,9 +59,7 @@ pub struct EncodeOptions {
 }
 
 fn zstd_level(level: Option<i32>) -> CompressionLevel {
-    level
-        .map(CompressionLevel::Level)
-        .unwrap_or(DEFAULT_ZSTD_LEVEL)
+    level.map_or(DEFAULT_ZSTD_LEVEL, CompressionLevel::Level)
 }
 
 fn decode_one(codec: &Codec, data: &[u8]) -> Result<Vec<u8>, CodecError> {
@@ -98,7 +96,6 @@ fn decode_one(codec: &Codec, data: &[u8]) -> Result<Vec<u8>, CodecError> {
                                     .into(),
                             )
                         })?;
-                        continue;
                     }
                     Err(e) => return Err(CodecError::Failed(format!("zstd decode failed: {e}"))),
                 }

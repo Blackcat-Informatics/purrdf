@@ -400,6 +400,7 @@ type NamedGraphRow<'py> = (
     rsyncable_threshold=DEFAULT_RSYNCABLE_THRESHOLD,
 ))]
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn compile_gts_native(
     py: Python<'_>,
     base_data: &Bound<'_, PyBytes>,
@@ -525,7 +526,7 @@ fn rdf_format(format: PyRdfFormat) -> NativeRdfFormat {
 }
 
 /// Register the native GTS producer surface on the `purrdf` module.
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gts_from_quads, m)?)?;
     m.add_function(wrap_pyfunction!(gts_from_rdf12_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(compile_gts_native, m)?)?;

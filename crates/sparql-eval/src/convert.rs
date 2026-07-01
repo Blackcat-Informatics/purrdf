@@ -19,11 +19,11 @@ use crate::error::EvalError;
 
 /// Map the algebra's RDF-1.2 base direction to the IR's.
 #[inline]
-pub(crate) fn map_direction(direction: Option<BaseDirection>) -> Option<RdfTextDirection> {
-    direction.map(|d| match d {
+pub(crate) fn map_direction(direction: BaseDirection) -> RdfTextDirection {
+    match direction {
         BaseDirection::Ltr => RdfTextDirection::Ltr,
         BaseDirection::Rtl => RdfTextDirection::Rtl,
-    })
+    }
 }
 
 /// An IRI term value.
@@ -39,7 +39,7 @@ pub(crate) fn literal_to_value(lit: &Literal) -> TermValue {
         lexical_form: lit.value().to_owned(),
         datatype: lit.datatype().as_str().to_owned(),
         language: lit.language().map(str::to_ascii_lowercase),
-        direction: map_direction(lit.direction()),
+        direction: lit.direction().map(map_direction),
     }
 }
 

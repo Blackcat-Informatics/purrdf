@@ -34,11 +34,11 @@ pub fn dataset_from_quads(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, String> 
     for quad in quads {
         let subject = intern_native_term(&mut builder, &quad.subject);
         let is_reifies = quad.predicate == RDF_REIFIES;
-        let predicate = builder.intern_iri(quad.predicate.clone());
+        let predicate = builder.intern_iri(&quad.predicate);
         let object = match &quad.object {
             RdfTerm::Triple(triple) => {
                 let s = intern_native_term(&mut builder, &triple.subject);
-                let p = builder.intern_iri(triple.predicate.clone());
+                let p = builder.intern_iri(&triple.predicate);
                 let o = intern_native_term(&mut builder, &triple.object);
                 FoldNode::Triple { s, p, o }
             }
@@ -65,12 +65,12 @@ pub fn dataset_from_quads(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, String> 
 /// `builder` under the default blank scope, returning its [`TermId`].
 fn intern_native_term(builder: &mut RdfDatasetBuilder, term: &RdfTerm) -> TermId {
     match term {
-        RdfTerm::Iri(iri) => builder.intern_iri(iri.clone()),
-        RdfTerm::BlankNode(label) => builder.intern_blank(label.clone(), BlankScope::DEFAULT),
+        RdfTerm::Iri(iri) => builder.intern_iri(iri),
+        RdfTerm::BlankNode(label) => builder.intern_blank(label, BlankScope::DEFAULT),
         RdfTerm::Literal(lit) => builder.intern_literal(lit.clone()),
         RdfTerm::Triple(triple) => {
             let s = intern_native_term(builder, &triple.subject);
-            let p = builder.intern_iri(triple.predicate.clone());
+            let p = builder.intern_iri(&triple.predicate);
             let o = intern_native_term(builder, &triple.object);
             builder.intern_triple(s, p, o)
         }
@@ -206,7 +206,7 @@ ex:g {
 }
 "#;
         let ir = crate::parse_dataset(TRIG.as_bytes(), "application/trig", None).expect("parse");
-        let canon = super::canonical_flat_nquads(&ir).expect("native flat canon");
+        let canon = canonical_flat_nquads(&ir).expect("native flat canon");
 
         // (a) The statement layer is FLATTENED to plain triples: the `rdf:reifies`
         // binding and the annotation re-appear as ordinary N-Quads lines, and the
@@ -239,7 +239,7 @@ ex:g {
 "#;
         let ir_iso =
             crate::parse_dataset(TRIG_ISO.as_bytes(), "application/trig", None).expect("parse iso");
-        let canon_iso = super::canonical_flat_nquads(&ir_iso).expect("native flat canon iso");
+        let canon_iso = canonical_flat_nquads(&ir_iso).expect("native flat canon iso");
         assert_eq!(
             canon, canon_iso,
             "isomorphic datasets must canonicalize to identical flat N-Quads"

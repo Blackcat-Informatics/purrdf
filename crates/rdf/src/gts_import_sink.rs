@@ -195,7 +195,7 @@ impl SinkImporter {
                             .with_gts_term(gts_id),
                     ));
                 };
-                self.builder.intern_iri(iri)
+                self.builder.intern_iri(&iri)
             }
             // Per-segment scope isolation (C0.2): scope = segment_index + 1 so the
             // SAME blank label in different segments interns to DISTINCT ids, while
@@ -205,7 +205,7 @@ impl SinkImporter {
                     .value
                     .unwrap_or_else(|| format!("gts_bnode_{segment_index}_{gts_id}"));
                 let scope = BlankScope(segment_index as u32 + 1);
-                self.builder.intern_blank(label, scope)
+                self.builder.intern_blank(&label, scope)
             }
             TermKind::Literal => {
                 let literal = self.literal_from_term(segment_index, term, depth)?;
@@ -797,7 +797,7 @@ mod tests {
             .freeze()
             .expect("freeze");
         match dataset.resolve(lit_id) {
-            crate::ir::TermRef::Literal {
+            TermRef::Literal {
                 lexical,
                 language,
                 direction,
@@ -861,7 +861,7 @@ mod tests {
             .freeze()
             .expect("freeze");
         match dataset.resolve(outer) {
-            crate::ir::TermRef::Triple { o, .. } => {
+            TermRef::Triple { o, .. } => {
                 assert_eq!(o, inner, "outer triple's object IS the inner triple term");
             }
             other => panic!("expected triple term, got {other:?}"),
@@ -929,13 +929,13 @@ mod tests {
         // The outer quad's object must be the quoted triple, with the right (s,p,o).
         let quad = dataset
             .quad_refs()
-            .find(|q| matches!(q.o, crate::ir::TermRef::Triple { .. }))
+            .find(|q| matches!(q.o, TermRef::Triple { .. }))
             .expect("a quad whose object is the quoted triple");
-        let crate::ir::TermRef::Triple { s, p, o } = quad.o else {
+        let TermRef::Triple { s, p, o } = quad.o else {
             unreachable!("filtered for Triple above");
         };
         let iri_of = |id: TermId| match dataset.resolve(id) {
-            crate::ir::TermRef::Iri(iri) => iri.to_owned(),
+            TermRef::Iri(iri) => iri.to_owned(),
             other => panic!("expected IRI, got {other:?}"),
         };
         assert_eq!(iri_of(s), "http://example.org/s");
@@ -945,7 +945,7 @@ mod tests {
         // The reifier resource ex:stmt binds the SAME interned triple term.
         let reifiers: Vec<_> = dataset.reifiers().collect();
         assert_eq!(reifiers.len(), 1, "one reifier binding survives the bytes");
-        let crate::ir::TermRef::Triple {
+        let TermRef::Triple {
             s: rs,
             p: rp,
             o: ro,
@@ -1007,18 +1007,18 @@ mod tests {
 
         let quad = dataset
             .quad_refs()
-            .find(|q| matches!(q.o, crate::ir::TermRef::Triple { .. }))
+            .find(|q| matches!(q.o, TermRef::Triple { .. }))
             .expect("a quad whose object is the outer quoted triple");
-        let crate::ir::TermRef::Triple { s: outer_s, .. } = quad.o else {
+        let TermRef::Triple { s: outer_s, .. } = quad.o else {
             unreachable!("filtered for Triple above");
         };
         // The outer triple's SUBJECT is itself a quoted triple <<ex:a ex:b ex:c>>.
         let iri_of = |id: TermId| match dataset.resolve(id) {
-            crate::ir::TermRef::Iri(iri) => iri.to_owned(),
+            TermRef::Iri(iri) => iri.to_owned(),
             other => panic!("expected IRI, got {other:?}"),
         };
         match dataset.resolve(outer_s) {
-            crate::ir::TermRef::Triple { s, p, o } => {
+            TermRef::Triple { s, p, o } => {
                 assert_eq!(iri_of(s), "http://example.org/a");
                 assert_eq!(iri_of(p), "http://example.org/b");
                 assert_eq!(iri_of(o), "http://example.org/c");
@@ -1111,10 +1111,10 @@ mod tests {
         let mut blank_scopes: Vec<(String, BlankScope)> = Vec::new();
         let mut subjects: Vec<&str> = Vec::new();
         for quad in dataset.quad_refs() {
-            if let crate::ir::TermRef::Iri(iri) = quad.s {
+            if let TermRef::Iri(iri) = quad.s {
                 subjects.push(iri);
             }
-            if let crate::ir::TermRef::Blank { label, scope } = quad.o {
+            if let TermRef::Blank { label, scope } = quad.o {
                 blank_scopes.push((label.to_owned(), scope));
             }
         }

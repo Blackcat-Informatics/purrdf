@@ -96,7 +96,8 @@ impl VarSchema {
     /// then `other`'s columns not already present (in order). This is the result
     /// schema of a binary algebra operator and matches SPARQL's deterministic
     /// variable ordering (left operand's variables lead).
-    pub fn union(&self, other: &VarSchema) -> VarSchema {
+    #[must_use]
+    pub fn union(&self, other: &Self) -> Self {
         let mut out = self.clone();
         for v in &other.cols {
             out.push(v.clone());
@@ -107,7 +108,7 @@ impl VarSchema {
     /// The shared columns of `self` and `other`, as `(self_ordinal, other_ordinal)`
     /// pairs in `self`'s column order. These are the join key columns and the
     /// columns a compatibility check compares.
-    pub fn shared_columns(&self, other: &VarSchema) -> Vec<(usize, usize)> {
+    pub fn shared_columns(&self, other: &Self) -> Vec<(usize, usize)> {
         self.cols
             .iter()
             .enumerate()

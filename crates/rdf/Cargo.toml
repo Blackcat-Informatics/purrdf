@@ -3,14 +3,19 @@
 
 [package]
 name = "purrdf-rdf"
-description = "PURRDF RDF 1.2 implementation: PyO3-free model, diagnostics, store traits, and native GTS/text-codec adapters"
-version = "0.1.1"
+description = "PurRDF RDF 1.2 implementation: PyO3-free model, diagnostics, store traits, and native GTS/text-codec adapters"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "rdf-12", "gts", "knowledge-graph", "diagnostics"]
 exclude = ["tests/corpus/w3c/**"]
+
+[lints]
+workspace = true
 
 [lib]
 # rlib-only: Python bindings live in `bindings/python`, so this crate stays
@@ -24,40 +29,45 @@ path = "src/lib.rs"
 # model, diagnostics, store traits, loss ledger, provenance, FnO/SSSOM codecs,
 # the content store, and the oxigraph-free GTS reader path. Non-optional:
 # purrdf always re-exports its shipped modules.
-purrdf-core = { path = "../rdf-core", version = "0.1.1" }
+purrdf-core = { workspace = true }
 # The native, zero-dependency XSD value space (#906): non-optional, so purrdf's
 # always-on native codec path can reach W3C-canonical literal canonicalization
 # without any feature gate (#1132 carrier-purity — `.goals` forbids optional
 # components).
-purrdf-xsd = { path = "../xsd", version = "0.1.1" }
+purrdf-xsd = { workspace = true }
 # JSON / YAML surface for the first-party JSON-LD-star / YAML-LD-star codec
 # (`native_codecs::jsonld`, issue #1171). Already in the validate + pipeline trees, so
 # this adds no new tree-wide dependency.
-serde_json = "1"
-serde_yaml = "0.9"
-ciborium = "0.2"
-purrdf-gts = { path = "../gts", version = "0.1.1" }
-purrdf-events = { path = "../rdf-events", version = "0.1.1" }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+ciborium = { workspace = true }
+# Store-once interning on the native text-codec hot path (fixed-key hashing +
+# raw hash table indices into the owned term Vec), matching the purrdf-core
+# `ir::builder` pattern.
+ahash = { workspace = true }
+hashbrown = { workspace = true }
+purrdf-gts = { workspace = true }
+purrdf-events = { workspace = true }
 # The snapshot signing path constructs a SigningKey from 32 raw Ed25519 bytes;
 # same major as purrdf-gts links.
-ed25519-dalek = "2"
+ed25519-dalek = { workspace = true }
 # The native SPARQL evaluator (purrdf S6, #912) — now the SOLE SPARQL authority
 # (EPIC #906 removed oxigraph). It is the engine the maintainer-only golden-capture
 # binary (`src/bin/capture_sparql_goldens.rs`) runs to freeze the conformance
 # goldens (native-vs-native regression gate).
-purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.1" }
+purrdf-sparql-eval = { workspace = true }
 # The wasm-clean SPARQL front-end (#911): its `lexer` is the proven, UCHAR-decoding
 # RDF term tokenizer the first-party N-Triples/N-Quads/Turtle/TriG parser reuses
 # (EPIC #906). NO oxigraph-family edge (only purrdf-iri + purrdf-xsd) — gated by
 # `make rdf-core-hygiene`.
-purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.1" }
+purrdf-sparql-algebra = { workspace = true }
 # The XML DOM front-end for the FIRST-PARTY RDF/XML codec (EPIC #906): supplies a
 # namespace-resolved, document-order element tree, on top of which `native_codecs::
 # rdfxml` implements the W3C RDF/XML grammar in-repo (replacing the external
 # `purrdf_gts::rdf_codecs::{from_rdf_xml, to_rdf_xml}`). Pure-Rust, NO oxigraph-family
 # edge (the same crate `crates/music` already vendors). Rides the always-on `gts`
 # shipped with the rest of the native codecs.
-roxmltree = "0.20"
+roxmltree = { workspace = true }
 
 # Maintainer-only golden-capture binary (EPIC #906 Task 2/8). Freezes the native
 # SPARQL engine over the corpus as committed goldens under
@@ -69,14 +79,14 @@ path = "src/bin/capture_sparql_goldens.rs"
 [dev-dependencies]
 # Rich colored line-diffs on assert_eq! failure (#871). Drop-in: a shadowing
 # `use pretty_assertions::assert_eq;` per test file; identical on pass.
-pretty_assertions = "1"
-ciborium = "0.2"
-purrdf-gts = { path = "../gts", version = "0.1.1" }
-proptest = "1"
+pretty_assertions = { workspace = true }
+ciborium = { workspace = true }
+purrdf-gts = { workspace = true }
+proptest = { workspace = true }
 # Acceleration-program baselines (#630/#819 C1 Task 7); light feature set matching
 # the sibling crates (logic/shacl/validate): criterion's plotters/rayon defaults are
 # off so `make bench` builds fast and the cargo-bench stdout summary is all we need.
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+criterion = { workspace = true }
 
 [[bench]]
 # Native RDF text codec hot paths: N-Quads parse into frozen IR and serialize back

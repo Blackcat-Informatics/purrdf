@@ -107,10 +107,7 @@ fn check_statement_positions(
         ));
     }
 
-    let mut ok = graph.terms[p].kind == TermKind::Iri;
-    if graph.terms[s].kind == TermKind::Literal {
-        ok = false;
-    }
+    let mut ok = graph.terms[p].kind == TermKind::Iri && graph.terms[s].kind != TermKind::Literal;
     if let Some(graph_name) = graph_slot {
         if matches!(
             graph.terms[graph_name].kind,

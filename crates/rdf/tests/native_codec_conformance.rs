@@ -49,7 +49,7 @@ use purrdf_rdf::{
 ///   self-reifier "cycle while declaring term N") is fixed: the self-referential
 ///   triple-term entry is no longer rendered as a reifier statement.
 /// - The former **G3** lenient-lexical trade-off is gone: the native language-tag
-///   validator accepts PURRDF's long private-use subtags (`x-purrdf-norwegiannynorsk`)
+///   validator accepts PurRDF's long private-use subtags (`x-purrdf-norwegiannynorsk`)
 ///   while still REJECTING the genuinely-malformed W3C negative cases — strictly better
 ///   than the old oxttl `.lenient()` path.
 ///
@@ -420,8 +420,8 @@ fn lexical_form_preserved_verbatim() {
     ];
     for (lexical, datatype) in cases {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s".to_owned());
-        let p = b.intern_iri("https://e/p".to_owned());
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
         let lit = b.intern_literal(RdfLiteral::typed(lexical, datatype));
         b.push_quad(s, p, lit, None);
         let ds: Arc<RdfDataset> = b.freeze().expect("freeze");

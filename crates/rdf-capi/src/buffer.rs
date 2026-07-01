@@ -8,12 +8,13 @@ use crate::status::PurrdfStatus;
 
 /// An owned byte buffer. Opaque to C; read via `purrdf_buffer_data`, release
 /// with `purrdf_buffer_free`.
+#[derive(Debug)]
 pub struct PurrdfBuffer(pub(crate) Vec<u8>);
 
 impl PurrdfBuffer {
     /// Heap-allocate a buffer handle from owned bytes.
-    pub(crate) fn into_raw(bytes: Vec<u8>) -> *mut PurrdfBuffer {
-        Box::into_raw(Box::new(PurrdfBuffer(bytes)))
+    pub(crate) fn into_raw(bytes: Vec<u8>) -> *mut Self {
+        Box::into_raw(Box::new(Self(bytes)))
     }
 }
 
@@ -29,15 +30,17 @@ pub unsafe extern "C" fn purrdf_buffer_data(
     out_ptr: *mut *const u8,
     out_len: *mut usize,
 ) -> i32 {
-    ffi_guard!(PurrdfStatus::Panic as i32, {
-        if buf.is_null() || out_ptr.is_null() || out_len.is_null() {
-            return PurrdfStatus::NullPointer as i32;
-        }
-        let bytes = &(*buf).0;
-        *out_ptr = bytes.as_ptr();
-        *out_len = bytes.len();
-        PurrdfStatus::Ok as i32
-    })
+    unsafe {
+        ffi_guard!(PurrdfStatus::Panic as i32, {
+            if buf.is_null() || out_ptr.is_null() || out_len.is_null() {
+                return PurrdfStatus::NullPointer as i32;
+            }
+            let bytes = &(*buf).0;
+            *out_ptr = bytes.as_ptr();
+            *out_len = bytes.len();
+            PurrdfStatus::Ok as i32
+        })
+    }
 }
 
 /// Release a buffer handle. No-op on null.
@@ -46,11 +49,13 @@ pub unsafe extern "C" fn purrdf_buffer_data(
 /// `buf` must be null or a live buffer handle not already freed.
 #[no_mangle]
 pub unsafe extern "C" fn purrdf_buffer_free(buf: *mut PurrdfBuffer) {
-    ffi_guard!((), {
-        if !buf.is_null() {
-            drop(Box::from_raw(buf));
-        }
-    })
+    unsafe {
+        ffi_guard!((), {
+            if !buf.is_null() {
+                drop(Box::from_raw(buf));
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -64,7 +69,7 @@ mod tests {
         let mut len: usize = 0;
         unsafe {
             assert_eq!(
-                purrdf_buffer_data(raw, &mut ptr, &mut len),
+                purrdf_buffer_data(raw, &raw mut ptr, &raw mut len),
                 PurrdfStatus::Ok as i32
             );
             assert_eq!(len, 5);
@@ -80,7 +85,7 @@ mod tests {
             let mut ptr: *const u8 = std::ptr::null();
             let mut len: usize = 0;
             assert_eq!(
-                purrdf_buffer_data(std::ptr::null(), &mut ptr, &mut len),
+                purrdf_buffer_data(std::ptr::null(), &raw mut ptr, &raw mut len),
                 PurrdfStatus::NullPointer as i32
             );
             purrdf_buffer_free(std::ptr::null_mut());

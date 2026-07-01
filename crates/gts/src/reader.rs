@@ -102,10 +102,10 @@ fn term_depends_on_anchor(
     } else {
         graph.reifier(reifier)
     };
-    let Some((s, p, o)) = binding else {
+    let Some(triple) = binding else {
         return false;
     };
-    [s, p, o]
+    <[usize; 3]>::from(triple)
         .into_iter()
         .any(|component| term_depends_on_anchor(graph, component, anchor, pending, seen))
 }
@@ -137,10 +137,8 @@ enum PayloadError {
 impl From<CodecError> for PayloadError {
     fn from(e: CodecError) -> Self {
         match e {
-            CodecError::Unavailable { reason, detail } => {
-                PayloadError::Unavailable { reason, detail }
-            }
-            CodecError::Failed(detail) => PayloadError::Damaged(detail),
+            CodecError::Unavailable { reason, detail } => Self::Unavailable { reason, detail },
+            CodecError::Failed(detail) => Self::Damaged(detail),
         }
     }
 }
@@ -228,6 +226,16 @@ pub struct ReadOptions<'a> {
     pub content_key: Option<&'a ContentKeyResolver<'a>>,
 }
 
+impl std::fmt::Debug for ReadOptions<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadOptions")
+            .field("allow_segments", &self.allow_segments)
+            .field("expected_head", &self.expected_head)
+            .field("content_key", &self.content_key.map(|_| "<resolver>"))
+            .finish()
+    }
+}
+
 impl<'a> ReadOptions<'a> {
     /// Build options matching the legacy [`read`] signature.
     pub fn new(allow_segments: bool, expected_head: Option<&'a [u8]>) -> Self {
@@ -239,6 +247,7 @@ impl<'a> ReadOptions<'a> {
     }
 
     /// Add a content-key provider for decrypting `COSE_Encrypt0` frames.
+    #[must_use]
     pub fn with_content_key(mut self, resolver: &'a ContentKeyResolver<'a>) -> Self {
         self.content_key = Some(resolver);
         self
@@ -713,9 +722,7 @@ impl Folder<'_, '_, '_> {
     fn h_meta(&mut self, payload: &Value) {
         if let Value::Map(entries) = payload {
             for (k, v) in entries {
-                let key = as_text(k)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("{k:?}"));
+                let key = as_text(k).map_or_else(|| format!("{k:?}"), str::to_string);
                 self.g.set_meta(key, v.clone());
             }
         }
@@ -774,7 +781,7 @@ impl Folder<'_, '_, '_> {
                         term_entries
                             .iter()
                             .map(|(k, v)| {
-                                if matches!(as_text(k), Some("dt") | Some("rf")) {
+                                if matches!(as_text(k), Some("dt" | "rf")) {
                                     (k.clone(), sh(v))
                                 } else {
                                     (k.clone(), v.clone())
@@ -819,9 +826,7 @@ impl Folder<'_, '_, '_> {
         }
         if let Some(Value::Map(meta)) = map_get(entries, "meta") {
             for (k, v) in meta {
-                let key = as_text(k)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("{k:?}"));
+                let key = as_text(k).map_or_else(|| format!("{k:?}"), str::to_string);
                 self.g.set_meta(key, v.clone());
             }
         }
@@ -1108,7 +1113,7 @@ impl ActiveStreamingSegment {
         let mut valid_header = false;
         match unwrap_header(raw_header) {
             Ok(entries) => {
-                header = entries.clone();
+                header.clone_from(entries);
                 valid_header = true;
                 let stored_hid: Option<Vec<u8>> = match map_get(&header, "id") {
                     Some(Value::Bytes(b)) => Some(b.clone()),
@@ -1227,7 +1232,7 @@ impl ActiveStreamingSegment {
                         Some(abs_index),
                     );
                 }
-                self.expected_prev = computed.clone();
+                self.expected_prev.clone_from(&computed);
                 self.frame_ids.push(self.expected_prev.clone());
                 if let Some(sig) = map_get(frame, "sig") {
                     let (status, cose) = match sig {
@@ -1321,9 +1326,7 @@ pub fn read_to_sink_from_reader<R: Read>(
         inner: reader,
         pos: 0,
     };
-    let mut result = StreamingReadResult {
-        ..StreamingReadResult::default()
-    };
+    let mut result = StreamingReadResult::default();
     let mut item_index = 0usize;
     let mut current: Option<ActiveStreamingSegment> = None;
     loop {
@@ -1437,6 +1440,7 @@ pub fn read_to_sink_from_reader<R: Read>(
 /// The per-segment view of a file — the input to composition tooling (§14.1):
 /// each segment folded independently, plus the file-level torn marker and any
 /// fatal pre-segmentation diagnostic.
+#[derive(Debug)]
 pub struct FileSegments {
     /// One fold per segment, in file order, each carrying its OWN diagnostics.
     pub segments: Vec<Graph>,
@@ -1610,7 +1614,7 @@ fn read_segment_with_sink(
                     Some(abs_index),
                 );
             }
-            expected_prev = computed.clone();
+            expected_prev.clone_from(&computed);
             frame_ids.push(expected_prev.clone());
             if let Some(sig) = map_get(frame, "sig") {
                 // No key provider in this baseline — a well-formed signature

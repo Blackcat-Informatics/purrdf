@@ -267,7 +267,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
-    /// The PURRDF vocabulary namespace — used only to build full IRIs when the
+    /// The PurRDF vocabulary namespace — used only to build full IRIs when the
     /// committed-Turtle cross-check reads `module.ttl` (production code stores
     /// bare local names, the open-vocabulary discipline).
     const PURRDF: &str = "https://blackcatinformatics.ca/purrdf/";

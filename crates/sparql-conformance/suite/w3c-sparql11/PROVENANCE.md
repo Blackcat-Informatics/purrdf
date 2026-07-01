@@ -24,7 +24,7 @@ Software and Document License** — see
 <https://www.w3.org/Consortium/Legal/2015/copyright-software-and-document>.
 They are vendored verbatim (query + data) and are **not** relicensed; each carries
 a `.license` SPDX sidecar (`SPDX-License-Identifier: LicenseRef-W3C-Test-Suite`).
-The selector `manifest.ttl` files and this document are PURRDF-authored
+The selector `manifest.ttl` files and this document are PurRDF-authored
 (MIT OR Apache-2.0).
 
 ## Vendored files & fidelity

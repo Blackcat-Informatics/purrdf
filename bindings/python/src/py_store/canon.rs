@@ -21,9 +21,13 @@ use crate::{flat_dataset_from_quads, RdfDataset, RdfQuad, RdfTerm, RdfTriple};
 /// The graph canonicalization algorithms. Mirrors the oxigraph Python
 /// `CanonicalizationAlgorithm` so the Python surface is unchanged.
 #[pyclass(name = "CanonicalizationAlgorithm", eq, eq_int, from_py_object)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
-pub enum PyCanonicalizationAlgorithm {
+#[allow(
+    clippy::upper_case_acronyms,
+    reason = "the variant spellings ARE the Python-visible enum members (oxigraph API parity), so they must not be renamed"
+)]
+pub(super) enum PyCanonicalizationAlgorithm {
     /// The standard RDF Canonicalization 1.0 algorithm (SHA-256).
     RDFC_1_0,
     /// Retained for API compatibility; now an alias of the native RDFC-1.0 engine.
@@ -35,11 +39,11 @@ pub enum PyCanonicalizationAlgorithm {
 /// caller's literal/IRI term forms are preserved exactly (only blanks are relabeled).
 /// The `algorithm` selector is retained for API compatibility; both variants map to
 /// the one native engine.
-pub fn canonicalize_quads(
-    quads: Vec<RdfQuad>,
+pub(super) fn canonicalize_quads(
+    quads: &[RdfQuad],
     _algorithm: PyCanonicalizationAlgorithm,
 ) -> Vec<RdfQuad> {
-    let ds = flat_dataset_from_quads(&quads).expect("native RDFC-1.0: flat freeze of valid quads");
+    let ds = flat_dataset_from_quads(quads).expect("native RDFC-1.0: flat freeze of valid quads");
     let canon = core_canonicalize(&ds);
     let map = label_map(&ds, &canon);
     let mut out: Vec<RdfQuad> = quads.iter().map(|q| relabel_quad(q, &map)).collect();
@@ -114,11 +118,11 @@ mod tests {
         let g1 = "_:a <https://example.org/p> _:b .\n_:b <https://example.org/q> _:a .";
         let g2 = "_:x <https://example.org/p> _:y .\n_:y <https://example.org/q> _:x .";
         let c1 = canonicalize_quads(
-            parse_quads(g1.as_bytes(), NativeRdfFormat::NTriples).unwrap(),
+            &parse_quads(g1.as_bytes(), NativeRdfFormat::NTriples).unwrap(),
             PyCanonicalizationAlgorithm::RDFC_1_0,
         );
         let c2 = canonicalize_quads(
-            parse_quads(g2.as_bytes(), NativeRdfFormat::NTriples).unwrap(),
+            &parse_quads(g2.as_bytes(), NativeRdfFormat::NTriples).unwrap(),
             PyCanonicalizationAlgorithm::RDFC_1_0,
         );
         let s1: Vec<String> = c1.iter().map(quad_sort_key).collect();
@@ -134,11 +138,11 @@ mod tests {
     fn canonicalize_quads_unstable_is_self_consistent() {
         let g = "_:a <https://example.org/p> _:b .";
         let c1 = canonicalize_quads(
-            parse_quads(g.as_bytes(), NativeRdfFormat::NTriples).unwrap(),
+            &parse_quads(g.as_bytes(), NativeRdfFormat::NTriples).unwrap(),
             PyCanonicalizationAlgorithm::UNSTABLE,
         );
         let c2 = canonicalize_quads(
-            parse_quads(g.as_bytes(), NativeRdfFormat::NTriples).unwrap(),
+            &parse_quads(g.as_bytes(), NativeRdfFormat::NTriples).unwrap(),
             PyCanonicalizationAlgorithm::UNSTABLE,
         );
         let s1: Vec<String> = c1.iter().map(quad_sort_key).collect();

@@ -40,37 +40,39 @@ pub unsafe extern "C" fn purrdf_parse(
     out_dataset: *mut *mut PurrdfDataset,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    ffi_try!(out_error, {
-        if bytes.is_null() || media_type.is_null() || out_dataset.is_null() {
-            return Err(PurrdfError::new(
-                PurrdfStatus::NullPointer,
-                "null pointer argument to purrdf_parse",
-            ));
-        }
-        let slice = std::slice::from_raw_parts(bytes, len);
-        let media = cstr_to_str(media_type)?;
-        let base_iri = opt_cstr_to_str(base_iri)?;
-        let source_name = opt_cstr_to_str(source_name)?;
+    unsafe {
+        ffi_try!(out_error, {
+            if bytes.is_null() || media_type.is_null() || out_dataset.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_parse",
+                ));
+            }
+            let slice = std::slice::from_raw_parts(bytes, len);
+            let media = cstr_to_str(media_type)?;
+            let base_iri = opt_cstr_to_str(base_iri)?;
+            let source_name = opt_cstr_to_str(source_name)?;
 
-        let mut sink = DatasetSink::new();
-        GtsCodecBackend
-            .parse_into(
-                RdfParseRequest {
-                    bytes: slice,
-                    media_type: media,
-                    base_iri,
-                    source_name,
-                },
-                &mut sink,
-            )
-            .map_err(|diagnostic| {
-                PurrdfError::from_diagnostic(parse_status(&diagnostic), &diagnostic)
+            let mut sink = DatasetSink::new();
+            GtsCodecBackend
+                .parse_into(
+                    RdfParseRequest {
+                        bytes: slice,
+                        media_type: media,
+                        base_iri,
+                        source_name,
+                    },
+                    &mut sink,
+                )
+                .map_err(|diagnostic| {
+                    PurrdfError::from_diagnostic(parse_status(&diagnostic), &diagnostic)
+                })?;
+
+            let dataset = sink.into_dataset().ok_or_else(|| {
+                PurrdfError::new(PurrdfStatus::ParseError, "parse produced no dataset")
             })?;
-
-        let dataset = sink.into_dataset().ok_or_else(|| {
-            PurrdfError::new(PurrdfStatus::ParseError, "parse produced no dataset")
-        })?;
-        *out_dataset = PurrdfDataset::into_raw(dataset);
-        Ok(PurrdfStatus::Ok)
-    })
+            *out_dataset = PurrdfDataset::into_raw(dataset);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
 }

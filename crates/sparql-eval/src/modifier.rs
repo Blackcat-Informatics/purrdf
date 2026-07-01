@@ -249,7 +249,7 @@ fn compare_keys(
     exprs: &[OrderExpression],
 ) -> Ordering {
     for (i, oe) in exprs.iter().enumerate() {
-        let mut ord = sparql_order(&a[i], &b[i]);
+        let mut ord = sparql_order(a[i].as_ref(), b[i].as_ref());
         if is_descending(oe) {
             ord = ord.reverse();
         }
@@ -262,7 +262,7 @@ fn compare_keys(
 
 /// SPARQL ORDER BY total order: unbound sorts before any bound term; otherwise by
 /// term kind (blank < IRI < literal < triple) and then within the kind.
-fn sparql_order(a: &Option<TermValue>, b: &Option<TermValue>) -> Ordering {
+fn sparql_order(a: Option<&TermValue>, b: Option<&TermValue>) -> Ordering {
     match (a, b) {
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Less,
@@ -437,7 +437,7 @@ fn eval_aggregate(
                 let mut seen: DetHashSet<SolutionTerm> = DetHashSet::default();
                 values.retain(|(t, _)| seen.insert(*t));
             }
-            apply_aggregate(function, values, ctx)
+            apply_aggregate(function, &values, ctx)
         }
     }
 }
@@ -445,14 +445,14 @@ fn eval_aggregate(
 /// Apply a named aggregate to the collected group values.
 fn apply_aggregate(
     function: &AggregateFunction,
-    values: Vec<(SolutionTerm, TermValue)>,
+    values: &[(SolutionTerm, TermValue)],
     ctx: &mut EvalCtx<'_>,
 ) -> Result<Option<SolutionTerm>, EvalError> {
     match function {
         AggregateFunction::Count => Ok(Some(integer_term(ctx, values.len() as i64))),
         AggregateFunction::Sample => Ok(values.first().map(|(t, _)| *t)),
-        AggregateFunction::Min => Ok(extreme(&values, Ordering::Less)),
-        AggregateFunction::Max => Ok(extreme(&values, Ordering::Greater)),
+        AggregateFunction::Min => Ok(extreme(values, Ordering::Less)),
+        AggregateFunction::Max => Ok(extreme(values, Ordering::Greater)),
         AggregateFunction::GroupConcat { separator } => {
             let sep = separator.as_deref().unwrap_or(" ");
             let joined = values
@@ -469,7 +469,7 @@ fn apply_aggregate(
             }
             // Extract numeric XsdValues; any non-numeric → unbound.
             let mut numerics: Vec<XsdValue> = Vec::with_capacity(values.len());
-            for (_, v) in &values {
+            for (_, v) in values {
                 match xsd_of(v) {
                     Some(xv) if is_numeric_xsd(&xv) => numerics.push(xv),
                     _ => return Ok(None),
@@ -493,7 +493,7 @@ fn apply_aggregate(
             let n = values.len();
             // Extract numeric XsdValues; any non-numeric → unbound.
             let mut numerics: Vec<XsdValue> = Vec::with_capacity(n);
-            for (_, v) in &values {
+            for (_, v) in values {
                 match xsd_of(v) {
                     Some(xv) if is_numeric_xsd(&xv) => numerics.push(xv),
                     _ => return Ok(None),
@@ -595,9 +595,9 @@ mod tests {
     fn ages() -> Arc<RdfDataset> {
         // :a :age 30 ; :b :age 17 ; :c :age 30  (duplicate age 30)
         let mut b = RdfDatasetBuilder::new();
-        let age = b.intern_iri("http://ex/age".to_owned());
+        let age = b.intern_iri("http://ex/age");
         for (s, n) in [("a", "30"), ("b", "17"), ("c", "30")] {
-            let subj = b.intern_iri(format!("http://ex/{s}"));
+            let subj = b.intern_iri(&format!("http://ex/{s}"));
             let val = b.intern_literal(RdfLiteral {
                 lexical_form: n.to_owned(),
                 datatype: Some(XINT.to_owned()),
@@ -802,12 +802,7 @@ mod tests {
     }
 
     /// Helper: resolve an aggregate column via the eval scratch.
-    fn agg_lex(
-        ds: &std::sync::Arc<RdfDataset>,
-        ctx: &mut EvalCtx<'_>,
-        seq: &SolutionSeq,
-        var: &str,
-    ) -> String {
+    fn agg_lex(ds: &Arc<RdfDataset>, ctx: &EvalCtx<'_>, seq: &SolutionSeq, var: &str) -> String {
         let col = seq.schema.index_of(&Variable::new(var)).unwrap();
         match ctx.scratch.value_of(ds, seq.rows[0][col].unwrap()) {
             TermValue::Literal { lexical_form, .. } => lexical_form,
@@ -833,7 +828,7 @@ mod tests {
             )],
         };
         let seq = eval(&group, &mut ctx).expect("sum");
-        assert_eq!(agg_lex(&ds, &mut ctx, &seq, "s"), "77");
+        assert_eq!(agg_lex(&ds, &ctx, &seq, "s"), "77");
     }
 
     #[test]
@@ -842,9 +837,9 @@ mod tests {
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
         const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/v".to_owned());
+        let p = b.intern_iri("http://ex/v");
         for (s, lex, dt) in [("a", "1", XINT), ("b", "0.5", XDEC)] {
-            let subj = b.intern_iri(format!("http://ex/{s}"));
+            let subj = b.intern_iri(&format!("http://ex/{s}"));
             let val = b.intern_literal(RdfLiteral {
                 lexical_form: lex.to_owned(),
                 datatype: Some(dt.to_owned()),
@@ -856,10 +851,10 @@ mod tests {
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
         let bgp = GraphPattern::Bgp {
-            patterns: vec![purrdf_sparql_algebra::TriplePattern {
-                subject: purrdf_sparql_algebra::TermPattern::Variable(Variable::new("s")),
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
                 predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/v")),
-                object: purrdf_sparql_algebra::TermPattern::Variable(Variable::new("n")),
+                object: TermPattern::Variable(Variable::new("n")),
             }],
         };
         let group = GraphPattern::Group {
@@ -875,7 +870,7 @@ mod tests {
             )],
         };
         let seq = eval(&group, &mut ctx).expect("sum decimal");
-        let result = agg_lex(&ds, &mut ctx, &seq, "s");
+        let result = agg_lex(&ds, &ctx, &seq, "s");
         assert!(
             result.starts_with("1.5"),
             "SUM(1, 0.5) should be 1.5…, got {result}"
@@ -888,10 +883,10 @@ mod tests {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
         let empty_bgp = GraphPattern::Bgp {
-            patterns: vec![purrdf_sparql_algebra::TriplePattern {
-                subject: purrdf_sparql_algebra::TermPattern::Variable(Variable::new("s")),
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
                 predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/none")),
-                object: purrdf_sparql_algebra::TermPattern::Variable(Variable::new("n")),
+                object: TermPattern::Variable(Variable::new("n")),
             }],
         };
         let group = GraphPattern::Group {
@@ -907,7 +902,7 @@ mod tests {
             )],
         };
         let seq = eval(&group, &mut ctx).expect("sum empty");
-        assert_eq!(agg_lex(&ds, &mut ctx, &seq, "s"), "0");
+        assert_eq!(agg_lex(&ds, &ctx, &seq, "s"), "0");
     }
 
     #[test]
@@ -915,17 +910,17 @@ mod tests {
         // SUM over a string value → unbound (Ok(None) in the aggregate output).
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/label".to_owned());
-        let subj = b.intern_iri("http://ex/x".to_owned());
+        let p = b.intern_iri("http://ex/label");
+        let subj = b.intern_iri("http://ex/x");
         let val = b.intern_literal(RdfLiteral::simple("hello"));
         b.push_quad(subj, p, val, None);
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
         let bgp = GraphPattern::Bgp {
-            patterns: vec![purrdf_sparql_algebra::TriplePattern {
-                subject: purrdf_sparql_algebra::TermPattern::Variable(Variable::new("s")),
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
                 predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/label")),
-                object: purrdf_sparql_algebra::TermPattern::Variable(Variable::new("n")),
+                object: TermPattern::Variable(Variable::new("n")),
             }],
         };
         let group = GraphPattern::Group {
@@ -955,9 +950,9 @@ mod tests {
         // AVG(?n) over {2, 4} → 3.0 (decimal, NOT integer).
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/v".to_owned());
+        let p = b.intern_iri("http://ex/v");
         for (s, n) in [("a", "2"), ("b", "4")] {
-            let subj = b.intern_iri(format!("http://ex/{s}"));
+            let subj = b.intern_iri(&format!("http://ex/{s}"));
             let val = b.intern_literal(RdfLiteral {
                 lexical_form: n.to_owned(),
                 datatype: Some(XINT.to_owned()),
@@ -969,10 +964,10 @@ mod tests {
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
         let bgp = GraphPattern::Bgp {
-            patterns: vec![purrdf_sparql_algebra::TriplePattern {
-                subject: purrdf_sparql_algebra::TermPattern::Variable(Variable::new("s")),
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
                 predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/v")),
-                object: purrdf_sparql_algebra::TermPattern::Variable(Variable::new("n")),
+                object: TermPattern::Variable(Variable::new("n")),
             }],
         };
         let group = GraphPattern::Group {
@@ -988,7 +983,7 @@ mod tests {
             )],
         };
         let seq = eval(&group, &mut ctx).expect("avg");
-        let result = agg_lex(&ds, &mut ctx, &seq, "avg");
+        let result = agg_lex(&ds, &ctx, &seq, "avg");
         // AVG(2, 4) = 6 / 2 = 3.0 — result is decimal (integer ÷ integer → decimal).
         assert!(
             result.starts_with("3.0"),
@@ -1002,10 +997,10 @@ mod tests {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
         let empty_bgp = GraphPattern::Bgp {
-            patterns: vec![purrdf_sparql_algebra::TriplePattern {
-                subject: purrdf_sparql_algebra::TermPattern::Variable(Variable::new("s")),
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
                 predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/none")),
-                object: purrdf_sparql_algebra::TermPattern::Variable(Variable::new("n")),
+                object: TermPattern::Variable(Variable::new("n")),
             }],
         };
         let group = GraphPattern::Group {
@@ -1021,7 +1016,7 @@ mod tests {
             )],
         };
         let seq = eval(&group, &mut ctx).expect("avg empty");
-        assert_eq!(agg_lex(&ds, &mut ctx, &seq, "avg"), "0");
+        assert_eq!(agg_lex(&ds, &ctx, &seq, "avg"), "0");
     }
 
     #[test]
@@ -1029,11 +1024,11 @@ mod tests {
         // GROUP BY ?s, SUM(?n) per group: dataset has two subjects each with two values.
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/score".to_owned());
+        let p = b.intern_iri("http://ex/score");
         // :alice → 10, 20 ; :bob → 5, 15
         for (s, vals) in [("alice", vec!["10", "20"]), ("bob", vec!["5", "15"])] {
             for v in vals {
-                let subj = b.intern_iri(format!("http://ex/{s}"));
+                let subj = b.intern_iri(&format!("http://ex/{s}"));
                 let val = b.intern_literal(RdfLiteral {
                     lexical_form: v.to_owned(),
                     datatype: Some(XINT.to_owned()),
@@ -1046,10 +1041,10 @@ mod tests {
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
         let bgp = GraphPattern::Bgp {
-            patterns: vec![purrdf_sparql_algebra::TriplePattern {
-                subject: purrdf_sparql_algebra::TermPattern::Variable(Variable::new("who")),
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("who")),
                 predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/score")),
-                object: purrdf_sparql_algebra::TermPattern::Variable(Variable::new("n")),
+                object: TermPattern::Variable(Variable::new("n")),
             }],
         };
         let group = GraphPattern::Group {

@@ -21,8 +21,8 @@ struct Parts {
 }
 
 impl Parts {
-    fn of(iri: &Iri) -> Parts {
-        Parts {
+    fn of(iri: &Iri) -> Self {
+        Self {
             scheme: iri.scheme().map(str::to_owned),
             authority: iri.authority().map(str::to_owned),
             path: iri.path().to_owned(),
@@ -58,7 +58,7 @@ impl Parts {
 impl Iri {
     /// Resolve `reference` against `self` as base, returning a new absolute
     /// [`Iri`] (RFC-3986 §5.2, strict). `self` must have a scheme.
-    pub fn resolve(&self, reference: &str) -> Result<Iri> {
+    pub fn resolve(&self, reference: &str) -> Result<Self> {
         if !self.has_scheme() {
             return Err(IriError::NonAbsoluteBase(self.as_str().to_owned()));
         }
@@ -165,7 +165,7 @@ pub(crate) fn remove_dot_segments(path: &str) -> String {
         else if let Some(rest) = input.strip_prefix("/./") {
             input = format!("/{rest}");
         } else if input == "/." {
-            input = "/".to_owned();
+            "/".clone_into(&mut input);
         }
         // C: "/../" -> "/" and pop last output segment; exact "/.." likewise.
         else if let Some(rest) = input.strip_prefix("/../") {
@@ -173,7 +173,7 @@ pub(crate) fn remove_dot_segments(path: &str) -> String {
             input = format!("/{rest}");
         } else if input == "/.." {
             pop_last_segment(&mut out);
-            input = "/".to_owned();
+            "/".clone_into(&mut input);
         }
         // D: input is exactly "." or ".." -> drop.
         else if input == "." || input == ".." {

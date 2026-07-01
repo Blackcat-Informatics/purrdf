@@ -182,7 +182,7 @@ impl<'a> Lexer<'a> {
 
     /// Byte offset of the char at `chars[i]`, or `src.len()` at end.
     fn byte_at(&self, i: usize) -> usize {
-        self.chars.get(i).map(|&(b, _)| b).unwrap_or(self.src.len())
+        self.chars.get(i).map_or(self.src.len(), |&(b, _)| b)
     }
 
     fn peek(&self, ahead: usize) -> Option<char> {
@@ -504,7 +504,7 @@ impl<'a> Lexer<'a> {
     /// Called while `self.cur()` is `e`/`E`.
     fn exp_has_digits(&self) -> bool {
         match self.peek(1) {
-            Some('+') | Some('-') => matches!(self.peek(2), Some('0'..='9')),
+            Some('+' | '-') => matches!(self.peek(2), Some('0'..='9')),
             Some('0'..='9') => true,
             _ => false,
         }
@@ -524,7 +524,7 @@ impl<'a> Lexer<'a> {
                 'e' | 'E' if !seen_exp && self.exp_has_digits() => {
                     seen_exp = true;
                     self.pos += 1;
-                    if matches!(self.cur(), Some('+') | Some('-')) {
+                    if matches!(self.cur(), Some('+' | '-')) {
                         self.pos += 1;
                     }
                 }

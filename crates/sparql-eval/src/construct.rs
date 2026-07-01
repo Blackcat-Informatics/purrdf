@@ -346,9 +346,8 @@ fn emit_dropped_losses(
         // inner variable yields `None` — there is no concrete triple to declare
         // lost, so the declaration is (correctly) skipped for this row.
         let mut blanks: DetHashMap<String, String> = DetHashMap::default();
-        let inner_term = match instantiate_term(&d.inner, row, schema, &mut blanks, ctx) {
-            Some(v) => v,
-            None => continue,
+        let Some(inner_term) = instantiate_term(&d.inner, row, schema, &mut blanks, ctx) else {
+            continue;
         };
 
         // Deterministic loss-node label from the resolved triple-term content.
@@ -441,10 +440,10 @@ mod tests {
     fn knows_graph() -> Arc<RdfDataset> {
         // :a :knows :b ; :a :knows :c .
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri(KNOWS.to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bb = b.intern_iri("http://ex/b".to_owned());
-        let cc = b.intern_iri("http://ex/c".to_owned());
+        let knows = b.intern_iri(KNOWS);
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let cc = b.intern_iri("http://ex/c");
         b.push_quad(a, knows, bb, None);
         b.push_quad(a, knows, cc, None);
         b.freeze().expect("freeze")
@@ -513,7 +512,7 @@ mod tests {
         let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
         assert_eq!(out.quad_count(), 2);
         // Collect the distinct blank subjects.
-        let mut blanks = std::collections::BTreeSet::new();
+        let mut blanks = BTreeSet::new();
         for q in out.quads() {
             if let TermRef::Blank { label, .. } = out.resolve(q.s) {
                 blanks.insert(label.to_owned());
@@ -527,8 +526,8 @@ mod tests {
         // CONSTRUCT { ?o :related ?s } where ?o binds to a literal → literal subject
         // → skipped.
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p".to_owned());
-        let s = b.intern_iri("http://ex/s".to_owned());
+        let p = b.intern_iri("http://ex/p");
+        let s = b.intern_iri("http://ex/s");
         let lit = b.intern_literal(RdfLiteral::simple("hello"));
         b.push_quad(s, p, lit, None); // :s :p "hello"
         let ds = b.freeze().expect("freeze");
@@ -564,19 +563,19 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         // `rdf:reifies` MUST be interned for the reifier-query layer to fire
         // (the virtual-predicate id is resolved via term_id_by_value).
-        let _ = b.intern_iri(REIFIES.to_owned());
-        let alice = b.intern_iri("http://ex/alice".to_owned());
-        let age = b.intern_iri("http://ex/age".to_owned());
+        let _ = b.intern_iri(REIFIES);
+        let alice = b.intern_iri("http://ex/alice");
+        let age = b.intern_iri("http://ex/age");
         let forty_two = b.intern_literal(RdfLiteral::simple("42"));
         let triple = b.intern_triple(alice, age, forty_two);
-        let r = b.intern_iri("http://ex/r".to_owned());
+        let r = b.intern_iri("http://ex/r");
         b.push_reifier(r, triple);
         // Annotation: :r :confidence "0.9" ; :r purrdf:accordingTo :sourceX .
-        let confidence = b.intern_iri("http://ex/confidence".to_owned());
+        let confidence = b.intern_iri("http://ex/confidence");
         let conf_val = b.intern_literal(RdfLiteral::simple("0.9"));
         b.push_annotation(r, confidence, conf_val);
-        let according = b.intern_iri(ACCORDING_TO.to_owned());
-        let source_x = b.intern_iri("http://ex/sourceX".to_owned());
+        let according = b.intern_iri(ACCORDING_TO);
+        let source_x = b.intern_iri("http://ex/sourceX");
         b.push_annotation(r, according, source_x);
         b.freeze().expect("freeze")
     }
@@ -809,12 +808,12 @@ mod tests {
         // (2) Via direct builder calls — same logical structure as reified_graph() but
         //     without annotations (the template above carries no annotations).
         let mut b = RdfDatasetBuilder::new();
-        let _ = b.intern_iri(REIFIES.to_owned());
-        let alice = b.intern_iri("http://ex/alice".to_owned());
-        let age = b.intern_iri("http://ex/age".to_owned());
+        let _ = b.intern_iri(REIFIES);
+        let alice = b.intern_iri("http://ex/alice");
+        let age = b.intern_iri("http://ex/age");
         let forty_two = b.intern_literal(RdfLiteral::simple("42"));
         let triple = b.intern_triple(alice, age, forty_two);
-        let r = b.intern_iri("http://ex/r".to_owned());
+        let r = b.intern_iri("http://ex/r");
         b.push_reifier(r, triple);
         let direct_out = b.freeze().expect("freeze direct");
 
@@ -832,13 +831,13 @@ mod tests {
         // rows that drop to the SAME lost triple, so the deterministic content-keyed
         // loss node collapses to ONE.
         let mut b = RdfDatasetBuilder::new();
-        let _ = b.intern_iri(REIFIES.to_owned());
-        let alice = b.intern_iri("http://ex/alice".to_owned());
-        let age = b.intern_iri("http://ex/age".to_owned());
+        let _ = b.intern_iri(REIFIES);
+        let alice = b.intern_iri("http://ex/alice");
+        let age = b.intern_iri("http://ex/age");
         let forty_two = b.intern_literal(RdfLiteral::simple("42"));
         let triple = b.intern_triple(alice, age, forty_two);
-        let r1 = b.intern_iri("http://ex/r1".to_owned());
-        let r2 = b.intern_iri("http://ex/r2".to_owned());
+        let r1 = b.intern_iri("http://ex/r1");
+        let r2 = b.intern_iri("http://ex/r2");
         b.push_reifier(r1, triple);
         b.push_reifier(r2, triple);
         let ds = b.freeze().expect("freeze");

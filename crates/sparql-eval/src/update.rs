@@ -212,7 +212,7 @@ fn delete_insert(
                 &schema,
                 &mut del_blanks,
                 &mut ctx,
-                &with_value,
+                with_value.as_ref(),
             ) {
                 to_remove.push(q);
             }
@@ -225,7 +225,7 @@ fn delete_insert(
                 &schema,
                 &mut ins_blanks,
                 &mut ctx,
-                &with_value,
+                with_value.as_ref(),
             ) {
                 to_insert.push(q);
             }
@@ -278,7 +278,7 @@ fn load(
     let view = MutableDataset::new(loaded);
     let quads = view.quads_for_pattern(None, None, None, GraphMatchValue::Any);
     for q in quads {
-        m.insert(rekey_graph(q, &dest));
+        m.insert(rekey_graph(q, dest.as_ref()));
     }
     Ok(())
 }
@@ -309,7 +309,7 @@ fn graph_op_add(
     let src = quads_of_target(source, m);
     let dest = graph_target_value(destination)?;
     for q in src {
-        m.insert(rekey_graph(q, &dest));
+        m.insert(rekey_graph(q, dest.as_ref()));
     }
     Ok(())
 }
@@ -328,7 +328,7 @@ fn graph_op_copy(
     let src = quads_of_target(source, m);
     clear_target(destination, m);
     for q in src {
-        m.insert(rekey_graph(q, &dest));
+        m.insert(rekey_graph(q, dest.as_ref()));
     }
     Ok(())
 }
@@ -351,7 +351,7 @@ fn graph_op_move(
     let src = quads_of_target(source, m);
     clear_target(destination, m);
     for q in &src {
-        m.insert(rekey_graph(q.clone(), &dest));
+        m.insert(rekey_graph(q.clone(), dest.as_ref()));
     }
     for q in &src {
         m.remove(q);
@@ -399,7 +399,7 @@ fn instantiate_quad_with_default(
     schema: &VarSchema,
     blanks: &mut DetHashMap<String, String>,
     ctx: &mut EvalCtx<'_>,
-    default_graph: &Option<TermValue>,
+    default_graph: Option<&TermValue>,
 ) -> Option<QuadValues> {
     let s = instantiate_term(&qp.triple.subject, row, schema, blanks, ctx)?;
     let p = instantiate_predicate(&qp.triple.predicate, row, schema, ctx)?;
@@ -424,19 +424,19 @@ fn instantiate_quad_with_default(
             }
             Some(value)
         }
-        None => default_graph.clone(),
+        None => default_graph.cloned(),
     };
 
     Some(QuadValues { s, p, o, g })
 }
 
 /// Re-key a quad's graph slot to `dest` (`None` = default graph).
-fn rekey_graph(q: QuadValues, dest: &Option<TermValue>) -> QuadValues {
+fn rekey_graph(q: QuadValues, dest: Option<&TermValue>) -> QuadValues {
     QuadValues {
         s: q.s,
         p: q.p,
         o: q.o,
-        g: dest.clone(),
+        g: dest.cloned(),
     }
 }
 
@@ -499,9 +499,9 @@ mod tests {
     fn mut_with(triples: &[(&str, &str, &str)]) -> MutableDataset {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in triples {
-            let s = b.intern_iri(format!("{EX}{s}"));
-            let p = b.intern_iri(format!("{EX}{p}"));
-            let o = b.intern_iri(format!("{EX}{o}"));
+            let s = b.intern_iri(&format!("{EX}{s}"));
+            let p = b.intern_iri(&format!("{EX}{p}"));
+            let o = b.intern_iri(&format!("{EX}{o}"));
             b.push_quad(s, p, o, None);
         }
         MutableDataset::new(b.freeze().expect("freeze base"))
@@ -596,10 +596,10 @@ mod tests {
     fn drop_named_graph_removes_its_quads() {
         // A base with a default-graph quad and a named-graph quad.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(format!("{EX}a"));
-        let p = b.intern_iri(format!("{EX}p"));
-        let o = b.intern_iri(format!("{EX}b"));
-        let g = b.intern_iri(format!("{EX}g"));
+        let s = b.intern_iri(&format!("{EX}a"));
+        let p = b.intern_iri(&format!("{EX}p"));
+        let o = b.intern_iri(&format!("{EX}b"));
+        let g = b.intern_iri(&format!("{EX}g"));
         b.push_quad(s, p, o, None);
         b.push_quad(s, p, o, Some(g));
         let mut m = MutableDataset::new(b.freeze().expect("freeze"));
@@ -644,11 +644,11 @@ mod tests {
     fn copy_replaces_dest_then_fills_it() {
         // Seed ex:g with a stale quad; COPY default → ex:g must clear ex:g first.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(format!("{EX}a"));
-        let p = b.intern_iri(format!("{EX}p"));
-        let o = b.intern_iri(format!("{EX}b"));
-        let stale = b.intern_iri(format!("{EX}stale"));
-        let g = b.intern_iri(format!("{EX}g"));
+        let s = b.intern_iri(&format!("{EX}a"));
+        let p = b.intern_iri(&format!("{EX}p"));
+        let o = b.intern_iri(&format!("{EX}b"));
+        let stale = b.intern_iri(&format!("{EX}stale"));
+        let g = b.intern_iri(&format!("{EX}g"));
         b.push_quad(s, p, o, None); // default (a,p,b)
         b.push_quad(stale, p, o, Some(g)); // ex:g (stale,p,b)
         let mut m = MutableDataset::new(b.freeze().expect("freeze"));
@@ -667,10 +667,10 @@ mod tests {
         // MOVE GRAPH ex:g TO GRAPH ex:g is a no-op (SPARQL §3.2.6). Without the
         // same-graph guard the suppression-delta double-remove would empty ex:g.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(format!("{EX}a"));
-        let p = b.intern_iri(format!("{EX}p"));
-        let o = b.intern_iri(format!("{EX}b"));
-        let g = b.intern_iri(format!("{EX}g"));
+        let s = b.intern_iri(&format!("{EX}a"));
+        let p = b.intern_iri(&format!("{EX}p"));
+        let o = b.intern_iri(&format!("{EX}b"));
+        let g = b.intern_iri(&format!("{EX}g"));
         b.push_quad(s, p, o, Some(g));
         let mut m = MutableDataset::new(b.freeze().expect("freeze"));
 
@@ -720,8 +720,8 @@ mod tests {
 
     fn loadable() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(format!("{EX}loaded"));
-        let p = b.intern_iri(format!("{EX}p"));
+        let s = b.intern_iri(&format!("{EX}loaded"));
+        let p = b.intern_iri(&format!("{EX}p"));
         let o = b.intern_literal(RdfLiteral::simple("v"));
         b.push_quad(s, p, o, None);
         b.freeze().expect("freeze loadable")
@@ -776,11 +776,11 @@ mod tests {
     /// decoy (a,p,c) only in ex:g.
     fn base_default_and_named() -> MutableDataset {
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri(format!("{EX}a"));
-        let p = b.intern_iri(format!("{EX}p"));
-        let bb = b.intern_iri(format!("{EX}b"));
-        let cc = b.intern_iri(format!("{EX}c"));
-        let g = b.intern_iri(format!("{EX}g"));
+        let a = b.intern_iri(&format!("{EX}a"));
+        let p = b.intern_iri(&format!("{EX}p"));
+        let bb = b.intern_iri(&format!("{EX}b"));
+        let cc = b.intern_iri(&format!("{EX}c"));
+        let g = b.intern_iri(&format!("{EX}g"));
         b.push_quad(a, p, bb, None); // default (a,p,b)
         b.push_quad(a, p, bb, Some(g)); // ex:g (a,p,b)
         b.push_quad(a, p, cc, Some(g)); // ex:g (a,p,c)
@@ -843,10 +843,10 @@ mod tests {
         // explicit graph) target ex:g too. Seed a quad in ex:g and a decoy in the
         // default graph with the same s/p/o; only the ex:g one is rewritten.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(format!("{EX}a"));
-        let p = b.intern_iri(format!("{EX}p"));
-        let o = b.intern_iri(format!("{EX}b"));
-        let g = b.intern_iri(format!("{EX}g"));
+        let s = b.intern_iri(&format!("{EX}a"));
+        let p = b.intern_iri(&format!("{EX}p"));
+        let o = b.intern_iri(&format!("{EX}b"));
+        let g = b.intern_iri(&format!("{EX}g"));
         b.push_quad(s, p, o, None); // default-graph decoy (a,p,b)
         b.push_quad(s, p, o, Some(g)); // ex:g (a,p,b)
         let mut m = MutableDataset::new(b.freeze().expect("freeze"));

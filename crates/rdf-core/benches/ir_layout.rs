@@ -86,20 +86,26 @@ fn on_dealloc(size: usize) {
 // only added behavior is thread-local counter bookkeeping on alloc/dealloc paths.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        on_alloc(layout.size());
-        System.alloc(layout)
+        unsafe {
+            on_alloc(layout.size());
+            System.alloc(layout)
+        }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        on_dealloc(layout.size());
-        System.dealloc(ptr, layout)
+        unsafe {
+            on_dealloc(layout.size());
+            System.dealloc(ptr, layout);
+        }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // A realloc frees the old block and hands back a (possibly) larger one.
-        on_dealloc(layout.size());
-        on_alloc(new_size);
-        System.realloc(ptr, layout, new_size)
+        unsafe {
+            // A realloc frees the old block and hands back a (possibly) larger one.
+            on_dealloc(layout.size());
+            on_alloc(new_size);
+            System.realloc(ptr, layout, new_size)
+        }
     }
 }
 
@@ -159,14 +165,14 @@ const ROWS: u32 = 800;
 /// uses, scaled up to benchmark size.
 fn build_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p".to_string());
-    let g = b.intern_iri("http://example.org/g".to_string());
-    let asserts = b.intern_iri("http://example.org/asserts".to_string());
-    let confidence = b.intern_iri("http://example.org/confidence".to_string());
+    let p = b.intern_iri("http://example.org/p");
+    let g = b.intern_iri("http://example.org/g");
+    let asserts = b.intern_iri("http://example.org/asserts");
+    let confidence = b.intern_iri("http://example.org/confidence");
 
     for n in 0..ROWS {
-        let s = b.intern_iri(format!("http://example.org/s{n}"));
-        let bnode = b.intern_blank(format!("b{n}"), BlankScope(n % 4));
+        let s = b.intern_iri(&format!("http://example.org/s{n}"));
+        let bnode = b.intern_blank(&format!("b{n}"), BlankScope(n % 4));
         let lit = b.intern_literal(RdfLiteral::language_tagged(format!("value {n}"), "EN"));
         let typed = b.intern_literal(RdfLiteral::typed(
             format!("{n}"),
@@ -186,7 +192,7 @@ fn build_dataset() -> Arc<RdfDataset> {
         // their capability flags are populated.
         if n % 4 == 0 {
             let triple = b.intern_triple(s, p, bnode);
-            let reifier = b.intern_iri(format!("http://example.org/r{n}"));
+            let reifier = b.intern_iri(&format!("http://example.org/r{n}"));
             b.push_reifier(reifier, triple);
             let score = b.intern_literal(RdfLiteral::typed(
                 format!("0.{n}"),
@@ -218,7 +224,7 @@ struct SoaQuads {
 impl SoaQuads {
     fn from_dataset(ds: &RdfDataset) -> Self {
         let n = ds.quad_count();
-        let mut soa = SoaQuads {
+        let mut soa = Self {
             s: Vec::with_capacity(n),
             p: Vec::with_capacity(n),
             o: Vec::with_capacity(n),
@@ -267,7 +273,7 @@ impl PredicateAdjacency {
                 None => buckets.push((q.p, vec![(q.s, q.o, q.g)])),
             }
         }
-        PredicateAdjacency { buckets }
+        Self { buckets }
     }
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
@@ -289,7 +295,7 @@ fn consume_ids(q: QuadIds) -> u64 {
     let mut acc = 0u64;
     for id in [Some(q.s), Some(q.p), Some(q.o), q.g] {
         acc = acc
-            .wrapping_mul(1099511628211)
+            .wrapping_mul(1_099_511_628_211)
             .wrapping_add(id.map_or(0xFFFF_FFFF, |_| 1));
     }
     acc

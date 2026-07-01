@@ -1,6 +1,6 @@
 # Release Process
 
-PURRDF publishes Rust crates to crates.io from the GitHub Actions workflow
+PurRDF publishes Rust crates to crates.io from the GitHub Actions workflow
 `.github/workflows/release-cargo.yaml`.
 
 The release lane follows the `gmeow-gts` cargo release pattern:
@@ -73,8 +73,8 @@ After the release commit is on `main` and all Trusted Publisher entries exist,
 push one release tag:
 
 ```sh
-git tag rust-v0.1.1
-git push origin rust-v0.1.1
+git tag rust-v0.1.3
+git push origin rust-v0.1.3
 ```
 
 The workflow publishes crates in dependency order and skips any crate/version
@@ -108,8 +108,39 @@ runner CPU.
 After the release commit is on `main` and the pending publisher is configured:
 
 ```sh
-git tag py-v0.1.1
-git push origin py-v0.1.1
+git tag py-v0.1.3
+git push origin py-v0.1.3
+```
+
+## npm Release
+
+`release-npm.yaml` publishes the `@blackcatinformatics/purrdf` ESM/wasm
+package (`crates/rdf-wasm/js/`) on `npm-v*` tags. The **first** publish is
+bootstrapped by the `NPM_TOKEN` repository secret (a trusted publisher can
+only be configured once the package exists); after that, configure the
+trusted publisher on npmjs.com and delete the token + secret — the workflow
+switches to **npm trusted publishing** (OIDC) automatically:
+
+| Field | Value |
+| --- | --- |
+| Publisher | GitHub Actions |
+| Organization or user | `Blackcat-Informatics` |
+| Repository | `purrdf` |
+| Workflow filename | `release-npm.yaml` |
+| Environment | `(none)` |
+
+The workflow verifies the tag against `crates/rdf-wasm/js/package.json`,
+builds the wasm artifact with the pinned `wasm-bindgen-cli` and `wasm-opt`
+(`make wasm-pkg`), runs the Node real-execution suite, packs the tarball,
+attests provenance + SPDX SBOM, and publishes with `--access public`
+(npm's own sigstore provenance is added automatically).
+
+The js package version is bumped by hand in `crates/rdf-wasm/js/package.json`
+(it is not read from the workspace):
+
+```sh
+git tag npm-v0.1.3
+git push origin npm-v0.1.3
 ```
 
 ## Verification
@@ -117,7 +148,7 @@ git push origin py-v0.1.1
 Download a published crate and verify its GitHub attestation:
 
 ```sh
-VERSION=0.1.1
+VERSION=0.1.3
 CRATE=purrdf
 curl -L "https://crates.io/api/v1/crates/${CRATE}/${VERSION}/download" \
   -o "${CRATE}-${VERSION}.crate"

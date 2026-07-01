@@ -24,13 +24,13 @@ use ::purrdf::parse_dataset;
 use ::purrdf::RdfDataset;
 use purrdf_shapes::engine::{validate_dataset_graphs, validate_graphs};
 
-const PREFIXES: &str = r#"
+const PREFIXES: &str = r"
     @prefix sh:   <http://www.w3.org/ns/shacl#> .
     @prefix ex:   <http://example.org/ns#> .
     @prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
     @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
     @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
-"#;
+";
 
 /// Parse a Turtle data document (so RDF 1.2 `<<( … )>>` reifier syntax can be
 /// expressed) into a frozen dataset via the native codec (#909).
@@ -64,7 +64,7 @@ fn assert_backends_agree(label: &str, shapes_ttl: &str, data_nt: &str) {
 /// express). The text path cannot carry a reifier, so the differential here is the
 /// dataset path against an owned-quad round-trip re-freeze of the same dataset
 /// (which preserves reifiers/annotations): both must produce byte-identical reports.
-fn assert_backends_agree_store(label: &str, shapes_ttl: &str, dataset: Arc<RdfDataset>) {
+fn assert_backends_agree_store(label: &str, shapes_ttl: &str, dataset: &Arc<RdfDataset>) {
     use ::purrdf::RdfDatasetBuilder;
 
     let mut builder = RdfDatasetBuilder::new();
@@ -119,11 +119,11 @@ fn empty_data_and_shapes_agree() {
 #[test]
 fn target_class_min_count_violation_agrees() {
     let shapes = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:PersonShape a sh:NodeShape ;
             sh:targetClass ex:Person ;
             sh:property [ sh:path ex:name ; sh:minCount 1 ] .
-        "#
+        "
     );
     let data = "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n";
     assert_backends_agree("targetClass-minCount-violate", &shapes, data);
@@ -132,11 +132,11 @@ fn target_class_min_count_violation_agrees() {
 #[test]
 fn target_class_min_count_conforming_agrees() {
     let shapes = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:PersonShape a sh:NodeShape ;
             sh:targetClass ex:Person ;
             sh:property [ sh:path ex:name ; sh:minCount 1 ] .
-        "#
+        "
     );
     let data = concat!(
         "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
@@ -149,11 +149,11 @@ fn target_class_min_count_conforming_agrees() {
 fn subclass_closure_agrees() {
     // sh:targetClass honors asserted rdfs:subClassOf (SHACL §4.2.5).
     let shapes = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:PersonShape a sh:NodeShape ;
             sh:targetClass ex:Person ;
             sh:property [ sh:path ex:name ; sh:minCount 1 ] .
-        "#
+        "
     );
     let data = concat!(
         "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Employee> .\n",
@@ -167,11 +167,11 @@ fn subclass_closure_agrees() {
 fn sh_class_target_objects_of_agrees() {
     // sh:class constraint on path values + targetObjectsOf target.
     let shapes = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:KnowsShape a sh:NodeShape ;
             sh:targetSubjectsOf ex:knows ;
             sh:property [ sh:path ex:knows ; sh:class ex:Person ] .
-        "#
+        "
     );
     let data = concat!(
         "<http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> .\n",
@@ -185,14 +185,14 @@ fn sh_class_target_objects_of_agrees() {
 #[test]
 fn target_subjects_objects_of_agrees() {
     let shapes = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:KnowerShape a sh:NodeShape ;
             sh:targetSubjectsOf ex:knows ;
             sh:property [ sh:path ex:label ; sh:minCount 1 ] .
         ex:KnownShape a sh:NodeShape ;
             sh:targetObjectsOf ex:knows ;
             sh:property [ sh:path ex:label ; sh:minCount 1 ] .
-        "#
+        "
     );
     let data = "<http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> .\n";
     assert_backends_agree("targetSubjectsOf+ObjectsOf", &shapes, data);
@@ -224,11 +224,11 @@ fn datatype_and_pattern_constraints_agree() {
 #[test]
 fn cardinality_min_max_count_agrees() {
     let shapes = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:CardShape a sh:NodeShape ;
             sh:targetClass ex:Card ;
             sh:property [ sh:path ex:tag ; sh:minCount 2 ; sh:maxCount 3 ] .
-        "#
+        "
     );
     let data = concat!(
         // c1 has 1 tag → minCount violation
@@ -248,13 +248,13 @@ fn cardinality_min_max_count_agrees() {
 fn node_shape_recursion_agrees() {
     // sh:node references another node shape (recursion through the generic engine).
     let shapes = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:AddressShape a sh:NodeShape ;
             sh:property [ sh:path ex:city ; sh:minCount 1 ] .
         ex:PersonShape a sh:NodeShape ;
             sh:targetClass ex:Person ;
             sh:property [ sh:path ex:address ; sh:node ex:AddressShape ] .
-        "#
+        "
     );
     let data = concat!(
         "<http://example.org/ns#p1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
@@ -270,11 +270,11 @@ fn node_shape_recursion_agrees() {
 #[test]
 fn inverse_path_agrees() {
     let shapes = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:ChildShape a sh:NodeShape ;
             sh:targetClass ex:Child ;
             sh:property [ sh:path [ sh:inversePath ex:parent ] ; sh:minCount 1 ] .
-        "#
+        "
     );
     let data = concat!(
         // c1 has an inverse-parent edge → conforms; c2 has none → minCount violation
@@ -288,11 +288,11 @@ fn inverse_path_agrees() {
 #[test]
 fn target_node_explicit_agrees() {
     let shapes = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:AliceShape a sh:NodeShape ;
             sh:targetNode ex:alice ;
             sh:property [ sh:path ex:name ; sh:minCount 1 ] .
-        "#
+        "
     );
     let data = "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n";
     assert_backends_agree("targetNode", &shapes, data);
@@ -301,13 +301,13 @@ fn target_node_explicit_agrees() {
 #[test]
 fn and_or_xone_logical_constraints_agree() {
     let shapes = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:HasName a sh:NodeShape ; sh:property [ sh:path ex:name ; sh:minCount 1 ] .
         ex:HasEmail a sh:NodeShape ; sh:property [ sh:path ex:email ; sh:minCount 1 ] .
         ex:ContactShape a sh:NodeShape ;
             sh:targetClass ex:Contact ;
             sh:xone ( ex:HasName ex:HasEmail ) .
-        "#
+        "
     );
     let data = concat!(
         // ct1 has BOTH name and email → xone(exactly-one) violation
@@ -372,11 +372,11 @@ fn multi_focus_determinism_agrees() {
     // Several violating focus nodes — exercises the deterministic sort across both
     // backends so the serialized reports line up.
     let shapes = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:PersonShape a sh:NodeShape ;
             sh:targetClass ex:Person ;
             sh:property [ sh:path ex:name ; sh:minCount 1 ] .
-        "#
+        "
     );
     let data = concat!(
         "<http://example.org/ns#zeta> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
@@ -393,7 +393,7 @@ fn reifier_shape_over_rdf12_triple_term_agrees() {
     // are materialized in the quad table; the oracle reads them as plain quads. Both
     // must reach the reifier shape's inner constraint identically.
     let shapes = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:S a sh:NodeShape ;
             sh:targetNode ex:a ;
             sh:property [
@@ -402,15 +402,15 @@ fn reifier_shape_over_rdf12_triple_term_agrees() {
                     sh:property [ sh:path ex:confidence ; sh:minCount 1 ] ;
                 ] ;
             ] .
-        "#
+        "
     );
     // ex:a ex:p ex:b is reified by ex:r; ex:r has NO ex:confidence → the reifier
     // shape's inner minCount fires.
     let data_ttl = format!(
-        r#"{PREFIXES}
+        r"{PREFIXES}
         ex:a ex:p ex:b .
         ex:r rdf:reifies <<( ex:a ex:p ex:b )>> .
-        "#
+        "
     );
-    assert_backends_agree_store("reifier-shape", &shapes, load_data_turtle(&data_ttl));
+    assert_backends_agree_store("reifier-shape", &shapes, &load_data_turtle(&data_ttl));
 }

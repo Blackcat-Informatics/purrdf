@@ -3,14 +3,19 @@
 
 [package]
 name = "purrdf-capi"
-description = "PURRDF purrdf C-ABI: libpurrdf cdylib/staticlib over the purrdf semantic kernel (purrdf P8)"
-version = "0.1.1"
+description = "PurRDF purrdf C-ABI: libpurrdf cdylib/staticlib over the purrdf semantic kernel (purrdf P8)"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "rdf-12", "ffi", "c-abi", "sparql"]
 publish = false
+
+[lints]
+workspace = true
 
 [lib]
 # `purrdf` → libpurrdf.{so,a}. The shipped artifacts are the cdylib + staticlib;
@@ -26,20 +31,22 @@ path = "src/lib.rs"
 # language shim links one .so" clause. SPARQL is served by the native engine
 # (`purrdf-sparql-eval`, below), so NO `oxigraph` feature is pulled (#906 cutover).
 # The `python` feature stays OFF: this is a C-ABI, not a PyO3 extension.
-purrdf-rs = { package = "purrdf", path = "../purrdf", version = "0.1.1" }
+# NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
+# at an inheriting use site, and the workspace key `purrdf` is the umbrella.
+purrdf-rs = { package = "purrdf", path = "../purrdf", version = "0.1.3" }
 # purrdf re-exports the core types, but the capi depends on the kernel
 # directly too so it can name MutableDataset/QuadValues/GraphMatchValue/DatasetMut
 # without leaning on re-export aliasing. Harmless to crate-check (acyclic).
-purrdf-core = { path = "../rdf-core", version = "0.1.1" }
+purrdf-core = { workspace = true }
 # The canonical SPARQL-Results serializer (purrdf S9, EPIC #906). Path-depends on
 # the SAME ../rdf-core, so SparqlResult/TermValue unify — this crate delegates its
 # SRJ emission here instead of carrying a second hand-written serializer.
-purrdf-sparql-results = { path = "../sparql-results", version = "0.1.1" }
+purrdf-sparql-results = { workspace = true }
 # The native SPARQL engine (purrdf S6, #912): the single `SparqlEngine` impl
 # (`NativeSparqlEngine`) evaluates `purrdf_query` over the frozen `Arc<RdfDataset>`
 # directly — the oxigraph-free query path (#906). Path-depends on the SAME
 # ../rdf-core so `SparqlRequest`/`SparqlResult` unify.
-purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.1" }
+purrdf-sparql-eval = { workspace = true }
 
 # === cargo-c packaging (the spec-letter build mechanism) ===
 [package.metadata.capi]
@@ -51,8 +58,8 @@ subdirectory = "purrdf"
 
 [package.metadata.capi.pkg_config]
 name = "purrdf"
-description = "PURRDF purrdf semantic RDF-1.2 C-ABI"
+description = "PurRDF purrdf semantic RDF-1.2 C-ABI"
 
 [package.metadata.capi.library]
 name = "purrdf"
-version = "0.1.1"
+version = "0.1.3"

@@ -17,11 +17,11 @@ use purrdf_sparql_eval::NativeSparqlEngine;
 /// the join order materially changes the intermediate-result sizes.
 fn skewed_star(spec: &[(&str, usize)]) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let hub = b.intern_iri("http://ex/hub".to_owned());
+    let hub = b.intern_iri("http://ex/hub");
     for &(name, count) in spec {
-        let pred = b.intern_iri(format!("http://ex/{name}"));
+        let pred = b.intern_iri(&format!("http://ex/{name}"));
         for i in 0..count {
-            let leaf = b.intern_iri(format!("http://ex/{name}{i}"));
+            let leaf = b.intern_iri(&format!("http://ex/{name}{i}"));
             b.push_quad(hub, pred, leaf, None);
         }
     }
@@ -81,18 +81,18 @@ fn six_pattern_chain_evaluates_end_to_end() {
     // A single hot path :n0 ->hot-> :n1 -> … -> :n6 (one solution), plus fan-out noise
     // off :n0 so the seed pattern is not trivially unique.
     let mut b = RdfDatasetBuilder::new();
-    let hot = b.intern_iri("http://ex/hot".to_owned());
-    let n0 = b.intern_iri("http://ex/n0".to_owned());
+    let hot = b.intern_iri("http://ex/hot");
+    let n0 = b.intern_iri("http://ex/n0");
     let mut prev = n0;
     for i in 1..=6 {
-        let next = b.intern_iri(format!("http://ex/n{i}"));
+        let next = b.intern_iri(&format!("http://ex/n{i}"));
         b.push_quad(prev, hot, next, None);
         prev = next;
     }
     // Off-path fan-out from n0 (raises the cardinality of the hot predicate so order
     // matters), none of which can complete the 6-hop chain.
     for i in 0..30 {
-        let dead = b.intern_iri(format!("http://ex/dead{i}"));
+        let dead = b.intern_iri(&format!("http://ex/dead{i}"));
         b.push_quad(n0, hot, dead, None);
     }
     let ds = b.freeze().expect("freeze");

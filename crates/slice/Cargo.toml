@@ -3,12 +3,17 @@
 
 [package]
 name = "purrdf-slice"
-description = "PURRDF native slice catalog: manifest-based discovery, typed artifact inventory, content-addressed IDs"
-version = "0.1.1"
+description = "PurRDF native slice catalog: manifest-based discovery, typed artifact inventory, content-addressed IDs"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
 readme = "README.md"
+
+[lints]
+workspace = true
 
 [lib]
 crate-type = ["rlib"]
@@ -17,27 +22,31 @@ path = "src/lib.rs"
 [dependencies]
 # Oxigraph-free (EPIC #906): the slice catalog/emitters/linters parse via the native
 # `gts` text codecs (`parse_dataset`) into the `RdfDataset` IR and query it directly.
-purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.1.1" }
+# NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
+# at an inheriting use site, and the workspace key `purrdf` is the umbrella.
+purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.1.3" }
 # Native SPARQL parser (purrdf S5, #911) — competency/verify queries are PARSED
 # (RFC §10), never text-searched, to extract referenced term IRIs. Replaces the
 # oxigraph-family SPARQL parser; RDF-1.2 quoted triple terms are first-class.
-purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.1" }
+purrdf-sparql-algebra = { workspace = true }
 # Strongly-connected-component computation over the S4 dependency graph
 # (RFC §8 link units). `petgraph` is a published registry crate (no `path`),
 # so it is an external boundary, not a first-party layering edge — the
 # crate-layering gate (S0.9) is unaffected. Version aligns with the workspace
 # lockfile resolution.
-petgraph = { version = "0.8", default-features = false }
-sha2 = "0.10"
-hex = "0.4"
+petgraph = { workspace = true }
+# Default features (std) re-enabled; the workspace-level entry is
+# default-features = false for the wasm-clean eval path.
+sha2 = { workspace = true, default-features = true }
+hex = { workspace = true }
 # The prefix-consistency lint scans authored `.ttl` / `.rq` sources for `@prefix` /
 # `PREFIX` declarations with a regex, to police registry-prefix shadowing. External
 # published crate (already in the workspace lockfile, used by purrdf-validate/purrdf-shapes),
 # so the S0.9 layering gate is unaffected.
-regex = "1"
-rayon = "1"
-serde = { version = "1", features = ["derive"] }
+regex = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
-insta = { version = "1.48", features = ["json"] }
+tempfile = { workspace = true }
+insta = { workspace = true, features = ["json"] }

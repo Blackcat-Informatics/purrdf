@@ -55,7 +55,7 @@ fn parse_failure_dict<'py>(py: Python<'py>, diag: &RdfDiagnostic) -> PyResult<Bo
     diag_dict(py, "FATAL", &diag.code, &diag.message, "parse", None)
 }
 
-/// Parse a PURRDF SSSOM TSV document, then validate it, returning one dict per
+/// Parse a PurRDF SSSOM TSV document, then validate it, returning one dict per
 /// diagnostic with string keys `{severity, code, message, check, instance}`.
 ///
 /// A structurally unparsable document yields a single-element list carrying the
@@ -85,7 +85,7 @@ fn validate_sssom(py: Python<'_>, text: &str) -> PyResult<Vec<Py<PyDict>>> {
         .collect()
 }
 
-/// Parse a PURRDF SSSOM TSV document and render its [`sssom::to_rdf`] projection as
+/// Parse a PurRDF SSSOM TSV document and render its [`sssom::to_rdf`] projection as
 /// N-Triples text — the round-trip / ENHANCE surface the Python codec never had
 /// (the `sssom` PyPI package validates but emits no RDF here). A structurally
 /// unparsable document is a hard `ValueError`.
@@ -99,7 +99,7 @@ fn sssom_to_rdf(text: &str) -> PyResult<String> {
     Ok(ntriples)
 }
 
-/// Parse then re-serialize a PURRDF SSSOM TSV document, returning the canonical
+/// Parse then re-serialize a PurRDF SSSOM TSV document, returning the canonical
 /// TSV form ([`sssom::serialize_tsv`]). The byte-stable round-trip the compile
 /// path uses to prove the codec is idempotent. A structurally unparsable document
 /// is a hard `ValueError`.
@@ -121,7 +121,7 @@ fn sssom_default_validation_types() -> Vec<String> {
 }
 
 /// Register the native SSSOM surface on the `purrdf` module.
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_sssom, m)?)?;
     m.add_function(wrap_pyfunction!(sssom_to_rdf, m)?)?;
     m.add_function(wrap_pyfunction!(sssom_roundtrip_tsv, m)?)?;

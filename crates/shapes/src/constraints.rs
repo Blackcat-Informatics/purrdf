@@ -198,6 +198,16 @@ struct ReifierEvalContext<'a, G: ShaclDataGraph> {
     path_term: &'a Term,
 }
 
+// Manual impls (not derives): a `derive(Copy)` would demand `G: Copy`, but the
+// context only holds `&G` — every field is a reference, so the struct is Copy
+// for ANY data-graph type.
+impl<G: ShaclDataGraph> Clone for ReifierEvalContext<'_, G> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<G: ShaclDataGraph> Copy for ReifierEvalContext<'_, G> {}
+
 fn eval_reifier_shapes<G: ShaclDataGraph>(ctx: ReifierEvalContext<'_, G>) -> Vec<ValidationResult> {
     let ReifierEvalContext {
         store,
@@ -295,7 +305,7 @@ fn triple_term(focus: &Term, predicate: &NamedNode, value: &Term) -> Option<Term
 
 fn reifiers_for<G: ShaclDataGraph>(store: &G, triple_term: &Term) -> Vec<Term> {
     let reifies = Term::NamedNode(NamedNode::from(rdf::REIFIES));
-    let reifiers: Vec<Term> = store
+    let reifiers_set: HashSet<Term> = store
         .quads_for_pattern(
             None,
             Some(&reifies),
@@ -305,7 +315,6 @@ fn reifiers_for<G: ShaclDataGraph>(store: &G, triple_term: &Term) -> Vec<Term> {
         .into_iter()
         .map(|q| q.subject)
         .collect();
-    let reifiers_set: HashSet<Term> = reifiers.into_iter().collect();
     let mut reifiers: Vec<Term> = reifiers_set.into_iter().collect();
     reifiers.sort_by_key(Term::to_string);
     reifiers
@@ -316,7 +325,7 @@ fn path_box_roles<G: ShaclDataGraph>(store: &G, path: &Path) -> Vec<NamedNode> {
         Path::Predicate(predicate) => predicate,
         Path::Inverse(inner) => match inner.as_ref() {
             Path::Predicate(predicate) => predicate,
-            _ => return vec![],
+            Path::Inverse(_) => return vec![],
         },
     };
     let predicate_term = Term::NamedNode(predicate.clone());
@@ -561,14 +570,14 @@ fn eval_constraint<G: ShaclDataGraph>(
                     .unwrap_or_else(|| source_shape.clone());
                 vec![ValidationResult {
                     focus_node: focus,
-                    result_path: result_path.clone(),
+                    result_path,
                     value: None,
                     source_constraint_component: NamedNode::from(
                         sh::HAS_VALUE_CONSTRAINT_COMPONENT,
                     ),
-                    source_shape: source_shape.clone(),
+                    source_shape,
                     severity,
-                    message: message.clone(),
+                    message,
                     source_box_roles: vec![],
                     path_box_roles: vec![],
                     result_box_roles: vec![],
@@ -1064,10 +1073,10 @@ fn eval_constraint<G: ShaclDataGraph>(
                 &store.sparql_dataset(),
                 focus_node,
                 select,
-                NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
+                &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
                 &source_shape,
                 sev,
-                msg,
+                msg.as_ref(),
             )
             .expect("sh:sparql query execution failed (parseability checked at parse time)")
         }
@@ -1083,11 +1092,7 @@ fn eval_constraint<G: ShaclDataGraph>(
 /// derived from asserted `rdfs:subClassOf` edges (as returned by
 /// [`crate::engine::subclass_closure`]).  The caller hoists the closure
 /// computation once before the per-value-node loop to avoid O(N×M) BFS cost.
-fn is_shacl_instance<G: ShaclDataGraph>(
-    store: &G,
-    value: &Term,
-    closure: &std::collections::HashSet<Term>,
-) -> bool {
+fn is_shacl_instance<G: ShaclDataGraph>(store: &G, value: &Term, closure: &HashSet<Term>) -> bool {
     if !matches!(value, Term::NamedNode(_) | Term::BlankNode(_)) {
         return false;
     }
@@ -1236,8 +1241,8 @@ fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> boo
     // For sign-constrained but unbounded types, fall back to a lexical sign check
     // when the magnitude exceeds i128 (astronomically large; never in practice).
     let value = trimmed.parse::<i128>().ok();
-    let is_negative = || value.map_or(trimmed.starts_with('-'), |n| n < 0);
-    let is_positive = || value.map_or(!trimmed.starts_with('-'), |n| n > 0);
+    let is_negative = || value.map_or_else(|| trimmed.starts_with('-'), |n| n < 0);
+    let is_positive = || value.map_or_else(|| !trimmed.starts_with('-'), |n| n > 0);
     let is_zero = || value == Some(0);
     match required_dt {
         "http://www.w3.org/2001/XMLSchema#nonNegativeInteger" => !is_negative(),
@@ -1260,15 +1265,20 @@ fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> boo
 fn check_node_kind(value: &Term, kind: &NodeKindValue) -> bool {
     matches!(
         (value, kind),
-        (Term::NamedNode(_), NodeKindValue::Iri)
-            | (Term::NamedNode(_), NodeKindValue::BlankNodeOrIri)
-            | (Term::NamedNode(_), NodeKindValue::IriOrLiteral)
-            | (Term::BlankNode(_), NodeKindValue::BlankNode)
-            | (Term::BlankNode(_), NodeKindValue::BlankNodeOrIri)
-            | (Term::BlankNode(_), NodeKindValue::BlankNodeOrLiteral)
-            | (Term::Literal(_), NodeKindValue::Literal)
-            | (Term::Literal(_), NodeKindValue::BlankNodeOrLiteral)
-            | (Term::Literal(_), NodeKindValue::IriOrLiteral)
+        (
+            Term::NamedNode(_),
+            NodeKindValue::Iri | NodeKindValue::BlankNodeOrIri | NodeKindValue::IriOrLiteral
+        ) | (
+            Term::BlankNode(_),
+            NodeKindValue::BlankNode
+                | NodeKindValue::BlankNodeOrIri
+                | NodeKindValue::BlankNodeOrLiteral
+        ) | (
+            Term::Literal(_),
+            NodeKindValue::Literal
+                | NodeKindValue::BlankNodeOrLiteral
+                | NodeKindValue::IriOrLiteral
+        )
     )
 }
 
@@ -1528,7 +1538,10 @@ mod tests {
     }
 
     fn role_iris(roles: &[NamedNode]) -> Vec<&str> {
-        roles.iter().map(|role| role.as_str()).collect()
+        roles
+            .iter()
+            .map(super::super::term::NamedNode::as_str)
+            .collect()
     }
 
     fn named_role(role: &str) -> NamedNode {
@@ -2668,7 +2681,7 @@ mod tests {
         assert_eq!(results.len(), 1, "ex:age is an undeclared predicate");
         assert!(component_iri(&results)[0].contains("ClosedConstraintComponent"));
         assert_eq!(
-            results[0].result_path.as_ref().map(|t| t.to_string()),
+            results[0].result_path.as_ref().map(ToString::to_string),
             Some(format!("<{EX}age>"))
         );
     }

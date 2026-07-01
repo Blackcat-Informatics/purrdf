@@ -54,10 +54,10 @@ impl TryFrom<i32> for PurrdfTermKind {
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(PurrdfTermKind::Iri),
-            1 => Ok(PurrdfTermKind::Blank),
-            2 => Ok(PurrdfTermKind::Literal),
-            3 => Ok(PurrdfTermKind::Triple),
+            0 => Ok(Self::Iri),
+            1 => Ok(Self::Blank),
+            2 => Ok(Self::Literal),
+            3 => Ok(Self::Triple),
             _ => Err(PurrdfError::new(
                 PurrdfStatus::InvalidArgument,
                 format!("unknown PurrdfTermKind discriminant: {value}"),
@@ -87,9 +87,9 @@ impl TryFrom<i32> for PurrdfDirection {
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(PurrdfDirection::None),
-            1 => Ok(PurrdfDirection::Ltr),
-            2 => Ok(PurrdfDirection::Rtl),
+            0 => Ok(Self::None),
+            1 => Ok(Self::Ltr),
+            2 => Ok(Self::Rtl),
             _ => Err(PurrdfError::new(
                 PurrdfStatus::InvalidArgument,
                 format!("unknown PurrdfDirection discriminant: {value}"),
@@ -135,19 +135,21 @@ impl PurrdfStr {
     /// # Safety
     /// For non-empty slices, `ptr` must be valid for `len` bytes for `'a`.
     pub(crate) unsafe fn as_str<'a>(self) -> Result<&'a str, PurrdfError> {
-        if self.len == 0 {
-            return Ok("");
+        unsafe {
+            if self.len == 0 {
+                return Ok("");
+            }
+            if self.ptr.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "PurrdfStr has a null pointer with non-zero length",
+                ));
+            }
+            let bytes = std::slice::from_raw_parts(self.ptr, self.len);
+            std::str::from_utf8(bytes).map_err(|_| {
+                PurrdfError::new(PurrdfStatus::InvalidUtf8, "PurrdfStr is not valid UTF-8")
+            })
         }
-        if self.ptr.is_null() {
-            return Err(PurrdfError::new(
-                PurrdfStatus::NullPointer,
-                "PurrdfStr has a null pointer with non-zero length",
-            ));
-        }
-        let bytes = std::slice::from_raw_parts(self.ptr, self.len);
-        std::str::from_utf8(bytes).map_err(|_| {
-            PurrdfError::new(PurrdfStatus::InvalidUtf8, "PurrdfStr is not valid UTF-8")
-        })
     }
 }
 
@@ -221,9 +223,9 @@ impl TryFrom<i32> for PurrdfGraphMatchKind {
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(PurrdfGraphMatchKind::Any),
-            1 => Ok(PurrdfGraphMatchKind::Default),
-            2 => Ok(PurrdfGraphMatchKind::Named),
+            0 => Ok(Self::Any),
+            1 => Ok(Self::Default),
+            2 => Ok(Self::Named),
             _ => Err(PurrdfError::new(
                 PurrdfStatus::InvalidArgument,
                 format!("unknown PurrdfGraphMatchKind discriminant: {value}"),
@@ -297,7 +299,7 @@ pub(crate) unsafe fn render_term(dataset: &RdfDataset, id: TermId, view: &mut Pu
                 view.language = PurrdfStr::from_str(language);
             }
             view.direction = match direction {
-                Option::None => PurrdfDirection::None as i32,
+                None => PurrdfDirection::None as i32,
                 Some(RdfTextDirection::Ltr) => PurrdfDirection::Ltr as i32,
                 Some(RdfTextDirection::Rtl) => PurrdfDirection::Rtl as i32,
             };
@@ -347,7 +349,7 @@ pub(crate) unsafe fn render_value(value: &TermValue, view: &mut PurrdfTermView) 
                 view.language = PurrdfStr::from_str(language);
             }
             view.direction = match direction {
-                Option::None => PurrdfDirection::None as i32,
+                None => PurrdfDirection::None as i32,
                 Some(RdfTextDirection::Ltr) => PurrdfDirection::Ltr as i32,
                 Some(RdfTextDirection::Rtl) => PurrdfDirection::Rtl as i32,
             };
@@ -366,68 +368,72 @@ pub(crate) unsafe fn render_value(value: &TermValue, view: &mut PurrdfTermView) 
 /// # Safety
 /// The view's `PurrdfStr` slices must be valid for the call.
 pub(crate) unsafe fn view_to_value(view: &PurrdfTermView) -> Result<TermValue, PurrdfError> {
-    let lexical = view.lexical.as_str()?;
-    let kind = PurrdfTermKind::try_from(view.kind)?;
-    match kind {
-        PurrdfTermKind::Iri => Ok(TermValue::Iri(lexical.to_owned())),
-        PurrdfTermKind::Blank => Ok(TermValue::Blank {
-            label: lexical.to_owned(),
-            scope: BlankScope(view.blank_scope),
-        }),
-        PurrdfTermKind::Literal => {
-            let language = if view.language.len == 0 {
-                None
-            } else {
-                Some(view.language.as_str()?.to_owned())
-            };
-            let datatype_in = view.datatype.as_str()?;
-            let datatype = if !datatype_in.is_empty() {
-                datatype_in.to_owned()
-            } else if language.is_some() {
-                RDF_LANG_STRING.to_owned()
-            } else {
-                XSD_STRING.to_owned()
-            };
-            let direction = match PurrdfDirection::try_from(view.direction)? {
-                PurrdfDirection::None => None,
-                PurrdfDirection::Ltr => Some(RdfTextDirection::Ltr),
-                PurrdfDirection::Rtl => Some(RdfTextDirection::Rtl),
-            };
-            Ok(TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype,
-                language,
-                direction,
-            })
+    unsafe {
+        let lexical = view.lexical.as_str()?;
+        let kind = PurrdfTermKind::try_from(view.kind)?;
+        match kind {
+            PurrdfTermKind::Iri => Ok(TermValue::Iri(lexical.to_owned())),
+            PurrdfTermKind::Blank => Ok(TermValue::Blank {
+                label: lexical.to_owned(),
+                scope: BlankScope(view.blank_scope),
+            }),
+            PurrdfTermKind::Literal => {
+                let language = if view.language.len == 0 {
+                    None
+                } else {
+                    Some(view.language.as_str()?.to_owned())
+                };
+                let datatype_in = view.datatype.as_str()?;
+                let datatype = if !datatype_in.is_empty() {
+                    datatype_in.to_owned()
+                } else if language.is_some() {
+                    RDF_LANG_STRING.to_owned()
+                } else {
+                    XSD_STRING.to_owned()
+                };
+                let direction = match PurrdfDirection::try_from(view.direction)? {
+                    PurrdfDirection::None => None,
+                    PurrdfDirection::Ltr => Some(RdfTextDirection::Ltr),
+                    PurrdfDirection::Rtl => Some(RdfTextDirection::Rtl),
+                };
+                Ok(TermValue::Literal {
+                    lexical_form: lexical.to_owned(),
+                    datatype,
+                    language,
+                    direction,
+                })
+            }
+            PurrdfTermKind::Triple => Err(PurrdfError::new(
+                PurrdfStatus::InvalidArgument,
+                "quoted-triple terms cannot be passed by value as an input view in libpurrdf 0.1",
+            )),
         }
-        PurrdfTermKind::Triple => Err(PurrdfError::new(
-            PurrdfStatus::InvalidArgument,
-            "quoted-triple terms cannot be passed by value as an input view in libpurrdf 0.1",
-        )),
     }
 }
 
 /// Build an owned [`RdfTerm`] from an input view (non-triple), for N-Triples
 /// rendering when the view carries no dataset id.
 unsafe fn view_to_rdf_term(view: &PurrdfTermView) -> Result<RdfTerm, PurrdfError> {
-    match view_to_value(view)? {
-        TermValue::Iri(iri) => Ok(RdfTerm::iri(iri)),
-        TermValue::Blank { label, .. } => Ok(RdfTerm::blank_node(label)),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => Ok(RdfTerm::literal(RdfLiteral {
-            lexical_form,
-            datatype: Some(datatype),
-            language,
-            direction,
-        })),
-        TermValue::Triple { .. } => Err(PurrdfError::new(
-            PurrdfStatus::InvalidArgument,
-            "cannot render a quoted-triple term without a dataset id",
-        )),
+    unsafe {
+        match view_to_value(view)? {
+            TermValue::Iri(iri) => Ok(RdfTerm::iri(iri)),
+            TermValue::Blank { label, .. } => Ok(RdfTerm::blank_node(label)),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => Ok(RdfTerm::literal(RdfLiteral {
+                lexical_form,
+                datatype: Some(datatype),
+                language,
+                direction,
+            })),
+            TermValue::Triple { .. } => Err(PurrdfError::new(
+                PurrdfStatus::InvalidArgument,
+                "cannot render a quoted-triple term without a dataset id",
+            )),
+        }
     }
 }
 
@@ -447,27 +453,29 @@ pub unsafe extern "C" fn purrdf_term_to_ntriples(
     out_buffer: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    ffi_try!(out_error, {
-        if view.is_null() || out_buffer.is_null() {
-            return Err(PurrdfError::new(
-                PurrdfStatus::NullPointer,
-                "null pointer argument to purrdf_term_to_ntriples",
-            ));
-        }
-        let view = &*view;
-        let token = match decode_id(view.term_id) {
-            Some(id) => {
-                if dataset.is_null() {
-                    return Err(PurrdfError::new(
+    unsafe {
+        ffi_try!(out_error, {
+            if view.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_term_to_ntriples",
+                ));
+            }
+            let view = &*view;
+            let token = match decode_id(view.term_id) {
+                Some(id) => {
+                    if dataset.is_null() {
+                        return Err(PurrdfError::new(
                         PurrdfStatus::NullPointer,
                         "a view with a dataset term_id requires its dataset to render N-Triples",
                     ));
+                    }
+                    emit_term(&PurrdfDataset::dataset(dataset).to_owned_term(id))
                 }
-                emit_term(&PurrdfDataset::dataset(dataset).to_owned_term(id))
-            }
-            None => emit_term(&view_to_rdf_term(view)?),
-        };
-        *out_buffer = PurrdfBuffer::into_raw(token.into_bytes());
-        Ok(PurrdfStatus::Ok)
-    })
+                None => emit_term(&view_to_rdf_term(view)?),
+            };
+            *out_buffer = PurrdfBuffer::into_raw(token.into_bytes());
+            Ok(PurrdfStatus::Ok)
+        })
+    }
 }

@@ -27,11 +27,11 @@ use purrdf_sparql_eval::{evaluate_query, EvalCtx};
 /// A skewed star: `:hub --pred--> N leaves` for each `(name, N)` pair.
 fn skewed_star(spec: &[(&str, usize)]) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let hub = b.intern_iri("http://ex/hub".to_owned());
+    let hub = b.intern_iri("http://ex/hub");
     for &(name, count) in spec {
-        let pred = b.intern_iri(format!("http://ex/{name}"));
+        let pred = b.intern_iri(&format!("http://ex/{name}"));
         for i in 0..count {
-            let leaf = b.intern_iri(format!("http://ex/{name}{i}"));
+            let leaf = b.intern_iri(&format!("http://ex/{name}{i}"));
             b.push_quad(hub, pred, leaf, None);
         }
     }

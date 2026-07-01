@@ -162,8 +162,7 @@ fn is_header_item(item: &Value) -> bool {
 fn item_end(items: &[(usize, Value)], torn: Option<usize>, data_len: usize, index: usize) -> usize {
     items
         .get(index + 1)
-        .map(|(offset, _)| *offset)
-        .unwrap_or_else(|| torn.unwrap_or(data_len))
+        .map_or_else(|| torn.unwrap_or(data_len), |(offset, _)| *offset)
 }
 
 fn header_profile(item: &Value) -> String {
@@ -342,6 +341,7 @@ fn aggregate_digest(inventory: &Inventory) -> Vec<u8> {
 }
 
 fn json_escape(text: &str) -> String {
+    use std::fmt::Write as _;
     let mut out = String::new();
     for ch in text.chars() {
         match ch {
@@ -350,7 +350,9 @@ fn json_escape(text: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
             c => out.push(c),
         }
     }
@@ -366,7 +368,7 @@ fn json_hex(bytes: &[u8]) -> String {
 }
 
 fn json_optional_hex(value: Option<&[u8]>) -> String {
-    value.map(json_hex).unwrap_or_else(|| "null".to_string())
+    value.map_or_else(|| "null".to_string(), json_hex)
 }
 
 fn diagnostic_json(diagnostic: &Diagnostic) -> String {
@@ -376,8 +378,7 @@ fn diagnostic_json(diagnostic: &Diagnostic) -> String {
         json_string(&diagnostic.detail),
         diagnostic
             .frame_index
-            .map(|index| index.to_string())
-            .unwrap_or_else(|| "null".to_string())
+            .map_or_else(|| "null".to_string(), |index| index.to_string())
     )
 }
 
@@ -393,9 +394,7 @@ fn diagnostics_json(diagnostics: &[Diagnostic]) -> String {
 }
 
 fn fatal_json(fatal: Option<&Diagnostic>) -> String {
-    fatal
-        .map(diagnostic_json)
-        .unwrap_or_else(|| "null".to_string())
+    fatal.map_or_else(|| "null".to_string(), diagnostic_json)
 }
 
 fn layout_json(layout: &StreamableInfo) -> String {
@@ -439,8 +438,7 @@ pub fn heads_json(inventory: &Inventory) -> String {
         json_optional_hex(file_head),
         inventory
             .torn
-            .map(|offset| offset.to_string())
-            .unwrap_or_else(|| "null".to_string()),
+            .map_or_else(|| "null".to_string(), |offset| offset.to_string()),
         fatal_json(inventory.fatal.as_ref())
     )
 }
@@ -478,8 +476,7 @@ pub fn segments_json(inventory: &Inventory) -> String {
         inventory.item_count,
         inventory
             .torn
-            .map(|offset| offset.to_string())
-            .unwrap_or_else(|| "null".to_string()),
+            .map_or_else(|| "null".to_string(), |offset| offset.to_string()),
         fatal_json(inventory.fatal.as_ref())
     )
 }
@@ -576,8 +573,7 @@ pub fn missing_json(result: &MissingResult) -> String {
         result
             .detail
             .as_deref()
-            .map(json_string)
-            .unwrap_or_else(|| "null".to_string())
+            .map_or_else(|| "null".to_string(), json_string)
     )
 }
 

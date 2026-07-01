@@ -30,9 +30,13 @@ use crate::{
 /// Mirrors the oxigraph Python `RdfFormat`; the members keep the SCREAMING_SNAKE Python
 /// spelling (`RdfFormat.TURTLE`).
 #[pyclass(name = "RdfFormat", eq, eq_int, from_py_object)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
-pub enum PyRdfFormat {
+#[allow(
+    clippy::upper_case_acronyms,
+    reason = "the SCREAMING_SNAKE variant spellings ARE the Python-visible enum members (`RdfFormat.TURTLE`), so they must not be renamed"
+)]
+pub(crate) enum PyRdfFormat {
     TURTLE,
     N_TRIPLES,
     N_QUADS,
@@ -44,10 +48,10 @@ impl PyRdfFormat {
     /// oxigraph `RdfFormat` router on the parse/serialize path.
     pub(crate) fn to_native(self) -> NativeRdfFormat {
         match self {
-            PyRdfFormat::TURTLE => NativeRdfFormat::Turtle,
-            PyRdfFormat::N_TRIPLES => NativeRdfFormat::NTriples,
-            PyRdfFormat::N_QUADS => NativeRdfFormat::NQuads,
-            PyRdfFormat::TRIG => NativeRdfFormat::TriG,
+            Self::TURTLE => NativeRdfFormat::Turtle,
+            Self::N_TRIPLES => NativeRdfFormat::NTriples,
+            Self::N_QUADS => NativeRdfFormat::NQuads,
+            Self::TRIG => NativeRdfFormat::TriG,
         }
     }
 }
@@ -106,7 +110,7 @@ pub(crate) fn serialize(
 /// rows of the RDF 1.2 statement layer reappear in the quad stream exactly as a flat
 /// parse would yield them. Private-use language tags such as `@x-purrdf-*` are valid
 /// BCP-47 `x-…` privateuse tags and survive the native parse.
-pub fn parse_quads(data: &[u8], format: NativeRdfFormat) -> Result<Vec<RdfQuad>, String> {
+pub(crate) fn parse_quads(data: &[u8], format: NativeRdfFormat) -> Result<Vec<RdfQuad>, String> {
     let dataset = parse_dataset(data, format.media_type(), None).map_err(|e| e.to_string())?;
     Ok(flat_rdf_quads_from_dataset(&dataset))
 }

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `purrdf` -- PyO3-free RDF 1.2 kernel for the PURRDF Rust workspace.
+//! `purrdf` -- PyO3-free RDF 1.2 kernel for the PurRDF Rust workspace.
 //!
 //! The crate is the narrow waist between transport/runtime stores (GTS and future
 //! logic stores) and consumers such as SHACL, validate, and LOGIC. It models RDF 1.2

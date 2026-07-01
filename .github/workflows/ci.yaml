@@ -30,11 +30,46 @@ jobs:
       - name: Check workspace
         run: cargo check --workspace --lib --tests --locked
 
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Enforce no Cargo features
         run: python3 scripts/check-no-features.py
 
       - name: Check generated artifacts
         run: bash scripts/check-generated.sh
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Run workspace tests (includes doc tests)
+        run: cargo test --workspace --locked
+
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install MSRV Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: "1.96"
+
+      - name: Check workspace on MSRV
+        run: cargo check --workspace --lib --locked
 
   wasm:
     runs-on: ubuntu-latest

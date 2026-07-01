@@ -36,6 +36,7 @@
 //! scoping.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use roxmltree::{Document, Node};
@@ -104,7 +105,7 @@ enum XmlTerm {
     Iri(String),
     Blank(String),
     Literal(RdfLiteral),
-    Triple(Box<(XmlTerm, XmlTerm, XmlTerm)>),
+    Triple(Box<(Self, Self, Self)>),
 }
 
 /// A subject / object node: an IRI or a blank node (never a literal / triple in
@@ -118,8 +119,8 @@ enum XmlNode {
 impl From<XmlNode> for XmlTerm {
     fn from(node: XmlNode) -> Self {
         match node {
-            XmlNode::Iri(iri) => XmlTerm::Iri(iri),
-            XmlNode::Blank(label) => XmlTerm::Blank(label),
+            XmlNode::Iri(iri) => Self::Iri(iri),
+            XmlNode::Blank(label) => Self::Blank(label),
         }
     }
 }
@@ -143,7 +144,7 @@ struct XmlRow {
 /// reification as plain quads, and RDF-1.2 reifiers as `rdf:reifies` rows — then interns
 /// each into a [`RdfDatasetBuilder`] and folds them through the shared
 /// [`fold_statement_layer`], identically to the line/Turtle-family path.
-pub fn parse_rdfxml_to_dataset(
+pub(super) fn parse_rdfxml_to_dataset(
     text: &str,
     base_iri: Option<&str>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
@@ -226,7 +227,7 @@ impl RdfXmlParser {
         let mut fold_rows: Vec<FoldRow> = Vec::with_capacity(self.rows.len());
         for row in &self.rows {
             let subject = intern_term(&mut builder, &row.subject)?;
-            let predicate = builder.intern_iri(row.predicate.clone());
+            let predicate = builder.intern_iri(&row.predicate);
             let object = intern_node(&mut builder, &row.object)?;
             fold_rows.push(FoldRow {
                 subject,
@@ -542,7 +543,7 @@ impl RdfXmlParser {
         let type_attr = attr_rdf(node, RDF_TYPE);
         let prop_attrs: Vec<roxmltree::Attribute<'_, '_>> = property_attrs(node).collect();
         let child_props: Vec<Node<'_, '_>> = element_children(node).collect();
-        if type_attr.is_some() as usize + prop_attrs.len() + child_props.len() != 1 {
+        if usize::from(type_attr.is_some()) + prop_attrs.len() + child_props.len() != 1 {
             return Err(parse_err(
                 "rdf:parseType=\"Triple\" requires exactly one predicate/object",
             ));
@@ -578,7 +579,7 @@ impl RdfXmlParser {
         if let Some(node_id) = attr_rdf(property, RDF_NODE_ID) {
             return Ok(XmlTerm::Blank(blank_label(node_id)?));
         }
-        if let Some("Triple") = attr_rdf(property, RDF_PARSE_TYPE) {
+        if attr_rdf(property, RDF_PARSE_TYPE) == Some("Triple") {
             return Ok(XmlTerm::Triple(Box::new(
                 self.parse_triple_element(property, &context)?,
             )));
@@ -782,9 +783,9 @@ fn intern_term(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<TermId
 /// row, or re-intern it as a quoted-triple object otherwise.
 fn intern_node(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<FoldNode, RdfDiagnostic> {
     match term {
-        XmlTerm::Iri(iri) => Ok(FoldNode::Term(builder.intern_iri(iri.clone()))),
+        XmlTerm::Iri(iri) => Ok(FoldNode::Term(builder.intern_iri(iri))),
         XmlTerm::Blank(label) => Ok(FoldNode::Term(
-            builder.intern_blank(label.clone(), BlankScope::DEFAULT),
+            builder.intern_blank(label, BlankScope::DEFAULT),
         )),
         XmlTerm::Literal(literal) => Ok(FoldNode::Term(builder.intern_literal(literal.clone()))),
         XmlTerm::Triple(components) => {
@@ -870,7 +871,7 @@ fn element_children<'a, 'input>(node: Node<'a, 'input>) -> impl Iterator<Item = 
 fn element_text(element: Node<'_, '_>) -> String {
     element
         .children()
-        .filter(|n| n.is_text())
+        .filter(Node::is_text)
         .filter_map(|n| n.text())
         .collect()
 }
@@ -989,9 +990,9 @@ fn serialize_xml_node(node: Node<'_, '_>, apex_ns: Option<&[(String, String)]>, 
     if let Some(namespaces) = apex_ns {
         for (prefix, iri) in namespaces {
             if prefix.is_empty() {
-                out.push_str(&format!(" xmlns=\"{}\"", escape_xml_attr(iri)));
+                let _ = write!(out, " xmlns=\"{}\"", escape_xml_attr(iri));
             } else {
-                out.push_str(&format!(" xmlns:{prefix}=\"{}\"", escape_xml_attr(iri)));
+                let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(iri));
             }
         }
     }
@@ -1072,7 +1073,7 @@ enum PropertyItem {
 /// drops the statement layer (star-incapable RDF/XML egress), `graph.reifiers` carries
 /// only self-reifier sentinels (skipped) and `graph.annotations` is empty, so only the
 /// base quads render. Named graphs are rejected (RDF/XML is a single-graph syntax).
-pub fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
     let named = graph.quads.iter().any(|(_, _, _, g)| g.is_some())
         || graph.reifiers.iter().any(|(_, _, g)| g.is_some())
         || graph.annotations.iter().any(|(_, _, _, g)| g.is_some());
@@ -1123,10 +1124,7 @@ pub fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, RdfDiag
     );
     for (namespace, prefix) in &namespaces {
         if prefix != "rdf" && prefix != "xsd" {
-            out.push_str(&format!(
-                " xmlns:{prefix}=\"{}\"",
-                escape_xml_attr(namespace)
-            ));
+            let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(namespace));
         }
     }
     // Declare RDF 1.2 so a round-trip preserves triple terms and base direction (their
@@ -1168,9 +1166,9 @@ fn write_reifies(
     namespaces: &BTreeMap<String, String>,
 ) -> Result<(), RdfDiagnostic> {
     let name = serializer_qname(RDF_REIFIES_IRI, namespaces);
-    out.push_str(&format!("{indent}<{name} rdf:parseType=\"Triple\">\n"));
+    let _ = writeln!(out, "{indent}<{name} rdf:parseType=\"Triple\">");
     write_triple_node(out, &format!("{indent}  "), graph, (s, p, o), namespaces)?;
-    out.push_str(&format!("{indent}</{name}>\n"));
+    let _ = writeln!(out, "{indent}</{name}>");
     Ok(())
 }
 
@@ -1195,16 +1193,10 @@ fn write_node_attribute(
     let term = ser_term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
-            out.push_str(&format!(
-                " rdf:about=\"{}\"",
-                escape_xml_attr(ser_value(term)?)
-            ));
+            let _ = write!(out, " rdf:about=\"{}\"", escape_xml_attr(ser_value(term)?));
         }
         SerTermKind::Bnode => {
-            out.push_str(&format!(
-                " rdf:nodeID=\"{}\"",
-                escape_xml_attr(ser_value(term)?)
-            ));
+            let _ = write!(out, " rdf:nodeID=\"{}\"", escape_xml_attr(ser_value(term)?));
         }
         other => {
             return Err(serialize_err(format!(
@@ -1257,47 +1249,44 @@ fn write_property(
     let term = ser_term(graph, object)?;
     match term.kind {
         SerTermKind::Iri => {
-            out.push_str(&format!(
-                "{indent}<{name} rdf:resource=\"{}\"/>\n",
+            let _ = writeln!(
+                out,
+                "{indent}<{name} rdf:resource=\"{}\"/>",
                 escape_xml_attr(ser_value(term)?)
-            ));
+            );
         }
         SerTermKind::Bnode => {
-            out.push_str(&format!(
-                "{indent}<{name} rdf:nodeID=\"{}\"/>\n",
+            let _ = writeln!(
+                out,
+                "{indent}<{name} rdf:nodeID=\"{}\"/>",
                 escape_xml_attr(ser_value(term)?)
-            ));
+            );
         }
         SerTermKind::Literal => {
-            out.push_str(&format!("{indent}<{name}"));
+            let _ = write!(out, "{indent}<{name}");
             if let Some(language) = &term.lang {
-                out.push_str(&format!(" xml:lang=\"{}\"", escape_xml_attr(language)));
+                let _ = write!(out, " xml:lang=\"{}\"", escape_xml_attr(language));
             }
             if let Some(direction) = &term.direction {
-                out.push_str(&format!(
-                    " xmlns:its=\"{ITS_NS}\" its:dir=\"{}\"",
-                    direction
-                ));
+                let _ = write!(out, " xmlns:its=\"{ITS_NS}\" its:dir=\"{direction}\"");
             }
             if let Some(datatype) = term.datatype {
-                out.push_str(&format!(
+                let _ = write!(
+                    out,
                     " rdf:datatype=\"{}\"",
                     escape_xml_attr(ser_value(ser_term(graph, datatype)?)?)
-                ));
+                );
             }
-            out.push_str(&format!(
-                ">{}</{name}>\n",
-                escape_xml_text(ser_value(term)?)
-            ));
+            let _ = writeln!(out, ">{}</{name}>", escape_xml_text(ser_value(term)?));
         }
         SerTermKind::Triple => {
             let (s, p, o) = term
                 .reifier
                 .and_then(|rf| graph.reifier(rf))
                 .ok_or_else(|| serialize_err("a triple term has no reifier binding"))?;
-            out.push_str(&format!("{indent}<{name} rdf:parseType=\"Triple\">\n"));
+            let _ = writeln!(out, "{indent}<{name} rdf:parseType=\"Triple\">");
             write_triple_node(out, &format!("{indent}  "), graph, (s, p, o), namespaces)?;
-            out.push_str(&format!("{indent}</{name}>\n"));
+            let _ = writeln!(out, "{indent}</{name}>");
         }
     }
     Ok(())
@@ -1310,11 +1299,11 @@ fn write_triple_node(
     (s, p, o): (usize, usize, usize),
     namespaces: &BTreeMap<String, String>,
 ) -> Result<(), RdfDiagnostic> {
-    out.push_str(&format!("{indent}<rdf:Description"));
+    let _ = write!(out, "{indent}<rdf:Description");
     write_node_attribute(out, graph, s)?;
     out.push_str(">\n");
     write_property(out, &format!("{indent}  "), graph, p, o, namespaces)?;
-    out.push_str(&format!("{indent}</rdf:Description>\n"));
+    let _ = writeln!(out, "{indent}</rdf:Description>");
     Ok(())
 }
 
@@ -1337,18 +1326,12 @@ fn ser_value(term: &SerTerm) -> Result<&str, RdfDiagnostic> {
 
 fn serializer_qname(iri: &str, namespaces: &BTreeMap<String, String>) -> String {
     let (namespace, local) = split_property_iri(iri);
-    let prefix = namespaces
-        .get(namespace)
-        .map(String::as_str)
-        .unwrap_or("ns");
+    let prefix = namespaces.get(namespace).map_or("ns", String::as_str);
     format!("{prefix}:{local}")
 }
 
 fn split_property_iri(iri: &str) -> (&str, &str) {
-    let split = iri
-        .rfind(['#', '/', ':'])
-        .map(|index| index + 1)
-        .unwrap_or(0);
+    let split = iri.rfind(['#', '/', ':']).map_or(0, |index| index + 1);
     let (namespace, local) = iri.split_at(split);
     if local.is_empty() || !is_xml_name(local) {
         (iri, "property")
@@ -1487,8 +1470,7 @@ fn resolve_relative_iri(base: &str, raw: &str) -> String {
         } else {
             base_path
                 .rfind('/')
-                .map(|index| &base_path[..=index])
-                .unwrap_or("")
+                .map_or("", |index| &base_path[..=index])
         };
         format!("{base_dir}{raw_path}")
     };
@@ -1500,13 +1482,13 @@ mod tests {
     use super::*;
 
     /// Parse RDF/XML straight into a frozen dataset, for assertions over quads.
-    fn parse(text: &str, base: Option<&str>) -> std::sync::Arc<crate::RdfDataset> {
+    fn parse(text: &str, base: Option<&str>) -> Arc<RdfDataset> {
         parse_rdfxml_to_dataset(text, base).expect("parse rdf/xml")
     }
 
     /// Serialize a frozen dataset to RDF/XML through the native base-only egress (the
     /// star layer is declared loss for RDF/XML), matching the production arm.
-    fn serialize(dataset: &crate::RdfDataset) -> String {
+    fn serialize(dataset: &RdfDataset) -> String {
         let bytes = crate::native_codecs::serialize_dataset_base_only(
             dataset,
             "application/rdf+xml",

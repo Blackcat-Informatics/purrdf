@@ -21,6 +21,7 @@
 //! shorthand the reasoning-closure emitter uses.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use crate::native_quads::flat_rdf_quads_from_dataset;
 use crate::{
@@ -211,12 +212,13 @@ pub fn project_owl_to_rdf12(owl_ttl: &str) -> Result<String, RdfDiagnostic> {
         let property_iri = require_iri(property, "owl:annotatedProperty")?;
 
         // ?s ?p ?o .
-        out.push_str(&format!(
-            "{} <{}> {} .\n",
+        let _ = writeln!(
+            out,
+            "{} <{}> {} .",
             emit(source),
             property_iri,
             emit(target)
-        ));
+        );
 
         // ?axiom rdf:reifies <<( ?s ?p ?o )>> ; ?annProp ?annVal ; … .
         let mut annotations: Vec<(String, String)> = acc
@@ -232,7 +234,7 @@ pub fn project_owl_to_rdf12(owl_ttl: &str) -> Result<String, RdfDiagnostic> {
             emit_triple_term(source, &property_iri, target)
         );
         for (predicate, object) in &annotations {
-            line.push_str(&format!(" ;\n   <{predicate}> {object}"));
+            let _ = write!(line, " ;\n   <{predicate}> {object}");
         }
         line.push_str(" .\n");
         out.push_str(&line);
@@ -243,7 +245,7 @@ pub fn project_owl_to_rdf12(owl_ttl: &str) -> Result<String, RdfDiagnostic> {
 /// Accumulated facts for one reifier subject during normalization.
 struct ReifierAccum {
     subject: RdfTerm,
-    reified: Option<Box<crate::RdfTriple>>,
+    reified: Option<Box<RdfTriple>>,
     annotations: Vec<(String, RdfTerm)>,
 }
 
@@ -305,7 +307,7 @@ pub fn normalize_rdf12_to_owl(rdf12_ttl: &str) -> Result<String, RdfDiagnostic> 
         let (s, p, o) = (&reified.subject, &reified.predicate, &reified.object);
 
         // ?s ?p ?o .
-        out.push_str(&format!("{} <{}> {} .\n", emit(s), p, emit(o)));
+        let _ = writeln!(out, "{} <{}> {} .", emit(s), p, emit(o));
 
         // ?reifier a owl:Axiom ; owl:annotated* … ; ?annProp ?annVal .
         let mut properties: Vec<(String, String)> = vec![
@@ -321,7 +323,7 @@ pub fn normalize_rdf12_to_owl(rdf12_ttl: &str) -> Result<String, RdfDiagnostic> 
         let mut line = emit(&acc.subject);
         for (index, (predicate, object)) in properties.iter().enumerate() {
             let sep = if index == 0 { " " } else { " ;\n   " };
-            line.push_str(&format!("{sep}<{predicate}> {object}"));
+            let _ = write!(line, "{sep}<{predicate}> {object}");
         }
         line.push_str(" .\n");
         out.push_str(&line);
@@ -392,7 +394,7 @@ purrdf:ax a owl:Axiom ;
     #[test]
     fn dropped_annotation_breaks_the_round_trip() {
         // Same axiom, but without the confidence annotation.
-        const OWL_MISSING: &str = r#"
+        const OWL_MISSING: &str = r"
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
 
@@ -402,7 +404,7 @@ purrdf:ax a owl:Axiom ;
     owl:annotatedProperty purrdf:p ;
     owl:annotatedTarget purrdf:o ;
     purrdf:accordingTo purrdf:analyst .
-"#;
+";
         // The faithful round-trip carries the confidence, so it must NOT match a
         // graph that lost it (proves annotations flow through, not silently dropped).
         let rdf12 = project_owl_to_rdf12(OWL).expect("project");
@@ -414,7 +416,7 @@ purrdf:ax a owl:Axiom ;
     fn conflicting_annotated_source_is_rejected() {
         // Two DIFFERENT owl:annotatedSource for one axiom: a corrupt input the
         // codec must hard-fail on, never silently last-write-win.
-        const OWL_CONFLICT: &str = r#"
+        const OWL_CONFLICT: &str = r"
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
 
@@ -424,7 +426,7 @@ purrdf:ax a owl:Axiom ;
     owl:annotatedSource purrdf:other ;
     owl:annotatedProperty purrdf:p ;
     owl:annotatedTarget purrdf:o .
-"#;
+";
         let err = project_owl_to_rdf12(OWL_CONFLICT)
             .expect_err("conflicting owl:annotatedSource must hard-fail, not be silently dropped");
         assert_eq!(err.code, "statements-conflicting-structural");
@@ -433,7 +435,7 @@ purrdf:ax a owl:Axiom ;
     #[test]
     fn duplicate_identical_source_is_idempotent() {
         // The SAME triple repeated is set membership, not a conflict — accepted.
-        const OWL_DUP: &str = r#"
+        const OWL_DUP: &str = r"
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
 
@@ -443,7 +445,7 @@ purrdf:ax a owl:Axiom ;
     owl:annotatedSource purrdf:s ;
     owl:annotatedProperty purrdf:p ;
     owl:annotatedTarget purrdf:o .
-"#;
+";
         project_owl_to_rdf12(OWL_DUP)
             .expect("an identical duplicate structural triple is accepted");
     }
@@ -459,14 +461,14 @@ purrdf:ax a owl:Axiom ;
         // `statements-turtle-parse` error before `normalize_rdf12_to_owl` reaches its
         // own `set_once_or_error` guard. The conflict is still hard-failed (P7), only
         // the detection point and error code moved into the shared native fold.
-        const RDF12_CONFLICT: &str = r#"
+        const RDF12_CONFLICT: &str = r"
 @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 
 purrdf:s purrdf:p purrdf:o .
 purrdf:ax rdf:reifies <<( purrdf:s purrdf:p purrdf:o )>> ;
     rdf:reifies <<( purrdf:s purrdf:p purrdf:other )>> .
-"#;
+";
         let err = normalize_rdf12_to_owl(RDF12_CONFLICT)
             .expect_err("conflicting rdf:reifies must hard-fail, not be silently dropped");
         assert_eq!(err.code, "statements-turtle-parse");

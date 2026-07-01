@@ -21,7 +21,8 @@ use crate::resolve::remove_dot_segments;
 impl Iri {
     /// Produce a syntax-normalized copy (RFC-3986 §6.2.2). The result is itself
     /// parsed/validated; normalization never yields an invalid IRI.
-    pub fn normalize(&self) -> Iri {
+    #[must_use]
+    pub fn normalize(&self) -> Self {
         let mut out = String::with_capacity(self.as_str().len());
 
         if let Some(scheme) = self.scheme() {

@@ -39,12 +39,12 @@ pub enum ParseError {
 impl ParseError {
     /// Construct a [`ParseError::Unsupported`] from any displayable feature name.
     pub fn unsupported(feature: impl Into<String>) -> Self {
-        ParseError::Unsupported(feature.into())
+        Self::Unsupported(feature.into())
     }
 
     /// Construct a [`ParseError::Syntax`] at a byte offset.
     pub fn syntax(reason: impl Into<String>, at: usize) -> Self {
-        ParseError::Syntax {
+        Self::Syntax {
             reason: reason.into(),
             at,
         }
@@ -52,7 +52,7 @@ impl ParseError {
 
     /// Construct a [`ParseError::Lex`] at a byte offset.
     pub fn lex(reason: impl Into<String>, at: usize) -> Self {
-        ParseError::Lex {
+        Self::Lex {
             reason: reason.into(),
             at,
         }
@@ -62,17 +62,17 @@ impl ParseError {
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ParseError::Lex { reason, at } => write!(f, "SPARQL lex error at byte {at}: {reason}"),
-            ParseError::Syntax { reason, at } => {
+            Self::Lex { reason, at } => write!(f, "SPARQL lex error at byte {at}: {reason}"),
+            Self::Syntax { reason, at } => {
                 write!(f, "SPARQL syntax error at byte {at}: {reason}")
             }
-            ParseError::Unsupported(feature) => {
+            Self::Unsupported(feature) => {
                 write!(
                     f,
                     "unsupported SPARQL construct (purrdf S5 scope): {feature}"
                 )
             }
-            ParseError::Iri { lexical, reason } => {
+            Self::Iri { lexical, reason } => {
                 write!(f, "invalid IRI {lexical:?} in term position: {reason}")
             }
         }

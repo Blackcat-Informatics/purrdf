@@ -46,17 +46,23 @@ fn bump() {
 // only added behavior is a thread-local counter increment on allocation paths.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        bump();
-        System.alloc(layout)
+        unsafe {
+            bump();
+            System.alloc(layout)
+        }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        System.dealloc(ptr, layout)
+        unsafe {
+            System.dealloc(ptr, layout);
+        }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        bump();
-        System.realloc(ptr, layout, new_size)
+        unsafe {
+            bump();
+            System.realloc(ptr, layout, new_size)
+        }
     }
 }
 
@@ -73,12 +79,12 @@ fn allocations() -> usize {
 /// nested triple term — so the iteration genuinely resolves every term variant.
 fn build_dataset() -> std::sync::Arc<purrdf_core::RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p".to_string());
-    let g = b.intern_iri("http://example.org/g".to_string());
+    let p = b.intern_iri("http://example.org/p");
+    let g = b.intern_iri("http://example.org/g");
 
     for n in 0..64 {
-        let s = b.intern_iri(format!("http://example.org/s{n}"));
-        let bnode = b.intern_blank(format!("b{n}"), BlankScope(n % 3));
+        let s = b.intern_iri(&format!("http://example.org/s{n}"));
+        let bnode = b.intern_blank(&format!("b{n}"), BlankScope(n % 3));
         let lit = b.intern_literal(RdfLiteral::language_tagged(format!("v{n}"), "EN"));
         let typed = b.intern_literal(RdfLiteral::typed(
             format!("{n}"),

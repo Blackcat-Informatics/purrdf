@@ -61,6 +61,7 @@ fn store_once<T: Hash + Eq>(vec: &mut Vec<T>, table: &mut HashTable<u32>, value:
 /// A borrowed term lookup key (#879 P3b): carries the string components by reference
 /// so the interner can dedup BY VALUE *before* anything is pushed to the arena.
 /// Mirrors [`InternedTerm`] but with `&str` where the stored form holds a `StrRange`.
+#[derive(Clone, Copy)]
 enum TermLookup<'a> {
     Iri(&'a str),
     Blank {
@@ -82,7 +83,7 @@ enum TermLookup<'a> {
 
 /// Hash a borrowed lookup. MUST hash byte-identically to [`hash_stored`] for equal
 /// values — explicit discriminant tags + `str::hash` (so the find/insert hashes agree).
-fn hash_lookup<H: Hasher>(lookup: &TermLookup, state: &mut H) {
+fn hash_lookup<H: Hasher>(lookup: &TermLookup<'_>, state: &mut H) {
     match lookup {
         TermLookup::Iri(iri) => {
             0u8.hash(state);
@@ -144,7 +145,7 @@ fn hash_stored<H: Hasher>(arena: &[u8], term: &InternedTerm, state: &mut H) {
 }
 
 /// Whether a stored term equals a lookup, resolving the stored ranges through `arena`.
-fn term_eq(arena: &[u8], term: &InternedTerm, lookup: &TermLookup) -> bool {
+fn term_eq(arena: &[u8], term: &InternedTerm, lookup: &TermLookup<'_>) -> bool {
     match (term, lookup) {
         (InternedTerm::Iri(r), TermLookup::Iri(s)) => arena_str(arena, *r) == *s,
         (
@@ -182,6 +183,7 @@ fn term_eq(arena: &[u8], term: &InternedTerm, lookup: &TermLookup) -> bool {
 
 /// Term storage + value-interning dedup + the C0 identity policy, in one cohesive
 /// unit (SRP). Private: the builder is the only public surface.
+#[derive(Debug)]
 struct Interner {
     /// The byte arena owning every interned string ONCE (#879 P3b); terms hold ranges.
     arena: Vec<u8>,
@@ -219,7 +221,7 @@ impl Interner {
     /// Intern a term BY VALUE: dedups against existing terms (resolving their ranges
     /// through the arena) and pushes the strings to the arena only on a MISS, so a
     /// duplicate value costs no arena bytes. Idempotent: equal values map to one id.
-    fn intern(&mut self, lookup: TermLookup) -> TermId {
+    fn intern(&mut self, lookup: TermLookup<'_>) -> TermId {
         let hash = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             hash_lookup(&lookup, &mut h);
@@ -291,6 +293,7 @@ impl Interner {
 /// annotations are deduplicated *during* push (the dataset is a set, C0.5), while
 /// [`freeze`](RdfDatasetBuilder::freeze) re-sorts everything into a stable,
 /// reproducible order.
+#[derive(Debug)]
 pub struct RdfDatasetBuilder {
     /// Owns terms + the value-intern index + the C0 identity policy.
     interner: Interner,
@@ -322,6 +325,7 @@ pub struct RdfDatasetBuilder {
 /// This type-state splits validation from materialization for callers that need to
 /// make that phase boundary explicit, while [`RdfDatasetBuilder::freeze`] keeps the
 /// traditional one-shot validate-then-freeze API.
+#[derive(Debug)]
 pub struct ValidatedRdfDatasetBuilder {
     inner: RdfDatasetBuilder,
 }
@@ -358,7 +362,7 @@ impl Extend<QuadIds> for RdfDatasetBuilder {
             // push the table past u32::MAX must abort up front rather than reserve
             // and then panic mid-loop in `next_id`/`intern` with a half-grown table.
             assert!(
-                self.quads.len() + reserve <= u32::MAX as usize,
+                u32::try_from(self.quads.len() + reserve).is_ok(),
                 "bulk quad push exceeds maximum quad capacity of u32::MAX"
             );
             self.quads.reserve(reserve);
@@ -390,17 +394,14 @@ impl RdfDatasetBuilder {
     }
 
     /// Intern an IRI term. Idempotent: the same IRI string yields the same id.
-    pub fn intern_iri(&mut self, iri: String) -> TermId {
-        self.interner.intern(TermLookup::Iri(&iri))
+    pub fn intern_iri(&mut self, iri: &str) -> TermId {
+        self.interner.intern(TermLookup::Iri(iri))
     }
 
     /// Intern a blank node. Identity is `(label, scope)` (C0.2): same label + same
     /// scope → same id; same label + different scope → different id.
-    pub fn intern_blank(&mut self, label: String, scope: BlankScope) -> TermId {
-        self.interner.intern(TermLookup::Blank {
-            label: &label,
-            scope,
-        })
+    pub fn intern_blank(&mut self, label: &str, scope: BlankScope) -> TermId {
+        self.interner.intern(TermLookup::Blank { label, scope })
     }
 
     /// Intern a literal, applying the C0.1 identity policy:
@@ -430,7 +431,7 @@ impl RdfDatasetBuilder {
             },
         };
 
-        let datatype_id = self.intern_iri(datatype_iri);
+        let datatype_id = self.intern_iri(&datatype_iri);
 
         self.interner.intern(TermLookup::Literal {
             lexical: &lexical_form,
@@ -465,12 +466,12 @@ impl RdfDatasetBuilder {
     /// Private: callers outside this module use the public `push_dataset` path.
     fn intern_owned_term_scoped(&mut self, term: &RdfTerm, scope: BlankScope) -> TermId {
         match term {
-            RdfTerm::Iri(iri) => self.intern_iri(iri.clone()),
-            RdfTerm::BlankNode(label) => self.intern_blank(label.clone(), scope),
+            RdfTerm::Iri(iri) => self.intern_iri(iri),
+            RdfTerm::BlankNode(label) => self.intern_blank(label, scope),
             RdfTerm::Literal(literal) => self.intern_literal(literal.clone()),
             RdfTerm::Triple(triple) => {
                 let s = self.intern_owned_term_scoped(&triple.subject, scope);
-                let p = self.intern_iri(triple.predicate.clone());
+                let p = self.intern_iri(&triple.predicate);
                 let o = self.intern_owned_term_scoped(&triple.object, scope);
                 self.intern_triple(s, p, o)
             }
@@ -491,7 +492,7 @@ impl RdfDatasetBuilder {
     fn push_owned_quad_scoped(&mut self, quad: &RdfQuad, scope: BlankScope) {
         let handle = self.next_quad_handle();
         let s = self.intern_owned_term_scoped(&quad.subject, scope);
-        let p = self.intern_iri(quad.predicate.clone());
+        let p = self.intern_iri(&quad.predicate);
         let o = self.intern_owned_term_scoped(&quad.object, scope);
         let g = quad
             .graph_name
@@ -514,7 +515,7 @@ impl RdfDatasetBuilder {
     /// interning through `scope`.
     fn push_owned_reifier_scoped(&mut self, reifier: &RdfReifier, scope: BlankScope) {
         let s = self.intern_owned_term_scoped(&reifier.statement.subject, scope);
-        let p = self.intern_iri(reifier.statement.predicate.clone());
+        let p = self.intern_iri(&reifier.statement.predicate);
         let o = self.intern_owned_term_scoped(&reifier.statement.object, scope);
         let triple = self.intern_triple(s, p, o);
         let reifier_id = self.intern_owned_term_scoped(&reifier.reifier, scope);
@@ -531,7 +532,7 @@ impl RdfDatasetBuilder {
     /// interning through `scope`.
     fn push_owned_annotation_scoped(&mut self, annotation: &RdfAnnotation, scope: BlankScope) {
         let reifier_id = self.intern_owned_term_scoped(&annotation.reifier, scope);
-        let p = self.intern_iri(annotation.predicate.clone());
+        let p = self.intern_iri(&annotation.predicate);
         let o = self.intern_owned_term_scoped(&annotation.object, scope);
         self.push_annotation(reifier_id, p, o);
     }
@@ -569,7 +570,7 @@ impl RdfDatasetBuilder {
             // up front if `other` would overflow it rather than corrupt builder
             // state midway through the merge loop.
             assert!(
-                self.quads.len() + reserve <= u32::MAX as usize,
+                u32::try_from(self.quads.len() + reserve).is_ok(),
                 "dataset merge exceeds maximum quad capacity of u32::MAX"
             );
             self.quads.reserve(reserve);
@@ -649,7 +650,7 @@ impl RdfDatasetBuilder {
     /// `push_owned_reifier` (e.g. a named-graph projection) would carry reifiers the
     /// renderer / pattern-matcher cannot see, because the predicate id is absent.
     pub fn push_reifier(&mut self, reifier: TermId, triple: TermId) {
-        let _ = self.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies".to_string());
+        let _ = self.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies");
         let binding = (reifier, triple);
         store_once(&mut self.reifiers, &mut self.reifier_index, binding);
     }
@@ -717,7 +718,7 @@ impl RdfDatasetBuilder {
     /// Consume the builder and materialize the frozen dataset. Called only by
     /// [`freeze`](Self::freeze) AFTER validation has passed.
     fn materialize(self) -> RdfDataset {
-        let RdfDatasetBuilder {
+        let Self {
             interner,
             quads,
             mut reifiers,
@@ -819,9 +820,9 @@ mod tests {
     #[test]
     fn intern_iri_is_idempotent() {
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://example.org/x".to_string());
-        let c = b.intern_iri("http://example.org/x".to_string());
-        let d = b.intern_iri("http://example.org/y".to_string());
+        let a = b.intern_iri("http://example.org/x");
+        let c = b.intern_iri("http://example.org/x");
+        let d = b.intern_iri("http://example.org/y");
         assert_eq!(a, c);
         assert_ne!(a, d);
     }
@@ -829,8 +830,8 @@ mod tests {
     #[test]
     fn intern_blank_is_idempotent() {
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_blank("b0".to_string(), BlankScope::DEFAULT);
-        let c = b.intern_blank("b0".to_string(), BlankScope::DEFAULT);
+        let a = b.intern_blank("b0", BlankScope::DEFAULT);
+        let c = b.intern_blank("b0", BlankScope::DEFAULT);
         assert_eq!(a, c);
     }
 
@@ -900,9 +901,9 @@ mod tests {
     #[test]
     fn blank_scope_distinctness() {
         let mut b = RdfDatasetBuilder::new();
-        let s1 = b.intern_blank("b".to_string(), BlankScope(1));
-        let s2 = b.intern_blank("b".to_string(), BlankScope(2));
-        let s1_again = b.intern_blank("b".to_string(), BlankScope(1));
+        let s1 = b.intern_blank("b", BlankScope(1));
+        let s2 = b.intern_blank("b", BlankScope(2));
+        let s1_again = b.intern_blank("b", BlankScope(1));
         assert_ne!(s1, s2);
         assert_eq!(s1, s1_again);
     }
@@ -912,16 +913,16 @@ mod tests {
     #[test]
     fn nested_triple_term_structural_identity() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s".to_string());
-        let p = b.intern_iri("http://example.org/p".to_string());
-        let o = b.intern_iri("http://example.org/o".to_string());
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
 
         let t1 = b.intern_triple(s, p, o);
         let t2 = b.intern_triple(s, p, o);
         assert_eq!(t1, t2, "same (s,p,o) → same triple-term id");
 
         // Nest the triple term as the object of an outer triple, twice.
-        let outer_p = b.intern_iri("http://example.org/asserts".to_string());
+        let outer_p = b.intern_iri("http://example.org/asserts");
         let outer1 = b.intern_triple(s, outer_p, t1);
         let outer2 = b.intern_triple(s, outer_p, t2);
         assert_eq!(outer1, outer2, "nested triple term is reusable by id");
@@ -933,7 +934,7 @@ mod tests {
 
     /// A small helper interning a fresh IRI by suffix.
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}"))
     }
 
     #[test]
@@ -1123,9 +1124,9 @@ mod tests {
         // Dataset A: single quad  _:b0 <ex:p> <ex:o1>
         let dataset_a = {
             let mut b = RdfDatasetBuilder::new();
-            let s = b.intern_blank("b0".to_string(), BlankScope::DEFAULT);
-            let p = b.intern_iri("http://example.org/p".to_string());
-            let o = b.intern_iri("http://example.org/o1".to_string());
+            let s = b.intern_blank("b0", BlankScope::DEFAULT);
+            let p = b.intern_iri("http://example.org/p");
+            let o = b.intern_iri("http://example.org/o1");
             b.push_quad(s, p, o, None);
             b.freeze().expect("valid A")
         };
@@ -1133,9 +1134,9 @@ mod tests {
         // Dataset B: single quad  _:b0 <ex:p> <ex:o2>  (same blank label, different object)
         let dataset_b = {
             let mut b = RdfDatasetBuilder::new();
-            let s = b.intern_blank("b0".to_string(), BlankScope::DEFAULT);
-            let p = b.intern_iri("http://example.org/p".to_string());
-            let o = b.intern_iri("http://example.org/o2".to_string());
+            let s = b.intern_blank("b0", BlankScope::DEFAULT);
+            let p = b.intern_iri("http://example.org/p");
+            let o = b.intern_iri("http://example.org/o2");
             b.push_quad(s, p, o, None);
             b.freeze().expect("valid B")
         };
@@ -1212,12 +1213,12 @@ mod tests {
                     Op::Iri(n) => {
                         let iri = format!("http://example.org/i{n}");
                         distinct_terms.insert(format!("iri:{iri}"));
-                        (format!("iri:{iri}"), b.intern_iri(iri))
+                        (format!("iri:{iri}"), b.intern_iri(&iri))
                     }
                     Op::Blank(l, s) => {
                         let key = format!("blank:{l}:{s}");
                         distinct_terms.insert(key.clone());
-                        (key, b.intern_blank(format!("b{l}"), BlankScope(s)))
+                        (key, b.intern_blank(&format!("b{l}"), BlankScope(s)))
                     }
                     Op::Literal(n) => {
                         let lex = format!("v{n}");

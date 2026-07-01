@@ -70,9 +70,9 @@ mod tests {
     #[test]
     fn bundle_pairs_dataset_with_envelope() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s".to_string());
-        let p = b.intern_iri("http://example.org/p".to_string());
-        let o = b.intern_iri("http://example.org/o".to_string());
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
         b.push_quad(s, p, o, None);
         let dataset = b.freeze().expect("valid");
 

@@ -326,7 +326,7 @@ fn find_depends_on_block(text: &str) -> Option<DependsBlock> {
     let (term_idx, terminator) = terminator?;
 
     // Leading indentation of the predicate line.
-    let line_start = text[..pred_start].rfind('\n').map(|n| n + 1).unwrap_or(0);
+    let line_start = text[..pred_start].rfind('\n').map_or(0, |n| n + 1);
     let indent: String = text[line_start..pred_start]
         .chars()
         .take_while(|c| *c == ' ' || *c == '\t')
@@ -454,12 +454,8 @@ fn insert_new_block(
         })?;
     let line_end = original[anchor_rel..]
         .find('\n')
-        .map(|n| anchor_rel + n + 1)
-        .unwrap_or(original.len());
-    let line_start = original[..anchor_rel]
-        .rfind('\n')
-        .map(|n| n + 1)
-        .unwrap_or(0);
+        .map_or(original.len(), |n| anchor_rel + n + 1);
+    let line_start = original[..anchor_rel].rfind('\n').map_or(0, |n| n + 1);
     let indent: String = original[line_start..anchor_rel]
         .chars()
         .take_while(|c| *c == ' ' || *c == '\t')

@@ -150,6 +150,8 @@ pub struct FileBlobRange<'a> {
 }
 
 /// Safety policy for materializing files-profile archives.
+// Deliberate flag set: each bool is an independent opt-in safety toggle, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnpackOptions {
     /// Extract blobs hidden by suppression frames.
@@ -181,19 +183,17 @@ struct TermBuilder {
 }
 
 impl TermBuilder {
-    fn atom(&mut self, kind: TermKind, value: String, datatype: Option<String>) -> usize {
+    fn atom(&mut self, kind: TermKind, value: String, datatype: Option<&str>) -> usize {
         let key = TermKey {
             kind,
             value: value.clone(),
-            datatype: datatype.clone(),
+            datatype: datatype.map(str::to_string),
         };
         if let Some(id) = self.ids.get(&key) {
             return *id;
         }
         let datatype_id = if kind == TermKind::Literal {
-            datatype
-                .as_deref()
-                .map(|iri| self.atom(TermKind::Iri, iri.to_string(), None))
+            datatype.map(|iri| self.atom(TermKind::Iri, iri.to_string(), None))
         } else {
             None
         };
@@ -219,11 +219,7 @@ impl TermBuilder {
     }
 
     fn literal(&mut self, value: &str, datatype: Option<&str>) -> usize {
-        self.atom(
-            TermKind::Literal,
-            value.to_string(),
-            datatype.map(str::to_string),
-        )
+        self.atom(TermKind::Literal, value.to_string(), datatype)
     }
 
     fn quad_lit(&mut self, subject: usize, predicate: &str, value: &str, datatype: Option<&str>) {
@@ -233,8 +229,8 @@ impl TermBuilder {
     }
 }
 
-fn iri_term(value: &str) -> crate::model::Term {
-    crate::model::Term {
+fn iri_term(value: &str) -> Term {
+    Term {
         kind: TermKind::Iri,
         value: Some(value.to_string()),
         datatype: None,
@@ -244,8 +240,8 @@ fn iri_term(value: &str) -> crate::model::Term {
     }
 }
 
-fn literal_term(value: &str, datatype: Option<usize>) -> crate::model::Term {
-    crate::model::Term {
+fn literal_term(value: &str, datatype: Option<usize>) -> Term {
+    Term {
         kind: TermKind::Literal,
         value: Some(value.to_string()),
         datatype,
@@ -255,8 +251,8 @@ fn literal_term(value: &str, datatype: Option<usize>) -> crate::model::Term {
     }
 }
 
-fn bnode_term(label: &str) -> crate::model::Term {
-    crate::model::Term {
+fn bnode_term(label: &str) -> Term {
+    Term {
         kind: TermKind::Bnode,
         value: Some(label.to_string()),
         datatype: None,
@@ -309,10 +305,10 @@ fn to_posix_path(path: &Path) -> Result<String, String> {
     Ok(parts.join("/"))
 }
 
-fn walk_dir_sorted(dir: &Path) -> Result<Vec<std::path::PathBuf>, String> {
-    fn recurse(out: &mut Vec<std::path::PathBuf>, dir: &Path) -> Result<(), std::io::Error> {
+fn walk_dir_sorted(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    fn recurse(out: &mut Vec<PathBuf>, dir: &Path) -> Result<(), std::io::Error> {
         let mut entries: Vec<_> = fs::read_dir(dir)?.collect::<Result<Vec<_>, _>>()?;
-        entries.sort_by_key(|a| a.file_name());
+        entries.sort_by_key(fs::DirEntry::file_name);
         for entry in entries {
             let path = entry.path();
             let ftype = entry.file_type()?;
@@ -335,8 +331,8 @@ fn walk_dir_sorted(dir: &Path) -> Result<Vec<std::path::PathBuf>, String> {
     Ok(out)
 }
 
-fn resolve_sources(sources: &[&Path]) -> Result<Vec<(std::path::PathBuf, String)>, String> {
-    let mut entries: Vec<(std::path::PathBuf, String)> = Vec::new();
+fn resolve_sources(sources: &[&Path]) -> Result<Vec<(PathBuf, String)>, String> {
+    let mut entries: Vec<(PathBuf, String)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for src in sources {
         let meta = fs::symlink_metadata(src).map_err(|e| format!("{src:?}: {e}"))?;
@@ -379,11 +375,11 @@ fn resolve_sources(sources: &[&Path]) -> Result<Vec<(std::path::PathBuf, String)
 fn guess_media_type(path: &Path) -> String {
     match path.extension().and_then(|e| e.to_str()) {
         Some("txt") => "text/plain".to_string(),
-        Some("html") | Some("htm") => "text/html".to_string(),
+        Some("html" | "htm") => "text/html".to_string(),
         Some("json") => "application/json".to_string(),
         Some("xml") => "application/xml".to_string(),
         Some("png") => "image/png".to_string(),
-        Some("jpg") | Some("jpeg") => "image/jpeg".to_string(),
+        Some("jpg" | "jpeg") => "image/jpeg".to_string(),
         Some("gif") => "image/gif".to_string(),
         Some("webp") => "image/webp".to_string(),
         Some("pdf") => "application/pdf".to_string(),
@@ -414,15 +410,15 @@ fn write_cbor_type_len<W: Write>(writer: &mut W, major: u8, len: u64) -> std::io
     if len < 24 {
         writer.write_all(&[prefix | len as u8])
     } else if u8::try_from(len).is_ok() {
-        writer.write_all(&[prefix | 24, len as u8])
+        writer.write_all(&[prefix | 0x18, len as u8])
     } else if u16::try_from(len).is_ok() {
-        writer.write_all(&[prefix | 25])?;
+        writer.write_all(&[prefix | 0x19])?;
         writer.write_all(&(len as u16).to_be_bytes())
     } else if u32::try_from(len).is_ok() {
-        writer.write_all(&[prefix | 26])?;
+        writer.write_all(&[prefix | 0x1a])?;
         writer.write_all(&(len as u32).to_be_bytes())
     } else {
-        writer.write_all(&[prefix | 27])?;
+        writer.write_all(&[prefix | 0x1b])?;
         writer.write_all(&len.to_be_bytes())
     }
 }
@@ -472,7 +468,7 @@ fn copy_counted_and_hash<R: Read, W: Write>(
 ) -> std::io::Result<(String, u64)> {
     let mut digest = blake3::Hasher::new();
     let mut written = 0_u64;
-    let mut buf = [0_u8; STREAM_CHUNK_SIZE];
+    let mut buf = vec![0_u8; STREAM_CHUNK_SIZE];
     loop {
         let n = reader.read(&mut buf)?;
         if n == 0 {
@@ -784,8 +780,8 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
 
     let entries = resolved_files_with_metadata(sources)?;
 
-    let mut file_terms: Vec<crate::model::Term> = Vec::new();
-    let mut quads: Vec<crate::model::Quad> = Vec::new();
+    let mut file_terms: Vec<Term> = Vec::new();
+    let mut quads: Vec<Quad> = Vec::new();
 
     for (idx, entry) in entries.iter().enumerate() {
         let entry_label = format!("f{idx}");
@@ -1365,7 +1361,7 @@ fn entry_to_field_map(entry: &FileEntry) -> BTreeMap<String, String> {
     fields
 }
 
-fn dest_path(dest: &Path, archive_path: &str) -> Result<std::path::PathBuf, String> {
+fn dest_path(dest: &Path, archive_path: &str) -> Result<PathBuf, String> {
     safe_archive_path(archive_path)?;
     // Resolve the destination itself (e.g. `/tmp` -> `/private/tmp` on macOS),
     // then resolve the closest existing target ancestor so an existing
@@ -1429,7 +1425,11 @@ fn suppressed_blob_digests(graph: &Graph) -> HashSet<String> {
 }
 
 fn hex(data: &[u8]) -> String {
-    data.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write as _;
+    data.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
 }
 
 /// Extract FileEntry quads from a folded graph into dest.
@@ -1475,7 +1475,7 @@ pub fn unpack_with_options(
                 let digest = entry
                     .digest
                     .as_ref()
-                    .ok_or(format!("missing digest for {path}"))?;
+                    .ok_or_else(|| format!("missing digest for {path}"))?;
                 if suppressed.contains(digest) {
                     continue;
                 }
@@ -1490,7 +1490,7 @@ pub fn unpack_with_options(
                                 .map_err(|err| format!("decode inline blob for {path}: {err:?}"))
                         })
                         .transpose()?
-                        .ok_or(format!("missing inline blob for {path}: {digest}"))?;
+                        .ok_or_else(|| format!("missing inline blob for {path}: {digest}"))?;
                     decoded_cache.insert(digest.clone(), decoded.clone());
                     decoded
                 };
@@ -1595,7 +1595,7 @@ fn write_file_without_following_symlink(
                 }
                 return result;
             }
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(err) => return Err(format!("create temp file for {target:?}: {err}")),
         }
     }
@@ -1685,7 +1685,7 @@ fn materialize_link(dest: &Path, target: &Path, entry: &FileEntry) -> Result<(),
             let source = dest_path(dest, link_target)?;
             prepare_create_node_target(target, &entry.path)?;
             fs::hard_link(&source, target)
-                .map_err(|e| format!("create hardlink {:?} -> {:?}: {e}", target, source))
+                .map_err(|e| format!("create hardlink {target:?} -> {source:?}: {e}"))
         }
         _ => Err(format!("{} is not a link entry", entry.path)),
     }

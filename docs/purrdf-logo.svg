@@ -1,8 +1,8 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
-  <title id="title">PURRDF black cat graph transport logo</title>
-  <desc id="desc">A stylized black cat head holding a small append-only chain of content-addressed graph frames, linked by a blue spine with red, yellow, and green content-id accents.</desc>
+  <title id="title">PurRDF black cat RDF triple logo</title>
+  <desc id="desc">A stylized black cat head holding an RDF triple: a subject node linked to an object node by a blue predicate arrow, with red and green arrows binding a literal frame below.</desc>
   <defs>
     <filter id="soft-white-glow" x="-12%" y="-12%" width="124%" height="124%" color-interpolation-filters="sRGB">
       <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="#ffffff" flood-opacity="0.78"/>
@@ -22,15 +22,17 @@
   </defs>
 
   <!--
-    Logo system note (PURRDF variant):
-    - #cat-head-core is shared verbatim with the purrdf family.
-    - #service-chain is this repo's service object: an append-only log — three
-      content-addressed data frames linked head-to-tail by a chain spine —
-      replacing the purrdf-ontology #service-graph while preserving the cat
-      silhouette. It depicts the GTS narrow waist: a single-file CBOR sequence of
-      segments chained by BLAKE3 content-id.
-    - Accent colors are isolated to the #service-chain (blue chain spine,
-      red/yellow/green content-id dots) for theming.
+    Logo system note (PurRDF variant; see the gmeow-ontology docs/BRAND.md):
+    - #cat-head-core is shared verbatim with the gmeow family.
+    - #service-triple is this repo's service object: an RDF 1.2 triple — a
+      subject node bound to an object node by a directed blue predicate arrow,
+      with a literal frame below bound by red and green predicate arrows —
+      replacing the gmeow-ontology #service-graph and the gmeow-gts
+      #service-chain while preserving the cat silhouette. It depicts PurRDF's
+      role: the RDF primitive model and codecs that carry triples between
+      systems.
+    - Accent colors are isolated to the #service-triple (blue/red/green
+      predicate arrows, yellow datatype dot on the literal) for theming.
   -->
 
   <g id="purrdf-logo" filter="url(#soft-white-glow)">
@@ -104,35 +106,27 @@
       </g>
     </g>
 
-    <g id="service-chain">
-      <!-- the append-only chain spine (blue), drawn under the frames -->
-      <path id="chain-spine" class="edge" stroke="#4285f4" stroke-width="13" d="M438 668 L438 848"/>
+    <g id="service-triple">
+      <!-- predicate arrows (accent-colored, drawn under the nodes) -->
+      <path id="predicate-blue" class="edge" stroke="#4285f4" stroke-width="12" d="M538 682 L629 760"/>
+      <polygon id="predicate-blue-head" fill="#4285f4" points="647,776 635,750 620,768"/>
 
-      <!-- three content-addressed frames (append-only log of CBOR segments) -->
-      <g id="frames">
-        <rect class="frame" x="449" y="636" width="150" height="64" rx="14"/>
-        <rect class="frame" x="449" y="726" width="150" height="64" rx="14"/>
-        <rect class="frame" x="449" y="816" width="150" height="64" rx="14"/>
-      </g>
+      <path id="predicate-red" class="edge" stroke="#ea4335" stroke-width="12" d="M490 686 L437 746"/>
+      <polygon id="predicate-red-head" fill="#ea4335" points="420,766 428,738 446,754"/>
 
-      <!-- chain links / content-ids: where the spine binds each frame -->
-      <circle id="link-top"    class="node" cx="438" cy="668" r="14"/>
-      <circle id="link-mid"    class="node" cx="438" cy="758" r="14"/>
-      <circle id="link-bottom" class="node" cx="438" cy="848" r="14"/>
+      <path id="predicate-green" class="edge" stroke="#34a853" stroke-width="12" d="M639 798 L474 798"/>
+      <polygon id="predicate-green-head" fill="#34a853" points="444,798 470,786 470,810"/>
 
-      <!-- per-frame content-id accent dots -->
-      <circle id="cid-top"    cx="479" cy="668" r="11" fill="#ea4335"/>
-      <circle id="cid-mid"    cx="479" cy="758" r="11" fill="#fbbc05"/>
-      <circle id="cid-bottom" cx="479" cy="848" r="11" fill="#34a853"/>
+      <!-- subject node (bitten by the cat) and object node -->
+      <circle id="node-subject" class="node" cx="512" cy="660" r="34"/>
+      <circle id="node-object"  class="node" cx="672" cy="798" r="33"/>
 
-      <!-- frame payload lines -->
-      <g id="payload-lines">
-        <path class="content-line" d="M505 656 L575 656"/>
-        <path class="content-line" d="M505 680 L552 680"/>
-        <path class="content-line" d="M505 746 L575 746"/>
-        <path class="content-line" d="M505 770 L552 770"/>
-        <path class="content-line" d="M505 836 L575 836"/>
-        <path class="content-line" d="M505 860 L552 860"/>
+      <!-- literal frame with datatype accent dot -->
+      <rect id="literal-frame" class="frame" x="292" y="766" width="150" height="64" rx="14"/>
+      <circle id="literal-datatype" cx="326" cy="798" r="11" fill="#fbbc05"/>
+      <g id="literal-lines">
+        <path class="content-line" d="M352 784 L412 784"/>
+        <path class="content-line" d="M352 812 L389 812"/>
       </g>
     </g>
 

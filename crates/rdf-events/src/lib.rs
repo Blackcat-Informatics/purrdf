@@ -321,7 +321,7 @@ pub trait RdfEventSink {
     /// early (and reporting [`ControlFlow::Break`]) if any quad cancels.
     fn quads(&mut self, qs: &[EventQuad]) -> Result<ControlFlow<()>, EventError> {
         for &q in qs {
-            if let ControlFlow::Break(()) = self.quad(q)? {
+            if self.quad(q)? == ControlFlow::Break(()) {
                 return Ok(ControlFlow::Break(()));
             }
         }

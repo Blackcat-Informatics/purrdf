@@ -3,7 +3,7 @@
 
 //! First-party JSON-LD-star / YAML-LD-star codec.
 //!
-//! Serializes the frozen [`RdfDataset`] to the PURRDF JSON-LD-star lead artifact and a
+//! Serializes the frozen [`RdfDataset`] to the PurRDF JSON-LD-star lead artifact and a
 //! deterministic YAML-LD-star derivative, and parses both back into the native carrier.
 //! The serializer walks the first-party [`SerGraph`] (the same shape the Turtle / TriG /
 //! N-Triples / N-Quads serializers walk), built from the frozen IR via
@@ -14,6 +14,7 @@
 //! explicitly sorted, so the document does not depend on input append order.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -41,16 +42,16 @@ const BUNDLED_SCHEMA_REF: &str = "purrdf.schema.json";
 
 /// RDF 1.2 reifier predicate.
 pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-/// PURRDF statement-metadata class.
+/// PurRDF statement-metadata class.
 pub const PURRDF_STATEMENT_METADATA: &str =
     "https://blackcatinformatics.ca/purrdf/StatementMetadata";
-/// PURRDF quoted subject property.
+/// PurRDF quoted subject property.
 pub const PURRDF_QSUBJECT: &str = "https://blackcatinformatics.ca/purrdf/qSubject";
-/// PURRDF quoted predicate property.
+/// PurRDF quoted predicate property.
 pub const PURRDF_QPREDICATE: &str = "https://blackcatinformatics.ca/purrdf/qPredicate";
-/// PURRDF quoted object property (IRI / blank-node objects).
+/// PurRDF quoted object property (IRI / blank-node objects).
 pub const PURRDF_QOBJECT: &str = "https://blackcatinformatics.ca/purrdf/qObject";
-/// PURRDF quoted literal object property.
+/// PurRDF quoted literal object property.
 pub const PURRDF_QOBJECTLITERAL: &str = "https://blackcatinformatics.ca/purrdf/qObjectLiteral";
 
 /// The statement-metadata reification vocabulary the JSON-LD-star downcast emits.
@@ -195,7 +196,7 @@ pub fn serialize_dataset_to_yamlld(
     Ok(header + &body)
 }
 
-/// Build the JSON-LD `@context` from the PURRDF prefix registry plus `@vocab`.
+/// Build the JSON-LD `@context` from the PurRDF prefix registry plus `@vocab`.
 fn build_context() -> Value {
     let mut ctx = BTreeMap::new();
     ctx.insert(
@@ -572,8 +573,7 @@ fn term_id(term: &SerTerm) -> Result<String, RdfDiagnostic> {
         SerTermKind::Iri => Ok(term
             .value
             .as_deref()
-            .map(curie)
-            .unwrap_or_else(|| "_:missing-iri".to_string())),
+            .map_or_else(|| "_:missing-iri".to_string(), curie)),
         SerTermKind::Bnode => Ok(format!(
             "_:{}",
             term.value.as_deref().unwrap_or("missing-bnode")
@@ -595,12 +595,12 @@ fn term_sort_key(graph: &SerGraph, term: &SerTerm) -> String {
         SerTermKind::Literal => {
             let mut key = format!("lit:{}", term.value.as_deref().unwrap_or_default());
             if let Some(lang) = &term.lang {
-                key.push_str(&format!("@{lang}"));
+                let _ = write!(key, "@{lang}");
             }
             if let Some(dir) = &term.direction {
-                key.push_str(&format!("^{dir}"));
+                let _ = write!(key, "^{dir}");
             }
-            key.push_str(&format!("^^{}", datatype_iri(graph, term)));
+            let _ = write!(key, "^^{}", datatype_iri(graph, term));
             key
         }
         SerTermKind::Triple => match triple_components(graph, term) {
@@ -612,7 +612,7 @@ fn term_sort_key(graph: &SerGraph, term: &SerTerm) -> String {
 
 /// Compact an IRI to a CURIE using the longest matching prefix.
 fn curie(iri: &str) -> String {
-    for (prefix, ns) in PREFIXES_BY_LEN.iter() {
+    for (prefix, ns) in PREFIXES_BY_LEN {
         if let Some(rest) = iri.strip_prefix(ns) {
             return format!("{prefix}:{rest}");
         }
@@ -673,7 +673,7 @@ fn cmp_value(a: &Value, b: &Value) -> std::cmp::Ordering {
 /// Parse JSON-LD-star bytes into the native carrier [`RdfDataset`].
 ///
 /// This is the inverse of [`serialize_dataset_to_jsonld`]: it interprets the
-/// `@annotation` idiom produced by the PURRDF JSON-LD-star emitter and reconstructs RDF
+/// `@annotation` idiom produced by the PurRDF JSON-LD-star emitter and reconstructs RDF
 /// 1.2 reifier quads (`rdf:reifies` with quoted triple objects) plus annotation triples
 /// in the default graph. Those reifier/annotation rows are FOLDED into the dataset's RDF
 /// 1.2 statement layer at freeze time (`dataset_from_quads`). Named graphs and
@@ -729,7 +729,7 @@ pub fn parse_jsonld(json_bytes: &[u8]) -> Result<Arc<RdfDataset>, RdfDiagnostic>
 
         if let Some(types) = node.get("@type") {
             // `@type` is a single value or an array; each entry is a string CURIE/IRI
-            // (standard JSON-LD) or a `{"@id": …}` node reference (the PURRDF emitter
+            // (standard JSON-LD) or a `{"@id": …}` node reference (the PurRDF emitter
             // form). Both expand to an rdf:type object IRI.
             let entries: Vec<&Value> = match types {
                 Value::Array(arr) => arr.iter().collect(),
@@ -765,7 +765,7 @@ pub fn parse_jsonld(json_bytes: &[u8]) -> Result<Arc<RdfDataset>, RdfDiagnostic>
             for v in values {
                 emit_value_quad(
                     &quads,
-                    subject.clone(),
+                    &subject,
                     &predicate,
                     graph_name.clone(),
                     &v,
@@ -863,7 +863,7 @@ fn emit_graph_entry(entry: &Value, emit_node: &EmitNodeFn<'_>) -> Result<(), Rdf
 
 fn emit_value_quad(
     quads: &std::cell::RefCell<Vec<RdfQuad>>,
-    subject: RdfTerm,
+    subject: &RdfTerm,
     predicate: &str,
     graph_name: Option<RdfTerm>,
     value: &Value,
@@ -982,11 +982,11 @@ fn parse_value_object(
 
 // ── statement-metadata downcast ─────────────────────────────────────────────────────
 
-/// Convert a JSON-LD-star document to PURRDF statement-metadata N-Quads.
+/// Convert a JSON-LD-star document to PurRDF statement-metadata N-Quads.
 ///
 /// RDF 1.2 quoted triples (`?r rdf:reifies <<( ?s ?p ?o )>>`) cannot be represented by
 /// rdflib-based consumers, so this downcast re-expresses each annotated statement as a
-/// native PURRDF statement-metadata cell:
+/// native PurRDF statement-metadata cell:
 ///
 /// ```turtle
 /// ?r a purrdf:StatementMetadata ;
@@ -1044,7 +1044,7 @@ pub fn jsonld_to_statement_metadata_nquads_with(
 
     for quad in &quads {
         if quad.predicate == RDF_REIFIES {
-            // Emit the PURRDF statement-metadata skeleton for this reifier.
+            // Emit the PurRDF statement-metadata skeleton for this reifier.
             let Some((s, p, o)) = reifier_quotes.get(&quad.subject) else {
                 continue;
             };
@@ -1175,7 +1175,7 @@ fn block_mapping_value(s: &str) -> Option<&str> {
     None
 }
 
-/// Downcast YAML-LD-star bytes to PURRDF statement-metadata N-Quads.
+/// Downcast YAML-LD-star bytes to PurRDF statement-metadata N-Quads.
 ///
 /// Routes through [`yamlld_to_jsonld`] then the JSON-LD-star downcast, so the output
 /// contains no quoted triple terms and is safe for the rdflib-compat up-projection lane.

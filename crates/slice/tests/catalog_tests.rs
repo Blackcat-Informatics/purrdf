@@ -42,8 +42,8 @@ fn path_independence() {
         .map(|a| (a.logical_path.as_str(), a.raw_digest.as_str()))
         .collect();
 
-    src_digests.sort();
-    dst_digests.sort();
+    src_digests.sort_unstable();
+    dst_digests.sort_unstable();
 
     assert_eq!(
         src_digests, dst_digests,
@@ -205,7 +205,7 @@ fn semantic_digest_blank_nodes_are_deterministic() {
         // An OWL restriction (blank node) plus a second blank node, so the
         // parser is forced to mint multiple blank-node labels.
         let module = format!(
-            r#"{module_comment}@prefix purrdf: <{PURRDF}> .
+            r"{module_comment}@prefix purrdf: <{PURRDF}> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 
@@ -214,7 +214,7 @@ fn semantic_digest_blank_nodes_are_deterministic() {
     rdfs:subClassOf [ a owl:Restriction ;
         owl:onProperty <{PURRDF}hasThing> ;
         owl:someValuesFrom [ a owl:Class ] ] .
-"#
+"
         );
         std::fs::write(dir.join("module.ttl"), module).unwrap();
     }

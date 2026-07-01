@@ -20,11 +20,13 @@ type PyTermRow = (
 );
 
 #[pyclass(name = "GtsFoldViewNative")]
+#[derive(Debug)]
 pub struct PyGtsFoldView {
     inner: GtsFoldView,
 }
 
 #[pymethods]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 impl PyGtsFoldView {
     #[staticmethod]
     fn from_bytes(data: &[u8]) -> Self {
@@ -115,7 +117,7 @@ impl PyGtsFoldView {
         Ok(self.inner.nq_token(tid))
     }
 
-    fn python_value<'py>(&self, py: Python<'py>, tid: usize) -> PyResult<Py<PyAny>> {
+    fn python_value(&self, py: Python<'_>, tid: usize) -> PyResult<Py<PyAny>> {
         self.ensure_tid(tid)?;
         match self.inner.public_value(tid) {
             PublicValue::Iri(value) | PublicValue::Blank(value) | PublicValue::String(value) => {
@@ -303,7 +305,7 @@ fn gts_to_parquet(data: &[u8], out_dir: &str) -> PyResult<Vec<String>> {
     ))
 }
 
-pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGtsFoldView>()?;
     m.add("GTS_ALL_SCOPE", ALL_SCOPE)?;
     m.add_function(wrap_pyfunction!(gts_relational_rows_from_bytes, m)?)?;
@@ -433,10 +435,7 @@ fn term_kind_int(kind: TermKind) -> u8 {
     }
 }
 
-fn relational_rows_dict<'py>(
-    py: Python<'py>,
-    rows: RelationalRows,
-) -> PyResult<Bound<'py, PyDict>> {
+fn relational_rows_dict(py: Python<'_>, rows: RelationalRows) -> PyResult<Bound<'_, PyDict>> {
     let out = PyDict::new(py);
     out.set_item("terms", rows.terms)?;
     out.set_item("quads", rows.quads)?;

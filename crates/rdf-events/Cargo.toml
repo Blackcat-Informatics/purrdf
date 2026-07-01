@@ -4,15 +4,20 @@
 [package]
 name = "purrdf-events"
 description = "Permissive RDF 1.2 ingestion protocol: the object-safe event sink/source seam both the GTS container and the IR engine depend ON (purrdf P6)"
-version = "0.1.1"
+version.workspace = true
 edition.workspace = true
 repository.workspace = true
 # This crate is the neutral protocol shared by the IR engine and the GTS
 # container. A pure parse->serialize path routed only through these traits stays
 # under the workspace `MIT OR Apache-2.0` license.
-license = "MIT OR Apache-2.0"
+license.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "rdf-12", "events", "ingestion", "protocol"]
+
+[lints]
+workspace = true
 
 [lib]
 # rlib-only, ZERO dependencies: this crate IS the protocol both sides depend on, so

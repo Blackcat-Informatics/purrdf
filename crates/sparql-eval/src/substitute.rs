@@ -59,14 +59,11 @@ fn ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic
         )?)),
         TermValue::Triple { s, p, o } => {
             let subject = ground_term_from_value(s)?;
-            let predicate = match ground_term_from_value(p)? {
-                GroundTerm::NamedNode(n) => n,
-                _ => {
-                    return Err(RdfDiagnostic::error(
-                        "native-sparql-subst-triple-predicate",
-                        "a quoted-triple predicate must be an IRI".to_owned(),
-                    ))
-                }
+            let GroundTerm::NamedNode(predicate) = ground_term_from_value(p)? else {
+                return Err(RdfDiagnostic::error(
+                    "native-sparql-subst-triple-predicate",
+                    "a quoted-triple predicate must be an IRI".to_owned(),
+                ));
             };
             let object = ground_term_from_value(o)?;
             Ok(GroundTerm::Triple(Box::new(GroundTriple {

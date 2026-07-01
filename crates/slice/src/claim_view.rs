@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Native claim-view emission — PURRDF's internal
+//! Native claim-view emission — PurRDF's internal
 //! `generated/queries/observation-claim-view.rq` SPARQL CONSTRUCT.
 //!
 //! Unlike the standpoint projections ([`crate::standpoint_emit`], which re-express
-//! PURRDF in *external* peer models) and the per-profile SPARQL projections
+//! PurRDF in *external* peer models) and the per-profile SPARQL projections
 //! (the correspondence lowerings), this is an INTERNAL purrdf→purrdf view: it materialises
 //! the legacy `purrdf:Observation` / `purrdf:StandpointClaim` query surface FROM the
 //! canonical `purrdf:ClaimToken` layer, so generic "all observations about X"

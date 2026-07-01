@@ -48,6 +48,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use sha2::{Digest, Sha256, Sha384};
 
@@ -197,7 +198,7 @@ pub fn blank_count(ds: &RdfDataset) -> usize {
     collect_components(ds, &mut |comp| {
         comp.for_each_blank(ds, &mut |b| {
             set.insert(b);
-        })
+        });
     });
     set.len()
 }
@@ -231,19 +232,19 @@ impl Component {
     /// The four quad slots `(s, p, o, g)` of this component in canonical shape.
     fn slots(self) -> (Slot, Slot, Slot, Option<Slot>) {
         match self {
-            Component::Quad { s, p, o, g } => (
+            Self::Quad { s, p, o, g } => (
                 Slot::Term(s),
                 Slot::Term(p),
                 Slot::Term(o),
                 g.map(Slot::Term),
             ),
-            Component::Reifier { r, t } => (
+            Self::Reifier { r, t } => (
                 Slot::Term(r),
                 Slot::Sentinel(SENTINEL_REIFIES),
                 Slot::Term(t),
                 None,
             ),
-            Component::Annotation { r, p, o } => (
+            Self::Annotation { r, p, o } => (
                 Slot::Term(r),
                 Slot::Term(p),
                 Slot::Term(o),
@@ -728,7 +729,7 @@ impl<'a> CanonState<'a> {
     }
 
     /// Write one component as a canonical N-Quads line (`s p o [g] .\n`).
-    fn write_component(&self, comp: Component, render: BlankRender, out: &mut String) {
+    fn write_component(&self, comp: Component, render: BlankRender<'_>, out: &mut String) {
         let (s, p, o, g) = comp.slots();
         self.write_slot(s, render, out);
         out.push(' ');
@@ -742,7 +743,7 @@ impl<'a> CanonState<'a> {
         out.push_str(" .\n");
     }
 
-    fn write_slot(&self, slot: Slot, render: BlankRender, out: &mut String) {
+    fn write_slot(&self, slot: Slot, render: BlankRender<'_>, out: &mut String) {
         match slot {
             Slot::Sentinel(iri) => {
                 out.push('<');
@@ -755,7 +756,7 @@ impl<'a> CanonState<'a> {
 
     /// Write a term in canonical N-Quads form. Literal lexical forms / datatypes /
     /// language / direction are emitted **verbatim** (never normalized).
-    fn write_term(&self, id: TermId, render: BlankRender, out: &mut String) {
+    fn write_term(&self, id: TermId, render: BlankRender<'_>, out: &mut String) {
         match self.ds.resolve(id) {
             TermRef::Iri(iri) => {
                 out.push('<');
@@ -912,9 +913,9 @@ fn write_literal_escaped(value: &str, out: &mut String) {
 fn write_u_escape(ch: char, out: &mut String) {
     let cp = ch as u32;
     if cp <= 0xFFFF {
-        out.push_str(&format!("\\u{cp:04X}"));
+        let _ = write!(out, "\\u{cp:04X}");
     } else {
-        out.push_str(&format!("\\U{cp:08X}"));
+        let _ = write!(out, "\\U{cp:08X}");
     }
 }
 
@@ -926,7 +927,7 @@ mod tests {
     use std::sync::Arc;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}"))
     }
 
     fn canon(ds: &RdfDataset) -> String {
@@ -1009,7 +1010,7 @@ mod tests {
             let mut b = RdfDatasetBuilder::new();
             let p = iri(&mut b, "p");
             let o = iri(&mut b, "o");
-            let blank = b.intern_blank(l.to_owned(), BlankScope(scope));
+            let blank = b.intern_blank(l, BlankScope(scope));
             b.push_quad(blank, p, o, None);
             b.freeze().expect("valid")
         };
@@ -1030,8 +1031,8 @@ mod tests {
         let build = |l1: &str, l2: &str| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (p, q) = (iri(&mut b, "p"), iri(&mut b, "q"));
-            let x = b.intern_blank(l1.to_owned(), BlankScope(0));
-            let y = b.intern_blank(l2.to_owned(), BlankScope(0));
+            let x = b.intern_blank(l1, BlankScope(0));
+            let y = b.intern_blank(l2, BlankScope(0));
             b.push_quad(x, p, y, None);
             b.push_quad(y, q, x, None);
             b.freeze().expect("valid")
@@ -1055,7 +1056,7 @@ mod tests {
         use super::super::term::BlankScope;
         let mut b = RdfDatasetBuilder::new();
         let p = iri(&mut b, "p");
-        let x = b.intern_blank("x".to_owned(), BlankScope::DEFAULT);
+        let x = b.intern_blank("x", BlankScope::DEFAULT);
         b.push_quad(x, p, x, None);
         let ds = b.freeze().expect("valid");
         assert_eq!(canon(&ds), "_:c14n0 <http://example.org/p> _:c14n0 .\n");
@@ -1068,7 +1069,7 @@ mod tests {
         let build = |neighbour: &str| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (p, link, s) = (iri(&mut b, "p"), iri(&mut b, "link"), iri(&mut b, "s"));
-            let blank = b.intern_blank("b".to_owned(), BlankScope::DEFAULT);
+            let blank = b.intern_blank("b", BlankScope::DEFAULT);
             let nb = iri(&mut b, neighbour);
             b.push_quad(s, p, blank, None);
             b.push_quad(blank, link, nb, None);
@@ -1136,8 +1137,8 @@ mod tests {
         use super::super::term::BlankScope;
         let mut b = RdfDatasetBuilder::new();
         let p = iri(&mut b, "p");
-        let x = b.intern_blank("x".to_owned(), BlankScope::DEFAULT);
-        let y = b.intern_blank("y".to_owned(), BlankScope::DEFAULT);
+        let x = b.intern_blank("x", BlankScope::DEFAULT);
+        let y = b.intern_blank("y", BlankScope::DEFAULT);
         b.push_quad(x, p, y, None);
         b.push_quad(y, p, x, None);
         let ds = b.freeze().expect("valid");
@@ -1169,8 +1170,8 @@ mod tests {
         let build = |l1: &str, l2: &str| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (base, refp, link) = (iri(&mut b, "base"), iri(&mut b, "ref"), iri(&mut b, "link"));
-            let x = b.intern_blank(l1.to_owned(), BlankScope(0));
-            let y = b.intern_blank(l2.to_owned(), BlankScope(0));
+            let x = b.intern_blank(l1, BlankScope(0));
+            let y = b.intern_blank(l2, BlankScope(0));
             let t1 = b.intern_triple(x, link, y);
             let t2 = b.intern_triple(y, link, x);
             b.push_quad(base, refp, t1, None);
@@ -1199,8 +1200,8 @@ mod tests {
                 iri(&mut b, "link"),
                 iri(&mut b, "tag"),
             );
-            let x = b.intern_blank("x".to_owned(), BlankScope(0));
-            let y = b.intern_blank("y".to_owned(), BlankScope(0));
+            let x = b.intern_blank("x", BlankScope(0));
+            let y = b.intern_blank("y", BlankScope(0));
             let t1 = b.intern_triple(x, link, y);
             let t2 = b.intern_triple(y, link, x);
             let t3 = b.intern_triple(x, link, tag);

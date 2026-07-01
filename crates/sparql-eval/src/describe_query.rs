@@ -86,11 +86,11 @@ mod tests {
         // :a :knows :b .   :x :refersTo :a .   DESCRIBE <a> keeps BOTH — the outgoing
         // edge and the incoming one (symmetric CBD, not a forward-only CBD).
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri(KNOWS.to_owned());
-        let refers = b.intern_iri(REFERS.to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bb = b.intern_iri("http://ex/b".to_owned());
-        let x = b.intern_iri("http://ex/x".to_owned());
+        let knows = b.intern_iri(KNOWS);
+        let refers = b.intern_iri(REFERS);
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let x = b.intern_iri("http://ex/x");
         b.push_quad(a, knows, bb, None);
         b.push_quad(x, refers, a, None);
         let ds = b.freeze().expect("freeze");
@@ -113,10 +113,10 @@ mod tests {
         // :a :knows :b ; :a :knows :c .   DESCRIBE ?o WHERE { :a :knows ?o } describes
         // :b and :c — each pulls in its incoming :a :knows edge, union = the two edges.
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri(KNOWS.to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bb = b.intern_iri("http://ex/b".to_owned());
-        let cc = b.intern_iri("http://ex/c".to_owned());
+        let knows = b.intern_iri(KNOWS);
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let cc = b.intern_iri("http://ex/c");
         b.push_quad(a, knows, bb, None);
         b.push_quad(a, knows, cc, None);
         let ds = b.freeze().expect("freeze");
@@ -141,9 +141,9 @@ mod tests {
     #[test]
     fn describe_unknown_iri_is_empty() {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri(KNOWS.to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bb = b.intern_iri("http://ex/b".to_owned());
+        let knows = b.intern_iri(KNOWS);
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
         b.push_quad(a, knows, bb, None);
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);

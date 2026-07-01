@@ -13,8 +13,8 @@
 //! ## The reachability primitive
 //!
 //! Evaluation follows the SPARQL 1.1 §18.1.7 ALP (arbitrary-length-path) shape: a
-//! single direction-parameterised primitive
-//! [`reach`]`(path, node, forward)` returns the set of nodes `y` such that
+//! single direction-parameterised primitive [`reach`], where
+//! `reach(path, node, forward)` returns the set of nodes `y` such that
 //! `(node, y)` is in the path relation (forward), or `(y, node)` is (backward).
 //! Every operator is structural recursion over the path expression:
 //!
@@ -25,11 +25,11 @@
 //! - `p?` (`ZeroOrOne`) adds the zero-length identity `{node}`.
 //! - `p*`/`p+` (`ZeroOrMore`/`OneOrMore`) take the transitive closure with a
 //!   **visited-set guard on the endpoint frontier**, so cyclic graphs terminate.
-//! - `p{n,m}` (`Range`, a PURRDF extension) is **k-fold composition unioned over
+//! - `p{n,m}` (`Range`, a PurRDF extension) is **k-fold composition unioned over
 //!   `[n, m]`**, re-entrant per `k` (NOT one global visited set across `k`) so a
 //!   node reachable at several repetition counts is reported for each — a single
 //!   visited-guarded level-BFS would be *wrong* on cyclic graphs.
-//! - `!(…)` (`NegatedPropertySet`) and `<any>`/`<any:ns>` (`Wildcard`, a PURRDF
+//! - `!(…)` (`NegatedPropertySet`) and `<any>`/`<any:ns>` (`Wildcard`, a PurRDF
 //!   extension) scan any-predicate edges, filtering by the excluded set or the
 //!   namespace prefix respectively.
 //!
@@ -116,7 +116,7 @@ pub(crate) fn eval_path(
     subject: &TermPattern,
     path: &PropertyPathExpression,
     object: &TermPattern,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &EvalCtx<'_>,
 ) -> Result<SolutionSeq, EvalError> {
     let dataset = ctx.dataset;
     let scope = ctx.active_dataset.scope_for(ctx.active_graph);
@@ -294,7 +294,7 @@ fn reach_cached(
     ctx: &PathCtx<'_>,
 ) -> Rc<BTreeSet<TermId>> {
     let key = (
-        path as *const PropertyPathExpression as usize,
+        std::ptr::from_ref::<PropertyPathExpression>(path) as usize,
         node,
         forward,
     );
@@ -587,9 +587,9 @@ mod tests {
     fn graph_of(edges: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in edges {
-            let s = b.intern_iri(iri(s));
-            let p = b.intern_iri(iri(p));
-            let o = b.intern_iri(iri(o));
+            let s = b.intern_iri(&iri(s));
+            let p = b.intern_iri(&iri(p));
+            let o = b.intern_iri(&iri(o));
             b.push_quad(s, p, o, None);
         }
         b.freeze().expect("freeze")
@@ -623,13 +623,13 @@ mod tests {
     /// for order-insensitive multiset comparison.
     fn run(
         ds: &RdfDataset,
-        subject: TermPattern,
-        path: PropertyPathExpression,
-        object: TermPattern,
+        subject: &TermPattern,
+        path: &PropertyPathExpression,
+        object: &TermPattern,
         vars: &[&str],
     ) -> Vec<Vec<Option<String>>> {
-        let mut ctx = EvalCtx::new(ds);
-        let seq = eval_path(&subject, &path, &object, &mut ctx).expect("path eval");
+        let ctx = EvalCtx::new(ds);
+        let seq = eval_path(subject, path, object, &ctx).expect("path eval");
         let cols: Vec<usize> = vars
             .iter()
             .map(|v| {
@@ -694,12 +694,12 @@ mod tests {
     fn named_predicate_forward_and_reverse() {
         let ds = graph_of(&[("a", "p", "b"), ("a", "p", "c")]);
         // { :a :p ?o }
-        let rows = run(&ds, ground("a"), named("p"), var("o"), &["o"]);
+        let rows = run(&ds, &ground("a"), &named("p"), &var("o"), &["o"]);
         assert_eq!(rows, col1(&["b", "c"]));
         // { :b ^:p ?s }  → inverse: ?s is anything that points to :b via :p, i.e. :a
         // (`:b ^:p ?s` ⟺ `?s :p :b`).
         let rev = PropertyPathExpression::Reverse(Box::new(named("p")));
-        let rows = run(&ds, ground("b"), rev, var("s"), &["s"]);
+        let rows = run(&ds, &ground("b"), &rev, &var("s"), &["s"]);
         assert_eq!(rows, col1(&["a"]));
     }
 
@@ -708,7 +708,7 @@ mod tests {
         let ds = graph_of(&[("a", "p", "x"), ("x", "q", "b"), ("x", "q", "c")]);
         // :a :p/:q ?o → b, c
         let seq = PropertyPathExpression::Sequence(Box::new(named("p")), Box::new(named("q")));
-        let rows = run(&ds, ground("a"), seq, var("o"), &["o"]);
+        let rows = run(&ds, &ground("a"), &seq, &var("o"), &["o"]);
         assert_eq!(rows, col1(&["b", "c"]));
     }
 
@@ -717,7 +717,7 @@ mod tests {
         let ds = graph_of(&[("a", "p", "x"), ("x", "q", "b")]);
         // ?s :p/:q :b  → a
         let seq = PropertyPathExpression::Sequence(Box::new(named("p")), Box::new(named("q")));
-        let rows = run(&ds, var("s"), seq, ground("b"), &["s"]);
+        let rows = run(&ds, &var("s"), &seq, &ground("b"), &["s"]);
         assert_eq!(rows, col1(&["a"]));
     }
 
@@ -725,7 +725,7 @@ mod tests {
     fn alternative_unions_both() {
         let ds = graph_of(&[("a", "p", "b"), ("a", "q", "c")]);
         let alt = PropertyPathExpression::Alternative(Box::new(named("p")), Box::new(named("q")));
-        let rows = run(&ds, ground("a"), alt, var("o"), &["o"]);
+        let rows = run(&ds, &ground("a"), &alt, &var("o"), &["o"]);
         assert_eq!(rows, col1(&["b", "c"]));
     }
 
@@ -784,7 +784,7 @@ mod tests {
         assert_eq!(reach_locals(&ds, &star, "a", true), vec!["a"]);
     }
 
-    // ---- Range {n,m} (PURRDF extension), including on cycles -----------------
+    // ---- Range {n,m} (PurRDF extension), including on cycles -----------------
 
     #[test]
     fn range_exact_and_bounded_on_chain() {
@@ -835,7 +835,7 @@ mod tests {
         let ds = graph_of(&[("a", "p", "b"), ("a", "q", "c"), ("a", "r", "d")]);
         // !(:p|:q) → only the :r edge.
         let neg = PropertyPathExpression::NegatedPropertySet(vec![nn("p"), nn("q")]);
-        let rows = run(&ds, ground("a"), neg, var("o"), &["o"]);
+        let rows = run(&ds, &ground("a"), &neg, &var("o"), &["o"]);
         assert_eq!(rows, col1(&["d"]));
     }
 
@@ -843,25 +843,25 @@ mod tests {
     fn wildcard_any_and_namespace_scoped() {
         // Two predicate namespaces: http://ex/ and http://other/.
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri(iri("a"));
-        let p = b.intern_iri(iri("p"));
-        let other_p = b.intern_iri("http://other/p".to_owned());
-        let x = b.intern_iri(iri("x"));
-        let y = b.intern_iri(iri("y"));
+        let a = b.intern_iri(&iri("a"));
+        let p = b.intern_iri(&iri("p"));
+        let other_p = b.intern_iri("http://other/p");
+        let x = b.intern_iri(&iri("x"));
+        let y = b.intern_iri(&iri("y"));
         b.push_quad(a, p, x, None);
         b.push_quad(a, other_p, y, None);
         let ds = b.freeze().expect("freeze");
 
         // <any> → both objects.
         let any = PropertyPathExpression::Wildcard { namespace: None };
-        let rows = run(&ds, ground("a"), any, var("o"), &["o"]);
+        let rows = run(&ds, &ground("a"), &any, &var("o"), &["o"]);
         assert_eq!(rows, col1(&["x", "y"]));
 
         // <any:http://ex/> → only the ex-namespaced edge.
         let scoped = PropertyPathExpression::Wildcard {
             namespace: Some(NamedNode::new_unchecked(EX)),
         };
-        let rows = run(&ds, ground("a"), scoped, var("o"), &["o"]);
+        let rows = run(&ds, &ground("a"), &scoped, &var("o"), &["o"]);
         assert_eq!(rows, col1(&["x"]));
     }
 
@@ -872,13 +872,13 @@ mod tests {
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c")]);
         let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
         // :a :p+ :c  → true (one unit solution).
-        let mut ctx = EvalCtx::new(&ds);
-        let hit = eval_path(&ground("a"), &plus, &ground("c"), &mut ctx).expect("eval");
+        let ctx = EvalCtx::new(&ds);
+        let hit = eval_path(&ground("a"), &plus, &ground("c"), &ctx).expect("eval");
         assert_eq!(hit.len(), 1);
         assert!(hit.schema.is_empty());
         // :a :p+ :a  → false (no solutions; acyclic).
-        let mut ctx = EvalCtx::new(&ds);
-        let miss = eval_path(&ground("a"), &plus, &ground("a"), &mut ctx).expect("eval");
+        let ctx = EvalCtx::new(&ds);
+        let miss = eval_path(&ground("a"), &plus, &ground("a"), &ctx).expect("eval");
         assert!(miss.is_empty());
     }
 
@@ -888,7 +888,7 @@ mod tests {
         let ds = graph_of(&[("a", "p", "b"), ("c", "q", "a")]);
         let star = PropertyPathExpression::ZeroOrMore(Box::new(named("p")));
         // ?s :p* ?o : every node pairs with itself (zero-length) + a→b transitive.
-        let rows = run(&ds, var("s"), star, var("o"), &["s", "o"]);
+        let rows = run(&ds, &var("s"), &star, &var("o"), &["s", "o"]);
         let mut expected = vec![
             vec![Some("a".to_owned()), Some("a".to_owned())],
             vec![Some("a".to_owned()), Some("b".to_owned())],
@@ -905,7 +905,7 @@ mod tests {
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "a")]);
         let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
         // ?x :p+ ?x  → a, b (each reaches itself via the cycle).
-        let rows = run(&ds, var("x"), plus, var("x"), &["x"]);
+        let rows = run(&ds, &var("x"), &plus, &var("x"), &["x"]);
         assert_eq!(rows, col1(&["a", "b"]));
     }
 
@@ -917,7 +917,7 @@ mod tests {
         // ?x :p* ?x — p* is reflexive, so every node is a solution via zero-length identity.
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c")]);
         let star = PropertyPathExpression::ZeroOrMore(Box::new(named("p")));
-        let rows = run(&ds, var("x"), star, var("x"), &["x"]);
+        let rows = run(&ds, &var("x"), &star, &var("x"), &["x"]);
         assert_eq!(rows, col1(&["a", "b", "c"]));
     }
 
@@ -927,7 +927,7 @@ mod tests {
         // ?x :p? ?x — p? is reflexive, so every node is a solution via zero-length identity.
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c")]);
         let opt = PropertyPathExpression::ZeroOrOne(Box::new(named("p")));
-        let rows = run(&ds, var("x"), opt, var("x"), &["x"]);
+        let rows = run(&ds, &var("x"), &opt, &var("x"), &["x"]);
         assert_eq!(rows, col1(&["a", "b", "c"]));
     }
 
@@ -940,7 +940,7 @@ mod tests {
             min: 0,
             max: Some(2),
         };
-        let rows = run(&ds, var("x"), rng, var("x"), &["x"]);
+        let rows = run(&ds, &var("x"), &rng, &var("x"), &["x"]);
         assert_eq!(rows, col1(&["a", "b", "c"]));
     }
 
@@ -949,7 +949,7 @@ mod tests {
         // Acyclic a -> b -> c. ?x :p+ ?x — p+ is non-reflexive; no node cycles back.
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c")]);
         let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
-        let rows = run(&ds, var("x"), plus, var("x"), &["x"]);
+        let rows = run(&ds, &var("x"), &plus, &var("x"), &["x"]);
         assert_eq!(rows, col1(&[]));
     }
 
@@ -958,8 +958,8 @@ mod tests {
         let ds = graph_of(&[("a", "p", "b")]);
         let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
         // :nobody is not in the graph → empty, but the schema still carries ?o.
-        let mut ctx = EvalCtx::new(&ds);
-        let seq = eval_path(&ground("nobody"), &plus, &var("o"), &mut ctx).expect("eval");
+        let ctx = EvalCtx::new(&ds);
+        let seq = eval_path(&ground("nobody"), &plus, &var("o"), &ctx).expect("eval");
         assert!(seq.is_empty());
         assert_eq!(seq.schema.vars(), &[Variable::new("o")]);
     }
@@ -1001,7 +1001,7 @@ mod tests {
                 Box::new(named("first")),
             )),
         );
-        let rows = run(&ds, ground("axiom"), path, var("x"), &["x"]);
+        let rows = run(&ds, &ground("axiom"), &path, &var("x"), &["x"]);
         assert_eq!(rows, col1(&["A", "B", "C"]));
     }
 
@@ -1009,10 +1009,10 @@ mod tests {
     fn determinism_rows_are_termid_ordered() {
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
         let star = PropertyPathExpression::ZeroOrMore(Box::new(named("p")));
-        let mut ctx = EvalCtx::new(&ds);
-        let first = eval_path(&ground("a"), &star, &var("o"), &mut ctx).expect("eval");
-        let mut ctx = EvalCtx::new(&ds);
-        let second = eval_path(&ground("a"), &star, &var("o"), &mut ctx).expect("eval");
+        let ctx = EvalCtx::new(&ds);
+        let first = eval_path(&ground("a"), &star, &var("o"), &ctx).expect("eval");
+        let ctx = EvalCtx::new(&ds);
+        let second = eval_path(&ground("a"), &star, &var("o"), &ctx).expect("eval");
         // Identical row order run-to-run (BTreeSet over TermId).
         let ids = |seq: &SolutionSeq| -> Vec<Option<SolutionTerm>> {
             seq.rows.iter().map(|r| r[0]).collect()

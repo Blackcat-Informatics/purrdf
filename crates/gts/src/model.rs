@@ -41,12 +41,12 @@ pub enum TermKind {
 
 impl TermKind {
     /// Parse the wire `"k"` value; an unknown kind defaults to IRI (§7.1).
-    pub fn from_wire(k: Option<i128>) -> TermKind {
+    pub fn from_wire(k: Option<i128>) -> Self {
         match k {
-            Some(1) => TermKind::Literal,
-            Some(2) => TermKind::Bnode,
-            Some(3) => TermKind::Triple,
-            _ => TermKind::Iri,
+            Some(1) => Self::Literal,
+            Some(2) => Self::Bnode,
+            Some(3) => Self::Triple,
+            _ => Self::Iri,
         }
     }
 }
@@ -90,6 +90,7 @@ pub struct QuadTerms<'a> {
 }
 
 /// Borrowing iterator returned by [`Graph::quad_terms`].
+#[derive(Debug)]
 pub struct QuadTermsIter<'a> {
     graph: &'a Graph,
     inner: slice::Iter<'a, Quad>,
@@ -138,7 +139,7 @@ pub struct Suppression {
 }
 
 /// A machine-observable reader diagnostic (§2.3).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     /// Stable diagnostic code, matching the cross-engine diagnostic vocabulary.
     pub code: String,
@@ -153,7 +154,7 @@ pub struct Diagnostic {
 /// `cose` retains the raw COSE_Sign1 bytes so streamable compaction (§10.1)
 /// can carry the signature *detached* — forever verifiable against
 /// `frame_id` even after the frame itself is re-authored into a new chain.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Signature {
     /// Frame id the COSE_Sign1 signature authenticates.
     pub frame_id: Vec<u8>,
@@ -171,7 +172,7 @@ pub struct Signature {
 /// `tail` counts the legal unpresaged frames after it ("streamable through
 /// frame *covered*, accretive tail of *tail* frame(s)"). For an unclaimed
 /// (accretive) segment all fields are their zero values.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StreamableInfo {
     /// Whether the segment header explicitly claimed `layout = "streamable"`.
     pub claimed: bool,
@@ -390,7 +391,7 @@ impl Graph {
 
     /// Look up a blob and return decoded owned bytes.
     pub fn blob_bytes_cloned(&mut self, digest: &str) -> Result<Option<Vec<u8>>, CodecError> {
-        Ok(self.blob_bytes(digest)?.map(|bytes| bytes.to_vec()))
+        Ok(self.blob_bytes(digest)?.map(<[u8]>::to_vec))
     }
 
     /// Return every blob as decoded owned bytes, preserving insertion order.

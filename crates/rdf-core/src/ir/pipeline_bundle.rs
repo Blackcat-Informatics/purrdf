@@ -439,8 +439,8 @@ impl RdfDataset {
     /// fallback for the rare case a freshly-frozen `Arc` is shared; the lazy caches
     /// rebuild on demand. Crate-internal — the public deep-copy path is
     /// [`union`](RdfDataset::union) of a single input.
-    pub(crate) fn owned_snapshot(&self) -> RdfDataset {
-        RdfDataset::union(&[self])
+    pub(crate) fn owned_snapshot(&self) -> Self {
+        Self::union(&[self])
     }
 }
 
@@ -460,7 +460,7 @@ mod tests {
     }
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}"))
     }
 
     /// Build a dataset with one default-graph quad and one quad in named graph `g`.
@@ -468,7 +468,7 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
         let go = iri(&mut b, "go");
-        let g = b.intern_iri("http://example.org/graph".to_string());
+        let g = b.intern_iri("http://example.org/graph");
         b.push_quad(s, p, o, None); // default graph
         b.push_quad(s, p, go, Some(g)); // named graph
         b.freeze().expect("valid")
@@ -534,7 +534,7 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
         let o = iri(&mut b, obj);
-        let g = b.intern_iri(graph.to_string());
+        let g = b.intern_iri(graph);
         b.push_quad(s, p, o, Some(g));
         b.freeze().expect("valid")
     }

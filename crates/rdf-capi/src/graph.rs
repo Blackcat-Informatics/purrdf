@@ -14,6 +14,7 @@ use crate::term::{view_to_value, PurrdfTermView};
 /// A copy-on-write mutable graph: a suppression-delta over a frozen base
 /// dataset. Single-threaded mutable — NOT `Sync`; do not touch one from two
 /// threads. Release with `purrdf_graph_free`.
+#[derive(Debug)]
 pub struct PurrdfGraph(pub(crate) MutableDataset);
 
 /// Build an owned value-quad from the three required term views and the optional
@@ -24,15 +25,17 @@ unsafe fn quad_from_views(
     o: *const PurrdfTermView,
     g: *const PurrdfTermView,
 ) -> Result<QuadValues, PurrdfError> {
-    let s = view_to_value(&*s)?;
-    let p = view_to_value(&*p)?;
-    let o = view_to_value(&*o)?;
-    let g = if g.is_null() {
-        None
-    } else {
-        Some(view_to_value(&*g)?)
-    };
-    Ok(QuadValues { s, p, o, g })
+    unsafe {
+        let s = view_to_value(&*s)?;
+        let p = view_to_value(&*p)?;
+        let o = view_to_value(&*o)?;
+        let g = if g.is_null() {
+            None
+        } else {
+            Some(view_to_value(&*g)?)
+        };
+        Ok(QuadValues { s, p, o, g })
+    }
 }
 
 /// Branch a single-threaded mutable COW graph off a frozen dataset. `*out_graph`
@@ -46,14 +49,16 @@ pub unsafe extern "C" fn purrdf_graph_from_dataset(
     dataset: *const PurrdfDataset,
     out_graph: *mut *mut PurrdfGraph,
 ) -> i32 {
-    ffi_guard!(PurrdfStatus::Panic as i32, {
-        if dataset.is_null() || out_graph.is_null() {
-            return PurrdfStatus::NullPointer as i32;
-        }
-        let base = PurrdfDataset::arc(dataset).clone();
-        *out_graph = Box::into_raw(Box::new(PurrdfGraph(MutableDataset::new(base))));
-        PurrdfStatus::Ok as i32
-    })
+    unsafe {
+        ffi_guard!(PurrdfStatus::Panic as i32, {
+            if dataset.is_null() || out_graph.is_null() {
+                return PurrdfStatus::NullPointer as i32;
+            }
+            let base = PurrdfDataset::arc(dataset).clone();
+            *out_graph = Box::into_raw(Box::new(PurrdfGraph(MutableDataset::new(base))));
+            PurrdfStatus::Ok as i32
+        })
+    }
 }
 
 /// Insert a value-quad into the effective set. `s`/`p`/`o` are required input
@@ -74,20 +79,22 @@ pub unsafe extern "C" fn purrdf_graph_insert(
     out_changed: *mut u8,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    ffi_try!(out_error, {
-        if graph.is_null() || s.is_null() || p.is_null() || o.is_null() {
-            return Err(PurrdfError::new(
-                PurrdfStatus::NullPointer,
-                "null pointer argument to purrdf_graph_insert",
-            ));
-        }
-        let quad = quad_from_views(s, p, o, g)?;
-        let changed = (*graph).0.insert(quad);
-        if !out_changed.is_null() {
-            *out_changed = changed as u8;
-        }
-        Ok(PurrdfStatus::Ok)
-    })
+    unsafe {
+        ffi_try!(out_error, {
+            if graph.is_null() || s.is_null() || p.is_null() || o.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_graph_insert",
+                ));
+            }
+            let quad = quad_from_views(s, p, o, g)?;
+            let changed = (*graph).0.insert(quad);
+            if !out_changed.is_null() {
+                *out_changed = u8::from(changed);
+            }
+            Ok(PurrdfStatus::Ok)
+        })
+    }
 }
 
 /// Remove a value-quad from the effective set. Removing a delta-added quad drops
@@ -106,20 +113,22 @@ pub unsafe extern "C" fn purrdf_graph_remove(
     out_changed: *mut u8,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    ffi_try!(out_error, {
-        if graph.is_null() || s.is_null() || p.is_null() || o.is_null() {
-            return Err(PurrdfError::new(
-                PurrdfStatus::NullPointer,
-                "null pointer argument to purrdf_graph_remove",
-            ));
-        }
-        let quad = quad_from_views(s, p, o, g)?;
-        let changed = (*graph).0.remove(&quad);
-        if !out_changed.is_null() {
-            *out_changed = changed as u8;
-        }
-        Ok(PurrdfStatus::Ok)
-    })
+    unsafe {
+        ffi_try!(out_error, {
+            if graph.is_null() || s.is_null() || p.is_null() || o.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_graph_remove",
+                ));
+            }
+            let quad = quad_from_views(s, p, o, g)?;
+            let changed = (*graph).0.remove(&quad);
+            if !out_changed.is_null() {
+                *out_changed = u8::from(changed);
+            }
+            Ok(PurrdfStatus::Ok)
+        })
+    }
 }
 
 /// Compact the COW delta into a fresh frozen dataset. The graph remains valid
@@ -134,19 +143,21 @@ pub unsafe extern "C" fn purrdf_graph_freeze(
     out_dataset: *mut *mut PurrdfDataset,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
-    ffi_try!(out_error, {
-        if graph.is_null() || out_dataset.is_null() {
-            return Err(PurrdfError::new(
-                PurrdfStatus::NullPointer,
-                "null pointer argument to purrdf_graph_freeze",
-            ));
-        }
-        let frozen = (*graph).0.freeze().map_err(|diagnostic| {
-            PurrdfError::from_diagnostic(PurrdfStatus::FreezeError, &diagnostic)
-        })?;
-        *out_dataset = PurrdfDataset::into_raw(frozen);
-        Ok(PurrdfStatus::Ok)
-    })
+    unsafe {
+        ffi_try!(out_error, {
+            if graph.is_null() || out_dataset.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_graph_freeze",
+                ));
+            }
+            let frozen = (*graph).0.freeze().map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::FreezeError, &diagnostic)
+            })?;
+            *out_dataset = PurrdfDataset::into_raw(frozen);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
 }
 
 /// Release a graph handle. No-op on null.
@@ -155,9 +166,11 @@ pub unsafe extern "C" fn purrdf_graph_freeze(
 /// `graph` must be null or a live graph handle not already freed.
 #[no_mangle]
 pub unsafe extern "C" fn purrdf_graph_free(graph: *mut PurrdfGraph) {
-    ffi_guard!((), {
-        if !graph.is_null() {
-            drop(Box::from_raw(graph));
-        }
-    })
+    unsafe {
+        ffi_guard!((), {
+            if !graph.is_null() {
+                drop(Box::from_raw(graph));
+            }
+        });
+    }
 }

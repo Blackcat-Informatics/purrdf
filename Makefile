@@ -1,14 +1,100 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-.PHONY: check metadata test
+CARGO_TARGET_DIR ?= target
+CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-metadata:
+.PHONY: help metadata fmt check test bench rdf-core-hygiene wasm wasm-pkg wasm-pkg-test \
+	capi-build capi-header capi-check capi-install
+
+help: ## Show this help.
+	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
+
+metadata: ## Regenerate + verify workspace metadata and generated artifacts.
 	cargo metadata --no-deps
+	bash scripts/check-generated.sh
 
-check:
-	cargo check --workspace --lib --tests
+fmt: ## Auto-format the workspace.
+	cargo fmt --all
 
-test:
-	cargo test --workspace
+check: ## The full local gate: fmt, clippy, build, tests, hygiene.
+	cargo fmt --all --check
+	cargo clippy --workspace --all-targets --locked -- -D warnings
+	cargo check --workspace --lib --tests --locked
+	python3 scripts/check-no-features.py
+	bash scripts/check-generated.sh
+	cargo test --workspace --locked
+	$(MAKE) rdf-core-hygiene
+	$(MAKE) wasm
 
+test: ## Run the workspace test suite.
+	cargo test --workspace --locked
+
+bench: ## Run criterion benchmarks (report-only; never a gate).
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes
+
+rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-core, zero-dep leaves.
+	@tree=$$(cargo tree -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \
+	if echo "$$tree" | grep -Eq '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; then \
+		echo "FAIL: purrdf-core pulls an oxigraph-family or PyO3 crate as a NORMAL dependency"; \
+		echo "$$tree" | grep -E '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; exit 1; \
+	fi; \
+	echo "OK: purrdf-core has no oxigraph/PyO3 normal dependency"
+	@for leaf in purrdf-iri purrdf-xsd purrdf-events; do \
+		deps=$$(cargo tree -p $$leaf --edges normal --depth 1 -f "{p}" | tail -n +2); \
+		if [ -n "$$deps" ]; then \
+			echo "FAIL: $$leaf must stay zero-dependency but depends on:"; echo "$$deps"; exit 1; \
+		fi; \
+		echo "OK: $$leaf is zero-dependency"; \
+	done
+
+wasm: ## Prove the release crates build for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
+	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
+		cargo check --locked --target wasm32-unknown-unknown --lib \
+			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-gts -p purrdf-core \
+			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
+			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf -p purrdf-wasm; \
+	elif [ -n "$${CI:-}" ]; then \
+		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
+	else \
+		echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
+	fi
+
+wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.
+	cargo build -p purrdf-wasm --target wasm32-unknown-unknown --release --locked
+	@# wasm-bindgen-cli must match the crate's exact wasm-bindgen pin (see [workspace.dependencies]).
+	PATH="$$HOME/.cargo/bin:$$PATH" wasm-bindgen \
+		$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm \
+		--out-dir crates/rdf-wasm/js/pkg --target web
+	@# wasm-opt -Oz is a REQUIRED build step (roughly halves the artifact).
+	@command -v wasm-opt >/dev/null 2>&1 || { echo "ERROR: wasm-opt (binaryen) not found — it is a REQUIRED wasm build dependency"; exit 1; }
+	wasm-opt -Oz -o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+	@echo "OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)"
+
+wasm-pkg-test: wasm-pkg ## Build the wasm package and run the Node real-execution round-trip suite.
+	cd crates/rdf-wasm/js && node --test tests/*.test.mjs
+
+capi-build: ## Build libpurrdf (cdylib + staticlib + header + pkg-config) via cargo-c.
+	cargo capi build -p purrdf-capi
+
+capi-header: ## Regenerate the committed purrdf.h ABI contract from the crate.
+	@touch crates/rdf-capi/src/lib.rs  # cargo-c only re-runs cbindgen when the crate recompiles
+	cargo capi build -p purrdf-capi
+	@hdr=$$(find $(CARGO_TARGET_DIR) -path '*/include/purrdf/purrdf.h' | head -1); \
+	  test -n "$$hdr" || { echo "FAIL: cargo-c did not emit purrdf.h"; exit 1; }; \
+	  cp "$$hdr" $(CAPI_HEADER); echo "regenerated $(CAPI_HEADER)"
+
+capi-check: ## Verify the committed purrdf.h is current + the C smoke links and runs.
+	@touch crates/rdf-capi/src/lib.rs  # force cbindgen to re-run so a cached build cannot serve a stale header
+	cargo capi build -p purrdf-capi
+	@hdr=$$(find $(CARGO_TARGET_DIR) -path '*/include/purrdf/purrdf.h' | head -1); \
+	  test -n "$$hdr" || { echo "FAIL: cargo-c did not emit purrdf.h"; exit 1; }; \
+	  if ! diff -q "$$hdr" $(CAPI_HEADER) >/dev/null; then \
+	    echo "FAIL: $(CAPI_HEADER) is STALE — run 'make capi-header' and commit the ABI header"; \
+	    diff $(CAPI_HEADER) "$$hdr" | head -40; exit 1; \
+	  fi; \
+	  echo "OK: committed purrdf.h matches the libpurrdf ABI surface"
+	cargo test -p purrdf-capi --test c_smoke --locked
+
+capi-install: ## Install libpurrdf + purrdf.pc + header to PREFIX (default /usr/local).
+	cargo capi install -p purrdf-capi --prefix="$(if $(PREFIX),$(PREFIX),/usr/local)"

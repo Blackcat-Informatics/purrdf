@@ -416,13 +416,14 @@ pub fn compact_streamable(
         .collect::<Result<_, _>>()?;
     keyed.sort_unstable();
     let mut blob_order: Vec<String> = keyed.into_iter().map(|(_, d)| d).collect();
-    let mut sealed_digest: Option<String> = None;
-    if seal_original {
+    let sealed_digest: Option<String> = if seal_original {
         let sealed = digest_str(data);
         blob_order.retain(|d| *d != sealed);
         blob_order.push(sealed.clone());
-        sealed_digest = Some(sealed);
-    }
+        Some(sealed)
+    } else {
+        None
+    };
 
     let index = streaming_index(
         &g,

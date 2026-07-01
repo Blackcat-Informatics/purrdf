@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! `purrdf-slice` — native slice catalog: manifest-based discovery, typed
-//! artifact inventory, and content-addressed IDs for the PURRDF ontology slices.
+//! artifact inventory, and content-addressed IDs for the PurRDF ontology slices.
 
 pub mod analysis;
 pub mod artifact;

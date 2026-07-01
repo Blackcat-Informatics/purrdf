@@ -599,10 +599,7 @@ mod tests {
             "missing source: {text}"
         );
         // Provenance sits after </results>, before </sparql>.
-        let after_results = text
-            .split_once("</results>")
-            .map(|(_, rest)| rest)
-            .unwrap_or("");
+        let after_results = text.split_once("</results>").map_or("", |(_, rest)| rest);
         assert!(
             after_results.contains("<purrdf:provenance"),
             "provenance must follow </results>: {text}"

@@ -136,7 +136,7 @@ fn check_acyclic(
     if depth > MAX_TERM_NESTING_DEPTH {
         return Err(diag(
             "rdf-ir-triple-nesting-limit",
-            format!("triple-term nesting depth exceeds the limit of {MAX_TERM_NESTING_DEPTH}",),
+            format!("triple-term nesting depth exceeds the limit of {MAX_TERM_NESTING_DEPTH}"),
         ));
     }
     match state[id.index()] {
@@ -296,7 +296,7 @@ mod tests {
     use crate::RdfLiteral;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}"))
     }
 
     #[test]

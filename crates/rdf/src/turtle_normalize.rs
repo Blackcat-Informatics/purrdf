@@ -51,7 +51,7 @@ fn ingest(input: &[u8]) -> Result<Arc<RdfDataset>, String> {
     let mut builder = RdfDatasetBuilder::new();
     for quad in flat_rdf_quads_from_dataset(&parsed) {
         let s = intern_term(&mut builder, &quad.subject)?;
-        let p = builder.intern_iri(quad.predicate);
+        let p = builder.intern_iri(&quad.predicate);
         let o = intern_term(&mut builder, &quad.object)?;
         builder.push_quad(s, p, o, None);
     }
@@ -60,12 +60,12 @@ fn ingest(input: &[u8]) -> Result<Arc<RdfDataset>, String> {
 
 fn intern_term(builder: &mut RdfDatasetBuilder, term: &RdfTerm) -> Result<TermId, String> {
     Ok(match term {
-        RdfTerm::Iri(n) => builder.intern_iri(n.clone()),
-        RdfTerm::BlankNode(b) => builder.intern_blank(b.clone(), BlankScope::DEFAULT),
+        RdfTerm::Iri(n) => builder.intern_iri(n),
+        RdfTerm::BlankNode(b) => builder.intern_blank(b, BlankScope::DEFAULT),
         RdfTerm::Literal(l) => builder.intern_literal(l.clone()),
         RdfTerm::Triple(t) => {
             let s = intern_term(builder, &t.subject)?;
-            let p = builder.intern_iri(t.predicate.clone());
+            let p = builder.intern_iri(&t.predicate);
             let o = intern_term(builder, &t.object)?;
             builder.intern_triple(s, p, o)
         }
@@ -192,11 +192,11 @@ mod tests {
 
     #[test]
     fn rdf_collection_renders_as_parens() {
-        let src = r#"
+        let src = r"
             @prefix ex: <http://example.org/> .
             @prefix owl: <http://www.w3.org/2002/07/owl#> .
             ex:U owl:unionOf ( ex:A ex:B ex:C ) .
-        "#;
+        ";
         let out = norm(src);
         assert!(out.contains("owl:unionOf ( ex:A ex:B ex:C )"), "{out}");
         assert!(iso(src, &out));

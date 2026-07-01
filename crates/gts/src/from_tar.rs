@@ -162,6 +162,9 @@ fn decompress_input<'a>(
     }
 }
 
+// Matching stays byte-exact on the (already lowercased) name; multi-part suffixes
+// like ".tar.gz" cannot be expressed via Path::extension.
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
 fn detect_compression(data: &[u8], source_name: Option<&str>) -> Option<&'static str> {
     if data.starts_with(&[0x1f, 0x8b]) {
         return Some("gzip");
@@ -194,7 +197,7 @@ fn file_entry_from_tar(
                     entry.path
                 )));
             }
-            require_link_target(&entry)?;
+            require_link_target(entry)?;
         }
         FileEntryKind::Hardlink => {
             if !options.allow_symlinks {
@@ -203,7 +206,7 @@ fn file_entry_from_tar(
                     entry.path
                 )));
             }
-            require_link_target(&entry)?;
+            require_link_target(entry)?;
         }
         FileEntryKind::Fifo | FileEntryKind::CharDev | FileEntryKind::BlockDev => {
             if !options.allow_special {
@@ -308,7 +311,7 @@ fn file_entry_from_seek_tar(
     })
 }
 
-fn require_link_target(entry: &RawTarEntry) -> Result<(), TarError> {
+fn require_link_target(entry: &RawTarEntry<'_>) -> Result<(), TarError> {
     if entry.link_target.as_deref().is_none_or(str::is_empty) {
         return Err(TarError::new(format!(
             "link entry {} has no link target",

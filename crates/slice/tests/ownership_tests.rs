@@ -29,9 +29,10 @@ fn write(root: &Path, rel: &str, content: &str) {
 /// A minimal valid `manifest.ttl` for a slice with the given IRI suffix and
 /// optional `purrdf:sliceDependsOn` targets (IRI suffixes).
 fn manifest(slice: &str, depends_on: &[&str]) -> String {
+    use std::fmt::Write as _;
     let mut deps = String::new();
     for d in depends_on {
-        deps.push_str(&format!("    purrdf:sliceDependsOn purrdf:{d} ;\n"));
+        let _ = writeln!(deps, "    purrdf:sliceDependsOn purrdf:{d} ;");
     }
     format!(
         "@prefix purrdf: <{NS}> .\n\
@@ -602,9 +603,10 @@ fn group_aggregate_iri_reaches_dependency_walk() {
         .expect("expected a sliceB → sliceA Query edge; Group aggregate walk dropped it");
 
     // The IRI used only inside the aggregate expression must be evidence.
-    let referenced: Vec<&NamedNode> = edge.evidence.iter().map(|e| &e.referenced_term).collect();
     assert!(
-        referenced.contains(&&nn("heldIn")),
+        edge.evidence
+            .iter()
+            .any(|e| e.referenced_term == nn("heldIn")),
         "heldIn (a purrdf extension function referenced only inside a Group aggregate \
          expression) must appear in evidence; walk_graph_pattern dropped Group aggregates \
          before the G4-B fix, and the walker must extract purrdf extension-function IRIs"

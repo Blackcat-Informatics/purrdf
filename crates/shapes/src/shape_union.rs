@@ -47,8 +47,7 @@ pub fn shape_files(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     base.retain(|p| {
         p.file_name()
             .and_then(|n| n.to_str())
-            .map(|n| !EXCLUDED.contains(&n))
-            .unwrap_or(false)
+            .is_some_and(|n| !EXCLUDED.contains(&n))
     });
     files.extend(base);
 

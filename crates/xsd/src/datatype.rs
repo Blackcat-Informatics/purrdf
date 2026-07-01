@@ -382,35 +382,35 @@ mod tests {
         );
         assert_eq!(
             XsdDatatype::Long.integer_range(),
-            Some((i64::MIN as i128, i64::MAX as i128))
+            Some((i128::from(i64::MIN), i128::from(i64::MAX)))
         );
         assert_eq!(
             XsdDatatype::Int.integer_range(),
-            Some((i32::MIN as i128, i32::MAX as i128))
+            Some((i128::from(i32::MIN), i128::from(i32::MAX)))
         );
         assert_eq!(
             XsdDatatype::Short.integer_range(),
-            Some((i16::MIN as i128, i16::MAX as i128))
+            Some((i128::from(i16::MIN), i128::from(i16::MAX)))
         );
         assert_eq!(
             XsdDatatype::Byte.integer_range(),
-            Some((i8::MIN as i128, i8::MAX as i128))
+            Some((i128::from(i8::MIN), i128::from(i8::MAX)))
         );
         assert_eq!(
             XsdDatatype::UnsignedLong.integer_range(),
-            Some((0, u64::MAX as i128))
+            Some((0, i128::from(u64::MAX)))
         );
         assert_eq!(
             XsdDatatype::UnsignedInt.integer_range(),
-            Some((0, u32::MAX as i128))
+            Some((0, i128::from(u32::MAX)))
         );
         assert_eq!(
             XsdDatatype::UnsignedShort.integer_range(),
-            Some((0, u16::MAX as i128))
+            Some((0, i128::from(u16::MAX)))
         );
         assert_eq!(
             XsdDatatype::UnsignedByte.integer_range(),
-            Some((0, u8::MAX as i128))
+            Some((0, i128::from(u8::MAX)))
         );
         assert_eq!(
             XsdDatatype::NonNegativeInteger.integer_range(),

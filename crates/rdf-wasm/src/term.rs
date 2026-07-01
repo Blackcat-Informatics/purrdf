@@ -27,7 +27,7 @@ pub(crate) const RDF_DIR_LANG_STRING: &str =
 
 /// The internal shape of a [`Term`]. Covers the four RDF term kinds plus the two
 /// query/graph term kinds RDF/JS adds (`Variable`, `DefaultGraph`).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TermInner {
     /// `termType: "NamedNode"` — an IRI.
     Named(String),
@@ -45,7 +45,7 @@ pub(crate) enum TermInner {
 
 /// An RDF/JS [Term](https://rdf.js.org/data-model-spec/#term-interface).
 #[wasm_bindgen]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Term {
     pub(crate) inner: TermInner,
 }
@@ -199,9 +199,9 @@ impl Term {
     /// `datatype` — the literal's datatype as a `NamedNode`, or `undefined` for a
     /// non-literal.
     #[wasm_bindgen(getter)]
-    pub fn datatype(&self) -> Option<Term> {
+    pub fn datatype(&self) -> Option<Self> {
         match &self.inner {
-            TermInner::Literal(lit) => Some(Term::from_inner(TermInner::Named(
+            TermInner::Literal(lit) => Some(Self::from_inner(TermInner::Named(
                 Self::literal_datatype_iri(lit),
             ))),
             _ => None,
@@ -210,27 +210,27 @@ impl Term {
 
     /// `subject` of a quoted-triple term (`termType: "Quad"`), else `undefined`.
     #[wasm_bindgen(getter)]
-    pub fn subject(&self) -> Option<Term> {
+    pub fn subject(&self) -> Option<Self> {
         match &self.inner {
-            TermInner::Quoted(t) => Some(Term::from_rdf_term(&t.subject)),
+            TermInner::Quoted(t) => Some(Self::from_rdf_term(&t.subject)),
             _ => None,
         }
     }
 
     /// `predicate` of a quoted-triple term as a `NamedNode`, else `undefined`.
     #[wasm_bindgen(getter)]
-    pub fn predicate(&self) -> Option<Term> {
+    pub fn predicate(&self) -> Option<Self> {
         match &self.inner {
-            TermInner::Quoted(t) => Some(Term::from_inner(TermInner::Named(t.predicate.clone()))),
+            TermInner::Quoted(t) => Some(Self::from_inner(TermInner::Named(t.predicate.clone()))),
             _ => None,
         }
     }
 
     /// `object` of a quoted-triple term, else `undefined`.
     #[wasm_bindgen(getter)]
-    pub fn object(&self) -> Option<Term> {
+    pub fn object(&self) -> Option<Self> {
         match &self.inner {
-            TermInner::Quoted(t) => Some(Term::from_rdf_term(&t.object)),
+            TermInner::Quoted(t) => Some(Self::from_rdf_term(&t.object)),
             _ => None,
         }
     }
@@ -238,15 +238,15 @@ impl Term {
     /// `graph` of a quoted-triple term — always the default graph (a quoted triple has
     /// no graph slot), else `undefined`.
     #[wasm_bindgen(getter)]
-    pub fn graph(&self) -> Option<Term> {
+    pub fn graph(&self) -> Option<Self> {
         match &self.inner {
-            TermInner::Quoted(_) => Some(Term::from_inner(TermInner::DefaultGraph)),
+            TermInner::Quoted(_) => Some(Self::from_inner(TermInner::DefaultGraph)),
             _ => None,
         }
     }
 
     /// Structural RDF/JS term equality.
-    pub fn equals(&self, other: &Term) -> bool {
+    pub fn equals(&self, other: &Self) -> bool {
         self.inner == other.inner
     }
 }
@@ -254,7 +254,7 @@ impl Term {
 /// An RDF/JS [Quad](https://rdf.js.org/data-model-spec/#quad-interface) — a statement
 /// `(subject, predicate, object, graph)` with `termType: "Quad"`.
 #[wasm_bindgen]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Quad {
     pub(crate) subject: Term,
     pub(crate) predicate: Term,
@@ -323,7 +323,7 @@ impl Quad {
     }
 
     /// Structural RDF/JS quad equality.
-    pub fn equals(&self, other: &Quad) -> bool {
+    pub fn equals(&self, other: &Self) -> bool {
         self.subject.inner == other.subject.inner
             && self.predicate.inner == other.predicate.inner
             && self.object.inner == other.object.inner

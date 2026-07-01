@@ -61,8 +61,8 @@ impl RawTerm {
     /// Copy a borrowed [`EventTerm`] into an owned [`RawTerm`].
     fn from_event(term: EventTerm<'_>) -> Self {
         match term {
-            EventTerm::Iri(iri) => RawTerm::Iri(iri.to_owned()),
-            EventTerm::Blank { label, scope } => RawTerm::Blank {
+            EventTerm::Iri(iri) => Self::Iri(iri.to_owned()),
+            EventTerm::Blank { label, scope } => Self::Blank {
                 label: label.to_owned(),
                 scope,
             },
@@ -71,27 +71,28 @@ impl RawTerm {
                 datatype,
                 language,
                 direction,
-            } => RawTerm::Literal {
+            } => Self::Literal {
                 lexical: lexical.to_owned(),
                 datatype: datatype.to_owned(),
                 language: language.map(str::to_owned),
                 direction,
             },
-            EventTerm::Triple(triple) => RawTerm::Triple(triple),
+            EventTerm::Triple(triple) => Self::Triple(triple),
         }
     }
 }
 
 /// Map the protocol's [`TextDirection`] onto the IR's [`RdfTextDirection`].
-fn map_direction(direction: Option<TextDirection>) -> Option<RdfTextDirection> {
-    direction.map(|d| match d {
+fn map_direction(direction: TextDirection) -> RdfTextDirection {
+    match direction {
         TextDirection::Ltr => RdfTextDirection::Ltr,
         TextDirection::Rtl => RdfTextDirection::Rtl,
-    })
+    }
 }
 
 /// An [`RdfEventSink`] that folds a permissive ingestion event stream into a frozen
 /// [`RdfDataset`], tolerant of forward references (two-phase; see the module docs).
+#[derive(Debug)]
 pub struct DatasetSink {
     /// RAW term declarations recorded during the streaming phase, keyed by
     /// [`EventTermId`]. A triple term stashes its component ids verbatim; resolution
@@ -231,12 +232,12 @@ impl DatasetSink {
     /// would only compile thanks to NLL dropping it — fragile under refactor.
     fn intern_raw(&mut self, raw: RawTerm, depth: usize) -> Result<TermId, EventError> {
         let our_id = match raw {
-            RawTerm::Iri(iri) => self.builder_mut().intern_iri(iri),
+            RawTerm::Iri(iri) => self.builder_mut().intern_iri(&iri),
             RawTerm::Blank { label, scope } => {
                 // Scope 0 (DEFAULT) maps to the IR default scope; a protocol scope `n`
                 // maps to IR `BlankScope(n)` so same-label blanks in different scopes
                 // intern to DISTINCT ids (mirrors GTS per-segment scope).
-                self.builder_mut().intern_blank(label, BlankScope(scope.0))
+                self.builder_mut().intern_blank(&label, BlankScope(scope.0))
             }
             RawTerm::Literal {
                 lexical,
@@ -256,7 +257,7 @@ impl DatasetSink {
                         Some(datatype)
                     },
                     language,
-                    direction: map_direction(direction),
+                    direction: direction.map(map_direction),
                 };
                 self.builder_mut().intern_literal(literal)
             }
@@ -436,6 +437,7 @@ impl DatasetSink {
 /// An [`RdfEventSource`] that replays an already-frozen [`RdfDataset`] *into* any
 /// [`RdfEventSink`]: a `term` event per term in [`TermId`] order (declares-before-
 /// reference), then quad / reifier / annotation events.
+#[derive(Debug)]
 pub struct FrozenDatasetSource<'a> {
     dataset: &'a RdfDataset,
 }
@@ -471,13 +473,10 @@ impl<'a> FrozenDatasetSource<'a> {
             } => {
                 // The datatype is an interned IRI term in the dataset; resolve it to
                 // its IRI string so the protocol carries the datatype by value.
-                let datatype_iri = match self.dataset.resolve(datatype) {
-                    TermRef::Iri(iri) => iri,
-                    _ => {
-                        return Err(EventError::message(
-                            "literal datatype did not resolve to an IRI",
-                        ))
-                    }
+                let TermRef::Iri(datatype_iri) = self.dataset.resolve(datatype) else {
+                    return Err(EventError::message(
+                        "literal datatype did not resolve to an IRI",
+                    ));
                 };
                 sink.term(
                     event_id,
@@ -529,7 +528,7 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
         // and a literal's datatype are declared before the term referencing them.
         for i in 0..self.dataset.term_count() {
             let id = TermId::from_index(i as u32);
-            if let ControlFlow::Break(()) = self.emit_term(sink, id)? {
+            if self.emit_term(sink, id)? == ControlFlow::Break(()) {
                 return Ok(());
             }
         }
@@ -540,7 +539,7 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
                 o: EventTermId(quad.o.index() as u32),
                 g: quad.g.map(|g| EventTermId(g.index() as u32)),
             };
-            if let ControlFlow::Break(()) = sink.quad(event)? {
+            if sink.quad(event)? == ControlFlow::Break(()) {
                 return Ok(());
             }
         }
@@ -555,18 +554,17 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
                 p: EventTermId(p.index() as u32),
                 o: EventTermId(o.index() as u32),
             };
-            if let ControlFlow::Break(()) =
-                sink.reifier(EventTermId(reifier.index() as u32), event)?
-            {
+            if sink.reifier(EventTermId(reifier.index() as u32), event)? == ControlFlow::Break(()) {
                 return Ok(());
             }
         }
         for (reifier, p, o) in self.dataset.annotations() {
-            if let ControlFlow::Break(()) = sink.annotation(
+            if sink.annotation(
                 EventTermId(reifier.index() as u32),
                 EventTermId(p.index() as u32),
                 EventTermId(o.index() as u32),
-            )? {
+            )? == ControlFlow::Break(())
+            {
                 return Ok(());
             }
         }
@@ -587,7 +585,7 @@ mod tests {
     use std::collections::HashSet;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}"))
     }
 
     /// Declare a term on the sink, asserting it did not cancel — keeps the tests free
@@ -611,8 +609,8 @@ mod tests {
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
         let g = iri(&mut b, "g");
-        let b0 = b.intern_blank("x".to_owned(), BlankScope(0));
-        let b1 = b.intern_blank("x".to_owned(), BlankScope(1));
+        let b0 = b.intern_blank("x", BlankScope(0));
+        let b1 = b.intern_blank("x", BlankScope(1));
         let typed = b.intern_literal(RdfLiteral::typed(
             "42",
             "http://www.w3.org/2001/XMLSchema#integer",

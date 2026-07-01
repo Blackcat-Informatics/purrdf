@@ -224,7 +224,7 @@ mod tests {
         );
         assert!(long.len() > 100, "fixture must exceed the 100-byte field");
         let members = vec![
-            (long.clone(), b"<html>long</html>".to_vec()),
+            (long, b"<html>long</html>".to_vec()),
             ("x-purrdf-english/index.html".to_string(), b"idx".to_vec()),
         ];
         let raw = write_archive(&members).expect("write_archive");

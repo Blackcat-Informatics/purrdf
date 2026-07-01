@@ -83,11 +83,11 @@ impl Phase {
     /// inputs under different phases never collide.
     fn tag(self) -> &'static str {
         match self {
-            Phase::Parse => "phase:parse",
-            Phase::Syntax => "phase:syntax",
-            Phase::Shacl => "phase:shacl",
-            Phase::Reason => "phase:reason",
-            Phase::Bundle => "phase:bundle",
+            Self::Parse => "phase:parse",
+            Self::Syntax => "phase:syntax",
+            Self::Shacl => "phase:shacl",
+            Self::Reason => "phase:reason",
+            Self::Bundle => "phase:bundle",
         }
     }
 
@@ -98,8 +98,8 @@ impl Phase {
     /// invariance for the reasoning phase.
     pub fn is_byte_sensitive(self) -> bool {
         match self {
-            Phase::Parse | Phase::Syntax | Phase::Bundle => true,
-            Phase::Shacl | Phase::Reason => false,
+            Self::Parse | Self::Syntax | Self::Bundle => true,
+            Self::Shacl | Self::Reason => false,
         }
     }
 
@@ -108,8 +108,8 @@ impl Phase {
     /// syntax of a single source unit are intra-slice and ignore the closure.
     fn folds_dependencies(self) -> bool {
         match self {
-            Phase::Reason | Phase::Shacl | Phase::Bundle => true,
-            Phase::Parse | Phase::Syntax => false,
+            Self::Reason | Self::Shacl | Self::Bundle => true,
+            Self::Parse | Self::Syntax => false,
         }
     }
 
@@ -119,7 +119,7 @@ impl Phase {
     fn includes_role(self, role: &ArtifactRole) -> bool {
         match self {
             // Parse / syntax look at every authored artifact's bytes.
-            Phase::Parse | Phase::Syntax | Phase::Bundle => true,
+            Self::Parse | Self::Syntax | Self::Bundle => true,
             // Reasoning closure = ontology modules + shapes + rules; not docs,
             // examples, citations, translations, or test/query prose. The
             // manifest is ALWAYS semantically load-bearing (tier / sliceDependsOn
@@ -127,12 +127,12 @@ impl Phase {
             // *semantic* digest, so a comment-only manifest edit is still
             // invisible. (manifest.ttl is RDF, so it always carries a semantic
             // digest — see catalog.rs `compute_semantic_digest`.)
-            Phase::Reason => matches!(
+            Self::Reason => matches!(
                 role,
                 ArtifactRole::Module | ArtifactRole::Shapes | ArtifactRole::Manifest
             ),
             // SHACL = semantic module/data + shapes + manifest-borne facts.
-            Phase::Shacl => matches!(
+            Self::Shacl => matches!(
                 role,
                 ArtifactRole::Module | ArtifactRole::Shapes | ArtifactRole::Manifest
             ),
@@ -536,9 +536,10 @@ pub fn product_unit_key(
 // ── Hex helper ──────────────────────────────────────────────────────────────
 
 fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
-        s.push_str(&format!("{b:02x}"));
+        let _ = write!(s, "{b:02x}");
     }
     s
 }

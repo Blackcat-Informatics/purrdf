@@ -49,7 +49,7 @@ fn literal_datatype_iri(lit: &RdfLiteral) -> &str {
 
 /// An IRI node. Mirrors the oxigraph Python `NamedNode`.
 #[pyclass(name = "NamedNode", frozen, skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PyNamedNode {
     pub(crate) inner: String,
 }
@@ -93,7 +93,7 @@ impl PyNamedNode {
 
 /// A blank node. Mirrors the oxigraph Python `BlankNode`.
 #[pyclass(name = "BlankNode", frozen, skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PyBlankNode {
     pub(crate) inner: String,
 }
@@ -137,7 +137,7 @@ impl PyBlankNode {
 
 /// An RDF literal. Mirrors the oxigraph Python `Literal`.
 #[pyclass(name = "Literal", frozen, skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PyLiteral {
     pub(crate) inner: RdfLiteral,
 }
@@ -249,7 +249,7 @@ fn literal_key_string(lit: &RdfLiteral) -> String {
 
 /// A quoted triple term (RDF 1.2 / RDF-star). Mirrors the oxigraph Python `Triple`.
 #[pyclass(name = "Triple", frozen, skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PyTriple {
     pub(crate) inner: RdfTriple,
 }
@@ -286,7 +286,7 @@ impl PyTriple {
                 inner: self.inner.predicate.clone(),
             },
         )
-        .map(|n| n.into_any())
+        .map(Py::into_any)
     }
 
     #[getter]
@@ -313,7 +313,7 @@ impl PyTriple {
 
 /// An RDF quad. Mirrors the oxigraph Python `Quad`.
 #[pyclass(name = "Quad", frozen, skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PyQuad {
     pub(crate) inner: RdfQuad,
 }
@@ -350,7 +350,7 @@ impl PyQuad {
                 inner: self.inner.predicate.clone(),
             },
         )
-        .map(|n| n.into_any())
+        .map(Py::into_any)
     }
 
     #[getter]
@@ -360,7 +360,7 @@ impl PyQuad {
 
     #[getter]
     fn graph_name(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        graph_name_to_py(py, &self.inner.graph_name)
+        graph_name_to_py(py, self.inner.graph_name.as_ref())
     }
 
     fn __str__(&self) -> String {
@@ -382,7 +382,7 @@ impl PyQuad {
 
 /// A default-graph marker term. Mirrors the oxigraph Python `DefaultGraph`.
 #[pyclass(name = "DefaultGraph", frozen, skip_from_py_object)]
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct PyDefaultGraph;
 
 #[pymethods]
@@ -408,7 +408,7 @@ impl PyDefaultGraph {
 /// A SPARQL variable, used to key query substitutions. Mirrors
 /// the oxigraph Python `Variable`.
 #[pyclass(name = "Variable", frozen, skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PyVariable {
     pub(crate) inner: String,
 }
@@ -513,7 +513,7 @@ fn quad_key(quad: &RdfQuad) -> String {
 /// re-parse. The returned object is the same `PyQuad` the parser/SPARQL surface
 /// yields, so downstream code (rdflib adapters, comparators) treats it uniformly.
 #[allow(dead_code)]
-pub fn quad_to_py(py: Python<'_>, quad: &RdfQuad) -> PyResult<Py<PyAny>> {
+pub(super) fn quad_to_py(py: Python<'_>, quad: &RdfQuad) -> PyResult<Py<PyAny>> {
     Ok(Py::new(
         py,
         PyQuad {
@@ -536,7 +536,7 @@ pub fn quad_to_py(py: Python<'_>, quad: &RdfQuad) -> PyResult<Py<PyAny>> {
 ///
 /// Returns a Python error if the dataset cannot be flattened into quads.
 #[allow(dead_code)]
-pub fn dataset_quads_to_py(
+pub(super) fn dataset_quads_to_py(
     py: Python<'_>,
     dataset: &crate::RdfDataset,
 ) -> PyResult<Vec<Py<PyAny>>> {
@@ -575,7 +575,7 @@ fn subject_to_py(py: Python<'_>, subject: &RdfTerm) -> PyResult<Py<PyAny>> {
     }
 }
 
-fn graph_name_to_py(py: Python<'_>, graph_name: &Option<RdfTerm>) -> PyResult<Py<PyAny>> {
+fn graph_name_to_py(py: Python<'_>, graph_name: Option<&RdfTerm>) -> PyResult<Py<PyAny>> {
     match graph_name {
         None => Ok(Py::new(py, PyDefaultGraph)?.into_any()),
         Some(RdfTerm::Iri(n)) => Ok(Py::new(py, PyNamedNode { inner: n.clone() })?.into_any()),

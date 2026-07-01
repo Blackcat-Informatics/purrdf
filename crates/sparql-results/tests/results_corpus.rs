@@ -271,7 +271,7 @@ fn starred_graph() -> SparqlResult {
         RdfTerm::iri("https://en.wikipedia.org/wiki/Half-Blood_Prince"),
     );
     let ann_reifier_id = builder.intern_owned_term(&annotation.reifier);
-    let ann_pred_id = builder.intern_iri(annotation.predicate.clone());
+    let ann_pred_id = builder.intern_iri(&annotation.predicate);
     let ann_obj_id = builder.intern_owned_term(&annotation.object);
     builder.push_annotation(ann_reifier_id, ann_pred_id, ann_obj_id);
 

@@ -45,7 +45,7 @@ impl NamedNode {
         })?;
         if !parsed.has_scheme() {
             return Err(ParseError::Iri {
-                lexical: iri.clone(),
+                lexical: iri,
                 reason: "relative IRI reference in term position (no scheme)".to_owned(),
             });
         }

@@ -190,7 +190,7 @@ pub(crate) fn eval_extend(
     let mut schema = (*seq.schema).clone();
     let col = schema.push(var.clone());
     let width = schema.len();
-    let schema = std::rc::Rc::new(schema);
+    let schema = Rc::new(schema);
 
     let mut rows = Vec::with_capacity(seq.rows.len());
     for mut row in seq.rows {
@@ -231,8 +231,8 @@ fn bool_term(ctx: &mut EvalCtx<'_>, b: bool) -> SolutionTerm {
 }
 
 /// Intern an `xsd:string` literal.
-fn string_term(ctx: &mut EvalCtx<'_>, lexical: String) -> SolutionTerm {
-    intern(ctx, typed(&lexical, XSD_STRING))
+fn string_term(ctx: &mut EvalCtx<'_>, lexical: &str) -> SolutionTerm {
+    intern(ctx, typed(lexical, XSD_STRING))
 }
 
 /// Intern an `xsd:integer` literal.
@@ -415,7 +415,7 @@ fn is_literal(v: &TermValue) -> bool {
 /// This is a pure syntactic walk of the [`Expression`] tree; it returns every
 /// variable that appears in a position where it is *evaluated* (not just matched
 /// as a triple-pattern term).
-fn expr_vars(expr: &Expression, out: &mut DetHashSet<purrdf_sparql_algebra::Variable>) {
+fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
     match expr {
         Expression::Variable(v) | Expression::Bound(v) => {
             out.insert(v.clone());
@@ -474,10 +474,7 @@ fn expr_vars(expr: &Expression, out: &mut DetHashSet<purrdf_sparql_algebra::Vari
 /// grouping-key expressions and aggregate sub-expressions. Variables that appear
 /// only as triple-pattern terms (subject/predicate/object) are NOT included here
 /// because they are constrained by the standard join, not by expression evaluation.
-fn pattern_expr_vars(
-    pattern: &GraphPattern,
-    out: &mut DetHashSet<purrdf_sparql_algebra::Variable>,
-) {
+fn pattern_expr_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     match pattern {
         // Leaf nodes with no expression positions.
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
@@ -587,7 +584,7 @@ fn exists(
     // Build the set of outer-bound variables (those with a concrete binding in
     // the current row), then check if any of them are referenced in expression
     // positions inside the inner pattern.
-    let outer_bound: DetHashSet<purrdf_sparql_algebra::Variable> = schema
+    let outer_bound: DetHashSet<Variable> = schema
         .vars()
         .iter()
         .enumerate()
@@ -600,7 +597,7 @@ fn exists(
         })
         .collect();
 
-    let pattern_key = pattern as *const GraphPattern as usize;
+    let pattern_key = std::ptr::from_ref::<GraphPattern>(pattern) as usize;
     let inner_expr_vars = ctx
         .exists_expr_vars_cache
         .entry(pattern_key)
@@ -637,7 +634,7 @@ fn exists(
         // replaces the former per-row seed-join, whose `join_seqs` rebuilt the inner
         // hash index on every outer row (O(rows × |inner|)).
         let key = (
-            pattern as *const GraphPattern as usize,
+            std::ptr::from_ref::<GraphPattern>(pattern) as usize,
             ctx.graph_key(),
             crate::eval::schema_fingerprint(schema),
         );
@@ -649,14 +646,14 @@ fn exists(
         let entry = match cached {
             Some(entry) => entry,
             None => {
-                let inner = std::rc::Rc::new(eval(pattern, ctx)?);
+                let inner = Rc::new(eval(pattern, ctx)?);
                 // `shared` is computed against the FULL outer schema (not just the
                 // row's bound vars), so one index serves every row: an outer var
                 // unbound in a given row is `None` in the probe and matches anything
                 // via `compatible`, exactly as the prior bound-only seed-join did.
                 let shared = schema.shared_columns(&inner.schema);
                 let (keyed, wild) = crate::binop::build_index(&inner, &shared);
-                let entry = std::rc::Rc::new(crate::eval::ExistsInner {
+                let entry = Rc::new(crate::eval::ExistsInner {
                     inner,
                     shared,
                     keyed,
@@ -690,10 +687,7 @@ fn exists(
 /// `NamedNode` (blank nodes and triple terms cannot appear as triple-pattern
 /// constants in a `Bgp`, so those positions are left as variables — the later
 /// seed-join in the uncorrelated path handles them instead).
-fn substitute_pattern(
-    pattern: &GraphPattern,
-    bindings: &[(purrdf_sparql_algebra::Variable, Expression)],
-) -> GraphPattern {
+fn substitute_pattern(pattern: &GraphPattern, bindings: &[(Variable, Expression)]) -> GraphPattern {
     match pattern {
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
             patterns: patterns
@@ -826,7 +820,7 @@ fn substitute_pattern(
 /// positions are `NamedNodePattern` which cannot be a free variable — left unchanged.
 fn substitute_triple_pattern(
     tp: &purrdf_sparql_algebra::TriplePattern,
-    bindings: &[(purrdf_sparql_algebra::Variable, Expression)],
+    bindings: &[(Variable, Expression)],
 ) -> purrdf_sparql_algebra::TriplePattern {
     use purrdf_sparql_algebra::{TermPattern, TriplePattern};
 
@@ -856,10 +850,7 @@ fn substitute_triple_pattern(
 
 /// Substitute outer-bound variables in expression positions by replacing
 /// `Expression::Variable(v)` with the corresponding constant expression.
-fn substitute_expr(
-    expr: &Expression,
-    bindings: &[(purrdf_sparql_algebra::Variable, Expression)],
-) -> Expression {
+fn substitute_expr(expr: &Expression, bindings: &[(Variable, Expression)]) -> Expression {
     match expr {
         Expression::Variable(v) => {
             for (bv, replacement) in bindings {
@@ -964,7 +955,7 @@ fn outer_bindings_for_substitution(
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
     ctx: &EvalCtx<'_>,
-) -> Vec<(purrdf_sparql_algebra::Variable, Expression)> {
+) -> Vec<(Variable, Expression)> {
     use purrdf_core::TermValue;
     use purrdf_sparql_algebra::{Literal, NamedNode};
 
@@ -1045,7 +1036,8 @@ fn eval_function(
             matches!(vals.first(), Some(Some(TermValue::Literal { .. }))),
         ))),
         Function::IsNumeric => {
-            let numeric = matches!(arg(&vals, 0), Some(v) if xsd_of(v).is_some_and(is_numeric));
+            let numeric =
+                matches!(arg(&vals, 0), Some(v) if xsd_of(v).is_some_and(|xv| is_numeric(&xv)));
             Ok(Some(bool_term(ctx, numeric)))
         }
         Function::IsTriple => Ok(Some(bool_term(
@@ -1056,15 +1048,16 @@ fn eval_function(
         // ---- term accessors ------------------------------------------------
         Function::Str => match arg(&vals, 0) {
             Some(TermValue::Literal { lexical_form, .. }) => {
-                Ok(Some(string_term(ctx, lexical_form.clone())))
+                Ok(Some(string_term(ctx, lexical_form)))
             }
-            Some(TermValue::Iri(iri)) => Ok(Some(string_term(ctx, iri.clone()))),
+            Some(TermValue::Iri(iri)) => Ok(Some(string_term(ctx, iri))),
             _ => Ok(None),
         },
         Function::Lang => match arg(&vals, 0) {
-            Some(TermValue::Literal { language, .. }) => {
-                Ok(Some(string_term(ctx, language.clone().unwrap_or_default())))
-            }
+            Some(TermValue::Literal { language, .. }) => Ok(Some(string_term(
+                ctx,
+                language.as_deref().unwrap_or_default(),
+            ))),
             _ => Ok(None),
         },
         Function::Datatype => match arg(&vals, 0) {
@@ -1079,8 +1072,8 @@ fn eval_function(
             Some((s, _)) => Ok(Some(integer_term(ctx, s.chars().count() as i64))),
             None => Ok(None),
         },
-        Function::UCase => map_string(ctx, &vals, |s| s.to_uppercase()),
-        Function::LCase => map_string(ctx, &vals, |s| s.to_lowercase()),
+        Function::UCase => map_string(ctx, &vals, str::to_uppercase),
+        Function::LCase => map_string(ctx, &vals, str::to_lowercase),
         Function::Contains => string_pred(ctx, &vals, |h, n| h.contains(n)),
         Function::StrStarts => string_pred(ctx, &vals, |h, n| h.starts_with(n)),
         Function::StrEnds => string_pred(ctx, &vals, |h, n| h.ends_with(n)),
@@ -1130,7 +1123,7 @@ fn eval_function(
 
         // ---- ENCODE_FOR_URI -----------------------------------------------
         Function::EncodeForUri => match string_arg(&vals, 0) {
-            Some((s, _)) => Ok(Some(string_term(ctx, encode_for_uri(&s)))),
+            Some((s, _)) => Ok(Some(string_term(ctx, &encode_for_uri(&s)))),
             None => Ok(None),
         },
 
@@ -1206,15 +1199,15 @@ fn eval_function(
         Function::Tz => match arg(&vals, 0).and_then(xsd_of) {
             Some(XsdValue::DateTime(dt)) => Ok(Some(string_term(
                 ctx,
-                format_tz_string(dt.timezone_minutes()),
+                &format_tz_string(dt.timezone_minutes()),
             ))),
             Some(XsdValue::Date(d)) => Ok(Some(string_term(
                 ctx,
-                format_tz_string(d.timezone_minutes()),
+                &format_tz_string(d.timezone_minutes()),
             ))),
             Some(XsdValue::Time(t)) => Ok(Some(string_term(
                 ctx,
-                format_tz_string(t.timezone_minutes()),
+                &format_tz_string(t.timezone_minutes()),
             ))),
             _ => Ok(None),
         },
@@ -1223,35 +1216,35 @@ fn eval_function(
         Function::Md5 => match string_arg(&vals, 0) {
             Some((s, _)) => {
                 let digest = md5::Md5::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha1 => match string_arg(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha1::Sha1::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha256 => match string_arg(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha256::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha384 => match string_arg(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha384::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha512 => match string_arg(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha512::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &hex_lower(&digest))))
             }
             None => Ok(None),
         },
@@ -1269,11 +1262,11 @@ fn eval_function(
         Function::Uuid => {
             let (uuid_iri, _) = make_uuid(ctx);
             let iri_val = format!("urn:uuid:{uuid_iri}");
-            Ok(Some(intern(ctx, purrdf_core::TermValue::Iri(iri_val))))
+            Ok(Some(intern(ctx, TermValue::Iri(iri_val))))
         }
         Function::StrUuid => {
             let (uuid_str, _) = make_uuid(ctx);
-            Ok(Some(string_term(ctx, uuid_str)))
+            Ok(Some(string_term(ctx, &uuid_str)))
         }
 
         // ---- purrdf extension functions (CLOSED, exhaustive) ----------------
@@ -1642,7 +1635,7 @@ fn lang_lexical_term(ctx: &EvalCtx<'_>, term: SolutionTerm) -> Option<String> {
 }
 
 /// Whether an XSD value is in the numeric tower.
-fn is_numeric(v: XsdValue) -> bool {
+fn is_numeric(v: &XsdValue) -> bool {
     matches!(
         v,
         XsdValue::Integer { .. } | XsdValue::Decimal(_) | XsdValue::Float(_) | XsdValue::Double(_)
@@ -1707,7 +1700,7 @@ fn make_string(ctx: &mut EvalCtx<'_>, lexical: String, lang: Option<String>) -> 
                 direction: None,
             },
         ),
-        None => string_term(ctx, lexical),
+        None => string_term(ctx, &lexical),
     }
 }
 
@@ -1784,7 +1777,7 @@ fn eval_str_before_after(
             }
         }
         // No match → empty (typed xsd:string, no language).
-        None => return Ok(Some(string_term(ctx, String::new()))),
+        None => return Ok(Some(string_term(ctx, ""))),
     };
     Ok(Some(make_string(ctx, result, lang)))
 }
@@ -2058,6 +2051,8 @@ fn hex_lower(bytes: &[u8]) -> String {
 /// Format a timezone offset in minutes as an `xsd:dayTimeDuration` string,
 /// e.g. `+60` → `"PT1H"`, `0` → `"PT0S"`, `-330` → `"-PT5H30M"`.
 fn format_daytime_duration(offset_minutes: i64) -> String {
+    use core::fmt::Write as _;
+
     if offset_minutes == 0 {
         return "PT0S".to_owned();
     }
@@ -2070,11 +2065,12 @@ fn format_daytime_duration(offset_minutes: i64) -> String {
     } else {
         "PT".to_owned()
     };
+    // Writing to a `String` is infallible, so the `write!` results are ignored.
     if hours > 0 {
-        s.push_str(&format!("{hours}H"));
+        let _ = write!(s, "{hours}H");
     }
     if mins > 0 {
-        s.push_str(&format!("{mins}M"));
+        let _ = write!(s, "{mins}M");
     }
     s
 }
@@ -2535,12 +2531,12 @@ mod tests {
         // :a :member :club .   (a is a member; b is not)
         use purrdf_core::RdfLiteral;
         let mut b = RdfDatasetBuilder::new();
-        let age = b.intern_iri("http://ex/age".to_owned());
-        let name = b.intern_iri("http://ex/name".to_owned());
-        let member = b.intern_iri("http://ex/member".to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bb = b.intern_iri("http://ex/b".to_owned());
-        let club = b.intern_iri("http://ex/club".to_owned());
+        let age = b.intern_iri("http://ex/age");
+        let name = b.intern_iri("http://ex/name");
+        let member = b.intern_iri("http://ex/member");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let club = b.intern_iri("http://ex/club");
         let i30 = b.intern_literal(RdfLiteral {
             lexical_form: "30".to_owned(),
             datatype: Some(XINT.to_owned()),
@@ -2754,7 +2750,7 @@ mod tests {
         let tz_none = Expression::FunctionCall(Function::Tz, vec![dt_none]);
         assert_eq!(lex(&ds, &tz_utc), Some("Z".to_owned()));
         assert_eq!(lex(&ds, &tz_off), Some("+05:30".to_owned()));
-        assert_eq!(lex(&ds, &tz_none), Some("".to_owned()));
+        assert_eq!(lex(&ds, &tz_none), Some(String::new()));
     }
 
     // ---- Gap 4: NOW() with fixed ctx.now ----------------------------------
@@ -2765,14 +2761,14 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         // Override now with a known value for deterministic testing.
         let known_dt = purrdf_xsd::datetime_from_unix_seconds(0);
-        ctx.now = purrdf_xsd::XsdValue::DateTime(known_dt);
+        ctx.now = XsdValue::DateTime(known_dt);
         let schema = VarSchema::new();
         let expr = Expression::FunctionCall(Function::Now, vec![]);
         let term = eval_expr(&expr, &[], &schema, &mut ctx)
             .expect("NOW()")
             .expect("some");
         match value_of(&ctx, term) {
-            purrdf_core::TermValue::Literal { lexical_form, .. } => {
+            TermValue::Literal { lexical_form, .. } => {
                 assert_eq!(lexical_form, "1970-01-01T00:00:00Z");
             }
             other => panic!("expected literal, got {other:?}"),
@@ -2799,7 +2795,7 @@ mod tests {
             .expect("some");
         let v2 = value_of(&ctx, t2);
         // Both must be xsd:double literals in [0, 1)
-        if let purrdf_core::TermValue::Literal {
+        if let TermValue::Literal {
             lexical_form: lex1, ..
         } = &v1
         {
@@ -2808,7 +2804,7 @@ mod tests {
         } else {
             panic!("rand1 not a literal");
         }
-        if let purrdf_core::TermValue::Literal {
+        if let TermValue::Literal {
             lexical_form: lex2, ..
         } = &v2
         {
@@ -2834,7 +2830,7 @@ mod tests {
             .expect("UUID")
             .expect("some");
         let val = value_of(&ctx, term);
-        if let purrdf_core::TermValue::Iri(iri) = &val {
+        if let TermValue::Iri(iri) = &val {
             assert!(
                 iri.starts_with("urn:uuid:"),
                 "UUID IRI must start with urn:uuid:"
@@ -2871,7 +2867,7 @@ mod tests {
             .expect("STRUUID")
             .expect("some");
         let val = value_of(&ctx, term);
-        if let purrdf_core::TermValue::Literal { lexical_form, .. } = &val {
+        if let TermValue::Literal { lexical_form, .. } = &val {
             let parts: Vec<&str> = lexical_form.split('-').collect();
             assert_eq!(parts.len(), 5);
             assert_eq!(&parts[2][..1], "4");
@@ -2886,12 +2882,12 @@ mod tests {
     /// subjects (`:a`) so a per-row EXISTS would re-evaluate the inner repeatedly.
     fn knows_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows".to_owned());
-        let member = b.intern_iri("http://ex/member".to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bb = b.intern_iri("http://ex/b".to_owned());
-        let c = b.intern_iri("http://ex/c".to_owned());
-        let club = b.intern_iri("http://ex/club".to_owned());
+        let knows = b.intern_iri("http://ex/knows");
+        let member = b.intern_iri("http://ex/member");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
+        let club = b.intern_iri("http://ex/club");
         b.push_quad(a, knows, bb, None);
         b.push_quad(a, knows, c, None);
         b.push_quad(bb, member, club, None);
@@ -3018,12 +3014,12 @@ mod tests {
         // :b :knows :c
         // :a :p :x    ← only :a has :p
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows".to_owned());
-        let p = b.intern_iri("http://ex/p".to_owned());
-        let a = b.intern_iri("http://ex/a".to_owned());
-        let bb = b.intern_iri("http://ex/b".to_owned());
-        let c = b.intern_iri("http://ex/c".to_owned());
-        let x = b.intern_iri("http://ex/x".to_owned());
+        let knows = b.intern_iri("http://ex/knows");
+        let p = b.intern_iri("http://ex/p");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
+        let x = b.intern_iri("http://ex/x");
         b.push_quad(a, knows, bb, None);
         b.push_quad(bb, knows, c, None);
         b.push_quad(a, p, x, None);
@@ -3107,15 +3103,15 @@ mod tests {
     fn held_in_ds() -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
         let mut b = RdfDatasetBuilder::new();
-        let reifier = b.intern_iri("http://ex/r".to_owned());
-        let s = b.intern_iri("http://ex/s".to_owned());
-        let p = b.intern_iri("http://ex/p".to_owned());
+        let reifier = b.intern_iri("http://ex/r");
+        let s = b.intern_iri("http://ex/s");
+        let p = b.intern_iri("http://ex/p");
         let o = b.intern_literal(RdfLiteral::simple("v"));
-        let t1 = b.intern_iri("http://ex/T1".to_owned());
-        let t2 = b.intern_iri("http://ex/T2".to_owned());
-        let _t3 = b.intern_iri("http://ex/T3".to_owned());
-        let according_to = b.intern_iri(PURRDF_ACCORDING_TO.to_owned());
-        let sharpens = b.intern_iri(PURRDF_SHARPENS.to_owned());
+        let t1 = b.intern_iri("http://ex/T1");
+        let t2 = b.intern_iri("http://ex/T2");
+        let _t3 = b.intern_iri("http://ex/T3");
+        let according_to = b.intern_iri(PURRDF_ACCORDING_TO);
+        let sharpens = b.intern_iri(PURRDF_SHARPENS);
         // The reified triple-term `<<( s p o )>>` and its reifier binding.
         let triple = b.intern_triple(s, p, o);
         b.push_reifier(reifier, triple);

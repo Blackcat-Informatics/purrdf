@@ -24,8 +24,8 @@ pub struct PrefixMap {
 
 impl PrefixMap {
     /// An empty map.
-    pub fn new() -> PrefixMap {
-        PrefixMap {
+    pub fn new() -> Self {
+        Self {
             map: BTreeMap::new(),
         }
     }
@@ -56,8 +56,8 @@ where
     K: Into<String>,
     V: Into<String>,
 {
-    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> PrefixMap {
-        let mut pm = PrefixMap::new();
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        let mut pm = Self::new();
         for (k, v) in iter {
             pm.insert(k, v);
         }

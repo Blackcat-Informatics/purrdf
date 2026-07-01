@@ -129,36 +129,43 @@ impl RdfLookasideResource {
         }
     }
 
+    #[must_use]
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
     }
 
+    #[must_use]
     pub fn with_iri(mut self, iri: impl Into<String>) -> Self {
         self.iri = Some(iri.into());
         self
     }
 
+    #[must_use]
     pub fn with_graph_name(mut self, graph_name: impl Into<String>) -> Self {
         self.graph_name = Some(graph_name.into());
         self
     }
 
+    #[must_use]
     pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
         self.media_type = Some(media_type.into());
         self
     }
 
+    #[must_use]
     pub fn with_digest(mut self, digest: impl Into<String>) -> Self {
         self.content_digest = Some(digest.into());
         self
     }
 
+    #[must_use]
     pub fn with_path(mut self, path: impl Into<String>) -> Self {
         self.path = Some(path.into());
         self
     }
 
+    #[must_use]
     pub fn with_location(mut self, location: RdfLocation) -> Self {
         self.location = Some(location);
         self
@@ -192,12 +199,9 @@ pub enum RdfMetadataValue {
     Float(f64),
     Text(String),
     Bytes(Vec<u8>),
-    Array(Vec<RdfMetadataValue>),
-    Map(BTreeMap<String, RdfMetadataValue>),
-    Tagged {
-        tag: u64,
-        value: Box<RdfMetadataValue>,
-    },
+    Array(Vec<Self>),
+    Map(BTreeMap<String, Self>),
+    Tagged { tag: u64, value: Box<Self> },
     Opaque(String),
 }
 

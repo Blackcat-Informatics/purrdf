@@ -30,6 +30,7 @@ const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langSt
 
 /// A COW mutable RDF dataset over the native `purrdf-core` IR.
 #[pyclass(name = "MutableDataset")]
+#[derive(Debug)]
 pub struct PyMutableDataset {
     inner: MutableDataset,
     next_blank_scope: u32,
@@ -211,8 +212,8 @@ impl PyMutableDataset {
             .len()
     }
 
-    fn __iter__(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<PyQuadIter>> {
-        let quads = slf
+    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyQuadIter>> {
+        let quads = self
             .inner
             .quads_for_pattern(None, None, None, GraphMatchValue::Any)
             .iter()
@@ -245,7 +246,7 @@ impl PyMutableDataset {
             .iter()
             .map(values_to_rdf_quad)
             .collect();
-        dataset_from_quads_verbatim(&quads).map_err(|e| PyValueError::new_err(e.to_string()))
+        dataset_from_quads_verbatim(&quads).map_err(PyValueError::new_err)
     }
 }
 
@@ -410,7 +411,7 @@ fn value_to_rdf_term(value: &TermValue) -> RdfTerm {
             language,
             direction,
         } => RdfTerm::Literal(RdfLiteral {
-            datatype: collapse_synthetic_datatype(datatype, language),
+            datatype: collapse_synthetic_datatype(datatype, language.as_ref()),
             lexical_form: lexical_form.clone(),
             language: language.clone(),
             direction: *direction,
@@ -423,7 +424,7 @@ fn value_to_rdf_term(value: &TermValue) -> RdfTerm {
     }
 }
 
-fn collapse_synthetic_datatype(datatype: &str, language: &Option<String>) -> Option<String> {
+fn collapse_synthetic_datatype(datatype: &str, language: Option<&String>) -> Option<String> {
     if language.is_some() {
         return (datatype != RDF_LANG_STRING).then(|| datatype.to_owned());
     }

@@ -92,6 +92,7 @@ pub trait ShaclDataGraph: Send + Sync {
 /// Pattern lookups iterate the frozen quad table; the SPARQL paths hand the engine
 /// the same `Arc<RdfDataset>` (no materialization — the native engine reads the IR
 /// directly).
+#[derive(Debug)]
 pub struct IrDataGraph {
     dataset: Arc<RdfDataset>,
 }
@@ -163,9 +164,8 @@ impl ShaclDataGraph for IrDataGraph {
             if !s.is_subject() {
                 continue;
             }
-            let predicate = match term_id_to_native(dataset, q.p) {
-                Term::NamedNode(n) => n,
-                _ => continue,
+            let Term::NamedNode(predicate) = term_id_to_native(dataset, q.p) else {
+                continue;
             };
             let object = term_id_to_native(dataset, q.o);
             out.push(Quad {

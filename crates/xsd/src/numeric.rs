@@ -26,7 +26,7 @@ impl Decimal {
     /// Construct from raw mantissa + scale (internal/testing).
     #[must_use]
     pub(crate) fn from_parts(mantissa: i128, scale: u8) -> Self {
-        Decimal { mantissa, scale }
+        Self { mantissa, scale }
     }
 
     /// The mantissa (signed significant digits).
@@ -55,8 +55,8 @@ impl Decimal {
 
     /// The fractional part of the value as a `Decimal` (same scale).
     #[must_use]
-    pub fn frac_part(&self) -> Decimal {
-        Decimal {
+    pub fn frac_part(&self) -> Self {
+        Self {
             mantissa: self.mantissa % 10i128.pow(u32::from(self.scale)),
             scale: self.scale,
         }
@@ -87,7 +87,7 @@ impl Decimal {
     ///
     /// There is NO `f64` path and NO `unwrap_or` swallowing a failure.
     #[must_use]
-    pub fn cmp_exact(&self, other: &Decimal) -> Ordering {
+    pub fn cmp_exact(&self, other: &Self) -> Ordering {
         // Fast path: identical scale — single cmp, no arithmetic needed.
         if self.scale == other.scale {
             return self.mantissa.cmp(&other.mantissa);
@@ -151,7 +151,7 @@ impl Decimal {
         let scale = usize::from(self.scale);
 
         let (int_part, frac_part) = if scale == 0 {
-            (digits.clone(), String::new())
+            (digits, String::new())
         } else if digits.len() > scale {
             let split = digits.len() - scale;
             (digits[..split].to_string(), digits[split..].to_string())
@@ -509,7 +509,7 @@ pub fn numeric_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f64(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in add",
             })?;
-            Ok(XsdValue::Double(x + y))
+            Ok(Double(x + y))
         }
         // Either float (no double) → f32
         (Float(_), _) | (_, Float(_)) => {
@@ -519,7 +519,7 @@ pub fn numeric_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f32(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in add",
             })?;
-            Ok(XsdValue::Float(x + y))
+            Ok(Float(x + y))
         }
         // Either decimal (no float/double) → exact decimal
         (Dec(x), Dec(y)) => decimal_add(x, y),
@@ -559,7 +559,7 @@ pub fn numeric_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f64(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in sub",
             })?;
-            Ok(XsdValue::Double(x - y))
+            Ok(Double(x - y))
         }
         (Float(_), _) | (_, Float(_)) => {
             let x = num_f32(a).ok_or(XsdError::TypeMismatch {
@@ -568,7 +568,7 @@ pub fn numeric_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f32(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in sub",
             })?;
-            Ok(XsdValue::Float(x - y))
+            Ok(Float(x - y))
         }
         (Dec(x), Dec(y)) => decimal_sub(x, y),
         (Integer { value: x, .. }, Dec(y)) => decimal_sub(&integer_to_decimal(*x), y),
@@ -610,7 +610,7 @@ pub fn numeric_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f64(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in mul",
             })?;
-            Ok(XsdValue::Double(x * y))
+            Ok(Double(x * y))
         }
         (Float(_), _) | (_, Float(_)) => {
             let x = num_f32(a).ok_or(XsdError::TypeMismatch {
@@ -619,7 +619,7 @@ pub fn numeric_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f32(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in mul",
             })?;
-            Ok(XsdValue::Float(x * y))
+            Ok(Float(x * y))
         }
         (Dec(x), Dec(y)) => decimal_mul(x, y),
         (Integer { value: x, .. }, Dec(y)) => decimal_mul(&integer_to_decimal(*x), y),
@@ -684,7 +684,7 @@ pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f64(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in div",
             })?;
-            Ok(XsdValue::Double(x / y))
+            Ok(Double(x / y))
         }
         (Float(_), _) | (_, Float(_)) => {
             let x = num_f32(a).ok_or(XsdError::TypeMismatch {
@@ -693,7 +693,7 @@ pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f32(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in div",
             })?;
-            Ok(XsdValue::Float(x / y))
+            Ok(Float(x / y))
         }
         // Integer ÷ Integer → Decimal (XPath op:numeric-divide spec rule)
         (Integer { value: x, .. }, Integer { value: y, .. }) => {
@@ -1078,14 +1078,14 @@ mod tests {
         let u64max = u64::MAX.to_string();
         assert_eq!(
             parse_integer_typed(&u64max, D::UnsignedLong).unwrap(),
-            u64::MAX as i128
+            i128::from(u64::MAX)
         );
         assert!(parse_integer_typed("18446744073709551616", D::UnsignedLong).is_err());
 
         // xsd:int: 2147483647 ok, 2147483648 fails
         assert_eq!(
             parse_integer_typed("2147483647", D::Int).unwrap(),
-            2147483647
+            2_147_483_647
         );
         assert!(parse_integer_typed("2147483648", D::Int).is_err());
     }

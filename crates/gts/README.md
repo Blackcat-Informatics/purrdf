@@ -1,6 +1,6 @@
 # purrdf-gts
 
-`purrdf-gts` is the PURRDF-owned GTS container engine. It owns the
+`purrdf-gts` is the PurRDF-owned GTS container engine. It owns the
 Graph Transport Substrate wire format pieces: CBOR sequence parsing and writing,
 frame transforms, append-only chain verification, folding, signatures,
 encryption, blobs, stream state, and transport policy.

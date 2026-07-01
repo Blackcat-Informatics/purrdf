@@ -36,9 +36,10 @@ fn to_event_direction(direction: RdfTextDirection) -> TextDirection {
 /// An RDF/JS `Sink` — a streaming consumer that interns pushed quads through the
 /// `purrdf-events` protocol and freezes them at `finish()`.
 #[wasm_bindgen]
+#[derive(Debug)]
 pub struct Sink {
     /// `None` after `finish()` (the protocol sink is consumed to produce the dataset).
-    sink: Option<DatasetSink>,
+    inner: Option<DatasetSink>,
     /// Dedup: a distinct term value is declared once and its protocol id reused.
     ids: HashMap<RdfTerm, EventTermId>,
     /// The next protocol-local [`EventTermId`] to mint (drive-global, monotonic).
@@ -48,7 +49,7 @@ pub struct Sink {
 impl Default for Sink {
     fn default() -> Self {
         Self {
-            sink: Some(DatasetSink::new()),
+            inner: Some(DatasetSink::new()),
             ids: HashMap::new(),
             next_id: 0,
         }
@@ -129,7 +130,7 @@ impl Sink {
     }
 
     fn sink_mut(&mut self) -> Result<&mut DatasetSink, String> {
-        self.sink
+        self.inner
             .as_mut()
             .ok_or_else(|| "the sink has already been finished".to_owned())
     }
@@ -169,8 +170,8 @@ impl Sink {
 #[wasm_bindgen]
 impl Sink {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Sink {
-        Sink::default()
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// `push(quad)` — stream one quad into the sink (interned via the event protocol).
@@ -184,7 +185,7 @@ impl Sink {
     #[wasm_bindgen(js_name = finish)]
     pub fn finish(&mut self) -> Result<Dataset, JsError> {
         let mut sink = self
-            .sink
+            .inner
             .take()
             .ok_or_else(|| JsError::new("the sink has already been finished"))?;
         sink.finish().map_err(|e| JsError::new(&e.to_string()))?;

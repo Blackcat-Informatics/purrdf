@@ -13,12 +13,14 @@ use purrdf_rdf::{parse_dataset, serialize_dataset, SerializeGraph};
 const ROWS: usize = 2_000;
 
 fn nquads_fixture(rows: usize) -> String {
+    use std::fmt::Write as _;
     let mut out = String::with_capacity(rows * 140);
     for idx in 0..rows {
-        out.push_str(&format!(
-            "<https://example.org/s{idx}> <https://example.org/p> \"{idx}\" <https://example.org/g{}> .\n",
+        let _ = writeln!(
+            out,
+            "<https://example.org/s{idx}> <https://example.org/p> \"{idx}\" <https://example.org/g{}> .",
             idx % 8
-        ));
+        );
     }
     out
 }

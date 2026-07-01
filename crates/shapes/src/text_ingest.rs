@@ -11,7 +11,7 @@
 //! short-circuiting on the first.
 //!
 //! This module reproduces both capabilities on top of the native purrdf
-//! codecs ([`::purrdf::parse_dataset`]), which are lenient on the PURRDF
+//! codecs ([`::purrdf::parse_dataset`]), which are lenient on the PurRDF
 //! ontology's private-use `@x-purrdf-*` language tags (long BCP-47 subtags) and
 //! carry no oxigraph `io` dependency:
 //!
@@ -167,7 +167,7 @@ fn is_directive(statement: &str) -> bool {
 fn split_turtle_statements(ttl: &str) -> Vec<String> {
     let mut statements: Vec<String> = Vec::new();
     let mut current = String::new();
-    let mut chars = ttl.chars().peekable();
+    let mut chars = ttl.chars();
     let mut in_iri = false;
     let mut string_delim: Option<char> = None;
     while let Some(c) = chars.next() {
@@ -239,7 +239,7 @@ mod tests {
             "purrdf".to_owned(),
             "https://blackcatinformatics.ca/purrdf/".to_owned()
         )));
-        assert!(prefixes.contains(&("".to_owned(), "http://example.org/default#".to_owned())));
+        assert!(prefixes.contains(&(String::new(), "http://example.org/default#".to_owned())));
     }
 
     #[test]
@@ -269,9 +269,8 @@ mod tests {
             "ex:b ex:q ex:c .\n",           // valid
             "ex:d ex:r ex:s ex:t ex:u .\n", // too many terms → error
         );
-        let errors = match parse_turtle_to_dataset(bad) {
-            Ok(_) => panic!("malformed Turtle must error"),
-            Err(errors) => errors,
+        let Err(errors) = parse_turtle_to_dataset(bad) else {
+            panic!("malformed Turtle must error")
         };
         assert!(
             errors.len() >= 2,
@@ -287,9 +286,8 @@ mod tests {
             "<http://example.org/s> <http://example.org/p> .\n",
             "neither is this\n",
         );
-        let errors = match parse_ntriples_to_dataset(bad) {
-            Ok(_) => panic!("malformed N-Triples must error"),
-            Err(errors) => errors,
+        let Err(errors) = parse_ntriples_to_dataset(bad) else {
+            panic!("malformed N-Triples must error")
         };
         assert!(
             errors.len() >= 2,
@@ -309,7 +307,7 @@ mod tests {
     fn split_turtle_ignores_dots_in_iris_and_strings() {
         let ttl = "ex:a ex:p \"a. b. c\" . ex:d ex:e <http://x.y/z> .";
         let statements = split_turtle_statements(ttl);
-        let non_empty: Vec<_> = statements.iter().filter(|s| !s.trim().is_empty()).collect();
-        assert_eq!(non_empty.len(), 2, "two statements: {statements:?}");
+        let non_empty = statements.iter().filter(|s| !s.trim().is_empty()).count();
+        assert_eq!(non_empty, 2, "two statements: {statements:?}");
     }
 }

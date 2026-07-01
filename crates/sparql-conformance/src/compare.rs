@@ -152,7 +152,7 @@ fn term_key(term: &TermValue) -> String {
         } => format!(
             "L:{lexical_form}{FIELD_SEP}{datatype}{FIELD_SEP}{}{FIELD_SEP}{}",
             language.as_deref().unwrap_or(""),
-            direction.map(|d| d.as_str()).unwrap_or("")
+            direction.map_or("", purrdf_core::RdfTextDirection::as_str)
         ),
         TermValue::Triple { s, p, o } => {
             format!("T:({} {} {})", term_key(s), term_key(p), term_key(o))

@@ -106,7 +106,7 @@ mod tests {
     use super::super::term::TermId;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}"))
     }
 
     fn ground_triple() -> Arc<RdfDataset> {
@@ -215,7 +215,7 @@ mod tests {
         let build = |label: &str, scope: u32| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
-            let blank = b.intern_blank(label.to_owned(), BlankScope(scope));
+            let blank = b.intern_blank(label, BlankScope(scope));
             b.push_quad(s, p, blank, None);
             b.freeze().expect("valid")
         };
@@ -235,7 +235,7 @@ mod tests {
         let build = |neighbour: &str| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, link) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "link"));
-            let blank = b.intern_blank("b".to_owned(), BlankScope::DEFAULT);
+            let blank = b.intern_blank("b", BlankScope::DEFAULT);
             let nb = iri(&mut b, neighbour);
             b.push_quad(s, p, blank, None);
             b.push_quad(blank, link, nb, None);
@@ -255,8 +255,8 @@ mod tests {
             let p = iri(&mut b, "p");
             let a_node = iri(&mut b, "A");
             let b_node = iri(&mut b, "B");
-            let x = b.intern_blank(l1.to_owned(), BlankScope(s1));
-            let y = b.intern_blank(l2.to_owned(), BlankScope(s2));
+            let x = b.intern_blank(l1, BlankScope(s1));
+            let y = b.intern_blank(l2, BlankScope(s2));
             b.push_quad(x, p, a_node, None);
             b.push_quad(y, p, b_node, None);
             b.freeze().expect("valid")
@@ -275,8 +275,8 @@ mod tests {
         let build = |l1: &str, l2: &str| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let p = iri(&mut b, "p");
-            let x = b.intern_blank(l1.to_owned(), BlankScope(0));
-            let y = b.intern_blank(l2.to_owned(), BlankScope(0));
+            let x = b.intern_blank(l1, BlankScope(0));
+            let y = b.intern_blank(l2, BlankScope(0));
             b.push_quad(x, p, y, None);
             b.push_quad(y, p, x, None);
             b.freeze().expect("valid")

@@ -80,7 +80,7 @@ pub(crate) struct QuadRow {
 // costs no discriminant word, so a quad row is 16 bytes (3×4 ids + 4 for the
 // niche-packed optional graph) rather than 20. This is the ~20%-off-the-quad-table
 // win; the assertion fails the build if the niche or field layout regresses.
-const _: () = assert!(std::mem::size_of::<QuadRow>() == 16);
+const _: () = assert!(size_of::<QuadRow>() == 16);
 
 /// A small `Copy` quad row in term ids, for ID-native consumers. `g == None` is the
 /// default graph.
@@ -176,7 +176,7 @@ pub struct RdfDataset {
 
 /// The lazy non-identity permutation indexes over the freeze-sorted `quads` table
 /// (#891 P4b). Each is a `u32`-per-quad ordinal-indirection array: `arr[i]` is the
-/// ordinal into [`RdfDataset`]`::quads` of the `i`-th quad in that permutation's
+/// ordinal into the [`RdfDataset`] quads table of the `i`-th quad in that permutation's
 /// order. SPOG needs no array (the table is already SPOG-sorted); these five cover
 /// the remaining bound-set shapes. All five warm ≈ 20 B/quad on top of the table.
 #[derive(Debug, Default)]
@@ -279,13 +279,13 @@ enum QuadPermutation {
 impl QuadPermutation {
     /// Every permutation, identity first so it wins prefix-length ties (it needs no
     /// array). The dispatch scans this list to pick the best ordering for a pattern.
-    const ALL: [QuadPermutation; 6] = [
-        QuadPermutation::Spog,
-        QuadPermutation::Pos,
-        QuadPermutation::Osp,
-        QuadPermutation::Gspo,
-        QuadPermutation::Gpos,
-        QuadPermutation::Gosp,
+    const ALL: [Self; 6] = [
+        Self::Spog,
+        Self::Pos,
+        Self::Osp,
+        Self::Gspo,
+        Self::Gpos,
+        Self::Gosp,
     ];
 
     /// This permutation's axis order (its sort-key sequence).
@@ -293,12 +293,12 @@ impl QuadPermutation {
     fn axes(self) -> QuadAxisOrder {
         use Axis::{G, O, P, S};
         match self {
-            QuadPermutation::Spog => AxisOrder::new([S, P, O, G]),
-            QuadPermutation::Pos => AxisOrder::new([P, O, S, G]),
-            QuadPermutation::Osp => AxisOrder::new([O, S, P, G]),
-            QuadPermutation::Gspo => AxisOrder::new([G, S, P, O]),
-            QuadPermutation::Gpos => AxisOrder::new([G, P, O, S]),
-            QuadPermutation::Gosp => AxisOrder::new([G, O, S, P]),
+            Self::Spog => AxisOrder::new([S, P, O, G]),
+            Self::Pos => AxisOrder::new([P, O, S, G]),
+            Self::Osp => AxisOrder::new([O, S, P, G]),
+            Self::Gspo => AxisOrder::new([G, S, P, O]),
+            Self::Gpos => AxisOrder::new([G, P, O, S]),
+            Self::Gosp => AxisOrder::new([G, O, S, P]),
         }
     }
 }
@@ -412,7 +412,7 @@ impl RdfDataset {
     /// consumers that key on the dataset-independent value identity (LOGIC's
     /// world-store, the SPARQL egress) resolve through this rather than the
     /// `RdfTerm` owned model.
-    pub fn term_value(&self, id: TermId) -> crate::TermValue {
+    pub fn term_value(&self, id: TermId) -> TermValue {
         use crate::TermValue;
         match self.resolve(id) {
             TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
@@ -523,7 +523,7 @@ impl RdfDataset {
     /// graphs from contaminating the per-graph digest (pin-invariant correctness: each
     /// backing per-graph digest must be isolated to that graph's own content only).
     #[must_use]
-    pub fn project_named_graph(&self, graph: &str) -> RdfDataset {
+    pub fn project_named_graph(&self, graph: &str) -> Self {
         use std::collections::HashSet;
 
         let mut builder = super::builder::RdfDatasetBuilder::new();
@@ -532,12 +532,12 @@ impl RdfDataset {
         // The RDF 1.2 reifier side-table has NO graph dimension (reifier bindings are
         // always `g: None`), so we use the set of quad subjects as the proxy for
         // "this reifier was asserted in the context of this named graph".
-        let mut graph_subjects: HashSet<crate::RdfTerm> = HashSet::new();
+        let mut graph_subjects: HashSet<RdfTerm> = HashSet::new();
 
         for quad in self.owned_quads() {
             let in_graph = matches!(
                 &quad.graph_name,
-                Some(crate::RdfTerm::Iri(iri)) if iri == graph
+                Some(RdfTerm::Iri(iri)) if iri == graph
             );
             if !in_graph {
                 continue;
@@ -581,16 +581,16 @@ impl RdfDataset {
     /// byte-for-byte. Used by the superset gate's fold; the strict projection backs the
     /// digest/pin path (unchanged, so per-graph digests are stable).
     #[must_use]
-    pub fn project_named_graph_full(&self, graph: &str) -> RdfDataset {
+    pub fn project_named_graph_full(&self, graph: &str) -> Self {
         use std::collections::HashSet;
 
         let mut builder = super::builder::RdfDatasetBuilder::new();
-        let mut graph_subjects: HashSet<crate::RdfTerm> = HashSet::new();
+        let mut graph_subjects: HashSet<RdfTerm> = HashSet::new();
 
         for quad in self.owned_quads() {
             let in_graph = matches!(
                 &quad.graph_name,
-                Some(crate::RdfTerm::Iri(iri)) if iri == graph
+                Some(RdfTerm::Iri(iri)) if iri == graph
             );
             if !in_graph {
                 continue;
@@ -601,7 +601,7 @@ impl RdfDataset {
             builder.push_owned_quad(&projected);
         }
 
-        let mut kept_reifiers: HashSet<crate::RdfTerm> = HashSet::new();
+        let mut kept_reifiers: HashSet<RdfTerm> = HashSet::new();
         for reifier in self.owned_reifiers() {
             if graph_subjects.contains(&reifier.reifier)
                 || graph_subjects.contains(&reifier.statement.subject)
@@ -954,6 +954,14 @@ impl RdfDataset {
         }
     }
 
+    /// Iterate quads as borrowed, resolved [`QuadRef`] views — the `iter` twin of
+    /// the `for quad in &dataset` [`IntoIterator`] impl. Alias for
+    /// [`quad_refs`](Self::quad_refs).
+    #[inline]
+    pub fn iter(&self) -> RdfDatasetIter<'_> {
+        self.quad_refs()
+    }
+
     /// Resolve one frozen [`QuadRow`] to a borrowed [`QuadRef`] (no allocation).
     #[inline]
     fn quad_ref_of(&self, row: &QuadRow) -> QuadRef<'_> {
@@ -1181,7 +1189,7 @@ impl RdfDataset {
     /// union of already-valid datasets somehow fails structural validation, which
     /// cannot happen for inputs that each froze successfully.
     #[must_use]
-    pub fn union(datasets: &[&RdfDataset]) -> RdfDataset {
+    pub fn union(datasets: &[&Self]) -> Self {
         let mut builder = super::builder::RdfDatasetBuilder::new();
         for ds in datasets {
             builder.push_dataset(ds);
@@ -1192,15 +1200,15 @@ impl RdfDataset {
         let frozen = builder
             .freeze()
             .expect("union of valid datasets re-freezes successfully");
-        std::sync::Arc::try_unwrap(frozen).unwrap_or_else(|arc| arc.clone_dataset())
+        Arc::try_unwrap(frozen).unwrap_or_else(|arc| arc.clone_dataset())
     }
 
     /// Deep-clone a frozen dataset's tables into a fresh owned `RdfDataset`. The
     /// fallback for [`union`](Self::union) when the freshly frozen `Arc` is somehow
     /// shared (it is not, in practice — `freeze` returns a unique `Arc`). The lazy
     /// `OnceLock` caches are intentionally NOT cloned; they rebuild on demand.
-    fn clone_dataset(&self) -> RdfDataset {
-        RdfDataset {
+    fn clone_dataset(&self) -> Self {
+        Self {
             arena: self.arena.clone(),
             terms: self.terms.clone(),
             quads: self.quads.clone(),
@@ -1252,6 +1260,7 @@ impl RdfDataset {
 /// `for quad in &dataset`. Backed by a `core::slice::Iter` (no_std-ready), it is
 /// `Double-ended`, `ExactSize`, and `Fused` — a drop-in for the standard iterator
 /// adapters with no per-item heap cost.
+#[derive(Debug)]
 pub struct RdfDatasetIter<'a> {
     dataset: &'a RdfDataset,
     inner: core::slice::Iter<'a, QuadRow>,
@@ -1321,7 +1330,7 @@ mod tests {
     use crate::RdfLiteral;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}"))
     }
 
     #[test]
@@ -1330,7 +1339,7 @@ mod tests {
         let s = iri(&mut b, "s");
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        let bn = b.intern_blank("b0".to_string(), BlankScope::DEFAULT);
+        let bn = b.intern_blank("b0", BlankScope::DEFAULT);
         let plain = b.intern_literal(RdfLiteral::simple("hello"));
         let typed = b.intern_literal(RdfLiteral::typed(
             "42",
@@ -1340,8 +1349,7 @@ mod tests {
         let tr = b.intern_triple(s, p, o);
         b.push_quad(s, p, o, None);
         let r = iri(&mut b, "r");
-        let reifies =
-            b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies".to_string());
+        let reifies = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies");
         b.push_quad(r, reifies, tr, None);
         let ds = b.freeze().expect("freeze");
 
@@ -1444,12 +1452,12 @@ mod tests {
         let val = TermValue::Iri("http://example.org/x".to_string());
         let mut a = RdfDatasetBuilder::new();
         let _pad = iri(&mut a, "pad"); // shift x's id in dataset `a`
-        let xa = a.intern_iri("http://example.org/x".to_string());
+        let xa = a.intern_iri("http://example.org/x");
         a.push_quad(xa, xa, xa, None);
         let da = a.freeze().unwrap();
 
         let mut b = RdfDatasetBuilder::new();
-        let xb = b.intern_iri("http://example.org/x".to_string());
+        let xb = b.intern_iri("http://example.org/x");
         b.push_quad(xb, xb, xb, None);
         let db = b.freeze().unwrap();
 
@@ -1723,7 +1731,7 @@ mod tests {
         // The ingest path interns `rdf:reifies` as a term alongside the reifier
         // binding (it is the serialized indirection edge); `reifier_quads` uses that
         // interned id as the virtual predicate.
-        let reifies = b.intern_iri(RDF_REIFIES.to_owned());
+        let reifies = b.intern_iri(RDF_REIFIES);
         b.push_reifier(r1, triple);
         b.push_reifier(r2, triple);
         let ds = b.freeze().expect("valid");
@@ -1924,12 +1932,10 @@ mod tests {
     fn union_standardizes_apart_same_label_blanks() {
         let build = |member: &str| {
             let mut b = RdfDatasetBuilder::new();
-            let head = b.intern_blank("b0".to_string(), BlankScope::DEFAULT);
-            let rdf_type =
-                b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_string());
-            let disjoint =
-                b.intern_iri("http://www.w3.org/2002/07/owl#AllDisjointClasses".to_string());
-            let members = b.intern_iri("http://www.w3.org/2002/07/owl#members".to_string());
+            let head = b.intern_blank("b0", BlankScope::DEFAULT);
+            let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+            let disjoint = b.intern_iri("http://www.w3.org/2002/07/owl#AllDisjointClasses");
+            let members = b.intern_iri("http://www.w3.org/2002/07/owl#members");
             let m = iri(&mut b, member);
             b.push_quad(head, rdf_type, disjoint, None);
             b.push_quad(head, members, m, None);
@@ -1967,7 +1973,7 @@ mod tests {
         let ds = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
-            let head = b.intern_blank("x".to_string(), BlankScope::DEFAULT);
+            let head = b.intern_blank("x", BlankScope::DEFAULT);
             b.push_quad(s, p, head, None);
             b.freeze().expect("ds")
         };
@@ -1998,10 +2004,10 @@ mod tests {
             let mut b = RdfDatasetBuilder::new();
             // Intern a fixed pool of IRIs once so positional constraints always hold.
             let pool: Vec<TermId> = (0..5)
-                .map(|n| b.intern_iri(format!("http://example.org/n{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
                 .collect();
             let graphs: Vec<TermId> = (0..3)
-                .map(|n| b.intern_iri(format!("http://example.org/g{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
                 .collect();
 
             let mut distinct: HashSet<(TermId, TermId, TermId, Option<TermId>)> = HashSet::new();
@@ -2048,10 +2054,10 @@ mod tests {
 
             let mut b = RdfDatasetBuilder::new();
             let pool: Vec<TermId> = (0..5)
-                .map(|n| b.intern_iri(format!("http://example.org/n{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
                 .collect();
             let graphs: Vec<TermId> = (0..3)
-                .map(|n| b.intern_iri(format!("http://example.org/g{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
                 .collect();
             for (s, p, o, g) in rows {
                 b.push_quad(pool[s as usize], pool[p as usize], pool[o as usize],
@@ -2102,10 +2108,10 @@ mod tests {
         ) {
             let mut b = RdfDatasetBuilder::new();
             let pool: Vec<TermId> = (0..5)
-                .map(|n| b.intern_iri(format!("http://example.org/n{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
                 .collect();
             let graphs: Vec<TermId> = (0..3)
-                .map(|n| b.intern_iri(format!("http://example.org/g{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
                 .collect();
             for (s, p, o, g) in rows {
                 b.push_quad(pool[s as usize], pool[p as usize], pool[o as usize],
@@ -2147,10 +2153,10 @@ mod tests {
         ) {
             let mut b = RdfDatasetBuilder::new();
             let pool: Vec<TermId> = (0..5)
-                .map(|n| b.intern_iri(format!("http://example.org/n{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
                 .collect();
             let graphs: Vec<TermId> = (0..3)
-                .map(|n| b.intern_iri(format!("http://example.org/g{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
                 .collect();
             let raw: Vec<(TermId, TermId, TermId, Option<TermId>)> = rows
                 .iter()

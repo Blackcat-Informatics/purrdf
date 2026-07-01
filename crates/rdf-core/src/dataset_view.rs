@@ -48,9 +48,9 @@ impl GraphMatch {
     #[must_use]
     pub fn matches(self, graph: Option<TermId>) -> bool {
         match self {
-            GraphMatch::Any => true,
-            GraphMatch::Default => graph.is_none(),
-            GraphMatch::Named(id) => graph == Some(id),
+            Self::Any => true,
+            Self::Default => graph.is_none(),
+            Self::Named(id) => graph == Some(id),
         }
     }
 }
@@ -176,17 +176,17 @@ impl DatasetView for RdfDataset {
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         // Inherent methods take method-resolution priority over trait methods, so
         // these delegate to `RdfDataset`'s own impls (no recursion).
-        RdfDataset::quads(self)
+        Self::quads(self)
     }
 
     #[inline]
     fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
-        RdfDataset::quad_refs(self)
+        Self::quad_refs(self)
     }
 
     #[inline]
     fn resolve(&self, id: TermId) -> TermRef<'_> {
-        RdfDataset::resolve(self, id)
+        Self::resolve(self, id)
     }
 
     #[inline]
@@ -200,17 +200,17 @@ impl DatasetView for RdfDataset {
         // Indexed override (P4b, #891): lazy permutation indexes + a bound-set ->
         // permutation -> partition_point dispatch, byte-identical to the trait's
         // default linear scan (differential proptest in `ir/dataset.rs`).
-        RdfDataset::quads_for_pattern_indexed(self, s, p, o, g)
+        Self::quads_for_pattern_indexed(self, s, p, o, g)
     }
 
     #[inline]
     fn capabilities(&self) -> RdfStoreCapabilities {
-        RdfDataset::capabilities(self)
+        Self::capabilities(self)
     }
 
     #[inline]
     fn len_hint(&self) -> Option<usize> {
-        Some(RdfDataset::quad_count(self))
+        Some(Self::quad_count(self))
     }
 }
 
@@ -220,7 +220,7 @@ mod tests {
     use crate::ir::RdfDatasetBuilder;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}"))
     }
 
     #[test]

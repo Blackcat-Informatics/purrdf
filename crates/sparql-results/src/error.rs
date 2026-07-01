@@ -29,9 +29,9 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::MalformedTerm(msg) => write!(f, "malformed result term: {msg}"),
-            Error::Format(msg) => write!(f, "result format error: {msg}"),
-            Error::Internal(msg) => write!(f, "internal error: {msg}"),
+            Self::MalformedTerm(msg) => write!(f, "malformed result term: {msg}"),
+            Self::Format(msg) => write!(f, "result format error: {msg}"),
+            Self::Internal(msg) => write!(f, "internal error: {msg}"),
         }
     }
 }
