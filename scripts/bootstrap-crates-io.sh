@@ -9,6 +9,7 @@ if [[ -z "${VERSION}" ]]; then
   VERSION="$(cargo metadata --no-deps --format-version 1 \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
 fi
+PUBLISH_COOLDOWN_SECONDS="${PUBLISH_COOLDOWN_SECONDS:-620}"
 
 if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
   if [[ -n "${CARGO_TOKEN:-}" ]]; then
@@ -98,12 +99,15 @@ cargo package --workspace \
   --locked \
   --no-verify
 
-for crate in "${crates[@]}"; do
+for idx in "${!crates[@]}"; do
+  crate="${crates[$idx]}"
   if crate_version_exists "$crate"; then
     echo "${crate} ${VERSION} already exists on crates.io; skipping"
     continue
   fi
   cargo publish -p "$crate" --locked --no-verify
   wait_for_crate_version "$crate"
-  sleep 15
+  if ((idx + 1 < ${#crates[@]})) && [[ "${PUBLISH_COOLDOWN_SECONDS}" != "0" ]]; then
+    sleep "${PUBLISH_COOLDOWN_SECONDS}"
+  fi
 done
