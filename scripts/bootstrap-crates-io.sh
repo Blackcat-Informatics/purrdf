@@ -50,7 +50,8 @@ crates=(
 crate_version_exists() {
   local crate="$1"
   local status
-  status="$(curl -sS -o /tmp/purrdf-crate-version.json -w "%{http_code}" \
+  status="$(curl -sS -H "User-Agent: purrdf-release/${VERSION} (paudley@blackcatinformatics.ca)" \
+    -o /tmp/purrdf-crate-version.json -w "%{http_code}" \
     "https://crates.io/api/v1/crates/${crate}/${VERSION}")"
   case "$status" in
     200) return 0 ;;
