@@ -37,7 +37,6 @@ drifts from the crate (`make capi-check`).
   abort across FFI).
 - **`int32_t` status + out-params.** Fallible functions return a
   `PurrdfStatus` value (as `int32_t`) and write results through out-pointers. On
-  error they set `*out_error` to an owned `PurrdfError`.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
   additive. The current ABI is **0.1.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib

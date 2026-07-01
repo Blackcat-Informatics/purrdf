@@ -4,7 +4,7 @@
 [package]
 name = "purrdf-python"
 description = "Python bindings for PURRDF, packaged as the purrdf_native extension module"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -17,11 +17,11 @@ path = "src/lib.rs"
 test = false
 
 [dependencies]
-purrdf = { path = "../../crates/rdf", version = "0.1.0" }
-purrdf-core = { path = "../../crates/rdf-core", version = "0.1.0" }
-purrdf-gts = { path = "../../crates/gts", version = "0.1.0" }
-purrdf-shapes = { path = "../../crates/shapes", version = "0.1.0" }
-purrdf-slice = { path = "../../crates/slice", version = "0.1.0" }
-purrdf-sparql-eval = { path = "../../crates/sparql-eval", version = "0.1.0" }
-purrdf-xsd = { path = "../../crates/xsd", version = "0.1.0" }
+purrdf = { path = "../../crates/purrdf", version = "0.1.1" }
+purrdf-core = { path = "../../crates/rdf-core", version = "0.1.1" }
+purrdf-gts = { path = "../../crates/gts", version = "0.1.1" }
+purrdf-shapes = { path = "../../crates/shapes", version = "0.1.1" }
+purrdf-slice = { path = "../../crates/slice", version = "0.1.1" }
+purrdf-sparql-eval = { path = "../../crates/sparql-eval", version = "0.1.1" }
+purrdf-xsd = { path = "../../crates/xsd", version = "0.1.1" }
 pyo3 = { version = "0.29", features = ["abi3-py313", "extension-module"] }

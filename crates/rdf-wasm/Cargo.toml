@@ -4,7 +4,7 @@
 [package]
 name = "purrdf-wasm"
 description = "purrdf: a wasm32, in-memory RDF 1.2 engine with an idiomatic RDF/JS (DataFactory/Dataset/Stream) API"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -25,20 +25,20 @@ path = "src/lib.rs"
 # and PyO3, and parses/serializes RDF text + RDF/XML through the first-party native
 # codecs (crates/rdf/src/native_codecs/, roxmltree-backed) — no purrdf-gts codec, no
 # Store, no RocksDB, no rayon.
-purrdf = { path = "../rdf", version = "0.1.0" }
+purrdf = { path = "../purrdf", version = "0.1.1" }
 # The permissive zero-dep RDF 1.2 ingestion protocol (purrdf P6 #840): the seam
 # the RDF/JS Sink maps onto.
-purrdf-events = { path = "../rdf-events", version = "0.1.0" }
+purrdf-events = { path = "../rdf-events", version = "0.1.1" }
 # The IR kernel + `SparqlEngine` seam (SparqlRequest / SparqlResult), in interned
 # TermId space.
-purrdf-core = { path = "../rdf-core", version = "0.1.0" }
+purrdf-core = { path = "../rdf-core", version = "0.1.1" }
 # The native, oxigraph-free multiset SPARQL evaluator that powers the offline
 # in-browser `Dataset.query`. SERVICE federation is host-injected through
 # `RemoteQuerySource`; this crate does not bake in an HTTP client.
-purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.0" }
+purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.1" }
 # Serializes the SELECT/ASK result model to W3C SPARQL Results JSON. wasm-clean leaf
 # (replaces the oxigraph-family `sparesults`).
-purrdf-sparql-results = { path = "../sparql-results", version = "0.1.0" }
+purrdf-sparql-results = { path = "../sparql-results", version = "0.1.1" }
 # EXACT pin: the `wasm-bindgen` CLI that generates the JS bindings must match the
 # library version byte-for-byte or it refuses to run. `make wasm-pkg` and the CI
 # Node lane install `wasm-bindgen-cli@0.2.125` to match this.

@@ -4,7 +4,7 @@
 [package]
 name = "purrdf-iri"
 description = "Native, zero-dependency IRI/URI value space (RFC-3987 IRI + RFC-3986 URI parse/validate, reference resolution, syntax normalization, CURIE/prefix expansion) for the RDF 1.2 query stack — replaces oxiri (purrdf S2, EPIC #906)"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 repository.workspace = true
 license.workspace = true

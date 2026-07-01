@@ -16,14 +16,14 @@ path = "src/lib.rs"
 
 [dependencies]
 # The engine under test + its algebra front-end.
-purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.0" }
-purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.0" }
+purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.1" }
+purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.1" }
 # Native Turtle/TriG/N-Quads loader (parse_dataset) + RDFC-1.0 canonicalization,
 # both oxigraph-Store-free.
-purrdf = { path = "../rdf", version = "0.1.0" }
-purrdf-core = { path = "../rdf-core", version = "0.1.0" }
+purrdf = { path = "../purrdf", version = "0.1.1" }
+purrdf-core = { path = "../rdf-core", version = "0.1.1" }
 # Hand-rolled SPARQL Results readers for the expected SRX/SRJ files.
-purrdf-sparql-results = { path = "../sparql-results", version = "0.1.0" }
+purrdf-sparql-results = { path = "../sparql-results", version = "0.1.1" }
 # UTF-8 path type used by the datatest-stable harness signature.
 camino = "1"
 

@@ -6,7 +6,7 @@
 //! # Why these assertions are RAW, never canonical
 //!
 //! The sibling `proptest_roundtrip.rs` compares both sides of a round-trip via the
-//! RDFC-1.0 [`purrdf::canonical_flat_nquads`] comparator. RDFC-1.0 is allowed to
+//! RDFC-1.0 [`purrdf_rdf::canonical_flat_nquads`] comparator. RDFC-1.0 is allowed to
 //! relabel blank nodes AND to rewrite literal lexical forms into canonical form, so a
 //! comparator-mediated round-trip would happily *mask* a codec that normalizes the
 //! value space (`"0.90"` → `"0.9"`) or narrows a datatype
@@ -20,7 +20,7 @@
 //! `"0.90"^^xsd:decimal`, `"007"^^xsd:nonNegativeInteger`, `"1.0E0"^^xsd:double`,
 //! `"+1.5"^^xsd:decimal`, `"0.50"^^xsd:decimal`.
 
-use purrdf::{
+use purrdf_rdf::{
     parse_dataset, serialize_dataset, NativeRdfFormat, RdfDatasetBuilder, RdfLiteral, RdfQuad,
     RdfTerm, SerializeGraph, TermValue,
 };
@@ -66,7 +66,7 @@ const FIDELITY_LITERALS: &[Fidelity] = &[
 ];
 
 /// Build the single-quad dataset `<https://e/s> <https://e/p> "lexical"^^<datatype>`.
-fn dataset_with_literal(lexical: &str, datatype: &str) -> std::sync::Arc<purrdf::RdfDataset> {
+fn dataset_with_literal(lexical: &str, datatype: &str) -> std::sync::Arc<purrdf_rdf::RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let quad = RdfQuad::new(
         RdfTerm::iri(SUBJECT.to_owned()),
@@ -154,7 +154,7 @@ fn trig_preserves_literal_value_space() {
 /// canonical comparator.
 #[test]
 fn jsonld_preserves_literal_value_space() {
-    use purrdf::native_codecs::jsonld::{parse_jsonld, serialize_dataset_to_jsonld};
+    use purrdf_rdf::native_codecs::jsonld::{parse_jsonld, serialize_dataset_to_jsonld};
 
     for f in FIDELITY_LITERALS {
         let ds = dataset_with_literal(f.lexical, f.datatype);

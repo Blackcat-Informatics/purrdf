@@ -38,15 +38,16 @@ Use that same publisher configuration for these crates:
 - `purrdf-sparql-algebra`
 - `purrdf-sparql-results`
 - `purrdf-sparql-eval`
-- `purrdf`
+- `purrdf-rdf`
 - `purrdf-slice`
 - `purrdf-shapes`
+- `purrdf`
 - `purrdf-wasm`
 
 crates.io currently requires the crate to exist before a Trusted Publisher can
-be configured. The first `0.1.0` bootstrap publish therefore uses an explicit
-token. After those crate records exist, enable the Trusted Publisher entries
-above and use the GitHub release workflow for future releases.
+be configured. Bootstrap publishes for new crate records therefore use an
+explicit token. After those crate records exist, enable the Trusted Publisher
+entries above and use the GitHub release workflow for future releases.
 
 `purrdf-python`, `purrdf-sparql-conformance`, and `purrdf-capi` remain workspace
 crates, but they are not in this crates.io release lane. `purrdf-python` is the
@@ -57,7 +58,7 @@ separate release lane if/when it is shipped.
 For the bootstrap publish from a clean local checkout:
 
 ```sh
-CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh 0.1.0
+CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh 0.1.1
 ```
 
 The script runs the local release gates, refuses dirty source by default, skips

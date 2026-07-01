@@ -4,7 +4,7 @@
 [package]
 name = "purrdf-sparql-results"
 description = "Native, wasm-clean serializer for the SPARQL result model (SELECT/ASK/CONSTRUCT) to SPARQL Results JSON/XML/CSV/TSV plus a provenance-carrying purrdf extension — the canonical results-serialization authority replacing the oxigraph-family `sparesults` (purrdf S9, EPIC #906)"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 repository.workspace = true
 license.workspace = true
@@ -21,7 +21,7 @@ path = "src/lib.rs"
 name = "purrdf_sparql_results"
 
 [dependencies]
-purrdf-core = { path = "../rdf-core", version = "0.1.0" }
+purrdf-core = { path = "../rdf-core", version = "0.1.1" }
 
 [dev-dependencies]
 pretty_assertions = "1"

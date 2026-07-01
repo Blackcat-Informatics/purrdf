@@ -4,7 +4,7 @@
 [package]
 name = "purrdf-shapes"
 description = "PURRDF SHACL validation engine core: native RDF 1.2 SHACL Core validator, gated against the SHACL conformance corpus"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -22,11 +22,11 @@ path = "src/lib.rs"
 # SHACL-SPARQL queries (ASK/CONSTRUCT/DESCRIBE) — they parse but cannot bind ?this
 # and would panic at eval. Use SparqlParser to parse and match Query::Select.
 # Replaces the oxigraph-family SPARQL parser.
-purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.0" }
+purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.1" }
 # Native SPARQL engine (crates/sparql-eval): the single SparqlEngine impl over the
 # frozen IR. Replaces oxigraph's SPARQL 1.1 engine for SHACL-AF sh:sparql /
 # sh:SPARQLTarget evaluation (EPIC #906).
-purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.0" }
+purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.1" }
 # sh:pattern regex constraint.
 regex = "1"
 # JSON Schema / OpenAPI emitter (#700). NO `preserve_order` feature: we rely on
@@ -34,7 +34,7 @@ regex = "1"
 # deterministic, byte-stable output.
 serde_json = "1"
 # Shared PyO3-free RDF 1.2 kernel and native GTS/text-codec boundary (#648).
-purrdf = { path = "../rdf", version = "0.1.0" }
+purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.1.1" }
 # Native DOM parser for reading vendored openEHR OPT XML directly (openehr_opt
 # module): navigates the OPT's C_DV_QUANTITY magnitude interval structurally
 # rather than transcribing bounds by hand. Same version pin as crates/rdf and
@@ -42,8 +42,8 @@ purrdf = { path = "../rdf", version = "0.1.0" }
 roxmltree = "0.20"
 
 [dev-dependencies]
-purrdf-gts = { path = "../gts", version = "0.1.0" }
-purrdf-slice = { path = "../slice", version = "0.1.0" }
+purrdf-gts = { path = "../gts", version = "0.1.1" }
+purrdf-slice = { path = "../slice", version = "0.1.1" }
 proptest = "1"
 # Acceleration-program baselines (#630, Phase 0); light feature set, see crates/logic.
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }

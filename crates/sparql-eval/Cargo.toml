@@ -4,7 +4,7 @@
 [package]
 name = "purrdf-sparql-eval"
 description = "Native, RDF-1.2-first multiset SPARQL evaluator over the DatasetView read trait in interned TermId space — the runtime that consumes purrdf-sparql-algebra (S5) and replaces the oxigraph-family spareval on the query path (purrdf S6, EPIC #906)"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 repository.workspace = true
 license.workspace = true
@@ -24,12 +24,12 @@ name = "purrdf_sparql_eval"
 
 [dependencies]
 # The IR + DatasetView read trait + SparqlEngine seam, in TermId space.
-purrdf-core = { path = "../rdf-core", version = "0.1.0" }
+purrdf-core = { path = "../rdf-core", version = "0.1.1" }
 # The query algebra this crate evaluates (parser + GraphPattern/Expression AST).
-purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.0" }
+purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.1" }
 # The XSD value space for FILTER/BIND/ORDER: value-space equality/ordering
 # (value_cmp/value_eq), effective boolean value, and the numeric tower.
-purrdf-xsd = { path = "../xsd", version = "0.1.0" }
+purrdf-xsd = { path = "../xsd", version = "0.1.1" }
 # Pure-Rust, wasm-clean regex engine for the SPARQL REGEX/REPLACE built-ins. Already
 # in the workspace lock; pulls only regex-automata/regex-syntax/aho-corasick/memchr
 # (no oxigraph-family edge — gated by `make rdf-core-hygiene`).
@@ -43,7 +43,7 @@ sha1 = { version = "0.10", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 # SPARQL Results reader for decoding remote SERVICE responses. Wasm-clean
 # (hand-rolled, no serde). No oxigraph-family edge.
-purrdf-sparql-results = { path = "../sparql-results", version = "0.1.0" }
+purrdf-sparql-results = { path = "../sparql-results", version = "0.1.1" }
 
 [dev-dependencies]
 # Colored line-diffs on assert_eq! failure (repo convention).

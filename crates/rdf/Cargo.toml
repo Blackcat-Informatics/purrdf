@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 [package]
-name = "purrdf"
-description = "PURRDF RDF 1.2 kernel: PyO3-free model, diagnostics, store traits, and native GTS/text-codec adapters"
-version = "0.1.0"
+name = "purrdf-rdf"
+description = "PURRDF RDF 1.2 implementation: PyO3-free model, diagnostics, store traits, and native GTS/text-codec adapters"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -15,6 +15,7 @@ exclude = ["tests/corpus/w3c/**"]
 [lib]
 # rlib-only: Python bindings live in `bindings/python`, so this crate stays
 # PyO3-free and wasm-clean.
+name = "purrdf_rdf"
 crate-type = ["rlib"]
 path = "src/lib.rs"
 
@@ -23,20 +24,20 @@ path = "src/lib.rs"
 # model, diagnostics, store traits, loss ledger, provenance, FnO/SSSOM codecs,
 # the content store, and the oxigraph-free GTS reader path. Non-optional:
 # purrdf always re-exports its shipped modules.
-purrdf-core = { path = "../rdf-core", version = "0.1.0" }
+purrdf-core = { path = "../rdf-core", version = "0.1.1" }
 # The native, zero-dependency XSD value space (#906): non-optional, so purrdf's
 # always-on native codec path can reach W3C-canonical literal canonicalization
 # without any feature gate (#1132 carrier-purity — `.goals` forbids optional
 # components).
-purrdf-xsd = { path = "../xsd", version = "0.1.0" }
+purrdf-xsd = { path = "../xsd", version = "0.1.1" }
 # JSON / YAML surface for the first-party JSON-LD-star / YAML-LD-star codec
 # (`native_codecs::jsonld`, issue #1171). Already in the validate + pipeline trees, so
 # this adds no new tree-wide dependency.
 serde_json = "1"
 serde_yaml = "0.9"
 ciborium = "0.2"
-purrdf-gts = { path = "../gts", version = "0.1.0" }
-purrdf-events = { path = "../rdf-events", version = "0.1.0" }
+purrdf-gts = { path = "../gts", version = "0.1.1" }
+purrdf-events = { path = "../rdf-events", version = "0.1.1" }
 # The snapshot signing path constructs a SigningKey from 32 raw Ed25519 bytes;
 # same major as purrdf-gts links.
 ed25519-dalek = "2"
@@ -44,12 +45,12 @@ ed25519-dalek = "2"
 # (EPIC #906 removed oxigraph). It is the engine the maintainer-only golden-capture
 # binary (`src/bin/capture_sparql_goldens.rs`) runs to freeze the conformance
 # goldens (native-vs-native regression gate).
-purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.0" }
+purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.1" }
 # The wasm-clean SPARQL front-end (#911): its `lexer` is the proven, UCHAR-decoding
 # RDF term tokenizer the first-party N-Triples/N-Quads/Turtle/TriG parser reuses
 # (EPIC #906). NO oxigraph-family edge (only purrdf-iri + purrdf-xsd) — gated by
 # `make rdf-core-hygiene`.
-purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.0" }
+purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.1" }
 # The XML DOM front-end for the FIRST-PARTY RDF/XML codec (EPIC #906): supplies a
 # namespace-resolved, document-order element tree, on top of which `native_codecs::
 # rdfxml` implements the W3C RDF/XML grammar in-repo (replacing the external
@@ -70,7 +71,7 @@ path = "src/bin/capture_sparql_goldens.rs"
 # `use pretty_assertions::assert_eq;` per test file; identical on pass.
 pretty_assertions = "1"
 ciborium = "0.2"
-purrdf-gts = { path = "../gts", version = "0.1.0" }
+purrdf-gts = { path = "../gts", version = "0.1.1" }
 proptest = "1"
 # Acceleration-program baselines (#630/#819 C1 Task 7); light feature set matching
 # the sibling crates (logic/shacl/validate): criterion's plotters/rayon defaults are

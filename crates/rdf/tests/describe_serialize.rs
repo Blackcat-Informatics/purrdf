@@ -5,10 +5,10 @@
 //! structurally valid subgraph that every `native_codecs` serializer here in
 //! `purrdf` can emit — the docs multi-format export depends on exactly that hand-off.
 
-use purrdf::describe::describe;
-use purrdf::native_codecs::jsonld::serialize_dataset_to_jsonld;
-use purrdf::{parse_dataset, serialize_dataset, SerializeGraph};
 use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+use purrdf_rdf::describe::describe;
+use purrdf_rdf::native_codecs::jsonld::serialize_dataset_to_jsonld;
+use purrdf_rdf::{parse_dataset, serialize_dataset, SerializeGraph};
 
 const S: &str = "https://e/s";
 

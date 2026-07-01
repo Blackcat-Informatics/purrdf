@@ -7,6 +7,7 @@ members = [
     "bindings/python",
     "crates/gts",
     "crates/iri",
+    "crates/purrdf",
     "crates/rdf",
     "crates/rdf-capi",
     "crates/rdf-core",
@@ -25,7 +26,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Blackcat-Informatics/purrdf"

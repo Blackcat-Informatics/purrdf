@@ -4,7 +4,7 @@
 [package]
 name = "purrdf-core"
 description = "PURRDF RDF 1.2 oxigraph-free kernel: model, diagnostics, IR, store traits, and event ingestion"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -24,7 +24,7 @@ name = "purrdf_core"
 # the `DatasetSink` adapter that folds an `RdfEventSink` event stream into a frozen
 # `RdfDataset`, plus the frozen-IR-replay `FrozenDatasetSource`. The protocol crate
 # is dependency-free and uses the same `MIT OR Apache-2.0` license as this crate.
-purrdf-events = { path = "../rdf-events", version = "0.1.0" }
+purrdf-events = { path = "../rdf-events", version = "0.1.1" }
 # Fixed-key, non-cryptographic hashing for in-memory IR lookup tables. The tables
 # never persist hash values and equality still resolves collisions; this replaces
 # SipHash on hot value-index paths without introducing runtime randomness.

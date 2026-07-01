@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf"
+description = "PURRDF umbrella crate: RDF 1.2 implementation, slices, and SHACL/ShEx shape support"
+version = "0.1.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["rdf", "rdf-12", "shacl", "shex", "knowledge-graph"]
+
+[lib]
+crate-type = ["rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+purrdf-rdf = { path = "../rdf", version = "0.1.1" }
+purrdf-slice = { path = "../slice", version = "0.1.1" }
+purrdf-shapes = { path = "../shapes", version = "0.1.1" }

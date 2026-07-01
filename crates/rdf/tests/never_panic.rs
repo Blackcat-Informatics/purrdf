@@ -15,12 +15,12 @@
 //! turn a pathological input into a spurious timeout — a panic is a real find, a
 //! timeout would be a false red.
 //!
-//! The parser under test is the native, oxigraph-free [`purrdf::parse_dataset`]
+//! The parser under test is the native, oxigraph-free [`purrdf_rdf::parse_dataset`]
 //! codec (EPIC #906): it must return `Ok`/`Err` and NEVER panic on arbitrary input
 //! across every text format it accepts (N-Quads / Turtle / TriG / N-Triples).
 
 use proptest::prelude::*;
-use purrdf::{parse_dataset, NativeRdfFormat};
+use purrdf_rdf::{parse_dataset, NativeRdfFormat};
 
 /// Raw arbitrary bytes, bounded to keep parsing cheap.
 fn arbitrary_bytes() -> impl Strategy<Value = Vec<u8>> {
@@ -76,15 +76,15 @@ proptest! {
     /// without multi-segment support.
     #[test]
     fn gts_read_graph_never_panics(data in arbitrary_bytes()) {
-        let _ = purrdf::gts::read_graph(&data, false);
-        let _ = purrdf::gts::read_graph(&data, true);
+        let _ = purrdf_rdf::gts::read_graph(&data, false);
+        let _ = purrdf_rdf::gts::read_graph(&data, true);
     }
 
     /// The SSSOM TSV parser must never panic on arbitrary text.
     #[test]
     fn sssom_parse_tsv_never_panics(data in arbitrary_bytes()) {
         if let Ok(text) = std::str::from_utf8(&data) {
-            let _ = purrdf::sssom::parse_tsv(text);
+            let _ = purrdf_rdf::sssom::parse_tsv(text);
         }
     }
 
@@ -98,22 +98,22 @@ proptest! {
         )
     ) {
         let text = rows.into_iter().map(|r| r.join("\t")).collect::<Vec<_>>().join("\n");
-        let _ = purrdf::sssom::parse_tsv(&text);
+        let _ = purrdf_rdf::sssom::parse_tsv(&text);
     }
 
     /// The RDF-1.2 ↔ OWL statement transforms parse untrusted Turtle; neither
     /// direction may panic.
     #[test]
     fn statements_transforms_never_panic(text in structured_turtle()) {
-        let _ = purrdf::statements::project_owl_to_rdf12(&text);
-        let _ = purrdf::statements::normalize_rdf12_to_owl(&text);
+        let _ = purrdf_rdf::statements::project_owl_to_rdf12(&text);
+        let _ = purrdf_rdf::statements::normalize_rdf12_to_owl(&text);
     }
 
     #[test]
     fn statements_transforms_never_panic_raw(data in arbitrary_bytes()) {
         if let Ok(text) = std::str::from_utf8(&data) {
-            let _ = purrdf::statements::project_owl_to_rdf12(text);
-            let _ = purrdf::statements::normalize_rdf12_to_owl(text);
+            let _ = purrdf_rdf::statements::project_owl_to_rdf12(text);
+            let _ = purrdf_rdf::statements::normalize_rdf12_to_owl(text);
         }
     }
 }

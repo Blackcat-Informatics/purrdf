@@ -4,7 +4,7 @@
 [package]
 name = "purrdf-xsd"
 description = "Native, zero-dependency XSD value space (parse, value-space equality/ordering, canonical lexical mapping, SPARQL numeric promotion) for the RDF 1.2 query stack — replaces oxsdatatypes (purrdf S1, EPIC #906)"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 repository.workspace = true
 license.workspace = true

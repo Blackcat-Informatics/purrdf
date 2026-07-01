@@ -4,7 +4,7 @@
 [package]
 name = "purrdf-slice"
 description = "PURRDF native slice catalog: manifest-based discovery, typed artifact inventory, content-addressed IDs"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -17,11 +17,11 @@ path = "src/lib.rs"
 [dependencies]
 # Oxigraph-free (EPIC #906): the slice catalog/emitters/linters parse via the native
 # `gts` text codecs (`parse_dataset`) into the `RdfDataset` IR and query it directly.
-purrdf = { path = "../rdf", version = "0.1.0" }
+purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.1.1" }
 # Native SPARQL parser (purrdf S5, #911) — competency/verify queries are PARSED
 # (RFC §10), never text-searched, to extract referenced term IRIs. Replaces the
 # oxigraph-family SPARQL parser; RDF-1.2 quoted triple terms are first-class.
-purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.0" }
+purrdf-sparql-algebra = { path = "../sparql-algebra", version = "0.1.1" }
 # Strongly-connected-component computation over the S4 dependency graph
 # (RFC §8 link units). `petgraph` is a published registry crate (no `path`),
 # so it is an external boundary, not a first-party layering edge — the

@@ -42,9 +42,10 @@ crates=(
   purrdf-sparql-algebra
   purrdf-sparql-results
   purrdf-sparql-eval
-  purrdf
+  purrdf-rdf
   purrdf-slice
   purrdf-shapes
+  purrdf
   purrdf-wasm
 )
 

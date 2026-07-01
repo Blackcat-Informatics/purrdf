@@ -61,9 +61,10 @@ jobs:
             -p purrdf-sparql-algebra \
             -p purrdf-sparql-results \
             -p purrdf-sparql-eval \
-            -p purrdf \
+            -p purrdf-rdf \
             -p purrdf-slice \
             -p purrdf-shapes \
+            -p purrdf \
             -p purrdf-wasm
 
       - name: Build wasm package artifact
@@ -88,6 +89,6 @@ jobs:
         run: |
           cargo bench -p purrdf-gts --no-run --locked
           cargo bench -p purrdf-core --no-run --locked
-          cargo bench -p purrdf --bench native_codecs --no-run --locked
+          cargo bench -p purrdf-rdf --bench native_codecs --no-run --locked
           cargo bench -p purrdf-sparql-eval --no-run --locked
           cargo bench -p purrdf-shapes --bench validate --no-run --locked

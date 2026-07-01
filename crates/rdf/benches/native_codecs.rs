@@ -8,7 +8,7 @@
 //! serializer exercise dataset-capable paths.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use purrdf::{parse_dataset, serialize_dataset, SerializeGraph};
+use purrdf_rdf::{parse_dataset, serialize_dataset, SerializeGraph};
 
 const ROWS: usize = 2_000;
 

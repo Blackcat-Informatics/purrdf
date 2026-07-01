@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 # purrdf (wasm) — RDF 1.2 in the browser & Node, the RDF/JS way
 
 `purrdf` is a `wasm32`, **in-memory** RDF 1.2 engine compiled from the oxigraph-free
-[`purrdf`](../rdf) kernel and surfaced to JavaScript/TypeScript through the
+[`purrdf`](../purrdf) umbrella crate and surfaced to JavaScript/TypeScript through the
 [RDF/JS](https://rdf.js.org/) community spec (`DataFactory`, `DatasetCore`,
 `Stream`/`Sink`). It is parcel **P10** of the purrdf program
 (EPIC #832, [`docs/design/PURRDF-PLAN.md`](../../docs/design/PURRDF-PLAN.md)).

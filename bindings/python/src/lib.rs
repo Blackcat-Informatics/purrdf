@@ -11,11 +11,11 @@ pub use purrdf::*;
 mod py_gts;
 mod py_gts_dataset;
 mod py_gts_view;
+mod py_slice;
 mod py_sssom;
 mod py_store;
 mod rdf;
 mod shacl;
-mod slice;
 
 use pyo3::prelude::*;
 
@@ -30,7 +30,7 @@ fn purrdf_native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_submodule(&shacl_module)?;
 
     let slice_module = PyModule::new(py, "slice")?;
-    slice::register(&slice_module)?;
+    py_slice::register(&slice_module)?;
     m.add_submodule(&slice_module)?;
 
     Ok(())

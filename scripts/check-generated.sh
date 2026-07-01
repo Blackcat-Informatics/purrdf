@@ -10,9 +10,9 @@ trap 'rm -rf "$tmp"' EXIT
 
 cd "$repo"
 
-cargo run -p purrdf --example gen_loss_matrix --locked -- rdf \
+cargo run -p purrdf-rdf --example gen_loss_matrix --locked -- rdf \
   > "$tmp/rdf-loss-matrix.json"
-cargo run -p purrdf --example gen_loss_matrix --locked -- transcode \
+cargo run -p purrdf-rdf --example gen_loss_matrix --locked -- transcode \
   > "$tmp/transcode-loss-matrix.json"
 
 check_file() {

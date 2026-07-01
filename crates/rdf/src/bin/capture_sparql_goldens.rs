@@ -23,15 +23,15 @@
 
 use std::path::{Path, PathBuf};
 
-use purrdf::capture_support::{
+use purrdf_core::SparqlEngine;
+use purrdf_rdf::capture_support::{
     collect_corpus_files, corpus_repo_root, is_deferred_construct, is_multi_query_file,
     is_nondeterministic, row_key,
 };
-use purrdf::{
+use purrdf_rdf::{
     canonicalize, dataset_from_bytes, BlankScope, NativeRdfFormat, RdfDataset, SparqlRequest,
     SparqlResult, TermRef, TermValue,
 };
-use purrdf_core::SparqlEngine;
 use purrdf_sparql_eval::NativeSparqlEngine;
 
 /// Where every golden tree roots. The conformance crate (oxigraph-free) reads these.
@@ -116,7 +116,7 @@ fn capture_corpus(goldens: &Path) -> Tally {
         .join("purrdf.gts");
     let gts_bytes = std::fs::read(&gts_path)
         .unwrap_or_else(|e| panic!("read purrdf.gts at {}: {e}", gts_path.display()));
-    let dataset = purrdf::gts::flattened_dataset_from_bytes(&gts_bytes)
+    let dataset = purrdf_rdf::gts::flattened_dataset_from_bytes(&gts_bytes)
         .expect("native flattened dataset from gts");
     let native = NativeSparqlEngine::new();
 

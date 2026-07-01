@@ -33,7 +33,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf::{
+use purrdf_rdf::{
     datasets_isomorphic, parse_dataset, serialize_dataset, RdfDataset, SerializeGraph, TermRef,
     TermValue,
 };
@@ -409,7 +409,7 @@ fn w3c_rdf12_syntax_suites_round_trip() {
 /// Inline lexical-form preservation assertions — typed literals must survive a full
 /// N-Triples round-trip with their lexical form UNCHANGED (no canonicalization).
 fn lexical_form_preserved_verbatim() {
-    use purrdf::{RdfDatasetBuilder, RdfLiteral};
+    use purrdf_rdf::{RdfDatasetBuilder, RdfLiteral};
     let cases = [
         ("0.70", "http://www.w3.org/2001/XMLSchema#decimal"),
         (

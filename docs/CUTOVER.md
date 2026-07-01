@@ -7,8 +7,10 @@ This is the cutover checklist for replacing the in-tree RDF/GTS carrier stack in
 
 - `purrdf-core` owns the RDF 1.2 primitive model, frozen dataset IR,
   diagnostics, provenance, loss ledger, and store traits.
-- `purrdf` owns RDF text/XML/JSON-LD adapters and the first-class GTS adapter
-  surface over purrdf primitives.
+- `purrdf-rdf` owns RDF text/XML/JSON-LD adapters and the first-class GTS
+  adapter surface over purrdf primitives.
+- `purrdf` is the user-facing umbrella crate: it re-exports `purrdf-rdf` and
+  includes the first-class slice and shape APIs.
 - `purrdf-gts` owns the GTS container only: CBOR sequence, terms/quads, fold,
   verification, signing/encryption metadata, blobs, files, and transport policy.
 - `purrdf-slice` owns the slice/catalog carrier IR, dataset-level wrappers,
@@ -37,7 +39,7 @@ paudley/purrdf-cutover
 
 Until the purrdf crates are published, test the ontology cutover with explicit
 path dependencies pointing at `/home/paudley/Active/purrdf/crates/*`. After
-publishing, replace those path dependencies with `0.1.0` registry dependencies.
+publishing, replace those path dependencies with `0.1.1` registry dependencies.
 
 ## Publish Order
 
@@ -51,12 +53,13 @@ Publish the dependency leaves first:
 6. `purrdf-sparql-algebra`
 7. `purrdf-sparql-results`
 8. `purrdf-sparql-eval`
-9. `purrdf`
+9. `purrdf-rdf`
 10. `purrdf-slice`
 11. `purrdf-shapes`
-12. `purrdf-wasm`
+12. `purrdf`
+13. `purrdf-wasm`
 
-Every internal path dependency in this workspace carries `version = "0.1.0"` so
+Every internal path dependency in this workspace carries `version = "0.1.1"` so
 `cargo package` can resolve the same graph after publication.
 
 The GitHub release workflow is `.github/workflows/release-cargo.yaml`; it gates
@@ -80,8 +83,8 @@ cargo check --workspace --lib --tests
 cargo check --target wasm32-unknown-unknown --lib \
   -p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-gts \
   -p purrdf-core -p purrdf-sparql-algebra -p purrdf-sparql-results \
-  -p purrdf-sparql-eval -p purrdf -p purrdf-slice -p purrdf-shapes \
-  -p purrdf-wasm
+  -p purrdf-sparql-eval -p purrdf-rdf -p purrdf-slice \
+  -p purrdf-shapes -p purrdf -p purrdf-wasm
 cargo test -p purrdf-gts --test transport
 cargo test -p purrdf-slice
 ```

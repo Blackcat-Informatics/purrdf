@@ -56,5 +56,5 @@ crate constraints are load-bearing:
 
 - [ ] PUB-001: Commit the release source so the bootstrap publish script can run
   without `ALLOW_DIRTY=true`.
-- [ ] PUB-002: Bootstrap-publish the first `0.1.0` crates.io records with
+- [ ] PUB-002: Bootstrap-publish the corrected `0.1.1` crates.io records with
   `CARGO_TOKEN`, then configure crates.io Trusted Publisher entries.

@@ -4,7 +4,7 @@
 [package]
 name = "purrdf-capi"
 description = "PURRDF purrdf C-ABI: libpurrdf cdylib/staticlib over the purrdf semantic kernel (purrdf P8)"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -26,20 +26,20 @@ path = "src/lib.rs"
 # language shim links one .so" clause. SPARQL is served by the native engine
 # (`purrdf-sparql-eval`, below), so NO `oxigraph` feature is pulled (#906 cutover).
 # The `python` feature stays OFF: this is a C-ABI, not a PyO3 extension.
-purrdf-rs = { package = "purrdf", path = "../rdf", version = "0.1.0" }
+purrdf-rs = { package = "purrdf", path = "../purrdf", version = "0.1.1" }
 # purrdf re-exports the core types, but the capi depends on the kernel
 # directly too so it can name MutableDataset/QuadValues/GraphMatchValue/DatasetMut
 # without leaning on re-export aliasing. Harmless to crate-check (acyclic).
-purrdf-core = { path = "../rdf-core", version = "0.1.0" }
+purrdf-core = { path = "../rdf-core", version = "0.1.1" }
 # The canonical SPARQL-Results serializer (purrdf S9, EPIC #906). Path-depends on
 # the SAME ../rdf-core, so SparqlResult/TermValue unify — this crate delegates its
 # SRJ emission here instead of carrying a second hand-written serializer.
-purrdf-sparql-results = { path = "../sparql-results", version = "0.1.0" }
+purrdf-sparql-results = { path = "../sparql-results", version = "0.1.1" }
 # The native SPARQL engine (purrdf S6, #912): the single `SparqlEngine` impl
 # (`NativeSparqlEngine`) evaluates `purrdf_query` over the frozen `Arc<RdfDataset>`
 # directly — the oxigraph-free query path (#906). Path-depends on the SAME
 # ../rdf-core so `SparqlRequest`/`SparqlResult` unify.
-purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.0" }
+purrdf-sparql-eval = { path = "../sparql-eval", version = "0.1.1" }
 
 # === cargo-c packaging (the spec-letter build mechanism) ===
 [package.metadata.capi]
@@ -55,4 +55,4 @@ description = "PURRDF purrdf semantic RDF-1.2 C-ABI"
 
 [package.metadata.capi.library]
 name = "purrdf"
-version = "0.1.0"
+version = "0.1.1"

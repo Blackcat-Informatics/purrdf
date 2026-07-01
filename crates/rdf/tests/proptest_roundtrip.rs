@@ -10,13 +10,13 @@
 //! `"x"` ≡ `"x"^^xsd:string` distinction. Byte equality would therefore produce
 //! spurious failures (cf. the GTS codec-skew doctrine, PR #595: the drift gate is
 //! semantic). Every property here compares **RDFC-1.0 canonical quad sets** via the
-//! native [`purrdf::canonical_flat_nquads`] (#910), the same comparator the
+//! native [`purrdf_rdf::canonical_flat_nquads`] (#910), the same comparator the
 //! production native canonicalizer wraps.
 //!
 //! # Single generator, three codecs (EPIC #906 — native only)
 //!
 //! One generator authors a frozen [`RdfDataset`] fixture; the native text codecs
-//! ([`purrdf::serialize_dataset`] / [`purrdf::parse_dataset`]) serialize and
+//! ([`purrdf_rdf::serialize_dataset`] / [`purrdf_rdf::parse_dataset`]) serialize and
 //! re-parse it for N-Quads and TriG, and the GTS fold/unfold path covers the third
 //! codec. EPIC #906 removed oxigraph, so this gate now exercises the native codecs
 //! against the native RDFC-1.0 comparator directly (it is no longer a cross-check
@@ -39,7 +39,7 @@
 //!   (#718/#719) and do not exist yet.
 
 use proptest::prelude::*;
-use purrdf::{
+use purrdf_rdf::{
     canonical_flat_nquads, flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset,
     NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfLookaside, RdfQuad, RdfTerm,
     RdfTriple, SerializeGraph,
@@ -263,11 +263,11 @@ proptest! {
     /// same canonical quad set.
     #[test]
     fn gts_roundtrip(dataset in arb_dataset()) {
-        let bytes = purrdf::gts_write::to_gts(dataset.as_ref(), &RdfLookaside::default(), "purrdf-proptest")
+        let bytes = purrdf_rdf::gts_write::to_gts(dataset.as_ref(), &RdfLookaside::default(), "purrdf-proptest")
             .expect("to_gts should succeed");
         let graph = purrdf_gts::reader::read(&bytes, false, None);
         prop_assert!(graph.diagnostics.is_empty(), "GTS fold diagnostics: {:?}", graph.diagnostics);
-        let after = purrdf::import_gts_graph(graph).expect("import folded GTS graph");
+        let after = purrdf_rdf::import_gts_graph(graph).expect("import folded GTS graph");
         prop_assert_eq!(
             canonical(&flat(dataset.as_ref())),
             canonical(&flat(after.dataset.as_ref()))

@@ -4,7 +4,7 @@
 [package]
 name = "purrdf-sparql-algebra"
 description = "Native, wasm-clean SPARQL 1.1/1.2 parser → RDF 1.2-native query algebra AST (quoted triple terms, property paths, FILTER/BIND/VALUES, solution modifiers, GROUP BY) for the RDF 1.2 query stack — replaces the direct oxigraph-family SPARQL-parser dependency (purrdf S5, EPIC #906)"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 repository.workspace = true
 license.workspace = true
@@ -23,8 +23,8 @@ path = "src/lib.rs"
 name = "purrdf_sparql_algebra"
 
 [dependencies]
-purrdf-iri = { path = "../iri", version = "0.1.0" }
-purrdf-xsd = { path = "../xsd", version = "0.1.0" }
+purrdf-iri = { path = "../iri", version = "0.1.1" }
+purrdf-xsd = { path = "../xsd", version = "0.1.1" }
 
 [dev-dependencies]
 # Colored line-diffs on assert_eq! failure (repo convention).
