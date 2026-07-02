@@ -151,13 +151,12 @@ pub struct EvalCtx<'d> {
     /// template blanks).
     pub bnode_counter: u64,
     /// The evaluation-time value of NOW() — an xsd:dateTime, captured once at
-    /// context construction so all NOW() calls in a query return the same instant.
-    /// Defaults to the Unix epoch; hosts that need wall-clock query semantics inject
-    /// a value with [`Self::with_now`].
+    /// context construction (from the host platform's real wall clock, see
+    /// [`crate::clock::wall_clock_now`]) so all NOW() calls in a query return the
+    /// same instant (SPARQL 1.1 §17.4.5.1).
     pub now: purrdf_xsd::XsdValue,
-    /// Splitmix64 PRNG state for RAND()/UUID()/STRUUID().
-    /// Defaults to 0; hosts that need non-deterministic query semantics inject a
-    /// seed with [`Self::with_rng_seed`].
+    /// Splitmix64 PRNG state for RAND()/UUID()/STRUUID(), seeded once at context
+    /// construction from real OS/platform entropy (see [`crate::clock::entropy_seed`]).
     pub rng_state: u64,
     /// Tunable evaluation behavior (see [`EvalOptions`]). Production default.
     pub options: EvalOptions,
@@ -237,8 +236,8 @@ impl core::fmt::Debug for EvalCtx<'_> {
 impl<'d> EvalCtx<'d> {
     /// A fresh context over `dataset`, scoped to the default graph.
     pub fn new(dataset: &'d RdfDataset) -> Self {
-        let now_val = purrdf_xsd::XsdValue::DateTime(purrdf_xsd::datetime_epoch());
-        let rng_seed: u64 = 0;
+        let now_val = purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now());
+        let rng_seed: u64 = crate::clock::entropy_seed();
 
         Self {
             dataset,
@@ -260,16 +259,20 @@ impl<'d> EvalCtx<'d> {
         }
     }
 
-    /// Set the evaluation-time value of NOW().
+    /// Set the evaluation-time value of NOW(). Test-only: production callers get a
+    /// correct wall-clock value for free from [`Self::new`].
+    #[cfg(test)]
     #[must_use]
-    pub fn with_now(mut self, now: purrdf_xsd::XsdValue) -> Self {
+    pub(crate) fn with_now(mut self, now: purrdf_xsd::XsdValue) -> Self {
         self.now = now;
         self
     }
 
-    /// Set the SplitMix64 seed used by RAND()/UUID()/STRUUID().
+    /// Set the SplitMix64 seed used by RAND()/UUID()/STRUUID(). Test-only:
+    /// production callers get a correct entropy seed for free from [`Self::new`].
+    #[cfg(test)]
     #[must_use]
-    pub fn with_rng_seed(mut self, seed: u64) -> Self {
+    pub(crate) fn with_rng_seed(mut self, seed: u64) -> Self {
         self.rng_state = seed;
         self
     }

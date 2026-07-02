@@ -5,14 +5,9 @@
 //! SPARQL 1.1/1.2 Query Results JSON convenience path).
 
 use std::os::raw::c_char;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use purrdf_rs::{SparqlEngine, SparqlRequest, SparqlResult};
-use purrdf_sparql_eval::{NativeSparqlEngine, QueryEnv};
-use purrdf_xsd::datetime_from_unix_seconds;
-use purrdf_xsd::temporal::DateTime;
+use purrdf_sparql_eval::NativeSparqlEngine;
 
 use crate::buffer::PurrdfBuffer;
 use crate::error::PurrdfError;
@@ -26,40 +21,11 @@ const KIND_SOLUTIONS: i32 = 0;
 const KIND_GRAPH: i32 = 1;
 const KIND_BOOLEAN: i32 = 2;
 
-/// Native (non-wasm) host clock/entropy for the C ABI surface. `NOW()` gets the
-/// real wall clock; `RAND()`/`UUID()` get a per-query seed from the wall-clock nanos
-/// mixed with a process-lifetime counter (distinct seed per query even within one
-/// nanosecond). No new dependency — `std::time` only. This crate is native-only
-/// (not a wasm target), so the wall-clock syscall is confined here, never in the
-/// wasm-able engine.
-#[derive(Debug, Default)]
-struct SystemEnv;
-
-static QUERY_SEQ: AtomicU64 = AtomicU64::new(0);
-
-impl QueryEnv for SystemEnv {
-    fn now(&self) -> DateTime {
-        let secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
-        datetime_from_unix_seconds(secs)
-    }
-
-    fn rng_seed(&self) -> u64 {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
-        nanos
-            ^ QUERY_SEQ
-                .fetch_add(1, Ordering::Relaxed)
-                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-    }
-}
-
-/// The native SPARQL engine for the C ABI, wired with the host wall clock so
-/// NOW() and RAND()/UUID() are live (this crate is native, not a wasm target).
+/// The native SPARQL engine for the C ABI. `NOW()`/`RAND()`/`UUID()`/`STRUUID()`
+/// are live by construction — `EvalCtx::new` samples the real host wall clock and
+/// OS entropy itself, so no host-side clock/entropy wiring is needed here.
 fn engine() -> NativeSparqlEngine {
-    NativeSparqlEngine::new().with_query_env(Arc::new(SystemEnv))
+    NativeSparqlEngine::new()
 }
 
 /// Run a SPARQL query over a frozen dataset, materializing the result.
@@ -204,10 +170,9 @@ mod tests {
 
     use super::*;
 
-    /// `NOW()` must report the real wall clock through the C ABI's `engine()`, not
-    /// the epoch a `QueryEnv`-less engine would freeze it to. `year(NOW())` on any
-    /// date after this crate existed is `>= 2025`; the frozen-epoch regression
-    /// would yield `1970`.
+    /// `NOW()` must report the real wall clock through the C ABI's `engine()`.
+    /// `year(NOW())` on any date after this crate existed is `>= 2025`; a
+    /// frozen-epoch regression would yield `1970`.
     #[test]
     fn now_reports_the_real_wall_clock_year() {
         let dataset = RdfDatasetBuilder::new()

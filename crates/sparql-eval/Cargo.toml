@@ -52,6 +52,16 @@ sha2 = { workspace = true }
 # (hand-rolled, no serde). No oxigraph-family edge.
 purrdf-sparql-results = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# OS entropy for the RAND()/UUID()/STRUUID() seed on native targets. Target-gated
+# so the wasm build (make wasm) never pulls it.
+getrandom = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Browser wall clock + entropy for NOW()/RAND() on wasm. Target-gated so native
+# builds never pull js-sys.
+js-sys = { workspace = true }
+
 [dev-dependencies]
 # Colored line-diffs on assert_eq! failure (repo convention).
 pretty_assertions = { workspace = true }

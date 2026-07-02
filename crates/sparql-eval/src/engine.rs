@@ -22,7 +22,6 @@ use purrdf_core::{
 use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
 
 use crate::eval::{evaluate_query, BgpOrderCache, EvalCtx, Outcome, StandpointPredicates};
-use crate::query_env::QueryEnv;
 use crate::update::{eval_update, GraphResolver};
 use crate::DetHashMap;
 
@@ -116,10 +115,6 @@ pub struct NativeSparqlEngine {
     /// evaluation context. `None` (the default) means `heldIn` hard-errors
     /// and `CONSTRUCT` emits no standpoint-scope loss attribution.
     standpoint_predicates: Option<StandpointPredicates>,
-    /// The caller-supplied host non-determinism seam (`NOW()` and the
-    /// `RAND()`/`UUID()`/`STRUUID()` seed), sampled once per query. `None` (the
-    /// default) keeps the engine fully deterministic: epoch `NOW()`, seed 0.
-    query_env: Option<Arc<dyn QueryEnv>>,
 }
 
 // `dyn GraphResolver` is not `Debug`, so derive can't apply; report its presence by
@@ -138,13 +133,6 @@ impl std::fmt::Debug for NativeSparqlEngine {
             )
             .field("parser_options", &self.parser_options)
             .field("standpoint_predicates", &self.standpoint_predicates)
-            .field(
-                "query_env",
-                match &self.query_env {
-                    Some(_) => &"Some(..)",
-                    None => &"None",
-                },
-            )
             .finish()
     }
 }
@@ -185,26 +173,14 @@ impl NativeSparqlEngine {
         self
     }
 
-    /// Supply a host [`QueryEnv`] so `NOW()` returns the host wall clock and
-    /// `RAND()`/`UUID()`/`STRUUID()` get a host seed. Without one the engine is
-    /// deterministic: epoch `NOW()`, seed 0 (the conformance/wasm default).
-    #[must_use]
-    pub fn with_query_env(mut self, env: Arc<dyn QueryEnv>) -> Self {
-        self.query_env = Some(env);
-        self
-    }
-
     /// Build the per-query evaluation context, threading the engine-level
     /// configuration (order cache + standpoint predicate table) into it.
+    /// `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already correct by construction:
+    /// [`EvalCtx::new`] samples the real host wall clock and OS entropy itself.
     fn eval_ctx<'d>(&'d self, dataset: &'d RdfDataset) -> EvalCtx<'d> {
         let mut ctx = EvalCtx::new(dataset).with_order_cache(&self.order_cache);
         if let Some(predicates) = &self.standpoint_predicates {
             ctx = ctx.with_standpoint_predicates(predicates.clone());
-        }
-        if let Some(env) = &self.query_env {
-            ctx = ctx
-                .with_now(purrdf_xsd::XsdValue::DateTime(env.now()))
-                .with_rng_seed(env.rng_seed());
         }
         ctx
     }
@@ -1423,79 +1399,29 @@ mod tests {
         );
     }
 
-    /// A fixed, non-advancing [`QueryEnv`]: every call to `now()` returns the same
-    /// instant (2026-07-02T00:00:00Z) and `rng_seed()` returns the same seed.
-    struct FixedEnv;
-
-    impl QueryEnv for FixedEnv {
-        fn now(&self) -> purrdf_xsd::temporal::DateTime {
-            purrdf_xsd::datetime_from_unix_seconds(1_782_950_400)
-        }
-
-        fn rng_seed(&self) -> u64 {
-            42
-        }
-    }
-
-    /// A [`QueryEnv`] whose `now()` advances by one second on every call — used to
-    /// prove `EvalCtx::now` is sampled exactly once per query, not once per `NOW()`
-    /// call site.
-    struct AdvancingEnv {
-        secs: std::sync::atomic::AtomicI64,
-    }
-
-    impl QueryEnv for AdvancingEnv {
-        fn now(&self) -> purrdf_xsd::temporal::DateTime {
-            let secs = self.secs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            purrdf_xsd::datetime_from_unix_seconds(secs)
-        }
-
-        fn rng_seed(&self) -> u64 {
-            0
-        }
-    }
-
-    /// `NOW()` reads the host [`QueryEnv`] instead of the epoch default.
+    /// `NativeSparqlEngine::new()` needs no injected clock: `NOW()` reads the real
+    /// host wall clock by construction (`EvalCtx::new` → `crate::clock::wall_clock_now`).
     #[test]
-    fn now_injected_via_query_env() {
-        let engine = NativeSparqlEngine::new().with_query_env(Arc::new(FixedEnv));
-        let r = engine
-            .query(
-                &social(),
-                SparqlRequest {
-                    query: "SELECT (NOW() AS ?n) (YEAR(NOW()) AS ?y) WHERE {}",
-                    base_iri: None,
-                    substitutions: &[],
-                },
-            )
-            .expect("query");
+    fn default_engine_now_is_current_wall_clock() {
+        let r = run_on(&social(), "SELECT (YEAR(NOW()) AS ?y) WHERE {}");
         match r {
             SparqlResult::Solutions { rows, .. } => {
                 assert_eq!(rows.len(), 1);
-                assert_eq!(render_cell(rows[0][0].as_ref()), "2026-07-02T00:00:00Z");
-                assert_eq!(render_cell(rows[0][1].as_ref()), "2026");
+                let year: i64 = render_cell(rows[0][0].as_ref())
+                    .parse()
+                    .expect("YEAR(NOW()) must render as an integer");
+                assert!(year >= 2025, "expected a current year, got {year}");
             }
             other => panic!("expected solutions, got {other:?}"),
         }
     }
 
-    /// All `NOW()` call sites within a single query observe the same instant, even
-    /// when the host [`QueryEnv`] would return a different value on every call.
+    /// All `NOW()` call sites within a single query observe the same instant
+    /// (SPARQL 1.1 §17.4.5.1): `EvalCtx::new` samples the wall clock exactly once
+    /// per query, not once per `NOW()` call site.
     #[test]
     fn now_is_constant_within_one_query() {
-        let engine = NativeSparqlEngine::new().with_query_env(Arc::new(AdvancingEnv {
-            secs: std::sync::atomic::AtomicI64::new(0),
-        }));
-        let r = engine
-            .query(
-                &social(),
-                SparqlRequest {
-                    query: "SELECT (NOW() AS ?a) (NOW() AS ?b) WHERE {}",
-                    base_iri: None,
-                    substitutions: &[],
-                },
-            )
-            .expect("query");
+        let r = run_on(&social(), "SELECT (NOW() AS ?a) (NOW() AS ?b) WHERE {}");
         match r {
             SparqlResult::Solutions { rows, .. } => {
                 assert_eq!(rows.len(), 1);
@@ -1509,48 +1435,27 @@ mod tests {
         }
     }
 
-    /// The host [`QueryEnv`] seed reaches `EvalCtx::rng_state` deterministically: two
-    /// fresh engines with the same fixed seed produce the same `RAND()` output.
+    /// `RAND()`/`UUID()`/`STRUUID()` are seeded from live OS entropy, not a fixed
+    /// default: fresh engines across repeated runs must not all agree. A single pair
+    /// differing is overwhelmingly likely but not guaranteed, so run a handful of
+    /// times and require not-all-identical.
     #[test]
-    fn rng_seed_injected() {
-        let run = || {
-            let engine = NativeSparqlEngine::new().with_query_env(Arc::new(FixedEnv));
-            let r = engine
-                .query(
-                    &social(),
-                    SparqlRequest {
-                        query: "SELECT (RAND() AS ?r) WHERE {}",
-                        base_iri: None,
-                        substitutions: &[],
-                    },
-                )
-                .expect("query");
-            match r {
-                SparqlResult::Solutions { rows, .. } => {
-                    assert_eq!(rows.len(), 1);
-                    render_cell(rows[0][0].as_ref())
+    fn rand_is_live_across_queries() {
+        let values: Vec<String> = (0..4)
+            .map(|_| {
+                let r = run_on(&social(), "SELECT (STRUUID() AS ?u) WHERE {}");
+                match r {
+                    SparqlResult::Solutions { rows, .. } => {
+                        assert_eq!(rows.len(), 1);
+                        render_cell(rows[0][0].as_ref())
+                    }
+                    other => panic!("expected solutions, got {other:?}"),
                 }
-                other => panic!("expected solutions, got {other:?}"),
-            }
-        };
-        assert_eq!(
-            run(),
-            run(),
-            "the same fixed seed must produce the same RAND() output across engines"
+            })
+            .collect();
+        assert!(
+            values.windows(2).any(|w| w[0] != w[1]),
+            "expected live entropy to vary across queries, got identical values: {values:?}"
         );
-    }
-
-    /// Without a [`QueryEnv`], `NOW()` stays at the wasm-safe/conformance default:
-    /// the Unix epoch.
-    #[test]
-    fn default_engine_now_is_epoch() {
-        let r = run_on(&social(), "SELECT (NOW() AS ?n) WHERE {}");
-        match r {
-            SparqlResult::Solutions { rows, .. } => {
-                assert_eq!(rows.len(), 1);
-                assert_eq!(render_cell(rows[0][0].as_ref()), "1970-01-01T00:00:00Z");
-            }
-            other => panic!("expected solutions, got {other:?}"),
-        }
     }
 }

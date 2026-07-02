@@ -43,6 +43,7 @@
 
 mod bgp;
 mod binop;
+mod clock;
 mod construct;
 mod convert;
 mod dataset_spec;
@@ -54,7 +55,6 @@ mod expr;
 mod list_fn;
 mod modifier;
 mod path;
-mod query_env;
 pub mod remote;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
 // crate stays wasm-portable.
@@ -72,7 +72,6 @@ pub use eval::{eval, evaluate_query, EvalCtx, EvalOptions, Outcome, StandpointPr
 // (see [`NativeSparqlEngine::with_parser_options`]) without depending on the
 // front-end crate directly.
 pub use purrdf_sparql_algebra::ParserOptions;
-pub use query_env::QueryEnv;
 pub use remote::{LocalRemoteQuerySource, RemoteError, RemoteQuerySource, ResolvedBindings};
 pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
 pub use scratch::{ScratchId, ScratchInterner, SolutionTerm};
