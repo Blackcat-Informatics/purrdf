@@ -9,3 +9,7 @@
 /.pytest_cache/
 __pycache__/
 *.egg-info/
+.codex
+.goals
+.baseline
+.agents
