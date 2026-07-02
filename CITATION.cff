@@ -14,6 +14,7 @@ abstract: >-
   semantics for every consumer — and its behavior is gated by W3C SPARQL, SHACL,
   RDFC-1.0, and frozen cross-language GTS conformance corpora.
 type: software
+doi: "10.67342/pkg8gpp4no/v1"
 authors:
   - name: "Blackcat Informatics® Inc."
     website: "https://blackcatinformatics.ca/"
