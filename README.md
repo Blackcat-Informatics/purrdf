@@ -222,6 +222,13 @@ adjectives — `crates/rdf-core/benches/ir_layout.rs` measures AoS vs. SoA vs.
 predicate-adjacency layouts (allocation counts, high-water mark, end-to-end
 latency), and the shipped layout is whichever wins. Run them with `make bench`.
 
+There is also a report-only Python harness that times the native-backed
+`purrdf.compat.rdflib` drop-in against the real `rdflib` on parse, serialize,
+SPARQL, and triple-pattern iteration over a deterministic `example.org` corpus
+(`make bench-python`). Methodology, how to run, and a representative
+(host-dependent) results table live in [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md).
+Numbers vary by host — reproduce locally rather than trusting a fixed multiplier.
+
 ## Conformance
 
 Every engine is gated by its official test suite, vendored and frozen in-repo —
