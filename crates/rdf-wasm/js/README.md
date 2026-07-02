@@ -33,6 +33,10 @@ npm install @blackcatinformatics/purrdf
 
 Runs in Node ≥ 18 and modern browsers (ESM, `web`-target wasm-bindgen).
 
+The wasm artifact is built with WebAssembly SIMD (`+simd128`) for higher parse
+throughput, so it requires a runtime with wasm SIMD support: every major browser
+since ~2021 (Chrome/Edge 91+, Firefox 89+, Safari 16.4+) and Node ≥ 18.
+
 ## Quickstart
 
 ```js
