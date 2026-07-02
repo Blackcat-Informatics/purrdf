@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Built-in RDF parsers for the purrdf compat plugin registry (#7/#11).
+"""Built-in RDF parsers for the purrdf compat plugin registry.
 
 Each class implements the RDFLib parser interface (``parse(source, sink)``) and
 is the target the plugin registry resolves for a parser name. :meth:`Graph.parse`
@@ -11,7 +11,7 @@ using the parser class's :attr:`rdf_format` marker rather than a hardcoded map.
 The native parsers carry an :attr:`rdf_format` marker (Turtle/N-Triples/N-Quads/
 TriG); the codec parsers (JSON-LD-star, RDF/XML) route bytes through the
 purrdf-gts codecs. TriX and HexTuples are registered as *unsupported* (lookup
-resolves, use raises ``NotImplementedError``) — see the xfail ledger (#7/#11).
+resolves, use raises ``NotImplementedError``) — see the strict-xfail ledger.
 """
 
 from __future__ import annotations
@@ -115,17 +115,17 @@ class _UnsupportedParser(Parser):
         """Raise ``NotImplementedError`` — the format is ledgered as unsupported."""
         raise NotImplementedError(
             f"{self.format_label} parsing is not yet supported by the purrdf compat "
-            "shim (#7/#11)"
+            "shim"
         )
 
 
 class TriXParser(_UnsupportedParser):
-    """TriX parser — registered as unsupported (no native TriX reader; #7/#11)."""
+    """TriX parser — registered as unsupported (no native TriX reader)."""
 
     format_label = "TriX"
 
 
 class HextuplesParser(_UnsupportedParser):
-    """HexTuples parser — registered as unsupported (#7/#11)."""
+    """HexTuples parser — registered as unsupported."""
 
     format_label = "HexTuples"

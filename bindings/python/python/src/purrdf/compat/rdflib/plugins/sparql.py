@@ -12,7 +12,7 @@ RDFLib evaluates SPARQL in Python, so a registered Python callable is invoked
 during evaluation; the purrdf engine evaluates natively in Rust and cannot call
 back into an arbitrary Python function, so the registry is recorded for API
 compatibility but a registered function is **not** invoked at query time. That
-runtime gap is ledgered as a strict xfail (#10). The native engine's own closed
+runtime gap is ledgered as a strict xfail. The native engine's own closed
 extension-function set is enabled through the ``extension_namespaces`` engine
 config kwarg instead.
 """
@@ -58,7 +58,7 @@ def register_custom_function(
 
     Records the callable so the registry round-trips like RDFLib's; note the
     native engine does not invoke it at query time (see the module docstring and
-    the #10 ledger note). Returns ``func`` so it can be used as a decorator.
+    the strict-xfail ledger). Returns ``func`` so it can be used as a decorator.
     """
     key = str(uri)
     if not override and key in _CUSTOM_FUNCTIONS:

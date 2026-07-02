@@ -17,15 +17,15 @@ uv run pytest tests         # or: make pytest   (from the repo root)
 | `conftest.py` | Shared fixtures (`compat`, `oracle`) + the xfail-ledger XPASS hook. |
 | `xfail_ledger.toml` | `node_id → reason` for tests expected to fail against the shim. Applied as **strict** xfails; the ledger only shrinks (AGENTS.md §2 discipline). |
 | `test_compat_parity.py` | Differential suite: real `rdflib` (oracle) vs `purrdf.compat.rdflib` (shim), locking in current behavior. |
-| `test_rdflib_suite.py` | The #9 **rdflib LSP conformance gate**: drives the subprocess runner and asserts a green result (pass + strict-xfail only). |
+| `test_rdflib_suite.py` | The **rdflib LSP conformance gate**: drives the subprocess runner and asserts a green result (pass + strict-xfail only). |
 | `rdflib_suite/` | The conformance gate's machinery: `runner.py` (subprocess entry that shadows `rdflib` and runs the vendored suite), `xfail_ledger.toml` (its own strict-xfail ledger), and `vendor/` (rdflib 7.6.0's OWN tests, verbatim, with `LICENSE` + `PROVENANCE.md`). Excluded from parent collection via `collect_ignore_glob`. |
 
-## The #9 rdflib LSP conformance gate
+## The rdflib LSP conformance gate
 
 `test_rdflib_suite.py` runs rdflib's **own**, verbatim-vendored tests against the
 shim. Because the shadow and the oracle share the `rdflib` import name (see rule
 below), the whole vendored suite runs in a **subprocess** (`rdflib_suite/runner.py`)
-whose `import rdflib` resolves to the Task 7 shadow; the parent oracle env is never
+whose `import rdflib` resolves to the top-level rdflib shadow; the parent oracle env is never
 mutated. Every gap is a strict xfail in `rdflib_suite/xfail_ledger.toml` with a
 concrete reason — an XPASS or a stale ledger key turns the gate RED, so the ledger
 only shrinks. Scoreboard at authoring: **50 passed / 36 xfailed**. See
@@ -36,8 +36,8 @@ explicit (never silent) exclusions.
 
 - The `dev` dependency group installs the **real** `rdflib` (currently 7.6.x). It
   is the differential *oracle* the parity suite compares against, and the target
-  of the #9 "rdflib's own test suite" gate.
-- Task 7 ships a top-level **`rdflib` shadow** package that re-exports
+  of the "rdflib's own test suite" gate.
+- A separate `python-rdflib-shadow` distribution ships a top-level **`rdflib` shadow** package that re-exports
   `purrdf.compat.rdflib`. It claims the same import name.
 - These MUST NOT co-inhabit one environment — a differential test whose "reference"
   is secretly the implementation under test proves nothing.

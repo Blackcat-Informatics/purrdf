@@ -212,7 +212,7 @@ def _suite_sparql() -> SuiteResult:
 
 
 def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
-    """rdflib's OWN vendored tests run against the purrdf drop-in (Task 8)."""
+    """rdflib's OWN vendored tests run against the purrdf drop-in."""
     log = ""
     if build:
         rc, bout = _run(

@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Task 8 (#9 / #11): the rdflib LSP conformance gate.
+"""The rdflib LSP conformance gate.
 
-This is the #9 "rdflib LSP gate": run rdflib's OWN, verbatim-vendored test suite
+This is the "rdflib LSP gate": run rdflib's OWN, verbatim-vendored test suite
 against ``purrdf.compat.rdflib`` and require a GREEN result — every vendored test
 either passes or is a *known, ledgered, strict* xfail, with zero unexpected
 failures and zero XPASS.
 
 Isolation (hard constraint): this parent pytest process has the REAL rdflib 7.6
-installed as the differential oracle, and the Task 7 shadow claims the same
+installed as the differential oracle, and the top-level rdflib shadow claims the same
 ``rdflib`` import name; the two must never co-inhabit one interpreter. So the
 whole vendored suite runs in a **subprocess** (``tests/rdflib_suite/runner.py``)
 whose ``import rdflib`` resolves to the shadow. This process' ``sys.modules`` /

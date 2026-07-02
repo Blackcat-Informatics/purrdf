@@ -4,7 +4,7 @@
 
 Each ``driver_<package>.py`` next to this file is a standalone script executed in
 a CHILD interpreter whose ``PYTHONPATH`` prepends ``bindings/python-rdflib-shadow``
-so a plain ``import rdflib`` resolves to the purrdf shadow (Task 7), *shadowing*
+so a plain ``import rdflib`` resolves to the purrdf shadow, *shadowing*
 the genuine rdflib that the acceptance dependency group also installed. The
 driver then imports a real third-party rdflib consumer and drives its core path.
 

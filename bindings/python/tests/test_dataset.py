@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Differential parity for the ``Dataset`` named-graph facade (Task 4, #11).
+"""Differential parity for the ``Dataset`` named-graph facade.
 
 Real ``rdflib``'s ``Dataset.contexts`` (and ``Dataset.identifier``) emit
 ``DeprecationWarning``; the suite silences those so the differential comparison

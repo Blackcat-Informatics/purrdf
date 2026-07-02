@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""SPARQL Results serialization / parsing for the compat shim (Task 6, #6/#11).
+"""SPARQL Results serialization / parsing for the compat shim.
 
 Covers the native SELECT/ASK result codecs behind ``Result.serialize`` /
 ``Result.parse`` (JSON / XML / CSV / TSV): byte-determinism against committed
@@ -156,7 +156,7 @@ def test_purrdf_parses_oracle_output(
     ]
 
 
-# ── registry wiring (the Task 5 slots now serve real codecs) ──────────────────────
+# ── registry wiring (the reserved slots now serve real codecs) ────────────────────
 
 
 def test_registry_serializer_slots_emit(compat: ModuleType) -> None:

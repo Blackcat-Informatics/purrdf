@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""SPARQL query surface for the compat shim (Task 6, #6/#10/#11).
+"""SPARQL query surface for the compat shim.
 
 Differential against the *real* rdflib oracle: native ``initBindings`` (via the
 engine ``substitutions`` kwarg), ``DESCRIBE`` result form, and aggregation. The
 custom-function and ``SERVICE`` gaps (the native engine cannot call back into a
-Python function, and has no federation source) are ledgered strict xfails (#10).
+Python function, and has no federation source) are ledgered strict xfails.
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ def test_group_concat_aggregation_matches_oracle(
     assert run(compat) == run(oracle) == {f"{EX}b", f"{EX}c"}
 
 
-# ── ledgered runtime gaps (strict xfail; #10) ─────────────────────────────────────
+# ── ledgered runtime gaps (strict xfail) ──────────────────────────────────────────
 
 
 def test_register_custom_function_executes(compat: ModuleType) -> None:

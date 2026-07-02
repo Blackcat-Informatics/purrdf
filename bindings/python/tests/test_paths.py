@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""SPARQL property-path algebra for the compat shim (Task 6, #11).
+"""SPARQL property-path algebra for the compat shim.
 
 Differential against the *real* rdflib: the operator overloads on ``URIRef``
 build the same path algebra and render the same ``n3`` syntax, and evaluating a

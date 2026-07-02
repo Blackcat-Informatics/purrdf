@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Differential parity for the extended ``Graph`` facade surface (Task 4, #11).
+"""Differential parity for the extended ``Graph`` facade surface.
 
 Every method that real ``rdflib`` also exposes is compared against the ``oracle``
 fixture; behaviours real rdflib does not surface (e.g. the persistence no-op
@@ -206,7 +206,7 @@ def test_seq_ordering(compat: ModuleType, oracle: ModuleType) -> None:
         assert str(seq[0]) == "one"
 
 
-# ── literal provenance hardening (#11 fault line) ─────────────────────────────────
+# ── literal provenance hardening (fault line) ─────────────────────────────────────
 
 
 def test_literal_provenance_survives_unrelated_update(
@@ -245,7 +245,7 @@ def test_parse_string_datatype_collapse_matches_oracle(
 
     This is the residual provenance gap: ``parse`` loads straight into the native
     store (bypassing the literal-variant map), so the plain/``xsd:string`` collapse
-    cannot be re-expanded. Ledgered strict-xfail under ``#11``.
+    cannot be re-expanded. Ledgered as a strict xfail.
     """
     nt = (
         f'<{EX}s> <{EX}p> "foo" .\n'

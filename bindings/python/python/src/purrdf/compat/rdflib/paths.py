@@ -10,8 +10,8 @@ accessor family) is evaluated by translating it to an internal SPARQL query — 
 compat equivalent of RDFLib's ``evalPath`` — so the same call sites work unchanged.
 
 The ``{n,m}`` fixed-cardinality operator RDFLib does not model (SPARQL 1.1 dropped
-it) is out of scope; the modelled operators are ``/ * + ? | ~ !`` (see the ``#10``
-ledger note for the ``{n,m}`` gap).
+it) is out of scope; the modelled operators are ``/ * + ? | ~ !`` (see the
+strict-xfail ledger for the ``{n,m}`` gap).
 """
 
 from __future__ import annotations

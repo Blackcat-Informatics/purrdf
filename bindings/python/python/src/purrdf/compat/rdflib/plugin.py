@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Plugin registry for the purrdf compat shim (RDFLib ``rdflib.plugin``, #7/#11).
+"""Plugin registry for the purrdf compat shim (RDFLib ``rdflib.plugin``).
 
 Mirrors RDFLib's plugin registry so a drop-in caller can resolve an
 implementation by ``(name, kind)``:
@@ -209,7 +209,7 @@ register("sparql", Result, _SPARQL, "SPARQLResult")
 register("sparql", Processor, _SPARQL, "SPARQLProcessor")
 register("sparql", UpdateProcessor, _SPARQL, "SPARQLUpdateProcessor")
 
-# ── SPARQL result serializers / parsers (native codecs; #6) ──────────────────────
+# ── SPARQL result serializers / parsers (native codecs) ──────────────────────────
 # JSON/XML/CSV/TSV serializers and JSON/XML parsers route through the native
 # purrdf-sparql-results crate; CSV/TSV parsing and the txt table are deferred.
 _RESULTS = "purrdf.compat.rdflib.plugins.sparqlresults"

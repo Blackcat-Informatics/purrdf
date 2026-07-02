@@ -105,7 +105,8 @@ def _scan_prefixes(text: str) -> list[tuple[str, str]]:
     A lightweight lexical scan (no full parse): rdflib records document prefixes on
     the graph's ``NamespaceManager`` during parsing; the native parser does not yet
     surface them, so we recover them from the source. Non-textual/binary sources and
-    JSON-LD/RDF/XML documents are handled by the caller (see ``#11`` ledger note).
+    JSON-LD/RDF/XML documents are handled by the caller (see the strict-xfail
+    ledger for the residual prefix-wiring gap).
     """
     return [(m.group(1), m.group(2)) for m in _PREFIX_DECL_RE.finditer(text)]
 
@@ -1133,7 +1134,7 @@ class Graph:
         the plain-vs-``xsd:string`` provenance for quads the update left intact),
         we keep every entry still backed by a native quad and drop the rest — so
         provenance survives an unrelated update and stays consistent with
-        ``triples()``/``quads()``. See the ``#11`` ledger note for the residual
+        ``triples()``/``quads()``. See the strict-xfail ledger for the residual
         gap (variants an update *introduces* cannot be recovered post-collapse).
         """
         for key in list(self._literal_terms):

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Differential parity for the term model (Task 2, #11).
+"""Differential parity for the term model.
 
 Covers the broadened ``Literal`` value coercion / ``toPython``, ``Literal.ill_typed``,
 namespace-manager-aware ``n3``, ``util.from_n3``, RDF 1.2 base direction

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Task 7 (#11): the opt-in top-level ``rdflib`` shadow distribution.
+"""The opt-in top-level ``rdflib`` shadow distribution.
 
 ``purrdf-rdflib`` (``bindings/python-rdflib-shadow``) ships a top-level
 ``rdflib`` package that re-exports :mod:`purrdf.compat.rdflib`, so third-party

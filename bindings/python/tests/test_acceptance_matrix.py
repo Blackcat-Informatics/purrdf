@@ -1,18 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Task 10: the downstream-acceptance matrix.
+"""The downstream-acceptance matrix.
 
 Proves that real third-party rdflib consumers — SPARQLWrapper, pyshacl, sssom —
 import and run their core paths against ``purrdf.compat.rdflib`` (the shim), with
 their ``import rdflib`` / plugin lookups resolving to purrdf rather than the
 genuine rdflib.
 
-Mechanism (identical in spirit to the Task 8 conformance gate): the ``acceptance``
-dependency group installs each consumer, which drags in the *real* rdflib. To make
-a consumer run on purrdf WITHOUT mutating this parent process (whose in-process
-rdflib is the differential oracle), every row runs in a SUBPROCESS whose
-``PYTHONPATH`` prepends ``bindings/python-rdflib-shadow``; the child's
-``import rdflib`` then resolves to the purrdf shadow (Task 7), shadowing the
+Mechanism (identical in spirit to the rdflib LSP conformance gate): the
+``acceptance`` dependency group installs each consumer, which drags in the *real*
+rdflib. To make a consumer run on purrdf WITHOUT mutating this parent process
+(whose in-process rdflib is the differential oracle), every row runs in a
+SUBPROCESS whose ``PYTHONPATH`` prepends ``bindings/python-rdflib-shadow``; the
+child's ``import rdflib`` then resolves to the purrdf shadow, shadowing the
 installed real rdflib for that child only. The parent's ``sys.modules`` /
 ``sys.path`` are never touched.
 
@@ -96,7 +96,7 @@ def _require_core_path(package: str) -> dict[str, Any]:
 
 
 def test_shadow_distribution_present() -> None:
-    """The acceptance mechanism depends on the Task 7 shadow distribution."""
+    """The acceptance mechanism depends on the top-level rdflib shadow distribution."""
     assert (_SHADOW_DIR / "rdflib" / "__init__.py").is_file()
 
 

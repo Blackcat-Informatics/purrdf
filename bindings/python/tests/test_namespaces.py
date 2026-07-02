@@ -233,7 +233,7 @@ def test_parse_sparql_style_prefix(compat: ModuleType) -> None:
 def test_parse_binds_jsonld_context_prefixes(compat: ModuleType) -> None:
     """JSON-LD ``@context`` prefixes are recorded on the graph (rdflib parity).
 
-    LEDGERED (#11): the compat prefix recovery is a lightweight text scan for
+    LEDGERED: the compat prefix recovery is a lightweight text scan for
     Turtle-family ``@prefix``/``PREFIX`` declarations only. JSON-LD ``@context``
     (and RDF/XML ``xmlns``) prefix extraction would need to walk the codec's
     parsed context, which the native JSON-LD codec does not yet surface.

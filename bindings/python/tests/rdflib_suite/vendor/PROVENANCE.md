@@ -9,8 +9,8 @@ files and `LICENSE` in this directory are rdflib's own and retain their license.
 
 This directory holds a **curated, verbatim** subset of [RDFLib](https://github.com/RDFLib/rdflib)'s
 own test suite, run **unmodified** against `purrdf.compat.rdflib` through the
-Task 7 top-level `rdflib` shadow. It is the source corpus for the #9 "rdflib LSP
-gate" (Task 8 of #11).
+top-level `rdflib` shadow. It is the source corpus for the "rdflib LSP
+conformance gate".
 
 ## Upstream source
 
@@ -92,7 +92,7 @@ Excluded on this basis (non-exhaustive): `test_graph/test_graph.py`,
 `test_graph/test_diff.py`, `test_graph/test_canonicalization.py`,
 `test_literal/test_literal.py`, `test_literal/test_term.py`,
 `test_namespace/test_namespace.py`, `test_namespace/test_namespacemanager.py`.
-Tracked to #9/#11 as a follow-up (broaden the shim's term/namespace surface,
+Tracked as a follow-up (broaden the shim's term/namespace surface,
 then vendor these).
 
 ### 2. Import-level shim gaps (whole module fails to collect)
@@ -100,8 +100,7 @@ then vendor these).
 These target public API but their **module-level imports** reference a shim
 submodule/name that does not yet exist, so pytest cannot collect them into
 per-test items (an all-or-nothing collection error, not a ledgerable per-test
-xfail). Excluded with the missing symbol noted; each is a real gap tracked to
-#7/#10/#11:
+xfail). Excluded with the missing symbol noted; each is a real, tracked gap:
 
 | Upstream file | Missing shim symbol |
 | --- | --- |

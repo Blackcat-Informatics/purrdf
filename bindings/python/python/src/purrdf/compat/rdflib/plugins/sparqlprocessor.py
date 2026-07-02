@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""SPARQL processor / result plugin classes for the purrdf compat registry (#7/#11).
+"""SPARQL processor / result plugin classes for the purrdf compat registry.
 
 RDFLib registers ``("sparql", Processor)``, ``("sparql", UpdateProcessor)`` and
 ``("sparql", Result)`` so ``Graph.query``/``Graph.update`` can resolve an engine

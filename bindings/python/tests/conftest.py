@@ -9,8 +9,8 @@ This is the Python analogue of the Rust conformance harnesses (AGENTS.md §2).
 
 Fixtures deliberately keep the *real* rdflib (`oracle`) and the purrdf compat
 shim (`compat`) as separate imports: the differential parity suite compares one
-against the other, so they must never be the same object. The Task 7 top-level
-`rdflib` shadow is kept out of this environment entirely (see README.md).
+against the other, so they must never be the same object. The top-level
+`rdflib` shadow package is kept out of this environment entirely (see README.md).
 """
 
 from __future__ import annotations

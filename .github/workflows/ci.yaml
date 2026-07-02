@@ -132,8 +132,8 @@ jobs:
   # The Python binding gate — separate from the Rust `workspace`/`test` jobs above
   # (AGENTS.md §3: `make check` stays a pure-Rust gate). Builds the native module
   # with maturin and runs the pytest suite (compat parity + the rdflib/xfail-ledger
-  # gate). The REAL rdflib is installed here as the differential oracle; the Task 7
-  # top-level `rdflib` shadow is never installed in this env.
+  # gate). The REAL rdflib is installed here as the differential oracle; the
+  # opt-in top-level `rdflib` shadow package is never installed in this env.
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -163,7 +163,7 @@ jobs:
   # per-suite pass / xfail(skip) / fail counts. Exits non-zero on any unexpected
   # failure (a red run, an XPASS, or a stale ledger key). The matrix is also
   # published to the job summary via $GITHUB_STEP_SUMMARY. The REAL rdflib is the
-  # differential oracle (installed by uv), never the Task 7 top-level shadow.
+  # differential oracle (installed by uv), never the top-level rdflib shadow.
   conformance:
     runs-on: ubuntu-latest
     timeout-minutes: 45

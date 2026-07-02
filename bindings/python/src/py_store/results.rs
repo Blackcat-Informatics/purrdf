@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! SPARQL **Results** serialization / parsing for the `purrdf` Python extension
-//! (rdflib drop-in Task 6).
+//! (rdflib drop-in support).
 //!
 //! The native SPARQL surface materializes a SELECT/ASK/CONSTRUCT result into the
 //! [`PyQuerySolutions`](super::query::PyQuerySolutions) family, but there was no

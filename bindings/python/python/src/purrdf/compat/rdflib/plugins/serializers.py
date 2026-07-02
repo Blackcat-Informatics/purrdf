@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Built-in RDF serializers for the purrdf compat plugin registry (#7/#11).
+"""Built-in RDF serializers for the purrdf compat plugin registry.
 
 Each class implements the RDFLib serializer interface (``__init__(graph)`` +
 ``serialize(stream, ...)``) and is the target the plugin registry resolves for a
@@ -12,7 +12,7 @@ Emitters are byte-deterministic: Turtle routes through the native
 ``canonicalize_turtle``; N-Triples/N-Quads/TriG dump via the deterministic
 oxigraph writers; JSON-LD-star and RDF/XML route through the purrdf-gts codecs.
 TriX and HexTuples are registered as *unsupported* (lookup resolves, use raises
-``NotImplementedError``) — see the xfail ledger (#7/#11).
+``NotImplementedError``) — see the strict-xfail ledger.
 """
 
 from __future__ import annotations
@@ -84,11 +84,11 @@ class TurtleSerializer(Serializer):
 
 
 class LongTurtleSerializer(TurtleSerializer):
-    """``longturtle`` alias — the shim emits canonical Turtle (caveat #11)."""
+    """``longturtle`` alias — the shim emits canonical Turtle."""
 
 
 class N3Serializer(TurtleSerializer):
-    """``n3``/``text/n3`` alias — the shim emits Turtle (an N3 subset; caveat #11)."""
+    """``n3``/``text/n3`` alias — the shim emits Turtle (an N3 subset)."""
 
 
 class JsonLDSerializer(Serializer):
@@ -140,17 +140,17 @@ class _UnsupportedSerializer(Serializer):
         """Raise ``NotImplementedError`` — the format is ledgered as unsupported."""
         raise NotImplementedError(
             f"{self.format_label} serialization is not yet supported by the purrdf "
-            "compat shim (#7/#11)"
+            "compat shim"
         )
 
 
 class TriXSerializer(_UnsupportedSerializer):
-    """TriX serializer — registered as unsupported (no native TriX writer; #7/#11)."""
+    """TriX serializer — registered as unsupported (no native TriX writer)."""
 
     format_label = "TriX"
 
 
 class HextuplesSerializer(_UnsupportedSerializer):
-    """HexTuples serializer — registered as unsupported (#7/#11)."""
+    """HexTuples serializer — registered as unsupported."""
 
     format_label = "HexTuples"

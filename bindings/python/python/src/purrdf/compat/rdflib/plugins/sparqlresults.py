@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""SPARQL-results serializer / parser plugins for the compat registry (#6/#7/#11).
+"""SPARQL-results serializer / parser plugins for the compat registry.
 
-Task 6 lands the actual codecs behind the registry slots Task 5 reserved. The
-serializers (JSON / XML / CSV / TSV) route through the native
+The SPARQL-results codecs now land behind the registry slots reserved earlier.
+The serializers (JSON / XML / CSV / TSV) route through the native
 ``purrdf-sparql-results`` crate (byte-deterministic); the parsers (JSON / XML)
 route through the native readers. Each resolves via
 ``plugin.get(name, ResultSerializer)`` / ``plugin.get(name, ResultParser)``.
@@ -25,8 +25,8 @@ from typing import IO, Any
 from ..query import Result, ResultParser, ResultSerializer
 
 _DEFERRED = (
-    "SPARQL Results {name} {kind} is deferred in the purrdf compat shim "
-    "(#6/#7/#11): the plugin registry slot resolves but this codec is not "
+    "SPARQL Results {name} {kind} is deferred in the purrdf compat shim: "
+    "the plugin registry slot resolves but this codec is not "
     "implemented"
 )
 

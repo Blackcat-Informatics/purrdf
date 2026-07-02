@@ -9,10 +9,10 @@ process, because it hijacks the ``rdflib`` import name.
 
 What it does, in order:
 
-1. Prepends the Task 7 ``python-rdflib-shadow`` distribution to ``sys.path`` and
+1. Prepends the ``python-rdflib-shadow`` distribution to ``sys.path`` and
    imports :mod:`rdflib`. That triggers the shadow's ``__init__``, which
    registers every ``purrdf.compat.rdflib.*`` submodule under the ``rdflib.*``
-   dotted names in :data:`sys.modules` (the "shadow mechanism" from Task 7). So
+   dotted names in :data:`sys.modules` (the "shadow mechanism"). So
    the vendored rdflib tests, which ``import rdflib`` / ``from rdflib import …``,
    transparently run on purrdf.
 2. Runs pytest over the verbatim-vendored rdflib test files in ``vendor/``.
@@ -98,7 +98,7 @@ class _LedgerPlugin:
 
 def main() -> int:
     """Install the shadow, run the vendored suite, return pytest's exit code."""
-    # 1. Make `import rdflib` resolve to the purrdf-backed Task 7 shadow.
+    # 1. Make `import rdflib` resolve to the purrdf-backed top-level shadow.
     sys.path.insert(0, str(_SHADOW_DIR))
     import rdflib  # noqa: F401  (loads the shadow, registers rdflib.* submodules)
 

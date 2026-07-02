@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Plugin registry discovery + the drop-in acceptance matrix (issue #7, #11).
+"""Plugin registry discovery + the drop-in acceptance matrix.
 
-Acceptance matrix (derived FIRST, per #7's mandate)
-===================================================
+Acceptance matrix (derived FIRST)
+=================================
 
 The purrdf compat shim must resolve, through ``rdflib.plugin.get(name, kind)``,
 every ``(name, kind)`` lookup a real rdflib consumer performs. The three drop-in
-targets called out by #7 are **pyshacl**, **SPARQLWrapper**, and **sssom**. Those
+targets are **pyshacl**, **SPARQLWrapper**, and **sssom**. Those
 packages are not installed in this differential environment, so the required
 lookups are derived from rdflib 7.6's own plugin surface (``rdflib/plugin.py``)
 that each library drives, rather than by grepping their sources:
@@ -27,9 +27,9 @@ that each library drives, rather than by grepping their sources:
 
 The union of those lookups is pinned in the ``ACCEPTANCE_MATRIX`` tables below;
 every entry must resolve (a concrete class), or — where the capability is
-deferred (TriX/HexTuples emit; SPARQL Results codecs, which land in Task 6) — the
+deferred (TriX/HexTuples emit; SPARQL Results codecs) — the
 lookup must still resolve to a stub, with the *capability* ledgered as a strict
-xfail (see ``xfail_ledger.toml``, #6/#7/#11). No silent skips.
+xfail (see ``xfail_ledger.toml``). No silent skips.
 
 Entry-point discovery
 =====================
@@ -167,14 +167,14 @@ def test_parser_lookup_resolves(name: str) -> None:
 
 @pytest.mark.parametrize("name", _RESULT_SERIALIZER_NAMES)
 def test_result_serializer_lookup_resolves(name: str) -> None:
-    """Every SPARQL-results serializer slot resolves (codec deferred to Task 6)."""
+    """Every SPARQL-results serializer slot resolves."""
     cls = plugin.get(name, ResultSerializer)
     assert isinstance(cls, type) and issubclass(cls, ResultSerializer)
 
 
 @pytest.mark.parametrize("name", _RESULT_PARSER_NAMES)
 def test_result_parser_lookup_resolves(name: str) -> None:
-    """Every SPARQL-results parser slot resolves (codec deferred to Task 6)."""
+    """Every SPARQL-results parser slot resolves."""
     cls = plugin.get(name, ResultParser)
     assert isinstance(cls, type) and issubclass(cls, ResultParser)
 
@@ -275,7 +275,7 @@ def test_entry_point_groups_match_rdflib(oracle: ModuleType) -> None:
 #
 # These tests assert the *desired* capability (real emit/parse). They currently
 # fail because the impl is a deferred stub, so they are strict-xfails in
-# xfail_ledger.toml (#6/#7/#11). When the codec lands, the XPASS forces the ledger
+# xfail_ledger.toml. When the codec lands, the XPASS forces the ledger
 # to shrink — the same discipline the Rust conformance harnesses use.
 
 
@@ -287,7 +287,7 @@ def _select_result(compat: ModuleType) -> Any:
 
 
 def test_trix_serialization_supported(compat: ModuleType) -> None:
-    """TriX serialization emits a TriX document (deferred; ledgered #7/#11)."""
+    """TriX serialization emits a TriX document (deferred; ledgered)."""
     g = compat.Graph()
     g.add((compat.URIRef(f"{EX}s"), compat.URIRef(f"{EX}p"), compat.Literal("v")))
     out = g.serialize(format="trix")
@@ -303,7 +303,7 @@ def test_hext_serialization_supported(compat: ModuleType) -> None:
 
 
 def test_sparql_results_json_serialization_supported(compat: ModuleType) -> None:
-    """SPARQL Results JSON serialization works (deferred to Task 6; ledgered)."""
+    """SPARQL Results JSON serialization works."""
     result = _select_result(compat)
     cls = plugin.get("json", ResultSerializer)
     buffer = io.BytesIO()
@@ -312,7 +312,7 @@ def test_sparql_results_json_serialization_supported(compat: ModuleType) -> None
 
 
 def test_sparql_results_csv_serialization_supported(compat: ModuleType) -> None:
-    """SPARQL Results CSV serialization works (deferred to Task 6; ledgered)."""
+    """SPARQL Results CSV serialization works."""
     result = _select_result(compat)
     cls = plugin.get("csv", ResultSerializer)
     buffer = io.BytesIO()
@@ -321,7 +321,7 @@ def test_sparql_results_csv_serialization_supported(compat: ModuleType) -> None:
 
 
 def test_sparql_results_xml_parsing_supported() -> None:
-    """SPARQL Results XML parsing works (deferred to Task 6; ledgered)."""
+    """SPARQL Results XML parsing works."""
     cls = plugin.get("xml", ResultParser)
     document = (
         b'<?xml version="1.0"?><sparql xmlns="http://www.w3.org/2005/sparql-results#">'
