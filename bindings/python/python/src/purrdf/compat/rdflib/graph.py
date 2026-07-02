@@ -259,6 +259,30 @@ def _native_substitutions(
     return substitutions
 
 
+#: A ``?var``/``$var`` token, greedily matching the full variable name so
+#: ``?s2`` is never mistaken for a substitution of ``?s``.
+_VAR_TOKEN_RE = re.compile(r"[?$](\w+)")
+
+
+def _inline_bound_variables(text: str, bindings: dict[str, Identifier]) -> str:
+    """Textually substitute ``?var``/``$var`` tokens with each bound term's N3 form.
+
+    ``Store.update`` (unlike ``Store.query``) has no native ``substitutions``
+    kwarg, so an UPDATE body's ``initBindings`` cannot be pre-bound by the
+    engine. UPDATE has no outer projection whose variable names must survive
+    the substitution (unlike a SELECT's result columns), so literal textual
+    substitution is a safe stand-in: it reproduces the same effect as pre-
+    binding for the WHERE-clause matching and template instantiation UPDATE
+    relies on.
+    """
+    literal_by_name = {
+        str(name).lstrip("?$"): term.n3() for name, term in bindings.items()
+    }
+    return _VAR_TOKEN_RE.sub(
+        lambda m: literal_by_name.get(m.group(1), m.group(0)), text
+    )
+
+
 def _literal_matches(
     candidate: Identifier,
     pattern: Literal,
@@ -1006,6 +1030,9 @@ class Graph:
         *,
         initBindings: dict[str, Identifier] | None = None,  # noqa: N803 - RDFLib API
         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
+        base: str | None = None,
+        extension_namespaces: list[str] | None = None,
+        standpoint_predicates: tuple[str, str] | None = None,
         **kwargs: object,
     ) -> Result:
         """Run a SPARQL query; return a :class:`~.query.Result`.
@@ -1014,17 +1041,33 @@ class Graph:
         the engine pre-binds each variable (keeping it projectable and propagating
         into ``OPTIONAL``/``MINUS``/``EXISTS``/sub-queries), matching RDFLib's
         ``initBindings`` semantics without an injected ``VALUES`` row.
+
+        ``base`` is spliced in as a leading ``BASE`` prologue declaration so
+        relative IRIs in the query text resolve against it, matching RDFLib's
+        ``base`` semantics. ``extension_namespaces``/``standpoint_predicates``
+        are the native engine configuration knobs (see ``Store.query``) and are
+        forwarded verbatim. Any other keyword is a param the native surface
+        genuinely cannot honor, so it raises rather than being swallowed.
         """
+        if kwargs:
+            raise TypeError(
+                f"Graph.query() got unsupported keyword argument(s): {sorted(kwargs)}"
+            )
+        if base:
+            query_object = f"BASE <{base}>\n" + query_object
         if initNs:
             prefixes = "".join(
                 f"PREFIX {prefix}: <{namespace}>\n"
                 for prefix, namespace in initNs.items()
             )
             query_object = prefixes + query_object
-        substitutions = (
-            _native_substitutions(initBindings) if initBindings else None
+        substitutions = _native_substitutions(initBindings) if initBindings else None
+        res = self._store.query(
+            query_object,
+            substitutions=substitutions,
+            extension_namespaces=extension_namespaces,
+            standpoint_predicates=standpoint_predicates,
         )
-        res = self._store.query(query_object, substitutions=substitutions)
         if isinstance(res, purrdf.QueryBoolean):
             return Result("ASK", ask=bool(res))
         if isinstance(res, purrdf.QueryTriples):
@@ -1046,17 +1089,40 @@ class Graph:
         self,
         update_object: str,
         *,
+        initBindings: dict[str, Identifier] | None = None,  # noqa: N803 - RDFLib API
         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
+        extension_namespaces: list[str] | None = None,
+        standpoint_predicates: tuple[str, str] | None = None,
         **kwargs: object,
     ) -> None:
-        """Run a SPARQL UPDATE against this graph."""
+        """Run a SPARQL UPDATE against this graph.
+
+        ``Store.update`` has no native ``substitutions`` kwarg (unlike
+        ``Store.query``), so ``initBindings`` is honored by textually inlining
+        each bound term's N3 form in place of its ``?var``/``$var`` token
+        (see :func:`_inline_bound_variables`) before the update reaches the
+        native engine. ``extension_namespaces``/``standpoint_predicates`` are the
+        native engine configuration knobs (see ``Store.update``) and are
+        forwarded verbatim. Any other keyword is a param the native surface
+        genuinely cannot honor, so it raises rather than being swallowed.
+        """
+        if kwargs:
+            raise TypeError(
+                f"Graph.update() got unsupported keyword argument(s): {sorted(kwargs)}"
+            )
         if initNs:
             prefixes = "".join(
                 f"PREFIX {prefix}: <{namespace}>\n"
                 for prefix, namespace in initNs.items()
             )
             update_object = prefixes + update_object
-        self._store.update(update_object)
+        if initBindings:
+            update_object = _inline_bound_variables(update_object, initBindings)
+        self._store.update(
+            update_object,
+            extension_namespaces=extension_namespaces,
+            standpoint_predicates=standpoint_predicates,
+        )
         self._reconcile_literal_terms()
 
     def _reconcile_literal_terms(self) -> None:

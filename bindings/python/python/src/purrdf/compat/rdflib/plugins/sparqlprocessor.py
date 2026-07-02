@@ -29,9 +29,16 @@ class SPARQLProcessor(Processor):
     ) -> Result:
         """Run ``strOrQuery`` against the bound graph (native execution)."""
         result = self.graph.query(
-            str(strOrQuery), initBindings=initBindings, initNs=initNs
+            str(strOrQuery),
+            initBindings=initBindings,
+            initNs=initNs,
+            base=base,
+            **kwargs,
         )
-        assert isinstance(result, Result)
+        if not isinstance(result, Result):
+            raise TypeError(
+                f"Graph.query returned {type(result).__name__}, expected Result"
+            )
         return result
 
 
@@ -46,7 +53,9 @@ class SPARQLUpdateProcessor(UpdateProcessor):
         **kwargs: Any,
     ) -> None:
         """Run ``strOrQuery`` as an update against the bound graph."""
-        self.graph.update(str(strOrQuery), initNs=initNs)
+        self.graph.update(
+            str(strOrQuery), initBindings=initBindings, initNs=initNs, **kwargs
+        )
 
 
 class SPARQLResult(Result):
