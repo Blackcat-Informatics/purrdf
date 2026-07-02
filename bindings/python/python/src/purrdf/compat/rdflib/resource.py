@@ -24,6 +24,13 @@ if TYPE_CHECKING:
 _Ref = URIRef | BNode
 
 
+def _ident(value: Any) -> Any:
+    """Unwrap ``value`` to its underlying identifier if it is a :class:`Resource`."""
+    if isinstance(value, Resource):
+        return value._identifier
+    return value
+
+
 class Resource:
     """A wrapper binding a :class:`~.graph.Graph` and a subject identifier."""
 
@@ -78,41 +85,43 @@ class Resource:
 
     # ── mutation ────────────────────────────────────────────────────────────────
 
-    def add(self, p: Identifier, o: Identifier | Resource) -> None:
+    def add(self, p: Identifier | Resource, o: Identifier | Resource) -> None:
         """Add ``(self, p, o)`` to the graph."""
-        if isinstance(o, Resource):
-            o = o._identifier
-        self._graph.add((self._identifier, p, o))
+        self._graph.add((self._identifier, _ident(p), _ident(o)))
 
-    def remove(self, p: Identifier, o: Identifier | Resource | None = None) -> None:
+    def remove(
+        self, p: Identifier | Resource, o: Identifier | Resource | None = None
+    ) -> None:
         """Remove ``(self, p, o)`` (``o=None`` = any object)."""
-        if isinstance(o, Resource):
-            o = o._identifier
-        self._graph.remove((self._identifier, p, o))
+        self._graph.remove((self._identifier, _ident(p), _ident(o)))
 
-    def set(self, p: Identifier, o: Identifier | Resource) -> None:
+    def set(self, p: Identifier | Resource, o: Identifier | Resource) -> None:
         """Replace all ``(self, p, *)`` objects with ``o``."""
-        if isinstance(o, Resource):
-            o = o._identifier
-        self._graph.set((self._identifier, p, o))
+        self._graph.set((self._identifier, _ident(p), _ident(o)))
 
     # ── accessors (reference values re-wrapped as Resources) ────────────────────
 
-    def subjects(self, predicate: Identifier | None = None) -> Iterator[Resource]:
+    def subjects(
+        self, predicate: Identifier | Resource | None = None
+    ) -> Iterator[Resource]:
         """Yield subjects of ``(*, predicate, self)`` as resources."""
-        return self._resources(self._graph.subjects(predicate, self._identifier))
+        return self._resources(
+            self._graph.subjects(_ident(predicate), self._identifier)
+        )
 
     def predicates(
         self, o: Identifier | Resource | None = None
     ) -> Iterator[Resource]:
         """Yield predicates of ``(self, *, o)`` as resources."""
-        if isinstance(o, Resource):
-            o = o._identifier
-        return self._resources(self._graph.predicates(self._identifier, o))
+        return self._resources(self._graph.predicates(self._identifier, _ident(o)))
 
-    def objects(self, predicate: Identifier | None = None) -> Iterator[Resource]:
+    def objects(
+        self, predicate: Identifier | Resource | None = None
+    ) -> Iterator[Resource]:
         """Yield objects of ``(self, predicate, *)`` as resources."""
-        return self._resources(self._graph.objects(self._identifier, predicate))
+        return self._resources(
+            self._graph.objects(self._identifier, _ident(predicate))
+        )
 
     def subject_predicates(
         self,
@@ -134,34 +143,38 @@ class Resource:
 
     def value(
         self,
-        p: Identifier = RDF.value,
+        p: Identifier | Resource = RDF.value,
         o: Identifier | Resource | None = None,
         default: Identifier | None = None,
         any: bool = True,  # noqa: A002 - RDFLib API name
     ) -> Any:
         """Return the single ``(self, p, *)`` object (cast to a resource)."""
-        if isinstance(o, Resource):
-            o = o._identifier
-        return self._cast(self._graph.value(self._identifier, p, o, default, any))
+        return self._cast(
+            self._graph.value(self._identifier, _ident(p), _ident(o), default, any)
+        )
 
     def items(self) -> Iterator[Resource]:
         """Yield the members of the ``rdf:List`` anchored at this resource."""
         return self._resources(self._graph.items(self._identifier))
 
     def transitive_objects(
-        self, predicate: Identifier, remember: Any = None
+        self, predicate: Identifier | Resource, remember: Any = None
     ) -> Iterator[Resource]:
         """Yield this resource and every object reachable via ``predicate``."""
         return self._resources(
-            self._graph.transitive_objects(self._identifier, predicate, remember)
+            self._graph.transitive_objects(
+                self._identifier, _ident(predicate), remember
+            )
         )
 
     def transitive_subjects(
-        self, predicate: Identifier, remember: Any = None
+        self, predicate: Identifier | Resource, remember: Any = None
     ) -> Iterator[Resource]:
         """Yield this resource and every subject reaching it via ``predicate``."""
         return self._resources(
-            self._graph.transitive_subjects(predicate, self._identifier, remember)
+            self._graph.transitive_subjects(
+                _ident(predicate), self._identifier, remember
+            )
         )
 
     def qname(self) -> str:
@@ -209,11 +222,7 @@ class Resource:
                     "Resources fix the subject for slicing, and can only be "
                     "sliced by predicate/object. "
                 )
-            p, o = item.start, item.stop
-            if isinstance(p, Resource):
-                p = p._identifier
-            if isinstance(o, Resource):
-                o = o._identifier
+            p, o = _ident(item.start), _ident(item.stop)
             if p is None and o is None:
                 return self.predicate_objects()
             if p is None:
@@ -221,7 +230,7 @@ class Resource:
             if o is None:
                 return self.objects(p)
             return (self._identifier, p, o) in self._graph
-        if isinstance(item, Identifier):
+        if isinstance(item, Identifier | Resource):
             return self.objects(item)
         raise TypeError(
             "You can only index a resource by a single rdflib term or a slice "
