@@ -1010,17 +1010,24 @@ dependencies = [
 
 [[package]]
 name = "purrdf"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
+ "purrdf-events",
+ "purrdf-gts",
+ "purrdf-iri",
  "purrdf-rdf",
  "purrdf-shapes",
  "purrdf-shex",
  "purrdf-slice",
+ "purrdf-sparql-algebra",
+ "purrdf-sparql-eval",
+ "purrdf-sparql-results",
+ "purrdf-xsd",
 ]
 
 [[package]]
 name = "purrdf-capi"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "purrdf",
  "purrdf-core",
@@ -1030,7 +1037,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-core"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "criterion",
@@ -1044,11 +1051,11 @@ dependencies = [
 
 [[package]]
 name = "purrdf-events"
-version = "0.1.5"
+version = "0.2.0"
 
 [[package]]
 name = "purrdf-gts"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "blake3",
@@ -1066,7 +1073,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-iri"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "pretty_assertions",
  "proptest",
@@ -1074,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-python"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "purrdf",
  "purrdf-core",
@@ -1089,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-rdf"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "ciborium",
@@ -1112,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-shapes"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "proptest",
@@ -1123,13 +1130,12 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-xsd",
  "regex",
- "roxmltree",
  "serde_json",
 ]
 
 [[package]]
 name = "purrdf-shex"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "pretty_assertions",
  "purrdf-core",
@@ -1143,7 +1149,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-slice"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "hex",
  "insta",
@@ -1159,7 +1165,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-algebra"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "insta",
  "pretty_assertions",
@@ -1170,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-conformance"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "camino",
  "datatest-stable",
@@ -1183,7 +1189,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-eval"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "criterion",
@@ -1200,7 +1206,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-results"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "insta",
  "pretty_assertions",
@@ -1209,7 +1215,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-wasm"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "pretty_assertions",
  "purrdf",
@@ -1222,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-xsd"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "pretty_assertions",
  "proptest",

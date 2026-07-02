@@ -46,12 +46,7 @@ serde_json = { workspace = true }
 # Shared PyO3-free RDF 1.2 kernel and native GTS/text-codec boundary (#648).
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.
-purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.1.5" }
-# Native DOM parser for reading vendored openEHR OPT XML directly (openehr_opt
-# module): navigates the OPT's C_DV_QUANTITY magnitude interval structurally
-# rather than transcribing bounds by hand. Same version pin as crates/rdf and
-# crates/music.
-roxmltree = { workspace = true }
+purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.2.0" }
 
 [dev-dependencies]
 purrdf-gts = { workspace = true }

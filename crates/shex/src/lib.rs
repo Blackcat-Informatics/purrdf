@@ -48,6 +48,7 @@ pub mod ast;
 pub mod error;
 pub mod lexer;
 pub mod parser;
+pub mod shexc;
 pub mod shexj;
 pub mod structure;
 pub mod validate;
@@ -59,6 +60,7 @@ pub use ast::{
 };
 pub use error::{Result, ShexError};
 pub use parser::parse_shexc;
+pub use shexc::to_shexc;
 pub use shexj::{parse_shexj, to_shexj};
 pub use structure::{check_structure, StructureError};
 pub use validate::{

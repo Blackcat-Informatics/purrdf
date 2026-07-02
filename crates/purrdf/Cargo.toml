@@ -25,3 +25,12 @@ purrdf-rdf = { workspace = true }
 purrdf-slice = { workspace = true }
 purrdf-shapes = { workspace = true }
 purrdf-shex = { workspace = true }
+# The remaining published surface, re-exported so a consumer depends on `purrdf`
+# alone: anything legitimately imported must be reachable from the umbrella.
+purrdf-gts = { workspace = true }
+purrdf-sparql-algebra = { workspace = true }
+purrdf-sparql-eval = { workspace = true }
+purrdf-sparql-results = { workspace = true }
+purrdf-xsd = { workspace = true }
+purrdf-iri = { workspace = true }
+purrdf-events = { workspace = true }
