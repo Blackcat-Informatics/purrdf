@@ -40,6 +40,18 @@ fn w3c_sparql11_inventory() {
         "negation",
         "project-expression",
         "property-path",
+        // full verbatim update-eval groups (commit 426c7df)
+        "add",
+        "basic-update",
+        "clear",
+        "copy",
+        "delete",
+        "delete-data",
+        "delete-insert",
+        "delete-where",
+        "drop",
+        "move",
+        "update-silent",
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("suite/w3c-sparql11");
     for group in EXPECTED_GROUPS {

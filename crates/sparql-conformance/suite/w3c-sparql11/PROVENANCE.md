@@ -46,6 +46,29 @@ The ledgered gaps are genuine (the curated subset simply never exercised these
 surfaces). `parse-unsupported` VALUES cases are cleared by the trailing-`VALUES`
 parser fix; `value-mismatch` marks real evaluation-correctness gaps to close.
 
+## Full W3C UPDATE-eval groups (commit `426c7df`)
+
+Eleven update groups are vendored verbatim and run through the harness's
+UPDATE-eval path (`SparqlEngine::update` → RDFC-1.0 canonical post-state diff).
+The engine's UPDATE implementation is strong: 97 of 102 cases pass outright.
+
+| Group | Cases | Green | Ledgered (reason) |
+|-------|------:|------:|-------------------|
+| add | 8 | 7 | 1 update-semantics |
+| basic-update | 13 | 11 | 2 update-semantics (cross-op bnode scoping) |
+| clear | 4 | 4 | — |
+| copy | 6 | 4 | 2 update-semantics |
+| delete | 19 | 19 | — |
+| delete-data | 6 | 6 | — |
+| delete-insert | 17 | 17 | — |
+| delete-where | 6 | 6 | — |
+| drop | 4 | 4 | — |
+| move | 6 | 6 | — |
+| update-silent | 13 | 13 | — |
+
+The 5 `update-semantics` residuals are genuine post-state divergences (COPY/ADD
+graph edge cases; blank-node scoping across separate INSERT operations).
+
 ## License
 
 The W3C test files are published under the **W3C Test Suite License** / **W3C
