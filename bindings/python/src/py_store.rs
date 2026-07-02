@@ -86,5 +86,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(results::parse_sparql_results, m)?)?;
     m.add_function(wrap_pyfunction!(xsd::xsd_value_compare, m)?)?;
     m.add_function(wrap_pyfunction!(xsd::xsd_canonical_lexical, m)?)?;
+    m.add_function(wrap_pyfunction!(xsd::xsd_decode_binary, m)?)?;
+    m.add_function(wrap_pyfunction!(xsd::xsd_normalize_whitespace, m)?)?;
     Ok(())
 }

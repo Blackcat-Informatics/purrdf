@@ -17,8 +17,6 @@ is a P9 concern — here term equality follows RDFLib's *term* equality over
 
 from __future__ import annotations
 
-import base64
-import binascii
 import datetime
 import re
 from decimal import Decimal
@@ -61,6 +59,8 @@ _XSD_DAYTIMEDURATION = _XSD + "dayTimeDuration"
 _XSD_YEARMONTHDURATION = _XSD + "yearMonthDuration"
 _XSD_HEXBINARY = _XSD + "hexBinary"
 _XSD_BASE64BINARY = _XSD + "base64Binary"
+_XSD_NORMALIZEDSTRING = _XSD + "normalizedString"
+_XSD_TOKEN = _XSD + "token"
 _XSD_ANYURI = _XSD + "anyURI"
 _XSD_INTEGERS = frozenset(
     _XSD + name
@@ -95,6 +95,13 @@ _XSD_STRINGLIKE = frozenset(
         _XSD + "NMTOKEN",
     )
 )
+
+#: XSD datatypes whose value space applies a ``whiteSpace`` facet to the lexical
+#: form on construction (RDFLib parity): ``xsd:normalizedString`` uses ``replace``
+#: (each tab/newline/CR → space) and ``xsd:token`` uses ``collapse`` (replace, then
+#: collapse space runs and strip). The native :func:`purrdf.xsd_normalize_whitespace`
+#: performs the facet; this set gates the FFI call to the two faceted datatypes.
+_XSD_WHITESPACE_FACETED = frozenset((_XSD_NORMALIZEDSTRING, _XSD_TOKEN))
 
 #: The RDF 1.2 base-direction vocabulary (closed set).
 _DIRECTIONS = frozenset(("ltr", "rtl"))
@@ -351,16 +358,12 @@ def _coerce_value(lexical: str, datatype: URIRef | None, language: str | None) -
         # RDFLib maps these to an ``isodate`` object (``Duration``/``timedelta``);
         # without ``isodate`` we keep the lexical form (the sanctioned fallback).
         return lexical
-    if dt == _XSD_HEXBINARY:
-        try:
-            return binascii.unhexlify(lexical)
-        except (binascii.Error, ValueError):
-            return lexical
-    if dt == _XSD_BASE64BINARY:
-        try:
-            return base64.b64decode(lexical, validate=True)
-        except (binascii.Error, ValueError):
-            return lexical
+    if dt in (_XSD_HEXBINARY, _XSD_BASE64BINARY):
+        # Decode to Python ``bytes`` through the native zero-dependency codecs
+        # (RUST-FIRST): malformed lexicals fall back to the lexical string, matching
+        # RDFLib's ``_castLexicalToPython``.
+        decoded = purrdf.xsd_decode_binary(lexical, dt)
+        return decoded if decoded is not None else lexical
     return lexical
 
 
@@ -464,6 +467,11 @@ class Literal(Identifier):
                 dt = lexical_or_value._datatype
                 if direction is None:
                     direction = lexical_or_value._direction
+        elif isinstance(lexical_or_value, bytes):
+            # A bytes lexical (e.g. ``Literal(b"4b6579", datatype=hexBinary)``) is the
+            # UTF-8 encoding of the lexical form — decode it to the str lexical, as
+            # RDFLib does, rather than stringifying the ``bytes`` repr.
+            lexical = lexical_or_value.decode("utf-8")
         elif isinstance(lexical_or_value, str):
             lexical = str(lexical_or_value)
         else:
@@ -471,6 +479,14 @@ class Literal(Identifier):
             lexical = inferred_lexical
             if dt is None and lang is None:
                 dt = inferred_dt
+        if dt is not None and normalize is not False and str(dt) in _XSD_WHITESPACE_FACETED:
+            # Apply the XSD ``whiteSpace`` facet (``replace`` for normalizedString,
+            # ``collapse`` for token) to the lexical form itself, so ``str()``, ``n3()``,
+            # term equality, and the native round-trip all use the normalized form —
+            # RDFLib parity. Delegates to the native facet (RUST-FIRST).
+            normalized = purrdf.xsd_normalize_whitespace(lexical, str(dt))
+            if normalized is not None:
+                lexical = normalized
         if direction is not None:
             if direction not in _DIRECTIONS:
                 raise ValueError(

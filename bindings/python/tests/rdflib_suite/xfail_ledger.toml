@@ -18,28 +18,6 @@
 
 [xfail]
 
-# --- Theme: XSD whitespace-facet processing on typed literals ---
-# purrdf's compat Literal retains the lexical form verbatim; it does not apply
-# the XSD `whiteSpace` facet — `replace` for xsd:normalizedString, `collapse`
-# for xsd:token — on construction. rdflib normalizes these, so the lexical form,
-# n3() output, and str() all differ.
-"test_normalized_string.py::TestNormalizedString::test1" = "compat Literal does not apply the xsd:normalizedString 'replace' whitespace facet; the lexical form is kept verbatim, so it stays equal to an xsd:string sibling"
-"test_normalized_string.py::TestNormalizedString::test2" = "compat Literal does not apply the xsd:normalizedString 'replace' whitespace facet, so str() retains raw tabs/newlines instead of collapsing them to spaces"
-"test_normalized_string.py::TestNormalizedString::test3" = "compat Literal does not apply the xsd:normalizedString 'replace' whitespace facet, so n3() emits the un-normalized lexical form"
-"test_normalized_string.py::TestNormalizedString::test4" = "compat Literal does not apply the xsd:normalizedString 'replace' whitespace facet, so the normalized value does not match the expected xsd:string form"
-"test_tokendatatype.py::TestTokenDatatype::test1" = "compat Literal does not apply the xsd:token 'collapse' whitespace facet; the lexical form is kept verbatim, so it stays equal to an xsd:string sibling"
-"test_tokendatatype.py::TestTokenDatatype::test2" = "compat Literal does not apply the xsd:token 'collapse' whitespace facet, so str() retains leading/collapsible whitespace"
-"test_tokendatatype.py::TestTokenDatatype::test3" = "compat Literal does not apply the xsd:token 'collapse' whitespace facet, so n3() emits the un-collapsed lexical form"
-"test_tokendatatype.py::TestTokenDatatype::test4" = "compat Literal does not apply the xsd:token 'collapse' whitespace facet, so the collapsed value does not match the expected xsd:string form"
-"test_tokendatatype.py::TestTokenDatatype::test_whitespace_is_collapsed_and_trailing_whitespace_is_stripped" = "compat Literal does not collapse/strip whitespace for xsd:token, so leading/trailing/interior whitespace survives"
-
-# --- Theme: binary-datatype value coercion ---
-# The compat Literal.value map does not decode xsd:hexBinary / xsd:base64Binary
-# lexical forms into Python `bytes`; it returns the raw string, so two literals
-# with the same decoded bytes but different lexical forms are not `.value`-equal.
-"test_hex_binary.py::TestHexBinaryCase::test_unicode" = "compat Literal.value does not decode xsd:hexBinary to Python bytes; it returns the lexical string, so decoded-bytes equality across literals fails"
-"test_b64_binary.py::TestB64Binary::test_unicode" = "compat Literal.value does not decode xsd:base64Binary to Python bytes; it returns the lexical string, so decoded-bytes equality across literals fails"
-
 # --- Theme: Graph subclass identity not preserved through set operators ---
 # rdflib's Graph.__add__/__sub__/__mul__ return an instance of the caller's
 # subclass; the compat facade returns a base purrdf Graph, dropping subclass

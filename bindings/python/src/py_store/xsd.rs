@@ -6,6 +6,10 @@
 use std::cmp::Ordering;
 
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
+
+const XSD_NORMALIZED_STRING: &str = "http://www.w3.org/2001/XMLSchema#normalizedString";
+const XSD_TOKEN: &str = "http://www.w3.org/2001/XMLSchema#token";
 
 /// Compare two XSD lexical values by value space.
 ///
@@ -41,4 +45,38 @@ pub(crate) fn xsd_canonical_lexical(lexical: &str, datatype: &str) -> Option<Str
         .ok()
         .flatten()
         .map(|value| value.canonical_lexical())
+}
+
+/// Decode an `xsd:hexBinary` or `xsd:base64Binary` lexical form to Python `bytes`.
+///
+/// Reuses the native zero-dependency codecs (`purrdf_xsd::parse_binary`, dispatching
+/// to `parse_hex` / `parse_base64`). Returns `None` — so the Python caller falls back
+/// to the lexical string, matching rdflib's `_castLexicalToPython` — when the datatype
+/// is not one of the two binary types or the lexical form is malformed for it.
+#[pyfunction]
+pub(crate) fn xsd_decode_binary<'py>(
+    py: Python<'py>,
+    lexical: &str,
+    datatype: &str,
+) -> Option<Bound<'py, PyBytes>> {
+    // `parse_binary` hard-errors on any non-binary datatype, so a non-binary IRI
+    // (or a malformed lexical) yields `None` via the `?`/`ok()` chain.
+    let dt = purrdf_xsd::XsdDatatype::from_iri(datatype)?;
+    let bytes = purrdf_xsd::parse_binary(dt, lexical).ok()?;
+    Some(PyBytes::new(py, &bytes))
+}
+
+/// Apply the XSD `whiteSpace` facet of `xsd:normalizedString` (`replace`) or
+/// `xsd:token` (`collapse`) to `lexical`, returning the normalized string.
+///
+/// Delegates to the native facet functions in `purrdf_xsd`. Returns `None` for any
+/// other datatype, so the Python caller keeps the lexical form verbatim for datatypes
+/// that carry no whitespace facet.
+#[pyfunction]
+pub(crate) fn xsd_normalize_whitespace(lexical: &str, datatype: &str) -> Option<String> {
+    match datatype {
+        XSD_NORMALIZED_STRING => Some(purrdf_xsd::normalize_whitespace_replace(lexical)),
+        XSD_TOKEN => Some(purrdf_xsd::normalize_whitespace_collapse(lexical)),
+        _ => None,
+    }
 }
