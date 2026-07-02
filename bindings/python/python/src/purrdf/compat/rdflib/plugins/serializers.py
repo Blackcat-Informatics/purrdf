@@ -9,10 +9,10 @@ instantiates the resolved class with the graph, and drives it into a byte
 stream — so the registry is the single source of truth for name → implementation.
 
 Emitters are byte-deterministic: Turtle routes through the native
-``canonicalize_turtle``; N-Triples/N-Quads/TriG dump via the deterministic
-oxigraph writers; JSON-LD-star and RDF/XML route through the purrdf-gts codecs.
-TriX and HexTuples are registered as *unsupported* (lookup resolves, use raises
-``NotImplementedError``) — see the strict-xfail ledger.
+``canonicalize_turtle``; N-Triples/N-Quads/TriG/TriX/HexTuples dump via the
+deterministic native codec writers; JSON-LD-star and RDF/XML route through the
+purrdf-gts codecs. TriX and HexTuples are native codecs (``purrdf-rdf``) that
+emit deterministic quad documents.
 """
 
 from __future__ import annotations
@@ -27,6 +27,8 @@ _TURTLE = purrdf.RdfFormat.TURTLE
 _NT = purrdf.RdfFormat.N_TRIPLES
 _NQ = purrdf.RdfFormat.N_QUADS
 _TRIG = purrdf.RdfFormat.TRIG
+_TRIX = purrdf.RdfFormat.TRIX
+_HEXT = purrdf.RdfFormat.HEXTUPLES
 
 
 class _NativeStoreSerializer(Serializer):
@@ -125,32 +127,13 @@ class PrettyXMLSerializer(XMLSerializer):
     """``pretty-xml`` alias — routes through the same RDF/XML codec."""
 
 
-class _UnsupportedSerializer(Serializer):
-    """A registered-but-unimplemented serializer (lookup resolves, use raises)."""
+class TriXSerializer(_NativeStoreSerializer):
+    """TriX serializer (``trix``/``application/trix``) via the native codec."""
 
-    format_label = "this format"
-
-    def serialize(
-        self,
-        stream: IO[bytes],
-        base: str | None = None,
-        encoding: str | None = None,
-        **args: Any,
-    ) -> None:
-        """Raise ``NotImplementedError`` — the format is ledgered as unsupported."""
-        raise NotImplementedError(
-            f"{self.format_label} serialization is not yet supported by the purrdf "
-            "compat shim"
-        )
+    rdf_format = _TRIX
 
 
-class TriXSerializer(_UnsupportedSerializer):
-    """TriX serializer — registered as unsupported (no native TriX writer)."""
+class HextuplesSerializer(_NativeStoreSerializer):
+    """HexTuples serializer (``hext``) via the native codec."""
 
-    format_label = "TriX"
-
-
-class HextuplesSerializer(_UnsupportedSerializer):
-    """HexTuples serializer — registered as unsupported."""
-
-    format_label = "HexTuples"
+    rdf_format = _HEXT

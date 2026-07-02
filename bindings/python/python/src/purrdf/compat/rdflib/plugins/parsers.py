@@ -9,9 +9,10 @@ native format read from a filesystem path it keeps the direct-load fast-path,
 using the parser class's :attr:`rdf_format` marker rather than a hardcoded map.
 
 The native parsers carry an :attr:`rdf_format` marker (Turtle/N-Triples/N-Quads/
-TriG); the codec parsers (JSON-LD-star, RDF/XML) route bytes through the
-purrdf-gts codecs. TriX and HexTuples are registered as *unsupported* (lookup
-resolves, use raises ``NotImplementedError``) — see the strict-xfail ledger.
+TriG/TriX/HexTuples); the codec parsers (JSON-LD-star, RDF/XML) route bytes
+through the purrdf-gts codecs. TriX and HexTuples are native codecs
+(``purrdf-rdf``): they load straight into the store like the other native
+quad formats.
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ _TURTLE = purrdf.RdfFormat.TURTLE
 _NT = purrdf.RdfFormat.N_TRIPLES
 _NQ = purrdf.RdfFormat.N_QUADS
 _TRIG = purrdf.RdfFormat.TRIG
+_TRIX = purrdf.RdfFormat.TRIX
+_HEXT = purrdf.RdfFormat.HEXTUPLES
 
 
 def _as_bytes(source: Any) -> bytes:
@@ -106,26 +109,13 @@ class RDFXMLParser(Parser):
         sink._store.load(purrdf.from_rdf_xml(_as_text(source)), format=_NQ)
 
 
-class _UnsupportedParser(Parser):
-    """A registered-but-unimplemented parser (lookup resolves, use raises)."""
+class TriXParser(_NativeParser):
+    """TriX parser (``trix``/``application/trix``) via the native codec."""
 
-    format_label = "this format"
-
-    def parse(self, source: Any, sink: Graph, **kwargs: Any) -> None:
-        """Raise ``NotImplementedError`` — the format is ledgered as unsupported."""
-        raise NotImplementedError(
-            f"{self.format_label} parsing is not yet supported by the purrdf compat "
-            "shim"
-        )
+    rdf_format = _TRIX
 
 
-class TriXParser(_UnsupportedParser):
-    """TriX parser — registered as unsupported (no native TriX reader)."""
+class HextuplesParser(_NativeParser):
+    """HexTuples parser (``hext``) via the native codec."""
 
-    format_label = "TriX"
-
-
-class HextuplesParser(_UnsupportedParser):
-    """HexTuples parser — registered as unsupported."""
-
-    format_label = "HexTuples"
+    rdf_format = _HEXT

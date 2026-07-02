@@ -145,6 +145,8 @@ _SUPPORTED_ROUNDTRIP = [
     "trig",
     "json-ld",
     "xml",
+    "trix",
+    "hext",
 ]
 
 
@@ -271,12 +273,13 @@ def test_entry_point_groups_match_rdflib(oracle: ModuleType) -> None:
     assert set(plugin.rdflib_entry_points) == set(oracle.plugin.rdflib_entry_points)
 
 
-# ── deferred capabilities: lookups resolve, but the codec is ledgered (xfail) ─────
+# ── capability dispatch: the resolved codec actually emits/parses ─────────────────
 #
-# These tests assert the *desired* capability (real emit/parse). They currently
-# fail because the impl is a deferred stub, so they are strict-xfails in
-# xfail_ledger.toml. When the codec lands, the XPASS forces the ledger
-# to shrink — the same discipline the Rust conformance harnesses use.
+# These tests assert the real capability behind a resolved registry slot. TriX and
+# HexTuples are now native codecs (their round-trip is also exercised by
+# ``test_supported_format_roundtrips_through_registry``); the SPARQL-results
+# serializers below are backed by the native results crate. Any slot that regresses
+# to a stub fails here rather than silently resolving to a landmine.
 
 
 def _select_result(compat: ModuleType) -> Any:
@@ -287,7 +290,7 @@ def _select_result(compat: ModuleType) -> Any:
 
 
 def test_trix_serialization_supported(compat: ModuleType) -> None:
-    """TriX serialization emits a TriX document (deferred; ledgered)."""
+    """TriX serialization emits a native TriX document."""
     g = compat.Graph()
     g.add((compat.URIRef(f"{EX}s"), compat.URIRef(f"{EX}p"), compat.Literal("v")))
     out = g.serialize(format="trix")
@@ -295,7 +298,7 @@ def test_trix_serialization_supported(compat: ModuleType) -> None:
 
 
 def test_hext_serialization_supported(compat: ModuleType) -> None:
-    """HexTuples serialization emits a hextuples document (deferred; ledgered)."""
+    """HexTuples serialization emits a native hextuples document."""
     g = compat.Graph()
     g.add((compat.URIRef(f"{EX}s"), compat.URIRef(f"{EX}p"), compat.Literal("v")))
     out = g.serialize(format="hext")

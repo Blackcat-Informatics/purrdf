@@ -43,6 +43,13 @@ mod text_parse;
 // replacing the external purrdf-gts `rdf_codecs::{from_rdf_xml, to_rdf_xml}` codec
 // entry points (the first-party mandate). It is fully purrdf-gts free.
 mod rdfxml;
+// First-party TriX codec ("Triples in XML"): a quads/named-graph XML serialization
+// parsed on the same pure-Rust XML DOM (`roxmltree`) as `rdfxml` and serialized by
+// hand-rolled deterministic XML emission from the first-party `SerGraph`.
+mod trix;
+// First-party HexTuples codec: a line-oriented NDJSON quads serialization, encoded and
+// decoded through `serde_json` (already a dep) into/from the first-party `SerGraph`.
+mod hextuples;
 
 pub use media_type::{classify, NativeRdfFormat};
 pub use parse::parse_dataset;

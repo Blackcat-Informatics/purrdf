@@ -30,6 +30,8 @@ class RdfFormat:
     N_TRIPLES: RdfFormat
     N_QUADS: RdfFormat
     TRIG: RdfFormat
+    TRIX: RdfFormat
+    HEXTUPLES: RdfFormat
 
 class CanonicalizationAlgorithm:
     RDFC_1_0: CanonicalizationAlgorithm
