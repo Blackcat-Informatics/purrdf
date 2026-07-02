@@ -75,7 +75,7 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	@# and blake3's simd128 backend run vectorized instead of scalar/SWAR. It is
 	@# scoped to this npm-artifact build only, so `make wasm` stays baseline-clean.
 	@# This raises the artifact's browser baseline to engines with wasm SIMD
-	@# (all major browsers since ~2021; Node >= 16).
+	@# (all major browsers since ~2021; Node >= 18, the package's engine floor).
 	@# Append rather than overwrite so any env / .cargo/config.toml RUSTFLAGS
 	@# (sccache, linker args, extra target features) survive alongside +simd128.
 	RUSTFLAGS="$${RUSTFLAGS} -C target-feature=+simd128" \
