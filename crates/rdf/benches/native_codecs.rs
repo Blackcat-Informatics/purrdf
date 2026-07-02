@@ -76,15 +76,49 @@ fn bench_parse_nquads_parallel_vs_sequential(c: &mut Criterion) {
     group.finish();
 }
 
+/// N-Quads fixture whose literals carry quote / backslash / tab / newline / C0-control
+/// escapes. Parsing decodes them to raw chars, so serialization drives the escape
+/// fast-path's BOUNDARY branch (not just the clean-run copy the numeric fixture
+/// exercises). Every escape is a valid N-Quads ECHAR/UCHAR so the fixture round-trips.
+fn nquads_fixture_escape_heavy(rows: usize) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(rows * 180);
+    for idx in 0..rows {
+        let _ = writeln!(
+            out,
+            "<https://example.org/s{idx}> <https://example.org/p> \"q\\\"{idx}\\\" back\\\\ tab\\t nl\\n ctl\\u0001\" <https://example.org/g{}> .",
+            idx % 8
+        );
+    }
+    out
+}
+
 fn bench_serialize_nquads(c: &mut Criterion) {
-    let text = nquads_fixture(ROWS);
-    let dataset = parse_dataset(text.as_bytes(), "application/n-quads", None).expect("parse");
+    let clean = nquads_fixture(ROWS);
+    let clean_ds = parse_dataset(clean.as_bytes(), "application/n-quads", None).expect("parse");
+    let dirty = nquads_fixture_escape_heavy(ROWS);
+    let dirty_ds = parse_dataset(dirty.as_bytes(), "application/n-quads", None).expect("parse");
+
     let mut group = c.benchmark_group("native_codecs_serialize");
-    group.throughput(Throughput::Elements(dataset.quad_count() as u64));
+    group.throughput(Throughput::Elements(clean_ds.quad_count() as u64));
+    // Clean literals: the escape scan finds no boundary, one wholesale copy per literal.
     group.bench_function("nquads_2k", |bencher| {
         bencher.iter(|| {
             let bytes = serialize_dataset(
-                black_box(&dataset),
+                black_box(&clean_ds),
+                "application/n-quads",
+                SerializeGraph::Dataset,
+            )
+            .expect("serialize");
+            black_box(bytes);
+        });
+    });
+    // Escape-heavy literals: every literal has multiple boundary chars, exercising the
+    // per-char fallback interleaved with clean-run copies.
+    group.bench_function("nquads_2k_escape_heavy", |bencher| {
+        bencher.iter(|| {
+            let bytes = serialize_dataset(
+                black_box(&dirty_ds),
                 "application/n-quads",
                 SerializeGraph::Dataset,
             )
