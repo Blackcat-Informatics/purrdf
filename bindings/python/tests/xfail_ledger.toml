@@ -16,3 +16,4 @@
 [xfail]
 "tests/test_term_model.py::test_rdf12_triple_term_has_no_rdflib_counterpart" = "RDF 1.2 triple term has no rdflib 7.6 counterpart (#11)"
 "tests/test_namespaces.py::test_parse_binds_jsonld_context_prefixes" = "compat prefix recovery is a lightweight text scan of Turtle-family @prefix/PREFIX only; JSON-LD @context (and RDF/XML xmlns) prefixes need the native codec to surface its parsed context (#11 prefix wiring gap)"
+"tests/test_graph_facade.py::test_parse_string_datatype_collapse_matches_oracle" = "parse() loads straight into the native store, which collapses a plain string and its explicit xsd:string sibling into one quad; the literal-variant provenance map is only populated on the add()/_add_quad boundary, so a parse-introduced collapse cannot be re-expanded to rdflib's two distinct terms without native per-term retention (#11 literal provenance residual gap)"

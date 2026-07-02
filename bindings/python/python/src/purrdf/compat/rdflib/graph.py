@@ -16,22 +16,29 @@ routes through the native ``canonicalize_turtle`` (deterministic, dogfooded).
 from __future__ import annotations
 
 import builtins
+import random
 import re
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import IO, Any, overload
+from typing import IO, TYPE_CHECKING, Any, overload
+from urllib.parse import urljoin, urlparse
 
 import purrdf
 
 from .namespace import RDF, NamespaceManager
 from .query import Result, ResultRow
 from .term import (
+    BNode,
     Identifier,
     Literal,
     URIRef,
     from_native,
     to_native,
 )
+
+if TYPE_CHECKING:
+    from .collection import Collection
+    from .resource import Resource
 
 _TURTLE = purrdf.RdfFormat.TURTLE
 _NT = purrdf.RdfFormat.N_TRIPLES
@@ -41,6 +48,52 @@ _TRIG = purrdf.RdfFormat.TRIG
 _JSON_LD_FORMATS = frozenset(("json-ld", "jsonld", "application/ld+json"))
 _XML_FORMATS = frozenset(("xml", "application/rdf+xml", "pretty-xml"))
 _XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
+
+#: RDFLib's default skolemization authority + genid base paths (rdf11 §skolemization).
+_SKOLEM_AUTHORITY = "https://rdflib.github.io"
+_SKOLEM_GENID = "/.well-known/genid/"
+_RDFLIB_SKOLEM_GENID = "/.well-known/genid/rdflib/"
+
+#: RDFLib's ``Dataset`` default-graph identifier (its default context's name).
+DATASET_DEFAULT_GRAPH_ID = URIRef("urn:x-rdflib:default")
+
+#: External-skolem → blank-node memo (RDFLib de-skolemizes non-rdflib genids to
+#: fresh, but stable-per-URI, blank nodes; we mirror that with a process-wide map).
+_EXTERNAL_SKOLEMS: dict[str, BNode] = {}
+
+
+def _skolemize_bnode(
+    bnode: BNode, authority: str | None = None, basepath: str | None = None
+) -> URIRef:
+    """Return the skolem IRI for ``bnode`` (RDFLib ``BNode.skolemize`` semantics)."""
+    authority = authority or _SKOLEM_AUTHORITY
+    basepath = basepath or _RDFLIB_SKOLEM_GENID
+    return URIRef(urljoin(authority, basepath + str(bnode)))
+
+
+def _is_rdflib_skolem(uri: str) -> bool:
+    """Return whether ``uri`` is an rdflib-minted skolem IRI (round-trippable)."""
+    parsed = urlparse(str(uri))
+    if parsed.params or parsed.query or parsed.fragment:
+        return False
+    return parsed.path.rfind(_RDFLIB_SKOLEM_GENID) == 0
+
+
+def _is_external_skolem(uri: str) -> bool:
+    """Return whether ``uri`` is a (non-rdflib) well-known genid skolem IRI."""
+    return urlparse(str(uri)).path.rfind(_SKOLEM_GENID) == 0
+
+
+def _de_skolemize_uri(uri: URIRef) -> BNode:
+    """Convert a skolem IRI back to its blank node (RDFLib ``de_skolemize``)."""
+    if _is_rdflib_skolem(uri):
+        return BNode(value=urlparse(str(uri)).path[len(_RDFLIB_SKOLEM_GENID) :])
+    key = str(uri)
+    bnode = _EXTERNAL_SKOLEMS.get(key)
+    if bnode is None:
+        bnode = BNode()
+        _EXTERNAL_SKOLEMS[key] = bnode
+    return bnode
 
 #: Formats whose text carries ``@prefix`` / SPARQL-style ``PREFIX`` declarations.
 _PREFIX_BEARING_FORMATS = frozenset(
@@ -123,6 +176,23 @@ def _graph_name_from_native(
     converted = from_native(graph_name)
     assert converted is None or isinstance(converted, Identifier)
     return converted
+
+
+def _context_graph_name(context: object) -> _GraphName:
+    """Return the graph-name slot for a quad context (a ``Graph`` or identifier).
+
+    RDFLib's default-graph identifier (``urn:x-rdflib:default``) maps to the
+    unnamed default graph (``None``), matching the native ``DefaultGraph`` slot.
+    """
+    if context is None:
+        return None
+    if isinstance(context, Graph):
+        return context._graph_name
+    if context == DATASET_DEFAULT_GRAPH_ID:
+        return None
+    if isinstance(context, Identifier):
+        return context
+    return URIRef(str(context))
 
 
 def _literal_bucket(literal: Literal) -> _LiteralBucket:
@@ -250,9 +320,20 @@ class Graph:
         self._nsm = (
             namespace_manager if namespace_manager is not None else (NamespaceManager())
         )
-        self.identifier = identifier
+        # RDFLib assigns a fresh BNode name when no identifier is given, and wraps
+        # a bare string as a URIRef — its __hash__/__eq__ contract keys on this.
+        if identifier is None:
+            self.identifier: Identifier = BNode()
+        elif isinstance(identifier, Identifier):
+            self.identifier = identifier
+        else:
+            self.identifier = URIRef(str(identifier))
         self.base = base
         self._literal_terms: dict[_LiteralQuadKey, set[Literal]] = {}
+        #: The named-graph slot this facade writes/reads (``None`` = default graph).
+        self._graph_name: _GraphName = None
+        #: Whether pattern access spans every graph (``Dataset.default_union``).
+        self._any_graph = False
 
     def __reduce__(
         self,
@@ -308,7 +389,18 @@ class Graph:
     def add(self, triple: tuple[Identifier, Identifier, Identifier]) -> None:
         """Add a ``(subject, predicate, object)`` triple."""
         s, p, o = triple
-        self._add_quad(s, p, o, None)
+        self._add_quad(s, p, o, self._graph_name)
+
+    def addN(  # noqa: N802 - RDFLib API name
+        self, quads: Iterable[tuple[Identifier, Identifier, Identifier, object]]
+    ) -> None:
+        """Add a sequence of ``(s, p, o, context)`` quads (RDFLib ``addN``).
+
+        The context is the graph the triple belongs to — either a ``Graph``
+        facade (its graph slot is used) or a graph-name identifier.
+        """
+        for s, p, o, context in quads:
+            self._add_quad(s, p, o, _context_graph_name(context))
 
     def remove(self, triple: _Pattern) -> None:
         """Remove every triple matching the (possibly wildcard) pattern."""
@@ -316,7 +408,7 @@ class Graph:
         # Snapshot matches first — deleting while iterating the store is unsafe.
         matched = list(self.triples((s, p, o)))
         for ms, mp, mo in matched:
-            self._remove_quad(ms, mp, mo, None)
+            self._remove_quad(ms, mp, mo, self._graph_name)
 
     def set(self, triple: tuple[Identifier, Identifier, Identifier]) -> None:
         """Replace all ``(s, p, *)`` objects with this single triple's object."""
@@ -327,7 +419,12 @@ class Graph:
     # ── pattern access ────────────────────────────────────────────────────────────
 
     def triples(self, pattern: _Pattern) -> Iterator[_Triple]:
-        """Yield triples matching the wildcard pattern (``None`` = any)."""
+        """Yield triples matching the wildcard pattern (``None`` = any).
+
+        Scoped to this facade's graph slot (``self._graph_name``); a
+        ``default_union`` dataset (``self._any_graph``) spans every graph and
+        de-duplicates triples that appear in more than one graph.
+        """
         s, p, o = pattern
         pattern_literal = o if isinstance(o, Literal) else None
         quads = self._store.quads_for_pattern(
@@ -336,15 +433,17 @@ class Graph:
             None
             if pattern_literal is not None
             else (None if o is None else to_native(o)),
-            None,
-            any_graph=False,
+            None if self._graph_name is None else _native_subject(self._graph_name),
+            any_graph=self._any_graph,
         )
+        seen: builtins.set[_Triple] | None = set() if self._any_graph else None
         for quad in quads:
             rs = s if s is not None else _require(from_native(quad.subject))
             rp = p if p is not None else _require(from_native(quad.predicate))
             candidate = _require(from_native(quad.object))
+            qgraph = _graph_name_from_native(quad.graph_name)
             if isinstance(candidate, Literal):
-                variants, exact = self._literal_variants(rs, rp, candidate, None)
+                variants, exact = self._literal_variants(rs, rp, candidate, qgraph)
                 for variant in variants:
                     if pattern_literal is not None and not _literal_matches(
                         variant,
@@ -352,8 +451,16 @@ class Graph:
                         exact_string_provenance=exact,
                     ):
                         continue
+                    if seen is not None:
+                        if (rs, rp, variant) in seen:
+                            continue
+                        seen.add((rs, rp, variant))
                     yield (rs, rp, variant)
             elif pattern_literal is None:
+                if seen is not None:
+                    if (rs, rp, candidate) in seen:
+                        continue
+                    seen.add((rs, rp, candidate))
                 yield (rs, rp, candidate)
 
     def __iter__(self) -> Iterator[_Triple]:
@@ -371,6 +478,70 @@ class Graph:
         for _ in self.triples(triple):
             return True
         return False
+
+    def __getitem__(self, item: Any) -> Any:
+        """Slice a graph as a shortcut for :meth:`triples` (RDFLib ``__getitem__``).
+
+        ``g[s:p:o]`` maps the slice's ``start``/``stop``/``step`` to the
+        subject/predicate/object pattern; supplying only some parts returns the
+        matching accessor generator (e.g. ``g[s]`` → ``predicate_objects(s)``,
+        ``g[:p]`` → ``subject_objects(p)``, ``g[::o]`` → ``subject_predicates(o)``).
+        """
+        if isinstance(item, slice):
+            s, p, o = item.start, item.stop, item.step
+            if s is None and p is None and o is None:
+                return self.triples((s, p, o))
+            if s is None and p is None:
+                return self.subject_predicates(o)
+            if s is None and o is None:
+                return self.subject_objects(p)
+            if p is None and o is None:
+                return self.predicate_objects(s)
+            if s is None:
+                return self.subjects(p, o)
+            if p is None:
+                return self.predicates(s, o)
+            if o is None:
+                return self.objects(s, p)
+            return (s, p, o) in self
+        if isinstance(item, Identifier):
+            return self.predicate_objects(item)
+        raise TypeError(
+            "You can only index a graph by a single rdflib term or a slice of "
+            "rdflib terms."
+        )
+
+    def __hash__(self) -> int:
+        """Hash over the graph's identifier — mirrors RDFLib's contract."""
+        return hash(self.identifier)
+
+    def __eq__(self, other: object) -> bool:
+        """Equal to another graph with the same identifier (RDFLib parity)."""
+        return isinstance(other, Graph) and self.identifier == other.identifier
+
+    def __ne__(self, other: object) -> bool:
+        """Negate :meth:`__eq__`."""
+        return not self == other
+
+    def __lt__(self, other: object) -> bool:
+        """Order graphs by identifier (RDFLib parity)."""
+        return (other is None) or (
+            isinstance(other, Graph) and self.identifier < other.identifier
+        )
+
+    def __le__(self, other: object) -> bool:
+        """Less-than-or-equal by identifier."""
+        return self < other or self == other
+
+    def __gt__(self, other: object) -> bool:
+        """Strictly greater by identifier."""
+        return (isinstance(other, Graph) and self.identifier > other.identifier) or (
+            other is not None and not isinstance(other, Graph)
+        )
+
+    def __ge__(self, other: object) -> bool:
+        """Greater-than-or-equal by identifier."""
+        return self > other or self == other
 
     def value(
         self,
@@ -477,6 +648,197 @@ class Graph:
         from .compare import isomorphic
 
         return isomorphic(self, other)
+
+    # ── graph topology / views ─────────────────────────────────────────────────────
+
+    def all_nodes(self) -> builtins.set[Identifier]:
+        """Return every node appearing as a subject or object (RDFLib parity)."""
+        nodes: builtins.set[Identifier] = set(self.objects())
+        nodes.update(self.subjects())
+        return nodes
+
+    def connected(self) -> bool:
+        """Return whether the graph is connected (treated as undirected)."""
+        all_nodes = list(self.all_nodes())
+        if not all_nodes:
+            return False
+        discovered: list[Identifier] = []
+        visiting = [all_nodes[random.randrange(len(all_nodes))]]
+        while visiting:
+            x = visiting.pop()
+            if x not in discovered:
+                discovered.append(x)
+            for new_x in self.objects(subject=x):
+                if new_x not in discovered and new_x not in visiting:
+                    visiting.append(new_x)
+            for new_x in self.subjects(object=x):
+                if new_x not in discovered and new_x not in visiting:
+                    visiting.append(new_x)
+        return len(all_nodes) == len(discovered)
+
+    def collection(self, identifier: Identifier) -> Collection:
+        """Return a :class:`~.collection.Collection` over the list at ``identifier``."""
+        from .collection import Collection
+
+        return Collection(self, identifier)
+
+    def resource(self, identifier: Identifier | str) -> Resource:
+        """Return a :class:`~.resource.Resource` bound to ``identifier``."""
+        from .resource import Resource
+
+        if not isinstance(identifier, Identifier):
+            identifier = URIRef(str(identifier))
+        return Resource(self, identifier)
+
+    # ── skolemization ───────────────────────────────────────────────────────────────
+
+    def _process_skolem_tuples(
+        self, target: Graph, func: Any
+    ) -> None:
+        """Copy every triple through ``func`` into ``target`` (RDFLib helper)."""
+        for t in self.triples((None, None, None)):
+            target.add(func(t))
+
+    def skolemize(
+        self,
+        new_graph: Graph | None = None,
+        bnode: BNode | None = None,
+        authority: str | None = None,
+        basepath: str | None = None,
+    ) -> Graph:
+        """Replace blank nodes with skolem IRIs (RDFLib ``skolemize``).
+
+        With ``bnode`` given, only that blank node is skolemized; otherwise every
+        blank node is. The result is written to ``new_graph`` (or a fresh graph).
+        """
+
+        def one(t: _Triple) -> _Triple:
+            s, p, o = t
+            if s == bnode and isinstance(s, BNode):
+                s = _skolemize_bnode(s, authority, basepath)
+            if o == bnode and isinstance(o, BNode):
+                o = _skolemize_bnode(o, authority, basepath)
+            return (s, p, o)
+
+        def each(t: _Triple) -> _Triple:
+            s, p, o = t
+            if isinstance(s, BNode):
+                s = _skolemize_bnode(s, authority, basepath)
+            if isinstance(o, BNode):
+                o = _skolemize_bnode(o, authority, basepath)
+            return (s, p, o)
+
+        retval = Graph() if new_graph is None else new_graph
+        if bnode is None:
+            self._process_skolem_tuples(retval, each)
+        elif isinstance(bnode, BNode):
+            self._process_skolem_tuples(retval, one)
+        return retval
+
+    def de_skolemize(
+        self, new_graph: Graph | None = None, uriref: URIRef | None = None
+    ) -> Graph:
+        """Replace skolem IRIs with blank nodes (RDFLib ``de_skolemize``).
+
+        With ``uriref`` given, only that skolem IRI is reverted; otherwise every
+        rdflib/well-known genid skolem IRI is. Writes to ``new_graph`` or a fresh
+        graph.
+        """
+
+        def one(t: _Triple) -> _Triple:
+            s, p, o = t
+            if s == uriref and isinstance(s, URIRef):
+                s = _de_skolemize_uri(s)
+            if o == uriref and isinstance(o, URIRef):
+                o = _de_skolemize_uri(o)
+            return (s, p, o)
+
+        def each(t: _Triple) -> _Triple:
+            s, p, o = t
+            if isinstance(s, URIRef) and (
+                _is_rdflib_skolem(s) or _is_external_skolem(s)
+            ):
+                s = _de_skolemize_uri(s)
+            if isinstance(o, URIRef) and (
+                _is_rdflib_skolem(o) or _is_external_skolem(o)
+            ):
+                o = _de_skolemize_uri(o)
+            return (s, p, o)
+
+        retval = Graph() if new_graph is None else new_graph
+        if uriref is None:
+            self._process_skolem_tuples(retval, each)
+        elif isinstance(uriref, URIRef):
+            self._process_skolem_tuples(retval, one)
+        return retval
+
+    def cbd(
+        self,
+        resource: Identifier,
+        *,
+        target_graph: Graph | None = None,
+        include_reifications: bool = True,
+    ) -> Graph:
+        """Return the Concise Bounded Description of ``resource`` (RDFLib ``cbd``)."""
+        subgraph = Graph() if target_graph is None else target_graph
+
+        def add_to_cbd(uri: Identifier) -> None:
+            reif_index: dict[_Triple, builtins.set[Identifier]] = {}
+            if include_reifications:
+                for stmt in self.subjects(RDF.subject, uri):
+                    p = self.value(stmt, RDF.predicate)
+                    o = self.value(stmt, RDF.object)
+                    if p is not None and o is not None:
+                        reif_index.setdefault((uri, p, o), set()).add(stmt)
+            for s, p, o in self.triples((uri, None, None)):
+                subgraph.add((s, p, o))
+                if type(o) is BNode and (o, None, None) not in subgraph:
+                    add_to_cbd(o)
+                if include_reifications:
+                    for stmt in reif_index.get((s, p, o), set()):
+                        if (stmt, None, None) not in subgraph:
+                            add_to_cbd(stmt)
+
+        add_to_cbd(resource)
+        return subgraph
+
+    # ── name resolution / persistence stubs ─────────────────────────────────────────
+
+    def qname(self, uri: str) -> str:
+        """Return the ``prefix:local`` form of ``uri`` (delegates to the nsm)."""
+        return self._nsm.qname(uri)
+
+    def compute_qname(
+        self, uri: str, generate: bool = True
+    ) -> tuple[str, URIRef, str]:
+        """Return the ``(prefix, namespace, local)`` split of ``uri``."""
+        return self._nsm.compute_qname(uri, generate)
+
+    def absolutize(self, uri: str, defrag: int = 1) -> URIRef:
+        """Return ``uri`` as an absolute IRI (delegates to the nsm)."""
+        return self._nsm.absolutize(uri, defrag)
+
+    def open(
+        self, configuration: str | tuple[str, str], create: bool = False
+    ) -> int | None:
+        """Open the backing store (no-op: the native COW store is always open)."""
+        return None
+
+    def close(self, commit_pending_transaction: bool = False) -> None:
+        """Close the backing store (no-op for the in-memory native store)."""
+        return None
+
+    def commit(self) -> Graph:
+        """Commit pending writes (no-op: native writes are immediate)."""
+        return self
+
+    def rollback(self) -> Graph:
+        """Roll back pending writes (no-op: native writes are immediate)."""
+        return self
+
+    def destroy(self, configuration: str) -> Graph:
+        """Destroy the store (no-op stub for RDFLib persistence parity)."""
+        return self
 
     # ── parse / serialize ─────────────────────────────────────────────────────────
 
@@ -671,7 +1033,40 @@ class Graph:
             )
             update_object = prefixes + update_object
         self._store.update(update_object)
-        self._literal_terms.clear()
+        self._reconcile_literal_terms()
+
+    def _reconcile_literal_terms(self) -> None:
+        """Prune literal provenance whose backing quad no longer exists.
+
+        SPARQL ``UPDATE`` rewrites the native store out from under the shim's
+        literal-variant map. Rather than discard the map wholesale (which loses
+        the plain-vs-``xsd:string`` provenance for quads the update left intact),
+        we keep every entry still backed by a native quad and drop the rest — so
+        provenance survives an unrelated update and stays consistent with
+        ``triples()``/``quads()``. See the ``#11`` ledger note for the residual
+        gap (variants an update *introduces* cannot be recovered post-collapse).
+        """
+        for key in list(self._literal_terms):
+            subject, predicate, (lexical, datatype, language), graph_name = key
+            if language is not None:
+                probe: Literal = Literal(lexical, lang=language)
+            elif datatype is not None:
+                probe = Literal(lexical, datatype=URIRef(datatype))
+            else:
+                probe = Literal(lexical)
+            native_graph = (
+                purrdf.DefaultGraph()
+                if graph_name is None
+                else _native_subject(graph_name)
+            )
+            quad = purrdf.Quad(
+                _native_subject(subject),
+                _native_predicate(predicate),
+                to_native(probe),
+                native_graph,
+            )
+            if not self._store.contains(quad):
+                del self._literal_terms[key]
 
     # ── set algebra ───────────────────────────────────────────────────────────────
 
@@ -796,27 +1191,48 @@ class Graph:
         return (tuple(variants), True)
 
 
-class _GraphView:
-    """An add target for one graph slot of a :class:`Dataset` (``Dataset.graph``)."""
+class _DatasetGraph(Graph):
+    """A readable/writable :class:`Graph` view over one graph slot of a Dataset.
 
-    def __init__(
-        self,
-        dataset: Dataset,
-        graph_name: _GraphName,
-    ) -> None:
-        """Bind to ``store`` and the graph slot ``graph_name``."""
+    Shares the parent dataset's native store and literal-provenance map, so its
+    ``triples``/``add``/``remove``/``__iter__``/``__len__`` operate on exactly one
+    named-graph slot (or the default graph). RDFLib's ``Dataset.graph`` /
+    ``get_context`` return an object of this shape.
+    """
+
+    def __init__(self, dataset: Graph, identifier: object | None) -> None:
+        """Bind to ``dataset``'s store, scoped to the graph named ``identifier``."""
+        self._store = dataset._store
+        self._nsm = dataset._nsm
+        self._literal_terms = dataset._literal_terms
         self._dataset = dataset
-        self._graph_name = graph_name
-        self.identifier = graph_name
+        self.base = None
+        self._any_graph = False
+        if identifier is None or identifier == DATASET_DEFAULT_GRAPH_ID:
+            self.identifier = DATASET_DEFAULT_GRAPH_ID
+            self._graph_name = None
+        elif isinstance(identifier, Identifier):
+            self.identifier = identifier
+            self._graph_name = identifier
+        else:
+            wrapped = URIRef(str(identifier))
+            self.identifier = wrapped
+            self._graph_name = wrapped
 
-    def add(self, triple: tuple[Identifier, Identifier, Identifier]) -> None:
-        """Add a triple into this view's graph slot."""
-        s, p, o = triple
-        self._dataset._add_quad(s, p, o, self._graph_name)
+    def __len__(self) -> int:
+        """Return the triple count within this graph slot alone."""
+        return sum(1 for _ in self.triples((None, None, None)))
 
 
 class Dataset(Graph):
-    """A quad-capable graph facade (RDFLib ``Dataset``); defaults to N-Quads."""
+    """A quad-capable graph facade (RDFLib ``Dataset``); defaults to N-Quads.
+
+    A dataset holds one unnamed default graph plus zero or more named graphs.
+    Simple triples (and ``add``) target the default graph; :meth:`graph` /
+    :meth:`get_context` return :class:`_DatasetGraph` views scoped to a named
+    graph. With ``default_union`` set, whole-dataset pattern access
+    (``triples``) spans every graph rather than the default graph alone.
+    """
 
     def __init__(
         self,
@@ -827,26 +1243,108 @@ class Dataset(Graph):
         """Create an empty dataset."""
         super().__init__(store)
         self.default_union = default_union
-
-    def graph(self, identifier: Identifier) -> _GraphView:
-        """Return an add target for the named graph ``identifier``."""
-        return _GraphView(self, identifier)
+        self._any_graph = default_union
+        #: Named graphs explicitly registered (so empty ones still enumerate).
+        self._graphs: builtins.set[Identifier] = set()
 
     @property
-    def default_graph(self) -> _GraphView:
-        """Return an add target for the (unnamed) default graph."""
-        return _GraphView(self, None)
+    def default_graph(self) -> _DatasetGraph:
+        """Return a :class:`Graph`-like view of the (unnamed) default graph."""
+        return _DatasetGraph(self, DATASET_DEFAULT_GRAPH_ID)
+
+    def graph(
+        self, identifier: object | None = None, base: str | None = None
+    ) -> _DatasetGraph:
+        """Return (and register) a :class:`Graph` view for a named graph.
+
+        ``identifier=None`` mints a fresh skolemized blank-node graph name (RDFLib
+        semantics). Passing a plain ``Graph`` copies its triples into the slot.
+        """
+        copy_from: Graph | None = None
+        if identifier is None:
+            identifier = _skolemize_bnode(BNode())
+        elif isinstance(identifier, Graph) and not isinstance(identifier, Dataset):
+            copy_from = identifier
+            identifier = identifier.identifier
+        view = _DatasetGraph(self, identifier)
+        view.base = base
+        if view._graph_name is not None:
+            self._graphs.add(view._graph_name)
+        if copy_from is not None:
+            for triple in copy_from:
+                view.add(triple)
+        return view
+
+    def get_context(
+        self,
+        identifier: object | None,
+        quoted: bool = False,
+        base: str | None = None,
+    ) -> _DatasetGraph:
+        """Return a :class:`Graph` view for ``identifier`` (without registering it)."""
+        view = _DatasetGraph(self, identifier)
+        view.base = base
+        return view
+
+    def add_graph(self, g: object | None) -> _DatasetGraph:
+        """Register a named graph — an alias of :meth:`graph` (RDFLib parity)."""
+        return self.graph(g)
+
+    def remove_graph(self, g: object | None) -> Dataset:
+        """Remove a named graph's triples and unregister it (the default persists)."""
+        view = g if isinstance(g, _DatasetGraph) else self.get_context(g)
+        for s, p, o in list(view.triples((None, None, None))):
+            view._remove_quad(s, p, o, view._graph_name)
+        if view._graph_name is not None:
+            self._graphs.discard(view._graph_name)
+        return self
+
+    def _context_names(self) -> builtins.set[Identifier]:
+        """Return every named-graph identifier present or explicitly registered."""
+        names: builtins.set[Identifier] = set(self._graphs)
+        for quad in self._store.quads_for_pattern(
+            None, None, None, None, any_graph=True
+        ):
+            name = _graph_name_from_native(quad.graph_name)
+            if name is not None:
+                names.add(name)
+        return names
+
+    def contexts(
+        self, triple: _Pattern | None = None
+    ) -> Iterator[_DatasetGraph]:
+        """Yield each graph (default + named) as a context :class:`Graph`.
+
+        With ``triple`` given, only graphs containing a matching triple are
+        yielded. The default graph is always considered (RDFLib semantics).
+        """
+        candidates: list[_DatasetGraph] = [self.default_graph]
+        candidates.extend(
+            _DatasetGraph(self, name) for name in sorted(self._context_names())
+        )
+        for context in candidates:
+            if triple is None or triple in context:
+                yield context
+
+    def graphs(self, triple: _Pattern | None = None) -> Iterator[_DatasetGraph]:
+        """Yield each graph (default + named) — RDFLib's spelling of :meth:`contexts`."""
+        yield from self.contexts(triple)
 
     def quads(
         self, pattern: _QuadPattern | None = None
     ) -> Iterator[tuple[Identifier, Identifier, Identifier, _GraphName]]:
         """Yield ``(s, p, o, graph_name)`` quads matching ``pattern``.
 
-        Each ``pattern`` slot is a wildcard when ``None`` (RDFLib quads() semantics);
-        ``graph_name`` is ``None`` for the default graph.
+        Each ``pattern`` slot is a wildcard when ``None`` (RDFLib quads() semantics).
+        A ``None`` graph slot spans every graph; ``urn:x-rdflib:default`` (or a
+        default-graph view) restricts to the default graph. Matching real RDFLib
+        7.x, default-graph quads carry the graph name ``urn:x-rdflib:default``
+        (its ``Dataset.quads`` never actually collapses that to ``None``).
         """
         ps, pp, po, pg = pattern if pattern is not None else (None, None, None, None)
-        native_graph_name = None if pg is None else _native_subject(pg)
+        union = pg is None
+        scope = None if union else _context_graph_name(pg)
+        native_graph_name = None if scope is None else _native_subject(scope)
         pattern_literal = po if isinstance(po, Literal) else None
         for quad in self._store.quads_for_pattern(
             None if ps is None else _native_subject(ps),
@@ -855,9 +1353,10 @@ class Dataset(Graph):
             if pattern_literal is not None
             else (None if po is None else to_native(po)),
             native_graph_name,
-            any_graph=pg is None,
+            any_graph=union,
         ):
             gname = _graph_name_from_native(quad.graph_name)
+            out_gname: _GraphName = DATASET_DEFAULT_GRAPH_ID if gname is None else gname
             s = _require(from_native(quad.subject))
             p = _require(from_native(quad.predicate))
             o = _require(from_native(quad.object))
@@ -865,8 +1364,6 @@ class Dataset(Graph):
                 s = ps
             if pp is not None:
                 p = pp
-            if pg is not None:
-                gname = pg
             if isinstance(o, Literal):
                 variants, exact = self._literal_variants(s, p, o, gname)
                 for variant in variants:
@@ -876,9 +1373,13 @@ class Dataset(Graph):
                         exact_string_provenance=exact,
                     ):
                         continue
-                    yield (s, p, variant, gname)
+                    yield (s, p, variant, out_gname)
             elif pattern_literal is None:
-                yield (s, p, o, gname)
+                yield (s, p, o, out_gname)
+
+    def __iter__(self) -> Iterator[Any]:  # type: ignore[override]
+        """Iterate every quad in the dataset (RDFLib ``Dataset.__iter__``)."""
+        yield from self.quads((None, None, None, None))
 
     def parse(
         self,
@@ -918,3 +1419,102 @@ class Dataset(Graph):
 
 class ConjunctiveGraph(Dataset):
     """RDFLib ``ConjunctiveGraph`` alias over the dataset facade."""
+
+
+class Seq:
+    """A read view over an ``rdf:Seq`` resource, ordered by ``rdf:_1``/``_2``/… .
+
+    Mirrors RDFLib's ``Seq``: it reads the container member predicates
+    (``rdf:_N``) off ``subject`` and orders them by their integer index.
+    """
+
+    def __init__(self, graph: Graph, subject: Identifier) -> None:
+        """Collect ``subject``'s ``rdf:_N`` members from ``graph``, ordered by ``N``."""
+        li_index = str(RDF) + "_"
+        items: list[tuple[int, Identifier]] = []
+        for p, o in graph.predicate_objects(subject):
+            if p.startswith(li_index):
+                items.append((int(p.replace(li_index, "")), o))
+        items.sort()
+        self._list = items
+
+    def toPython(self) -> Seq:  # noqa: N802 - RDFLib API name
+        """Return self (RDFLib parity)."""
+        return self
+
+    def __iter__(self) -> Iterator[Identifier]:
+        """Iterate the members in ``rdf:_N`` order."""
+        for _index, item in self._list:
+            yield item
+
+    def __len__(self) -> int:
+        """Return the number of members."""
+        return len(self._list)
+
+    def __getitem__(self, index: int) -> Identifier:
+        """Return the member at ``index`` (position, not ``rdf:_N`` value)."""
+        _index, item = self._list[index]
+        return item
+
+
+class BatchAddGraph:
+    """Batch ``add`` calls on a wrapped graph into fewer ``addN`` flushes.
+
+    Mirrors RDFLib's ``BatchAddGraph`` context manager: buffered triples are
+    flushed when the buffer fills and again on context exit (unless an exception
+    propagates).
+    """
+
+    def __init__(
+        self, graph: Graph, batch_size: int = 1000, batch_addn: bool = False
+    ) -> None:
+        """Wrap ``graph``, flushing every ``batch_size`` buffered triples."""
+        if not batch_size or batch_size < 2:
+            raise ValueError("batch_size must be a positive number")
+        self.graph = graph
+        self.__graph_tuple = (graph,)
+        self.__batch_size = batch_size
+        self.__batch_addn = batch_addn
+        self.reset()
+
+    def reset(self) -> BatchAddGraph:
+        """Clear the buffer and reset the count."""
+        self.batch: list[tuple[Identifier, Identifier, Identifier, object]] = []
+        self.count = 0
+        return self
+
+    def add(
+        self,
+        triple_or_quad: tuple[Any, ...],
+    ) -> BatchAddGraph:
+        """Buffer a triple/quad, flushing via ``addN`` when the batch is full."""
+        if len(self.batch) >= self.__batch_size:
+            self.graph.addN(self.batch)
+            self.batch = []
+        self.count += 1
+        if len(triple_or_quad) == 3:
+            self.batch.append(triple_or_quad + self.__graph_tuple)  # type: ignore[arg-type]
+        else:
+            self.batch.append(triple_or_quad)  # type: ignore[arg-type]
+        return self
+
+    def addN(  # noqa: N802 - RDFLib API name
+        self, quads: Iterable[tuple[Identifier, Identifier, Identifier, object]]
+    ) -> BatchAddGraph:
+        """Buffer (or pass through) a sequence of quads."""
+        if self.__batch_addn:
+            for q in quads:
+                self.add(q)
+        else:
+            self.graph.addN(quads)
+        return self
+
+    def __enter__(self) -> BatchAddGraph:
+        """Enter the batch context (resets the buffer)."""
+        self.reset()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Flush the buffer on a clean exit (a propagating exception drops it)."""
+        if exc[0] is None:
+            self.graph.addN(self.batch)

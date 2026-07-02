@@ -16,7 +16,14 @@ import OWL`` → ``from purrdf.compat.rdflib.namespace import OWL`` and so on.
 
 from __future__ import annotations
 
-from .graph import ConjunctiveGraph, Dataset, Graph
+from .graph import (
+    DATASET_DEFAULT_GRAPH_ID,
+    BatchAddGraph,
+    ConjunctiveGraph,
+    Dataset,
+    Graph,
+    Seq,
+)
 from .namespace import (
     BRICK,
     CSVW,
@@ -55,6 +62,7 @@ from .namespace import (
     URIPattern,
 )
 from .query import Result, ResultRow
+from .resource import Resource
 from .term import BNode, Identifier, Literal, Node, URIRef, Variable
 
 __all__ = [
@@ -87,7 +95,9 @@ __all__ = [
     "WGS",
     "XMLNS",
     "XSD",
+    "DATASET_DEFAULT_GRAPH_ID",
     "BNode",
+    "BatchAddGraph",
     "ClosedNamespace",
     "ConjunctiveGraph",
     "Dataset",
@@ -99,8 +109,10 @@ __all__ = [
     "Namespace",
     "NamespaceManager",
     "Node",
+    "Resource",
     "Result",
     "ResultRow",
+    "Seq",
     "URIPattern",
     "URIRef",
     "Variable",
