@@ -19,8 +19,8 @@ workspace = true
 [lib]
 # rlib-only, wasm-clean leaf: the SPARQL front-end of the native query stack. It
 # must NOT pull any oxigraph-family crate (it replaces the oxigraph-family SPARQL
-# parser). It builds on the two CLOSED foundation leaves `purrdf-iri` (#908) and
-# `purrdf-xsd` (#907) plus `memchr` (a wasm-clean SIMD byte-scan primitive for the
+# parser). It builds on the two CLOSED foundation leaves `purrdf-iri` and
+# `purrdf-xsd` plus `memchr` (a wasm-clean SIMD byte-scan primitive for the
 # tokenizer hot paths — not a foundation leaf, the same class of infra dep as the
 # rayon/ahash edges elsewhere); it deliberately does NOT depend on `purrdf-core`
 # (whose terms are dataset-interned `TermId` and which pulls a `gts` default feature).
