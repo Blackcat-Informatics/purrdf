@@ -10,7 +10,13 @@
 //! CONSTRUCT triples are `RdfTriple`. The engine is `NativeSparqlEngine`; the
 //! oxigraph `QueryResults` type is gone from this surface.
 
-use purrdf_sparql_eval::{NativeSparqlEngine, ParserOptions, StandpointPredicates};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use purrdf_sparql_eval::{NativeSparqlEngine, ParserOptions, QueryEnv, StandpointPredicates};
+use purrdf_xsd::datetime_from_unix_seconds;
+use purrdf_xsd::temporal::DateTime;
 use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
@@ -18,6 +24,36 @@ use pyo3::types::{PyBytes, PyString};
 use super::io::{serialize_triples, PyRdfFormat};
 use super::term::{term_to_py, PyTriple, PyVariable};
 use crate::{RdfDataset, RdfTerm, RdfTriple, SparqlResult, TermValue};
+
+/// Native (non-wasm) host clock/entropy for the Python surface. `NOW()` gets the
+/// real wall clock; `RAND()`/`UUID()` get a per-query seed from the wall-clock nanos
+/// mixed with a process-lifetime counter (distinct seed per query even within one
+/// nanosecond). No new dependency — `std::time` only. This crate is native-only
+/// (not a wasm target), so the wall-clock syscall is confined here, never in the
+/// wasm-able engine.
+#[derive(Debug, Default)]
+struct SystemEnv;
+
+static QUERY_SEQ: AtomicU64 = AtomicU64::new(0);
+
+impl QueryEnv for SystemEnv {
+    fn now(&self) -> DateTime {
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+        datetime_from_unix_seconds(secs)
+    }
+
+    fn rng_seed(&self) -> u64 {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
+        nanos
+            ^ QUERY_SEQ
+                .fetch_add(1, Ordering::Relaxed)
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    }
+}
 
 /// Build the [`NativeSparqlEngine`] for one query/update call from the optional
 /// Python-surface engine configuration (shared by `Store` and `MutableDataset`):
@@ -43,6 +79,7 @@ pub(super) fn build_engine(
         engine =
             engine.with_standpoint_predicates(StandpointPredicates::new(according_to, sharpens));
     }
+    engine = engine.with_query_env(Arc::new(SystemEnv));
     engine
 }
 
