@@ -16,6 +16,7 @@ import OWL`` → ``from purrdf.compat.rdflib.namespace import OWL`` and so on.
 
 from __future__ import annotations
 
+from . import parser, plugin, serializer, store, util
 from .graph import (
     DATASET_DEFAULT_GRAPH_ID,
     BatchAddGraph,
@@ -116,4 +117,9 @@ __all__ = [
     "URIPattern",
     "URIRef",
     "Variable",
+    "parser",
+    "plugin",
+    "serializer",
+    "store",
+    "util",
 ]

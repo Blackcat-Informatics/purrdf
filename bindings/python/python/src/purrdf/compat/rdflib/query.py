@@ -11,12 +11,26 @@ for ASK).
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any
+from typing import IO, TYPE_CHECKING, Any
 
 from .term import Identifier
 
 if TYPE_CHECKING:
     from .graph import Graph
+
+__all__ = [
+    "Result",
+    "ResultRow",
+    "ResultException",
+    "Processor",
+    "UpdateProcessor",
+    "ResultParser",
+    "ResultSerializer",
+]
+
+
+class ResultException(Exception):  # noqa: N818 - RDFLib API name
+    """Raised for malformed / unsupported SPARQL results (RDFLib parity)."""
 
 
 class ResultRow(tuple[Identifier | None, ...]):
@@ -114,3 +128,55 @@ class Result:
         if self.type == "ASK":
             return bool(self.askAnswer)
         return len(self) > 0
+
+
+# ── plugin *kind* base classes (RDFLib ``rdflib.query`` hierarchy) ───────────────
+#
+# These give ``plugin.get(name, kind)`` the same *kind* identities RDFLib exposes
+# from ``rdflib.query`` (``Processor``/``UpdateProcessor``/``ResultParser``/
+# ``ResultSerializer``), plus ``Result`` above as the query-result kind. Concrete
+# implementations live under ``purrdf.compat.rdflib.plugins``.
+
+
+class Processor:
+    """Base class for a SPARQL query *processor* kind (RDFLib parity)."""
+
+    def __init__(self, graph: Graph) -> None:
+        """Bind the processor to the graph it queries."""
+        self.graph = graph
+
+    def query(self, strOrQuery: object, **kwargs: Any) -> Any:  # noqa: N803
+        """Execute a query (overridden by concrete processors)."""
+        raise NotImplementedError
+
+
+class UpdateProcessor:
+    """Base class for a SPARQL *update* processor kind (RDFLib parity)."""
+
+    def __init__(self, graph: Graph) -> None:
+        """Bind the processor to the graph it updates."""
+        self.graph = graph
+
+    def update(self, strOrQuery: object, **kwargs: Any) -> None:  # noqa: N803
+        """Execute an update (overridden by concrete processors)."""
+        raise NotImplementedError
+
+
+class ResultParser:
+    """Base class for a SPARQL-results *parser* kind (RDFLib parity)."""
+
+    def parse(self, source: Any, **kwargs: Any) -> Result:
+        """Parse a SPARQL result document (overridden by concrete parsers)."""
+        raise NotImplementedError
+
+
+class ResultSerializer:
+    """Base class for a SPARQL-results *serializer* kind (RDFLib parity)."""
+
+    def __init__(self, result: Result) -> None:
+        """Bind the serializer to the result it emits."""
+        self.result = result
+
+    def serialize(self, stream: IO[Any], encoding: str | None = None, **kwargs: Any) -> None:
+        """Serialize a SPARQL result (overridden by concrete serializers)."""
+        raise NotImplementedError

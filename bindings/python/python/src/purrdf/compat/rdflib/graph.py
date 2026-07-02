@@ -16,6 +16,7 @@ routes through the native ``canonicalize_turtle`` (deterministic, dogfooded).
 from __future__ import annotations
 
 import builtins
+import io
 import random
 import re
 from collections.abc import Iterable, Iterator
@@ -40,13 +41,9 @@ if TYPE_CHECKING:
     from .collection import Collection
     from .resource import Resource
 
-_TURTLE = purrdf.RdfFormat.TURTLE
 _NT = purrdf.RdfFormat.N_TRIPLES
 _NQ = purrdf.RdfFormat.N_QUADS
-_TRIG = purrdf.RdfFormat.TRIG
 
-_JSON_LD_FORMATS = frozenset(("json-ld", "jsonld", "application/ld+json"))
-_XML_FORMATS = frozenset(("xml", "application/rdf+xml", "pretty-xml"))
 _XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
 
 #: RDFLib's default skolemization authority + genid base paths (rdf11 §skolemization).
@@ -95,10 +92,6 @@ def _de_skolemize_uri(uri: URIRef) -> BNode:
         _EXTERNAL_SKOLEMS[key] = bnode
     return bnode
 
-#: Formats whose text carries ``@prefix`` / SPARQL-style ``PREFIX`` declarations.
-_PREFIX_BEARING_FORMATS = frozenset(
-    ("turtle", "ttl", "longturtle", "n3", "trig", "application/trig")
-)
 #: A Turtle/TriG/N3/SPARQL prefix declaration: ``@prefix foo: <iri>`` / ``PREFIX foo: <iri>``.
 _PREFIX_DECL_RE = re.compile(
     r"@?prefix\s+([^\s:]*)\s*:\s*<([^>\s]*)>", re.IGNORECASE
@@ -125,24 +118,6 @@ _QuadPattern = tuple[
 _GraphName = Identifier | None
 _LiteralBucket = tuple[str, str | None, str | None]
 _LiteralQuadKey = tuple[Identifier, Identifier, _LiteralBucket, _GraphName]
-
-
-def _rdf_format(fmt: str | None) -> purrdf.RdfFormat:
-    """Map an RDFLib format string to an oxigraph-native :class:`purrdf.RdfFormat`.
-
-    JSON-LD-star and RDF/XML are NOT oxigraph-native; ``parse``/``serialize`` route
-    those through the purrdf-gts codecs before reaching this mapper.
-    """
-    f = (fmt or "turtle").lower()
-    if f in ("turtle", "ttl", "longturtle", "n3"):
-        return _TURTLE
-    if f in ("nt", "ntriples", "nt11", "ntriples11", "application/n-triples"):
-        return _NT
-    if f in ("nquads", "nq", "application/n-quads"):
-        return _NQ
-    if f in ("trig", "application/trig"):
-        return _TRIG
-    raise ValueError(f"unsupported RDF format: {fmt!r}")
 
 
 def _native_subject(term: Identifier) -> purrdf.NamedNode | purrdf.BlankNode:
@@ -863,12 +838,22 @@ class Graph:
     ) -> Graph:
         """Parse RDF from a path/file/``data`` into this graph (any compat format).
 
-        JSON-LD-star and RDF/XML route through the purrdf-gts codecs (text → native
-        ``from_json_ld``/``from_rdf_xml`` → N-Quads → store); the oxigraph-native
-        formats load directly (a path source is handed straight to the loader).
+        The format name is resolved to a parser class through the plugin registry
+        (:mod:`purrdf.compat.rdflib.plugin`) — the single source of truth for
+        name → implementation. Native formats read from a filesystem path keep the
+        direct-load fast-path (via the parser's ``rdf_format`` marker); every other
+        source is read to a ``bytes`` payload and handed to the resolved parser.
         """
+        from . import plugin
+        from .parser import Parser
+
         f = (format or "turtle").lower()
-        is_codec = f in _JSON_LD_FORMATS or f in _XML_FORMATS
+        try:
+            parser_cls = plugin.get(f, Parser)
+        except plugin.PluginException as exc:
+            raise ValueError(f"unsupported RDF format: {format!r}") from exc
+        native_format = getattr(parser_cls, "rdf_format", None)
+        prefix_bearing = getattr(parser_cls, "prefix_bearing", False)
         payload: bytes
         if data is not None:
             payload = data.encode("utf-8") if isinstance(data, str) else data
@@ -882,49 +867,40 @@ class Graph:
             if callable(reader):
                 raw = reader()
                 payload = raw.encode("utf-8") if isinstance(raw, str) else raw
-            elif is_codec:
-                payload = Path(str(src)).read_bytes()
-            else:
+            elif native_format is not None:
                 # A path source for an oxigraph-native format loads directly. Recover
                 # document prefixes (turtle/trig/n3) from the file text so serialize/
                 # qname see them, since the native loader does not surface them.
-                if f in _PREFIX_BEARING_FORMATS:
+                if prefix_bearing:
                     self._bind_source_prefixes(Path(str(src)).read_bytes())
-                self._store.load(path=str(src), format=_rdf_format(format))
+                self._store.load(path=str(src), format=native_format)
                 return self
-        if f in _JSON_LD_FORMATS:
-            self._store.load(
-                purrdf.from_json_ld(payload.decode("utf-8")), format=_NQ
-            )
-        elif f in _XML_FORMATS:
-            self._store.load(
-                purrdf.from_rdf_xml(payload.decode("utf-8")), format=_NQ
-            )
-        else:
-            if f in _PREFIX_BEARING_FORMATS:
-                self._bind_source_prefixes(payload)
-            self._store.load(payload, format=_rdf_format(format))
+            else:
+                payload = Path(str(src)).read_bytes()
+        parser_cls().parse(payload, self)
         return self
 
     def _dump_bytes(self, fmt: str | None) -> bytes:
         """Serialize the store to bytes in the requested format.
 
-        Turtle routes through the native ``canonicalize_turtle``; JSON-LD-star and
-        RDF/XML route through the purrdf-gts codecs (store → N-Quads → native
-        ``to_json_ld``/``to_rdf_xml``); the rest dump directly via oxigraph.
+        The format name is resolved to a serializer class through the plugin
+        registry (:mod:`purrdf.compat.rdflib.plugin`) — the single source of truth
+        for name → implementation. Turtle routes through the native
+        ``canonicalize_turtle``; JSON-LD-star and RDF/XML route through the
+        purrdf-gts codecs; the rest dump directly via oxigraph. Every emitter is
+        byte-deterministic.
         """
+        from . import plugin
+        from .serializer import Serializer
+
         f = (fmt or "turtle").lower()
-        if f in ("turtle", "ttl", "longturtle", "n3"):
-            nt = self._store.dump(format=_NT)
-            prefixes = [(prefix, str(ns)) for prefix, ns in self._nsm.namespaces()]
-            return purrdf.canonicalize_turtle(nt, prefixes)
-        if f in _JSON_LD_FORMATS:
-            nquads = self._store.dump(format=_NQ)
-            return purrdf.to_json_ld(nquads, format=_NQ).encode("utf-8")
-        if f in _XML_FORMATS:
-            nquads = self._store.dump(format=_NQ)
-            return purrdf.to_rdf_xml(nquads, format=_NQ).encode("utf-8")
-        return self._store.dump(format=_rdf_format(fmt))
+        try:
+            serializer_cls = plugin.get(f, Serializer)
+        except plugin.PluginException as exc:
+            raise ValueError(f"unsupported RDF format: {fmt!r}") from exc
+        buffer = io.BytesIO()
+        serializer_cls(self).serialize(buffer)
+        return buffer.getvalue()
 
     @overload
     def serialize(
