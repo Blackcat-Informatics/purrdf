@@ -44,7 +44,7 @@ Repository = "https://github.com/Blackcat-Informatics/purrdf"
 # holds the dependencies for the downstream acceptance matrix drivers.
 [dependency-groups]
 dev = [
-  "pytest>=8,<9",
+  "pytest>=8,<10",
   "rdflib>=7.1,<8",
   "mypy>=1.10",
   "maturin>=1.7,<2",
