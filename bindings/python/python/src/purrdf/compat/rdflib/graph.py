@@ -16,6 +16,7 @@ routes through the native ``canonicalize_turtle`` (deterministic, dogfooded).
 from __future__ import annotations
 
 import builtins
+import re
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import IO, Any, overload
@@ -40,6 +41,26 @@ _TRIG = purrdf.RdfFormat.TRIG
 _JSON_LD_FORMATS = frozenset(("json-ld", "jsonld", "application/ld+json"))
 _XML_FORMATS = frozenset(("xml", "application/rdf+xml", "pretty-xml"))
 _XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
+
+#: Formats whose text carries ``@prefix`` / SPARQL-style ``PREFIX`` declarations.
+_PREFIX_BEARING_FORMATS = frozenset(
+    ("turtle", "ttl", "longturtle", "n3", "trig", "application/trig")
+)
+#: A Turtle/TriG/N3/SPARQL prefix declaration: ``@prefix foo: <iri>`` / ``PREFIX foo: <iri>``.
+_PREFIX_DECL_RE = re.compile(
+    r"@?prefix\s+([^\s:]*)\s*:\s*<([^>\s]*)>", re.IGNORECASE
+)
+
+
+def _scan_prefixes(text: str) -> list[tuple[str, str]]:
+    """Extract ``(prefix, iri)`` declarations from Turtle/TriG/N3/SPARQL source text.
+
+    A lightweight lexical scan (no full parse): rdflib records document prefixes on
+    the graph's ``NamespaceManager`` during parsing; the native parser does not yet
+    surface them, so we recover them from the source. Non-textual/binary sources and
+    JSON-LD/RDF/XML documents are handled by the caller (see ``#11`` ledger note).
+    """
+    return [(m.group(1), m.group(2)) for m in _PREFIX_DECL_RE.finditer(text)]
 
 #: A graph triple of compat terms.
 _Triple = tuple[Identifier, Identifier, Identifier]
@@ -254,7 +275,7 @@ class Graph:
             (
                 type(self),
                 self._store.dump(format=_NQ),
-                self._nsm.namespaces(),
+                [(prefix, str(ns)) for prefix, ns in self._nsm.namespaces()],
                 _literal_terms_snapshot(self._literal_terms),
             ),
         )
@@ -459,6 +480,15 @@ class Graph:
 
     # ── parse / serialize ─────────────────────────────────────────────────────────
 
+    def _bind_source_prefixes(self, payload: bytes) -> None:
+        """Bind any ``@prefix``/``PREFIX`` declarations found in ``payload`` text."""
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return
+        for prefix, iri in _scan_prefixes(text):
+            self._nsm.bind(prefix, iri)
+
     def parse(
         self,
         source: object | None = None,
@@ -493,6 +523,11 @@ class Graph:
             elif is_codec:
                 payload = Path(str(src)).read_bytes()
             else:
+                # A path source for an oxigraph-native format loads directly. Recover
+                # document prefixes (turtle/trig/n3) from the file text so serialize/
+                # qname see them, since the native loader does not surface them.
+                if f in _PREFIX_BEARING_FORMATS:
+                    self._bind_source_prefixes(Path(str(src)).read_bytes())
                 self._store.load(path=str(src), format=_rdf_format(format))
                 return self
         if f in _JSON_LD_FORMATS:
@@ -504,6 +539,8 @@ class Graph:
                 purrdf.from_rdf_xml(payload.decode("utf-8")), format=_NQ
             )
         else:
+            if f in _PREFIX_BEARING_FORMATS:
+                self._bind_source_prefixes(payload)
             self._store.load(payload, format=_rdf_format(format))
         return self
 
@@ -517,7 +554,8 @@ class Graph:
         f = (fmt or "turtle").lower()
         if f in ("turtle", "ttl", "longturtle", "n3"):
             nt = self._store.dump(format=_NT)
-            return purrdf.canonicalize_turtle(nt, self._nsm.namespaces())
+            prefixes = [(prefix, str(ns)) for prefix, ns in self._nsm.namespaces()]
+            return purrdf.canonicalize_turtle(nt, prefixes)
         if f in _JSON_LD_FORMATS:
             nquads = self._store.dump(format=_NQ)
             return purrdf.to_json_ld(nquads, format=_NQ).encode("utf-8")
