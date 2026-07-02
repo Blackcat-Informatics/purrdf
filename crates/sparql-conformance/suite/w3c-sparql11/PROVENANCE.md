@@ -15,7 +15,36 @@ It is consumed by the native conformance harness (`crates/sparql-conformance`).
   path `sparql/sparql11/`.
 - Mirror of the W3C DAWG/SPARQL-WG test suite at
   <https://www.w3.org/2009/sparql/docs/tests/>.
-- Fetched from the `main` branch on **2026-06-26**.
+- The curated `aggregates`/`subquery`/`service` subset was fetched from the
+  `main` branch on **2026-06-26**.
+- The full query-eval groups (see below) are vendored **verbatim** at the pinned
+  commit **`426c7df4b5d5d292e3ba09dc22e622ea301f230a`** — every file, `manifest.ttl`
+  included, carries its own `LicenseRef-W3C-Test-Suite` `.license` sidecar.
+
+## Full W3C query-eval groups (commit `426c7df`)
+
+Ten groups are vendored verbatim and discovered automatically by the harness
+(one nextest case per `manifest.ttl`). Unlike the curated subset, these ship the
+**upstream** `manifest.ttl` verbatim (sidecar'd), so the whole group runs. Every
+non-passing case is recorded in `crates/sparql-conformance/src/xfail.rs` with a
+typed reason — nothing is silently skipped.
+
+| Group | Cases | Green | Ledgered (reason) |
+|-------|------:|------:|-------------------|
+| bind | 10 | 10 | — |
+| bindings | 11 | 1 | 9 parse-unsupported (VALUES), 1 result-format |
+| cast | 6 | 0 | 6 value-mismatch (XSD cast lexical/datatype) |
+| construct | 7 | 2 | 1 parse-unsupported, 4 unsupported-construct (CONSTRUCT WHERE) |
+| exists | 6 | 5 | 1 unsupported-construct (EXISTS over GRAPH var) |
+| functions | 75 | 59 | 14 value-mismatch, 2 non-deterministic (BNODE labels) |
+| grouping | 6 | 4 | 2 unsupported-construct (missing non-grouped-var rejection) |
+| negation | 12 | 12 | — |
+| project-expression | 7 | 7 | — |
+| property-path | 33 | 24 | 9 property-path (inverse-in-NPS, `*`/`?` over sets) |
+
+The ledgered gaps are genuine (the curated subset simply never exercised these
+surfaces). `parse-unsupported` VALUES cases are cleared by the trailing-`VALUES`
+parser fix; `value-mismatch` marks real evaluation-correctness gaps to close.
 
 ## License
 

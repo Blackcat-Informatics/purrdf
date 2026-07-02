@@ -9,9 +9,16 @@
 
 version = 1
 
+# The curated `aggregates`/`subquery`/`service` selectors are PurRDF-authored
+# (they reference a hand-picked subset), as are the reconstructed aggregates/
+# subquery `.srx` expected-results. Verbatim upstream groups (bind, functions,
+# property-path, …) instead carry a per-file `.license` sidecar on every file,
+# manifest included, so they are NOT annotated here.
 [[annotations]]
 path = [
-  "**/manifest.ttl",
+  "aggregates/manifest.ttl",
+  "subquery/manifest.ttl",
+  "service/manifest.ttl",
   "aggregates/*.srx",
   "subquery/*.srx",
 ]
