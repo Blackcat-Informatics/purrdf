@@ -100,7 +100,7 @@ pub(crate) struct ExistsInner {
     /// `(outer_ordinal, inner_ordinal)` pairs (the probe's join key).
     pub shared: Vec<(usize, usize)>,
     /// Inner rows fully bound on the shared columns, grouped by their key.
-    pub keyed: DetHashMap<Vec<SolutionTerm>, Vec<usize>>,
+    pub keyed: DetHashMap<crate::binop::JoinKey, Vec<usize>>,
     /// Inner rows with an unbound shared column (compatible with any probe value).
     pub wild: Vec<usize>,
 }
