@@ -10,7 +10,6 @@
 //! its datatype (the whole point of the native codec: byte-for-byte lexical fidelity).
 
 use crate::RdfDiagnostic;
-use std::fmt::Write as _;
 
 /// The kind of a serialization term.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +128,9 @@ const IRI_CLEAN: [bool; 256] = {
     t
 };
 
+/// Uppercase hex-nibble lookup table for `push_uchar_00`.
+const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+
 /// Bytes that pass through a literal lexical form untouched: printable ASCII
 /// (`0x20..=0x7E`) minus `"` and `\`. C0/DEL controls, the two ASCII escapables, and
 /// any byte `>= 0x80` (which may lead a C1 control that must ride as `\uXXXX`) are
@@ -179,6 +181,18 @@ fn escape_scan(s: &str, clean: &[bool; 256], escape_one: impl Fn(&mut String, ch
     out
 }
 
+/// Push the `\u00XX` UCHAR escape for a code point known to be `<= 0xFF`
+/// (every escapable byte here: C0/DEL/C1 controls, space, and the IRIREF
+/// grammar delimiters). Byte-identical to `write!(out, "\\u{:04X}", v)` for
+/// `v <= 0xFF`, without the `fmt` machinery.
+#[inline]
+fn push_uchar_00(out: &mut String, v: u32) {
+    debug_assert!(v <= 0xFF);
+    out.push_str("\\u00");
+    out.push(HEX_UPPER[((v >> 4) & 0xF) as usize] as char);
+    out.push(HEX_UPPER[(v & 0xF) as usize] as char);
+}
+
 /// Escape an IRI body for an N-Triples / Turtle / TriG `<…>` `IRIREF`. The W3C grammar
 /// forbids `<`, `>`, `"`, `{`, `}`, `|`, `^`, `` ` ``, `\`, the space character, and every
 /// control code point (C0 `0x00-0x1F`, DEL `0x7F`, and the C1 block `0x80-0x9F`) appearing
@@ -187,10 +201,10 @@ fn escape_scan(s: &str, clean: &[bool; 256], escape_one: impl Fn(&mut String, ch
 fn escape_iri(iri: &str) -> String {
     escape_scan(iri, &IRI_CLEAN, |out, ch| match ch {
         '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
-            let _ = write!(out, "\\u{:04X}", ch as u32);
+            push_uchar_00(out, ch as u32);
         }
         c if c.is_control() || c == ' ' => {
-            let _ = write!(out, "\\u{:04X}", c as u32);
+            push_uchar_00(out, c as u32);
         }
         c => out.push(c),
     })
@@ -212,7 +226,7 @@ fn escape_literal(lex: &str) -> String {
         '\r' => out.push_str("\\r"),
         '\t' => out.push_str("\\t"),
         c if c.is_control() => {
-            let _ = write!(out, "\\u{:04X}", c as u32);
+            push_uchar_00(out, c as u32);
         }
         c => out.push(c),
     })
@@ -465,6 +479,7 @@ pub(crate) fn to_trig(g: &SerGraph) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
     use proptest::prelude::*;
 
     #[test]
