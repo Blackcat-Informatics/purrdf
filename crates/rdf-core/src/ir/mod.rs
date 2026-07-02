@@ -40,7 +40,9 @@ pub use builder::{RdfDatasetBuilder, ValidatedRdfDatasetBuilder};
 pub use bundle::{GtsBundle, RdfEnvelope};
 pub use canon::{canonicalize, canonicalize_with, CanonHash, Canonicalized};
 pub use compare::{dataset_diff, datasets_isomorphic, DatasetDiff};
-pub use dataset::{QuadHandle, QuadIds, QuadRef, RdfDataset, RdfDatasetIter, TermRef};
+pub use dataset::{
+    QuadHandle, QuadIds, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetIter, TermRef,
+};
 pub use event_sink::RdfDatasetVisitor;
 pub use ingest::{DatasetSink, FrozenDatasetSource};
 pub use mutable::{MutableDataset, QuadValues};
