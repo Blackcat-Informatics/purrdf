@@ -16,7 +16,7 @@
 //! a compatibility scan over all build rows. The common case — two fully-bound BGPs
 //! — stays an O(n+m) hash join.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use purrdf_sparql_algebra::{Expression, GraphPattern};
 
@@ -83,7 +83,7 @@ pub(crate) fn eval_union(
     }
 
     Ok(SolutionSeq {
-        schema: Rc::new(out),
+        schema: Arc::new(out),
         rows,
     })
 }
@@ -201,7 +201,7 @@ fn hash_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
     }
 
     SolutionSeq {
-        schema: Rc::new(out),
+        schema: Arc::new(out),
         rows,
     }
 }
@@ -291,7 +291,7 @@ fn left_outer_join_filtered(
     expr: &Expression,
     ctx: &mut EvalCtx<'_>,
 ) -> Result<SolutionSeq, EvalError> {
-    let out = Rc::new(l.schema.union(&r.schema));
+    let out = Arc::new(l.schema.union(&r.schema));
     let out_len = out.len();
     let left_len = l.schema.len();
     let right_to_out = right_to_out_map(&r.schema, &out);
@@ -366,7 +366,7 @@ fn left_outer_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
     }
 
     SolutionSeq {
-        schema: Rc::new(out),
+        schema: Arc::new(out),
         rows,
     }
 }
@@ -417,7 +417,6 @@ mod tests {
     use purrdf_sparql_algebra::{
         NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
     };
-    use std::sync::Arc;
 
     fn graph() -> Arc<RdfDataset> {
         // :a :knows :b ; :likes :cake .
@@ -628,7 +627,7 @@ mod tests {
 
         // Inner over schema [x]: x=1, x=2, and one wild row (x unbound).
         let inner = SolutionSeq {
-            schema: Rc::new(VarSchema::from_vars([Variable::new("x")])),
+            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
             rows: vec![vec![t(1)], vec![t(2)], vec![None]],
         };
         // Probe layout is the FULL outer schema [x, y]; shared = {x} → [(0, 0)].
@@ -665,7 +664,7 @@ mod tests {
 
         // Same shape but NO wild inner row, so a keyed miss is a true non-match.
         let inner2 = SolutionSeq {
-            schema: Rc::new(VarSchema::from_vars([Variable::new("x")])),
+            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
             rows: vec![vec![t(1)], vec![t(2)]],
         };
         let (keyed2, wild2) = build_index(&inner2, &shared);
@@ -683,7 +682,7 @@ mod tests {
             &inner2.rows
         ));
         let empty = SolutionSeq {
-            schema: Rc::new(VarSchema::from_vars([Variable::new("x")])),
+            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
             rows: vec![],
         };
         let (ek, ew) = build_index(&empty, &shared);

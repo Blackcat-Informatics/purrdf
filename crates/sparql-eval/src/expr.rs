@@ -24,6 +24,7 @@
 
 use std::cmp::Ordering;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use purrdf_core::{BlankScope, DatasetView, GraphMatch, TermRef, TermValue};
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
@@ -194,7 +195,7 @@ pub(crate) fn eval_extend(
     let mut schema = (*seq.schema).clone();
     let col = schema.push(var.clone());
     let width = schema.len();
-    let schema = Rc::new(schema);
+    let schema = Arc::new(schema);
 
     let mut rows = Vec::with_capacity(seq.rows.len());
     for mut row in seq.rows {
@@ -776,14 +777,14 @@ fn exists(
         let entry = match cached {
             Some(entry) => entry,
             None => {
-                let inner = Rc::new(eval(pattern, ctx)?);
+                let inner = Arc::new(eval(pattern, ctx)?);
                 // `shared` is computed against the FULL outer schema (not just the
                 // row's bound vars), so one index serves every row: an outer var
                 // unbound in a given row is `None` in the probe and matches anything
                 // via `compatible`, exactly as the prior bound-only seed-join did.
                 let shared = schema.shared_columns(&inner.schema);
                 let (keyed, wild) = crate::binop::build_index(&inner, &shared);
-                let entry = Rc::new(crate::eval::ExistsInner {
+                let entry = Arc::new(crate::eval::ExistsInner {
                     inner,
                     shared,
                     keyed,
@@ -2283,7 +2284,6 @@ mod tests {
     use super::*;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder};
     use purrdf_sparql_algebra::{Literal, NamedNode};
-    use std::sync::Arc;
 
     fn empty_ds() -> Arc<RdfDataset> {
         RdfDatasetBuilder::new().freeze().expect("freeze")

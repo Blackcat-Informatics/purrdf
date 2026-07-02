@@ -6,7 +6,7 @@
 //! and named-graph scoping.
 
 use std::cmp::Ordering;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use purrdf_core::{GraphMatch, TermId, TermValue};
 use purrdf_sparql_algebra::{
@@ -33,7 +33,7 @@ pub(crate) fn eval_values(
     bindings: &[Vec<Option<purrdf_sparql_algebra::GroundTerm>>],
     ctx: &mut EvalCtx<'_>,
 ) -> Result<SolutionSeq, EvalError> {
-    let schema = Rc::new(VarSchema::from_vars(variables.iter().cloned()));
+    let schema = Arc::new(VarSchema::from_vars(variables.iter().cloned()));
     let width = schema.len();
     let mut rows = Vec::with_capacity(bindings.len());
     for binding in bindings {
@@ -59,7 +59,7 @@ pub(crate) fn eval_project(
     ctx: &mut EvalCtx<'_>,
 ) -> Result<SolutionSeq, EvalError> {
     let seq = eval(inner, ctx)?;
-    let out = Rc::new(VarSchema::from_vars(variables.iter().cloned()));
+    let out = Arc::new(VarSchema::from_vars(variables.iter().cloned()));
     // For each projected column, the source column in the inner schema (if any).
     let src: Vec<Option<usize>> = out.vars().iter().map(|v| seq.schema.index_of(v)).collect();
     let rows = seq
@@ -200,7 +200,7 @@ fn eval_graph_var(
     graphs.dedup();
 
     let saved = ctx.active_graph;
-    let mut out_schema: Option<Rc<VarSchema>> = None;
+    let mut out_schema: Option<Arc<VarSchema>> = None;
     let mut rows = Vec::new();
     for g in graphs {
         ctx.active_graph = GraphMatch::Named(g);
@@ -213,7 +213,7 @@ fn eval_graph_var(
             row[gcol] = Some(SolutionTerm::Existing(g));
             rows.push(row);
         }
-        out_schema = Some(Rc::new(sch));
+        out_schema = Some(Arc::new(sch));
     }
     ctx.active_graph = saved;
 
@@ -224,7 +224,7 @@ fn eval_graph_var(
             let seq = eval(inner, ctx)?;
             let mut sch = (*seq.schema).clone();
             sch.push(var.clone());
-            Rc::new(sch)
+            Arc::new(sch)
         }
     };
     Ok(SolutionSeq { schema, rows })
@@ -480,7 +480,7 @@ pub(crate) fn eval_group(
     for (out_var, _) in aggregates {
         out_schema.push(out_var.clone());
     }
-    let out_schema = Rc::new(out_schema);
+    let out_schema = Arc::new(out_schema);
 
     let mut rows = Vec::with_capacity(order.len());
     for key in &order {
@@ -687,7 +687,6 @@ mod tests {
     use super::*;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
     use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, TriplePattern};
-    use std::sync::Arc;
 
     const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
 

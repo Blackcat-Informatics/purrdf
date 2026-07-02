@@ -41,7 +41,6 @@ use crate::eval::{BgpOrderCache, EvalCtx};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 use crate::DetHashSet;
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification
@@ -951,7 +950,7 @@ fn object_can_be_triple_term(pos: &Pos, dataset: &RdfDataset) -> bool {
 /// An empty solution sequence over only the real (non-blank) variables of `working`.
 fn empty_over_real_vars(working: &VarSchema) -> SolutionSeq {
     let real = real_var_schema(working);
-    SolutionSeq::empty(Rc::new(real))
+    SolutionSeq::empty(Arc::new(real))
 }
 
 /// The schema of `working` restricted to its real variables, in order.
@@ -974,12 +973,12 @@ fn project_out_blanks(working: &VarSchema, rows: Vec<Solution>) -> SolutionSeq {
     // Fast path: no blank columns — reuse rows as-is.
     if keep.len() == working.len() {
         return SolutionSeq {
-            schema: Rc::new(real_var_schema(working)),
+            schema: Arc::new(real_var_schema(working)),
             rows,
         };
     }
 
-    let schema = Rc::new(real_var_schema(working));
+    let schema = Arc::new(real_var_schema(working));
     let projected = rows
         .into_iter()
         .map(|row| keep.iter().map(|&i| row[i]).collect())
@@ -997,7 +996,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
     use purrdf_sparql_algebra::{Literal, NamedNode};
-    use std::sync::Arc;
 
     /// A small graph:
     ///   :alice :knows :bob ; :name "Alice" .

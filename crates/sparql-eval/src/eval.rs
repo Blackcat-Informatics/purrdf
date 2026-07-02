@@ -95,7 +95,7 @@ pub(crate) type ExistsCacheKey = (usize, (u8, u32), u64);
 /// EXISTS` anti-join from N per-row index rebuilds into N O(1)/scan probes.
 pub(crate) struct ExistsInner {
     /// The inner pattern's unconstrained result (outer-row-independent).
-    pub inner: Rc<SolutionSeq>,
+    pub inner: Arc<SolutionSeq>,
     /// Shared columns between the outer schema and `inner.schema`, as
     /// `(outer_ordinal, inner_ordinal)` pairs (the probe's join key).
     pub shared: Vec<(usize, usize)>,
@@ -172,7 +172,7 @@ pub struct EvalCtx<'d> {
     /// over it are outer-row-independent, so this turns `expr::exists`'s per-row
     /// re-evaluation *and* per-row index rebuild into a single build per site.
     /// Naturally per-query: a fresh [`EvalCtx`] is built for each `query()` call.
-    pub(crate) exists_inner_cache: DetHashMap<ExistsCacheKey, Rc<ExistsInner>>,
+    pub(crate) exists_inner_cache: DetHashMap<ExistsCacheKey, Arc<ExistsInner>>,
     /// Per-query syntactic variable cache for expression positions inside an
     /// `EXISTS` inner pattern, keyed by the immutable inner-pattern AST address.
     /// Correlation detection runs for every outer row; caching this pure walk keeps
