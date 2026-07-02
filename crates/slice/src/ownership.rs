@@ -38,15 +38,18 @@ use crate::error::SliceError;
 use crate::rdf_query::{Dataset, NamedNode};
 
 // ── Namespace constants ───────────────────────────────────────────────────────
+//
+// Only W3C terms are hardcoded; the slice-framework vocabulary (the ownership
+// namespace, `sliceDependsOn`, …) comes from the catalog's caller-supplied
+// [`SliceVocab`](crate::vocab::SliceVocab).
 
-const PURRDF_NS: &str = "https://blackcatinformatics.ca/purrdf/";
 const RDFS_IS_DEFINED_BY: &str = "http://www.w3.org/2000/01/rdf-schema#isDefinedBy";
-const PURRDF_SLICE_DEPENDS_ON: &str = "https://blackcatinformatics.ca/purrdf/sliceDependsOn";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
 /// The `rdf:type` object IRIs whose subjects are considered declared vocabulary
-/// terms subject to ownership checking.  Subjects in PURRDF_NS typed with any of
-/// these are "declared terms" even when they have no `rdfs:isDefinedBy`.
+/// terms subject to ownership checking.  Subjects in the vocab namespace typed
+/// with any of these are "declared terms" even when they have no
+/// `rdfs:isDefinedBy`.
 const VOCAB_TERM_TYPES: &[&str] = &[
     "http://www.w3.org/2002/07/owl#Class",
     "http://www.w3.org/2002/07/owl#ObjectProperty",
@@ -147,7 +150,7 @@ pub enum EdgeKind {
 }
 
 impl EdgeKind {
-    /// Whether this edge kind reconciles against `purrdf:sliceDependsOn`
+    /// Whether this edge kind reconciles against `<vocab>sliceDependsOn`
     /// (a documentation link must not become a build dependency — RFC §10).
     pub fn is_semantic(self) -> bool {
         matches!(
@@ -157,14 +160,14 @@ impl EdgeKind {
     }
 }
 
-/// How a computed edge reconciles with the authored `purrdf:sliceDependsOn`.
+/// How a computed edge reconciles with the authored `<vocab>sliceDependsOn`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReconciliationStatus {
-    /// A semantic edge that *is* declared in `purrdf:sliceDependsOn`.
+    /// A semantic edge that *is* declared in `<vocab>sliceDependsOn`.
     Matched,
-    /// A semantic edge that is *not* declared in `purrdf:sliceDependsOn`.
+    /// A semantic edge that is *not* declared in `<vocab>sliceDependsOn`.
     Undeclared,
-    /// Declared in `purrdf:sliceDependsOn` but no semantic evidence was found.
+    /// Declared in `<vocab>sliceDependsOn` but no semantic evidence was found.
     Stale,
     /// A computed dependency edge that violates the tier model: a core slice
     /// depending on an extension, or an extension depending on another extension
@@ -184,7 +187,7 @@ pub struct DependencyEdge {
     pub edge_kind: EdgeKind,
     /// Per-reference evidence (which artifact + which term triggered the edge).
     pub evidence: Vec<EdgeEvidence>,
-    /// The reconciliation verdict against `purrdf:sliceDependsOn`.
+    /// The reconciliation verdict against `<vocab>sliceDependsOn`.
     pub reconciliation: ReconciliationStatus,
 }
 
@@ -205,18 +208,18 @@ pub enum OwnershipDiagnostic {
         declared: SliceIri,
         physical: SliceIri,
     },
-    /// A semantic edge has no authored `purrdf:sliceDependsOn` declaration.
+    /// A semantic edge has no authored `<vocab>sliceDependsOn` declaration.
     UndeclaredDependency {
         from_slice: SliceIri,
         to_slice: SliceIri,
         edge_kind: EdgeKind,
     },
-    /// A `purrdf:sliceDependsOn` declaration has no semantic evidence.
+    /// A `<vocab>sliceDependsOn` declaration has no semantic evidence.
     StaleDependency {
         from_slice: SliceIri,
         to_slice: SliceIri,
     },
-    /// A vocabulary term in the PurRDF namespace (typed as an OWL/RDFS concept)
+    /// A vocabulary term in the vocab namespace (typed as an OWL/RDFS concept)
     /// has no `rdfs:isDefinedBy` declaration in any slice.  Non-fatal: the term
     /// is recorded in the ownership table with `OwnershipStatus::Unowned` and
     /// surfaced as a diagnostic, but does not by itself fail validation.
@@ -296,8 +299,8 @@ impl<'a> OwnershipAnalyzer<'a> {
                 let store = parse_rdf_artifact(artifact)?;
                 // Collect rdfs:isDefinedBy claims.
                 for (subject, owner) in collect_is_defined_by(&store) {
-                    // Only PurRDF vocabulary terms are owned.
-                    if !subject.as_str().starts_with(PURRDF_NS) {
+                    // Only terms in the caller's vocab namespace are owned.
+                    if !subject.as_str().starts_with(self.catalog.vocab().ns()) {
                         continue;
                     }
                     claims
@@ -316,8 +319,9 @@ impl<'a> OwnershipAnalyzer<'a> {
                             raw_digest: artifact.raw_digest.clone(),
                         });
                 }
-                // Collect declared vocabulary terms (typed subjects in PURRDF_NS).
-                for term in collect_declared_terms(&store) {
+                // Collect declared vocabulary terms (typed subjects in the
+                // caller's vocab namespace).
+                for term in collect_declared_terms(&store, self.catalog.vocab().ns()) {
                     declared_terms.insert(term);
                 }
             }
@@ -407,11 +411,12 @@ impl<'a> OwnershipAnalyzer<'a> {
             }
         }
 
-        // ── Phase 4: authored declarations (purrdf:sliceDependsOn) ───────────
+        // ── Phase 4: authored declarations (<vocab>sliceDependsOn) ───────────
+        let depends_on_iri = self.catalog.vocab().slice_depends_on();
         let mut declared_deps: BTreeMap<SliceIri, BTreeSet<SliceIri>> = BTreeMap::new();
         for record in self.catalog.records() {
             let from = record.manifest.slice_iri.clone();
-            let targets = collect_slice_depends_on(record)?;
+            let targets = collect_slice_depends_on(record, &depends_on_iri)?;
             if !targets.is_empty() {
                 declared_deps.entry(from).or_default().extend(targets);
             }
@@ -610,11 +615,11 @@ fn collect_is_defined_by(store: &Dataset) -> Vec<(NamedNode, SliceIri)> {
     out
 }
 
-/// Collect every PurRDF-namespaced subject typed as an OWL/RDFS vocabulary
+/// Collect every vocab-namespaced subject typed as an OWL/RDFS vocabulary
 /// construct (`owl:Class`, `owl:ObjectProperty`, etc.) in the given dataset.
 /// These are "declared terms" that must have an `rdfs:isDefinedBy` or they will
 /// be flagged as `OwnershipStatus::Unowned`.
-fn collect_declared_terms(store: &Dataset) -> BTreeSet<NamedNode> {
+fn collect_declared_terms(store: &Dataset, vocab_ns: &str) -> BTreeSet<NamedNode> {
     let mut out = BTreeSet::new();
     for quad in store.inner().owned_quads() {
         if quad.predicate != RDF_TYPE {
@@ -626,22 +631,25 @@ fn collect_declared_terms(store: &Dataset) -> BTreeSet<NamedNode> {
         let RdfTerm::Iri(object) = &quad.object else {
             continue;
         };
-        if VOCAB_TERM_TYPES.contains(&object.as_str()) && subject.starts_with(PURRDF_NS) {
+        if VOCAB_TERM_TYPES.contains(&object.as_str()) && subject.starts_with(vocab_ns) {
             out.insert(NamedNode::new_unchecked(subject.clone()));
         }
     }
     out
 }
 
-/// Collect the `purrdf:sliceDependsOn` targets declared in a slice's manifest,
+/// Collect the `<vocab>sliceDependsOn` targets declared in a slice's manifest,
 /// scoped to the manifest's own slice subject ONLY. A `sliceDependsOn` triple
 /// whose subject is some *other* resource in the manifest (e.g. a blank-node
 /// description or an unrelated IRI) is never picked up — only edges authored on
 /// the slice itself reconcile against computed dependencies (#820 G8 MED).
-fn collect_slice_depends_on(record: &SliceRecord) -> Result<BTreeSet<SliceIri>, SliceError> {
+fn collect_slice_depends_on(
+    record: &SliceRecord,
+    depends_on_iri: &str,
+) -> Result<BTreeSet<SliceIri>, SliceError> {
     let mut out = BTreeSet::new();
     // The manifest is preserved as an IR dataset; re-derive its named-node
-    // objects of purrdf:sliceDependsOn. We parse the manifest artifact directly
+    // objects of <vocab>sliceDependsOn. We parse the manifest artifact directly
     // for a robust oxigraph query surface (the IR carries the same triples).
     let Some(manifest_artifact) = record
         .artifacts
@@ -656,7 +664,7 @@ fn collect_slice_depends_on(record: &SliceRecord) -> Result<BTreeSet<SliceIri>, 
     if NamedNode::new(&record.manifest.slice_iri).is_err() {
         return Ok(out);
     }
-    for target in store.object_iris(&record.manifest.slice_iri, PURRDF_SLICE_DEPENDS_ON)? {
+    for target in store.object_iris(&record.manifest.slice_iri, depends_on_iri)? {
         out.insert(target);
     }
     Ok(out)
@@ -863,9 +871,16 @@ fn walk_expression(e: &purrdf_sparql_algebra::Expression, out: &mut BTreeSet<Nam
                 purrdf_sparql_algebra::Function::Custom(n) => insert_oxiri(n, out),
                 // A purrdf extension function (e.g. purrdf:heldIn) depends on the slice
                 // that declares its vocabulary term — reconstruct its IRI from the
-                // closed local-name so the dependency edge is not lost.
+                // closed local-name so the dependency edge is not lost. These are the
+                // PUBLISHED PurRDF carrier terms (vocab/purrdf.ttl: heldIn, list*),
+                // minted under the purrdf namespace by the SPARQL parser itself,
+                // NOT caller vocabulary — so the published namespace is correct here.
                 purrdf_sparql_algebra::Function::Purrdf(g) => {
-                    if let Ok(nn) = NamedNode::new(format!("{PURRDF_NS}{}", g.local_name())) {
+                    /// The published PurRDF carrier-vocabulary namespace the
+                    /// SPARQL extension functions are minted under.
+                    const PURRDF_CARRIER_NS: &str = "https://blackcatinformatics.ca/purrdf/";
+                    if let Ok(nn) = NamedNode::new(format!("{PURRDF_CARRIER_NS}{}", g.local_name()))
+                    {
                         out.insert(nn);
                     }
                 }

@@ -16,14 +16,20 @@ use crate::cache::{
 use crate::catalog::SliceCatalog;
 use crate::ownership::OwnershipAnalyzer;
 
-const PURRDF: &str = "https://blackcatinformatics.ca/purrdf/";
+/// Pure fixtures use a caller-supplied example.org vocabulary (the slice
+/// vocabulary is never PurRDF's own).
+const NS: &str = "https://example.org/vocab/";
+
+fn test_vocab() -> crate::vocab::SliceVocab {
+    crate::vocab::SliceVocab::for_namespace(NS)
+}
 
 fn toolchain() -> ToolchainContext {
     ToolchainContext::new("purrdf-logic v1", "native")
 }
 
 /// Write a minimal slice directory under `parent/<dirname>/`. The manifest
-/// declares `slice_iri`, tier core, and (optionally) `purrdf:sliceDependsOn`
+/// declares `slice_iri`, tier core, and (optionally) `vocab:sliceDependsOn`
 /// targets. The module defines `term` via `rdfs:isDefinedBy slice_iri` and
 /// references each `dep_term` (so the dependency analyzer derives an edge).
 fn write_slice(
@@ -38,7 +44,7 @@ fn write_slice(
     std::fs::create_dir_all(&dir).unwrap();
 
     let depends_on: String = deps.iter().fold(String::new(), |mut out, (dep_iri, _)| {
-        let _ = writeln!(out, "    purrdf:sliceDependsOn <{dep_iri}> ;");
+        let _ = writeln!(out, "    vocab:sliceDependsOn <{dep_iri}> ;");
         out
     });
 
@@ -46,16 +52,16 @@ fn write_slice(
     // different path is byte-identical (the rename-invariance fixture relies on
     // this).
     let manifest = format!(
-        r#"@prefix purrdf: <{PURRDF}> .
+        r#"@prefix vocab: <{NS}> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
 
-<{slice_iri}> a purrdf:Slice ;
+<{slice_iri}> a vocab:Slice ;
     rdfs:label "slice label"@x-purrdf-english ;
     dcterms:title "Slice title"@x-purrdf-english ;
     dcterms:creator "Test Author" ;
-    purrdf:sliceTier purrdf:tierCore ;
-{depends_on}    purrdf:sliceConsumer "test"@x-purrdf-english .
+    vocab:sliceTier vocab:tierCore ;
+{depends_on}    vocab:sliceConsumer "test"@x-purrdf-english .
 "#
     );
     std::fs::write(dir.join("manifest.ttl"), manifest).unwrap();
@@ -66,11 +72,11 @@ fn write_slice(
         deps.iter()
             .enumerate()
             .fold(String::new(), |mut out, (i, (_, dep_term))| {
-                let _ = writeln!(out, "<{term}> purrdf:refP{i} <{dep_term}> .");
+                let _ = writeln!(out, "<{term}> vocab:refP{i} <{dep_term}> .");
                 out
             });
     let module = format!(
-        r#"{module_comment}@prefix purrdf: <{PURRDF}> .
+        r#"{module_comment}@prefix vocab: <{NS}> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 
@@ -83,7 +89,7 @@ fn write_slice(
 }
 
 fn discover(root: &Path) -> (SliceCatalog, Vec<crate::ownership::DependencyEdge>) {
-    let catalog = SliceCatalog::discover(root).unwrap();
+    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
     (catalog, report.edges)
 }
@@ -93,8 +99,8 @@ fn discover(root: &Path) -> (SliceCatalog, Vec<crate::ownership::DependencyEdge>
 /// per-phase keys. Moving the slice's directory changes NO cache key.
 #[test]
 fn rename_invariance_all_phases() {
-    let a_iri = format!("{PURRDF}slice/alpha");
-    let a_term = format!("{PURRDF}Alpha");
+    let a_iri = format!("{NS}slice/alpha");
+    let a_term = format!("{NS}Alpha");
 
     // Layout 1: slices/core/alpha
     let t1 = TempDir::new().unwrap();
@@ -131,8 +137,8 @@ fn rename_invariance_all_phases() {
 /// REASONING-phase key unchanged, while the SYNTAX (byte-sensitive) key changes.
 #[test]
 fn comment_only_invariance_reasoning_key() {
-    let a_iri = format!("{PURRDF}slice/alpha");
-    let a_term = format!("{PURRDF}Alpha");
+    let a_iri = format!("{NS}slice/alpha");
+    let a_term = format!("{NS}Alpha");
 
     let t1 = TempDir::new().unwrap();
     let core1 = t1.path().join("slices").join("core");
@@ -179,12 +185,12 @@ fn comment_only_invariance_reasoning_key() {
 /// link unit {A,B} and a singleton {C}; A and B remain individually nameable.
 #[test]
 fn scc_grouping_cycle_and_singleton() {
-    let a_iri = format!("{PURRDF}slice/aaa");
-    let b_iri = format!("{PURRDF}slice/bbb");
-    let c_iri = format!("{PURRDF}slice/ccc");
-    let a_term = format!("{PURRDF}Aaa");
-    let b_term = format!("{PURRDF}Bbb");
-    let c_term = format!("{PURRDF}Ccc");
+    let a_iri = format!("{NS}slice/aaa");
+    let b_iri = format!("{NS}slice/bbb");
+    let c_iri = format!("{NS}slice/ccc");
+    let a_term = format!("{NS}Aaa");
+    let b_term = format!("{NS}Bbb");
+    let c_term = format!("{NS}Ccc");
 
     let t = TempDir::new().unwrap();
     let core = t.path().join("slices").join("core");
@@ -220,12 +226,12 @@ fn scc_grouping_cycle_and_singleton() {
 /// yields the dependency-closed set (transitive closure).
 #[test]
 fn profile_closure_transitive() {
-    let a_iri = format!("{PURRDF}slice/aaa");
-    let b_iri = format!("{PURRDF}slice/bbb");
-    let c_iri = format!("{PURRDF}slice/ccc");
-    let a_term = format!("{PURRDF}Aaa");
-    let b_term = format!("{PURRDF}Bbb");
-    let c_term = format!("{PURRDF}Ccc");
+    let a_iri = format!("{NS}slice/aaa");
+    let b_iri = format!("{NS}slice/bbb");
+    let c_iri = format!("{NS}slice/ccc");
+    let a_term = format!("{NS}Aaa");
+    let b_term = format!("{NS}Bbb");
+    let c_term = format!("{NS}Ccc");
 
     let t = TempDir::new().unwrap();
     let core = t.path().join("slices").join("core");
@@ -259,11 +265,11 @@ fn profile_closure_transitive() {
 /// to that dependency does not.
 #[test]
 fn dependency_change_invalidates_dependent_reasoning_key() {
-    let a_iri = format!("{PURRDF}slice/aaa");
-    let b_iri = format!("{PURRDF}slice/bbb");
-    let a_term = format!("{PURRDF}Aaa");
-    let b_term = format!("{PURRDF}Bbb");
-    let b_term2 = format!("{PURRDF}BbbExtra");
+    let a_iri = format!("{NS}slice/aaa");
+    let b_iri = format!("{NS}slice/bbb");
+    let a_term = format!("{NS}Aaa");
+    let b_term = format!("{NS}Bbb");
+    let b_term2 = format!("{NS}BbbExtra");
 
     // Baseline: A depends on B; B defines one term.
     let t1 = TempDir::new().unwrap();
@@ -293,22 +299,22 @@ fn dependency_change_invalidates_dependent_reasoning_key() {
         let dir = core2.join("bbb");
         std::fs::create_dir_all(&dir).unwrap();
         let manifest = format!(
-            r#"@prefix purrdf: <{PURRDF}> .
+            r#"@prefix vocab: <{NS}> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
 
-<{b_iri}> a purrdf:Slice ;
+<{b_iri}> a vocab:Slice ;
     rdfs:label "slice bbb"@x-purrdf-english ;
     dcterms:title "Slice bbb"@x-purrdf-english ;
     dcterms:creator "Test Author" ;
-    purrdf:sliceTier purrdf:tierCore ;
-    purrdf:sliceConsumer "test"@x-purrdf-english .
+    vocab:sliceTier vocab:tierCore ;
+    vocab:sliceConsumer "test"@x-purrdf-english .
 "#
         );
         std::fs::write(dir.join("manifest.ttl"), manifest).unwrap();
         let module = format!(
             r#"# b
-@prefix purrdf: <{PURRDF}> .
+@prefix vocab: <{NS}> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 
@@ -349,7 +355,7 @@ fn write_slice_explicit_manifest(
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("manifest.ttl"), manifest_body).unwrap();
     let module = format!(
-        r#"@prefix purrdf: <{PURRDF}> .
+        r#"@prefix vocab: <{NS}> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 
@@ -364,43 +370,43 @@ fn write_slice_explicit_manifest(
 /// HIGH-6 — **manifest participates in the semantic (Reason/Shacl) key**: a
 /// manifest comment-only edit leaves the Reason/Shacl key UNCHANGED (manifest is
 /// folded by its *semantic* digest), while a real semantic manifest change (a new
-/// `purrdf:sliceDependsOn`) DOES change the Reason/Shacl key.
+/// `vocab:sliceDependsOn`) DOES change the Reason/Shacl key.
 #[test]
 fn manifest_folds_into_semantic_phases() {
-    let a_iri = format!("{PURRDF}slice/alpha");
-    let a_term = format!("{PURRDF}Alpha");
-    let dep_iri = format!("{PURRDF}slice/dep");
+    let a_iri = format!("{NS}slice/alpha");
+    let a_term = format!("{NS}Alpha");
+    let dep_iri = format!("{NS}slice/dep");
 
     let base_manifest = format!(
-        r#"@prefix purrdf: <{PURRDF}> .
+        r#"@prefix vocab: <{NS}> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
 
-<{a_iri}> a purrdf:Slice ;
+<{a_iri}> a vocab:Slice ;
     rdfs:label "slice label"@x-purrdf-english ;
     dcterms:title "Slice title"@x-purrdf-english ;
     dcterms:creator "Test Author" ;
-    purrdf:sliceTier purrdf:tierCore ;
-    purrdf:sliceConsumer "test"@x-purrdf-english .
+    vocab:sliceTier vocab:tierCore ;
+    vocab:sliceConsumer "test"@x-purrdf-english .
 "#
     );
 
     // Variant 1: identical canonical RDF, different comment only.
     let comment_only_manifest = format!("# a different leading comment\n{base_manifest}");
 
-    // Variant 2: a real semantic change — add a purrdf:sliceDependsOn triple.
+    // Variant 2: a real semantic change — add a vocab:sliceDependsOn triple.
     let semantic_change_manifest = format!(
-        r#"@prefix purrdf: <{PURRDF}> .
+        r#"@prefix vocab: <{NS}> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
 
-<{a_iri}> a purrdf:Slice ;
+<{a_iri}> a vocab:Slice ;
     rdfs:label "slice label"@x-purrdf-english ;
     dcterms:title "Slice title"@x-purrdf-english ;
     dcterms:creator "Test Author" ;
-    purrdf:sliceTier purrdf:tierCore ;
-    purrdf:sliceDependsOn <{dep_iri}> ;
-    purrdf:sliceConsumer "test"@x-purrdf-english .
+    vocab:sliceTier vocab:tierCore ;
+    vocab:sliceDependsOn <{dep_iri}> ;
+    vocab:sliceConsumer "test"@x-purrdf-english .
 "#
     );
 

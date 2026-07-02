@@ -1397,29 +1397,43 @@ fn format_plain_decimal(value: f64) -> String {
     }
 }
 
-/// The canonical purrdf vocabulary IRIs the `purrdf:heldIn` evaluator reads.
-const PURRDF_ACCORDING_TO: &str = "https://blackcatinformatics.ca/purrdf/accordingTo";
-const PURRDF_SHARPENS: &str = "https://blackcatinformatics.ca/purrdf/sharpens";
-
 /// `purrdf:heldIn(reifier, standpoint) -> xsd:boolean` — DIRECT, non-transitive
 /// standpoint membership over the already-reasoned dataset.
 ///
+/// The standpoint vocabulary is **caller configuration**, never an engine
+/// constant: the `accordingTo`/`sharpens` predicates are domain terms from the
+/// caller's ontology (the published purrdf carrier vocabulary, gmeow's, …) read
+/// from the caller's data, supplied as a
+/// [`crate::eval::StandpointPredicates`] table. Evaluating `heldIn` with **no**
+/// configured table is a hard [`EvalError`] — there is no fabricated default.
+///
 /// Per CONSTITUTION Principle 17 the native logic solver is the sole reasoning
-/// authority: this does NOT walk/compute the `purrdf:sharpens` transitive closure —
+/// authority: this does NOT walk/compute the `sharpens` transitive closure —
 /// it relies on the closure being materialized upstream as direct edges. It returns
 /// true iff some vantage standpoint `T` of the reifier (the objects of the reifier's
-/// `purrdf:accordingTo` annotations) either equals the queried standpoint or has a
-/// direct `(T, purrdf:sharpens, standpoint)` quad (T is more specific than the
+/// `accordingTo` annotations) either equals the queried standpoint or has a
+/// direct `(T, sharpens, standpoint)` quad (T is more specific than the
 /// queried standpoint, so a claim held in T counts as held in the broader one).
 ///
 /// Three-valued: an unbound argument yields `Ok(None)` (a SPARQL error). An argument
 /// absent from the dataset is a well-formed negative answer — `Ok(Some(false))`, not
-/// `None`. Missing `purrdf:accordingTo`/`purrdf:sharpens` interning simply yields no
+/// `None`. Missing `accordingTo`/`sharpens` interning simply yields no
 /// matches (→ false), which is correct.
 fn eval_held_in(
     vals: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_>,
 ) -> Result<Option<SolutionTerm>, EvalError> {
+    // The predicate table is mandatory configuration — fail loudly BEFORE looking at
+    // the arguments, so a misconfigured deployment cannot get a quietly-wrong answer.
+    let Some(predicates) = ctx.standpoint_predicates.clone() else {
+        return Err(EvalError::unsupported(
+            "purrdf:heldIn requires a standpoint predicate configuration: supply the \
+             ontology's accordingTo/sharpens IRIs via \
+             NativeSparqlEngine::with_standpoint_predicates (or \
+             EvalCtx::with_standpoint_predicates); there is no built-in default",
+        ));
+    };
+
     // Strict in both args: an unbound/error argument is a SPARQL error (None).
     let (Some(reifier_val), Some(standpoint_val)) = (arg(vals, 0), arg(vals, 1)) else {
         return Ok(None);
@@ -1436,13 +1450,13 @@ fn eval_held_in(
 
     let according_to_id = ctx
         .dataset
-        .term_id_by_value(&TermValue::Iri(PURRDF_ACCORDING_TO.to_owned()));
+        .term_id_by_value(&TermValue::Iri(predicates.according_to));
     let sharpens_id = ctx
         .dataset
-        .term_id_by_value(&TermValue::Iri(PURRDF_SHARPENS.to_owned()));
+        .term_id_by_value(&TermValue::Iri(predicates.sharpens));
 
-    // The reifier's vantage standpoint(s): annotation objects under `purrdf:accordingTo`.
-    // If `purrdf:accordingTo` was never interned, there are no vantage standpoints.
+    // The reifier's vantage standpoint(s): annotation objects under the configured
+    // `accordingTo`. If it was never interned, there are no vantage standpoints.
     let held = according_to_id.is_some_and(|atid| {
         ctx.dataset
             .annotations_of(reifier_id)
@@ -3097,8 +3111,19 @@ mod tests {
 
     // ── purrdf:heldIn extension function ───────────────────────────────────────
 
+    /// A pure-fixture (example.org) standpoint vocabulary — the predicate table is
+    /// caller-supplied configuration, so the fixture deliberately does NOT use the
+    /// purrdf namespace: any ontology's IRIs work when configured.
+    const EX_ACCORDING_TO: &str = "http://example.org/accordingTo";
+    const EX_SHARPENS: &str = "http://example.org/sharpens";
+
+    /// The fixture's caller-supplied standpoint predicate table.
+    fn ex_standpoints() -> crate::eval::StandpointPredicates {
+        crate::eval::StandpointPredicates::new(EX_ACCORDING_TO, EX_SHARPENS)
+    }
+
     /// Build a dataset with a reifier `R` of a reified statement, annotated
-    /// `R purrdf:accordingTo T1`, plus a direct `T1 purrdf:sharpens T2` edge.
+    /// `R ex:accordingTo T1`, plus a direct `T1 ex:sharpens T2` edge.
     /// `T3` is an unrelated standpoint.
     fn held_in_ds() -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
@@ -3110,8 +3135,8 @@ mod tests {
         let t1 = b.intern_iri("http://ex/T1");
         let t2 = b.intern_iri("http://ex/T2");
         let _t3 = b.intern_iri("http://ex/T3");
-        let according_to = b.intern_iri(PURRDF_ACCORDING_TO);
-        let sharpens = b.intern_iri(PURRDF_SHARPENS);
+        let according_to = b.intern_iri(EX_ACCORDING_TO);
+        let sharpens = b.intern_iri(EX_SHARPENS);
         // The reified triple-term `<<( s p o )>>` and its reifier binding.
         let triple = b.intern_triple(s, p, o);
         b.push_reifier(reifier, triple);
@@ -3122,11 +3147,34 @@ mod tests {
         b.freeze().expect("freeze")
     }
 
-    /// Evaluate `purrdf:heldIn(arg0, arg1)` over `ds` and return the EBV
+    /// Evaluate `purrdf:heldIn(arg0, arg1)` over `ds` — with the fixture's
+    /// standpoint predicate table configured — and return the EBV
     /// (`None` ⇒ SPARQL error / unbound).
     fn held_in(ds: &RdfDataset, arg0: Expression, arg1: Expression) -> Option<bool> {
         let expr = Expression::FunctionCall(Function::Purrdf(PurrdfFn::HeldIn), vec![arg0, arg1]);
-        ebv(ds, &expr)
+        let mut ctx = EvalCtx::new(ds).with_standpoint_predicates(ex_standpoints());
+        let schema = VarSchema::new();
+        eval_ebv(&expr, &[], &schema, &mut ctx).expect("eval")
+    }
+
+    #[test]
+    fn held_in_without_a_configured_table_is_a_hard_eval_error() {
+        // No StandpointPredicates configured ⇒ hard error (no fabricated default),
+        // even before the arguments are inspected.
+        let ds = held_in_ds();
+        let expr = Expression::FunctionCall(
+            Function::Purrdf(PurrdfFn::HeldIn),
+            vec![iri("http://ex/r"), iri("http://ex/T1")],
+        );
+        let mut ctx = EvalCtx::new(&ds);
+        let schema = VarSchema::new();
+        let err = eval_ebv(&expr, &[], &schema, &mut ctx)
+            .expect_err("heldIn without a predicate table must hard-error");
+        assert!(
+            err.to_string()
+                .contains("requires a standpoint predicate configuration"),
+            "got: {err}"
+        );
     }
 
     #[test]

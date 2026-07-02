@@ -822,20 +822,29 @@ pub enum Function {
     /// `isTRIPLE(t)` — RDF 1.2 triple-term test.
     IsTriple,
     /// A purrdf extension function (a CLOSED, exhaustive seam, dispatched at parse
-    /// time from an IRI under the canonical purrdf namespace). See [`PurrdfFn`].
+    /// time from an IRI under a configured extension-function namespace — default
+    /// the canonical purrdf namespace). See [`PurrdfFn`].
     Purrdf(PurrdfFn),
-    /// A custom function identified by an arbitrary (non-purrdf) IRI.
+    /// A custom function identified by an arbitrary IRI outside every configured
+    /// extension-function namespace.
     Custom(NamedNode),
 }
 
 /// The CLOSED set of purrdf SPARQL extension functions.
 ///
-/// Recognized at PARSE time from an IRI under the canonical purrdf namespace
-/// (`{PURRDF_NS}{local-name}`, see [`crate::PURRDF_NS`]). The set is exhaustive: an
-/// IRI under the purrdf namespace whose local-name is not one of these in call
-/// position is a hard parse error, never a [`Function::Custom`]. This keeps the
-/// purrdf function surface a small, fully-enumerated contract rather than an open
-/// custom-IRI escape hatch.
+/// Recognized at PARSE time from an IRI under any *configured* extension-function
+/// namespace (`{ns}{local-name}`; see
+/// [`crate::parser::ParserOptions::extension_fn_namespaces`], whose default is the
+/// single published carrier-vocabulary namespace [`crate::PURRDF_NS`]). The set is
+/// exhaustive: an IRI under a configured namespace whose local-name is not one of
+/// these in call position is a hard parse error, never a [`Function::Custom`].
+/// This keeps the purrdf function surface a small, fully-enumerated contract
+/// rather than an open custom-IRI escape hatch.
+///
+/// The namespace is an alias, not part of the identity: `gmeow:heldIn(...)`
+/// (parsed with the gmeow namespace configured) and `purrdf:heldIn(...)` dispatch
+/// to the same [`PurrdfFn::HeldIn`], and serialization normalizes both back to the
+/// default [`crate::PURRDF_NS`] spelling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PurrdfFn {
     /// `purrdf:heldIn(reifier, standpoint) -> xsd:boolean` — direct (already-reasoned)

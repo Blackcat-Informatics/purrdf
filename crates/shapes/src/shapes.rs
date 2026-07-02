@@ -5,8 +5,11 @@
 //!
 //! Parses a SHACL Core shapes graph (loaded into an oxigraph [`Store`]) into a
 //! fully typed [`Shapes`] structure.  No evaluation logic lives here — that is
-//! Task 3.  Unsupported SHACL features (SPARQL constraints, qualified shapes,
-//! complex path forms, …) cause a hard `Err` rather than a silent skip.
+//! Task 3.  Covers full SHACL Core: all six property-path forms (§2.3.1),
+//! property-pair constraints (§4.3), qualified value shapes (§4.5.4–4.5.5), and
+//! SHACL-AF SPARQL constraints/targets.  Malformed constructs (e.g. a literal
+//! `sh:equals` object, a one-member sequence path) cause a hard `Err` rather
+//! than a silent skip.
 
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
@@ -37,13 +40,25 @@ pub enum NodeKindValue {
     IriOrLiteral,
 }
 
-/// A SHACL property path.
+/// A SHACL property path (spec §2.3.1 — all six path forms are modelled).
 #[derive(Debug, Clone)]
 pub enum Path {
     /// A plain IRI predicate path (`ex:name`).
     Predicate(NamedNode),
     /// An inverse path (`[ sh:inversePath ex:parent ]`).
     Inverse(Box<Self>),
+    /// A sequence path — an RDF list of at least two paths in path position
+    /// (`sh:path ( ex:a ex:b )`).
+    Sequence(Vec<Self>),
+    /// An alternative path (`[ sh:alternativePath ( ex:a ex:b ) ]`).
+    Alternative(Vec<Self>),
+    /// A zero-or-more path (`[ sh:zeroOrMorePath ex:next ]`) — reflexive
+    /// transitive closure.
+    ZeroOrMore(Box<Self>),
+    /// A one-or-more path (`[ sh:oneOrMorePath ex:next ]`) — transitive closure.
+    OneOrMore(Box<Self>),
+    /// A zero-or-one path (`[ sh:zeroOrOnePath ex:next ]`).
+    ZeroOrOne(Box<Self>),
 }
 
 /// A SHACL target declaration on a node shape.
@@ -159,6 +174,36 @@ pub enum Constraint {
         /// constraint blank node).
         severity: Option<Severity>,
     },
+    /// `sh:equals ex:p` — the value node set must equal the objects of `ex:p`
+    /// from the same focus node (spec §4.3.1).
+    Equals(NamedNode),
+    /// `sh:disjoint ex:p` — no value node may also be an object of `ex:p` from
+    /// the same focus node (spec §4.3.2).
+    Disjoint(NamedNode),
+    /// `sh:lessThan ex:p` — every value node must be `<` every object of `ex:p`
+    /// from the same focus node, under SPARQL `<` semantics (spec §4.3.3).
+    LessThan(NamedNode),
+    /// `sh:lessThanOrEquals ex:p` — every value node must be `<=` every object
+    /// of `ex:p` from the same focus node (spec §4.3.4).
+    LessThanOrEquals(NamedNode),
+    /// `sh:qualifiedValueShape` + `sh:qualifiedMinCount`/`sh:qualifiedMaxCount`
+    /// (spec §4.5.4–4.5.5).
+    QualifiedValueShape {
+        /// The qualified value shape the counted value nodes must conform to.
+        shape: Box<Shape>,
+        /// Sibling qualified value shapes (spec §4.5.5): the values of
+        /// `sh:property/sh:qualifiedValueShape` on all parents of this property
+        /// shape, minus this constraint's own shape. Populated only when
+        /// `disjoint` is true (empty otherwise — never consulted).
+        siblings: Vec<Shape>,
+        /// `sh:qualifiedMinCount`, if declared.
+        min_count: Option<u64>,
+        /// `sh:qualifiedMaxCount`, if declared.
+        max_count: Option<u64>,
+        /// `sh:qualifiedValueShapesDisjoint true` — value nodes conforming to
+        /// any sibling qualified shape are excluded before counting.
+        disjoint: bool,
+    },
 }
 
 /// A property shape, reached via `sh:property` from a node shape.
@@ -168,6 +213,10 @@ pub struct PropertyShape {
     pub path: Path,
     /// Constraints on values reached via the path.
     pub constraints: Vec<Constraint>,
+    /// Property shapes nested under THIS property shape via `sh:property`
+    /// (spec §2.1: `sh:property` may appear on any shape). Each nested shape is
+    /// evaluated with every value node of this shape's path as its focus node.
+    pub property_shapes: Vec<Self>,
     /// Node shapes that RDF 1.2 reifiers for this focus/path/value triple must conform to.
     pub reifier_shapes: Vec<Shape>,
     /// Whether at least one RDF 1.2 reifier is required for each focus/path/value triple.
@@ -176,6 +225,9 @@ pub struct PropertyShape {
     pub severity: Severity,
     /// Optional human-readable message.
     pub message: Option<String>,
+    /// Whether `sh:deactivated true` is set — a deactivated property shape
+    /// validates nothing.
+    pub deactivated: bool,
     /// Optional PurRDF ABox/TBox/RBox/CBox role annotations on this property shape.
     pub box_roles: Vec<NamedNode>,
 }
@@ -246,40 +298,10 @@ pub fn from_dataset_with_prefixes(
     parser.parse()
 }
 
-// ── Hard-fail predicate set ────────────────────────────────────────────────────
-
-/// The set of SHACL predicate IRIs that are part of SHACL spec but are NOT
-/// modelled in this implementation.  Encountering any of them on a shape node
-/// is a hard error (no silent skip).
-///
-/// The full list is compiled once.  Benign shape-metadata predicates
-/// (`sh:name`, `sh:description`, `sh:order`, `sh:group`, `sh:message`,
-/// `sh:severity`, `sh:deactivated`, `sh:path`, `sh:property`, `sh:flags`)
-/// are NOT in this set — they are handled or deliberately ignored.
-fn unsupported_predicates() -> HashSet<&'static str> {
-    [
-        sh::QUALIFIED_VALUE_SHAPE,
-        sh::QUALIFIED_MIN_COUNT,
-        sh::QUALIFIED_MAX_COUNT,
-        sh::LESS_THAN,
-        sh::LESS_THAN_OR_EQUALS,
-        sh::EQUALS,
-        sh::DISJOINT,
-        // unsupported path forms (checked on bnode path objects)
-        sh::ALTERNATIVE_PATH,
-        sh::ZERO_OR_MORE_PATH,
-        sh::ONE_OR_MORE_PATH,
-        sh::ZERO_OR_ONE_PATH,
-    ]
-    .into_iter()
-    .collect()
-}
-
 // ── Internal parser ────────────────────────────────────────────────────────────
 
 struct Parser<'s> {
     data: &'s IrDataGraph,
-    unsupported: HashSet<&'static str>,
     /// Tracks shape nodes currently being parsed to prevent infinite recursion
     /// through `sh:node` or `sh:and/or/xone` cycles.
     in_flight: HashSet<String>,
@@ -292,7 +314,6 @@ impl<'s> Parser<'s> {
     fn new(data: &'s IrDataGraph, doc_prefixes: &[(String, String)]) -> Self {
         Self {
             data,
-            unsupported: unsupported_predicates(),
             in_flight: HashSet::new(),
             doc_prefixes: doc_prefixes.to_vec(),
         }
@@ -343,21 +364,76 @@ impl<'s> Parser<'s> {
             property_shape_nodes.insert(quad.object);
         }
 
-        // Remove property-shape-only nodes from top-level set
+        // Remove property-shape nodes from the top-level set — UNLESS the node
+        // declares its own sh:target* (spec §3.1: every shape with targets is
+        // validated against them; a standalone `sh:PropertyShape` carrying
+        // `sh:targetNode`/`sh:targetClass` is a first-class validatable shape).
+        // A property shape reachable only via sh:property has no targets of its
+        // own and validates solely through its parent.
         for ps in &property_shape_nodes {
-            shape_ids.remove(ps);
+            if !self.has_own_targets(ps) {
+                shape_ids.remove(ps);
+            }
         }
 
-        // Parse each top-level node shape in stable (sorted) order
+        // The pre-binding restrictions gate every SHACL-SPARQL ASK validator in
+        // the graph (custom constraint components are otherwise unsupported,
+        // but a restricted query must still hard-fail per SHACL-SPARQL §5.2.1).
+        self.check_ask_validators()?;
+
+        // Parse each top-level shape in stable (sorted) order. A node with
+        // sh:path is a (standalone) PROPERTY shape: its path-scoped constraints
+        // are wrapped in a single-property Shape carrying the node's targets.
         let mut node_shapes: Vec<Shape> = Vec::new();
         let mut ids: Vec<Term> = shape_ids.into_iter().collect();
         ids.sort_by_key(Term::to_string);
         for term in ids {
-            let shape = self.parse_node_shape(term.clone())?;
+            let shape = if self.first_object_of(&term, sh::PATH).is_some() {
+                self.parse_standalone_property_shape(term.clone())?
+            } else {
+                self.parse_node_shape(term.clone())?
+            };
             node_shapes.push(shape);
         }
 
         Ok(Shapes { node_shapes })
+    }
+
+    /// Whether `id` declares any SHACL target of its own (`sh:targetClass`,
+    /// `sh:targetSubjectsOf`, `sh:targetObjectsOf`, `sh:targetNode`,
+    /// SHACL-AF `sh:target`, or the implicit `rdfs:Class` target).
+    fn has_own_targets(&self, id: &Term) -> bool {
+        for pred in [
+            sh::TARGET_CLASS,
+            sh::TARGET_SUBJECTS_OF,
+            sh::TARGET_OBJECTS_OF,
+            sh::TARGET_NODE,
+            sh::TARGET,
+        ] {
+            if self.first_object_of(id, pred).is_some() {
+                return true;
+            }
+        }
+        matches!(id, Term::NamedNode(_)) && self.has_type(id, rdfs::CLASS)
+    }
+
+    /// Parse a TOP-LEVEL property shape (a node with `sh:path` and its own
+    /// targets) into a wrapper [`Shape`]: the targets live on the wrapper, the
+    /// path-scoped constraints in its single `property_shapes` entry.
+    fn parse_standalone_property_shape(&mut self, id: Term) -> Result<Shape, String> {
+        let targets = self.parse_targets(&id)?;
+        let ps = self.parse_property_shape(&id)?;
+        let deactivated = ps.deactivated;
+        Ok(Shape {
+            id,
+            targets,
+            constraints: vec![],
+            property_shapes: vec![ps],
+            severity: Severity::Violation,
+            message: None,
+            deactivated,
+            box_roles: vec![],
+        })
     }
 
     /// Pattern-query the shapes dataset over ALL graphs. `subject`/`object` are IRI
@@ -391,18 +467,6 @@ impl<'s> Parser<'s> {
                 GraphFilter::AnyGraph,
             )
             .is_empty()
-    }
-
-    /// Collect all predicate→object pairs for a given subject term.
-    fn predicates_of(&self, subject: &Term) -> Vec<(NamedNode, Term)> {
-        if !subject.is_subject() {
-            return vec![];
-        }
-        self.data
-            .quads_for_pattern(Some(subject), None, None, GraphFilter::AnyGraph)
-            .into_iter()
-            .map(|q| (q.predicate, q.object))
-            .collect()
     }
 
     /// Return all objects for `(subject, predicate, ?)`.
@@ -518,24 +582,10 @@ impl<'s> Parser<'s> {
 
     /// Inner parse logic shared between top-level and anonymous/inline shapes.
     fn parse_shape_inner(&mut self, id: &Term) -> Result<Shape, String> {
-        let id_str = id.to_string();
-        let preds = self.predicates_of(id);
-
-        // -- Check for unsupported predicates FIRST (hard-fail) --
-        for (pred, _obj) in &preds {
-            let iri = pred.as_str();
-            if self.unsupported.contains(iri) {
-                return Err(format!("unsupported SHACL term <{iri}> on shape {id_str}"));
-            }
-        }
-
         // -- Severity --
         let severity = self
             .first_object_of(id, sh::SEVERITY)
-            .and_then(|t| match &t {
-                Term::NamedNode(n) => Severity::from_iri(n.as_str()),
-                _ => None,
-            })
+            .and_then(|t| severity_from_term(&t))
             .unwrap_or(Severity::Violation);
 
         // -- Message (take first by stable sort of string representation) --
@@ -960,7 +1010,14 @@ impl<'s> Parser<'s> {
             // DESCRIBE parse but cannot bind ?this and would panic at eval — reject
             // at the boundary.
             match purrdf_sparql_algebra::SparqlParser::new().parse_query(&select) {
-                Ok(purrdf_sparql_algebra::Query::Select { .. }) => {}
+                Ok(query @ purrdf_sparql_algebra::Query::Select { .. }) => {
+                    // The query runs with $this pre-bound to each focus node;
+                    // the SHACL-SPARQL §5.2.1 pre-binding restrictions (no
+                    // MINUS / SERVICE / VALUES, no `AS $this`, subqueries must
+                    // project $this) reject it as a hard failure at load.
+                    crate::prebinding::check_select(&query, &["this"])
+                        .map_err(|e| format!("sh:sparql constraint on shape {id}: {e}"))?;
+                }
                 Ok(_) => {
                     return Err(format!(
                         "sh:sparql constraint on shape {id} must be a SELECT query (ASK/CONSTRUCT/DESCRIBE are not valid SHACL-SPARQL)"
@@ -988,10 +1045,7 @@ impl<'s> Parser<'s> {
             // Optional per-constraint sh:severity override.
             let severity = self
                 .first_object_of(&c_node, sh::SEVERITY)
-                .and_then(|t| match &t {
-                    Term::NamedNode(n) => Severity::from_iri(n.as_str()),
-                    _ => None,
-                });
+                .and_then(|t| severity_from_term(&t));
 
             constraints.push(Constraint::Sparql {
                 select,
@@ -1000,37 +1054,194 @@ impl<'s> Parser<'s> {
             });
         }
 
+        // sh:equals / sh:disjoint / sh:lessThan / sh:lessThanOrEquals — the
+        // property-pair constraint components (§4.3). Each object must be an IRI;
+        // a non-IRI object is malformed and hard-fails (no silent drop).
+        for (pred, make) in [
+            (
+                sh::EQUALS,
+                Constraint::Equals as fn(NamedNode) -> Constraint,
+            ),
+            (sh::DISJOINT, Constraint::Disjoint as fn(_) -> _),
+            (sh::LESS_THAN, Constraint::LessThan as fn(_) -> _),
+            (
+                sh::LESS_THAN_OR_EQUALS,
+                Constraint::LessThanOrEquals as fn(_) -> _,
+            ),
+        ] {
+            let mut props: Vec<NamedNode> = Vec::new();
+            for t in self.objects_of(id, pred) {
+                match t {
+                    Term::NamedNode(n) => props.push(n),
+                    other => {
+                        return Err(format!(
+                            "<{pred}> on shape {id} must be an IRI, got {other}"
+                        ));
+                    }
+                }
+            }
+            props.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            for n in props {
+                constraints.push(make(n));
+            }
+        }
+
+        // sh:qualifiedValueShape + sh:qualifiedMinCount / sh:qualifiedMaxCount
+        // (§4.5.4–4.5.5). The counts require the shape and vice versa — a
+        // dangling half of the pair is malformed and hard-fails.
+        constraints.extend(self.parse_qualified_value_shapes(id)?);
+
         Ok(constraints)
+    }
+
+    /// Parse the qualified-value-shape constraint(s) declared on `id`.
+    ///
+    /// Returns one [`Constraint::QualifiedValueShape`] per `sh:qualifiedValueShape`
+    /// object (sorted for determinism). The declared `sh:qualifiedMinCount` /
+    /// `sh:qualifiedMaxCount` apply to each. When
+    /// `sh:qualifiedValueShapesDisjoint true` is set, the sibling qualified value
+    /// shapes (§4.5.5: the values of `sh:property/sh:qualifiedValueShape` on the
+    /// parents of `id`, minus the constraint's own shape) are parsed and stored.
+    fn parse_qualified_value_shapes(&mut self, id: &Term) -> Result<Vec<Constraint>, String> {
+        let mut qvs_nodes: Vec<Term> = self.objects_of(id, sh::QUALIFIED_VALUE_SHAPE);
+        qvs_nodes.sort_by_key(ToString::to_string);
+
+        let min_count = match self.first_object_of(id, sh::QUALIFIED_MIN_COUNT) {
+            Some(t) => Some(parse_u64(&t).ok_or_else(|| {
+                format!("sh:qualifiedMinCount value is not a non-negative integer on {id}")
+            })?),
+            None => None,
+        };
+        let max_count = match self.first_object_of(id, sh::QUALIFIED_MAX_COUNT) {
+            Some(t) => Some(parse_u64(&t).ok_or_else(|| {
+                format!("sh:qualifiedMaxCount value is not a non-negative integer on {id}")
+            })?),
+            None => None,
+        };
+
+        if qvs_nodes.is_empty() {
+            // sh:qualifiedMinCount / sh:qualifiedMaxCount without an
+            // sh:qualifiedValueShape leaves the constraint component INACTIVE
+            // (its mandatory parameter is absent — W3C core/node/qualified-001
+            // expects the dangling counts to be ignored, not a hard failure).
+            return Ok(vec![]);
+        }
+        if min_count.is_none() && max_count.is_none() {
+            return Err(format!(
+                "sh:qualifiedValueShape on {id} requires sh:qualifiedMinCount or \
+                 sh:qualifiedMaxCount"
+            ));
+        }
+
+        let disjoint = self
+            .first_object_of(id, sh::QUALIFIED_VALUE_SHAPES_DISJOINT)
+            .is_some_and(|t| matches!(&t, Term::Literal(lit) if lit.value() == "true"));
+
+        let mut out = Vec::with_capacity(qvs_nodes.len());
+        for qvs_node in &qvs_nodes {
+            let shape = self.parse_inline_shape(qvs_node.clone())?;
+            let siblings = if disjoint {
+                self.parse_sibling_qualified_shapes(id, qvs_node)?
+            } else {
+                vec![]
+            };
+            out.push(Constraint::QualifiedValueShape {
+                shape: Box::new(shape),
+                siblings,
+                min_count,
+                max_count,
+                disjoint,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Collect and parse the sibling qualified value shapes of `own_qvs` (§4.5.5):
+    /// all values of `sh:property/sh:qualifiedValueShape` reachable from the
+    /// parents of the property shape `ps_id`, minus `own_qvs` itself.
+    fn parse_sibling_qualified_shapes(
+        &mut self,
+        ps_id: &Term,
+        own_qvs: &Term,
+    ) -> Result<Vec<Shape>, String> {
+        let property = Term::NamedNode(NamedNode::from(sh::PROPERTY));
+        let mut sibling_nodes: Vec<Term> = Vec::new();
+        let mut seen: HashSet<Term> = HashSet::new();
+        // Parents: subjects of (?, sh:property, ps_id).
+        let mut parents: Vec<Term> = self
+            .data
+            .quads_for_pattern(None, Some(&property), Some(ps_id), GraphFilter::AnyGraph)
+            .into_iter()
+            .map(|q| q.subject)
+            .collect();
+        parents.sort_by_key(Term::to_string);
+        parents.dedup();
+        for parent in &parents {
+            let mut sibling_ps: Vec<Term> = self.objects_of(parent, sh::PROPERTY);
+            sibling_ps.sort_by_key(Term::to_string);
+            for ps in sibling_ps {
+                let mut qvs: Vec<Term> = self.objects_of(&ps, sh::QUALIFIED_VALUE_SHAPE);
+                qvs.sort_by_key(Term::to_string);
+                for q in qvs {
+                    if &q != own_qvs && seen.insert(q.clone()) {
+                        sibling_nodes.push(q);
+                    }
+                }
+            }
+        }
+        let mut siblings = Vec::with_capacity(sibling_nodes.len());
+        for node in sibling_nodes {
+            siblings.push(self.parse_inline_shape(node)?);
+        }
+        Ok(siblings)
+    }
+
+    /// Enforce the SHACL-SPARQL §5.2.1 pre-binding restrictions on every
+    /// `sh:ask` validator in the shapes graph.
+    ///
+    /// Custom SPARQL constraint components are otherwise unsupported by this
+    /// engine, but a validator whose ASK query is ILLEGAL under pre-binding
+    /// (its `$this`/`$value` variables are pre-bound at execution) must still
+    /// be rejected as a hard failure (W3C `unsupported-sparql-006`). An
+    /// UNPARSABLE ask query is skipped — the component never executes here, so
+    /// only well-formed-but-restricted queries hard-fail.
+    fn check_ask_validators(&self) -> Result<(), String> {
+        let mut asks: Vec<(Term, String)> = self
+            .quads_with(None, Some(sh::ASK), None)
+            .into_iter()
+            .filter_map(|q| match q.object {
+                Term::Literal(lit) => Some((q.subject, lit.value().to_owned())),
+                _ => None,
+            })
+            .collect();
+        asks.sort_by(|a, b| (a.0.to_string(), &a.1).cmp(&(b.0.to_string(), &b.1)));
+        for (validator, raw_ask) in asks {
+            let query_text = format!("{}{raw_ask}", self.prefix_header(&[&validator]));
+            let Ok(query) = purrdf_sparql_algebra::SparqlParser::new().parse_query(&query_text)
+            else {
+                continue; // unsupported component — never executed by this engine
+            };
+            crate::prebinding::check_ask(&query, &["this", "value"])
+                .map_err(|e| format!("sh:ask validator {validator}: {e}"))?;
+        }
+        Ok(())
     }
 
     /// Parse a property shape node.
     fn parse_property_shape(&mut self, ps_node: &Term) -> Result<PropertyShape, String> {
         let ps_str = ps_node.to_string();
 
-        // Check for unsupported predicates first
-        for (pred, _) in self.predicates_of(ps_node) {
-            let iri = pred.as_str();
-            if self.unsupported.contains(iri) {
-                return Err(format!(
-                    "unsupported SHACL term <{iri}> on property shape {ps_str}"
-                ));
-            }
-        }
-
         // sh:path is required
         let path_node = self
             .first_object_of(ps_node, sh::PATH)
             .ok_or_else(|| format!("property shape {ps_str} missing sh:path"))?;
 
-        let path = self.parse_path(&path_node, ps_node)?;
+        let path = self.parse_path(&path_node, ps_node, &mut HashSet::new())?;
 
         // severity
         let severity = self
             .first_object_of(ps_node, sh::SEVERITY)
-            .and_then(|t| match &t {
-                Term::NamedNode(n) => Severity::from_iri(n.as_str()),
-                _ => None,
-            })
+            .and_then(|t| severity_from_term(&t))
             .unwrap_or(Severity::Violation);
 
         // message
@@ -1045,8 +1256,39 @@ impl<'s> Parser<'s> {
         messages.sort();
         let message = messages.into_iter().next();
 
+        // sh:deactivated — a deactivated property shape validates nothing.
+        let deactivated = self
+            .first_object_of(ps_node, sh::DEACTIVATED)
+            .is_some_and(|t| matches!(&t, Term::Literal(lit) if lit.value() == "true"));
+
         // constraints on the property shape
         let constraints = self.parse_constraints(ps_node)?;
+
+        // Nested sh:property on a property shape (spec §2.1: sh:property may
+        // appear on ANY shape) — each nested property shape applies to THIS
+        // shape's value nodes. `in_flight` breaks sh:property cycles by
+        // skipping a shape already being parsed (mirrors parse_node_shape's
+        // cycle stub).
+        let mut nested_nodes: Vec<Term> = self.objects_of(ps_node, sh::PROPERTY);
+        nested_nodes.sort_by_key(ToString::to_string);
+        let mut property_shapes: Vec<PropertyShape> = Vec::new();
+        if !nested_nodes.is_empty() {
+            self.in_flight.insert(ps_str.clone());
+            for nested in nested_nodes {
+                if self.in_flight.contains(&nested.to_string()) {
+                    continue;
+                }
+                match self.parse_property_shape(&nested) {
+                    Ok(parsed) => property_shapes.push(parsed),
+                    Err(e) => {
+                        self.in_flight.remove(&ps_str);
+                        return Err(e);
+                    }
+                }
+            }
+            self.in_flight.remove(&ps_str);
+        }
+
         let box_roles = self.box_roles_of(ps_node);
         let reification_required = self
             .objects_of(ps_node, sh::REIFICATION_REQUIRED)
@@ -1070,57 +1312,109 @@ impl<'s> Parser<'s> {
         Ok(PropertyShape {
             path,
             constraints,
+            property_shapes,
             reifier_shapes,
             reification_required,
             severity,
             message,
+            deactivated,
             box_roles,
         })
     }
 
-    /// Parse an `sh:path` value into a [`Path`].
-    fn parse_path(&self, path_node: &Term, shape_id: &Term) -> Result<Path, String> {
+    /// Parse an `sh:path` value into a [`Path`] (all six §2.3.1 path forms).
+    ///
+    /// `in_flight` tracks the blank path nodes currently being expanded so a
+    /// cyclic path structure (a blank node reachable from itself) hard-fails
+    /// instead of recursing forever.
+    fn parse_path(
+        &self,
+        path_node: &Term,
+        shape_id: &Term,
+        in_flight: &mut HashSet<String>,
+    ) -> Result<Path, String> {
         match path_node {
             Term::NamedNode(nn) => Ok(Path::Predicate(nn.clone())),
-            Term::BlankNode(_) => {
-                // Check for unsupported path forms first
-                for unsupported_path_pred in [
-                    sh::ALTERNATIVE_PATH,
-                    sh::ZERO_OR_MORE_PATH,
-                    sh::ONE_OR_MORE_PATH,
-                    sh::ZERO_OR_ONE_PATH,
-                ] {
-                    if self
-                        .first_object_of(path_node, unsupported_path_pred)
-                        .is_some()
-                    {
-                        return Err(format!(
-                            "unsupported SHACL term <{unsupported_path_pred}> on shape {shape_id}"
-                        ));
-                    }
+            Term::BlankNode(label) => {
+                if !in_flight.insert(label.clone()) {
+                    return Err(format!("cyclic sh:path structure on shape {shape_id}"));
                 }
-
-                // sh:inversePath
-                if let Some(inner) = self.first_object_of(path_node, sh::INVERSE_PATH) {
-                    let inner_path = self.parse_path(&inner, shape_id)?;
-                    return Ok(Path::Inverse(Box::new(inner_path)));
-                }
-
-                // RDF-list sequence paths: if the bnode has rdf:first it's a sequence
-                if self.first_object_of(path_node, rdf::FIRST).is_some() {
-                    return Err(format!(
-                        "unsupported SHACL sequence path on shape {shape_id}"
-                    ));
-                }
-
-                Err(format!(
-                    "unrecognised sh:path blank node structure on shape {shape_id}"
-                ))
+                let result = self.parse_blank_path(path_node, shape_id, in_flight);
+                in_flight.remove(label);
+                result
             }
             _ => Err(format!(
                 "sh:path on shape {shape_id} must be an IRI or blank node, got {path_node}"
             )),
         }
+    }
+
+    /// Parse the blank-node forms of an `sh:path` value: sequence (RDF list),
+    /// inverse, alternative, and the three closure paths.
+    fn parse_blank_path(
+        &self,
+        path_node: &Term,
+        shape_id: &Term,
+        in_flight: &mut HashSet<String>,
+    ) -> Result<Path, String> {
+        // RDF list in path position = sequence path (at least two members).
+        if self.first_object_of(path_node, rdf::FIRST).is_some() {
+            let items = self.walk_rdf_list(path_node, shape_id)?;
+            if items.len() < 2 {
+                return Err(format!(
+                    "sequence path on shape {shape_id} must have at least two members, \
+                     got {}",
+                    items.len()
+                ));
+            }
+            let mut parts = Vec::with_capacity(items.len());
+            for item in &items {
+                parts.push(self.parse_path(item, shape_id, in_flight)?);
+            }
+            return Ok(Path::Sequence(parts));
+        }
+
+        // sh:inversePath
+        if let Some(inner) = self.first_object_of(path_node, sh::INVERSE_PATH) {
+            let inner_path = self.parse_path(&inner, shape_id, in_flight)?;
+            return Ok(Path::Inverse(Box::new(inner_path)));
+        }
+
+        // sh:alternativePath — an RDF list of at least two alternatives.
+        if let Some(list_head) = self.first_object_of(path_node, sh::ALTERNATIVE_PATH) {
+            let items = self.walk_rdf_list(&list_head, shape_id)?;
+            if items.len() < 2 {
+                return Err(format!(
+                    "sh:alternativePath on shape {shape_id} must have at least two \
+                     members, got {}",
+                    items.len()
+                ));
+            }
+            let mut parts = Vec::with_capacity(items.len());
+            for item in &items {
+                parts.push(self.parse_path(item, shape_id, in_flight)?);
+            }
+            return Ok(Path::Alternative(parts));
+        }
+
+        // sh:zeroOrMorePath / sh:oneOrMorePath / sh:zeroOrOnePath
+        for (pred, make) in [
+            (
+                sh::ZERO_OR_MORE_PATH,
+                Path::ZeroOrMore as fn(Box<Path>) -> Path,
+            ),
+            (sh::ONE_OR_MORE_PATH, Path::OneOrMore as fn(_) -> _),
+            (sh::ZERO_OR_ONE_PATH, Path::ZeroOrOne as fn(_) -> _),
+        ] {
+            if let Some(inner) = self.first_object_of(path_node, pred) {
+                let inner_path = self.parse_path(&inner, shape_id, in_flight)?;
+                return Ok(make(Box::new(inner_path)));
+            }
+        }
+
+        Err(format!(
+            "unrecognised sh:path blank node structure on shape {shape_id}"
+        ))
     }
 
     /// Walk an RDF list (`rdf:first`/`rdf:rest`/`rdf:nil`) and collect items.
@@ -1188,16 +1482,6 @@ impl<'s> Parser<'s> {
             });
         }
 
-        // Check for unsupported predicates
-        for (pred, _) in self.predicates_of(&id) {
-            let iri = pred.as_str();
-            if self.unsupported.contains(iri) {
-                return Err(format!(
-                    "unsupported SHACL term <{iri}> on inline shape {id_str}"
-                ));
-            }
-        }
-
         if self.first_object_of(&id, sh::PATH).is_some() {
             // Treat as an inline property shape
             self.in_flight.insert(id_str.clone());
@@ -1221,6 +1505,19 @@ impl<'s> Parser<'s> {
 }
 
 // ── Helper functions ───────────────────────────────────────────────────────────
+
+/// Map an `sh:severity` object term to a [`Severity`]: the three built-in
+/// `sh:` severities map to their variants, any OTHER IRI is preserved verbatim
+/// (SHACL allows custom severity IRIs — W3C core/misc/severity-002), and a
+/// non-IRI object yields `None` (caller falls back to `sh:Violation`).
+fn severity_from_term(t: &Term) -> Option<Severity> {
+    match t {
+        Term::NamedNode(n) => {
+            Some(Severity::from_iri(n.as_str()).unwrap_or_else(|| Severity::Other(n.clone())))
+        }
+        _ => None,
+    }
+}
 
 /// Parse `sh:nodeKind` object IRI into a [`NodeKindValue`].
 fn parse_node_kind(iri: &str) -> Option<NodeKindValue> {
@@ -1308,7 +1605,7 @@ mod tests {
             Path::Predicate(nn) => {
                 assert_eq!(nn.as_str(), "http://example.org/ns#name");
             }
-            other @ Path::Inverse(_) => panic!("expected Path::Predicate, got {other:?}"),
+            other => panic!("expected Path::Predicate, got {other:?}"),
         }
 
         // Constraints must include MinCount(1) and MaxCount(1)
@@ -1400,9 +1697,9 @@ mod tests {
                 Path::Predicate(nn) => {
                     assert_eq!(nn.as_str(), "http://example.org/ns#parent");
                 }
-                other @ Path::Inverse(_) => panic!("expected inner Predicate, got {other:?}"),
+                other => panic!("expected inner Predicate, got {other:?}"),
             },
-            other @ Path::Predicate(_) => panic!("expected Path::Inverse, got {other:?}"),
+            other => panic!("expected Path::Inverse, got {other:?}"),
         }
     }
 
@@ -1478,7 +1775,9 @@ mod tests {
     // ── Importable prefix set resolves through the production reader ─────────
     #[test]
     fn core_prefixes_import_resolves_registry_only_prefixes() {
-        let core_set = purrdf_slice::emit_core_prefixes();
+        let vocab =
+            purrdf_slice::SliceVocab::for_namespace("https://blackcatinformatics.ca/purrdf/");
+        let core_set = purrdf_slice::emit_core_prefixes(&vocab);
         let shape = r#"
             purrdf:SpanImportProofShape a sh:NodeShape ;
                 sh:prefixes purrdf:CorePrefixes ;
@@ -1600,10 +1899,10 @@ mod tests {
         );
     }
 
-    // ── Test 5: sh:qualifiedValueShape → Err ──────────────────────────────────
+    // ── Test 5: sh:qualifiedValueShape parses (§4.5.4) ─────────────────────────
 
     #[test]
-    fn test_qualified_value_shape_returns_err() {
+    fn test_qualified_value_shape_parses() {
         let ttl = format!(
             r"{PREFIXES}
             ex:QShape a sh:NodeShape ;
@@ -1612,14 +1911,152 @@ mod tests {
                     sh:path ex:item ;
                     sh:qualifiedValueShape [ sh:class ex:Item ] ;
                     sh:qualifiedMinCount 1 ;
+                    sh:qualifiedMaxCount 3 ;
                 ] .
         "
         );
         let store = load_store(&ttl);
-        let result = from_store(&store);
+        let shapes = from_store(&store).expect("sh:qualifiedValueShape must parse");
+        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let qvs = ps.constraints.iter().find_map(|c| match c {
+            Constraint::QualifiedValueShape {
+                shape,
+                siblings,
+                min_count,
+                max_count,
+                disjoint,
+            } => Some((shape, siblings, min_count, max_count, disjoint)),
+            _ => None,
+        });
+        let (shape, siblings, min_count, max_count, disjoint) =
+            qvs.expect("expected QualifiedValueShape constraint");
+        assert_eq!(*min_count, Some(1));
+        assert_eq!(*max_count, Some(3));
+        assert!(!disjoint, "no sh:qualifiedValueShapesDisjoint declared");
+        assert!(siblings.is_empty(), "siblings only collected when disjoint");
         assert!(
-            result.is_err(),
-            "sh:qualifiedValueShape must cause a hard error"
+            shape
+                .constraints
+                .iter()
+                .any(|c| matches!(c, Constraint::Class(_))),
+            "qualified shape should carry sh:class"
+        );
+    }
+
+    #[test]
+    fn test_qualified_value_shape_disjoint_collects_siblings() {
+        let ttl = format!(
+            r"{PREFIXES}
+            ex:HandShape a sh:NodeShape ;
+                sh:targetClass ex:Hand ;
+                sh:property [
+                    sh:path ex:digit ;
+                    sh:qualifiedValueShape [ sh:class ex:Thumb ] ;
+                    sh:qualifiedMinCount 1 ;
+                    sh:qualifiedValueShapesDisjoint true ;
+                ] ;
+                sh:property [
+                    sh:path ex:digit ;
+                    sh:qualifiedValueShape [ sh:class ex:Finger ] ;
+                    sh:qualifiedMinCount 4 ;
+                    sh:qualifiedValueShapesDisjoint true ;
+                ] .
+        "
+        );
+        let store = load_store(&ttl);
+        let shapes = from_store(&store).expect("disjoint qualified shapes must parse");
+        let shape = &shapes.node_shapes[0];
+        assert_eq!(shape.property_shapes.len(), 2);
+        for ps in &shape.property_shapes {
+            let (siblings, disjoint) = ps
+                .constraints
+                .iter()
+                .find_map(|c| match c {
+                    Constraint::QualifiedValueShape {
+                        siblings, disjoint, ..
+                    } => Some((siblings, disjoint)),
+                    _ => None,
+                })
+                .expect("expected QualifiedValueShape");
+            assert!(disjoint);
+            assert_eq!(
+                siblings.len(),
+                1,
+                "each qualified shape has exactly one sibling (the other one)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_qualified_value_shape_without_counts_errors() {
+        let ttl = format!(
+            r"{PREFIXES}
+            ex:QShape a sh:NodeShape ;
+                sh:targetClass ex:Bar ;
+                sh:property [
+                    sh:path ex:item ;
+                    sh:qualifiedValueShape [ sh:class ex:Item ] ;
+                ] .
+        "
+        );
+        let store = load_store(&ttl);
+        let err = from_store(&store).expect_err("counts are required with a qualified shape");
+        assert!(
+            err.contains("qualifiedMinCount"),
+            "error should name the missing count, got: {err}"
+        );
+    }
+
+    // ── Property-pair constraints parse (§4.3) ─────────────────────────────────
+
+    #[test]
+    fn test_property_pair_constraints_parse() {
+        let ttl = format!(
+            r"{PREFIXES}
+            ex:PairShape a sh:NodeShape ;
+                sh:targetClass ex:Event ;
+                sh:property [ sh:path ex:start ; sh:lessThan ex:end ] ;
+                sh:property [ sh:path ex:first ; sh:lessThanOrEquals ex:last ] ;
+                sh:property [ sh:path ex:a ; sh:equals ex:b ] ;
+                sh:property [ sh:path ex:c ; sh:disjoint ex:d ] .
+        "
+        );
+        let store = load_store(&ttl);
+        let shapes = from_store(&store).expect("property-pair constraints must parse");
+        let shape = &shapes.node_shapes[0];
+        let all: Vec<&Constraint> = shape
+            .property_shapes
+            .iter()
+            .flat_map(|ps| ps.constraints.iter())
+            .collect();
+        assert!(all
+            .iter()
+            .any(|c| matches!(c, Constraint::LessThan(n) if n.as_str().ends_with("end"))));
+        assert!(all
+            .iter()
+            .any(|c| matches!(c, Constraint::LessThanOrEquals(n) if n.as_str().ends_with("last"))));
+        assert!(all
+            .iter()
+            .any(|c| matches!(c, Constraint::Equals(n) if n.as_str().ends_with('b'))));
+        assert!(all
+            .iter()
+            .any(|c| matches!(c, Constraint::Disjoint(n) if n.as_str().ends_with('d'))));
+    }
+
+    #[test]
+    fn test_property_pair_non_iri_object_errors() {
+        let ttl = format!(
+            r#"{PREFIXES}
+            ex:PairShape a sh:NodeShape ;
+                sh:targetClass ex:Event ;
+                sh:property [ sh:path ex:start ; sh:lessThan "notAnIri" ] .
+        "#
+        );
+        let store = load_store(&ttl);
+        let err = from_store(&store).expect_err("a literal sh:lessThan object must hard-fail");
+        assert!(
+            err.contains("lessThan") && err.contains("IRI"),
+            "error should name the malformed pair object, got: {err}"
         );
     }
 
@@ -1745,25 +2182,156 @@ mod tests {
         assert_eq!(and_c.unwrap().len(), 2);
     }
 
-    // ── Test 11: unsupported path form → Err ──────────────────────────────────
+    // ── Test 11: all composite path forms parse (§2.3.1) ───────────────────────
 
     #[test]
-    fn test_zero_or_more_path_returns_err() {
+    fn test_zero_or_more_path_parses() {
         let ttl = format!(
             r"{PREFIXES}
             ex:StarShape a sh:NodeShape ;
                 sh:targetClass ex:Node ;
                 sh:property [
                     sh:path [ sh:zeroOrMorePath ex:link ] ;
-                    sh:minCount 0 ;
+                    sh:nodeKind sh:IRI ;
                 ] .
         "
         );
         let store = load_store(&ttl);
-        let result = from_store(&store);
+        let shapes = from_store(&store).expect("sh:zeroOrMorePath must parse");
+        let ps = &shapes.node_shapes[0].property_shapes[0];
+        match &ps.path {
+            Path::ZeroOrMore(inner) => match inner.as_ref() {
+                Path::Predicate(nn) => assert_eq!(nn.as_str(), "http://example.org/ns#link"),
+                other => panic!("expected inner Predicate, got {other:?}"),
+            },
+            other => panic!("expected Path::ZeroOrMore, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_one_or_more_and_zero_or_one_paths_parse() {
+        let ttl = format!(
+            r"{PREFIXES}
+            ex:PlusShape a sh:NodeShape ;
+                sh:targetClass ex:Node ;
+                sh:property [ sh:path [ sh:oneOrMorePath ex:link ] ; sh:nodeKind sh:IRI ] .
+            ex:OptShape a sh:NodeShape ;
+                sh:targetClass ex:Node ;
+                sh:property [ sh:path [ sh:zeroOrOnePath ex:link ] ; sh:nodeKind sh:IRI ] .
+        "
+        );
+        let store = load_store(&ttl);
+        let shapes = from_store(&store).expect("closure paths must parse");
+        let mut saw_plus = false;
+        let mut saw_opt = false;
+        for shape in &shapes.node_shapes {
+            for ps in &shape.property_shapes {
+                match &ps.path {
+                    Path::OneOrMore(_) => saw_plus = true,
+                    Path::ZeroOrOne(_) => saw_opt = true,
+                    other => panic!("expected a closure path, got {other:?}"),
+                }
+            }
+        }
+        assert!(saw_plus, "expected a OneOrMore path");
+        assert!(saw_opt, "expected a ZeroOrOne path");
+    }
+
+    #[test]
+    fn test_sequence_path_parses() {
+        let ttl = format!(
+            r"{PREFIXES}
+            ex:SeqShape a sh:NodeShape ;
+                sh:targetClass ex:Node ;
+                sh:property [
+                    sh:path ( ex:address ex:city ) ;
+                    sh:minCount 1 ;
+                ] .
+        "
+        );
+        let store = load_store(&ttl);
+        let shapes = from_store(&store).expect("sequence path must parse");
+        let ps = &shapes.node_shapes[0].property_shapes[0];
+        match &ps.path {
+            Path::Sequence(parts) => {
+                assert_eq!(parts.len(), 2);
+                assert!(matches!(&parts[0], Path::Predicate(n) if n.as_str().ends_with("address")));
+                assert!(matches!(&parts[1], Path::Predicate(n) if n.as_str().ends_with("city")));
+            }
+            other => panic!("expected Path::Sequence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_alternative_path_parses() {
+        let ttl = format!(
+            r"{PREFIXES}
+            ex:AltShape a sh:NodeShape ;
+                sh:targetClass ex:Node ;
+                sh:property [
+                    sh:path [ sh:alternativePath ( ex:email ex:phone ) ] ;
+                    sh:minCount 1 ;
+                ] .
+        "
+        );
+        let store = load_store(&ttl);
+        let shapes = from_store(&store).expect("alternative path must parse");
+        let ps = &shapes.node_shapes[0].property_shapes[0];
+        match &ps.path {
+            Path::Alternative(parts) => {
+                assert_eq!(parts.len(), 2);
+                assert!(matches!(&parts[0], Path::Predicate(n) if n.as_str().ends_with("email")));
+                assert!(matches!(&parts[1], Path::Predicate(n) if n.as_str().ends_with("phone")));
+            }
+            other => panic!("expected Path::Alternative, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_nested_path_combination_parses() {
+        // An alternative whose second branch is an inverse of a zeroOrMore —
+        // nested combinations must compose.
+        let ttl = format!(
+            r"{PREFIXES}
+            ex:NestShape a sh:NodeShape ;
+                sh:targetClass ex:Node ;
+                sh:property [
+                    sh:path [ sh:alternativePath (
+                        ( ex:a ex:b )
+                        [ sh:inversePath [ sh:zeroOrMorePath ex:c ] ]
+                    ) ] ;
+                    sh:minCount 1 ;
+                ] .
+        "
+        );
+        let store = load_store(&ttl);
+        let shapes = from_store(&store).expect("nested path combination must parse");
+        let ps = &shapes.node_shapes[0].property_shapes[0];
+        let Path::Alternative(parts) = &ps.path else {
+            panic!("expected Path::Alternative, got {:?}", ps.path);
+        };
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], Path::Sequence(seq) if seq.len() == 2));
+        assert!(matches!(
+            &parts[1],
+            Path::Inverse(inner) if matches!(inner.as_ref(), Path::ZeroOrMore(_))
+        ));
+    }
+
+    #[test]
+    fn test_single_member_sequence_path_errors() {
+        let ttl = format!(
+            r"{PREFIXES}
+            ex:SeqShape a sh:NodeShape ;
+                sh:targetClass ex:Node ;
+                sh:property [ sh:path ( ex:only ) ; sh:minCount 1 ] .
+        "
+        );
+        let store = load_store(&ttl);
+        let err = from_store(&store).expect_err("a one-member sequence path is malformed");
         assert!(
-            result.is_err(),
-            "sh:zeroOrMorePath must cause a hard error, got {result:?}"
+            err.contains("at least two members"),
+            "error should explain the arity rule, got: {err}"
         );
     }
 

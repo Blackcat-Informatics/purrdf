@@ -62,7 +62,7 @@ pub mod sh {
 
     pub const INVERSE_PATH: &str = "http://www.w3.org/ns/shacl#inversePath";
 
-    // ── Supported path forms that are NOT modelled (hard-fail set) ────────────
+    // ── Composite path forms (§2.3.1) ──────────────────────────────────────────
 
     pub const ALTERNATIVE_PATH: &str = "http://www.w3.org/ns/shacl#alternativePath";
 
@@ -142,7 +142,7 @@ pub mod sh {
 
     pub const IRI_OR_LITERAL: &str = "http://www.w3.org/ns/shacl#IRIOrLiteral";
 
-    // ── Unsupported constraint predicates (hard-fail set) ─────────────────────
+    // ── SHACL-AF and advanced constraint predicates ────────────────────────────
 
     pub const SPARQL: &str = "http://www.w3.org/ns/shacl#sparql";
 
@@ -153,6 +153,9 @@ pub mod sh {
     pub const QUALIFIED_MIN_COUNT: &str = "http://www.w3.org/ns/shacl#qualifiedMinCount";
 
     pub const QUALIFIED_MAX_COUNT: &str = "http://www.w3.org/ns/shacl#qualifiedMaxCount";
+
+    pub const QUALIFIED_VALUE_SHAPES_DISJOINT: &str =
+        "http://www.w3.org/ns/shacl#qualifiedValueShapesDisjoint";
 
     pub const LESS_THAN: &str = "http://www.w3.org/ns/shacl#lessThan";
 
@@ -177,6 +180,9 @@ pub mod sh {
     pub const MAX_EXCLUSIVE: &str = "http://www.w3.org/ns/shacl#maxExclusive";
 
     pub const SELECT: &str = "http://www.w3.org/ns/shacl#select";
+
+    /// `sh:ask` — the ASK query of a SHACL-SPARQL validator.
+    pub const ASK: &str = "http://www.w3.org/ns/shacl#ask";
 
     // ── SHACL-AF prefix declarations (sh:prefixes / sh:declare) ───────────────
 
@@ -261,6 +267,24 @@ pub mod sh {
 
     pub const CLOSED_CONSTRAINT_COMPONENT: &str =
         "http://www.w3.org/ns/shacl#ClosedConstraintComponent";
+
+    pub const EQUALS_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#EqualsConstraintComponent";
+
+    pub const DISJOINT_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#DisjointConstraintComponent";
+
+    pub const LESS_THAN_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#LessThanConstraintComponent";
+
+    pub const LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#LessThanOrEqualsConstraintComponent";
+
+    pub const QUALIFIED_MIN_COUNT_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#QualifiedMinCountConstraintComponent";
+
+    pub const QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#QualifiedMaxCountConstraintComponent";
 }
 
 /// PurRDF namespace constants (`https://blackcatinformatics.ca/purrdf/`).

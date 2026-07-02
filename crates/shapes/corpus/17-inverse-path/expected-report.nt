@@ -1,4 +1,4 @@
-_:r0 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/ns#hasMember> .
+_:r0 <http://www.w3.org/ns/shacl#resultPath> _:path-inv--http--seq--seq-example-org-seq-ns-hasMember .
 _:r0 <http://www.w3.org/ns/shacl#sourceShape> <http://example.org/ns#OrphanShape> .
 _:r0 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#MinCountConstraintComponent> .
 _:r0 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
@@ -7,3 +7,4 @@ _:r0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/sha
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationReport> .
+_:path-inv--http--seq--seq-example-org-seq-ns-hasMember <http://www.w3.org/ns/shacl#inversePath> <http://example.org/ns#hasMember> .

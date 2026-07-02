@@ -15,21 +15,19 @@ use purrdf::RdfDataset;
 use crate::artifact::{ArtifactRecord, ArtifactRole};
 use crate::error::SliceError;
 use crate::rdf_query::{Dataset, Object};
+use crate::vocab::SliceVocab;
 
 // ── Namespace constants ───────────────────────────────────────────────────────
+//
+// Only W3C/DCMI terms are hardcoded; every slice-framework term (`Slice`,
+// `sliceTier`, `sliceDependsOn`, …) comes from the caller's [`SliceVocab`].
 
-const PURRDF: &str = "https://blackcatinformatics.ca/purrdf/";
 const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
 const DCTERMS_TITLE: &str = "http://purl.org/dc/terms/title";
 const DCTERMS_CREATOR: &str = "http://purl.org/dc/terms/creator";
 const DCTERMS_IDENTIFIER: &str = "http://purl.org/dc/terms/identifier";
-const PURRDF_SLICE_TIER: &str = "https://blackcatinformatics.ca/purrdf/sliceTier";
-const PURRDF_SLICE_CONSUMER: &str = "https://blackcatinformatics.ca/purrdf/sliceConsumer";
-const PURRDF_SLICE_PROFILE: &str = "https://blackcatinformatics.ca/purrdf/sliceProfile";
-const PURRDF_SLICE_DEPENDS_ON: &str = "https://blackcatinformatics.ca/purrdf/sliceDependsOn";
-const PURRDF_SLICE_CLASS: &str = "https://blackcatinformatics.ca/purrdf/Slice";
 
-/// The tier of a slice in the PurRDF taxonomy.
+/// The tier of a slice in the slice taxonomy.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SliceTier {
     Core,
@@ -39,8 +37,8 @@ pub enum SliceTier {
 }
 
 impl SliceTier {
-    fn from_iri(iri: &str) -> Self {
-        let base = PURRDF;
+    fn from_iri(iri: &str, vocab: &SliceVocab) -> Self {
+        let base = vocab.ns();
         match iri.strip_prefix(base) {
             Some("tierCore") => Self::Core,
             Some("tierExtension") => Self::Extension,
@@ -53,7 +51,7 @@ impl SliceTier {
 /// A parsed view of the mandatory `manifest.ttl` fields.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ManifestView {
-    /// The IRI of the slice resource (`a purrdf:Slice`).
+    /// The IRI of the slice resource (`a <vocab>Slice`).
     pub slice_iri: String,
     /// `rdfs:label` (first, in any language).
     pub label: Option<String>,
@@ -63,16 +61,16 @@ pub struct ManifestView {
     pub creators: Vec<String>,
     /// `dcterms:identifier` (e.g. DOI).
     pub identifier: Option<String>,
-    /// `purrdf:sliceTier`.
+    /// `<vocab>sliceTier`.
     pub tier: Option<SliceTier>,
-    /// `purrdf:sliceConsumer` values.
+    /// `<vocab>sliceConsumer` values.
     pub consumers: Vec<String>,
-    /// `purrdf:sliceProfile` values — the named profiles this slice declares
+    /// `<vocab>sliceProfile` values — the named profiles this slice declares
     /// membership in (e.g. `claims`, `memory`, `narrative`). Profile-document
     /// generation lives in the pipeline; this view exposes the raw declarations
     /// so docs consumers can compute per-term profile membership (#1026).
     pub profiles: Vec<String>,
-    /// `purrdf:sliceDependsOn` values — the slice IRIs this slice depends on.
+    /// `<vocab>sliceDependsOn` values — the slice IRIs this slice depends on.
     /// A named profile's membership is the closure of its declared members over
     /// this relation (#330); docs reuse it for the same closure (#1026).
     pub depends_on: Vec<String>,
@@ -113,27 +111,35 @@ impl SliceRecord {
     }
 }
 
-/// The slice catalog: a collection of discovered and loaded slice records.
+/// The slice catalog: a collection of discovered and loaded slice records,
+/// plus the caller's [`SliceVocab`] the manifests were interpreted with.
 #[derive(Debug)]
 pub struct SliceCatalog {
     records: Vec<SliceRecord>,
+    vocab: SliceVocab,
 }
 
 impl SliceCatalog {
     /// Recursively discover all slice directories under `root` (directories
-    /// containing a `manifest.ttl`) and load each one.
-    pub fn discover(root: &Path) -> Result<Self, SliceError> {
+    /// containing a `manifest.ttl`) and load each one, interpreting manifests
+    /// with the caller's `vocab`.
+    pub fn discover(root: &Path, vocab: SliceVocab) -> Result<Self, SliceError> {
         let dirs = find_slice_dirs(root)?;
         let records: Result<Vec<_>, _> = dirs
             .par_iter()
-            .map(|dir| Self::from_slice_dir(dir))
+            .map(|dir| Self::from_slice_dir(dir, &vocab))
             .collect();
         let records = records?;
-        Ok(Self { records })
+        Ok(Self { records, vocab })
+    }
+
+    /// The vocabulary this catalog's manifests were interpreted with.
+    pub fn vocab(&self) -> &SliceVocab {
+        &self.vocab
     }
 
     /// Load a single slice from `dir` (which must contain `manifest.ttl`).
-    pub fn from_slice_dir(dir: &Path) -> Result<SliceRecord, SliceError> {
+    pub fn from_slice_dir(dir: &Path, vocab: &SliceVocab) -> Result<SliceRecord, SliceError> {
         let manifest_path = dir.join("manifest.ttl");
         let manifest_bytes = std::fs::read(&manifest_path).map_err(SliceError::Io)?;
 
@@ -143,7 +149,7 @@ impl SliceCatalog {
         let dataset = parse_manifest(&manifest_bytes, &manifest_path)?;
 
         // Extract manifest view from the dataset.
-        let manifest = extract_manifest_view(&dataset)?;
+        let manifest = extract_manifest_view(&dataset, vocab)?;
 
         // Keep the frozen RdfDataset for lossless round-trip.
         let manifest_graph = Arc::new(dataset.into_inner());
@@ -178,9 +184,13 @@ fn parse_manifest(bytes: &[u8], path: &Path) -> Result<Dataset, SliceError> {
 
 // ── Manifest extraction ───────────────────────────────────────────────────────
 
-fn extract_manifest_view(ds: &Dataset) -> Result<ManifestView, SliceError> {
-    // Find the slice IRI: subject of `a purrdf:Slice`.
-    let slice_iri = find_slice_iri(ds)?;
+fn extract_manifest_view(ds: &Dataset, vocab: &SliceVocab) -> Result<ManifestView, SliceError> {
+    // Find the slice IRI: subject of `a <vocab>Slice`.
+    let slice_iri = find_slice_iri(ds, vocab)?;
+    let slice_tier = vocab.slice_tier();
+    let slice_consumer = vocab.slice_consumer();
+    let slice_profile = vocab.slice_profile();
+    let slice_depends_on = vocab.slice_depends_on();
 
     let mut label: Option<String> = None;
     let mut title: Option<String> = None;
@@ -211,20 +221,20 @@ fn extract_manifest_view(ds: &Dataset) -> Result<ManifestView, SliceError> {
                     identifier = Some(literal_value(&object));
                 }
             }
-            p if p == PURRDF_SLICE_TIER => {
+            p if p == slice_tier => {
                 if tier.is_none() {
                     if let Object::Named(nn) = &object {
-                        tier = Some(SliceTier::from_iri(nn));
+                        tier = Some(SliceTier::from_iri(nn, vocab));
                     }
                 }
             }
-            p if p == PURRDF_SLICE_CONSUMER => {
+            p if p == slice_consumer => {
                 consumers.push(literal_value(&object));
             }
-            p if p == PURRDF_SLICE_PROFILE => {
+            p if p == slice_profile => {
                 profiles.push(literal_value(&object));
             }
-            p if p == PURRDF_SLICE_DEPENDS_ON => {
+            p if p == slice_depends_on => {
                 if let Object::Named(nn) = &object {
                     depends_on.push(nn.clone());
                 }
@@ -252,18 +262,19 @@ fn extract_manifest_view(ds: &Dataset) -> Result<ManifestView, SliceError> {
     })
 }
 
-fn find_slice_iri(ds: &Dataset) -> Result<String, SliceError> {
-    let mut subjects: Vec<String> = ds.subjects_of_type(PURRDF_SLICE_CLASS)?;
+fn find_slice_iri(ds: &Dataset, vocab: &SliceVocab) -> Result<String, SliceError> {
+    let mut subjects: Vec<String> = ds.subjects_of_type(&vocab.slice_class())?;
+    let prefix = vocab.prefix_name();
 
     match subjects.len() {
-        0 => Err(SliceError::InvalidManifest(
-            "no `a purrdf:Slice` triple found in manifest.ttl".to_string(),
-        )),
+        0 => Err(SliceError::InvalidManifest(format!(
+            "no `a {prefix}:Slice` triple found in manifest.ttl"
+        ))),
         1 => Ok(subjects.remove(0)),
         _ => {
             subjects.sort();
             Err(SliceError::InvalidManifest(format!(
-                "manifest.ttl declares {} `a purrdf:Slice` subjects (must be exactly one): {}",
+                "manifest.ttl declares {} `a {prefix}:Slice` subjects (must be exactly one): {}",
                 subjects.len(),
                 subjects.join(", ")
             )))
@@ -472,20 +483,22 @@ fn find_slice_dirs_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Slice
 mod tests {
     use super::*;
 
-    /// Fix 1: a manifest declaring two `a purrdf:Slice` subjects must hard-fail
-    /// with `SliceError::InvalidManifest` naming both subjects.
+    /// Fix 1: a manifest declaring two `a <vocab>Slice` subjects must hard-fail
+    /// with `SliceError::InvalidManifest` naming both subjects. The vocabulary
+    /// is caller-supplied; the fixture uses example.org.
     #[test]
     fn find_slice_iri_rejects_multiple_slice_subjects() {
         let ttl = r"
 @prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
-@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
+@prefix vocab: <https://example.org/vocab/> .
 
-<https://example.org/slice/alpha> a purrdf:Slice .
-<https://example.org/slice/beta>  a purrdf:Slice .
+<https://example.org/slice/alpha> a vocab:Slice .
+<https://example.org/slice/beta>  a vocab:Slice .
 ";
         let path = Path::new("manifest.ttl");
         let ds = parse_manifest(ttl.as_bytes(), path).expect("should parse without error");
-        let result = find_slice_iri(&ds);
+        let vocab = SliceVocab::for_namespace("https://example.org/vocab/");
+        let result = find_slice_iri(&ds, &vocab);
         match result {
             Err(SliceError::InvalidManifest(msg)) => {
                 assert!(

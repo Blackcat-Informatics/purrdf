@@ -11,8 +11,8 @@
 //!
 //! # Conventions (must stay in lock-step with `instance.rs`)
 //!
-//! * **IRI compaction** — [`compact_iri`] maps a known namespace prefix to
-//!   `prefix:LocalName`; otherwise the full IRI is kept verbatim.
+//! * **IRI compaction** — [`Namespaces::compact_iri`] maps a declared namespace
+//!   prefix to `prefix:LocalName`; otherwise the full IRI is kept verbatim.
 //! * **Object (node) value** — a JSON object `{"@id": "<compacted-iri>"}`.
 //! * **Typed literal value** — `{"@value": "<lexical>", "@type": "<compacted-datatype>"}`.
 //!   For numeric / boolean datatypes the projector MAY also emit a bare JSON
@@ -36,9 +36,6 @@ use serde_json::{json, Map, Value};
 use crate::shapes::{Constraint, NodeKindValue, Path, Shape, Shapes, Target};
 use crate::term::Term;
 
-/// The PurRDF namespace (matches `crate::model::purrdf`).
-const PURRDF_NS: &str = "https://blackcatinformatics.ca/purrdf/";
-const LOGIC_NS: &str = "https://blackcatinformatics.ca/logic/";
 const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const RDFS_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
@@ -49,11 +46,10 @@ const SH_NS: &str = "http://www.w3.org/ns/shacl#";
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
-/// The well-known prefix map, highest-specificity-first so e.g. the purrdf
-/// namespace is matched before any shorter prefix could.  `(prefix, namespace)`.
-pub const PREFIXES: &[(&str, &str)] = &[
-    ("purrdf", PURRDF_NS),
-    ("logic", LOGIC_NS),
+/// The W3C builtin prefixes that are ALWAYS available for compaction, whatever
+/// the shapes document declares. A document declaration of the same prefix name
+/// wins on conflict.
+const BUILTIN_PREFIXES: &[(&str, &str)] = &[
     ("xsd", XSD_NS),
     ("rdf", RDF_NS),
     ("rdfs", RDFS_NS),
@@ -61,18 +57,154 @@ pub const PREFIXES: &[(&str, &str)] = &[
     ("sh", SH_NS),
 ];
 
-/// Compact an IRI to `prefix:LocalName` when it begins with a known namespace;
-/// otherwise return the full IRI unchanged.
+/// The caller-supplied namespace table driving ALL IRI compaction, `$defs`
+/// keying, and `@type` discrimination — for BOTH the schema emitter
+/// ([`compile`]) and the instance projector ([`crate::instance`]).
 ///
-/// This is the single shared compaction helper used by BOTH the schema emitter
-/// and the instance projector ([`crate::instance`]).
-pub fn compact_iri(iri: &str) -> String {
-    for (prefix, ns) in PREFIXES {
-        if let Some(local) = iri.strip_prefix(ns) {
-            return format!("{prefix}:{local}");
+/// Nothing is hardcoded in the library: the *primary* namespace (whose classes
+/// key their `$defs` by bare local name and discriminate `@type` as
+/// `primary_prefix:LocalName`) and every other compactable namespace come from
+/// the caller, typically the shapes document's own `@prefix` declarations
+/// (see [`crate::shapes::from_dataset_with_prefixes`]).
+///
+/// # Example (downstream call pattern)
+///
+/// ```
+/// use purrdf_shapes::json_schema::{compile, Namespaces};
+///
+/// // The shapes document's @prefix declarations (prefix → namespace).
+/// let doc_prefixes = vec![(
+///     "gmeow".to_owned(),
+///     "https://blackcatinformatics.ca/gmeow/".to_owned(),
+/// )];
+/// let ns = Namespaces::new("gmeow", &doc_prefixes)?;
+///
+/// # let ttl = r"
+/// #     @prefix sh:    <http://www.w3.org/ns/shacl#> .
+/// #     @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+/// #     @prefix gmeow: <https://blackcatinformatics.ca/gmeow/> .
+/// #     gmeow:CatShape a sh:NodeShape ;
+/// #         sh:targetClass gmeow:Cat ;
+/// #         sh:property [ sh:path gmeow:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+/// # ";
+/// # let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(ttl).unwrap();
+/// # let shapes = purrdf_shapes::shapes::from_dataset(&dataset).unwrap();
+/// let out = compile(&shapes, &ns);
+/// # assert!(out.schema_json.contains("gmeow:Cat"));
+/// # Ok::<(), String>(())
+/// ```
+#[derive(Debug, Clone)]
+pub struct Namespaces {
+    /// `(prefix, namespace)` pairs sorted longest-namespace-first so the most
+    /// specific namespace always wins compaction (prefix name breaks ties
+    /// deterministically).
+    prefixes: Vec<(String, String)>,
+    /// The prefix whose classes key `$defs` by bare local name.
+    primary_prefix: String,
+    /// The namespace `primary_prefix` resolves to.
+    primary_ns: String,
+}
+
+impl Namespaces {
+    /// Build a namespace table from the primary prefix and the shapes
+    /// document's `(prefix, namespace)` declarations.
+    ///
+    /// The W3C builtins (`xsd`, `rdf`, `rdfs`, `owl`, `sh`) are always merged
+    /// in; a document declaration of the same prefix name wins on conflict.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when `primary_prefix` resolves in neither `doc_prefixes`
+    /// nor the builtins.
+    pub fn new(primary_prefix: &str, doc_prefixes: &[(String, String)]) -> Result<Self, String> {
+        let mut merged: std::collections::BTreeMap<String, String> = BUILTIN_PREFIXES
+            .iter()
+            .map(|(p, n)| ((*p).to_owned(), (*n).to_owned()))
+            .collect();
+        for (prefix, ns) in doc_prefixes {
+            merged.insert(prefix.clone(), ns.clone());
+        }
+        let Some(primary_ns) = merged.get(primary_prefix).cloned() else {
+            return Err(format!(
+                "Namespaces: primary prefix {primary_prefix:?} is not declared — pass it in \
+                 doc_prefixes (the shapes document's @prefix declarations) or use a W3C builtin"
+            ));
+        };
+        let mut prefixes: Vec<(String, String)> = merged.into_iter().collect();
+        // Longest-namespace-first so the most specific namespace is matched
+        // before any shorter one that prefixes it; tie-break on prefix name for
+        // run-to-run determinism.
+        prefixes.sort_by(|(pa, na), (pb, nb)| nb.len().cmp(&na.len()).then_with(|| pa.cmp(pb)));
+        Ok(Self {
+            prefixes,
+            primary_prefix: primary_prefix.to_owned(),
+            primary_ns,
+        })
+    }
+
+    /// Compact an IRI to `prefix:LocalName` when it begins with a declared
+    /// namespace; otherwise return the full IRI unchanged.
+    ///
+    /// This is the single shared compaction helper used by BOTH the schema
+    /// emitter and the instance projector ([`crate::instance`]).
+    #[must_use]
+    pub fn compact_iri(&self, iri: &str) -> String {
+        for (prefix, ns) in &self.prefixes {
+            if let Some(local) = iri.strip_prefix(ns.as_str()) {
+                return format!("{prefix}:{local}");
+            }
+        }
+        iri.to_owned()
+    }
+
+    /// Whether an IRI is in the primary namespace (object refs to primary
+    /// classes get a `$ref`; external classes get a permissive node-ref /
+    /// string).
+    #[must_use]
+    pub fn is_primary(&self, iri: &str) -> bool {
+        iri.starts_with(self.primary_ns.as_str())
+    }
+
+    /// The `$defs`/discriminator key for a target class. A primary-namespace
+    /// class keeps its bare local name (a valid OpenAPI `components/schemas`
+    /// key); any other declared-namespace class is keyed by its full CURIE
+    /// (`logic:FormalizationCandidate`), so cross-namespace local-name twins
+    /// never collide; an undeclared-namespace IRI is returned verbatim (and
+    /// rejected by [`compile`]'s keying guard). A primary local name never
+    /// contains a `:`, while a CURIE always does — the discriminator
+    /// ([`node_def`]) relies on that to rebuild each `@type` const.
+    #[must_use]
+    pub fn def_key(&self, iri: &str) -> String {
+        if self.is_primary(iri) {
+            local_name(iri)
+        } else {
+            self.compact_iri(iri)
         }
     }
-    iri.to_owned()
+
+    /// The JSON-LD `@context` prefix-map object (every declared prefix plus
+    /// the merged builtins), for the instance projector's `@context`.
+    #[must_use]
+    pub fn context_object(&self) -> Map<String, Value> {
+        let mut ctx = Map::new();
+        for (prefix, ns) in &self.prefixes {
+            ctx.insert(prefix.clone(), Value::String(ns.clone()));
+        }
+        ctx
+    }
+
+    /// The primary namespace IRI (drives the schema `$id`).
+    #[must_use]
+    pub fn primary_ns(&self) -> &str {
+        &self.primary_ns
+    }
+
+    /// Whether an IRI is in a declared namespace (i.e. [`Self::compact_iri`]
+    /// would compact it to a `prefix:Local` CURIE rather than returning it
+    /// verbatim).
+    fn is_known(&self, iri: &str) -> bool {
+        self.compact_iri(iri) != iri
+    }
 }
 
 /// The bare local name of an IRI: the substring after the last `#` or `/`.
@@ -82,32 +214,6 @@ pub fn local_name(iri: &str) -> String {
     // `/` over that remainder.
     let local = after_hash.rsplit('/').next().unwrap_or(after_hash);
     local.to_owned()
-}
-
-/// Whether an IRI is in the PurRDF namespace (object refs to purrdf classes get a
-/// `$ref`; external classes get a permissive node-ref / string).
-fn is_purrdf(iri: &str) -> bool {
-    iri.starts_with(PURRDF_NS)
-}
-
-/// Whether an IRI is in a known namespace (i.e. [`compact_iri`] would compact it
-/// to a `prefix:Local` CURIE rather than returning it verbatim).
-fn is_known_prefix(iri: &str) -> bool {
-    compact_iri(iri) != iri
-}
-
-/// The `$defs`/discriminator key for a target class. A `purrdf:` class keeps its
-/// bare local name (the historical keying — no schema-golden churn); any other
-/// known-namespace class is keyed by its full CURIE (`logic:FormalizationCandidate`),
-/// so cross-namespace local-name twins never collide. A `purrdf:` local name never
-/// contains a `:`, while a CURIE always does — the discriminator
-/// ([`node_def`]) relies on that to rebuild each `@type` const.
-fn def_key(iri: &str) -> String {
-    if is_purrdf(iri) {
-        local_name(iri)
-    } else {
-        compact_iri(iri)
-    }
 }
 
 /// A single un-mappable SHACL construct, recorded rather than silently dropped.
@@ -135,8 +241,9 @@ pub struct CompiledSchema {
 
 // ── Compilation context ──────────────────────────────────────────────────────
 
-/// Accumulates losses while compiling so every emitter helper can record one.
-struct Ctx {
+/// Accumulates losses while compiling so every emitter helper can record one,
+/// and carries the caller-supplied [`Namespaces`] every helper compacts with.
+struct Ctx<'ns> {
     losses: Vec<LossRecord>,
     /// The set of class local-names that WILL receive a `$def` — i.e. every
     /// `LocalName(target_class)` over all non-deactivated `Target::Class(..)`
@@ -144,13 +251,16 @@ struct Ctx {
     /// `#/$defs/<LocalName(C)>` ref when `LocalName(C)` is in this set;
     /// otherwise the ref would dangle (no shape ⇒ no `$def`).
     emitted_defs: BTreeSet<String>,
+    /// The namespace table driving ALL compaction / keying decisions.
+    ns: &'ns Namespaces,
 }
 
-impl Ctx {
-    fn new(emitted_defs: BTreeSet<String>) -> Self {
+impl<'ns> Ctx<'ns> {
+    fn new(emitted_defs: BTreeSet<String>, ns: &'ns Namespaces) -> Self {
         Self {
             losses: Vec::new(),
             emitted_defs,
+            ns,
         }
     }
 
@@ -166,17 +276,33 @@ impl Ctx {
 // ── Public entry points ──────────────────────────────────────────────────────
 
 /// Compile a parsed [`Shapes`] graph into a closed-world JSON Schema + OpenAPI.
-pub fn compile(shapes: &Shapes) -> CompiledSchema {
-    // Keying invariant (#700 Gap D, fail-closed): every `$def` is keyed by the
-    // class LOCAL NAME and the `@type` discriminator is `purrdf:<LocalName>`. That
-    // is sound ONLY while every target class is in the purrdf namespace and no two
-    // distinct class IRIs share a local name. Local-name keys are deliberate — a
-    // colon-bearing compact IRI (`purrdf:Event`) is not a valid OpenAPI
-    // `components/schemas` key (`^[a-zA-Z0-9._-]+$`) — so this guard protects the
-    // precondition rather than widening the keys. The whole corpus satisfies it
-    // today; a future non-purrdf or colliding target class HARD-fails the build
-    // here instead of silently mis-discriminating or clobbering a `$def`.
-    assert_target_class_keys_are_unambiguous(shapes);
+///
+/// Every compaction / keying decision — CURIE compaction, `$defs` keys, the
+/// `@type` discriminator, the schema `$id` — flows through the caller-supplied
+/// [`Namespaces`], so downstream shape corpora in any namespace compile without
+/// touching this crate:
+///
+/// ```text
+/// let ns = Namespaces::new("gmeow", &doc_prefixes)?;
+/// let out = compile(&shapes, &ns);
+/// ```
+///
+/// # Panics
+///
+/// Panics (build-time, fail-closed) when an active `sh:targetClass` is in a
+/// namespace with no declared prefix, or when two distinct target classes
+/// would share a `$defs` key — see [`Namespaces::def_key`].
+pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
+    // Keying invariant (#700 Gap D, fail-closed): every primary-namespace `$def`
+    // is keyed by the class LOCAL NAME and the `@type` discriminator is
+    // `<primary_prefix>:<LocalName>`. That is sound ONLY while every target
+    // class is in a declared namespace and no two distinct class IRIs share a
+    // key. Local-name keys are deliberate — a colon-bearing compact IRI is not
+    // a valid OpenAPI `components/schemas` key (`^[a-zA-Z0-9._-]+$`) — so this
+    // guard protects the precondition rather than widening the keys. A target
+    // class from an undeclared namespace or a colliding key HARD-fails the
+    // build here instead of silently mis-discriminating or clobbering a `$def`.
+    assert_target_class_keys_are_unambiguous(shapes, ns);
 
     // PASS 1: compute the set of class local-names that WILL receive a `$def`,
     // using the EXACT same iteration that builds the `$defs` map below (every
@@ -195,7 +321,7 @@ pub fn compile(shapes: &Shapes) -> CompiledSchema {
         }
     }
 
-    let mut ctx = Ctx::new(emitted_defs);
+    let mut ctx = Ctx::new(emitted_defs, ns);
 
     // Build $defs: one entry per `sh:targetClass` of every active node shape,
     // keyed by the class local name; the body is the shape compiled as an object
@@ -208,7 +334,7 @@ pub fn compile(shapes: &Shapes) -> CompiledSchema {
         let body = compile_object_schema(shape, &mut ctx);
         for target in &shape.targets {
             if let Target::Class(c) = target {
-                let name = def_key(c.as_str());
+                let name = ns.def_key(c.as_str());
                 // First writer wins for a given class name; bodies are identical
                 // per shape so this only matters if two shapes target the same
                 // class (last one would otherwise clobber). Keep deterministic by
@@ -229,12 +355,12 @@ pub fn compile(shapes: &Shapes) -> CompiledSchema {
     // `class_names` is already sorted because `defs` is a BTree-ordered Map iter.
 
     // The `@type`-discriminated `Node` schema (#700 closed-world enforcement):
-    // a node typed `purrdf:Foo` MUST satisfy `#/$defs/Foo`. Inserted AFTER
+    // a node typed `<primary>:Foo` MUST satisfy `#/$defs/Foo`. Inserted AFTER
     // `class_names` is snapshotted so `Node` itself is never treated as a class
     // branch.
-    defs.insert("Node".to_owned(), node_def(&class_names));
+    defs.insert("Node".to_owned(), node_def(&class_names, ns));
 
-    let schema = root_schema(&defs);
+    let schema = root_schema(&defs, ns);
     let openapi = openapi_doc(&defs);
 
     CompiledSchema {
@@ -245,10 +371,11 @@ pub fn compile(shapes: &Shapes) -> CompiledSchema {
 }
 
 /// Enforce the keying precondition (#700 Gap D): every active `sh:targetClass`
-/// is in a KNOWN namespace (so [`def_key`] yields a stable `$defs` key and
-/// [`node_def`] can rebuild its `@type` const) and those keys are collision-free.
-/// Panics with a descriptive message otherwise (build-time, fail-closed).
-fn assert_target_class_keys_are_unambiguous(shapes: &Shapes) {
+/// is in a DECLARED namespace (so [`Namespaces::def_key`] yields a stable
+/// `$defs` key and [`node_def`] can rebuild its `@type` const) and those keys
+/// are collision-free. Panics with a descriptive message otherwise
+/// (build-time, fail-closed).
+fn assert_target_class_keys_are_unambiguous(shapes: &Shapes, ns: &Namespaces) {
     use std::collections::BTreeMap;
     let mut key_to_iri: BTreeMap<String, String> = BTreeMap::new();
     for shape in &shapes.node_shapes {
@@ -259,13 +386,13 @@ fn assert_target_class_keys_are_unambiguous(shapes: &Shapes) {
             if let Target::Class(c) = target {
                 let iri = c.as_str();
                 assert!(
-                    is_known_prefix(iri),
-                    "json_schema: unknown-namespace sh:targetClass {iri:?} — the @type \
-                     discriminator and `$defs` keys derive from a known prefix CURIE; \
-                     register the namespace in PREFIXES (and confirm OpenAPI key encoding) \
-                     before introducing target classes from a new namespace"
+                    ns.is_known(iri),
+                    "json_schema: sh:targetClass {iri:?} has no declared namespace prefix — \
+                     the @type discriminator and `$defs` keys derive from a prefix CURIE; \
+                     declare its prefix in the shapes document / Namespaces (and confirm \
+                     OpenAPI key encoding) before introducing target classes from it"
                 );
-                let key = def_key(iri);
+                let key = ns.def_key(iri);
                 if let Some(prev) = key_to_iri.insert(key.clone(), iri.to_owned()) {
                     assert_eq!(
                         prev, iri,
@@ -286,7 +413,7 @@ fn assert_target_class_keys_are_unambiguous(shapes: &Shapes) {
 /// Every instance node — whether a `@graph` member or a bare single-node root —
 /// is validated by the single `#/$defs/Node` schema, which discriminates on
 /// `@type` (closed-world enforcement, #700).
-fn root_schema(defs: &Map<String, Value>) -> Value {
+fn root_schema(defs: &Map<String, Value>, ns: &Namespaces) -> Value {
     let node_ref = json!({ "$ref": "#/$defs/Node" });
 
     // The @graph envelope object: every member is a discriminated Node. The
@@ -308,7 +435,7 @@ fn root_schema(defs: &Map<String, Value>) -> Value {
 
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://blackcatinformatics.ca/purrdf/schema/instance.schema.json",
+        "$id": format!("{}schema/instance.schema.json", ns.primary_ns()),
         "title": "PURRDF instance schema (SHACL-derived, closed-world)",
         "$defs": Value::Object(defs.clone()),
         "type": "object",
@@ -327,18 +454,19 @@ fn root_schema(defs: &Map<String, Value>) -> Value {
 ///
 /// A node carries `@id`/`@type`/`@annotation` permissively, then an `allOf` of
 /// per-class conditionals (sorted by class name for determinism). Each entry
-/// reads: *if* `@type` includes the class CURIE — `purrdf:<Class>` for a purrdf
-/// class, or the full `prefix:<Class>` for any other known namespace (e.g.
-/// `logic:FormalizationCandidate`) — as a bare string OR an array member,
-/// *then* the node MUST satisfy that class's `#/$defs` body.
+/// reads: *if* `@type` includes the class CURIE — `<primary>:<Class>` for a
+/// primary-namespace class, or the full `prefix:<Class>` for any other declared
+/// namespace (e.g. `logic:FormalizationCandidate`) — as a bare string OR an
+/// array member, *then* the node MUST satisfy that class's `#/$defs` body.
 ///
 /// Closed-world semantics:
-/// * An instance typed `purrdf:Foo` that is MISSING a required property triggers
-///   Foo's `then` (`#/$defs/Foo`), fails Foo's `required`, and is REJECTED.
+/// * An instance typed `<primary>:Foo` that is MISSING a required property
+///   triggers Foo's `then` (`#/$defs/Foo`), fails Foo's `required`, and is
+///   REJECTED.
 /// * A node typed only by an UNMODELED class (no `$def`) fires no `if`, so no
 ///   `then` applies and it stays permissively allowed — keeping the slice
 ///   example sweep (Task 6) green on unmodeled types.
-fn node_def(class_names: &[String]) -> Value {
+fn node_def(class_names: &[String], ns: &Namespaces) -> Value {
     // class_names arrives sorted (BTree-ordered defs iter); keep it explicit so
     // the conditional list is deterministic regardless of caller.
     let mut sorted: Vec<&String> = class_names.iter().collect();
@@ -347,14 +475,14 @@ fn node_def(class_names: &[String]) -> Value {
     let conditionals: Vec<Value> = sorted
         .iter()
         .map(|name| {
-            // A `$defs` key carrying a `:` is already a CURIE (a non-purrdf class,
-            // e.g. `logic:FormalizationCandidate`); a colon-free key is a bare
-            // purrdf local name and takes the `purrdf:` prefix. Either way the
-            // `@type` const matches the compact IRI an instance node carries.
+            // A `$defs` key carrying a `:` is already a CURIE (a non-primary
+            // class, e.g. `logic:FormalizationCandidate`); a colon-free key is a
+            // bare primary local name and takes the primary prefix. Either way
+            // the `@type` const matches the compact IRI an instance node carries.
             let type_const = if name.contains(':') {
                 (*name).clone()
             } else {
-                format!("purrdf:{name}")
+                format!("{}:{name}", ns.primary_prefix)
             };
             json!({
                 "if": {
@@ -376,7 +504,10 @@ fn node_def(class_names: &[String]) -> Value {
     json!({
         "type": "object",
         "title": "A single discriminated PURRDF instance node",
-        "description": "Validated by @type: a node typed purrdf:Foo MUST satisfy #/$defs/Foo (closed-world, #700). Nodes typed only by unmodeled classes are permissively allowed.",
+        "description": format!(
+            "Validated by @type: a node typed {}:Foo MUST satisfy #/$defs/Foo (closed-world, #700). Nodes typed only by unmodeled classes are permissively allowed.",
+            ns.primary_prefix
+        ),
         "properties": {
             "@id": { "type": "string" },
             "@type": {
@@ -475,7 +606,7 @@ fn typed_literal_schema() -> Value {
 /// Compile a single node shape into a JSON Schema object schema (one `$defs`
 /// body). Property shapes become `properties`; node-level logical/closed
 /// constraints become `allOf`/`anyOf`/`oneOf`/`not`/`additionalProperties`.
-fn compile_object_schema(shape: &Shape, ctx: &mut Ctx) -> Value {
+fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     let shape_iri = shape.id.to_string();
 
     let mut properties: Map<String, Value> = Map::new();
@@ -511,17 +642,16 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx) -> Value {
     let mut by_key: std::collections::BTreeMap<String, Vec<Constraint>> =
         std::collections::BTreeMap::new();
     for ps in &shape.property_shapes {
-        // Inverse paths do not shape outgoing JSON properties: skip but note it.
-        let pred = match &ps.path {
-            Path::Predicate(p) => p,
-            Path::Inverse(_) => {
-                comments.push(
-                    "an inverse-path property shape was skipped (inverse paths do not constrain outgoing JSON properties)".to_owned(),
-                );
-                continue;
-            }
+        // Only direct predicate paths shape outgoing JSON properties; inverse
+        // and composite paths (sequence/alternative/closures) are skipped with
+        // a note.
+        let Path::Predicate(pred) = &ps.path else {
+            comments.push(
+                "a non-predicate-path property shape was skipped (only direct predicate paths constrain outgoing JSON properties)".to_owned(),
+            );
+            continue;
         };
-        let key = compact_iri(pred.as_str());
+        let key = ctx.ns.compact_iri(pred.as_str());
         by_key
             .entry(key)
             .or_default()
@@ -570,7 +700,7 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx) -> Value {
             Constraint::Closed { ignored } => {
                 additional_properties_false = true;
                 for n in ignored {
-                    closed_ignored.push(compact_iri(n.as_str()));
+                    closed_ignored.push(ctx.ns.compact_iri(n.as_str()));
                 }
             }
             Constraint::Sparql { .. } => {
@@ -651,7 +781,7 @@ fn compile_property(
     constraints: &[Constraint],
     shape_iri: &str,
     key: &str,
-    ctx: &mut Ctx,
+    ctx: &mut Ctx<'_>,
 ) -> (Value, bool) {
     // The "scalar" value schema (a single value, pre-cardinality).
     let mut value: Map<String, Value> = Map::new();
@@ -671,7 +801,7 @@ fn compile_property(
                 alts.push(datatype_value_schema(dt.as_str()));
             }
             Constraint::Class(c) => {
-                if is_purrdf(c.as_str()) {
+                if ctx.ns.is_primary(c.as_str()) {
                     let name = local_name(c.as_str());
                     if ctx.emitted_defs.contains(&name) {
                         // The class has a NodeShape ⇒ a `$def` is emitted for it.
@@ -690,7 +820,8 @@ fn compile_property(
                             map.insert(
                                 "$comment".to_owned(),
                                 json!(format!(
-                                    "purrdf:{name} has no NodeShape; node reference only"
+                                    "{} has no NodeShape; node reference only",
+                                    ctx.ns.compact_iri(c.as_str())
                                 )),
                             );
                         }
@@ -719,11 +850,11 @@ fn compile_property(
             },
             Constraint::In(terms) => {
                 for t in terms {
-                    enum_values.push(json!(term_enum_value(t)));
+                    enum_values.push(json!(term_enum_value(t, ctx.ns)));
                 }
             }
             Constraint::HasValue(v) => {
-                value.insert("const".to_owned(), term_const_value(v));
+                value.insert("const".to_owned(), term_const_value(v, ctx.ns));
             }
             Constraint::Pattern { regex, .. } => {
                 value.insert("pattern".to_owned(), json!(regex));
@@ -935,9 +1066,9 @@ fn term_lexical(term: &Term) -> String {
 /// The `sh:in` enum member value, matching what the projector emits.
 ///
 /// IRIs project as the compacted CURIE/IRI string; literals as their lexical.
-fn term_enum_value(term: &Term) -> Value {
+fn term_enum_value(term: &Term, ns: &Namespaces) -> Value {
     match term {
-        Term::NamedNode(n) => Value::String(compact_iri(n.as_str())),
+        Term::NamedNode(n) => Value::String(ns.compact_iri(n.as_str())),
         Term::Literal(lit) => Value::String(lit.value().to_owned()),
         Term::BlankNode(b) => Value::String(b.as_str().to_owned()),
         other @ Term::Triple(_) => Value::String(other.to_string()),
@@ -945,9 +1076,9 @@ fn term_enum_value(term: &Term) -> Value {
 }
 
 /// The `sh:hasValue` const value (projected form).
-fn term_const_value(term: &Term) -> Value {
+fn term_const_value(term: &Term, ns: &Namespaces) -> Value {
     match term {
-        Term::NamedNode(n) => json!({ "@id": compact_iri(n.as_str()) }),
+        Term::NamedNode(n) => json!({ "@id": ns.compact_iri(n.as_str()) }),
         Term::Literal(lit) => {
             if let Some(lang) = lit.language() {
                 json!({ "@value": lit.value(), "@language": lang })
@@ -956,7 +1087,7 @@ fn term_const_value(term: &Term) -> Value {
                 if dt.as_str() == RDF_LANG_STRING || dt.as_str() == XSD_STRING {
                     Value::String(lit.value().to_owned())
                 } else {
-                    json!({ "@value": lit.value(), "@type": compact_iri(dt.as_str()) })
+                    json!({ "@value": lit.value(), "@type": ns.compact_iri(dt.as_str()) })
                 }
             }
         }
@@ -994,11 +1125,31 @@ mod tests {
         @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
     ";
 
+    /// The fixture namespace table: `purrdf` primary, plus the `logic` prefix
+    /// the cross-namespace tests declare. Nothing is hardcoded in library code
+    /// — these are DECLARED here exactly as a shapes document would.
+    fn fixture_ns() -> Namespaces {
+        Namespaces::new(
+            "purrdf",
+            &[
+                (
+                    "purrdf".to_owned(),
+                    "https://blackcatinformatics.ca/purrdf/".to_owned(),
+                ),
+                (
+                    "logic".to_owned(),
+                    "https://blackcatinformatics.ca/logic/".to_owned(),
+                ),
+            ],
+        )
+        .expect("fixture namespaces are valid")
+    }
+
     fn compile_ttl(body: &str) -> CompiledSchema {
         let ttl = format!("{PREFIXES}{body}");
         let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("Turtle parse");
         let shapes = from_dataset(&dataset).expect("shape parse");
-        compile(&shapes)
+        compile(&shapes, &fixture_ns())
     }
 
     fn schema_of(c: &CompiledSchema) -> Value {
@@ -1010,12 +1161,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "unknown-namespace sh:targetClass")]
+    #[should_panic(expected = "declare its prefix in the shapes document / Namespaces")]
     fn unknown_namespace_target_class_hard_fails() {
-        // A target class from an UNREGISTERED namespace has no prefix CURIE to key
+        // A target class from an UNDECLARED namespace has no prefix CURIE to key
         // its `$defs`/discriminator by; the keying guard must reject it loudly
-        // (#700 Gap D). A KNOWN non-purrdf prefix (e.g. logic:) is accepted — see
-        // `logic_target_class_keyed_by_curie`.
+        // (#700 Gap D). A DECLARED non-primary prefix (e.g. logic:) is accepted —
+        // see `logic_target_class_keyed_by_curie`.
         compile_ttl(
             r"
             @prefix ex: <https://example.org/> .
@@ -1065,16 +1216,18 @@ mod tests {
 
     #[test]
     fn test_curie_compaction_and_local_name() {
+        let ns = fixture_ns();
         assert_eq!(
-            compact_iri("https://blackcatinformatics.ca/purrdf/Person"),
+            ns.compact_iri("https://blackcatinformatics.ca/purrdf/Person"),
             "purrdf:Person"
         );
+        // Builtins are always merged in, even though the fixture never declares xsd.
         assert_eq!(
-            compact_iri("http://www.w3.org/2001/XMLSchema#integer"),
+            ns.compact_iri("http://www.w3.org/2001/XMLSchema#integer"),
             "xsd:integer"
         );
         assert_eq!(
-            compact_iri("http://example.org/Foo"),
+            ns.compact_iri("http://example.org/Foo"),
             "http://example.org/Foo"
         );
         assert_eq!(
@@ -1085,6 +1238,124 @@ mod tests {
             local_name("http://www.w3.org/2001/XMLSchema#integer"),
             "integer"
         );
+    }
+
+    #[test]
+    fn test_namespaces_primary_and_def_key() {
+        let ns = fixture_ns();
+        assert!(ns.is_primary("https://blackcatinformatics.ca/purrdf/Person"));
+        assert!(!ns.is_primary("https://blackcatinformatics.ca/logic/Claim"));
+        assert_eq!(ns.primary_ns(), "https://blackcatinformatics.ca/purrdf/");
+        // Primary → bare local name; other declared → CURIE; undeclared → full IRI.
+        assert_eq!(
+            ns.def_key("https://blackcatinformatics.ca/purrdf/Person"),
+            "Person"
+        );
+        assert_eq!(
+            ns.def_key("https://blackcatinformatics.ca/logic/FormalizationCandidate"),
+            "logic:FormalizationCandidate"
+        );
+        assert_eq!(
+            ns.def_key("http://example.org/Foo"),
+            "http://example.org/Foo"
+        );
+    }
+
+    #[test]
+    fn test_namespaces_unresolved_primary_prefix_is_err() {
+        let err = Namespaces::new("gmeow", &[]).expect_err("undeclared primary must fail");
+        assert!(
+            err.contains("gmeow") && err.contains("doc_prefixes"),
+            "error must name the prefix and the fix, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_namespaces_doc_declaration_wins_over_builtin() {
+        // A document may rebind a builtin prefix name; the document wins.
+        let ns = Namespaces::new(
+            "xsd",
+            &[(
+                "xsd".to_owned(),
+                "https://example.org/custom-xsd/".to_owned(),
+            )],
+        )
+        .expect("rebound builtin");
+        assert_eq!(ns.primary_ns(), "https://example.org/custom-xsd/");
+        assert_eq!(
+            ns.compact_iri("https://example.org/custom-xsd/int"),
+            "xsd:int"
+        );
+        // The other builtins are still merged in.
+        assert_eq!(
+            ns.compact_iri("http://www.w3.org/ns/shacl#NodeShape"),
+            "sh:NodeShape"
+        );
+    }
+
+    #[test]
+    fn test_namespaces_context_object_carries_all_prefixes() {
+        let ctx = fixture_ns().context_object();
+        assert_eq!(
+            ctx.get("purrdf"),
+            Some(&json!("https://blackcatinformatics.ca/purrdf/"))
+        );
+        assert_eq!(
+            ctx.get("logic"),
+            Some(&json!("https://blackcatinformatics.ca/logic/"))
+        );
+        assert_eq!(ctx.get("xsd"), Some(&json!(XSD_NS)));
+        assert_eq!(ctx.get("sh"), Some(&json!(SH_NS)));
+    }
+
+    #[test]
+    fn non_purrdf_primary_namespace_compiles() {
+        // The downstream (gmeow) call pattern: a completely different primary
+        // namespace, declared by the caller — nothing purrdf-specific remains
+        // in the emitter's keying, discrimination, or `$id`.
+        let ttl = r"
+            @prefix sh:    <http://www.w3.org/ns/shacl#> .
+            @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+            @prefix gmeow: <https://blackcatinformatics.ca/gmeow/> .
+            gmeow:CatShape a sh:NodeShape ;
+                sh:targetClass gmeow:Cat ;
+                sh:property [ sh:path gmeow:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+        ";
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl).expect("Turtle parse");
+        let shapes = from_dataset(&dataset).expect("shape parse");
+        let ns = Namespaces::new(
+            "gmeow",
+            &[(
+                "gmeow".to_owned(),
+                "https://blackcatinformatics.ca/gmeow/".to_owned(),
+            )],
+        )
+        .expect("gmeow namespaces");
+        let schema = schema_of(&compile(&shapes, &ns));
+
+        // Primary-namespace class keys its $def by bare local name.
+        assert!(
+            def(&schema, "Cat").is_object(),
+            "gmeow class keyed by local name"
+        );
+        // The $id derives from the primary namespace.
+        assert_eq!(
+            schema["$id"],
+            json!("https://blackcatinformatics.ca/gmeow/schema/instance.schema.json")
+        );
+        // The Node discriminator fires on the gmeow-prefixed @type const.
+        let conds = def(&schema, "Node")["allOf"]
+            .as_array()
+            .expect("Node allOf");
+        assert!(
+            conds.iter().any(|c| {
+                c["then"]["$ref"] == "#/$defs/Cat"
+                    && c["if"]["properties"]["@type"]["anyOf"][0]["const"] == "gmeow:Cat"
+            }),
+            "Node must discriminate gmeow:Cat"
+        );
+        // The property key compacts through the declared prefix.
+        assert!(def(&schema, "Cat")["properties"]["gmeow:name"].is_object());
     }
 
     #[test]

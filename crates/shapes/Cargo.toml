@@ -34,6 +34,11 @@ purrdf-sparql-algebra = { workspace = true }
 purrdf-sparql-eval = { workspace = true }
 # sh:pattern regex constraint.
 regex = { workspace = true }
+# XSD value-space machinery: temporal (xsd:dateTime/date/time) value comparison
+# for the sh:minInclusive / sh:maxInclusive / sh:minExclusive / sh:maxExclusive
+# facets (W3C core/node/minInclusive-002/-003 — timezone-aware partial order;
+# indeterminate comparisons are violations).
+purrdf-xsd = { workspace = true }
 # JSON Schema / OpenAPI emitter (#700). NO `preserve_order` feature: we rely on
 # serde_json's default BTreeMap-backed Map so object keys serialize sorted for
 # deterministic, byte-stable output.

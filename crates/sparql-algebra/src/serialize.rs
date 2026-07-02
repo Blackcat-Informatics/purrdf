@@ -679,7 +679,11 @@ fn fmt_function_name(s: &mut String, f: &Function) {
         Function::IsTriple => "isTRIPLE",
         Function::Purrdf(g) => {
             // Emit the full canonical purrdf IRI so a re-parse re-dispatches to the same
-            // PurrdfFn (the parser recognizes any IRI under PURRDF_NS in call position).
+            // PurrdfFn. This is a deliberate NORMALIZATION: a PurrdfFn parsed under a
+            // configured namespace alias (e.g. gmeow's, via ParserOptions) still
+            // serializes under the DEFAULT published PURRDF_NS, which every default
+            // parse recognizes — so serialize→re-parse round-trips regardless of which
+            // alias the original query used.
             let _ = write!(s, "<{}{}>", crate::PURRDF_NS, g.local_name());
             return;
         }

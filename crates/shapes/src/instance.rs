@@ -12,7 +12,7 @@
 //! # Value conventions (lock-step with `json_schema.rs`)
 //!
 //! * **IRI / node ref** — `{"@id": "<compacted-iri>"}` (via
-//!   [`crate::json_schema::compact_iri`]).
+//!   [`Namespaces::compact_iri`]).
 //! * **`rdf:type`** — folded into the node's `@type` (a CURIE string, or an array
 //!   of CURIE strings when there are several).
 //! * **Typed literal** — `{"@value": "<lexical>", "@type": "<compacted-datatype>"}`.
@@ -30,7 +30,7 @@ use ::purrdf::RdfDataset;
 use serde_json::{json, Map, Value};
 
 use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
-use crate::json_schema::{compact_iri, PREFIXES};
+use crate::json_schema::Namespaces;
 use crate::model::rdf;
 use crate::term::Term;
 
@@ -39,13 +39,22 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
 /// Project the default graph of `dataset` into a JSON-LD `@graph` document.
-pub fn project_graph(dataset: &std::sync::Arc<RdfDataset>) -> Value {
+///
+/// `ns` is the SAME caller-supplied [`Namespaces`] the matching schema was
+/// compiled with ([`crate::json_schema::compile`]) — it drives every CURIE
+/// compaction and the emitted `@context`:
+///
+/// ```text
+/// let ns = Namespaces::new("gmeow", &doc_prefixes)?;
+/// let doc = project_graph(&dataset, &ns);
+/// ```
+pub fn project_graph(dataset: &std::sync::Arc<RdfDataset>, ns: &Namespaces) -> Value {
     let data = IrDataGraph::new(std::sync::Arc::clone(dataset));
-    project_graph_data(&data)
+    project_graph_data(&data, ns)
 }
 
 /// Project the default graph of a [`ShaclDataGraph`] into a JSON-LD `@graph` document.
-fn project_graph_data<G: ShaclDataGraph>(data: &G) -> Value {
+fn project_graph_data<G: ShaclDataGraph>(data: &G, ns: &Namespaces) -> Value {
     // Collect distinct named-node / blank-node subjects of the default graph.
     let mut subjects: Vec<Term> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -64,22 +73,27 @@ fn project_graph_data<G: ShaclDataGraph>(data: &G) -> Value {
 
     let mut nodes: Vec<Value> = Vec::with_capacity(subjects.len());
     for subj in &subjects {
-        nodes.push(project_subject_data(data, subj));
+        nodes.push(project_subject_data(data, ns, subj));
     }
 
     json!({
-        "@context": context_object(),
+        "@context": Value::Object(ns.context_object()),
         "@graph": Value::Array(nodes),
     })
 }
 
-/// Project a single subject term into a JSON-LD node object.
-pub fn project_subject(dataset: &std::sync::Arc<RdfDataset>, subject: &Term) -> Value {
+/// Project a single subject term into a JSON-LD node object, compacting IRIs
+/// through the caller-supplied [`Namespaces`].
+pub fn project_subject(
+    dataset: &std::sync::Arc<RdfDataset>,
+    ns: &Namespaces,
+    subject: &Term,
+) -> Value {
     let data = IrDataGraph::new(std::sync::Arc::clone(dataset));
-    project_subject_data(&data, subject)
+    project_subject_data(&data, ns, subject)
 }
 
-fn project_subject_data<G: ShaclDataGraph>(data: &G, subject: &Term) -> Value {
+fn project_subject_data<G: ShaclDataGraph>(data: &G, ns: &Namespaces, subject: &Term) -> Value {
     if !subject.is_subject() {
         // Literals (and quoted triples) are never node subjects.
         return Value::Object(Map::new());
@@ -93,12 +107,12 @@ fn project_subject_data<G: ShaclDataGraph>(data: &G, subject: &Term) -> Value {
         let pred = quad.predicate;
         if pred.as_str() == rdf::TYPE {
             if let Term::NamedNode(n) = &quad.object {
-                types.push(compact_iri(n.as_str()));
+                types.push(ns.compact_iri(n.as_str()));
             }
             continue;
         }
         by_pred
-            .entry(compact_iri(pred.as_str()))
+            .entry(ns.compact_iri(pred.as_str()))
             .or_default()
             .push(quad.object);
     }
@@ -107,7 +121,7 @@ fn project_subject_data<G: ShaclDataGraph>(data: &G, subject: &Term) -> Value {
 
     // @id
     let id = match subject {
-        Term::NamedNode(n) => compact_iri(n.as_str()),
+        Term::NamedNode(n) => ns.compact_iri(n.as_str()),
         Term::BlankNode(b) => format!("_:{b}"),
         _ => String::new(),
     };
@@ -129,7 +143,7 @@ fn project_subject_data<G: ShaclDataGraph>(data: &G, subject: &Term) -> Value {
 
     for (key, mut objects) in by_pred {
         objects.sort_by_key(ToString::to_string);
-        let values: Vec<Value> = objects.iter().map(project_value).collect();
+        let values: Vec<Value> = objects.iter().map(|t| project_value(t, ns)).collect();
         let v = if values.len() == 1 {
             values.into_iter().next().unwrap()
         } else {
@@ -144,9 +158,9 @@ fn project_subject_data<G: ShaclDataGraph>(data: &G, subject: &Term) -> Value {
 /// Project a single object term into its JSON-LD value form.
 ///
 /// MUST match the value-schema convention in [`crate::json_schema`].
-fn project_value(term: &Term) -> Value {
+fn project_value(term: &Term, ns: &Namespaces) -> Value {
     match term {
-        Term::NamedNode(n) => json!({ "@id": compact_iri(n.as_str()) }),
+        Term::NamedNode(n) => json!({ "@id": ns.compact_iri(n.as_str()) }),
         Term::BlankNode(b) => json!({ "@id": format!("_:{}", b.as_str()) }),
         Term::Literal(lit) => {
             if let Some(lang) = lit.language() {
@@ -163,7 +177,7 @@ fn project_value(term: &Term) -> Value {
                 return scalar;
             }
             // Other typed literals → the {"@value","@type"} object form.
-            json!({ "@value": lit.value(), "@type": compact_iri(dt_iri) })
+            json!({ "@value": lit.value(), "@type": ns.compact_iri(dt_iri) })
         }
         // Quoted triple (RDF-1.2) and any other term: stringify (statement-layer
         // reifiers are projected via @annotation, not as plain object values).
@@ -196,15 +210,6 @@ fn numeric_or_bool_scalar(dt_iri: &str, lexical: &str) -> Option<Value> {
     }
 }
 
-/// The JSON-LD `@context` prefix-map object (the shared [`PREFIXES`] set).
-fn context_object() -> Value {
-    let mut ctx: Map<String, Value> = Map::new();
-    for (prefix, ns) in PREFIXES {
-        ctx.insert((*prefix).to_owned(), Value::String((*ns).to_owned()));
-    }
-    Value::Object(ctx)
-}
-
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -221,6 +226,19 @@ mod tests {
         @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
     ";
 
+    /// The fixture namespace table — the same `purrdf` declaration the Turtle
+    /// fixtures use, supplied by the caller (nothing hardcoded in library code).
+    fn fixture_ns() -> Namespaces {
+        Namespaces::new(
+            "purrdf",
+            &[(
+                "purrdf".to_owned(),
+                "https://blackcatinformatics.ca/purrdf/".to_owned(),
+            )],
+        )
+        .expect("fixture namespaces are valid")
+    }
+
     #[test]
     fn test_project_graph_envelope_and_context() {
         let store = load(&format!(
@@ -229,7 +247,7 @@ mod tests {
                 purrdf:name "Alice" .
         "#
         ));
-        let doc = project_graph(&store);
+        let doc = project_graph(&store, &fixture_ns());
         // @context carries the prefix map (purrdf:).
         assert_eq!(
             doc["@context"]["purrdf"],
@@ -250,7 +268,7 @@ mod tests {
             purrdf:org purrdf:member purrdf:alice .
         "
         ));
-        let doc = project_graph(&store);
+        let doc = project_graph(&store, &fixture_ns());
         let graph = doc["@graph"].as_array().unwrap();
         let org = graph
             .iter()
@@ -269,7 +287,7 @@ mod tests {
                 purrdf:label "bonjour"@fr .
         "#
         ));
-        let doc = project_graph(&store);
+        let doc = project_graph(&store, &fixture_ns());
         let node = &doc["@graph"].as_array().unwrap()[0];
         // integer → bare scalar
         assert_eq!(node["purrdf:count"], json!(3));
@@ -294,7 +312,7 @@ mod tests {
             purrdf:x purrdf:tag "b", "a", "c" .
         "#
         ));
-        let doc = project_graph(&store);
+        let doc = project_graph(&store, &fixture_ns());
         let node = &doc["@graph"].as_array().unwrap()[0];
         let tags = node["purrdf:tag"].as_array().expect("array");
         assert_eq!(tags.len(), 3);
@@ -318,7 +336,7 @@ mod tests {
         let store = std::sync::Arc::new(
             ::purrdf::parse_dataset(trig.as_bytes(), "application/trig", None).expect("TriG parse"),
         );
-        let doc = project_graph(&store);
+        let doc = project_graph(&store, &fixture_ns());
         let graph = doc["@graph"].as_array().expect("@graph array");
         // Only the default-graph subject is projected — no named-graph leak.
         assert_eq!(graph.len(), 1, "named-graph subject must not appear");
@@ -337,8 +355,8 @@ mod tests {
             purrdf:bob a purrdf:Person ; purrdf:name "Bob" .
         "#
         );
-        let a = serde_json::to_string_pretty(&project_graph(&load(&ttl))).unwrap();
-        let b = serde_json::to_string_pretty(&project_graph(&load(&ttl))).unwrap();
+        let a = serde_json::to_string_pretty(&project_graph(&load(&ttl), &fixture_ns())).unwrap();
+        let b = serde_json::to_string_pretty(&project_graph(&load(&ttl), &fixture_ns())).unwrap();
         assert_eq!(a, b, "projection must be byte-stable");
     }
 }

@@ -1,0 +1,18 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:HandShape
+    a sh:NodeShape ;
+    sh:targetNode ex:hand ;
+    sh:property [
+        sh:path ex:digit ;
+        sh:qualifiedValueShape [ sh:class ex:Thumb ] ;
+        sh:qualifiedMinCount 1 ;
+        sh:qualifiedValueShapesDisjoint true ;
+    ] ;
+    sh:property [
+        sh:path ex:digit ;
+        sh:qualifiedValueShape [ sh:class ex:Finger ] ;
+        sh:qualifiedMinCount 4 ;
+        sh:qualifiedValueShapesDisjoint true ;
+    ] .

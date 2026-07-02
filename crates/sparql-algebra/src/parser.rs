@@ -35,10 +35,49 @@ const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
+/// Parse-time configuration for the SPARQL front-end.
+///
+/// The single knob today is [`Self::extension_fn_namespaces`]: the set of IRI
+/// namespaces the parser recognizes as the purrdf **extension-function seam**. An
+/// IRI in call position (immediately followed by `(`) whose string starts with any
+/// configured namespace is stripped to its local name and dispatched into the
+/// CLOSED [`crate::algebra::PurrdfFn`] set; an *unknown* local name under a
+/// configured namespace is a hard [`ParseError`] (never a silent
+/// [`Function::Custom`] fallthrough).
+///
+/// The default is the single published carrier-vocabulary namespace
+/// [`crate::PURRDF_NS`] (`vocab/purrdf.ttl` declares all seven extension
+/// functions). A deployment whose queries spell the same closed function set
+/// under its own ontology namespace — e.g. gmeow's
+/// `https://blackcatinformatics.ca/gmeow/` with `gmeow:heldIn(...)` — adds that
+/// namespace as an *alias* here; the local names are unchanged.
+///
+/// Note the serializer does **not** consult this configuration: a
+/// [`Function::Purrdf`] always re-emits under the default [`crate::PURRDF_NS`]
+/// (a deliberate normalization — see `serialize.rs`), and re-parsing that output
+/// with the default options round-trips to the same algebra.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParserOptions {
+    /// The namespaces recognized as the extension-function seam in call position.
+    /// Defaults to `[PURRDF_NS]`; order is first-match-wins for prefix stripping.
+    pub extension_fn_namespaces: Vec<String>,
+}
+
+impl Default for ParserOptions {
+    fn default() -> Self {
+        Self {
+            extension_fn_namespaces: vec![crate::PURRDF_NS.to_owned()],
+        }
+    }
+}
+
 /// A reusable SPARQL query parser.
 ///
 /// Mirrors the prior oxigraph-family `SparqlParser` surface the existing
 /// consumers call so the port is mechanical: `SparqlParser::new().parse_query(text)`.
+/// Parse-time configuration (the extension-function namespace set) is passed per
+/// call via [`SparqlParser::parse_query_with`] / [`SparqlParser::parse_update_with`];
+/// the plain `parse_*` entries use [`ParserOptions::default`].
 #[derive(Clone, Debug, Default)]
 pub struct SparqlParser {
     base_iri: Option<String>,
@@ -58,27 +97,39 @@ impl SparqlParser {
         self
     }
 
-    /// Parse a SPARQL 1.1/1.2 query into the algebra.
+    /// Parse a SPARQL 1.1/1.2 query into the algebra, under [`ParserOptions::default`].
     pub fn parse_query(&self, query: &str) -> Result<Query> {
-        let tokens = tokenize(query)?;
-        let mut p = Parser {
-            tokens,
-            pos: 0,
-            prefixes: HashMap::new(),
-            base: self.base_iri.clone(),
-            agg_counter: 0,
-            anon_counter: 0,
-            group_counter: 0,
-        };
+        self.parse_query_with(query, &ParserOptions::default())
+    }
+
+    /// Parse a SPARQL 1.1/1.2 query into the algebra with explicit [`ParserOptions`]
+    /// (e.g. an extra extension-function namespace alias).
+    pub fn parse_query_with(&self, query: &str, options: &ParserOptions) -> Result<Query> {
+        let mut p = self.parser_for(query, options)?;
         let q = p.parse_query()?;
         p.expect_eof()?;
         Ok(q)
     }
 
-    /// Parse a SPARQL 1.1 Update request into the [`Update`] algebra.
+    /// Parse a SPARQL 1.1 Update request into the [`Update`] algebra, under
+    /// [`ParserOptions::default`].
     pub fn parse_update(&self, update: &str) -> Result<Update> {
-        let tokens = tokenize(update)?;
-        let mut p = Parser {
+        self.parse_update_with(update, &ParserOptions::default())
+    }
+
+    /// Parse a SPARQL 1.1 Update request into the [`Update`] algebra with explicit
+    /// [`ParserOptions`].
+    pub fn parse_update_with(&self, update: &str, options: &ParserOptions) -> Result<Update> {
+        let mut p = self.parser_for(update, options)?;
+        let u = p.parse_update()?;
+        p.expect_eof()?;
+        Ok(u)
+    }
+
+    /// Tokenize `text` and assemble the internal recursive-descent parser state.
+    fn parser_for<'o>(&self, text: &str, options: &'o ParserOptions) -> Result<Parser<'o>> {
+        let tokens = tokenize(text)?;
+        Ok(Parser {
             tokens,
             pos: 0,
             prefixes: HashMap::new(),
@@ -86,14 +137,12 @@ impl SparqlParser {
             agg_counter: 0,
             anon_counter: 0,
             group_counter: 0,
-        };
-        let u = p.parse_update()?;
-        p.expect_eof()?;
-        Ok(u)
+            options,
+        })
     }
 }
 
-struct Parser {
+struct Parser<'o> {
     tokens: Vec<Spanned>,
     pos: usize,
     prefixes: HashMap<String, String>,
@@ -101,9 +150,10 @@ struct Parser {
     agg_counter: usize,
     anon_counter: usize,
     group_counter: usize,
+    options: &'o ParserOptions,
 }
 
-impl Parser {
+impl Parser<'_> {
     // ── token cursor ─────────────────────────────────────────────────────────
 
     fn peek(&self) -> Option<&Token> {
@@ -1963,11 +2013,19 @@ impl Parser {
     ) -> Result<Expression> {
         let node = self.expect_iri_node()?;
         if self.at(&Token::LParen) {
-            // An IRI in call position under the canonical purrdf namespace dispatches to
-            // the CLOSED purrdf extension-function seam, recognized here at parse time.
-            // The local-name MUST resolve; an unknown purrdf:foo(...) is a hard error
-            // (fail-fast), never a silent Function::Custom fallthrough.
-            let func = if let Some(local) = node.as_str().strip_prefix(crate::PURRDF_NS) {
+            // An IRI in call position under ANY configured extension-function namespace
+            // (default: the published PURRDF_NS carrier vocabulary; deployments may add
+            // aliases such as the gmeow namespace via ParserOptions) dispatches to the
+            // CLOSED purrdf extension-function seam, recognized here at parse time.
+            // The local-name MUST resolve; an unknown <ns>foo(...) under a configured
+            // namespace is a hard error (fail-fast), never a silent Function::Custom
+            // fallthrough. An IRI under NO configured namespace stays Function::Custom.
+            let ext_local = self
+                .options
+                .extension_fn_namespaces
+                .iter()
+                .find_map(|ns| node.as_str().strip_prefix(ns.as_str()));
+            let func = if let Some(local) = ext_local {
                 match crate::algebra::PurrdfFn::from_local_name(local) {
                     Some(g) => Function::Purrdf(g),
                     None => {
@@ -3666,6 +3724,125 @@ mod tests {
         };
         // `GM` binds `purrdf:` to `<https://x/>`, so this is an external custom IRI.
         assert!(matches!(func, Function::Custom(_)), "got {func:?}");
+    }
+
+    // ── configurable extension-function namespaces (ParserOptions) ────────────
+
+    /// The gmeow ontology namespace — the original deployment alias for the same
+    /// closed extension-function set.
+    const GMEOW_NS: &str = "https://blackcatinformatics.ca/gmeow/";
+
+    /// Options with the gmeow namespace configured ALONGSIDE the default.
+    fn gmeow_options() -> ParserOptions {
+        ParserOptions {
+            extension_fn_namespaces: vec![crate::PURRDF_NS.to_owned(), GMEOW_NS.to_owned()],
+        }
+    }
+
+    #[test]
+    fn configured_namespace_alias_dispatches_to_purrdf_fn() {
+        // gmeow:heldIn(...) dispatches to the SAME closed PurrdfFn set when the gmeow
+        // namespace is supplied via ParserOptions.
+        let q = format!(
+            "PREFIX gmeow: <{GMEOW_NS}>\n\
+             SELECT ?h WHERE {{ ?r ?p ?o . BIND(gmeow:heldIn(?r, ?s) AS ?h) }}"
+        );
+        let parsed = SparqlParser::new()
+            .parse_query_with(&q, &gmeow_options())
+            .expect("parse with gmeow alias");
+        let Query::Select { pattern, .. } = parsed else {
+            panic!("expected SELECT");
+        };
+        let GraphPattern::Extend { expression, .. } = unproject(pattern) else {
+            panic!("expected Extend");
+        };
+        let Expression::FunctionCall(func, args) = expression else {
+            panic!("expected a FunctionCall");
+        };
+        assert_eq!(func, Function::Purrdf(PurrdfFn::HeldIn));
+        assert_eq!(args.len(), 2);
+    }
+
+    #[test]
+    fn default_namespace_still_dispatches_alongside_a_configured_alias() {
+        // Adding an alias must not displace the default published namespace.
+        let q = format!("{GMNS}SELECT ?h WHERE {{ ?r ?p ?o . BIND(g:listLength(?r) AS ?h) }}");
+        let parsed = SparqlParser::new()
+            .parse_query_with(&q, &gmeow_options())
+            .expect("parse");
+        let Query::Select { pattern, .. } = parsed else {
+            panic!("expected SELECT");
+        };
+        let GraphPattern::Extend { expression, .. } = unproject(pattern) else {
+            panic!("expected Extend");
+        };
+        let Expression::FunctionCall(func, _) = expression else {
+            panic!("expected a FunctionCall");
+        };
+        assert_eq!(func, Function::Purrdf(PurrdfFn::ListLength));
+    }
+
+    #[test]
+    fn unknown_local_under_configured_alias_is_hard_parse_error() {
+        // The closed-set contract applies to EVERY configured namespace: an unknown
+        // local name under the gmeow alias hard-fails, no Custom fallthrough.
+        let q = format!(
+            "PREFIX gmeow: <{GMEOW_NS}>\n\
+             SELECT ?x WHERE {{ ?r ?p ?o . BIND(gmeow:bogus(?r) AS ?x) }}"
+        );
+        let err = SparqlParser::new()
+            .parse_query_with(&q, &gmeow_options())
+            .unwrap_err();
+        assert!(
+            matches!(err, ParseError::Syntax { .. }),
+            "unknown gmeow:bogus(...) must be a hard parse error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn unconfigured_namespace_stays_a_custom_function() {
+        // WITHOUT the alias configured, a gmeow IRI in call position is an ordinary
+        // custom function — never an implicit extension dispatch.
+        let q = format!(
+            "PREFIX gmeow: <{GMEOW_NS}>\n\
+             SELECT ?h WHERE {{ ?r ?p ?o . BIND(gmeow:heldIn(?r, ?s) AS ?h) }}"
+        );
+        let Expression::FunctionCall(func, _) = bound_expr(&q) else {
+            panic!("expected a FunctionCall");
+        };
+        assert!(
+            matches!(&func, Function::Custom(n) if n.as_str() == format!("{GMEOW_NS}heldIn")),
+            "got {func:?}"
+        );
+    }
+
+    #[test]
+    fn alias_parsed_fn_serializes_under_the_default_namespace() {
+        // NORMALIZATION: a PurrdfFn parsed under the gmeow alias re-serializes under
+        // the DEFAULT published namespace, and a default re-parse round-trips.
+        let q = format!(
+            "PREFIX gmeow: <{GMEOW_NS}>\n\
+             SELECT ?h WHERE {{ ?r ?p ?o . BIND(gmeow:heldIn(?r, ?s) AS ?h) }}"
+        );
+        let parsed = SparqlParser::new()
+            .parse_query_with(&q, &gmeow_options())
+            .expect("parse with gmeow alias");
+        let Query::Select { pattern, .. } = parsed else {
+            panic!("expected SELECT");
+        };
+        let text = crate::serialize::pattern_to_select_query(&pattern);
+        assert!(
+            text.contains(&format!("<{}heldIn>", crate::PURRDF_NS)),
+            "serialization must normalize to the default namespace; text = {text}"
+        );
+        assert!(
+            !text.contains(GMEOW_NS),
+            "the alias namespace must not leak into serialized output; text = {text}"
+        );
+        let reparsed = find_held_in(&select_pattern(&text)).unwrap_or_else(|| {
+            panic!("default re-parse lost the PurrdfFn dispatch; text = {text}")
+        });
+        assert_eq!(reparsed, Function::Purrdf(PurrdfFn::HeldIn));
     }
 
     #[test]

@@ -17,7 +17,8 @@
 //! (`purrdf:wasAssociatedWith`). The output is byte-identical to the committed
 //! `observation-claim-view.rq` (the parity gate).
 
-use crate::mapping_support::{prefix_block, GENERATED_BANNER};
+use crate::mapping_support::{prefix_block, rename_template_prefix, GENERATED_BANNER};
+use crate::vocab::SliceVocab;
 
 /// The committed file name of the internal observation union view.
 pub const CLAIM_VIEW_FILE: &str = "observation-claim-view.rq";
@@ -29,8 +30,10 @@ pub const CLAIM_VIEW_FILE: &str = "observation-claim-view.rq";
 /// (`purrdf:displayable false`) are excluded (Principle 10).
 ///
 /// Takes no DSL input — it is a constant template-coded query — so it is
-/// infallible, matching the individual standpoint emitters.
-pub fn emit_claim_view() -> String {
+/// infallible, matching the individual standpoint emitters. Every vocabulary
+/// term derives from the caller's [`SliceVocab`]; for a fixed vocab the output
+/// is byte-deterministic.
+pub fn emit_claim_view(vocab: &SliceVocab) -> String {
     let body = "CONSTRUCT {\n\
          \x20   ?tok a purrdf:Observation , purrdf:StandpointClaim ;\n\
          \x20       purrdf:observedFeature ?prop ;\n\
@@ -52,7 +55,9 @@ pub fn emit_claim_view() -> String {
          # is back-filled from purrdf:expresses; vantage from the asserting agent\n\
          # (purrdf:wasAssociatedWith). Suppressed tokens (purrdf:displayable false) drop out.\n"
     );
-    format!("{header}{}\n\n{body}", prefix_block(&body))
+    let header = rename_template_prefix(&header, vocab.prefix_name());
+    let body = rename_template_prefix(&body, vocab.prefix_name());
+    format!("{header}{}\n\n{body}", prefix_block(&body, vocab))
 }
 
 #[cfg(test)]
@@ -68,9 +73,15 @@ mod tests {
             .unwrap()
     }
 
+    /// Committed-artifact parity uses the blackcatinformatics purrdf namespace
+    /// the committed query was generated with.
+    fn committed_vocab() -> SliceVocab {
+        SliceVocab::for_namespace("https://blackcatinformatics.ca/purrdf/")
+    }
+
     #[test]
     fn claim_view_matches_committed() {
-        let text = emit_claim_view();
+        let text = emit_claim_view(&committed_vocab());
         let committed_path = repo_root()
             .join("generated")
             .join("queries")
@@ -89,7 +100,7 @@ mod tests {
 
     #[test]
     fn claim_view_constructs_observation_surface_from_claim_tokens() {
-        let text = emit_claim_view();
+        let text = emit_claim_view(&committed_vocab());
         // Reads the canonical layer...
         assert!(text.contains("?tok a purrdf:ClaimToken"));
         assert!(text.contains("purrdf:expresses ?prop"));

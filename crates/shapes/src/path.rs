@@ -4,7 +4,13 @@
 //! SHACL property path evaluation.
 //!
 //! Evaluates a [`Path`] against a [`ShaclDataGraph`], returning the set of value
-//! nodes reachable from a given focus node.
+//! nodes reachable from a given focus node. All six SHACL §2.3.1 path forms are
+//! supported: predicate, inverse, sequence, alternative, and the three closure
+//! paths (`zeroOrMore`, `oneOrMore`, `zeroOrOne`). Closure evaluation walks a
+//! worklist with a visited set, so cyclic data graphs terminate; result order is
+//! deterministic (first-seen order over the deterministic pattern lookups).
+
+use std::collections::HashSet;
 
 use crate::data::{GraphFilter, ShaclDataGraph};
 use crate::shapes::Path;
@@ -15,25 +21,98 @@ use crate::term::Term;
 ///
 /// The result set is deduplicated (preserving first occurrence order) as SHACL
 /// specifies value nodes as a set.  If `focus` is a `Literal` or cannot serve
-/// as a subject, returns an empty `Vec`.
+/// as a subject, non-reflexive steps return no matches (a reflexive closure
+/// step may still yield the focus itself).
 pub fn eval<G: ShaclDataGraph>(store: &G, focus: &Term, path: &Path) -> Vec<Term> {
     let mut nodes = eval_inner(store, focus, path);
     // Dedup preserving first-occurrence order.
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     nodes.retain(|t| seen.insert(t.clone()));
     nodes
 }
 
 /// Convert a [`Path`] to its term representation for use in `result_path`.
 ///
-/// - `Predicate(p)` → `Term::NamedNode(p)`
-/// - `Inverse(inner)` → the predicate IRI of the innermost predicate (SHACL
-///   path serialisation as a full blank-node structure is out-of-scope for
-///   #576; the predicate IRI is a faithful approximation for the corpus).
+/// - `Predicate(p)` → `Term::NamedNode(p)` (a simple path IS its IRI);
+/// - every other form → a deterministic blank node ([`path_label`]) standing
+///   for the SHACL path structure, matching the spec's `sh:resultPath`
+///   rendering (`[ sh:inversePath … ]`, sequence lists, …). The structure
+///   itself travels in `ValidationResult::path_structure` and is emitted into
+///   the report graph by `ValidationReport::to_ntriples`.
 pub fn path_to_term(path: &Path) -> Term {
     match path {
         Path::Predicate(p) => Term::NamedNode(p.clone()),
-        Path::Inverse(inner) => path_to_term(inner),
+        complex => Term::BlankNode(path_label(complex)),
+    }
+}
+
+/// Render a [`Path`] in SPARQL 1.1 property-path surface syntax
+/// (`^<p>`, `<a>/<b>`, `<a>|<b>`, `(<p>)*`, …).
+///
+/// Used for SHACL-SPARQL `$PATH` substitution (a property-shape `sh:sparql`
+/// validator's `$PATH` placeholder is replaced with the shape's path in SPARQL
+/// syntax) and as the seed for [`path_label`]. Composite sub-paths are always
+/// parenthesised, so the rendering is unambiguous in any embedding position.
+pub fn path_to_sparql(path: &Path) -> String {
+    fn grouped(path: &Path) -> String {
+        match path {
+            Path::Predicate(_) => path_to_sparql(path),
+            composite => format!("({})", path_to_sparql(composite)),
+        }
+    }
+    match path {
+        Path::Predicate(p) => format!("<{}>", p.as_str()),
+        Path::Inverse(inner) => format!("^{}", grouped(inner)),
+        Path::Sequence(parts) => parts.iter().map(grouped).collect::<Vec<_>>().join("/"),
+        Path::Alternative(parts) => parts.iter().map(grouped).collect::<Vec<_>>().join("|"),
+        Path::ZeroOrMore(inner) => format!("{}*", grouped(inner)),
+        Path::OneOrMore(inner) => format!("{}+", grouped(inner)),
+        Path::ZeroOrOne(inner) => format!("{}?", grouped(inner)),
+    }
+}
+
+/// A deterministic blank-node label for a complex path: the SPARQL rendering
+/// sanitised to blank-node-label-safe characters (`[A-Za-z0-9-]`, no trailing
+/// `-`). Distinct paths get distinct-enough labels; equal paths always get the
+/// SAME label, keeping report output byte-stable across runs.
+fn path_label(path: &Path) -> String {
+    let rendered = path_to_sparql(path);
+    let mut label = String::with_capacity(rendered.len() + 8);
+    label.push_str("path-");
+    for c in rendered.chars() {
+        // Path OPERATORS keep distinct spellings (they would all sanitise to
+        // `-` otherwise, colliding e.g. `a/b` with `a|b`).
+        match c {
+            '^' => label.push_str("inv-"),
+            '/' => label.push_str("-seq-"),
+            '|' => label.push_str("-alt-"),
+            '*' => label.push_str("-star"),
+            '+' => label.push_str("-plus"),
+            '?' => label.push_str("-opt"),
+            c if c.is_ascii_alphanumeric() => label.push(c),
+            _ => label.push('-'),
+        }
+    }
+    while label.ends_with('-') {
+        label.pop();
+    }
+    label
+}
+
+/// The first (leftmost) predicate IRI mentioned in a path, if any.
+///
+/// Used for predicate-keyed metadata lookups (e.g. graph-box roles) where a
+/// single representative predicate suffices.
+pub fn primary_predicate(path: &Path) -> Option<&crate::term::NamedNode> {
+    match path {
+        Path::Predicate(p) => Some(p),
+        Path::Inverse(inner)
+        | Path::ZeroOrMore(inner)
+        | Path::OneOrMore(inner)
+        | Path::ZeroOrOne(inner) => primary_predicate(inner),
+        Path::Sequence(parts) | Path::Alternative(parts) => {
+            parts.first().and_then(primary_predicate)
+        }
     }
 }
 
@@ -71,33 +150,98 @@ fn eval_inner<G: ShaclDataGraph>(store: &G, focus: &Term, path: &Path) -> Vec<Te
                     .map(|q| q.subject)
                     .collect()
             }
-            // General inverse: eval inner with focus as "target", swap roles.
-            // For any inner path, find all nodes `n` such that focus ∈ eval(n, inner).
-            // This requires scanning every subject in the store — only Predicate inner
-            // is needed for the corpus, but we keep it total.
-            inner_path @ Path::Inverse(_) => {
-                // Collect all distinct subjects from the default graph.
-                let all_subjects: Vec<Term> = {
-                    let mut subjects: Vec<Term> = store
-                        .quads_for_pattern(None, None, None, GraphFilter::DefaultGraph)
-                        .into_iter()
-                        .map(|q| q.subject)
-                        .collect();
-                    let mut seen = std::collections::HashSet::new();
-                    subjects.retain(|t| seen.insert(t.clone()));
-                    subjects
-                };
-                all_subjects
-                    .into_iter()
-                    .filter(|candidate| {
-                        eval_inner(store, candidate, inner_path)
-                            .iter()
-                            .any(|v| v == focus)
-                    })
-                    .collect()
-            }
+            // Inverse of a composite path: push the inversion inward (SPARQL
+            // property-path algebra) and evaluate the rewritten path. This keeps
+            // inverse evaluation total for every nesting without graph scans.
+            composite => eval_inner(store, focus, &invert(composite)),
         },
+        Path::Sequence(parts) => {
+            // Fold the frontier through each sequence step, deduplicating per
+            // step (first-seen order) so diamond-shaped graphs stay linear.
+            let mut frontier = vec![focus.clone()];
+            for part in parts {
+                let mut next = Vec::new();
+                let mut seen = HashSet::new();
+                for node in &frontier {
+                    for value in eval_inner(store, node, part) {
+                        if seen.insert(value.clone()) {
+                            next.push(value);
+                        }
+                    }
+                }
+                frontier = next;
+            }
+            frontier
+        }
+        Path::Alternative(parts) => {
+            // Union of all alternatives (the caller deduplicates).
+            parts
+                .iter()
+                .flat_map(|part| eval_inner(store, focus, part))
+                .collect()
+        }
+        Path::ZeroOrMore(inner) => closure(store, focus, inner, true),
+        Path::OneOrMore(inner) => closure(store, focus, inner, false),
+        Path::ZeroOrOne(inner) => {
+            let mut nodes = vec![focus.clone()];
+            nodes.extend(eval_inner(store, focus, inner));
+            nodes
+        }
     }
+}
+
+/// Rewrite the inverse of a composite path by pushing the inversion inward:
+///
+/// - `^(^p)      = p`
+/// - `^(a/b/…/z) = ^z/…/^b/^a`
+/// - `^(a|b)     = ^a|^b`
+/// - `^(p*)      = (^p)*` (and likewise `+`, `?`)
+fn invert(path: &Path) -> Path {
+    match path {
+        Path::Predicate(_) => Path::Inverse(Box::new(path.clone())),
+        Path::Inverse(inner) => inner.as_ref().clone(),
+        Path::Sequence(parts) => Path::Sequence(parts.iter().rev().map(invert).collect()),
+        Path::Alternative(parts) => Path::Alternative(parts.iter().map(invert).collect()),
+        Path::ZeroOrMore(inner) => Path::ZeroOrMore(Box::new(invert(inner))),
+        Path::OneOrMore(inner) => Path::OneOrMore(Box::new(invert(inner))),
+        Path::ZeroOrOne(inner) => Path::ZeroOrOne(Box::new(invert(inner))),
+    }
+}
+
+/// The (reflexive-)transitive closure of `inner` from `focus`: a breadth-first
+/// worklist walk with a visited set, so cyclic graphs terminate. `reflexive`
+/// includes the focus node itself (`zeroOrMore`); otherwise the walk starts from
+/// the focus's direct step values (`oneOrMore`). First-seen order is preserved.
+fn closure<G: ShaclDataGraph>(store: &G, focus: &Term, inner: &Path, reflexive: bool) -> Vec<Term> {
+    let mut seen: HashSet<Term> = HashSet::new();
+    let mut order: Vec<Term> = Vec::new();
+    let mut worklist: Vec<Term> = Vec::new();
+
+    if reflexive {
+        seen.insert(focus.clone());
+        order.push(focus.clone());
+        worklist.push(focus.clone());
+    } else {
+        for value in eval_inner(store, focus, inner) {
+            if seen.insert(value.clone()) {
+                order.push(value.clone());
+                worklist.push(value);
+            }
+        }
+    }
+
+    let mut cursor = 0;
+    while cursor < worklist.len() {
+        let node = worklist[cursor].clone();
+        cursor += 1;
+        for value in eval_inner(store, &node, inner) {
+            if seen.insert(value.clone()) {
+                order.push(value.clone());
+                worklist.push(value);
+            }
+        }
+    }
+    order
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -127,6 +271,12 @@ mod tests {
 
     fn nn(iri: &str) -> Term {
         Term::NamedNode(NamedNode::new_unchecked(iri))
+    }
+
+    fn pred(local: &str) -> Path {
+        Path::Predicate(NamedNode::new_unchecked(format!(
+            "http://example.org/ns#{local}"
+        )))
     }
 
     #[test]
@@ -169,5 +319,268 @@ mod tests {
         let result = eval(&data, &focus, &path);
         // Should be exactly 2 distinct values
         assert_eq!(result.len(), 2);
+    }
+
+    // ── Sequence paths ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn sequence_path_chains_predicates() {
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:p ex:b . ex:b ex:q ex:c . ex:b ex:q ex:d .
+        ",
+        );
+        let focus = nn("http://example.org/ns#a");
+        let path = Path::Sequence(vec![pred("p"), pred("q")]);
+        let mut result = eval(&data, &focus, &path);
+        result.sort_by_key(Term::to_string);
+        assert_eq!(
+            result,
+            vec![nn("http://example.org/ns#c"), nn("http://example.org/ns#d")]
+        );
+    }
+
+    #[test]
+    fn sequence_path_diamond_deduplicates() {
+        // a → {b, c} → d : d is reachable twice but reported once.
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:p ex:b , ex:c . ex:b ex:q ex:d . ex:c ex:q ex:d .
+        ",
+        );
+        let focus = nn("http://example.org/ns#a");
+        let path = Path::Sequence(vec![pred("p"), pred("q")]);
+        let result = eval(&data, &focus, &path);
+        assert_eq!(result, vec![nn("http://example.org/ns#d")]);
+    }
+
+    // ── Alternative paths ──────────────────────────────────────────────────────
+
+    #[test]
+    fn alternative_path_unions_branches() {
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:p ex:b . ex:a ex:q ex:c . ex:a ex:p ex:c .
+        ",
+        );
+        let focus = nn("http://example.org/ns#a");
+        let path = Path::Alternative(vec![pred("p"), pred("q")]);
+        let mut result = eval(&data, &focus, &path);
+        result.sort_by_key(Term::to_string);
+        // ex:c is reachable via both branches but reported once (set semantics).
+        assert_eq!(
+            result,
+            vec![nn("http://example.org/ns#b"), nn("http://example.org/ns#c")]
+        );
+    }
+
+    // ── Closure paths ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn zero_or_more_includes_focus_and_terminates_on_cycle() {
+        // a → b → c → a : a cyclic graph must terminate and include the focus.
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:next ex:b . ex:b ex:next ex:c . ex:c ex:next ex:a .
+        ",
+        );
+        let focus = nn("http://example.org/ns#a");
+        let path = Path::ZeroOrMore(Box::new(pred("next")));
+        let mut result = eval(&data, &focus, &path);
+        result.sort_by_key(Term::to_string);
+        assert_eq!(
+            result,
+            vec![
+                nn("http://example.org/ns#a"),
+                nn("http://example.org/ns#b"),
+                nn("http://example.org/ns#c")
+            ]
+        );
+    }
+
+    #[test]
+    fn one_or_more_excludes_unreachable_focus() {
+        // a → b → c (no cycle): oneOrMore from a yields {b, c}, not a.
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:next ex:b . ex:b ex:next ex:c .
+        ",
+        );
+        let focus = nn("http://example.org/ns#a");
+        let path = Path::OneOrMore(Box::new(pred("next")));
+        let mut result = eval(&data, &focus, &path);
+        result.sort_by_key(Term::to_string);
+        assert_eq!(
+            result,
+            vec![nn("http://example.org/ns#b"), nn("http://example.org/ns#c")]
+        );
+    }
+
+    #[test]
+    fn one_or_more_includes_focus_when_cyclically_reached() {
+        // a → b → a : oneOrMore from a reaches a in ≥1 step, so a IS a value.
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:next ex:b . ex:b ex:next ex:a .
+        ",
+        );
+        let focus = nn("http://example.org/ns#a");
+        let path = Path::OneOrMore(Box::new(pred("next")));
+        let mut result = eval(&data, &focus, &path);
+        result.sort_by_key(Term::to_string);
+        assert_eq!(
+            result,
+            vec![nn("http://example.org/ns#a"), nn("http://example.org/ns#b")]
+        );
+    }
+
+    #[test]
+    fn zero_or_one_is_focus_plus_one_step() {
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:next ex:b . ex:b ex:next ex:c .
+        ",
+        );
+        let focus = nn("http://example.org/ns#a");
+        let path = Path::ZeroOrOne(Box::new(pred("next")));
+        let mut result = eval(&data, &focus, &path);
+        result.sort_by_key(Term::to_string);
+        // Focus itself (zero steps) plus one step; c (two steps) excluded.
+        assert_eq!(
+            result,
+            vec![nn("http://example.org/ns#a"), nn("http://example.org/ns#b")]
+        );
+    }
+
+    // ── Nested combinations ────────────────────────────────────────────────────
+
+    #[test]
+    fn nested_sequence_of_alternative_and_closure() {
+        // (p|q) / r* : from a, step p|q then any number of r.
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:p ex:b . ex:a ex:q ex:c .
+            ex:b ex:r ex:d . ex:d ex:r ex:e .
+        ",
+        );
+        let focus = nn("http://example.org/ns#a");
+        let path = Path::Sequence(vec![
+            Path::Alternative(vec![pred("p"), pred("q")]),
+            Path::ZeroOrMore(Box::new(pred("r"))),
+        ]);
+        let mut result = eval(&data, &focus, &path);
+        result.sort_by_key(Term::to_string);
+        assert_eq!(
+            result,
+            vec![
+                nn("http://example.org/ns#b"),
+                nn("http://example.org/ns#c"),
+                nn("http://example.org/ns#d"),
+                nn("http://example.org/ns#e")
+            ]
+        );
+    }
+
+    #[test]
+    fn inverse_of_sequence_reverses_and_inverts() {
+        // ^(p/q) from d must find a, since a p/q d.
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:p ex:b . ex:b ex:q ex:d .
+        ",
+        );
+        let focus = nn("http://example.org/ns#d");
+        let path = Path::Inverse(Box::new(Path::Sequence(vec![pred("p"), pred("q")])));
+        let result = eval(&data, &focus, &path);
+        assert_eq!(result, vec![nn("http://example.org/ns#a")]);
+    }
+
+    #[test]
+    fn inverse_of_zero_or_more_includes_focus() {
+        // ^(next*) from b: everything that reaches b via next*, plus b itself
+        // (zero steps).
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:next ex:b .
+        ",
+        );
+        let focus = nn("http://example.org/ns#b");
+        let path = Path::Inverse(Box::new(Path::ZeroOrMore(Box::new(pred("next")))));
+        let mut result = eval(&data, &focus, &path);
+        result.sort_by_key(Term::to_string);
+        assert_eq!(
+            result,
+            vec![nn("http://example.org/ns#a"), nn("http://example.org/ns#b")]
+        );
+    }
+
+    // ── path_to_term / primary_predicate approximations ────────────────────────
+
+    #[test]
+    fn path_to_term_simple_is_iri_complex_is_deterministic_bnode() {
+        // A plain predicate path is its IRI.
+        assert_eq!(path_to_term(&pred("p")), nn("http://example.org/ns#p"));
+        // A complex path is a blank node whose label is deterministic: the same
+        // path yields the same label, distinct paths yield distinct labels.
+        let seq = Path::Sequence(vec![pred("p"), pred("q")]);
+        let alt = Path::Alternative(vec![pred("p"), pred("q")]);
+        let (t_seq, t_alt) = (path_to_term(&seq), path_to_term(&alt));
+        assert!(matches!(t_seq, Term::BlankNode(_)), "sequence → bnode");
+        assert!(matches!(t_alt, Term::BlankNode(_)), "alternative → bnode");
+        assert_ne!(t_seq, t_alt, "sequence and alternative labels must differ");
+        assert_eq!(path_to_term(&seq), t_seq, "labels are deterministic");
+    }
+
+    #[test]
+    fn path_to_sparql_renders_surface_syntax() {
+        let p = "<http://example.org/ns#p>";
+        let q = "<http://example.org/ns#q>";
+        assert_eq!(path_to_sparql(&pred("p")), p);
+        assert_eq!(
+            path_to_sparql(&Path::Inverse(Box::new(pred("p")))),
+            format!("^{p}")
+        );
+        assert_eq!(
+            path_to_sparql(&Path::Sequence(vec![pred("p"), pred("q")])),
+            format!("{p}/{q}")
+        );
+        assert_eq!(
+            path_to_sparql(&Path::Alternative(vec![pred("p"), pred("q")])),
+            format!("{p}|{q}")
+        );
+        assert_eq!(
+            path_to_sparql(&Path::ZeroOrMore(Box::new(pred("p")))),
+            format!("{p}*")
+        );
+        // Composite sub-paths are parenthesised.
+        assert_eq!(
+            path_to_sparql(&Path::OneOrMore(Box::new(Path::Sequence(vec![
+                pred("p"),
+                pred("q")
+            ])))),
+            format!("({p}/{q})+")
+        );
+    }
+
+    #[test]
+    fn primary_predicate_descends_composites() {
+        let path = Path::Inverse(Box::new(Path::Sequence(vec![
+            Path::ZeroOrOne(Box::new(pred("p"))),
+            pred("q"),
+        ])));
+        assert_eq!(
+            primary_predicate(&path).map(NamedNode::as_str),
+            Some("http://example.org/ns#p")
+        );
     }
 }

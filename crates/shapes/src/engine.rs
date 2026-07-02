@@ -131,7 +131,7 @@ fn resolve_focus_nodes<G: ShaclDataGraph>(
     data: &G,
     targets: &[Target],
     closure_memo: &mut std::collections::HashMap<NamedNode, std::collections::HashSet<Term>>,
-) -> Vec<Term> {
+) -> Result<Vec<Term>, String> {
     let mut seen = std::collections::HashSet::new();
     let mut nodes: Vec<Term> = Vec::new();
 
@@ -151,11 +151,12 @@ fn resolve_focus_nodes<G: ShaclDataGraph>(
             }
             // sh:SPARQLTarget: execute the pre-parsed SELECT and collect ?this over
             // the native SPARQL engine, reading the IR dataset directly.
-            // SELECT-form is enforced at shape-load (shapes.rs rejects non-SELECT), so the only Err here is an impossible-by-construction runtime failure; .expect() documents that invariant.
+            // SELECT-form is enforced at shape-load (shapes.rs rejects
+            // non-SELECT); a residual evaluation failure is surfaced as a hard
+            // validation error rather than a panic.
             Target::Sparql { select, .. } => {
-                crate::sparql::eval_target(&data.sparql_dataset(), select).expect(
-                    "SPARQLTarget query execution failed (parseability checked at parse time)",
-                )
+                crate::sparql::eval_target(&data.sparql_dataset(), select)
+                    .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?
             }
         };
         for node in candidates {
@@ -167,7 +168,7 @@ fn resolve_focus_nodes<G: ShaclDataGraph>(
 
     // Sort for a stable, deterministic ordering across iterations.
     nodes.sort_by_key(ToString::to_string);
-    nodes
+    Ok(nodes)
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -182,7 +183,15 @@ fn resolve_focus_nodes<G: ShaclDataGraph>(
 /// via [`crate::constraints::validate_shape`]. Results are sorted by `(focus_node,
 /// source_constraint_component, source_shape, result_path, value)` so reports are
 /// identical across runs.
-pub fn validate_with<G: ShaclDataGraph>(data: &G, shapes: &Shapes) -> ValidationReport {
+///
+/// # Errors
+///
+/// Returns `Err(String)` on a hard validation failure: a SHACL-SPARQL target
+/// or constraint query the engine cannot evaluate.
+pub fn validate_with<G: ShaclDataGraph>(
+    data: &G,
+    shapes: &Shapes,
+) -> Result<ValidationReport, String> {
     validate_with_focus_filter(data, shapes, |_, _| true)
 }
 
@@ -192,11 +201,15 @@ pub fn validate_with<G: ShaclDataGraph>(data: &G, shapes: &Shapes) -> Validation
 /// It lets callers that already know only a bounded set of focus nodes changed
 /// avoid rechecking the clean base graph, while still resolving targets against
 /// the full data graph.
+///
+/// # Errors
+///
+/// Returns `Err(String)` on a hard validation failure (see [`validate_with`]).
 pub fn validate_with_focus_filter<G, F>(
     data: &G,
     shapes: &Shapes,
     mut include_focus: F,
-) -> ValidationReport
+) -> Result<ValidationReport, String>
 where
     G: ShaclDataGraph,
     F: FnMut(&Shape, &Term) -> bool,
@@ -214,7 +227,7 @@ where
             continue;
         }
 
-        let focus_nodes = resolve_focus_nodes(data, &shape.targets, &mut closure_memo);
+        let focus_nodes = resolve_focus_nodes(data, &shape.targets, &mut closure_memo)?;
 
         // Per-focus constraint evaluation stays SERIAL. A rayon `par_iter` over the
         // focus loop was measured on `shacl_validate/large_hierarchy` (3000 focus
@@ -229,7 +242,7 @@ where
             if !include_focus(shape, focus) {
                 continue;
             }
-            all_results.extend(crate::constraints::validate_shape(data, focus, shape));
+            all_results.extend(crate::constraints::validate_shape(data, focus, shape)?);
         }
     }
 
@@ -266,10 +279,10 @@ where
 
     let conforms = all_results.is_empty();
 
-    ValidationReport {
+    Ok(ValidationReport {
         conforms,
         results: all_results,
-    }
+    })
 }
 
 /// Validate a frozen [`::purrdf::RdfDataset`] against parsed SHACL shapes, IR-natively.
@@ -287,7 +300,7 @@ pub fn validate_dataset(data: &RdfDataset, shapes: &Shapes) -> Result<Validation
     let dataset = project_dataset(data)?;
     // The engine reads pattern lookups directly from the frozen IR; SHACL-SPARQL
     // paths run the native SPARQL engine over the same `Arc<RdfDataset>`.
-    Ok(validate_projected_dataset(dataset, shapes))
+    validate_projected_dataset(dataset, shapes)
 }
 
 /// Validate an already-SHACL-projected dataset.
@@ -295,17 +308,28 @@ pub fn validate_dataset(data: &RdfDataset, shapes: &Shapes) -> Result<Validation
 /// Call [`project_dataset`] first when the same base graph is reused across many
 /// overlays; this avoids flattening/reifier-projecting the base graph on every
 /// validation pass.
-pub fn validate_projected_dataset(projected: Arc<RdfDataset>, shapes: &Shapes) -> ValidationReport {
+///
+/// # Errors
+///
+/// Returns `Err(String)` on a hard validation failure (see [`validate_with`]).
+pub fn validate_projected_dataset(
+    projected: Arc<RdfDataset>,
+    shapes: &Shapes,
+) -> Result<ValidationReport, String> {
     let reference = IrDataGraph::new(projected);
     validate_with(&reference, shapes)
 }
 
 /// Validate an already-SHACL-projected dataset with a focus-node filter.
+///
+/// # Errors
+///
+/// Returns `Err(String)` on a hard validation failure (see [`validate_with`]).
 pub fn validate_projected_dataset_with_focus_filter<F>(
     projected: Arc<RdfDataset>,
     shapes: &Shapes,
     include_focus: F,
-) -> ValidationReport
+) -> Result<ValidationReport, String>
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
@@ -817,7 +841,7 @@ mod tests {
                     r.source_shape.to_string(),
                     r.result_path.as_ref().map(ToString::to_string),
                     r.value.as_ref().map(ToString::to_string),
-                    r.severity,
+                    r.severity.clone(),
                 )
             })
             .collect();
@@ -831,7 +855,7 @@ mod tests {
                     r.source_shape.to_string(),
                     r.result_path.as_ref().map(ToString::to_string),
                     r.value.as_ref().map(ToString::to_string),
-                    r.severity,
+                    r.severity.clone(),
                 )
             })
             .collect();

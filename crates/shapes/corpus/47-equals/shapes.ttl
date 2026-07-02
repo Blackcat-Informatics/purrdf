@@ -1,0 +1,10 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:NameShape
+    a sh:NodeShape ;
+    sh:targetNode ex:person ;
+    sh:property [
+        sh:path ex:firstName ;
+        sh:equals ex:givenName ;
+    ] .

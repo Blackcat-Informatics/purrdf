@@ -267,9 +267,11 @@ mod tests {
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
-    /// The PurRDF vocabulary namespace — used only to build full IRIs when the
-    /// committed-Turtle cross-check reads `module.ttl` (production code stores
-    /// bare local names, the open-vocabulary discipline).
+    /// The namespace the committed `slices/core/standpoint/module.ttl` bundle
+    /// was authored under — used ONLY by the committed-Turtle cross-check
+    /// (which skips when that file is absent). Production code stores bare
+    /// local names (the open-vocabulary discipline); the consumer supplies its
+    /// namespace at the emitters' boundaries via `SliceVocab`.
     const PURRDF: &str = "https://blackcatinformatics.ca/purrdf/";
 
     /// The five legacy values, for exhaustive iteration in tests.

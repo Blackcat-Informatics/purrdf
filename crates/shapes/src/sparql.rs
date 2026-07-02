@@ -85,7 +85,7 @@ pub fn eval_sparql_constraint(
     select: &str,
     component: &NamedNode,
     source_shape: &Term,
-    severity: Severity,
+    severity: &Severity,
     message: Option<&String>,
 ) -> Result<Vec<ValidationResult>, String> {
     // Pre-bind `$this` to THIS focus node (GAP-A substitution — the native
@@ -108,17 +108,21 @@ pub fn eval_sparql_constraint(
             .and_then(|i| row.get(i))
             .and_then(Option::as_ref)
             .map(term_value_to_native);
+        // SHACL-SPARQL result mapping (§5.3.1): sh:value is the solution's
+        // ?value binding when present, otherwise the FOCUS NODE ($this).
         let value = value_index
             .and_then(|i| row.get(i))
             .and_then(Option::as_ref)
-            .map(term_value_to_native);
+            .map(term_value_to_native)
+            .or_else(|| Some(focus.clone()));
         out.push(ValidationResult {
             focus_node: focus.clone(),
             result_path,
+            path_structure: None,
             value,
             source_constraint_component: component.clone(),
             source_shape: source_shape.clone(),
-            severity,
+            severity: severity.clone(),
             message: message.cloned(),
             source_box_roles: vec![],
             path_box_roles: vec![],
@@ -268,7 +272,7 @@ mod tests {
             select,
             &dummy_component(),
             &dummy_shape(),
-            Severity::Violation,
+            &Severity::Violation,
             None,
         )
         .expect("eval must succeed for self-referencing focus");
@@ -276,7 +280,9 @@ mod tests {
         assert_eq!(results[0].focus_node, focus_self);
         assert_eq!(results[0].severity, Severity::Violation);
         assert_eq!(results[0].result_path, None);
-        assert_eq!(results[0].value, None);
+        // SHACL-SPARQL §5.3.1: no ?value binding ⇒ sh:value defaults to the
+        // focus node ($this).
+        assert_eq!(results[0].value, Some(focus_self));
 
         // Focus = an unrelated node → zero results.
         let focus_other = named_term("http://example.org/other");
@@ -286,7 +292,7 @@ mod tests {
             select,
             &dummy_component(),
             &dummy_shape(),
-            Severity::Violation,
+            &Severity::Violation,
             None,
         )
         .expect("eval must succeed for non-matching focus");

@@ -1500,28 +1500,28 @@ fn set_reifier(
 mod tests {
     use super::*;
 
-    /// A bare `/` in a prefixed-name local part (e.g. `purrdf:report/shacl/sarif`)
+    /// A bare `/` in a prefixed-name local part (e.g. `ex:report/shacl/sarif`)
     /// must parse as ONE prefixed name and expand to the prefix namespace plus the
     /// slash-bearing local, matching oxigraph/purrdf-gts (strict Turtle would need
-    /// `\/`, but the ontology + fixtures use the bare form).
+    /// `\/`, but real-world ontologies and fixtures use the bare form).
     #[test]
     fn turtle_prefixed_name_allows_bare_slash_in_local() {
-        let text = "@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .\n\
-                    purrdf:report/shacl/sarif purrdf:projection/okf purrdf:report/shacl/sarif .";
+        let text = "@prefix ex: <https://example.org/vocab/> .\n\
+                    ex:report/shacl/sarif ex:projection/okf ex:report/shacl/sarif .";
         let statements = DocParser::new(text, None, false).parse().expect("parses");
         assert_eq!(statements.len(), 1);
         let nodes = &statements[0];
         assert_eq!(
             nodes[0],
-            Node::Iri("https://blackcatinformatics.ca/purrdf/report/shacl/sarif".to_owned())
+            Node::Iri("https://example.org/vocab/report/shacl/sarif".to_owned())
         );
         assert_eq!(
             nodes[1],
-            Node::Iri("https://blackcatinformatics.ca/purrdf/projection/okf".to_owned())
+            Node::Iri("https://example.org/vocab/projection/okf".to_owned())
         );
         assert_eq!(
             nodes[2],
-            Node::Iri("https://blackcatinformatics.ca/purrdf/report/shacl/sarif".to_owned())
+            Node::Iri("https://example.org/vocab/report/shacl/sarif".to_owned())
         );
     }
 }

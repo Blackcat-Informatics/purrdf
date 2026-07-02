@@ -1,17 +1,17 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: CC-BY-4.0
 
-@prefix purrdf:  <https://blackcatinformatics.ca/purrdf/> .
+@prefix vocab:   <https://example.org/vocab/> .
 @prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
 @prefix ex:      <https://example.org/test/> .
 
 <https://example.org/test/slice/test>
-    a purrdf:Slice ;
+    a vocab:Slice ;
     rdfs:label "test slice"@x-purrdf-english ;
     dcterms:title "Test Slice"@x-purrdf-english ;
     dcterms:creator "Test Author" ;
     dcterms:identifier "10.99999/test" ;
-    purrdf:sliceTier purrdf:tierCore ;
-    purrdf:sliceConsumer "For testing only."@x-purrdf-english ;
+    vocab:sliceTier vocab:tierCore ;
+    vocab:sliceConsumer "For testing only."@x-purrdf-english ;
     ex:unknownCustomProp "custom value"^^<http://www.w3.org/2001/XMLSchema#string> .

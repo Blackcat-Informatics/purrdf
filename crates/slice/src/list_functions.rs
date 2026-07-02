@@ -154,9 +154,6 @@ const PARAMS: &[ListTerm] = &[
     },
 ];
 
-/// The PurRDF namespace prefix the function/param/output IRIs are minted under.
-const PURRDF_NS: &str = "https://blackcatinformatics.ca/purrdf/";
-
 /// The document node banner (`rdfs:comment` after `to_quads`, like
 /// `functions.fno.ttl`). Note the predicate shift from the legacy hand-Turtle's
 /// `skos:definition` to `rdfs:comment` is intentional — the FnO doc-node idiom uses
@@ -171,20 +168,22 @@ const BANNER: &str =
      and surfaces them in CONSTRUCT output or the SELECT auxiliary graph.";
 
 /// Build the FnO catalog of the six primitive list functions from the
-/// [`FUNCTIONS`]/[`PARAMS`] consts (the single source of truth).
+/// [`FUNCTIONS`]/[`PARAMS`] consts (the single source of truth), minting every
+/// function/param/output IRI under the caller's [`SliceVocab`](crate::vocab::SliceVocab)
+/// namespace.
 ///
 /// These are PRIMITIVES: their params/outputs bind NO `fno:predicate` and the
 /// functions are typed `fno:Function` ONLY (`kind_types` is empty — they are NOT
-/// `purrdf:ProjectionFunction`). The maximal-information-flow `rdfs:label` /
+/// the consumer's `ProjectionFunction`). The maximal-information-flow `rdfs:label` /
 /// `skos:definition` on every function, param, and output is carried via the
 /// optional model fields and survives the shared [`purrdf::fno::to_quads`] path.
-pub fn list_functions_catalog() -> purrdf::fno::FnoCatalog {
+pub fn list_functions_catalog(vocab: &crate::vocab::SliceVocab) -> purrdf::fno::FnoCatalog {
     use purrdf::fno::{FnFunction, FnOutput, FnParam, FnoCatalog};
 
     let functions: Vec<FnFunction> = FUNCTIONS
         .iter()
         .map(|f| FnFunction {
-            iri: format!("{PURRDF_NS}{}", f.name),
+            iri: vocab.term(f.name),
             label: f.label.to_owned(),
             description: Some(f.definition.to_owned()),
             // Primitive — `fno:Function` only.
@@ -193,17 +192,13 @@ pub fn list_functions_catalog() -> purrdf::fno::FnoCatalog {
             // and per-function backing status lives in `skos:definition` and the
             // document banner.
             see_also: None,
-            expects: f
-                .expects
-                .iter()
-                .map(|p| format!("{PURRDF_NS}{p}"))
-                .collect(),
+            expects: f.expects.iter().map(|p| vocab.term(p)).collect(),
             output: FnOutput {
-                iri: format!("{PURRDF_NS}{}", f.output),
+                iri: vocab.term(f.output),
                 predicate: None,
                 r#type: f.output_type.to_owned(),
                 label: Some(format!("{} result", f.label)),
-                description: Some(format!("The result of purrdf:{}.", f.name)),
+                description: Some(format!("The result of {}:{}.", vocab.prefix_name(), f.name)),
             },
         })
         .collect();
@@ -211,7 +206,7 @@ pub fn list_functions_catalog() -> purrdf::fno::FnoCatalog {
     let params: Vec<FnParam> = PARAMS
         .iter()
         .map(|p| FnParam {
-            iri: format!("{PURRDF_NS}{}", p.local),
+            iri: vocab.term(p.local),
             predicate: None,
             r#type: p.ty.to_owned(),
             required: true,
@@ -221,9 +216,9 @@ pub fn list_functions_catalog() -> purrdf::fno::FnoCatalog {
         .collect();
 
     FnoCatalog {
-        ontology_iri: "https://blackcatinformatics.ca/purrdf".to_owned(),
-        // Keep the legacy doc-node IRI (`purrdf:list-functions`).
-        document_iri: "https://blackcatinformatics.ca/purrdf/list-functions".to_owned(),
+        ontology_iri: vocab.ontology_iri().to_owned(),
+        // Keep the legacy doc-node IRI shape (`<vocab>list-functions`).
+        document_iri: vocab.term("list-functions"),
         doc_label: "PURRDF first-class RDF list functions (FnO)".to_owned(),
         banner: BANNER.to_owned(),
         functions,
@@ -239,8 +234,8 @@ pub fn list_functions_catalog() -> purrdf::fno::FnoCatalog {
 /// `functions.fno.ttl` (§19 one-path), then retags the internal `@x-purrdf-english`
 /// language tag to the public `@en` and renders each quad as one N-Triples line.
 /// The content is fixed, so re-running is byte-identical.
-pub fn emit_list_functions() -> String {
-    let cat = list_functions_catalog();
+pub fn emit_list_functions(vocab: &crate::vocab::SliceVocab) -> String {
+    let cat = list_functions_catalog(vocab);
     let tag_map: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::from([("x-purrdf-english".to_owned(), "en".to_owned())]);
     let quads: Vec<purrdf::RdfQuad> = purrdf::fno::to_quads(&cat)
@@ -254,6 +249,15 @@ pub fn emit_list_functions() -> String {
 mod tests {
     use super::*;
     use crate::rdf_query::{Dataset, Object};
+    use crate::vocab::SliceVocab;
+
+    /// Pure fixtures use a caller-supplied example.org vocabulary.
+    fn vocab() -> SliceVocab {
+        SliceVocab::for_namespace("https://example.org/vocab/")
+    }
+
+    /// The fixture namespace the vocab mints terms under.
+    const NS: &str = "https://example.org/vocab/";
 
     const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
     const FNO_FUNCTION: &str = "https://w3id.org/function/ontology#Function";
@@ -261,12 +265,10 @@ mod tests {
     const FNO_PARAMETER: &str = "https://w3id.org/function/ontology#Parameter";
     const FNO_TYPE: &str = "https://w3id.org/function/ontology#type";
     const FNO_PREDICATE: &str = "https://w3id.org/function/ontology#predicate";
-    const PURRDF_PROJECTION_FUNCTION: &str =
-        "https://blackcatinformatics.ca/purrdf/ProjectionFunction";
 
     /// Parse the emitted N-Triples into a dataset (the new committed-artifact form).
     fn emitted_store() -> Dataset {
-        let text = emit_list_functions();
+        let text = emit_list_functions(&vocab());
         Dataset::parse(
             text.as_bytes(),
             "application/n-triples",
@@ -298,14 +300,14 @@ mod tests {
             "listContains",
         ] {
             assert!(
-                functions.contains(&format!("{PURRDF_NS}{name}")),
+                functions.contains(&format!("{NS}{name}")),
                 "missing function {name}"
             );
         }
-        // Primitives are NOT purrdf:ProjectionFunction.
+        // Primitives are NOT the consumer's ProjectionFunction.
         assert!(
-            subjects_of_type(&store, PURRDF_PROJECTION_FUNCTION).is_empty(),
-            "list functions must not be purrdf:ProjectionFunction"
+            subjects_of_type(&store, &vocab().projection_function()).is_empty(),
+            "list functions must not be typed as the consumer's ProjectionFunction"
         );
     }
 
@@ -324,7 +326,7 @@ mod tests {
     fn each_output_carries_its_specified_fno_type() {
         let store = emitted_store();
         for f in FUNCTIONS {
-            let out = format!("{PURRDF_NS}{}", f.output);
+            let out = format!("{NS}{}", f.output);
             let found = store
                 .objects(&out, FNO_TYPE)
                 .unwrap()
@@ -337,11 +339,8 @@ mod tests {
     #[test]
     fn every_param_and_output_carries_an_rdfs_label() {
         let store = emitted_store();
-        let mut targets: Vec<String> = PARAMS
-            .iter()
-            .map(|p| format!("{PURRDF_NS}{}", p.local))
-            .collect();
-        targets.extend(FUNCTIONS.iter().map(|f| format!("{PURRDF_NS}{}", f.output)));
+        let mut targets: Vec<String> = PARAMS.iter().map(|p| format!("{NS}{}", p.local)).collect();
+        targets.extend(FUNCTIONS.iter().map(|f| format!("{NS}{}", f.output)));
         for iri in targets {
             let has_label = !store.objects(&iri, RDFS_LABEL).unwrap().is_empty();
             assert!(has_label, "{iri} missing rdfs:label");
@@ -377,6 +376,6 @@ mod tests {
 
     #[test]
     fn is_deterministic() {
-        assert_eq!(emit_list_functions(), emit_list_functions());
+        assert_eq!(emit_list_functions(&vocab()), emit_list_functions(&vocab()));
     }
 }

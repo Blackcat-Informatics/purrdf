@@ -58,13 +58,20 @@ const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 const FNO: &str = "https://w3id.org/function/ontology#";
 /// The `https://w3id.org/function/vocabulary/mapping#` (fnom) namespace.
 const FNOM: &str = "https://w3id.org/function/vocabulary/mapping#";
-/// The PurRDF namespace (`purrdf:ProjectionFunction`).
+
+/// Derive a consumer ontology's `ProjectionFunction` class IRI from its
+/// ontology IRI: `<ontology_iri>/ProjectionFunction` (a trailing `/` on the
+/// ontology IRI is normalized away first).
 ///
-/// `pub` so the `purrdf-slice` FnO emitter can populate
-/// [`FnFunction::kind_types`] with the projection-function type for the
-/// `functions.fno.ttl` path (preserving its byte-identical output).
-pub const PURRDF_PROJECTION_FUNCTION: &str =
-    "https://blackcatinformatics.ca/purrdf/ProjectionFunction";
+/// The projection-function class is CONSUMER vocabulary, not PurRDF's: PurRDF
+/// mints no ontology terms beyond the tiny carrier set in `vocab/purrdf.ttl`.
+/// Emitters that type their functions as projection functions populate
+/// [`FnFunction::kind_types`] with this derived IRI (or any other class IRI of
+/// their own choosing).
+#[must_use]
+pub fn projection_function_class(ontology_iri: &str) -> String {
+    format!("{}/ProjectionFunction", ontology_iri.trim_end_matches('/'))
+}
 
 /// The PurRDF-internal language tag every localizable literal carries until the
 /// projection boundary retags it to public BCP-47.
@@ -100,9 +107,19 @@ pub struct FnoCatalog {
     pub mappings: Vec<FnMapping>,
 }
 
+impl FnoCatalog {
+    /// The consumer's `ProjectionFunction` class IRI, derived from this
+    /// catalog's [`ontology_iri`](Self::ontology_iri) via
+    /// [`projection_function_class`].
+    #[must_use]
+    pub fn projection_function_class(&self) -> String {
+        projection_function_class(&self.ontology_iri)
+    }
+}
+
 /// One `fno:Function` node (always typed `fno:Function`; any additional
-/// `rdf:type` IRIs — e.g. `purrdf:ProjectionFunction` for the projection catalog —
-/// come from [`FnFunction::kind_types`]).
+/// `rdf:type` IRIs — e.g. the consumer's projection-function class for the
+/// projection catalog — come from [`FnFunction::kind_types`]).
 #[derive(Debug, Clone)]
 pub struct FnFunction {
     pub iri: String,
@@ -111,9 +128,9 @@ pub struct FnFunction {
     /// `skos:definition` (`@x-purrdf-english`), omitted when empty.
     pub description: Option<String>,
     /// Extra `rdf:type` IRIs emitted IN ADDITION to `fno:Function`, in vec order.
-    /// The projection-function builder sets `[PURRDF_PROJECTION_FUNCTION]`;
-    /// primitives (e.g. the list functions) leave this empty so they are
-    /// `fno:Function` ONLY.
+    /// The projection-function builder sets its consumer's projection-function
+    /// class (see [`projection_function_class`]); primitives (e.g. the list
+    /// functions) leave this empty so they are `fno:Function` ONLY.
     pub kind_types: Vec<String>,
     /// `rdfs:seeAlso` (e.g. a projection function's `.rq` query), omitted when
     /// `None`. Primitives with no related resource leave it unset rather than
@@ -531,25 +548,23 @@ mod tests {
     /// one return-var binding.
     fn sample_catalog() -> FnoCatalog {
         FnoCatalog {
-            ontology_iri: "https://blackcatinformatics.ca/purrdf".to_owned(),
-            document_iri: "https://blackcatinformatics.ca/purrdf/projections/functions".to_owned(),
+            ontology_iri: "https://example.org/vocab".to_owned(),
+            document_iri: "https://example.org/vocab/projections/functions".to_owned(),
             doc_label: "PURRDF projection functions (FnO)".to_owned(),
             banner: "GENERATED — DO NOT EDIT.".to_owned(),
             functions: vec![FnFunction {
-                iri: "https://blackcatinformatics.ca/purrdf/fnDemo".to_owned(),
+                iri: "https://example.org/vocab/fnDemo".to_owned(),
                 label: "demo function".to_owned(),
                 description: Some("a demo".to_owned()),
-                kind_types: vec![PURRDF_PROJECTION_FUNCTION.to_owned()],
-                see_also: Some(
-                    "https://blackcatinformatics.ca/purrdf/queries/projections/demo.rq".to_owned(),
-                ),
+                kind_types: vec![projection_function_class("https://example.org/vocab")],
+                see_also: Some("https://example.org/vocab/queries/projections/demo.rq".to_owned()),
                 expects: vec![
-                    "https://blackcatinformatics.ca/purrdf/paramFoo".to_owned(),
-                    "https://blackcatinformatics.ca/purrdf/paramBar".to_owned(),
+                    "https://example.org/vocab/paramFoo".to_owned(),
+                    "https://example.org/vocab/paramBar".to_owned(),
                 ],
                 output: FnOutput {
-                    iri: "https://blackcatinformatics.ca/purrdf/outDemo".to_owned(),
-                    predicate: Some("https://blackcatinformatics.ca/purrdf/fullName".to_owned()),
+                    iri: "https://example.org/vocab/outDemo".to_owned(),
+                    predicate: Some("https://example.org/vocab/fullName".to_owned()),
                     r#type: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
                     label: None,
                     description: None,
@@ -557,16 +572,16 @@ mod tests {
             }],
             params: vec![
                 FnParam {
-                    iri: "https://blackcatinformatics.ca/purrdf/paramFoo".to_owned(),
-                    predicate: Some("https://blackcatinformatics.ca/purrdf/foo".to_owned()),
+                    iri: "https://example.org/vocab/paramFoo".to_owned(),
+                    predicate: Some("https://example.org/vocab/foo".to_owned()),
                     r#type: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
                     required: true,
                     label: None,
                     description: None,
                 },
                 FnParam {
-                    iri: "https://blackcatinformatics.ca/purrdf/paramBar".to_owned(),
-                    predicate: Some("https://blackcatinformatics.ca/purrdf/bar".to_owned()),
+                    iri: "https://example.org/vocab/paramBar".to_owned(),
+                    predicate: Some("https://example.org/vocab/bar".to_owned()),
                     r#type: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
                     required: false,
                     label: None,
@@ -574,36 +589,33 @@ mod tests {
                 },
             ],
             implementations: vec![FnImpl {
-                iri: "https://blackcatinformatics.ca/purrdf/implDemo".to_owned(),
+                iri: "https://example.org/vocab/implDemo".to_owned(),
                 format: "application/sparql-query".to_owned(),
-                see_also: "https://blackcatinformatics.ca/purrdf/queries/projections/demo.rq"
-                    .to_owned(),
+                see_also: "https://example.org/vocab/queries/projections/demo.rq".to_owned(),
             }],
             mappings: vec![FnMapping {
                 bnode_label: "mapping-fnDemo-demo".to_owned(),
                 label: "fnDemo → demo (FnO mapping)".to_owned(),
-                function: "https://blackcatinformatics.ca/purrdf/fnDemo".to_owned(),
-                implementation: "https://blackcatinformatics.ca/purrdf/implDemo".to_owned(),
+                function: "https://example.org/vocab/fnDemo".to_owned(),
+                implementation: "https://example.org/vocab/implDemo".to_owned(),
                 parameter_mappings: vec![
                     FnParamMapping {
                         bnode_label: "param-fnDemo-demo-paramFoo-foo".to_owned(),
                         label: "paramFoo ↦ ?foo".to_owned(),
-                        function_parameter: "https://blackcatinformatics.ca/purrdf/paramFoo"
-                            .to_owned(),
+                        function_parameter: "https://example.org/vocab/paramFoo".to_owned(),
                         implementation_property: "foo".to_owned(),
                     },
                     FnParamMapping {
                         bnode_label: "param-fnDemo-demo-paramBar-bar".to_owned(),
                         label: "paramBar ↦ ?bar".to_owned(),
-                        function_parameter: "https://blackcatinformatics.ca/purrdf/paramBar"
-                            .to_owned(),
+                        function_parameter: "https://example.org/vocab/paramBar".to_owned(),
                         implementation_property: "bar".to_owned(),
                     },
                 ],
                 return_mappings: vec![FnReturnMapping {
                     bnode_label: "return-fnDemo-demo-out".to_owned(),
                     label: "fnDemo output ↦ ?out".to_owned(),
-                    function_output: "https://blackcatinformatics.ca/purrdf/outDemo".to_owned(),
+                    function_output: "https://example.org/vocab/outDemo".to_owned(),
                     implementation_property: "out".to_owned(),
                 }],
             }],
@@ -621,9 +633,9 @@ mod tests {
     fn emits_function_typing_and_label_langstring() {
         let quads = to_quads(&sample_catalog());
         let fno_function = RdfTerm::iri(format!("{FNO}Function"));
-        let purrdf_pf = RdfTerm::iri(PURRDF_PROJECTION_FUNCTION);
+        let projection_fn = RdfTerm::iri(projection_function_class("https://example.org/vocab"));
         assert!(has_obj(&quads, RDF_TYPE, &fno_function));
-        assert!(has_obj(&quads, RDF_TYPE, &purrdf_pf));
+        assert!(has_obj(&quads, RDF_TYPE, &projection_fn));
         // The label is a @x-purrdf-english langString (NOT plain, NOT pre-retagged).
         let label = RdfTerm::literal(RdfLiteral::language_tagged(
             "demo function",
@@ -658,7 +670,7 @@ mod tests {
             .expect("fno:expects head");
         assert!(matches!(head, RdfTerm::BlankNode(_)));
         // The head's rdf:first is the required param (Foo, emitted first).
-        let foo = RdfTerm::iri("https://blackcatinformatics.ca/purrdf/paramFoo");
+        let foo = RdfTerm::iri("https://example.org/vocab/paramFoo");
         let first = quads
             .iter()
             .find(|q| q.subject == head && q.predicate == RDF_FIRST)
@@ -671,7 +683,7 @@ mod tests {
             .find(|q| q.subject == head && q.predicate == RDF_REST)
             .map(|q| q.object.clone())
             .expect("rdf:rest on head");
-        let bar = RdfTerm::iri("https://blackcatinformatics.ca/purrdf/paramBar");
+        let bar = RdfTerm::iri("https://example.org/vocab/paramBar");
         assert!(
             has_obj(&quads, RDF_FIRST, &bar) || {
                 quads
@@ -691,7 +703,7 @@ mod tests {
             .find(|q| q.predicate == format!("{FNO}returns"))
             .map(|q| q.object.clone())
             .expect("fno:returns head");
-        let out = RdfTerm::iri("https://blackcatinformatics.ca/purrdf/outDemo");
+        let out = RdfTerm::iri("https://example.org/vocab/outDemo");
         // head rdf:first out ; head rdf:rest rdf:nil.
         assert!(quads
             .iter()
@@ -723,8 +735,8 @@ mod tests {
     #[test]
     fn to_ntriples_emits_the_document_node() {
         let empty = FnoCatalog {
-            ontology_iri: "https://blackcatinformatics.ca/purrdf".to_owned(),
-            document_iri: "https://blackcatinformatics.ca/purrdf/projections/functions".to_owned(),
+            ontology_iri: "https://example.org/vocab".to_owned(),
+            document_iri: "https://example.org/vocab/projections/functions".to_owned(),
             doc_label: "PURRDF projection functions (FnO)".to_owned(),
             banner: "GENERATED — DO NOT EDIT.".to_owned(),
             functions: vec![],

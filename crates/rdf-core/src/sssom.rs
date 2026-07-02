@@ -20,10 +20,10 @@
 //! # license: https://creativecommons.org/licenses/by/4.0/
 //! # comment: "Accessibility alignments …"
 //! # curie_map:
-//! #   purrdf: https://blackcatinformatics.ca/purrdf/
+//! #   ex: https://example.org/vocab/
 //! #   skos:  http://www.w3.org/2004/02/skos/core#
 //! subject_id  predicate_id  object_id  mapping_justification  confidence  comment
-//! purrdf:Foo  skos:closeMatch  sosa:Observation  semapv:ManualMappingCuration  0.7  …
+//! ex:Foo  skos:closeMatch  sosa:Observation  semapv:ManualMappingCuration  0.7  …
 //! # # REFUSED … (trailer provenance — ignored, not a mapping)
 //! ```
 //!
@@ -804,12 +804,12 @@ mod tests {
 # license: https://creativecommons.org/licenses/by/4.0/
 # comment: \"demo set\"
 # curie_map:
-#   purrdf: https://blackcatinformatics.ca/purrdf/
+#   ex: https://example.org/vocab/
 #   skos: http://www.w3.org/2004/02/skos/core#
 #   semapv: https://w3id.org/semapv/vocab/
 #   sosa: http://www.w3.org/ns/sosa/
 subject_id\tpredicate_id\tobject_id\tobject_label\tmapping_justification\tconfidence\tcomment
-purrdf:Foo\tskos:closeMatch\tsosa:Observation\tObservation\tsemapv:ManualMappingCuration\t0.7\ta note
+ex:Foo\tskos:closeMatch\tsosa:Observation\tObservation\tsemapv:ManualMappingCuration\t0.7\ta note
 ";
 
     fn negative(rows: &str) -> String {
@@ -817,7 +817,7 @@ purrdf:Foo\tskos:closeMatch\tsosa:Observation\tObservation\tsemapv:ManualMapping
             "\
 # mapping_set_id: https://example.org/mappings/demo
 # curie_map:
-#   purrdf: https://blackcatinformatics.ca/purrdf/
+#   ex: https://example.org/vocab/
 #   skos: http://www.w3.org/2004/02/skos/core#
 #   semapv: https://w3id.org/semapv/vocab/
 #   sosa: http://www.w3.org/ns/sosa/
@@ -837,12 +837,12 @@ subject_id\tpredicate_id\tobject_id\tmapping_justification\tconfidence\tcomment
         // The comment value is kept as authored (JSON-quoted), not unquoted.
         assert_eq!(set.meta.comment.as_deref(), Some("\"demo set\""));
         assert_eq!(
-            set.meta.curie_map.get("purrdf").map(String::as_str),
-            Some("https://blackcatinformatics.ca/purrdf/")
+            set.meta.curie_map.get("ex").map(String::as_str),
+            Some("https://example.org/vocab/")
         );
         assert_eq!(set.mappings.len(), 1);
         let m = &set.mappings[0];
-        assert_eq!(m.subject_id, "purrdf:Foo");
+        assert_eq!(m.subject_id, "ex:Foo");
         assert_eq!(m.predicate_id, "skos:closeMatch");
         assert_eq!(m.object_id, "sosa:Observation");
         assert_eq!(m.object_label.as_deref(), Some("Observation"));
@@ -857,11 +857,11 @@ subject_id\tpredicate_id\tobject_id\tmapping_justification\tconfidence\tcomment
 # mapping_set_id: https://example.org/x
 # creator_id: orcid:0000
 # curie_map:
-#   purrdf: https://blackcatinformatics.ca/purrdf/
+#   ex: https://example.org/vocab/
 #   skos: http://www.w3.org/2004/02/skos/core#
 #   semapv: https://w3id.org/semapv/vocab/
 subject_id\tpredicate_id\tobject_id\tmapping_justification\tmapping_cardinality
-purrdf:A\tskos:exactMatch\tpurrdf:B\tsemapv:ManualMappingCuration\t1:1
+ex:A\tskos:exactMatch\tex:B\tsemapv:ManualMappingCuration\t1:1
 ";
         let set = parse_tsv(doc).expect("parse");
         assert_eq!(
@@ -885,11 +885,11 @@ purrdf:A\tskos:exactMatch\tpurrdf:B\tsemapv:ManualMappingCuration\t1:1
         let doc = "\
 # mapping_set_id: https://example.org/x
 # curie_map:
-#   purrdf: https://blackcatinformatics.ca/purrdf/
+#   ex: https://example.org/vocab/
 #   skos: http://www.w3.org/2004/02/skos/core#
 #   semapv: https://w3id.org/semapv/vocab/
 subject_id\tpredicate_id\tobject_id\tmapping_justification\tmapping_cardinality
-purrdf:A\tskos:exactMatch\tpurrdf:B\tsemapv:ManualMappingCuration\t1:1
+ex:A\tskos:exactMatch\tex:B\tsemapv:ManualMappingCuration\t1:1
 ";
         let set = parse_tsv(doc).expect("parse");
         let serialized = serialize_tsv(&set);
@@ -916,13 +916,13 @@ purrdf:A\tskos:exactMatch\tpurrdf:B\tsemapv:ManualMappingCuration\t1:1
         let doc = "\
 # mapping_set_id: https://example.org/x
 # curie_map:
-#   purrdf: https://blackcatinformatics.ca/purrdf/
+#   ex: https://example.org/vocab/
 #   skos: http://www.w3.org/2004/02/skos/core#
 #   semapv: https://w3id.org/semapv/vocab/
 subject_id\tpredicate_id\tobject_id\tmapping_justification\tconfidence
-purrdf:A\tskos:exactMatch\tpurrdf:B\tsemapv:ManualMappingCuration\t0.7
+ex:A\tskos:exactMatch\tex:B\tsemapv:ManualMappingCuration\t0.7
 # interleaved provenance comment
-purrdf:C\tskos:exactMatch\tpurrdf:D\tsemapv:ManualMappingCuration\tNOTNUM
+ex:C\tskos:exactMatch\tex:D\tsemapv:ManualMappingCuration\tNOTNUM
 ";
         let err = parse_tsv(doc).unwrap_err();
         assert_eq!(err.code, "sssom-tsv-parse");
@@ -938,7 +938,7 @@ purrdf:C\tskos:exactMatch\tpurrdf:D\tsemapv:ManualMappingCuration\tNOTNUM
 
     #[test]
     fn parse_ignores_trailer_comments() {
-        let doc = format!("{CLEAN}# # REFUSED purrdf:Bar — out of scope\n# # provenance note\n");
+        let doc = format!("{CLEAN}# # REFUSED ex:Bar — out of scope\n# # provenance note\n");
         let set = parse_tsv(&doc).expect("parse");
         assert_eq!(set.mappings.len(), 1, "trailer comments are not mappings");
     }
@@ -957,7 +957,7 @@ purrdf:C\tskos:exactMatch\tpurrdf:D\tsemapv:ManualMappingCuration\tNOTNUM
 # mapping_set_id: https://example.org/broken
 # curie_map: [unclosed
 subject_id\tpredicate_id\tobject_id
-purrdf:A\tskos:exactMatch\tpurrdf:B
+ex:A\tskos:exactMatch\tex:B
 ";
         let err = parse_tsv(doc).unwrap_err();
         assert_eq!(err.code, "sssom-tsv-parse");
@@ -999,7 +999,7 @@ purrdf:A\tskos:exactMatch\tpurrdf:B
     #[test]
     fn validate_flags_confidence_too_high() {
         let set = parse_tsv(&negative(
-            "purrdf:A\tskos:closeMatch\tsosa:Observation\tsemapv:ManualMappingCuration\t1.5\tx\n",
+            "ex:A\tskos:closeMatch\tsosa:Observation\tsemapv:ManualMappingCuration\t1.5\tx\n",
         ))
         .expect("parse");
         let diags = validate(&set);
@@ -1016,7 +1016,7 @@ purrdf:A\tskos:exactMatch\tpurrdf:B
     #[test]
     fn validate_flags_confidence_negative() {
         let set = parse_tsv(&negative(
-            "purrdf:A\tskos:closeMatch\tsosa:Observation\tsemapv:ManualMappingCuration\t-0.5\tx\n",
+            "ex:A\tskos:closeMatch\tsosa:Observation\tsemapv:ManualMappingCuration\t-0.5\tx\n",
         ))
         .expect("parse");
         let diags = validate(&set);
@@ -1056,10 +1056,7 @@ purrdf:A\tskos:exactMatch\tpurrdf:B
         };
         // CURIEs are resolved to full IRIs via the curie_map.
         assert!(has(RDF_TYPE, OWL_AXIOM));
-        assert!(has(
-            OWL_ANNOTATED_SOURCE,
-            "https://blackcatinformatics.ca/purrdf/Foo"
-        ));
+        assert!(has(OWL_ANNOTATED_SOURCE, "https://example.org/vocab/Foo"));
         assert!(has(
             OWL_ANNOTATED_PROPERTY,
             "http://www.w3.org/2004/02/skos/core#closeMatch"

@@ -41,6 +41,7 @@ use purrdf_slice::ownership::{
     DependencyEdge, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipReport, OwnershipStatus,
     ReconciliationStatus, SliceIri,
 };
+use purrdf_slice::vocab::SliceVocab;
 
 /// The stable lowercase token a [`ReconciliationStatus`] is exposed as.
 fn reconciliation_token(status: ReconciliationStatus) -> &'static str {
@@ -254,17 +255,29 @@ impl PySliceRecord {
 #[derive(Debug)]
 pub struct PySliceCatalog {
     inner: SliceCatalog,
+    /// The caller-supplied slice vocabulary (ontology namespace); captured at
+    /// discovery so every downstream consumer (ownership analysis, emitters)
+    /// uses the same vocabulary by construction.
+    vocab: SliceVocab,
 }
 
 #[pymethods]
 impl PySliceCatalog {
     /// Discover every slice under `root` (globs `*/*/manifest.ttl`), parsing
     /// each manifest and inventorying its artifacts.
+    ///
+    /// `namespace` is the ontology namespace the slice manifests use for the
+    /// slice vocabulary (`{namespace}sliceDependsOn`, `{namespace}Slice`, …) —
+    /// e.g. `"https://blackcatinformatics.ca/gmeow/"`.
     #[staticmethod]
-    fn discover(root: &str) -> PyResult<Self> {
-        let catalog = SliceCatalog::discover(Path::new(root))
+    fn discover(root: &str, namespace: &str) -> PyResult<Self> {
+        let vocab = SliceVocab::for_namespace(namespace);
+        let catalog = SliceCatalog::discover(Path::new(root), vocab.clone())
             .map_err(|e| PyValueError::new_err(format!("slice catalog discovery failed: {e}")))?;
-        Ok(Self { inner: catalog })
+        Ok(Self {
+            inner: catalog,
+            vocab,
+        })
     }
 
     /// Every discovered slice record (sorted by IRI).
@@ -492,6 +505,8 @@ pub struct PyOwnershipAnalyzer {
     /// analysis-graph emitter's `tier_of` closure is a pure lookup (the emitter
     /// module stays PyO3-free; tier resolution happens here).
     tier_of: HashMap<SliceIri, u8>,
+    /// The slice vocabulary inherited from the catalog at construction.
+    vocab: SliceVocab,
     /// Every authored artifact raw digest in the catalog (drives the analysis
     /// graph's bundle content-ID). Sorted for stable iteration.
     raw_digests: Vec<String>,
@@ -524,6 +539,7 @@ impl PyOwnershipAnalyzer {
         Ok(Self {
             report,
             tier_of,
+            vocab: catalog.vocab.clone(),
             raw_digests,
         })
     }
@@ -581,6 +597,7 @@ impl PyOwnershipAnalyzer {
         let tier_of = |slice: &SliceIri| -> u8 { self.tier_of.get(slice).copied().unwrap_or(2) };
 
         let graph = emit_analysis_graph(
+            &self.vocab,
             &self.report.edges,
             authored_input_text,
             &digests,

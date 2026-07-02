@@ -24,10 +24,50 @@ const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 #[cfg(test)]
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
-const NAMESPACE: &str = "https://blackcatinformatics.ca/purrdf/";
-const LANGUAGE_CLASS: &str = "https://blackcatinformatics.ca/purrdf/Language";
-const LANGUAGE_TAG: &str = "https://blackcatinformatics.ca/purrdf/languageTag";
-const BCP47_TAG: &str = "https://blackcatinformatics.ca/purrdf/bcp47Tag";
+
+/// The consumer-ontology language vocabulary the fold view scans to build its
+/// internal→BCP-47 retag map (mirrors the `StatementMetadataVocab` pattern in
+/// the JSON-LD codec).
+///
+/// The retag map is built from subjects typed `a <language_class>` carrying a
+/// `<language_tag>` (the internal `x-purrdf-*` tag) and a `<bcp47_tag>` (the
+/// public tag). These are the CALLER's vocabulary terms — PurRDF mints no such
+/// ontology terms of its own — so there is no default: a view constructed
+/// without a vocab performs no namespace scanning and its retag map is empty.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LanguageVocab {
+    /// The language-individual class IRI (subjects typed with this are scanned).
+    pub language_class: String,
+    /// The predicate carrying the internal (`x-purrdf-*`) tag literal.
+    pub language_tag: String,
+    /// The predicate carrying the public BCP-47 tag literal.
+    pub bcp47_tag: String,
+}
+
+impl LanguageVocab {
+    /// Derive the three term IRIs by concatenation from a namespace whose
+    /// local names are `Language` / `languageTag` / `bcp47Tag`.
+    #[must_use]
+    pub fn for_namespace(ns: &str) -> Self {
+        Self {
+            language_class: format!("{ns}Language"),
+            language_tag: format!("{ns}languageTag"),
+            bcp47_tag: format!("{ns}bcp47Tag"),
+        }
+    }
+}
+
+/// Consumer configuration for [`GtsFoldView`]: the optional language vocabulary
+/// (drives the retag map) and any extra CURIE prefix entries consulted (in
+/// order, before the built-in W3C/schema.org table) when compacting IRIs for
+/// [`PublicValue::Iri`] / [`GtsFoldView::curie`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GtsFoldViewConfig {
+    /// The language vocabulary; `None` leaves the retag map empty.
+    pub language_vocab: Option<LanguageVocab>,
+    /// Extra `(prefix, namespace)` CURIE entries, highest priority first.
+    pub curie_prefixes: Vec<(String, String)>,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PublicValue {
@@ -69,6 +109,7 @@ pub struct GtsFoldView {
     spo: BTreeMap<ScopeKey, BTreeMap<usize, Vec<(usize, usize)>>>,
     po: BTreeMap<ScopeKey, BTreeMap<(usize, usize), Vec<usize>>>,
     tag_map: BTreeMap<String, String>,
+    curie_prefixes: Vec<(String, String)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -79,17 +120,30 @@ enum ScopeKey {
 }
 
 impl GtsFoldView {
+    /// A view with no consumer vocabulary: the retag map stays empty (no
+    /// namespace scanning is fabricated) and CURIE compaction uses only the
+    /// built-in W3C/schema.org prefixes. Pass a [`GtsFoldViewConfig`] via
+    /// [`GtsFoldView::with_config`] to supply the consumer's language vocab
+    /// and CURIE prefixes.
     pub fn new(graph: Graph) -> Self {
+        Self::with_config(graph, GtsFoldViewConfig::default())
+    }
+
+    /// A view configured with the consumer's [`GtsFoldViewConfig`].
+    pub fn with_config(graph: Graph, config: GtsFoldViewConfig) -> Self {
         let mut view = Self {
             graph,
             iri_index: BTreeMap::new(),
             spo: BTreeMap::new(),
             po: BTreeMap::new(),
             tag_map: BTreeMap::new(),
+            curie_prefixes: config.curie_prefixes,
         };
         view.build_iri_index();
         view.build_quad_indexes();
-        view.tag_map = view.build_tag_map();
+        if let Some(vocab) = &config.language_vocab {
+            view.tag_map = view.build_tag_map(vocab);
+        }
         view
     }
 
@@ -174,7 +228,7 @@ impl GtsFoldView {
                 }
                 PublicValue::String(lex)
             }
-            TermKind::Iri => PublicValue::Iri(curie(self.lex(tid))),
+            TermKind::Iri => PublicValue::Iri(self.curie(self.lex(tid))),
             TermKind::Bnode => PublicValue::Blank(format!("_:{}", self.lex(tid))),
             TermKind::Triple => PublicValue::String(self.nq_token(tid)),
         }
@@ -185,6 +239,11 @@ impl GtsFoldView {
     }
 
     pub fn curie(&self, iri: &str) -> String {
+        for (prefix, namespace) in &self.curie_prefixes {
+            if let Some(local) = iri.strip_prefix(namespace.as_str()) {
+                return format!("{prefix}:{local}");
+            }
+        }
         curie(iri)
     }
 
@@ -439,11 +498,11 @@ impl GtsFoldView {
         }
     }
 
-    fn build_tag_map(&self) -> BTreeMap<String, String> {
+    fn build_tag_map(&self, vocab: &LanguageVocab) -> BTreeMap<String, String> {
         let mut out = BTreeMap::new();
-        for lang_tid in self.subjects_by_type(LANGUAGE_CLASS, Some(ALL_SCOPE)) {
-            let internal = self.value(lang_tid, LANGUAGE_TAG, Some(ALL_SCOPE));
-            let bcp = self.value(lang_tid, BCP47_TAG, Some(ALL_SCOPE));
+        for lang_tid in self.subjects_by_type(&vocab.language_class, Some(ALL_SCOPE)) {
+            let internal = self.value(lang_tid, &vocab.language_tag, Some(ALL_SCOPE));
+            let bcp = self.value(lang_tid, &vocab.bcp47_tag, Some(ALL_SCOPE));
             if let (Some(internal), Some(bcp)) = (internal, bcp) {
                 out.insert(self.lex(internal).to_string(), self.lex(bcp).to_string());
             }
@@ -714,9 +773,10 @@ fn curie(iri: &str) -> String {
     iri.to_string()
 }
 
+/// Built-in CURIE prefixes: well-known public vocabularies only. Consumer
+/// namespaces (e.g. an application ontology) are supplied via
+/// [`GtsFoldViewConfig::curie_prefixes`] and are consulted first.
 const PREFIXES: &[(&str, &str)] = &[
-    ("purrdf", NAMESPACE),
-    ("logic", "https://blackcatinformatics.ca/logic/"),
     ("schema", "https://schema.org/"),
     ("rdf", RDF),
     ("rdfs", "http://www.w3.org/2000/01/rdf-schema#"),
@@ -876,23 +936,26 @@ mod tests {
 
     #[test]
     fn language_boundary_reads_tag_map_across_all_scopes() {
+        // The language vocabulary is CALLER-supplied: this fixture mints its
+        // terms in the example.org namespace and hands them to the view.
+        let vocab = LanguageVocab::for_namespace(EX);
         let mut writer = Writer::new("dist");
         writer.add_terms(&[
             iri(RDF_TYPE),
-            iri(LANGUAGE_CLASS),
-            iri(LANGUAGE_TAG),
-            iri(BCP47_TAG),
+            iri(&vocab.language_class),
+            iri(&vocab.language_tag),
+            iri(&vocab.bcp47_tag),
             iri(RDFS_LABEL),
-            iri(&(NAMESPACE.to_string() + "English")),
+            iri(&(EX.to_string() + "English")),
             lit("x-purrdf-english", Some("en"), None),
             lit("en", Some("en"), None),
-            iri(&(NAMESPACE.to_string() + "French")),
+            iri(&(EX.to_string() + "French")),
             lit("x-purrdf-french", Some("en"), None),
             lit("fr", Some("en"), None),
-            iri(&(NAMESPACE.to_string() + "Thing")),
+            iri(&(EX.to_string() + "Thing")),
             lit("Hello", Some("x-purrdf-english"), None),
             lit("Bonjour", Some("x-purrdf-french"), None),
-            iri(&(NAMESPACE.to_string() + "graph/languages")),
+            iri(&(EX.to_string() + "graph/languages")),
         ]);
         writer.add_quads(&[
             (5, 0, 1, Some(14)),
@@ -904,7 +967,14 @@ mod tests {
             (11, 4, 12, None),
             (11, 4, 13, None),
         ]);
-        let view = GtsFoldView::new(purrdf_gts::reader::read(&writer.to_bytes(), true, None));
+        let bytes = writer.to_bytes();
+        let view = GtsFoldView::with_config(
+            purrdf_gts::reader::read(&bytes, true, None),
+            GtsFoldViewConfig {
+                language_vocab: Some(vocab),
+                curie_prefixes: vec![("ex".to_string(), EX.to_string())],
+            },
+        );
         assert_eq!(
             view.tag_map().get("x-purrdf-english"),
             Some(&"en".to_string())
@@ -921,6 +991,13 @@ mod tests {
             view.public_literal_with_fallback(11, RDFS_LABEL, &["fr".to_string()], None),
             ("Bonjour".to_string(), Some("fr".to_string()), false)
         );
+        // The caller-supplied CURIE prefix is honoured ahead of the built-ins.
+        assert_eq!(view.curie(&(EX.to_string() + "Thing")), "ex:Thing");
+
+        // With NO vocab configured the retag map is empty — no fabricated
+        // namespace scanning happens.
+        let bare = GtsFoldView::new(purrdf_gts::reader::read(&bytes, true, None));
+        assert!(bare.tag_map().is_empty());
     }
 
     #[test]

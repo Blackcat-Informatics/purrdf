@@ -3,8 +3,9 @@
 
 //! Slice-analysis graph emitter (RFC #820 §11 / S7).
 //!
-//! Serialises computed dependency edges into the `purrdf:graph/slice-analysis`
-//! named graph. The authored manifests are NEVER modified.
+//! Serialises computed dependency edges into the `<vocab>graph/slice-analysis`
+//! named graph (the graph IRI and every emitted term derive from the caller's
+//! [`SliceVocab`]). The authored manifests are NEVER modified.
 //!
 //! # Two-pass attestation
 //!
@@ -21,30 +22,12 @@ use std::fmt::Write as _;
 
 use crate::cache::ToolchainContext;
 use crate::ownership::{DependencyEdge, ReconciliationStatus, SliceIri};
+use crate::vocab::SliceVocab;
 
-// ── Named graph IRI ───────────────────────────────────────────────────────────
-
-/// The named graph IRI for the computed slice-analysis output.
-pub const ANALYSIS_GRAPH_IRI: &str = "https://blackcatinformatics.ca/purrdf/graph/slice-analysis";
-
-const PURRDF_NS: &str = "https://blackcatinformatics.ca/purrdf/";
-
-/// `purrdf:computedSliceDependency` — a blank node asserting a computed edge.
-pub const COMPUTED_SLICE_DEPENDENCY: &str =
-    "https://blackcatinformatics.ca/purrdf/computedSliceDependency";
-
-/// `purrdf:dependencyStatus` — status literal ("matched"/"undeclared"/"stale"/"forbidden").
-pub const DEPENDENCY_STATUS: &str = "https://blackcatinformatics.ca/purrdf/dependencyStatus";
-
-/// `purrdf:dependencyEvidence` — human-readable evidence summary literal.
-pub const DEPENDENCY_EVIDENCE: &str = "https://blackcatinformatics.ca/purrdf/dependencyEvidence";
-
-/// `purrdf:computedProfileMembership` — profile membership assertion.
-pub const COMPUTED_PROFILE_MEMBERSHIP: &str =
-    "https://blackcatinformatics.ca/purrdf/computedProfileMembership";
-
-/// `purrdf:termCoverage` — integer count of terms owned by a slice.
-pub const TERM_COVERAGE: &str = "https://blackcatinformatics.ca/purrdf/termCoverage";
+// The emitted vocabulary — the analysis graph IRI (`{ns}graph/slice-analysis`),
+// `computedSliceDependency`, `dependencyStatus`, `dependencyEvidence`,
+// `computedProfileMembership`, `termCoverage`, and the provenance predicates —
+// all derive from the caller's [`SliceVocab`] (see its accessor methods).
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
@@ -149,7 +132,7 @@ pub fn bundle_content_id(raw_digests: &[&str]) -> String {
 #[derive(Debug, Clone)]
 pub struct AnalysisGraph {
     /// Serialised Turtle for the named graph body (without a GRAPH wrapper).
-    /// Every triple is implicitly in `purrdf:graph/slice-analysis`.
+    /// Every triple is implicitly in `<vocab>graph/slice-analysis`.
     pub turtle_body: String,
     /// Bundle content-ID stamped into every triple's provenance.
     pub bundle_content_id: String,
@@ -161,11 +144,13 @@ pub struct AnalysisGraph {
     pub forbidden_count: usize,
 }
 
-/// Emit the computed dependency edges as the `purrdf:graph/slice-analysis`
+/// Emit the computed dependency edges as the `<vocab>graph/slice-analysis`
 /// named graph.
 ///
 /// # Arguments
 ///
+/// - `vocab` — the caller's slice vocabulary; every emitted term and the
+///   analysis-graph IRI derive from it.
 /// - `edges` — computed edges from [`crate::ownership::OwnershipAnalyzer::analyze`].
 /// - `authored_input_text` — text of the authored input checked for the
 ///   self-attestation guard (may be `""` when the caller has no text form).
@@ -173,13 +158,14 @@ pub struct AnalysisGraph {
 ///   (drives the bundle content-ID).
 /// - `toolchain` — compiler/profile version stamped into provenance.
 /// - `tier_of` — maps a slice IRI to numeric tier (0=core, 1=extension, 2=unknown).
-/// - `term_count_of` — maps a slice IRI to its term count (for `purrdf:termCoverage`).
+/// - `term_count_of` — maps a slice IRI to its term count (for `<vocab>termCoverage`).
 ///
 /// # Errors
 ///
 /// Returns [`AnalysisError::SelfAttestationViolation`] if `authored_input_text`
-/// contains [`ANALYSIS_GRAPH_IRI`].
+/// contains the vocab's analysis-graph IRI.
 pub fn emit_analysis_graph(
+    vocab: &SliceVocab,
     edges: &[DependencyEdge],
     authored_input_text: &str,
     all_raw_digests: &[&str],
@@ -187,10 +173,18 @@ pub fn emit_analysis_graph(
     tier_of: impl Fn(&SliceIri) -> u8,
     term_count_of: impl Fn(&SliceIri) -> usize,
 ) -> Result<AnalysisGraph, AnalysisError> {
+    let analysis_graph_iri = vocab.analysis_graph_iri();
+    let ns = vocab.ns();
+    let prefix = vocab.prefix_name();
+    let term_coverage = vocab.term_coverage();
+    let computed_slice_dependency = vocab.computed_slice_dependency();
+    let dependency_status = vocab.dependency_status();
+    let dependency_evidence = vocab.dependency_evidence();
+
     // ── Self-attestation guard ────────────────────────────────────────────────
-    if authored_input_text.contains(ANALYSIS_GRAPH_IRI) {
+    if authored_input_text.contains(&analysis_graph_iri) {
         return Err(AnalysisError::SelfAttestationViolation {
-            found: ANALYSIS_GRAPH_IRI.to_string(),
+            found: analysis_graph_iri,
         });
     }
 
@@ -199,7 +193,7 @@ pub fn emit_analysis_graph(
     let mut forbidden_count = 0usize;
 
     // Turtle preamble.
-    writeln!(body, "@prefix purrdf: <{PURRDF_NS}> .").unwrap();
+    writeln!(body, "@prefix {prefix}: <{ns}> .").unwrap();
     writeln!(body, "@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .").unwrap();
     writeln!(
         body,
@@ -210,27 +204,27 @@ pub fn emit_analysis_graph(
 
     // Graph-level provenance node. This is generated A-Box instance data folded
     // into the bundle, not vocabulary surface: it carries a human label, its own
-    // named-graph provenance anchor, and the assertional `purrdf:boxABox` role so
+    // named-graph provenance anchor, and the assertional `<vocab>boxABox` role so
     // it satisfies the assertional-tier validation contract (no `skos:definition`).
-    writeln!(body, "<{ANALYSIS_GRAPH_IRI}>").unwrap();
-    writeln!(body, "    a <{PURRDF_NS}SliceAnalysisGraph> ;").unwrap();
+    writeln!(body, "<{analysis_graph_iri}>").unwrap();
+    writeln!(body, "    a <{ns}SliceAnalysisGraph> ;").unwrap();
     writeln!(body, "    rdfs:label \"Slice analysis graph\" ;").unwrap();
-    writeln!(body, "    rdfs:isDefinedBy <{ANALYSIS_GRAPH_IRI}> ;").unwrap();
-    writeln!(body, "    <{PURRDF_NS}graphBoxRole> <{PURRDF_NS}boxABox> ;").unwrap();
+    writeln!(body, "    rdfs:isDefinedBy <{analysis_graph_iri}> ;").unwrap();
+    writeln!(body, "    <{ns}graphBoxRole> <{ns}boxABox> ;").unwrap();
     writeln!(
         body,
-        "    <{PURRDF_NS}bundleContentId> {content_id:?}^^xsd:string ;"
+        "    <{ns}bundleContentId> {content_id:?}^^xsd:string ;"
     )
     .unwrap();
     writeln!(
         body,
-        "    <{PURRDF_NS}toolchainCompiler> {:?}^^xsd:string ;",
+        "    <{ns}toolchainCompiler> {:?}^^xsd:string ;",
         toolchain.compiler_version
     )
     .unwrap();
     writeln!(
         body,
-        "    <{PURRDF_NS}toolchainProfile> {:?}^^xsd:string .",
+        "    <{ns}toolchainProfile> {:?}^^xsd:string .",
         toolchain.reasoning_profile
     )
     .unwrap();
@@ -247,7 +241,7 @@ pub fn emit_analysis_graph(
     for slice_iri in &all_slices {
         let count = term_count_of(slice_iri);
         writeln!(body, "<{slice_iri}>").unwrap();
-        writeln!(body, "    <{TERM_COVERAGE}> \"{count}\"^^xsd:integer .").unwrap();
+        writeln!(body, "    <{term_coverage}> \"{count}\"^^xsd:integer .").unwrap();
         writeln!(body).unwrap();
     }
 
@@ -267,49 +261,44 @@ pub fn emit_analysis_graph(
         let kind_str = format!("{:?}", edge.edge_kind);
 
         writeln!(body, "_:dep{i}").unwrap();
-        writeln!(body, "    a <{COMPUTED_SLICE_DEPENDENCY}> ;").unwrap();
+        writeln!(body, "    a <{computed_slice_dependency}> ;").unwrap();
         writeln!(
             body,
-            "    <{DEPENDENCY_STATUS}> {:?}^^xsd:string ;",
+            "    <{dependency_status}> {:?}^^xsd:string ;",
             status_label(effective_status)
         )
         .unwrap();
         writeln!(
             body,
-            "    <{PURRDF_NS}dependencyFromSlice> <{}> ;",
+            "    <{ns}dependencyFromSlice> <{}> ;",
             edge.from_slice
         )
         .unwrap();
+        writeln!(body, "    <{ns}dependencyToSlice> <{}> ;", edge.to_slice).unwrap();
         writeln!(
             body,
-            "    <{PURRDF_NS}dependencyToSlice> <{}> ;",
-            edge.to_slice
+            "    <{ns}dependencyEdgeKind> {kind_str:?}^^xsd:string ;"
         )
         .unwrap();
         writeln!(
             body,
-            "    <{PURRDF_NS}dependencyEdgeKind> {kind_str:?}^^xsd:string ;"
+            "    <{dependency_evidence}> {evidence_str:?}^^xsd:string ;"
         )
         .unwrap();
         writeln!(
             body,
-            "    <{DEPENDENCY_EVIDENCE}> {evidence_str:?}^^xsd:string ;"
+            "    <{ns}bundleContentId> {content_id:?}^^xsd:string ;"
         )
         .unwrap();
         writeln!(
             body,
-            "    <{PURRDF_NS}bundleContentId> {content_id:?}^^xsd:string ;"
-        )
-        .unwrap();
-        writeln!(
-            body,
-            "    <{PURRDF_NS}toolchainCompiler> {:?}^^xsd:string ;",
+            "    <{ns}toolchainCompiler> {:?}^^xsd:string ;",
             toolchain.compiler_version
         )
         .unwrap();
         writeln!(
             body,
-            "    <{PURRDF_NS}toolchainProfile> {:?}^^xsd:string .",
+            "    <{ns}toolchainProfile> {:?}^^xsd:string .",
             toolchain.reasoning_profile
         )
         .unwrap();
@@ -336,6 +325,11 @@ mod tests {
         ToolchainContext::new("purrdf-logic v1", "el")
     }
 
+    /// Pure fixtures use a caller-supplied example.org vocabulary.
+    fn vocab() -> SliceVocab {
+        SliceVocab::for_namespace("https://example.org/vocab/")
+    }
+
     fn make_edge(
         from: &str,
         to: &str,
@@ -354,20 +348,21 @@ mod tests {
     #[test]
     fn no_authored_overwrite() {
         // The emitter returns a NEW graph string; the authored input is unchanged.
-        let authored = "@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .\n\
-                        purrdf:sliceA purrdf:sliceDependsOn purrdf:sliceB .\n";
+        let authored = "@prefix vocab: <https://example.org/vocab/> .\n\
+                        vocab:sliceA vocab:sliceDependsOn vocab:sliceB .\n";
         let authored_orig = authored;
         let edges = vec![make_edge(
-            "https://blackcatinformatics.ca/purrdf/sliceA",
-            "https://blackcatinformatics.ca/purrdf/sliceB",
+            "https://example.org/vocab/sliceA",
+            "https://example.org/vocab/sliceB",
             EdgeKind::Ontology,
             ReconciliationStatus::Matched,
         )];
-        let result = emit_analysis_graph(&edges, authored, &[], &tc(), |_| 0, |_| 5).unwrap();
+        let result =
+            emit_analysis_graph(&vocab(), &edges, authored, &[], &tc(), |_| 0, |_| 5).unwrap();
         // Authored string is a static &str — prove it is structurally unchanged.
         assert_eq!(authored, authored_orig);
         // The output contains the analysis graph IRI, not sliceDependsOn.
-        assert!(result.turtle_body.contains(ANALYSIS_GRAPH_IRI));
+        assert!(result.turtle_body.contains(&vocab().analysis_graph_iri()));
         assert!(!result.turtle_body.contains("sliceDependsOn"));
     }
 
@@ -375,26 +370,27 @@ mod tests {
     fn status_coverage_all_variants() {
         let edges = vec![
             make_edge(
-                "https://blackcatinformatics.ca/purrdf/sliceA",
-                "https://blackcatinformatics.ca/purrdf/sliceB",
+                "https://example.org/vocab/sliceA",
+                "https://example.org/vocab/sliceB",
                 EdgeKind::Ontology,
                 ReconciliationStatus::Matched,
             ),
             make_edge(
-                "https://blackcatinformatics.ca/purrdf/sliceC",
-                "https://blackcatinformatics.ca/purrdf/sliceB",
+                "https://example.org/vocab/sliceC",
+                "https://example.org/vocab/sliceB",
                 EdgeKind::Shape,
                 ReconciliationStatus::Undeclared,
             ),
             make_edge(
-                "https://blackcatinformatics.ca/purrdf/sliceD",
-                "https://blackcatinformatics.ca/purrdf/sliceB",
+                "https://example.org/vocab/sliceD",
+                "https://example.org/vocab/sliceB",
                 EdgeKind::Ontology,
                 ReconciliationStatus::Stale,
             ),
         ];
         let digests = ["abc123", "def456"];
-        let result = emit_analysis_graph(&edges, "", &digests, &tc(), |_| 2, |_| 3).unwrap();
+        let result =
+            emit_analysis_graph(&vocab(), &edges, "", &digests, &tc(), |_| 2, |_| 3).unwrap();
 
         assert!(result.turtle_body.contains("\"matched\""));
         assert!(result.turtle_body.contains("\"undeclared\""));
@@ -402,7 +398,7 @@ mod tests {
         assert_eq!(result.edge_count, 3);
 
         // Deterministic bundle content-ID.
-        let id2 = emit_analysis_graph(&edges, "", &digests, &tc(), |_| 2, |_| 3)
+        let id2 = emit_analysis_graph(&vocab(), &edges, "", &digests, &tc(), |_| 2, |_| 3)
             .unwrap()
             .bundle_content_id;
         assert_eq!(result.bundle_content_id, id2);
@@ -412,24 +408,25 @@ mod tests {
     fn forbidden_status_emitted_for_tier_violations() {
         // core (0) → extension (1): forbidden.
         let edges = vec![make_edge(
-            "https://blackcatinformatics.ca/purrdf/coreSlice",
-            "https://blackcatinformatics.ca/purrdf/extSlice",
+            "https://example.org/vocab/coreSlice",
+            "https://example.org/vocab/extSlice",
             EdgeKind::Ontology,
             ReconciliationStatus::Matched,
         )];
         let tier_of = |iri: &SliceIri| -> u8 { u8::from(!iri.ends_with("coreSlice")) };
-        let result = emit_analysis_graph(&edges, "", &[], &tc(), tier_of, |_| 0).unwrap();
+        let result = emit_analysis_graph(&vocab(), &edges, "", &[], &tc(), tier_of, |_| 0).unwrap();
         assert!(result.turtle_body.contains("\"forbidden\""));
         assert_eq!(result.forbidden_count, 1);
     }
 
     #[test]
     fn self_attestation_guard_fires() {
+        let graph_iri = vocab().analysis_graph_iri();
         let poisoned = format!(
-            "@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .\n\
-             <{ANALYSIS_GRAPH_IRI}> a purrdf:SliceAnalysisGraph .\n"
+            "@prefix vocab: <https://example.org/vocab/> .\n\
+             <{graph_iri}> a vocab:SliceAnalysisGraph .\n"
         );
-        let res = emit_analysis_graph(&[], &poisoned, &[], &tc(), |_| 2, |_| 0);
+        let res = emit_analysis_graph(&vocab(), &[], &poisoned, &[], &tc(), |_| 2, |_| 0);
         assert!(matches!(
             res,
             Err(AnalysisError::SelfAttestationViolation { .. })
@@ -439,8 +436,8 @@ mod tests {
     #[test]
     fn term_coverage_in_output() {
         let edges = vec![make_edge(
-            "https://blackcatinformatics.ca/purrdf/sliceA",
-            "https://blackcatinformatics.ca/purrdf/sliceB",
+            "https://example.org/vocab/sliceA",
+            "https://example.org/vocab/sliceB",
             EdgeKind::Ontology,
             ReconciliationStatus::Matched,
         )];
@@ -451,8 +448,9 @@ mod tests {
                 3
             }
         };
-        let result = emit_analysis_graph(&edges, "", &[], &tc(), |_| 2, term_count).unwrap();
-        assert!(result.turtle_body.contains(TERM_COVERAGE));
+        let result =
+            emit_analysis_graph(&vocab(), &edges, "", &[], &tc(), |_| 2, term_count).unwrap();
+        assert!(result.turtle_body.contains(&vocab().term_coverage()));
         assert!(
             result.turtle_body.contains("\"7\"^^xsd:integer")
                 || result.turtle_body.contains("\"3\"^^xsd:integer")
@@ -467,14 +465,14 @@ mod tests {
     fn emitted_turtle_is_valid() {
         let edges = vec![
             make_edge(
-                "https://blackcatinformatics.ca/purrdf/sliceA",
-                "https://blackcatinformatics.ca/purrdf/sliceB",
+                "https://example.org/vocab/sliceA",
+                "https://example.org/vocab/sliceB",
                 EdgeKind::Ontology,
                 ReconciliationStatus::Matched,
             ),
             make_edge(
-                "https://blackcatinformatics.ca/purrdf/sliceC",
-                "https://blackcatinformatics.ca/purrdf/sliceB",
+                "https://example.org/vocab/sliceC",
+                "https://example.org/vocab/sliceB",
                 EdgeKind::Shape,
                 ReconciliationStatus::Undeclared,
             ),
@@ -488,8 +486,16 @@ mod tests {
                 3
             }
         };
-        let result =
-            emit_analysis_graph(&edges, "", &["abc", "def"], &tc(), |_| 2, term_count).unwrap();
+        let result = emit_analysis_graph(
+            &vocab(),
+            &edges,
+            "",
+            &["abc", "def"],
+            &tc(),
+            |_| 2,
+            term_count,
+        )
+        .unwrap();
 
         // Drive the native codec over the emitted body.  Any Turtle syntax
         // error (including an un-quoted typed-literal like `7^^xsd:integer`)

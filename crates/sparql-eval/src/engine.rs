@@ -19,9 +19,9 @@ use std::sync::Arc;
 use purrdf_core::{
     MutableDataset, RdfDataset, RdfDiagnostic, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
 };
-use purrdf_sparql_algebra::{Query, SparqlParser};
+use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
 
-use crate::eval::{evaluate_query, BgpOrderCache, EvalCtx, Outcome};
+use crate::eval::{evaluate_query, BgpOrderCache, EvalCtx, Outcome, StandpointPredicates};
 use crate::update::{eval_update, GraphResolver};
 use crate::DetHashMap;
 
@@ -32,7 +32,8 @@ pub struct PreparedQuery {
     pub query: Query,
 }
 
-/// A parse-memoizing cache keyed on `(base IRI, query text)`.
+/// A parse-memoizing cache keyed on `(base IRI, extension-function namespace set,
+/// query text)`.
 #[derive(Debug, Default)]
 pub struct PlanCache {
     entries: DetHashMap<String, Arc<PreparedQuery>>,
@@ -44,15 +45,33 @@ impl PlanCache {
         Self::default()
     }
 
-    /// Parse `query` (memoized) into a [`PreparedQuery`].
+    /// Parse `query` (memoized) into a [`PreparedQuery`], under
+    /// [`ParserOptions::default`].
     pub fn prepare(
         &mut self,
         query: &str,
         base_iri: Option<&str>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        // The cache key must include the base IRI: the same text under a different
-        // base parses to different IRIs.
-        let key = format!("{}\u{0}{}", base_iri.unwrap_or(""), query);
+        self.prepare_with(query, base_iri, &ParserOptions::default())
+    }
+
+    /// Parse `query` (memoized) into a [`PreparedQuery`] with explicit
+    /// [`ParserOptions`] (e.g. an extension-function namespace alias).
+    pub fn prepare_with(
+        &mut self,
+        query: &str,
+        base_iri: Option<&str>,
+        options: &ParserOptions,
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        // The cache key must include the base IRI AND the extension-function
+        // namespace set: the same text under a different base or namespace
+        // configuration parses to a different algebra.
+        let key = format!(
+            "{}\u{0}{}\u{0}{}",
+            base_iri.unwrap_or(""),
+            options.extension_fn_namespaces.join("\u{1}"),
+            query
+        );
         if let Some(prepared) = self.entries.get(&key) {
             return Ok(prepared.clone());
         }
@@ -61,7 +80,7 @@ impl PlanCache {
             parser = parser.with_base_iri(base);
         }
         let parsed = parser
-            .parse_query(query)
+            .parse_query_with(query, options)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-parse", e.to_string()))?;
         let prepared = Arc::new(PreparedQuery { query: parsed });
         self.entries.insert(key, prepared.clone());
@@ -70,6 +89,17 @@ impl PlanCache {
 }
 
 /// The native, RDF-1.2-first multiset SPARQL engine (purrdf S6, #912).
+///
+/// Domain-vocabulary seams are **caller configuration**, never engine constants:
+///
+/// - [`Self::with_parser_options`] configures the extension-function namespace
+///   set (default: the published purrdf carrier vocabulary,
+///   [`purrdf_sparql_algebra::PURRDF_NS`]). A gmeow deployment adds its
+///   `https://blackcatinformatics.ca/gmeow/` alias here so `gmeow:heldIn(...)`
+///   queries keep parsing.
+/// - [`Self::with_standpoint_predicates`] supplies the `accordingTo`/`sharpens`
+///   predicate table that `purrdf:heldIn` and loss-aware `CONSTRUCT` read from
+///   the caller's data. Without it, `heldIn` is a hard evaluation error.
 #[derive(Default)]
 pub struct NativeSparqlEngine {
     cache: RefCell<PlanCache>,
@@ -77,6 +107,14 @@ pub struct NativeSparqlEngine {
     /// the static query corpus re-plans each BGP once per dataset (see [`BgpOrderCache`]).
     order_cache: BgpOrderCache,
     resolver: Option<Arc<dyn GraphResolver>>,
+    /// Parse-time configuration (the extension-function namespace set), applied to
+    /// every query and update this engine parses. Defaults to the published purrdf
+    /// namespace only.
+    parser_options: ParserOptions,
+    /// The caller-supplied standpoint predicate table threaded into every
+    /// evaluation context. `None` (the default) means `purrdf:heldIn` hard-errors
+    /// and `CONSTRUCT` emits no standpoint-scope loss attribution.
+    standpoint_predicates: Option<StandpointPredicates>,
 }
 
 // `dyn GraphResolver` is not `Debug`, so derive can't apply; report its presence by
@@ -93,6 +131,8 @@ impl std::fmt::Debug for NativeSparqlEngine {
                     None => &"None",
                 },
             )
+            .field("parser_options", &self.parser_options)
+            .field("standpoint_predicates", &self.standpoint_predicates)
             .finish()
     }
 }
@@ -111,6 +151,38 @@ impl NativeSparqlEngine {
         self
     }
 
+    /// Set the parse-time configuration ([`ParserOptions`]) this engine uses for
+    /// every query and update — most notably the extension-function namespace set.
+    /// The default recognizes only the published purrdf carrier vocabulary; a
+    /// deployment whose queries spell the same closed function set under another
+    /// namespace (e.g. `gmeow:heldIn(...)`) adds that namespace as an alias here.
+    #[must_use]
+    pub fn with_parser_options(mut self, options: ParserOptions) -> Self {
+        self.parser_options = options;
+        self
+    }
+
+    /// Supply the caller's standpoint predicate table (see
+    /// [`StandpointPredicates`]): the `accordingTo`/`sharpens` domain predicate
+    /// IRIs that `purrdf:heldIn` and loss-aware `CONSTRUCT` read from the queried
+    /// data. There is **no built-in default** — evaluating `heldIn` on an engine
+    /// without this configuration is a hard error.
+    #[must_use]
+    pub fn with_standpoint_predicates(mut self, predicates: StandpointPredicates) -> Self {
+        self.standpoint_predicates = Some(predicates);
+        self
+    }
+
+    /// Build the per-query evaluation context, threading the engine-level
+    /// configuration (order cache + standpoint predicate table) into it.
+    fn eval_ctx<'d>(&'d self, dataset: &'d RdfDataset) -> EvalCtx<'d> {
+        let mut ctx = EvalCtx::new(dataset).with_order_cache(&self.order_cache);
+        if let Some(predicates) = &self.standpoint_predicates {
+            ctx = ctx.with_standpoint_predicates(predicates.clone());
+        }
+        ctx
+    }
+
     /// Like [`SparqlEngine::query`], but with a
     /// [`RemoteQuerySource`](crate::remote::RemoteQuerySource) injected so
     /// `SERVICE` clauses resolve through it. Without this, the default
@@ -127,13 +199,12 @@ impl NativeSparqlEngine {
         request: SparqlRequest<'_>,
         source: &dyn crate::remote::RemoteQuerySource,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared = self
-            .cache
-            .borrow_mut()
-            .prepare(request.query, request.base_iri)?;
-        let mut ctx = EvalCtx::new(dataset)
-            .with_remote(source)
-            .with_order_cache(&self.order_cache);
+        let prepared = self.cache.borrow_mut().prepare_with(
+            request.query,
+            request.base_iri,
+            &self.parser_options,
+        )?;
+        let mut ctx = self.eval_ctx(dataset).with_remote(source);
         let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
         Ok(materialize(outcome, &ctx))
     }
@@ -168,11 +239,12 @@ impl SparqlEngine for NativeSparqlEngine {
         dataset: &Self::Dataset,
         request: SparqlRequest<'_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared = self
-            .cache
-            .borrow_mut()
-            .prepare(request.query, request.base_iri)?;
-        let mut ctx = EvalCtx::new(dataset).with_order_cache(&self.order_cache);
+        let prepared = self.cache.borrow_mut().prepare_with(
+            request.query,
+            request.base_iri,
+            &self.parser_options,
+        )?;
+        let mut ctx = self.eval_ctx(dataset);
         let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
         Ok(materialize(outcome, &ctx))
     }
@@ -190,7 +262,7 @@ impl SparqlEngine for NativeSparqlEngine {
             parser = parser.with_base_iri(base);
         }
         let update = parser
-            .parse_update(request.query)
+            .parse_update_with(request.query, &self.parser_options)
             .map_err(|e| RdfDiagnostic::error("native-sparql-update-parse", e.to_string()))?;
         // Atomicity is structural: branch a COW MutableDataset off the frozen base,
         // apply every op to the delta, and only on FULL success freeze back. Any
@@ -937,6 +1009,125 @@ mod tests {
     fn engine_has_no_resolver_by_default() {
         assert!(NativeSparqlEngine::new().resolver.is_none());
         assert!(NativeSparqlEngine::default().resolver.is_none());
+    }
+
+    // ── configurable extension namespace + standpoint predicate table ─────────
+
+    /// The gmeow ontology namespace — a deployment alias for the same closed
+    /// extension-function set, with its own domain standpoint predicates.
+    const GMEOW_NS: &str = "https://blackcatinformatics.ca/gmeow/";
+
+    /// A standpoint dataset in the GMEOW vocabulary: reifier `:r` held in `:T1`
+    /// (via `gmeow:accordingTo`), and `:T1 gmeow:sharpens :T2`.
+    fn gmeow_standpoint_ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let r = b.intern_iri("http://ex/r");
+        let s = b.intern_iri("http://ex/s");
+        let p = b.intern_iri("http://ex/p");
+        let o = b.intern_iri("http://ex/o");
+        let t1 = b.intern_iri("http://ex/T1");
+        let t2 = b.intern_iri("http://ex/T2");
+        let according_to = b.intern_iri(&format!("{GMEOW_NS}accordingTo"));
+        let sharpens = b.intern_iri(&format!("{GMEOW_NS}sharpens"));
+        let triple = b.intern_triple(s, p, o);
+        b.push_reifier(r, triple);
+        b.push_annotation(r, according_to, t1);
+        b.push_quad(t1, sharpens, t2, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// The gmeow migration path end-to-end: the namespace alias flows through
+    /// [`ParserOptions`] (so `gmeow:heldIn(...)` still parses) and the domain
+    /// predicates flow through [`StandpointPredicates`] (so the evaluator reads
+    /// `gmeow:accordingTo`/`gmeow:sharpens` from the data) — no engine constants.
+    #[test]
+    fn gmeow_namespace_and_predicate_table_flow_through_configuration() {
+        let ds = gmeow_standpoint_ds();
+        let engine = NativeSparqlEngine::new()
+            .with_parser_options(ParserOptions {
+                extension_fn_namespaces: vec![
+                    purrdf_sparql_algebra::PURRDF_NS.to_owned(),
+                    GMEOW_NS.to_owned(),
+                ],
+            })
+            .with_standpoint_predicates(StandpointPredicates::new(
+                format!("{GMEOW_NS}accordingTo"),
+                format!("{GMEOW_NS}sharpens"),
+            ));
+        let ask = |standpoint: &str| {
+            let q = format!(
+                "PREFIX gmeow: <{GMEOW_NS}>\n\
+                 ASK {{ FILTER( gmeow:heldIn(<http://ex/r>, <http://ex/{standpoint}>) ) }}"
+            );
+            let r = engine
+                .query(
+                    &ds,
+                    SparqlRequest {
+                        query: &q,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                )
+                .expect("query");
+            matches!(r, SparqlResult::Boolean(true))
+        };
+        assert!(ask("T1"), "held directly in its vantage standpoint");
+        assert!(ask("T2"), "held via the direct gmeow:sharpens edge");
+        assert!(!ask("T9"), "not held in an unrelated standpoint");
+    }
+
+    #[test]
+    fn held_in_without_a_predicate_table_is_a_hard_diagnostic() {
+        // heldIn parses under the DEFAULT namespace, but evaluation must hard-fail
+        // when no standpoint predicate table is configured — never guess a default.
+        let ds = gmeow_standpoint_ds();
+        let engine = NativeSparqlEngine::new();
+        let q = format!(
+            "PREFIX purrdf: <{}>\n\
+             ASK {{ FILTER( purrdf:heldIn(<http://ex/r>, <http://ex/T1>) ) }}",
+            purrdf_sparql_algebra::PURRDF_NS
+        );
+        let err = engine
+            .query(
+                &ds,
+                SparqlRequest {
+                    query: &q,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "native-sparql-query-eval");
+        assert!(
+            err.message
+                .contains("requires a standpoint predicate configuration"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn plan_cache_keys_on_the_extension_namespace_set() {
+        // The SAME text under two namespace configurations must be two cache
+        // entries — a gmeow-alias parse must not be served to a default parse.
+        let mut cache = PlanCache::new();
+        let q = format!(
+            "PREFIX gmeow: <{GMEOW_NS}>\nSELECT (gmeow:listLength(?l) AS ?n) WHERE {{ ?s ?p ?l }}"
+        );
+        let with_alias = ParserOptions {
+            extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+        };
+        let a = cache
+            .prepare_with(&q, None, &with_alias)
+            .expect("parse with the alias configured");
+        // Under the DEFAULT options the gmeow IRI is a plain custom function.
+        let b = cache
+            .prepare_with(&q, None, &ParserOptions::default())
+            .expect("parse without the alias");
+        assert!(
+            !Arc::ptr_eq(&a, &b),
+            "different namespace configurations must not share a cache entry"
+        );
     }
 
     // ── exotic aggregation ────────────────────────────────────────────────────

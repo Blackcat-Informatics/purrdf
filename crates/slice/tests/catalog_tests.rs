@@ -6,6 +6,12 @@
 
 use purrdf_slice::artifact::ArtifactRole;
 use purrdf_slice::catalog::SliceCatalog;
+use purrdf_slice::SliceVocab;
+
+/// Pure fixtures use a caller-supplied example.org vocabulary.
+fn test_vocab() -> SliceVocab {
+    SliceVocab::for_namespace("https://example.org/vocab/")
+}
 
 fn fixture_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-slice")
@@ -22,8 +28,8 @@ fn path_independence() {
     let dst = tmp.path().join("test-slice");
     copy_dir_all(&src, &dst).expect("copy fixture");
 
-    let rec_src = SliceCatalog::from_slice_dir(&src).expect("load from src");
-    let rec_dst = SliceCatalog::from_slice_dir(&dst).expect("load from dst");
+    let rec_src = SliceCatalog::from_slice_dir(&src, &test_vocab()).expect("load from src");
+    let rec_dst = SliceCatalog::from_slice_dir(&dst, &test_vocab()).expect("load from dst");
 
     assert_eq!(
         rec_src.artifacts.len(),
@@ -73,7 +79,7 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
 #[test]
 fn lossless_round_trip() {
     let dir = fixture_dir();
-    let rec = SliceCatalog::from_slice_dir(&dir).expect("load slice");
+    let rec = SliceCatalog::from_slice_dir(&dir, &test_vocab()).expect("load slice");
 
     // Structural fields from manifest.ttl.
     assert_eq!(
@@ -110,7 +116,7 @@ fn lossless_round_trip() {
 #[test]
 fn recoverability() {
     let dir = fixture_dir();
-    let rec = SliceCatalog::from_slice_dir(&dir).expect("load slice");
+    let rec = SliceCatalog::from_slice_dir(&dir, &test_vocab()).expect("load slice");
 
     assert!(
         !rec.artifacts.is_empty(),
@@ -155,7 +161,7 @@ fn recoverability() {
 #[test]
 fn role_classification() {
     let dir = fixture_dir();
-    let rec = SliceCatalog::from_slice_dir(&dir).expect("load slice");
+    let rec = SliceCatalog::from_slice_dir(&dir, &test_vocab()).expect("load slice");
 
     let has_manifest = rec
         .artifacts
@@ -184,35 +190,35 @@ fn role_classification() {
 /// comment-only edit must NOT change the semantic digest.
 #[test]
 fn semantic_digest_blank_nodes_are_deterministic() {
-    const PURRDF: &str = "https://blackcatinformatics.ca/purrdf/";
+    const NS: &str = "https://example.org/vocab/";
 
     fn write_slice(dir: &std::path::Path, module_comment: &str) {
         std::fs::create_dir_all(dir).unwrap();
         let manifest = format!(
-            r#"@prefix purrdf: <{PURRDF}> .
+            r#"@prefix vocab: <{NS}> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix dcterms: <http://purl.org/dc/terms/> .
 
-<{PURRDF}slice/bn> a purrdf:Slice ;
+<{NS}slice/bn> a vocab:Slice ;
     rdfs:label "bn"@x-purrdf-english ;
     dcterms:title "bn"@x-purrdf-english ;
     dcterms:creator "Test" ;
-    purrdf:sliceTier purrdf:tierCore ;
-    purrdf:sliceConsumer "test"@x-purrdf-english .
+    vocab:sliceTier vocab:tierCore ;
+    vocab:sliceConsumer "test"@x-purrdf-english .
 "#
         );
         std::fs::write(dir.join("manifest.ttl"), manifest).unwrap();
         // An OWL restriction (blank node) plus a second blank node, so the
         // parser is forced to mint multiple blank-node labels.
         let module = format!(
-            r"{module_comment}@prefix purrdf: <{PURRDF}> .
+            r"{module_comment}@prefix vocab: <{NS}> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 
-<{PURRDF}Bn> a owl:Class ;
-    rdfs:isDefinedBy <{PURRDF}slice/bn> ;
+<{NS}Bn> a owl:Class ;
+    rdfs:isDefinedBy <{NS}slice/bn> ;
     rdfs:subClassOf [ a owl:Restriction ;
-        owl:onProperty <{PURRDF}hasThing> ;
+        owl:onProperty <{NS}hasThing> ;
         owl:someValuesFrom [ a owl:Class ] ] .
 "
         );
@@ -220,7 +226,7 @@ fn semantic_digest_blank_nodes_are_deterministic() {
     }
 
     fn module_semantic_digest(dir: &std::path::Path) -> String {
-        let rec = SliceCatalog::from_slice_dir(dir).expect("load slice");
+        let rec = SliceCatalog::from_slice_dir(dir, &test_vocab()).expect("load slice");
         rec.artifacts
             .iter()
             .find(|a| matches!(a.role, ArtifactRole::Module))

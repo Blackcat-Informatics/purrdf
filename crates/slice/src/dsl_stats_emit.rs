@@ -7,12 +7,13 @@
 //! Emits the counts summary over the SAME merged mapping-DSL source set every
 //! other emitter loads (the shared
 //! `dsl/mappings/**/*.ttl` tree + the slice [`crate::artifact::ArtifactRole::Mapping`]
-//! artifacts). The counts are:
-//!   * `equivalences` — every `purrdf:TermEquivalence` cell.
-//!   * `functions` — every `purrdf:ProjectionFunction`.
-//!   * `mapping_sets` — every `purrdf:MappingSet`.
-//!   * `projections` — every `purrdf:ProjectionMapping`.
-//!   * `cells_by_set` — per `purrdf:sssomFile`, the equivalence-cell count.
+//! artifacts). The counted classes derive from the caller's
+//! [`SliceVocab`](crate::vocab::SliceVocab):
+//!   * `equivalences` — every `<vocab>TermEquivalence` cell.
+//!   * `functions` — every `<vocab>ProjectionFunction`.
+//!   * `mapping_sets` — every `<vocab>MappingSet`.
+//!   * `projections` — every `<vocab>ProjectionMapping`.
+//!   * `cells_by_set` — per `<vocab>sssomFile`, the equivalence-cell count.
 //!
 //! The JSON text is **byte-identical** to the historical Python emitter:
 //! `json.dumps(stats, indent=1, sort_keys=True) + "\n"` — sorted keys, a 1-space
@@ -23,13 +24,7 @@ use std::path::Path;
 
 use crate::error::SliceError;
 use crate::mapping_support::{collect_dsl_store, object_literal, subjects_of_type};
-
-// purrdf class IRIs the stats counts (full IRIs derived from the Python `GM.<name>`).
-const GM_TERM_EQUIVALENCE: &str = "https://blackcatinformatics.ca/purrdf/TermEquivalence";
-const GM_PROJECTION_FUNCTION: &str = "https://blackcatinformatics.ca/purrdf/ProjectionFunction";
-const GM_MAPPING_SET: &str = "https://blackcatinformatics.ca/purrdf/MappingSet";
-const GM_PROJECTION_MAPPING: &str = "https://blackcatinformatics.ca/purrdf/ProjectionMapping";
-const GM_SSSOM_FILE: &str = "https://blackcatinformatics.ca/purrdf/sssomFile";
+use crate::vocab::SliceVocab;
 
 /// Emit the DSL surface-count summary as committed JSON text.
 ///
@@ -42,17 +37,18 @@ const GM_SSSOM_FILE: &str = "https://blackcatinformatics.ca/purrdf/sssomFile";
 /// # Errors
 ///
 /// Returns [`SliceError`] on any missing/unparsable required source (no degraded
-/// fallback): a `purrdf:TermEquivalence` cell with no `purrdf:sssomFile` is a hard
-/// error, matching the DSL equivalence-cell contract.
-pub fn emit_dsl_stats(root: &Path) -> Result<String, SliceError> {
-    let store = collect_dsl_store(root)?;
+/// fallback): a `<vocab>TermEquivalence` cell with no `<vocab>sssomFile` is a
+/// hard error, matching the DSL equivalence-cell contract.
+pub fn emit_dsl_stats(root: &Path, vocab: &SliceVocab) -> Result<String, SliceError> {
+    let store = collect_dsl_store(root, vocab)?;
+    let sssom_file_iri = vocab.sssom_file();
 
-    // cells_by_set + equivalences: every purrdf:TermEquivalence keyed by sssomFile.
+    // cells_by_set + equivalences: every <vocab>TermEquivalence keyed by sssomFile.
     let mut cells_by_set: BTreeMap<String, u64> = BTreeMap::new();
     let mut equivalences: u64 = 0;
-    for cell_iri in subjects_of_type(&store, GM_TERM_EQUIVALENCE)? {
+    for cell_iri in subjects_of_type(&store, &vocab.term_equivalence())? {
         equivalences += 1;
-        let Some(sssom_file) = object_literal(&store, &cell_iri, GM_SSSOM_FILE)? else {
+        let Some(sssom_file) = object_literal(&store, &cell_iri, &sssom_file_iri)? else {
             return Err(SliceError::Parse(format!(
                 "term equivalence {cell_iri} missing sssomFile"
             )));
@@ -60,17 +56,17 @@ pub fn emit_dsl_stats(root: &Path) -> Result<String, SliceError> {
         *cells_by_set.entry(sssom_file).or_insert(0) += 1;
     }
 
-    let functions = subjects_of_type(&store, GM_PROJECTION_FUNCTION)?.len() as u64;
-    let projections = subjects_of_type(&store, GM_PROJECTION_MAPPING)?.len() as u64;
+    let functions = subjects_of_type(&store, &vocab.projection_function())?.len() as u64;
+    let projections = subjects_of_type(&store, &vocab.projection_mapping())?.len() as u64;
 
-    // mapping_sets: Python's `_mapping_sets` keys a dict by `purrdf:sssomFile`, so
-    // two `purrdf:MappingSet` nodes targeting the same file (e.g. the music slice +
-    // the shared DSL both declaring `purrdf-music.sssom.tsv`) collapse to ONE entry
+    // mapping_sets: Python's `_mapping_sets` keys a dict by `<vocab>sssomFile`, so
+    // two `<vocab>MappingSet` nodes targeting the same file (e.g. a music slice +
+    // the shared DSL both declaring the same `.sssom.tsv`) collapse to ONE entry
     // (last-write-wins). Count the DISTINCT target files, not the subjects.
     let mut mapping_set_files: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
-    for set_iri in subjects_of_type(&store, GM_MAPPING_SET)? {
-        let Some(file) = object_literal(&store, &set_iri, GM_SSSOM_FILE)? else {
+    for set_iri in subjects_of_type(&store, &vocab.mapping_set())? {
+        let Some(file) = object_literal(&store, &set_iri, &sssom_file_iri)? else {
             return Err(SliceError::Parse(format!(
                 "mapping set {set_iri} missing sssomFile"
             )));
@@ -168,7 +164,11 @@ mod tests {
     #[test]
     fn dsl_stats_matches_committed() {
         let root = repo_root();
-        let got = emit_dsl_stats(&root).expect("emit dsl stats");
+        // Committed-artifact parity: the committed stats were generated with the
+        // blackcatinformatics purrdf namespace, so this cross-check must use it
+        // (pure fixtures elsewhere use example.org).
+        let vocab = SliceVocab::for_namespace("https://blackcatinformatics.ca/purrdf/");
+        let got = emit_dsl_stats(&root, &vocab).expect("emit dsl stats");
         let committed_path = root
             .join("generated")
             .join("mappings")

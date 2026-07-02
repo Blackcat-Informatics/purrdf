@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use purrdf::{serialize_dataset, SerializeGraph};
 use purrdf_core::{RdfDataset, SparqlEngine, SparqlRequest, SparqlResult};
-use purrdf_sparql_eval::{NativeSparqlEngine, RemoteQuerySource};
+use purrdf_sparql_eval::{NativeSparqlEngine, RemoteQuerySource, StandpointPredicates};
 
 use crate::manifest::{SparqlTestCase, TestKind};
 
@@ -110,7 +110,19 @@ pub fn run(
         }
         TestKind::QueryEval => {
             let dataset = load_dataset(case)?;
-            let engine = NativeSparqlEngine::new();
+            // The standpoint predicate table is CALLER configuration (the engine has
+            // no default): the purrdf-extend suite's standpoint cases exercise
+            // `purrdf:heldIn` under the default extension namespace against
+            // `standpoint.ttl` data written in the published purrdf carrier
+            // vocabulary, so the harness supplies that vocabulary's
+            // accordingTo/sharpens table here. (A gmeow deployment would supply its
+            // own gmeow IRIs instead — the table flows through configuration, not
+            // constants.) Harmless for the W3C suites, which never call heldIn.
+            let engine =
+                NativeSparqlEngine::new().with_standpoint_predicates(StandpointPredicates::new(
+                    "https://blackcatinformatics.ca/purrdf/accordingTo",
+                    "https://blackcatinformatics.ca/purrdf/sharpens",
+                ));
             let request = SparqlRequest {
                 query: &query_text,
                 base_iri: Some(BASE),

@@ -55,7 +55,7 @@ fn percent_encode(value: &str) -> String {
 
 /// Mint the namespaced, percent-encoded rule IRI for a rule label.
 ///
-/// `base` is the rule-IRI base (e.g. `https://blackcatinformatics.ca/purrdf/rule/`)
+/// `base` is the caller-supplied rule-IRI base (e.g. `https://example.org/vocab/rule/`)
 /// and `rule_name` the firing rule's name. The result is `<base + encoded-name>`,
 /// matching the retired Python `_rule_iri` byte-for-byte.
 pub fn rule_iri(base: &str, rule_name: &str) -> String {
@@ -257,10 +257,10 @@ mod tests {
     fn rule_iri_is_base_plus_encoded_name() {
         assert_eq!(
             rule_iri(
-                "https://blackcatinformatics.ca/purrdf/rule/",
+                "https://example.org/vocab/rule/",
                 "el:subClassOf-transitive"
             ),
-            "https://blackcatinformatics.ca/purrdf/rule/el%3AsubClassOf-transitive"
+            "https://example.org/vocab/rule/el%3AsubClassOf-transitive"
         );
     }
 

@@ -53,7 +53,7 @@ wasm: ## Prove the release crates build for wasm32-unknown-unknown (SKIP locally
 		cargo check --locked --target wasm32-unknown-unknown --lib \
 			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-gts -p purrdf-core \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
-			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf -p purrdf-wasm; \
+			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf -p purrdf-wasm; \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
 	else \

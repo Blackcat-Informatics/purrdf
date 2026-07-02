@@ -338,16 +338,16 @@ mod tests {
 
     const OWL: &str = r#"
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
-@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
+@prefix ex: <https://example.org/vocab/> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
-purrdf:s purrdf:p purrdf:o .
-purrdf:ax a owl:Axiom ;
-    owl:annotatedSource purrdf:s ;
-    owl:annotatedProperty purrdf:p ;
-    owl:annotatedTarget purrdf:o ;
-    purrdf:accordingTo purrdf:analyst ;
-    purrdf:confidence "0.9"^^xsd:decimal .
+ex:s ex:p ex:o .
+ex:ax a owl:Axiom ;
+    owl:annotatedSource ex:s ;
+    owl:annotatedProperty ex:p ;
+    owl:annotatedTarget ex:o ;
+    ex:accordingTo ex:analyst ;
+    ex:confidence "0.9"^^xsd:decimal .
 "#;
 
     /// Canonical default-graph quad set for isomorphism comparison (named nodes
@@ -369,7 +369,7 @@ purrdf:ax a owl:Axiom ;
         );
         // The base triple is asserted alongside the reifier.
         assert!(rdf12.contains(
-            "<https://blackcatinformatics.ca/purrdf/s> <https://blackcatinformatics.ca/purrdf/p> <https://blackcatinformatics.ca/purrdf/o> ."
+            "<https://example.org/vocab/s> <https://example.org/vocab/p> <https://example.org/vocab/o> ."
         ));
     }
 
@@ -396,14 +396,14 @@ purrdf:ax a owl:Axiom ;
         // Same axiom, but without the confidence annotation.
         const OWL_MISSING: &str = r"
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
-@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
+@prefix ex: <https://example.org/vocab/> .
 
-purrdf:s purrdf:p purrdf:o .
-purrdf:ax a owl:Axiom ;
-    owl:annotatedSource purrdf:s ;
-    owl:annotatedProperty purrdf:p ;
-    owl:annotatedTarget purrdf:o ;
-    purrdf:accordingTo purrdf:analyst .
+ex:s ex:p ex:o .
+ex:ax a owl:Axiom ;
+    owl:annotatedSource ex:s ;
+    owl:annotatedProperty ex:p ;
+    owl:annotatedTarget ex:o ;
+    ex:accordingTo ex:analyst .
 ";
         // The faithful round-trip carries the confidence, so it must NOT match a
         // graph that lost it (proves annotations flow through, not silently dropped).
@@ -418,14 +418,14 @@ purrdf:ax a owl:Axiom ;
         // codec must hard-fail on, never silently last-write-win.
         const OWL_CONFLICT: &str = r"
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
-@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
+@prefix ex: <https://example.org/vocab/> .
 
-purrdf:s purrdf:p purrdf:o .
-purrdf:ax a owl:Axiom ;
-    owl:annotatedSource purrdf:s ;
-    owl:annotatedSource purrdf:other ;
-    owl:annotatedProperty purrdf:p ;
-    owl:annotatedTarget purrdf:o .
+ex:s ex:p ex:o .
+ex:ax a owl:Axiom ;
+    owl:annotatedSource ex:s ;
+    owl:annotatedSource ex:other ;
+    owl:annotatedProperty ex:p ;
+    owl:annotatedTarget ex:o .
 ";
         let err = project_owl_to_rdf12(OWL_CONFLICT)
             .expect_err("conflicting owl:annotatedSource must hard-fail, not be silently dropped");
@@ -437,14 +437,14 @@ purrdf:ax a owl:Axiom ;
         // The SAME triple repeated is set membership, not a conflict — accepted.
         const OWL_DUP: &str = r"
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
-@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
+@prefix ex: <https://example.org/vocab/> .
 
-purrdf:s purrdf:p purrdf:o .
-purrdf:ax a owl:Axiom ;
-    owl:annotatedSource purrdf:s ;
-    owl:annotatedSource purrdf:s ;
-    owl:annotatedProperty purrdf:p ;
-    owl:annotatedTarget purrdf:o .
+ex:s ex:p ex:o .
+ex:ax a owl:Axiom ;
+    owl:annotatedSource ex:s ;
+    owl:annotatedSource ex:s ;
+    owl:annotatedProperty ex:p ;
+    owl:annotatedTarget ex:o .
 ";
         project_owl_to_rdf12(OWL_DUP)
             .expect("an identical duplicate structural triple is accepted");
@@ -462,12 +462,12 @@ purrdf:ax a owl:Axiom ;
         // own `set_once_or_error` guard. The conflict is still hard-failed (P7), only
         // the detection point and error code moved into the shared native fold.
         const RDF12_CONFLICT: &str = r"
-@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
+@prefix ex: <https://example.org/vocab/> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 
-purrdf:s purrdf:p purrdf:o .
-purrdf:ax rdf:reifies <<( purrdf:s purrdf:p purrdf:o )>> ;
-    rdf:reifies <<( purrdf:s purrdf:p purrdf:other )>> .
+ex:s ex:p ex:o .
+ex:ax rdf:reifies <<( ex:s ex:p ex:o )>> ;
+    rdf:reifies <<( ex:s ex:p ex:other )>> .
 ";
         let err = normalize_rdf12_to_owl(RDF12_CONFLICT)
             .expect_err("conflicting rdf:reifies must hard-fail, not be silently dropped");

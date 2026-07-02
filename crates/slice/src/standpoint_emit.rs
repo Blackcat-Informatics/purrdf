@@ -22,10 +22,8 @@
 use std::collections::BTreeMap;
 
 use crate::error::SliceError;
-use crate::mapping_support::{prefix_block, GENERATED_BANNER};
-
-/// PurRDF's ontology IRI (no trailing slash), mirroring `config.ONTOLOGY_IRI`.
-const ONTOLOGY_IRI: &str = "https://blackcatinformatics.ca/purrdf";
+use crate::mapping_support::{prefix_block, rename_template_prefix, GENERATED_BANNER};
+use crate::vocab::SliceVocab;
 
 /// The committed file names for the seven standpoint projections (six peer-model
 /// re-expressions plus the legacy-modality projection), in emission order.
@@ -40,12 +38,15 @@ const STANDPOINT_FILES: &[&str] = &[
 ];
 
 /// Emit every standpoint SPARQL projection, returning `{ "standpoint-<x>.rq" →
-/// rq_text }` for all seven fixed projections.
+/// rq_text }` for all seven fixed projections. Every vocabulary term the
+/// queries reference (`accordingTo`, `StandpointClaim`, `claimModality`, …) is
+/// minted under the caller's [`SliceVocab`]; for a fixed vocab the output is
+/// byte-deterministic.
 ///
 /// These take no DSL input — they are constant template-coded queries — so the
 /// `root` argument is accepted only for call-site symmetry with the other mapping
-/// emitters and is unused. The text is byte-identical to the historical Python
-/// `emit_standpoint_*_sparql` emitters.
+/// emitters and is unused. For the original consumer vocabulary the text is
+/// byte-identical to the historical Python `emit_standpoint_*_sparql` emitters.
 ///
 /// # Errors
 ///
@@ -53,15 +54,16 @@ const STANDPOINT_FILES: &[&str] = &[
 /// the constant bodies cannot fail to render.
 pub fn emit_standpoint_sets(
     _root: &std::path::Path,
+    vocab: &SliceVocab,
 ) -> Result<BTreeMap<String, String>, SliceError> {
     let texts = [
-        emit_owl2(),
-        emit_crminf(),
-        emit_prov(),
-        emit_oa(),
-        emit_schema(),
-        emit_bbc(),
-        emit_modality(),
+        emit_owl2(vocab),
+        emit_crminf(vocab),
+        emit_prov(vocab),
+        emit_oa(vocab),
+        emit_schema(vocab),
+        emit_bbc(vocab),
+        emit_modality(vocab),
     ];
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     for (name, text) in STANDPOINT_FILES.iter().zip(texts) {
@@ -70,17 +72,21 @@ pub fn emit_standpoint_sets(
     Ok(out)
 }
 
-/// Assemble a standpoint query from its fixed header + body, threading the body
-/// through the shared registry-ordered prefix block (mirrors the Python
-/// `f"{header}{_prefix_block(body)}\n\n{body}"` tail every emitter shares).
-fn assemble(header: &str, body: &str) -> String {
-    format!("{header}{}\n\n{body}", prefix_block(body))
+/// Assemble a standpoint query from its fixed header + body: rename the
+/// template's `purrdf:` CURIE tokens to the caller's prefix name, then thread
+/// the renamed body through the shared registry-ordered prefix block (mirrors
+/// the Python `f"{header}{_prefix_block(body)}\n\n{body}"` tail every emitter
+/// shares) so the prefix label is bound to the caller's namespace.
+fn assemble(header: &str, body: &str, vocab: &SliceVocab) -> String {
+    let header = rename_template_prefix(header, vocab.prefix_name());
+    let body = rename_template_prefix(body, vocab.prefix_name());
+    format!("{header}{}\n\n{body}", prefix_block(&body, vocab))
 }
 
 // ── Standpoint-OWL 2 (standpointLabel) ──────────────────────────────────────────
 
-fn emit_owl2() -> String {
-    let label_iri = format!("{ONTOLOGY_IRI}#standpointLabel");
+fn emit_owl2(vocab: &SliceVocab) -> String {
+    let label_iri = format!("{}#standpointLabel", vocab.ontology_iri());
     let label_concat = "    BIND(CONCAT(\"<standpointAxiom><\", ?op, \"><Standpoint name=\\\"\", ?spName, \"\\\"/></\", ?op, \"></standpointAxiom>\") AS ?label)\n";
     let sp_name =
         "    BIND(IF(!BOUND(?sp) || ?sp = purrdf:universalStandpoint, \"*\", STR(?sp)) AS ?spName)\n";
@@ -125,12 +131,12 @@ fn emit_owl2() -> String {
          # Branch C (generic-entity observedFeature) is excluded by design — the\n\
          # translator matches only owl:Axiom individuals.\n"
     );
-    assemble(&header, &body)
+    assemble(&header, &body, vocab)
 }
 
 // ── CRMinf (CIDOC-CRM Argumentation) ────────────────────────────────────────────
 
-fn emit_crminf() -> String {
+fn emit_crminf(vocab: &SliceVocab) -> String {
     let holder = "    BIND(COALESCE(?sp, purrdf:universalStandpoint) AS ?holder)\n";
     let value = "    BIND(IF(!BOUND(?mod), \"true\", IF(?mod = purrdf:refuted, \"false\", IF(?mod = purrdf:conceivable, \"possible\", IF(?mod = purrdf:probable, \"probable\", \"true\")))) AS ?value)\n";
     let subject_bind = "    BIND(COALESCE(?s, ?feature) AS ?subject)\n";
@@ -185,12 +191,12 @@ fn emit_crminf() -> String {
          # generic-entity observedFeature. Generic entities use ?feature as the\n\
          # referred-to subject.\n"
     );
-    assemble(&header, &body)
+    assemble(&header, &body, vocab)
 }
 
 // ── PROV-O (qualified attribution) ──────────────────────────────────────────────
 
-fn emit_prov() -> String {
+fn emit_prov(vocab: &SliceVocab) -> String {
     let holder = "    BIND(COALESCE(?sp, purrdf:universalStandpoint) AS ?holder)\n";
     let mint = "    BIND(IRI(CONCAT(STR(?ax), \"/attribution\")) AS ?attr)\n";
     let body = format!(
@@ -238,12 +244,12 @@ fn emit_prov() -> String {
          # generic-entity observedFeature. Generic-entity branch omits\n\
          # owl:annotated* (unbound, skipped).\n"
     );
-    assemble(&header, &body)
+    assemble(&header, &body, vocab)
 }
 
 // ── W3C Web Annotation (oa) ──────────────────────────────────────────────────────
 
-fn emit_oa() -> String {
+fn emit_oa(vocab: &SliceVocab) -> String {
     let holder = "    BIND(COALESCE(?sp, purrdf:universalStandpoint) AS ?holder)\n";
     let target = "    BIND(COALESCE(?s, ?feature) AS ?target)\n";
     let mint = "    BIND(IRI(CONCAT(STR(?ax), \"/annotation\")) AS ?ann)\n";
@@ -291,12 +297,12 @@ fn emit_oa() -> String {
          # generic-entity observedFeature. Generic-entity branch uses ?feature as\n\
          # oa:hasTarget.\n"
     );
-    assemble(&header, &body)
+    assemble(&header, &body, vocab)
 }
 
 // ── schema.org Claim ─────────────────────────────────────────────────────────────
 
-fn emit_schema() -> String {
+fn emit_schema(vocab: &SliceVocab) -> String {
     let refuted_filter = "    FILTER(!BOUND(?mod) || ?mod != purrdf:refuted)\n";
     let holder = "    BIND(COALESCE(?sp, purrdf:universalStandpoint) AS ?holder)\n";
     let prop_text = "    BIND(IF(BOUND(?s), CONCAT(STR(?s), \" \", STR(?p), \" \", STR(?o)), STR(?feature)) AS ?propText)\n";
@@ -341,12 +347,12 @@ fn emit_schema() -> String {
          # generic-entity observedFeature. Generic-entity branch renders ?feature\n\
          # IRI as schema:text.\n"
     );
-    assemble(&header, &body)
+    assemble(&header, &body, vocab)
 }
 
 // ── BBC News Ontology ────────────────────────────────────────────────────────────
 
-fn emit_bbc() -> String {
+fn emit_bbc(vocab: &SliceVocab) -> String {
     let holder = "    BIND(COALESCE(?sp, purrdf:universalStandpoint) AS ?holder)\n";
     let mint = "    BIND(IRI(CONCAT(STR(?event), \"/news-event\")) AS ?newsEvent)\n";
     let body = format!(
@@ -370,12 +376,12 @@ fn emit_bbc() -> String {
          # Media-standpoint projection: StandpointClaim about an Event becomes a\n\
          # bbc:NewsEvent with standpoint and modality metadata.\n"
     );
-    assemble(&header, &body)
+    assemble(&header, &body, vocab)
 }
 
 // ── Factored claim-modality legacy projection ────────────────────────────────
 
-fn emit_modality() -> String {
+fn emit_modality(vocab: &SliceVocab) -> String {
     // Build one UNION arm per row of the DECOMPOSITIONS table — the single source
     // of truth, read at runtime so the emitter and the logic module share the same
     // five rows without hard-coding them a second time.
@@ -424,7 +430,7 @@ fn emit_modality() -> String {
          # decompositions. Tuples with no legacy equivalent produce no triple\n\
          # (hard-unsupported, never approximated \u{2014} Principle 9).\n"
     );
-    assemble(&header, &body)
+    assemble(&header, &body, vocab)
 }
 
 #[cfg(test)]
@@ -457,7 +463,11 @@ mod tests {
     #[test]
     fn every_standpoint_file_matches_committed() {
         let root = repo_root();
-        let sets = emit_standpoint_sets(&root).expect("emit standpoint");
+        // Committed-artifact parity: the committed queries were generated with
+        // the blackcatinformatics purrdf namespace (prefix `purrdf`), so this
+        // cross-check must use it (pure fixtures elsewhere use example.org).
+        let vocab = SliceVocab::for_namespace("https://blackcatinformatics.ca/purrdf/");
+        let sets = emit_standpoint_sets(&root, &vocab).expect("emit standpoint");
         let dir = root.join("generated").join("queries");
         if !dir.exists() {
             eprintln!(

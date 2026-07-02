@@ -18,12 +18,15 @@ pub mod json_schema;
 pub mod model;
 pub mod openehr_opt;
 pub mod path;
+pub(crate) mod prebinding;
 pub mod report;
 pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
 pub mod term;
 pub mod text_ingest;
+
+pub use json_schema::Namespaces;
 
 /// Crate version string for cache/toolchain salt parity with Python package
 /// versions (`metadata.version("purrdf-shapes")`).

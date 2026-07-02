@@ -34,7 +34,8 @@ use regex::Regex;
 
 use crate::diagnostics::ProjectionDiagnostic;
 use crate::error::SliceError;
-use crate::mapping_support::PREFIX_REGISTRY;
+use crate::mapping_support::effective_registry;
+use crate::vocab::SliceVocab;
 
 /// Authored source roots scanned for prefix declarations. The `generated/` tree is
 /// excluded: those artifacts are *emitted* from the registry and are consistent by
@@ -93,8 +94,15 @@ fn collect_sources(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), SliceError>
 ///
 /// Returns [`SliceError`] on a filesystem error reading the scanned tree (a missing
 /// root is not an error — it simply contributes no sources).
-pub fn lint_prefix_consistency(root: &Path) -> Result<Vec<ProjectionDiagnostic>, SliceError> {
-    let registry: BTreeMap<&str, &str> = PREFIX_REGISTRY.iter().copied().collect();
+pub fn lint_prefix_consistency(
+    root: &Path,
+    vocab: &SliceVocab,
+) -> Result<Vec<ProjectionDiagnostic>, SliceError> {
+    let effective = effective_registry(vocab);
+    let registry: BTreeMap<&str, &str> = effective
+        .iter()
+        .map(|(p, n)| (p.as_str(), n.as_str()))
+        .collect();
     let re = declaration_re();
 
     let mut files: Vec<PathBuf> = Vec::new();
@@ -163,9 +171,14 @@ mod tests {
             .unwrap()
     }
 
+    fn committed_vocab() -> SliceVocab {
+        SliceVocab::for_namespace("https://blackcatinformatics.ca/purrdf/")
+    }
+
     #[test]
     fn authored_corpus_has_no_registry_prefix_shadows() {
-        let diagnostics = lint_prefix_consistency(&repo_root()).expect("scan corpus");
+        let diagnostics =
+            lint_prefix_consistency(&repo_root(), &committed_vocab()).expect("scan corpus");
         assert!(
             diagnostics.is_empty(),
             "registry-prefix shadows found:\n{}",
@@ -181,9 +194,9 @@ mod tests {
     fn non_registry_prefix_is_not_a_shadow() {
         // `ex:` is not a registry prefix — per-example local namespaces are exempt,
         // so the corpus's varied `ex:` bindings must NOT be flagged.
-        let registry: BTreeMap<&str, &str> = PREFIX_REGISTRY.iter().copied().collect();
+        let effective = effective_registry(&committed_vocab());
         assert!(
-            !registry.contains_key("ex"),
+            !effective.iter().any(|(p, _)| p == "ex"),
             "test assumes `ex` is not a registry prefix"
         );
     }
@@ -207,10 +220,7 @@ mod tests {
         }
         let text = std::fs::read_to_string(&config).expect("read config.py");
         let python = parse_config_prefixes(&text);
-        let rust: Vec<(String, String)> = PREFIX_REGISTRY
-            .iter()
-            .map(|(p, n)| ((*p).to_owned(), (*n).to_owned()))
-            .collect();
+        let rust: Vec<(String, String)> = effective_registry(&committed_vocab());
         assert_eq!(
             python, rust,
             "config.PREFIXES drifted from PREFIX_REGISTRY (pairs and/or order)"

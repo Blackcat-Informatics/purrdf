@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-shex"
+description = "PurRDF ShEx 2.1 engine: ShExC/ShExJ schema parsing, structural validation, and shape-map validation over the purrdf-core IR, gated against the shexTest conformance suite"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["shex", "rdf", "schema", "parser", "validation"]
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only, wasm-clean leaf: the ShEx 2.1 front-end of the shapes stack. The
+# schema layer (ShExC/ShExJ parsers, the ShExJ-aligned AST, and the spec §5.7
+# structural well-formedness checks) builds only on the CLOSED foundation
+# leaves `purrdf-iri` and `purrdf-xsd`; the shape-map validator (`validate`)
+# evaluates over the `purrdf-core` frozen IR in interned `TermId` space.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_shex"
+
+[dependencies]
+purrdf-core = { workspace = true }
+purrdf-iri = { workspace = true }
+purrdf-xsd = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# Colored line-diffs on assert_eq! failure (repo convention).
+pretty_assertions = { workspace = true }
+# Turtle parsing for the validation conformance harness only (the library
+# itself depends on the ring-fenced kernel, never the codec stack).
+purrdf-rdf = { workspace = true }

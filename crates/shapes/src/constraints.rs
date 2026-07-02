@@ -7,6 +7,7 @@
 //! recursive shape evaluator.  PyO3-free.
 
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use crate::data::{GraphFilter, ShaclDataGraph};
 use crate::model::{purrdf, rdf, sh};
@@ -23,13 +24,20 @@ use crate::term::{NamedNode, Term, Triple};
 /// `sh:and`, `sh:or`, `sh:xone`, and `sh:node` constraints.
 ///
 /// A `deactivated` shape produces no results.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when a SHACL-SPARQL constraint fails to EVALUATE (a
+/// hard validation failure per SHACL-SPARQL — e.g. a query construct the
+/// native engine cannot execute). Ordinary constraint violations are `Ok`
+/// results, never errors.
 pub fn validate_shape<G: ShaclDataGraph>(
     store: &G,
     focus: &Term,
     shape: &Shape,
-) -> Vec<ValidationResult> {
+) -> Result<Vec<ValidationResult>, String> {
     if shape.deactivated {
-        return vec![];
+        return Ok(vec![]);
     }
 
     let mut results: Vec<ValidationResult> = Vec::new();
@@ -37,7 +45,7 @@ pub fn validate_shape<G: ShaclDataGraph>(
     // --- Node-level constraints (value nodes = [focus], no path) ---
     let node_value_nodes = std::slice::from_ref(focus);
     for constraint in &shape.constraints {
-        let mut rs = eval_constraint(store, focus, node_value_nodes, constraint, None, shape);
+        let mut rs = eval_constraint(store, focus, node_value_nodes, constraint, None, shape)?;
         for r in &mut rs {
             r.apply_box_roles(&shape.box_roles, &[]);
         }
@@ -46,7 +54,7 @@ pub fn validate_shape<G: ShaclDataGraph>(
 
     // --- Property shapes ---
     for ps in &shape.property_shapes {
-        results.extend(eval_property_shape(store, focus, ps, shape));
+        results.extend(eval_property_shape(store, focus, ps, shape)?);
     }
 
     // --- sh:closed (node-shape-level; needs the sibling property shapes) ---
@@ -59,7 +67,7 @@ pub fn validate_shape<G: ShaclDataGraph>(
         }
     }
 
-    results
+    Ok(results)
 }
 
 /// Evaluate `sh:closed` against a focus node (SHACL §4.8.1).
@@ -67,9 +75,14 @@ pub fn validate_shape<G: ShaclDataGraph>(
 /// The permitted predicate set is the union of:
 /// - every simple-predicate `sh:path` of the shape's property shapes (an inverse
 ///   path constrains incoming, not outgoing, triples and so does not permit an
-///   outgoing predicate);
-/// - the `sh:ignoredProperties` list; and
-/// - `rdf:type` (always allowed).
+///   outgoing predicate); and
+/// - the `sh:ignoredProperties` list.
+///
+/// `rdf:type` is NOT implicitly permitted: per the spec (and W3C
+/// `core/node/closed-001`), a closed shape reports EVERY predicate not
+/// declared by `sh:property` or listed in `sh:ignoredProperties` — shapes that
+/// want to allow `rdf:type` must list it in `sh:ignoredProperties`
+/// (`core/node/closed-002` does exactly that).
 ///
 /// One result per focus-node outgoing triple whose predicate is not permitted.
 fn eval_closed<G: ShaclDataGraph>(
@@ -79,7 +92,6 @@ fn eval_closed<G: ShaclDataGraph>(
     ignored: &[NamedNode],
 ) -> Vec<ValidationResult> {
     let mut permitted: HashSet<String> = HashSet::new();
-    permitted.insert(rdf::TYPE.to_owned());
     for ps in &shape.property_shapes {
         if let Path::Predicate(predicate) = &ps.path {
             permitted.insert(predicate.as_str().to_owned());
@@ -103,10 +115,11 @@ fn eval_closed<G: ShaclDataGraph>(
         let mut result = ValidationResult {
             focus_node: focus.clone(),
             result_path: Some(Term::NamedNode(predicate.clone())),
+            path_structure: None,
             value: Some(quad.object),
             source_constraint_component: NamedNode::from(sh::CLOSED_CONSTRAINT_COMPONENT),
             source_shape: shape.id.clone(),
-            severity: shape.severity,
+            severity: shape.severity.clone(),
             message: shape.message.clone(),
             source_box_roles: vec![],
             path_box_roles: vec![],
@@ -121,8 +134,13 @@ fn eval_closed<G: ShaclDataGraph>(
 
 /// Returns `true` iff the focus node produces zero validation results against
 /// the shape (i.e., it fully conforms).
-pub fn conforms<G: ShaclDataGraph>(store: &G, focus: &Term, shape: &Shape) -> bool {
-    validate_shape(store, focus, shape).is_empty()
+///
+/// # Errors
+///
+/// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
+/// (see [`validate_shape`]).
+pub fn conforms<G: ShaclDataGraph>(store: &G, focus: &Term, shape: &Shape) -> Result<bool, String> {
+    Ok(validate_shape(store, focus, shape)?.is_empty())
 }
 
 // ── Property shape evaluator ───────────────────────────────────────────────────
@@ -132,9 +150,20 @@ fn eval_property_shape<G: ShaclDataGraph>(
     focus: &Term,
     ps: &PropertyShape,
     parent_shape: &Shape,
-) -> Vec<ValidationResult> {
+) -> Result<Vec<ValidationResult>, String> {
+    // A deactivated property shape validates nothing (SHACL §2.1.3.3).
+    if ps.deactivated {
+        return Ok(vec![]);
+    }
     let value_nodes = path::eval(store, focus, &ps.path);
     let path_term = path::path_to_term(&ps.path);
+    // The complex-path structure stamped onto results whose path comes from
+    // this property shape (None for a plain predicate path).
+    let path_structure: Option<Path> = if matches!(ps.path, Path::Predicate(_)) {
+        None
+    } else {
+        Some(ps.path.clone())
+    };
     let source_roles = merge_box_roles(&parent_shape.box_roles, &ps.box_roles);
     let path_roles = path_box_roles(store, &ps.path);
 
@@ -145,7 +174,7 @@ fn eval_property_shape<G: ShaclDataGraph>(
         targets: vec![],
         constraints: ps.constraints.clone(),
         property_shapes: vec![],
-        severity: ps.severity,
+        severity: ps.severity.clone(),
         message: ps.message.clone(),
         deactivated: false,
         box_roles: source_roles.clone(),
@@ -160,7 +189,7 @@ fn eval_property_shape<G: ShaclDataGraph>(
             constraint,
             Some(&ps.path),
             &ps_as_shape,
-        );
+        )?;
         // Stamp the property-shape path and focus onto every result, but PRESERVE
         // a path the constraint itself bound — a `sh:sparql` query may project
         // `?path` (→ result_path, SHACL-AF §3.4.2.2), which is more specific than
@@ -168,12 +197,26 @@ fn eval_property_shape<G: ShaclDataGraph>(
         for r in &mut rs {
             if r.result_path.is_none() {
                 r.result_path = Some(path_term.clone());
+                r.path_structure.clone_from(&path_structure);
             }
             r.focus_node = focus.clone();
             r.apply_box_roles(&source_roles, &path_roles);
         }
         results.extend(rs);
     }
+
+    // --- Nested property shapes (sh:property on a property shape) ---
+    // Spec §2.1: sh:property may appear on ANY shape. On a property shape it
+    // constrains this shape's VALUE nodes: each value node becomes the focus
+    // node of the nested property shape (W3C core/property/property-001,
+    // core/validation-reports/shared — a nested shape reached via two parents
+    // fires once per reach, so results are NOT deduplicated here).
+    for nested in &ps.property_shapes {
+        for value in &value_nodes {
+            results.extend(eval_property_shape(store, value, nested, &ps_as_shape)?);
+        }
+    }
+
     results.extend(eval_reifier_shapes(ReifierEvalContext {
         store,
         focus,
@@ -183,8 +226,8 @@ fn eval_property_shape<G: ShaclDataGraph>(
         source_roles: &source_roles,
         path_roles: &path_roles,
         path_term: &path_term,
-    }));
-    results
+    })?);
+    Ok(results)
 }
 
 struct ReifierEvalContext<'a, G: ShaclDataGraph> {
@@ -208,7 +251,9 @@ impl<G: ShaclDataGraph> Clone for ReifierEvalContext<'_, G> {
 }
 impl<G: ShaclDataGraph> Copy for ReifierEvalContext<'_, G> {}
 
-fn eval_reifier_shapes<G: ShaclDataGraph>(ctx: ReifierEvalContext<'_, G>) -> Vec<ValidationResult> {
+fn eval_reifier_shapes<G: ShaclDataGraph>(
+    ctx: ReifierEvalContext<'_, G>,
+) -> Result<Vec<ValidationResult>, String> {
     let ReifierEvalContext {
         store,
         focus,
@@ -220,10 +265,10 @@ fn eval_reifier_shapes<G: ShaclDataGraph>(ctx: ReifierEvalContext<'_, G>) -> Vec
         path_term,
     } = ctx;
     if ps.reifier_shapes.is_empty() && !ps.reification_required {
-        return vec![];
+        return Ok(vec![]);
     }
     let Path::Predicate(predicate) = &ps.path else {
-        return vec![];
+        return Ok(vec![]);
     };
 
     let source_roles = with_cbox_role(source_roles);
@@ -237,12 +282,13 @@ fn eval_reifier_shapes<G: ShaclDataGraph>(ctx: ReifierEvalContext<'_, G>) -> Vec
             let mut result = ValidationResult {
                 focus_node: focus.clone(),
                 result_path: Some(path_term.clone()),
+                path_structure: None,
                 value: Some(triple_term.clone()),
                 source_constraint_component: NamedNode::from(
                     sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
                 ),
                 source_shape: ps_as_shape.id.clone(),
-                severity: ps.severity,
+                severity: ps.severity.clone(),
                 message: ps.message.clone(),
                 source_box_roles: vec![],
                 path_box_roles: vec![],
@@ -256,7 +302,7 @@ fn eval_reifier_shapes<G: ShaclDataGraph>(ctx: ReifierEvalContext<'_, G>) -> Vec
 
         for reifier in &reifiers {
             for reifier_shape in &ps.reifier_shapes {
-                let inner_results = validate_shape(store, reifier, reifier_shape);
+                let inner_results = validate_shape(store, reifier, reifier_shape)?;
                 if inner_results.is_empty() {
                     continue;
                 }
@@ -264,12 +310,13 @@ fn eval_reifier_shapes<G: ShaclDataGraph>(ctx: ReifierEvalContext<'_, G>) -> Vec
                     let mut result = ValidationResult {
                         focus_node: focus.clone(),
                         result_path: Some(path_term.clone()),
+                        path_structure: None,
                         value: Some(triple_term.clone()),
                         source_constraint_component: NamedNode::from(
                             sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: inner.source_shape.clone(),
-                        severity: inner.severity,
+                        severity: inner.severity.clone(),
                         message: inner
                             .message
                             .clone()
@@ -288,7 +335,7 @@ fn eval_reifier_shapes<G: ShaclDataGraph>(ctx: ReifierEvalContext<'_, G>) -> Vec
             }
         }
     }
-    results
+    Ok(results)
 }
 
 fn triple_term(focus: &Term, predicate: &NamedNode, value: &Term) -> Option<Term> {
@@ -321,12 +368,10 @@ fn reifiers_for<G: ShaclDataGraph>(store: &G, triple_term: &Term) -> Vec<Term> {
 }
 
 fn path_box_roles<G: ShaclDataGraph>(store: &G, path: &Path) -> Vec<NamedNode> {
-    let predicate = match path {
-        Path::Predicate(predicate) => predicate,
-        Path::Inverse(inner) => match inner.as_ref() {
-            Path::Predicate(predicate) => predicate,
-            Path::Inverse(_) => return vec![],
-        },
+    // Composite paths key their role lookup on the first reachable predicate —
+    // the same representative the report's `result_path` approximation uses.
+    let Some(predicate) = path::primary_predicate(path) else {
+        return vec![];
     };
     let predicate_term = Term::NamedNode(predicate.clone());
     let box_role = Term::NamedNode(NamedNode::from(purrdf::GRAPH_BOX_ROLE));
@@ -378,9 +423,13 @@ fn eval_constraint<G: ShaclDataGraph>(
     constraint: &Constraint,
     path: Option<&Path>,
     shape: &Shape,
-) -> Vec<ValidationResult> {
+) -> Result<Vec<ValidationResult>, String> {
     let result_path = path.map(path::path_to_term);
-    let severity = shape.severity;
+    // The full SHACL path structure travels alongside a COMPLEX result path
+    // (its result_path term is a deterministic blank node) so the report
+    // serialization can emit the spec-mandated structure.
+    let path_structure: Option<Path> = path.filter(|p| !matches!(p, Path::Predicate(_))).cloned();
+    let severity = shape.severity.clone();
     let message = shape.message.clone();
     let source_shape = shape.id.clone();
 
@@ -392,10 +441,11 @@ fn eval_constraint<G: ShaclDataGraph>(
                     .cloned()
                     .unwrap_or_else(|| source_shape.clone()),
                 result_path: result_path.clone(),
+                path_structure: path_structure.clone(),
                 value: $value,
                 source_constraint_component: NamedNode::from($component),
                 source_shape: source_shape.clone(),
-                severity,
+                severity: severity.clone(),
                 message: message.clone(),
                 source_box_roles: vec![],
                 path_box_roles: vec![],
@@ -407,10 +457,11 @@ fn eval_constraint<G: ShaclDataGraph>(
             ValidationResult {
                 focus_node: $focus,
                 result_path: result_path.clone(),
+                path_structure: path_structure.clone(),
                 value: $value,
                 source_constraint_component: NamedNode::from($component),
                 source_shape: source_shape.clone(),
-                severity,
+                severity: severity.clone(),
                 message: message.clone(),
                 source_box_roles: vec![],
                 path_box_roles: vec![],
@@ -420,7 +471,7 @@ fn eval_constraint<G: ShaclDataGraph>(
         };
     }
 
-    match constraint {
+    Ok(match constraint {
         // ── Count constraints (operate on the SET) ─────────────────────────────
         Constraint::MinCount(n) => {
             let count = value_nodes.len() as u64;
@@ -458,12 +509,13 @@ fn eval_constraint<G: ShaclDataGraph>(
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(
                             sh::CLASS_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -487,12 +539,13 @@ fn eval_constraint<G: ShaclDataGraph>(
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(
                             sh::DATATYPE_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -516,12 +569,13 @@ fn eval_constraint<G: ShaclDataGraph>(
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(
                             sh::NODE_KIND_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -545,10 +599,11 @@ fn eval_constraint<G: ShaclDataGraph>(
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(sh::IN_CONSTRAINT_COMPONENT),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -571,6 +626,7 @@ fn eval_constraint<G: ShaclDataGraph>(
                 vec![ValidationResult {
                     focus_node: focus,
                     result_path,
+                    path_structure,
                     value: None,
                     source_constraint_component: NamedNode::from(
                         sh::HAS_VALUE_CONSTRAINT_COMPONENT,
@@ -619,12 +675,13 @@ fn eval_constraint<G: ShaclDataGraph>(
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(
                             sh::PATTERN_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -653,12 +710,13 @@ fn eval_constraint<G: ShaclDataGraph>(
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(
                             sh::MIN_LENGTH_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -687,12 +745,13 @@ fn eval_constraint<G: ShaclDataGraph>(
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(
                             sh::MAX_LENGTH_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -716,12 +775,13 @@ fn eval_constraint<G: ShaclDataGraph>(
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(
                             sh::LANGUAGE_IN_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -742,14 +802,15 @@ fn eval_constraint<G: ShaclDataGraph>(
                 .unwrap_or_else(|| source_shape.clone());
             for value in value_nodes {
                 // Violation iff the value node DOES conform to the negated shape.
-                if conforms(store, value, inner_shape) {
+                if conforms(store, value, inner_shape)? {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(sh::NOT_CONSTRAINT_COMPONENT),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -789,12 +850,13 @@ fn eval_constraint<G: ShaclDataGraph>(
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: None,
                         source_constraint_component: NamedNode::from(
                             sh::UNIQUE_LANG_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message
                             .clone()
                             .or_else(|| Some(format!("duplicate language tag: {lang}"))),
@@ -811,27 +873,27 @@ fn eval_constraint<G: ShaclDataGraph>(
 
         // ── MinInclusive / MaxInclusive (per value node) ───────────────────────
         Constraint::MinInclusive(bound) => {
-            let bound_num = numeric_value(bound);
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
                 .cloned()
                 .unwrap_or_else(|| source_shape.clone());
             for value in value_nodes {
-                let violates = match (numeric_value(value), &bound_num) {
-                    (Some(v), Some(b)) => v < *b,
-                    _ => true,
-                };
+                let violates = !matches!(
+                    range_facet_cmp(value, bound),
+                    Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+                );
                 if violates {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(
                             sh::MIN_INCLUSIVE_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -843,27 +905,27 @@ fn eval_constraint<G: ShaclDataGraph>(
             results
         }
         Constraint::MaxInclusive(bound) => {
-            let bound_num = numeric_value(bound);
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
                 .cloned()
                 .unwrap_or_else(|| source_shape.clone());
             for value in value_nodes {
-                let violates = match (numeric_value(value), &bound_num) {
-                    (Some(v), Some(b)) => v > *b,
-                    _ => true,
-                };
+                let violates = !matches!(
+                    range_facet_cmp(value, bound),
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                );
                 if violates {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(
                             sh::MAX_INCLUSIVE_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -877,27 +939,27 @@ fn eval_constraint<G: ShaclDataGraph>(
 
         // ── MinExclusive / MaxExclusive (per value node) ───────────────────────
         Constraint::MinExclusive(bound) => {
-            let bound_num = numeric_value(bound);
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
                 .cloned()
                 .unwrap_or_else(|| source_shape.clone());
             for value in value_nodes {
-                let violates = match (numeric_value(value), &bound_num) {
-                    (Some(v), Some(b)) => v <= *b,
-                    _ => true,
-                };
+                let violates = !matches!(
+                    range_facet_cmp(value, bound),
+                    Some(std::cmp::Ordering::Greater)
+                );
                 if violates {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(
                             sh::MIN_EXCLUSIVE_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -909,27 +971,27 @@ fn eval_constraint<G: ShaclDataGraph>(
             results
         }
         Constraint::MaxExclusive(bound) => {
-            let bound_num = numeric_value(bound);
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
                 .cloned()
                 .unwrap_or_else(|| source_shape.clone());
             for value in value_nodes {
-                let violates = match (numeric_value(value), &bound_num) {
-                    (Some(v), Some(b)) => v >= *b,
-                    _ => true,
-                };
+                let violates = !matches!(
+                    range_facet_cmp(value, bound),
+                    Some(std::cmp::Ordering::Less)
+                );
                 if violates {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(
                             sh::MAX_EXCLUSIVE_CONSTRAINT_COMPONENT,
                         ),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -949,15 +1011,22 @@ fn eval_constraint<G: ShaclDataGraph>(
                 .cloned()
                 .unwrap_or_else(|| source_shape.clone());
             for value in value_nodes {
-                let all_conform = members.iter().all(|m| conforms(store, value, m));
+                let mut all_conform = true;
+                for member in members {
+                    if !conforms(store, value, member)? {
+                        all_conform = false;
+                        break;
+                    }
+                }
                 if !all_conform {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(sh::AND_CONSTRAINT_COMPONENT),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -977,15 +1046,22 @@ fn eval_constraint<G: ShaclDataGraph>(
                 .cloned()
                 .unwrap_or_else(|| source_shape.clone());
             for value in value_nodes {
-                let any_conforms = members.iter().any(|m| conforms(store, value, m));
+                let mut any_conforms = false;
+                for member in members {
+                    if conforms(store, value, member)? {
+                        any_conforms = true;
+                        break;
+                    }
+                }
                 if !any_conforms {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(sh::OR_CONSTRAINT_COMPONENT),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -1005,15 +1081,21 @@ fn eval_constraint<G: ShaclDataGraph>(
                 .cloned()
                 .unwrap_or_else(|| source_shape.clone());
             for value in value_nodes {
-                let count = members.iter().filter(|m| conforms(store, value, m)).count();
+                let mut count = 0usize;
+                for member in members {
+                    if conforms(store, value, member)? {
+                        count += 1;
+                    }
+                }
                 if count != 1 {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(sh::XONE_CONSTRAINT_COMPONENT),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
@@ -1033,20 +1115,139 @@ fn eval_constraint<G: ShaclDataGraph>(
                 .cloned()
                 .unwrap_or_else(|| source_shape.clone());
             for value in value_nodes {
-                if !conforms(store, value, inner_shape) {
+                if !conforms(store, value, inner_shape)? {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
+                        path_structure: path_structure.clone(),
                         value: Some(value.clone()),
                         source_constraint_component: NamedNode::from(sh::NODE_CONSTRAINT_COMPONENT),
                         source_shape: source_shape.clone(),
-                        severity,
+                        severity: severity.clone(),
                         message: message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
                         result_box_roles: vec![],
                         attributions: vec![],
                     });
+                }
+            }
+            results
+        }
+
+        // ── Property-pair constraints (§4.3): compare the value nodes against
+        //    the objects of the given predicate from the SAME focus node. ──────
+        Constraint::Equals(pred) => {
+            let others = pair_values(store, focus_node, pred);
+            let mut offending: Vec<Term> = Vec::new();
+            let mut seen: HashSet<Term> = HashSet::new();
+            // Value nodes missing from the predicate's objects…
+            for v in value_nodes {
+                if !others.contains(v) && seen.insert(v.clone()) {
+                    offending.push(v.clone());
+                }
+            }
+            // …and predicate objects missing from the value nodes.
+            for o in &others {
+                if !value_nodes.contains(o) && seen.insert(o.clone()) {
+                    offending.push(o.clone());
+                }
+            }
+            offending
+                .into_iter()
+                .map(|value| {
+                    result!(
+                        sh::EQUALS_CONSTRAINT_COMPONENT,
+                        focus_node.clone(),
+                        Some(value)
+                    )
+                })
+                .collect()
+        }
+        Constraint::Disjoint(pred) => {
+            let others = pair_values(store, focus_node, pred);
+            let mut results = Vec::new();
+            for v in value_nodes {
+                if others.contains(v) {
+                    results.push(result!(
+                        sh::DISJOINT_CONSTRAINT_COMPONENT,
+                        focus_node.clone(),
+                        Some(v.clone())
+                    ));
+                }
+            }
+            results
+        }
+        Constraint::LessThan(pred) => {
+            pair_order_offenders(store, focus_node, value_nodes, pred, false)
+                .into_iter()
+                .map(|value| {
+                    result!(
+                        sh::LESS_THAN_CONSTRAINT_COMPONENT,
+                        focus_node.clone(),
+                        Some(value)
+                    )
+                })
+                .collect()
+        }
+        Constraint::LessThanOrEquals(pred) => {
+            pair_order_offenders(store, focus_node, value_nodes, pred, true)
+                .into_iter()
+                .map(|value| {
+                    result!(
+                        sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT,
+                        focus_node.clone(),
+                        Some(value)
+                    )
+                })
+                .collect()
+        }
+
+        // ── Qualified value shapes (§4.5.4–4.5.5) ──────────────────────────────
+        Constraint::QualifiedValueShape {
+            shape: qshape,
+            siblings,
+            min_count,
+            max_count,
+            disjoint,
+        } => {
+            // A value node counts iff it conforms to the qualified shape AND —
+            // under sibling disjointness — conforms to NO sibling qualified shape.
+            let mut count = 0u64;
+            for v in value_nodes {
+                if !conforms(store, v, qshape)? {
+                    continue;
+                }
+                let mut sibling_conforms = false;
+                if *disjoint {
+                    for sibling in siblings {
+                        if conforms(store, v, sibling)? {
+                            sibling_conforms = true;
+                            break;
+                        }
+                    }
+                }
+                if !sibling_conforms {
+                    count += 1;
+                }
+            }
+            let mut results = Vec::new();
+            if let Some(min) = min_count {
+                if count < *min {
+                    results.push(result!(
+                        sh::QUALIFIED_MIN_COUNT_CONSTRAINT_COMPONENT,
+                        focus_node.clone(),
+                        None
+                    ));
+                }
+            }
+            if let Some(max) = max_count {
+                if count > *max {
+                    results.push(result!(
+                        sh::QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT,
+                        focus_node.clone(),
+                        None
+                    ));
                 }
             }
             results
@@ -1059,7 +1260,10 @@ fn eval_constraint<G: ShaclDataGraph>(
         //
         // The constraint blank node may carry its own sh:message / sh:severity;
         // those override the shape-level defaults at eval time.
-        // SELECT-form is enforced at shape-load (shapes.rs rejects non-SELECT), so the only Err here is an impossible-by-construction runtime failure; .expect() documents that invariant.
+        // SELECT-form and the SHACL-SPARQL pre-binding restrictions are enforced
+        // at shape-load (shapes.rs); a residual evaluation failure (a construct
+        // the native engine cannot execute) is surfaced as a hard validation
+        // error rather than a panic.
         // The native SPARQL engine runs the validated query text over the dataset,
         // substituting $this for this focus node (SparqlRequest.substitutions).
         Constraint::Sparql {
@@ -1067,20 +1271,42 @@ fn eval_constraint<G: ShaclDataGraph>(
             message: cmsg,
             severity: csev,
         } => {
-            let sev = csev.unwrap_or(severity);
+            let sev = csev.clone().unwrap_or_else(|| severity.clone());
             let msg = cmsg.clone().or_else(|| message.clone());
+            // SHACL-SPARQL §5.3.2: on a property shape, the `$PATH` placeholder
+            // stands for the shape's path in SPARQL surface syntax.
+            let query = substitute_path_placeholder(select, path);
             crate::sparql::eval_sparql_constraint(
                 &store.sparql_dataset(),
                 focus_node,
-                select,
+                &query,
                 &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
                 &source_shape,
-                sev,
+                &sev,
                 msg.as_ref(),
             )
-            .expect("sh:sparql query execution failed (parseability checked at parse time)")
+            .map_err(|e| format!("sh:sparql constraint on shape {source_shape}: {e}"))?
         }
+    })
+}
+
+/// Replace the SHACL-SPARQL `$PATH` / `?PATH` placeholder with the property
+/// shape's path rendered in SPARQL property-path surface syntax. A node-shape
+/// constraint (`path == None`) and a query without the placeholder pass
+/// through unchanged.
+fn substitute_path_placeholder(select: &str, path: Option<&Path>) -> String {
+    static PATH_PLACEHOLDER: OnceLock<regex::Regex> = OnceLock::new();
+    let Some(path) = path else {
+        return select.to_owned();
+    };
+    let re = PATH_PLACEHOLDER
+        .get_or_init(|| regex::Regex::new(r"[$?]PATH\b").expect("static regex is valid"));
+    if !re.is_match(select) {
+        return select.to_owned();
     }
+    let rendered = path::path_to_sparql(path);
+    re.replace_all(select, regex::NoExpand(&rendered))
+        .into_owned()
 }
 
 // ── Helper functions ───────────────────────────────────────────────────────────
@@ -1158,36 +1384,33 @@ fn is_xsd_double_lexical(s: &str) -> bool {
 
 /// Check that a `Term` satisfies `sh:datatype` requirements.
 ///
-/// - Must be a `Literal` whose datatype matches `dt_iri`.
-/// - On an exact datatype-IRI match, additionally validates the lexical form for
-///   common XSD types (xsd:integer unbounded, xsd:decimal no scientific notation,
-///   xsd:double/float, xsd:boolean).
-/// - Oxigraph canonicalizes XSD derived integer types to `xsd:integer` in the
-///   store at load time (e.g. `"1"^^xsd:nonNegativeInteger` becomes
-///   `"1"^^xsd:integer`), which would break the exact-IRI match. When the shape
-///   requires such a derived type and the stored literal carries the canonical
-///   base, accept iff the lexical value lies in the derived type's value space.
-///   This matches pySHACL's spec-correct result. See #598.
+/// - Must be a `Literal` whose datatype IRI matches `dt_iri` EXACTLY (spec
+///   §4.1.2: sh:datatype compares the rdf:type of the literal, so a
+///   `"55"^^xsd:integer` value violates a shape requiring `xsd:byte` even
+///   though 55 fits in a byte — W3C `core/property/datatype-ill-formed`).
+/// - On the exact match, additionally validates the lexical form for common
+///   XSD types (xsd:integer unbounded, xsd:decimal no scientific notation,
+///   xsd:double/float, xsd:boolean), and for a DERIVED integer type validates
+///   the VALUE space: the native codec keeps `"-2"^^xsd:nonNegativeInteger`
+///   faithfully typed, but the value is outside the derived range and must
+///   violate (see #598 / corpus case 32).
 fn check_datatype(value: &Term, dt_iri: &NamedNode) -> bool {
     let Term::Literal(lit) = value else {
         return false;
     };
     let stored_dt = lit.datatype();
     let lex = lit.value();
-    if stored_dt.as_str() == dt_iri.as_str() {
-        // Exact datatype-IRI match. For the primitive types validate the lexical
-        // form; for a DERIVED integer type the literal is faithfully typed (the
-        // native value space does not normalize it to xsd:integer the way oxigraph
-        // did), so additionally validate the VALUE space — a `"-2"^^nonNegativeInteger`
-        // is lexically an integer but out of the derived type's range and must
-        // violate. `XSD_INTEGER` is the canonical fold target the value-space check
-        // keys on, so check the stored value against xsd:integer first.
-        if is_derived_integer_type(dt_iri.as_str()) {
-            return derived_integer_matches(XSD_INTEGER, dt_iri.as_str(), lex);
-        }
-        return xsd_lexical_valid(dt_iri.as_str(), lex);
+    if stored_dt.as_str() != dt_iri.as_str() {
+        return false;
     }
-    derived_integer_matches(stored_dt.as_str(), dt_iri.as_str(), lex)
+    // Exact datatype-IRI match. For the primitive types validate the lexical
+    // form; for a DERIVED integer type additionally validate the VALUE space.
+    // `XSD_INTEGER` is the canonical fold target the value-space check keys
+    // on, so check the stored value against xsd:integer first.
+    if is_derived_integer_type(dt_iri.as_str()) {
+        return derived_integer_matches(XSD_INTEGER, dt_iri.as_str(), lex);
+    }
+    xsd_lexical_valid(dt_iri.as_str(), lex)
 }
 
 /// The XSD integer-derived datatype IRIs whose VALUE space is narrower than
@@ -1359,10 +1582,150 @@ fn numeric_value(term: &Term) -> Option<f64> {
     }
 }
 
+/// Value-space comparison for the range facets (`sh:minInclusive`,
+/// `sh:maxInclusive`, `sh:minExclusive`, `sh:maxExclusive`):
+///
+/// - two numeric literals compare by numeric value ([`numeric_value`], the
+///   full XSD numeric lattice);
+/// - two temporal literals (`xsd:dateTime` / `xsd:date` / `xsd:time`) compare
+///   in the XSD VALUE space via `purrdf-xsd` — a timezone-carrying value
+///   against a timezone-less one follows the ±14:00 rule, whose indeterminate
+///   overlap is `None`;
+/// - anything else is incomparable → `None`, which every facet treats as a
+///   violation (per spec, a value that cannot be compared to the bound fails).
+fn range_facet_cmp(value: &Term, bound: &Term) -> Option<std::cmp::Ordering> {
+    if let (Some(v), Some(b)) = (numeric_value(value), numeric_value(bound)) {
+        return v.partial_cmp(&b);
+    }
+    temporal_value_cmp(value, bound)
+}
+
+/// XSD temporal value-space comparison of two literals, `None` when either
+/// term is not an `xsd:dateTime`/`xsd:date`/`xsd:time` literal, when a lexical
+/// form is invalid, or when the XSD partial order is indeterminate.
+fn temporal_value_cmp(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
+    const TEMPORAL: [&str; 3] = [
+        "http://www.w3.org/2001/XMLSchema#dateTime",
+        "http://www.w3.org/2001/XMLSchema#date",
+        "http://www.w3.org/2001/XMLSchema#time",
+    ];
+    let (Term::Literal(la), Term::Literal(lb)) = (a, b) else {
+        return None;
+    };
+    if !TEMPORAL.contains(&la.datatype_str()) || !TEMPORAL.contains(&lb.datatype_str()) {
+        return None;
+    }
+    let va = purrdf_xsd::parse_by_iri(la.value(), la.datatype_str()).ok()??;
+    let vb = purrdf_xsd::parse_by_iri(lb.value(), lb.datatype_str()).ok()??;
+    purrdf_xsd::value_cmp(&va, &vb)
+}
+
 /// Term equality: two terms are equal iff their string representations match
 /// (oxigraph's `PartialEq` does the right thing for typed literals).
 fn terms_equal(a: &Term, b: &Term) -> bool {
     a == b
+}
+
+/// The distinct objects of `(focus, pred, ?)` in the default graph, first-seen
+/// order — the "other" side of a property-pair constraint (§4.3).
+fn pair_values<G: ShaclDataGraph>(store: &G, focus: &Term, pred: &NamedNode) -> Vec<Term> {
+    let predicate = Term::NamedNode(pred.clone());
+    let mut out: Vec<Term> = Vec::new();
+    let mut seen: HashSet<Term> = HashSet::new();
+    for quad in store.quads_for_pattern(
+        Some(focus),
+        Some(&predicate),
+        None,
+        GraphFilter::DefaultGraph,
+    ) {
+        if seen.insert(quad.object.clone()) {
+            out.push(quad.object);
+        }
+    }
+    out
+}
+
+/// The value nodes violating `sh:lessThan` (`allow_equal = false`) or
+/// `sh:lessThanOrEquals` (`allow_equal = true`) against the objects of `pred`
+/// from the same focus node.
+///
+/// Per spec §4.3.3–4.3.4 a result exists for every offending `(value, other)`
+/// pair; since a result records only the value node, offending pairs collapse
+/// to one result per distinct offending value node (first-seen order). An
+/// incomparable pair (per SPARQL `<` semantics) is a violation.
+fn pair_order_offenders<G: ShaclDataGraph>(
+    store: &G,
+    focus: &Term,
+    value_nodes: &[Term],
+    pred: &NamedNode,
+    allow_equal: bool,
+) -> Vec<Term> {
+    let others = pair_values(store, focus, pred);
+    let mut offending: Vec<Term> = Vec::new();
+    let mut seen: HashSet<Term> = HashSet::new();
+    for v in value_nodes {
+        for o in &others {
+            let ok = match compare_terms(v, o) {
+                Some(std::cmp::Ordering::Less) => true,
+                Some(std::cmp::Ordering::Equal) => allow_equal,
+                Some(std::cmp::Ordering::Greater) | None => false,
+            };
+            if !ok && seen.insert(v.clone()) {
+                offending.push(v.clone());
+            }
+        }
+    }
+    offending
+}
+
+/// SPARQL-style `<` comparison of two terms, as used by `sh:lessThan` /
+/// `sh:lessThanOrEquals` (and the same value machinery as the range facets):
+///
+/// - two numeric literals compare by numeric value ([`numeric_value`] — the
+///   full XSD numeric lattice);
+/// - two plain/`xsd:string` literals compare by codepoint order;
+/// - two `xsd:boolean` literals compare with `false < true`;
+/// - two temporal literals of the SAME datatype (`xsd:dateTime`, `xsd:date`,
+///   `xsd:time`) compare lexically — faithful for the canonical same-timezone
+///   forms the engine ingests;
+/// - anything else (language-tagged literals, IRIs, blank nodes, mixed
+///   datatypes) is incomparable → `None`, which the pair constraints treat as a
+///   violation per spec.
+fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
+    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+    const TEMPORAL: [&str; 3] = [
+        "http://www.w3.org/2001/XMLSchema#dateTime",
+        "http://www.w3.org/2001/XMLSchema#date",
+        "http://www.w3.org/2001/XMLSchema#time",
+    ];
+
+    if let (Some(x), Some(y)) = (numeric_value(a), numeric_value(b)) {
+        return x.partial_cmp(&y);
+    }
+    let (Term::Literal(la), Term::Literal(lb)) = (a, b) else {
+        return None;
+    };
+    // SPARQL `<` is undefined for language-tagged literals.
+    if la.language().is_some() || lb.language().is_some() {
+        return None;
+    }
+    let (da, db) = (la.datatype_str(), lb.datatype_str());
+    if da == XSD_STRING && db == XSD_STRING {
+        return Some(la.value().cmp(lb.value()));
+    }
+    if da == XSD_BOOLEAN && db == XSD_BOOLEAN {
+        let bool_of = |lex: &str| match lex.trim() {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => None,
+        };
+        return Some(bool_of(la.value())?.cmp(&bool_of(lb.value())?));
+    }
+    if da == db && TEMPORAL.contains(&da) {
+        return Some(la.value().cmp(lb.value()));
+    }
+    None
 }
 
 /// Build a compiled `Regex` from a pattern string and optional `sh:flags` string.
@@ -1507,10 +1870,12 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 path: Path::Predicate(NamedNode::new_unchecked(path_iri)),
                 constraints,
+                property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
                 message: None,
+                deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
@@ -1518,6 +1883,18 @@ mod tests {
             deactivated: false,
             box_roles: vec![],
         }
+    }
+
+    /// Result-unwrapping shim over [`super::validate_shape`]: the in-crate
+    /// tests exercise only infallible constraint paths, so a hard validation
+    /// error is a test bug. (An explicitly-defined item shadows the glob
+    /// import from `use super::*`.)
+    fn validate_shape<G: ShaclDataGraph>(
+        store: &G,
+        focus: &Term,
+        shape: &Shape,
+    ) -> Vec<ValidationResult> {
+        super::validate_shape(store, focus, shape).expect("constraint evaluation must not error")
     }
 
     fn load_store(ttl: &str) -> IrDataGraph {
@@ -1585,10 +1962,12 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
                 constraints: vec![Constraint::MinCount(1)],
+                property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
                 message: None,
+                deactivated: false,
                 box_roles: vec![named_role(purrdf::BOX_CONFIG_BOX)],
             }],
             severity: Severity::Violation,
@@ -1639,10 +2018,12 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
                 constraints: vec![],
+                property_shapes: vec![],
                 reifier_shapes: vec![reifier_shape],
                 reification_required: false,
                 severity: Severity::Violation,
                 message: None,
+                deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
@@ -2376,10 +2757,12 @@ mod tests {
                     format!("{EX}parent"),
                 )))),
                 constraints: vec![Constraint::MinCount(1)],
+                property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
                 message: None,
+                deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
@@ -2407,10 +2790,12 @@ mod tests {
                     format!("{EX}parent"),
                 )))),
                 constraints: vec![Constraint::MinCount(1)],
+                property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
                 message: None,
+                deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
@@ -2637,10 +3022,12 @@ mod tests {
             .map(|p| PropertyShape {
                 path: Path::Predicate(NamedNode::new_unchecked(*p)),
                 constraints: vec![],
+                property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
                 message: None,
+                deactivated: false,
                 box_roles: vec![],
             })
             .collect();
@@ -2658,15 +3045,36 @@ mod tests {
 
     #[test]
     fn closed_pass_only_declared_predicates() {
-        // ex:a uses only ex:name (declared) and rdf:type (always allowed).
+        // ex:a uses only ex:name (declared) and rdf:type (listed in
+        // sh:ignoredProperties — per spec §4.8.1 / W3C closed-001, rdf:type is
+        // NOT implicitly permitted; closed shapes must ignore it explicitly).
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . @prefix rdf: <{RDF}> . ex:a a ex:Person ; ex:name \"Al\" ."
+        ));
+        let shape = closed_shape(
+            vec![NamedNode::new_unchecked(rdf::TYPE)],
+            &[&format!("{EX}name")],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert!(
+            results.is_empty(),
+            "declared + explicitly-ignored predicates ⇒ pass"
+        );
+    }
+
+    #[test]
+    fn closed_fail_rdf_type_not_implicitly_ignored() {
+        // Without rdf:type in sh:ignoredProperties, a typed focus node
+        // violates the closed shape ON rdf:type (W3C closed-001).
         let store = load_store(&format!(
             "@prefix ex: <{EX}> . @prefix rdf: <{RDF}> . ex:a a ex:Person ; ex:name \"Al\" ."
         ));
         let shape = closed_shape(vec![], &[&format!("{EX}name")]);
         let results = validate_shape(&store, &ex("a"), &shape);
-        assert!(
-            results.is_empty(),
-            "only declared/rdf:type predicates ⇒ pass"
+        assert_eq!(results.len(), 1, "rdf:type must be reported");
+        assert_eq!(
+            results[0].result_path.as_ref().map(ToString::to_string),
+            Some(format!("<{}>", rdf::TYPE))
         );
     }
 
@@ -2724,5 +3132,355 @@ mod tests {
         );
         let results = validate_shape(&store, &ex("a"), &shape);
         assert!(results.is_empty(), "ignored predicate ex:age ⇒ pass");
+    }
+
+    // ── Property-pair constraints (§4.3) ───────────────────────────────────────
+
+    fn pair_pred(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}{local}"))
+    }
+
+    #[test]
+    fn equals_pass_when_value_sets_match() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:p \"x\" , \"y\" ; ex:q \"y\" , \"x\" ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Equals(pair_pred("q"))],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn equals_fail_reports_both_directions() {
+        // ex:p has "x" (missing from ex:q); ex:q has "z" (missing from ex:p).
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:p \"x\" ; ex:q \"z\" ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Equals(pair_pred("q"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 2, "one result per asymmetric value");
+        assert!(component_iri(&results)
+            .iter()
+            .all(|c| c.contains("EqualsConstraintComponent")));
+        let values: Vec<String> = results
+            .iter()
+            .map(|r| r.value.as_ref().unwrap().to_string())
+            .collect();
+        assert!(values.contains(&"\"x\"".to_owned()));
+        assert!(values.contains(&"\"z\"".to_owned()));
+    }
+
+    #[test]
+    fn disjoint_pass_and_fail() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:p \"x\" , \"shared\" ; ex:q \"shared\" ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Disjoint(pair_pred("q"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1, "only the shared value violates");
+        assert!(component_iri(&results)[0].contains("DisjointConstraintComponent"));
+        assert_eq!(
+            results[0].value.as_ref().unwrap().to_string(),
+            "\"shared\"".to_owned()
+        );
+
+        let store_ok = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:p \"x\" ; ex:q \"y\" ."
+        ));
+        assert!(validate_shape(&store_ok, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn less_than_numeric_literals() {
+        // start=10 is NOT less than end=5 → violation carrying the value node.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:start \"10\"^^<{XSD}integer> ; ex:end \"5\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}start"),
+            vec![Constraint::LessThan(pair_pred("end"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("LessThanConstraintComponent"));
+        assert_eq!(
+            results[0].value.as_ref().unwrap().to_string(),
+            format!("\"10\"^^<{XSD}integer>")
+        );
+
+        // start=3 < end=5 → conforms.
+        let store_ok = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:start \"3\"^^<{XSD}integer> ; ex:end \"5\"^^<{XSD}integer> ."
+        ));
+        assert!(validate_shape(&store_ok, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn less_than_equal_values_violate_but_lte_passes() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:start \"5\"^^<{XSD}integer> ; ex:end \"5\"^^<{XSD}integer> ."
+        ));
+        let lt_shape = prop_shape(
+            "S",
+            &format!("{EX}start"),
+            vec![Constraint::LessThan(pair_pred("end"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &lt_shape);
+        assert_eq!(results.len(), 1, "5 < 5 is false → lessThan violates");
+
+        let lte_shape = prop_shape(
+            "S",
+            &format!("{EX}start"),
+            vec![Constraint::LessThanOrEquals(pair_pred("end"))],
+        );
+        assert!(
+            validate_shape(&store, &ex("a"), &lte_shape).is_empty(),
+            "5 <= 5 → lessThanOrEquals passes"
+        );
+    }
+
+    #[test]
+    fn less_than_string_literals_compare_lexically() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:start \"apple\" ; ex:end \"banana\" ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}start"),
+            vec![Constraint::LessThan(pair_pred("end"))],
+        );
+        assert!(
+            validate_shape(&store, &ex("a"), &shape).is_empty(),
+            "\"apple\" < \"banana\" lexically"
+        );
+    }
+
+    #[test]
+    fn less_than_incomparable_pair_violates() {
+        // An IRI value cannot be compared to an integer → violation per spec.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:start ex:thing ; ex:end \"5\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}start"),
+            vec![Constraint::LessThan(pair_pred("end"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1, "incomparable pair must violate");
+    }
+
+    #[test]
+    fn compare_terms_covers_the_value_lattice() {
+        use std::cmp::Ordering;
+        // Mixed numeric datatypes compare by value.
+        assert_eq!(
+            compare_terms(&xsd_lit("2", "integer"), &xsd_lit("2.5", "decimal")),
+            Some(Ordering::Less)
+        );
+        // Booleans: false < true.
+        assert_eq!(
+            compare_terms(&xsd_lit("false", "boolean"), &xsd_lit("true", "boolean")),
+            Some(Ordering::Less)
+        );
+        // Same-datatype dateTime compares lexically (ISO 8601).
+        assert_eq!(
+            compare_terms(
+                &xsd_lit("2024-01-01T00:00:00", "dateTime"),
+                &xsd_lit("2025-01-01T00:00:00", "dateTime")
+            ),
+            Some(Ordering::Less)
+        );
+        // Language-tagged literals are incomparable under SPARQL `<`.
+        let lang = Term::Literal(Literal::new_language_tagged_literal_unchecked("a", "en"));
+        assert_eq!(compare_terms(&lang, &lang), None);
+        // IRIs are incomparable.
+        assert_eq!(compare_terms(&ex("x"), &ex("y")), None);
+    }
+
+    // ── Qualified value shapes (§4.5.4–4.5.5) ──────────────────────────────────
+
+    fn qualified_constraint(
+        class_local: &str,
+        siblings: Vec<Shape>,
+        min_count: Option<u64>,
+        max_count: Option<u64>,
+        disjoint: bool,
+    ) -> Constraint {
+        Constraint::QualifiedValueShape {
+            shape: Box::new(shape_with(
+                "Q",
+                vec![Constraint::Class(NamedNode::new_unchecked(format!(
+                    "{EX}{class_local}"
+                )))],
+            )),
+            siblings,
+            min_count,
+            max_count,
+            disjoint,
+        }
+    }
+
+    #[test]
+    fn qualified_min_count_pass_and_fail() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:item ex:i1 , ex:i2 . ex:i1 a ex:Good ."
+        ));
+        // One value node (ex:i1) conforms to [sh:class ex:Good].
+        let pass = prop_shape(
+            "S",
+            &format!("{EX}item"),
+            vec![qualified_constraint("Good", vec![], Some(1), None, false)],
+        );
+        assert!(validate_shape(&store, &ex("a"), &pass).is_empty());
+
+        let fail = prop_shape(
+            "S",
+            &format!("{EX}item"),
+            vec![qualified_constraint("Good", vec![], Some(2), None, false)],
+        );
+        let results = validate_shape(&store, &ex("a"), &fail);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("QualifiedMinCountConstraintComponent"));
+        assert!(
+            results[0].value.is_none(),
+            "count violations carry no value"
+        );
+    }
+
+    #[test]
+    fn qualified_max_count_fail() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:item ex:i1 , ex:i2 . ex:i1 a ex:Good . ex:i2 a ex:Good ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}item"),
+            vec![qualified_constraint("Good", vec![], None, Some(1), false)],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("QualifiedMaxCountConstraintComponent"));
+    }
+
+    #[test]
+    fn qualified_disjoint_excludes_sibling_conforming_values() {
+        // The thumb is typed BOTH ex:Thumb and ex:Finger. Without disjointness
+        // the Thumb-qualified count is 1; with a Finger sibling and
+        // disjoint=true the thumb is excluded → count 0 → violation.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:hand ex:digit ex:thumb . ex:thumb a ex:Thumb , ex:Finger ."
+        ));
+        let finger_sibling = shape_with(
+            "FingerQ",
+            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+                "{EX}Finger"
+            )))],
+        );
+
+        let without_disjoint = prop_shape(
+            "S",
+            &format!("{EX}digit"),
+            vec![qualified_constraint("Thumb", vec![], Some(1), None, false)],
+        );
+        assert!(
+            validate_shape(&store, &ex("hand"), &without_disjoint).is_empty(),
+            "without disjointness the thumb counts"
+        );
+
+        let with_disjoint = prop_shape(
+            "S",
+            &format!("{EX}digit"),
+            vec![qualified_constraint(
+                "Thumb",
+                vec![finger_sibling],
+                Some(1),
+                None,
+                true,
+            )],
+        );
+        let results = validate_shape(&store, &ex("hand"), &with_disjoint);
+        assert_eq!(
+            results.len(),
+            1,
+            "sibling-conforming thumb is excluded before counting"
+        );
+        assert!(component_iri(&results)[0].contains("QualifiedMinCountConstraintComponent"));
+    }
+
+    // ── Shape metadata: deactivated property shape, severity, message ──────────
+
+    #[test]
+    fn deactivated_property_shape_produces_no_results() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a a ex:Thing ."));
+        let shape = Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                constraints: vec![Constraint::MinCount(1)],
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Violation,
+                message: None,
+                deactivated: true,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            message: None,
+            deactivated: false,
+            box_roles: vec![],
+        };
+        assert!(
+            validate_shape(&store, &ex("a"), &shape).is_empty(),
+            "a deactivated property shape validates nothing"
+        );
+    }
+
+    #[test]
+    fn property_shape_severity_and_message_propagate() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a a ex:Thing ."));
+        let shape = Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                constraints: vec![Constraint::MinCount(1)],
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Info,
+                message: Some("p is recommended".to_owned()),
+                deactivated: false,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            message: None,
+            deactivated: false,
+            box_roles: vec![],
+        };
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].severity,
+            Severity::Info,
+            "the property shape's severity overrides the parent's"
+        );
+        assert_eq!(results[0].message.as_deref(), Some("p is recommended"));
     }
 }

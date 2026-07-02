@@ -45,6 +45,42 @@ impl Default for EvalOptions {
     }
 }
 
+/// The caller-supplied **standpoint predicate table** read by `purrdf:heldIn` and
+/// by loss-aware `CONSTRUCT`.
+///
+/// `heldIn(reifier, standpoint)` interprets *domain* predicates that live in the
+/// caller's ontology and data — the annotation predicate binding a reifier to its
+/// vantage standpoint (`according_to`) and the materialized poset edge
+/// (`sharpens`). Those are NOT part of the engine: there is **no built-in
+/// default**, and evaluating `heldIn` without a configured table is a hard
+/// [`crate::EvalError`] (never a silently-wrong answer against fabricated IRIs).
+///
+/// Callers supply their own vocabulary, e.g. the published purrdf carrier
+/// vocabulary (`https://blackcatinformatics.ca/purrdf/accordingTo` /
+/// `…/sharpens`) or the gmeow ontology's
+/// (`https://blackcatinformatics.ca/gmeow/accordingTo` / `…/sharpens`), via
+/// [`crate::NativeSparqlEngine::with_standpoint_predicates`] (engine-level) or
+/// [`EvalCtx::with_standpoint_predicates`] (a directly-built context).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StandpointPredicates {
+    /// The annotation predicate whose objects are a reifier's vantage
+    /// standpoint(s) (e.g. `…/accordingTo`).
+    pub according_to: String,
+    /// The direct (already-materialized) "is more specific than" poset edge
+    /// between standpoints (e.g. `…/sharpens`).
+    pub sharpens: String,
+}
+
+impl StandpointPredicates {
+    /// A table from the caller's two predicate IRIs.
+    pub fn new(according_to: impl Into<String>, sharpens: impl Into<String>) -> Self {
+        Self {
+            according_to: according_to.into(),
+            sharpens: sharpens.into(),
+        }
+    }
+}
+
 /// A hashable key for an `EXISTS` inner-cache entry: the inner pattern's address
 /// (stable for the immutable AST during a query), a compact encoding of the active
 /// graph, and a fingerprint of the **outer schema**. The schema fingerprint is part
@@ -127,6 +163,13 @@ pub struct EvalCtx<'d> {
     pub rng_state: u64,
     /// Tunable evaluation behavior (see [`EvalOptions`]). Production default.
     pub options: EvalOptions,
+    /// The caller-supplied standpoint predicate table (see
+    /// [`StandpointPredicates`]) read by `purrdf:heldIn` and loss-aware
+    /// `CONSTRUCT`. `None` (the default) means no table is configured:
+    /// `heldIn` then hard-errors and `CONSTRUCT` cannot attribute a dropped
+    /// annotation to a standpoint scope — deliberately, since these are domain
+    /// predicates from the caller's ontology, never engine defaults.
+    pub standpoint_predicates: Option<StandpointPredicates>,
     /// Memoized `EXISTS`/`NOT EXISTS` inner patterns **and their probe index**
     /// ([`ExistsInner`]), keyed by [`ExistsCacheKey`]. The inner eval and the index
     /// over it are outer-row-independent, so this turns `expr::exists`'s per-row
@@ -177,6 +220,7 @@ impl core::fmt::Debug for EvalCtx<'_> {
             .field("now", &self.now)
             .field("rng_state", &self.rng_state)
             .field("options", &self.options)
+            .field("standpoint_predicates", &self.standpoint_predicates)
             .finish_non_exhaustive()
     }
 }
@@ -196,6 +240,7 @@ impl<'d> EvalCtx<'d> {
             now: now_val,
             rng_state: rng_seed,
             options: EvalOptions::default(),
+            standpoint_predicates: None,
             exists_inner_cache: DetHashMap::default(),
             exists_expr_vars_cache: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
@@ -216,6 +261,15 @@ impl<'d> EvalCtx<'d> {
     #[must_use]
     pub fn with_rng_seed(mut self, seed: u64) -> Self {
         self.rng_state = seed;
+        self
+    }
+
+    /// Supply the caller's standpoint predicate table (see
+    /// [`StandpointPredicates`]) for `purrdf:heldIn` and loss-aware `CONSTRUCT`.
+    /// Without it, `heldIn` is a hard evaluation error.
+    #[must_use]
+    pub fn with_standpoint_predicates(mut self, predicates: StandpointPredicates) -> Self {
+        self.standpoint_predicates = Some(predicates);
         self
     }
 

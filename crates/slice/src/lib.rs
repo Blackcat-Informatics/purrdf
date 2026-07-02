@@ -21,11 +21,10 @@ pub mod prefix_lint;
 pub mod rdf_query;
 pub mod standpoint_emit;
 pub mod standpoint_modality;
+pub mod vocab;
 
 pub use analysis::{
     bundle_content_id, emit_analysis_graph, is_forbidden_edge, AnalysisError, AnalysisGraph,
-    ANALYSIS_GRAPH_IRI, COMPUTED_PROFILE_MEMBERSHIP, COMPUTED_SLICE_DEPENDENCY,
-    DEPENDENCY_EVIDENCE, DEPENDENCY_STATUS, TERM_COVERAGE,
 };
 pub use artifact::{ArtifactRecord, ArtifactRole};
 pub use cache::{
@@ -44,7 +43,8 @@ pub use ownership::{
     OwnershipDiagnostic, OwnershipReport, OwnershipStatus, ReconciliationStatus, SliceIri,
     TermOwnership,
 };
-pub use prefix_emit::{emit_core_prefixes, emit_jsonld_context, CORE_PREFIXES_IRI};
+pub use prefix_emit::{emit_core_prefixes, emit_jsonld_context};
 pub use prefix_lint::lint_prefix_consistency;
 pub use rdf_query::NamedNode;
 pub use standpoint_emit::emit_standpoint_sets;
+pub use vocab::SliceVocab;

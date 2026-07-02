@@ -51,9 +51,6 @@ const LOGIC_PROJECTION_LOSS: &str = "https://blackcatinformatics.ca/logic/Projec
 const LOGIC_LOSS_CODE: &str = "https://blackcatinformatics.ca/logic/lossCode";
 /// `logic:lostReifies` — object is the triple term whose reification was dropped.
 const LOGIC_LOST_REIFIES: &str = "https://blackcatinformatics.ca/logic/lostReifies";
-/// `purrdf:accordingTo` — a dropped annotation under this predicate also loses the
-/// standpoint scope.
-const PURRDF_ACCORDING_TO: &str = "https://blackcatinformatics.ca/purrdf/accordingTo";
 
 /// Evaluate a `CONSTRUCT` query to a frozen IR dataset.
 ///
@@ -77,7 +74,17 @@ pub(crate) fn eval_construct(
     // ONCE, before the row loop. With no `rdf:reifies` pattern in the WHERE the set
     // is empty and the per-row emission below is skipped entirely — the output is
     // byte-identical to today's plain CONSTRUCT.
-    let dropped = collect_dropped_reifiers(template, pattern);
+    //
+    // Standpoint attribution reads the SAME caller-supplied predicate table as
+    // `purrdf:heldIn` (see [`crate::eval::StandpointPredicates`]): with no table
+    // configured, a dropped annotation cannot be attributed to a standpoint scope
+    // and only the generic annotation-layer loss code is emitted — the engine never
+    // fabricates a default domain predicate.
+    let standpoint_according_to: Option<String> = ctx
+        .standpoint_predicates
+        .as_ref()
+        .map(|p| p.according_to.clone());
+    let dropped = collect_dropped_reifiers(template, pattern, standpoint_according_to.as_deref());
 
     // Identify which template triple indices are reifier declarations
     // (predicate == rdf:reifies, object == TermPattern::Triple).  This scan is
@@ -178,7 +185,9 @@ struct DroppedReifier {
     /// `true` if the `WHERE` also matched annotation triples on this reifier var
     /// (a triple whose subject is the reifier var, other than the reifies edge).
     has_annotation: bool,
-    /// `true` if one of those dropped annotation predicates is `purrdf:accordingTo`.
+    /// `true` if one of those dropped annotation predicates is the caller's
+    /// configured standpoint `according_to` predicate (never true when no
+    /// [`crate::eval::StandpointPredicates`] table is configured).
     has_standpoint: bool,
 }
 
@@ -190,9 +199,14 @@ struct DroppedReifier {
 /// reifier variable + inner triple-term pattern), then drops the ones whose reifier
 /// variable is absent from the set of all variables mentioned anywhere in the
 /// template. Deterministic: returns the dropped set in `WHERE`-traversal order.
+///
+/// `standpoint_according_to` is the caller-configured standpoint annotation
+/// predicate (from [`crate::eval::StandpointPredicates`]); `None` means no table
+/// is configured and no drop can be attributed a standpoint scope.
 fn collect_dropped_reifiers(
     template: &[TriplePattern],
     pattern: &GraphPattern,
+    standpoint_according_to: Option<&str>,
 ) -> Vec<DroppedReifier> {
     // Collect every BGP triple pattern reachable in the WHERE, in a stable order.
     let mut where_triples: Vec<&TriplePattern> = Vec::new();
@@ -233,7 +247,7 @@ fn collect_dropped_reifiers(
         }
         // Sub-codes: do any WHERE annotation triples key off this dropped reifier
         // var (subject == reifier var, predicate != rdf:reifies)? And is one of
-        // those predicates `purrdf:accordingTo`?
+        // those predicates the configured standpoint `according_to` predicate?
         let mut has_annotation = false;
         let mut has_standpoint = false;
         for tp in &where_triples {
@@ -244,7 +258,7 @@ fn collect_dropped_reifiers(
                 if s.as_str() == reifier_var {
                     has_annotation = true;
                     if let NamedNodePattern::NamedNode(n) = &tp.predicate {
-                        if n.as_str() == PURRDF_ACCORDING_TO {
+                        if standpoint_according_to.is_some_and(|at| n.as_str() == at) {
                             has_standpoint = true;
                         }
                     }
@@ -330,7 +344,8 @@ fn collect_term_pattern_vars(term: &TermPattern, out: &mut BTreeSet<String>) {
 /// ```
 ///
 /// plus the `annotation-layer-dropped` / `standpoint-scope-dropped` sub-codes when
-/// the dropped reifier also lost annotations / a `purrdf:accordingTo` standpoint.
+/// the dropped reifier also lost annotations / a standpoint annotation under the
+/// caller-configured `according_to` predicate.
 /// `<lossNode>` is a DETERMINISTIC blank node whose label is derived purely from the
 /// resolved triple-term content, so identical drops across rows collapse to one node
 /// via the builder's dedup.
@@ -554,7 +569,15 @@ mod tests {
 
     const REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
     const RDF_TYPE_IRI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const ACCORDING_TO: &str = "https://blackcatinformatics.ca/purrdf/accordingTo";
+    /// A pure-fixture (example.org) standpoint vocabulary: the `according_to`
+    /// predicate is caller-supplied configuration, not an engine constant.
+    const ACCORDING_TO: &str = "http://example.org/accordingTo";
+    const SHARPENS: &str = "http://example.org/sharpens";
+
+    /// The fixture's caller-supplied standpoint predicate table.
+    fn ex_standpoints() -> crate::eval::StandpointPredicates {
+        crate::eval::StandpointPredicates::new(ACCORDING_TO, SHARPENS)
+    }
 
     /// A dataset with one reifier `:r rdf:reifies <<( :alice :age 42 )>>`, with two
     /// annotations on `:r` (confidence + accordingTo). The reifier query layer comes
@@ -647,10 +670,12 @@ mod tests {
 
     #[test]
     fn dropped_annotated_reifier_emits_annotation_and_standpoint_codes() {
-        // WHERE binds the reifier, its rdf:reifies edge, an annotation, AND a
-        // purrdf:accordingTo annotation — all keyed off ?r, which the template drops.
+        // WHERE binds the reifier, its rdf:reifies edge, an annotation, AND an
+        // accordingTo annotation — all keyed off ?r, which the template drops. The
+        // standpoint attribution reads the CONFIGURED predicate table (example.org
+        // here), proving the vocabulary flows through configuration, not a const.
         let ds = reified_graph();
-        let mut ctx = EvalCtx::new(&ds);
+        let mut ctx = EvalCtx::new(&ds).with_standpoint_predicates(ex_standpoints());
         let where_pat = GraphPattern::Bgp {
             patterns: vec![
                 TriplePattern {
@@ -687,6 +712,47 @@ mod tests {
         assert_eq!(count_loss_code(&out, LOSS_REIFIER_LAYER_DROPPED), 1);
         assert_eq!(count_loss_code(&out, LOSS_ANNOTATION_LAYER_DROPPED), 1);
         assert_eq!(count_loss_code(&out, LOSS_STANDPOINT_SCOPE_DROPPED), 1);
+    }
+
+    #[test]
+    fn without_a_configured_table_no_standpoint_scope_code_is_emitted() {
+        // The SAME dropped-annotated-reifier shape, but with NO StandpointPredicates
+        // configured: the engine cannot (and must not) guess a domain predicate, so
+        // the generic annotation-layer code is emitted WITHOUT the standpoint sub-code.
+        let ds = reified_graph();
+        let mut ctx = EvalCtx::new(&ds); // no table configured
+        let where_pat = GraphPattern::Bgp {
+            patterns: vec![
+                TriplePattern {
+                    subject: var("r"),
+                    predicate: pred(REIFIES),
+                    object: TermPattern::Triple(Box::new(TriplePattern {
+                        subject: var("s"),
+                        predicate: NamedNodePattern::Variable(Variable::new("p")),
+                        object: var("o"),
+                    })),
+                },
+                TriplePattern {
+                    subject: var("r"),
+                    predicate: pred(ACCORDING_TO),
+                    object: var("stand"),
+                },
+            ],
+        };
+        let template = vec![TriplePattern {
+            subject: var("s"),
+            predicate: NamedNodePattern::Variable(Variable::new("p")),
+            object: var("o"),
+        }];
+        let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
+
+        assert_eq!(count_loss_code(&out, LOSS_REIFIER_LAYER_DROPPED), 1);
+        assert_eq!(count_loss_code(&out, LOSS_ANNOTATION_LAYER_DROPPED), 1);
+        assert_eq!(
+            count_loss_code(&out, LOSS_STANDPOINT_SCOPE_DROPPED),
+            0,
+            "no configured table ⇒ no standpoint attribution"
+        );
     }
 
     #[test]

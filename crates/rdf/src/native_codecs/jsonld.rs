@@ -32,6 +32,8 @@ const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#di
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
+/// The published PurRDF carrier-vocabulary namespace (`vocab/purrdf.ttl`,
+/// served at this IRI). Used as the JSON-LD `@context` `@vocab`.
 const PURRDF_NAMESPACE: &str = "https://blackcatinformatics.ca/purrdf/";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 /// Schema reference for the YAML-LD language-server header when the output is
@@ -42,26 +44,34 @@ const BUNDLED_SCHEMA_REF: &str = "purrdf.schema.json";
 
 /// RDF 1.2 reifier predicate.
 pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-/// PurRDF statement-metadata class.
+/// `purrdf:StatementMetadata` — the neutral fallback reifier class published in
+/// the PurRDF carrier vocabulary (`vocab/purrdf.ttl`, served at
+/// <https://blackcatinformatics.ca/purrdf/>).
 pub const PURRDF_STATEMENT_METADATA: &str =
     "https://blackcatinformatics.ca/purrdf/StatementMetadata";
-/// PurRDF quoted subject property.
+/// `purrdf:qSubject` — the quoted-subject carrier predicate (`vocab/purrdf.ttl`).
 pub const PURRDF_QSUBJECT: &str = "https://blackcatinformatics.ca/purrdf/qSubject";
-/// PurRDF quoted predicate property.
+/// `purrdf:qPredicate` — the quoted-predicate carrier predicate (`vocab/purrdf.ttl`).
 pub const PURRDF_QPREDICATE: &str = "https://blackcatinformatics.ca/purrdf/qPredicate";
-/// PurRDF quoted object property (IRI / blank-node objects).
+/// `purrdf:qObject` — the quoted-object carrier predicate for IRI / blank-node
+/// objects (`vocab/purrdf.ttl`).
 pub const PURRDF_QOBJECT: &str = "https://blackcatinformatics.ca/purrdf/qObject";
-/// PurRDF quoted literal object property.
+/// `purrdf:qObjectLiteral` — the quoted-object carrier predicate for literal
+/// objects (`vocab/purrdf.ttl`).
 pub const PURRDF_QOBJECTLITERAL: &str = "https://blackcatinformatics.ca/purrdf/qObjectLiteral";
 
 /// The statement-metadata reification vocabulary the JSON-LD-star downcast emits.
 ///
-/// Parametric so a consumer ontology supplies its own terms rather than purrdf's
-/// neutral default: purrdf is a namespace-neutral toolkit, but the reified
-/// statement-metadata class/predicates are the CONSUMER's vocabulary (e.g. gmeow's
-/// `gmeow:StatementMetadata` / `gmeow:qSubject`). [`Default`] yields the
-/// `PURRDF_*` IRIs; pass an explicit vocab to [`jsonld_to_statement_metadata_nquads_with`]
-/// / [`yamlld_to_statement_metadata_nquads_with`] to lower into another namespace.
+/// Parametric so a consumer ontology can supply its own terms: the reified
+/// statement-metadata class/predicates are usually the CONSUMER's vocabulary
+/// (e.g. an application's `app:StatementMetadata` / `app:qSubject`).
+/// [`Default`] yields the `PURRDF_*` IRIs — these are the published PurRDF
+/// carrier terms defined in `vocab/purrdf.ttl` (the `qSubject` / `qPredicate` /
+/// `qObject` / `qObjectLiteral` downcast keys plus the neutral
+/// `StatementMetadata` fallback class), so the default is a legitimate,
+/// resolvable vocabulary rather than a fabricated namespace. Pass an explicit
+/// vocab to [`jsonld_to_statement_metadata_nquads_with`] /
+/// [`yamlld_to_statement_metadata_nquads_with`] to lower into another namespace.
 #[derive(Debug, Clone, Copy)]
 pub struct StatementMetadataVocab<'a> {
     /// The reifier's `rdf:type` (the statement-metadata class IRI).

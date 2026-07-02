@@ -23,7 +23,12 @@ use crate::term::{NamedNode, Term};
 // ── Severity ──────────────────────────────────────────────────────────────────
 
 /// SHACL result severity levels, ordered from most to least severe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+///
+/// SHACL permits ANY IRI as an `sh:severity` value (spec §2.1.5); the three
+/// `sh:` severities are only the built-in defaults. A custom severity IRI is
+/// carried verbatim in [`Severity::Other`] so validation reports preserve it
+/// (W3C `core/misc/severity-002`) instead of coercing it to `sh:Violation`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     /// `sh:Violation` — the most severe level.
     Violation,
@@ -31,19 +36,24 @@ pub enum Severity {
     Warning,
     /// `sh:Info` — the least severe level.
     Info,
+    /// Any other severity IRI, preserved verbatim.
+    Other(NamedNode),
 }
 
 impl Severity {
-    /// The `sh:` IRI string for this severity level.
-    pub fn iri(&self) -> &'static str {
+    /// The IRI string for this severity level.
+    pub fn iri(&self) -> &str {
         match self {
             Self::Violation => sh::VIOLATION,
             Self::Warning => sh::WARNING,
             Self::Info => sh::INFO,
+            Self::Other(iri) => iri.as_str(),
         }
     }
 
-    /// Parse a severity from its IRI string, returning `None` if unrecognised.
+    /// Parse one of the three built-in `sh:` severities from its IRI string,
+    /// returning `None` if unrecognised (use [`Severity::Other`] to carry a
+    /// custom severity IRI).
     pub fn from_iri(s: &str) -> Option<Self> {
         match s {
             "http://www.w3.org/ns/shacl#Violation" => Some(Self::Violation),
@@ -62,7 +72,17 @@ pub struct ValidationResult {
     /// The focus node that violated the constraint.
     pub focus_node: Term,
     /// The result path, if the violation is path-scoped.
+    ///
+    /// A plain predicate path is its IRI term; a COMPLEX path (inverse,
+    /// sequence, alternative, closure) is a deterministic blank node whose
+    /// structure is carried in [`ValidationResult::path_structure`] and emitted
+    /// into the report graph by [`ValidationReport::to_ntriples`].
     pub result_path: Option<Term>,
+    /// The full SHACL path behind a complex `result_path` blank node, so the
+    /// report serialization can emit the spec-mandated path structure
+    /// (`[ sh:inversePath … ]`, sequence lists, …). `None` when the result path
+    /// is absent or a plain predicate IRI.
+    pub path_structure: Option<crate::shapes::Path>,
     /// The offending value at the focus node, if applicable.
     pub value: Option<Term>,
     /// The constraint component that produced this result.
@@ -157,6 +177,8 @@ impl ValidationReport {
     /// byte-lenient on language tags, matching the legacy oxigraph serializer.
     pub fn to_ntriples(&self) -> String {
         let mut builder = RdfDatasetBuilder::new();
+        // Complex-path structure roots already emitted (keyed by root label).
+        let mut emitted_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         let report_subj = RdfTerm::blank_node("report");
 
@@ -230,7 +252,9 @@ impl ValidationReport {
                 r.source_shape.to_rdf_term(),
             );
 
-            // sh:resultPath (optional)
+            // sh:resultPath (optional). A complex path is a blank node; its
+            // full SHACL path structure is emitted once per distinct root label
+            // (two results sharing a path share the structure bnodes).
             if let Some(path) = &r.result_path {
                 push_triple(
                     &mut builder,
@@ -238,6 +262,11 @@ impl ValidationReport {
                     sh::RESULT_PATH,
                     path.to_rdf_term(),
                 );
+                if let (Term::BlankNode(label), Some(structure)) = (path, &r.path_structure) {
+                    if emitted_paths.insert(label.clone()) {
+                        emit_path_structure(&mut builder, label, structure);
+                    }
+                }
             }
 
             // sh:value (optional)
@@ -283,7 +312,7 @@ impl ValidationReport {
                     r.value.as_ref().map(ToString::to_string),
                     r.source_constraint_component.to_string(),
                     r.source_shape.to_string(),
-                    r.severity,
+                    r.severity.clone(),
                 )
             })
             .collect()
@@ -300,6 +329,146 @@ fn push_triple(
     object: RdfTerm,
 ) {
     builder.push_owned_quad(&RdfQuad::new(subject, predicate, object));
+}
+
+// ── SHACL path-structure serialization ────────────────────────────────────────
+
+/// Emit the RDF structure of a COMPLEX SHACL path rooted at blank node `label`
+/// (SHACL §2.3.1 path syntax: `[ sh:inversePath … ]`, sequence lists,
+/// `[ sh:alternativePath ( … ) ]`, and the three closure forms). Interior blank
+/// nodes are labelled `{label}-{n}` with a per-root counter, so the emission is
+/// deterministic for a given path.
+fn emit_path_structure(builder: &mut RdfDatasetBuilder, label: &str, path: &crate::shapes::Path) {
+    let mut counter = 0usize;
+    emit_path_node(builder, label, path, label, &mut counter);
+}
+
+/// Allocate the next interior blank-node label under `root`.
+fn next_path_label(root: &str, counter: &mut usize) -> String {
+    let label = format!("{root}-{counter}");
+    *counter += 1;
+    label
+}
+
+/// The RDF term standing for a sub-path: a plain predicate inlines as its IRI;
+/// a composite sub-path becomes a fresh blank node whose structure is emitted
+/// recursively.
+fn path_object(
+    builder: &mut RdfDatasetBuilder,
+    path: &crate::shapes::Path,
+    root: &str,
+    counter: &mut usize,
+) -> RdfTerm {
+    if let crate::shapes::Path::Predicate(p) = path {
+        return RdfTerm::iri(p.as_str());
+    }
+    let label = next_path_label(root, counter);
+    emit_path_node(builder, &label, path, root, counter);
+    RdfTerm::blank_node(label)
+}
+
+/// Emit the structure triples for the composite path node `label`.
+fn emit_path_node(
+    builder: &mut RdfDatasetBuilder,
+    label: &str,
+    path: &crate::shapes::Path,
+    root: &str,
+    counter: &mut usize,
+) {
+    use crate::shapes::Path;
+    match path {
+        // A plain predicate is always inlined by `path_object`; a predicate
+        // root never reaches here (`path_structure` is only set for complex paths).
+        Path::Predicate(_) => {}
+        Path::Inverse(inner) => {
+            let object = path_object(builder, inner, root, counter);
+            push_triple(
+                builder,
+                RdfTerm::blank_node(label),
+                sh::INVERSE_PATH,
+                object,
+            );
+        }
+        Path::ZeroOrMore(inner) => {
+            let object = path_object(builder, inner, root, counter);
+            push_triple(
+                builder,
+                RdfTerm::blank_node(label),
+                sh::ZERO_OR_MORE_PATH,
+                object,
+            );
+        }
+        Path::OneOrMore(inner) => {
+            let object = path_object(builder, inner, root, counter);
+            push_triple(
+                builder,
+                RdfTerm::blank_node(label),
+                sh::ONE_OR_MORE_PATH,
+                object,
+            );
+        }
+        Path::ZeroOrOne(inner) => {
+            let object = path_object(builder, inner, root, counter);
+            push_triple(
+                builder,
+                RdfTerm::blank_node(label),
+                sh::ZERO_OR_ONE_PATH,
+                object,
+            );
+        }
+        // A sequence path IS the RDF list (the list head sits in path position).
+        Path::Sequence(parts) => {
+            emit_path_list(builder, label, parts, root, counter);
+        }
+        // An alternative path wraps its list under sh:alternativePath.
+        Path::Alternative(parts) => {
+            let head = next_path_label(root, counter);
+            push_triple(
+                builder,
+                RdfTerm::blank_node(label),
+                sh::ALTERNATIVE_PATH,
+                RdfTerm::blank_node(head.clone()),
+            );
+            emit_path_list(builder, &head, parts, root, counter);
+        }
+    }
+}
+
+/// Emit an RDF collection of sub-paths with `head_label` as the first cell.
+fn emit_path_list(
+    builder: &mut RdfDatasetBuilder,
+    head_label: &str,
+    parts: &[crate::shapes::Path],
+    root: &str,
+    counter: &mut usize,
+) {
+    let mut cell = head_label.to_owned();
+    for (i, part) in parts.iter().enumerate() {
+        let object = path_object(builder, part, root, counter);
+        push_triple(
+            builder,
+            RdfTerm::blank_node(cell.clone()),
+            rdf::FIRST,
+            object,
+        );
+        if i + 1 == parts.len() {
+            push_triple(
+                builder,
+                RdfTerm::blank_node(cell.clone()),
+                rdf::REST,
+                RdfTerm::iri(rdf::NIL),
+            );
+        } else {
+            let next = next_path_label(root, counter);
+            push_triple(
+                builder,
+                RdfTerm::blank_node(cell),
+                rdf::REST,
+                RdfTerm::blank_node(next.clone()),
+            );
+            cell = next;
+        }
+    }
 }
 
 // ── Round-trip helpers ────────────────────────────────────────────────────────
@@ -353,9 +522,15 @@ pub fn tuples_from_dataset(data: &IrDataGraph) -> BTreeSet<ResultTuple> {
             object_string(data, &result_node, sh::RESULT_SEVERITY).unwrap_or_default();
 
         // Parse severity from the IRI string (strip angle brackets the term
-        // rendering adds for a NamedNode).
+        // rendering adds for a NamedNode). A non-built-in severity IRI is
+        // preserved verbatim (Severity::Other); a missing severity defaults to
+        // sh:Violation.
         let sev_str = severity_iri.trim_matches(|c| c == '<' || c == '>');
-        let severity = Severity::from_iri(sev_str).unwrap_or(Severity::Violation);
+        let severity = if sev_str.is_empty() {
+            Severity::Violation
+        } else {
+            Severity::from_iri(sev_str).unwrap_or_else(|| Severity::Other(NamedNode::from(sev_str)))
+        };
 
         tuples.insert((focus, path, value, component, source_shape, severity));
     }
@@ -410,6 +585,7 @@ mod tests {
             result_path: Some(Term::NamedNode(NamedNode::new_unchecked(
                 "http://example.org/predP",
             ))),
+            path_structure: None,
             value: Some(Term::Literal(Literal::new_simple_literal("bad value"))),
             source_constraint_component: NamedNode::new_unchecked(
                 "http://www.w3.org/ns/shacl#MinCountConstraintComponent",
@@ -510,11 +686,11 @@ mod tests {
     #[test]
     fn severity_iri_round_trip() {
         for sev in [Severity::Violation, Severity::Warning, Severity::Info] {
-            let iri = sev.iri();
-            let parsed = Severity::from_iri(iri);
+            let iri = sev.iri().to_owned();
+            let parsed = Severity::from_iri(&iri);
             assert_eq!(
-                parsed,
-                Some(sev),
+                parsed.as_ref(),
+                Some(&sev),
                 "from_iri(iri()) must round-trip for {sev:?}"
             );
         }
@@ -590,6 +766,7 @@ mod tests {
             focus_node: Term::NamedNode(NamedNode::new_unchecked("http://example.org/subjectX")),
             // minCount: no result_path (not path-scoped here for simplicity).
             result_path: None,
+            path_structure: None,
             // No offending value — absence-based.
             value: None,
             source_constraint_component: NamedNode::new_unchecked(

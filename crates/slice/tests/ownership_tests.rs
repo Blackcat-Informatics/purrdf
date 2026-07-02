@@ -12,10 +12,16 @@ use tempfile::TempDir;
 
 use purrdf_slice::{
     EdgeKind, NamedNode, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipStatus,
-    ReconciliationStatus, SliceCatalog,
+    ReconciliationStatus, SliceCatalog, SliceVocab,
 };
 
-const NS: &str = "https://blackcatinformatics.ca/purrdf/";
+/// Pure fixtures use a caller-supplied example.org vocabulary (the slice
+/// vocabulary is never PurRDF's own).
+const NS: &str = "https://example.org/vocab/";
+
+fn test_vocab() -> SliceVocab {
+    SliceVocab::for_namespace(NS)
+}
 
 // ── Fixture helpers ───────────────────────────────────────────────────────────
 
@@ -27,18 +33,18 @@ fn write(root: &Path, rel: &str, content: &str) {
 }
 
 /// A minimal valid `manifest.ttl` for a slice with the given IRI suffix and
-/// optional `purrdf:sliceDependsOn` targets (IRI suffixes).
+/// optional `vocab:sliceDependsOn` targets (IRI suffixes).
 fn manifest(slice: &str, depends_on: &[&str]) -> String {
     use std::fmt::Write as _;
     let mut deps = String::new();
     for d in depends_on {
-        let _ = writeln!(deps, "    purrdf:sliceDependsOn purrdf:{d} ;");
+        let _ = writeln!(deps, "    vocab:sliceDependsOn vocab:{d} ;");
     }
     format!(
-        "@prefix purrdf: <{NS}> .\n\
+        "@prefix vocab: <{NS}> .\n\
          @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
          @prefix dcterms: <http://purl.org/dc/terms/> .\n\n\
-         purrdf:{slice} a purrdf:Slice ;\n\
+         vocab:{slice} a vocab:Slice ;\n\
          {deps}    rdfs:label \"{slice}\"@x-purrdf-english ;\n\
          dcterms:title \"{slice} slice\"@x-purrdf-english .\n"
     )
@@ -70,11 +76,11 @@ fn single_validated_owner() {
         root,
         "slices/grpA/sliceA/module.ttl",
         &format!(
-            "@prefix purrdf: <{NS}> .\n\
+            "@prefix vocab: <{NS}> .\n\
              @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
              @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n\
-             purrdf:termT a owl:Class ;\n\
-             rdfs:isDefinedBy purrdf:sliceA ;\n\
+             vocab:termT a owl:Class ;\n\
+             rdfs:isDefinedBy vocab:sliceA ;\n\
              rdfs:label \"term T\"@x-purrdf-english .\n"
         ),
     );
@@ -89,16 +95,16 @@ fn single_validated_owner() {
         root,
         "slices/grpB/sliceB/module.ttl",
         &format!(
-            "@prefix purrdf: <{NS}> .\n\
+            "@prefix vocab: <{NS}> .\n\
              @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
              @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n\
-             purrdf:termU a owl:Class ;\n\
-             rdfs:isDefinedBy purrdf:sliceB ;\n\
-             rdfs:subClassOf purrdf:termT .\n"
+             vocab:termU a owl:Class ;\n\
+             rdfs:isDefinedBy vocab:sliceB ;\n\
+             rdfs:subClassOf vocab:termT .\n"
         ),
     );
 
-    let catalog = SliceCatalog::discover(root).unwrap();
+    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     // Exactly ONE validated owner for T.
@@ -147,10 +153,10 @@ fn ownership_conflict() {
         root,
         "slices/grpA/sliceA/module.ttl",
         &format!(
-            "@prefix purrdf: <{NS}> .\n\
+            "@prefix vocab: <{NS}> .\n\
              @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
              @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n\
-             purrdf:termT a owl:Class ; rdfs:isDefinedBy purrdf:sliceA .\n"
+             vocab:termT a owl:Class ; rdfs:isDefinedBy vocab:sliceA .\n"
         ),
     );
     write(
@@ -162,14 +168,14 @@ fn ownership_conflict() {
         root,
         "slices/grpB/sliceB/module.ttl",
         &format!(
-            "@prefix purrdf: <{NS}> .\n\
+            "@prefix vocab: <{NS}> .\n\
              @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
              @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n\
-             purrdf:termT a owl:Class ; rdfs:isDefinedBy purrdf:sliceB .\n"
+             vocab:termT a owl:Class ; rdfs:isDefinedBy vocab:sliceB .\n"
         ),
     );
 
-    let catalog = SliceCatalog::discover(root).unwrap();
+    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     let t = &report.ownership[&nn("termT")];
@@ -195,7 +201,7 @@ fn ownership_mismatch() {
     let root = tmp.path();
 
     // Slice A is the only physical slice, but its module declares term T as
-    // owned by a DIFFERENT/foreign slice IRI (purrdf:sliceElsewhere). The
+    // owned by a DIFFERENT/foreign slice IRI (vocab:sliceElsewhere). The
     // declared owner therefore disagrees with the physical origin (sliceA).
     write(
         root,
@@ -206,14 +212,14 @@ fn ownership_mismatch() {
         root,
         "slices/grpA/sliceA/module.ttl",
         &format!(
-            "@prefix purrdf: <{NS}> .\n\
+            "@prefix vocab: <{NS}> .\n\
              @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
              @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n\
-             purrdf:termT a owl:Class ; rdfs:isDefinedBy purrdf:sliceElsewhere .\n"
+             vocab:termT a owl:Class ; rdfs:isDefinedBy vocab:sliceElsewhere .\n"
         ),
     );
 
-    let catalog = SliceCatalog::discover(root).unwrap();
+    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     let t = &report.ownership[&nn("termT")];
@@ -251,17 +257,17 @@ fn parsed_not_textual_edges() {
         root,
         "slices/grpA/sliceA/module.ttl",
         &format!(
-            "@prefix purrdf: <{NS}> .\n\
+            "@prefix vocab: <{NS}> .\n\
              @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
              @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n\
-             purrdf:termT a owl:Property ; rdfs:isDefinedBy purrdf:sliceA .\n\
-             purrdf:termGhost a owl:Property ; rdfs:isDefinedBy purrdf:sliceA .\n"
+             vocab:termT a owl:Property ; rdfs:isDefinedBy vocab:sliceA .\n\
+             vocab:termGhost a owl:Property ; rdfs:isDefinedBy vocab:sliceA .\n"
         ),
     );
 
     // Slice B has a SPARQL query that:
-    //  - uses purrdf:termT as a predicate (a real term reference), and
-    //  - mentions purrdf:termGhost ONLY inside a string literal (must NOT count).
+    //  - uses vocab:termT as a predicate (a real term reference), and
+    //  - mentions vocab:termGhost ONLY inside a string literal (must NOT count).
     write(
         root,
         "slices/grpB/sliceB/manifest.ttl",
@@ -271,15 +277,15 @@ fn parsed_not_textual_edges() {
         root,
         "slices/grpB/sliceB/queries/competency/q.rq",
         &format!(
-            "PREFIX purrdf: <{NS}>\n\
+            "PREFIX vocab: <{NS}>\n\
              SELECT ?s ?label WHERE {{\n\
-             ?s purrdf:termT ?o .\n\
+             ?s vocab:termT ?o .\n\
              BIND(\"see <{NS}termGhost> for details\" AS ?label)\n\
              }}\n"
         ),
     );
 
-    let catalog = SliceCatalog::discover(root).unwrap();
+    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     // Exactly one B → A query edge, with termT as evidence.
@@ -319,10 +325,10 @@ fn path_independence() {
             root,
             &format!("slices/{group}/sliceA/module.ttl"),
             &format!(
-                "@prefix purrdf: <{NS}> .\n\
+                "@prefix vocab: <{NS}> .\n\
                  @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
                  @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n\
-                 purrdf:termT a owl:Class ; rdfs:isDefinedBy purrdf:sliceA .\n"
+                 vocab:termT a owl:Class ; rdfs:isDefinedBy vocab:sliceA .\n"
             ),
         );
     }
@@ -332,10 +338,10 @@ fn path_independence() {
     build(tmp1.path(), "core");
     build(tmp2.path(), "extensions/deeply/nested");
 
-    let r1 = OwnershipAnalyzer::new(&SliceCatalog::discover(tmp1.path()).unwrap())
+    let r1 = OwnershipAnalyzer::new(&SliceCatalog::discover(tmp1.path(), test_vocab()).unwrap())
         .analyze()
         .unwrap();
-    let r2 = OwnershipAnalyzer::new(&SliceCatalog::discover(tmp2.path()).unwrap())
+    let r2 = OwnershipAnalyzer::new(&SliceCatalog::discover(tmp2.path(), test_vocab()).unwrap())
         .analyze()
         .unwrap();
 
@@ -367,10 +373,10 @@ fn semantic_vs_nonsemantic() {
         root,
         "slices/grpA/sliceA/module.ttl",
         &format!(
-            "@prefix purrdf: <{NS}> .\n\
+            "@prefix vocab: <{NS}> .\n\
              @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
              @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n\
-             purrdf:termT a owl:Class ; rdfs:isDefinedBy purrdf:sliceA .\n"
+             vocab:termT a owl:Class ; rdfs:isDefinedBy vocab:sliceA .\n"
         ),
     );
 
@@ -399,15 +405,15 @@ fn semantic_vs_nonsemantic() {
         root,
         "slices/grpC/sliceC/module.ttl",
         &format!(
-            "@prefix purrdf: <{NS}> .\n\
+            "@prefix vocab: <{NS}> .\n\
              @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
              @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n\
-             purrdf:termC a owl:Class ; rdfs:isDefinedBy purrdf:sliceC ;\n\
-             rdfs:subClassOf purrdf:termT .\n"
+             vocab:termC a owl:Class ; rdfs:isDefinedBy vocab:sliceC ;\n\
+             rdfs:subClassOf vocab:termT .\n"
         ),
     );
 
-    let catalog = SliceCatalog::discover(root).unwrap();
+    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     // The documentation edge B → A (if recorded at all) is NON-semantic and
@@ -476,20 +482,20 @@ fn declared_but_unowned_term() {
     // quote of the Turtle literal and would close the Rust string early).
     let module_ttl = format!(
         concat!(
-            "@prefix purrdf: <{ns}> .\n",
+            "@prefix vocab: <{ns}> .\n",
             "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
             "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n",
-            "purrdf:termWithOwner a owl:Class ;\n",
-            "    rdfs:isDefinedBy purrdf:sliceA ;\n",
+            "vocab:termWithOwner a owl:Class ;\n",
+            "    rdfs:isDefinedBy vocab:sliceA ;\n",
             "    rdfs:label \"owned\"@x-purrdf-english .\n\n",
-            "purrdf:termNoOwner a owl:Class ;\n",
+            "vocab:termNoOwner a owl:Class ;\n",
             "    rdfs:label \"orphan\"@x-purrdf-english .\n",
         ),
         ns = NS,
     );
     write(root, "slices/grpA/sliceA/module.ttl", &module_ttl);
 
-    let catalog = SliceCatalog::discover(root).unwrap();
+    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     // termWithOwner must be Validated.
@@ -544,10 +550,10 @@ fn group_aggregate_iri_reaches_dependency_walk() {
     // extension-function IRI referenced ONLY inside an aggregate expression
     // therefore vanished from the dependency set, creating an invisible build-dep gap.
     //
-    // This test places `purrdf:heldIn` EXCLUSIVELY in the aggregated expression of a
-    // GROUP query (`SUM(purrdf:heldIn(?x))`).  After the fix the dependency edge must
+    // This test places `vocab:heldIn` EXCLUSIVELY in the aggregated expression of a
+    // GROUP query (`SUM(vocab:heldIn(?x))`).  After the fix the dependency edge must
     // carry `heldIn` as evidence; before the fix it would not, and the query edge
-    // might not even appear. (A purrdf: IRI in call position must be a real purrdf
+    // might not even appear. (A vocab: IRI in call position must be a real purrdf
     // extension function; the walker reconstructs its IRI from the closed set.)
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
@@ -562,14 +568,14 @@ fn group_aggregate_iri_reaches_dependency_walk() {
         root,
         "slices/grpA/sliceA/module.ttl",
         &format!(
-            "@prefix purrdf: <{NS}> .\n\
+            "@prefix vocab: <{NS}> .\n\
              @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
              @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n\
-             purrdf:heldIn a owl:ObjectProperty ; rdfs:isDefinedBy purrdf:sliceA .\n"
+             vocab:heldIn a owl:ObjectProperty ; rdfs:isDefinedBy vocab:sliceA .\n"
         ),
     );
 
-    // Slice B's query: grouped query where purrdf:termAggFn appears ONLY inside
+    // Slice B's query: grouped query where vocab:termAggFn appears ONLY inside
     // the aggregated expression of SUM — not as a predicate or IRI in the BGP.
     // Before the fix the Group arm dropped `aggregates` entirely.
     write(
@@ -581,14 +587,14 @@ fn group_aggregate_iri_reaches_dependency_walk() {
         root,
         "slices/grpB/sliceB/queries/competency/agg.rq",
         &format!(
-            "PREFIX purrdf: <{NS}>\n\
-             SELECT ?t (SUM(purrdf:heldIn(?x)) AS ?total) WHERE {{\n\
+            "PREFIX vocab: <{NS}>\n\
+             SELECT ?t (SUM(vocab:heldIn(?x)) AS ?total) WHERE {{\n\
              ?x a ?t .\n\
              }} GROUP BY ?t\n"
         ),
     );
 
-    let catalog = SliceCatalog::discover(root).unwrap();
+    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     // A Query edge from B to A must exist.
@@ -634,10 +640,10 @@ fn query_edge_evidence(query_body: &str, defined_term: &str) -> Vec<NamedNode> {
         root,
         "slices/grpA/sliceA/module.ttl",
         &format!(
-            "@prefix purrdf: <{NS}> .\n\
+            "@prefix vocab: <{NS}> .\n\
              @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
              @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\n\
-             purrdf:{defined_term} a owl:ObjectProperty ; rdfs:isDefinedBy purrdf:sliceA .\n"
+             vocab:{defined_term} a owl:ObjectProperty ; rdfs:isDefinedBy vocab:sliceA .\n"
         ),
     );
     write(
@@ -651,7 +657,7 @@ fn query_edge_evidence(query_body: &str, defined_term: &str) -> Vec<NamedNode> {
         query_body,
     );
 
-    let catalog = SliceCatalog::discover(root).unwrap();
+    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
     let edge = report
         .edges
@@ -673,7 +679,7 @@ fn describe_target_iri_reaches_dependency_walk() {
     // G12: `DESCRIBE <iri>` stores the IRI in `targets`, and the pattern is the
     // empty unit pattern — walking only `pattern` dropped the edge.
     let ev = query_edge_evidence(
-        &format!("PREFIX purrdf: <{NS}>\nDESCRIBE purrdf:describedThing\n"),
+        &format!("PREFIX vocab: <{NS}>\nDESCRIBE vocab:describedThing\n"),
         "describedThing",
     );
     assert!(
@@ -686,11 +692,11 @@ fn describe_target_iri_reaches_dependency_walk() {
 fn order_by_function_iri_reaches_dependency_walk() {
     // G13: a function IRI used only in an ORDER BY key was dropped because the
     // OrderBy arm matched `..` and never walked `expression`. The IRI is the purrdf
-    // extension function purrdf:heldIn (a purrdf: IRI in call position must be a real
+    // extension function vocab:heldIn (a vocab: IRI in call position must be a real
     // purrdf extension function; the walker reconstructs its IRI from the closed set).
     let ev = query_edge_evidence(
         &format!(
-            "PREFIX purrdf: <{NS}>\nSELECT ?x WHERE {{ ?x purrdf:p ?v }} ORDER BY DESC(purrdf:heldIn(?v))\n"
+            "PREFIX vocab: <{NS}>\nSELECT ?x WHERE {{ ?x vocab:p ?v }} ORDER BY DESC(vocab:heldIn(?v))\n"
         ),
         "heldIn",
     );
@@ -706,7 +712,7 @@ fn values_quoted_triple_iri_reaches_dependency_walk() {
     // because the Values arm had no GroundTerm::Triple recursion.
     let ev = query_edge_evidence(
         &format!(
-            "PREFIX purrdf: <{NS}>\nSELECT ?t WHERE {{ VALUES ?t {{ <<( purrdf:qs purrdf:quotedPred purrdf:qo )>> }} }}\n"
+            "PREFIX vocab: <{NS}>\nSELECT ?t WHERE {{ VALUES ?t {{ <<( vocab:qs vocab:quotedPred vocab:qo )>> }} }}\n"
         ),
         "quotedPred",
     );
@@ -735,11 +741,11 @@ fn malformed_artifact_hard_fails_analysis() {
     write(
         root,
         "slices/grpA/sliceA/module.ttl",
-        "@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .\n\
-         purrdf:Broken a purrdf:Class  <<< not turtle at all ;;;\n",
+        "@prefix vocab: <https://example.org/vocab/> .\n\
+         vocab:Broken a vocab:Class  <<< not turtle at all ;;;\n",
     );
 
-    let catalog = SliceCatalog::discover(root).unwrap();
+    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
     let result = OwnershipAnalyzer::new(&catalog).analyze();
     assert!(
         result.is_err(),
