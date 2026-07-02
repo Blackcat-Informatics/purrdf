@@ -46,7 +46,7 @@ serde_json = { workspace = true }
 # Shared PyO3-free RDF 1.2 kernel and native GTS/text-codec boundary (#648).
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.
-purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.2.0" }
+purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.2.1" }
 
 [dev-dependencies]
 purrdf-gts = { workspace = true }
