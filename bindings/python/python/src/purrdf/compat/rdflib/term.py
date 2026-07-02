@@ -287,7 +287,12 @@ def _daytime_duration_to_timedelta(lexical: str) -> datetime.timedelta | str:
     ``isodate``; without it we keep the lexical form, so those are not handled here.
     """
     match = _DAYTIME_DURATION_RE.match(lexical)
-    if match is None or match.group(0) == "P":
+    # A bare ``P``/``-P`` (no day count, no ``T`` time section at all) has no
+    # duration component whatsoever and is ill-typed per RDFLib/isodate — unlike
+    # e.g. ``PT`` or ``PT0S``, which isodate accepts as a zero duration. Falling
+    # through for the bare form would silently coerce it to ``timedelta(0)``
+    # instead of keeping the lexical string, as RDFLib does.
+    if match is None or match.group(0) == match.group("sign") + "P":
         return lexical
     days = int(match.group("days") or 0)
     hours = int(match.group("hours") or 0)

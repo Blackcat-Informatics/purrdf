@@ -39,6 +39,9 @@ _WELL_FORMED = [
     ("P1DT2H30M", "dayTimeDuration"),
     ("PT5S", "dayTimeDuration"),
     ("-P1D", "dayTimeDuration"),
+    ("PT", "dayTimeDuration"),
+    ("PT1H30M", "dayTimeDuration"),
+    ("P2DT3H", "dayTimeDuration"),
     ("48656C6C6F", "hexBinary"),
     ("SGVsbG8=", "base64Binary"),
     ("http://example.org/x", "anyURI"),
@@ -69,6 +72,8 @@ def test_topython_breadth_matches_oracle(
         ("notadate", "date"),
         ("ZZ", "hexBinary"),
         ("25:00:00", "time"),
+        ("P", "dayTimeDuration"),
+        ("-P", "dayTimeDuration"),
     ],
 )
 def test_topython_illformed_falls_back_to_lexical(
@@ -93,6 +98,41 @@ def test_daytime_duration_is_timedelta(compat: ModuleType) -> None:
     """``xsd:dayTimeDuration`` maps to a ``datetime.timedelta`` (rdflib parity)."""
     value = _lit(compat, "P1DT2H", XSD + "dayTimeDuration").toPython()
     assert value == datetime.timedelta(days=1, hours=2)
+
+
+@pytest.mark.parametrize(
+    ("lexical", "expected"),
+    [
+        ("PT1H30M", datetime.timedelta(hours=1, minutes=30)),
+        ("P2DT3H", datetime.timedelta(days=2, hours=3)),
+        ("PT", datetime.timedelta(0)),
+    ],
+)
+def test_daytime_duration_well_formed_values(
+    compat: ModuleType, lexical: str, expected: datetime.timedelta
+) -> None:
+    """A well-formed day/time duration — including the all-zero ``PT`` form — yields
+    the matching ``timedelta``, never a stringly-typed fallback.
+    """
+    literal = _lit(compat, lexical, XSD + "dayTimeDuration")
+    value = literal.toPython()
+    assert value == expected
+    assert isinstance(value, datetime.timedelta)
+
+
+@pytest.mark.parametrize("lexical", ["P", "-P"])
+def test_daytime_duration_bare_form_falls_back_to_lexical(
+    compat: ModuleType, lexical: str
+) -> None:
+    """A bare ``P``/``-P`` has no duration component at all and is ill-typed: the
+    shim must keep the raw lexical string, not silently coerce it to a zero
+    ``timedelta``.
+    """
+    literal = _lit(compat, lexical, XSD + "dayTimeDuration")
+    value = literal.toPython()
+    assert value == lexical
+    assert not isinstance(value, datetime.timedelta)
+    assert str(literal) == lexical
 
 
 # ── ill_typed ───────────────────────────────────────────────────────────────────
