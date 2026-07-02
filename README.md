@@ -132,9 +132,14 @@ quads = purrdf.parse(
     purrdf.RdfFormat.TURTLE,
 )
 
-from purrdf_native import shacl
+from purrdf_native import shacl, shex
+
 report = shacl.validate(shapes_ttl=my_shapes, data_nt=my_data)
 print(report["conforms"])
+
+result = shex.validate(my_schema_shexc, my_data_ttl,
+                       [("https://example.org/alice", "https://example.org/PersonShape")])
+print(result["conforms"])
 ```
 
 The Python package also ships an [rdflib compatibility layer](./bindings/python/python/src/purrdf/compat/rdflib/)

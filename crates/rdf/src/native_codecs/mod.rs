@@ -46,6 +46,10 @@ mod rdfxml;
 
 pub use media_type::{classify, NativeRdfFormat};
 pub use parse::parse_dataset;
+// Bench/test-only sequential baseline for the chunk-parallel N-Triples/N-Quads path;
+// hidden, unstable, not public API.
+#[doc(hidden)]
+pub use parse::parse_dataset_forced_sequential;
 pub use serialize::{
     serialize_dataset, serialize_dataset_base_only, serialize_dataset_to_format, SerializeOutcome,
 };

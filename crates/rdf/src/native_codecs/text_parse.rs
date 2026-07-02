@@ -36,6 +36,7 @@
 use std::collections::HashMap;
 
 use purrdf_sparql_algebra::lexer::{tokenize, tokenize_turtle, Spanned, Token};
+use rayon::prelude::*;
 
 use super::media_type::NativeRdfFormat;
 use super::ser_model::{SerGraph, SerTerm, SerTermKind, SerTriple3};
@@ -74,18 +75,39 @@ enum Node {
     Triple(Box<Self>, Box<Self>, Box<Self>),
 }
 
+/// Line-family execution mode: `Auto` routes N-Triples/N-Quads inputs at or above
+/// [`PARALLEL_MIN_BYTES`] through the chunk-parallel phase-1 tokenizer;
+/// `ForceSequential` pins the single-pass pipeline (the bench baseline and the
+/// determinism-proof tests compare the two — the outputs are byte-identical).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LineParseMode {
+    /// Pick parallel above the size threshold, sequential below it.
+    Auto,
+    /// Always take the single-threaded pipeline, whatever the input size.
+    ForceSequential,
+}
+
 /// Parse RDF text of one of the four line/Turtle-family `format`s into the first-party
 /// in-memory [`SerGraph`] that the downstream statement-layer fold consumes. Mirrors the
 /// `from_*` structure exactly (see the module note) so the resulting IR is byte-identical
 /// to the prior purrdf-gts path, with the UCHAR-in-IRI gap fixed.
-pub(super) fn parse_to_gts_graph(
+///
+/// The mode applies ONLY to N-Triples / N-Quads: those grammars are newline-delimited
+/// with no cross-line state, so line-aligned chunks can be tokenized+parsed in
+/// parallel and re-joined in document order. Turtle / TriG stay sequential BY DESIGN —
+/// `@prefix` / `@base` directives rebind mid-document (a later line's meaning depends
+/// on every earlier directive) and anonymous blank nodes / reifiers mint labels from a
+/// document-ordered counter, so a chunk cannot be parsed without the full prefix and
+/// counter state of everything before it.
+pub(super) fn parse_to_gts_graph_mode(
     format: NativeRdfFormat,
     text: &str,
     base_iri: Option<&str>,
+    mode: LineParseMode,
 ) -> Result<SerGraph, RdfDiagnostic> {
     let statements = match format {
-        NativeRdfFormat::NTriples => parse_lines(text, false)?,
-        NativeRdfFormat::NQuads => parse_lines(text, true)?,
+        NativeRdfFormat::NTriples => parse_lines(text, false, mode)?,
+        NativeRdfFormat::NQuads => parse_lines(text, true, mode)?,
         NativeRdfFormat::Turtle => DocParser::new(text, base_iri, false).parse()?,
         NativeRdfFormat::TriG => DocParser::new(text, base_iri, true).parse()?,
         NativeRdfFormat::RdfXml => {
@@ -102,13 +124,121 @@ pub(super) fn parse_to_gts_graph(
 /// One statement: subject, predicate, object, and (N-Quads) an optional graph name.
 type Statement = Vec<Node>;
 
-/// Parse N-Triples (`allow_graph == false`) / N-Quads (`allow_graph == true`).
+/// Inputs at or above this many bytes take the chunk-parallel phase-1 pipeline.
+///
+/// Rationale: below ~1 MiB the whole parse completes in single-digit milliseconds,
+/// so rayon's fork/join dispatch plus the per-chunk `Vec` staging would cost a
+/// larger fraction of the runtime than the parallelism recovers — and 1 MiB also
+/// guarantees at least four [`PARALLEL_MIN_CHUNK_BYTES`] chunks, so the parallel
+/// path never degenerates into "one chunk plus overhead". Small documents (the
+/// overwhelmingly common conformance / fixture case) keep the sequential path with
+/// ZERO added overhead.
+const PARALLEL_MIN_BYTES: usize = 1 << 20;
+
+/// Smallest line-aligned chunk phase 1 hands a rayon worker (256 KiB). Chunks are
+/// sized `len / (threads * 4)` — enough splits for work-stealing to balance ragged
+/// lines — clamped to [256 KiB, 4 MiB] so tiny chunks never drown in dispatch
+/// overhead and huge ones never serialize the tail. Chunk geometry affects ONLY
+/// scheduling, never output: phase 2 re-joins chunks in document order.
+const PARALLEL_MIN_CHUNK_BYTES: usize = 256 << 10;
+
+/// Largest phase-1 chunk (see [`PARALLEL_MIN_CHUNK_BYTES`]).
+const PARALLEL_MAX_CHUNK_BYTES: usize = 4 << 20;
+
+/// Parse N-Triples (`allow_graph == false`) / N-Quads (`allow_graph == true`),
+/// dispatching on size (see [`PARALLEL_MIN_BYTES`]) unless `mode` pins sequential.
+///
+/// Both paths produce the IDENTICAL statement list: each line is parsed with no
+/// cross-line state, and the parallel path re-joins its chunks in document order, so
+/// the downstream [`build_gts_graph`] interner sees the same statements in the same
+/// order and assigns the same term ids (interning stays the sequential serialization
+/// point). The determinism-proof tests below assert this end to end.
+fn parse_lines(
+    text: &str,
+    allow_graph: bool,
+    mode: LineParseMode,
+) -> Result<Vec<Statement>, RdfDiagnostic> {
+    if mode == LineParseMode::Auto && text.len() >= PARALLEL_MIN_BYTES {
+        return parse_lines_parallel(text, allow_graph);
+    }
+    parse_lines_sequential(text, allow_graph)
+}
+
+/// Split `text` into line-aligned chunks of roughly `target_bytes` each: every chunk
+/// (except possibly the last) ends immediately after a `'\n'`, so concatenating the
+/// chunks' [`str::lines`] streams reproduces `text.lines()` exactly. `'\n'` is ASCII,
+/// so every boundary is a valid UTF-8 char boundary.
+fn split_line_chunks(text: &str, target_bytes: usize) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let target = target_bytes.max(1);
+    let mut chunks = Vec::with_capacity(text.len() / target + 1);
+    let mut start = 0;
+    while start < text.len() {
+        let mut end = start.saturating_add(target).min(text.len());
+        if end < text.len() {
+            end = match bytes[end..].iter().position(|&b| b == b'\n') {
+                Some(offset) => end + offset + 1,
+                None => text.len(),
+            };
+        }
+        chunks.push(&text[start..end]);
+        start = end;
+    }
+    chunks
+}
+
+/// Phase 1 + 2 of the chunk-parallel line parse.
+///
+/// Phase 1 (parallel): rayon maps [`parse_lines_sequential`] over line-aligned chunks
+/// — each chunk's lines are tokenized/parsed independently (the grammar has no
+/// cross-line state) into a per-chunk statement buffer.
+///
+/// Phase 2 (sequential, document order): chunk results are visited IN DOCUMENT ORDER.
+/// The FIRST error in document order wins — chunk results are fully collected before
+/// any is inspected, so a fast-failing late chunk can never race ahead of an earlier
+/// chunk's diagnostic, and each per-line diagnostic is built from the line text alone,
+/// so the message is byte-identical to the sequential path's. Successful chunks
+/// concatenate in order into the exact statement list the sequential pass yields.
+fn parse_lines_parallel(text: &str, allow_graph: bool) -> Result<Vec<Statement>, RdfDiagnostic> {
+    let threads = rayon::current_num_threads().max(1);
+    let target = (text.len() / (threads * 4).max(1))
+        .clamp(PARALLEL_MIN_CHUNK_BYTES, PARALLEL_MAX_CHUNK_BYTES);
+    parse_lines_parallel_with_chunk_size(text, allow_graph, target)
+}
+
+/// [`parse_lines_parallel`] with an explicit chunk size (tests use a tiny size to
+/// force many chunks over small fixtures; chunk geometry never changes the output).
+fn parse_lines_parallel_with_chunk_size(
+    text: &str,
+    allow_graph: bool,
+    target_bytes: usize,
+) -> Result<Vec<Statement>, RdfDiagnostic> {
+    let chunks = split_line_chunks(text, target_bytes);
+    // Phase 1: parallel per-chunk tokenize+parse (on wasm32 rayon runs this inline).
+    let per_chunk: Vec<Result<Vec<Statement>, RdfDiagnostic>> = chunks
+        .par_iter()
+        .map(|chunk| parse_lines_sequential(chunk, allow_graph))
+        .collect();
+    // Phase 2: document order — first error wins, then in-order concatenation.
+    let mut statements = Vec::with_capacity(
+        per_chunk
+            .iter()
+            .map(|r| r.as_ref().map_or(0, Vec::len))
+            .sum(),
+    );
+    for chunk_result in per_chunk {
+        statements.extend(chunk_result?);
+    }
+    Ok(statements)
+}
+
+/// The single-threaded line pipeline (also phase 1's per-chunk worker).
 ///
 /// Line-oriented like the purrdf-gts parser: blank lines and `#`-comment lines are
 /// skipped, every other line is one statement of 3 (NT) or 3-or-4 (NQ) terms. The
 /// `<<( s p o )>>` quoted-triple TERM is admitted in subject (NQ only) and object
 /// position; IRIREFs are UCHAR-decoded (the test060 fix).
-fn parse_lines(text: &str, allow_graph: bool) -> Result<Vec<Statement>, RdfDiagnostic> {
+fn parse_lines_sequential(text: &str, allow_graph: bool) -> Result<Vec<Statement>, RdfDiagnostic> {
     let mut statements = Vec::new();
     for raw in text.lines() {
         let line = raw.trim();
@@ -1499,6 +1629,240 @@ fn set_reifier(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Deterministic synthetic N-Quads with terms REPEATED across chunk boundaries
+    /// (subjects/predicates/graphs cycle through small moduli), blank nodes, plain /
+    /// language-tagged / directional / typed literals, quoted-triple object terms,
+    /// and `rdf:reifies` reifier bindings with annotations — every term shape the
+    /// N-Quads grammar admits, so the parallel-vs-sequential comparison exercises the
+    /// whole interner.
+    fn synthetic_nquads(rows: usize) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::with_capacity(rows * 160);
+        out.push_str("# synthetic determinism fixture\n\n");
+        for i in 0..rows {
+            let g = i % 7;
+            let s = i % 997;
+            let p = i % 13;
+            match i % 6 {
+                0 => writeln!(
+                    out,
+                    "<https://example.org/s{s}> <https://example.org/p{p}> \
+                     <https://example.org/o{}> <https://example.org/g{g}> .",
+                    i % 991
+                ),
+                1 => writeln!(
+                    out,
+                    "_:b{} <https://example.org/knows> _:b{} .",
+                    i % 499,
+                    (i + 1) % 499
+                ),
+                2 => writeln!(
+                    out,
+                    "<https://example.org/s{s}> <https://example.org/label> \"row {i}\"@en ."
+                ),
+                3 => writeln!(
+                    out,
+                    "<https://example.org/s{s}> <https://example.org/title> \
+                     \"\\u0645 {i}\"@ar--rtl <https://example.org/g{g}> ."
+                ),
+                4 => writeln!(
+                    out,
+                    "<https://example.org/s{s}> <https://example.org/count> \
+                     \"{i}\"^^<http://www.w3.org/2001/XMLSchema#integer> ."
+                ),
+                _ => writeln!(
+                    out,
+                    "<https://example.org/s{s}> <https://example.org/asserts> \
+                     <<( <https://example.org/a{}> <https://example.org/p{p}> \
+                     <https://example.org/c{}> )>> .",
+                    i % 89,
+                    i % 83
+                ),
+            }
+            .expect("write row");
+            if i % 100 == 0 {
+                writeln!(
+                    out,
+                    "<https://example.org/r{i}> \
+                     <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+                     <<( <https://example.org/a{}> <https://example.org/p{p}> \
+                     <https://example.org/c{}> )>> .",
+                    i % 89,
+                    i % 83
+                )
+                .expect("write reifier");
+                writeln!(
+                    out,
+                    "<https://example.org/r{i}> <https://example.org/confidence> \
+                     \"0.9\"^^<http://www.w3.org/2001/XMLSchema#decimal> ."
+                )
+                .expect("write annotation");
+            }
+        }
+        out
+    }
+
+    /// The determinism proof: a document ABOVE the parallel threshold parsed through
+    /// the sequential and the (auto-selected) parallel path must be identical at every
+    /// stage — statement list, `SerGraph` term table (interning order = term ids),
+    /// quad/reifier/annotation rows, frozen dataset rows, and the canonical N-Quads
+    /// bytes serialized back out.
+    #[test]
+    fn parallel_line_parse_is_byte_identical_to_sequential() {
+        let text = synthetic_nquads(12_000);
+        assert!(
+            text.len() >= PARALLEL_MIN_BYTES,
+            "fixture ({} bytes) must cross the {PARALLEL_MIN_BYTES}-byte parallel threshold",
+            text.len()
+        );
+
+        let seq = parse_lines_sequential(&text, true).expect("sequential parse");
+        let par = parse_lines(&text, true, LineParseMode::Auto).expect("parallel parse");
+        assert!(seq == par, "statement lists must be identical");
+
+        let graph_seq = build_gts_graph(&seq).expect("sequential graph");
+        let graph_par = build_gts_graph(&par).expect("parallel graph");
+        assert!(
+            graph_seq.terms == graph_par.terms,
+            "term tables (first-seen interning order = ids) must be identical"
+        );
+        assert!(graph_seq.quads == graph_par.quads, "quad rows must match");
+        assert!(
+            graph_seq.reifiers == graph_par.reifiers,
+            "reifier rows must match"
+        );
+        assert!(
+            graph_seq.annotations == graph_par.annotations,
+            "annotation rows must match"
+        );
+
+        let ds_seq = super::super::parse::dataset_from_ser_graph(&graph_seq).expect("freeze seq");
+        let ds_par = super::super::parse::dataset_from_ser_graph(&graph_par).expect("freeze par");
+        assert_eq!(ds_seq.term_count(), ds_par.term_count());
+        assert!(
+            ds_seq.quads().collect::<Vec<_>>() == ds_par.quads().collect::<Vec<_>>(),
+            "frozen quad rows (term ids + order) must be identical"
+        );
+        assert!(
+            ds_seq.reifiers().collect::<Vec<_>>() == ds_par.reifiers().collect::<Vec<_>>(),
+            "frozen reifier rows must be identical"
+        );
+        assert!(
+            ds_seq.annotations().collect::<Vec<_>>() == ds_par.annotations().collect::<Vec<_>>(),
+            "frozen annotation rows must be identical"
+        );
+
+        let bytes_seq = crate::native_codecs::serialize_dataset(
+            &ds_seq,
+            "application/n-quads",
+            crate::SerializeGraph::Dataset,
+        )
+        .expect("serialize seq");
+        let bytes_par = crate::native_codecs::serialize_dataset(
+            &ds_par,
+            "application/n-quads",
+            crate::SerializeGraph::Dataset,
+        )
+        .expect("serialize par");
+        assert!(
+            bytes_seq == bytes_par,
+            "canonical N-Quads bytes must be identical"
+        );
+    }
+
+    /// Chunk geometry (down to a 1-byte target, i.e. one line per chunk) never changes
+    /// the parsed statement list — including across comments, blank lines, CRLF line
+    /// ends, and quoted-triple terms.
+    #[test]
+    fn chunk_geometry_never_changes_output() {
+        let text = "# comment\n\n<https://e/s> <https://e/p> \"a\" .\r\n\
+                    <https://e/s> <https://e/p> \"b\"@en <https://e/g> .\n\
+                    _:b0 <https://e/p> <<( <https://e/x> <https://e/y> <https://e/z> )>> .\n";
+        let expected = parse_lines_sequential(text, true).expect("sequential");
+        for chunk_bytes in [1usize, 7, 16, 64, 4096] {
+            let actual = parse_lines_parallel_with_chunk_size(text, true, chunk_bytes)
+                .expect("parallel parse");
+            assert!(
+                actual == expected,
+                "chunk size {chunk_bytes} must not change the parse"
+            );
+        }
+    }
+
+    /// Line-aligned chunks partition the input exactly: concatenating the chunks
+    /// reproduces the text, and every non-final chunk ends immediately after a `\n`.
+    #[test]
+    fn split_line_chunks_partitions_at_line_boundaries() {
+        let text = "aaa\nbb\n\nccccc\nno-trailing-newline";
+        for target in 1..=text.len() + 1 {
+            let chunks = split_line_chunks(text, target);
+            assert_eq!(chunks.concat(), text, "target {target} must partition");
+            for chunk in &chunks[..chunks.len().saturating_sub(1)] {
+                assert!(
+                    chunk.ends_with('\n'),
+                    "non-final chunk {chunk:?} (target {target}) must end at a line boundary"
+                );
+            }
+        }
+        assert!(split_line_chunks("", 8).is_empty());
+    }
+
+    /// Error semantics: with an invalid line in an EARLY chunk and a different invalid
+    /// line in a LATE chunk, the parallel path must report the earliest document-order
+    /// diagnostic, byte-identical to the sequential path's (no chunk race).
+    #[test]
+    fn first_error_in_document_order_wins_across_chunks() {
+        use std::fmt::Write as _;
+        let mut text = String::new();
+        for i in 0..40 {
+            writeln!(text, "<https://e/s{i}> <https://e/p> <https://e/o{i}> .").expect("write");
+        }
+        text.push_str("<https://e/early-error> <https://e/p> .\n");
+        for i in 40..400 {
+            writeln!(text, "<https://e/s{i}> <https://e/p> <https://e/o{i}> .").expect("write");
+        }
+        text.push_str("this is not rdf\n");
+
+        let seq_err = parse_lines_sequential(&text, true).expect_err("sequential must fail");
+        // A tiny chunk target guarantees the two bad lines land in different chunks.
+        let par_err =
+            parse_lines_parallel_with_chunk_size(&text, true, 256).expect_err("parallel must fail");
+        assert_eq!(
+            par_err, seq_err,
+            "parallel must report the sequential (earliest) diagnostic byte-identically"
+        );
+        assert!(
+            par_err.message.contains("early-error"),
+            "the EARLIER line's diagnostic must win, got: {}",
+            par_err.message
+        );
+    }
+
+    /// The same earliest-error-wins guarantee through the real `Auto` threshold path
+    /// (input above [`PARALLEL_MIN_BYTES`], errors in far-apart chunks).
+    #[test]
+    fn first_error_wins_on_auto_threshold_path() {
+        let mut text = synthetic_nquads(600);
+        text.push_str("<https://e/early-error> <https://e/p> .\n");
+        text.push_str(&synthetic_nquads(12_000));
+        text.push_str("late garbage line\n");
+        text.push_str(&synthetic_nquads(600));
+        assert!(
+            text.len() >= PARALLEL_MIN_BYTES,
+            "fixture must cross the parallel threshold"
+        );
+
+        let seq_err = parse_lines_sequential(&text, true).expect_err("sequential must fail");
+        let par_err =
+            parse_lines(&text, true, LineParseMode::Auto).expect_err("parallel must fail");
+        assert_eq!(par_err, seq_err, "diagnostics must be byte-identical");
+        assert!(
+            par_err.message.contains("early-error"),
+            "the earlier chunk's error must win, got: {}",
+            par_err.message
+        );
+    }
 
     /// A bare `/` in a prefixed-name local part (e.g. `ex:report/shacl/sarif`)
     /// must parse as ONE prefixed name and expand to the prefix namespace plus the

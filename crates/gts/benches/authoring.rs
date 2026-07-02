@@ -11,15 +11,32 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughpu
 
 use purrdf_gts::codec::encode_chain;
 use purrdf_gts::model::{Graph, Term, TermKind};
-use purrdf_gts::writer::{snapshot_from_graph, SnapshotOptions};
+use purrdf_gts::reader::read;
+use purrdf_gts::writer::{snapshot_from_graph, SnapshotOptions, Writer};
 
 const PAYLOAD_LEN: usize = 512 * 1024;
 const ROWS: usize = 2_000;
 
+// Verify-bench container shape: a multi-segment `cat` file whose integrity
+// checks are dominated by BLAKE3 content-id and blob-digest work. Roughly
+// 4 segments x (4 x 2 MiB blobs + 256 term frames) ~= 32 MiB — big enough to
+// exercise the parallel paths, small enough for CI-adjacent runs.
+const VERIFY_SEGMENTS: usize = 4;
+const VERIFY_BLOBS_PER_SEGMENT: usize = 4;
+const VERIFY_BLOB_LEN: usize = 2 * 1024 * 1024;
+const VERIFY_TERM_FRAMES_PER_SEGMENT: usize = 256;
+
 fn deterministic_payload(len: usize) -> Vec<u8> {
+    seeded_payload(len, 0)
+}
+
+fn seeded_payload(len: usize, seed: usize) -> Vec<u8> {
     (0..len)
         .map(|idx| {
-            let value = idx.wrapping_mul(31).wrapping_add(idx / 7);
+            let value = idx
+                .wrapping_mul(31)
+                .wrapping_add(idx / 7)
+                .wrapping_add(seed.wrapping_mul(131));
             value as u8
         })
         .collect()
@@ -102,5 +119,48 @@ fn bench_snapshot_authoring(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_rsyncable_zstd, bench_snapshot_authoring);
+/// Author a synthetic multi-segment container (§3.1 `cat` composition) with
+/// sizeable inline blobs and a long per-segment frame chain.
+fn verify_container() -> Vec<u8> {
+    let mut data = Vec::new();
+    for segment in 0..VERIFY_SEGMENTS {
+        let mut writer = Writer::new("generic");
+        for frame in 0..VERIFY_TERM_FRAMES_PER_SEGMENT {
+            writer.add_terms(&[iri(format!("http://example.org/s{segment}/t{frame}"))]);
+        }
+        for blob in 0..VERIFY_BLOBS_PER_SEGMENT {
+            let payload = seeded_payload(
+                VERIFY_BLOB_LEN,
+                segment * VERIFY_BLOBS_PER_SEGMENT + blob + 1,
+            );
+            writer.add_blob_owned(payload, Some("application/octet-stream"), None);
+        }
+        writer.add_index_with_mmr();
+        data.extend_from_slice(&writer.into_bytes());
+    }
+    data
+}
+
+fn bench_verify(c: &mut Criterion) {
+    let data = verify_container();
+
+    let mut group = c.benchmark_group("gts_verify");
+    group.throughput(Throughput::Bytes(data.len() as u64));
+    group.sample_size(10);
+    group.bench_function("read_multisegment_32mib", |bencher| {
+        bencher.iter(|| {
+            let graph = read(black_box(&data), true, None);
+            assert!(graph.diagnostics.is_empty(), "container must verify clean");
+            black_box(graph);
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_rsyncable_zstd,
+    bench_snapshot_authoring,
+    bench_verify
+);
 criterion_main!(benches);

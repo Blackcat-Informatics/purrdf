@@ -68,6 +68,12 @@ purrdf-sparql-algebra = { workspace = true }
 # edge (the same crate `crates/music` already vendors). Rides the always-on `gts`
 # shipped with the rest of the native codecs.
 roxmltree = { workspace = true }
+# Chunk-parallel N-Triples / N-Quads line parsing (phase 1 of the two-phase parse in
+# `native_codecs::text_parse`): tokenize+parse per line-aligned chunk in parallel,
+# then intern sequentially in document order (byte-identical output). Unconditional —
+# rayon compiles cleanly on wasm32-unknown-unknown and degrades to inline-sequential
+# execution there (same pattern as purrdf-slice's catalog scan).
+rayon = { workspace = true }
 
 # Maintainer-only golden-capture binary (EPIC #906 Task 2/8). Freezes the native
 # SPARQL engine over the corpus as committed goldens under

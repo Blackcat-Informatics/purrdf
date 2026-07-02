@@ -1000,11 +1000,8 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
     // Each segment owns its term-id namespace. Unioning happens after segment
     // folds by semantic term value, which avoids silently treating equal
     // numeric ids from different segments as equal terms.
-    let mut folded: Vec<Graph> = bounds
-        .iter()
-        .zip(ends)
-        .map(|(&a, b)| read_segment_with_sink(&items[a..b], a, 0, None, options.content_key))
-        .collect();
+    let ranges: Vec<(usize, usize)> = bounds.iter().copied().zip(ends).collect();
+    let mut folded = fold_segments(&items, &ranges, options.content_key);
 
     let mut g = if folded.len() == 1 {
         folded.remove(0)
@@ -1484,11 +1481,8 @@ pub fn read_file_segments(data: &[u8]) -> FileSegments {
         };
     }
     let ends = bounds.iter().skip(1).copied().chain([items.len()]);
-    let segments: Vec<Graph> = bounds
-        .iter()
-        .zip(ends)
-        .map(|(&a, b)| read_segment(&items[a..b], a))
-        .collect();
+    let ranges: Vec<(usize, usize)> = bounds.iter().copied().zip(ends).collect();
+    let segments = fold_segments(&items, &ranges, None);
     FileSegments {
         segments,
         torn,
@@ -1496,12 +1490,52 @@ pub fn read_file_segments(data: &[u8]) -> FileSegments {
     }
 }
 
-/// Fold ONE segment (header + frames) into a [`Graph`] (§7.5).
+/// Fold each `(start, end)` segment range independently, in file order.
 ///
-/// `index_offset` is the segment's absolute position in the file's item
-/// sequence, so multi-segment diagnostics report ABSOLUTE indices.
-fn read_segment(items: &[(usize, Value)], index_offset: usize) -> Graph {
-    read_segment_with_sink(items, index_offset, 0, None, None)
+/// Segments have independent integrity (§3.1): each carries its own genesis,
+/// id/prev chain, signatures, and index, so cross-segment verification is
+/// embarrassingly parallel. Folds run on rayon when no content-key resolver is
+/// supplied (the resolver closure is not required to be thread-safe); results
+/// are collected by segment position, so the folded graphs — and every
+/// diagnostic they carry — are identical to a sequential fold regardless of
+/// scheduling. On targets without threads rayon executes inline.
+fn fold_segments(
+    items: &[(usize, Value)],
+    ranges: &[(usize, usize)],
+    content_key: Option<&ContentKeyResolver<'_>>,
+) -> Vec<Graph> {
+    if content_key.is_none() && ranges.len() > 1 {
+        use rayon::prelude::*;
+        ranges
+            .par_iter()
+            .map(|&(a, b)| read_segment_with_sink(&items[a..b], a, 0, None, None))
+            .collect()
+    } else {
+        ranges
+            .iter()
+            .map(|&(a, b)| read_segment_with_sink(&items[a..b], a, 0, None, content_key))
+            .collect()
+    }
+}
+
+/// Recompute every frame's BLAKE3 content id concurrently (§9.1).
+///
+/// Each frame's `"id"` hashes a self-contained byte range, so all frame
+/// hashes are recomputed in parallel and the fold that follows reduces to a
+/// trivial sequential `"prev"`-equality pass — no accumulating dependency
+/// forces single-threaded verification. Ids are collected by frame position
+/// (never thread completion order), keeping every downstream diagnostic in
+/// exact frame order. Non-map items yield `None`; the fold reports their
+/// diagnostics itself.
+fn parallel_content_ids(items: &[(usize, Value)]) -> Vec<Option<Vec<u8>>> {
+    use rayon::prelude::*;
+    items
+        .par_iter()
+        .map(|(_, raw)| match raw {
+            Value::Map(frame) => Some(content_id(frame)),
+            _ => None,
+        })
+        .collect()
 }
 
 fn read_segment_with_sink(
@@ -1564,6 +1598,11 @@ fn read_segment_with_sink(
     // per-frame chain ids, by 0-based frame position
     let mut frame_ids: Vec<Vec<u8>> = Vec::new();
 
+    // §9.1 parallel verification: hash every frame's content id up front,
+    // concurrently; the fold below then walks the chain sequentially with a
+    // cheap `prev`-equality check per frame.
+    let mut computed_ids = parallel_content_ids(&items[1..]);
+
     let (index_records, blob_events, restored_sink) = {
         let catalog = catalog_from(header);
         let mut folder = Folder {
@@ -1592,7 +1631,9 @@ fn read_segment_with_sink(
                 Some(Value::Bytes(b)) => Some(b),
                 _ => None,
             };
-            let computed = content_id(frame);
+            let computed = computed_ids[index]
+                .take()
+                .unwrap_or_else(|| content_id(frame));
             if stored_id.map(|b| &b[..]) != Some(&computed[..]) {
                 folder.diag(
                     "DamagedFrame",

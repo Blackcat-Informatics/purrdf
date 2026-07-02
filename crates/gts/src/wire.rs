@@ -62,8 +62,23 @@ pub fn append_canonical(v: &Value, out: &mut Vec<u8>) {
     encode_into(&deterministic(v), out);
 }
 
+/// Input size at which BLAKE3 switches to multi-threaded hashing.
+///
+/// Follows the blake3 crate's guidance: `update_rayon` only pays for its
+/// fork-join overhead once the input spans enough chunks (~128 KiB). Below
+/// the threshold the single-threaded fast path is used. Both paths compute
+/// the same function, so every content id and blob digest is byte-identical
+/// regardless of thread count (rayon runs inline-sequential on targets
+/// without threads, e.g. wasm32).
+const PARALLEL_HASH_MIN: usize = 128 * 1024;
+
 /// The 32-byte BLAKE3-256 digest of `data`.
 pub fn blake3_256(data: &[u8]) -> Vec<u8> {
+    if data.len() >= PARALLEL_HASH_MIN {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update_rayon(data);
+        return hasher.finalize().as_bytes().to_vec();
+    }
     blake3::hash(data).as_bytes().to_vec()
 }
 

@@ -183,6 +183,7 @@ dependencies = [
  "cfg-if",
  "constant_time_eq",
  "cpufeatures 0.3.0",
+ "rayon-core",
 ]
 
 [[package]]
@@ -1056,6 +1057,7 @@ dependencies = [
  "ed25519-dalek",
  "filetime",
  "flate2",
+ "rayon",
  "sha1",
  "structured-zstd",
  "time",
@@ -1078,6 +1080,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-gts",
  "purrdf-shapes",
+ "purrdf-shex",
  "purrdf-slice",
  "purrdf-sparql-eval",
  "purrdf-xsd",
@@ -1101,6 +1104,7 @@ dependencies = [
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-xsd",
+ "rayon",
  "roxmltree",
  "serde_json",
  "serde_yaml_ng",

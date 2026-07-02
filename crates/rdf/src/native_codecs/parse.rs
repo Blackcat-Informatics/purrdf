@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use super::media_type::{classify, NativeRdfFormat};
 use super::ser_model::{SerGraph, SerTermKind};
+use super::text_parse::LineParseMode;
 use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
 };
@@ -121,6 +122,31 @@ pub fn parse_dataset(
     media_type: &str,
     base_iri: Option<&str>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)
+}
+
+/// [`parse_dataset`] forcing the single-threaded N-Triples/N-Quads line pipeline
+/// regardless of input size (Turtle/TriG/RDF-XML are always sequential, so the mode
+/// is a no-op there).
+///
+/// Bench/test-only surface: the criterion bench and the determinism-proof tests use
+/// it as the baseline the chunk-parallel path must match byte-for-byte. NOT public
+/// API — hidden, unstable, and free to disappear.
+#[doc(hidden)]
+pub fn parse_dataset_forced_sequential(
+    bytes: &[u8],
+    media_type: &str,
+    base_iri: Option<&str>,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::ForceSequential)
+}
+
+fn parse_dataset_mode(
+    bytes: &[u8],
+    media_type: &str,
+    base_iri: Option<&str>,
+    mode: LineParseMode,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let format = classify(media_type)?;
     let text = std::str::from_utf8(bytes)
         .map_err(|e| RdfDiagnostic::error("native-codec-utf8", e.to_string()))?;
@@ -130,12 +156,17 @@ pub fn parse_dataset(
         // in-memory SerGraph the statement-layer fold consumes — no purrdf-gts text
         // codec, no text→bytes→reader indirection. This also decodes `\uXXXX` UCHAR
         // escapes inside IRIREFs (W3C test060), which the purrdf-gts IRIREF readers
-        // rejected.
+        // rejected. N-Triples/N-Quads above the `text_parse` size threshold tokenize
+        // their line-aligned chunks in PARALLEL (phase 1) and re-join in document
+        // order before interning (phase 2), so the frozen IR — term ids, quad order,
+        // diagnostics — is byte-identical to the sequential pipeline. Turtle/TriG stay
+        // sequential (stateful `@prefix`/`@base` + document-ordered bnode minting; see
+        // `text_parse::parse_to_gts_graph_mode`).
         NativeRdfFormat::NTriples
         | NativeRdfFormat::NQuads
         | NativeRdfFormat::Turtle
         | NativeRdfFormat::TriG => {
-            let graph = text_parse_without_panicking(format, text, base_iri)?;
+            let graph = text_parse_without_panicking(format, text, base_iri, mode)?;
             dataset_from_ser_graph(&graph)
         }
         // RDF/XML parses FIRST-PARTY through the in-repo `rdfxml` codec (W3C RDF/XML
@@ -149,9 +180,10 @@ fn text_parse_without_panicking(
     format: NativeRdfFormat,
     text: &str,
     base_iri: Option<&str>,
+    mode: LineParseMode,
 ) -> Result<SerGraph, RdfDiagnostic> {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        super::text_parse::parse_to_gts_graph(format, text, base_iri)
+        super::text_parse::parse_to_gts_graph_mode(format, text, base_iri, mode)
     }));
     match outcome {
         Ok(result) => result,
@@ -568,6 +600,50 @@ mod tests {
         let err = parse_dataset("0À".as_bytes(), "text/turtle", None)
             .expect_err("malformed input must be rejected without unwinding");
         assert_eq!(err.code, "native-codec-parse");
+    }
+
+    #[test]
+    fn public_parse_dataset_parallel_path_matches_forced_sequential() {
+        // Above the `text_parse` parallel threshold the public `parse_dataset` entry
+        // takes the chunk-parallel N-Quads pipeline; the forced-sequential twin is the
+        // baseline it must match byte-for-byte: same term ids, same quad order, same
+        // canonical N-Quads back out.
+        use std::fmt::Write as _;
+        let mut text = String::with_capacity(2 << 20);
+        for i in 0..14_000 {
+            writeln!(
+                text,
+                "<https://example.org/s{}> <https://example.org/p{}> \"v{i}\"@en \
+                 <https://example.org/g{}> .",
+                i % 611,
+                i % 17,
+                i % 5
+            )
+            .expect("write row");
+        }
+        assert!(text.len() >= 1 << 20, "fixture must cross the threshold");
+
+        let auto = parse_dataset(text.as_bytes(), "application/n-quads", None).expect("auto");
+        let seq = parse_dataset_forced_sequential(text.as_bytes(), "application/n-quads", None)
+            .expect("sequential");
+        assert_eq!(auto.term_count(), seq.term_count());
+        assert!(
+            auto.quads().collect::<Vec<_>>() == seq.quads().collect::<Vec<_>>(),
+            "frozen quad rows (term ids + order) must be identical"
+        );
+        let ser_auto = crate::native_codecs::serialize_dataset(
+            &auto,
+            "application/n-quads",
+            crate::SerializeGraph::Dataset,
+        )
+        .expect("serialize auto");
+        let ser_seq = crate::native_codecs::serialize_dataset(
+            &seq,
+            "application/n-quads",
+            crate::SerializeGraph::Dataset,
+        )
+        .expect("serialize sequential");
+        assert!(ser_auto == ser_seq, "canonical bytes must be identical");
     }
 
     #[test]
