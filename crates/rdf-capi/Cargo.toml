@@ -47,6 +47,9 @@ purrdf-sparql-results = { workspace = true }
 # directly — the oxigraph-free query path (#906). Path-depends on the SAME
 # ../rdf-core so `SparqlRequest`/`SparqlResult` unify.
 purrdf-sparql-eval = { workspace = true }
+# `xsd:dateTime`/`datetime_from_unix_seconds` for the host `QueryEnv` wall clock
+# wired into the native engine below.
+purrdf-xsd = { workspace = true }
 
 # === cargo-c packaging (the spec-letter build mechanism) ===
 [package.metadata.capi]

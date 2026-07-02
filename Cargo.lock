@@ -1033,6 +1033,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-xsd",
 ]
 
 [[package]]

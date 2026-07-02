@@ -5,9 +5,14 @@
 //! SPARQL 1.1/1.2 Query Results JSON convenience path).
 
 use std::os::raw::c_char;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use purrdf_rs::{SparqlEngine, SparqlRequest, SparqlResult};
-use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_sparql_eval::{NativeSparqlEngine, QueryEnv};
+use purrdf_xsd::datetime_from_unix_seconds;
+use purrdf_xsd::temporal::DateTime;
 
 use crate::buffer::PurrdfBuffer;
 use crate::error::PurrdfError;
@@ -20,6 +25,42 @@ use crate::{cstr_to_str, opt_cstr_to_str};
 const KIND_SOLUTIONS: i32 = 0;
 const KIND_GRAPH: i32 = 1;
 const KIND_BOOLEAN: i32 = 2;
+
+/// Native (non-wasm) host clock/entropy for the C ABI surface. `NOW()` gets the
+/// real wall clock; `RAND()`/`UUID()` get a per-query seed from the wall-clock nanos
+/// mixed with a process-lifetime counter (distinct seed per query even within one
+/// nanosecond). No new dependency — `std::time` only. This crate is native-only
+/// (not a wasm target), so the wall-clock syscall is confined here, never in the
+/// wasm-able engine.
+#[derive(Debug, Default)]
+struct SystemEnv;
+
+static QUERY_SEQ: AtomicU64 = AtomicU64::new(0);
+
+impl QueryEnv for SystemEnv {
+    fn now(&self) -> DateTime {
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+        datetime_from_unix_seconds(secs)
+    }
+
+    fn rng_seed(&self) -> u64 {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
+        nanos
+            ^ QUERY_SEQ
+                .fetch_add(1, Ordering::Relaxed)
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    }
+}
+
+/// The native SPARQL engine for the C ABI, wired with the host wall clock so
+/// NOW() and RAND()/UUID() are live (this crate is native, not a wasm target).
+fn engine() -> NativeSparqlEngine {
+    NativeSparqlEngine::new().with_query_env(Arc::new(SystemEnv))
+}
 
 /// Run a SPARQL query over a frozen dataset, materializing the result.
 unsafe fn run_query(
@@ -34,7 +75,7 @@ unsafe fn run_query(
         // no oxigraph `Store` round-trip. `NativeSparqlEngine::query` is the single
         // `SparqlEngine` impl (#887/#912); its `Dataset` IS the `Arc<RdfDataset>` the
         // handle already owns.
-        NativeSparqlEngine::new()
+        engine()
             .query(
                 PurrdfDataset::arc(dataset),
                 SparqlRequest {
@@ -154,5 +195,45 @@ pub unsafe extern "C" fn purrdf_query_json(
             *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
             Ok(PurrdfStatus::Ok)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use purrdf_core::{RdfDatasetBuilder, TermValue};
+
+    use super::*;
+
+    /// `NOW()` must report the real wall clock through the C ABI's `engine()`, not
+    /// the epoch a `QueryEnv`-less engine would freeze it to. `year(NOW())` on any
+    /// date after this crate existed is `>= 2025`; the frozen-epoch regression
+    /// would yield `1970`.
+    #[test]
+    fn now_reports_the_real_wall_clock_year() {
+        let dataset = RdfDatasetBuilder::new()
+            .freeze()
+            .expect("empty dataset freezes");
+        let result = engine()
+            .query(
+                &dataset,
+                SparqlRequest {
+                    query: "SELECT (year(NOW()) AS ?y) WHERE {}",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .expect("query evaluates");
+        let SparqlResult::Solutions { rows, .. } = result else {
+            panic!("expected a SELECT solutions result");
+        };
+        assert_eq!(rows.len(), 1, "empty WHERE yields exactly one solution");
+        let cell = rows[0][0].as_ref().expect("?y is bound");
+        let TermValue::Literal { lexical_form, .. } = cell else {
+            panic!("?y must be a literal, got {cell:?}");
+        };
+        let year: i64 = lexical_form
+            .parse()
+            .unwrap_or_else(|e| panic!("?y `{lexical_form}` must parse as an integer: {e}"));
+        assert!(year >= 2025, "year(NOW()) = {year}, expected >= 2025");
     }
 }
