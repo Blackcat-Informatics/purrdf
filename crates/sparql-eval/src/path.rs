@@ -51,7 +51,7 @@ use crate::error::EvalError;
 use crate::eval::EvalCtx;
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
-use crate::DetHashMap;
+use crate::{DetHashMap, DetHashSet};
 
 /// Excluded-predicate sets for every `NegatedPropertySet` in the path, resolved to
 /// dataset ids ONCE per `eval_path` call and keyed by the excluded slice's data
@@ -476,8 +476,12 @@ fn closure(
     forward: bool,
     ctx: &PathCtx<'_>,
 ) -> BTreeSet<TermId> {
+    // `result` stays an ordered `BTreeSet` — it is the returned/egress set, and its
+    // iteration order determines solution-row order (byte-identity). `visited` is a
+    // membership-only guard, never iterated into output, so it uses an O(1)
+    // `DetHashSet` instead of the O(log n) `BTreeSet` on the closure's hot loop.
     let mut result = BTreeSet::new();
-    let mut visited = BTreeSet::new();
+    let mut visited: DetHashSet<TermId> = DetHashSet::default();
     let mut frontier: Vec<TermId> = reach_cached(inner, node, forward, ctx)
         .iter()
         .copied()
@@ -506,8 +510,10 @@ fn closure_multi(
     forward: bool,
     ctx: &PathCtx<'_>,
 ) -> BTreeSet<TermId> {
+    // As in `closure`: ordered `result` for egress, O(1) `DetHashSet` for the
+    // membership-only `visited` guard.
     let mut result = BTreeSet::new();
-    let mut visited = BTreeSet::new();
+    let mut visited: DetHashSet<TermId> = DetHashSet::default();
     let mut frontier: Vec<TermId> = Vec::new();
     for &s in seeds {
         frontier.extend(reach_cached(inner, s, forward, ctx).iter().copied());
