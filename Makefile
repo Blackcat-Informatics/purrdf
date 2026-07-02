@@ -70,7 +70,14 @@ wasm: ## Prove the release crates build for wasm32-unknown-unknown (SKIP locally
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.
-	cargo build -p purrdf-wasm --target wasm32-unknown-unknown --release --locked
+	@# +simd128 is a PLATFORM target feature (not a Cargo feature): it turns on
+	@# the wasm SIMD instruction set so memchr's byte scan (the parser hot path)
+	@# and blake3's simd128 backend run vectorized instead of scalar/SWAR. It is
+	@# scoped to this npm-artifact build only, so `make wasm` stays baseline-clean.
+	@# This raises the artifact's browser baseline to engines with wasm SIMD
+	@# (all major browsers since ~2021; Node >= 16).
+	RUSTFLAGS="-C target-feature=+simd128" \
+		cargo build -p purrdf-wasm --target wasm32-unknown-unknown --release --locked
 	@# wasm-bindgen-cli must match the crate's exact wasm-bindgen pin (see [workspace.dependencies]).
 	PATH="$$HOME/.cargo/bin:$$PATH" wasm-bindgen \
 		$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm \
@@ -78,11 +85,12 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	@# wasm-opt -Oz is a REQUIRED build step (roughly halves the artifact).
 	@# The --enable flags cover the post-MVP features rustc emits by default
 	@# for wasm32-unknown-unknown; older binaryen builds (e.g. Ubuntu's apt
-	@# package) reject the module without them.
+	@# package) reject the module without them. --enable-simd is REQUIRED for the
+	@# +simd128 build above (binaryen rejects the SIMD-carrying module without it).
 	@command -v wasm-opt >/dev/null 2>&1 || { echo "ERROR: wasm-opt (binaryen) not found — it is a REQUIRED wasm build dependency"; exit 1; }
 	wasm-opt -Oz \
 		--enable-bulk-memory --enable-nontrapping-float-to-int \
-		--enable-sign-ext --enable-mutable-globals \
+		--enable-sign-ext --enable-mutable-globals --enable-simd \
 		-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
 	@echo "OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)"
 
