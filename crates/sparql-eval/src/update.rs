@@ -46,12 +46,20 @@ use purrdf_sparql_algebra::{
 
 use crate::convert::named_node_to_value;
 use crate::dataset_spec::ActiveDataset;
-use crate::eval::{eval, EvalCtx};
+use crate::eval::{eval, BgpOrderCache, EvalCtx, StandpointPredicates};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
     instantiate_ground_term, instantiate_predicate, instantiate_term, positionally_ill_formed,
 };
 use crate::DetHashMap;
+
+/// The engine-level WHERE-evaluation config threaded into UPDATE, mirroring the
+/// query path's `EvalCtx` build (order cache + standpoint predicate table) so a
+/// `DELETE/INSERT … WHERE` evaluates identically to a `SELECT`.
+pub(crate) struct UpdateEvalConfig<'e> {
+    pub(crate) standpoint_predicates: Option<&'e StandpointPredicates>,
+    pub(crate) order_cache: &'e BgpOrderCache,
+}
 
 /// Host seam for SPARQL `LOAD <iri>`: resolves a source IRI to a frozen dataset.
 ///
@@ -75,9 +83,10 @@ pub(crate) fn eval_update(
     update: &Update,
     m: &mut MutableDataset,
     resolver: Option<&dyn GraphResolver>,
+    cfg: &UpdateEvalConfig<'_>,
 ) -> Result<(), RdfDiagnostic> {
     for op in &update.operations {
-        apply_operation(op, m, resolver)?;
+        apply_operation(op, m, resolver, cfg)?;
     }
     Ok(())
 }
@@ -87,6 +96,7 @@ fn apply_operation(
     op: &GraphUpdateOperation,
     m: &mut MutableDataset,
     resolver: Option<&dyn GraphResolver>,
+    cfg: &UpdateEvalConfig<'_>,
 ) -> Result<(), RdfDiagnostic> {
     match op {
         GraphUpdateOperation::InsertData { data } => insert_data(data, m),
@@ -97,7 +107,7 @@ fn apply_operation(
             with,
             using,
             pattern,
-        } => delete_insert(delete, insert, with.as_ref(), using, pattern, m),
+        } => delete_insert(delete, insert, with.as_ref(), using, pattern, m, cfg),
         GraphUpdateOperation::Load {
             silent,
             source,
@@ -170,6 +180,7 @@ fn delete_insert(
     using: &[UsingClause],
     pattern: &purrdf_sparql_algebra::GraphPattern,
     m: &mut MutableDataset,
+    cfg: &UpdateEvalConfig<'_>,
 ) -> Result<(), RdfDiagnostic> {
     // The WITH graph is the default target for delete/insert quads whose own
     // QuadPattern.graph is None (template target — independent of the WHERE dataset).
@@ -177,6 +188,10 @@ fn delete_insert(
 
     let snap = m.freeze()?;
     let mut ctx = EvalCtx::new(&snap);
+    ctx = ctx.with_order_cache(cfg.order_cache);
+    if let Some(preds) = cfg.standpoint_predicates {
+        ctx = ctx.with_standpoint_predicates(preds.clone());
+    }
 
     // Scope the WHERE active dataset (§3.1.3): USING (if present) builds a custom
     // dataset and replaces WITH's effect on the WHERE; otherwise WITH scopes the WHERE
@@ -516,7 +531,12 @@ mod tests {
     }
 
     fn run(text: &str, m: &mut MutableDataset) {
-        eval_update(&parse(text), m, None).expect("update applies");
+        let cache = BgpOrderCache::default();
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+        };
+        eval_update(&parse(text), m, None, &cfg).expect("update applies");
     }
 
     #[test]
@@ -700,7 +720,12 @@ mod tests {
             }],
             base_iri: None,
         };
-        let err = eval_update(&upd, &mut m, None).unwrap_err();
+        let cache = BgpOrderCache::default();
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+        };
+        let err = eval_update(&upd, &mut m, None, &cfg).unwrap_err();
         assert_eq!(err.code, "native-sparql-update-bad-destination");
         // The base is untouched (the error aborts before any mutation lands here, and
         // the engine seam's branch/freeze guarantees atomicity at the request level).
@@ -731,7 +756,12 @@ mod tests {
     fn load_with_resolver_imports_into_default_graph() {
         let mut m = mut_with(&[]);
         let resolver = TestResolver { ds: loadable() };
-        eval_update(&parse("LOAD ex:doc"), &mut m, Some(&resolver)).expect("load");
+        let cache = BgpOrderCache::default();
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+        };
+        eval_update(&parse("LOAD ex:doc"), &mut m, Some(&resolver), &cfg).expect("load");
         let frozen = m.freeze().expect("freeze");
         assert_eq!(frozen.quad_count(), 1);
         assert!(frozen.term_id_by_value(&iri("loaded")).is_some());
@@ -741,10 +771,16 @@ mod tests {
     fn load_into_named_graph_rekeys_to_destination() {
         let mut m = mut_with(&[]);
         let resolver = TestResolver { ds: loadable() };
+        let cache = BgpOrderCache::default();
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+        };
         eval_update(
             &parse("LOAD ex:doc INTO GRAPH ex:g"),
             &mut m,
             Some(&resolver),
+            &cfg,
         )
         .expect("load into");
         let all = m.quads_for_pattern(None, None, None, GraphMatchValue::Any);
@@ -759,14 +795,24 @@ mod tests {
     #[test]
     fn load_without_resolver_is_a_hard_error() {
         let mut m = mut_with(&[]);
-        let err = eval_update(&parse("LOAD ex:doc"), &mut m, None).unwrap_err();
+        let cache = BgpOrderCache::default();
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+        };
+        let err = eval_update(&parse("LOAD ex:doc"), &mut m, None, &cfg).unwrap_err();
         assert_eq!(err.code, "native-sparql-load-no-resolver");
     }
 
     #[test]
     fn load_silent_without_resolver_is_a_noop_ok() {
         let mut m = mut_with(&[("a", "p", "b")]);
-        eval_update(&parse("LOAD SILENT ex:doc"), &mut m, None).expect("silent load no-ops");
+        let cache = BgpOrderCache::default();
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+        };
+        eval_update(&parse("LOAD SILENT ex:doc"), &mut m, None, &cfg).expect("silent load no-ops");
         assert_eq!(quad_set(&m).len(), 1, "unchanged");
     }
 

@@ -270,7 +270,11 @@ impl SparqlEngine for NativeSparqlEngine {
         // apply every op to the delta, and only on FULL success freeze back. Any
         // error drops `m` and leaves `*dataset` untouched.
         let mut m = MutableDataset::new(Arc::clone(dataset));
-        eval_update(&update, &mut m, self.resolver.as_deref())?;
+        let cfg = crate::update::UpdateEvalConfig {
+            standpoint_predicates: self.standpoint_predicates.as_ref(),
+            order_cache: &self.order_cache,
+        };
+        eval_update(&update, &mut m, self.resolver.as_deref(), &cfg)?;
         *dataset = m.freeze()?;
         Ok(())
     }
@@ -958,6 +962,107 @@ mod tests {
         assert_eq!(
             after, before,
             "the failed request left the dataset untouched"
+        );
+    }
+
+    /// GAP 3 regression: the UPDATE path must thread the SAME `EvalCtx` wiring the
+    /// query path uses, so a `NOW()` bound inside a `DELETE/INSERT … WHERE` is the
+    /// live wall clock — not some frozen/epoch default — mirroring
+    /// `default_engine_now_is_current_wall_clock` but through `engine.update`.
+    #[test]
+    fn now_is_live_in_update_where() {
+        let engine = NativeSparqlEngine::new();
+        let mut ds = empty();
+        update(
+            &engine,
+            &mut ds,
+            "INSERT { <http://ex/s> <http://ex/p> ?n } WHERE { BIND(NOW() AS ?n) }",
+        );
+        let r = engine
+            .query(
+                &ds,
+                SparqlRequest {
+                    query: "SELECT (YEAR(?o) AS ?y) WHERE { <http://ex/s> <http://ex/p> ?o }",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .expect("query");
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                let year: i64 = render_cell(rows[0][0].as_ref())
+                    .parse()
+                    .expect("YEAR(?o) must render as an integer");
+                assert!(
+                    year >= 2025,
+                    "NOW() inside an UPDATE WHERE must be the live wall clock, got year {year}"
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// GAP 3 regression: `heldIn` inside an UPDATE `WHERE` must see the engine's
+    /// configured [`StandpointPredicates`] table, the same as the query path
+    /// (`gmeow_namespace_and_predicate_table_flow_through_configuration`). Before the
+    /// fix, `engine::update` dropped the table on the floor and any `heldIn` in a
+    /// `DELETE/INSERT … WHERE` hard-errored even on a standpoint-configured engine.
+    #[test]
+    fn heldin_in_update_where_uses_configured_standpoint_predicates() {
+        let ds = gmeow_standpoint_ds();
+        let configured = NativeSparqlEngine::new()
+            .with_parser_options(ParserOptions {
+                extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+            })
+            .with_standpoint_predicates(StandpointPredicates::new(
+                format!("{GMEOW_NS}accordingTo"),
+                format!("{GMEOW_NS}sharpens"),
+            ));
+        let q = format!(
+            "PREFIX gmeow: <{GMEOW_NS}>\n\
+             INSERT {{ <http://ex/hit> <http://ex/in> <http://ex/T1> }} \
+             WHERE {{ FILTER( gmeow:heldIn(<http://ex/r>, <http://ex/T1>) ) }}"
+        );
+        let mut configured_ds = Arc::clone(&ds);
+        configured
+            .update(
+                &mut configured_ds,
+                SparqlRequest {
+                    query: &q,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .expect("heldIn in an UPDATE WHERE must see the configured standpoint table");
+        assert!(
+            configured_ds
+                .term_id_by_value(&TermValue::Iri("http://ex/hit".to_owned()))
+                .is_some(),
+            "the WHERE matched and the INSERT landed"
+        );
+
+        // Same UPDATE, unconfigured engine: heldIn hard-errors (never a silent default).
+        let unconfigured = NativeSparqlEngine::new().with_parser_options(ParserOptions {
+            extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+        });
+        let mut unconfigured_ds = Arc::clone(&ds);
+        let err = unconfigured
+            .update(
+                &mut unconfigured_ds,
+                SparqlRequest {
+                    query: &q,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "native-sparql-update-eval");
+        assert!(
+            err.message
+                .contains("requires a standpoint predicate configuration"),
+            "got: {}",
+            err.message
         );
     }
 
