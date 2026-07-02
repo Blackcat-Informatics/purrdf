@@ -279,8 +279,11 @@ enum SortKey {
         language: Option<String>,
         lexical: String,
     },
-    /// Triple term — kind rank 3 (rare; compared via [`term_value_order`]).
-    Triple(TermValue),
+    /// Triple term — kind rank 3 (rare). Its `(s, p, o)` components are themselves
+    /// precomputed sort keys, so the literal XSD parse of a nested component is paid
+    /// once at build time (not re-run per comparison, as `term_value_order` would);
+    /// [`compare_sort_keys`] recurses over them componentwise.
+    Triple(Box<[Self; 3]>),
 }
 
 /// The kind rank of a bound sort key: blank < IRI < literal < triple
@@ -311,7 +314,11 @@ fn sort_key(value: Option<TermValue>) -> SortKey {
             language,
             lexical: lexical_form,
         },
-        Some(triple @ TermValue::Triple { .. }) => SortKey::Triple(triple),
+        Some(TermValue::Triple { s, p, o }) => SortKey::Triple(Box::new([
+            sort_key(Some(*s)),
+            sort_key(Some(*p)),
+            sort_key(Some(*o)),
+        ])),
     }
 }
 
@@ -349,9 +356,18 @@ fn compare_sort_keys(a: &SortKey, b: &SortKey) -> Ordering {
             }
             (dx, gx, lx).cmp(&(dy, gy, ly))
         }
-        (SortKey::Triple(x), SortKey::Triple(y)) => term_value_order(x, y),
+        (SortKey::Triple(x), SortKey::Triple(y)) => compare_triple_keys(x, y),
         _ => sort_key_rank(a).cmp(&sort_key_rank(b)),
     }
+}
+
+/// Compare two triple-term sort keys componentwise (`s`, then `p`, then `o`) — the
+/// precomputed-key analogue of [`term_value_order`]'s triple arm, with each
+/// component already parsed at build time.
+fn compare_triple_keys(a: &[SortKey; 3], b: &[SortKey; 3]) -> Ordering {
+    compare_sort_keys(&a[0], &b[0])
+        .then_with(|| compare_sort_keys(&a[1], &b[1]))
+        .then_with(|| compare_sort_keys(&a[2], &b[2]))
 }
 
 fn kind_rank(v: &TermValue) -> u8 {
@@ -1190,5 +1206,49 @@ mod tests {
         let x = seq.schema.index_of(&Variable::new("x")).unwrap();
         assert!(seq.rows[0][x].is_some());
         assert!(seq.rows[1][x].is_none()); // UNDEF.
+    }
+
+    /// The precomputed triple sort key (`sort_key` + `compare_sort_keys`) must order
+    /// quoted-triple terms **identically** to the reference `term_value_order` over
+    /// the raw values — the only difference is that the nested literals' XSD parse is
+    /// paid once at key-build time instead of on every comparison. Includes cases
+    /// where value-space and lexical order disagree (integer `9` < `30` by value but
+    /// `"30"` < `"9"` lexically), cross-kind components, and a nested triple.
+    #[test]
+    fn triple_sort_keys_match_term_value_order() {
+        let lit = |n: &str| TermValue::Literal {
+            lexical_form: n.to_owned(),
+            datatype: XINT.to_owned(),
+            language: None,
+            direction: None,
+        };
+        let iri = |s: &str| TermValue::Iri(s.to_owned());
+        let triple = |s: TermValue, p: TermValue, o: TermValue| TermValue::Triple {
+            s: Box::new(s),
+            p: Box::new(p),
+            o: Box::new(o),
+        };
+        let samples = [
+            triple(iri("http://ex/a"), iri("http://ex/p"), lit("30")),
+            triple(iri("http://ex/a"), iri("http://ex/p"), lit("9")),
+            triple(iri("http://ex/a"), iri("http://ex/p"), iri("http://ex/z")),
+            triple(iri("http://ex/b"), iri("http://ex/p"), lit("9")),
+            triple(
+                triple(iri("http://ex/a"), iri("http://ex/p"), lit("9")),
+                iri("http://ex/q"),
+                lit("30"),
+            ),
+        ];
+        for a in &samples {
+            for b in &samples {
+                let via_keys =
+                    compare_sort_keys(&sort_key(Some(a.clone())), &sort_key(Some(b.clone())));
+                let via_ref = term_value_order(a, b);
+                assert_eq!(
+                    via_keys, via_ref,
+                    "ordering mismatch:\n  a={a:?}\n  b={b:?}"
+                );
+            }
+        }
     }
 }
