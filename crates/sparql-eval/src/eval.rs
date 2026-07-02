@@ -204,6 +204,16 @@ pub struct EvalCtx<'d> {
     /// fresh intern would produce. Naturally per-query: the algebra the addresses
     /// point into outlives this context's `query()` call.
     pub(crate) const_atom_cache: DetHashMap<usize, SolutionTerm>,
+    /// Per-query memo of the parsed XSD value of a dataset literal, keyed by its
+    /// `TermId`. `FILTER`/comparison hot paths (`compare`/`equal`/`ebv_term`) parse
+    /// the same `Existing(TermId)` literal's lexical form via `parse_by_iri` on
+    /// every row; a 30k-row `?age > 40` re-parses ~60 distinct ages 30k times. The
+    /// lexical form and datatype are immutable for a fixed id, so the parse is a
+    /// pure function of the id — memoizing it (including the `None` "not an XSD
+    /// value" outcome) collapses per-row re-parsing to one parse per distinct id.
+    /// Naturally per-query. Only dataset (`Existing`) ids are cached; computed
+    /// scratch values are ephemeral and stay on the borrowed-view path.
+    pub(crate) xsd_parse_cache: DetHashMap<purrdf_core::TermId, Option<purrdf_xsd::XsdValue>>,
     /// The `SERVICE` federation source, if one is injected. `None` in
     /// the default engine path: a non-silent `SERVICE` then hard-fails. Tests and
     /// the conformance harness inject an in-memory source via [`EvalCtx::with_remote`].
@@ -264,6 +274,7 @@ impl<'d> EvalCtx<'d> {
             regex_cache: DetHashMap::default(),
             cached_bool_terms: [None, None],
             const_atom_cache: DetHashMap::default(),
+            xsd_parse_cache: DetHashMap::default(),
             remote: None,
             bgp_order_cache: None,
             constructed: Vec::new(),

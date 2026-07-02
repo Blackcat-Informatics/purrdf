@@ -313,7 +313,7 @@ fn ebv_of(
 }
 
 /// The effective boolean value of a concrete term (`None` = type error).
-fn ebv_term(ctx: &EvalCtx<'_>, term: SolutionTerm) -> Option<bool> {
+fn ebv_term(ctx: &mut EvalCtx<'_>, term: SolutionTerm) -> Option<bool> {
     match xsd_of_term(ctx, term) {
         Some(xv) => effective_boolean_value(&xv),
         None => None,
@@ -324,18 +324,31 @@ fn ebv_term(ctx: &EvalCtx<'_>, term: SolutionTerm) -> Option<bool> {
 /// [`TermRef`] for dataset terms, the scratch table for computed ones — so the
 /// per-row comparison hot path parses without materializing an owned
 /// [`TermValue`]. Semantically identical to `xsd_of(&value_of(ctx, term))`.
-fn xsd_of_term(ctx: &EvalCtx<'_>, term: SolutionTerm) -> Option<XsdValue> {
+///
+/// Dataset (`Existing`) parses are memoized per query by `TermId` (see
+/// [`EvalCtx::xsd_parse_cache`]): the lexical form and datatype are immutable for a
+/// fixed id, so a comparison/`FILTER` over N rows parses each distinct literal once
+/// instead of once per row. Computed scratch values are ephemeral and stay on the
+/// direct borrowed-view path.
+fn xsd_of_term(ctx: &mut EvalCtx<'_>, term: SolutionTerm) -> Option<XsdValue> {
     match term {
-        SolutionTerm::Existing(id) => match ctx.dataset.resolve(id) {
-            TermRef::Literal {
-                lexical, datatype, ..
-            } => match ctx.dataset.resolve(datatype) {
-                TermRef::Iri(iri) => parse_by_iri(lexical, iri).ok().flatten(),
-                // A literal's datatype is always an interned IRI (C0.1).
-                other => unreachable!("literal datatype must be an IRI, got {other:?}"),
-            },
-            _ => None,
-        },
+        SolutionTerm::Existing(id) => {
+            if let Some(cached) = ctx.xsd_parse_cache.get(&id) {
+                return cached.clone();
+            }
+            let parsed = match ctx.dataset.resolve(id) {
+                TermRef::Literal {
+                    lexical, datatype, ..
+                } => match ctx.dataset.resolve(datatype) {
+                    TermRef::Iri(iri) => parse_by_iri(lexical, iri).ok().flatten(),
+                    // A literal's datatype is always an interned IRI (C0.1).
+                    other => unreachable!("literal datatype must be an IRI, got {other:?}"),
+                },
+                _ => None,
+            };
+            ctx.xsd_parse_cache.insert(id, parsed.clone());
+            parsed
+        }
         SolutionTerm::Computed(sid) => xsd_of(ctx.scratch.computed_value(sid)),
     }
 }
@@ -375,8 +388,12 @@ fn compare(
     }
     // Value-space comparison over borrowed term views (no owned TermValue
     // clones). Distinct non-value terms (IRIs/blanks) or incomparable value
-    // spaces are a type error (`None`), exactly as before.
-    let ord = match (xsd_of_term(ctx, ta), xsd_of_term(ctx, tb)) {
+    // spaces are a type error (`None`), exactly as before. Each side is parsed
+    // through the per-query id→XSD memo; the two calls are sequenced (not a tuple
+    // literal) because each takes `&mut ctx`.
+    let ax = xsd_of_term(ctx, ta);
+    let bx = xsd_of_term(ctx, tb);
+    let ord = match (ax, bx) {
         (Some(ax), Some(bx)) => value_cmp(&ax, &bx),
         _ => None,
     };
@@ -414,7 +431,9 @@ fn equal(
     // value-space comparison and the literal/non-literal split remain — evaluated
     // here on borrowed views (no owned TermValue clones), semantically identical
     // to `rdf_equal(&value_of(ctx, ta), &value_of(ctx, tb))`.
-    let eq = match (xsd_of_term(ctx, ta), xsd_of_term(ctx, tb)) {
+    let ax = xsd_of_term(ctx, ta);
+    let bx = xsd_of_term(ctx, tb);
+    let eq = match (ax, bx) {
         (Some(ax), Some(bx)) => value_cmp(&ax, &bx).map(|o| o == Ordering::Equal),
         _ => {
             if term_is_literal(ctx, ta) && term_is_literal(ctx, tb) {
