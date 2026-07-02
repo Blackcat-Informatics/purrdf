@@ -41,6 +41,8 @@ pub(crate) enum PyRdfFormat {
     N_TRIPLES,
     N_QUADS,
     TRIG,
+    TRIX,
+    HEXTUPLES,
 }
 
 impl PyRdfFormat {
@@ -52,6 +54,8 @@ impl PyRdfFormat {
             Self::N_TRIPLES => NativeRdfFormat::NTriples,
             Self::N_QUADS => NativeRdfFormat::NQuads,
             Self::TRIG => NativeRdfFormat::TriG,
+            Self::TRIX => NativeRdfFormat::TriX,
+            Self::HEXTUPLES => NativeRdfFormat::HexTuples,
         }
     }
 }
@@ -284,5 +288,10 @@ mod tests {
         );
         assert_eq!(PyRdfFormat::N_QUADS.to_native(), NativeRdfFormat::NQuads);
         assert_eq!(PyRdfFormat::TRIG.to_native(), NativeRdfFormat::TriG);
+        assert_eq!(PyRdfFormat::TRIX.to_native(), NativeRdfFormat::TriX);
+        assert_eq!(
+            PyRdfFormat::HEXTUPLES.to_native(),
+            NativeRdfFormat::HexTuples
+        );
     }
 }

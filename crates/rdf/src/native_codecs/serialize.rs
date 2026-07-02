@@ -78,6 +78,10 @@ fn serialize_dataset_inner(
         // RDF/XML serializes FIRST-PARTY from the same `SerGraph`, walking its base
         // quads (the star layer is declared loss for the star-incapable target).
         NativeRdfFormat::RdfXml => super::rdfxml::serialize_ser_graph_to_rdfxml(&graph)?,
+        // TriX / HexTuples serialize FIRST-PARTY from the same `SerGraph`, walking its
+        // quads (with named-graph slots) through their in-repo emitters.
+        NativeRdfFormat::TriX => super::trix::serialize_ser_graph_to_trix(&graph)?,
+        NativeRdfFormat::HexTuples => super::hextuples::serialize_ser_graph_to_hextuples(&graph)?,
     };
     Ok(text.into_bytes())
 }

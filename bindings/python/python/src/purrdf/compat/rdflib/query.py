@@ -11,12 +11,89 @@ for ASK).
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import IO, TYPE_CHECKING, Any
 
-from .term import Identifier
+import purrdf
+
+from .term import Identifier, from_native, to_native
 
 if TYPE_CHECKING:
     from .graph import Graph
+
+__all__ = [
+    "Result",
+    "ResultRow",
+    "ResultException",
+    "Processor",
+    "UpdateProcessor",
+    "ResultParser",
+    "ResultSerializer",
+]
+
+#: RDFLib SPARQL-result format names / media types → the native short format id.
+_RESULT_FORMAT_IDS: dict[str, str] = {
+    "json": "json",
+    "srj": "json",
+    "application/sparql-results+json": "json",
+    "xml": "xml",
+    "srx": "xml",
+    "application/sparql-results+xml": "xml",
+    "csv": "csv",
+    "text/csv": "csv",
+    "tsv": "tsv",
+    "text/tab-separated-values": "tsv",
+}
+
+
+def _result_format_id(fmt: str | None) -> str:
+    """Resolve an RDFLib result format name / media type to a native id."""
+    key = (fmt or "xml").lower()
+    try:
+        return _RESULT_FORMAT_IDS[key]
+    except KeyError:
+        raise ResultException(f"unsupported SPARQL result format: {fmt!r}") from None
+
+
+def _serialize_result_bytes(result: Result, fmt_id: str) -> bytes:
+    """Serialize a SELECT/ASK :class:`Result` to SPARQL-Results bytes via the native codec."""
+    if result.type == "ASK":
+        out = purrdf.serialize_sparql_boolean(fmt_id, bool(result.askAnswer))
+        assert isinstance(out, bytes)
+        return out
+    if result.type == "SELECT":
+        rows: list[list[Any]] = [
+            [None if cell is None else to_native(cell) for cell in row]
+            for row in result._rows
+        ]
+        out = purrdf.serialize_sparql_solutions(fmt_id, list(result.vars), rows)
+        assert isinstance(out, bytes)
+        return out
+    raise ResultException(
+        f"cannot serialize a {result.type} result as SPARQL results "
+        "(CONSTRUCT/DESCRIBE serialize as an RDF graph)"
+    )
+
+
+def _read_result_source(source: Any) -> bytes:
+    """Read a SPARQL-results document source (file-like / bytes / str / path) to bytes."""
+    if source is None:
+        raise ResultException("Result.parse requires a source")
+    reader = getattr(source, "read", None)
+    if callable(reader):
+        raw = reader()
+        return raw.encode("utf-8") if isinstance(raw, str) else raw
+    if isinstance(source, bytes):
+        return source
+    if isinstance(source, str):
+        return source.encode("utf-8")
+    if isinstance(source, Path):
+        return source.read_bytes()
+    raise ResultException(f"unsupported Result.parse source: {source!r}")
+
+
+class ResultException(Exception):  # noqa: N818 - RDFLib API name
+    """Raised for malformed / unsupported SPARQL results (RDFLib parity)."""
 
 
 class ResultRow(tuple[Identifier | None, ...]):
@@ -114,3 +191,114 @@ class Result:
         if self.type == "ASK":
             return bool(self.askAnswer)
         return len(self) > 0
+
+    def serialize(
+        self,
+        destination: str | Path | IO[bytes] | None = None,
+        encoding: str | None = None,
+        format: str | None = None,
+        **args: Any,
+    ) -> bytes | str | None:
+        """Serialize the result (RDFLib ``Result.serialize`` parity).
+
+        SELECT/ASK results emit a W3C SPARQL Results document (JSON/XML/CSV/TSV)
+        via the native codec; CONSTRUCT/DESCRIBE results serialize as an RDF graph
+        (delegating to :meth:`Graph.serialize`). With no ``destination`` the bytes
+        are returned (a ``str`` when ``encoding`` is ``None``); otherwise they are
+        written to the file-like / path destination.
+        """
+        if self.type in ("CONSTRUCT", "DESCRIBE"):
+            assert self.graph is not None
+            return self.graph.serialize(
+                destination, format=format or "xml", encoding=encoding, **args
+            )
+        data = _serialize_result_bytes(self, _result_format_id(format))
+        if destination is None:
+            return data if encoding is not None else data.decode("utf-8")
+        writer = getattr(destination, "write", None)
+        if callable(writer):
+            writer(data)
+        elif isinstance(destination, str | Path):
+            Path(destination).write_bytes(data)
+        else:
+            raise TypeError(f"unsupported serialize destination: {destination!r}")
+        return None
+
+    @staticmethod
+    def parse(
+        source: Any = None,
+        format: str | None = None,
+        content_type: str | None = None,
+        **kwargs: Any,
+    ) -> Result:
+        """Parse a SPARQL Results document into a :class:`Result` (JSON/XML).
+
+        Mirrors RDFLib's ``Result.parse`` static method: reads a SELECT or ASK
+        result document (from a file-like, ``bytes``, ``str``, or path) in the
+        given ``format`` (or ``content_type`` media type) and returns the
+        reconstructed :class:`Result`.
+        """
+        fmt_id = _result_format_id(format or content_type)
+        data = _read_result_source(source)
+        parsed = purrdf.parse_sparql_results(fmt_id, data)
+        kind = parsed[0]
+        if kind == "ASK":
+            return Result("ASK", ask=bool(parsed[1]))
+        variables = tuple(parsed[1])
+        rows = [
+            ResultRow(tuple(from_native(cell) for cell in row), variables)
+            for row in parsed[2]
+        ]
+        return Result("SELECT", rows=rows, variables=variables)
+
+
+# ── plugin *kind* base classes (RDFLib ``rdflib.query`` hierarchy) ───────────────
+#
+# These give ``plugin.get(name, kind)`` the same *kind* identities RDFLib exposes
+# from ``rdflib.query`` (``Processor``/``UpdateProcessor``/``ResultParser``/
+# ``ResultSerializer``), plus ``Result`` above as the query-result kind. Concrete
+# implementations live under ``purrdf.compat.rdflib.plugins``.
+
+
+class Processor:
+    """Base class for a SPARQL query *processor* kind (RDFLib parity)."""
+
+    def __init__(self, graph: Graph) -> None:
+        """Bind the processor to the graph it queries."""
+        self.graph = graph
+
+    def query(self, strOrQuery: object, **kwargs: Any) -> Any:  # noqa: N803
+        """Execute a query (overridden by concrete processors)."""
+        raise NotImplementedError
+
+
+class UpdateProcessor:
+    """Base class for a SPARQL *update* processor kind (RDFLib parity)."""
+
+    def __init__(self, graph: Graph) -> None:
+        """Bind the processor to the graph it updates."""
+        self.graph = graph
+
+    def update(self, strOrQuery: object, **kwargs: Any) -> None:  # noqa: N803
+        """Execute an update (overridden by concrete processors)."""
+        raise NotImplementedError
+
+
+class ResultParser:
+    """Base class for a SPARQL-results *parser* kind (RDFLib parity)."""
+
+    def parse(self, source: Any, **kwargs: Any) -> Result:
+        """Parse a SPARQL result document (overridden by concrete parsers)."""
+        raise NotImplementedError
+
+
+class ResultSerializer:
+    """Base class for a SPARQL-results *serializer* kind (RDFLib parity)."""
+
+    def __init__(self, result: Result) -> None:
+        """Bind the serializer to the result it emits."""
+        self.result = result
+
+    def serialize(self, stream: IO[Any], encoding: str | None = None, **kwargs: Any) -> None:
+        """Serialize a SPARQL result (overridden by concrete serializers)."""
+        raise NotImplementedError

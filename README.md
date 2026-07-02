@@ -143,7 +143,23 @@ print(result["conforms"])
 ```
 
 The Python package also ships an [rdflib compatibility layer](./bindings/python/python/src/purrdf/compat/rdflib/)
-and GTS relational exports (`gts_to_sqlite`, `gts_to_duckdb`, `gts_to_parquet`).
+(`from purrdf.compat.rdflib import Graph`) and GTS relational exports
+(`gts_to_sqlite`, `gts_to_duckdb`, `gts_to_parquet`).
+
+For a literal, zero-change `import rdflib`, install the opt-in extra:
+
+```bash
+pip install purrdf[rdflib]
+```
+
+This pulls in the separate [`purrdf-rdflib`](./bindings/python-rdflib-shadow/)
+distribution, whose top-level `rdflib` package re-exports the compat surface, so
+existing third-party code doing `import rdflib` / `from rdflib.namespace import RDF`
+transparently runs on purrdf. **Caveat:** that shadow claims the `rdflib` import
+name and must never be installed alongside the genuine
+[`rdflib`](https://pypi.org/project/rdflib/) — the two cannot co-inhabit one
+environment. It is a separate distribution (never bundled into the main `purrdf`
+wheel) precisely so environments that need the real rdflib simply omit it.
 
 ### JavaScript / WebAssembly
 
@@ -205,6 +221,13 @@ per axis). Performance claims are backed by criterion benchmarks rather than
 adjectives — `crates/rdf-core/benches/ir_layout.rs` measures AoS vs. SoA vs.
 predicate-adjacency layouts (allocation counts, high-water mark, end-to-end
 latency), and the shipped layout is whichever wins. Run them with `make bench`.
+
+There is also a report-only Python harness that times the native-backed
+`purrdf.compat.rdflib` drop-in against the real `rdflib` on parse, serialize,
+SPARQL, and triple-pattern iteration over a deterministic `example.org` corpus
+(`make bench-python`). Methodology, how to run, and a representative
+(host-dependent) results table live in [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md).
+Numbers vary by host — reproduce locally rather than trusting a fixed multiplier.
 
 ## Conformance
 

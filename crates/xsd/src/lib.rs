@@ -84,5 +84,6 @@ pub use numeric::{
     numeric_sub, numeric_unary_minus, numeric_unary_plus, Decimal,
 };
 pub use ops::{effective_boolean_value, value_cmp, value_eq};
+pub use simple::{normalize_whitespace_collapse, normalize_whitespace_replace};
 pub use temporal::{datetime_epoch, datetime_from_unix_seconds};
 pub use value::{parse, parse_by_iri, XsdError, XsdValue};

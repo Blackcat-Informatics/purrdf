@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import builtins
-from typing import IO, TypedDict, overload
+from typing import IO, Any, TypedDict, overload
 
 # ── Statement codec (bindings/python/src/rdf.rs) ────────────────────────────────
 
@@ -30,6 +30,8 @@ class RdfFormat:
     N_TRIPLES: RdfFormat
     N_QUADS: RdfFormat
     TRIG: RdfFormat
+    TRIX: RdfFormat
+    HEXTUPLES: RdfFormat
 
 class CanonicalizationAlgorithm:
     RDFC_1_0: CanonicalizationAlgorithm
@@ -58,11 +60,14 @@ class Literal:
         *,
         datatype: NamedNode | None = ...,
         language: str | None = ...,
+        direction: str | None = ...,
     ) -> None: ...
     @property
     def value(self) -> str: ...
     @property
     def language(self) -> str | None: ...
+    @property
+    def direction(self) -> str | None: ...
     @property
     def datatype(self) -> NamedNode: ...
     def __hash__(self) -> int: ...
@@ -284,6 +289,26 @@ def xsd_value_compare(
     right_datatype: str,
 ) -> int | None: ...
 def xsd_canonical_lexical(lexical: str, datatype: str) -> str | None: ...
+def xsd_decode_binary(lexical: str, datatype: str) -> bytes | None: ...
+def xsd_normalize_whitespace(lexical: str, datatype: str) -> str | None: ...
+
+# ── SPARQL Results serialization / parsing (bindings/python/src/py_store/results.rs) ──
+#
+# The four W3C SPARQL Results formats are keyed by the short id `"json"` / `"xml"`
+# / `"csv"` / `"tsv"`. Serialization is byte-deterministic; parsing supports
+# JSON and XML only (CSV/TSV have no native reader).
+
+#: A SELECT row: one cell per projected variable, `None` for an unbound binding.
+_ResultRow = list[_Term | None]
+
+def serialize_sparql_solutions(
+    format: str, variables: list[str], rows: list[_ResultRow]
+) -> bytes: ...
+def serialize_sparql_boolean(format: str, value: bool) -> bytes: ...
+
+# A parsed SELECT is `("SELECT", variables, rows)`; a parsed ASK is `("ASK", bool)`
+# — a heterogeneous tuple discriminated by its first element.
+def parse_sparql_results(format: str, data: bytes) -> tuple[Any, ...]: ...
 
 # ── RDF → GTS producer (bindings/python/src/py_gts.rs, #819 Task 8) ──────────────
 
@@ -506,3 +531,169 @@ class shex:
         format: str = ...,
         base: str | None = ...,
     ) -> str: ...
+
+# ── Top-level engine submodules (attached by the __init__.py shim) ───────────────
+# Mirroring the Rust `purrdf` umbrella crate, the SHACL / slice / GTS engines are
+# reachable directly off `purrdf` — no caller touches `purrdf_native`. Declared
+# here (the one ABI source of truth) as class-namespaces, exactly like `shex`.
+# Engine classes carry an underscore-prefixed module-level name and are re-exported
+# under their public name inside each namespace: a plain `X = X` in a class body
+# reads as a self-referential type alias, so the indirection is deliberate.
+
+# ── SHACL engine (bindings/python/src/shacl.rs, purrdf_native.shacl) ─────────────
+# `purrdf.shapes` is the canonical (Rust-parity) name; `purrdf.shacl` is an alias.
+
+class _ValidationReport:
+    """A SHACL validation report."""
+
+    @property
+    def conforms(self) -> bool: ...
+    @property
+    def results(self) -> list[dict[str, builtins.object]]: ...
+    def to_ntriples(self) -> str: ...
+
+class _Shapes:
+    """Parsed SHACL shapes, reusable across many data graphs."""
+
+    def __init__(self, shapes_ttl: str) -> None: ...
+    def validate_nt(self, data_nt: str) -> _ValidationReport: ...
+    def validate_store(self, data: Store | MutableDataset) -> _ValidationReport: ...
+
+class shapes:
+    ValidationReport = _ValidationReport
+    Shapes = _Shapes
+    # Validate a data graph (N-Triples) against a shapes graph (Turtle).
+    @staticmethod
+    def validate(shapes_ttl: str, data_nt: str) -> dict[str, builtins.object]: ...
+
+# Back-compat alias for the native submodule's own name.
+shacl = shapes
+
+# ── GTS surface grouping (purrdf.gts) ────────────────────────────────────────────
+# The GTS entry points are also present at the purrdf root (declared above); the
+# `gts` namespace groups them to mirror the Rust umbrella's `purrdf::gts` module.
+
+_gts_from_quads = gts_from_quads
+_gts_from_rdf12_bytes = gts_from_rdf12_bytes
+_compile_gts_native = compile_gts_native
+_snapshot_content_id_native = snapshot_content_id_native
+_feedback_bundle_native = feedback_bundle_native
+_to_json_ld = to_json_ld
+_from_json_ld = from_json_ld
+_to_rdf_xml = to_rdf_xml
+_from_rdf_xml = from_rdf_xml
+_gts_relational_rows_from_bytes = gts_relational_rows_from_bytes
+_gts_to_sqlite = gts_to_sqlite
+_gts_to_duckdb = gts_to_duckdb
+_gts_to_parquet = gts_to_parquet
+_RdfDataset = RdfDataset
+_GtsFoldViewNative = GtsFoldViewNative
+
+class gts:
+    gts_from_quads = _gts_from_quads
+    gts_from_rdf12_bytes = _gts_from_rdf12_bytes
+    compile_gts_native = _compile_gts_native
+    snapshot_content_id_native = _snapshot_content_id_native
+    feedback_bundle_native = _feedback_bundle_native
+    to_json_ld = _to_json_ld
+    from_json_ld = _from_json_ld
+    to_rdf_xml = _to_rdf_xml
+    from_rdf_xml = _from_rdf_xml
+    gts_relational_rows_from_bytes = _gts_relational_rows_from_bytes
+    gts_to_sqlite = _gts_to_sqlite
+    gts_to_duckdb = _gts_to_duckdb
+    gts_to_parquet = _gts_to_parquet
+    RdfDataset = _RdfDataset
+    GtsFoldViewNative = _GtsFoldViewNative
+
+# ── Slice tooling (bindings/python/src/py_slice.rs, purrdf_native.slice) ─────────
+# Project artifact/dependency tooling, surfaced as `purrdf.slice`.
+
+class _ArtifactRecord:
+    @property
+    def role(self) -> str: ...
+    @property
+    def logical_path(self) -> str: ...
+    @property
+    def media_type(self) -> str: ...
+    @property
+    def raw_digest(self) -> str: ...
+    @property
+    def semantic_digest(self) -> str: ...
+    @property
+    def content(self) -> builtins.bytes: ...
+
+class _ManifestView:
+    @property
+    def identifier(self) -> str: ...
+    @property
+    def slice_iri(self) -> str: ...
+    @property
+    def label(self) -> str | None: ...
+    @property
+    def title(self) -> str | None: ...
+    @property
+    def tier(self) -> str | None: ...
+    @property
+    def creators(self) -> list[str]: ...
+    @property
+    def consumers(self) -> list[str]: ...
+
+class _SliceRecord:
+    @property
+    def manifest(self) -> _ManifestView: ...
+    @property
+    def manifest_path(self) -> str: ...
+    @property
+    def slice_dir(self) -> str: ...
+    @property
+    def artifacts(self) -> list[_ArtifactRecord]: ...
+
+class _DependencyEdge:
+    @property
+    def from_slice(self) -> str: ...
+    @property
+    def to_slice(self) -> str: ...
+    @property
+    def is_semantic(self) -> bool: ...
+    @property
+    def reconciliation(self) -> str: ...
+
+class _ManifestPatch:
+    @property
+    def manifest_path(self) -> str: ...
+    @property
+    def original_text(self) -> str: ...
+    @property
+    def patched_text(self) -> str: ...
+
+class _OwnershipReport:
+    @property
+    def edges(self) -> list[_DependencyEdge]: ...
+    @property
+    def has_ownership_defect(self) -> bool: ...
+    @property
+    def ownership_errors(self) -> list[str]: ...
+
+class _SliceCatalog:
+    @staticmethod
+    def discover(root: str, namespace: str) -> _SliceCatalog: ...
+    @property
+    def records(self) -> list[_SliceRecord]: ...
+    @property
+    def core_slice_iris(self) -> list[str]: ...
+    def fix_deps(self) -> list[_ManifestPatch]: ...
+
+class _OwnershipAnalyzer:
+    def analyze(self) -> _OwnershipReport: ...
+    def analysis_graph_turtle(self) -> str: ...
+
+class slice:
+    ArtifactRecord = _ArtifactRecord
+    ManifestView = _ManifestView
+    SliceRecord = _SliceRecord
+    DependencyEdge = _DependencyEdge
+    ManifestPatch = _ManifestPatch
+    OwnershipReport = _OwnershipReport
+    SliceCatalog = _SliceCatalog
+    OwnershipAnalyzer = _OwnershipAnalyzer

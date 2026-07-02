@@ -51,6 +51,7 @@ mod canon;
 mod io;
 mod mutable;
 mod query;
+mod results;
 mod store;
 mod term;
 mod xsd;
@@ -80,7 +81,12 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<store::PyQuadIter>()?;
     m.add_function(wrap_pyfunction!(io::parse, m)?)?;
     m.add_function(wrap_pyfunction!(io::serialize, m)?)?;
+    m.add_function(wrap_pyfunction!(results::serialize_sparql_solutions, m)?)?;
+    m.add_function(wrap_pyfunction!(results::serialize_sparql_boolean, m)?)?;
+    m.add_function(wrap_pyfunction!(results::parse_sparql_results, m)?)?;
     m.add_function(wrap_pyfunction!(xsd::xsd_value_compare, m)?)?;
     m.add_function(wrap_pyfunction!(xsd::xsd_canonical_lexical, m)?)?;
+    m.add_function(wrap_pyfunction!(xsd::xsd_decode_binary, m)?)?;
+    m.add_function(wrap_pyfunction!(xsd::xsd_normalize_whitespace, m)?)?;
     Ok(())
 }

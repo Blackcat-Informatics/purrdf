@@ -26,6 +26,12 @@ pub enum NativeRdfFormat {
     NQuads,
     /// RDF/XML (`application/rdf+xml`).
     RdfXml,
+    /// TriX — "Triples in XML", a quads/named-graph XML serialization
+    /// (`application/trix`).
+    TriX,
+    /// HexTuples — a line-oriented NDJSON quads serialization
+    /// (`application/x-hextuples`).
+    HexTuples,
 }
 
 impl NativeRdfFormat {
@@ -38,14 +44,20 @@ impl NativeRdfFormat {
             Self::NTriples => "application/n-triples",
             Self::NQuads => "application/n-quads",
             Self::RdfXml => "application/rdf+xml",
+            Self::TriX => "application/trix",
+            Self::HexTuples => "application/x-hextuples",
         }
     }
 
-    /// Whether this format can carry named graphs (TriG / N-Quads). Turtle, N-Triples,
-    /// and RDF/XML are single-graph syntaxes, so a `SerializeGraph::Dataset` request
-    /// against them falls back to the default graph (see `serialize.rs`).
+    /// Whether this format can carry named graphs (TriG / N-Quads / TriX / HexTuples).
+    /// Turtle, N-Triples, and RDF/XML are single-graph syntaxes, so a
+    /// `SerializeGraph::Dataset` request against them falls back to the default graph
+    /// (see `serialize.rs`).
     pub fn supports_datasets(self) -> bool {
-        matches!(self, Self::TriG | Self::NQuads)
+        matches!(
+            self,
+            Self::TriG | Self::NQuads | Self::TriX | Self::HexTuples
+        )
     }
 }
 
@@ -68,6 +80,10 @@ pub fn classify(media_type: &str) -> Result<NativeRdfFormat, RdfDiagnostic> {
         "application/n-triples" | "n-triples" | "ntriples" | "nt" => Ok(NativeRdfFormat::NTriples),
         "application/n-quads" | "n-quads" | "nquads" | "nq" => Ok(NativeRdfFormat::NQuads),
         "application/rdf+xml" | "rdf+xml" | "rdf" | "owl" | "xml" => Ok(NativeRdfFormat::RdfXml),
+        "application/trix" | "trix" => Ok(NativeRdfFormat::TriX),
+        "application/x-hextuples" | "application/hex+x-ndjson" | "hext" | "hextuples" => {
+            Ok(NativeRdfFormat::HexTuples)
+        }
         other => Err(RdfDiagnostic::error(
             "native-codec-unsupported-format",
             format!("unsupported RDF media type or format id `{other}`"),
@@ -95,6 +111,24 @@ mod tests {
             classify("application/rdf+xml").unwrap(),
             NativeRdfFormat::RdfXml
         );
+        assert_eq!(classify("application/trix").unwrap(), NativeRdfFormat::TriX);
+        assert_eq!(
+            classify("application/x-hextuples").unwrap(),
+            NativeRdfFormat::HexTuples
+        );
+    }
+
+    #[test]
+    fn classify_accepts_trix_and_hextuples_ids() {
+        assert_eq!(classify("trix").unwrap(), NativeRdfFormat::TriX);
+        assert_eq!(classify("hext").unwrap(), NativeRdfFormat::HexTuples);
+        assert_eq!(classify("hextuples").unwrap(), NativeRdfFormat::HexTuples);
+    }
+
+    #[test]
+    fn trix_and_hextuples_support_datasets() {
+        assert!(NativeRdfFormat::TriX.supports_datasets());
+        assert!(NativeRdfFormat::HexTuples.supports_datasets());
     }
 
     #[test]
@@ -128,6 +162,8 @@ mod tests {
             NativeRdfFormat::NTriples,
             NativeRdfFormat::NQuads,
             NativeRdfFormat::RdfXml,
+            NativeRdfFormat::TriX,
+            NativeRdfFormat::HexTuples,
         ] {
             assert_eq!(classify(format.media_type()).unwrap(), format);
         }

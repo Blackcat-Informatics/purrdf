@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "purrdf-rdflib"
+version = "0.2.0"
+description = "Opt-in top-level `import rdflib` shadow that resolves to purrdf's rdflib compatibility surface"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT OR Apache-2.0"
+authors = [
+  { name = "Blackcat Informatics Inc.", email = "paudley@blackcatinformatics.ca" },
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+dependencies = ["purrdf"]
+
+[project.urls]
+Homepage = "https://blackcatinformatics.ca/purrdf/"
+Repository = "https://github.com/Blackcat-Informatics/purrdf"
+
+[tool.hatch.build.targets.wheel]
+packages = ["rdflib"]

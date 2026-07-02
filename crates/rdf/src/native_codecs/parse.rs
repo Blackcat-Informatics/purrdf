@@ -173,6 +173,34 @@ fn parse_dataset_mode(
         // grammar over a pure-Rust XML DOM), which interns straight into the frozen IR
         // through the SAME shared statement-layer fold — no intermediate GTS graph.
         NativeRdfFormat::RdfXml => parse_rdfxml_without_panicking(text, base_iri),
+        // TriX / HexTuples parse FIRST-PARTY through their in-repo codecs (XML DOM /
+        // NDJSON), interning straight into the frozen IR through the SAME shared
+        // statement-layer fold.
+        NativeRdfFormat::TriX => catch_codec_panic(NativeRdfFormat::TriX, || {
+            super::trix::parse_trix_to_dataset(text)
+        }),
+        NativeRdfFormat::HexTuples => catch_codec_panic(NativeRdfFormat::HexTuples, || {
+            super::hextuples::parse_hextuples_to_dataset(text)
+        }),
+    }
+}
+
+/// Run a first-party codec parse under a panic guard, converting any unwind into a
+/// structured `native-codec-panic` diagnostic (mirrors the RDF/XML guard).
+fn catch_codec_panic<F>(format: NativeRdfFormat, parse: F) -> Result<Arc<RdfDataset>, RdfDiagnostic>
+where
+    F: FnOnce() -> Result<Arc<RdfDataset>, RdfDiagnostic>,
+{
+    match catch_unwind(AssertUnwindSafe(parse)) {
+        Ok(result) => result,
+        Err(payload) => Err(RdfDiagnostic::error(
+            "native-codec-panic",
+            format!(
+                "native codec panicked while parsing {}: {}",
+                format.media_type(),
+                panic_payload_message(payload.as_ref()),
+            ),
+        )),
     }
 }
 
