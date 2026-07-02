@@ -19,10 +19,11 @@ workspace = true
 [lib]
 # rlib-only, wasm-clean leaf: the SPARQL front-end of the native query stack. It
 # must NOT pull any oxigraph-family crate (it replaces the oxigraph-family SPARQL
-# parser). It builds
-# only on the two CLOSED foundation leaves `purrdf-iri` (#908) and `purrdf-xsd`
-# (#907); it deliberately does NOT depend on `purrdf-core` (whose terms are
-# dataset-interned `TermId` and which pulls a `gts` default feature).
+# parser). It builds on the two CLOSED foundation leaves `purrdf-iri` (#908) and
+# `purrdf-xsd` (#907) plus `memchr` (a wasm-clean SIMD byte-scan primitive for the
+# tokenizer hot paths — not a foundation leaf, the same class of infra dep as the
+# rayon/ahash edges elsewhere); it deliberately does NOT depend on `purrdf-core`
+# (whose terms are dataset-interned `TermId` and which pulls a `gts` default feature).
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_sparql_algebra"
@@ -30,6 +31,10 @@ name = "purrdf_sparql_algebra"
 [dependencies]
 purrdf-iri = { workspace = true }
 purrdf-xsd = { workspace = true }
+# SIMD byte scanning on the tokenizer hot paths (string-literal body, IRIREF end,
+# comment/EOL). SIMD on x86/aarch64, portable SWAR fallback — wasm-clean, no feature
+# gate. NOT an oxigraph-family crate, so the front-end stays a clean native leaf.
+memchr = { workspace = true }
 
 [dev-dependencies]
 # Colored line-diffs on assert_eq! failure (repo convention).
@@ -38,3 +43,9 @@ pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 # Byte-unit AST snapshots for representative queries (repo golden convention).
 insta = { workspace = true }
+# Tokenizer hot-path baselines (dev-dep only).
+criterion = { workspace = true }
+
+[[bench]]
+name = "tokenize"
+harness = false

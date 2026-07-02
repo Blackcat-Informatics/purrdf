@@ -1210,7 +1210,9 @@ dependencies = [
 name = "purrdf-sparql-algebra"
 version = "0.2.1"
 dependencies = [
+ "criterion",
  "insta",
+ "memchr",
  "pretty_assertions",
  "proptest",
  "purrdf-iri",
