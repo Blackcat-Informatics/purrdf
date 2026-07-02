@@ -8,9 +8,12 @@
 // N-Triples corpus. Parsing is the primary beneficiary of WebAssembly SIMD:
 // the engine's byte scanning runs through `memchr`, whose wasm32 `simd128`
 // backend only activates when the module is built with the `+simd128` target
-// feature. This benchmark is how the SIMD build's win is measured and how a
-// future throughput regression is caught — wasm SIMD codegen only exists once
-// the module runs in V8, so a native criterion bench cannot see it.
+// feature. This benchmark is how the SIMD build's win is measured: it prints a
+// compact, greppable summary line you compare against a prior run to spot a
+// throughput regression. It is report-only — it asserts correctness (parsed
+// size) but never gates on throughput and stores no baseline, so a regression
+// is caught by reading the numbers, not automatically. wasm SIMD codegen only
+// exists once the module runs in V8, so a native criterion bench cannot see it.
 //
 // Usage:
 //   node bench/parse.bench.mjs
