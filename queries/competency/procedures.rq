@@ -1,25 +1,25 @@
-# Competency question: "What are the core procedure / execution / step terms in PURRDF?"
+# Competency question: "What are the core procedure / execution / step terms in GMEOW?"
 # Expected: Procedure, ProcedureStep, Execution, ControlFlow, DataFlow, and key properties.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX owl: <http://www.w3.org/2002/07/owl#>
 
 SELECT ?term WHERE {
     {
-        ?term rdfs:subClassOf* purrdf:Procedure .
+        ?term rdfs:subClassOf* gmeow:Procedure .
     } UNION {
-        ?term rdfs:subClassOf* purrdf:ProcedureStep .
+        ?term rdfs:subClassOf* gmeow:ProcedureStep .
     } UNION {
-        ?term rdfs:subClassOf* purrdf:Execution .
+        ?term rdfs:subClassOf* gmeow:Execution .
     } UNION {
-        ?term rdfs:subClassOf* purrdf:ControlFlow .
+        ?term rdfs:subClassOf* gmeow:ControlFlow .
     } UNION {
-        ?term rdfs:subClassOf* purrdf:DataFlow .
+        ?term rdfs:subClassOf* gmeow:DataFlow .
     } UNION {
         ?term a owl:ObjectProperty ;
             rdfs:domain ?domain .
-        FILTER(?domain IN (purrdf:Procedure, purrdf:ProcedureStep, purrdf:Execution, purrdf:ControlFlow, purrdf:DataFlow))
+        FILTER(?domain IN (gmeow:Procedure, gmeow:ProcedureStep, gmeow:Execution, gmeow:ControlFlow, gmeow:DataFlow))
     }
 }
 ORDER BY ?term

@@ -1,4 +1,4 @@
-# Competency question: "What deception-related event types and veridicality values does PURRDF model?"
+# Competency question: "What deception-related event types and veridicality values does GMEOW model?"
 # Expected: eventTypeDeception, eventTypeLie, eventTypePaltering, eventTypeOmission,
 #           eventTypeDistortion, eventTypeBullshit, eventTypeSelfDeception,
 #           eventTypeFabrication, eventTypeForgery, eventTypeImpersonation,
@@ -6,25 +6,25 @@
 #           ClaimVeridicality, veridicalityUntrue, veridicalityLicensedFalsehood.
 # Issues #215, #216, #217.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?deceptionType WHERE {
-    { ?deceptionType a purrdf:EventType . FILTER(?deceptionType IN (
-        purrdf:eventTypeDeception,
-        purrdf:eventTypeLie,
-        purrdf:eventTypePaltering,
-        purrdf:eventTypeOmission,
-        purrdf:eventTypeDistortion,
-        purrdf:eventTypeBullshit,
-        purrdf:eventTypeSelfDeception,
-        purrdf:eventTypeFabrication,
-        purrdf:eventTypeForgery,
-        purrdf:eventTypeImpersonation,
-        purrdf:eventTypeDisinformation
+    { ?deceptionType a gmeow:EventType . FILTER(?deceptionType IN (
+        gmeow:eventTypeDeception,
+        gmeow:eventTypeLie,
+        gmeow:eventTypePaltering,
+        gmeow:eventTypeOmission,
+        gmeow:eventTypeDistortion,
+        gmeow:eventTypeBullshit,
+        gmeow:eventTypeSelfDeception,
+        gmeow:eventTypeFabrication,
+        gmeow:eventTypeForgery,
+        gmeow:eventTypeImpersonation,
+        gmeow:eventTypeDisinformation
     )) }
     UNION
-    { BIND(purrdf:ClaimVeridicality AS ?deceptionType) }
+    { BIND(gmeow:ClaimVeridicality AS ?deceptionType) }
     UNION
-    { ?deceptionType a purrdf:ClaimVeridicality }
+    { ?deceptionType a gmeow:ClaimVeridicality }
 }
 ORDER BY ?deceptionType

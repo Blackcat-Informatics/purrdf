@@ -2,11 +2,11 @@
 # An omission = deception event with heldStandpoint but no projectedStandpoint.
 # Expected: event-omission-001.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?event WHERE {
-    ?event purrdf:eventType purrdf:eventTypeOmission .
-    ?event purrdf:heldStandpoint ?heldClaim .
-    FILTER NOT EXISTS { ?event purrdf:projectedStandpoint ?anyProjected . }
+    ?event gmeow:eventType gmeow:eventTypeOmission .
+    ?event gmeow:heldStandpoint ?heldClaim .
+    FILTER NOT EXISTS { ?event gmeow:projectedStandpoint ?anyProjected . }
 }
 ORDER BY ?event

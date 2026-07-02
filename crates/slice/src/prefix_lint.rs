@@ -172,7 +172,7 @@ mod tests {
     }
 
     fn committed_vocab() -> SliceVocab {
-        SliceVocab::for_namespace("https://blackcatinformatics.ca/purrdf/")
+        SliceVocab::for_namespace("https://blackcatinformatics.ca/gmeow/")
     }
 
     #[test]

@@ -33,6 +33,13 @@ use purrdf_shapes::model::sh::MAX_EXCLUSIVE_CONSTRAINT_COMPONENT;
 use purrdf_shapes::openehr_opt::{lower_magnitude_to_shacl_ttl, read_magnitude_interval};
 use purrdf_shapes::shapes::Constraint;
 
+/// Caller-supplied prefix bindings for the CURIEs passed to
+/// `lower_magnitude_to_shacl_ttl` (PurRDF mints no vocabulary of its own).
+const TEST_PREFIXES: &[(&str, &str)] = &[
+    ("meta", "https://example.org/meta/"),
+    ("ex", "https://purrdf.example/openehr/bp/"),
+];
+
 /// Reads the vendored Blutdruck OPT from disk, relative to this crate's
 /// manifest directory (`crates/shacl` → `../../validations/openehr-bloodpressure`).
 fn read_blutdruck_opt() -> String {
@@ -46,9 +53,9 @@ fn data_node(local: &str, value: &str) -> String {
     format!(
         "<https://purrdf.example/openehr/bp/{local}> \
          <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
-         <https://blackcatinformatics.ca/purrdf/SystolicMeasurement> .\n\
+         <https://example.org/meta/SystolicMeasurement> .\n\
          <https://purrdf.example/openehr/bp/{local}> \
-         <https://blackcatinformatics.ca/purrdf/quantityValue> \
+         <https://example.org/meta/quantityValue> \
          \"{value}\"^^<http://www.w3.org/2001/XMLSchema#decimal> .\n"
     )
 }
@@ -100,9 +107,10 @@ fn half_open_lowers_to_max_exclusive_never_max_inclusive() {
     let systolic = read_magnitude_interval(&opt, "at0004").expect("read systolic magnitude");
     let shapes_ttl = lower_magnitude_to_shacl_ttl(
         &systolic,
-        "purrdf:SystolicMeasurement",
-        "purrdf:quantityValue",
+        "meta:SystolicMeasurement",
+        "meta:quantityValue",
         "ex:SystolicMeasurementShape",
+        TEST_PREFIXES,
     );
 
     let shapes = parse_shapes(&shapes_ttl).expect("parse systolic shapes");
@@ -145,9 +153,10 @@ fn value_equal_to_open_upper_bound_is_rejected() {
     let systolic = read_magnitude_interval(&opt, "at0004").expect("read systolic magnitude");
     let shapes_ttl = lower_magnitude_to_shacl_ttl(
         &systolic,
-        "purrdf:SystolicMeasurement",
-        "purrdf:quantityValue",
+        "meta:SystolicMeasurement",
+        "meta:quantityValue",
         "ex:SystolicMeasurementShape",
+        TEST_PREFIXES,
     );
 
     let data = format!(

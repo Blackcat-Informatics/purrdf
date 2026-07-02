@@ -11,7 +11,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 <h1 align="center">PurRDF</h1>
 
 <p align="center">
-  <em>The RDF 1.2 toolkit with a purr: primitives, codecs, SPARQL, SHACL, and graph transport.</em>
+  <em>The RDF 1.2 toolkit with a purr: primitives, codecs, SPARQL, SHACL, ShEx, and graph transport.</em>
 </p>
 
 <p align="center">
@@ -67,9 +67,16 @@ but it assumes nothing about your ontology or application.
   IR (property paths, aggregates, EXISTS decorrelation, cost-based BGP planning,
   injectable SERVICE federation), gated by the W3C SPARQL 1.1 conformance harness.
   Results in SPARQL JSON/XML/CSV/TSV.
-- **SHACL Core validation** — a native validator gated against the SHACL conformance
-  corpus, plus scoped SHACL 1.2 draft support for reifier shapes. (ShEx is planned;
-  see [`docs/CUTOVER.md`](./docs/CUTOVER.md).)
+- **SHACL validation** — a native validator with the complete SHACL Core feature
+  set (all constraint components, full property paths, qualified value shapes,
+  property pairs), SHACL-SPARQL constraints/targets on the native engine, and
+  scoped SHACL 1.2 draft support for reifier shapes — **114/120 passing** on the
+  vendored W3C test suite (the 6 ledgered are custom-component and
+  pre-binding-semantics gaps).
+- **ShEx 2.1** — a from-scratch ShExC + ShExJ schema layer and validator gated
+  against the official shexTest suite: **1,051/1,051 attempted validation tests,
+  zero expected-failures** (imports/semantic-actions staged next), 99/99 negative
+  syntax, 14/14 negative structure. See [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md).
 - **GTS graph transport** — a single-file, content-addressed, append-only container
   for RDF 1.2 graphs and the binaries they reference: BLAKE3-chained CBOR segments,
   deterministic fold, COSE signing/encryption, pure-Rust crypto (wasm-friendly).
@@ -174,7 +181,8 @@ that CI checks for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-sparql-algebra`](./crates/sparql-algebra/) | SPARQL 1.1/1.2 parser → query algebra AST. |
 | [`purrdf-sparql-eval`](./crates/sparql-eval/) | Multiset SPARQL evaluator in interned `TermId` space. |
 | [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL results JSON/XML/CSV/TSV, plus a provenance-carrying extension. |
-| [`purrdf-shapes`](./crates/shapes/) | SHACL Core validation engine. |
+| [`purrdf-shapes`](./crates/shapes/) | SHACL validation engine (full Core + SHACL-SPARQL). |
+| [`purrdf-shex`](./crates/shex/) | ShEx 2.1: ShExC/ShExJ schemas and validation. |
 | [`purrdf-slice`](./crates/slice/) | Slice catalog: manifests, typed artifacts, ownership/dependency analysis. |
 | [`purrdf-iri`](./crates/iri/) | Zero-dependency IRI/URI parsing, resolution, normalization, CURIEs. |
 | [`purrdf-xsd`](./crates/xsd/) | Zero-dependency XSD 1.1 value space with SPARQL numeric promotion. |
@@ -195,12 +203,18 @@ latency), and the shipped layout is whichever wins. Run them with `make bench`.
 
 ## Conformance
 
-- **SPARQL** — W3C SPARQL 1.1 test suite via `purrdf-sparql-conformance`.
-- **SHACL** — gated against the SHACL Core conformance corpus (parity with pySHACL,
-  `inference="none"`).
-- **RDFC-1.0** — W3C canonicalization fixtures (`crates/rdf/tests/fixtures/rdfc/`).
-- **GTS** — the frozen, byte-exact cross-language vector corpus in
-  [`vectors/`](./vectors/), shared with the other GTS engines.
+Every engine is gated by its official test suite, vendored and frozen in-repo —
+full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md):
+
+| Engine | Suite | Result |
+| --- | --- | --- |
+| ShEx 2.1 validation | shexTest v2.1.0 (`vectors/shexTest/`) | **1,051 / 1,051** attempted, 0 xfail |
+| ShEx schemas / negative syntax / structure | shexTest v2.1.0 | **425/425 · 99/99 · 14/14** |
+| SHACL | W3C data-shapes (`vectors/shacl/`) | **114 / 120** (6 ledgered) |
+| SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **48 / 48** |
+| SPARQL 1.1 | W3C suite via `purrdf-sparql-conformance` | green, xfail-ledgered |
+| RDFC-1.0 | W3C canonicalization fixtures | green |
+| GTS | frozen cross-language vectors (`vectors/`) | byte-exact |
 
 ## Development
 

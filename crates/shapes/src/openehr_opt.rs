@@ -26,6 +26,7 @@
 //! any step of that path is absent for the requested `node_id`.
 
 use std::fmt;
+use std::fmt::Write as _;
 
 /// A parsed `C_DV_QUANTITY` magnitude interval, read verbatim from an OPT.
 #[derive(Debug, Clone, PartialEq)]
@@ -198,6 +199,11 @@ fn format_bound(value: f64) -> String {
 /// targeting `target_class` and constraining `path_predicate` under the
 /// property shape identified by `shape_iri`.
 ///
+/// `target_class` / `path_predicate` / `shape_iri` may be prefixed names; the
+/// caller supplies every `(prefix, namespace)` binding they rely on via
+/// `prefixes` — PurRDF mints no vocabulary namespace of its own, so nothing
+/// beyond the W3C `sh:` prefix is declared by default.
+///
 /// Inclusivity maps directly onto the corresponding SHACL constraint
 /// component: `lower_included` selects `sh:minInclusive` (true) or
 /// `sh:minExclusive` (false); `upper_included` selects `sh:maxInclusive`
@@ -207,6 +213,7 @@ pub fn lower_magnitude_to_shacl_ttl(
     target_class: &str,
     path_predicate: &str,
     shape_iri: &str,
+    prefixes: &[(&str, &str)],
 ) -> String {
     let min_predicate = if interval.lower_included {
         "sh:minInclusive"
@@ -219,10 +226,13 @@ pub fn lower_magnitude_to_shacl_ttl(
         "sh:maxExclusive"
     };
 
+    let mut prefix_block = String::from("@prefix sh:    <http://www.w3.org/ns/shacl#> .\n");
+    for (prefix, ns) in prefixes {
+        let _ = writeln!(prefix_block, "@prefix {prefix}: <{ns}> .");
+    }
+
     format!(
-        "@prefix sh:    <http://www.w3.org/ns/shacl#> .\n\
-         @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .\n\
-         @prefix ex:    <https://purrdf.example/openehr/bp/> .\n\
+        "{prefix_block}\
          \n\
          {shape_iri} a sh:NodeShape ;\n\
          \x20   sh:targetClass {target_class} ;\n\
@@ -240,6 +250,13 @@ pub fn lower_magnitude_to_shacl_ttl(
 mod tests {
     use super::*;
 
+    /// Caller-supplied prefix bindings for the CURIEs the tests pass in
+    /// (PurRDF mints no vocabulary namespace of its own).
+    const TEST_PREFIXES: &[(&str, &str)] = &[
+        ("meta", "https://example.org/meta/"),
+        ("ex", "https://purrdf.example/openehr/bp/"),
+    ];
+
     fn interval(lower_included: bool, upper_included: bool) -> MagnitudeInterval {
         MagnitudeInterval {
             lower: 0.0,
@@ -254,9 +271,10 @@ mod tests {
     fn lower_included_true_emits_min_inclusive() {
         let ttl = lower_magnitude_to_shacl_ttl(
             &interval(true, false),
-            "purrdf:SystolicMeasurement",
-            "purrdf:quantityValue",
+            "meta:SystolicMeasurement",
+            "meta:quantityValue",
             "ex:SystolicMeasurementShape",
+            TEST_PREFIXES,
         );
         assert!(ttl.contains("sh:minInclusive 0"));
         assert!(!ttl.contains("sh:minExclusive"));
@@ -266,9 +284,10 @@ mod tests {
     fn lower_included_false_emits_min_exclusive() {
         let ttl = lower_magnitude_to_shacl_ttl(
             &interval(false, false),
-            "purrdf:SystolicMeasurement",
-            "purrdf:quantityValue",
+            "meta:SystolicMeasurement",
+            "meta:quantityValue",
             "ex:SystolicMeasurementShape",
+            TEST_PREFIXES,
         );
         assert!(ttl.contains("sh:minExclusive 0"));
         assert!(!ttl.contains("sh:minInclusive"));
@@ -278,9 +297,10 @@ mod tests {
     fn upper_included_true_emits_max_inclusive() {
         let ttl = lower_magnitude_to_shacl_ttl(
             &interval(true, true),
-            "purrdf:SystolicMeasurement",
-            "purrdf:quantityValue",
+            "meta:SystolicMeasurement",
+            "meta:quantityValue",
             "ex:SystolicMeasurementShape",
+            TEST_PREFIXES,
         );
         assert!(ttl.contains("sh:maxInclusive 1000"));
         assert!(!ttl.contains("sh:maxExclusive"));
@@ -290,9 +310,10 @@ mod tests {
     fn upper_included_false_emits_max_exclusive() {
         let ttl = lower_magnitude_to_shacl_ttl(
             &interval(true, false),
-            "purrdf:SystolicMeasurement",
-            "purrdf:quantityValue",
+            "meta:SystolicMeasurement",
+            "meta:quantityValue",
             "ex:SystolicMeasurementShape",
+            TEST_PREFIXES,
         );
         assert!(ttl.contains("sh:maxExclusive 1000"));
         assert!(!ttl.contains("sh:maxInclusive"));

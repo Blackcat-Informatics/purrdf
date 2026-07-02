@@ -1,13 +1,13 @@
 # Competency question: "What posts are vacant after a member's tenure ended?"
 # Expected: Posts that have no current Membership filling them.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?post ?org WHERE {
-    ?post a purrdf:Post ;
-          purrdf:postIn ?org .
+    ?post a gmeow:Post ;
+          gmeow:postIn ?org .
     FILTER NOT EXISTS {
-        ?membership purrdf:fillsPost ?post .
+        ?membership gmeow:fillsPost ?post .
     }
 }
 ORDER BY ?org ?post

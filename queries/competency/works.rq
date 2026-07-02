@@ -1,11 +1,11 @@
-# Competency question: "What kinds of creative work does PURRDF model?"
+# Competency question: "What kinds of creative work does GMEOW model?"
 # Expected: CreativeWork and its subclasses (Document, Article, Patent, Dataset,
 # MediaObject, WebPage, SoftwareProduct).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?work WHERE {
-    ?work rdfs:subClassOf* purrdf:CreativeWork .
+    ?work rdfs:subClassOf* gmeow:CreativeWork .
 }
 ORDER BY ?work

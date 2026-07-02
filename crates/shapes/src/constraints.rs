@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use crate::data::{GraphFilter, ShaclDataGraph};
-use crate::model::{purrdf, rdf, sh};
+use crate::model::{rdf, sh, BoxRoleVocab};
 use crate::path;
 use crate::report::ValidationResult;
 use crate::shapes::{Constraint, NodeKindValue, Path, PropertyShape, Shape};
@@ -36,6 +36,27 @@ pub fn validate_shape<G: ShaclDataGraph>(
     focus: &Term,
     shape: &Shape,
 ) -> Result<Vec<ValidationResult>, String> {
+    validate_shape_with(store, focus, shape, None)
+}
+
+/// [`validate_shape`] with the caller-supplied [`BoxRoleVocab`] threaded in.
+///
+/// PurRDF mints no vocabulary IRIs, so the box-role feature has no default:
+/// with `box_role_vocab = None` no data-graph role lookup is performed and no
+/// role individual is stamped onto results — the feature is inactive, not
+/// defaulted. Conformance (result existence) is identical either way; the
+/// vocab only drives result role ATTRIBUTION.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
+/// (see [`validate_shape`]).
+pub fn validate_shape_with<G: ShaclDataGraph>(
+    store: &G,
+    focus: &Term,
+    shape: &Shape,
+    box_role_vocab: Option<&BoxRoleVocab>,
+) -> Result<Vec<ValidationResult>, String> {
     if shape.deactivated {
         return Ok(vec![]);
     }
@@ -54,7 +75,13 @@ pub fn validate_shape<G: ShaclDataGraph>(
 
     // --- Property shapes ---
     for ps in &shape.property_shapes {
-        results.extend(eval_property_shape(store, focus, ps, shape)?);
+        results.extend(eval_property_shape(
+            store,
+            focus,
+            ps,
+            shape,
+            box_role_vocab,
+        )?);
     }
 
     // --- sh:closed (node-shape-level; needs the sibling property shapes) ---
@@ -63,7 +90,7 @@ pub fn validate_shape<G: ShaclDataGraph>(
     // same predicate attribution that property-shape results do (#700 Gap B).
     for constraint in &shape.constraints {
         if let Constraint::Closed { ignored } = constraint {
-            results.extend(eval_closed(store, focus, shape, ignored));
+            results.extend(eval_closed(store, focus, shape, ignored, box_role_vocab));
         }
     }
 
@@ -90,6 +117,7 @@ fn eval_closed<G: ShaclDataGraph>(
     focus: &Term,
     shape: &Shape,
     ignored: &[NamedNode],
+    box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Vec<ValidationResult> {
     let mut permitted: HashSet<String> = HashSet::new();
     for ps in &shape.property_shapes {
@@ -111,7 +139,7 @@ fn eval_closed<G: ShaclDataGraph>(
         // Resolve the offending predicate's graph-box roles (the same resolution
         // property shapes use for their path) so closed-world results are not left
         // with empty path attribution.
-        let path_roles = path_box_roles(store, &Path::Predicate(predicate.clone()));
+        let path_roles = path_box_roles(store, &Path::Predicate(predicate.clone()), box_role_vocab);
         let mut result = ValidationResult {
             focus_node: focus.clone(),
             result_path: Some(Term::NamedNode(predicate.clone())),
@@ -150,6 +178,7 @@ fn eval_property_shape<G: ShaclDataGraph>(
     focus: &Term,
     ps: &PropertyShape,
     parent_shape: &Shape,
+    box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Result<Vec<ValidationResult>, String> {
     // A deactivated property shape validates nothing (SHACL §2.1.3.3).
     if ps.deactivated {
@@ -165,7 +194,7 @@ fn eval_property_shape<G: ShaclDataGraph>(
         Some(ps.path.clone())
     };
     let source_roles = merge_box_roles(&parent_shape.box_roles, &ps.box_roles);
-    let path_roles = path_box_roles(store, &ps.path);
+    let path_roles = path_box_roles(store, &ps.path, box_role_vocab);
 
     // Build a synthetic shape wrapping the property shape so result
     // metadata (source_shape, severity, message) can come from the PS.
@@ -213,7 +242,13 @@ fn eval_property_shape<G: ShaclDataGraph>(
     // fires once per reach, so results are NOT deduplicated here).
     for nested in &ps.property_shapes {
         for value in &value_nodes {
-            results.extend(eval_property_shape(store, value, nested, &ps_as_shape)?);
+            results.extend(eval_property_shape(
+                store,
+                value,
+                nested,
+                &ps_as_shape,
+                box_role_vocab,
+            )?);
         }
     }
 
@@ -226,6 +261,7 @@ fn eval_property_shape<G: ShaclDataGraph>(
         source_roles: &source_roles,
         path_roles: &path_roles,
         path_term: &path_term,
+        box_role_vocab,
     })?);
     Ok(results)
 }
@@ -239,6 +275,7 @@ struct ReifierEvalContext<'a, G: ShaclDataGraph> {
     source_roles: &'a [NamedNode],
     path_roles: &'a [NamedNode],
     path_term: &'a Term,
+    box_role_vocab: Option<&'a BoxRoleVocab>,
 }
 
 // Manual impls (not derives): a `derive(Copy)` would demand `G: Copy`, but the
@@ -263,6 +300,7 @@ fn eval_reifier_shapes<G: ShaclDataGraph>(
         source_roles,
         path_roles,
         path_term,
+        box_role_vocab,
     } = ctx;
     if ps.reifier_shapes.is_empty() && !ps.reification_required {
         return Ok(vec![]);
@@ -271,7 +309,7 @@ fn eval_reifier_shapes<G: ShaclDataGraph>(
         return Ok(vec![]);
     };
 
-    let source_roles = with_cbox_role(source_roles);
+    let source_roles = with_cbox_role(source_roles, box_role_vocab);
     let mut results = Vec::new();
     for value in value_nodes {
         let Some(triple_term) = triple_term(focus, predicate, value) else {
@@ -302,7 +340,8 @@ fn eval_reifier_shapes<G: ShaclDataGraph>(
 
         for reifier in &reifiers {
             for reifier_shape in &ps.reifier_shapes {
-                let inner_results = validate_shape(store, reifier, reifier_shape)?;
+                let inner_results =
+                    validate_shape_with(store, reifier, reifier_shape, box_role_vocab)?;
                 if inner_results.is_empty() {
                     continue;
                 }
@@ -367,14 +406,22 @@ fn reifiers_for<G: ShaclDataGraph>(store: &G, triple_term: &Term) -> Vec<Term> {
     reifiers
 }
 
-fn path_box_roles<G: ShaclDataGraph>(store: &G, path: &Path) -> Vec<NamedNode> {
+fn path_box_roles<G: ShaclDataGraph>(
+    store: &G,
+    path: &Path,
+    box_role_vocab: Option<&BoxRoleVocab>,
+) -> Vec<NamedNode> {
+    // The box-role feature is caller-configured; with no vocab it is INACTIVE.
+    let Some(vocab) = box_role_vocab else {
+        return vec![];
+    };
     // Composite paths key their role lookup on the first reachable predicate —
     // the same representative the report's `result_path` approximation uses.
     let Some(predicate) = path::primary_predicate(path) else {
         return vec![];
     };
     let predicate_term = Term::NamedNode(predicate.clone());
-    let box_role = Term::NamedNode(NamedNode::from(purrdf::GRAPH_BOX_ROLE));
+    let box_role = Term::NamedNode(NamedNode::from(vocab.graph_box_role.as_str()));
     let mut roles: Vec<NamedNode> = store
         .quads_for_pattern(
             Some(&predicate_term),
@@ -393,8 +440,16 @@ fn path_box_roles<G: ShaclDataGraph>(store: &G, path: &Path) -> Vec<NamedNode> {
     roles
 }
 
-fn with_cbox_role(source_roles: &[NamedNode]) -> Vec<NamedNode> {
-    merge_box_roles(source_roles, &[NamedNode::from(purrdf::BOX_CBOX)])
+/// Merge the caller vocabulary's CBox role individual into `source_roles`.
+/// With no vocab configured this is the identity (no role is minted).
+fn with_cbox_role(
+    source_roles: &[NamedNode],
+    box_role_vocab: Option<&BoxRoleVocab>,
+) -> Vec<NamedNode> {
+    let Some(vocab) = box_role_vocab else {
+        return source_roles.to_vec();
+    };
+    merge_box_roles(source_roles, &[NamedNode::from(vocab.box_cbox.as_str())])
 }
 
 fn merge_box_roles(left: &[NamedNode], right: &[NamedNode]) -> Vec<NamedNode> {
@@ -1650,9 +1705,10 @@ fn pair_values<G: ShaclDataGraph>(store: &G, focus: &Term, pred: &NamedNode) -> 
 /// from the same focus node.
 ///
 /// Per spec §4.3.3–4.3.4 a result exists for every offending `(value, other)`
-/// pair; since a result records only the value node, offending pairs collapse
-/// to one result per distinct offending value node (first-seen order). An
-/// incomparable pair (per SPARQL `<` semantics) is a violation.
+/// pair; a result records only the value node, so a value offending against
+/// N comparands yields N results (duplicate tuples — the report is a
+/// multiset, matching the W3C suite's expectations). An incomparable pair
+/// (per SPARQL `<` semantics) is a violation.
 fn pair_order_offenders<G: ShaclDataGraph>(
     store: &G,
     focus: &Term,
@@ -1662,7 +1718,6 @@ fn pair_order_offenders<G: ShaclDataGraph>(
 ) -> Vec<Term> {
     let others = pair_values(store, focus, pred);
     let mut offending: Vec<Term> = Vec::new();
-    let mut seen: HashSet<Term> = HashSet::new();
     for v in value_nodes {
         for o in &others {
             let ok = match compare_terms(v, o) {
@@ -1670,7 +1725,7 @@ fn pair_order_offenders<G: ShaclDataGraph>(
                 Some(std::cmp::Ordering::Equal) => allow_equal,
                 Some(std::cmp::Ordering::Greater) | None => false,
             };
-            if !ok && seen.insert(v.clone()) {
+            if !ok {
                 offending.push(v.clone());
             }
         }
@@ -1897,6 +1952,23 @@ mod tests {
         super::validate_shape(store, focus, shape).expect("constraint evaluation must not error")
     }
 
+    /// The caller-supplied box-role vocabulary the box-role tests configure
+    /// (purrdf mints no vocabulary of its own — these are test terms).
+    fn meta_vocab() -> BoxRoleVocab {
+        BoxRoleVocab::for_namespace("https://example.org/meta/")
+    }
+
+    /// Result-unwrapping shim over [`super::validate_shape_with`], with the
+    /// test box-role vocabulary configured.
+    fn validate_shape_with_roles<G: ShaclDataGraph>(
+        store: &G,
+        focus: &Term,
+        shape: &Shape,
+    ) -> Vec<ValidationResult> {
+        validate_shape_with(store, focus, shape, Some(&meta_vocab()))
+            .expect("constraint evaluation must not error")
+    }
+
     fn load_store(ttl: &str) -> IrDataGraph {
         let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl).expect("Turtle parse");
         // Apply the same SHACL projection `validate_dataset` uses, so RDF-1.2
@@ -1946,13 +2018,13 @@ mod tests {
 
     #[test]
     fn property_shape_box_roles_augment_parent_roles() {
-        use crate::model::purrdf;
         use crate::shapes::Path;
 
+        let vocab = meta_vocab();
         let store = load_store(&format!(
             "@prefix ex: <{EX}> .\n\
-             @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .\n\
-             ex:p purrdf:graphBoxRole purrdf:boxRBox .\n\
+             @prefix meta: <https://example.org/meta/> .\n\
+             ex:p meta:graphBoxRole meta:boxRBox .\n\
              ex:a a ex:Thing .\n"
         ));
         let shape = Shape {
@@ -1968,31 +2040,75 @@ mod tests {
                 severity: Severity::Violation,
                 message: None,
                 deactivated: false,
-                box_roles: vec![named_role(purrdf::BOX_CONFIG_BOX)],
+                box_roles: vec![named_role(&vocab.box_config_box)],
             }],
             severity: Severity::Violation,
             message: None,
             deactivated: false,
-            box_roles: vec![named_role(purrdf::BOX_TBOX)],
+            box_roles: vec![named_role(&vocab.box_tbox)],
+        };
+
+        let results = validate_shape_with_roles(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        let source_roles = role_iris(&results[0].source_box_roles);
+        assert!(source_roles.contains(&vocab.box_tbox.as_str()));
+        assert!(source_roles.contains(&vocab.box_config_box.as_str()));
+        assert_eq!(
+            role_iris(&results[0].path_box_roles),
+            [vocab.box_rbox.as_str()]
+        );
+        let result_roles = role_iris(&results[0].result_box_roles);
+        assert!(result_roles.contains(&vocab.box_tbox.as_str()));
+        assert!(result_roles.contains(&vocab.box_config_box.as_str()));
+        assert!(result_roles.contains(&vocab.box_rbox.as_str()));
+    }
+
+    #[test]
+    fn box_roles_inactive_without_configured_vocab() {
+        use crate::shapes::Path;
+
+        // Same data as `property_shape_box_roles_augment_parent_roles`, but the
+        // vocab is NOT configured: the violation still fires, yet no role is
+        // looked up or minted — the feature is inactive, not defaulted.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> .\n\
+             @prefix meta: <https://example.org/meta/> .\n\
+             ex:p meta:graphBoxRole meta:boxRBox .\n\
+             ex:a a ex:Thing .\n"
+        ));
+        let shape = Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                constraints: vec![Constraint::MinCount(1)],
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Violation,
+                message: None,
+                deactivated: false,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            message: None,
+            deactivated: false,
+            box_roles: vec![],
         };
 
         let results = validate_shape(&store, &ex("a"), &shape);
-        assert_eq!(results.len(), 1);
-        let source_roles = role_iris(&results[0].source_box_roles);
-        assert!(source_roles.contains(&purrdf::BOX_TBOX));
-        assert!(source_roles.contains(&purrdf::BOX_CONFIG_BOX));
-        assert_eq!(role_iris(&results[0].path_box_roles), [purrdf::BOX_RBOX]);
-        let result_roles = role_iris(&results[0].result_box_roles);
-        assert!(result_roles.contains(&purrdf::BOX_TBOX));
-        assert!(result_roles.contains(&purrdf::BOX_CONFIG_BOX));
-        assert!(result_roles.contains(&purrdf::BOX_RBOX));
+        assert_eq!(results.len(), 1, "the violation itself must still fire");
+        assert!(results[0].source_box_roles.is_empty());
+        assert!(results[0].path_box_roles.is_empty());
+        assert!(results[0].result_box_roles.is_empty());
     }
 
     #[test]
     fn reifier_shape_box_roles_preserve_inner_roles() {
-        use crate::model::purrdf;
         use crate::shapes::Path;
 
+        let vocab = meta_vocab();
         let store = load_store(&format!(
             "@prefix ex: <{EX}> .\n\
              @prefix rdf: <{RDF}> .\n\
@@ -2009,7 +2125,7 @@ mod tests {
             severity: Severity::Violation,
             message: None,
             deactivated: false,
-            box_roles: vec![named_role(purrdf::BOX_CONFIG_BOX)],
+            box_roles: vec![named_role(&vocab.box_config_box)],
         };
         let shape = Shape {
             id: ex("S"),
@@ -2029,20 +2145,20 @@ mod tests {
             severity: Severity::Violation,
             message: None,
             deactivated: false,
-            box_roles: vec![named_role(purrdf::BOX_TBOX)],
+            box_roles: vec![named_role(&vocab.box_tbox)],
         };
 
-        let results = validate_shape(&store, &ex("a"), &shape);
+        let results = validate_shape_with_roles(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1);
         assert!(component_iri(&results)[0].contains("ReifierShapeConstraintComponent"));
         let source_roles = role_iris(&results[0].source_box_roles);
-        assert!(source_roles.contains(&purrdf::BOX_TBOX));
-        assert!(source_roles.contains(&purrdf::BOX_CBOX));
-        assert!(source_roles.contains(&purrdf::BOX_CONFIG_BOX));
+        assert!(source_roles.contains(&vocab.box_tbox.as_str()));
+        assert!(source_roles.contains(&vocab.box_cbox.as_str()));
+        assert!(source_roles.contains(&vocab.box_config_box.as_str()));
         let result_roles = role_iris(&results[0].result_box_roles);
-        assert!(result_roles.contains(&purrdf::BOX_TBOX));
-        assert!(result_roles.contains(&purrdf::BOX_CBOX));
-        assert!(result_roles.contains(&purrdf::BOX_CONFIG_BOX));
+        assert!(result_roles.contains(&vocab.box_tbox.as_str()));
+        assert!(result_roles.contains(&vocab.box_cbox.as_str()));
+        assert!(result_roles.contains(&vocab.box_config_box.as_str()));
     }
 
     // ── maxCount ───────────────────────────────────────────────────────────────
@@ -3096,26 +3212,26 @@ mod tests {
 
     #[test]
     fn closed_violation_carries_predicate_box_roles() {
-        use crate::model::purrdf;
         // The offending (undeclared) predicate ex:age declares a graph-box role;
         // the closed-world result must carry it as PATH attribution — closed
         // violations previously dropped predicate roles (#700 Gap B).
+        let vocab = meta_vocab();
         let store = load_store(&format!(
             "@prefix ex: <{EX}> .\n\
-             @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .\n\
-             ex:age purrdf:graphBoxRole purrdf:boxRBox .\n\
+             @prefix meta: <https://example.org/meta/> .\n\
+             ex:age meta:graphBoxRole meta:boxRBox .\n\
              ex:a ex:name \"Al\" ; ex:age 30 .\n"
         ));
         let shape = closed_shape(vec![], &[&format!("{EX}name")]);
-        let results = validate_shape(&store, &ex("a"), &shape);
+        let results = validate_shape_with_roles(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1, "ex:age is an undeclared predicate");
         assert_eq!(
             role_iris(&results[0].path_box_roles),
-            [purrdf::BOX_RBOX],
+            [vocab.box_rbox.as_str()],
             "closed-world violation must carry the offending predicate's box roles"
         );
         assert!(
-            role_iris(&results[0].result_box_roles).contains(&purrdf::BOX_RBOX),
+            role_iris(&results[0].result_box_roles).contains(&vocab.box_rbox.as_str()),
             "merged result roles must include the predicate's path role"
         );
     }

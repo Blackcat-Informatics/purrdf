@@ -6,17 +6,17 @@
 # This list is the intentional definition of "public" for leak-detection purposes;
 # new public consumers must be added here and in the ontology simultaneously.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?fact ?policy ?consumer WHERE {
-    ?fact purrdf:hasDisclosurePolicy ?policy .
-    ?fact purrdf:eligibleForConsumer ?consumer .
-    FILTER(?policy IN (purrdf:policyNeverPublic, purrdf:policyInternalOnly))
+    ?fact gmeow:hasDisclosurePolicy ?policy .
+    ?fact gmeow:eligibleForConsumer ?consumer .
+    FILTER(?policy IN (gmeow:policyNeverPublic, gmeow:policyInternalOnly))
     FILTER(?consumer IN (
-        purrdf:consumerPublicSite,
-        purrdf:consumerWikidata,
-        purrdf:consumerWikipedia,
-        purrdf:consumerSchemaOrgJsonLd,
-        purrdf:consumerFoafExport
+        gmeow:consumerPublicSite,
+        gmeow:consumerWikidata,
+        gmeow:consumerWikipedia,
+        gmeow:consumerSchemaOrgJsonLd,
+        gmeow:consumerFoafExport
     ))
 }

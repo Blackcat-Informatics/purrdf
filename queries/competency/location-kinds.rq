@@ -1,11 +1,11 @@
-# Competency question: "What kinds of location does PURRDF model as first-class
+# Competency question: "What kinds of location does GMEOW model as first-class
 # (structurally distinct) classes?" Expected: Location and its subclasses Place,
 # VirtualLocation, StorageLocation.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?kind WHERE {
-    ?kind rdfs:subClassOf* purrdf:Location .
+    ?kind rdfs:subClassOf* gmeow:Location .
 }
 ORDER BY ?kind

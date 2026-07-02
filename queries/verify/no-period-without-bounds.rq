@@ -2,15 +2,15 @@
 # A period must have either start and end instants or a temporal
 # measurement. A period lacking both is a FAILURE.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?period WHERE {
-    ?period a purrdf:NamedPeriod .
+    ?period a gmeow:NamedPeriod .
     FILTER NOT EXISTS {
-        ?period purrdf:periodStart ?start ;
-                purrdf:periodEnd ?end .
+        ?period gmeow:periodStart ?start ;
+                gmeow:periodEnd ?end .
     }
     FILTER NOT EXISTS {
-        ?period purrdf:hasTemporalMeasurement ?tm .
+        ?period gmeow:hasTemporalMeasurement ?tm .
     }
 }

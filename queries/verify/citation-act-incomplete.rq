@@ -2,22 +2,22 @@
 # citingEntity, one citedEntity, and one citationIntent.
 # Any returned row is a FAILURE.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?citation ?missing WHERE {
-    ?citation a purrdf:CitationAct .
+    ?citation a gmeow:CitationAct .
     {
         BIND("citingEntity" AS ?missing)
-        FILTER NOT EXISTS { ?citation purrdf:citingEntity ?e }
+        FILTER NOT EXISTS { ?citation gmeow:citingEntity ?e }
     }
     UNION
     {
         BIND("citedEntity" AS ?missing)
-        FILTER NOT EXISTS { ?citation purrdf:citedEntity ?w }
+        FILTER NOT EXISTS { ?citation gmeow:citedEntity ?w }
     }
     UNION
     {
         BIND("citationIntent" AS ?missing)
-        FILTER NOT EXISTS { ?citation purrdf:citationIntent ?i }
+        FILTER NOT EXISTS { ?citation gmeow:citationIntent ?i }
     }
 }

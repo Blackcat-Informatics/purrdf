@@ -93,12 +93,12 @@ impl PlanCache {
 /// Domain-vocabulary seams are **caller configuration**, never engine constants:
 ///
 /// - [`Self::with_parser_options`] configures the extension-function namespace
-///   set (default: the published purrdf carrier vocabulary,
-///   [`purrdf_sparql_algebra::PURRDF_NS`]). A gmeow deployment adds its
-///   `https://blackcatinformatics.ca/gmeow/` alias here so `gmeow:heldIn(...)`
-///   queries keep parsing.
+///   set (default: EMPTY — extension functions are off and a call-position IRI
+///   is an ordinary custom function). A gmeow deployment supplies its
+///   `https://blackcatinformatics.ca/gmeow/` namespace here so
+///   `gmeow:heldIn(...)` queries parse as extension calls.
 /// - [`Self::with_standpoint_predicates`] supplies the `accordingTo`/`sharpens`
-///   predicate table that `purrdf:heldIn` and loss-aware `CONSTRUCT` read from
+///   predicate table that `heldIn` and loss-aware `CONSTRUCT` read from
 ///   the caller's data. Without it, `heldIn` is a hard evaluation error.
 #[derive(Default)]
 pub struct NativeSparqlEngine {
@@ -108,11 +108,11 @@ pub struct NativeSparqlEngine {
     order_cache: BgpOrderCache,
     resolver: Option<Arc<dyn GraphResolver>>,
     /// Parse-time configuration (the extension-function namespace set), applied to
-    /// every query and update this engine parses. Defaults to the published purrdf
-    /// namespace only.
+    /// every query and update this engine parses. Defaults to empty (no extension
+    /// namespaces — the seam is caller configuration).
     parser_options: ParserOptions,
     /// The caller-supplied standpoint predicate table threaded into every
-    /// evaluation context. `None` (the default) means `purrdf:heldIn` hard-errors
+    /// evaluation context. `None` (the default) means `heldIn` hard-errors
     /// and `CONSTRUCT` emits no standpoint-scope loss attribution.
     standpoint_predicates: Option<StandpointPredicates>,
 }
@@ -153,9 +153,9 @@ impl NativeSparqlEngine {
 
     /// Set the parse-time configuration ([`ParserOptions`]) this engine uses for
     /// every query and update — most notably the extension-function namespace set.
-    /// The default recognizes only the published purrdf carrier vocabulary; a
-    /// deployment whose queries spell the same closed function set under another
-    /// namespace (e.g. `gmeow:heldIn(...)`) adds that namespace as an alias here.
+    /// The default set is EMPTY (extension functions off); a deployment whose
+    /// queries spell the closed function set under its own namespace (e.g.
+    /// `gmeow:heldIn(...)`) supplies that namespace here.
     #[must_use]
     pub fn with_parser_options(mut self, options: ParserOptions) -> Self {
         self.parser_options = options;
@@ -164,7 +164,7 @@ impl NativeSparqlEngine {
 
     /// Supply the caller's standpoint predicate table (see
     /// [`StandpointPredicates`]): the `accordingTo`/`sharpens` domain predicate
-    /// IRIs that `purrdf:heldIn` and loss-aware `CONSTRUCT` read from the queried
+    /// IRIs that `heldIn` and loss-aware `CONSTRUCT` read from the queried
     /// data. There is **no built-in default** — evaluating `heldIn` on an engine
     /// without this configuration is a hard error.
     #[must_use]
@@ -1045,10 +1045,7 @@ mod tests {
         let ds = gmeow_standpoint_ds();
         let engine = NativeSparqlEngine::new()
             .with_parser_options(ParserOptions {
-                extension_fn_namespaces: vec![
-                    purrdf_sparql_algebra::PURRDF_NS.to_owned(),
-                    GMEOW_NS.to_owned(),
-                ],
+                extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
             })
             .with_standpoint_predicates(StandpointPredicates::new(
                 format!("{GMEOW_NS}accordingTo"),
@@ -1078,14 +1075,16 @@ mod tests {
 
     #[test]
     fn held_in_without_a_predicate_table_is_a_hard_diagnostic() {
-        // heldIn parses under the DEFAULT namespace, but evaluation must hard-fail
-        // when no standpoint predicate table is configured — never guess a default.
+        // heldIn parses under a caller-configured namespace, but evaluation must
+        // hard-fail when no standpoint predicate table is configured — never
+        // guess a default.
         let ds = gmeow_standpoint_ds();
-        let engine = NativeSparqlEngine::new();
+        let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
+            extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+        });
         let q = format!(
-            "PREFIX purrdf: <{}>\n\
-             ASK {{ FILTER( purrdf:heldIn(<http://ex/r>, <http://ex/T1>) ) }}",
-            purrdf_sparql_algebra::PURRDF_NS
+            "PREFIX gmeow: <{GMEOW_NS}>\n\
+             ASK {{ FILTER( gmeow:heldIn(<http://ex/r>, <http://ex/T1>) ) }}"
         );
         let err = engine
             .query(

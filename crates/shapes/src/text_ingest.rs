@@ -230,15 +230,12 @@ mod tests {
     fn extract_prefixes_turtle_and_sparql_forms() {
         let ttl = concat!(
             "@prefix ex: <http://example.org/ns#> .\n",
-            "PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>\n",
+            "PREFIX meta: <https://example.org/meta/>\n",
             "@prefix : <http://example.org/default#> .\n",
         );
         let prefixes = extract_prefixes(ttl);
         assert!(prefixes.contains(&("ex".to_owned(), "http://example.org/ns#".to_owned())));
-        assert!(prefixes.contains(&(
-            "purrdf".to_owned(),
-            "https://blackcatinformatics.ca/purrdf/".to_owned()
-        )));
+        assert!(prefixes.contains(&("meta".to_owned(), "https://example.org/meta/".to_owned())));
         assert!(prefixes.contains(&(String::new(), "http://example.org/default#".to_owned())));
     }
 

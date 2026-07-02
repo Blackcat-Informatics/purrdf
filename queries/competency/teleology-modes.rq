@@ -1,18 +1,18 @@
-# Competency question: "What grades of intentional commitment can PURRDF
+# Competency question: "What grades of intentional commitment can GMEOW
 # record, and how do they divide between intrinsic modes and relators?"
-# Expected: purrdf:Desire and purrdf:Intention as subclasses of
-# purrdf:IntentionalMode (intrinsic — one bearer), and purrdf:Commitment as a
+# Expected: gmeow:Desire and gmeow:Intention as subclasses of
+# gmeow:IntentionalMode (intrinsic — one bearer), and gmeow:Commitment as a
 # logic:Relator (social — committed agent + distinct beneficiaries). The
 # commitment-graded trichotomy of the teleology core slice (#350, EPIC #348).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX logic: <https://blackcatinformatics.ca/logic/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?mode WHERE {
-    { ?mode rdfs:subClassOf purrdf:IntentionalMode . }
+    { ?mode rdfs:subClassOf gmeow:IntentionalMode . }
     UNION
     { ?mode rdfs:subClassOf logic:Relator .
-      FILTER(?mode = purrdf:Commitment) }
+      FILTER(?mode = gmeow:Commitment) }
 }
 ORDER BY ?mode

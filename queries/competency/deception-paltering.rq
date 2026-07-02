@@ -3,14 +3,14 @@
 # while the projected literal claim itself is non-refuted.
 # Expected: event-paltering-001.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?event WHERE {
-    ?event purrdf:eventType purrdf:eventTypePaltering .
-    ?event purrdf:implicates ?implicatedProp .
-    ?event purrdf:heldStandpoint ?heldClaim .
-    ?heldClaim purrdf:claimModality purrdf:refuted .
-    ?event purrdf:projectedStandpoint ?projectedClaim .
-    FILTER NOT EXISTS { ?projectedClaim purrdf:claimModality purrdf:refuted . }
+    ?event gmeow:eventType gmeow:eventTypePaltering .
+    ?event gmeow:implicates ?implicatedProp .
+    ?event gmeow:heldStandpoint ?heldClaim .
+    ?heldClaim gmeow:claimModality gmeow:refuted .
+    ?event gmeow:projectedStandpoint ?projectedClaim .
+    FILTER NOT EXISTS { ?projectedClaim gmeow:claimModality gmeow:refuted . }
 }
 ORDER BY ?event

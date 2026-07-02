@@ -272,7 +272,7 @@ mod tests {
     /// (which skips when that file is absent). Production code stores bare
     /// local names (the open-vocabulary discipline); the consumer supplies its
     /// namespace at the emitters' boundaries via `SliceVocab`.
-    const PURRDF: &str = "https://blackcatinformatics.ca/purrdf/";
+    const GMEOW: &str = "https://blackcatinformatics.ca/gmeow/";
 
     /// The five legacy values, for exhaustive iteration in tests.
     const LEGACY: [&str; 5] = [
@@ -333,15 +333,15 @@ mod tests {
         let ds = Dataset::parse_turtle(&bytes, &module.display().to_string())
             .expect("module.ttl parses");
 
-        let decomposes = format!("{PURRDF}decomposesToAxis");
+        let decomposes = format!("{GMEOW}decomposesToAxis");
         for d in DECOMPOSITIONS {
-            let subject = format!("{PURRDF}{}", d.legacy);
+            let subject = format!("{GMEOW}{}", d.legacy);
             let committed: BTreeSet<String> = ds
                 .objects(&subject, &decomposes)
                 .unwrap()
                 .into_iter()
                 .filter_map(|o| match o {
-                    Object::Named(n) => n.strip_prefix(PURRDF).map(str::to_owned),
+                    Object::Named(n) => n.strip_prefix(GMEOW).map(str::to_owned),
                     _ => None,
                 })
                 .collect();

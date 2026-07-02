@@ -3,14 +3,14 @@
 # veridicality must NOT be returned as a lie.
 # Expected: empty result — the safety property holds.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?fictionClaim WHERE {
-    ?fictionClaim purrdf:accordingTo ?narrativeFrame .
-    ?fictionClaim purrdf:claimVeridicality purrdf:veridicalityLicensedFalsehood .
+    ?fictionClaim gmeow:accordingTo ?narrativeFrame .
+    ?fictionClaim gmeow:claimVeridicality gmeow:veridicalityLicensedFalsehood .
     FILTER EXISTS {
-        ?deceptionEvent purrdf:eventType purrdf:eventTypeLie .
-        ?deceptionEvent purrdf:projectedStandpoint ?fictionClaim .
+        ?deceptionEvent gmeow:eventType gmeow:eventTypeLie .
+        ?deceptionEvent gmeow:projectedStandpoint ?fictionClaim .
     }
 }
 ORDER BY ?fictionClaim

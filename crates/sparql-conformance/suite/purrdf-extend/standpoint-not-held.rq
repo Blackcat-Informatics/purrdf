@@ -1,7 +1,7 @@
 PREFIX rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX ex:     <http://ex/>
-PREFIX purrdf:  <https://blackcatinformatics.ca/purrdf/>
+PREFIX ext:     <https://example.org/ext/>
 ASK {
   ?r rdf:reifies <<( ?s ?p ?o )>> .
-  FILTER( purrdf:heldIn(?r, ex:unrelated) )
+  FILTER( ext:heldIn(?r, ex:unrelated) )
 }

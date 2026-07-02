@@ -1,18 +1,18 @@
-# Competency question: "What sexual and romantic orientations does PURRDF recognise,
+# Competency question: "What sexual and romantic orientations does GMEOW recognise,
 # kept as SEPARATE axes (split-attraction model)?" Expected: the
-# purrdf:SexualOrientationValue individuals (heterosexual, homosexual, bisexual,
+# gmeow:SexualOrientationValue individuals (heterosexual, homosexual, bisexual,
 # pansexual, asexual, demisexual, queer, questioning) AND the distinct
-# purrdf:RomanticOrientationValue individuals (heteroromantic … aromantic …) — so an
+# gmeow:RomanticOrientationValue individuals (heteroromantic … aromantic …) — so an
 # asexual person may still be biromantic. Values, not subclasses; extend by adding
 # individuals.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?orientation ?axis ?label WHERE {
-    { ?orientation a purrdf:SexualOrientationValue . BIND("sexual" AS ?axis) }
+    { ?orientation a gmeow:SexualOrientationValue . BIND("sexual" AS ?axis) }
     UNION
-    { ?orientation a purrdf:RomanticOrientationValue . BIND("romantic" AS ?axis) }
+    { ?orientation a gmeow:RomanticOrientationValue . BIND("romantic" AS ?axis) }
     OPTIONAL { ?orientation rdfs:label ?label . }
 }
 ORDER BY ?axis ?orientation

@@ -677,14 +677,12 @@ fn fmt_function_name(s: &mut String, f: &Function) {
         Function::Predicate => "PREDICATE",
         Function::Object => "OBJECT",
         Function::IsTriple => "isTRIPLE",
-        Function::Purrdf(g) => {
-            // Emit the full canonical purrdf IRI so a re-parse re-dispatches to the same
-            // PurrdfFn. This is a deliberate NORMALIZATION: a PurrdfFn parsed under a
-            // configured namespace alias (e.g. gmeow's, via ParserOptions) still
-            // serializes under the DEFAULT published PURRDF_NS, which every default
-            // parse recognizes — so serialize→re-parse round-trips regardless of which
-            // alias the original query used.
-            let _ = write!(s, "<{}{}>", crate::PURRDF_NS, g.local_name());
+        Function::Purrdf(call) => {
+            // Emit the ORIGINAL IRI the call was parsed from (recorded in the AST
+            // node). PurRDF mints no vocabulary of its own, so no namespace is ever
+            // fabricated on output; re-parsing with the same ParserOptions
+            // re-dispatches to the same PurrdfFn.
+            let _ = write!(s, "<{}>", call.iri);
             return;
         }
         Function::Custom(n) => {
@@ -759,7 +757,7 @@ mod tests {
 
     /// Parse a full query and return its root pattern.
     fn pattern_of(query: &str) -> GraphPattern {
-        let gm = format!("PREFIX purrdf: <{}>\n", crate::PURRDF_NS);
+        let gm = "PREFIX purrdf: <https://example.org/ext/>\n".to_owned();
         let gm = gm.as_str();
         match SparqlParser::new()
             .parse_query(&format!("{gm}{query}"))

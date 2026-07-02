@@ -2,17 +2,17 @@
 # Expected: Executions of type procedureTypeIngestion whose stepOutput includes
 # an Observation (claim) but no Event.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?execution WHERE {
-    ?execution a purrdf:Execution .
-    ?execution purrdf:executesProcedure / purrdf:procedureType purrdf:procedureTypeIngestion .
-    ?execution purrdf:executesStep / purrdf:stepOutput ?output .
-    ?output a purrdf:Observation .
+    ?execution a gmeow:Execution .
+    ?execution gmeow:executesProcedure / gmeow:procedureType gmeow:procedureTypeIngestion .
+    ?execution gmeow:executesStep / gmeow:stepOutput ?output .
+    ?output a gmeow:Observation .
     FILTER NOT EXISTS {
-        ?execution purrdf:executesStep / purrdf:stepOutput ?event .
-        ?event a purrdf:Event .
+        ?execution gmeow:executesStep / gmeow:stepOutput ?event .
+        ?event a gmeow:Event .
     }
 }
 ORDER BY ?execution

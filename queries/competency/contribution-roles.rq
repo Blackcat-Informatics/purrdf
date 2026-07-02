@@ -1,9 +1,9 @@
-# Competency question: "What contribution roles does PURRDF support?"
+# Competency question: "What contribution roles does GMEOW support?"
 # Expected: the canonical CRediT role individuals plus legacy seeds.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?role WHERE {
-    ?role a purrdf:ContributionRole .
+    ?role a gmeow:ContributionRole .
 }
 ORDER BY ?role

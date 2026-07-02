@@ -6,13 +6,13 @@
 # Over the bare ontology this returns no rows (the seam carries no instance
 # data of its own); the consumer child (#364) gates it against the corpus.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT DISTINCT ?segment ?a ?b WHERE {
-    { ?segment purrdf:narrates ?a . } UNION { ?a purrdf:narratedIn ?segment . }
-    UNION { ?d1 a purrdf:NarrationUsage ; purrdf:narrationSegment ?segment ; purrdf:narrationSubject ?a . }
-    { ?segment purrdf:narrates ?b . } UNION { ?b purrdf:narratedIn ?segment . }
-    UNION { ?d2 a purrdf:NarrationUsage ; purrdf:narrationSegment ?segment ; purrdf:narrationSubject ?b . }
+    { ?segment gmeow:narrates ?a . } UNION { ?a gmeow:narratedIn ?segment . }
+    UNION { ?d1 a gmeow:NarrationUsage ; gmeow:narrationSegment ?segment ; gmeow:narrationSubject ?a . }
+    { ?segment gmeow:narrates ?b . } UNION { ?b gmeow:narratedIn ?segment . }
+    UNION { ?d2 a gmeow:NarrationUsage ; gmeow:narrationSegment ?segment ; gmeow:narrationSubject ?b . }
     FILTER(STR(?a) < STR(?b))
 }
 ORDER BY ?segment ?a ?b

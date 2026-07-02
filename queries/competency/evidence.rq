@@ -1,9 +1,9 @@
 # Competency question: "What evidential warrant and source-typing vocabulary does
-# PURRDF provide for evidence-backed claims?"
+# GMEOW provide for evidence-backed claims?"
 # Expected: EvidenceClass, SourceIndependence, SourceTier, CoverageDepth value
 # individuals, plus the five linking properties.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX owl: <http://www.w3.org/2002/07/owl#>
 
@@ -11,27 +11,27 @@ SELECT ?term WHERE {
     {
         ?term a owl:Class .
         FILTER(?term IN (
-            purrdf:EvidenceClass,
-            purrdf:SourceIndependence,
-            purrdf:SourceTier,
-            purrdf:CoverageDepth
+            gmeow:EvidenceClass,
+            gmeow:SourceIndependence,
+            gmeow:SourceTier,
+            gmeow:CoverageDepth
         ))
     } UNION {
-        ?term a purrdf:EvidenceClass .
+        ?term a gmeow:EvidenceClass .
     } UNION {
-        ?term a purrdf:SourceIndependence .
+        ?term a gmeow:SourceIndependence .
     } UNION {
-        ?term a purrdf:SourceTier .
+        ?term a gmeow:SourceTier .
     } UNION {
-        ?term a purrdf:CoverageDepth .
+        ?term a gmeow:CoverageDepth .
     } UNION {
-        ?term rdfs:domain purrdf:CitationAct .
+        ?term rdfs:domain gmeow:CitationAct .
         FILTER(?term IN (
-            purrdf:hasEvidenceClass,
-            purrdf:sourceIndependence,
-            purrdf:sourceTier,
-            purrdf:coverageDepth,
-            purrdf:supportsNotability
+            gmeow:hasEvidenceClass,
+            gmeow:sourceIndependence,
+            gmeow:sourceTier,
+            gmeow:coverageDepth,
+            gmeow:supportsNotability
         ))
     }
 }

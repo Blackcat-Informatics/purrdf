@@ -6,20 +6,20 @@
 # The boundary is local to each propagation hop, not a global label.
 # Issue #217.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX prov:  <http://www.w3.org/ns/prov#>
 
 SELECT ?event ?label ?hopType WHERE {
-    ?event a purrdf:Event .
+    ?event a gmeow:Event .
 
     # Case A: Disinformation — this node is the origin of deception.
     # heldStandpoint and projectedStandpoint diverge (both present, distinct claims)
     # AND a deceptiveIntentClaim is attributed to this event.
     OPTIONAL {
-        ?event purrdf:heldStandpoint ?heldClaim .
-        ?event purrdf:projectedStandpoint ?projectedClaim .
+        ?event gmeow:heldStandpoint ?heldClaim .
+        ?event gmeow:projectedStandpoint ?projectedClaim .
         FILTER(?heldClaim != ?projectedClaim)
-        ?event purrdf:deceptiveIntentClaim ?intentClaim .
+        ?event gmeow:deceptiveIntentClaim ?intentClaim .
         BIND("disinformation" AS ?labelA)
     }
 
@@ -28,11 +28,11 @@ SELECT ?event ?label ?hopType WHERE {
     # AND the projected claim is tagged veridicalityUntrue.
     # AND no deceptiveIntentClaim is present at this node.
     OPTIONAL {
-        ?event purrdf:projectedStandpoint ?projClaim .
-        ?projClaim purrdf:claimVeridicality purrdf:veridicalityUntrue .
-        FILTER NOT EXISTS { ?event purrdf:deceptiveIntentClaim ?anyIntent }
+        ?event gmeow:projectedStandpoint ?projClaim .
+        ?projClaim gmeow:claimVeridicality gmeow:veridicalityUntrue .
+        FILTER NOT EXISTS { ?event gmeow:deceptiveIntentClaim ?anyIntent }
         FILTER NOT EXISTS {
-            ?event purrdf:heldStandpoint ?heldClaim2 .
+            ?event gmeow:heldStandpoint ?heldClaim2 .
             FILTER(?heldClaim2 != ?projClaim)
         }
         BIND("misinformation" AS ?labelB)

@@ -2,10 +2,10 @@
 # Self-deception = same agent in deceiver and deceived roles.
 # Expected: event-self-deception-001 (when participation data is present).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?event ?agent WHERE {
-    ?event purrdf:eventType purrdf:eventTypeSelfDeception .
-    ?event purrdf:hasParticipant ?agent .
+    ?event gmeow:eventType gmeow:eventTypeSelfDeception .
+    ?event gmeow:hasParticipant ?agent .
 }
 ORDER BY ?event

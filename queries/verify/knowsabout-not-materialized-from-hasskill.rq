@@ -1,8 +1,8 @@
 # Native verify QC — the load-bearing regression guard. Removing the strict
-# purrdf:hasSkill rdfs:subPropertyOf purrdf:knowsAbout must NOT be silently
+# gmeow:hasSkill rdfs:subPropertyOf gmeow:knowsAbout must NOT be silently
 # reintroduced: this lane runs over the EL/DL closure, so a re-added subproperty
-# axiom would expand into a materialized purrdf:knowsAbout edge and be caught here.
-# The canonical source of a purrdf:knowsAbout edge is a declarative-familiarity
+# axiom would expand into a materialized gmeow:knowsAbout edge and be caught here.
+# The canonical source of a gmeow:knowsAbout edge is a declarative-familiarity
 # logic:CognitiveAssessment (via the ladder projection) or a deeper rung; a skill
 # is defeasible evidence only and never a source under the shipped reasoning.
 #
@@ -15,20 +15,20 @@
 # mirrors the projection rule: a sub-threshold declarative assessment does NOT
 # project knows-about, so it must not excuse a knows-about edge here either.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX logic: <https://blackcatinformatics.ca/logic/>
 
 SELECT ?agent ?subject WHERE {
-    ?agent purrdf:hasSkill ?subject .
-    ?agent purrdf:knowsAbout ?subject .
-    FILTER NOT EXISTS { ?agent purrdf:understands ?subject }
-    FILTER NOT EXISTS { ?agent purrdf:hasMastered ?subject }
+    ?agent gmeow:hasSkill ?subject .
+    ?agent gmeow:knowsAbout ?subject .
+    FILTER NOT EXISTS { ?agent gmeow:understands ?subject }
+    FILTER NOT EXISTS { ?agent gmeow:hasMastered ?subject }
     FILTER NOT EXISTS {
         ?assessment logic:assessedAgent ?agent ;
                     logic:assessmentSubject ?subject ;
                     logic:assessmentDimension logic:dimensionDeclarativeFamiliarity ;
                     logic:assessmentLevel ?level .
-        ?row logic:projectsLadderEdge purrdf:knowsAbout ;
+        ?row logic:projectsLadderEdge gmeow:knowsAbout ;
              logic:sourceDimension logic:dimensionDeclarativeFamiliarity ;
              logic:thresholdLevel ?threshold .
         ?level logic:levelAtOrAbove ?threshold .

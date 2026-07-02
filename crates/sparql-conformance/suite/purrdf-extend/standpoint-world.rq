@@ -1,8 +1,8 @@
 PREFIX rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX ex:    <http://ex/>
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX ext:    <https://example.org/ext/>
 ASK {
   GRAPH ?world { ex:earth ex:surveyedBy ex:survey . }
   ?r rdf:reifies <<( ex:earth ex:shape ex:sphere )>> .
-  FILTER( purrdf:heldIn(?r, ex:commonSense) )
+  FILTER( ext:heldIn(?r, ex:commonSense) )
 }

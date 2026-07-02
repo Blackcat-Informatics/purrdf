@@ -1,17 +1,17 @@
-# Competency question: "What terms define notability eligibility in PURRDF?"
+# Competency question: "What terms define notability eligibility in GMEOW?"
 # Expected: the WP:GNG triad (independent + secondary + significant coverage)
 # and the supportsNotability property.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?term WHERE {
     ?term a ?type .
     FILTER(
         ?term IN (
-            purrdf:sourceIndependenceIndependent,
-            purrdf:sourceTierSecondary,
-            purrdf:coverageDepthSignificantCoverage,
-            purrdf:supportsNotability
+            gmeow:sourceIndependenceIndependent,
+            gmeow:sourceTierSecondary,
+            gmeow:coverageDepthSignificantCoverage,
+            gmeow:supportsNotability
         )
     )
 }

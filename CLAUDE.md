@@ -14,5 +14,8 @@ Quick orientation:
   oxigraph/PyO3 anywhere near `purrdf-core`; break the wasm32 build (every
   release crate must stay `wasm32-unknown-unknown`-clean — `make wasm`).
 * **Naming**: the project is **PurRDF** in prose, `purrdf` in identifiers.
+* **PurRDF is NOT an ontology**: it mints no vocabulary IRIs. Vocabularies are
+  caller-supplied configuration with no fabricated defaults (hard error or
+  inactive feature when absent); test fixtures use `example.org`.
 * **Perf changes need a bench**: extend the criterion benches rather than
   asserting a speedup.

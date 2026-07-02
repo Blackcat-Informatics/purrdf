@@ -1,13 +1,13 @@
-# Competency question: "What deontic forces can a PURRDF norm carry, and is
+# Competency question: "What deontic forces can a GMEOW norm carry, and is
 # the vocabulary open?"
 # Expected: at least obligation (must), prohibition (must not), permission
 # (may), and recommendation (should) — the seeds of the OPEN DeonticModality
 # vocabulary (#351, EPIC #348). There is no ought, only ought-according-to:
 # every modality-bearing norm names its issuer (SHACL-enforced).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?modality WHERE {
-    ?modality a purrdf:DeonticModality .
+    ?modality a gmeow:DeonticModality .
 }
 ORDER BY ?modality

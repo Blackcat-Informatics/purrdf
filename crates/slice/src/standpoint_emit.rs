@@ -466,7 +466,7 @@ mod tests {
         // Committed-artifact parity: the committed queries were generated with
         // the blackcatinformatics purrdf namespace (prefix `purrdf`), so this
         // cross-check must use it (pure fixtures elsewhere use example.org).
-        let vocab = SliceVocab::for_namespace("https://blackcatinformatics.ca/purrdf/");
+        let vocab = SliceVocab::for_namespace("https://blackcatinformatics.ca/gmeow/");
         let sets = emit_standpoint_sets(&root, &vocab).expect("emit standpoint");
         let dir = root.join("generated").join("queries");
         if !dir.exists() {

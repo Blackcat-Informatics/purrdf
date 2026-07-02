@@ -1,12 +1,12 @@
-# Competency question: "What kinds of name (appellation) does PURRDF model as
+# Competency question: "What kinds of name (appellation) does GMEOW model as
 # first-class, structurally-distinct classes?" Expected: Appellation and its
 # subclasses PersonName, Filename, PlaceName, OrganizationName. A name is a
 # reified object, not a flat datatype property.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?kind WHERE {
-    ?kind rdfs:subClassOf* purrdf:Appellation .
+    ?kind rdfs:subClassOf* gmeow:Appellation .
 }
 ORDER BY ?kind

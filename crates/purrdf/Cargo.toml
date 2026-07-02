@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf"
-description = "PurRDF umbrella crate: RDF 1.2 implementation, slices, and SHACL shape validation"
+description = "PurRDF umbrella crate: RDF 1.2 implementation, slices, and SHACL/ShEx shape validation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 readme = "README.md"
-keywords = ["rdf", "rdf-12", "shacl", "sparql", "knowledge-graph"]
+keywords = ["rdf", "rdf-12", "shacl", "shex", "sparql"]
 
 [lints]
 workspace = true
@@ -24,3 +24,4 @@ path = "src/lib.rs"
 purrdf-rdf = { workspace = true }
 purrdf-slice = { workspace = true }
 purrdf-shapes = { workspace = true }
+purrdf-shex = { workspace = true }

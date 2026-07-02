@@ -1,5 +1,5 @@
 # ROBOT verify QC (#39) — reasoning-centric meta-grounding (CONSTITUTION P8).
-# Every PURRDF class must be punned with a meta-class in EITHER the gUFO namespace
+# Every GMEOW class must be punned with a meta-class in EITHER the gUFO namespace
 # (gufo:Kind / SubKind / Role / Phase / Category / EventType / …) OR the canonical
 # logic: namespace it migrates to (logic:Kind / …, #663/#694). The reasoned-graph
 # dual of the exactly_one_stereotype check in crates/validate/src/gufo.rs. A
@@ -11,7 +11,7 @@ PREFIX logic: <https://blackcatinformatics.ca/logic/>
 
 SELECT ?class WHERE {
     ?class a owl:Class .
-    FILTER(STRSTARTS(STR(?class), "https://blackcatinformatics.ca/purrdf/"))
+    FILTER(STRSTARTS(STR(?class), "https://blackcatinformatics.ca/gmeow/"))
     FILTER NOT EXISTS {
         ?class a ?stereotype .
         FILTER(STRSTARTS(STR(?stereotype), "http://purl.org/nemo/gufo#")

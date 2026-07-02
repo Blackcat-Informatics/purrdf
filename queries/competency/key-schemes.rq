@@ -1,11 +1,11 @@
-# Competency question: "What cryptographic key schemes does PURRDF recognise for
+# Competency question: "What cryptographic key schemes does GMEOW recognise for
 # the keys an agent holds?" Expected: the KeyScheme individuals (OpenPGP, X.509,
 # SSH, Nostr). Schemes are values, not key subclasses — extend by adding
 # individuals, so this query keeps working as new schemes are added.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?scheme WHERE {
-    ?scheme a purrdf:KeyScheme .
+    ?scheme a gmeow:KeyScheme .
 }
 ORDER BY ?scheme

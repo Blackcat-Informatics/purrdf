@@ -1,15 +1,15 @@
 # Competency question: "What can be recorded about a geographic Place?"
-# Expected: the properties domained on purrdf:Place — containment, coordinates,
+# Expected: the properties domained on gmeow:Place — containment, coordinates,
 # geometry, and place type.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 # Domains Place and Location (its umbrella) — so location-level inherited
 # properties (e.g. timezone) are included without dragging in every generic
 # Entity-domain property across the whole vocabulary.
 SELECT ?property WHERE {
-    VALUES ?domain { purrdf:Place purrdf:Location }
+    VALUES ?domain { gmeow:Place gmeow:Location }
     ?property rdfs:domain ?domain .
 }
 ORDER BY ?property

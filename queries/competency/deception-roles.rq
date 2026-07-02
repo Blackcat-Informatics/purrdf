@@ -1,17 +1,17 @@
-# Competency question: "What deception-related participant roles does PURRDF model?"
+# Competency question: "What deception-related participant roles does GMEOW model?"
 # Expected: roleDeceiver, roleDeceived, roleBeneficiaryOfDeception, roleDupe,
 #           roleSpinDoctor (issue #215).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?deceptionRole WHERE {
-    ?deceptionRole a purrdf:ParticipantRole .
+    ?deceptionRole a gmeow:ParticipantRole .
     FILTER(?deceptionRole IN (
-        purrdf:roleDeceiver,
-        purrdf:roleDeceived,
-        purrdf:roleBeneficiaryOfDeception,
-        purrdf:roleDupe,
-        purrdf:roleSpinDoctor
+        gmeow:roleDeceiver,
+        gmeow:roleDeceived,
+        gmeow:roleBeneficiaryOfDeception,
+        gmeow:roleDupe,
+        gmeow:roleSpinDoctor
     ))
 }
 ORDER BY ?deceptionRole

@@ -1,18 +1,18 @@
 # Competency question: "What myths exist and how do their tellings propagate?"
-# Expected: purrdf:Myth, purrdf:hasMythTelling, purrdf:mythFrame, purrdf:propagatesFrom,
-#           and purrdf:wasDerivedFrom (the PROV-O lineage spine reused by propagation).
+# Expected: gmeow:Myth, gmeow:hasMythTelling, gmeow:mythFrame, gmeow:propagatesFrom,
+#           and gmeow:wasDerivedFrom (the PROV-O lineage spine reused by propagation).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?term WHERE {
-    { BIND(purrdf:Myth AS ?term) }
-    UNION { BIND(purrdf:hasMythTelling AS ?term) }
-    UNION { BIND(purrdf:mythFrame AS ?term) }
-    UNION { BIND(purrdf:propagatesFrom AS ?term) }
+    { BIND(gmeow:Myth AS ?term) }
+    UNION { BIND(gmeow:hasMythTelling AS ?term) }
+    UNION { BIND(gmeow:mythFrame AS ?term) }
+    UNION { BIND(gmeow:propagatesFrom AS ?term) }
     UNION {
-        purrdf:propagatesFrom rdfs:subPropertyOf+ purrdf:wasDerivedFrom .
-        BIND(purrdf:wasDerivedFrom AS ?term)
+        gmeow:propagatesFrom rdfs:subPropertyOf+ gmeow:wasDerivedFrom .
+        BIND(gmeow:wasDerivedFrom AS ?term)
     }
 }
 ORDER BY ?term

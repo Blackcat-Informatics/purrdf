@@ -1269,11 +1269,16 @@ fn eval_function(
             Ok(Some(string_term(ctx, &uuid_str)))
         }
 
-        // ---- purrdf extension functions (CLOSED, exhaustive) ----------------
-        Function::Purrdf(PurrdfFn::HeldIn) => eval_held_in(&vals, ctx),
-        // The six `rdf:List` functions (`purrdf:listLength`, …) — every other purrdf
-        // function is a list function, so this arm is total over the registry.
-        Function::Purrdf(list_func) => crate::list_fn::dispatch(*list_func, &vals, ctx),
+        // ---- extension functions (CLOSED, exhaustive) -----------------------
+        // Dispatch on the parse-time-resolved kind; the original call IRI in the
+        // node is serialization-only.
+        Function::Purrdf(call) => match call.fn_kind {
+            PurrdfFn::HeldIn => eval_held_in(&vals, ctx),
+            // The six `rdf:List` functions (`listLength`, …) — every other
+            // extension function is a list function, so this arm is total over
+            // the registry.
+            list_func => crate::list_fn::dispatch(list_func, &vals, ctx),
+        },
 
         // ---- XSD constructor casts (SPARQL 1.1 §17.1) ---------------------
         // An IRI in call position whose IRI is an XSD value-space datatype is the
@@ -1397,12 +1402,12 @@ fn format_plain_decimal(value: f64) -> String {
     }
 }
 
-/// `purrdf:heldIn(reifier, standpoint) -> xsd:boolean` — DIRECT, non-transitive
+/// `heldIn(reifier, standpoint) -> xsd:boolean` — DIRECT, non-transitive
 /// standpoint membership over the already-reasoned dataset.
 ///
 /// The standpoint vocabulary is **caller configuration**, never an engine
 /// constant: the `accordingTo`/`sharpens` predicates are domain terms from the
-/// caller's ontology (the published purrdf carrier vocabulary, gmeow's, …) read
+/// caller's ontology (gmeow's, …) read
 /// from the caller's data, supplied as a
 /// [`crate::eval::StandpointPredicates`] table. Evaluating `heldIn` with **no**
 /// configured table is a hard [`EvalError`] — there is no fabricated default.
@@ -1427,7 +1432,7 @@ fn eval_held_in(
     // the arguments, so a misconfigured deployment cannot get a quietly-wrong answer.
     let Some(predicates) = ctx.standpoint_predicates.clone() else {
         return Err(EvalError::unsupported(
-            "purrdf:heldIn requires a standpoint predicate configuration: supply the \
+            "heldIn requires a standpoint predicate configuration: supply the \
              ontology's accordingTo/sharpens IRIs via \
              NativeSparqlEngine::with_standpoint_predicates (or \
              EvalCtx::with_standpoint_predicates); there is no built-in default",
@@ -3109,11 +3114,19 @@ mod tests {
         );
     }
 
-    // ── purrdf:heldIn extension function ───────────────────────────────────────
+    // ── heldIn extension function ──────────────────────────────────────────────
+
+    /// The `heldIn` extension call node as parsed under a caller-configured
+    /// example.org namespace (the original IRI rides along for serialization).
+    fn held_in_fn() -> Function {
+        Function::Purrdf(purrdf_sparql_algebra::PurrdfCall {
+            fn_kind: PurrdfFn::HeldIn,
+            iri: "https://example.org/ext/heldIn".to_owned(),
+        })
+    }
 
     /// A pure-fixture (example.org) standpoint vocabulary — the predicate table is
-    /// caller-supplied configuration, so the fixture deliberately does NOT use the
-    /// purrdf namespace: any ontology's IRIs work when configured.
+    /// caller-supplied configuration: any ontology's IRIs work when configured.
     const EX_ACCORDING_TO: &str = "http://example.org/accordingTo";
     const EX_SHARPENS: &str = "http://example.org/sharpens";
 
@@ -3147,11 +3160,11 @@ mod tests {
         b.freeze().expect("freeze")
     }
 
-    /// Evaluate `purrdf:heldIn(arg0, arg1)` over `ds` — with the fixture's
+    /// Evaluate `heldIn(arg0, arg1)` over `ds` — with the fixture's
     /// standpoint predicate table configured — and return the EBV
     /// (`None` ⇒ SPARQL error / unbound).
     fn held_in(ds: &RdfDataset, arg0: Expression, arg1: Expression) -> Option<bool> {
-        let expr = Expression::FunctionCall(Function::Purrdf(PurrdfFn::HeldIn), vec![arg0, arg1]);
+        let expr = Expression::FunctionCall(held_in_fn(), vec![arg0, arg1]);
         let mut ctx = EvalCtx::new(ds).with_standpoint_predicates(ex_standpoints());
         let schema = VarSchema::new();
         eval_ebv(&expr, &[], &schema, &mut ctx).expect("eval")
@@ -3162,10 +3175,8 @@ mod tests {
         // No StandpointPredicates configured ⇒ hard error (no fabricated default),
         // even before the arguments are inspected.
         let ds = held_in_ds();
-        let expr = Expression::FunctionCall(
-            Function::Purrdf(PurrdfFn::HeldIn),
-            vec![iri("http://ex/r"), iri("http://ex/T1")],
-        );
+        let expr =
+            Expression::FunctionCall(held_in_fn(), vec![iri("http://ex/r"), iri("http://ex/T1")]);
         let mut ctx = EvalCtx::new(&ds);
         let schema = VarSchema::new();
         let err = eval_ebv(&expr, &[], &schema, &mut ctx)

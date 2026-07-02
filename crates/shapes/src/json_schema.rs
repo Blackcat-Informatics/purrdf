@@ -567,7 +567,7 @@ fn annotation_def() -> Value {
     json!({
         "type": "object",
         "title": "RDF-1.2 statement metadata (reifier annotation)",
-        "description": "Free-form metadata about an asserted triple (e.g. purrdf:accordingTo, purrdf:confidence, purrdf:assertedAt). Permissive; tightened by #699.",
+        "description": "Free-form metadata about an asserted triple (e.g. meta:accordingTo, meta:confidence, meta:assertedAt). Permissive; tightened by #699.",
         "additionalProperties": {
             "anyOf": [
                 { "type": "string" },
@@ -1122,20 +1122,17 @@ mod tests {
         @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
         @prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
         @prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
-        @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
+        @prefix meta: <https://example.org/meta/> .
     ";
 
-    /// The fixture namespace table: `purrdf` primary, plus the `logic` prefix
+    /// The fixture namespace table: `meta` primary, plus the `logic` prefix
     /// the cross-namespace tests declare. Nothing is hardcoded in library code
     /// — these are DECLARED here exactly as a shapes document would.
     fn fixture_ns() -> Namespaces {
         Namespaces::new(
-            "purrdf",
+            "meta",
             &[
-                (
-                    "purrdf".to_owned(),
-                    "https://blackcatinformatics.ca/purrdf/".to_owned(),
-                ),
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
                 (
                     "logic".to_owned(),
                     "https://blackcatinformatics.ca/logic/".to_owned(),
@@ -1172,16 +1169,16 @@ mod tests {
             @prefix ex: <https://example.org/> .
             ex:PersonShape a sh:NodeShape ;
                 sh:targetClass ex:Person ;
-                sh:property [ sh:path purrdf:name ; sh:minCount 1 ] .
+                sh:property [ sh:path meta:name ; sh:minCount 1 ] .
         ",
         );
     }
 
     #[test]
     fn logic_target_class_keyed_by_curie() {
-        // A non-purrdf but KNOWN-prefix target class (logic:) keys its `$defs` body
+        // A non-primary but KNOWN-prefix target class (logic:) keys its `$defs` body
         // by the full CURIE and discriminates `@type` on that same CURIE, so a
-        // closed-world logic node is enforced exactly like a purrdf node (#772).
+        // closed-world logic node is enforced exactly like a primary-namespace node (#772).
         let schema = schema_of(&compile_ttl(
             r"
             @prefix logic: <https://blackcatinformatics.ca/logic/> .
@@ -1218,8 +1215,8 @@ mod tests {
     fn test_curie_compaction_and_local_name() {
         let ns = fixture_ns();
         assert_eq!(
-            ns.compact_iri("https://blackcatinformatics.ca/purrdf/Person"),
-            "purrdf:Person"
+            ns.compact_iri("https://example.org/meta/Person"),
+            "meta:Person"
         );
         // Builtins are always merged in, even though the fixture never declares xsd.
         assert_eq!(
@@ -1230,10 +1227,7 @@ mod tests {
             ns.compact_iri("http://example.org/Foo"),
             "http://example.org/Foo"
         );
-        assert_eq!(
-            local_name("https://blackcatinformatics.ca/purrdf/Person"),
-            "Person"
-        );
+        assert_eq!(local_name("https://example.org/meta/Person"), "Person");
         assert_eq!(
             local_name("http://www.w3.org/2001/XMLSchema#integer"),
             "integer"
@@ -1243,14 +1237,11 @@ mod tests {
     #[test]
     fn test_namespaces_primary_and_def_key() {
         let ns = fixture_ns();
-        assert!(ns.is_primary("https://blackcatinformatics.ca/purrdf/Person"));
+        assert!(ns.is_primary("https://example.org/meta/Person"));
         assert!(!ns.is_primary("https://blackcatinformatics.ca/logic/Claim"));
-        assert_eq!(ns.primary_ns(), "https://blackcatinformatics.ca/purrdf/");
+        assert_eq!(ns.primary_ns(), "https://example.org/meta/");
         // Primary → bare local name; other declared → CURIE; undeclared → full IRI.
-        assert_eq!(
-            ns.def_key("https://blackcatinformatics.ca/purrdf/Person"),
-            "Person"
-        );
+        assert_eq!(ns.def_key("https://example.org/meta/Person"), "Person");
         assert_eq!(
             ns.def_key("https://blackcatinformatics.ca/logic/FormalizationCandidate"),
             "logic:FormalizationCandidate"
@@ -1296,10 +1287,7 @@ mod tests {
     #[test]
     fn test_namespaces_context_object_carries_all_prefixes() {
         let ctx = fixture_ns().context_object();
-        assert_eq!(
-            ctx.get("purrdf"),
-            Some(&json!("https://blackcatinformatics.ca/purrdf/"))
-        );
+        assert_eq!(ctx.get("meta"), Some(&json!("https://example.org/meta/")));
         assert_eq!(
             ctx.get("logic"),
             Some(&json!("https://blackcatinformatics.ca/logic/"))
@@ -1311,7 +1299,7 @@ mod tests {
     #[test]
     fn non_purrdf_primary_namespace_compiles() {
         // The downstream (gmeow) call pattern: a completely different primary
-        // namespace, declared by the caller — nothing purrdf-specific remains
+        // namespace, declared by the caller — nothing namespace-specific remains
         // in the emitter's keying, discrimination, or `$id`.
         let ttl = r"
             @prefix sh:    <http://www.w3.org/ns/shacl#> .
@@ -1362,25 +1350,25 @@ mod tests {
     fn test_required_from_min_count_and_array_vs_single() {
         let c = compile_ttl(
             r"
-            purrdf:PersonShape a sh:NodeShape ;
-                sh:targetClass purrdf:Person ;
-                sh:property [ sh:path purrdf:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
-                sh:property [ sh:path purrdf:nickname ; sh:datatype xsd:string ] .
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+                sh:property [ sh:path meta:nickname ; sh:datatype xsd:string ] .
             ",
         );
         let schema = schema_of(&c);
         let person = def(&schema, "Person");
-        // required contains purrdf:name (minCount 1)
+        // required contains meta:name (minCount 1)
         let required = person["required"].as_array().expect("required array");
-        assert!(required.iter().any(|v| v == "purrdf:name"));
+        assert!(required.iter().any(|v| v == "meta:name"));
         // name (maxCount 1) is a single value, NOT an array
-        let name = &person["properties"]["purrdf:name"];
+        let name = &person["properties"]["meta:name"];
         assert_ne!(name["type"], json!("array"), "maxCount 1 → single value");
         // nickname (no maxCount, minCount<=1) accepts BOTH the bare single form
         // AND the array form: the projector emits a bare scalar for a single
         // value and an array only for multiple values, so the schema must accept
         // either or it would reject SHACL-conformant single-value data (#700).
-        let nickname = &person["properties"]["purrdf:nickname"];
+        let nickname = &person["properties"]["meta:nickname"];
         let alts = nickname["anyOf"]
             .as_array()
             .expect("no-maxCount property is an anyOf of single|array");
@@ -1399,22 +1387,22 @@ mod tests {
     fn test_datatype_type_and_format() {
         let c = compile_ttl(
             r"
-            purrdf:EventShape a sh:NodeShape ;
-                sh:targetClass purrdf:Event ;
-                sh:property [ sh:path purrdf:at ; sh:maxCount 1 ; sh:datatype xsd:dateTime ] ;
-                sh:property [ sh:path purrdf:count ; sh:maxCount 1 ; sh:datatype xsd:integer ] .
+            meta:EventShape a sh:NodeShape ;
+                sh:targetClass meta:Event ;
+                sh:property [ sh:path meta:at ; sh:maxCount 1 ; sh:datatype xsd:dateTime ] ;
+                sh:property [ sh:path meta:count ; sh:maxCount 1 ; sh:datatype xsd:integer ] .
             ",
         );
         let schema = schema_of(&c);
         let event = def(&schema, "Event");
         // dateTime → anyOf containing {type:string, format:date-time}
-        let at = &event["properties"]["purrdf:at"];
+        let at = &event["properties"]["meta:at"];
         let at_alts = at["anyOf"].as_array().expect("anyOf");
         assert!(at_alts
             .iter()
             .any(|alt| alt["format"] == json!("date-time")));
         // integer → anyOf containing {type:integer}
-        let count = &event["properties"]["purrdf:count"];
+        let count = &event["properties"]["meta:count"];
         let count_alts = count["anyOf"].as_array().expect("anyOf");
         assert!(count_alts.iter().any(|alt| alt["type"] == json!("integer")));
     }
@@ -1423,13 +1411,13 @@ mod tests {
     fn test_enum_from_sh_in() {
         let c = compile_ttl(
             r#"
-            purrdf:ColorShape a sh:NodeShape ;
-                sh:targetClass purrdf:Color ;
-                sh:property [ sh:path purrdf:value ; sh:maxCount 1 ; sh:in ( "red" "green" "blue" ) ] .
+            meta:ColorShape a sh:NodeShape ;
+                sh:targetClass meta:Color ;
+                sh:property [ sh:path meta:value ; sh:maxCount 1 ; sh:in ( "red" "green" "blue" ) ] .
             "#,
         );
         let schema = schema_of(&c);
-        let value = &def(&schema, "Color")["properties"]["purrdf:value"];
+        let value = &def(&schema, "Color")["properties"]["meta:value"];
         let en = value["enum"].as_array().expect("enum array");
         // sorted: blue, green, red
         assert_eq!(en.len(), 3);
@@ -1445,13 +1433,13 @@ mod tests {
     fn test_pattern() {
         let c = compile_ttl(
             r#"
-            purrdf:CodeShape a sh:NodeShape ;
-                sh:targetClass purrdf:Code ;
-                sh:property [ sh:path purrdf:code ; sh:maxCount 1 ; sh:pattern "^[A-Z]+$" ] .
+            meta:CodeShape a sh:NodeShape ;
+                sh:targetClass meta:Code ;
+                sh:property [ sh:path meta:code ; sh:maxCount 1 ; sh:pattern "^[A-Z]+$" ] .
             "#,
         );
         let schema = schema_of(&c);
-        let code = &def(&schema, "Code")["properties"]["purrdf:code"];
+        let code = &def(&schema, "Code")["properties"]["meta:code"];
         assert_eq!(code["pattern"], json!("^[A-Z]+$"));
     }
 
@@ -1459,26 +1447,26 @@ mod tests {
     fn test_closed_additional_properties_false() {
         let c = compile_ttl(
             r"
-            purrdf:ClosedShape a sh:NodeShape ;
-                sh:targetClass purrdf:Sealed ;
+            meta:ClosedShape a sh:NodeShape ;
+                sh:targetClass meta:Sealed ;
                 sh:closed true ;
                 sh:ignoredProperties ( rdf:type ) ;
-                sh:property [ sh:path purrdf:only ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+                sh:property [ sh:path meta:only ; sh:maxCount 1 ; sh:datatype xsd:string ] .
             ",
         );
         let schema = schema_of(&c);
         let sealed = def(&schema, "Sealed");
         assert_eq!(sealed["additionalProperties"], json!(false));
         // The single declared property key is present.
-        assert!(sealed["properties"]["purrdf:only"].is_object());
+        assert!(sealed["properties"]["meta:only"].is_object());
     }
 
     #[test]
     fn test_not_constraint() {
         let c = compile_ttl(
             r"
-            purrdf:NotShape a sh:NodeShape ;
-                sh:targetClass purrdf:Thing ;
+            meta:NotShape a sh:NodeShape ;
+                sh:targetClass meta:Thing ;
                 sh:not [ sh:nodeKind sh:Literal ] .
             ",
         );
@@ -1491,10 +1479,10 @@ mod tests {
     fn test_sparql_constraint_records_loss_and_comment() {
         let c = compile_ttl(
             r#"
-            purrdf:SparqlShape a sh:NodeShape ;
-                sh:targetClass purrdf:Guarded ;
+            meta:SparqlShape a sh:NodeShape ;
+                sh:targetClass meta:Guarded ;
                 sh:sparql [
-                    sh:select "SELECT $this WHERE { $this <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://blackcatinformatics.ca/purrdf/Guarded> . }" ;
+                    sh:select "SELECT $this WHERE { $this <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/meta/Guarded> . }" ;
                 ] .
             "#,
         );
@@ -1519,15 +1507,15 @@ mod tests {
     fn test_object_property_uses_ref() {
         let c = compile_ttl(
             r"
-            purrdf:OrgShape a sh:NodeShape ;
-                sh:targetClass purrdf:Organization ;
-                sh:property [ sh:path purrdf:member ; sh:maxCount 1 ; sh:class purrdf:Person ] .
-            purrdf:PersonShape a sh:NodeShape ;
-                sh:targetClass purrdf:Person .
+            meta:OrgShape a sh:NodeShape ;
+                sh:targetClass meta:Organization ;
+                sh:property [ sh:path meta:member ; sh:maxCount 1 ; sh:class meta:Person ] .
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person .
             ",
         );
         let schema = schema_of(&c);
-        let member = &def(&schema, "Organization")["properties"]["purrdf:member"];
+        let member = &def(&schema, "Organization")["properties"]["meta:member"];
         // anyOf includes a node ref {"@id":..} and a $ref to #/$defs/Person.
         let alts = member["anyOf"].as_array().expect("anyOf");
         assert!(alts.iter().any(|a| a["$ref"] == json!("#/$defs/Person")));
@@ -1538,9 +1526,9 @@ mod tests {
     fn test_annotation_def_present_and_root_envelope() {
         let c = compile_ttl(
             r"
-            purrdf:PersonShape a sh:NodeShape ;
-                sh:targetClass purrdf:Person ;
-                sh:property [ sh:path purrdf:name ; sh:datatype xsd:string ] .
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:property [ sh:path meta:name ; sh:datatype xsd:string ] .
             ",
         );
         let schema = schema_of(&c);
@@ -1565,10 +1553,10 @@ mod tests {
     fn test_deactivated_shape_skipped() {
         let c = compile_ttl(
             r"
-            purrdf:GoneShape a sh:NodeShape ;
-                sh:targetClass purrdf:Gone ;
+            meta:GoneShape a sh:NodeShape ;
+                sh:targetClass meta:Gone ;
                 sh:deactivated true ;
-                sh:property [ sh:path purrdf:x ; sh:datatype xsd:string ] .
+                sh:property [ sh:path meta:x ; sh:datatype xsd:string ] .
             ",
         );
         let schema = schema_of(&c);
@@ -1582,9 +1570,9 @@ mod tests {
     fn test_openapi_embeds_components_schemas() {
         let c = compile_ttl(
             r"
-            purrdf:PersonShape a sh:NodeShape ;
-                sh:targetClass purrdf:Person ;
-                sh:property [ sh:path purrdf:name ; sh:datatype xsd:string ] .
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:property [ sh:path meta:name ; sh:datatype xsd:string ] .
             ",
         );
         let openapi: Value = serde_json::from_str(&c.openapi_json).expect("openapi JSON");
@@ -1624,18 +1612,18 @@ mod tests {
     /// class with NO NodeShape must NOT emit a dangling `$ref`.
     #[test]
     fn every_ref_resolves() {
-        // purrdf:Organization HAS a shape; purrdf:Ghost (the sh:class target of the
+        // meta:Organization HAS a shape; meta:Ghost (the sh:class target of the
         // `haunts` property) has NONE — so no `$defs/Ghost` is emitted and a ref
         // to it would dangle. Also exercise sh:node (inline) and @annotation.
         let c = compile_ttl(
             r"
-            purrdf:OrgShape a sh:NodeShape ;
-                sh:targetClass purrdf:Organization ;
-                sh:node [ sh:property [ sh:path purrdf:label ; sh:datatype xsd:string ] ] ;
-                sh:property [ sh:path purrdf:member ; sh:maxCount 1 ; sh:class purrdf:Person ] ;
-                sh:property [ sh:path purrdf:haunts ; sh:maxCount 1 ; sh:class purrdf:Ghost ] .
-            purrdf:PersonShape a sh:NodeShape ;
-                sh:targetClass purrdf:Person .
+            meta:OrgShape a sh:NodeShape ;
+                sh:targetClass meta:Organization ;
+                sh:node [ sh:property [ sh:path meta:label ; sh:datatype xsd:string ] ] ;
+                sh:property [ sh:path meta:member ; sh:maxCount 1 ; sh:class meta:Person ] ;
+                sh:property [ sh:path meta:haunts ; sh:maxCount 1 ; sh:class meta:Ghost ] .
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person .
             ",
         );
         let schema = schema_of(&c);
@@ -1669,11 +1657,11 @@ mod tests {
         );
         // …and the haunts property must carry the node-reference-only form with a
         // $comment noting Ghost has no shape.
-        let haunts = &def(&schema, "Organization")["properties"]["purrdf:haunts"];
+        let haunts = &def(&schema, "Organization")["properties"]["meta:haunts"];
         let comment = haunts["$comment"].as_str().unwrap_or("");
         assert!(
             comment.contains("Ghost") && comment.contains("no NodeShape"),
-            "expected a node-reference-only $comment for purrdf:Ghost, got {haunts:?}"
+            "expected a node-reference-only $comment for meta:Ghost, got {haunts:?}"
         );
         // The Person ref (class WITH a shape) is still present.
         assert!(refs.iter().any(|r| r == "Person"));
@@ -1704,15 +1692,15 @@ mod tests {
 
     #[test]
     fn closed_world_rejects_incomplete_typed_node() {
-        // A class with a required property: a node typed purrdf:Thing that is
-        // missing purrdf:req must (structurally) be funnelled through Thing's
+        // A class with a required property: a node typed meta:Thing that is
+        // missing meta:req must (structurally) be funnelled through Thing's
         // `then` and fail Thing's `required` — i.e. the discrimination exists and
-        // Thing actually requires purrdf:req.
+        // Thing actually requires meta:req.
         let c = compile_ttl(
             r"
-            purrdf:ThingShape a sh:NodeShape ;
-                sh:targetClass purrdf:Thing ;
-                sh:property [ sh:path purrdf:req ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+            meta:ThingShape a sh:NodeShape ;
+                sh:targetClass meta:Thing ;
+                sh:property [ sh:path meta:req ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
             ",
         );
         let schema = schema_of(&c);
@@ -1738,7 +1726,7 @@ mod tests {
             .find(|c| c["then"]["$ref"] == json!("#/$defs/Thing"))
             .expect("a conditional whose then $refs #/$defs/Thing");
 
-        // Its `if` requires @type and matches @type == "purrdf:Thing" both as a
+        // Its `if` requires @type and matches @type == "meta:Thing" both as a
         // bare const and as an array `contains`.
         let if_clause = &thing_cond["if"];
         assert_eq!(if_clause["required"], json!(["@type"]));
@@ -1746,26 +1734,24 @@ mod tests {
             .as_array()
             .expect("@type discrimination anyOf");
         assert!(
-            type_alts
-                .iter()
-                .any(|a| a["const"] == json!("purrdf:Thing")),
-            "expected a bare const purrdf:Thing branch, got {type_alts:?}"
+            type_alts.iter().any(|a| a["const"] == json!("meta:Thing")),
+            "expected a bare const meta:Thing branch, got {type_alts:?}"
         );
         assert!(
             type_alts
                 .iter()
                 .any(|a| a["type"] == json!("array")
-                    && a["contains"]["const"] == json!("purrdf:Thing")),
-            "expected an array-contains purrdf:Thing branch, got {type_alts:?}"
+                    && a["contains"]["const"] == json!("meta:Thing")),
+            "expected an array-contains meta:Thing branch, got {type_alts:?}"
         );
 
-        // And Thing actually requires purrdf:req — so an incomplete node IS
+        // And Thing actually requires meta:req — so an incomplete node IS
         // rejected once routed through Thing's `then`.
         let thing = def(&schema, "Thing");
         let required = thing["required"].as_array().expect("Thing.required array");
         assert!(
-            required.iter().any(|v| v == "purrdf:req"),
-            "Thing must require purrdf:req, got {required:?}"
+            required.iter().any(|v| v == "meta:req"),
+            "Thing must require meta:req, got {required:?}"
         );
 
         // Thing itself must NOT require @type (discrimination lives in Node).
@@ -1791,10 +1777,10 @@ mod tests {
     #[test]
     fn test_determinism_byte_stable() {
         let body = r"
-            purrdf:PersonShape a sh:NodeShape ;
-                sh:targetClass purrdf:Person ;
-                sh:property [ sh:path purrdf:name ; sh:minCount 1 ; sh:datatype xsd:string ] ;
-                sh:property [ sh:path purrdf:age ; sh:maxCount 1 ; sh:datatype xsd:integer ] .
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] ;
+                sh:property [ sh:path meta:age ; sh:maxCount 1 ; sh:datatype xsd:integer ] .
         ";
         let a = compile_ttl(body);
         let b = compile_ttl(body);

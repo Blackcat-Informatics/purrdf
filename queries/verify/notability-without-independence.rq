@@ -1,12 +1,12 @@
 # Negative test: a citation claiming notability support must be from an
 # independent source (WP:GNG triad — independence).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?citation WHERE {
-    ?citation a purrdf:CitationAct .
-    ?citation purrdf:supportsNotability true .
+    ?citation a gmeow:CitationAct .
+    ?citation gmeow:supportsNotability true .
     FILTER NOT EXISTS {
-        ?citation purrdf:sourceIndependence purrdf:sourceIndependenceIndependent .
+        ?citation gmeow:sourceIndependence gmeow:sourceIndependenceIndependent .
     }
 }

@@ -1,15 +1,15 @@
 # Competency question: "Does the claimed-authority ordering span the levels
 # transitively — is absolute stronger than conditional through the chain?"
-# Expected: one row binding ?top = purrdf:authorityAbsolute, reached from
-# purrdf:authorityConditional through the strongerThan+ property path (the
+# Expected: one row binding ?top = gmeow:authorityAbsolute, reached from
+# gmeow:authorityConditional through the strongerThan+ property path (the
 # kernel GranularityLevel ordered-vocabulary pattern, third use — #351).
-# Norms themselves are NEVER ordered transitively: purrdf:overrides is
+# Norms themselves are NEVER ordered transitively: gmeow:overrides is
 # pairwise and defeasible; chains are solver work (Principle 12).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?top WHERE {
-    ?top a purrdf:AuthorityLevel .
-    ?top purrdf:strongerThan+ purrdf:authorityConditional .
-    FILTER NOT EXISTS { ?higher purrdf:strongerThan ?top . }
+    ?top a gmeow:AuthorityLevel .
+    ?top gmeow:strongerThan+ gmeow:authorityConditional .
+    FILTER NOT EXISTS { ?higher gmeow:strongerThan ?top . }
 }

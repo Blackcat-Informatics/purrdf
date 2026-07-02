@@ -1,12 +1,12 @@
 # Competency question: "What organizations and their predecessors exist through a merger?"
 # Expected: Successor organizations linked to their predecessor organizations via a merger event.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?successor ?predecessor ?event WHERE {
-    ?event a purrdf:Event ;
-           purrdf:eventType purrdf:eventTypeMerger ;
-           purrdf:successorOrganization ?successor ;
-           purrdf:predecessorOrganization ?predecessor .
+    ?event a gmeow:Event ;
+           gmeow:eventType gmeow:eventTypeMerger ;
+           gmeow:successorOrganization ?successor ;
+           gmeow:predecessorOrganization ?predecessor .
 }
 ORDER BY ?event ?predecessor ?successor

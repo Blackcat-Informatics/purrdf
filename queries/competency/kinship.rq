@@ -1,11 +1,11 @@
-# Competency question: "Which kinship relationships between persons does PURRDF define?"
+# Competency question: "Which kinship relationships between persons does GMEOW define?"
 # Expected: hasParent, hasChild, hasSpouse, hasSibling.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?relationship WHERE {
-    ?relationship rdfs:domain purrdf:Person ;
-                  rdfs:range purrdf:Person .
+    ?relationship rdfs:domain gmeow:Person ;
+                  rdfs:range gmeow:Person .
 }
 ORDER BY ?relationship

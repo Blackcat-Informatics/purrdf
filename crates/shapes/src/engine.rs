@@ -242,7 +242,12 @@ where
             if !include_focus(shape, focus) {
                 continue;
             }
-            all_results.extend(crate::constraints::validate_shape(data, focus, shape)?);
+            all_results.extend(crate::constraints::validate_shape_with(
+                data,
+                focus,
+                shape,
+                shapes.box_role_vocab.as_ref(),
+            )?);
         }
     }
 
@@ -394,18 +399,36 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// Returns an error string if the shapes Turtle fails to parse or contains
 /// unsupported SHACL constructs.
 pub fn parse_shapes(shapes_ttl: &str) -> Result<Shapes, String> {
+    parse_shapes_with_config(shapes_ttl, None)
+}
+
+/// [`parse_shapes`] with the caller-supplied [`BoxRoleVocab`]
+/// (`crate::model::BoxRoleVocab`) threaded through.
+///
+/// PurRDF mints no vocabulary IRIs, so the box-role annotation feature has no
+/// default vocabulary: with `box_role_vocab = None` it is INACTIVE (shapes
+/// parse fine, but no role annotations are collected or stamped).
+///
+/// # Errors
+///
+/// Returns an error string if the shapes Turtle fails to parse or contains
+/// unsupported SHACL constructs.
+pub fn parse_shapes_with_config(
+    shapes_ttl: &str,
+    box_role_vocab: Option<crate::model::BoxRoleVocab>,
+) -> Result<Shapes, String> {
     // Parse the shapes graph via the native purrdf codecs (#909) — no
     // the oxigraph `io` parser. The native codec drops document prefixes once it folds to
     // the IR, so we recover the `@prefix`/SPARQL `PREFIX` map by scanning the
     // source text: SHACL-AF sh:select queries (and pySHACL) rely on prefixed
-    // names like `purrdf:`. See #578. A syntax error is reported per-statement so
+    // names. See #578. A syntax error is reported per-statement so
     // a SHACL author sees the full list in one pass (#828 item 4), not the
     // fix-one-rerun-find-the-next loop.
     let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(shapes_ttl)
         .map_err(|errors| errors.join("\n"))?;
     let doc_prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
 
-    crate::shapes::from_dataset_with_prefixes(&shapes_dataset, &doc_prefixes)
+    crate::shapes::from_dataset_with_config(&shapes_dataset, &doc_prefixes, box_role_vocab)
 }
 
 /// Validate data (N-Triples) against shapes (Turtle), returning a [`ValidationReport`].
@@ -425,13 +448,28 @@ pub fn parse_shapes(shapes_ttl: &str) -> Result<Shapes, String> {
 ///
 /// Returns an error string if either graph fails to parse.
 pub fn validate_graphs(data_nt: &str, shapes_ttl: &str) -> Result<ValidationReport, String> {
+    validate_graphs_with_config(data_nt, shapes_ttl, None)
+}
+
+/// [`validate_graphs`] with the caller-supplied [`BoxRoleVocab`]
+/// (`crate::model::BoxRoleVocab`) threaded through to shape parsing and
+/// validation. `None` leaves the box-role feature inactive.
+///
+/// # Errors
+///
+/// Returns an error string if either graph fails to parse.
+pub fn validate_graphs_with_config(
+    data_nt: &str,
+    shapes_ttl: &str,
+    box_role_vocab: Option<crate::model::BoxRoleVocab>,
+) -> Result<ValidationReport, String> {
     // Parse the data graph via the native codecs (#909). Every malformed
     // N-Triples line is reported in one pass — same multi-error contract as
     // `parse_shapes`. See #828 (item 4).
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
 
-    let shapes = parse_shapes(shapes_ttl)?;
+    let shapes = parse_shapes_with_config(shapes_ttl, box_role_vocab)?;
     validate_dataset(data.as_ref(), &shapes)
 }
 

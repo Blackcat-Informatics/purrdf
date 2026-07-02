@@ -3,8 +3,8 @@
 # Competency (#349): find carriers that ENACT a mode without any vantage
 # recording that they DESCRIBE it — pure use, no mention: performances,
 # demands, dark patterns; never reports or analyses.
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 SELECT DISTINCT ?carrier WHERE {
-    ?carrier purrdf:hasAboutness purrdf:aboutnessEnacts .
-    FILTER NOT EXISTS { ?carrier purrdf:hasAboutness purrdf:aboutnessDescribes }
+    ?carrier gmeow:hasAboutness gmeow:aboutnessEnacts .
+    FILTER NOT EXISTS { ?carrier gmeow:hasAboutness gmeow:aboutnessDescribes }
 }

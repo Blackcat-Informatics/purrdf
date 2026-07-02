@@ -17,7 +17,7 @@ use std::sync::{Arc, OnceLock};
 use ::purrdf::RdfDataset;
 
 use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
-use crate::model::{purrdf, rdf, rdfs, sh};
+use crate::model::{rdf, rdfs, sh, BoxRoleVocab};
 use crate::report::Severity;
 use crate::term::{NamedNode, Term};
 
@@ -228,7 +228,8 @@ pub struct PropertyShape {
     /// Whether `sh:deactivated true` is set — a deactivated property shape
     /// validates nothing.
     pub deactivated: bool,
-    /// Optional PurRDF ABox/TBox/RBox/CBox role annotations on this property shape.
+    /// Optional graph-box role annotations on this property shape, read via the
+    /// caller-supplied [`BoxRoleVocab`] (empty when no vocab is configured).
     pub box_roles: Vec<NamedNode>,
 }
 
@@ -249,7 +250,8 @@ pub struct Shape {
     pub message: Option<String>,
     /// Whether `sh:deactivated true` is set.
     pub deactivated: bool,
-    /// Optional PurRDF ABox/TBox/RBox/CBox role annotations on this shape.
+    /// Optional graph-box role annotations on this shape, read via the
+    /// caller-supplied [`BoxRoleVocab`] (empty when no vocab is configured).
     pub box_roles: Vec<NamedNode>,
 }
 
@@ -258,6 +260,10 @@ pub struct Shape {
 pub struct Shapes {
     /// Node shapes extracted from the shapes graph.
     pub node_shapes: Vec<Shape>,
+    /// The caller-supplied box-role vocabulary these shapes were parsed with;
+    /// carried into validation so data-graph role lookups use the same terms.
+    /// `None` = the box-role feature is inactive.
+    pub box_role_vocab: Option<BoxRoleVocab>,
 }
 
 // ── Public entry point ─────────────────────────────────────────────────────────
@@ -293,8 +299,29 @@ pub fn from_dataset_with_prefixes(
     dataset: &Arc<RdfDataset>,
     doc_prefixes: &[(String, String)],
 ) -> Result<Shapes, String> {
+    from_dataset_with_config(dataset, doc_prefixes, None)
+}
+
+/// Parse shapes from a dataset with the full caller configuration: the
+/// document prefix fallback map (see [`from_dataset_with_prefixes`]) plus the
+/// optional caller-supplied [`BoxRoleVocab`].
+///
+/// PurRDF mints no vocabulary IRIs, so the box-role annotation feature has no
+/// default vocabulary: with `box_role_vocab = None` it is INACTIVE (every
+/// parsed `box_roles` list stays empty and validation performs no role
+/// lookups).
+///
+/// # Errors
+///
+/// Returns `Err(String)` on any unsupported SHACL construct or missing
+/// structural data — see [`from_dataset`].
+pub fn from_dataset_with_config(
+    dataset: &Arc<RdfDataset>,
+    doc_prefixes: &[(String, String)],
+    box_role_vocab: Option<BoxRoleVocab>,
+) -> Result<Shapes, String> {
     let data = IrDataGraph::new(Arc::clone(dataset));
-    let mut parser = Parser::new(&data, doc_prefixes);
+    let mut parser = Parser::new(&data, doc_prefixes, box_role_vocab);
     parser.parse()
 }
 
@@ -308,14 +335,21 @@ struct Parser<'s> {
     /// The shapes document's `@prefix` map (prefix → namespace), used as the
     /// fallback PREFIX header for SHACL-AF `sh:select` queries.
     doc_prefixes: Vec<(String, String)>,
+    /// The caller-supplied box-role vocabulary; `None` = feature inactive.
+    box_role_vocab: Option<BoxRoleVocab>,
 }
 
 impl<'s> Parser<'s> {
-    fn new(data: &'s IrDataGraph, doc_prefixes: &[(String, String)]) -> Self {
+    fn new(
+        data: &'s IrDataGraph,
+        doc_prefixes: &[(String, String)],
+        box_role_vocab: Option<BoxRoleVocab>,
+    ) -> Self {
         Self {
             data,
             in_flight: HashSet::new(),
             doc_prefixes: doc_prefixes.to_vec(),
+            box_role_vocab,
         }
     }
 
@@ -396,7 +430,10 @@ impl<'s> Parser<'s> {
             node_shapes.push(shape);
         }
 
-        Ok(Shapes { node_shapes })
+        Ok(Shapes {
+            node_shapes,
+            box_role_vocab: self.box_role_vocab.clone(),
+        })
     }
 
     /// Whether `id` declares any SHACL target of its own (`sh:targetClass`,
@@ -487,10 +524,15 @@ impl<'s> Parser<'s> {
         self.objects_of(subject, predicate).into_iter().next()
     }
 
-    /// Collect deterministic PurRDF graph-box role annotations from a shape node.
+    /// Collect deterministic graph-box role annotations from a shape node via
+    /// the caller-supplied [`BoxRoleVocab`]. With no vocab configured the
+    /// box-role feature is inactive and this returns an empty list.
     fn box_roles_of(&self, subject: &Term) -> Vec<NamedNode> {
+        let Some(vocab) = &self.box_role_vocab else {
+            return vec![];
+        };
         let mut roles: Vec<NamedNode> = self
-            .objects_of(subject, purrdf::GRAPH_BOX_ROLE)
+            .objects_of(subject, &vocab.graph_box_role)
             .into_iter()
             .filter_map(|t| match t {
                 Term::NamedNode(n) => Some(n),
@@ -1775,13 +1817,12 @@ mod tests {
     // ── Importable prefix set resolves through the production reader ─────────
     #[test]
     fn core_prefixes_import_resolves_registry_only_prefixes() {
-        let vocab =
-            purrdf_slice::SliceVocab::for_namespace("https://blackcatinformatics.ca/purrdf/");
+        let vocab = purrdf_slice::SliceVocab::for_namespace("https://example.org/meta/");
         let core_set = purrdf_slice::emit_core_prefixes(&vocab);
         let shape = r#"
-            purrdf:SpanImportProofShape a sh:NodeShape ;
-                sh:prefixes purrdf:CorePrefixes ;
-                sh:targetClass purrdf:Thing ;
+            meta:SpanImportProofShape a sh:NodeShape ;
+                sh:prefixes meta:CorePrefixes ;
+                sh:targetClass meta:Thing ;
                 sh:sparql [
                     a sh:SPARQLConstraint ;
                     sh:message "registry-only prefixes must resolve via the imported set" ;
@@ -1795,7 +1836,7 @@ mod tests {
         let ttl = format!("{core_set}\n{shape}");
 
         let shapes = crate::engine::parse_shapes(&ttl)
-            .expect("sh:prefixes purrdf:CorePrefixes must resolve registry-only prefixes");
+            .expect("sh:prefixes meta:CorePrefixes must resolve registry-only prefixes");
         let select = shapes
             .node_shapes
             .iter()
@@ -1816,7 +1857,7 @@ mod tests {
             let line = format!("PREFIX {prefix}: <{ns}>");
             assert!(
                 select.contains(&line),
-                "registry prefix `{prefix}:` must resolve via purrdf:CorePrefixes; \
+                "registry prefix `{prefix}:` must resolve via meta:CorePrefixes; \
                  missing `{line}` in injected header:\n{select}"
             );
         }

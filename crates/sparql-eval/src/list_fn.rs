@@ -5,7 +5,8 @@
 //!
 //! These bind the FnO list primitives — `listLength`, `listGet`, `listIndexOf`,
 //! `listSlice`, `listConcat`, `listContains` — to executable SPARQL extension
-//! functions, so a query can write `purrdf:listLength(?list)` directly. They are
+//! functions, so a query can spell `ext:listLength(?list)` under whatever extension-function
+//! namespace the caller configures. They are
 //! recognized at parse time as members of the closed
 //! [`PurrdfFn`](purrdf_sparql_algebra::PurrdfFn) registry and dispatched from the
 //! `Function::Purrdf` arm of [`crate::expr`].
@@ -58,13 +59,11 @@ pub(crate) fn dispatch(
         PurrdfFn::ListContains => list_contains(ctx, vals),
         PurrdfFn::ListSlice => list_slice(ctx, vals),
         PurrdfFn::ListConcat => list_concat(ctx, vals),
-        PurrdfFn::HeldIn => Err(EvalError::internal(
-            "purrdf:heldIn is not an rdf:List function",
-        )),
+        PurrdfFn::HeldIn => Err(EvalError::internal("heldIn is not an rdf:List function")),
     }
 }
 
-/// `purrdf:listLength(list)` → the number of members, as `xsd:integer`. A non-list
+/// `listLength(list)` → the number of members, as `xsd:integer`. A non-list
 /// argument yields a SPARQL error (`Ok(None)`).
 fn list_length(
     ctx: &mut EvalCtx<'_>,
@@ -79,7 +78,7 @@ fn list_length(
     }
 }
 
-/// `purrdf:listGet(list, index)` → the zero-based member, or a SPARQL error when the
+/// `listGet(list, index)` → the zero-based member, or a SPARQL error when the
 /// index is out of range / not an integer.
 fn list_get(
     ctx: &mut EvalCtx<'_>,
@@ -103,7 +102,7 @@ fn list_get(
     }
 }
 
-/// `purrdf:listIndexOf(list, value)` → the zero-based index of the first occurrence,
+/// `listIndexOf(list, value)` → the zero-based index of the first occurrence,
 /// or a SPARQL error when the value is absent.
 fn list_index_of(
     ctx: &mut EvalCtx<'_>,
@@ -121,7 +120,7 @@ fn list_index_of(
     }
 }
 
-/// `purrdf:listContains(list, value)` → `xsd:boolean`. A non-list argument yields a
+/// `listContains(list, value)` → `xsd:boolean`. A non-list argument yields a
 /// SPARQL error (`Ok(None)`); membership over a valid (possibly empty) list is total.
 fn list_contains(
     ctx: &mut EvalCtx<'_>,
@@ -136,7 +135,7 @@ fn list_contains(
     Ok(Some(bool_term(ctx, members.iter().any(|m| m == value))))
 }
 
-/// `purrdf:listSlice(list, start, end)` → a fresh `rdf:List` of the members in the
+/// `listSlice(list, start, end)` → a fresh `rdf:List` of the members in the
 /// half-open index range `[start, end)`. Indices are clamped to the list bounds
 /// (negatives to 0), so an out-of-range or inverted range yields `rdf:nil`. The new
 /// cells are buffered on [`EvalCtx`] and surface at the result boundary (see
@@ -162,7 +161,7 @@ fn list_slice(
     Ok(Some(intern(ctx, value)))
 }
 
-/// `purrdf:listConcat(listA, listB)` → a fresh `rdf:List` of A's members followed by
+/// `listConcat(listA, listB)` → a fresh `rdf:List` of A's members followed by
 /// B's. The new cells are buffered on [`EvalCtx`] and surface at the result boundary
 /// (see [`materialize_list`]). A non-list argument yields a SPARQL error.
 fn list_concat(
@@ -476,10 +475,20 @@ mod tests {
         b.freeze().expect("freeze")
     }
 
+    /// The caller-configured extension-function namespace these tests parse with
+    /// (the `g:` prefix in `PREFIX` below binds to the same namespace).
+    fn ext_options() -> purrdf_sparql_algebra::ParserOptions {
+        purrdf_sparql_algebra::ParserOptions {
+            extension_fn_namespaces: vec!["https://example.org/ext/".to_owned()],
+        }
+    }
+
     /// Run `query` and return sorted stringified rows (a multiset comparison).
     fn rows(ds: &RdfDataset, query: &str) -> Vec<Vec<String>> {
         use purrdf_sparql_algebra::SparqlParser;
-        let parsed = SparqlParser::new().parse_query(query).expect("parse");
+        let parsed = SparqlParser::new()
+            .parse_query_with(query, &ext_options())
+            .expect("parse");
         let mut ctx = EvalCtx::new(ds);
         match evaluate_query(&parsed, &mut ctx).expect("eval") {
             Outcome::Solutions(seq) => {
@@ -510,12 +519,14 @@ mod tests {
     /// Evaluate a query expected to hard-fail, returning the error.
     fn eval_err(ds: &RdfDataset, query: &str) -> EvalError {
         use purrdf_sparql_algebra::SparqlParser;
-        let parsed = SparqlParser::new().parse_query(query).expect("parse");
+        let parsed = SparqlParser::new()
+            .parse_query_with(query, &ext_options())
+            .expect("parse");
         let mut ctx = EvalCtx::new(ds);
         evaluate_query(&parsed, &mut ctx).expect_err("expected a hard failure")
     }
 
-    const PREFIX: &str = "PREFIX g: <https://blackcatinformatics.ca/purrdf/> ";
+    const PREFIX: &str = "PREFIX g: <https://example.org/ext/> ";
 
     #[test]
     fn list_length_counts_members() {
@@ -593,27 +604,27 @@ mod tests {
     }
 
     #[test]
-    fn unknown_purrdf_function_is_a_parse_error() {
-        // The purrdf function surface is a CLOSED registry: an unrecognized
-        // purrdf-namespace IRI in call position fails fast at parse time and never
-        // reaches evaluation.
+    fn unknown_extension_function_is_a_parse_error() {
+        // The extension-function surface is a CLOSED registry: an unrecognized
+        // IRI under a configured namespace in call position fails fast at parse
+        // time and never reaches evaluation.
         use purrdf_sparql_algebra::SparqlParser;
         let q = format!("{PREFIX} SELECT ?x WHERE {{ BIND(g:notAListFunction(1) AS ?x) }}");
         let err = SparqlParser::new()
-            .parse_query(&q)
-            .expect_err("closed registry must reject an unknown purrdf function");
+            .parse_query_with(&q, &ext_options())
+            .expect_err("closed registry must reject an unknown extension function");
         assert!(
-            err.to_string()
-                .contains("unknown purrdf extension function"),
+            err.to_string().contains("unknown extension function"),
             "got {err}"
         );
     }
 
     #[test]
     fn unknown_custom_function_still_hard_fails() {
-        // A non-purrdf custom IRI parses to `Function::Custom` and hard-fails at eval.
+        // A custom IRI outside the configured namespace parses to
+        // `Function::Custom` and hard-fails at eval.
         let ds = list_ds();
-        let q = "SELECT ?x WHERE { BIND(<http://example.org/notAFunction>(1) AS ?x) }";
+        let q = "SELECT ?x WHERE { BIND(<http://other.example/notAFunction>(1) AS ?x) }";
         let err = eval_err(&ds, q);
         assert!(matches!(err, EvalError::Unsupported(_)), "got {err:?}");
     }
@@ -836,7 +847,7 @@ mod tests {
         ds: &Arc<RdfDataset>,
         query: &str,
     ) -> (Vec<Vec<Option<TermValue>>>, Arc<RdfDataset>) {
-        let engine = NativeSparqlEngine::new();
+        let engine = NativeSparqlEngine::new().with_parser_options(ext_options());
         let res = engine
             .query(
                 ds,
@@ -855,7 +866,7 @@ mod tests {
 
     /// Run a CONSTRUCT and return its output graph.
     fn run_graph(ds: &Arc<RdfDataset>, query: &str) -> Arc<RdfDataset> {
-        let engine = NativeSparqlEngine::new();
+        let engine = NativeSparqlEngine::new().with_parser_options(ext_options());
         match engine
             .query(
                 ds,

@@ -5,13 +5,13 @@
 # Disagreement is two vantages' rows at one ordinal with different states:
 # visible, never resolved (Principle 9). Over the bare ontology: no rows.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?vantage ?ordinal ?state WHERE {
-    ?sample a purrdf:ArcSample ;
-        purrdf:vantage ?vantage ;
-        purrdf:samplePosition ?pos ;
-        purrdf:sampleState ?state .
-    ?pos purrdf:positionOrdinal ?ordinal .
+    ?sample a gmeow:ArcSample ;
+        gmeow:vantage ?vantage ;
+        gmeow:samplePosition ?pos ;
+        gmeow:sampleState ?state .
+    ?pos gmeow:positionOrdinal ?ordinal .
 }
 ORDER BY ?vantage ?ordinal

@@ -183,3 +183,66 @@ fn jsonld_preserves_literal_value_space() {
         );
     }
 }
+
+/// The JSON-LD-star statement-metadata downcast mints IRIs in the CALLER's
+/// vocabulary only: star input without a configured vocab must hard-fail
+/// (PurRDF is not an ontology and fabricates no default namespace), while
+/// star-free input downcasts fine unconfigured.
+#[test]
+fn jsonld_statement_metadata_downcast_requires_caller_vocab() {
+    use purrdf_rdf::native_codecs::jsonld::{
+        jsonld_to_statement_metadata_nquads, StatementMetadataVocab,
+    };
+
+    // Star-bearing JSON-LD: an `@annotation` reifier on the base triple.
+    let star_json = r#"{
+      "@graph": [
+        {
+          "@id": "https://e/s",
+          "https://e/p": {
+            "@id": "https://e/o",
+            "@annotation": {
+              "@id": "https://e/r",
+              "https://e/source": { "@id": "https://e/doc" }
+            }
+          }
+        }
+      ]
+    }"#;
+
+    // Unconfigured + star features = hard error, never a fabricated namespace.
+    let err = jsonld_to_statement_metadata_nquads(star_json.as_bytes(), None)
+        .expect_err("star downcast without a vocab must fail closed");
+    assert!(
+        err.to_string()
+            .contains("requires a statement-metadata vocabulary"),
+        "unexpected error: {err}"
+    );
+
+    // A caller-supplied vocabulary lowers into the caller's namespace.
+    let vocab = StatementMetadataVocab {
+        statement_metadata: "https://example.org/meta/StatementMetadata",
+        q_subject: "https://example.org/meta/qSubject",
+        q_predicate: "https://example.org/meta/qPredicate",
+        q_object: "https://example.org/meta/qObject",
+        q_object_literal: "https://example.org/meta/qObjectLiteral",
+    };
+    let nq = jsonld_to_statement_metadata_nquads(star_json.as_bytes(), Some(&vocab))
+        .expect("star downcast with an explicit vocab");
+    assert!(nq.contains("https://example.org/meta/StatementMetadata"));
+    assert!(nq.contains("https://example.org/meta/qSubject"));
+    assert!(
+        !nq.contains("<<("),
+        "downcast output must be star-free N-Quads:\n{nq}"
+    );
+
+    // Star-free input needs no vocabulary at all.
+    let plain_json = r#"{
+      "@graph": [
+        { "@id": "https://e/s", "https://e/p": { "@id": "https://e/o" } }
+      ]
+    }"#;
+    let nq = jsonld_to_statement_metadata_nquads(plain_json.as_bytes(), None)
+        .expect("star-free downcast must work unconfigured");
+    assert!(nq.contains("<https://e/s> <https://e/p> <https://e/o> ."));
+}

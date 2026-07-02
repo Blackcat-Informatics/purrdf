@@ -1,9 +1,9 @@
-# Competency question: "What citation intents does PURRDF support?"
+# Competency question: "What citation intents does GMEOW support?"
 # Expected: the ten CitationIntent seed individuals.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?intent WHERE {
-    ?intent a purrdf:CitationIntent .
+    ?intent a gmeow:CitationIntent .
 }
 ORDER BY ?intent

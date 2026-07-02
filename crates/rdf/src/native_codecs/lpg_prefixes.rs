@@ -43,11 +43,6 @@ const PREFIXES_BY_LEN: &[(&str, &str)] = &[
     ("pleiades", "http://pleiades.stoa.org/places/vocab#"),
     ("bibframe", "http://id.loc.gov/ontologies/bibframe/"),
     ("as", "https://www.w3.org/ns/activitystreams#"),
-    // The published PurRDF carrier vocabulary (vocab/purrdf.ttl). Its terms can
-    // legitimately appear in datasets this table compacts: the JSON-LD-star
-    // statement-metadata downcast emits purrdf:qSubject/qPredicate/qObject/
-    // qObjectLiteral triples, which round-trip back through this codec.
-    ("purrdf", "https://blackcatinformatics.ca/purrdf/"),
     ("logic", "https://blackcatinformatics.ca/logic/"),
     ("rdfs", "http://www.w3.org/2000/01/rdf-schema#"),
     ("bbc", "http://www.bbc.co.uk/ontologies/news/"),

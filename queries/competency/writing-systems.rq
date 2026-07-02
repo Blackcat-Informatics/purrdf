@@ -1,12 +1,12 @@
-# Competency question: "How does PURRDF bind writing systems to a language, and
+# Competency question: "How does GMEOW bind writing systems to a language, and
 # what roles can a co-mingled script play?" Expected: the WritingSystemUsage
 # relator's role property and the ScriptRole value individuals (logographic
 # content, syllabic grammar, loanword, transliteration, …) that let Japanese mix
 # kanji + hiragana + katakana + rōmaji co-equally.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?role WHERE {
-    ?role a purrdf:ScriptRole .
+    ?role a gmeow:ScriptRole .
 }
 ORDER BY ?role

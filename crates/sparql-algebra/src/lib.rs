@@ -45,27 +45,6 @@
 
 #![forbid(unsafe_code)]
 
-/// The canonical purrdf ontology namespace — the **default** extension-function
-/// namespace.
-///
-/// Every purrdf vocabulary IRI is `{PURRDF_NS}{local-name}` (e.g.
-/// `https://blackcatinformatics.ca/purrdf/heldIn`); the published carrier
-/// vocabulary (`vocab/purrdf.ttl`) declares the seven SPARQL extension functions
-/// under it. The SPARQL front-end treats an IRI under a configured
-/// extension-function namespace ([`parser::ParserOptions::extension_fn_namespaces`],
-/// default `[PURRDF_NS]`) that is immediately followed by `(` as a purrdf extension
-/// function ([`algebra::PurrdfFn`]) — a CLOSED, exhaustive seam dispatched at PARSE
-/// time. An unknown local-name under a configured namespace in call position is a
-/// hard [`ParseError`], never a silent [`Function::Custom`] fallthrough.
-///
-/// Deployments whose queries spell the same closed function set under another
-/// ontology namespace (e.g. gmeow's `https://blackcatinformatics.ca/gmeow/`,
-/// `gmeow:heldIn(...)`) supply that namespace as an alias through
-/// [`parser::ParserOptions`] — the vocabulary is caller configuration, not a
-/// hardcoded domain. Serialization always normalizes [`Function::Purrdf`] back to
-/// this default namespace.
-pub const PURRDF_NS: &str = "https://blackcatinformatics.ca/purrdf/";
-
 pub mod algebra;
 pub mod ast;
 pub mod error;
@@ -76,8 +55,8 @@ pub mod substitute;
 
 pub use algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, GraphTarget,
-    GraphUpdateOperation, OrderExpression, PropertyPathExpression, PurrdfFn, Query, QueryDataset,
-    Update, UsingClause,
+    GraphUpdateOperation, OrderExpression, PropertyPathExpression, PurrdfCall, PurrdfFn, Query,
+    QueryDataset, Update, UsingClause,
 };
 pub use ast::{
     BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,

@@ -1,11 +1,11 @@
 # Audit (#55): show claims with no evidence — the flagged hallucinations.
 # An LLM-extracted claim (observationMethod methodLlmExtraction) with no
-# purrdf:groundedIn span is retained and FLAGGED, never deleted (P10).
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+# gmeow:groundedIn span is retained and FLAGGED, never deleted (P10).
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 SELECT ?claim ?model WHERE {
-    ?claim a purrdf:StandpointClaim ;
-           purrdf:observationMethod purrdf:methodLlmExtraction ;
-           purrdf:vantage ?model .
-    FILTER NOT EXISTS { ?claim purrdf:groundedIn ?span . }
+    ?claim a gmeow:StandpointClaim ;
+           gmeow:observationMethod gmeow:methodLlmExtraction ;
+           gmeow:vantage ?model .
+    FILTER NOT EXISTS { ?claim gmeow:groundedIn ?span . }
 }
 ORDER BY ?claim

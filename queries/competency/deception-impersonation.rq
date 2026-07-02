@@ -3,18 +3,18 @@
 # differs from the deceiver.
 # Expected: event-impersonation-001 (from dsl/statements/deception.ttl).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?event WHERE {
-    ?event purrdf:eventType purrdf:eventTypeImpersonation .
-    ?event purrdf:heldStandpoint ?heldClaim .
-    ?event purrdf:projectedStandpoint ?projectedClaim .
-    ?heldClaim purrdf:claimModality purrdf:refuted .
-    ?projectedClaim purrdf:claimModality purrdf:unequivocal .
+    ?event gmeow:eventType gmeow:eventTypeImpersonation .
+    ?event gmeow:heldStandpoint ?heldClaim .
+    ?event gmeow:projectedStandpoint ?projectedClaim .
+    ?heldClaim gmeow:claimModality gmeow:refuted .
+    ?projectedClaim gmeow:claimModality gmeow:unequivocal .
     OPTIONAL {
-        ?facet a purrdf:IdentityFacet .
-        ?facet purrdf:observedFeature ?event .
-        ?facet purrdf:facetSubject ?victim .
+        ?facet a gmeow:IdentityFacet .
+        ?facet gmeow:observedFeature ?event .
+        ?facet gmeow:facetSubject ?victim .
     }
 }
 ORDER BY ?event

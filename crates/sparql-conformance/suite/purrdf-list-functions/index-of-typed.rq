@@ -1,4 +1,4 @@
-PREFIX g:   <https://blackcatinformatics.ca/purrdf/>
+PREFIX g:   <https://example.org/ext/>
 PREFIX :    <http://purrdf.test/list#>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 # The exact term is at index 0; the value-equal xsd:decimal term is absent (unbound).

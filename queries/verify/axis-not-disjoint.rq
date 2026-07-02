@@ -7,17 +7,17 @@
 
 PREFIX owl: <http://www.w3.org/2002/07/owl#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?axis WHERE {
     VALUES ?axis {
-        purrdf:GenderIdentity
-        purrdf:GenderExpression
-        purrdf:SexAssignedAtBirth
-        purrdf:SexualOrientation
-        purrdf:RomanticOrientation
-        purrdf:PronounSet
-        purrdf:Honorific
+        gmeow:GenderIdentity
+        gmeow:GenderExpression
+        gmeow:SexAssignedAtBirth
+        gmeow:SexualOrientation
+        gmeow:RomanticOrientation
+        gmeow:PronounSet
+        gmeow:Honorific
     }
     FILTER NOT EXISTS {
         ?disjoint a owl:AllDisjointClasses ;

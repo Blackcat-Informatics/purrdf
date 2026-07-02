@@ -10,12 +10,12 @@
 # rows; the wellformed fixture (same tier-1 norm on both personas) returns
 # none either, which IS the invariant holding.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT DISTINCT ?agent ?persona ?norm WHERE {
-    ?persona a purrdf:Persona ; purrdf:personaBearer ?agent ; purrdf:expressesNorm ?norm .
-    ?sibling a purrdf:Persona ; purrdf:personaBearer ?agent .
+    ?persona a gmeow:Persona ; gmeow:personaBearer ?agent ; gmeow:expressesNorm ?norm .
+    ?sibling a gmeow:Persona ; gmeow:personaBearer ?agent .
     FILTER(?persona != ?sibling)
-    FILTER NOT EXISTS { ?sibling purrdf:expressesNorm ?norm . }
+    FILTER NOT EXISTS { ?sibling gmeow:expressesNorm ?norm . }
 }
 ORDER BY ?agent ?persona ?norm

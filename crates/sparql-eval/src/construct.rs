@@ -76,7 +76,7 @@ pub(crate) fn eval_construct(
     // byte-identical to today's plain CONSTRUCT.
     //
     // Standpoint attribution reads the SAME caller-supplied predicate table as
-    // `purrdf:heldIn` (see [`crate::eval::StandpointPredicates`]): with no table
+    // `heldIn` (see [`crate::eval::StandpointPredicates`]): with no table
     // configured, a dropped annotation cannot be attributed to a standpoint scope
     // and only the generic annotation-layer loss code is emitted — the engine never
     // fabricates a default domain predicate.
@@ -151,7 +151,7 @@ pub(crate) fn eval_construct(
         }
     }
 
-    // Value-constructing builtins (`purrdf:listSlice`/`listConcat`) invent fresh
+    // Value-constructing builtins (`listSlice`/`listConcat`) invent fresh
     // `rdf:List` cells while the WHERE is evaluated. A SPARQL expression can only
     // return the list head, so the cells are buffered on the context; fold them into
     // the CONSTRUCT output here so a constructed list materializes as triples — but

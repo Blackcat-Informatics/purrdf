@@ -1,6 +1,6 @@
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix ex: <http://example.org/ns#> .
-@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
+@prefix meta: <https://example.org/meta/> .
 
 ex:PersonShape
     a sh:NodeShape ;
@@ -9,7 +9,7 @@ ex:PersonShape
 
 ex:KnowsShape
     a sh:PropertyShape ;
-    purrdf:graphBoxRole purrdf:boxCBox ;
+    meta:graphBoxRole meta:boxCBox ;
     sh:path ex:knows ;
     sh:message "knowledge claims need statement context" ;
     sh:reificationRequired true ;
@@ -17,7 +17,7 @@ ex:KnowsShape
 
 ex:ProvenanceShape
     a sh:NodeShape ;
-    purrdf:graphBoxRole purrdf:boxCBox ;
+    meta:graphBoxRole meta:boxCBox ;
     sh:property ex:SourceShape .
 
 ex:SourceShape

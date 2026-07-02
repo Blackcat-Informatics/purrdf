@@ -1,11 +1,11 @@
 # Competency question: "What does a Web-of-Trust certification relate?"
 # Expected: the certification's endpoint properties (certifier, certified key,
-# certified identity), all domained on purrdf:Certification.
+# certified identity), all domained on gmeow:Certification.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?role WHERE {
-    ?role rdfs:domain purrdf:Certification .
+    ?role rdfs:domain gmeow:Certification .
 }
 ORDER BY ?role

@@ -1,10 +1,10 @@
-# Competency question: "What geographic place kinds does PURRDF recognise?"
+# Competency question: "What geographic place kinds does GMEOW recognise?"
 # Expected: the PlaceType value individuals (country, region, city, building,
 # room, …). Kinds are values, not subclasses — extend by adding individuals.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?placeType WHERE {
-    ?placeType a purrdf:PlaceType .
+    ?placeType a gmeow:PlaceType .
 }
 ORDER BY ?placeType

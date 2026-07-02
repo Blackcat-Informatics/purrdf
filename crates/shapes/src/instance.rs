@@ -223,18 +223,15 @@ mod tests {
     const PREFIXES_TTL: &str = r"
         @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
         @prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
-        @prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .
+        @prefix meta: <https://example.org/meta/> .
     ";
 
-    /// The fixture namespace table — the same `purrdf` declaration the Turtle
+    /// The fixture namespace table — the same `meta` declaration the Turtle
     /// fixtures use, supplied by the caller (nothing hardcoded in library code).
     fn fixture_ns() -> Namespaces {
         Namespaces::new(
-            "purrdf",
-            &[(
-                "purrdf".to_owned(),
-                "https://blackcatinformatics.ca/purrdf/".to_owned(),
-            )],
+            "meta",
+            &[("meta".to_owned(), "https://example.org/meta/".to_owned())],
         )
         .expect("fixture namespaces are valid")
     }
@@ -243,64 +240,61 @@ mod tests {
     fn test_project_graph_envelope_and_context() {
         let store = load(&format!(
             r#"{PREFIXES_TTL}
-            purrdf:alice a purrdf:Person ;
-                purrdf:name "Alice" .
+            meta:alice a meta:Person ;
+                meta:name "Alice" .
         "#
         ));
         let doc = project_graph(&store, &fixture_ns());
-        // @context carries the prefix map (purrdf:).
-        assert_eq!(
-            doc["@context"]["purrdf"],
-            json!("https://blackcatinformatics.ca/purrdf/")
-        );
+        // @context carries the prefix map (meta:).
+        assert_eq!(doc["@context"]["meta"], json!("https://example.org/meta/"));
         let graph = doc["@graph"].as_array().expect("@graph array");
         assert_eq!(graph.len(), 1);
         let node = &graph[0];
-        assert_eq!(node["@id"], json!("purrdf:alice"));
-        assert_eq!(node["@type"], json!("purrdf:Person"));
-        assert_eq!(node["purrdf:name"], json!("Alice"));
+        assert_eq!(node["@id"], json!("meta:alice"));
+        assert_eq!(node["@type"], json!("meta:Person"));
+        assert_eq!(node["meta:name"], json!("Alice"));
     }
 
     #[test]
     fn test_object_property_is_node_ref() {
         let store = load(&format!(
             r"{PREFIXES_TTL}
-            purrdf:org purrdf:member purrdf:alice .
+            meta:org meta:member meta:alice .
         "
         ));
         let doc = project_graph(&store, &fixture_ns());
         let graph = doc["@graph"].as_array().unwrap();
         let org = graph
             .iter()
-            .find(|n| n["@id"] == json!("purrdf:org"))
+            .find(|n| n["@id"] == json!("meta:org"))
             .expect("org node");
-        assert_eq!(org["purrdf:member"], json!({ "@id": "purrdf:alice" }));
+        assert_eq!(org["meta:member"], json!({ "@id": "meta:alice" }));
     }
 
     #[test]
     fn test_typed_and_numeric_and_lang_literals() {
         let store = load(&format!(
             r#"{PREFIXES_TTL}
-            purrdf:e purrdf:count 3 ;
-                purrdf:flag true ;
-                purrdf:at "2026-06-23T00:00:00Z"^^xsd:dateTime ;
-                purrdf:label "bonjour"@fr .
+            meta:e meta:count 3 ;
+                meta:flag true ;
+                meta:at "2026-06-23T00:00:00Z"^^xsd:dateTime ;
+                meta:label "bonjour"@fr .
         "#
         ));
         let doc = project_graph(&store, &fixture_ns());
         let node = &doc["@graph"].as_array().unwrap()[0];
         // integer → bare scalar
-        assert_eq!(node["purrdf:count"], json!(3));
+        assert_eq!(node["meta:count"], json!(3));
         // boolean → bare scalar
-        assert_eq!(node["purrdf:flag"], json!(true));
+        assert_eq!(node["meta:flag"], json!(true));
         // dateTime → typed-literal object
         assert_eq!(
-            node["purrdf:at"],
+            node["meta:at"],
             json!({ "@value": "2026-06-23T00:00:00Z", "@type": "xsd:dateTime" })
         );
         // lang literal → {@value,@language}
         assert_eq!(
-            node["purrdf:label"],
+            node["meta:label"],
             json!({ "@value": "bonjour", "@language": "fr" })
         );
     }
@@ -309,12 +303,12 @@ mod tests {
     fn test_multi_valued_predicate_is_array_and_sorted() {
         let store = load(&format!(
             r#"{PREFIXES_TTL}
-            purrdf:x purrdf:tag "b", "a", "c" .
+            meta:x meta:tag "b", "a", "c" .
         "#
         ));
         let doc = project_graph(&store, &fixture_ns());
         let node = &doc["@graph"].as_array().unwrap()[0];
-        let tags = node["purrdf:tag"].as_array().expect("array");
+        let tags = node["meta:tag"].as_array().expect("array");
         assert_eq!(tags.len(), 3);
         // sorted by term string → "a","b","c"
         assert_eq!(tags, &[json!("a"), json!("b"), json!("c")]);
@@ -327,9 +321,9 @@ mod tests {
         // graph, and the projector must scope to the default graph only.
         let trig = format!(
             r#"{PREFIXES_TTL}
-            purrdf:alice a purrdf:Person ; purrdf:name "Alice" .
-            purrdf:graph_other {{
-                purrdf:bob purrdf:name "Bob" .
+            meta:alice a meta:Person ; meta:name "Alice" .
+            meta:graph_other {{
+                meta:bob meta:name "Bob" .
             }}
         "#
         );
@@ -340,9 +334,9 @@ mod tests {
         let graph = doc["@graph"].as_array().expect("@graph array");
         // Only the default-graph subject is projected — no named-graph leak.
         assert_eq!(graph.len(), 1, "named-graph subject must not appear");
-        assert_eq!(graph[0]["@id"], json!("purrdf:alice"));
+        assert_eq!(graph[0]["@id"], json!("meta:alice"));
         assert!(
-            graph.iter().all(|n| n["@id"] != json!("purrdf:bob")),
+            graph.iter().all(|n| n["@id"] != json!("meta:bob")),
             "named-graph subject leaked into @graph"
         );
     }
@@ -351,8 +345,8 @@ mod tests {
     fn test_determinism_byte_stable() {
         let ttl = format!(
             r#"{PREFIXES_TTL}
-            purrdf:alice a purrdf:Person ; purrdf:name "Alice" ; purrdf:age 30 .
-            purrdf:bob a purrdf:Person ; purrdf:name "Bob" .
+            meta:alice a meta:Person ; meta:name "Alice" ; meta:age 30 .
+            meta:bob a meta:Person ; meta:name "Bob" .
         "#
         );
         let a = serde_json::to_string_pretty(&project_graph(&load(&ttl), &fixture_ns())).unwrap();

@@ -1,10 +1,10 @@
-# Competency question: "What cryptographic message signatures does PURRDF model?"
+# Competency question: "What cryptographic message signatures does GMEOW model?"
 # Expected: CryptographicSignature and its subclasses (DKIM, S/MIME, PGP).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?signature WHERE {
-    ?signature rdfs:subClassOf* purrdf:CryptographicSignature .
+    ?signature rdfs:subClassOf* gmeow:CryptographicSignature .
 }
 ORDER BY ?signature

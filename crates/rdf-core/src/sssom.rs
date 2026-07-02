@@ -1083,7 +1083,7 @@ ex:A\tskos:exactMatch\tex:B
         // manifest dir up to the repo root.
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../generated/mappings/purrdf-accessibility.sssom.tsv"
+            "/../../generated/mappings/gmeow-accessibility.sssom.tsv"
         );
         let text = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("read corpus file {path}: {e}"));

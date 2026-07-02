@@ -24,7 +24,8 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-core` (`crates/rdf-core`) | Interned IR kernel, diagnostics, store traits, provenance, RDFC-1.0 |
 | `purrdf-gts` (`crates/gts`) | GTS container engine (CBOR log, BLAKE3, COSE) |
 | `purrdf-sparql-{algebra,eval,results}` | SPARQL 1.1/1.2 parser, evaluator, results |
-| `purrdf-shapes` (`crates/shapes`) | SHACL Core validation |
+| `purrdf-shapes` (`crates/shapes`) | SHACL validation (full Core + SHACL-SPARQL) |
+| `purrdf-shex` (`crates/shex`) | ShEx 2.1 schemas + validation |
 | `purrdf-slice` (`crates/slice`) | Slice catalog, artifacts, ownership analysis |
 | `purrdf-iri`, `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
 | `purrdf-wasm`, `purrdf-capi`, `bindings/python` | WASM, C-ABI, and PyO3 bindings |
@@ -48,10 +49,23 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   say why in the PR. Never introduce iteration-order, time, or RNG dependence
   into output paths (hashers are fixed-key `ahash` for this reason).
 * **Conformance corpora are the contract**: W3C SPARQL 1.1
-  (`crates/sparql-conformance`), SHACL corpus, RDFC-1.0 fixtures
+  (`crates/sparql-conformance`), the W3C SHACL suite (`vectors/shacl/`), the
+  shexTest v2.1.0 suite (`vectors/shexTest/`), the first-party SHACL corpus
+  (`crates/shapes/corpus/`), RDFC-1.0 fixtures
   (`crates/rdf/tests/fixtures/rdfc/`), and the **frozen** GTS vectors in
   `vectors/` (shared byte-exact with the other GTS engines — never regenerate or
-  "fix" them here; the GTS wire format is governed in `gmeow-gts`).
+  "fix" them here; the GTS wire format is governed in `gmeow-gts`). Harnesses
+  assert exact counts and enforce XPASS discipline on their xfail ledgers —
+  see [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) for the scoreboard.
+* **PurRDF is NOT an ontology — it mints no vocabulary IRIs, ever.** Every
+  vocabulary the library reads or writes (slice manifests, statement-metadata
+  downcast, box roles, language retagging, SPARQL extension-function
+  namespaces, standpoint predicates, json_schema namespaces) is
+  **caller-supplied configuration with no fabricated default**: a feature
+  exercised without its vocabulary hard-errors or stays inactive. Never
+  hardcode a `blackcatinformatics.ca` namespace in library code (the GMEOW
+  ontology is a *consumer*; the dependency arrow never points from purrdf to
+  it). Test fixtures use `example.org`.
 * **Generated artifacts** under `generated/` are projections — never hand-edit;
   regenerate via `make metadata` (`scripts/check-generated.sh` gates drift).
 * **Dependency versions live in one place**: `[workspace.dependencies]` in the
@@ -111,6 +125,5 @@ is single-sourced in `[workspace.package]`. `purrdf-capi` and
 ## 7. Provenance
 
 This repo was extracted from `gmeow-ontology` and `gmeow-gts` — see
-[`PROVENANCE.md`](./PROVENANCE.md) for source commits and
-[`docs/CUTOVER.md`](./docs/CUTOVER.md) for the downstream cutover checklist.
-ShEx support is planned but **not implemented** — do not claim it in docs.
+[`PROVENANCE.md`](./PROVENANCE.md) for source commits. The downstream
+`gmeow-ontology` cutover onto these crates is complete.

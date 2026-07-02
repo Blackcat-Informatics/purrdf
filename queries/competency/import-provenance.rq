@@ -1,15 +1,15 @@
-# Competency question: "What carrier metadata does PURRDF record about an imported
+# Competency question: "What carrier metadata does GMEOW record about an imported
 # source (the import envelope)?" Expected: sourceModifiedAt (carrier time),
 # contentDigest (identity), sourceLocation (origin).
 # contentDigest is domain-free so the query uses owl:DatatypeProperty instead of
 # rdfs:domain (Principle 6 — greenfield, domain-free when cross-cutting).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX owl: <http://www.w3.org/2002/07/owl#>
 
 SELECT ?property WHERE {
     ?property a owl:DatatypeProperty .
-    FILTER(STRSTARTS(STR(?property), STR(purrdf:)))
-    VALUES ?property { purrdf:sourceModifiedAt purrdf:contentDigest purrdf:sourceLocation }
+    FILTER(STRSTARTS(STR(?property), STR(gmeow:)))
+    VALUES ?property { gmeow:sourceModifiedAt gmeow:contentDigest gmeow:sourceLocation }
 }
 ORDER BY ?property

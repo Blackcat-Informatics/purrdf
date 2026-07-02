@@ -2,19 +2,19 @@
 # A fabrication = deception event with a false CreativeWork whose provenance is refuted.
 # Expected: event-fabrication-001 (from dsl/statements/deception.ttl).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?event WHERE {
-    ?event purrdf:eventType purrdf:eventTypeFabrication .
-    ?event purrdf:heldStandpoint ?heldClaim .
-    ?event purrdf:projectedStandpoint ?projectedClaim .
-    ?heldClaim purrdf:claimModality purrdf:refuted .
-    ?projectedClaim purrdf:claimModality purrdf:unequivocal .
+    ?event gmeow:eventType gmeow:eventTypeFabrication .
+    ?event gmeow:heldStandpoint ?heldClaim .
+    ?event gmeow:projectedStandpoint ?projectedClaim .
+    ?heldClaim gmeow:claimModality gmeow:refuted .
+    ?projectedClaim gmeow:claimModality gmeow:unequivocal .
     OPTIONAL {
-        ?event purrdf:implicates ?work .
-        ?work a purrdf:CreativeWork .
-        ?verification a purrdf:VerificationResult .
-        ?verification purrdf:hasVerificationStatus purrdf:verificationStatusFailed .
+        ?event gmeow:implicates ?work .
+        ?work a gmeow:CreativeWork .
+        ?verification a gmeow:VerificationResult .
+        ?verification gmeow:hasVerificationStatus gmeow:verificationStatusFailed .
     }
 }
 ORDER BY ?event

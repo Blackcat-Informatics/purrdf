@@ -2,17 +2,17 @@
 # Expected: agent IRIs for proficiencies whose level is one of the expert-level
 # individuals across the Dreyfus, NIH, and assessed skill scales.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?agent ?skill ?level WHERE {
-    ?proficiency a purrdf:SkillProficiency ;
-                 purrdf:skillProficiencyAgent ?agent ;
-                 purrdf:skillProficiencyOf ?skill ;
-                 purrdf:skillProficiencyLevel ?level .
+    ?proficiency a gmeow:SkillProficiency ;
+                 gmeow:skillProficiencyAgent ?agent ;
+                 gmeow:skillProficiencyOf ?skill ;
+                 gmeow:skillProficiencyLevel ?level .
     VALUES ?level {
-        purrdf:dreyfusExpert
-        purrdf:nihExpert
-        purrdf:assessedExpert
+        gmeow:dreyfusExpert
+        gmeow:nihExpert
+        gmeow:assessedExpert
     }
 }
 ORDER BY ?agent ?skill

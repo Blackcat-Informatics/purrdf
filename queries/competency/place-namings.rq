@@ -1,16 +1,16 @@
-# Competency question: "How does PURRDF model the naming of places?"
-# Expected: purrdf:PlaceNaming — a DEFINED subclass of purrdf:NameUsage
-# (≡ NameUsage ⊓ ∃usageNamed.Place, issue #105). Place names are purrdf:PlaceName
-# appellations borne via purrdf:hasPlaceName; a name-usage that names a purrdf:Place
+# Competency question: "How does GMEOW model the naming of places?"
+# Expected: gmeow:PlaceNaming — a DEFINED subclass of gmeow:NameUsage
+# (≡ NameUsage ⊓ ∃usageNamed.Place, issue #105). Place names are gmeow:PlaceName
+# appellations borne via gmeow:hasPlaceName; a name-usage that names a gmeow:Place
 # is ENTAILED to be a PlaceNaming (proven by test_place_naming_is_entailed_not_asserted).
 # Reuse over redundancy (Principle 6): no parallel place-naming relator is minted.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?placeNamingKind WHERE {
-    ?placeNamingKind rdfs:subClassOf purrdf:NameUsage .
+    ?placeNamingKind rdfs:subClassOf gmeow:NameUsage .
     FILTER(isIRI(?placeNamingKind)
-           && STRSTARTS(STR(?placeNamingKind), "https://blackcatinformatics.ca/purrdf/"))
+           && STRSTARTS(STR(?placeNamingKind), "https://blackcatinformatics.ca/gmeow/"))
 }
 ORDER BY ?placeNamingKind

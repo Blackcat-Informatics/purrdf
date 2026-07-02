@@ -98,13 +98,6 @@ const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 /// with `XPASS` and the entry must be removed. This is the SHACL completion
 /// roadmap — keep reasons precise.
 const XFAIL: &[(&str, &str)] = &[
-    // ── SHACL Core ────────────────────────────────────────────────────────────
-    (
-        "core/property/lessThan-002",
-        "sh:lessThan emits one result per offending value; the suite requires one \
-         result per (value, comparand) pair — the two incomparable comparands \
-         here must each yield a violation (x2 per value)",
-    ),
     // ── SHACL-SPARQL ──────────────────────────────────────────────────────────
     (
         "sparql/component/optional-001",

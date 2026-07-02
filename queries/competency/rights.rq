@@ -1,13 +1,13 @@
-# Competency question: "What kinds of deontic rule can a PURRDF rights statement
+# Competency question: "What kinds of deontic rule can a GMEOW rights statement
 # carry?"
 # Expected: Rule and its subclasses Permission, Prohibition, Duty — the ODRL rule
-# trio (purrdf:Permission / purrdf:Prohibition / purrdf:Duty), the machine-readable
+# trio (gmeow:Permission / gmeow:Prohibition / gmeow:Duty), the machine-readable
 # rights model of the rights / IP facility (#21).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?rule WHERE {
-    ?rule rdfs:subClassOf* purrdf:Rule .
+    ?rule rdfs:subClassOf* gmeow:Rule .
 }
 ORDER BY ?rule

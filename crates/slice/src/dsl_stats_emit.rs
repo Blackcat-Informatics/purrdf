@@ -167,7 +167,7 @@ mod tests {
         // Committed-artifact parity: the committed stats were generated with the
         // blackcatinformatics purrdf namespace, so this cross-check must use it
         // (pure fixtures elsewhere use example.org).
-        let vocab = SliceVocab::for_namespace("https://blackcatinformatics.ca/purrdf/");
+        let vocab = SliceVocab::for_namespace("https://blackcatinformatics.ca/gmeow/");
         let got = emit_dsl_stats(&root, &vocab).expect("emit dsl stats");
         let committed_path = root
             .join("generated")

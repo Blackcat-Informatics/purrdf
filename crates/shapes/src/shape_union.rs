@@ -75,7 +75,7 @@ pub fn shape_files(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 /// The union's document `@prefix` declarations are recovered and threaded into
 /// [`shapes::from_dataset_with_prefixes`] (the frozen IR does not retain prefix
 /// maps): SHACL-AF `sh:select` queries — e.g. the music `MetricGroupShape`
-/// uniqueness constraint — use prefixed names like `purrdf:` and fail to parse
+/// uniqueness constraint — use prefixed names like `meta:` and fail to parse
 /// without them. This mirrors the live validator (`engine::parse_shapes`, #578).
 /// When the same prefix is declared in multiple files, the last declaration wins
 /// (deterministic via the merge order over the sorted file list).
@@ -271,24 +271,18 @@ mod tests {
     #[test]
     fn test_load_shapes_parses_union() {
         let repo = mock_repo();
-        let prefixes = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n@prefix purrdf: <https://blackcatinformatics.ca/purrdf/> .\n";
+        let prefixes = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n@prefix meta: <https://example.org/meta/> .\n";
         touch(
             &repo.join("shapes/purrdf-shapes.ttl"),
-            &format!(
-                "{prefixes}purrdf:PersonShape a sh:NodeShape ; sh:targetClass purrdf:Person .\n"
-            ),
+            &format!("{prefixes}meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person .\n"),
         );
         touch(
             &repo.join("generated/shapes/frame-shapes.ttl"),
-            &format!(
-                "{prefixes}purrdf:FrameShape a sh:NodeShape ; sh:targetClass purrdf:Frame .\n"
-            ),
+            &format!("{prefixes}meta:FrameShape a sh:NodeShape ; sh:targetClass meta:Frame .\n"),
         );
         touch(
             &repo.join("slices/core/alpha/shapes.ttl"),
-            &format!(
-                "{prefixes}purrdf:AlphaShape a sh:NodeShape ; sh:targetClass purrdf:Alpha .\n"
-            ),
+            &format!("{prefixes}meta:AlphaShape a sh:NodeShape ; sh:targetClass meta:Alpha .\n"),
         );
         let (_store, shapes) = load_shapes(&repo).expect("load_shapes must succeed");
         // 3 node shapes loaded from the union.

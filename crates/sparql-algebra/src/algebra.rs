@@ -821,59 +821,90 @@ pub enum Function {
     Object,
     /// `isTRIPLE(t)` — RDF 1.2 triple-term test.
     IsTriple,
-    /// A purrdf extension function (a CLOSED, exhaustive seam, dispatched at parse
-    /// time from an IRI under a configured extension-function namespace — default
-    /// the canonical purrdf namespace). See [`PurrdfFn`].
-    Purrdf(PurrdfFn),
+    /// An extension function call (a CLOSED, exhaustive local-name seam, dispatched
+    /// at parse time from an IRI under a *caller-configured* extension-function
+    /// namespace — there is no default namespace). Carries the original call IRI
+    /// so serialization round-trips exactly. See [`PurrdfCall`] and [`PurrdfFn`].
+    Purrdf(PurrdfCall),
     /// A custom function identified by an arbitrary IRI outside every configured
     /// extension-function namespace.
     Custom(NamedNode),
 }
 
-/// The CLOSED set of purrdf SPARQL extension functions.
+/// An extension function call resolved at parse time: the closed [`PurrdfFn`]
+/// kind plus the ORIGINAL IRI the call was parsed from.
+///
+/// The original IRI is retained so serialization re-emits exactly the IRI the
+/// query author wrote — PurRDF is a library, not an ontology, and never mints
+/// or fabricates vocabulary IRIs of its own on output.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PurrdfCall {
+    /// The closed extension-function kind this call dispatches to.
+    pub fn_kind: PurrdfFn,
+    /// The full original IRI the call was parsed from
+    /// (`{configured-namespace}{local-name}`). Serialization emits exactly this
+    /// IRI — no namespace is ever fabricated on output.
+    pub iri: String,
+}
+
+impl PurrdfCall {
+    /// The extension-function local-name (the suffix after the configured
+    /// namespace) — the same as [`PurrdfFn::local_name`] on [`Self::fn_kind`].
+    #[must_use]
+    pub const fn local_name(&self) -> &'static str {
+        self.fn_kind.local_name()
+    }
+}
+
+/// The CLOSED set of SPARQL extension functions (the type name `PurrdfFn` is an
+/// internal identifier; the *namespace* the functions are spelled under is
+/// caller configuration, never a purrdf-owned vocabulary).
 ///
 /// Recognized at PARSE time from an IRI under any *configured* extension-function
 /// namespace (`{ns}{local-name}`; see
-/// [`crate::parser::ParserOptions::extension_fn_namespaces`], whose default is the
-/// single published carrier-vocabulary namespace [`crate::PURRDF_NS`]). The set is
-/// exhaustive: an IRI under a configured namespace whose local-name is not one of
-/// these in call position is a hard parse error, never a [`Function::Custom`].
-/// This keeps the purrdf function surface a small, fully-enumerated contract
-/// rather than an open custom-IRI escape hatch.
+/// [`crate::parser::ParserOptions::extension_fn_namespaces`], whose default is
+/// EMPTY — with no configured namespace the seam is off and every call-position
+/// IRI is an ordinary [`Function::Custom`]). The local-name set is exhaustive:
+/// an IRI under a configured namespace whose local-name is not one of these in
+/// call position is a hard parse error, never a [`Function::Custom`]. This keeps
+/// the extension-function surface a small, fully-enumerated contract rather than
+/// an open custom-IRI escape hatch.
 ///
-/// The namespace is an alias, not part of the identity: `gmeow:heldIn(...)`
-/// (parsed with the gmeow namespace configured) and `purrdf:heldIn(...)` dispatch
-/// to the same [`PurrdfFn::HeldIn`], and serialization normalizes both back to the
-/// default [`crate::PURRDF_NS`] spelling.
+/// The namespace is caller configuration, not part of the identity:
+/// `gmeow:heldIn(...)` (parsed with the gmeow namespace configured) and
+/// `ext:heldIn(...)` (parsed with an `ext:` namespace configured) dispatch to
+/// the same [`PurrdfFn::HeldIn`]; serialization re-emits the original IRI
+/// recorded in [`PurrdfCall::iri`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PurrdfFn {
-    /// `purrdf:heldIn(reifier, standpoint) -> xsd:boolean` — direct (already-reasoned)
+    /// `heldIn(reifier, standpoint) -> xsd:boolean` — direct (already-reasoned)
     /// standpoint-membership: true iff the reified statement `reifier` is held in
     /// `standpoint` (its vantage standpoint equals, or sharpens, the queried one).
     HeldIn,
-    /// `purrdf:listLength(list) -> xsd:integer` — the number of members of an
+    /// `listLength(list) -> xsd:integer` — the number of members of an
     /// `rdf:List` (`rdf:nil` is length 0).
     ListLength,
-    /// `purrdf:listGet(list, index) -> term` — the member at the zero-based `index`,
+    /// `listGet(list, index) -> term` — the member at the zero-based `index`,
     /// or a SPARQL error when the index is out of range.
     ListGet,
-    /// `purrdf:listIndexOf(list, value) -> xsd:integer` — the zero-based index of the
+    /// `listIndexOf(list, value) -> xsd:integer` — the zero-based index of the
     /// first occurrence of `value`, or a SPARQL error when it is absent.
     ListIndexOf,
-    /// `purrdf:listContains(list, value) -> xsd:boolean` — whether `value` is a member.
+    /// `listContains(list, value) -> xsd:boolean` — whether `value` is a member.
     ListContains,
-    /// `purrdf:listSlice(list, start, end) -> rdf:List` — a fresh list of the members
+    /// `listSlice(list, start, end) -> rdf:List` — a fresh list of the members
     /// in the half-open index range `[start, end)` (clamped; inverted/out-of-range
     /// yields `rdf:nil`).
     ListSlice,
-    /// `purrdf:listConcat(listA, listB) -> rdf:List` — a fresh list of `listA`'s
+    /// `listConcat(listA, listB) -> rdf:List` — a fresh list of `listA`'s
     /// members followed by `listB`'s.
     ListConcat,
 }
 
 impl PurrdfFn {
-    /// The purrdf vocabulary local-name (the suffix after [`crate::PURRDF_NS`]) for this
-    /// function — used by both the parser (to recognize) and the serializer (to emit).
+    /// The extension-function local-name (the suffix after whichever configured
+    /// namespace the call was spelled under) — used by both the parser (to
+    /// recognize) and consumers that need the bare name.
     #[must_use]
     pub const fn local_name(self) -> &'static str {
         match self {
@@ -887,8 +918,8 @@ impl PurrdfFn {
         }
     }
 
-    /// Map a purrdf vocabulary local-name to its [`PurrdfFn`], or `None` if it is not a
-    /// recognized purrdf extension function. The inverse of [`PurrdfFn::local_name`].
+    /// Map an extension-function local-name to its [`PurrdfFn`], or `None` if it is
+    /// not a recognized extension function. The inverse of [`PurrdfFn::local_name`].
     #[must_use]
     pub fn from_local_name(name: &str) -> Option<Self> {
         match name {

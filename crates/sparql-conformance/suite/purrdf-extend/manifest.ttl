@@ -8,7 +8,7 @@
 #   1. triple-term binding   — a quoted triple flows as a first-class solution value
 #   2. reifier querying      — bind a reifier + its inner s/p/o from the side-table
 #   3. annotation querying   — bind a reifier's annotation value
-#   4. standpoint poset      — purrdf:heldIn is poset-aware (held / not-held controls)
+#   4. standpoint poset      — ext:heldIn is poset-aware (held / not-held controls)
 #   5. loss-aware CONSTRUCT   — dropping the reifier layer emits an in-band
 #                               logic:ProjectionLoss declaration (+ no-loss control)
 #   6. world × standpoint     — a named-graph world triple joins a standpoint-held
@@ -19,7 +19,7 @@
 # are scoped by the standpoint POSET, not by named graphs. The genuine end-to-end
 # proof of world + standpoint is therefore a JOIN: a named-graph world triple
 # (GRAPH ?world { … }) joined with a default-graph standpoint-held reifier via
-# purrdf:heldIn. The harness loads qt:graphData into named graphs to support this
+# ext:heldIn. The harness loads qt:graphData into named graphs to support this
 # case. See :standpointWorld below.
 
 @prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
@@ -54,12 +54,12 @@
     mf:result <annotation.srx> .
 
 :standpointHeld a mf:QueryEvaluationTest ;
-    mf:name "purrdf:heldIn — claim held in a sharper frame counts as held in the broader one" ;
+    mf:name "ext:heldIn — claim held in a sharper frame counts as held in the broader one" ;
     mf:action [ qt:query <standpoint-held.rq> ; qt:data <standpoint.ttl> ] ;
     mf:result <standpoint-held.srx> .
 
 :standpointNotHeld a mf:QueryEvaluationTest ;
-    mf:name "purrdf:heldIn — false for an unrelated frame (poset-aware, not always-true)" ;
+    mf:name "ext:heldIn — false for an unrelated frame (poset-aware, not always-true)" ;
     mf:action [ qt:query <standpoint-not-held.rq> ; qt:data <standpoint.ttl> ] ;
     mf:result <standpoint-not-held.srx> .
 

@@ -1,12 +1,12 @@
 # Competency question: "What does a perspectival owner-trust assertion record?"
 # Expected: the trust-assertion's properties (trustor, trustee, trust level,
-# introducer depth/amount), all domained on purrdf:TrustAssertion. This enumerates
+# introducer depth/amount), all domained on gmeow:TrustAssertion. This enumerates
 # asserted trust; it deliberately does NOT compute transitive trust paths.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
 SELECT ?aspect WHERE {
-    ?aspect rdfs:domain purrdf:TrustAssertion .
+    ?aspect rdfs:domain gmeow:TrustAssertion .
 }
 ORDER BY ?aspect

@@ -7,11 +7,19 @@ use std::sync::Arc;
 
 use purrdf::{serialize_dataset, SerializeGraph};
 use purrdf_core::{RdfDataset, SparqlEngine, SparqlRequest, SparqlResult};
-use purrdf_sparql_eval::{NativeSparqlEngine, RemoteQuerySource, StandpointPredicates};
+use purrdf_sparql_eval::{
+    NativeSparqlEngine, ParserOptions, RemoteQuerySource, StandpointPredicates,
+};
 
 use crate::manifest::{SparqlTestCase, TestKind};
 
 const BASE: &str = "http://purrdf.test/manifest/";
+
+/// The extension-function namespace the first-party suite fixtures spell their
+/// calls under. PurRDF itself mints no vocabulary — the namespace is HARNESS
+/// configuration (a neutral example.org name), exactly as a real deployment
+/// supplies its own ontology namespace.
+const EXT_NS: &str = "https://example.org/ext/";
 
 /// The outcome of running a case (before comparison against the expected result).
 #[derive(Debug)]
@@ -110,18 +118,23 @@ pub fn run(
         }
         TestKind::QueryEval => {
             let dataset = load_dataset(case)?;
-            // The standpoint predicate table is CALLER configuration (the engine has
-            // no default): the purrdf-extend suite's standpoint cases exercise
-            // `purrdf:heldIn` under the default extension namespace against
-            // `standpoint.ttl` data written in the published purrdf carrier
-            // vocabulary, so the harness supplies that vocabulary's
-            // accordingTo/sharpens table here. (A gmeow deployment would supply its
-            // own gmeow IRIs instead — the table flows through configuration, not
-            // constants.) Harmless for the W3C suites, which never call heldIn.
-            let engine =
-                NativeSparqlEngine::new().with_standpoint_predicates(StandpointPredicates::new(
-                    "https://blackcatinformatics.ca/purrdf/accordingTo",
-                    "https://blackcatinformatics.ca/purrdf/sharpens",
+            // Both the extension-function namespace and the standpoint predicate
+            // table are CALLER configuration (the engine has no defaults): the
+            // purrdf-extend suite's standpoint cases exercise `ext:heldIn` and the
+            // purrdf-list-functions suite the `ext:list*` functions, all spelled
+            // under the harness-configured example.org/ext/ namespace, against
+            // fixture data written in the same namespace — so the harness supplies
+            // that namespace plus its accordingTo/sharpens table here. (A gmeow
+            // deployment would supply its own gmeow IRIs instead — everything
+            // flows through configuration, not constants.) Harmless for the W3C
+            // suites, which never call the extension functions.
+            let engine = NativeSparqlEngine::new()
+                .with_parser_options(ParserOptions {
+                    extension_fn_namespaces: vec![EXT_NS.to_owned()],
+                })
+                .with_standpoint_predicates(StandpointPredicates::new(
+                    format!("{EXT_NS}accordingTo"),
+                    format!("{EXT_NS}sharpens"),
                 ));
             let request = SparqlRequest {
                 query: &query_text,

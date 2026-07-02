@@ -45,8 +45,8 @@ impl Default for EvalOptions {
     }
 }
 
-/// The caller-supplied **standpoint predicate table** read by `purrdf:heldIn` and
-/// by loss-aware `CONSTRUCT`.
+/// The caller-supplied **standpoint predicate table** read by the `heldIn`
+/// extension function and by loss-aware `CONSTRUCT`.
 ///
 /// `heldIn(reifier, standpoint)` interprets *domain* predicates that live in the
 /// caller's ontology and data — the annotation predicate binding a reifier to its
@@ -55,9 +55,7 @@ impl Default for EvalOptions {
 /// default**, and evaluating `heldIn` without a configured table is a hard
 /// [`crate::EvalError`] (never a silently-wrong answer against fabricated IRIs).
 ///
-/// Callers supply their own vocabulary, e.g. the published purrdf carrier
-/// vocabulary (`https://blackcatinformatics.ca/purrdf/accordingTo` /
-/// `…/sharpens`) or the gmeow ontology's
+/// Callers supply their own vocabulary, e.g. the gmeow ontology's
 /// (`https://blackcatinformatics.ca/gmeow/accordingTo` / `…/sharpens`), via
 /// [`crate::NativeSparqlEngine::with_standpoint_predicates`] (engine-level) or
 /// [`EvalCtx::with_standpoint_predicates`] (a directly-built context).
@@ -164,7 +162,7 @@ pub struct EvalCtx<'d> {
     /// Tunable evaluation behavior (see [`EvalOptions`]). Production default.
     pub options: EvalOptions,
     /// The caller-supplied standpoint predicate table (see
-    /// [`StandpointPredicates`]) read by `purrdf:heldIn` and loss-aware
+    /// [`StandpointPredicates`]) read by `heldIn` and loss-aware
     /// `CONSTRUCT`. `None` (the default) means no table is configured:
     /// `heldIn` then hard-errors and `CONSTRUCT` cannot attribute a dropped
     /// annotation to a standpoint scope — deliberately, since these are domain
@@ -198,7 +196,7 @@ pub struct EvalCtx<'d> {
     /// (Principle 12).
     pub(crate) bgp_order_cache: Option<&'d BgpOrderCache>,
     /// Quads invented during evaluation by value-constructing builtins
-    /// (`purrdf:listSlice`/`purrdf:listConcat` mint fresh `rdf:List` cells). A SPARQL
+    /// (`listSlice`/`listConcat` mint fresh `rdf:List` cells). A SPARQL
     /// expression returns one term, so the new cells are buffered here and surface at
     /// the result boundary — but only the cells **reachable from the surviving result
     /// rows** ([`Self::reachable_constructed`]): a list minted on a row later pruned by
@@ -265,7 +263,7 @@ impl<'d> EvalCtx<'d> {
     }
 
     /// Supply the caller's standpoint predicate table (see
-    /// [`StandpointPredicates`]) for `purrdf:heldIn` and loss-aware `CONSTRUCT`.
+    /// [`StandpointPredicates`]) for `heldIn` and loss-aware `CONSTRUCT`.
     /// Without it, `heldIn` is a hard evaluation error.
     #[must_use]
     pub fn with_standpoint_predicates(mut self, predicates: StandpointPredicates) -> Self {

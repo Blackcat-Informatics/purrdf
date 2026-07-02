@@ -287,19 +287,52 @@ pub mod sh {
         "http://www.w3.org/ns/shacl#QualifiedMaxCountConstraintComponent";
 }
 
-/// PurRDF namespace constants (`https://blackcatinformatics.ca/purrdf/`).
-pub mod purrdf {
-    pub const GRAPH_BOX_ROLE: &str = "https://blackcatinformatics.ca/purrdf/graphBoxRole";
+/// The CALLER-SUPPLIED graph-box role vocabulary for the OPTIONAL box-role
+/// annotation feature.
+///
+/// PurRDF is not an ontology and mints no vocabulary IRIs of its own, so there
+/// is deliberately NO default (mirroring the `LanguageVocab` /
+/// `StatementMetadataVocab` pattern elsewhere in the workspace): a shapes
+/// parse / validation run without a configured vocab leaves the box-role
+/// feature INACTIVE — every box-role list on shapes and validation results
+/// stays empty.
+///
+/// Configure it through
+/// [`from_dataset_with_config`](crate::shapes::from_dataset_with_config) /
+/// [`parse_shapes_with_config`](crate::engine::parse_shapes_with_config); the
+/// parsed [`Shapes`](crate::shapes::Shapes) carries it into validation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoxRoleVocab {
+    /// The predicate annotating a shape node or data-graph predicate with its
+    /// graph-box role.
+    pub graph_box_role: String,
+    /// The ABox role individual.
+    pub box_abox: String,
+    /// The TBox role individual.
+    pub box_tbox: String,
+    /// The RBox role individual.
+    pub box_rbox: String,
+    /// The CBox role individual (stamped onto reifier-shape results).
+    pub box_cbox: String,
+    /// The ConfigBox role individual.
+    pub box_config_box: String,
+}
 
-    pub const BOX_ABOX: &str = "https://blackcatinformatics.ca/purrdf/boxABox";
-
-    pub const BOX_TBOX: &str = "https://blackcatinformatics.ca/purrdf/boxTBox";
-
-    pub const BOX_RBOX: &str = "https://blackcatinformatics.ca/purrdf/boxRBox";
-
-    pub const BOX_CBOX: &str = "https://blackcatinformatics.ca/purrdf/boxCBox";
-
-    pub const BOX_CONFIG_BOX: &str = "https://blackcatinformatics.ca/purrdf/boxConfigBox";
+impl BoxRoleVocab {
+    /// Derive the six term IRIs by concatenation from a namespace whose local
+    /// names are `graphBoxRole` / `boxABox` / `boxTBox` / `boxRBox` / `boxCBox`
+    /// / `boxConfigBox`.
+    #[must_use]
+    pub fn for_namespace(ns: &str) -> Self {
+        Self {
+            graph_box_role: format!("{ns}graphBoxRole"),
+            box_abox: format!("{ns}boxABox"),
+            box_tbox: format!("{ns}boxTBox"),
+            box_rbox: format!("{ns}boxRBox"),
+            box_cbox: format!("{ns}boxCBox"),
+            box_config_box: format!("{ns}boxConfigBox"),
+        }
+    }
 }
 
 /// RDF namespace constants (`http://www.w3.org/1999/02/22-rdf-syntax-ns#`).

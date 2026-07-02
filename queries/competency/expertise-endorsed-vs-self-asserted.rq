@@ -3,29 +3,29 @@
 # Attestation vouches for it, and 'endorsed' when an Attestation exists whose
 # attester differs from the proficiency's agent.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?proficiency ?agent ?skill ?assertionKind WHERE {
     {
-        ?proficiency a purrdf:SkillProficiency ;
-                     purrdf:skillProficiencyAgent ?agent ;
-                     purrdf:skillProficiencyOf ?skill .
+        ?proficiency a gmeow:SkillProficiency ;
+                     gmeow:skillProficiencyAgent ?agent ;
+                     gmeow:skillProficiencyOf ?skill .
         FILTER NOT EXISTS {
-            ?attestation a purrdf:Attestation ;
-                         purrdf:attestedSubject ?proficiency ;
-                         purrdf:attester ?attester .
+            ?attestation a gmeow:Attestation ;
+                         gmeow:attestedSubject ?proficiency ;
+                         gmeow:attester ?attester .
             FILTER(?attester != ?agent)
         }
         BIND("self-asserted" AS ?assertionKind)
     }
     UNION
     {
-        ?proficiency a purrdf:SkillProficiency ;
-                     purrdf:skillProficiencyAgent ?agent ;
-                     purrdf:skillProficiencyOf ?skill .
-        ?attestation a purrdf:Attestation ;
-                     purrdf:attestedSubject ?proficiency ;
-                     purrdf:attester ?attester .
+        ?proficiency a gmeow:SkillProficiency ;
+                     gmeow:skillProficiencyAgent ?agent ;
+                     gmeow:skillProficiencyOf ?skill .
+        ?attestation a gmeow:Attestation ;
+                     gmeow:attestedSubject ?proficiency ;
+                     gmeow:attester ?attester .
         FILTER(?attester != ?agent)
         BIND("endorsed" AS ?assertionKind)
     }

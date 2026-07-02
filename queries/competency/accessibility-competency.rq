@@ -2,27 +2,27 @@
 # These queries demonstrate that the ontology can answer real-world
 # accessibility questions.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 # Q1: Find all locations that have a wheelchair accessibility feature
 #     and NO wheelchair barrier.
 SELECT ?place WHERE {
-    ?place purrdf:hasAccessibilityFeature purrdf:facetWheelchair .
+    ?place gmeow:hasAccessibilityFeature gmeow:facetWheelchair .
     FILTER NOT EXISTS {
-        ?place purrdf:hasBarrier purrdf:facetWheelchair .
+        ?place gmeow:hasBarrier gmeow:facetWheelchair .
     }
 }
 
 # Q2: Find all accessibility assertions made by a given vantage.
 SELECT ?assertion ?subject ?facet ?polarity WHERE {
-    ?assertion a purrdf:AccessibilityAssertion ;
-        purrdf:assertionSubject ?subject ;
-        purrdf:assertionFacet ?facet ;
-        purrdf:assertionPolarity ?polarity ;
-        purrdf:vantage ?vantage .
+    ?assertion a gmeow:AccessibilityAssertion ;
+        gmeow:assertionSubject ?subject ;
+        gmeow:assertionFacet ?facet ;
+        gmeow:assertionPolarity ?polarity ;
+        gmeow:vantage ?vantage .
 }
 
 # Q3: Which locations have barriers for a specific facet?
 SELECT ?place ?facet WHERE {
-    ?place purrdf:hasBarrier ?facet .
+    ?place gmeow:hasBarrier ?facet .
 }

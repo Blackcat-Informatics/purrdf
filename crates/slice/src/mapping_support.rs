@@ -359,8 +359,11 @@ fn has_prefix_token(text: &str, prefix: &str) -> bool {
 const TEMPLATE_PREFIX: &str = "purrdf";
 
 /// Rename `purrdf:` CURIE tokens (at a non-word-char boundary, mirroring
-/// [`prefix_block`]'s token scan) to `{prefix}:`. A no-op when the caller's
-/// prefix name is already the template label.
+/// [`prefix_block`]'s token scan) to `{prefix}:`, then rename the template's
+/// PROSE forms — the uppercase product token (`PURRDF` → `GMEOW`) in
+/// projection headers and the `` `purrdf regenerate` `` CLI mention in the
+/// generated banner — so no emitted artifact carries the template label.
+/// A no-op when the caller's prefix name is already the template label.
 pub(crate) fn rename_template_prefix(text: &str, prefix: &str) -> String {
     if prefix == TEMPLATE_PREFIX {
         return text.to_owned();
@@ -381,6 +384,38 @@ pub(crate) fn rename_template_prefix(text: &str, prefix: &str) -> String {
             out.push_str(&needle);
         }
         rest = &rest[pos + needle.len()..];
+    }
+    out.push_str(rest);
+    // After the CURIE pass, rename every remaining word-boundary occurrence of
+    // the template label (prose: `PURRDF →`, `purrdf→purrdf view`, the
+    // `` `purrdf regenerate` `` banner) — emitted artifacts must carry no
+    // trace of the template's authoring label.
+    let out = replace_word(&out, TEMPLATE_PREFIX, prefix);
+    replace_word(&out, &TEMPLATE_PREFIX.to_uppercase(), &prefix.to_uppercase())
+}
+
+/// Replace word-boundary occurrences of `from` with `to` (boundaries are
+/// non-alphanumeric/underscore on both sides).
+fn replace_word(text: &str, from: &str, to: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find(from) {
+        let before_ok = pos == 0 || {
+            let prev = rest.as_bytes()[pos - 1];
+            !(prev.is_ascii_alphanumeric() || prev == b'_')
+        };
+        let after = pos + from.len();
+        let after_ok = after >= rest.len() || {
+            let next = rest.as_bytes()[after];
+            !(next.is_ascii_alphanumeric() || next == b'_')
+        };
+        out.push_str(&rest[..pos]);
+        if before_ok && after_ok {
+            out.push_str(to);
+        } else {
+            out.push_str(from);
+        }
+        rest = &rest[after..];
     }
     out.push_str(rest);
     out

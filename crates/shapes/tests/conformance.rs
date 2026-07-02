@@ -8,9 +8,18 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
+use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::report::{conforms_from_ntriples, tuples_from_ntriples};
 
 const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus");
+
+/// The corpus fixtures' caller-supplied box-role vocabulary: the reifier-shape
+/// cases (38–42) annotate shapes with `meta:graphBoxRole` terms under
+/// `https://example.org/meta/`. PurRDF mints no vocabulary of its own, so the
+/// harness configures the vocab explicitly, exactly as a consumer would.
+fn corpus_box_role_vocab() -> BoxRoleVocab {
+    BoxRoleVocab::for_namespace("https://example.org/meta/")
+}
 
 #[test]
 fn conformance_corpus() {
@@ -59,8 +68,12 @@ fn conformance_corpus() {
         let expected_nt = fs::read_to_string(case_path.join("expected-report.nt"))
             .unwrap_or_else(|e| panic!("case {case_name}: cannot read expected-report.nt: {e}"));
 
-        // Run the validator.
-        let report = match purrdf_shapes::engine::validate_graphs(&data_nt, &shapes_ttl) {
+        // Run the validator with the corpus box-role vocabulary configured.
+        let report = match purrdf_shapes::engine::validate_graphs_with_config(
+            &data_nt,
+            &shapes_ttl,
+            Some(corpus_box_role_vocab()),
+        ) {
             Ok(r) => r,
             Err(e) => {
                 failures.push(format!("[{case_name}] validate_graphs failed: {e}"));

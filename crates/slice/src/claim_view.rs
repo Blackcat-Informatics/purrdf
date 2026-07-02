@@ -76,7 +76,7 @@ mod tests {
     /// Committed-artifact parity uses the blackcatinformatics purrdf namespace
     /// the committed query was generated with.
     fn committed_vocab() -> SliceVocab {
-        SliceVocab::for_namespace("https://blackcatinformatics.ca/purrdf/")
+        SliceVocab::for_namespace("https://blackcatinformatics.ca/gmeow/")
     }
 
     #[test]
@@ -102,12 +102,12 @@ mod tests {
     fn claim_view_constructs_observation_surface_from_claim_tokens() {
         let text = emit_claim_view(&committed_vocab());
         // Reads the canonical layer...
-        assert!(text.contains("?tok a purrdf:ClaimToken"));
-        assert!(text.contains("purrdf:expresses ?prop"));
+        assert!(text.contains("?tok a gmeow:ClaimToken"));
+        assert!(text.contains("gmeow:expresses ?prop"));
         // ...and materialises the legacy observation surface.
-        assert!(text.contains("purrdf:Observation , purrdf:StandpointClaim"));
-        assert!(text.contains("purrdf:observedFeature ?prop"));
+        assert!(text.contains("gmeow:Observation , gmeow:StandpointClaim"));
+        assert!(text.contains("gmeow:observedFeature ?prop"));
         // Suppression is honoured.
-        assert!(text.contains("FILTER NOT EXISTS { ?tok purrdf:displayable false }"));
+        assert!(text.contains("FILTER NOT EXISTS { ?tok gmeow:displayable false }"));
     }
 }

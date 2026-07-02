@@ -1,11 +1,11 @@
 # Competency question: "Who are members of a department and thereby members of the parent?"
 # Expected: Agents that are members of a sub-organization, entailed as members of the parent
-# via the existing purrdf:memberOf ∘ purrdf:subOrganizationOf property chain.
+# via the existing gmeow:memberOf ∘ gmeow:subOrganizationOf property chain.
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?member ?department ?parent WHERE {
-    ?member purrdf:memberOf ?department .
-    ?department purrdf:subOrganizationOf ?parent .
+    ?member gmeow:memberOf ?department .
+    ?department gmeow:subOrganizationOf ?parent .
 }
 ORDER BY ?parent ?department ?member

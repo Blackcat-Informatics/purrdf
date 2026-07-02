@@ -1,10 +1,10 @@
 # Competency question: "What is an organization's headquarters location?"
 # Expected: Organizations and their headquarters sites (hasSite + siteTypeHeadquarters).
 
-PREFIX purrdf: <https://blackcatinformatics.ca/purrdf/>
+PREFIX gmeow: <https://blackcatinformatics.ca/gmeow/>
 
 SELECT ?org ?hq WHERE {
-    ?org purrdf:hasSite ?hq .
-    ?hq purrdf:siteType purrdf:siteTypeHeadquarters .
+    ?org gmeow:hasSite ?hq .
+    ?hq gmeow:siteType gmeow:siteTypeHeadquarters .
 }
 ORDER BY ?org ?hq

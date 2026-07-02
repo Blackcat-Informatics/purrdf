@@ -869,18 +869,13 @@ fn walk_expression(e: &purrdf_sparql_algebra::Expression, out: &mut BTreeSet<Nam
             match func {
                 // An IRI-named external function references the slice defining it.
                 purrdf_sparql_algebra::Function::Custom(n) => insert_oxiri(n, out),
-                // A purrdf extension function (e.g. purrdf:heldIn) depends on the slice
-                // that declares its vocabulary term — reconstruct its IRI from the
-                // closed local-name so the dependency edge is not lost. These are the
-                // PUBLISHED PurRDF carrier terms (vocab/purrdf.ttl: heldIn, list*),
-                // minted under the purrdf namespace by the SPARQL parser itself,
-                // NOT caller vocabulary — so the published namespace is correct here.
-                purrdf_sparql_algebra::Function::Purrdf(g) => {
-                    /// The published PurRDF carrier-vocabulary namespace the
-                    /// SPARQL extension functions are minted under.
-                    const PURRDF_CARRIER_NS: &str = "https://blackcatinformatics.ca/purrdf/";
-                    if let Ok(nn) = NamedNode::new(format!("{PURRDF_CARRIER_NS}{}", g.local_name()))
-                    {
+                // A recognized extension function (e.g. heldIn) depends on the
+                // slice that declares its vocabulary term. The parsed call keeps
+                // the ORIGINAL IRI from the query text (the extension namespace
+                // is caller configuration — purrdf mints no vocabulary), so the
+                // dependency edge uses that IRI verbatim.
+                purrdf_sparql_algebra::Function::Purrdf(call) => {
+                    if let Ok(nn) = NamedNode::new(call.iri.clone()) {
                         out.insert(nn);
                     }
                 }
