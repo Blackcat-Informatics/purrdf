@@ -24,7 +24,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://blackcatinformatics.ca/projects/purrdf"
+Homepage = "https://blackcatinformatics.ca/purrdf/"
 Repository = "https://github.com/Blackcat-Informatics/purrdf"
 
 [tool.maturin]

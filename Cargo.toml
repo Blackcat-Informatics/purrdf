@@ -31,7 +31,7 @@ edition = "2021"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Blackcat-Informatics/purrdf"
-homepage = "https://blackcatinformatics.ca/projects/purrdf"
+homepage = "https://blackcatinformatics.ca/purrdf/"
 
 # Single source of truth for every dependency version in the workspace.
 # Member crates inherit with `dep.workspace = true`; per-crate feature

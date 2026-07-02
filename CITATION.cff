@@ -26,7 +26,7 @@ date-released: "2026-07-01"
 license:
   - Apache-2.0
   - MIT
-url: "https://blackcatinformatics.ca/projects/purrdf"
+url: "https://blackcatinformatics.ca/purrdf/"
 repository-code: "https://github.com/Blackcat-Informatics/purrdf"
 keywords:
   - rdf

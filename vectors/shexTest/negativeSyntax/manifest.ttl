@@ -1,0 +1,1110 @@
+# For the best user feedback, errors should include a location. The startRow,
+# startColumn, endRow and endColumn should bracket this location. They are
+# calculated by taking the 1-based column and row before any whitespace before
+# the offending token and the column and row after the offending token and any
+# whitespace.
+#
+# These ranges are negotiable. Feel free to write a github issue making a case
+# for expanding or contracting them.
+
+@base <https://raw.githubusercontent.com/shexSpec/shexTest/master/negativeSyntax/manifest> .
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix mf:     <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix sht:    <http://www.w3.org/ns/shacl/test-suite#> .
+@prefix sx:     <https://shexspec.github.io/shexTest/ns#> .
+
+<> a mf:Manifest ;
+    rdfs:comment "ShEx negative syntax tests" ;
+    mf:entries (
+    <#1decimalMininclusiveroman-numeral>
+    <#1dotAnnot_AIRIREF>
+    <#1dotUnlabeledCode1>
+    <#1doubleMininclusiveroman-numeral>
+    <#1floatMininclusiveroman-numeral>
+    <#1integerMininclusiveroman-numeral>
+    <#1inverseinversedot>
+    <#1iriLength2>
+    <#1iriMaxexclusive>
+    <#1iriMaxinclusive>
+    <#1iriMinexclusive>
+    <#1iriMininclusive>
+    <#1literalFractiondigitsxsd-integer>
+    <#1literalLength2>
+    <#1literalTotaldigitsxsd-integer>
+    <#1negatedinversenegateddot>
+    <#1negatednegateddot>
+    <#1datatypeRef1>
+    <#1unknowndatatypeMaxInclusive>
+    <#1val1bnode>
+    <#1val1iriMinusiri1>
+    <#1val1vcrefSTRING_LITERAL1>
+    <#1valA>
+    <#DECIMAL-123.abc>
+    <#DOUBLE-123e>
+    <#INTEGER-+-1>
+    <#INTEGER-123abc>
+    <#IRIREF-with-ECHAR>
+    <#IRIREF-with-PN_LOCAL_ESC>
+    <#IRIREF-with-SPACE>
+    <#IRIREF-with-bad-UCHAR.1>
+    <#IRIREF-with-bad-UCHAR.2>
+    <#PNAME_NS-dot-at-end-declared>
+    <#PNAME_NS-dot-at-end-undeclared>
+    <#PNAME_NS-dot-at-start-declared>
+    <#PNAME_NS-dot-at-start-undeclared>
+    <#PN_LOCAL-PERCENT-end>
+    <#PN_LOCAL-PERCENT-mid>
+    <#PN_LOCAL-PERCENT-start>
+    <#PN_LOCAL-dash-start>
+    <#PN_LOCAL-unescaped-TILDE>
+    <#PN_LOCAL-with-UCHAR.1>
+    <#1literalPattern-bad-delim>
+    <#1literalPattern_with_ECHAR_escape_1>
+    <#1literalPattern_with_ECHAR_escape_b>
+    <#1literalPattern_with_ECHAR_escape_f>
+    <#1literalPattern_with_UCHAR_escape_U0000061>
+    <#1literalPattern_with_UCHAR_escape_u061>
+    <#1val1STRING_LITERAL1_bad_delim>
+    <#1val1STRING_LITERAL1_with_ECHAR_escape_1>
+    <#1val1STRING_LITERAL1_with_ECHAR_escape_a>
+    <#1val1STRING_LITERAL1_with_ECHAR_escape_z>
+    <#1val1STRING_LITERAL1_with_UCHAR_escape_u061>
+    <#1val1STRING_LITERAL1_with_UCHAR_escape_U0000061>
+    <#STRING_LITERAL1-ending-QUOTATION_MARK>
+    <#STRING_LITERAL2-bad-ECHAR>
+    <#STRING_LITERAL2-bad-LANGTAG>
+    <#STRING_LITERAL2-bad-UCHAR1>
+    <#STRING_LITERAL2-bad-UCHAR2-value>
+    <#STRING_LITERAL2-ending-APOSTROPHE>
+    <#STRING_LITERAL2-illegal-UCHAR1-value>
+    <#STRING_LITERAL2-with-LANGTAG-and-datatype>
+    <#STRING_LITERAL_LONG1-ending-APOSTROPHE4>
+    <#STRING_LITERAL_LONG2-ending-APOSTROPHE3>
+    <#STRING_LITERAL_LONG2-ending-QUOTATION_MARK4>
+    <#STRING_LITERAL_LONG2-unterminated>
+    <#a>
+    <#Dot-Minus-emptylanguageStem>
+    <#emptylanguageStem-Minus-emptylanguageStem>
+    <#base-no-uri>
+    <#base-uri-dot>
+    <#bnodedot>
+    <#capitol-A>
+    <#group-no-SEMICOLON-separators>
+    <#groupShapeConstr-trailing-OR>
+    <#literal-0x123>
+    <#open1dotcloseAnnot3>
+    <#predicate-ANON>
+    <#predicate-BLANK_NODE_LABEL>
+    <#predicate-literal>
+    <#predicate-true>
+    <#prefix-missing>
+    <#prefix-no-COLON>
+    <#prefix-no-PNAME_NS>
+    <#prefix-no-uri>
+    <#prefix-none>
+    <#shapename-a>
+    <#shapename-literal>
+    <#shapename-true>
+    <#tripleConsraint-no-valueClass>
+    <#tripleConsraint-with-datatype-and-dot>
+    <#tripleConsraint-with-datatype-and-valueSet>
+    <#tripleConsraint-with-dot-and-datatype>
+    <#tripleConsraint-with-two-cardinalities>
+    <#1val1iriStemMinusliteral3>
+    <#1val1languageStemMinusliteral3>
+    <#1val1literalStemMinusiri3>
+    <#1val1literalStemMinuslanguage3>
+    <#INTEGER-in-shape-expression>
+  ) .
+
+<#1decimalMininclusiveroman-numeral> a sht:NegativeSyntax ;
+  mf:name "1decimalMininclusiveroman-numeral" ;
+  mf:status mf:Approved ;
+  sx:shex <1decimalMininclusiveroman-numeral.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 81 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1dotAnnot_AIRIREF> a sht:NegativeSyntax ;
+  mf:name "1dotAnnot_AIRIREF" ;
+  mf:status mf:Approved ;
+  sx:shex <1dotAnnot_AIRIREF.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 31 ;
+  mf:endRow 4 ;
+  mf:endColumn 1 ;
+  .
+
+<#1dotUnlabeledCode1> a sht:NegativeSyntax ;
+  mf:name "1dotUnlabeledCode1" ;
+  mf:status mf:Approved ;
+  sx:shex <1dotUnlabeledCode1.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 6 ;
+  mf:endRow 4 ;
+  mf:endColumn 1 ;
+  .
+
+<#1doubleMininclusiveroman-numeral> a sht:NegativeSyntax ;
+  mf:name "1doubleMininclusiveroman-numeral" ;
+  mf:status mf:Approved ;
+  sx:shex <1doubleMininclusiveroman-numeral.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 80 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1floatMininclusiveroman-numeral> a sht:NegativeSyntax ;
+  mf:name "1floatMininclusiveroman-numeral" ;
+  mf:status mf:Approved ;
+  sx:shex <1floatMininclusiveroman-numeral.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 79 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1integerMininclusiveroman-numeral> a sht:NegativeSyntax ;
+  mf:name "1integerMininclusiveroman-numeral" ;
+  mf:status mf:Approved ;
+  sx:shex <1integerMininclusiveroman-numeral.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 81 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1inverseinversedot> a sht:NegativeSyntax ;
+  mf:name "1inverseinversedot" ;
+  mf:status mf:Approved ;
+  sx:shex <1inverseinversedot.shex> ;
+  mf:startRow 1 ;
+  mf:startColumn 32 ;
+  mf:endRow 2 ;
+  mf:endColumn 28 ;
+  .
+
+<#1iriLength2> a sht:NegativeSyntax ;
+  mf:name "1iriLength2" ;
+  mf:status mf:Approved ;
+  sx:shex <1iriLength2.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 39 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1iriMaxexclusive> a sht:NegativeSyntax ;
+  mf:name "1iriMaxexclusive" ;
+  mf:status mf:Approved ;
+  sx:shex <1iriMaxexclusive.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 29 ;
+  mf:endRow 2 ;
+  mf:endColumn 43 ;
+  .
+
+<#1iriMaxinclusive> a sht:NegativeSyntax ;
+  mf:name "1iriMaxinclusive" ;
+  mf:status mf:Approved ;
+  sx:shex <1iriMaxinclusive.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 29 ;
+  mf:endRow 2 ;
+  mf:endColumn 43 ;
+  .
+
+<#1iriMinexclusive> a sht:NegativeSyntax ;
+  mf:name "1iriMinexclusive" ;
+  mf:status mf:Approved ;
+  sx:shex <1iriMinexclusive.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 29 ;
+  mf:endRow 2 ;
+  mf:endColumn 43 ;
+  .
+
+<#1iriMininclusive> a sht:NegativeSyntax ;
+  mf:name "1iriMininclusive" ;
+  mf:status mf:Approved ;
+  sx:shex <1iriMininclusive.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 29 ;
+  mf:endRow 2 ;
+  mf:endColumn 43 ;
+  .
+
+<#1literalFractiondigitsxsd-integer> a sht:NegativeSyntax ;
+  mf:name "1literalFractiondigitsxsd-integer" ;
+  mf:status mf:Approved ;
+  sx:shex <1literalFractiondigitsxsd-integer.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 48 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1literalLength2> a sht:NegativeSyntax ;
+  mf:name "1literalLength2" ;
+  mf:status mf:Approved ;
+  sx:shex <1literalLength2.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 43 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1literalTotaldigitsxsd-integer> a sht:NegativeSyntax ;
+  mf:name "1literalTotaldigitsxsd-integer" ;
+  mf:status mf:Approved ;
+  sx:shex <1literalTotaldigitsxsd-integer.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 45 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1negatedinversenegateddot> a sht:NegativeSyntax ;
+  mf:name "1negatedinversenegateddot" ;
+  mf:status mf:Approved ;
+  sx:shex <1negatedinversenegateddot.shex> ;
+  mf:startRow 1 ;
+  mf:startColumn 32 ;
+  mf:endRow 2 ;
+  mf:endColumn 5 ;
+  .
+
+<#1negatednegateddot> a sht:NegativeSyntax ;
+  mf:name "1negatednegateddot" ;
+  mf:status mf:Approved ;
+  sx:shex <1negatednegateddot.shex> ;
+  mf:startRow 1 ;
+  mf:startColumn 32 ;
+  mf:endRow 2 ;
+  mf:endColumn 5 ;
+  .
+
+<#1datatypeRef1> a sht:NegativeSyntax ;
+  mf:name "1datatypeRef1" ;
+  mf:status mf:Approved ;
+  sx:shex <1datatypeRef1.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 48 ;
+  mf:endRow 4 ;
+  mf:endColumn 1 ;
+  .
+
+<#1unknowndatatypeMaxInclusive> a sht:NegativeSyntax ;
+  mf:name "1unknowndatatypeMaxInclusive" ;
+  mf:status mf:Proposed ;
+  sx:shex <1unknowndatatypeMaxInclusive.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 48 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1val1bnode> a sht:NegativeSyntax ;
+  mf:name "1val1bnode" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1bnode.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 26 ;
+  mf:endRow 2 ;
+  mf:endColumn 30 ;
+  .
+
+<#1val1iriMinusiri1> a sht:NegativeSyntax ;
+  mf:name "1val1iriMinusiri1" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1iriMinusiri1.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 48 ;
+  mf:endRow 2 ;
+  mf:endColumn 51 ;
+  .
+
+<#1val1vcrefSTRING_LITERAL1> a sht:NegativeSyntax ;
+  mf:name "1val1vcrefSTRING_LITERAL1" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1vcrefSTRING_LITERAL1.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 1 ;
+  mf:endRow 3 ;
+  mf:endColumn 7 ;
+  .
+
+<#1valA> a sht:NegativeSyntax ;
+  mf:name "1valA" ;
+  mf:status mf:Approved ;
+  sx:shex <1valA.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 27 ;
+  mf:endRow 2 ;
+  mf:endColumn 28 ;
+  .
+
+<#DECIMAL-123.abc> a sht:NegativeSyntax ;
+  mf:name "DECIMAL-123.abc" ;
+  mf:status mf:Approved ;
+  sx:shex <DECIMAL-123.abc.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 31 ;
+  mf:endRow 4 ;
+  mf:endColumn 34 ;
+  .
+
+<#DOUBLE-123e> a sht:NegativeSyntax ;
+  mf:name "DOUBLE-123e" ;
+  mf:status mf:Approved ;
+  sx:shex <DOUBLE-123e.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 26 ;
+  mf:endRow 4 ;
+  mf:endColumn 31 ;
+  .
+
+<#INTEGER-+-1> a sht:NegativeSyntax ;
+  mf:name "INTEGER-+-1" ;
+  mf:status mf:Approved ;
+  sx:shex <INTEGER-+-1.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 4 ;
+  mf:endColumn 28 ;
+  .
+
+<#INTEGER-123abc> a sht:NegativeSyntax ;
+  mf:name "INTEGER-123abc" ;
+  mf:status mf:Approved ;
+  sx:shex <INTEGER-123abc.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 26 ;
+  mf:endRow 4 ;
+  mf:endColumn 34 ;
+  .
+
+<#IRIREF-with-ECHAR> a sht:NegativeSyntax ;
+  mf:name "IRIREF-with-ECHAR" ;
+  mf:status mf:Approved ;
+  sx:shex <IRIREF-with-ECHAR.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 32 ;
+  mf:endRow 4 ;
+  mf:endColumn 28 ;
+  .
+
+<#IRIREF-with-PN_LOCAL_ESC> a sht:NegativeSyntax ;
+  mf:name "IRIREF-with-PN_LOCAL_ESC" ;
+  mf:status mf:Approved ;
+  sx:shex <IRIREF-with-PN_LOCAL_ESC.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 32 ;
+  mf:endRow 4 ;
+  mf:endColumn 29 ;
+  .
+
+<#IRIREF-with-SPACE> a sht:NegativeSyntax ;
+  mf:name "IRIREF-with-SPACE" ;
+  mf:status mf:Approved ;
+  sx:shex <IRIREF-with-SPACE.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 32 ;
+  mf:endRow 4 ;
+  mf:endColumn 28 ;
+  .
+
+<#IRIREF-with-bad-UCHAR.1> a sht:NegativeSyntax ;
+  mf:name "IRIREF-with-bad-UCHAR.1" ;
+  mf:status mf:Approved ;
+  sx:shex <IRIREF-with-bad-UCHAR.1.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 32 ;
+  mf:endRow 4 ;
+  mf:endColumn 30 ;
+  .
+
+<#IRIREF-with-bad-UCHAR.2> a sht:NegativeSyntax ;
+  mf:name "IRIREF-with-bad-UCHAR.2" ;
+  mf:status mf:Approved ;
+  sx:shex <IRIREF-with-bad-UCHAR.2.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 32 ;
+  mf:endRow 4 ;
+  mf:endColumn 35 ;
+  .
+
+<#PNAME_NS-dot-at-end-declared> a sht:NegativeSyntax ;
+  mf:name "PNAME_NS-dot-at-end-declared" ;
+  mf:status mf:Approved ;
+  sx:shex <PNAME_NS-dot-at-end-declared.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 7 ;
+  mf:endRow 4 ;
+  mf:endColumn 17 ;
+  .
+
+<#PNAME_NS-dot-at-end-undeclared> a sht:NegativeSyntax ;
+  mf:name "PNAME_NS-dot-at-end-undeclared" ;
+  mf:status mf:Approved ;
+  sx:shex <PNAME_NS-dot-at-end-undeclared.shex> ;
+  mf:startRow 6 ;
+  mf:startColumn 16 ;
+  mf:endRow 6 ;
+  mf:endColumn 26 ;
+  .
+
+<#PNAME_NS-dot-at-start-declared> a sht:NegativeSyntax ;
+  mf:name "PNAME_NS-dot-at-start-declared" ;
+  mf:status mf:Approved ;
+  sx:shex <PNAME_NS-dot-at-start-declared.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 7 ;
+  mf:endRow 4 ;
+  mf:endColumn 17 ;
+  .
+
+<#PNAME_NS-dot-at-start-undeclared> a sht:NegativeSyntax ;
+  mf:name "PNAME_NS-dot-at-start-undeclared" ;
+  mf:status mf:Approved ;
+  sx:shex <PNAME_NS-dot-at-start-undeclared.shex> ;
+  mf:startRow 6 ;
+  mf:startColumn 16 ;
+  mf:endRow 6 ;
+  mf:endColumn 26 ;
+  .
+
+<#PN_LOCAL-PERCENT-end> a sht:NegativeSyntax ;
+  mf:name "PN_LOCAL-PERCENT-end" ;
+  mf:status mf:Approved ;
+  sx:shex <PN_LOCAL-PERCENT-end.shex> ;
+  mf:startRow 6 ;
+  mf:startColumn 7 ;
+  mf:endRow 6 ;
+  mf:endColumn 11 ;
+  .
+
+<#PN_LOCAL-PERCENT-mid> a sht:NegativeSyntax ;
+  mf:name "PN_LOCAL-PERCENT-mid" ;
+  mf:status mf:Approved ;
+  sx:shex <PN_LOCAL-PERCENT-mid.shex> ;
+  mf:startRow 6 ;
+  mf:startColumn 7 ;
+  mf:endRow 6 ;
+  mf:endColumn 12 ;
+  .
+
+<#PN_LOCAL-PERCENT-start> a sht:NegativeSyntax ;
+  mf:name "PN_LOCAL-PERCENT-start" ;
+  mf:status mf:Approved ;
+  sx:shex <PN_LOCAL-PERCENT-start.shex> ;
+  mf:startRow 6 ;
+  mf:startColumn 7 ;
+  mf:endRow 6 ;
+  mf:endColumn 11 ;
+  .
+
+<#PN_LOCAL-dash-start> a sht:NegativeSyntax ;
+  mf:name "PN_LOCAL-dash-start" ;
+  mf:status mf:Approved ;
+  sx:shex <PN_LOCAL-dash-start.shex> ;
+  mf:startRow 6 ;
+  mf:startColumn 7 ;
+  mf:endRow 6 ;
+  mf:endColumn 11 ;
+  .
+
+<#PN_LOCAL-unescaped-TILDE> a sht:NegativeSyntax ;
+  mf:name "PN_LOCAL-unescaped-TILDE" ;
+  mf:status mf:Approved ;
+  sx:shex <PN_LOCAL-unescaped-TILDE.shex> ;
+  mf:startRow 6 ;
+  mf:startColumn 7 ;
+  mf:endRow 6 ;
+  mf:endColumn 11 ;
+  .
+
+<#PN_LOCAL-with-UCHAR.1> a sht:NegativeSyntax ;
+  mf:name "PN_LOCAL-with-UCHAR.1" ;
+  mf:status mf:Approved ;
+  sx:shex <PN_LOCAL-with-UCHAR.1.shex> ;
+  mf:startRow 6 ;
+  mf:startColumn 7 ;
+  mf:endRow 6 ;
+  mf:endColumn 15 ;
+  .
+
+<#1literalPattern-bad-delim> a sht:NegativeSyntax ;
+  mf:name "1literalPattern-bad-delim" ;
+  mf:status mf:Approved ;
+  sx:shex <1literalPattern-bad-delim.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 25 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1literalPattern_with_ECHAR_escape_1> a sht:NegativeSyntax ;
+  mf:name "1literalPattern_with_ECHAR_escape_1" ;
+  mf:status mf:Approved ;
+  sx:shex <1literalPattern_with_ECHAR_escape_1.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 25 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1literalPattern_with_ECHAR_escape_b> a sht:NegativeSyntax ;
+  mf:name "1literalPattern_with_ECHAR_escape_b" ;
+  mf:status mf:Approved ;
+  sx:shex <1literalPattern_with_ECHAR_escape_b.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 25 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1literalPattern_with_ECHAR_escape_f> a sht:NegativeSyntax ;
+  mf:name "1literalPattern_with_ECHAR_escape_f" ;
+  mf:status mf:Approved ;
+  sx:shex <1literalPattern_with_ECHAR_escape_f.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 25 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1literalPattern_with_UCHAR_escape_U0000061> a sht:NegativeSyntax ;
+  mf:name "1literalPattern_with_UCHAR_escape_U0000061" ;
+  mf:status mf:Approved ;
+  sx:shex <1literalPattern_with_UCHAR_escape_U0000061.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 27 ;
+  mf:endRow 2 ;
+  mf:endColumn 39 ;
+  .
+
+<#1literalPattern_with_UCHAR_escape_u061> a sht:NegativeSyntax ;
+  mf:name "1literalPattern_with_UCHAR_escape_u061" ;
+  mf:status mf:Approved ;
+  sx:shex <1literalPattern_with_UCHAR_escape_u061.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 27 ;
+  mf:endRow 2 ;
+  mf:endColumn 34 ;
+  .
+
+<#1val1STRING_LITERAL1_bad_delim> a sht:NegativeSyntax ;
+  mf:name "1val1STRING_LITERAL1_bad_delim" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1STRING_LITERAL1_bad_delim.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 27 ;
+  mf:endRow 3 ;
+  mf:endColumn 1 ;
+  .
+
+<#1val1STRING_LITERAL1_with_ECHAR_escape_1> a sht:NegativeSyntax ;
+  mf:name "1val1STRING_LITERAL1_with_ECHAR_escape_1" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1STRING_LITERAL1_with_ECHAR_escape_1.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 27 ;
+  mf:endRow 2 ;
+  mf:endColumn 31 ;
+  .
+
+<#1val1STRING_LITERAL1_with_ECHAR_escape_a> a sht:NegativeSyntax ;
+  mf:name "1val1STRING_LITERAL1_with_ECHAR_escape_a" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1STRING_LITERAL1_with_ECHAR_escape_a.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 27 ;
+  mf:endRow 2 ;
+  mf:endColumn 31 ;
+  .
+
+<#1val1STRING_LITERAL1_with_ECHAR_escape_z> a sht:NegativeSyntax ;
+  mf:name "1val1STRING_LITERAL1_with_ECHAR_escape_z" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1STRING_LITERAL1_with_ECHAR_escape_z.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 27 ;
+  mf:endRow 2 ;
+  mf:endColumn 31 ;
+  .
+
+<#1val1STRING_LITERAL1_with_UCHAR_escape_u061> a sht:NegativeSyntax ;
+  mf:name "1val1STRING_LITERAL1_with_UCHAR_escape_u061" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1STRING_LITERAL1_with_UCHAR_escape_u061.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 27 ;
+  mf:endRow 2 ;
+  mf:endColumn 34 ;
+  .
+
+<#1val1STRING_LITERAL1_with_UCHAR_escape_U0000061> a sht:NegativeSyntax ;
+  mf:name "1val1STRING_LITERAL1_with_UCHAR_escape_U0000061" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1STRING_LITERAL1_with_UCHAR_escape_U0000061.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 27 ;
+  mf:endRow 2 ;
+  mf:endColumn 38 ;
+  .
+
+<#STRING_LITERAL1-ending-QUOTATION_MARK> a sht:NegativeSyntax ;
+  mf:name "STRING_LITERAL1-ending-QUOTATION_MARK" ;
+  mf:status mf:Approved ;
+  sx:shex <STRING_LITERAL1-ending-QUOTATION_MARK.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 5 ;
+  mf:endColumn 1 ;
+  .
+
+<#STRING_LITERAL2-bad-ECHAR> a sht:NegativeSyntax ;
+  mf:name "STRING_LITERAL2-bad-ECHAR" ;
+  mf:status mf:Approved ;
+  sx:shex <STRING_LITERAL2-bad-ECHAR.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 4 ;
+  mf:endColumn 33 ;
+  .
+
+<#STRING_LITERAL2-bad-LANGTAG> a sht:NegativeSyntax ;
+  mf:name "STRING_LITERAL2-bad-LANGTAG" ;
+  mf:status mf:Approved ;
+  sx:shex <STRING_LITERAL2-bad-LANGTAG.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 4 ;
+  mf:endColumn 37 ;
+  .
+
+<#STRING_LITERAL2-bad-UCHAR1> a sht:NegativeSyntax ;
+  mf:name "STRING_LITERAL2-bad-UCHAR1" ;
+  mf:status mf:Approved ;
+  sx:shex <STRING_LITERAL2-bad-UCHAR1.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 4 ;
+  mf:endColumn 35 ;
+  .
+
+<#STRING_LITERAL2-bad-UCHAR2-value> a sht:NegativeSyntax ;
+  mf:name "STRING_LITERAL2-bad-UCHAR2-value" ;
+  mf:status mf:Approved ;
+  sx:shex <STRING_LITERAL2-bad-UCHAR2-value.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 4 ;
+  mf:endColumn 39 ;
+  .
+
+<#STRING_LITERAL2-ending-APOSTROPHE> a sht:NegativeSyntax ;
+  mf:name "STRING_LITERAL2-ending-APOSTROPHE" ;
+  mf:status mf:Approved ;
+  sx:shex <STRING_LITERAL2-ending-APOSTROPHE.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 5 ;
+  mf:endColumn 1 ;
+  .
+
+<#STRING_LITERAL2-illegal-UCHAR1-value> a sht:NegativeSyntax ;
+  mf:name "STRING_LITERAL2-illegal-UCHAR1-value" ;
+  mf:status mf:Approved ;
+  sx:shex <STRING_LITERAL2-illegal-UCHAR1-value.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 4 ;
+  mf:endColumn 39 ;
+  .
+
+<#STRING_LITERAL2-with-LANGTAG-and-datatype> a sht:NegativeSyntax ;
+  mf:name "STRING_LITERAL2-with-LANGTAG-and-datatype" ;
+  mf:status mf:Approved ;
+  sx:shex <STRING_LITERAL2-with-LANGTAG-and-datatype.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 4 ;
+  mf:endColumn 60 ;
+  .
+
+<#STRING_LITERAL_LONG1-ending-APOSTROPHE4> a sht:NegativeSyntax ;
+  mf:name "STRING_LITERAL_LONG1-ending-APOSTROPHE4" ;
+  mf:status mf:Approved ;
+  sx:shex <STRING_LITERAL_LONG1-ending-APOSTROPHE4.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 4 ;
+  mf:endColumn 37 ;
+  .
+
+<#STRING_LITERAL_LONG2-ending-APOSTROPHE3> a sht:NegativeSyntax ;
+  mf:name "STRING_LITERAL_LONG2-ending-APOSTROPHE3" ;
+  mf:status mf:Approved ;
+  sx:shex <STRING_LITERAL_LONG2-ending-APOSTROPHE3.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 6 ;
+  mf:endColumn 1 ;
+  .
+
+<#STRING_LITERAL_LONG2-ending-QUOTATION_MARK4> a sht:NegativeSyntax ;
+  mf:name "STRING_LITERAL_LONG2-ending-QUOTATION_MARK4" ;
+  mf:status mf:Approved ;
+  sx:shex <STRING_LITERAL_LONG2-ending-QUOTATION_MARK4.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 4 ;
+  mf:endColumn 41 ;
+  .
+
+<#STRING_LITERAL_LONG2-unterminated> a sht:NegativeSyntax ;
+  mf:name "STRING_LITERAL_LONG2-unterminated" ;
+  mf:status mf:Approved ;
+  sx:shex <STRING_LITERAL_LONG2-unterminated.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 6 ;
+  mf:endColumn 1 ;
+  .
+
+<#a> a sht:NegativeSyntax ;
+  mf:name "a" ;
+  mf:status mf:Approved ;
+  sx:shex <a.shex> ;
+  mf:startRow 1 ;
+  mf:startColumn 1 ;
+  mf:endRow 2 ;
+  mf:endColumn 1 ;
+  .
+
+<#Dot-Minus-emptylanguageStem> a sht:NegativeSyntax ;
+  mf:name "Dot-Minus-emptylanguageStem" ;
+  mf:status mf:Approved ;
+  sx:shex <Dot-Minus-emptylanguageStem.shex> ;
+  mf:startRow 1 ;
+  mf:startColumn 28 ;
+  mf:endRow 1 ;
+  mf:endColumn 29 ;
+  .
+
+<#emptylanguageStem-Minus-emptylanguageStem> a sht:NegativeSyntax ;
+  mf:name "emptylanguageStem-Minus-emptylanguageStem" ;
+  mf:status mf:Approved ;
+  sx:shex <emptylanguageStem-Minus-emptylanguageStem.shex> ;
+  mf:startRow 1 ;
+  mf:startColumn 29 ;
+  mf:endRow 1 ;
+  mf:endColumn 30 ;
+  .
+
+<#base-no-uri> a sht:NegativeSyntax ;
+  mf:name "base-no-uri" ;
+  mf:status mf:Approved ;
+  sx:shex <base-no-uri.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 5 ;
+  mf:endRow 4 ;
+  mf:endColumn 1 ;
+  .
+
+<#base-uri-dot> a sht:NegativeSyntax ;
+  mf:name "base-uri-dot" ;
+  mf:status mf:Approved ;
+  sx:shex <base-uri-dot.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 44 ;
+  mf:endRow 4 ;
+  mf:endColumn 1 ;
+  .
+
+<#bnodedot> a sht:NegativeSyntax ;
+  mf:name "bnodedot" ;
+  mf:status mf:Approved ;
+  sx:shex <bnodedot.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 1 ;
+  mf:endRow 2 ;
+  mf:endColumn 15 ;
+  .
+
+<#capitol-A> a sht:NegativeSyntax ;
+  mf:name "capitol-A" ;
+  mf:status mf:Approved ;
+  sx:shex <capitol-A.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 32 ;
+  mf:endRow 4 ;
+  mf:endColumn 6 ;
+  .
+
+<#group-no-SEMICOLON-separators> a sht:NegativeSyntax ;
+  mf:name "group-no-SEMICOLON-separators" ;
+  mf:status mf:Approved ;
+  sx:shex <group-no-SEMICOLON-separators.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 27 ;
+  mf:endRow 4 ;
+  mf:endColumn 27 ;
+  .
+
+<#groupShapeConstr-trailing-OR> a sht:NegativeSyntax ;
+  mf:name "groupShapeConstr-trailing-OR" ;
+  mf:status mf:Approved ;
+  sx:shex <groupShapeConstr-trailing-OR.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 59 ;
+  mf:endRow 4 ;
+  mf:endColumn 1 ;
+  .
+
+<#literal-0x123> a sht:NegativeSyntax ;
+  mf:name "literal-0x123" ;
+  mf:status mf:Approved ;
+  sx:shex <literal-0x123.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 27 ;
+  mf:endRow 4 ;
+  mf:endColumn 32 ;
+  .
+
+<#open1dotcloseAnnot3> a sht:NegativeSyntax ;
+  mf:name "open1dotcloseAnnot3" ;
+  mf:status mf:Approved ;
+  sx:shex <open1dotcloseAnnot3.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 39 ;
+  mf:endRow 4 ;
+  mf:endColumn 37 ;
+  .
+
+<#predicate-ANON> a sht:NegativeSyntax ;
+  mf:name "predicate-ANON" ;
+  mf:status mf:Approved ;
+  sx:shex <predicate-ANON.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 32 ;
+  mf:endRow 4 ;
+  mf:endColumn 5 ;
+  .
+
+<#predicate-BLANK_NODE_LABEL> a sht:NegativeSyntax ;
+  mf:name "predicate-BLANK_NODE_LABEL" ;
+  mf:status mf:Approved ;
+  sx:shex <predicate-BLANK_NODE_LABEL.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 32 ;
+  mf:endRow 4 ;
+  mf:endColumn 9 ;
+  .
+
+<#predicate-literal> a sht:NegativeSyntax ;
+  mf:name "predicate-literal" ;
+  mf:status mf:Approved ;
+  sx:shex <predicate-literal.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 32 ;
+  mf:endRow 4 ;
+  mf:endColumn 9 ;
+  .
+
+<#predicate-true> a sht:NegativeSyntax ;
+  mf:name "predicate-true" ;
+  mf:status mf:Approved ;
+  sx:shex <predicate-true.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 32 ;
+  mf:endRow 4 ;
+  mf:endColumn 9 ;
+  .
+
+<#prefix-none> a sht:NegativeSyntax ;
+  mf:name "prefix-none" ;
+  mf:status mf:Approved ;
+  sx:shex <prefix-none.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 32 ;
+  mf:endRow 5 ;
+  mf:endColumn 10 ;
+  .
+
+<#prefix-missing> a sht:NegativeSyntax ;
+  mf:name "prefix-missing" ;
+  mf:status mf:Approved ;
+  sx:shex <prefix-missing.shex> ;
+  mf:startRow 6 ;
+  mf:startColumn 16 ;
+  mf:endRow 7 ;
+  mf:endColumn 10 ;
+  .
+
+<#prefix-no-COLON> a sht:NegativeSyntax ;
+  mf:name "prefix-no-COLON" ;
+  mf:status mf:Approved ;
+  sx:shex <prefix-no-COLON.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 7 ;
+  mf:endRow 3 ;
+  mf:endColumn 11 ;
+  .
+
+<#prefix-no-PNAME_NS> a sht:NegativeSyntax ;
+  mf:name "prefix-no-PNAME_NS" ;
+  mf:status mf:Approved ;
+  sx:shex <prefix-no-PNAME_NS.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 7 ;
+  mf:endRow 3 ;
+  mf:endColumn 27 ;
+  .
+
+<#prefix-no-uri> a sht:NegativeSyntax ;
+  mf:name "prefix-no-uri" ;
+  mf:status mf:Approved ;
+  sx:shex <prefix-no-uri.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 11 ;
+  mf:endRow 4 ;
+  mf:endColumn 1 ;
+  .
+
+<#shapename-a> a sht:NegativeSyntax ;
+  mf:name "shapename-a" ;
+  mf:status mf:Approved ;
+  sx:shex <shapename-a.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 1 ;
+  mf:endRow 3 ;
+  mf:endColumn 3 ;
+  .
+
+<#shapename-literal> a sht:NegativeSyntax ;
+  mf:name "shapename-literal" ;
+  mf:status mf:Approved ;
+  sx:shex <shapename-literal.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 1 ;
+  mf:endRow 3 ;
+  mf:endColumn 14 ;
+  .
+
+<#shapename-true> a sht:NegativeSyntax ;
+  mf:name "shapename-true" ;
+  mf:status mf:Approved ;
+  sx:shex <shapename-true.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 1 ;
+  mf:endRow 3 ;
+  mf:endColumn 6 ;
+  .
+
+<#tripleConsraint-no-valueClass> a sht:NegativeSyntax ;
+  mf:name "tripleConsraint-no-valueClass" ;
+  mf:status mf:Approved ;
+  sx:shex <tripleConsraint-no-valueClass.shex> ;
+  mf:startRow 4 ;
+  mf:startColumn 25 ;
+  mf:endRow 5 ;
+  mf:endColumn 1 ;
+  .
+
+<#tripleConsraint-with-datatype-and-dot> a sht:NegativeSyntax ;
+  mf:name "tripleConsraint-with-datatype-and-dot" ;
+  mf:status mf:Approved ;
+  sx:shex <tripleConsraint-with-datatype-and-dot.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 48 ;
+  mf:endRow 4 ;
+  mf:endColumn 1 ;
+  .
+
+<#tripleConsraint-with-datatype-and-valueSet> a sht:NegativeSyntax ;
+  mf:name "tripleConsraint-with-datatype-and-valueSet" ;
+  mf:status mf:Approved ;
+  sx:shex <tripleConsraint-with-datatype-and-valueSet.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 48 ;
+  mf:endRow 3 ;
+  mf:endColumn 74 ;
+  .
+
+<#tripleConsraint-with-dot-and-datatype> a sht:NegativeSyntax ;
+  mf:name "tripleConsraint-with-dot-and-datatype" ;
+  mf:status mf:Approved ;
+  sx:shex <tripleConsraint-with-dot-and-datatype.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 27 ;
+  mf:endRow 3 ;
+  mf:endColumn 50 ;
+  .
+
+<#tripleConsraint-with-two-cardinalities> a sht:NegativeSyntax ;
+  mf:name "tripleConsraint-with-two-cardinalities" ;
+  mf:status mf:Approved ;
+  sx:shex <tripleConsraint-with-two-cardinalities.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 29 ;
+  mf:endRow 4 ;
+  mf:endColumn 1 ;
+  .
+
+<#1val1iriStemMinusliteral3> a sht:NegativeSyntax ;
+  mf:name "1val1iriStemMinusliteral3" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1iriStemMinusliteral3.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 28 ;
+  mf:endRow 4 ;
+  mf:endColumn 27 ;
+  .
+
+<#1val1languageStemMinusliteral3> a sht:NegativeSyntax ;
+  mf:name "1val1languageStemMinusliteral3" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1languageStemMinusliteral3.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 28 ;
+  mf:endRow 4 ;
+  mf:endColumn 27 ;
+  .
+
+<#1val1literalStemMinusiri3> a sht:NegativeSyntax ;
+  mf:name "1val1literalStemMinusiri3" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1literalStemMinusiri3.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 28 ;
+  mf:endRow 4 ;
+  mf:endColumn 27 ;
+  .
+
+<#1val1literalStemMinuslanguage3> a sht:NegativeSyntax ;
+  mf:name "1val1literalStemMinuslanguage3" ;
+  mf:status mf:Approved ;
+  sx:shex <1val1literalStemMinuslanguage3.shex> ;
+  mf:startRow 3 ;
+  mf:startColumn 28 ;
+  mf:endRow 4 ;
+  mf:endColumn 27 ;
+  .
+
+<#INTEGER-in-shape-expression> a sht:NegativeSyntax ;
+  mf:name "INTEGER-in-shape-expression" ;
+  mf:status mf:Approved ;
+  sx:shex <INTEGER-in-shape-expression.shex> ;
+  mf:startRow 2 ;
+  mf:startColumn 25 ;
+  mf:endRow 2 ;
+  mf:endColumn 28 ;
+  .
+

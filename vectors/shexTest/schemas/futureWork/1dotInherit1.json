@@ -1,0 +1,25 @@
+{
+  "@context": "http://www.w3.org/ns/shex.jsonld",
+  "type": "Schema",
+  "prefixes": {},
+  "shapes": {
+    "http://a.example/S1": {
+      "type": "Shape",
+      "expression": {
+        "type": "TripleConstraint",
+        "predicate": "http://a.example/p1",
+        "valueExpr": { "type": "ValueClass" }
+      }
+    },
+    "http://a.example/S2": {
+      "type": "Shape",
+      "expression": {
+        "type": "TripleConstraint",
+        "predicate": "http://a.example/p2",
+        "valueExpr": { "type": "ValueClass" }
+      },
+      "inherit": [ "http://a.example/S1" ]
+    }
+  }
+}
+
