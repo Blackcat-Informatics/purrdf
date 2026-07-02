@@ -23,6 +23,15 @@ classifiers = [
   "Typing :: Typed",
 ]
 
+[project.optional-dependencies]
+# Opt-in: installs the separate `purrdf-rdflib` distribution, whose top-level
+# `rdflib` package shadows the real rdflib and re-exports purrdf's compat
+# surface. `pip install purrdf[rdflib]` yields a literal `import rdflib` drop-in.
+# It MUST NOT be installed alongside the genuine rdflib (import-name collision) —
+# hence a separate distribution (bindings/python-rdflib-shadow), never bundled
+# into the main purrdf wheel and deliberately absent from the [dev] oracle env.
+rdflib = ["purrdf-rdflib"]
+
 [project.urls]
 Homepage = "https://blackcatinformatics.ca/purrdf/"
 Repository = "https://github.com/Blackcat-Informatics/purrdf"
@@ -45,6 +54,14 @@ acceptance = [
   "SPARQLWrapper",
   "sssom",
 ]
+
+# uv-only: resolve the opt-in `rdflib` extra's `purrdf-rdflib` from the in-repo
+# shadow distribution (published to PyPI at release time). `pip`/build backends
+# ignore `[tool.uv.sources]`, so a real `pip install purrdf[rdflib]` still pulls
+# the published wheel. Extras are opt-in, so this NEVER enters the default dev
+# (oracle) sync — the genuine rdflib in `[dependency-groups].dev` stays unshadowed.
+[tool.uv.sources]
+purrdf-rdflib = { path = "../python-rdflib-shadow" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

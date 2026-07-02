@@ -957,6 +957,11 @@ name = "purrdf"
 version = "0.2.0"
 source = { editable = "." }
 
+[package.optional-dependencies]
+rdflib = [
+    { name = "purrdf-rdflib" },
+]
+
 [package.dev-dependencies]
 acceptance = [
     { name = "pyshacl" },
@@ -971,6 +976,8 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "purrdf-rdflib", marker = "extra == 'rdflib'", directory = "../python-rdflib-shadow" }]
+provides-extras = ["rdflib"]
 
 [package.metadata.requires-dev]
 acceptance = [
@@ -984,6 +991,17 @@ dev = [
     { name = "pytest", specifier = ">=8,<9" },
     { name = "rdflib", specifier = ">=7.1,<8" },
 ]
+
+[[package]]
+name = "purrdf-rdflib"
+version = "0.2.0"
+source = { directory = "../python-rdflib-shadow" }
+dependencies = [
+    { name = "purrdf" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "purrdf" }]
 
 [[package]]
 name = "pydantic"

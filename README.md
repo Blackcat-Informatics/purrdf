@@ -143,7 +143,23 @@ print(result["conforms"])
 ```
 
 The Python package also ships an [rdflib compatibility layer](./bindings/python/python/src/purrdf/compat/rdflib/)
-and GTS relational exports (`gts_to_sqlite`, `gts_to_duckdb`, `gts_to_parquet`).
+(`from purrdf.compat.rdflib import Graph`) and GTS relational exports
+(`gts_to_sqlite`, `gts_to_duckdb`, `gts_to_parquet`).
+
+For a literal, zero-change `import rdflib`, install the opt-in extra:
+
+```bash
+pip install purrdf[rdflib]
+```
+
+This pulls in the separate [`purrdf-rdflib`](./bindings/python-rdflib-shadow/)
+distribution, whose top-level `rdflib` package re-exports the compat surface, so
+existing third-party code doing `import rdflib` / `from rdflib.namespace import RDF`
+transparently runs on purrdf. **Caveat:** that shadow claims the `rdflib` import
+name and must never be installed alongside the genuine
+[`rdflib`](https://pypi.org/project/rdflib/) — the two cannot co-inhabit one
+environment. It is a separate distribution (never bundled into the main `purrdf`
+wheel) precisely so environments that need the real rdflib simply omit it.
 
 ### JavaScript / WebAssembly
 
