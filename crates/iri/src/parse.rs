@@ -201,7 +201,8 @@ fn validate_scheme(s: &str) -> Result<()> {
         return Err(IriError::BadScheme(s.to_owned()));
     }
     for &c in &b[1..] {
-        if !(c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.')) {
+        // scheme tail = ALPHA / DIGIT / `+` `-` `.` (ASCII-only by grammar).
+        if !ascii_class(c, SCHEME_TAIL) {
             return Err(IriError::BadScheme(s.to_owned()));
         }
     }
@@ -209,16 +210,82 @@ fn validate_scheme(s: &str) -> Result<()> {
 }
 
 // ---- Character classes (RFC-3986 §2 / RFC-3987 §2.2) -----------------------
+//
+// The ASCII character classes are precomputed into a const 128-entry bitmap
+// (`CLASS`, one byte per ASCII code point), so a per-character grammar check is a
+// single table load + mask instead of a chain of `matches!` comparisons. The
+// non-ASCII path (`ucschar`/`iprivate`) is unaffected — those code points are
+// validated by range test as before.
+
+/// `unreserved` = ALPHA / DIGIT / `-` `.` `_` `~`.
+const UNRESERVED: u8 = 1 << 0;
+/// `sub-delims` = `!` `$` `&` `'` `(` `)` `*` `+` `,` `;` `=`.
+const SUB_DELIMS: u8 = 1 << 1;
+/// The literal `:` (a `pchar`/userinfo extra).
+const COLON: u8 = 1 << 2;
+/// The literal `@` (a `pchar` extra).
+const AT: u8 = 1 << 3;
+/// The literal `/` (path segment separator; also a query/fragment extra).
+const SLASH: u8 = 1 << 4;
+/// The literal `?` (a query/fragment extra).
+const QUESTION: u8 = 1 << 5;
+/// `scheme` tail = ALPHA / DIGIT / `+` `-` `.` (after the mandatory leading ALPHA).
+const SCHEME_TAIL: u8 = 1 << 6;
+
+/// Precomputed class bitmap for the ASCII range (`0x00..=0x7F`). Built once at
+/// compile time; each entry ORs together every [`UNRESERVED`]/[`SUB_DELIMS`]/…
+/// class that its code point belongs to.
+const CLASS: [u8; 128] = build_class_table();
+
+const fn build_class_table() -> [u8; 128] {
+    let mut table = [0u8; 128];
+    let mut i = 0usize;
+    while i < 128 {
+        let b = i as u8;
+        let mut cls = 0u8;
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            cls |= UNRESERVED;
+        }
+        if matches!(
+            b,
+            b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'='
+        ) {
+            cls |= SUB_DELIMS;
+        }
+        if b == b':' {
+            cls |= COLON;
+        }
+        if b == b'@' {
+            cls |= AT;
+        }
+        if b == b'/' {
+            cls |= SLASH;
+        }
+        if b == b'?' {
+            cls |= QUESTION;
+        }
+        if b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.') {
+            cls |= SCHEME_TAIL;
+        }
+        table[i] = cls;
+        i += 1;
+    }
+    table
+}
+
+/// `true` iff the ASCII byte belongs to ANY class in `mask`. Non-ASCII bytes carry
+/// no ASCII class and return `false`.
+#[inline]
+fn ascii_class(byte: u8, mask: u8) -> bool {
+    byte < 0x80 && CLASS[byte as usize] & mask != 0
+}
 
 fn is_unreserved(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~')
+    c.is_ascii() && CLASS[c as usize] & UNRESERVED != 0
 }
 
 fn is_sub_delims(c: char) -> bool {
-    matches!(
-        c,
-        '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '='
-    )
+    c.is_ascii() && CLASS[c as usize] & SUB_DELIMS != 0
 }
 
 /// RFC-3987 §2.2 `ucschar` — the Unicode ranges IRIs add over URIs.
@@ -260,19 +327,25 @@ fn iri_extra_ok(c: char, allow_iprivate: bool, mode: Mode) -> bool {
 }
 
 /// Validate that a component string only contains the allowed ASCII set
-/// (`extra_ascii`), valid percent-encoding, plus IRI Unicode where permitted.
+/// (`unreserved` / `sub-delims` plus every class in `extra_mask`), valid
+/// percent-encoding, plus IRI Unicode where permitted.
+///
+/// The ASCII grammar check is a single [`CLASS`] table lookup + mask; only a
+/// non-ASCII byte (a UTF-8 lead byte, always a char boundary here) is decoded to a
+/// `char` and routed through the `ucschar`/`iprivate` range test.
 fn validate_component(
     s: &str,
     base_off: usize,
-    extra_ascii: &dyn Fn(char) -> bool,
+    extra_mask: u8,
     allow_iprivate: bool,
     mode: Mode,
 ) -> Result<()> {
     let bytes = s.as_bytes();
+    let allowed = UNRESERVED | SUB_DELIMS | extra_mask;
     let mut i = 0usize;
-    let mut ci = s.char_indices();
     while i < bytes.len() {
-        if bytes[i] == b'%' {
+        let b = bytes[i];
+        if b == b'%' {
             // Require exactly two following hex digits.
             if i + 3 > bytes.len()
                 || !bytes[i + 1].is_ascii_hexdigit()
@@ -281,22 +354,26 @@ fn validate_component(
                 return Err(IriError::BadPercentEncoding(base_off + i));
             }
             i += 3;
-            // keep char_indices in sync
-            for _ in 0..3 {
-                ci.next();
-            }
             continue;
         }
-        let (off, c) = ci.next().expect("char boundary tracks byte index");
-        debug_assert_eq!(off, i);
-        let ok = is_unreserved(c)
-            || is_sub_delims(c)
-            || extra_ascii(c)
-            || iri_extra_ok(c, allow_iprivate, mode);
-        if !ok {
-            return Err(IriError::DisallowedChar(c, base_off + i));
+        if b < 0x80 {
+            if ascii_class(b, allowed) {
+                i += 1;
+                continue;
+            }
+            return Err(IriError::DisallowedChar(b as char, base_off + i));
         }
-        i += c.len_utf8();
+        // Non-ASCII: `b` is a UTF-8 lead byte at a char boundary (the ASCII bytes
+        // before it are single-byte). Decode and apply the IRI Unicode test.
+        let c = s[i..]
+            .chars()
+            .next()
+            .expect("non-ASCII byte begins a char");
+        if iri_extra_ok(c, allow_iprivate, mode) {
+            i += c.len_utf8();
+            continue;
+        }
+        return Err(IriError::DisallowedChar(c, base_off + i));
     }
     Ok(())
 }
@@ -311,7 +388,7 @@ fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
     };
     if let Some(ui) = userinfo {
         // userinfo: unreserved / pct / sub-delims / ":"
-        validate_component(ui, base_off, &|c| c == ':', false, mode)?;
+        validate_component(ui, base_off, COLON, false, mode)?;
     }
 
     // Split host and optional port. An IP-literal host is bracketed `[...]`.
@@ -383,34 +460,22 @@ fn validate_host(s: &str, base_off: usize, mode: Mode) -> Result<()> {
         return Ok(());
     }
     // reg-name / IPv4: unreserved / pct / sub-delims (+ ucschar in IRI mode).
-    validate_component(s, base_off, &|_| false, false, mode)
+    validate_component(s, base_off, 0, false, mode)
 }
 
 fn validate_path(s: &str, base_off: usize, mode: Mode) -> Result<()> {
     // pchar = unreserved / pct / sub-delims / ":" / "@"; plus "/" segment sep.
-    validate_component(s, base_off, &|c| matches!(c, ':' | '@' | '/'), false, mode)
+    validate_component(s, base_off, COLON | AT | SLASH, false, mode)
 }
 
 fn validate_query(s: &str, base_off: usize, mode: Mode) -> Result<()> {
     // query = *( pchar / "/" / "?" ); IRIs additionally allow `iprivate`.
-    validate_component(
-        s,
-        base_off,
-        &|c| matches!(c, ':' | '@' | '/' | '?'),
-        true,
-        mode,
-    )
+    validate_component(s, base_off, COLON | AT | SLASH | QUESTION, true, mode)
 }
 
 fn validate_fragment(s: &str, base_off: usize, mode: Mode) -> Result<()> {
     // fragment = *( pchar / "/" / "?" )
-    validate_component(
-        s,
-        base_off,
-        &|c| matches!(c, ':' | '@' | '/' | '?'),
-        false,
-        mode,
-    )
+    validate_component(s, base_off, COLON | AT | SLASH | QUESTION, false, mode)
 }
 
 /// SWAR word width: one `u64` scans eight bytes per iteration.
@@ -482,5 +547,42 @@ mod tests {
         assert_eq!(find_first_of(haystack, *b"?#"), Some(32));
         assert_eq!(find_first_byte(haystack, b'#'), Some(37));
         assert_eq!(find_first_of(haystack, *b":/"), None);
+    }
+
+    /// The const `CLASS` bitmap must reproduce the original per-character grammar
+    /// predicates EXACTLY over the whole ASCII range — a one-bit table error would
+    /// silently widen or narrow IRI acceptance, which the W3C suite might not pinpoint.
+    #[test]
+    fn class_table_matches_scalar_predicates() {
+        for b in 0u8..128 {
+            let c = b as char;
+            let cls = CLASS[b as usize];
+            assert_eq!(
+                cls & UNRESERVED != 0,
+                c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'),
+                "UNRESERVED mismatch at 0x{b:02X}"
+            );
+            assert_eq!(
+                cls & SUB_DELIMS != 0,
+                matches!(
+                    c,
+                    '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '='
+                ),
+                "SUB_DELIMS mismatch at 0x{b:02X}"
+            );
+            assert_eq!(cls & COLON != 0, c == ':', "COLON mismatch at 0x{b:02X}");
+            assert_eq!(cls & AT != 0, c == '@', "AT mismatch at 0x{b:02X}");
+            assert_eq!(cls & SLASH != 0, c == '/', "SLASH mismatch at 0x{b:02X}");
+            assert_eq!(
+                cls & QUESTION != 0,
+                c == '?',
+                "QUESTION mismatch at 0x{b:02X}"
+            );
+            assert_eq!(
+                cls & SCHEME_TAIL != 0,
+                c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'),
+                "SCHEME_TAIL mismatch at 0x{b:02X}"
+            );
+        }
     }
 }
