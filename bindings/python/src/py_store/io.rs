@@ -70,7 +70,10 @@ pub(crate) fn parse(
     format: PyRdfFormat,
 ) -> PyResult<Vec<Py<PyQuad>>> {
     let data = read_input(Some(input), None)?;
-    let quads = parse_quads(&data, format.to_native())
+    // The native parse runs detached (GIL released); the Quad objects are
+    // built after reacquiring.
+    let quads = py
+        .detach(|| parse_quads(&data, format.to_native()))
         .map_err(|e| PyValueError::new_err(format!("parse error: {e}")))?;
     quads
         .into_iter()
@@ -91,7 +94,10 @@ pub(crate) fn serialize(
     format: Option<PyRdfFormat>,
 ) -> PyResult<Option<Py<PyBytes>>> {
     let format = format.ok_or_else(|| PyValueError::new_err("serialize: format is required"))?;
-    let bytes = serialize_triples(&input.triples, format.to_native())
+    // The native serialization runs detached (GIL released).
+    let triples = &input.triples;
+    let bytes = py
+        .detach(|| serialize_triples(triples, format.to_native()))
         .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))?;
     match output {
         Some(output) => {

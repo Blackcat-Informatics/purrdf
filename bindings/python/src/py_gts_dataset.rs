@@ -35,10 +35,11 @@ impl PyRdfDataset {
     /// Build a frozen dataset by parsing RDF `data` (bytes or str) in `format`.
     #[new]
     #[pyo3(signature = (data, format))]
-    fn new(data: &Bound<'_, PyAny>, format: PyRdfFormat) -> PyResult<Self> {
+    fn new(py: Python<'_>, data: &Bound<'_, PyAny>, format: PyRdfFormat) -> PyResult<Self> {
         let bytes = read_bytes(data)?;
-        let inner =
-            dataset_from_bytes(&bytes, rdf_format(format)).map_err(PyValueError::new_err)?;
+        let inner = py
+            .detach(|| dataset_from_bytes(&bytes, rdf_format(format)))
+            .map_err(PyValueError::new_err)?;
         Ok(Self { inner })
     }
 
@@ -64,7 +65,9 @@ impl PyRdfDataset {
     fn to_gts(&self, py: Python<'_>, profile: &str) -> PyResult<Py<PyBytes>> {
         // A bare dataset carries no out-of-band envelope, so the lookaside is empty
         // (matching the prior compat-bridge behavior, which yielded an empty lookaside).
-        let bytes = gts_write::to_gts(self.inner.as_ref(), &RdfLookaside::default(), profile)
+        let dataset = &self.inner;
+        let bytes = py
+            .detach(|| gts_write::to_gts(dataset.as_ref(), &RdfLookaside::default(), profile))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyBytes::new(py, &bytes).unbind())
     }

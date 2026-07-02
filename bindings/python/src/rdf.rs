@@ -19,16 +19,18 @@ use crate::{loss, statements};
 /// The native (no Jena, no Docker, no SPARQL) replacement for the Jena codec on
 /// the `purrdf regenerate` / `check-generated` statement path.
 #[pyfunction]
-fn project_statements_rdf12(owl_ttl: &str) -> PyResult<String> {
-    statements::project_owl_to_rdf12(owl_ttl).map_err(|e| PyValueError::new_err(e.to_string()))
+fn project_statements_rdf12(py: Python<'_>, owl_ttl: &str) -> PyResult<String> {
+    py.detach(|| statements::project_owl_to_rdf12(owl_ttl))
+        .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
 /// Normalize the RDF 1.2 / RDF* lead form → the OWL axiom-annotation normal form.
 ///
 /// Used by the round-trip isomorphism proof (the normal form rdflib can parse).
 #[pyfunction]
-fn normalize_rdf12_to_owl(rdf12_ttl: &str) -> PyResult<String> {
-    statements::normalize_rdf12_to_owl(rdf12_ttl).map_err(|e| PyValueError::new_err(e.to_string()))
+fn normalize_rdf12_to_owl(py: Python<'_>, rdf12_ttl: &str) -> PyResult<String> {
+    py.detach(|| statements::normalize_rdf12_to_owl(rdf12_ttl))
+        .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
 /// The machine-readable RDF↔GTS loss matrix as deterministic JSON (#819 C0).
@@ -51,10 +53,11 @@ fn loss_matrix_json() -> String {
 #[pyo3(signature = (turtle_bytes, extra_prefixes=Vec::new()))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn canonicalize_turtle(
+    py: Python<'_>,
     turtle_bytes: &[u8],
     extra_prefixes: Vec<(String, String)>,
 ) -> PyResult<Vec<u8>> {
-    crate::turtle_normalize::canonical_turtle(turtle_bytes, &extra_prefixes)
+    py.detach(|| crate::turtle_normalize::canonical_turtle(turtle_bytes, &extra_prefixes))
         .map(String::into_bytes)
         .map_err(PyValueError::new_err)
 }

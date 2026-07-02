@@ -10,6 +10,7 @@
 //! CONSTRUCT triples are `RdfTriple`. The engine is `NativeSparqlEngine`; the
 //! oxigraph `QueryResults` type is gone from this surface.
 
+use purrdf_sparql_eval::{NativeSparqlEngine, ParserOptions, StandpointPredicates};
 use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
@@ -17,6 +18,33 @@ use pyo3::types::{PyBytes, PyString};
 use super::io::{serialize_triples, PyRdfFormat};
 use super::term::{term_to_py, PyTriple, PyVariable};
 use crate::{RdfDataset, RdfTerm, RdfTriple, SparqlResult, TermValue};
+
+/// Build the [`NativeSparqlEngine`] for one query/update call from the optional
+/// Python-surface engine configuration (shared by `Store` and `MutableDataset`):
+///
+/// * `extension_namespaces` — the extension-function namespace set threaded into
+///   [`ParserOptions`]. Unset means the engine default (**extensions off**): a
+///   call-position IRI is an ordinary custom function.
+/// * `standpoint_predicates` — the `(according_to, sharpens)` domain predicate
+///   IRIs threaded into [`NativeSparqlEngine::with_standpoint_predicates`], read
+///   by `heldIn` and loss-aware `CONSTRUCT`. Unset means the engine default:
+///   evaluating `heldIn` is a hard error (PurRDF mints no vocabulary of its own).
+pub(super) fn build_engine(
+    extension_namespaces: Option<Vec<String>>,
+    standpoint_predicates: Option<(String, String)>,
+) -> NativeSparqlEngine {
+    let mut engine = NativeSparqlEngine::new();
+    if let Some(namespaces) = extension_namespaces {
+        engine = engine.with_parser_options(ParserOptions {
+            extension_fn_namespaces: namespaces,
+        });
+    }
+    if let Some((according_to, sharpens)) = standpoint_predicates {
+        engine =
+            engine.with_standpoint_predicates(StandpointPredicates::new(according_to, sharpens));
+    }
+    engine
+}
 
 /// SELECT results, materialized. Mirrors the oxigraph Python `QuerySolutions`.
 #[pyclass(name = "QuerySolutions")]
@@ -135,7 +163,10 @@ impl PyQueryTriples {
         py: Python<'py>,
         format: PyRdfFormat,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let bytes = serialize_triples(&self.triples, format.to_native())
+        // The native serialization runs detached (GIL released).
+        let triples = &self.triples;
+        let bytes = py
+            .detach(|| serialize_triples(triples, format.to_native()))
             .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))?;
         Ok(PyBytes::new(py, &bytes))
     }
@@ -263,5 +294,66 @@ fn term_value_predicate(value: TermValue) -> String {
     match value {
         TermValue::Iri(iri) => iri,
         other => term_value_to_rdf(other).to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{parse_dataset, SparqlEngine, SparqlRequest};
+
+    /// An `ASK` whose filter calls an IRI in call position under a would-be
+    /// extension namespace.
+    const EXT_CALL_ASK: &str = "ASK { FILTER(<https://ex.example/fn/nope>(1)) }";
+
+    fn ask(engine: &NativeSparqlEngine) -> Result<SparqlResult, crate::RdfDiagnostic> {
+        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
+        engine.query(
+            &dataset,
+            SparqlRequest {
+                query: EXT_CALL_ASK,
+                base_iri: None,
+                substitutions: &[],
+            },
+        )
+    }
+
+    #[test]
+    fn default_engine_leaves_extension_functions_off() {
+        // Unset = engine defaults: the call-position IRI is an ordinary custom
+        // function, so the query PARSES (any failure is an evaluation error,
+        // never the extension seam's parse-time unknown-local-name hard-fail).
+        if let Err(diag) = ask(&build_engine(None, None)) {
+            assert!(
+                !diag.to_string().contains("parse"),
+                "extensions-off must not fail at parse time: {diag}"
+            );
+        }
+    }
+
+    #[test]
+    fn extension_namespaces_thread_into_parser_options() {
+        // With the namespace configured, the UNKNOWN local name `nope` is a
+        // parse-time hard error — proving the kwarg reached ParserOptions.
+        let engine = build_engine(Some(vec!["https://ex.example/fn/".to_owned()]), None);
+        let diag = ask(&engine).expect_err("unknown extension local name must hard-fail");
+        assert_eq!(diag.code, "native-sparql-query-parse", "{diag}");
+    }
+
+    #[test]
+    fn standpoint_predicates_thread_into_the_engine() {
+        let engine = build_engine(
+            None,
+            Some((
+                "https://ex.example/accordingTo".to_owned(),
+                "https://ex.example/sharpens".to_owned(),
+            )),
+        );
+        // The engine Debug surface reports the configured table (the engine's own
+        // crate tests cover `heldIn` evaluation semantics end-to-end).
+        assert!(
+            format!("{engine:?}").contains("accordingTo"),
+            "standpoint predicate table must be installed"
+        );
     }
 }

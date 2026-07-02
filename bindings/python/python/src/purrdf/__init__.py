@@ -14,6 +14,7 @@ Store/SPARQL/parse/canonicalize surface, #667).
 import sys
 
 from .purrdf_native import rdf as _module
+from .purrdf_native import shex as _shex
 
 # PyO3 submodules carry no `__file__`. The legacy top-level name is expected to be
 # locatable (CI imports it and reads `__file__`, and tooling/tracebacks expect it),
@@ -29,5 +30,10 @@ _module.__file__ = __file__
 # swapped module object, so both halves coexist.
 _module.__path__ = __path__
 _module.__package__ = __name__
+
+# The ShEx engine submodule rides along on the swapped module so `purrdf.shex`
+# resolves by attribute access (matching the `shex` class-namespace declared in
+# `__init__.pyi`, the ABI source of truth).
+_module.shex = _shex
 
 sys.modules[__name__] = _module

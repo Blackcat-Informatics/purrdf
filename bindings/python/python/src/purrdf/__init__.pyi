@@ -167,13 +167,25 @@ class Store:
     ) -> None: ...
     def add(self, quad: Quad) -> None: ...
     def remove(self, quad: Quad) -> None: ...
+    # Engine configuration kwargs (unset = engine defaults): `extension_namespaces`
+    # enables the closed extension-function set under the caller's namespaces (OFF
+    # by default), `standpoint_predicates` is the `(according_to, sharpens)`
+    # predicate table the `heldIn` extension requires.
     def query(
         self,
         query: str,
         *,
         substitutions: dict[Variable, _Term] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
-    def update(self, update: str) -> None: ...
+    def update(
+        self,
+        update: str,
+        *,
+        extension_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+    ) -> None: ...
     @overload
     def dump(
         self,
@@ -230,13 +242,22 @@ class MutableDataset:
         format: RdfFormat,
         from_graph: NamedNode | BlankNode | DefaultGraph | None = ...,
     ) -> bytes: ...
+    # Engine configuration kwargs: as on `Store.query` / `Store.update`.
     def query(
         self,
         query: str,
         *,
         substitutions: dict[Variable, _Term] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryBoolean: ...
-    def update(self, update: str) -> None: ...
+    def update(
+        self,
+        update: str,
+        *,
+        extension_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+    ) -> None: ...
     def compact(self) -> None: ...
     def __len__(self) -> int: ...
 
@@ -313,7 +334,14 @@ def snapshot_content_id_native(data: bytes, *, format: RdfFormat) -> str: ...
 # `Graph.serialize`/`parse` route these formats here; serialize takes RDF bytes in
 # `format` and returns the text form, parse takes the text and returns N-Quads bytes.
 def to_json_ld(data: bytes, *, format: RdfFormat) -> str: ...
-def from_json_ld(text: str) -> bytes: ...
+
+# `statement_vocab` is the caller-supplied statement-metadata vocabulary
+# (keys: class/subject/predicate/object/objectLiteral, each an absolute IRI).
+# When given, RDF-1.2 star features are downcast to flat statement-metadata
+# cells in that vocabulary; PurRDF mints no default vocabulary of its own.
+def from_json_ld(
+    text: str, *, statement_vocab: dict[str, str] | None = ...
+) -> bytes: ...
 def to_rdf_xml(data: bytes, *, format: RdfFormat) -> str: ...
 def from_rdf_xml(text: str) -> bytes: ...
 def feedback_bundle_native(
@@ -438,3 +466,43 @@ def validate_sssom(text: str) -> list[SssomDiagnostic]: ...
 def sssom_to_rdf(text: str) -> str: ...
 def sssom_roundtrip_tsv(text: str) -> str: ...
 def sssom_default_validation_types() -> list[str]: ...
+
+# ── ShEx 2.1 engine (bindings/python/src/py_shex.rs, purrdf_native.shex) ─────────
+# The native `purrdf_native.shex` submodule, re-attached as `purrdf.shex` by the
+# `__init__.py` shim. Declared here as a class-namespace so the single-stub
+# layout stays the one ABI source of truth.
+
+class ShexResultEntry(TypedDict):
+    """One fixed-shape-map verdict: the input `(node, shape)` echoed verbatim."""
+
+    node: str
+    shape: str
+    conformant: bool
+    reason: str | None
+
+class shex:
+    # Validate a fixed shape map: `map` pairs a focus node (IRI — bare or
+    # `<…>`-wrapped —, `_:`-prefixed blank node, or Turtle literal token) with a
+    # shape label, or the literal string "START" for the schema's start shape.
+    # `schema_format` is "shexc" (default) or "shexj"; `data_format` is "turtle"
+    # (default), "ntriples", or "nquads"; `base` resolves relative IRIs in the
+    # schema and data. Typed engine errors raise ValueError.
+    @staticmethod
+    def validate(
+        schema: str,
+        data: str,
+        map: list[tuple[str, str]],
+        *,
+        schema_format: str = ...,
+        data_format: str = ...,
+        base: str | None = ...,
+    ) -> list[ShexResultEntry]: ...
+    # Parse a ShEx schema ("shexc" or "shexj") and return its canonical ShExJ
+    # JSON text, for schema tooling and cross-syntax round-trips.
+    @staticmethod
+    def parse(
+        schema: str,
+        *,
+        format: str = ...,
+        base: str | None = ...,
+    ) -> str: ...

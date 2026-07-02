@@ -7,22 +7,18 @@
 //! This adapter keeps Python on that COW surface; query / update run on the native
 //! `NativeSparqlEngine` over a frozen snapshot (EPIC #906 — no oxigraph).
 
-use std::sync::Arc;
-
 use purrdf_core::ir::{MutableDataset, QuadValues};
-use purrdf_sparql_eval::NativeSparqlEngine;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
 use super::io::{dataset_from_quads_verbatim, parse_quads, read_input, PyRdfFormat};
-use super::query::materialize_results;
+use super::query::{build_engine, materialize_results};
 use super::store::PyQuadIter;
 use super::term::{extract_graph_name, extract_term, PyQuad, PyVariable};
 use crate::{
-    serialize_dataset, BlankScope, DatasetMut, GraphMatchValue, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SparqlEngine, SparqlRequest,
-    TermValue,
+    serialize_dataset, BlankScope, DatasetMut, GraphMatchValue, RdfDatasetBuilder, RdfLiteral,
+    RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SparqlEngine, SparqlRequest, TermValue,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -50,6 +46,7 @@ impl PyMutableDataset {
     #[pyo3(signature = (input=None, format=None, *, path=None))]
     fn load(
         &mut self,
+        py: Python<'_>,
         input: Option<&Bound<'_, PyAny>>,
         format: Option<PyRdfFormat>,
         path: Option<String>,
@@ -57,13 +54,16 @@ impl PyMutableDataset {
         let format = format.ok_or_else(|| PyValueError::new_err("load: format is required"))?;
         let data = read_input(input, path)?;
         let blank_scope = self.allocate_blank_scope();
-        for quad in parse_quads(&data, format.to_native())
-            .map_err(|e| PyValueError::new_err(format!("load parse error: {e}")))?
-        {
-            self.inner
-                .insert(rdf_quad_to_values_scoped(&quad, blank_scope));
-        }
-        Ok(())
+        let inner = &mut self.inner;
+        // Parse + insert run detached (GIL released); only plain Rust data is touched.
+        py.detach(move || {
+            for quad in parse_quads(&data, format.to_native())
+                .map_err(|e| PyValueError::new_err(format!("load parse error: {e}")))?
+            {
+                inner.insert(rdf_quad_to_values_scoped(&quad, blank_scope));
+            }
+            Ok(())
+        })
     }
 
     /// Add a single quad. Returns whether the effective set changed.
@@ -96,25 +96,27 @@ impl PyMutableDataset {
         let p = optional_term(predicate)?;
         let o = optional_term(object)?;
         let g_value = optional_graph_value(graph_name)?;
-        let graph_match = if any_graph {
-            GraphMatchValue::Any
-        } else {
-            match g_value.as_ref() {
-                Some(g) => GraphMatchValue::Named(g),
-                None => GraphMatchValue::Default,
-            }
-        };
-        self.inner
-            .quads_for_pattern(s.as_ref(), p.as_ref(), o.as_ref(), graph_match)
-            .iter()
-            .map(|q| {
-                Py::new(
-                    py,
-                    PyQuad {
-                        inner: values_to_rdf_quad(q),
-                    },
-                )
-            })
+        let inner = &self.inner;
+        // The pattern scan over the effective set runs detached (GIL released);
+        // the matched quads are wrapped into Python objects after reacquiring.
+        let quads: Vec<RdfQuad> = py.detach(|| {
+            let graph_match = if any_graph {
+                GraphMatchValue::Any
+            } else {
+                match g_value.as_ref() {
+                    Some(g) => GraphMatchValue::Named(g),
+                    None => GraphMatchValue::Default,
+                }
+            };
+            inner
+                .quads_for_pattern(s.as_ref(), p.as_ref(), o.as_ref(), graph_match)
+                .iter()
+                .map(values_to_rdf_quad)
+                .collect()
+        });
+        quads
+            .into_iter()
+            .map(|inner| Py::new(py, PyQuad { inner }))
             .collect()
     }
 
@@ -129,22 +131,33 @@ impl PyMutableDataset {
     ) -> PyResult<Option<Py<PyBytes>>> {
         let format = format.ok_or_else(|| PyValueError::new_err("dump: format is required"))?;
         let native = format.to_native();
-        // Materialize the effective set into the IR verbatim, then serialize through
-        // the native codec (#909) — literal lexical forms are preserved.
-        let dataset = self.materialize_dataset()?;
+        // Resolve the Python-side graph selection BEFORE releasing the GIL.
         let graph_filter = match from_graph {
             Some(graph) => optional_graph_value(Some(graph))?,
             None => None,
         };
-        let selection = match (&graph_filter, from_graph.is_some()) {
-            (Some(name), _) => SerializeGraph::Named(name),
-            // An explicit default-graph (`from_graph=DefaultGraph`) selection.
-            (None, true) => SerializeGraph::DefaultGraph,
-            (None, false) if native.supports_datasets() => SerializeGraph::Dataset,
-            (None, false) => SerializeGraph::DefaultGraph,
-        };
-        let buf = serialize_dataset(&dataset, native.media_type(), selection)
-            .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))?;
+        let explicit_from_graph = from_graph.is_some();
+        let inner = &self.inner;
+        // Materialize the effective set into the IR verbatim, then serialize through
+        // the native codec (#909) — literal lexical forms are preserved. Both steps
+        // run detached (GIL released).
+        let buf: Vec<u8> = py.detach(|| {
+            let quads: Vec<RdfQuad> = inner
+                .quads_for_pattern(None, None, None, GraphMatchValue::Any)
+                .iter()
+                .map(values_to_rdf_quad)
+                .collect();
+            let dataset = dataset_from_quads_verbatim(&quads).map_err(PyValueError::new_err)?;
+            let selection = match (&graph_filter, explicit_from_graph) {
+                (Some(name), _) => SerializeGraph::Named(name),
+                // An explicit default-graph (`from_graph=DefaultGraph`) selection.
+                (None, true) => SerializeGraph::DefaultGraph,
+                (None, false) if native.supports_datasets() => SerializeGraph::Dataset,
+                (None, false) => SerializeGraph::DefaultGraph,
+            };
+            serialize_dataset(&dataset, native.media_type(), selection)
+                .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
+        })?;
         match output {
             Some(output) => {
                 output.call_method1("write", (PyBytes::new(py, &buf),))?;
@@ -155,52 +168,85 @@ impl PyMutableDataset {
     }
 
     /// Run a SPARQL query over the effective dataset.
-    #[pyo3(signature = (query, *, substitutions=None))]
+    ///
+    /// Engine configuration (unset = engine defaults, see
+    /// [`build_engine`](super::query::build_engine)): `extension_namespaces`
+    /// enables the closed extension-function set under the caller's namespaces
+    /// (OFF by default); `standpoint_predicates` is the `(according_to,
+    /// sharpens)` predicate table `heldIn` requires.
+    #[pyo3(signature = (query, *, substitutions=None, extension_namespaces=None, standpoint_predicates=None))]
     fn query(
         &self,
         py: Python<'_>,
         query: &str,
         substitutions: Option<&Bound<'_, PyDict>>,
+        extension_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
     ) -> PyResult<Py<PyAny>> {
-        let dataset = self.snapshot()?;
         let subs = collect_substitutions(substitutions)?;
-        let engine = NativeSparqlEngine::new();
-        let result = engine
-            .query(
-                &dataset,
-                SparqlRequest {
-                    query,
-                    base_iri: None,
-                    substitutions: &subs,
-                },
-            )
-            .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))?;
+        let inner = &self.inner;
+        // Snapshot + engine build + evaluation run detached (GIL released);
+        // results are materialized into Python objects after reacquiring.
+        let result = py.detach(move || {
+            let dataset = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
+            let engine = build_engine(extension_namespaces, standpoint_predicates);
+            engine
+                .query(
+                    &dataset,
+                    SparqlRequest {
+                        query,
+                        base_iri: None,
+                        substitutions: &subs,
+                    },
+                )
+                .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
+        })?;
         materialize_results(py, result)
     }
 
     /// Run a SPARQL UPDATE (COW-atomic: a failed update leaves the set unchanged).
-    fn update(&mut self, update: &str) -> PyResult<()> {
-        let mut dataset = self.snapshot()?;
-        let engine = NativeSparqlEngine::new();
-        engine
-            .update(
-                &mut dataset,
-                SparqlRequest {
-                    query: update,
-                    base_iri: None,
-                    substitutions: &[],
-                },
-            )
-            .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
+    /// `extension_namespaces` / `standpoint_predicates` configure the engine
+    /// exactly as on [`query`](Self::query).
+    #[pyo3(signature = (update, *, extension_namespaces=None, standpoint_predicates=None))]
+    fn update(
+        &mut self,
+        py: Python<'_>,
+        update: &str,
+        extension_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+    ) -> PyResult<()> {
+        // Snapshot + evaluation run detached (GIL released); the fresh frozen
+        // base is adopted after reacquiring.
+        let inner = &self.inner;
+        let dataset = py.detach(move || {
+            let mut dataset = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
+            let engine = build_engine(extension_namespaces, standpoint_predicates);
+            engine
+                .update(
+                    &mut dataset,
+                    SparqlRequest {
+                        query: update,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                )
+                .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
+            Ok::<_, PyErr>(dataset)
+        })?;
         self.inner = MutableDataset::new(dataset);
         Ok(())
     }
 
     /// Compact the effective set into a fresh frozen base.
-    fn compact(&mut self) -> PyResult<()> {
-        let frozen = self
-            .inner
-            .freeze()
+    fn compact(&mut self, py: Python<'_>) -> PyResult<()> {
+        // The COW freeze can be a real copy — run it detached (GIL released).
+        let inner = &self.inner;
+        let frozen = py
+            .detach(|| inner.freeze())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         self.inner = MutableDataset::new(frozen);
         Ok(())
@@ -228,25 +274,6 @@ impl PyMutableDataset {
         let scope = BlankScope(self.next_blank_scope);
         self.next_blank_scope = self.next_blank_scope.checked_add(1).unwrap_or(1);
         scope
-    }
-
-    /// Freeze the effective COW quad set into an immutable `Arc<RdfDataset>` snapshot.
-    fn snapshot(&self) -> PyResult<Arc<RdfDataset>> {
-        self.inner
-            .freeze()
-            .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))
-    }
-
-    /// Freeze the effective quad set into the IR verbatim (RDF 1.2 triple-term
-    /// objects preserved; no statement-layer fold), for native serialization (#909).
-    fn materialize_dataset(&self) -> PyResult<Arc<RdfDataset>> {
-        let quads: Vec<RdfQuad> = self
-            .inner
-            .quads_for_pattern(None, None, None, GraphMatchValue::Any)
-            .iter()
-            .map(values_to_rdf_quad)
-            .collect();
-        dataset_from_quads_verbatim(&quads).map_err(PyValueError::new_err)
     }
 }
 

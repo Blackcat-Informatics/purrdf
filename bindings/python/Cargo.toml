@@ -26,6 +26,7 @@ purrdf = { workspace = true }
 purrdf-core = { workspace = true }
 purrdf-gts = { workspace = true }
 purrdf-shapes = { workspace = true }
+purrdf-shex = { workspace = true }
 purrdf-slice = { workspace = true }
 purrdf-sparql-eval = { workspace = true }
 purrdf-xsd = { workspace = true }

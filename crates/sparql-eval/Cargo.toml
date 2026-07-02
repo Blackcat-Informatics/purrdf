@@ -68,6 +68,14 @@ name = "exists_decorrelation"
 harness = false
 
 [[bench]]
+# End-to-end query-mix evaluation over a ~300k-quad synthetic star dataset through
+# NativeSparqlEngine: selective/unselective BGP joins, FILTER regex+numeric,
+# OPTIONAL, UNION, GROUP BY aggregates, transitive property path, ORDER BY+LIMIT.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "query_eval"
+harness = false
+
+[[bench]]
 # Cost-based BGP join-planner latency on a skewed multi-join star, at two scales.
 # A regression watch on planning + eval cost (the structural heuristic was removed,
 # so there is no wall-time A/B; the deterministic win is a `bgp` unit test).

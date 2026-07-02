@@ -18,14 +18,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use purrdf_core::ir::{MutableDataset, QuadValues};
-use purrdf_sparql_eval::NativeSparqlEngine;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule, PyDict};
 
 use super::canon::PyCanonicalizationAlgorithm;
 use super::io::{dataset_from_quads_verbatim, parse_quads, read_input, PyRdfFormat};
-use super::query::materialize_results;
+use super::query::{build_engine, materialize_results};
 use super::term::{extract_graph_name, extract_term, PyQuad, PyVariable};
 use crate::{
     serialize_dataset, BlankScope, DatasetMut, GraphMatchValue, RdfDataset, RdfDatasetBuilder,
@@ -58,6 +57,7 @@ impl PyStore {
     #[pyo3(signature = (input=None, format=None, *, path=None))]
     fn load(
         &mut self,
+        py: Python<'_>,
         input: Option<&Bound<'_, PyAny>>,
         format: Option<PyRdfFormat>,
         path: Option<String>,
@@ -75,12 +75,17 @@ impl PyStore {
         // `parse` / `parse_quads` keep labels verbatim — that path round-trips a single
         // document, where verbatim labels are correct and canonicalization needs them.
         let scope = BlankScope(self.next_load_scope() as u32);
-        for quad in parse_quads(&data, format.to_native())
-            .map_err(|e| PyValueError::new_err(format!("load error: {e}")))?
-        {
-            self.inner.insert(rdf_quad_to_values_scoped(&quad, scope));
-        }
-        Ok(())
+        let inner = &mut self.inner;
+        // Parse + insert run detached (GIL released); the closure only touches
+        // plain Rust data.
+        py.detach(move || {
+            for quad in parse_quads(&data, format.to_native())
+                .map_err(|e| PyValueError::new_err(format!("load error: {e}")))?
+            {
+                inner.insert(rdf_quad_to_values_scoped(&quad, scope));
+            }
+            Ok(())
+        })
     }
 
     /// Alias of [`load`] — oxigraph's bulk loader is a throughput optimization,
@@ -88,11 +93,12 @@ impl PyStore {
     #[pyo3(signature = (input=None, format=None, *, path=None))]
     fn bulk_load(
         &mut self,
+        py: Python<'_>,
         input: Option<&Bound<'_, PyAny>>,
         format: Option<PyRdfFormat>,
         path: Option<String>,
     ) -> PyResult<()> {
-        self.load(input, format, path)
+        self.load(py, input, format, path)
     }
 
     /// Add a single quad.
@@ -111,44 +117,75 @@ impl PyStore {
     /// Run a SPARQL query. Returns `QuerySolutions` (SELECT), `QueryTriples`
     /// (CONSTRUCT/DESCRIBE), or `QueryBoolean` (ASK). Optional `substitutions`
     /// is a `{Variable: term}` mapping applied natively (never string-spliced).
-    #[pyo3(signature = (query, *, substitutions=None))]
+    ///
+    /// Engine configuration (unset = engine defaults, see
+    /// [`build_engine`](super::query::build_engine)): `extension_namespaces`
+    /// enables the closed extension-function set under the caller's namespaces
+    /// (OFF by default); `standpoint_predicates` is the `(according_to,
+    /// sharpens)` predicate table `heldIn` requires.
+    #[pyo3(signature = (query, *, substitutions=None, extension_namespaces=None, standpoint_predicates=None))]
     fn query(
         &self,
         py: Python<'_>,
         query: &str,
         substitutions: Option<&Bound<'_, PyDict>>,
+        extension_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
     ) -> PyResult<Py<PyAny>> {
-        let dataset = self.snapshot()?;
         let subs = collect_substitutions(substitutions)?;
-        let engine = NativeSparqlEngine::new();
-        let result = engine
-            .query(
-                &dataset,
-                SparqlRequest {
-                    query,
-                    base_iri: None,
-                    substitutions: &subs,
-                },
-            )
-            .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))?;
+        let inner = &self.inner;
+        // Snapshot + engine build + evaluation run detached (GIL released);
+        // results are materialized into Python objects after reacquiring.
+        let result = py.detach(move || {
+            let dataset = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+            let engine = build_engine(extension_namespaces, standpoint_predicates);
+            engine
+                .query(
+                    &dataset,
+                    SparqlRequest {
+                        query,
+                        base_iri: None,
+                        substitutions: &subs,
+                    },
+                )
+                .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
+        })?;
         materialize_results(py, result)
     }
 
     /// Run a SPARQL UPDATE against the store (COW-atomic: a failed update leaves the
-    /// store unchanged).
-    fn update(&mut self, update: &str) -> PyResult<()> {
-        let mut dataset = self.snapshot()?;
-        let engine = NativeSparqlEngine::new();
-        engine
-            .update(
-                &mut dataset,
-                SparqlRequest {
-                    query: update,
-                    base_iri: None,
-                    substitutions: &[],
-                },
-            )
-            .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
+    /// store unchanged). `extension_namespaces` / `standpoint_predicates` configure
+    /// the engine exactly as on [`query`](Self::query).
+    #[pyo3(signature = (update, *, extension_namespaces=None, standpoint_predicates=None))]
+    fn update(
+        &mut self,
+        py: Python<'_>,
+        update: &str,
+        extension_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+    ) -> PyResult<()> {
+        // Snapshot + evaluation run detached (GIL released); the fresh frozen
+        // base is adopted after reacquiring.
+        let inner = &self.inner;
+        let dataset = py.detach(move || {
+            let mut dataset = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+            let engine = build_engine(extension_namespaces, standpoint_predicates);
+            engine
+                .update(
+                    &mut dataset,
+                    SparqlRequest {
+                        query: update,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                )
+                .map_err(|e| PyValueError::new_err(format!("update evaluation error: {e}")))?;
+            Ok::<_, PyErr>(dataset)
+        })?;
         // The UPDATE produced a fresh frozen base; adopt it as the new COW base.
         self.inner = MutableDataset::new(dataset);
         Ok(())
@@ -168,24 +205,32 @@ impl PyStore {
     ) -> PyResult<Option<Py<PyBytes>>> {
         let format = format.ok_or_else(|| PyValueError::new_err("dump: format is required"))?;
         let native = format.to_native();
-        // Serialize natively (#909): materialize the store's quads into the IR verbatim
-        // (preserving literal lexical forms) and dispatch to the native codec.
-        let (quads, selection) = if native.supports_datasets() && from_graph.is_none() {
-            (self.collect_all_quads(), SerializeGraph::Dataset)
-        } else {
-            // `from_graph` selects one graph (a NamedNode/BlankNode → that graph; an
-            // explicit DefaultGraph, or no `from_graph` on a non-dataset format → the
-            // default graph). Project its triples into the default graph.
-            let graph = extract_graph_name(from_graph)?;
-            (
-                self.collect_graph_quads(graph.as_ref()),
-                SerializeGraph::DefaultGraph,
-            )
-        };
-        let dataset = dataset_from_quads_verbatim(&quads)
-            .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))?;
-        let buf = serialize_dataset(&dataset, native.media_type(), selection)
-            .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))?;
+        // Resolve the Python-side graph selection BEFORE releasing the GIL; the
+        // quad materialization + native serialization run detached.
+        let graph_projection: Option<Option<RdfTerm>> =
+            if native.supports_datasets() && from_graph.is_none() {
+                None
+            } else {
+                // `from_graph` selects one graph (a NamedNode/BlankNode → that graph; an
+                // explicit DefaultGraph, or no `from_graph` on a non-dataset format → the
+                // default graph). Project its triples into the default graph.
+                Some(extract_graph_name(from_graph)?)
+            };
+        let buf: Vec<u8> = py.detach(|| {
+            // Serialize natively (#909): materialize the store's quads into the IR
+            // verbatim (preserving literal lexical forms) and dispatch to the codec.
+            let (quads, selection) = match &graph_projection {
+                None => (self.collect_all_quads(), SerializeGraph::Dataset),
+                Some(graph) => (
+                    self.collect_graph_quads(graph.as_ref()),
+                    SerializeGraph::DefaultGraph,
+                ),
+            };
+            let dataset = dataset_from_quads_verbatim(&quads)
+                .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))?;
+            serialize_dataset(&dataset, native.media_type(), selection)
+                .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
+        })?;
         match output {
             Some(output) => {
                 output.call_method1("write", (PyBytes::new(py, &buf),))?;
@@ -225,7 +270,15 @@ impl PyStore {
     /// safety).
     fn _store_capsule<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyCapsule>> {
         let py = slf.py();
-        let snapshot: Arc<RdfDataset> = slf.borrow().snapshot()?;
+        let guard = slf.borrow();
+        let inner = &guard.inner;
+        // The COW freeze can be a real copy on a mutated store — run it detached.
+        let snapshot: Arc<RdfDataset> = py.detach(|| {
+            inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))
+        })?;
+        drop(guard);
         // Heap-box the Arc so its address is stable; the destructor reclaims the box
         // (dropping the held Arc) when the capsule is collected.
         let boxed: Box<Arc<RdfDataset>> = Box::new(snapshot);
@@ -248,13 +301,6 @@ impl PyStore {
     /// The next per-load blank scope ordinal (monotonic, wrapping past 1).
     fn next_load_scope(&self) -> u64 {
         self.next_load_scope.fetch_add(1, Ordering::Relaxed)
-    }
-
-    /// Freeze the effective COW quad set into an immutable `Arc<RdfDataset>` snapshot.
-    fn snapshot(&self) -> PyResult<Arc<RdfDataset>> {
-        self.inner
-            .freeze()
-            .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))
     }
 
     /// Every quad in the store, graph names intact (for the dataset-format dump path).
@@ -319,8 +365,10 @@ impl PyDataset {
     }
 
     /// Canonicalize blank-node labels in place under `algorithm` (native RDFC-1.0).
-    fn canonicalize(&mut self, algorithm: PyCanonicalizationAlgorithm) {
-        self.quads = super::canon::canonicalize_quads(&self.quads, algorithm);
+    fn canonicalize(&mut self, py: Python<'_>, algorithm: PyCanonicalizationAlgorithm) {
+        // RDFC-1.0 hashing is the heavy path — run it detached (GIL released).
+        let quads = &self.quads;
+        self.quads = py.detach(|| super::canon::canonicalize_quads(quads, algorithm));
     }
 
     fn __len__(&self) -> usize {

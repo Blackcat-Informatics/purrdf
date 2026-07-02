@@ -270,13 +270,17 @@ impl PySliceCatalog {
     /// slice vocabulary (`{namespace}sliceDependsOn`, `{namespace}Slice`, …) —
     /// e.g. `"https://blackcatinformatics.ca/gmeow/"`.
     #[staticmethod]
-    fn discover(root: &str, namespace: &str) -> PyResult<Self> {
-        let vocab = SliceVocab::for_namespace(namespace);
-        let catalog = SliceCatalog::discover(Path::new(root), vocab.clone())
-            .map_err(|e| PyValueError::new_err(format!("slice catalog discovery failed: {e}")))?;
-        Ok(Self {
-            inner: catalog,
-            vocab,
+    fn discover(py: Python<'_>, root: &str, namespace: &str) -> PyResult<Self> {
+        // Manifest discovery (disk walk + Turtle parses) runs detached (GIL released).
+        py.detach(|| {
+            let vocab = SliceVocab::for_namespace(namespace);
+            let catalog = SliceCatalog::discover(Path::new(root), vocab.clone()).map_err(|e| {
+                PyValueError::new_err(format!("slice catalog discovery failed: {e}"))
+            })?;
+            Ok(Self {
+                inner: catalog,
+                vocab,
+            })
         })
     }
 
@@ -305,8 +309,12 @@ impl PySliceCatalog {
     /// surgically-patched, re-parse-validated text. Hard-fails (`ValueError`) on
     /// any manifest read/parse error or post-patch validation failure — no silent
     /// skips, no wrong-manifest matching, no malformed Turtle.
-    fn fix_deps(&self) -> PyResult<Vec<PyManifestPatch>> {
-        let patches = compute_fix_deps(&self.inner)
+    fn fix_deps(&self, py: Python<'_>) -> PyResult<Vec<PyManifestPatch>> {
+        // The RDF-aware reconciliation (parse + patch + re-validate every
+        // manifest) runs detached (GIL released).
+        let catalog = &self.inner;
+        let patches = py
+            .detach(|| compute_fix_deps(catalog))
             .map_err(|e| PyValueError::new_err(format!("slice fix-deps failed: {e}")))?;
         Ok(patches
             .into_iter()
@@ -520,27 +528,30 @@ impl PyOwnershipAnalyzer {
     /// all authored artifact raw digests are captured here too, so the
     /// PyO3-free analysis-graph emitter can be driven entirely from owned data.
     #[new]
-    fn new(catalog: &PySliceCatalog) -> PyResult<Self> {
-        let report = OwnershipAnalyzer::new(&catalog.inner)
-            .analyze()
-            .map_err(|e| PyValueError::new_err(format!("ownership analysis failed: {e}")))?;
-        let mut tier_of: HashMap<SliceIri, u8> = HashMap::new();
-        let mut raw_digests: Vec<String> = Vec::new();
-        for record in catalog.inner.records() {
-            tier_of.insert(
-                record.manifest.slice_iri.clone(),
-                tier_priority(record.manifest.tier.as_ref()),
-            );
-            for artifact in &record.artifacts {
-                raw_digests.push(artifact.raw_digest.clone());
+    fn new(py: Python<'_>, catalog: &PySliceCatalog) -> PyResult<Self> {
+        // The eager ownership + dependency analysis runs detached (GIL released).
+        py.detach(|| {
+            let report = OwnershipAnalyzer::new(&catalog.inner)
+                .analyze()
+                .map_err(|e| PyValueError::new_err(format!("ownership analysis failed: {e}")))?;
+            let mut tier_of: HashMap<SliceIri, u8> = HashMap::new();
+            let mut raw_digests: Vec<String> = Vec::new();
+            for record in catalog.inner.records() {
+                tier_of.insert(
+                    record.manifest.slice_iri.clone(),
+                    tier_priority(record.manifest.tier.as_ref()),
+                );
+                for artifact in &record.artifacts {
+                    raw_digests.push(artifact.raw_digest.clone());
+                }
             }
-        }
-        raw_digests.sort_unstable();
-        Ok(Self {
-            report,
-            tier_of,
-            vocab: catalog.vocab.clone(),
-            raw_digests,
+            raw_digests.sort_unstable();
+            Ok(Self {
+                report,
+                tier_of,
+                vocab: catalog.vocab.clone(),
+                raw_digests,
+            })
         })
     }
 
@@ -570,6 +581,27 @@ impl PyOwnershipAnalyzer {
     /// Raises `ValueError` on any `purrdf_slice::analysis::AnalysisError` (notably the
     /// self-attestation guard violation) — never returns an empty string.
     fn analysis_graph_turtle(
+        &self,
+        py: Python<'_>,
+        authored_input_text: &str,
+        compiler_version: &str,
+        reasoning_profile: &str,
+    ) -> PyResult<String> {
+        // The graph emission (including the self-attestation scan over the
+        // authored input text) runs detached (GIL released).
+        py.detach(|| {
+            self.analysis_graph_turtle_core(
+                authored_input_text,
+                compiler_version,
+                reasoning_profile,
+            )
+        })
+    }
+}
+
+impl PyOwnershipAnalyzer {
+    /// The pure-Rust core of [`Self::analysis_graph_turtle`]; runs without the GIL.
+    fn analysis_graph_turtle_core(
         &self,
         authored_input_text: &str,
         compiler_version: &str,

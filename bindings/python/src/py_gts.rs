@@ -29,7 +29,7 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList};
 
 use crate::bundle::{RdfBundle, UnitMetadata};
 // The byte-emitting compose core now lives in the pyo3-free `gts_compose` module
@@ -216,8 +216,11 @@ fn secret_array(secret: Option<&Bound<'_, PyBytes>>) -> PyResult<Option<[u8; 32]
 /// private-use language tags (`@x-purrdf-*`) that the strict `purrdf.Literal`
 /// constructor would reject — the producer therefore lowers rdflib sources to
 /// N-Quads/Turtle bytes and parses HERE, never building `Quad` objects.
-fn parse_rdf(data: &Bound<'_, PyBytes>, format: PyRdfFormat) -> PyResult<Vec<RdfQuad>> {
-    parse_quads(data.as_bytes(), rdf_format(format))
+///
+/// Takes plain `&[u8]` so callers can run it inside [`Python::detach`] (GIL
+/// released); the error is a lazily-materialized `ValueError`.
+fn parse_rdf(data: &[u8], format: PyRdfFormat) -> PyResult<Vec<RdfQuad>> {
+    parse_quads(data, rdf_format(format))
         .map_err(|e| PyValueError::new_err(format!("parse error: {e}")))
 }
 
@@ -228,15 +231,39 @@ fn parse_rdf(data: &Bound<'_, PyBytes>, format: PyRdfFormat) -> PyResult<Vec<Rdf
 /// byte-for-byte. The blank-node `scope` is applied at INGESTION (by
 /// `add_dataset_scoped`), not here — `parse_dataset`'s third argument is the base
 /// IRI, never a blank scope. Private-use language tags (`@x-purrdf-*`) survive.
-fn parse_rdf_dataset(
-    data: &Bound<'_, PyBytes>,
-    format: PyRdfFormat,
-) -> PyResult<std::sync::Arc<RdfDataset>> {
-    crate::parse_dataset(data.as_bytes(), rdf_format(format).media_type(), None)
+fn parse_rdf_dataset(data: &[u8], format: PyRdfFormat) -> PyResult<std::sync::Arc<RdfDataset>> {
+    crate::parse_dataset(data, rdf_format(format).media_type(), None)
         .map_err(|e| PyValueError::new_err(format!("parse error: {e}")))
 }
 
 // ── Module-level functions ────────────────────────────────────────────────────
+
+/// The pure-Rust parse → snapshot-build → emit core `gts_from_quads` /
+/// `gts_from_rdf12_bytes` share; runs inside [`Python::detach`] (GIL released).
+fn snapshot_gts_bytes(
+    data: &[u8],
+    format: PyRdfFormat,
+    profile: &str,
+    transform: Option<Vec<String>>,
+) -> PyResult<Vec<u8>> {
+    let dataset = parse_rdf_dataset(data, format)?;
+    let mut builder = SnapshotBuilder::default();
+    builder
+        .add_dataset(&dataset)
+        .map_err(PyValueError::new_err)?;
+    emit_gts(
+        &builder,
+        profile,
+        transform,
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        None,
+        DEFAULT_RSYNCABLE_THRESHOLD,
+    )
+    .map_err(PyValueError::new_err)
+}
 
 /// Produce a GTS snapshot from a serialized RDF 1.1 base graph (Turtle/N-Quads
 /// bytes, parsed leniently). Mirrors `gts_producer.gts_from_graph`. `transform`
@@ -250,23 +277,8 @@ fn gts_from_quads(
     profile: &str,
     transform: Option<Vec<String>>,
 ) -> PyResult<Py<PyBytes>> {
-    let dataset = parse_rdf_dataset(data, format)?;
-    let mut builder = SnapshotBuilder::default();
-    builder
-        .add_dataset(&dataset)
-        .map_err(PyValueError::new_err)?;
-    let bytes = emit_gts(
-        &builder,
-        profile,
-        transform,
-        Vec::new(),
-        Vec::new(),
-        None,
-        None,
-        None,
-        DEFAULT_RSYNCABLE_THRESHOLD,
-    )
-    .map_err(PyValueError::new_err)?;
+    let raw = data.as_bytes();
+    let bytes = py.detach(|| snapshot_gts_bytes(raw, format, profile, transform))?;
     Ok(PyBytes::new(py, &bytes).unbind())
 }
 
@@ -281,23 +293,8 @@ fn gts_from_rdf12_bytes(
     profile: &str,
     transform: Option<Vec<String>>,
 ) -> PyResult<Py<PyBytes>> {
-    let dataset = parse_rdf_dataset(data, format)?;
-    let mut builder = SnapshotBuilder::default();
-    builder
-        .add_dataset(&dataset)
-        .map_err(PyValueError::new_err)?;
-    let bytes = emit_gts(
-        &builder,
-        profile,
-        transform,
-        Vec::new(),
-        Vec::new(),
-        None,
-        None,
-        None,
-        DEFAULT_RSYNCABLE_THRESHOLD,
-    )
-    .map_err(PyValueError::new_err)?;
+    let raw = data.as_bytes();
+    let bytes = py.detach(|| snapshot_gts_bytes(raw, format, profile, transform))?;
     Ok(PyBytes::new(py, &bytes).unbind())
 }
 
@@ -307,25 +304,87 @@ fn gts_from_rdf12_bytes(
 /// codec. This is the RDF-1.2-first JSON-LD form the published `*.jsonld` artifacts emit.
 #[pyfunction]
 #[pyo3(signature = (data, *, format))]
-fn to_json_ld(data: &Bound<'_, PyBytes>, format: PyRdfFormat) -> PyResult<String> {
-    let dataset = parse_rdf_dataset(data, format)?;
-    crate::native_codecs::jsonld::serialize_dataset_to_jsonld(&dataset)
-        .map_err(|e| PyValueError::new_err(format!("json-ld-star serialization error: {e}")))
+fn to_json_ld(py: Python<'_>, data: &Bound<'_, PyBytes>, format: PyRdfFormat) -> PyResult<String> {
+    let raw = data.as_bytes();
+    py.detach(|| {
+        let dataset = parse_rdf_dataset(raw, format)?;
+        crate::native_codecs::jsonld::serialize_dataset_to_jsonld(&dataset)
+            .map_err(|e| PyValueError::new_err(format!("json-ld-star serialization error: {e}")))
+    })
+}
+
+/// The caller-supplied statement-metadata vocabulary passed from Python as a
+/// dict with the keys `class` / `subject` / `predicate` / `object` /
+/// `objectLiteral` (each an absolute IRI). PurRDF mints no vocabulary of its
+/// own, so every key is REQUIRED — there is no fabricated default.
+fn statement_vocab_from_dict(vocab: &Bound<'_, PyDict>) -> PyResult<[String; 5]> {
+    let field = |key: &str| -> PyResult<String> {
+        vocab
+            .get_item(key)?
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "statement_vocab is missing the required {key:?} key \
+                     (keys: class/subject/predicate/object/objectLiteral)"
+                ))
+            })?
+            .extract::<String>()
+    };
+    Ok([
+        field("class")?,
+        field("subject")?,
+        field("predicate")?,
+        field("object")?,
+        field("objectLiteral")?,
+    ])
 }
 
 /// Parse **JSON-LD-star** text into N-Quads bytes, via the FIRST-PARTY native codec:
 /// `native_codecs::jsonld::parse_jsonld` into the frozen IR, then serialize to N-Quads —
 /// no longer the external purrdf-gts JSON-LD codec.
+///
+/// With `statement_vocab` (a dict with the `class` / `subject` / `predicate` /
+/// `object` / `objectLiteral` IRI keys) the RDF-1.2 statement layer is DOWNCAST
+/// to flat statement-metadata cells in the caller's vocabulary (rdflib-safe: no
+/// quoted triples in the output). Without it, star features round-trip as
+/// RDF 1.2 N-Quads (`rdf:reifies` + quoted-triple terms) — PurRDF mints no
+/// default vocabulary, so no vocabulary terms are ever fabricated.
 #[pyfunction]
-fn from_json_ld(py: Python<'_>, text: &str) -> PyResult<Py<PyBytes>> {
-    let dataset = crate::native_codecs::jsonld::parse_jsonld(text.as_bytes())
-        .map_err(|e| PyValueError::new_err(format!("json-ld-star parse error: {e}")))?;
-    let nquads = crate::serialize_dataset(
-        &dataset,
-        NativeRdfFormat::NQuads.media_type(),
-        crate::SerializeGraph::Dataset,
-    )
-    .map_err(|e| PyValueError::new_err(format!("json-ld-star→n-quads serialization error: {e}")))?;
+#[pyo3(signature = (text, *, statement_vocab=None))]
+fn from_json_ld(
+    py: Python<'_>,
+    text: &str,
+    statement_vocab: Option<&Bound<'_, PyDict>>,
+) -> PyResult<Py<PyBytes>> {
+    // Extract the vocab dict to owned Rust data BEFORE releasing the GIL.
+    let vocab_fields: Option<[String; 5]> =
+        statement_vocab.map(statement_vocab_from_dict).transpose()?;
+    let nquads: Vec<u8> = py.detach(|| {
+        if let Some([class, subject, predicate, object, object_literal]) = &vocab_fields {
+            let vocab = crate::native_codecs::jsonld::StatementMetadataVocab {
+                statement_metadata: class,
+                q_subject: subject,
+                q_predicate: predicate,
+                q_object: object,
+                q_object_literal: object_literal,
+            };
+            return crate::native_codecs::jsonld::jsonld_to_statement_metadata_nquads(
+                text.as_bytes(),
+                Some(&vocab),
+            )
+            .map(String::into_bytes)
+            .map_err(|e| PyValueError::new_err(format!("json-ld-star downcast error: {e}")));
+        }
+        let dataset = crate::native_codecs::jsonld::parse_jsonld(text.as_bytes())
+            .map_err(|e| PyValueError::new_err(format!("json-ld-star parse error: {e}")))?;
+        crate::serialize_dataset(
+            &dataset,
+            NativeRdfFormat::NQuads.media_type(),
+            crate::SerializeGraph::Dataset,
+        )
+        .map_err(|e| {
+            PyValueError::new_err(format!("json-ld-star→n-quads serialization error: {e}"))
+        })
+    })?;
     Ok(PyBytes::new(py, &nquads).unbind())
 }
 
@@ -334,16 +393,20 @@ fn from_json_ld(py: Python<'_>, text: &str) -> PyResult<Py<PyBytes>> {
 /// `native_codecs::rdfxml` serializer — no longer the external purrdf-gts RDF/XML codec.
 #[pyfunction]
 #[pyo3(signature = (data, *, format))]
-fn to_rdf_xml(data: &Bound<'_, PyBytes>, format: PyRdfFormat) -> PyResult<String> {
-    let dataset = parse_rdf_dataset(data, format)?;
-    let bytes = crate::serialize_dataset(
-        &dataset,
-        NativeRdfFormat::RdfXml.media_type(),
-        crate::SerializeGraph::Dataset,
-    )
-    .map_err(|e| PyValueError::new_err(format!("rdf/xml serialization error: {e}")))?;
-    String::from_utf8(bytes)
-        .map_err(|e| PyValueError::new_err(format!("rdf/xml serialization produced non-utf8: {e}")))
+fn to_rdf_xml(py: Python<'_>, data: &Bound<'_, PyBytes>, format: PyRdfFormat) -> PyResult<String> {
+    let raw = data.as_bytes();
+    py.detach(|| {
+        let dataset = parse_rdf_dataset(raw, format)?;
+        let bytes = crate::serialize_dataset(
+            &dataset,
+            NativeRdfFormat::RdfXml.media_type(),
+            crate::SerializeGraph::Dataset,
+        )
+        .map_err(|e| PyValueError::new_err(format!("rdf/xml serialization error: {e}")))?;
+        String::from_utf8(bytes).map_err(|e| {
+            PyValueError::new_err(format!("rdf/xml serialization produced non-utf8: {e}"))
+        })
+    })
 }
 
 /// Parse **RDF/XML** text into N-Quads bytes, via the FIRST-PARTY native codec
@@ -351,14 +414,17 @@ fn to_rdf_xml(data: &Bound<'_, PyBytes>, format: PyRdfFormat) -> PyResult<String
 /// the external purrdf-gts RDF/XML codec.
 #[pyfunction]
 fn from_rdf_xml(py: Python<'_>, text: &str) -> PyResult<Py<PyBytes>> {
-    let dataset = crate::parse_dataset(text.as_bytes(), NativeRdfFormat::RdfXml.media_type(), None)
-        .map_err(|e| PyValueError::new_err(format!("rdf/xml parse error: {e}")))?;
-    let nquads = crate::serialize_dataset(
-        &dataset,
-        NativeRdfFormat::NQuads.media_type(),
-        crate::SerializeGraph::Dataset,
-    )
-    .map_err(|e| PyValueError::new_err(format!("rdf/xml→n-quads serialization error: {e}")))?;
+    let nquads: Vec<u8> = py.detach(|| {
+        let dataset =
+            crate::parse_dataset(text.as_bytes(), NativeRdfFormat::RdfXml.media_type(), None)
+                .map_err(|e| PyValueError::new_err(format!("rdf/xml parse error: {e}")))?;
+        crate::serialize_dataset(
+            &dataset,
+            NativeRdfFormat::NQuads.media_type(),
+            crate::SerializeGraph::Dataset,
+        )
+        .map_err(|e| PyValueError::new_err(format!("rdf/xml→n-quads serialization error: {e}")))
+    })?;
     Ok(PyBytes::new(py, &nquads).unbind())
 }
 
@@ -370,6 +436,11 @@ type NamedGraphRow<'py> = (
     Option<String>,
     Option<String>,
 );
+
+/// A [`NamedGraphRow`] with its Python-side values lowered to plain borrows
+/// (`&[u8]` bytes, `&str` names) — the GIL-free shape the detached compile
+/// closure consumes.
+type BorrowedNamedGraphRow<'a> = (&'a [u8], PyRdfFormat, Option<&'a str>, Option<&'a str>);
 
 /// The full statement-complete compiler, mirroring `gts_producer.compile_gts`.
 ///
@@ -420,61 +491,88 @@ fn compile_gts_native(
     public_key_armor: Option<String>,
     rsyncable_threshold: usize,
 ) -> PyResult<Py<PyBytes>> {
-    let mut builder = SnapshotBuilder::default();
-
-    let base_dataset = parse_rdf_dataset(base_data, base_format)?;
-    builder
-        .add_dataset_scoped(&base_dataset, None, base_scope.as_deref())
-        .map_err(PyValueError::new_err)?;
-
-    if let Some(data) = rdf12_data {
-        let format = rdf12_format
-            .ok_or_else(|| PyValueError::new_err("rdf12_data requires rdf12_format"))?;
-        let dataset = parse_rdf_dataset(data, format)?;
-        builder
-            .add_dataset_scoped(
-                &dataset,
-                rdf12_graph_name.as_deref(),
-                rdf12_scope.as_deref(),
+    // Convert EVERY Python-side argument to plain/owned Rust data BEFORE
+    // releasing the GIL; the parse + snapshot-build + emit core runs detached.
+    let base_bytes = base_data.as_bytes();
+    let rdf12_bytes: Option<(&[u8], PyRdfFormat)> = match rdf12_data {
+        Some(data) => {
+            let format = rdf12_format
+                .ok_or_else(|| PyValueError::new_err("rdf12_data requires rdf12_format"))?;
+            Some((data.as_bytes(), format))
+        }
+        None => None,
+    };
+    let named_graphs = named_graphs.unwrap_or_default();
+    let named_graph_rows: Vec<BorrowedNamedGraphRow<'_>> = named_graphs
+        .iter()
+        .map(|(data, format, graph_name, scope)| {
+            (
+                data.as_bytes(),
+                *format,
+                graph_name.as_deref(),
+                scope.as_deref(),
             )
-            .map_err(PyValueError::new_err)?;
-    }
-
-    for (data, format, graph_name, scope) in named_graphs.unwrap_or_default() {
-        let dataset = parse_rdf_dataset(&data, format)?;
-        builder
-            .add_dataset_scoped(&dataset, graph_name.as_deref(), scope.as_deref())
-            .map_err(PyValueError::new_err)?;
-    }
-
-    // S3 (#820, gap G4): assemble the self-describing RdfBundle from the slice
-    // catalog rows, hard-fail `validate()`, and fold each ontology artifact in as
-    // a content-addressed blob through the SAME channel doc_blobs ride. The base
-    // graph is the bundle's hot dataset. Large external DATA blobs (graph.blobs)
-    // are NOT passed here and STAY by-reference (blob-by-reference doctrine).
-    let mut all_doc_blobs = blob_rows_from_py(doc_blobs)?;
+        })
+        .collect();
+    let doc_blob_rows = blob_rows_from_py(doc_blobs)?;
+    let report_blob_rows = blob_rows_from_py(report_blobs)?;
     let slice_rows = slice_artifact_rows_from_py(slice_artifacts)?;
-    if !slice_rows.is_empty() {
-        // The bundle assembler still consumes a flat oxigraph quad list for its hot
-        // dataset; re-parse the base here (only when slice artifacts are present).
-        let base = parse_rdf(base_data, base_format)?;
-        let bundle_blobs =
-            assemble_slice_bundle(&base, &slice_rows).map_err(PyValueError::new_err)?;
-        all_doc_blobs.extend(bundle_blobs);
-    }
+    let secret = secret_array(signer_secret)?;
 
-    let bytes = emit_gts(
-        &builder,
-        "dist",
-        transform,
-        all_doc_blobs,
-        blob_rows_from_py(report_blobs)?,
-        secret_array(signer_secret)?,
-        signer_kid,
-        public_key_armor,
-        rsyncable_threshold,
-    )
-    .map_err(PyValueError::new_err)?;
+    let bytes: Vec<u8> = py.detach(move || {
+        let mut builder = SnapshotBuilder::default();
+
+        let base_dataset = parse_rdf_dataset(base_bytes, base_format)?;
+        builder
+            .add_dataset_scoped(&base_dataset, None, base_scope.as_deref())
+            .map_err(PyValueError::new_err)?;
+
+        if let Some((data, format)) = rdf12_bytes {
+            let dataset = parse_rdf_dataset(data, format)?;
+            builder
+                .add_dataset_scoped(
+                    &dataset,
+                    rdf12_graph_name.as_deref(),
+                    rdf12_scope.as_deref(),
+                )
+                .map_err(PyValueError::new_err)?;
+        }
+
+        for (data, format, graph_name, scope) in named_graph_rows {
+            let dataset = parse_rdf_dataset(data, format)?;
+            builder
+                .add_dataset_scoped(&dataset, graph_name, scope)
+                .map_err(PyValueError::new_err)?;
+        }
+
+        // S3 (#820, gap G4): assemble the self-describing RdfBundle from the slice
+        // catalog rows, hard-fail `validate()`, and fold each ontology artifact in as
+        // a content-addressed blob through the SAME channel doc_blobs ride. The base
+        // graph is the bundle's hot dataset. Large external DATA blobs (graph.blobs)
+        // are NOT passed here and STAY by-reference (blob-by-reference doctrine).
+        let mut all_doc_blobs = doc_blob_rows;
+        if !slice_rows.is_empty() {
+            // The bundle assembler still consumes a flat oxigraph quad list for its hot
+            // dataset; re-parse the base here (only when slice artifacts are present).
+            let base = parse_rdf(base_bytes, base_format)?;
+            let bundle_blobs =
+                assemble_slice_bundle(&base, &slice_rows).map_err(PyValueError::new_err)?;
+            all_doc_blobs.extend(bundle_blobs);
+        }
+
+        emit_gts(
+            &builder,
+            "dist",
+            transform,
+            all_doc_blobs,
+            report_blob_rows,
+            secret,
+            signer_kid,
+            public_key_armor,
+            rsyncable_threshold,
+        )
+        .map_err(PyValueError::new_err)
+    })?;
     Ok(PyBytes::new(py, &bytes).unbind())
 }
 
@@ -482,13 +580,20 @@ fn compile_gts_native(
 /// `_Builder.snapshot_content_id` for the feedback-bundle self-attestation (#654).
 #[pyfunction]
 #[pyo3(signature = (data, *, format))]
-fn snapshot_content_id_native(data: &Bound<'_, PyBytes>, format: PyRdfFormat) -> PyResult<String> {
-    let dataset = parse_rdf_dataset(data, format)?;
-    let mut builder = SnapshotBuilder::default();
-    builder
-        .add_dataset(&dataset)
-        .map_err(PyValueError::new_err)?;
-    Ok(builder.snapshot_content_id())
+fn snapshot_content_id_native(
+    py: Python<'_>,
+    data: &Bound<'_, PyBytes>,
+    format: PyRdfFormat,
+) -> PyResult<String> {
+    let raw = data.as_bytes();
+    py.detach(|| {
+        let dataset = parse_rdf_dataset(raw, format)?;
+        let mut builder = SnapshotBuilder::default();
+        builder
+            .add_dataset(&dataset)
+            .map_err(PyValueError::new_err)?;
+        Ok(builder.snapshot_content_id())
+    })
 }
 
 /// Build a feedback bundle: a base graph (RDF bytes) as the snapshot, report blobs
@@ -501,23 +606,27 @@ fn feedback_bundle_native(
     format: PyRdfFormat,
     report_blobs: Option<&Bound<'_, PyList>>,
 ) -> PyResult<Py<PyBytes>> {
-    let dataset = parse_rdf_dataset(data, format)?;
-    let mut builder = SnapshotBuilder::default();
-    builder
-        .add_dataset(&dataset)
-        .map_err(PyValueError::new_err)?;
-    let bytes = emit_gts(
-        &builder,
-        "dist",
-        None,
-        Vec::new(),
-        blob_rows_from_py(report_blobs)?,
-        None,
-        None,
-        None,
-        DEFAULT_RSYNCABLE_THRESHOLD,
-    )
-    .map_err(PyValueError::new_err)?;
+    let raw = data.as_bytes();
+    let report_blob_rows = blob_rows_from_py(report_blobs)?;
+    let bytes: Vec<u8> = py.detach(move || {
+        let dataset = parse_rdf_dataset(raw, format)?;
+        let mut builder = SnapshotBuilder::default();
+        builder
+            .add_dataset(&dataset)
+            .map_err(PyValueError::new_err)?;
+        emit_gts(
+            &builder,
+            "dist",
+            None,
+            Vec::new(),
+            report_blob_rows,
+            None,
+            None,
+            None,
+            DEFAULT_RSYNCABLE_THRESHOLD,
+        )
+        .map_err(PyValueError::new_err)
+    })?;
     Ok(PyBytes::new(py, &bytes).unbind())
 }
 

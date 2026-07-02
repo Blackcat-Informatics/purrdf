@@ -34,7 +34,10 @@ use purrdf_shapes::report::ValidationReport;
 ///   `"source_shape"`, `"message"`.
 #[pyfunction]
 fn validate(py: Python<'_>, shapes_ttl: &str, data_nt: &str) -> PyResult<Py<PyAny>> {
-    let report = engine::validate_graphs(data_nt, shapes_ttl)
+    // Parse + validation run detached (GIL released); the result dicts are
+    // built after the GIL is reacquired.
+    let report = py
+        .detach(|| engine::validate_graphs(data_nt, shapes_ttl))
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     let out = PyDict::new(py);
@@ -106,20 +109,26 @@ impl PyShapes {
 #[pymethods]
 impl PyShapes {
     #[new]
-    fn new(shapes_ttl: &str) -> PyResult<Self> {
-        let inner =
-            engine::parse_shapes(shapes_ttl).map_err(pyo3::exceptions::PyValueError::new_err)?;
+    fn new(py: Python<'_>, shapes_ttl: &str) -> PyResult<Self> {
+        // Shapes-graph parsing runs detached (GIL released).
+        let inner = py
+            .detach(|| engine::parse_shapes(shapes_ttl))
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(Self { inner })
     }
 
     /// Validate an N-Triples data graph against these parsed shapes.
-    fn validate_nt(&self, data_nt: &str) -> PyResult<PyValidationReport> {
+    fn validate_nt(&self, py: Python<'_>, data_nt: &str) -> PyResult<PyValidationReport> {
         // Native codec ingest (#909): lenient on private-use language tags, every
         // malformed line reported in one pass. The engine runs over the frozen IR.
-        let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
-            .map_err(|errors| pyo3::exceptions::PyValueError::new_err(errors.join("\n")))?;
-        let report = engine::validate_dataset(data.as_ref(), &self.inner)
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        // Both the ingest and the validation run detached (GIL released).
+        let shapes = &self.inner;
+        let report = py.detach(|| {
+            let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
+                .map_err(|errors| pyo3::exceptions::PyValueError::new_err(errors.join("\n")))?;
+            engine::validate_dataset(data.as_ref(), shapes)
+                .map_err(pyo3::exceptions::PyValueError::new_err)
+        })?;
         Ok(PyValidationReport::new(report))
     }
 
@@ -143,11 +152,14 @@ impl PyShapes {
         let addr = unsafe { *ptr.cast::<usize>().as_ptr() };
         // SAFETY: the capsule's value is the address of an `Arc<RdfDataset>` the
         // producer keeps alive (and at a stable address) for the capsule's lifetime.
-        // We borrow it to validate; the producer's `Arc` owns the dataset.
-        let dataset = unsafe { &*(addr as *const Arc<RdfDataset>) };
-        Ok(PyValidationReport::new(
-            self.validate_against_dataset(dataset.as_ref()),
-        ))
+        // We clone the `Arc` (extending the dataset's lifetime past the capsule
+        // borrow) so validation can run detached (GIL released) without touching
+        // any py-bound value.
+        let dataset = Arc::clone(unsafe { &*(addr as *const Arc<RdfDataset>) });
+        let report = data
+            .py()
+            .detach(|| self.validate_against_dataset(dataset.as_ref()));
+        Ok(PyValidationReport::new(report))
     }
 }
 
@@ -216,9 +228,10 @@ impl PyValidationReport {
         Ok(list.into_any().unbind())
     }
 
-    /// Serialize the report to canonical N-Triples.
-    fn to_ntriples(&self) -> String {
-        self.inner.to_ntriples()
+    /// Serialize the report to canonical N-Triples (runs detached — GIL released).
+    fn to_ntriples(&self, py: Python<'_>) -> String {
+        let report = &self.inner;
+        py.detach(|| report.to_ntriples())
     }
 }
 

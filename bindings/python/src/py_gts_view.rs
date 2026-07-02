@@ -29,23 +29,28 @@ pub struct PyGtsFoldView {
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 impl PyGtsFoldView {
     #[staticmethod]
-    fn from_bytes(data: &[u8]) -> Self {
-        let graph = purrdf_gts::reader::read(data, true, None);
-        Self {
-            inner: GtsFoldView::new(graph),
-        }
+    fn from_bytes(py: Python<'_>, data: &[u8]) -> Self {
+        py.detach(|| {
+            let graph = purrdf_gts::reader::read(data, true, None);
+            Self {
+                inner: GtsFoldView::new(graph),
+            }
+        })
     }
 
     #[staticmethod]
     fn from_parts(
+        py: Python<'_>,
         terms: Vec<PyTermRow>,
         quads: Vec<(usize, usize, usize, Option<usize>)>,
         reifiers: Vec<(usize, (usize, usize, usize))>,
         annotations: Vec<(usize, usize, usize)>,
     ) -> PyResult<Self> {
-        let graph = graph_from_parts(terms, quads, reifiers, annotations)?;
-        Ok(Self {
-            inner: GtsFoldView::new(graph),
+        py.detach(|| {
+            let graph = graph_from_parts(terms, quads, reifiers, annotations)?;
+            Ok(Self {
+                inner: GtsFoldView::new(graph),
+            })
         })
     }
 
@@ -246,12 +251,11 @@ impl PyGtsFoldView {
     }
 
     fn relational_rows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        relational_rows_dict(
-            py,
-            self.inner
-                .relational_rows()
-                .map_err(PyValueError::new_err)?,
-        )
+        let view = &self.inner;
+        let rows = py
+            .detach(|| view.relational_rows())
+            .map_err(PyValueError::new_err)?;
+        relational_rows_dict(py, rows)
     }
 }
 
@@ -274,11 +278,13 @@ fn gts_relational_rows_from_bytes<'py>(
     py: Python<'py>,
     data: &[u8],
 ) -> PyResult<Bound<'py, PyDict>> {
-    let graph = purrdf_gts::reader::read(data, true, None);
-    relational_rows_dict(
-        py,
-        crate::gts_view::relational_rows(&graph).map_err(PyValueError::new_err)?,
-    )
+    let rows = py
+        .detach(|| {
+            let graph = purrdf_gts::reader::read(data, true, None);
+            crate::gts_view::relational_rows(&graph)
+        })
+        .map_err(PyValueError::new_err)?;
+    relational_rows_dict(py, rows)
 }
 
 #[pyfunction]

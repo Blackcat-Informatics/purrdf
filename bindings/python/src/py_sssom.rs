@@ -65,11 +65,14 @@ fn parse_failure_dict<'py>(py: Python<'py>, diag: &RdfDiagnostic) -> PyResult<Bo
 /// defects arrive in one channel the caller filters by severity.
 #[pyfunction]
 fn validate_sssom(py: Python<'_>, text: &str) -> PyResult<Vec<Py<PyDict>>> {
-    let set = match sssom::parse_tsv(text) {
-        Ok(set) => set,
+    // Parse + validation run detached (GIL released); the diagnostic dicts are
+    // built after the GIL is reacquired.
+    let outcome = py.detach(|| sssom::parse_tsv(text).map(|set| sssom::validate(&set)));
+    let diagnostics = match outcome {
+        Ok(diagnostics) => diagnostics,
         Err(diag) => return Ok(vec![parse_failure_dict(py, &diag)?.unbind()]),
     };
-    sssom::validate(&set)
+    diagnostics
         .into_iter()
         .map(|d| {
             diag_dict(
@@ -90,13 +93,15 @@ fn validate_sssom(py: Python<'_>, text: &str) -> PyResult<Vec<Py<PyDict>>> {
 /// (the `sssom` PyPI package validates but emits no RDF here). A structurally
 /// unparsable document is a hard `ValueError`.
 #[pyfunction]
-fn sssom_to_rdf(text: &str) -> PyResult<String> {
-    let set = sssom::parse_tsv(text).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let ntriples: String = sssom::to_rdf(&set)
-        .iter()
-        .map(crate::turtle::emit_quad)
-        .collect();
-    Ok(ntriples)
+fn sssom_to_rdf(py: Python<'_>, text: &str) -> PyResult<String> {
+    // Parse + RDF projection run detached (GIL released).
+    py.detach(|| {
+        let set = sssom::parse_tsv(text).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(sssom::to_rdf(&set)
+            .iter()
+            .map(crate::turtle::emit_quad)
+            .collect())
+    })
 }
 
 /// Parse then re-serialize a PurRDF SSSOM TSV document, returning the canonical
@@ -104,9 +109,12 @@ fn sssom_to_rdf(text: &str) -> PyResult<String> {
 /// path uses to prove the codec is idempotent. A structurally unparsable document
 /// is a hard `ValueError`.
 #[pyfunction]
-fn sssom_roundtrip_tsv(text: &str) -> PyResult<String> {
-    let set = sssom::parse_tsv(text).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(sssom::serialize_tsv(&set))
+fn sssom_roundtrip_tsv(py: Python<'_>, text: &str) -> PyResult<String> {
+    // Parse + canonical re-serialization run detached (GIL released).
+    py.detach(|| {
+        let set = sssom::parse_tsv(text).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(sssom::serialize_tsv(&set))
+    })
 }
 
 /// The default check set the native validator replicates from sssom-py
