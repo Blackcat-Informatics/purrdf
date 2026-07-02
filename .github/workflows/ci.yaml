@@ -156,3 +156,30 @@ jobs:
         run: |
           uv run maturin develop
           uv run pytest tests -q
+
+  # The single conformance matrix: runs the native Rust W3C
+  # harnesses (RDFC-1.0, IRI, syntax codecs, SPARQL-eval subset, SHACL, shexTest)
+  # AND the Python rdflib drop-in gate together, printing ONE scoreboard with
+  # per-suite pass / xfail(skip) / fail counts. Exits non-zero on any unexpected
+  # failure (a red run, an XPASS, or a stale ledger key). The matrix is also
+  # published to the job summary via $GITHUB_STEP_SUMMARY. The REAL rdflib is the
+  # differential oracle (installed by uv), never the Task 7 top-level shadow.
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Conformance matrix (native Rust suites + rdflib gate)
+        run: make conformance

@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check test bench pytest rdf-core-hygiene wasm wasm-pkg wasm-pkg-test \
+.PHONY: help metadata fmt check test bench pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test \
 	capi-build capi-header capi-check capi-install
 
 help: ## Show this help.
@@ -35,6 +35,9 @@ bench: ## Run criterion benchmarks (report-only; never a gate).
 
 pytest: ## Build the native module + run the Python binding test suite (own gate, NOT part of `check`).
 	cd bindings/python && uv run maturin develop && uv run pytest tests
+
+conformance: ## Umbrella conformance matrix: native Rust W3C suites + the Python rdflib drop-in gate, one scoreboard (see docs/CONFORMANCE.md).
+	python3 scripts/conformance-matrix.py
 
 rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-core, zero-dep leaves.
 	@tree=$$(cargo tree -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \
