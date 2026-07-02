@@ -67,8 +67,14 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 		$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm \
 		--out-dir crates/rdf-wasm/js/pkg --target web
 	@# wasm-opt -Oz is a REQUIRED build step (roughly halves the artifact).
+	@# The --enable flags cover the post-MVP features rustc emits by default
+	@# for wasm32-unknown-unknown; older binaryen builds (e.g. Ubuntu's apt
+	@# package) reject the module without them.
 	@command -v wasm-opt >/dev/null 2>&1 || { echo "ERROR: wasm-opt (binaryen) not found — it is a REQUIRED wasm build dependency"; exit 1; }
-	wasm-opt -Oz -o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+	wasm-opt -Oz \
+		--enable-bulk-memory --enable-nontrapping-float-to-int \
+		--enable-sign-ext --enable-mutable-globals \
+		-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
 	@echo "OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)"
 
 wasm-pkg-test: wasm-pkg ## Build the wasm package and run the Node real-execution round-trip suite.

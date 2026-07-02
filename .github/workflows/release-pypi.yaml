@@ -46,7 +46,9 @@ jobs:
         name: Verify tag matches Python and Rust package versions
         run: |
           python_version="$(python3 -c "import tomllib; print(tomllib.load(open('bindings/python/pyproject.toml','rb'))['project']['version'])")"
-          rust_version="$(python3 -c "import tomllib; print(tomllib.load(open('bindings/python/Cargo.toml','rb'))['package']['version'])")"
+          # The crate inherits version.workspace = true, so resolve it through
+          # cargo metadata rather than reading the member TOML directly.
+          rust_version="$(cargo metadata --no-deps --format-version 1 | python3 -c "import json,sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name'] == 'purrdf-python'))")"
           tag_version="${GITHUB_REF_NAME#py-v}"
           if [ "$python_version" != "$tag_version" ]; then
             echo "::error::Tag version (${tag_version}) does not match bindings/python/pyproject.toml version (${python_version})"
