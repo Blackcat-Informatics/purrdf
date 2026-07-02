@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The purrdf rdflib-compat xfail ledger.
+#
+# Each key is a pytest node id; each value is a concrete reason (with an issue
+# reference) for why that test is expected to fail against the current shim.
+# `conftest.py` applies these as STRICT xfails: a ledgered test that starts
+# passing (XPASS) fails the run — so this ledger only ever SHRINKS, never grows
+# silently. Mirrors the Rust conformance harnesses' XPASS discipline (AGENTS.md §2).
+#
+# Add an entry ONLY with a real reason and the tracking issue, e.g.:
+#   [xfail]
+#   "tests/rdflib_suite/test_n3.py::test_rules" = "rdflib N3 rule syntax unsupported (#11 format breadth)"
+
+[xfail]
+# (empty — the P0 parity suite is fully green today)

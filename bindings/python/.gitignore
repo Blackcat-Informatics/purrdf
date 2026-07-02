@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Native extension built into the source tree by `maturin develop`.
+python/src/purrdf/*.abi3.so
+python/src/purrdf/*.so
+python/src/purrdf/*.pyd
+
+# Python tooling caches.
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

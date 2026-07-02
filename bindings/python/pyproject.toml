@@ -27,6 +27,32 @@ classifiers = [
 Homepage = "https://blackcatinformatics.ca/purrdf/"
 Repository = "https://github.com/Blackcat-Informatics/purrdf"
 
+# Dev + acceptance dependency groups (PEP 735; consumed by `uv`, ignored by the
+# maturin build backend). The `dev` group carries the REAL rdflib — the differential
+# oracle for the compat shim and the target of the #9 rdflib-suite gate. The Task 7
+# top-level `rdflib` shadow is deliberately kept OUT of this environment so the
+# oracle is never shadowed (see tests/README.md). The `acceptance` group holds the
+# #7 downstream matrix, exercised later in Task 10.
+[dependency-groups]
+dev = [
+  "pytest>=8,<9",
+  "rdflib>=7.1,<8",
+  "mypy>=1.10",
+  "maturin>=1.7,<2",
+]
+acceptance = [
+  "pyshacl",
+  "SPARQLWrapper",
+  "sssom",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Keep xfail strict everywhere: a ledgered (expected-failing) test that starts
+# passing (XPASS) fails the run, forcing the xfail ledger to only ever shrink —
+# mirroring the Rust conformance harnesses' XPASS discipline (AGENTS.md §2).
+xfail_strict = true
+
 [tool.maturin]
 manifest-path = "Cargo.toml"
 module-name = "purrdf.purrdf_native"

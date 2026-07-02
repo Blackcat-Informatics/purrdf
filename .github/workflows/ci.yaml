@@ -128,3 +128,31 @@ jobs:
           cargo bench -p purrdf-rdf --bench native_codecs --no-run --locked
           cargo bench -p purrdf-sparql-eval --no-run --locked
           cargo bench -p purrdf-shapes --bench validate --no-run --locked
+
+  # The Python binding gate — separate from the Rust `workspace`/`test` jobs above
+  # (AGENTS.md §3: `make check` stays a pure-Rust gate). Builds the native module
+  # with maturin and runs the pytest suite (compat parity + the rdflib/xfail-ledger
+  # gate). The REAL rdflib is installed here as the differential oracle; the Task 7
+  # top-level `rdflib` shadow is never installed in this env.
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Python binding tests (maturin build + pytest)
+        working-directory: bindings/python
+        run: |
+          uv run maturin develop
+          uv run pytest tests -q
