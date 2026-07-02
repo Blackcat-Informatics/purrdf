@@ -733,7 +733,7 @@ pub fn parse_hex_32(input: &str) -> Result<Vec<u8>, String> {
         return Err("expected a 32-byte hex value".to_string());
     }
     let mut out = Vec::with_capacity(32);
-    for chunk in raw.as_bytes().chunks_exact(2) {
+    for chunk in raw.as_bytes().as_chunks::<2>().0 {
         let hi = (chunk[0] as char)
             .to_digit(16)
             .ok_or_else(|| "hex value contains a non-hex character".to_string())?;

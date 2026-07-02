@@ -37,10 +37,10 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install Rust (nightly)
+      - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
-          toolchain: nightly
+          toolchain: stable
 
       - id: version
         name: Verify tag matches Python and Rust package versions

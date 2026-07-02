@@ -44,9 +44,9 @@ This crate is gated by a SHACL conformance corpus and is part of **EPIC #575**.
 
 ## Build
 
-> **Toolchain requirement:** nightly Rust is required. The repo ships a
-> `rust-toolchain.toml` at the root that selects the latest available `nightly`;
-> `cargo` and `rustup` pick this up automatically.
+> **Toolchain:** stable Rust (the repo ships a `rust-toolchain.toml` at the
+> root pinning `stable`; the MSRV floor is `rust-version` in the workspace
+> `Cargo.toml`). `cargo` and `rustup` pick this up automatically.
 
 ```bash
 cargo build -p purrdf-shapes

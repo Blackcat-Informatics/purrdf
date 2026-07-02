@@ -73,9 +73,10 @@ make metadata   # regenerate + verify generated artifacts
 make bench      # criterion benchmarks (report-only; not a gate)
 ```
 
-Toolchain: `rust-toolchain.toml` pins nightly for development; CI builds and
-tests on **stable**, which is the supported floor (`rust-version` in
-`Cargo.toml`). Don't use nightly-only language features in library code.
+Toolchain: `rust-toolchain.toml` pins **stable** and the workspace is
+nightly-free by policy (`rust-version` in `Cargo.toml` is the enforced MSRV
+floor). Never introduce a nightly-only feature; rustup obeys the repo pin in
+CI too, so a nightly-ism would make the MSRV job a lie.
 
 ## 4. Performance discipline
 

@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
+# The workspace is stable-Rust clean (no nightly features); this pin keeps
+# local dev, CI, and the declared `rust-version` (MSRV) on the same channel.
 [toolchain]
-channel = "nightly"
+channel = "stable"
 components = ["clippy", "rustfmt"]
 targets = ["wasm32-unknown-unknown"]
-

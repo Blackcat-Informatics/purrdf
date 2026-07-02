@@ -44,9 +44,9 @@ make wasm-pkg   # build the ESM/wasm package
 make capi-build # build libpurrdf via cargo-c
 ```
 
-The workspace pins a nightly toolchain in `rust-toolchain.toml` for development;
-CI additionally builds and tests on stable, which is the supported floor
-(`rust-version` in `Cargo.toml`).
+The workspace pins **stable** in `rust-toolchain.toml` and is nightly-free by
+policy; the supported floor is `rust-version` in `Cargo.toml`, which CI
+enforces with a dedicated MSRV job.
 
 ## Before you open a pull request
 

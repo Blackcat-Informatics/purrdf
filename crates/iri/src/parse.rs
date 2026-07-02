@@ -12,7 +12,6 @@
 
 use crate::error::{IriError, Result};
 use core::ops::Range;
-use std::simd::{cmp::SimdPartialEq, Simd};
 
 /// A parsed, validated IRI (or URI) with byte-offset spans for each component.
 ///
@@ -414,19 +413,34 @@ fn validate_fragment(s: &str, base_off: usize, mode: Mode) -> Result<()> {
     )
 }
 
-const SCAN_LANES: usize = 16;
+/// SWAR word width: one `u64` scans eight bytes per iteration.
+const SCAN_WORD: usize = 8;
+
+/// Broadcast a byte to all eight lanes of a `u64`.
+const LANES_LO: u64 = 0x0101_0101_0101_0101;
+/// High bit of each byte lane.
+const LANES_HI: u64 = 0x8080_8080_8080_8080;
 
 #[inline]
 fn find_first_byte(bytes: &[u8], needle: u8) -> Option<usize> {
     find_first_of(bytes, [needle])
 }
 
+/// Set the high bit of every byte lane in `v` that is zero (classic SWAR
+/// zero-byte test); all other lanes report clear.
+#[inline]
+fn zero_byte_lanes(v: u64) -> u64 {
+    v.wrapping_sub(LANES_LO) & !v & LANES_HI
+}
+
 /// Find the first ASCII delimiter byte in a dense byte slice.
 ///
-/// IRI component splitting scans long ASCII-heavy strings for a very small set of
-/// delimiters. `std::simd` keeps that hot scan branch-light without changing the
-/// UTF-8 semantics: all delimiter bytes are ASCII and therefore cannot be confused
-/// with a non-ASCII continuation byte.
+/// IRI component splitting scans long ASCII-heavy strings for a very small set
+/// of delimiters. A branch-light SWAR scan over `u64` words (stable Rust, no
+/// dependencies — this crate is a zero-dep leaf) keeps the hot path wide
+/// without changing the UTF-8 semantics: all delimiter bytes are ASCII and
+/// therefore cannot be confused with a non-ASCII continuation byte. Lane
+/// order is fixed by `from_le_bytes`, so the result is platform-independent.
 #[inline]
 fn find_first_of<const N: usize>(bytes: &[u8], needles: [u8; N]) -> Option<usize> {
     if N == 0 {
@@ -434,17 +448,22 @@ fn find_first_of<const N: usize>(bytes: &[u8], needles: [u8; N]) -> Option<usize
     }
 
     let mut offset = 0usize;
-    while offset + SCAN_LANES <= bytes.len() {
-        let chunk = Simd::<u8, SCAN_LANES>::from_slice(&bytes[offset..offset + SCAN_LANES]);
-        let mut mask = chunk.simd_eq(Simd::splat(needles[0]));
-        for &needle in &needles[1..] {
-            mask |= chunk.simd_eq(Simd::splat(needle));
+    while offset + SCAN_WORD <= bytes.len() {
+        let word = u64::from_le_bytes(
+            bytes[offset..offset + SCAN_WORD]
+                .try_into()
+                .expect("slice is exactly SCAN_WORD bytes"),
+        );
+        let mut mask = 0u64;
+        for &needle in &needles {
+            mask |= zero_byte_lanes(word ^ (u64::from(needle) * LANES_LO));
         }
-        let bits = mask.to_bitmask();
-        if bits != 0 {
-            return Some(offset + bits.trailing_zeros() as usize);
+        if mask != 0 {
+            // The first set bit sits in the high bit of the first matching
+            // little-endian lane: bit index / 8 = byte index within the word.
+            return Some(offset + (mask.trailing_zeros() as usize) / 8);
         }
-        offset += SCAN_LANES;
+        offset += SCAN_WORD;
     }
 
     bytes[offset..]
@@ -458,7 +477,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn simd_delimiter_scan_matches_first_scalar_hit() {
+    fn swar_delimiter_scan_matches_first_scalar_hit() {
         let haystack = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?tail#later";
         assert_eq!(find_first_of(haystack, *b"?#"), Some(32));
         assert_eq!(find_first_byte(haystack, b'#'), Some(37));
