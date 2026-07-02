@@ -194,6 +194,16 @@ pub struct EvalCtx<'d> {
     /// the scratch interner dedups by value — so the cached term is bit-identical
     /// to what a fresh intern would return.
     pub(crate) cached_bool_terms: [Option<SolutionTerm>; 2],
+    /// Per-query memo of interned constant expression atoms (`NamedNode` /
+    /// `Literal`), keyed by the atom node's immutable AST address. A constant atom
+    /// inside a `FILTER`/`BIND` is otherwise re-`to_owned()`'d into an owned
+    /// `TermValue` and re-interned (a dataset reverse-index probe) once per row;
+    /// this collapses that to a single intern per distinct atom node. Like
+    /// [`Self::cached_bool_terms`], interning is deterministic for the pinned
+    /// `(dataset, scratch)` pair, so a cached hit is the same `SolutionTerm` a
+    /// fresh intern would produce. Naturally per-query: the algebra the addresses
+    /// point into outlives this context's `query()` call.
+    pub(crate) const_atom_cache: DetHashMap<usize, SolutionTerm>,
     /// The `SERVICE` federation source, if one is injected. `None` in
     /// the default engine path: a non-silent `SERVICE` then hard-fails. Tests and
     /// the conformance harness inject an in-memory source via [`EvalCtx::with_remote`].
@@ -253,6 +263,7 @@ impl<'d> EvalCtx<'d> {
             exists_expr_vars_cache: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
             cached_bool_terms: [None, None],
+            const_atom_cache: DetHashMap::default(),
             remote: None,
             bgp_order_cache: None,
             constructed: Vec::new(),

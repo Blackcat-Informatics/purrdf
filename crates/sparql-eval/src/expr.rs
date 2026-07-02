@@ -55,8 +55,12 @@ pub(crate) fn eval_expr(
 ) -> Result<Option<SolutionTerm>, EvalError> {
     match expr {
         // ---- atoms ---------------------------------------------------------
-        Expression::NamedNode(n) => Ok(Some(intern(ctx, TermValue::Iri(n.as_str().to_owned())))),
-        Expression::Literal(l) => Ok(Some(intern(ctx, crate::convert::literal_to_value(l)))),
+        Expression::NamedNode(n) => Ok(Some(const_atom(ctx, expr, || {
+            TermValue::Iri(n.as_str().to_owned())
+        }))),
+        Expression::Literal(l) => Ok(Some(const_atom(ctx, expr, || {
+            crate::convert::literal_to_value(l)
+        }))),
         Expression::Variable(v) => Ok(lookup(v, row, schema)),
         Expression::Bound(v) => Ok(Some(bool_term(ctx, lookup(v, row, schema).is_some()))),
 
@@ -218,6 +222,24 @@ fn lookup(
 /// Intern a value to a solution term (promoting to an existing dataset id).
 fn intern(ctx: &mut EvalCtx<'_>, value: TermValue) -> SolutionTerm {
     ctx.scratch.intern(ctx.dataset, value)
+}
+
+/// Intern a constant atom (`NamedNode`/`Literal`), memoized per query by the
+/// node's AST address (see [`EvalCtx::const_atom_cache`]). `build` — which owns
+/// the `TermValue` allocation — runs only on a cache miss, so a FILTER/BIND over
+/// N rows pays the `to_owned()` + intern probe once, not N times.
+fn const_atom(
+    ctx: &mut EvalCtx<'_>,
+    expr: &Expression,
+    build: impl FnOnce() -> TermValue,
+) -> SolutionTerm {
+    let key = std::ptr::from_ref::<Expression>(expr) as usize;
+    if let Some(term) = ctx.const_atom_cache.get(&key) {
+        return *term;
+    }
+    let term = intern(ctx, build());
+    ctx.const_atom_cache.insert(key, term);
+    term
 }
 
 /// Materialize a solution term to an owned value.
