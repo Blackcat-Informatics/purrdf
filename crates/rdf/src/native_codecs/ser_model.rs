@@ -492,8 +492,8 @@ pub(crate) fn to_trig(g: &SerGraph) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::Write as _;
     use proptest::prelude::*;
+    use std::fmt::Write as _;
 
     #[test]
     fn deterministic_blank_label_matches_zero_timestamp_ulid() {
