@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check test bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test \
+.PHONY: help metadata fmt check test bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
 	capi-build capi-header capi-check capi-install
 
 help: ## Show this help.
@@ -88,6 +88,9 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 
 wasm-pkg-test: wasm-pkg ## Build the wasm package and run the Node real-execution round-trip suite.
 	cd crates/rdf-wasm/js && node --test tests/*.test.mjs
+
+wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput benchmark (report-only; never a gate).
+	cd crates/rdf-wasm/js && node bench/parse.bench.mjs
 
 capi-build: ## Build libpurrdf (cdylib + staticlib + header + pkg-config) via cargo-c.
 	cargo capi build -p purrdf-capi
