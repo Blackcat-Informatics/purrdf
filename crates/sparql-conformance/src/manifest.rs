@@ -24,12 +24,26 @@ const BASE: &str = "http://purrdf.test/manifest/";
 
 const MF: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#";
 
+/// The SPARQL-1.1 update-test vocabulary (`ut:`). Update tests describe their
+/// pre-state (`ut:data`/`ut:graphData`), the update request (`ut:request`), and
+/// their expected post-state (an `mf:result` node carrying `ut:data`/
+/// `ut:graphData`). A named graph is a blank node `[ ut:graph <file> ;
+/// rdfs:label "graph-iri" ]` — the graph IRI is the `rdfs:label`, not the file.
+const UT: &str = "http://www.w3.org/2009/sparql/tests/test-update#";
+
+/// The RDF Schema namespace; `rdfs:label` carries the graph IRI of a
+/// `ut:graphData` entry in an update test.
+const RDFS_LABEL_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
+
 /// The kind of a discovered SPARQL test case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestKind {
     /// `mf:QueryEvaluationTest` (and result-format variants): run the query and
     /// diff the result.
     QueryEval,
+    /// `mf:UpdateEvaluationTest`: apply the `ut:request` update to the pre-state
+    /// dataset and diff the resulting dataset against the expected post-state.
+    UpdateEval,
     /// `mf:PositiveSyntaxTest(11)`: the query must parse.
     PositiveSyntax,
     /// `mf:NegativeSyntaxTest(11)`: the query must fail to parse.
@@ -48,6 +62,15 @@ pub enum ExpectedResult {
     Srj(PathBuf),
     /// A graph (`CONSTRUCT`/`DESCRIBE`) — compared as canonical N-Quads.
     Graph(PathBuf),
+    /// An UPDATE post-state: the expected default-graph data (`ut:data`) and
+    /// named graphs (`ut:graphData`), compared to the mutated dataset as
+    /// canonical N-Quads. Empty vectors denote an empty expected dataset.
+    DatasetState {
+        /// Expected default-graph Turtle files.
+        data: Vec<PathBuf>,
+        /// Expected named graphs as `(graph IRI, file)`.
+        graph_data: Vec<(String, PathBuf)>,
+    },
     /// Syntax tests carry no result.
     None,
     /// A result file whose extension the harness does not model.
@@ -158,7 +181,100 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
         }
     }
 
-    Ok(by_test.into_values().collect())
+    let mut cases: Vec<SparqlTestCase> = by_test.into_values().collect();
+    // Update tests carry their pre-state, request, and post-state under the `ut:`
+    // vocabulary, which the query SELECT above does not read. Fill those fields in
+    // with a dedicated pass so the `ut:` shape (nested graphData blank nodes) is
+    // read explicitly rather than shoe-horned into the query SELECT.
+    if cases.iter().any(|c| c.kind == TestKind::UpdateEval) {
+        load_update_details(&dataset, &dir, &mut cases)?;
+    }
+    Ok(cases)
+}
+
+/// An accumulated expected post-state: `(default-graph files, named graphs)`.
+type ExpectedState = (Vec<PathBuf>, Vec<(String, PathBuf)>);
+
+/// Fill in the `ut:`-vocabulary fields for every [`TestKind::UpdateEval`] case:
+/// the `ut:request` update file, the pre-state (`ut:data`/`ut:graphData`), and
+/// the expected post-state (`mf:result` → `ut:data`/`ut:graphData`).
+fn load_update_details(
+    dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
+    dir: &Path,
+    cases: &mut [SparqlTestCase],
+) -> Result<(), String> {
+    let query = format!(
+        "PREFIX mf: <{MF}>\n\
+         PREFIX ut: <{UT}>\n\
+         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
+         PREFIX rdfs: <{RDFS_LABEL_NS}>\n\
+         SELECT ?test ?request ?inData ?inGraph ?inLabel ?resData ?resGraph ?resLabel WHERE {{\n\
+         ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
+         ?test mf:action ?act .\n\
+         OPTIONAL {{ ?act ut:request ?request }}\n\
+         OPTIONAL {{ ?act ut:data ?inData }}\n\
+         OPTIONAL {{ ?act ut:graphData ?ig . ?ig ut:graph ?inGraph . OPTIONAL {{ ?ig rdfs:label ?inLabel }} }}\n\
+         OPTIONAL {{ ?test mf:result ?res .\n\
+           OPTIONAL {{ ?res ut:data ?resData }}\n\
+           OPTIONAL {{ ?res ut:graphData ?rg . ?rg ut:graph ?resGraph . OPTIONAL {{ ?rg rdfs:label ?resLabel }} }}\n\
+         }}\n\
+         }}"
+    );
+    let rows = query_rows(dataset, &query)?;
+
+    // Accumulate the expected post-state per test IRI (built as we scan rows).
+    let mut expected: BTreeMap<String, ExpectedState> = BTreeMap::new();
+
+    let by_iri: BTreeMap<String, usize> = cases
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.kind == TestKind::UpdateEval)
+        .map(|(i, c)| (c.iri.clone(), i))
+        .collect();
+
+    for row in &rows {
+        let Some(test_iri) = iri_of(row, "test") else {
+            continue;
+        };
+        let Some(&idx) = by_iri.get(test_iri.as_str()) else {
+            continue; // not an update test (or not modeled) — leave untouched
+        };
+        let case = &mut cases[idx];
+
+        if let Some(req) = iri_of(row, "request") {
+            case.query = local_path(dir, &req);
+        }
+        push_unique_path(
+            &mut case.data,
+            iri_of(row, "inData").map(|i| local_path(dir, &i)),
+        );
+        if let Some(g) = iri_of(row, "inGraph") {
+            let name = lexical_of(row, "inLabel").unwrap_or_else(|| g.clone());
+            let path = local_path(dir, &g);
+            if !case.graph_data.iter().any(|(_, p)| *p == path) {
+                case.graph_data.push((name, path));
+            }
+        }
+
+        let acc = expected.entry(test_iri.clone()).or_default();
+        push_unique_path(
+            &mut acc.0,
+            iri_of(row, "resData").map(|i| local_path(dir, &i)),
+        );
+        if let Some(g) = iri_of(row, "resGraph") {
+            let name = lexical_of(row, "resLabel").unwrap_or_else(|| g.clone());
+            let path = local_path(dir, &g);
+            if !acc.1.iter().any(|(_, p)| *p == path) {
+                acc.1.push((name, path));
+            }
+        }
+    }
+
+    for (iri, idx) in by_iri {
+        let (data, graph_data) = expected.remove(&iri).unwrap_or_default();
+        cases[idx].expected = ExpectedResult::DatasetState { data, graph_data };
+    }
+    Ok(())
 }
 
 /// Run `query` against `dataset` and return its solution rows as variable→value
@@ -236,6 +352,7 @@ fn classify(type_term: Option<&TermValue>) -> TestKind {
     let local = t.strip_prefix(MF).unwrap_or(t);
     match local {
         "QueryEvaluationTest" | "CSVResultFormatTest" => TestKind::QueryEval,
+        "UpdateEvaluationTest" => TestKind::UpdateEval,
         "PositiveSyntaxTest" | "PositiveSyntaxTest11" => TestKind::PositiveSyntax,
         "NegativeSyntaxTest" | "NegativeSyntaxTest11" => TestKind::NegativeSyntax,
         _ => TestKind::Unknown,

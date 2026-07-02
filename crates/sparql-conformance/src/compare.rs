@@ -15,8 +15,9 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
-use purrdf_core::{SparqlResult, TermValue};
+use purrdf_core::{RdfDataset, SparqlResult, TermValue};
 use purrdf_sparql_results::ParsedSolutions;
 
 use crate::manifest::{ExpectedResult, SparqlTestCase, TestKind};
@@ -39,6 +40,29 @@ pub fn compare(case: &SparqlTestCase, outcome: &RunOutcome) -> Result<(), String
             other => Err(format!("syntax outcome for non-syntax kind {other:?}")),
         },
         RunOutcome::Eval(result) => compare_eval(case, result),
+        RunOutcome::Update(actual) => compare_update(case, actual),
+    }
+}
+
+/// Compare an UPDATE post-state dataset against the expected [`ExpectedResult::DatasetState`].
+///
+/// The mutated dataset and the expected dataset are compared graph-preservingly
+/// by RDFC-1.0 canonical N-Quads — the same equality CONSTRUCT graphs use — so a
+/// differing default graph OR any named graph surfaces as a mismatch.
+fn compare_update(case: &SparqlTestCase, actual: &Arc<RdfDataset>) -> Result<(), String> {
+    let ExpectedResult::DatasetState { data, graph_data } = &case.expected else {
+        return Err(format!(
+            "update case {} has no DatasetState expected result",
+            case.iri
+        ));
+    };
+    let expected = crate::run::build_dataset(data, graph_data)?;
+    let actual_canon = purrdf_core::canonicalize(actual).nquads;
+    let expected_canon = purrdf_core::canonicalize(&expected).nquads;
+    if actual_canon == expected_canon {
+        Ok(())
+    } else {
+        Err("UPDATE post-state differs from expected (canonical N-Quads mismatch)".to_owned())
     }
 }
 

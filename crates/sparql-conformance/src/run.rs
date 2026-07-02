@@ -26,6 +26,8 @@ const EXT_NS: &str = "https://example.org/ext/";
 pub enum RunOutcome {
     /// A `QueryEvaluationTest` result.
     Eval(SparqlResult),
+    /// An `UpdateEvaluationTest` post-state: the dataset after applying the update.
+    Update(Arc<RdfDataset>),
     /// A syntax test: did the query parse?
     Syntax { parsed_ok: bool },
 }
@@ -47,9 +49,23 @@ pub enum RunOutcome {
 ///
 /// Returns a message on any read, parse, or serialize failure (never silent).
 pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
+    build_dataset(&case.data, &case.graph_data)
+}
+
+/// Build a dataset from default-graph Turtle files (`data`) and named-graph files
+/// (`graph_data`, each `(graph IRI, file)`). Shared by the query pre-state loader
+/// and the UPDATE pre-/post-state builders.
+///
+/// # Errors
+///
+/// Returns a message on any read, parse, or serialize failure (never silent).
+pub fn build_dataset(
+    data: &[std::path::PathBuf],
+    graph_data: &[(String, std::path::PathBuf)],
+) -> Result<Arc<RdfDataset>, String> {
     // Serialize each qt:data Turtle file to N-Quads (default graph — no graph tag).
     let mut combined_nq: Vec<u8> = Vec::new();
-    for data in &case.data {
+    for data in data {
         let chunk = std::fs::read(data).map_err(|e| format!("read {}: {e}", data.display()))?;
         let ds = purrdf::parse_dataset(&chunk, "text/turtle", Some(BASE))
             .map_err(|e| format!("parse data {}: {e}", data.display()))?;
@@ -63,7 +79,7 @@ pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
 
     // Serialize each qt:graphData Turtle file to N-Quads, then tag every triple line
     // with the named-graph IRI so it is placed in that named graph.
-    for (graph_iri, path) in &case.graph_data {
+    for (graph_iri, path) in graph_data {
         let chunk = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
         let ds = purrdf::parse_dataset(&chunk, "text/turtle", Some(BASE))
             .map_err(|e| format!("parse graph data {}: {e}", path.display()))?;
@@ -93,7 +109,7 @@ pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
     }
 
     purrdf::parse_dataset(&combined_nq, "application/n-quads", Some(BASE))
-        .map_err(|e| format!("parse combined n-quads for {}: {e}", case.iri))
+        .map_err(|e| format!("parse combined n-quads: {e}"))
 }
 
 /// Run `case`, optionally resolving `SERVICE` clauses through `remote`.
@@ -147,6 +163,23 @@ pub fn run(
             }
             .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
             Ok(RunOutcome::Eval(result))
+        }
+        TestKind::UpdateEval => {
+            // Apply the `ut:request` update to the pre-state dataset; the mutated
+            // dataset is diffed against the expected post-state in `compare`.
+            let mut dataset = build_dataset(&case.data, &case.graph_data)?;
+            let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
+                extension_fn_namespaces: vec![EXT_NS.to_owned()],
+            });
+            let request = SparqlRequest {
+                query: &query_text,
+                base_iri: Some(BASE),
+                substitutions: &[],
+            };
+            engine
+                .update(&mut dataset, request)
+                .map_err(|e| format!("apply update {}: {e}", case.iri))?;
+            Ok(RunOutcome::Update(dataset))
         }
         TestKind::Unknown => Err(format!("unmodeled test type for {}", case.iri)),
     }
