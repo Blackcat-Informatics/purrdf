@@ -23,6 +23,13 @@ import pytest
 
 _LEDGER_PATH = Path(__file__).parent / "xfail_ledger.toml"
 
+# The verbatim-vendored rdflib suite under `rdflib_suite/vendor/` is rdflib's
+# OWN test tree; it is meant to run ONLY in the shadow subprocess driven by
+# `test_rdflib_suite.py` (where `import rdflib` == the purrdf shim). It must
+# never be collected by this parent process, which uses the real rdflib as its
+# differential oracle. `collect_ignore_glob` keeps pytest away from it.
+collect_ignore_glob = ["rdflib_suite/vendor/*", "rdflib_suite/runner.py"]
+
 
 def _load_ledger() -> dict[str, str]:
     """Return the `{node_id: reason}` map from the xfail ledger (empty if absent)."""

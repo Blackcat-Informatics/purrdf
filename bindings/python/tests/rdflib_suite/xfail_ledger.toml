@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The rdflib LSP conformance-gate xfail ledger (#9 / #11, Task 8).
+#
+# This ledger governs rdflib's OWN, verbatim-vendored tests (see vendor/) run
+# against `purrdf.compat.rdflib` via the Task 7 shadow (see runner.py). Each key
+# is a pytest node id RELATIVE to vendor/ (e.g. `test_collection.py::test_x`);
+# each value is a concrete reason a real gap exists, with the tracking issue.
+#
+# runner.py applies these as STRICT xfails: a ledgered test that starts passing
+# (XPASS) FAILS the gate, and a stale key (matching no collected test) FAILS the
+# gate — so this ledger only ever SHRINKS, never drifts. Mirrors the Rust
+# conformance harnesses' XPASS discipline (AGENTS.md §2).
+#
+# Scoreboard when authored: 50 passed / 36 xfailed (0 xpassed, 0 failed).
+# Grouped by theme in the comments below.
+
+[xfail]
+
+# --- Theme: XSD whitespace-facet processing on typed literals (#11 literal facets) ---
+# purrdf's compat Literal retains the lexical form verbatim; it does not apply
+# the XSD `whiteSpace` facet — `replace` for xsd:normalizedString, `collapse`
+# for xsd:token — on construction. rdflib normalizes these, so the lexical form,
+# n3() output, and str() all differ.
+"test_normalized_string.py::TestNormalizedString::test1" = "compat Literal does not apply the xsd:normalizedString 'replace' whitespace facet; the lexical form is kept verbatim, so it stays equal to an xsd:string sibling (#11 literal facet-processing gap)"
+"test_normalized_string.py::TestNormalizedString::test2" = "compat Literal does not apply the xsd:normalizedString 'replace' whitespace facet, so str() retains raw tabs/newlines instead of collapsing them to spaces (#11 literal facet-processing gap)"
+"test_normalized_string.py::TestNormalizedString::test3" = "compat Literal does not apply the xsd:normalizedString 'replace' whitespace facet, so n3() emits the un-normalized lexical form (#11 literal facet-processing gap)"
+"test_normalized_string.py::TestNormalizedString::test4" = "compat Literal does not apply the xsd:normalizedString 'replace' whitespace facet, so the normalized value does not match the expected xsd:string form (#11 literal facet-processing gap)"
+"test_tokendatatype.py::TestTokenDatatype::test1" = "compat Literal does not apply the xsd:token 'collapse' whitespace facet; the lexical form is kept verbatim, so it stays equal to an xsd:string sibling (#11 literal facet-processing gap)"
+"test_tokendatatype.py::TestTokenDatatype::test2" = "compat Literal does not apply the xsd:token 'collapse' whitespace facet, so str() retains leading/collapsible whitespace (#11 literal facet-processing gap)"
+"test_tokendatatype.py::TestTokenDatatype::test3" = "compat Literal does not apply the xsd:token 'collapse' whitespace facet, so n3() emits the un-collapsed lexical form (#11 literal facet-processing gap)"
+"test_tokendatatype.py::TestTokenDatatype::test4" = "compat Literal does not apply the xsd:token 'collapse' whitespace facet, so the collapsed value does not match the expected xsd:string form (#11 literal facet-processing gap)"
+"test_tokendatatype.py::TestTokenDatatype::test_whitespace_is_collapsed_and_trailing_whitespace_is_stripped" = "compat Literal does not collapse/strip whitespace for xsd:token, so leading/trailing/interior whitespace survives (#11 literal facet-processing gap)"
+
+# --- Theme: binary-datatype value coercion (#11 literal value map) ---
+# The compat Literal.value map does not decode xsd:hexBinary / xsd:base64Binary
+# lexical forms into Python `bytes`; it returns the raw string, so two literals
+# with the same decoded bytes but different lexical forms are not `.value`-equal.
+"test_hex_binary.py::TestHexBinaryCase::test_unicode" = "compat Literal.value does not decode xsd:hexBinary to Python bytes; it returns the lexical string, so decoded-bytes equality across literals fails (#11 binary-datatype value-map gap)"
+"test_b64_binary.py::TestB64Binary::test_unicode" = "compat Literal.value does not decode xsd:base64Binary to Python bytes; it returns the lexical string, so decoded-bytes equality across literals fails (#11 binary-datatype value-map gap)"
+
+# --- Theme: Graph subclass identity not preserved through set operators (#11 facade) ---
+# rdflib's Graph.__add__/__sub__/__mul__ return an instance of the caller's
+# subclass; the compat facade returns a base purrdf Graph, dropping subclass
+# methods.
+"test_graph_operator.py::test_subclass_add_operator" = "compat Graph.__add__ returns a base purrdf Graph, not an instance of the caller's Graph subclass, so subclass methods are lost after '+' (#11 facade subclass-preservation gap)"
+"test_graph_operator.py::test_subclass_sub_operator" = "compat Graph.__sub__ returns a base purrdf Graph, not an instance of the caller's Graph subclass, so subclass methods are lost after '-' (#11 facade subclass-preservation gap)"
+"test_graph_operator.py::test_subclass_mul_operator" = "compat Graph.__mul__ (intersection) returns a base purrdf Graph, not an instance of the caller's Graph subclass, so subclass methods are lost after '*' (#11 facade subclass-preservation gap)"
+
+# --- Theme: RDF collection (rdf:List) parse + Collection mutation (#11 lists) ---
+"test_graph_items.py::test_items" = "parsing Turtle collection syntax '( ... )' through the native codec raises native-codec-iri-missing-value, so rdf:first/rdf:rest list items are never materialized for Seq iteration (#11 native rdf:List parse gap)"
+"test_graph_items.py::test_recursive_list_detection" = "parsing Turtle collection syntax '( ... )' through the native codec raises native-codec-iri-missing-value, so nested rdf:List recursion is never reached (#11 native rdf:List parse gap)"
+"test_collection.py::test_scenario" = "compat Collection is read/append-oriented and does not implement __delitem__, so 'del c[i]' raises TypeError (#11 Collection mutation gap)"
+
+# --- Theme: BatchAddGraph quad/context semantics (#11 facade) ---
+"test_batch_add.py::TestBatchAddGraph::test_add_quad_for_non_conjunctive_empty" = "compat BatchAddGraph.add on a non-conjunctive Graph does not drop the 4th (context) element the way rdflib does before an implicit flush, so a quad added to a plain Graph leaves one triple instead of none (#11 BatchAddGraph context-handling gap)"
+
+# --- Theme: DefinedNamespace introspection (#11 namespace) ---
+"test_definednamespace_dir.py::test_definednamespace_dir" = "compat DefinedNamespaceMeta does not override __dir__ to enumerate the namespace's defined term IRIs, so dir() returns ordinary object attributes rather than the term set (#11 DefinedNamespace introspection gap)"
+
+# --- Theme: SPARQL Result public API — .bindings / SELECT * projection (#10 SPARQL results) ---
+"test_evaluate_bind.py::test_bind[check-bind(\"thing\" as ?name)-name-thing]" = "compat Result exposes no .bindings attribute (rdflib's list-of-dict view of SELECT solutions), so r.bindings[0][var] raises AttributeError (#10 SPARQL Result.bindings API gap)"
+"test_evaluate_bind.py::test_bind[check-bind(<http://example.org/other> as ?other)-other-http://example.org/other]" = "compat Result exposes no .bindings attribute (rdflib's list-of-dict view of SELECT solutions), so r.bindings[0][var] raises AttributeError (#10 SPARQL Result.bindings API gap)"
+"test_evaluate_bind.py::test_bind[check-bind(:Thing as ?type)-type-http://example.org/ns#Thing]" = "compat Result exposes no .bindings attribute (rdflib's list-of-dict view of SELECT solutions), so r.bindings[0][var] raises AttributeError (#10 SPARQL Result.bindings API gap)"
+"test_optional.py::test_binding_with_optional_clause" = "compat Result exposes no .bindings attribute, so len(result.bindings) raises AttributeError on an OPTIONAL-with-subselect query (#10 SPARQL Result.bindings API gap)"
+"test_subselect.py::test_select_star_sub_select" = "'SELECT *' inside a sub-SELECT does not propagate the projected variables to the outer ResultRow, so row var lookup / asdict() raises (#10 SPARQL SELECT-* subselect projection gap)"
+"test_subselect.py::test_select_star_multiple_sub_select_star" = "'SELECT *' across multiple nested sub-SELECTs does not propagate projected variables to the outer ResultRow, so asdict() raises (#10 SPARQL SELECT-* subselect projection gap)"
+"test_subselect.py::test_select_star_multiple_sub_select_mixed_projections" = "'SELECT *' mixed with explicit projections across sub-SELECTs does not propagate all projected variables to the outer ResultRow, so asdict() raises (#10 SPARQL SELECT-* subselect projection gap)"
+"test_subselect.py::test_select_star_multiple_sub_select_defined_projections" = "explicit projections across nested sub-SELECTs are not surfaced on the outer ResultRow, so asdict() raises (#10 SPARQL SELECT-* subselect projection gap)"
+
+# --- Theme: SPARQL query prefix/namespace forwarding (#10 SPARQL prefixes) ---
+# The compat facade does not forward the graph's bound namespaces into the
+# native SPARQL parser as PREFIX declarations, so queries that rely on
+# graph-level prefix bindings (rather than in-query PREFIX) hard-error.
+"test_agg_undef.py::test_values_outside_group_by" = "graph-bound prefixes are not forwarded to the native SPARQL parser and a top-level VALUES block is rejected ('unexpected trailing token VALUES'), so this aggregate-over-UNDEF query is a parse hard-error (#10 SPARQL prefix-forwarding + VALUES gap)"
+"test_agg_distinct.py::test_count_optional_values" = "graph-bound prefix 'ex' is not forwarded to the native SPARQL parser, so the query fails with 'undeclared prefix ex' rather than being evaluated (#10 SPARQL prefix-forwarding gap)"
+
+# --- Theme: SPARQL aggregate / filter evaluation semantics (#10 SPARQL eval) ---
+"test_agg_distinct.py::test_count_distinct" = "COUNT(DISTINCT ?x) grouped aggregation yields an empty Result under the native engine instead of the two expected grouped counts (#10 SPARQL COUNT-DISTINCT grouping gap)"
+"test_nested_filters.py::test_nested_filter_outer_binding_propagation" = "FILTER bindings from an outer group are not propagated into a nested group as rdflib does, so the computed solution set diverges from the expected set (#10 SPARQL nested-FILTER binding-propagation gap)"
+"test_nested_filters.py::test_nested_filter_outermost_binding_propagation" = "outermost-group FILTER bindings are not propagated into nested groups as rdflib does, so the computed solution set diverges from the expected set (#10 SPARQL nested-FILTER binding-propagation gap)"
+"test_conjunctive_graph.py::test_graph_ids[check-kws1]" = "ConjunctiveGraph.parse forwards a StringInputSource down a filesystem path in this keyword combination, raising FileNotFoundError instead of parsing the in-memory source (#11 ConjunctiveGraph source-dispatch gap)"
+
+# --- Theme: ConjunctiveGraph legacy semantics (#11 conjunctive-graph facade) ---
+"test_conjunctive_graph.py::test_bnode_publicid" = "ConjunctiveGraph.parse(data=..., publicID=BNode) does not retain triples under a blank-node context the way rdflib does, so the graph reports no triples (#11 ConjunctiveGraph publicID/context gap)"
+"test_conjunctive_graph.py::test_quad_contexts" = "iterating a ConjunctiveGraph yields 4-tuple quads, whereas rdflib's default-union iteration yields 3-tuple triples, so the flattened triple set does not match (#11 ConjunctiveGraph iteration-arity gap)"
+"test_conjunctive_graph.py::test_deprecated" = "compat ConjunctiveGraph does not emit the DeprecationWarning rdflib 7.x raises on instantiation (rdflib deprecates ConjunctiveGraph in favor of Dataset); the compat facade keeps it as a quiet alias (#11 deprecation-parity gap)"
