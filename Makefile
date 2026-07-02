@@ -92,6 +92,15 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 		--enable-bulk-memory --enable-nontrapping-float-to-int \
 		--enable-sign-ext --enable-mutable-globals --enable-simd \
 		-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+	@# Durable proof that +simd128 actually produced SIMD codegen: a green
+	@# wasm-pkg-test round-trip only proves the module runs correctly, not that
+	@# it is vectorized — a memchr/RUSTFLAGS/dependency regression could ship a
+	@# silently scalar artifact with every test still passing. Disassemble the
+	@# optimized module and hard-fail if no SIMD opcodes are present.
+	@command -v wasm-dis >/dev/null 2>&1 || { echo "ERROR: wasm-dis (binaryen) not found — it is a REQUIRED wasm build dependency"; exit 1; }
+	@count=$$(wasm-dis crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm | grep -cE 'v128|i8x16|i16x8|i32x4|i64x2|f32x4|f64x2' || true); \
+		[ "$$count" -gt 0 ] || { echo "ERROR: wasm-pkg produced NO SIMD opcodes (+simd128 regressed — refusing to ship a scalar artifact)"; exit 1; }; \
+		echo "OK: verified $$count SIMD opcode(s) present in the optimized wasm artifact"
 	@echo "OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)"
 
 wasm-pkg-test: wasm-pkg ## Build the wasm package and run the Node real-execution round-trip suite.
