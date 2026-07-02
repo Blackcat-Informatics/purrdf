@@ -39,6 +39,7 @@ from .term import (
 
 if TYPE_CHECKING:
     from .collection import Collection
+    from .paths import Path as PropertyPath
     from .resource import Resource
 
 _NT = purrdf.RdfFormat.N_TRIPLES
@@ -219,39 +220,43 @@ def _rebuild_graph(
     return graph
 
 
-def _term_n3(term: Any) -> str:
-    """Return a term's SPARQL/N3 form (delegating to its ``n3`` method).
+#: The four SPARQL query-form keywords (the first one in a query fixes its form).
+_QUERY_FORM_RE = re.compile(r"\b(SELECT|ASK|CONSTRUCT|DESCRIBE)\b", re.IGNORECASE)
 
-    Raw Python values (int/str/bool/float) are coerced to a typed ``Literal``
-    so they serialize as proper RDF literals rather than ``<bare>`` IRIs.
+
+def _query_form(query_text: str) -> str:
+    """Return the SPARQL query form (``SELECT``/``ASK``/``CONSTRUCT``/``DESCRIBE``).
+
+    A lexical scan: the first form keyword after the (PREFIX/BASE) prologue fixes
+    the form. Used to distinguish a CONSTRUCT from a DESCRIBE, since both
+    materialize to the same native triple result.
     """
-    if not isinstance(term, Identifier):
-        from .term import Literal
-
-        term = Literal(term)
-    n3 = getattr(term, "n3", None)
-    if callable(n3):
-        result = n3()
-        assert isinstance(result, str)
-        return result
-    return f"<{term}>"
+    match = _QUERY_FORM_RE.search(query_text)
+    return match.group(1).upper() if match else "SELECT"
 
 
-def _inject_bindings(query_text: str, bindings: dict[str, Identifier]) -> str:
-    """Inject a ``VALUES`` row binding ``bindings`` into the query's WHERE group."""
-    names = " ".join(f"?{str(name).lstrip('?$')}" for name in bindings)
-    values = " ".join(_term_n3(term) for term in bindings.values())
-    clause = f" VALUES ({names}) {{ ({values}) }} "
-    lowered = query_text.lower()
-    where = lowered.find("where")
-    # SELECT / CONSTRUCT-WHERE: inject after the WHERE keyword's opening brace.
-    # ASK / DESCRIBE / WHERE-less SELECT: no WHERE keyword — first `{` IS the
-    # group graph pattern.  (A CONSTRUCT always carries an explicit WHERE, so
-    # its template brace is never reached by the else branch.)
-    brace = query_text.find("{", where) if where != -1 else query_text.find("{")
-    if brace == -1:
-        return query_text
-    return query_text[: brace + 1] + clause + query_text[brace + 1 :]
+def _native_substitutions(
+    bindings: dict[str, Identifier],
+) -> dict[
+    purrdf.Variable,
+    purrdf.NamedNode | purrdf.BlankNode | purrdf.Literal | purrdf.Triple,
+]:
+    """Convert RDFLib ``initBindings`` to the native ``substitutions`` kwarg.
+
+    Each key becomes a native :class:`purrdf.Variable` (sigil-stripped) and each
+    value a native term (a bare Python value is coerced to a typed ``Literal``,
+    matching RDFLib's pre-binding of non-term values).
+    """
+    substitutions: dict[
+        purrdf.Variable,
+        purrdf.NamedNode | purrdf.BlankNode | purrdf.Literal | purrdf.Triple,
+    ] = {}
+    for name, term in bindings.items():
+        variable = purrdf.Variable(str(name).lstrip("?$"))
+        if not isinstance(term, Identifier):
+            term = Literal(term)
+        substitutions[variable] = to_native(term)
+    return substitutions
 
 
 def _literal_matches(
@@ -399,8 +404,17 @@ class Graph:
         Scoped to this facade's graph slot (``self._graph_name``); a
         ``default_union`` dataset (``self._any_graph``) spans every graph and
         de-duplicates triples that appear in more than one graph.
+
+        A :class:`~.paths.Path` in the predicate slot is evaluated as a SPARQL
+        property path (RDFLib parity: the yielded triples carry the path object
+        as their predicate).
         """
+        from .paths import Path as PropertyPath
+
         s, p, o = pattern
+        if isinstance(p, PropertyPath):
+            yield from self._triples_path(s, p, o)
+            return
         pattern_literal = o if isinstance(o, Literal) else None
         quads = self._store.quads_for_pattern(
             None if s is None else _native_subject(s),
@@ -437,6 +451,37 @@ class Graph:
                         continue
                     seen.add((rs, rp, candidate))
                 yield (rs, rp, candidate)
+
+    def _triples_path(
+        self,
+        subject: Identifier | None,
+        path: PropertyPath,
+        object: Identifier | None,
+    ) -> Iterator[tuple[Identifier, PropertyPath, Identifier]]:
+        """Evaluate a SPARQL property path, yielding ``(s, path, o)`` triples.
+
+        Translates the path to SPARQL property-path syntax and runs it as an
+        internal query, binding the given endpoints and projecting the free ones
+        (RDFLib's ``evalPath`` equivalent).
+        """
+        s_bound = isinstance(subject, Identifier)
+        o_bound = isinstance(object, Identifier)
+        s_term = subject.n3() if isinstance(subject, Identifier) else "?s"
+        o_term = object.n3() if isinstance(object, Identifier) else "?o"
+        path_n3 = path.n3()
+        if isinstance(subject, Identifier) and isinstance(object, Identifier):
+            if bool(self.query(f"ASK {{ {s_term} {path_n3} {o_term} }}")):
+                yield (subject, path, object)
+            return
+        proj = " ".join(
+            var for var, bound in (("?s", s_bound), ("?o", o_bound)) if not bound
+        )
+        query = f"SELECT {proj} WHERE {{ {s_term} {path_n3} {o_term} }}"
+        for row in self.query(query):
+            rs = subject if isinstance(subject, Identifier) else row["s"]
+            ro = object if isinstance(object, Identifier) else row["o"]
+            assert isinstance(rs, Identifier) and isinstance(ro, Identifier)
+            yield (rs, path, ro)
 
     def __iter__(self) -> Iterator[_Triple]:
         """Iterate every triple as ``(subject, predicate, object)``."""
@@ -965,9 +1010,10 @@ class Graph:
     ) -> Result:
         """Run a SPARQL query; return a :class:`~.query.Result`.
 
-        ``initBindings`` are applied as a ``VALUES`` row injected into the WHERE
-        group (each value via its safe ``n3()`` form), matching RDFLib's
-        pre-binding semantics for variables that need not be projected.
+        ``initBindings`` are applied through the native ``substitutions`` kwarg —
+        the engine pre-binds each variable (keeping it projectable and propagating
+        into ``OPTIONAL``/``MINUS``/``EXISTS``/sub-queries), matching RDFLib's
+        ``initBindings`` semantics without an injected ``VALUES`` row.
         """
         if initNs:
             prefixes = "".join(
@@ -975,9 +1021,10 @@ class Graph:
                 for prefix, namespace in initNs.items()
             )
             query_object = prefixes + query_object
-        if initBindings:
-            query_object = _inject_bindings(query_object, initBindings)
-        res = self._store.query(query_object)
+        substitutions = (
+            _native_substitutions(initBindings) if initBindings else None
+        )
+        res = self._store.query(query_object, substitutions=substitutions)
         if isinstance(res, purrdf.QueryBoolean):
             return Result("ASK", ask=bool(res))
         if isinstance(res, purrdf.QueryTriples):
@@ -985,7 +1032,8 @@ class Graph:
             nt = res.serialize(_NT)
             if nt:
                 constructed._store.load(nt, format=_NT)
-            return Result("CONSTRUCT", graph=constructed)
+            form = "DESCRIBE" if _query_form(query_object) == "DESCRIBE" else "CONSTRUCT"
+            return Result(form, graph=constructed)
         variables = list(res.variables)
         var_names = tuple(v.value for v in variables)
         rows = [

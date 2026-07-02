@@ -209,7 +209,9 @@ register("sparql", Result, _SPARQL, "SPARQLResult")
 register("sparql", Processor, _SPARQL, "SPARQLProcessor")
 register("sparql", UpdateProcessor, _SPARQL, "SPARQLUpdateProcessor")
 
-# ── SPARQL result serializers / parsers (registry slots; codecs land in Task 6) ──
+# ── SPARQL result serializers / parsers (native codecs; #6) ──────────────────────
+# JSON/XML/CSV/TSV serializers and JSON/XML parsers route through the native
+# purrdf-sparql-results crate; CSV/TSV parsing and the txt table are deferred.
 _RESULTS = "purrdf.compat.rdflib.plugins.sparqlresults"
 for _name in ("json", "application/sparql-results+json"):
     register(_name, ResultSerializer, _RESULTS, "JSONResultSerializer")
@@ -221,6 +223,7 @@ for _name in ("csv", "text/csv"):
     register(_name, ResultSerializer, _RESULTS, "CSVResultSerializer")
     register(_name, ResultParser, _RESULTS, "CSVResultParser")
 for _name in ("tsv", "text/tab-separated-values"):
+    register(_name, ResultSerializer, _RESULTS, "TSVResultSerializer")
     register(_name, ResultParser, _RESULTS, "TSVResultParser")
 for _name in ("txt",):
     register(_name, ResultSerializer, _RESULTS, "TXTResultSerializer")

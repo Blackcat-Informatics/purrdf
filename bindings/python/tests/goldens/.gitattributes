@@ -1,0 +1,3 @@
+# Golden fixtures are byte-deterministic: preserve exact bytes (incl. CRLF in
+# SPARQL Results CSV per W3C) and skip all EOL/text normalization.
+* -text

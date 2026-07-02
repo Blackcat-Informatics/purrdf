@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import builtins
-from typing import IO, TypedDict, overload
+from typing import IO, Any, TypedDict, overload
 
 # ── Statement codec (bindings/python/src/rdf.rs) ────────────────────────────────
 
@@ -287,6 +287,24 @@ def xsd_value_compare(
     right_datatype: str,
 ) -> int | None: ...
 def xsd_canonical_lexical(lexical: str, datatype: str) -> str | None: ...
+
+# ── SPARQL Results serialization / parsing (bindings/python/src/py_store/results.rs) ──
+#
+# The four W3C SPARQL Results formats are keyed by the short id `"json"` / `"xml"`
+# / `"csv"` / `"tsv"`. Serialization is byte-deterministic; parsing supports
+# JSON and XML only (CSV/TSV have no native reader).
+
+#: A SELECT row: one cell per projected variable, `None` for an unbound binding.
+_ResultRow = list[_Term | None]
+
+def serialize_sparql_solutions(
+    format: str, variables: list[str], rows: list[_ResultRow]
+) -> bytes: ...
+def serialize_sparql_boolean(format: str, value: bool) -> bytes: ...
+
+# A parsed SELECT is `("SELECT", variables, rows)`; a parsed ASK is `("ASK", bool)`
+# — a heterogeneous tuple discriminated by its first element.
+def parse_sparql_results(format: str, data: bytes) -> tuple[Any, ...]: ...
 
 # ── RDF → GTS producer (bindings/python/src/py_gts.rs, #819 Task 8) ──────────────
 

@@ -1,0 +1,4 @@
+?s	?o
+<http://example.org/s1>	"alpha"
+<http://example.org/s2>	"42"^^<http://www.w3.org/2001/XMLSchema#integer>
+<http://example.org/s3>	"bonjour"@fr

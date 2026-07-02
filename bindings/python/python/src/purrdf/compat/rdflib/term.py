@@ -216,6 +216,43 @@ class URIRef(Identifier):
         """Return the native :class:`purrdf.NamedNode` counterpart."""
         return purrdf.NamedNode(str(self))
 
+    # ── SPARQL property-path operators (RDFLib ``rdflib.paths`` parity) ────────────
+    #
+    # These build the property-path algebra so ``p1 / p2``, ``p * OneOrMore``,
+    # ``p1 | p2``, ``~p``, and ``-p`` work on a ``URIRef`` exactly as in RDFLib.
+    # ``__mul__`` shadows ``str``'s repetition operator — matching RDFLib, which
+    # likewise repurposes it for cardinality paths.
+
+    def __truediv__(self, other: object) -> Any:
+        """``self / other`` — a sequence path."""
+        from .paths import SequencePath
+
+        return SequencePath(self, other)  # type: ignore[arg-type]
+
+    def __mul__(self, mod: object) -> Any:
+        """``self * mod`` — a cardinality path (``*``/``+``/``?``)."""
+        from .paths import MulPath
+
+        return MulPath(self, mod)  # type: ignore[arg-type]
+
+    def __or__(self, other: object) -> Any:
+        """``self | other`` — an alternative path."""
+        from .paths import AlternativePath
+
+        return AlternativePath(self, other)  # type: ignore[arg-type]
+
+    def __invert__(self) -> Any:
+        """``~self`` — an inverse path."""
+        from .paths import InvPath
+
+        return InvPath(self)
+
+    def __neg__(self) -> Any:
+        """``-self`` — a negated property set."""
+        from .paths import NegatedPath
+
+        return NegatedPath(self)
+
 
 class BNode(Identifier):
     """A blank-node term — RDFLib-shaped, backed by :class:`purrdf.BlankNode`."""
