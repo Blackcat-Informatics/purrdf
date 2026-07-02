@@ -365,10 +365,7 @@ fn validate_component(
         }
         // Non-ASCII: `b` is a UTF-8 lead byte at a char boundary (the ASCII bytes
         // before it are single-byte). Decode and apply the IRI Unicode test.
-        let c = s[i..]
-            .chars()
-            .next()
-            .expect("non-ASCII byte begins a char");
+        let c = s[i..].chars().next().expect("non-ASCII byte begins a char");
         if iri_extra_ok(c, allow_iprivate, mode) {
             i += c.len_utf8();
             continue;

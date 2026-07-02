@@ -668,10 +668,9 @@ mod tests {
         assert_eq!(escape_iri("a\u{01}b"), "a\\u0001b"); // C0
         assert_eq!(escape_iri("a\u{7F}b"), "a\\u007Fb"); // DEL
         assert_eq!(escape_iri("a\u{85}b"), "a\\u0085b"); // C1 (NEL)
-        // A clean non-ASCII char is not a control → passes through verbatim.
-        assert_eq!(escape_iri("a\u{E9}b"), "a\u{E9}b");
-        // Clean ASCII passes byte-for-byte; mixed clean+special stays anchored.
+        assert_eq!(escape_iri("a\u{E9}b"), "a\u{E9}b"); // clean non-ASCII: verbatim
         assert_eq!(
+            // A clean ASCII IRI passes byte-for-byte.
             escape_iri("http://example.org/path"),
             "http://example.org/path"
         );
