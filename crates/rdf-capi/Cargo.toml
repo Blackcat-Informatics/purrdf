@@ -33,7 +33,7 @@ path = "src/lib.rs"
 # The `python` feature stays OFF: this is a C-ABI, not a PyO3 extension.
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.
-purrdf-rs = { package = "purrdf", path = "../purrdf", version = "0.2.0" }
+purrdf-rs = { package = "purrdf", path = "../purrdf", version = "0.2.1" }
 # purrdf re-exports the core types, but the capi depends on the kernel
 # directly too so it can name MutableDataset/QuadValues/GraphMatchValue/DatasetMut
 # without leaning on re-export aliasing. Harmless to crate-check (acyclic).
@@ -62,4 +62,4 @@ description = "PurRDF purrdf semantic RDF-1.2 C-ABI"
 
 [package.metadata.capi.library]
 name = "purrdf"
-version = "0.2.0"
+version = "0.2.1"
