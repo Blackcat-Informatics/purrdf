@@ -1116,6 +1116,7 @@ dependencies = [
 name = "purrdf-iri"
 version = "0.2.1"
 dependencies = [
+ "criterion",
  "pretty_assertions",
  "proptest",
 ]
