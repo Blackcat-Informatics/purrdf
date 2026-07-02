@@ -55,8 +55,12 @@ pub(crate) fn eval_expr(
 ) -> Result<Option<SolutionTerm>, EvalError> {
     match expr {
         // ---- atoms ---------------------------------------------------------
-        Expression::NamedNode(n) => Ok(Some(intern(ctx, TermValue::Iri(n.as_str().to_owned())))),
-        Expression::Literal(l) => Ok(Some(intern(ctx, crate::convert::literal_to_value(l)))),
+        Expression::NamedNode(n) => Ok(Some(const_atom(ctx, expr, || {
+            TermValue::Iri(n.as_str().to_owned())
+        }))),
+        Expression::Literal(l) => Ok(Some(const_atom(ctx, expr, || {
+            crate::convert::literal_to_value(l)
+        }))),
         Expression::Variable(v) => Ok(lookup(v, row, schema)),
         Expression::Bound(v) => Ok(Some(bool_term(ctx, lookup(v, row, schema).is_some()))),
 
@@ -220,6 +224,32 @@ fn intern(ctx: &mut EvalCtx<'_>, value: TermValue) -> SolutionTerm {
     ctx.scratch.intern(ctx.dataset, value)
 }
 
+/// Intern a constant atom (`NamedNode`/`Literal`), memoized per query by the
+/// node's AST address (see [`EvalCtx::const_atom_cache`]). `build` — which owns
+/// the `TermValue` allocation — runs only on a cache miss, so a FILTER/BIND over
+/// N rows pays the `to_owned()` + intern probe once, not N times.
+fn const_atom(
+    ctx: &mut EvalCtx<'_>,
+    expr: &Expression,
+    build: impl FnOnce() -> TermValue,
+) -> SolutionTerm {
+    // Address-keyed memoization is unsound over a per-row substituted-EXISTS
+    // temporary (see `EvalCtx::in_substituted_exists`): the node's address can
+    // be a dropped-and-reused allocation from an earlier outer row, so a hit
+    // here would silently return a stale, wrong-row constant. Bypass the cache
+    // entirely for the duration of that window.
+    if ctx.in_substituted_exists {
+        return intern(ctx, build());
+    }
+    let key = std::ptr::from_ref::<Expression>(expr) as usize;
+    if let Some(term) = ctx.const_atom_cache.get(&key) {
+        return *term;
+    }
+    let term = intern(ctx, build());
+    ctx.const_atom_cache.insert(key, term);
+    term
+}
+
 /// Materialize a solution term to an owned value.
 fn value_of(ctx: &EvalCtx<'_>, term: SolutionTerm) -> TermValue {
     ctx.scratch.value_of(ctx.dataset, term)
@@ -291,7 +321,7 @@ fn ebv_of(
 }
 
 /// The effective boolean value of a concrete term (`None` = type error).
-fn ebv_term(ctx: &EvalCtx<'_>, term: SolutionTerm) -> Option<bool> {
+fn ebv_term(ctx: &mut EvalCtx<'_>, term: SolutionTerm) -> Option<bool> {
     match xsd_of_term(ctx, term) {
         Some(xv) => effective_boolean_value(&xv),
         None => None,
@@ -302,18 +332,31 @@ fn ebv_term(ctx: &EvalCtx<'_>, term: SolutionTerm) -> Option<bool> {
 /// [`TermRef`] for dataset terms, the scratch table for computed ones — so the
 /// per-row comparison hot path parses without materializing an owned
 /// [`TermValue`]. Semantically identical to `xsd_of(&value_of(ctx, term))`.
-fn xsd_of_term(ctx: &EvalCtx<'_>, term: SolutionTerm) -> Option<XsdValue> {
+///
+/// Dataset (`Existing`) parses are memoized per query by `TermId` (see
+/// [`EvalCtx::xsd_parse_cache`]): the lexical form and datatype are immutable for a
+/// fixed id, so a comparison/`FILTER` over N rows parses each distinct literal once
+/// instead of once per row. Computed scratch values are ephemeral and stay on the
+/// direct borrowed-view path.
+fn xsd_of_term(ctx: &mut EvalCtx<'_>, term: SolutionTerm) -> Option<XsdValue> {
     match term {
-        SolutionTerm::Existing(id) => match ctx.dataset.resolve(id) {
-            TermRef::Literal {
-                lexical, datatype, ..
-            } => match ctx.dataset.resolve(datatype) {
-                TermRef::Iri(iri) => parse_by_iri(lexical, iri).ok().flatten(),
-                // A literal's datatype is always an interned IRI (C0.1).
-                other => unreachable!("literal datatype must be an IRI, got {other:?}"),
-            },
-            _ => None,
-        },
+        SolutionTerm::Existing(id) => {
+            if let Some(cached) = ctx.xsd_parse_cache.get(&id) {
+                return cached.clone();
+            }
+            let parsed = match ctx.dataset.resolve(id) {
+                TermRef::Literal {
+                    lexical, datatype, ..
+                } => match ctx.dataset.resolve(datatype) {
+                    TermRef::Iri(iri) => parse_by_iri(lexical, iri).ok().flatten(),
+                    // A literal's datatype is always an interned IRI (C0.1).
+                    other => unreachable!("literal datatype must be an IRI, got {other:?}"),
+                },
+                _ => None,
+            };
+            ctx.xsd_parse_cache.insert(id, parsed.clone());
+            parsed
+        }
         SolutionTerm::Computed(sid) => xsd_of(ctx.scratch.computed_value(sid)),
     }
 }
@@ -353,8 +396,12 @@ fn compare(
     }
     // Value-space comparison over borrowed term views (no owned TermValue
     // clones). Distinct non-value terms (IRIs/blanks) or incomparable value
-    // spaces are a type error (`None`), exactly as before.
-    let ord = match (xsd_of_term(ctx, ta), xsd_of_term(ctx, tb)) {
+    // spaces are a type error (`None`), exactly as before. Each side is parsed
+    // through the per-query id→XSD memo; the two calls are sequenced (not a tuple
+    // literal) because each takes `&mut ctx`.
+    let ax = xsd_of_term(ctx, ta);
+    let bx = xsd_of_term(ctx, tb);
+    let ord = match (ax, bx) {
         (Some(ax), Some(bx)) => value_cmp(&ax, &bx),
         _ => None,
     };
@@ -392,7 +439,9 @@ fn equal(
     // value-space comparison and the literal/non-literal split remain — evaluated
     // here on borrowed views (no owned TermValue clones), semantically identical
     // to `rdf_equal(&value_of(ctx, ta), &value_of(ctx, tb))`.
-    let eq = match (xsd_of_term(ctx, ta), xsd_of_term(ctx, tb)) {
+    let ax = xsd_of_term(ctx, ta);
+    let bx = xsd_of_term(ctx, tb);
+    let eq = match (ax, bx) {
         (Some(ax), Some(bx)) => value_cmp(&ax, &bx).map(|o| o == Ordering::Equal),
         _ => {
             if term_is_literal(ctx, ta) && term_is_literal(ctx, tb) {
@@ -652,16 +701,26 @@ fn exists(
         })
         .collect();
 
-    let pattern_key = std::ptr::from_ref::<GraphPattern>(pattern) as usize;
-    let inner_expr_vars = ctx
-        .exists_expr_vars_cache
-        .entry(pattern_key)
-        .or_insert_with(|| {
-            let mut vars = DetHashSet::default();
-            pattern_expr_vars(pattern, &mut vars);
-            Rc::new(vars)
-        })
-        .clone();
+    // `pattern`'s address is a sound cache key only for the static query algebra.
+    // While evaluating a per-row substituted-EXISTS temporary
+    // (`ctx.in_substituted_exists`), `pattern` is itself such a temporary — its
+    // address can be a dropped-and-reused allocation from an earlier outer row —
+    // so skip both the cache read and the write and compute the var set fresh.
+    let inner_expr_vars = if ctx.in_substituted_exists {
+        let mut vars = DetHashSet::default();
+        pattern_expr_vars(pattern, &mut vars);
+        Rc::new(vars)
+    } else {
+        let pattern_key = std::ptr::from_ref::<GraphPattern>(pattern) as usize;
+        ctx.exists_expr_vars_cache
+            .entry(pattern_key)
+            .or_insert_with(|| {
+                let mut vars = DetHashSet::default();
+                pattern_expr_vars(pattern, &mut vars);
+                Rc::new(vars)
+            })
+            .clone()
+    };
 
     let is_expression_correlated = inner_expr_vars.iter().any(|v| outer_bound.contains(v));
 
@@ -679,7 +738,18 @@ fn exists(
         // pattern whose result is specific to this outer row; it is NOT memoized.
         let bindings = outer_bindings_for_substitution(row, schema, ctx);
         let substituted = substitute_pattern(pattern, &bindings);
-        let inner = eval(&substituted, ctx)?;
+        // `substituted` is a fresh heap allocation, specific to this outer row,
+        // that is dropped at the end of this call — its node addresses do NOT
+        // outlive the query. Flag the window so address-keyed memoization
+        // (`const_atom`, `exists_expr_vars_cache`, `exists_inner_cache`) is
+        // bypassed while it is evaluated, and restore the prior value afterward
+        // (even on error) so a doubly-nested correlated EXISTS is handled
+        // correctly.
+        let prev_in_substituted_exists = ctx.in_substituted_exists;
+        ctx.in_substituted_exists = true;
+        let inner = eval(&substituted, ctx);
+        ctx.in_substituted_exists = prev_in_substituted_exists;
+        let inner = inner?;
         Ok(!inner.is_empty())
     } else {
         // Fast memoized path: the inner pattern result is independent of the outer
@@ -688,12 +758,17 @@ fn exists(
         // schema), then existence-probe each outer row against the reused index. This
         // replaces the former per-row seed-join, whose `join_seqs` rebuilt the inner
         // hash index on every outer row (O(rows × |inner|)).
+        // As above: `pattern`'s address is a sound cache key only for the static
+        // query algebra. A doubly-nested EXISTS reached while
+        // `ctx.in_substituted_exists` is already set means `pattern` is itself
+        // part of an outer per-row substituted temporary, so skip both the cache
+        // get and the insert and build the entry fresh, unshared.
         let key = (
             std::ptr::from_ref::<GraphPattern>(pattern) as usize,
             ctx.graph_key(),
             crate::eval::schema_fingerprint(schema),
         );
-        let cached = if ctx.options.exists_memo {
+        let cached = if ctx.options.exists_memo && !ctx.in_substituted_exists {
             ctx.exists_inner_cache.get(&key).cloned()
         } else {
             None
@@ -714,7 +789,7 @@ fn exists(
                     keyed,
                     wild,
                 });
-                if ctx.options.exists_memo {
+                if ctx.options.exists_memo && !ctx.in_substituted_exists {
                     ctx.exists_inner_cache.insert(key, entry.clone());
                 }
                 entry
@@ -3187,6 +3262,75 @@ mod tests {
             ctx.exists_inner_cache.len(),
             1,
             "uncorrelated EXISTS must still populate the memo cache"
+        );
+    }
+
+    // ── Correlated EXISTS over many outer rows: address-reuse cache hazard ─────
+    //
+    // Regression guard for the `ctx.in_substituted_exists` cache bypass: the
+    // per-row `substitute_pattern` temporary built inside the expression-
+    // correlated branch of `exists()` is a fresh heap allocation that is
+    // dropped at the end of each outer row's evaluation. Across many rows the
+    // allocator can (and in practice does) hand back the *same address* for
+    // the next row's temporary. Before the fix, `const_atom_cache`,
+    // `exists_expr_vars_cache`, and `exists_inner_cache` were keyed on that
+    // address, so a later row could get a stale cache hit computed against an
+    // earlier row's substituted constant — corrupting the solution set. This
+    // test drives five outer rows (more than enough for address reuse to
+    // occur) with an alternating true/false correlated-FILTER-EXISTS result,
+    // so any stale hit flips at least one row to the wrong answer.
+
+    /// Five outer subjects `?s`, each with a single `:knows` edge (so each
+    /// contributes exactly one outer row). Only the odd-numbered subjects
+    /// (`s1`, `s3`, `s5`) additionally have a `:p` triple.
+    fn correlated_multi_row_ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri("http://example.org/knows");
+        let p = b.intern_iri("http://example.org/p");
+        let x = b.intern_iri("http://example.org/x");
+        for i in 1..=5 {
+            let s = b.intern_iri(&format!("http://example.org/s{i}"));
+            let o = b.intern_iri(&format!("http://example.org/o{i}"));
+            b.push_quad(s, knows, o, None);
+            if i % 2 == 1 {
+                // Odd subjects (s1, s3, s5) have :p; even ones (s2, s4) do not.
+                b.push_quad(s, p, x, None);
+            }
+        }
+        b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn correlated_exists_substitution_ignores_address_keyed_caches() {
+        // Each outer row substitutes a DIFFERENT constant for ?s into the inner
+        // FILTER(?s = ?x); the expected result alternates true/false/true/false/true
+        // across s1..s5. A stale address-keyed cache hit (the bug this guards)
+        // would carry an earlier row's substituted result into a later row and
+        // flip at least one entry — so the exact set below only holds because
+        // `ctx.in_substituted_exists` forces every row's substitution to be
+        // evaluated fresh.
+        let ds = correlated_multi_row_ds();
+        let q = "SELECT ?s WHERE { \
+                   ?s <http://example.org/knows> ?o \
+                   FILTER EXISTS { ?x <http://example.org/p> ?y FILTER(?s = ?x) } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            vec![
+                vec!["<http://example.org/s1>".to_owned()],
+                vec!["<http://example.org/s3>".to_owned()],
+                vec!["<http://example.org/s5>".to_owned()],
+            ],
+            "correlated EXISTS across many outer rows must return exactly the \
+             odd-numbered subjects (s1, s3, s5), each judged against its OWN \
+             substituted constant"
+        );
+        // Cross-check against the memo-off (naive per-row) reference path too.
+        assert_eq!(
+            rows,
+            run_rows(&ds, q, false),
+            "memo on/off must agree for the multi-row correlated EXISTS"
         );
     }
 

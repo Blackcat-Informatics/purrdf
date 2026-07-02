@@ -31,7 +31,7 @@
 //! **projected away**, so two independent BGPs that happen to reuse the label `_:b`
 //! never accidentally share a join variable.
 
-use purrdf_core::{DatasetView, GraphMatch, QuadIds, RdfDataset, TermId, TermRef};
+use purrdf_core::{DatasetView, GraphMatch, QuadIds, QuadProbePlan, RdfDataset, TermId, TermRef};
 use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern, Variable};
 
 use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
@@ -137,6 +137,11 @@ pub(crate) fn eval_bgp(
     for &i in order.iter() {
         let cp = &compiled[i];
         let mut next = Vec::new();
+        // The probe's bound-axis shape is fixed across this slot's rows (a variable is
+        // bound by an earlier pattern for every row or for none), so the permutation
+        // choice is loop-invariant: compute the `QuadProbePlan` once (on the first
+        // single-graph probe) and reuse it, instead of re-selecting per row.
+        let mut probe_plan: Option<QuadProbePlan> = None;
         for row in &rows {
             let s = query_id(&cp.s, row);
             let p = query_id(&cp.p, row);
@@ -145,7 +150,10 @@ pub(crate) fn eval_bgp(
                 // Single-graph scope (store default / a named graph): the indexed
                 // partition_point read, unchanged — no de-dup overhead.
                 GraphScope::One(gm) => {
-                    for quad in ctx.dataset.quads_for_pattern(s, p, o, *gm) {
+                    let plan = *probe_plan.get_or_insert_with(|| {
+                        RdfDataset::probe_plan(s.is_some(), p.is_some(), o.is_some(), *gm)
+                    });
+                    for quad in ctx.dataset.quads_for_pattern_with_plan(&plan, s, p, o, *gm) {
                         if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
                             next.push(extended);
                         }

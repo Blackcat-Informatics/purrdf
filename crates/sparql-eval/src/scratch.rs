@@ -64,6 +64,35 @@ pub enum SolutionTerm {
     Computed(ScratchId),
 }
 
+impl SolutionTerm {
+    /// A total, collision-free `u64` encoding used as a single-column hash-join key,
+    /// so a one-variable join key is a `Copy` `u64` with **no per-row `Vec`
+    /// allocation**.
+    ///
+    /// `Existing` ids map into `[0, 2^32)` and `Computed` ids into `[2^32, 2^33)`, so
+    /// two terms encode to the same `u64` **iff** they are equal — the same invariant
+    /// the `Existing`/`Computed` unification rule already guarantees for join
+    /// correctness (a value present in the dataset is never also a `Computed` id).
+    /// A collision here would be a *wrong join result*, not a slowdown, so the width
+    /// assumption (both ids fit `u32` — `TermId` is a `NonZeroU32`, `ScratchId` a
+    /// `u32`) is asserted in debug builds.
+    #[inline]
+    pub(crate) fn join_key_u64(self) -> u64 {
+        match self {
+            Self::Existing(id) => {
+                let ix = id.index() as u64;
+                debug_assert!(ix < (1 << 32), "TermId index must fit u32");
+                ix
+            }
+            Self::Computed(sid) => {
+                let s = sid.index() as u64;
+                debug_assert!(s < (1 << 32), "ScratchId must fit u32");
+                (1 << 32) | s
+            }
+        }
+    }
+}
+
 /// A per-query interner for terms computed during evaluation.
 ///
 /// Interns by [`TermValue`] (dataset-independent), de-duplicating equal computed

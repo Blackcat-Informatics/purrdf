@@ -266,7 +266,7 @@ fn compare_prefix(
 
 /// One of the six quad orderings. SPOG is the identity (the freeze-sorted table); the
 /// other five are materialized lazily as ordinal arrays.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum QuadPermutation {
     Spog,
     Pos,
@@ -301,6 +301,22 @@ impl QuadPermutation {
             Self::Gosp => AxisOrder::new([G, O, S, P]),
         }
     }
+}
+
+/// A loop-invariant probe plan: the permutation and prefix length chosen purely from
+/// *which* axes a pattern binds (not their bound values) plus the graph constraint.
+///
+/// The permutation choice in [`RdfDataset::pattern_candidate_run`] depends only on the
+/// bound-axis shape, which is constant across the rows of one index-nested-loop join
+/// slot (a variable bound by an earlier BGP pattern is bound for every row; an unbound
+/// one for none). So the join computes this **once** per slot via
+/// [`RdfDataset::probe_plan`] and reuses it for every probe row through
+/// [`RdfDataset::quads_for_pattern_with_plan`], instead of re-scanning all six
+/// permutations on each row. Opaque by design — callers only pass it back.
+#[derive(Clone, Copy, Debug)]
+pub struct QuadProbePlan {
+    perm: QuadPermutation,
+    prefix: usize,
 }
 
 /// The candidate-quad source for an indexed pattern query. Unifies the two access
@@ -670,49 +686,80 @@ impl RdfDataset {
         o: Option<TermId>,
         g: GraphMatch,
     ) -> (QuadPermutation, usize, usize) {
-        // The bound key for an axis, or `None` if the pattern leaves it free.
-        let bound = |axis: Axis| -> Option<u32> {
-            match axis {
-                Axis::S => s.map(|id| id.index() as u32),
-                Axis::P => p.map(|id| id.index() as u32),
-                Axis::O => o.map(|id| id.index() as u32),
-                Axis::G => match g {
-                    GraphMatch::Any => None,
-                    GraphMatch::Default => Some(0),
-                    GraphMatch::Named(id) => Some(id.index() as u32 + 1),
-                },
-            }
-        };
+        let plan = Self::probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+        self.candidate_run(&plan, s, p, o, g)
+    }
 
-        // Choose the permutation with the longest leading run of bound axes. SPOG is
-        // first in `ALL`, so it wins ties (it needs no array). The chosen `target`
-        // holds the bound key for each of the `prefix` leading axes.
+    /// Select the [`QuadProbePlan`] — permutation + prefix length — for a pattern's
+    /// bound-axis shape (which of s/p/o are bound, plus the graph constraint). This is
+    /// the **value-independent** half of [`Self::pattern_candidate_run`]: it reads only
+    /// the boundness of each axis, so an index-nested-loop join whose probe slot has a
+    /// fixed shape across rows computes it once and reuses it (see [`QuadProbePlan`]).
+    ///
+    /// Choose the permutation whose sort prefix covers the most leading bound axes;
+    /// SPOG is first in `ALL` so it wins ties (it needs no ordinal array).
+    #[must_use]
+    pub fn probe_plan(s_bound: bool, p_bound: bool, o_bound: bool, g: GraphMatch) -> QuadProbePlan {
+        let g_bound = !matches!(g, GraphMatch::Any);
+        let axis_bound = |axis: Axis| match axis {
+            Axis::S => s_bound,
+            Axis::P => p_bound,
+            Axis::O => o_bound,
+            Axis::G => g_bound,
+        };
         let mut best = QuadPermutation::Spog;
         let mut prefix = 0usize;
-        let mut target: QuadAxisKeys = [0; QUAD_ARITY];
         for perm in QuadPermutation::ALL {
             let axes = perm.axes();
             let mut k = 0;
-            let mut t: QuadAxisKeys = [0; QUAD_ARITY];
-            while k < QUAD_ARITY {
-                match bound(axes.axes[k]) {
-                    Some(v) => {
-                        t[k] = v;
-                        k += 1;
-                    }
-                    None => break,
-                }
+            while k < QUAD_ARITY && axis_bound(axes.axes[k]) {
+                k += 1;
             }
             if k > prefix {
                 prefix = k;
                 best = perm;
-                target = t;
             }
         }
+        QuadProbePlan { perm: best, prefix }
+    }
 
-        let axes = best.axes();
+    /// The contiguous `[lo, hi)` candidate run for this row's `(s, p, o, g)` values under
+    /// a precomputed [`QuadProbePlan`] — the **value-dependent** half of
+    /// [`Self::pattern_candidate_run`]. Builds the `target` key for the plan's `prefix`
+    /// leading (therefore bound) axes from the row's values, then binary-searches the
+    /// run. For SPOG the bounds index the freeze-sorted `quads` table directly;
+    /// otherwise the permutation's ordinal array.
+    fn candidate_run(
+        &self,
+        plan: &QuadProbePlan,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> (QuadPermutation, usize, usize) {
+        let axes = plan.perm.axes();
+        // The bound key for one of the `prefix` leading axes — each is bound by
+        // construction of the plan, so the `expect`/`unreachable` cannot fire.
+        let key_of = |axis: Axis| -> u32 {
+            match axis {
+                Axis::S => s.expect("plan prefix axis S is bound").index() as u32,
+                Axis::P => p.expect("plan prefix axis P is bound").index() as u32,
+                Axis::O => o.expect("plan prefix axis O is bound").index() as u32,
+                Axis::G => match g {
+                    GraphMatch::Default => 0,
+                    GraphMatch::Named(id) => id.index() as u32 + 1,
+                    GraphMatch::Any => unreachable!("plan prefix axis G is bound"),
+                },
+            }
+        };
+        let prefix = plan.prefix;
+        let mut target: QuadAxisKeys = [0; QUAD_ARITY];
+        for (slot, &axis) in target.iter_mut().zip(axes.axes.iter()).take(prefix) {
+            *slot = key_of(axis);
+        }
+
         // Binary-search the contiguous run whose `prefix` leading keys equal `target`.
-        match best {
+        match plan.perm {
             QuadPermutation::Spog => {
                 let lo = self
                     .quads
@@ -720,17 +767,17 @@ impl RdfDataset {
                 let hi = self
                     .quads
                     .partition_point(|q| compare_prefix(axes, q, &target, prefix).is_le());
-                (best, lo, hi)
+                (plan.perm, lo, hi)
             }
             _ => {
-                let arr = self.permutation(best);
+                let arr = self.permutation(plan.perm);
                 let lo = arr.partition_point(|&ord| {
                     compare_prefix(axes, &self.quads[ord as usize], &target, prefix).is_lt()
                 });
                 let hi = arr.partition_point(|&ord| {
                     compare_prefix(axes, &self.quads[ord as usize], &target, prefix).is_le()
                 });
-                (best, lo, hi)
+                (plan.perm, lo, hi)
             }
         }
     }
@@ -774,7 +821,25 @@ impl RdfDataset {
         o: Option<TermId>,
         g: GraphMatch,
     ) -> impl Iterator<Item = QuadIds> + '_ {
-        let (best, lo, hi) = self.pattern_candidate_run(s, p, o, g);
+        let plan = Self::probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+        self.quads_for_pattern_with_plan(&plan, s, p, o, g)
+    }
+
+    /// Like [`Self::quads_for_pattern_indexed`], but with a caller-precomputed
+    /// [`QuadProbePlan`] (see [`Self::probe_plan`]) so the per-call permutation
+    /// selection — loop-invariant across an index-nested-loop join slot — is skipped.
+    /// Behaviour is otherwise identical: the same selectivity guard and the same
+    /// residual `(s, p, o, g)` id-equality + [`GraphMatch`] filter, so the yielded
+    /// quads and their order are unchanged.
+    pub fn quads_for_pattern_with_plan(
+        &self,
+        plan: &QuadProbePlan,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        let (best, lo, hi) = self.candidate_run(plan, s, p, o, g);
         let candidates = match best {
             // For SPOG the run is a sub-slice of the freeze-sorted table (sequential).
             QuadPermutation::Spog => QuadCandidates::Slice(self.quads[lo..hi].iter()),

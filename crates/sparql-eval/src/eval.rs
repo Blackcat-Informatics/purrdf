@@ -100,7 +100,7 @@ pub(crate) struct ExistsInner {
     /// `(outer_ordinal, inner_ordinal)` pairs (the probe's join key).
     pub shared: Vec<(usize, usize)>,
     /// Inner rows fully bound on the shared columns, grouped by their key.
-    pub keyed: DetHashMap<Vec<SolutionTerm>, Vec<usize>>,
+    pub keyed: DetHashMap<crate::binop::JoinKey, Vec<usize>>,
     /// Inner rows with an unbound shared column (compatible with any probe value).
     pub wild: Vec<usize>,
 }
@@ -194,6 +194,34 @@ pub struct EvalCtx<'d> {
     /// the scratch interner dedups by value — so the cached term is bit-identical
     /// to what a fresh intern would return.
     pub(crate) cached_bool_terms: [Option<SolutionTerm>; 2],
+    /// Per-query memo of interned constant expression atoms (`NamedNode` /
+    /// `Literal`), keyed by the atom node's immutable AST address. A constant atom
+    /// inside a `FILTER`/`BIND` is otherwise re-`to_owned()`'d into an owned
+    /// `TermValue` and re-interned (a dataset reverse-index probe) once per row;
+    /// this collapses that to a single intern per distinct atom node. Like
+    /// [`Self::cached_bool_terms`], interning is deterministic for the pinned
+    /// `(dataset, scratch)` pair, so a cached hit is the same `SolutionTerm` a
+    /// fresh intern would produce. Naturally per-query — **but only for the
+    /// static query algebra**: the address is a sound cache key precisely because
+    /// those nodes are allocated once and outlive the whole `query()` call.
+    /// Per-outer-row correlated-`EXISTS` substitution (`expr::exists`) is the
+    /// exception: it heap-allocates a fresh substituted pattern tree per row and
+    /// drops it at the end of that row, so a later row's differently-substituted
+    /// node can be allocated at the SAME address (an ABA hazard) and would
+    /// otherwise return a stale, wrong-row value from this cache.
+    /// [`Self::in_substituted_exists`] flags exactly that window so `const_atom`
+    /// bypasses this cache while it is set.
+    pub(crate) const_atom_cache: DetHashMap<usize, SolutionTerm>,
+    /// Per-query memo of the parsed XSD value of a dataset literal, keyed by its
+    /// `TermId`. `FILTER`/comparison hot paths (`compare`/`equal`/`ebv_term`) parse
+    /// the same `Existing(TermId)` literal's lexical form via `parse_by_iri` on
+    /// every row; a 30k-row `?age > 40` re-parses ~60 distinct ages 30k times. The
+    /// lexical form and datatype are immutable for a fixed id, so the parse is a
+    /// pure function of the id — memoizing it (including the `None` "not an XSD
+    /// value" outcome) collapses per-row re-parsing to one parse per distinct id.
+    /// Naturally per-query. Only dataset (`Existing`) ids are cached; computed
+    /// scratch values are ephemeral and stay on the borrowed-view path.
+    pub(crate) xsd_parse_cache: DetHashMap<purrdf_core::TermId, Option<purrdf_xsd::XsdValue>>,
     /// The `SERVICE` federation source, if one is injected. `None` in
     /// the default engine path: a non-silent `SERVICE` then hard-fails. Tests and
     /// the conformance harness inject an in-memory source via [`EvalCtx::with_remote`].
@@ -215,6 +243,16 @@ pub struct EvalCtx<'d> {
     /// output, and the native `query` egress into `SparqlResult::Solutions::aux`. Empty
     /// whenever no constructing builtin ran.
     pub(crate) constructed: Vec<(TermValue, TermValue, TermValue)>,
+    /// `true` while evaluating a per-outer-row correlated-`EXISTS` substituted
+    /// temporary pattern (see `expr::exists`'s correlated branch). That
+    /// temporary's `Expression`/`GraphPattern` nodes are heap-allocated fresh for
+    /// the current outer row and dropped at the end of it — they do NOT outlive
+    /// this context's `query()` call — so address-keyed memoization
+    /// ([`Self::const_atom_cache`], [`Self::exists_expr_vars_cache`],
+    /// [`Self::exists_inner_cache`]) is unsound over them (a later row's
+    /// allocation can reuse a dropped node's address) and must be bypassed
+    /// entirely while this flag is set.
+    pub(crate) in_substituted_exists: bool,
 }
 
 impl core::fmt::Debug for EvalCtx<'_> {
@@ -253,9 +291,12 @@ impl<'d> EvalCtx<'d> {
             exists_expr_vars_cache: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
             cached_bool_terms: [None, None],
+            const_atom_cache: DetHashMap::default(),
+            xsd_parse_cache: DetHashMap::default(),
             remote: None,
             bgp_order_cache: None,
             constructed: Vec::new(),
+            in_substituted_exists: false,
         }
     }
 

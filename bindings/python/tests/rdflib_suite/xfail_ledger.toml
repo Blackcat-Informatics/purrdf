@@ -57,7 +57,6 @@
 # --- Theme: SPARQL aggregate / filter evaluation semantics ---
 "test_agg_distinct.py::test_count_distinct" = "COUNT(DISTINCT ?x) grouped aggregation yields an empty Result under the native engine instead of the two expected grouped counts"
 "test_nested_filters.py::test_nested_filter_outer_binding_propagation" = "FILTER bindings from an outer group are not propagated into a nested group as rdflib does, so the computed solution set diverges from the expected set"
-"test_nested_filters.py::test_nested_filter_outermost_binding_propagation" = "outermost-group FILTER bindings are not propagated into nested groups as rdflib does, so the computed solution set diverges from the expected set"
 "test_conjunctive_graph.py::test_graph_ids[check-kws1]" = "ConjunctiveGraph.parse forwards a StringInputSource down a filesystem path in this keyword combination, raising FileNotFoundError instead of parsing the in-memory source"
 
 # --- Theme: ConjunctiveGraph legacy semantics ---

@@ -24,7 +24,23 @@ use crate::error::EvalError;
 use crate::eval::{eval, EvalCtx};
 use crate::scratch::SolutionTerm;
 use crate::solution::{compatible, Solution, SolutionSeq, VarSchema};
-use crate::DetHashMap;
+use crate::{DetHashMap, DetHasher};
+
+/// A hash-join key over the shared columns of two solutions.
+///
+/// The overwhelmingly common case is a **single** shared variable (a star join on
+/// `?p`), so that case is specialized to a `Copy` `u64` ([`SolutionTerm::join_key_u64`])
+/// — no per-row heap allocation on either the build or probe side. Joins on zero or
+/// ≥2 shared columns keep the general owned-vector key. Within one join the shared
+/// column count is fixed, so every key is the same variant and the two never compare
+/// across variants.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) enum JoinKey {
+    /// Exactly one shared column: the term encoded as a collision-free `u64`.
+    Single(u64),
+    /// Zero or ≥2 shared columns: the bound terms in shared-column order.
+    Multi(Vec<SolutionTerm>),
+}
 
 /// Evaluate `left . right` (algebra `Join`) as a hash join on shared variables.
 pub(crate) fn eval_join(
@@ -94,8 +110,11 @@ fn right_to_out_map(right: &VarSchema, out: &VarSchema) -> Vec<usize> {
 pub(crate) fn build_index(
     r: &SolutionSeq,
     shared: &[(usize, usize)],
-) -> (DetHashMap<Vec<SolutionTerm>, Vec<usize>>, Vec<usize>) {
-    let mut keyed: DetHashMap<Vec<SolutionTerm>, Vec<usize>> = DetHashMap::default();
+) -> (DetHashMap<JoinKey, Vec<usize>>, Vec<usize>) {
+    // Pre-size to the build-row count: the exact upper bound on distinct keys, so a
+    // large build side is filled without incremental rehash-and-reallocate churn.
+    let mut keyed: DetHashMap<JoinKey, Vec<usize>> =
+        DetHashMap::with_capacity_and_hasher(r.rows.len(), DetHasher::default());
     let mut wild: Vec<usize> = Vec::new();
     for (idx, rrow) in r.rows.iter().enumerate() {
         match bound_key(rrow, shared, KeySide::Right) {
@@ -121,7 +140,7 @@ pub(crate) fn build_index(
 pub(crate) fn probe_has_match(
     probe: &[Option<SolutionTerm>],
     shared: &[(usize, usize)],
-    keyed: &DetHashMap<Vec<SolutionTerm>, Vec<usize>>,
+    keyed: &DetHashMap<JoinKey, Vec<usize>>,
     wild: &[usize],
     r_rows: &[Solution],
 ) -> bool {
@@ -197,21 +216,27 @@ enum KeySide {
 /// The shared-column key of `row`, or `None` if any shared column is unbound.
 ///
 /// Both sides build the key in the same `shared` order, so a left key equals a
-/// right key iff the two rows agree on every (bound) shared column.
+/// right key iff the two rows agree on every (bound) shared column. A single shared
+/// column — the common star-join shape — produces an allocation-free
+/// [`JoinKey::Single`]; zero or ≥2 columns fall back to an owned [`JoinKey::Multi`].
 fn bound_key(
     row: &[Option<SolutionTerm>],
     shared: &[(usize, usize)],
     side: KeySide,
-) -> Option<Vec<SolutionTerm>> {
+) -> Option<JoinKey> {
+    let col_of = |ia: usize, ib: usize| match side {
+        KeySide::Left => ia,
+        KeySide::Right => ib,
+    };
+    if let [(ia, ib)] = *shared {
+        // Single shared column: no heap allocation for the key.
+        return Some(JoinKey::Single(row[col_of(ia, ib)]?.join_key_u64()));
+    }
     let mut key = Vec::with_capacity(shared.len());
     for &(ia, ib) in shared {
-        let col = match side {
-            KeySide::Left => ia,
-            KeySide::Right => ib,
-        };
-        key.push(row[col]?);
+        key.push(row[col_of(ia, ib)]?);
     }
-    Some(key)
+    Some(JoinKey::Multi(key))
 }
 
 /// Merge a compatible `(left_row, right_row)` pair into one solution over the output
