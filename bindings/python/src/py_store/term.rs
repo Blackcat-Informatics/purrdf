@@ -23,7 +23,7 @@ use std::hash::{Hash, Hasher};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::{RdfLiteral, RdfQuad, RdfTerm, RdfTriple};
+use crate::{RdfLiteral, RdfQuad, RdfTerm, RdfTextDirection, RdfTriple};
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
@@ -44,6 +44,20 @@ fn literal_datatype_iri(lit: &RdfLiteral) -> &str {
         (Some(dt), _) => dt.as_str(),
         (None, Some(_)) => RDF_LANG_STRING,
         (None, None) => XSD_STRING,
+    }
+}
+
+/// Parse the optional RDF 1.2 base-direction argument (`"ltr"`/`"rtl"`) into the
+/// native [`RdfTextDirection`]. A `None` argument yields `None`; any other string is
+/// rejected, mirroring the closed direction vocabulary of RDF 1.2.
+fn parse_direction(direction: Option<&str>) -> PyResult<Option<RdfTextDirection>> {
+    match direction {
+        None => Ok(None),
+        Some("ltr") => Ok(Some(RdfTextDirection::Ltr)),
+        Some("rtl") => Ok(Some(RdfTextDirection::Rtl)),
+        Some(other) => Err(PyValueError::new_err(format!(
+            "invalid base direction `{other}`: expected \"ltr\" or \"rtl\""
+        ))),
     }
 }
 
@@ -145,12 +159,14 @@ pub struct PyLiteral {
 #[pymethods]
 impl PyLiteral {
     #[new]
-    #[pyo3(signature = (value, *, datatype=None, language=None))]
+    #[pyo3(signature = (value, *, datatype=None, language=None, direction=None))]
     fn new(
         value: String,
         datatype: Option<&PyNamedNode>,
         language: Option<String>,
+        direction: Option<&str>,
     ) -> PyResult<Self> {
+        let direction = parse_direction(direction)?;
         let inner = if let Some(language) = language {
             if datatype.is_some() {
                 return Err(PyValueError::new_err(
@@ -166,23 +182,32 @@ impl PyLiteral {
                 lexical_form: value,
                 datatype: None,
                 language: Some(language),
-                direction: None,
-            }
-        } else if let Some(datatype) = datatype {
-            RdfLiteral {
-                lexical_form: value,
-                datatype: Some(datatype.inner.clone()),
-                language: None,
-                direction: None,
+                direction,
             }
         } else {
-            // A plain literal: datatype-less in the native model, surfaced as
-            // `xsd:string` by the `datatype` getter (oxigraph Python parity).
-            RdfLiteral {
-                lexical_form: value,
-                datatype: None,
-                language: None,
-                direction: None,
+            // RDF 1.2: base direction is only meaningful on a language-tagged
+            // literal (a `dirLangString`). Reject a bare/typed literal carrying one.
+            if direction.is_some() {
+                return Err(PyValueError::new_err(
+                    "a base direction requires a language tag (RDF 1.2 dirLangString)",
+                ));
+            }
+            if let Some(datatype) = datatype {
+                RdfLiteral {
+                    lexical_form: value,
+                    datatype: Some(datatype.inner.clone()),
+                    language: None,
+                    direction: None,
+                }
+            } else {
+                // A plain literal: datatype-less in the native model, surfaced as
+                // `xsd:string` by the `datatype` getter (oxigraph Python parity).
+                RdfLiteral {
+                    lexical_form: value,
+                    datatype: None,
+                    language: None,
+                    direction: None,
+                }
             }
         };
         Ok(Self { inner })
@@ -198,6 +223,12 @@ impl PyLiteral {
     #[getter]
     fn language(&self) -> Option<&str> {
         self.inner.language.as_deref()
+    }
+
+    /// The RDF 1.2 base direction (`"ltr"`/`"rtl"`), or `None` when absent.
+    #[getter]
+    fn direction(&self) -> Option<&'static str> {
+        self.inner.direction.map(RdfTextDirection::as_str)
     }
 
     /// The datatype IRI (always present — `xsd:string` for a plain literal,
@@ -690,6 +721,26 @@ mod tests {
         };
         assert_eq!(typed.datatype().inner, int_dt);
         assert!(!typed.__eq__(&plain));
+    }
+
+    #[test]
+    fn direction_parses_and_round_trips_on_lang_literal() {
+        // RDF 1.2 base direction: a `dirLangString` carries a language tag AND a
+        // direction; the getter surfaces the closed `ltr`/`rtl` vocabulary.
+        let lit = PyLiteral::new("مرحبا".to_owned(), None, Some("ar".to_owned()), Some("rtl"))
+            .expect("dirLangString constructs");
+        assert_eq!(lit.language(), Some("ar"));
+        assert_eq!(lit.direction(), Some("rtl"));
+
+        // A direction without a language tag is rejected (not a dirLangString).
+        assert!(PyLiteral::new("x".to_owned(), None, None, Some("ltr")).is_err());
+        // An unknown direction token is rejected (closed vocabulary).
+        assert!(
+            PyLiteral::new("x".to_owned(), None, Some("en".to_owned()), Some("up")).is_err()
+        );
+        // A plain/typed literal reports no direction.
+        let plain = PyLiteral::new("x".to_owned(), None, None, None).expect("plain constructs");
+        assert_eq!(plain.direction(), None);
     }
 
     #[test]

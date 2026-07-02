@@ -14,4 +14,4 @@
 #   "tests/rdflib_suite/test_n3.py::test_rules" = "rdflib N3 rule syntax unsupported (#11 format breadth)"
 
 [xfail]
-# (empty — the P0 parity suite is fully green today)
+"tests/test_term_model.py::test_rdf12_triple_term_has_no_rdflib_counterpart" = "RDF 1.2 triple term has no rdflib 7.6 counterpart (#11)"
