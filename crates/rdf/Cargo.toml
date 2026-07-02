@@ -74,6 +74,10 @@ roxmltree = { workspace = true }
 # rayon compiles cleanly on wasm32-unknown-unknown and degrades to inline-sequential
 # execution there (same pattern as purrdf-slice's catalog scan).
 rayon = { workspace = true }
+# SIMD-accelerated byte scanning on the native codec hot paths (chunk-parallel
+# newline splitting; serializer escape fast-path classification). SIMD on
+# x86/aarch64, portable SWAR fallback elsewhere — wasm-clean, no feature gate.
+memchr = { workspace = true }
 
 # Maintainer-only golden-capture binary (EPIC #906 Task 2/8). Freezes the native
 # SPARQL engine over the corpus as committed goldens under

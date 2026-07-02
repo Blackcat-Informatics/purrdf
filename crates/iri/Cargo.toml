@@ -30,3 +30,11 @@ name = "purrdf_iri"
 pretty_assertions = { workspace = true }
 # Round-trip / idempotency property tests (parse -> serialize, normalize twice).
 proptest = { workspace = true }
+# Parse hot-path baselines. DEV-DEPENDENCY ONLY: the zero-dep leaf gate checks
+# `cargo tree --edges normal`, which excludes dev-deps, so criterion here does not
+# breach the crate's zero-runtime-dependency contract.
+criterion = { workspace = true }
+
+[[bench]]
+name = "parse"
+harness = false

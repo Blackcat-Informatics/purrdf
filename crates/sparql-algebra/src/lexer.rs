@@ -158,10 +158,17 @@ pub fn tokenize_with(input: &str, options: LexerOptions) -> Result<Vec<Spanned>>
     Lexer::with_options(input, options).run()
 }
 
+/// A byte-cursor tokenizer over the source `str`.
+///
+/// `pos` is a **byte** offset (always on a UTF-8 char boundary — the lexer only ever
+/// advances by whole chars). Working directly on the source bytes avoids the
+/// `char_indices().collect()` full-input materialization the prior cursor paid up
+/// front, and lets the hot scans (string body, `IRIREF` end, comment tails) run
+/// through `memchr`. Token spans are byte offsets, so `pos` *is* the span cursor.
 struct Lexer<'a> {
     src: &'a str,
-    chars: Vec<(usize, char)>,
-    /// Index into `chars`.
+    bytes: &'a [u8],
+    /// Byte offset into `src` (char boundary).
     pos: usize,
     options: LexerOptions,
 }
@@ -174,51 +181,47 @@ impl<'a> Lexer<'a> {
     fn with_options(src: &'a str, options: LexerOptions) -> Self {
         Self {
             src,
-            chars: src.char_indices().collect(),
+            bytes: src.as_bytes(),
             pos: 0,
             options,
         }
     }
 
-    /// Byte offset of the char at `chars[i]`, or `src.len()` at end.
-    fn byte_at(&self, i: usize) -> usize {
-        self.chars.get(i).map_or(self.src.len(), |&(b, _)| b)
-    }
-
+    /// The `ahead`-th char from the cursor without consuming (`ahead == 0` is the
+    /// current char). Small `ahead` only (0/1/2), so the per-call decode is cheap.
     fn peek(&self, ahead: usize) -> Option<char> {
-        self.chars.get(self.pos + ahead).map(|&(_, c)| c)
+        self.src[self.pos..].chars().nth(ahead)
     }
 
     fn cur(&self) -> Option<char> {
-        self.peek(0)
+        self.src[self.pos..].chars().next()
     }
 
     fn run(mut self) -> Result<Vec<Spanned>> {
         let mut out = Vec::new();
         loop {
             self.skip_trivia();
-            let start = self.byte_at(self.pos);
+            let start = self.pos;
             let Some(c) = self.cur() else { break };
             let token = self.lex_one(c, start)?;
-            let end = self.byte_at(self.pos);
+            let end = self.pos;
             out.push(Spanned { token, start, end });
         }
         Ok(out)
     }
 
-    /// Skip whitespace and `#` line comments.
+    /// Skip whitespace and `#` line comments. The comment tail is skipped with a
+    /// single `memchr` to the newline rather than a per-char walk.
     fn skip_trivia(&mut self) {
         loop {
             match self.cur() {
-                Some(c) if c.is_whitespace() => self.pos += 1,
-                Some('#') => {
-                    while let Some(c) = self.cur() {
-                        self.pos += 1;
-                        if c == '\n' {
-                            break;
-                        }
-                    }
-                }
+                Some(c) if c.is_whitespace() => self.pos += c.len_utf8(),
+                Some('#') => match memchr::memchr(b'\n', &self.bytes[self.pos..]) {
+                    // Consume through the newline (byte-identical to the prior
+                    // per-char loop, which broke AFTER pushing past '\n').
+                    Some(rel) => self.pos += rel + 1,
+                    None => self.pos = self.bytes.len(),
+                },
                 _ => break,
             }
         }
@@ -311,12 +314,40 @@ impl<'a> Lexer<'a> {
     }
 
     /// `<` is `IRIREF` / `<<` / `<=` / `<`. Try a greedy IRIREF body first.
+    ///
+    /// Fast path: `memchr` the closing `>`. A UCHAR escape (`\uXXXX`) never contains a
+    /// literal `>` byte, so the first `>` is always the true `IRIREF` end. When the
+    /// body has no backslash (every ordinary IRI), it is emitted VERBATIM as a single
+    /// slice after a delimiter-free check — no per-char `String` build. Only a body
+    /// carrying a `\` UCHAR escape (or no closing `>`) falls to the decoding scan.
     fn lex_lt_or_iri(&mut self) -> Result<Token> {
-        // Attempt an IRIREF: `<` ( UCHAR | not-disallowed )* `>`.
-        let mut i = self.pos + 1;
+        let body_start = self.pos + 1;
+        if let Some(rel) = memchr::memchr(b'>', &self.bytes[body_start..]) {
+            let end = body_start + rel;
+            let body = &self.src[body_start..end];
+            if !body.as_bytes().contains(&b'\\') {
+                // No escapes: an IRIREF iff no disallowed char appears in the body.
+                if body.chars().all(|c| {
+                    !c.is_whitespace() && !matches!(c, '<' | '"' | '{' | '}' | '|' | '^' | '`')
+                }) {
+                    self.pos = end + 1; // consume through '>'
+                    return Ok(Token::Iri(body.to_owned()));
+                }
+                // A disallowed char precedes the '>' → not an IRIREF.
+                return Ok(self.two_or_one('<', Token::TripleOpen, '=', Token::LtEq, Token::Lt));
+            }
+        }
+        // Backslash in the body (UCHAR), or no closing '>': decode char by char.
+        self.lex_iri_escaped()
+    }
+
+    /// The `IRIREF` slow path: a byte-cursor scan that decodes `\uXXXX`/`\UXXXXXXXX`
+    /// UCHAR escapes into the resolved content, mirroring the prior char-cursor scan.
+    fn lex_iri_escaped(&mut self) -> Result<Token> {
+        let mut i = self.pos + 1; // byte offset just past '<'
         let mut content = String::new();
         let mut ok = false;
-        while let Some(&(b, c)) = self.chars.get(i) {
+        while let Some(c) = self.src[i..].chars().next() {
             if c == '>' {
                 ok = true;
                 i += 1;
@@ -335,8 +366,7 @@ impl<'a> Lexer<'a> {
                 break; // disallowed in IRIREF → not an IRIREF
             }
             content.push(c);
-            let _ = b;
-            i += 1;
+            i += c.len_utf8();
         }
         if ok {
             self.pos = i;
@@ -346,34 +376,52 @@ impl<'a> Lexer<'a> {
         Ok(self.two_or_one('<', Token::TripleOpen, '=', Token::LtEq, Token::Lt))
     }
 
-    /// Read a `\uXXXX` / `\UXXXXXXXX` escape starting at `chars[i]` (the `\`).
-    /// Returns `(chars_consumed, decoded_char)`.
+    /// Read a `\uXXXX` / `\UXXXXXXXX` escape starting at byte offset `i` (the `\`).
+    /// Returns `(bytes_consumed, decoded_char)`. The escape is all-ASCII, so the
+    /// byte count equals the char count.
     fn read_uchar(&self, i: usize) -> Option<(usize, char)> {
-        let kind = self.chars.get(i + 1).map(|&(_, c)| c)?;
-        let width = match kind {
-            'u' => 4,
-            'U' => 8,
+        let width = match *self.bytes.get(i + 1)? {
+            b'u' => 4,
+            b'U' => 8,
             _ => return None,
         };
         let mut value: u32 = 0;
         for k in 0..width {
-            let c = self.chars.get(i + 2 + k).map(|&(_, c)| c)?;
-            value = value * 16 + c.to_digit(16)?;
+            value = value * 16 + char::from(*self.bytes.get(i + 2 + k)?).to_digit(16)?;
         }
         let decoded = char::from_u32(value)?;
         Some((2 + width, decoded))
     }
 
     fn lex_string(&mut self, quote: char, start: usize) -> Result<Token> {
+        // `quote` is `"` or `'` — ASCII, so its byte is the delimiter to scan for.
+        let quote_byte = quote as u8;
         // Long form `"""` / `'''` vs short form.
         let long = self.peek(1) == Some(quote) && self.peek(2) == Some(quote);
-        let open = if long { 3 } else { 1 };
-        self.pos += open;
+        self.pos += if long { 3 } else { 1 };
         let mut value = String::new();
         loop {
-            let Some(c) = self.cur() else {
+            // memchr-forward over the clean run to the next interesting byte: the
+            // quote or a `\` escape (both forms), plus a raw CR/LF for the short form
+            // (which forbids them). The skipped bytes are literal content, copied
+            // wholesale in one `push_str` instead of char by char.
+            let tail = &self.bytes[self.pos..];
+            let stop = if long {
+                memchr::memchr2(quote_byte, b'\\', tail)
+            } else {
+                min_opt(
+                    memchr::memchr2(quote_byte, b'\\', tail),
+                    memchr::memchr2(b'\n', b'\r', tail),
+                )
+            };
+            let Some(stop) = stop else {
                 return Err(ParseError::lex("unterminated string literal", start));
             };
+            if stop > 0 {
+                value.push_str(&self.src[self.pos..self.pos + stop]);
+                self.pos += stop;
+            }
+            let c = self.cur().expect("memchr stop is a byte within the source");
             if c == '\\' {
                 self.pos += 1;
                 let Some(esc) = self.cur() else {
@@ -402,7 +450,7 @@ impl<'a> Lexer<'a> {
                         return Err(ParseError::lex(format!("bad escape \\{other}"), start));
                     }
                 }
-                self.pos += 1;
+                self.pos += 1; // the escape char is ASCII
                 continue;
             }
             if c == quote {
@@ -419,16 +467,12 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 return Ok(Token::StringLit(value));
             }
-            // SPARQL STRING_LITERAL1/2 forbid raw line breaks; only the long
-            // `'''`/`"""` forms admit them. Reject rather than over-accept.
-            if !long && matches!(c, '\n' | '\r') {
-                return Err(ParseError::lex(
-                    "raw newline in short string literal",
-                    start,
-                ));
-            }
-            value.push(c);
-            self.pos += 1;
+            // Short form only: `stop` landed on a raw CR/LF. SPARQL STRING_LITERAL1/2
+            // forbid raw line breaks (only `'''`/`"""` admit them) — reject.
+            return Err(ParseError::lex(
+                "raw newline in short string literal",
+                start,
+            ));
         }
     }
 
@@ -453,16 +497,16 @@ impl<'a> Lexer<'a> {
 
     fn lex_bracket_or_anon(&mut self) -> Result<Token> {
         // `[` optionally `]` (with only whitespace between) → anonymous blank.
-        let mut j = self.pos + 1;
-        while let Some(&(_, c)) = self.chars.get(j) {
+        let mut j = self.pos + 1; // byte offset past '['
+        while let Some(c) = self.src[j..].chars().next() {
             if c.is_whitespace() {
-                j += 1;
+                j += c.len_utf8();
             } else {
                 break;
             }
         }
-        if self.chars.get(j).map(|&(_, c)| c) == Some(']') {
-            self.pos = j + 1;
+        if self.src[j..].starts_with(']') {
+            self.pos = j + 1; // ']' is ASCII
             Ok(Token::Anon)
         } else {
             self.pos += 1;
@@ -531,10 +575,8 @@ impl<'a> Lexer<'a> {
                 _ => break,
             }
         }
-        let lexical: String = self.chars[begin..self.pos]
-            .iter()
-            .map(|&(_, c)| c)
-            .collect();
+        // Numbers are ASCII, so the byte span is the lexical form verbatim.
+        let lexical = self.src[begin..self.pos].to_owned();
         if seen_exp {
             Token::Double(lexical)
         } else if seen_dot {
@@ -548,15 +590,12 @@ impl<'a> Lexer<'a> {
         let begin = self.pos;
         while let Some(c) = self.cur() {
             if pred(c) {
-                self.pos += 1;
+                self.pos += c.len_utf8();
             } else {
                 break;
             }
         }
-        self.chars[begin..self.pos]
-            .iter()
-            .map(|&(_, c)| c)
-            .collect()
+        self.src[begin..self.pos].to_owned()
     }
 
     /// `PN_PREFIX`: starts with a base char, may contain `.`/`-`/digits, must not
@@ -564,10 +603,10 @@ impl<'a> Lexer<'a> {
     fn take_pn_prefix(&mut self) -> String {
         let raw = self.take_while(|c| is_pn_chars(c) || c == '.');
         let trimmed = raw.trim_end_matches('.');
-        // push back any over-consumed trailing dots (`.` is ASCII, so the count
-        // of trimmed chars is the count of trailing dots; `pos` is a char index).
-        self.pos -= raw.chars().count() - trimmed.chars().count();
-        trimmed.to_string()
+        // Push `pos` (a byte offset) back over the over-consumed trailing dots. `.`
+        // is ASCII (1 byte), so the trimmed byte-length delta equals that dot run.
+        self.pos -= raw.len() - trimmed.len();
+        trimmed.to_owned()
     }
 
     /// `PN_LOCAL`: like a prefix but may also start with a digit or `_`/`:`; must
@@ -616,7 +655,7 @@ impl<'a> Lexer<'a> {
             if is_pn_chars(c) || c == ':' || c == '%' {
                 out.push(c);
                 trailing_dots = 0;
-                self.pos += 1;
+                self.pos += c.len_utf8();
             } else {
                 break;
             }
@@ -627,6 +666,15 @@ impl<'a> Lexer<'a> {
             self.pos -= trailing_dots;
         }
         out
+    }
+}
+
+/// The smaller of two optional offsets — the earliest of two `memchr` hits, or
+/// whichever is present, or `None` when neither matched.
+fn min_opt(a: Option<usize>, b: Option<usize>) -> Option<usize> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x.min(y)),
+        (a, b) => a.or(b),
     }
 }
 

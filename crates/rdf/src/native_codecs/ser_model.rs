@@ -9,8 +9,9 @@
 //! lexical forms VERBATIM — they never canonicalize a literal's value-space nor narrow
 //! its datatype (the whole point of the native codec: byte-for-byte lexical fidelity).
 
+use std::borrow::Cow;
+
 use crate::RdfDiagnostic;
-use std::fmt::Write as _;
 
 /// The kind of a serialization term.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,25 +112,115 @@ fn is_literal_direction(direction: &str) -> bool {
     matches!(direction, "ltr" | "rtl")
 }
 
+/// Bytes that pass through an `IRIREF` body untouched: printable ASCII
+/// (`0x21..=0x7E`) minus the nine grammar-forbidden delimiters
+/// (`<`, `>`, `"`, `{`, `}`, `|`, `^`, `` ` ``, `\`). Space (`0x20`), every control
+/// (C0/DEL), and any byte `>= 0x80` (which may lead a C1 control) are `false`, so they
+/// fall through to per-char classification.
+const IRI_CLEAN: [bool; 256] = {
+    let mut t = [false; 256];
+    let mut i = 0x21usize;
+    while i <= 0x7E {
+        t[i] = !matches!(
+            i as u8,
+            b'"' | b'<' | b'>' | b'\\' | b'^' | b'`' | b'{' | b'|' | b'}'
+        );
+        i += 1;
+    }
+    t
+};
+
+/// Uppercase hex-nibble lookup table for `push_uchar_00`.
+const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+
+/// Bytes that pass through a literal lexical form untouched: printable ASCII
+/// (`0x20..=0x7E`) minus `"` and `\`. C0/DEL controls, the two ASCII escapables, and
+/// any byte `>= 0x80` (which may lead a C1 control that must ride as `\uXXXX`) are
+/// `false`, so they fall through to per-char classification.
+const LITERAL_CLEAN: [bool; 256] = {
+    let mut t = [false; 256];
+    let mut i = 0x20usize;
+    while i <= 0x7E {
+        t[i] = i != b'"' as usize && i != b'\\' as usize;
+        i += 1;
+    }
+    t
+};
+
+/// Scan-first escape: copy maximal runs of `clean` bytes wholesale (one `push_str`),
+/// routing only each boundary char through `escape_one` (the per-char escape logic).
+///
+/// This is byte-identical to a per-char loop whose clean arm is `out.push(c)`: the
+/// clean run — the vast majority of every production IRI / literal — is batched
+/// instead of pushed a char at a time, and every non-clean char takes the exact same
+/// `escape_one` decision it would have taken per-char. `clean` marks only single-byte
+/// ASCII as clean, so the first non-clean byte is always a UTF-8 char boundary.
+///
+/// When every byte of `s` is `clean` (the stated common case: every production IRI,
+/// numeric/plain literals), this borrows `s` directly rather than allocating and
+/// copying — a single linear scan replaces the wasted `String::with_capacity` + copy.
+#[inline]
+fn escape_scan<'a>(
+    s: &'a str,
+    clean: &[bool; 256],
+    escape_one: impl Fn(&mut String, char),
+) -> Cow<'a, str> {
+    let bytes = s.as_bytes();
+    if bytes.iter().all(|&b| clean[b as usize]) {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut run_start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if clean[bytes[i] as usize] {
+            i += 1;
+            continue;
+        }
+        if run_start < i {
+            out.push_str(&s[run_start..i]);
+        }
+        let c = s[i..]
+            .chars()
+            .next()
+            .expect("first non-clean byte is a char boundary");
+        escape_one(&mut out, c);
+        i += c.len_utf8();
+        run_start = i;
+    }
+    if run_start < bytes.len() {
+        out.push_str(&s[run_start..]);
+    }
+    Cow::Owned(out)
+}
+
+/// Push the `\u00XX` UCHAR escape for a code point known to be `<= 0xFF`
+/// (every escapable byte here: C0/DEL/C1 controls, space, and the IRIREF
+/// grammar delimiters). Byte-identical to `write!(out, "\\u{:04X}", v)` for
+/// `v <= 0xFF`, without the `fmt` machinery.
+#[inline]
+fn push_uchar_00(out: &mut String, v: u32) {
+    debug_assert!(v <= 0xFF);
+    out.push_str("\\u00");
+    out.push(HEX_UPPER[((v >> 4) & 0xF) as usize] as char);
+    out.push(HEX_UPPER[(v & 0xF) as usize] as char);
+}
+
 /// Escape an IRI body for an N-Triples / Turtle / TriG `<…>` `IRIREF`. The W3C grammar
 /// forbids `<`, `>`, `"`, `{`, `}`, `|`, `^`, `` ` ``, `\`, the space character, and every
 /// control code point (C0 `0x00-0x1F`, DEL `0x7F`, and the C1 block `0x80-0x9F`) appearing
 /// raw; each rides as a `\uXXXX` `UCHAR` (the text parser decodes them back). A clean ASCII
 /// IRI (every production IRI) passes through byte-for-byte unchanged.
-fn escape_iri(iri: &str) -> String {
-    let mut out = String::with_capacity(iri.len());
-    for ch in iri.chars() {
-        match ch {
-            '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
-                let _ = write!(out, "\\u{:04X}", ch as u32);
-            }
-            c if c.is_control() || c == ' ' => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            c => out.push(c),
+fn escape_iri(iri: &str) -> Cow<'_, str> {
+    escape_scan(iri, &IRI_CLEAN, |out, ch| match ch {
+        '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
+            push_uchar_00(out, ch as u32);
         }
-    }
-    out
+        c if c.is_control() || c == ' ' => {
+            push_uchar_00(out, c as u32);
+        }
+        c => out.push(c),
+    })
 }
 
 /// Escape a literal lexical form for N-Triples. Escapes `\` and `"`, emits the readable ECHAR
@@ -140,22 +231,18 @@ fn escape_iri(iri: &str) -> String {
 /// parser normalizes/replaces raw C1 code points on read — so the payload only survives an XML
 /// round-trip if the full control range rides as ASCII `\uXXXX`. The canonical form answers to
 /// RDFC-1.0 byte-conformance; this one answers to XML transport.
-fn escape_literal(lex: &str) -> String {
-    let mut out = String::with_capacity(lex.len());
-    for ch in lex.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            c => out.push(c),
+fn escape_literal(lex: &str) -> Cow<'_, str> {
+    escape_scan(lex, &LITERAL_CLEAN, |out, ch| match ch {
+        '\\' => out.push_str("\\\\"),
+        '"' => out.push_str("\\\""),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        c if c.is_control() => {
+            push_uchar_00(out, c as u32);
         }
-    }
-    out
+        c => out.push(c),
+    })
 }
 
 /// Render a term-id as an N-Triples token.
@@ -405,6 +492,8 @@ pub(crate) fn to_trig(g: &SerGraph) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use std::fmt::Write as _;
 
     #[test]
     fn deterministic_blank_label_matches_zero_timestamp_ulid() {
@@ -550,5 +639,101 @@ mod tests {
         g.quads.push((0, 1, 2, None));
         let nt = to_ntriples(&g).expect("ntriples");
         assert!(nt.contains("\"hi\"@en--ltr"), "got: {nt}");
+    }
+
+    // ── serializer escape: byte-identity of the scan-first fast path ───────────────
+
+    /// The pre-optimization per-char `escape_iri`, frozen verbatim as a test oracle:
+    /// the scan-first implementation must match it byte-for-byte on every input.
+    fn escape_iri_oracle(iri: &str) -> String {
+        let mut out = String::with_capacity(iri.len());
+        for ch in iri.chars() {
+            match ch {
+                '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
+                    let _ = write!(out, "\\u{:04X}", ch as u32);
+                }
+                c if c.is_control() || c == ' ' => {
+                    let _ = write!(out, "\\u{:04X}", c as u32);
+                }
+                c => out.push(c),
+            }
+        }
+        out
+    }
+
+    /// The pre-optimization per-char `escape_literal`, frozen verbatim as a test oracle.
+    fn escape_literal_oracle(lex: &str) -> String {
+        let mut out = String::with_capacity(lex.len());
+        for ch in lex.chars() {
+            match ch {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if c.is_control() => {
+                    let _ = write!(out, "\\u{:04X}", c as u32);
+                }
+                c => out.push(c),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn escape_iri_fixed_adversarial_goldens() {
+        // Every IRIREF-forbidden delimiter rides as an uppercase 4-hex `\uXXXX`.
+        assert_eq!(escape_iri("a<b"), "a\\u003Cb");
+        assert_eq!(escape_iri("a>b"), "a\\u003Eb");
+        assert_eq!(escape_iri("a\"b"), "a\\u0022b");
+        assert_eq!(escape_iri("a{b"), "a\\u007Bb");
+        assert_eq!(escape_iri("a}b"), "a\\u007Db");
+        assert_eq!(escape_iri("a|b"), "a\\u007Cb");
+        assert_eq!(escape_iri("a^b"), "a\\u005Eb");
+        assert_eq!(escape_iri("a`b"), "a\\u0060b");
+        assert_eq!(escape_iri("a\\b"), "a\\u005Cb");
+        assert_eq!(escape_iri("a b"), "a\\u0020b"); // space
+        assert_eq!(escape_iri("a\u{01}b"), "a\\u0001b"); // C0
+        assert_eq!(escape_iri("a\u{7F}b"), "a\\u007Fb"); // DEL
+        assert_eq!(escape_iri("a\u{85}b"), "a\\u0085b"); // C1 (NEL)
+        assert_eq!(escape_iri("a\u{E9}b"), "a\u{E9}b"); // clean non-ASCII: verbatim
+        assert_eq!(
+            // A clean ASCII IRI passes byte-for-byte.
+            escape_iri("http://example.org/path"),
+            "http://example.org/path"
+        );
+    }
+
+    #[test]
+    fn escape_literal_fixed_adversarial_goldens() {
+        assert_eq!(escape_literal("a\"b"), "a\\\"b");
+        assert_eq!(escape_literal("a\\b"), "a\\\\b");
+        assert_eq!(escape_literal("a\nb"), "a\\nb");
+        assert_eq!(escape_literal("a\rb"), "a\\rb");
+        assert_eq!(escape_literal("a\tb"), "a\\tb");
+        assert_eq!(escape_literal("a\u{01}b"), "a\\u0001b"); // C0
+        assert_eq!(escape_literal("a\u{7F}b"), "a\\u007Fb"); // DEL
+        assert_eq!(escape_literal("a\u{85}b"), "a\\u0085b"); // C1
+        assert_eq!(escape_literal("a\u{E9}b"), "a\u{E9}b"); // clean unicode
+        assert_eq!(escape_literal("clean text 123"), "clean text 123");
+        assert_eq!(escape_literal("x\"y\\z\n"), "x\\\"y\\\\z\\n"); // mixed
+    }
+
+    proptest! {
+        /// The scan-first `escape_iri` equals the frozen per-char oracle on every
+        /// arbitrary string (controls, C1, multi-byte unicode, and clean runs).
+        #[test]
+        fn escape_iri_matches_oracle(s in any::<String>()) {
+            let got = escape_iri(&s);
+            prop_assert_eq!(got.as_ref(), escape_iri_oracle(&s));
+        }
+
+        /// The scan-first `escape_literal` equals the frozen per-char oracle on every
+        /// arbitrary string.
+        #[test]
+        fn escape_literal_matches_oracle(s in any::<String>()) {
+            let got = escape_literal(&s);
+            prop_assert_eq!(got.as_ref(), escape_literal_oracle(&s));
+        }
     }
 }
