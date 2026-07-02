@@ -21,6 +21,13 @@ const KIND_SOLUTIONS: i32 = 0;
 const KIND_GRAPH: i32 = 1;
 const KIND_BOOLEAN: i32 = 2;
 
+/// The native SPARQL engine for the C ABI. `NOW()`/`RAND()`/`UUID()`/`STRUUID()`
+/// are live by construction — `EvalCtx::new` samples the real host wall clock and
+/// OS entropy itself, so no host-side clock/entropy wiring is needed here.
+fn engine() -> NativeSparqlEngine {
+    NativeSparqlEngine::new()
+}
+
 /// Run a SPARQL query over a frozen dataset, materializing the result.
 unsafe fn run_query(
     dataset: *const PurrdfDataset,
@@ -34,7 +41,7 @@ unsafe fn run_query(
         // no oxigraph `Store` round-trip. `NativeSparqlEngine::query` is the single
         // `SparqlEngine` impl (#887/#912); its `Dataset` IS the `Arc<RdfDataset>` the
         // handle already owns.
-        NativeSparqlEngine::new()
+        engine()
             .query(
                 PurrdfDataset::arc(dataset),
                 SparqlRequest {
@@ -154,5 +161,44 @@ pub unsafe extern "C" fn purrdf_query_json(
             *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
             Ok(PurrdfStatus::Ok)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use purrdf_core::{RdfDatasetBuilder, TermValue};
+
+    use super::*;
+
+    /// `NOW()` must report the real wall clock through the C ABI's `engine()`.
+    /// `year(NOW())` on any date after this crate existed is `>= 2025`; a
+    /// frozen-epoch regression would yield `1970`.
+    #[test]
+    fn now_reports_the_real_wall_clock_year() {
+        let dataset = RdfDatasetBuilder::new()
+            .freeze()
+            .expect("empty dataset freezes");
+        let result = engine()
+            .query(
+                &dataset,
+                SparqlRequest {
+                    query: "SELECT (year(NOW()) AS ?y) WHERE {}",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .expect("query evaluates");
+        let SparqlResult::Solutions { rows, .. } = result else {
+            panic!("expected a SELECT solutions result");
+        };
+        assert_eq!(rows.len(), 1, "empty WHERE yields exactly one solution");
+        let cell = rows[0][0].as_ref().expect("?y is bound");
+        let TermValue::Literal { lexical_form, .. } = cell else {
+            panic!("?y must be a literal, got {cell:?}");
+        };
+        let year: i64 = lexical_form
+            .parse()
+            .unwrap_or_else(|e| panic!("?y `{lexical_form}` must parse as an integer: {e}"));
+        assert!(year >= 2025, "year(NOW()) = {year}, expected >= 2025");
     }
 }

@@ -2855,10 +2855,9 @@ mod tests {
     #[test]
     fn now_returns_ctx_now() {
         let ds = empty_ds();
-        let mut ctx = EvalCtx::new(&ds);
         // Override now with a known value for deterministic testing.
         let known_dt = purrdf_xsd::datetime_from_unix_seconds(0);
-        ctx.now = XsdValue::DateTime(known_dt);
+        let mut ctx = EvalCtx::new(&ds).with_now(XsdValue::DateTime(known_dt));
         let schema = VarSchema::new();
         let expr = Expression::FunctionCall(Function::Now, vec![]);
         let term = eval_expr(&expr, &[], &schema, &mut ctx)
@@ -2877,8 +2876,7 @@ mod tests {
     #[test]
     fn rand_deterministic_with_fixed_seed() {
         let ds = empty_ds();
-        let mut ctx = EvalCtx::new(&ds);
-        ctx.rng_state = 12345;
+        let mut ctx = EvalCtx::new(&ds).with_rng_seed(12345);
         let schema = VarSchema::new();
         let expr = Expression::FunctionCall(Function::Rand, vec![]);
         // First call

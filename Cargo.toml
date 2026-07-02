@@ -69,10 +69,16 @@ datatest-stable = "0.3"
 ed25519-dalek = "2"
 filetime = "0.2"
 flate2 = "1"
+# OS entropy for the SPARQL RAND()/UUID()/STRUUID() seed on native targets (see
+# crates/sparql-eval's target-gated dependency section).
+getrandom = "0.3"
 # `HashTable` requires >= 0.14.2 (introduced there); tracked on 0.15.
 hashbrown = "0.15"
 hex = "0.4"
 insta = "1.48"
+# Browser wall clock + entropy for SPARQL NOW()/RAND() on wasm32 (see
+# crates/sparql-eval's target-gated dependency section).
+js-sys = "0.3"
 md-5 = { version = "0.10", default-features = false }
 petgraph = { version = "0.8", default-features = false }
 pretty_assertions = "1"

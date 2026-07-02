@@ -175,6 +175,8 @@ impl NativeSparqlEngine {
 
     /// Build the per-query evaluation context, threading the engine-level
     /// configuration (order cache + standpoint predicate table) into it.
+    /// `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already correct by construction:
+    /// [`EvalCtx::new`] samples the real host wall clock and OS entropy itself.
     fn eval_ctx<'d>(&'d self, dataset: &'d RdfDataset) -> EvalCtx<'d> {
         let mut ctx = EvalCtx::new(dataset).with_order_cache(&self.order_cache);
         if let Some(predicates) = &self.standpoint_predicates {
@@ -268,7 +270,11 @@ impl SparqlEngine for NativeSparqlEngine {
         // apply every op to the delta, and only on FULL success freeze back. Any
         // error drops `m` and leaves `*dataset` untouched.
         let mut m = MutableDataset::new(Arc::clone(dataset));
-        eval_update(&update, &mut m, self.resolver.as_deref())?;
+        let cfg = crate::update::UpdateEvalConfig {
+            standpoint_predicates: self.standpoint_predicates.as_ref(),
+            order_cache: &self.order_cache,
+        };
+        eval_update(&update, &mut m, self.resolver.as_deref(), &cfg)?;
         *dataset = m.freeze()?;
         Ok(())
     }
@@ -959,6 +965,107 @@ mod tests {
         );
     }
 
+    /// GAP 3 regression: the UPDATE path must thread the SAME `EvalCtx` wiring the
+    /// query path uses, so a `NOW()` bound inside a `DELETE/INSERT … WHERE` is the
+    /// live wall clock — not some frozen/epoch default — mirroring
+    /// `default_engine_now_is_current_wall_clock` but through `engine.update`.
+    #[test]
+    fn now_is_live_in_update_where() {
+        let engine = NativeSparqlEngine::new();
+        let mut ds = empty();
+        update(
+            &engine,
+            &mut ds,
+            "INSERT { <http://ex/s> <http://ex/p> ?n } WHERE { BIND(NOW() AS ?n) }",
+        );
+        let r = engine
+            .query(
+                &ds,
+                SparqlRequest {
+                    query: "SELECT (YEAR(?o) AS ?y) WHERE { <http://ex/s> <http://ex/p> ?o }",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .expect("query");
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                let year: i64 = render_cell(rows[0][0].as_ref())
+                    .parse()
+                    .expect("YEAR(?o) must render as an integer");
+                assert!(
+                    year >= 2025,
+                    "NOW() inside an UPDATE WHERE must be the live wall clock, got year {year}"
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// GAP 3 regression: `heldIn` inside an UPDATE `WHERE` must see the engine's
+    /// configured [`StandpointPredicates`] table, the same as the query path
+    /// (`gmeow_namespace_and_predicate_table_flow_through_configuration`). Before the
+    /// fix, `engine::update` dropped the table on the floor and any `heldIn` in a
+    /// `DELETE/INSERT … WHERE` hard-errored even on a standpoint-configured engine.
+    #[test]
+    fn heldin_in_update_where_uses_configured_standpoint_predicates() {
+        let ds = gmeow_standpoint_ds();
+        let configured = NativeSparqlEngine::new()
+            .with_parser_options(ParserOptions {
+                extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+            })
+            .with_standpoint_predicates(StandpointPredicates::new(
+                format!("{GMEOW_NS}accordingTo"),
+                format!("{GMEOW_NS}sharpens"),
+            ));
+        let q = format!(
+            "PREFIX gmeow: <{GMEOW_NS}>\n\
+             INSERT {{ <http://ex/hit> <http://ex/in> <http://ex/T1> }} \
+             WHERE {{ FILTER( gmeow:heldIn(<http://ex/r>, <http://ex/T1>) ) }}"
+        );
+        let mut configured_ds = Arc::clone(&ds);
+        configured
+            .update(
+                &mut configured_ds,
+                SparqlRequest {
+                    query: &q,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .expect("heldIn in an UPDATE WHERE must see the configured standpoint table");
+        assert!(
+            configured_ds
+                .term_id_by_value(&TermValue::Iri("http://ex/hit".to_owned()))
+                .is_some(),
+            "the WHERE matched and the INSERT landed"
+        );
+
+        // Same UPDATE, unconfigured engine: heldIn hard-errors (never a silent default).
+        let unconfigured = NativeSparqlEngine::new().with_parser_options(ParserOptions {
+            extension_fn_namespaces: vec![GMEOW_NS.to_owned()],
+        });
+        let mut unconfigured_ds = Arc::clone(&ds);
+        let err = unconfigured
+            .update(
+                &mut unconfigured_ds,
+                SparqlRequest {
+                    query: &q,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "native-sparql-update-eval");
+        assert!(
+            err.message
+                .contains("requires a standpoint predicate configuration"),
+            "got: {}",
+            err.message
+        );
+    }
+
     #[test]
     fn update_is_atomic_on_a_where_eval_failure() {
         // A second atomicity proof through a different failure mode: a modify whose
@@ -1394,6 +1501,66 @@ mod tests {
             engine.order_cache.borrow().len(),
             2,
             "distinct datasets ⇒ distinct fingerprints ⇒ two cache entries"
+        );
+    }
+
+    /// `NativeSparqlEngine::new()` needs no injected clock: `NOW()` reads the real
+    /// host wall clock by construction (`EvalCtx::new` → `crate::clock::wall_clock_now`).
+    #[test]
+    fn default_engine_now_is_current_wall_clock() {
+        let r = run_on(&social(), "SELECT (YEAR(NOW()) AS ?y) WHERE {}");
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                let year: i64 = render_cell(rows[0][0].as_ref())
+                    .parse()
+                    .expect("YEAR(NOW()) must render as an integer");
+                assert!(year >= 2025, "expected a current year, got {year}");
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// All `NOW()` call sites within a single query observe the same instant
+    /// (SPARQL 1.1 §17.4.5.1): `EvalCtx::new` samples the wall clock exactly once
+    /// per query, not once per `NOW()` call site.
+    #[test]
+    fn now_is_constant_within_one_query() {
+        let r = run_on(&social(), "SELECT (NOW() AS ?a) (NOW() AS ?b) WHERE {}");
+        match r {
+            SparqlResult::Solutions { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(
+                    render_cell(rows[0][0].as_ref()),
+                    render_cell(rows[0][1].as_ref()),
+                    "?a and ?b must see the same sampled instant: {rows:?}"
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// `RAND()`/`UUID()`/`STRUUID()` are seeded from live OS entropy, not a fixed
+    /// default: fresh engines across repeated runs must not all agree. A single pair
+    /// differing is overwhelmingly likely but not guaranteed, so run a handful of
+    /// times and require not-all-identical.
+    #[test]
+    fn rand_is_live_across_queries() {
+        let values: Vec<String> = (0..4)
+            .map(|_| {
+                let r = run_on(&social(), "SELECT (STRUUID() AS ?u) WHERE {}");
+                match r {
+                    SparqlResult::Solutions { rows, .. } => {
+                        assert_eq!(rows.len(), 1);
+                        render_cell(rows[0][0].as_ref())
+                    }
+                    other => panic!("expected solutions, got {other:?}"),
+                }
+            })
+            .collect();
+        assert!(
+            values.windows(2).any(|w| w[0] != w[1]),
+            "expected live entropy to vary across queries, got identical values: {values:?}"
         );
     }
 }
