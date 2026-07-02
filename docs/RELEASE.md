@@ -74,8 +74,8 @@ After the release commit is on `main` and all Trusted Publisher entries exist,
 push one release tag:
 
 ```sh
-git tag rust-v0.1.3
-git push origin rust-v0.1.3
+git tag rust-v0.1.5
+git push origin rust-v0.1.5
 ```
 
 The workflow publishes crates in dependency order and skips any crate/version
@@ -109,8 +109,8 @@ runner CPU.
 After the release commit is on `main` and the pending publisher is configured:
 
 ```sh
-git tag py-v0.1.3
-git push origin py-v0.1.3
+git tag py-v0.1.5
+git push origin py-v0.1.5
 ```
 
 ## npm Release
@@ -140,8 +140,8 @@ The js package version is bumped by hand in `crates/rdf-wasm/js/package.json`
 (it is not read from the workspace):
 
 ```sh
-git tag npm-v0.1.3
-git push origin npm-v0.1.3
+git tag npm-v0.1.5
+git push origin npm-v0.1.5
 ```
 
 ## Verification
@@ -149,7 +149,7 @@ git push origin npm-v0.1.3
 Download a published crate and verify its GitHub attestation:
 
 ```sh
-VERSION=0.1.3
+VERSION=0.1.5
 CRATE=purrdf
 curl -L "https://crates.io/api/v1/crates/${CRATE}/${VERSION}/download" \
   -o "${CRATE}-${VERSION}.crate"

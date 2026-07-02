@@ -23,7 +23,7 @@ use purrdf_sparql_algebra::{GraphPattern, Query, Variable};
 
 use crate::dataset_spec::ActiveDataset;
 use crate::error::EvalError;
-use crate::scratch::ScratchInterner;
+use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::SolutionSeq;
 use crate::DetHashMap;
 
@@ -100,7 +100,7 @@ pub(crate) struct ExistsInner {
     /// `(outer_ordinal, inner_ordinal)` pairs (the probe's join key).
     pub shared: Vec<(usize, usize)>,
     /// Inner rows fully bound on the shared columns, grouped by their key.
-    pub keyed: DetHashMap<Vec<crate::scratch::SolutionTerm>, Vec<usize>>,
+    pub keyed: DetHashMap<Vec<SolutionTerm>, Vec<usize>>,
     /// Inner rows with an unbound shared column (compatible with any probe value).
     pub wild: Vec<usize>,
 }
@@ -180,10 +180,21 @@ pub struct EvalCtx<'d> {
     /// the row loop focused on the cheap membership test against currently-bound
     /// outer variables.
     pub(crate) exists_expr_vars_cache: DetHashMap<usize, Rc<crate::DetHashSet<Variable>>>,
-    /// Per-query cache for SPARQL `REGEX`/`REPLACE` pattern+flag compilations.
-    /// Dynamic pattern expressions still compile per distinct value, but a filter
-    /// over many rows no longer rebuilds the same automata for every row.
-    pub(crate) regex_cache: DetHashMap<(String, String), Option<regex::Regex>>,
+    /// Per-query cache for SPARQL `REGEX`/`REPLACE` pattern+flag compilations,
+    /// keyed pattern-then-flags so a hit probes with **borrowed** strings (no
+    /// per-row key allocation). The compiled regex is behind an `Rc`, so a hit
+    /// hands out a cheap pointer clone that **shares** the regex's lazy-DFA cache
+    /// pool instead of minting a fresh one per row. Dynamic pattern expressions
+    /// still compile per distinct value, but a filter over many rows no longer
+    /// rebuilds the same automata (or their DFA caches) for every row.
+    pub(crate) regex_cache: DetHashMap<String, DetHashMap<String, Option<Rc<regex::Regex>>>>,
+    /// Lazily-resolved solution terms for the `xsd:boolean` literals `"false"` /
+    /// `"true"` (indexed by `usize::from(bool)`), so per-row boolean expression
+    /// results skip the value-hash intern probe. Interning is deterministic per
+    /// `(dataset, scratch)` — the dataset is pinned for the context's lifetime and
+    /// the scratch interner dedups by value — so the cached term is bit-identical
+    /// to what a fresh intern would return.
+    pub(crate) cached_bool_terms: [Option<SolutionTerm>; 2],
     /// The `SERVICE` federation source, if one is injected. `None` in
     /// the default engine path: a non-silent `SERVICE` then hard-fails. Tests and
     /// the conformance harness inject an in-memory source via [`EvalCtx::with_remote`].
@@ -242,6 +253,7 @@ impl<'d> EvalCtx<'d> {
             exists_inner_cache: DetHashMap::default(),
             exists_expr_vars_cache: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
+            cached_bool_terms: [None, None],
             remote: None,
             bgp_order_cache: None,
             constructed: Vec::new(),
@@ -467,16 +479,74 @@ pub(crate) fn materialize_solutions(
         .iter()
         .map(|v| v.as_str().to_owned())
         .collect();
-    let rows = seq
-        .rows
-        .iter()
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.map(|t| ctx.scratch.value_of(ctx.dataset, t)))
-                .collect()
-        })
-        .collect();
+    // Literal datatype IRIs repeat massively across a result (a handful of XSD
+    // types over tens of thousands of cells), so each datatype TermId is resolved
+    // once per call and cloned from a small memo instead of re-resolved per cell.
+    let mut datatype_memo: DetHashMap<purrdf_core::TermId, String> = DetHashMap::default();
+    let mut rows = Vec::with_capacity(seq.rows.len());
+    for row in &seq.rows {
+        let mut out = Vec::with_capacity(row.len());
+        for cell in row {
+            out.push(cell.map(|t| memoized_value_of(ctx, t, &mut datatype_memo)));
+        }
+        rows.push(out);
+    }
     (variables, rows)
+}
+
+/// [`ScratchInterner::value_of`], with repeated literal datatype-IRI resolutions
+/// served from `datatype_memo` (egress-only; identical output values).
+fn memoized_value_of(
+    ctx: &EvalCtx<'_>,
+    term: SolutionTerm,
+    datatype_memo: &mut DetHashMap<purrdf_core::TermId, String>,
+) -> TermValue {
+    match term {
+        SolutionTerm::Existing(id) => memoized_term_value(ctx.dataset, id, datatype_memo),
+        SolutionTerm::Computed(_) => ctx.scratch.value_of(ctx.dataset, term),
+    }
+}
+
+/// `scratch::term_id_to_value`, with the literal datatype id → IRI string
+/// resolution memoized across cells (recursing through RDF-1.2 triple terms).
+fn memoized_term_value(
+    dataset: &RdfDataset,
+    id: purrdf_core::TermId,
+    datatype_memo: &mut DetHashMap<purrdf_core::TermId, String>,
+) -> TermValue {
+    match dataset.resolve(id) {
+        purrdf_core::TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
+        purrdf_core::TermRef::Blank { label, scope } => TermValue::Blank {
+            label: label.to_owned(),
+            scope,
+        },
+        purrdf_core::TermRef::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => {
+            let datatype = datatype_memo
+                .entry(datatype)
+                .or_insert_with(|| match dataset.resolve(datatype) {
+                    purrdf_core::TermRef::Iri(iri) => iri.to_owned(),
+                    // A literal's datatype is always an interned IRI (C0.1).
+                    other => unreachable!("literal datatype must be an IRI, got {other:?}"),
+                })
+                .clone();
+            TermValue::Literal {
+                lexical_form: lexical.to_owned(),
+                datatype,
+                language: language.map(str::to_owned),
+                direction,
+            }
+        }
+        purrdf_core::TermRef::Triple { s, p, o } => TermValue::Triple {
+            s: Box::new(memoized_term_value(dataset, s, datatype_memo)),
+            p: Box::new(memoized_term_value(dataset, p, datatype_memo)),
+            o: Box::new(memoized_term_value(dataset, o, datatype_memo)),
+        },
+    }
 }
 
 /// A short, stable name for a [`GraphPattern`] variant, for diagnostics.

@@ -27,7 +27,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.1.3"
+version = "0.1.5"
 edition = "2021"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
@@ -41,19 +41,19 @@ homepage = "https://blackcatinformatics.ca/purrdf/"
 # re-enabled per crate with `default-features = true` where required.
 [workspace.dependencies]
 # --- internal crates (paths are relative to the WORKSPACE ROOT) ---
-purrdf = { path = "crates/purrdf", version = "0.1.3" }
-purrdf-core = { path = "crates/rdf-core", version = "0.1.3" }
-purrdf-events = { path = "crates/rdf-events", version = "0.1.3" }
-purrdf-gts = { path = "crates/gts", version = "0.1.3" }
-purrdf-iri = { path = "crates/iri", version = "0.1.3" }
-purrdf-rdf = { path = "crates/rdf", version = "0.1.3" }
-purrdf-shapes = { path = "crates/shapes", version = "0.1.3" }
-purrdf-shex = { path = "crates/shex", version = "0.1.3" }
-purrdf-slice = { path = "crates/slice", version = "0.1.3" }
-purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "0.1.3" }
-purrdf-sparql-eval = { path = "crates/sparql-eval", version = "0.1.3" }
-purrdf-sparql-results = { path = "crates/sparql-results", version = "0.1.3" }
-purrdf-xsd = { path = "crates/xsd", version = "0.1.3" }
+purrdf = { path = "crates/purrdf", version = "0.1.5" }
+purrdf-core = { path = "crates/rdf-core", version = "0.1.5" }
+purrdf-events = { path = "crates/rdf-events", version = "0.1.5" }
+purrdf-gts = { path = "crates/gts", version = "0.1.5" }
+purrdf-iri = { path = "crates/iri", version = "0.1.5" }
+purrdf-rdf = { path = "crates/rdf", version = "0.1.5" }
+purrdf-shapes = { path = "crates/shapes", version = "0.1.5" }
+purrdf-shex = { path = "crates/shex", version = "0.1.5" }
+purrdf-slice = { path = "crates/slice", version = "0.1.5" }
+purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "0.1.5" }
+purrdf-sparql-eval = { path = "crates/sparql-eval", version = "0.1.5" }
+purrdf-sparql-results = { path = "crates/sparql-results", version = "0.1.5" }
+purrdf-xsd = { path = "crates/xsd", version = "0.1.5" }
 
 # --- external crates ---
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }

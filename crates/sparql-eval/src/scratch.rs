@@ -115,6 +115,14 @@ impl ScratchInterner {
         }
     }
 
+    /// Borrow the computed value behind a [`ScratchId`] (no clone) — the hot-path
+    /// twin of [`Self::value_of`] for callers that only need to *inspect* a
+    /// computed term (e.g. the comparison fast path in `expr`).
+    #[must_use]
+    pub fn computed_value(&self, sid: ScratchId) -> &TermValue {
+        &self.values[sid.index()]
+    }
+
     /// The number of distinct computed terms minted so far (diagnostics/tests).
     #[must_use]
     pub fn computed_count(&self) -> usize {

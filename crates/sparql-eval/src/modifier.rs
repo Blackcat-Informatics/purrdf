@@ -132,14 +132,16 @@ pub(crate) fn eval_order_by(
     let seq = eval(inner, ctx)?;
     let schema = seq.schema.clone();
 
-    // Precompute each row's sort keys as owned values, so the sort comparator is a
-    // pure function (no `ctx` borrow during the sort).
-    let mut keyed: Vec<(Vec<Option<TermValue>>, Solution)> = Vec::with_capacity(seq.rows.len());
+    // Precompute each row's typed sort keys — including the one-time XSD parse
+    // that `term_value_order` would otherwise re-run inside the O(n log n)
+    // comparator — so the sort comparator is a cheap pure function (no `ctx`
+    // borrow, no re-parsing during the sort).
+    let mut keyed: Vec<(Vec<SortKey>, Solution)> = Vec::with_capacity(seq.rows.len());
     for row in seq.rows {
         let mut keys = Vec::with_capacity(exprs.len());
         for oe in exprs {
             let term = eval_expr(order_expr(oe), &row, &schema, ctx)?;
-            keys.push(term.map(|t| ctx.scratch.value_of(ctx.dataset, t)));
+            keys.push(sort_key(term.map(|t| ctx.scratch.value_of(ctx.dataset, t))));
         }
         keyed.push((keys, row));
     }
@@ -243,13 +245,9 @@ fn is_descending(oe: &OrderExpression) -> bool {
 }
 
 /// Compare two rows' precomputed sort keys, applying each key's `ASC`/`DESC`.
-fn compare_keys(
-    a: &[Option<TermValue>],
-    b: &[Option<TermValue>],
-    exprs: &[OrderExpression],
-) -> Ordering {
+fn compare_keys(a: &[SortKey], b: &[SortKey], exprs: &[OrderExpression]) -> Ordering {
     for (i, oe) in exprs.iter().enumerate() {
-        let mut ord = sparql_order(a[i].as_ref(), b[i].as_ref());
+        let mut ord = compare_sort_keys(&a[i], &b[i]);
         if is_descending(oe) {
             ord = ord.reverse();
         }
@@ -260,14 +258,99 @@ fn compare_keys(
     Ordering::Equal
 }
 
-/// SPARQL ORDER BY total order: unbound sorts before any bound term; otherwise by
-/// term kind (blank < IRI < literal < triple) and then within the kind.
-fn sparql_order(a: Option<&TermValue>, b: Option<&TermValue>) -> Ordering {
+/// A per-row precomputed ORDER BY sort key. The XSD parse (`parse_by_iri`) that
+/// the SPARQL ordering would otherwise re-run for every literal comparison is
+/// hoisted to key-build time; [`compare_sort_keys`] then mirrors the
+/// unbound-first / kind-rank / value-space-with-deterministic-fallback semantics
+/// of `sparql_order`/[`term_value_order`] EXACTLY.
+enum SortKey {
+    /// Unbound sorts before any bound term.
+    Unbound,
+    /// Blank node, ordered by `(scope ordinal, label)` — kind rank 0.
+    Blank(u32, String),
+    /// IRI, ordered by its string — kind rank 1.
+    Iri(String),
+    /// Literal — kind rank 2. `xsd` is the one-time parse for the value-space
+    /// compare; the remaining fields are the deterministic `(datatype, language,
+    /// lexical)` fallback tuple (`direction` is ignored, as in `literal_order`).
+    Literal {
+        xsd: Option<XsdValue>,
+        datatype: String,
+        language: Option<String>,
+        lexical: String,
+    },
+    /// Triple term — kind rank 3 (rare; compared via [`term_value_order`]).
+    Triple(TermValue),
+}
+
+/// The kind rank of a bound sort key: blank < IRI < literal < triple
+/// (mirrors `kind_rank`; `Unbound` is handled before ranks are consulted).
+fn sort_key_rank(k: &SortKey) -> u8 {
+    match k {
+        SortKey::Unbound | SortKey::Blank(..) => 0,
+        SortKey::Iri(_) => 1,
+        SortKey::Literal { .. } => 2,
+        SortKey::Triple(_) => 3,
+    }
+}
+
+/// Build the typed sort key for one (possibly unbound) ORDER BY value.
+fn sort_key(value: Option<TermValue>) -> SortKey {
+    match value {
+        None => SortKey::Unbound,
+        Some(TermValue::Blank { label, scope }) => SortKey::Blank(scope.ordinal(), label),
+        Some(TermValue::Iri(iri)) => SortKey::Iri(iri),
+        Some(TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            ..
+        }) => SortKey::Literal {
+            xsd: parse_by_iri(&lexical_form, &datatype).ok().flatten(),
+            datatype,
+            language,
+            lexical: lexical_form,
+        },
+        Some(triple @ TermValue::Triple { .. }) => SortKey::Triple(triple),
+    }
+}
+
+/// SPARQL ORDER BY total order over precomputed keys: unbound sorts before any
+/// bound term; otherwise by term kind (blank < IRI < literal < triple) and then
+/// within the kind — identical ordering to `sparql_order` over the raw values,
+/// with the literal XSD parse already paid at key-build time.
+fn compare_sort_keys(a: &SortKey, b: &SortKey) -> Ordering {
     match (a, b) {
-        (None, None) => Ordering::Equal,
-        (None, Some(_)) => Ordering::Less,
-        (Some(_), None) => Ordering::Greater,
-        (Some(x), Some(y)) => term_value_order(x, y),
+        (SortKey::Unbound, SortKey::Unbound) => Ordering::Equal,
+        (SortKey::Unbound, _) => Ordering::Less,
+        (_, SortKey::Unbound) => Ordering::Greater,
+        (SortKey::Blank(sa, la), SortKey::Blank(sb, lb)) => (sa, la).cmp(&(sb, lb)),
+        (SortKey::Iri(x), SortKey::Iri(y)) => x.cmp(y),
+        (
+            SortKey::Literal {
+                xsd: ax,
+                datatype: dx,
+                language: gx,
+                lexical: lx,
+            },
+            SortKey::Literal {
+                xsd: bx,
+                datatype: dy,
+                language: gy,
+                lexical: ly,
+            },
+        ) => {
+            // Value space where both parse AND compare; else the deterministic
+            // (datatype, language, lexical) fallback — exactly `literal_order`.
+            if let (Some(av), Some(bv)) = (ax, bx) {
+                if let Some(ord) = value_cmp(av, bv) {
+                    return ord;
+                }
+            }
+            (dx, gx, lx).cmp(&(dy, gy, ly))
+        }
+        (SortKey::Triple(x), SortKey::Triple(y)) => term_value_order(x, y),
+        _ => sort_key_rank(a).cmp(&sort_key_rank(b)),
     }
 }
 

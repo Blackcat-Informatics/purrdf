@@ -149,7 +149,9 @@ fn hash_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
     // Build side = right (split into key-indexed + wild rows).
     let (keyed, wild) = build_index(r, &shared);
 
-    let mut rows = Vec::new();
+    // Probe-side cardinality is a cheap, usually-tight lower-bound estimate for
+    // the output (the common star join is ~1:1), avoiding most growth reallocs.
+    let mut rows = Vec::with_capacity(l.rows.len());
     for lrow in &l.rows {
         match bound_key(lrow, &shared, KeySide::Left) {
             // Probe is fully bound on shared columns: hit the matching bucket
@@ -224,8 +226,12 @@ fn merge(
     right_to_out: &[usize],
     out_len: usize,
 ) -> Solution {
-    let mut merged = vec![None; out_len];
-    merged[..left_len].copy_from_slice(left_row);
+    debug_assert_eq!(left_row.len(), left_len);
+    // One exact-size allocation, initialized from the left row directly (no
+    // write-None-then-overwrite pass over the left prefix).
+    let mut merged = Vec::with_capacity(out_len);
+    merged.extend_from_slice(left_row);
+    merged.resize(out_len, None);
     for (j, &cell) in right_row.iter().enumerate() {
         let p = right_to_out[j];
         if merged[p].is_none() {
@@ -266,7 +272,8 @@ fn left_outer_join_filtered(
     let right_to_out = right_to_out_map(&r.schema, &out);
     let shared = l.schema.shared_columns(&r.schema);
 
-    let mut rows = Vec::new();
+    // A left outer join emits at least one row per left row.
+    let mut rows = Vec::with_capacity(l.rows.len());
     for lrow in &l.rows {
         let mut matched = false;
         for rrow in &r.rows {
@@ -299,7 +306,8 @@ fn left_outer_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
 
     let (keyed, wild) = build_index(r, &shared);
 
-    let mut rows = Vec::new();
+    // A left outer join emits at least one row per left row.
+    let mut rows = Vec::with_capacity(l.rows.len());
     for lrow in &l.rows {
         let before = rows.len();
         match bound_key(lrow, &shared, KeySide::Left) {

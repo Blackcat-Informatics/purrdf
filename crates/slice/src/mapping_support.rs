@@ -391,7 +391,11 @@ pub(crate) fn rename_template_prefix(text: &str, prefix: &str) -> String {
     // `` `purrdf regenerate` `` banner) — emitted artifacts must carry no
     // trace of the template's authoring label.
     let out = replace_word(&out, TEMPLATE_PREFIX, prefix);
-    replace_word(&out, &TEMPLATE_PREFIX.to_uppercase(), &prefix.to_uppercase())
+    replace_word(
+        &out,
+        &TEMPLATE_PREFIX.to_uppercase(),
+        &prefix.to_uppercase(),
+    )
 }
 
 /// Replace word-boundary occurrences of `from` with `to` (boundaries are

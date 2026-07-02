@@ -226,8 +226,20 @@ fn value_of(ctx: &EvalCtx<'_>, term: SolutionTerm) -> TermValue {
 }
 
 /// Intern an `xsd:boolean` literal.
+///
+/// The two boolean terms are resolved **once per [`EvalCtx`]** (lazily) and then
+/// served from `cached_bool_terms`: a FILTER over N rows pays the value-hash
+/// intern probe once, not N times. The cache is exact — interning is
+/// deterministic for the context's pinned dataset and dedup-by-value scratch, so
+/// the cached term is the same `SolutionTerm` a fresh intern would produce.
 fn bool_term(ctx: &mut EvalCtx<'_>, b: bool) -> SolutionTerm {
-    intern(ctx, typed(if b { "true" } else { "false" }, XSD_BOOLEAN))
+    let slot = usize::from(b);
+    if let Some(term) = ctx.cached_bool_terms[slot] {
+        return term;
+    }
+    let term = intern(ctx, typed(if b { "true" } else { "false" }, XSD_BOOLEAN));
+    ctx.cached_bool_terms[slot] = Some(term);
+    term
 }
 
 /// Intern an `xsd:string` literal.
@@ -280,10 +292,42 @@ fn ebv_of(
 
 /// The effective boolean value of a concrete term (`None` = type error).
 fn ebv_term(ctx: &EvalCtx<'_>, term: SolutionTerm) -> Option<bool> {
-    let value = value_of(ctx, term);
-    match xsd_of(&value) {
+    match xsd_of_term(ctx, term) {
         Some(xv) => effective_boolean_value(&xv),
         None => None,
+    }
+}
+
+/// The XSD value of a solution term, resolved through **borrowed** views — a
+/// [`TermRef`] for dataset terms, the scratch table for computed ones — so the
+/// per-row comparison hot path parses without materializing an owned
+/// [`TermValue`]. Semantically identical to `xsd_of(&value_of(ctx, term))`.
+fn xsd_of_term(ctx: &EvalCtx<'_>, term: SolutionTerm) -> Option<XsdValue> {
+    match term {
+        SolutionTerm::Existing(id) => match ctx.dataset.resolve(id) {
+            TermRef::Literal {
+                lexical, datatype, ..
+            } => match ctx.dataset.resolve(datatype) {
+                TermRef::Iri(iri) => parse_by_iri(lexical, iri).ok().flatten(),
+                // A literal's datatype is always an interned IRI (C0.1).
+                other => unreachable!("literal datatype must be an IRI, got {other:?}"),
+            },
+            _ => None,
+        },
+        SolutionTerm::Computed(sid) => xsd_of(ctx.scratch.computed_value(sid)),
+    }
+}
+
+/// Whether a solution term is a literal, checked on the borrowed view (no
+/// materialization).
+fn term_is_literal(ctx: &EvalCtx<'_>, term: SolutionTerm) -> bool {
+    match term {
+        SolutionTerm::Existing(id) => {
+            matches!(ctx.dataset.resolve(id), TermRef::Literal { .. })
+        }
+        SolutionTerm::Computed(sid) => {
+            matches!(ctx.scratch.computed_value(sid), TermValue::Literal { .. })
+        }
     }
 }
 
@@ -307,9 +351,14 @@ fn compare(
     if ta == tb {
         return Ok(Some(bool_term(ctx, keep(Ordering::Equal))));
     }
-    let va = value_of(ctx, ta);
-    let vb = value_of(ctx, tb);
-    Ok(rdf_cmp(&va, &vb).map(|ord| bool_term(ctx, keep(ord))))
+    // Value-space comparison over borrowed term views (no owned TermValue
+    // clones). Distinct non-value terms (IRIs/blanks) or incomparable value
+    // spaces are a type error (`None`), exactly as before.
+    let ord = match (xsd_of_term(ctx, ta), xsd_of_term(ctx, tb)) {
+        (Some(ax), Some(bx)) => value_cmp(&ax, &bx),
+        _ => None,
+    };
+    Ok(ord.map(|ord| bool_term(ctx, keep(ord))))
 }
 
 /// Evaluate `a = b` under SPARQL RDFterm-equality (SPARQL §17.4.1.7 / `RDFterm-equal`):
@@ -335,21 +384,27 @@ fn equal(
     if ta == tb {
         return Ok(Some(bool_term(ctx, true)));
     }
-    let va = value_of(ctx, ta);
-    let vb = value_of(ctx, tb);
-    Ok(rdf_equal(&va, &vb).map(|eq| bool_term(ctx, eq)))
-}
-
-/// Compare two RDF terms in the SPARQL value space. `None` = a type error (the
-/// values are not comparable — e.g. distinct IRIs under `<`, or two literals in
-/// incomparable value spaces).
-fn rdf_cmp(a: &TermValue, b: &TermValue) -> Option<Ordering> {
-    match (xsd_of(a), xsd_of(b)) {
-        (Some(ax), Some(bx)) => value_cmp(&ax, &bx),
-        // Distinct non-value terms (IRIs/blanks): equality is decidable (handled by
-        // the sameTerm short-circuit above for `=`), but ordering is a type error.
-        _ => None,
-    }
+    // Distinct `SolutionTerm`s are distinct RDF terms BY CONSTRUCTION: the dataset
+    // builder interns terms by value (one id per value, table kept as-is at
+    // freeze), the scratch interner dedups by value, and the promotion rule makes
+    // an Existing/Computed cross-pair unequal in value. So `rdf_equal`'s
+    // structural `a == b` fallback can never fire once `ta != tb`; only the
+    // value-space comparison and the literal/non-literal split remain — evaluated
+    // here on borrowed views (no owned TermValue clones), semantically identical
+    // to `rdf_equal(&value_of(ctx, ta), &value_of(ctx, tb))`.
+    let eq = match (xsd_of_term(ctx, ta), xsd_of_term(ctx, tb)) {
+        (Some(ax), Some(bx)) => value_cmp(&ax, &bx).map(|o| o == Ordering::Equal),
+        _ => {
+            if term_is_literal(ctx, ta) && term_is_literal(ctx, tb) {
+                // Two different literals neither side could value-compare.
+                None
+            } else {
+                // Distinct terms of (at least one) non-literal kind: known unequal.
+                Some(false)
+            }
+        }
+    };
+    Ok(eq.map(|eq| bool_term(ctx, eq)))
 }
 
 /// `expr IN (list)`: true if equal (value semantics) to any list entry; an error in
@@ -1840,11 +1895,27 @@ fn eval_regex(
     }
 }
 
-fn cached_regex(ctx: &mut EvalCtx<'_>, pattern: &str, flags: &str) -> Option<regex::Regex> {
+/// The compiled regex for `(pattern, flags)`, from the per-query cache.
+///
+/// The hit path probes with the **borrowed** strings (the two-level map avoids
+/// allocating a `(String, String)` key per row) and returns an `Rc` clone — the
+/// rows of one filter share a single compiled regex and therefore its lazy-DFA
+/// cache pool, instead of each row cloning a fresh one. Compile failures are
+/// cached as `None` (same errors, compiled once).
+fn cached_regex(ctx: &mut EvalCtx<'_>, pattern: &str, flags: &str) -> Option<Rc<regex::Regex>> {
+    if let Some(cached) = ctx
+        .regex_cache
+        .get(pattern)
+        .and_then(|by_flags| by_flags.get(flags))
+    {
+        return cached.clone();
+    }
+    let compiled = build_regex(pattern, flags).map(Rc::new);
     ctx.regex_cache
-        .entry((pattern.to_owned(), flags.to_owned()))
-        .or_insert_with(|| build_regex(pattern, flags))
-        .clone()
+        .entry(pattern.to_owned())
+        .or_default()
+        .insert(flags.to_owned(), compiled.clone());
+    compiled
 }
 
 /// Build a regex from a SPARQL pattern + flag string (`i`, `s`, `m`, `x`).
@@ -2286,6 +2357,13 @@ mod tests {
         let re = Expression::FunctionCall(Function::Regex, vec![lit("Hello"), lit("^h"), lit("i")]);
         let bad =
             Expression::FunctionCall(Function::Regex, vec![lit("Hello"), lit("^h"), lit("z")]);
+        // Total `(pattern, flags)` entries across the pattern-keyed two-level map.
+        let entries = |ctx: &EvalCtx<'_>| {
+            ctx.regex_cache
+                .values()
+                .map(crate::DetHashMap::len)
+                .sum::<usize>()
+        };
 
         assert_eq!(
             eval_ebv(&re, &[], &schema, &mut ctx).expect("first regex"),
@@ -2295,7 +2373,7 @@ mod tests {
             eval_ebv(&re, &[], &schema, &mut ctx).expect("second regex"),
             Some(true)
         );
-        assert_eq!(ctx.regex_cache.len(), 1);
+        assert_eq!(entries(&ctx), 1);
 
         assert_eq!(
             eval_ebv(&bad, &[], &schema, &mut ctx).expect("invalid regex"),
@@ -2305,7 +2383,7 @@ mod tests {
             eval_ebv(&bad, &[], &schema, &mut ctx).expect("invalid regex cached"),
             None
         );
-        assert_eq!(ctx.regex_cache.len(), 2);
+        assert_eq!(entries(&ctx), 2);
     }
 
     #[test]
