@@ -9,6 +9,8 @@
 //! lexical forms VERBATIM — they never canonicalize a literal's value-space nor narrow
 //! its datatype (the whole point of the native codec: byte-for-byte lexical fidelity).
 
+use std::borrow::Cow;
+
 use crate::RdfDiagnostic;
 
 /// The kind of a serialization term.
@@ -153,9 +155,20 @@ const LITERAL_CLEAN: [bool; 256] = {
 /// instead of pushed a char at a time, and every non-clean char takes the exact same
 /// `escape_one` decision it would have taken per-char. `clean` marks only single-byte
 /// ASCII as clean, so the first non-clean byte is always a UTF-8 char boundary.
+///
+/// When every byte of `s` is `clean` (the stated common case: every production IRI,
+/// numeric/plain literals), this borrows `s` directly rather than allocating and
+/// copying — a single linear scan replaces the wasted `String::with_capacity` + copy.
 #[inline]
-fn escape_scan(s: &str, clean: &[bool; 256], escape_one: impl Fn(&mut String, char)) -> String {
+fn escape_scan<'a>(
+    s: &'a str,
+    clean: &[bool; 256],
+    escape_one: impl Fn(&mut String, char),
+) -> Cow<'a, str> {
     let bytes = s.as_bytes();
+    if bytes.iter().all(|&b| clean[b as usize]) {
+        return Cow::Borrowed(s);
+    }
     let mut out = String::with_capacity(s.len());
     let mut run_start = 0usize;
     let mut i = 0usize;
@@ -178,7 +191,7 @@ fn escape_scan(s: &str, clean: &[bool; 256], escape_one: impl Fn(&mut String, ch
     if run_start < bytes.len() {
         out.push_str(&s[run_start..]);
     }
-    out
+    Cow::Owned(out)
 }
 
 /// Push the `\u00XX` UCHAR escape for a code point known to be `<= 0xFF`
@@ -198,7 +211,7 @@ fn push_uchar_00(out: &mut String, v: u32) {
 /// control code point (C0 `0x00-0x1F`, DEL `0x7F`, and the C1 block `0x80-0x9F`) appearing
 /// raw; each rides as a `\uXXXX` `UCHAR` (the text parser decodes them back). A clean ASCII
 /// IRI (every production IRI) passes through byte-for-byte unchanged.
-fn escape_iri(iri: &str) -> String {
+fn escape_iri(iri: &str) -> Cow<'_, str> {
     escape_scan(iri, &IRI_CLEAN, |out, ch| match ch {
         '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
             push_uchar_00(out, ch as u32);
@@ -218,7 +231,7 @@ fn escape_iri(iri: &str) -> String {
 /// parser normalizes/replaces raw C1 code points on read — so the payload only survives an XML
 /// round-trip if the full control range rides as ASCII `\uXXXX`. The canonical form answers to
 /// RDFC-1.0 byte-conformance; this one answers to XML transport.
-fn escape_literal(lex: &str) -> String {
+fn escape_literal(lex: &str) -> Cow<'_, str> {
     escape_scan(lex, &LITERAL_CLEAN, |out, ch| match ch {
         '\\' => out.push_str("\\\\"),
         '"' => out.push_str("\\\""),
@@ -711,14 +724,16 @@ mod tests {
         /// arbitrary string (controls, C1, multi-byte unicode, and clean runs).
         #[test]
         fn escape_iri_matches_oracle(s in any::<String>()) {
-            prop_assert_eq!(escape_iri(&s), escape_iri_oracle(&s));
+            let got = escape_iri(&s);
+            prop_assert_eq!(got.as_ref(), escape_iri_oracle(&s));
         }
 
         /// The scan-first `escape_literal` equals the frozen per-char oracle on every
         /// arbitrary string.
         #[test]
         fn escape_literal_matches_oracle(s in any::<String>()) {
-            prop_assert_eq!(escape_literal(&s), escape_literal_oracle(&s));
+            let got = escape_literal(&s);
+            prop_assert_eq!(got.as_ref(), escape_literal_oracle(&s));
         }
     }
 }
