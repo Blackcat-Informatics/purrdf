@@ -179,7 +179,7 @@ fn split_line_chunks(text: &str, target_bytes: usize) -> Vec<&str> {
     while start < text.len() {
         let mut end = start.saturating_add(target).min(text.len());
         if end < text.len() {
-            end = match bytes[end..].iter().position(|&b| b == b'\n') {
+            end = match memchr::memchr(b'\n', &bytes[end..]) {
                 Some(offset) => end + offset + 1,
                 None => text.len(),
             };

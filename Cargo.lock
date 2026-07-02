@@ -1144,6 +1144,7 @@ dependencies = [
  "criterion",
  "ed25519-dalek",
  "hashbrown 0.15.5",
+ "memchr",
  "pretty_assertions",
  "proptest",
  "purrdf-core",

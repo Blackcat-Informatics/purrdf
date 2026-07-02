@@ -80,6 +80,9 @@ insta = "1.48"
 # crates/sparql-eval's target-gated dependency section).
 js-sys = "0.3"
 md-5 = { version = "0.10", default-features = false }
+# SIMD byte scanning (SWAR fallback, wasm-clean). Used by the native RDF codec
+# hot paths in purrdf-rdf only.
+memchr = "2"
 petgraph = { version = "0.8", default-features = false }
 pretty_assertions = "1"
 proptest = "1"
