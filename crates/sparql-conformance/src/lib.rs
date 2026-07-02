@@ -39,16 +39,22 @@ pub struct Summary {
     pub unexpected_pass: Vec<String>,
     /// Cases that failed without an xfail entry: `(case IRI, message)`.
     pub failed: Vec<(String, String)>,
-    /// Cases whose `rdf:type` the harness does not model (surfaced, not skipped).
+    /// Cases whose `rdf:type` the harness does not model. A HARD ERROR: an
+    /// unmodeled type is a silent-skip hole, so it fails the manifest until the
+    /// harness models the type (or a modeled no-op is added with a reason).
     pub unmodeled: Vec<String>,
 }
 
 impl Summary {
-    /// True when the manifest passed: no unexpected passes and no unexplained
-    /// failures (xfails are allowed).
+    /// True when the manifest passed: no unexpected passes, no unexplained
+    /// failures, and no unmodeled test types (xfails are allowed).
+    ///
+    /// `unmodeled` is fatal by design (the "no silent skips" doctrine): a test
+    /// whose `rdf:type` the harness does not recognize would otherwise pass
+    /// green without ever running, so it must fail loudly until modeled.
     #[must_use]
     pub fn is_ok(&self) -> bool {
-        self.unexpected_pass.is_empty() && self.failed.is_empty()
+        self.unexpected_pass.is_empty() && self.failed.is_empty() && self.unmodeled.is_empty()
     }
 
     /// A one-line tally for the run log.
@@ -73,6 +79,11 @@ impl Summary {
         }
         for (iri, msg) in &self.failed {
             lines.push(format!("  • FAIL {iri}: {msg}"));
+        }
+        for iri in &self.unmodeled {
+            lines.push(format!(
+                "  • UNMODELED (harness models no TestKind for this rdf:type — model it or add a reasoned no-op): {iri}"
+            ));
         }
         lines.join("\n")
     }

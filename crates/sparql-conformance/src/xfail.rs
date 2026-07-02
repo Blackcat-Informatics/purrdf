@@ -15,6 +15,11 @@
 //! manifest base), which is stable across vendored manifests.
 
 /// Why a conformance case is expected to fail today.
+///
+/// Each variant is a *typed, justified* reason — never a catch-all. The full
+/// W3C 1.1/1.2 corpus surfaces distinct failure classes, and bucketing them here
+/// (rather than skipping) keeps the ledger doubling as a precise roadmap: the
+/// matrix can report per-category counts, and a category emptying out is visible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XfailReason {
     /// Uses a construct the native engine deliberately does not support yet.
@@ -27,6 +32,25 @@ pub enum XfailReason {
     NonDeterministic,
     /// Known upstream erratum in the vendored fixture.
     UpstreamErratum,
+    /// Requires an entailment regime (RDF/RDFS/D/OWL) whose closure the native
+    /// reasoner does not (yet, or by spec-inherent boundary) materialize.
+    Entailment,
+    /// Invokes an extension / spec function or aggregate the engine has not
+    /// implemented.
+    CustomFunction,
+    /// A result-format / result-shape (CSV/TSV/SRJ ordering) the comparer does
+    /// not model.
+    ResultFormat,
+    /// An UPDATE operation whose post-state the engine computes differently
+    /// (e.g. graph-existence edge cases where `CREATE`/`CLEAR` are no-ops).
+    UpdateSemantics,
+    /// A property-path form (negated property sets, nested `{n,m}`, etc.) the
+    /// path evaluator does not yet handle.
+    PropertyPath,
+    /// Syntax the parser rejects — typically unstable SPARQL 1.2 / RDF-1.2
+    /// draft grammar. (Stable-but-unimplemented syntax is in-scope work, NOT a
+    /// ledger row.)
+    ParseUnsupported,
 }
 
 impl XfailReason {
@@ -38,6 +62,12 @@ impl XfailReason {
             Self::PendingService => "pending-service",
             Self::NonDeterministic => "non-deterministic",
             Self::UpstreamErratum => "upstream-erratum",
+            Self::Entailment => "entailment",
+            Self::CustomFunction => "custom-function",
+            Self::ResultFormat => "result-format",
+            Self::UpdateSemantics => "update-semantics",
+            Self::PropertyPath => "property-path",
+            Self::ParseUnsupported => "parse-unsupported",
         }
     }
 }

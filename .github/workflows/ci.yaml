@@ -36,6 +36,9 @@ jobs:
       - name: Enforce no Cargo features
         run: python3 scripts/check-no-features.py
 
+      - name: Check vendored-corpus license hygiene
+        run: python3 scripts/check-licenses.py
+
       - name: Check generated artifacts
         run: bash scripts/check-generated.sh
 
