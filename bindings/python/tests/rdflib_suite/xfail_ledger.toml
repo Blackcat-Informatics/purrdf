@@ -6,14 +6,16 @@
 # This ledger governs rdflib's OWN, verbatim-vendored tests (see vendor/) run
 # against `purrdf.compat.rdflib` via the top-level rdflib shadow (see runner.py). Each key
 # is a pytest node id RELATIVE to vendor/ (e.g. `test_collection.py::test_x`);
-# each value is a concrete reason a real gap exists, with the tracking issue.
+# each value is a concrete, self-describing reason a real gap exists.
 #
 # runner.py applies these as STRICT xfails: a ledgered test that starts passing
 # (XPASS) FAILS the gate, and a stale key (matching no collected test) FAILS the
 # gate — so this ledger only ever SHRINKS, never drifts. Mirrors the Rust
 # conformance harnesses' XPASS discipline (AGENTS.md §2).
 #
-# Scoreboard when authored: 50 passed / 36 xfailed (0 xpassed, 0 failed).
+# Current scoreboard (reconciled to the live suite): 62 passed / 24 xfailed
+# (0 xpassed, 0 failed, 0 errors; ledger 24/24 applied, 0 stale). This ledger
+# only shrinks: as gaps close, keys are pruned here and the pass count rises.
 # Grouped by theme in the comments below.
 
 [xfail]
