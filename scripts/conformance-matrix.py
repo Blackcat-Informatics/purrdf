@@ -215,7 +215,9 @@ def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
     """rdflib's OWN vendored tests run against the purrdf drop-in (Task 8)."""
     log = ""
     if build:
-        rc, bout = _run(["uv", "run", "maturin", "develop"], _PY_DIR)
+        rc, bout = _run(
+            ["uv", "run", "--group", "acceptance", "maturin", "develop"], _PY_DIR
+        )
         log += bout
         if rc != 0:
             return SuiteResult(
@@ -256,14 +258,18 @@ def _suite_py_compat(build: bool) -> SuiteResult:
     """The full first-party compat parity pytest suite."""
     log = ""
     if build:
-        rc, bout = _run(["uv", "run", "maturin", "develop"], _PY_DIR)
+        rc, bout = _run(
+            ["uv", "run", "--group", "acceptance", "maturin", "develop"], _PY_DIR
+        )
         log += bout
         if rc != 0:
             return SuiteResult(
                 "purrdf.compat parity", "first-party (differential vs rdflib)",
                 failed=-1, detail="maturin develop FAILED", ok=False, log=log,
             )
-    rc, out = _run(["uv", "run", "pytest", "tests", "-q"], _PY_DIR)
+    rc, out = _run(
+        ["uv", "run", "--group", "acceptance", "pytest", "tests", "-q"], _PY_DIR
+    )
     log += out
     passed = _int(re.search(r"(\d+) passed", out))
     xfailed = _int(re.search(r"(\d+) xfailed", out))
