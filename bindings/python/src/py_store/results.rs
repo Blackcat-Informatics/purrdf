@@ -172,9 +172,9 @@ pub(crate) fn parse_sparql_results<'py>(
                 ))),
             },
         },
-        SparqlResultsFormat::Csv | SparqlResultsFormat::Tsv => Err(PyValueError::new_err(
-            format!("parsing SPARQL results `{format}` is not supported (JSON/XML only)"),
-        )),
+        SparqlResultsFormat::Csv | SparqlResultsFormat::Tsv => Err(PyValueError::new_err(format!(
+            "parsing SPARQL results `{format}` is not supported (JSON/XML only)"
+        ))),
     }
 }
 

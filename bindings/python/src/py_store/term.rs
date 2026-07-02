@@ -735,9 +735,7 @@ mod tests {
         // A direction without a language tag is rejected (not a dirLangString).
         assert!(PyLiteral::new("x".to_owned(), None, None, Some("ltr")).is_err());
         // An unknown direction token is rejected (closed vocabulary).
-        assert!(
-            PyLiteral::new("x".to_owned(), None, Some("en".to_owned()), Some("up")).is_err()
-        );
+        assert!(PyLiteral::new("x".to_owned(), None, Some("en".to_owned()), Some("up")).is_err());
         // A plain/typed literal reports no direction.
         let plain = PyLiteral::new("x".to_owned(), None, None, None).expect("plain constructs");
         assert_eq!(plain.direction(), None);
