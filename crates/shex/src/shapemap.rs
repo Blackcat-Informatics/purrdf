@@ -25,8 +25,9 @@
 
 use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
 
+use crate::ast::Schema;
 use crate::error::{Result, ShexError};
-use crate::validate::ShapeSelector;
+use crate::validate::{validate_with, ResultShapeMap, ShapeSelector, ValidationOptions};
 
 /// `rdf:type`, the expansion of the `a` predicate keyword.
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -104,6 +105,35 @@ pub fn resolve_shape_map(map: &ShapeMap, data: &RdfDataset) -> Vec<(TermValue, S
         }
     }
     out
+}
+
+/// Parse, resolve, and validate a query shape map in one call: the
+/// one-call form of [`parse_shape_map`] → [`resolve_shape_map`] →
+/// [`crate::validate::validate_with`].
+///
+/// `map_src` is parsed against `base` and resolved against `data` exactly as
+/// [`resolve_shape_map`] does (deterministic order: de-duplicated, sorted by
+/// term string), then every resulting `(node, shape)` association is
+/// validated with `options` — the same [`crate::validate::validate_with`]
+/// call a single fixed shape map would use — and collected into a
+/// [`ResultShapeMap`] in that order.
+///
+/// # Errors
+///
+/// Returns an error only when `map_src` fails to parse (see
+/// [`parse_shape_map`]); a per-node validation failure is reported as a
+/// [`ConformanceStatus::Nonconformant`](crate::validate::ConformanceStatus)
+/// entry, not an `Err`.
+pub fn validate_shape_map(
+    schema: &Schema,
+    data: &RdfDataset,
+    map_src: &str,
+    base: Option<&str>,
+    options: &ValidationOptions<'_>,
+) -> Result<ResultShapeMap> {
+    let map = parse_shape_map(map_src, base)?;
+    let resolved = resolve_shape_map(&map, data);
+    Ok(validate_with(schema, data, &resolved, options))
 }
 
 /// Which triple position `FOCUS` occupies.

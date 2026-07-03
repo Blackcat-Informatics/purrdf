@@ -65,7 +65,10 @@ pub use error::{Result, ShexError};
 pub use imports::{resolve_imports, ImportResolver};
 pub use parser::parse_shexc;
 pub use semact::{SemActContext, SemActExtension, SemActRegistry, TEST_EXTENSION};
-pub use shapemap::{parse_shape_map, resolve_shape_map, NodeSelector, ShapeAssociation, ShapeMap};
+pub use shapemap::{
+    parse_shape_map, resolve_shape_map, validate_shape_map, NodeSelector, ShapeAssociation,
+    ShapeMap,
+};
 pub use shexc::to_shexc;
 pub use shexj::{parse_shexj, to_shexj};
 pub use structure::{check_structure, StructureError};
