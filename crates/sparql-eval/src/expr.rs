@@ -19,8 +19,8 @@
 //! **`ABS`/`CEIL`/`FLOOR`/`ROUND`**, and (Gap 4) **`ENCODE_FOR_URI`**,
 //! **`NOW`**, **`YEAR`/`MONTH`/`DAY`/`HOURS`/`MINUTES`/`SECONDS`**,
 //! **`TIMEZONE`/`TZ`**, **`MD5`/`SHA1`/`SHA256`/`SHA384`/`SHA512`**,
-//! **`RAND`**, and **`UUID`/`STRUUID`**. Still deferred (`Unsupported`):
-//! `SERVICE` (S6b #928), property paths (S8 #914), and `Function::Custom`.
+//! **`RAND`**, and **`UUID`/`STRUUID`**. Unsupported (`Unsupported`):
+//! `SERVICE`, property paths, and `Function::Custom`.
 
 use std::cmp::Ordering;
 use std::sync::Arc;

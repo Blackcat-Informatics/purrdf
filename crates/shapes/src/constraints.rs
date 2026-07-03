@@ -87,7 +87,8 @@ pub fn validate_shape_with<G: ShaclDataGraph>(
     // --- sh:closed (node-shape-level; needs the sibling property shapes) ---
     // `eval_closed` stamps each result's box roles itself — the source roles plus
     // the OFFENDING PREDICATE's path roles — so closed-world violations carry the
-    // same predicate attribution that property-shape results do (#700 Gap B).
+    // same predicate attribution that property-shape results do — violations
+    // must not drop their predicate role.
     for constraint in &shape.constraints {
         if let Constraint::Closed { ignored } = constraint {
             results.extend(eval_closed(store, focus, shape, ignored, box_role_vocab));
@@ -1588,7 +1589,7 @@ fn numeric_value(term: &Term) -> Option<f64> {
     // violated every `sh:minInclusive`/`sh:maxInclusive` facet. (The omission was
     // masked while data round-tripped through oxigraph's NT serializer, which
     // value-space-normalized such literals to `xsd:integer`; the oxigraph-free
-    // path, #906, is the faithful one and exposes the gap.)
+    // path is the faithful one and exposes the gap.)
     let local = lit.datatype_str().strip_prefix(XSD_NS)?;
     if matches!(
         local,
@@ -1839,7 +1840,7 @@ mod tests {
 
     #[test]
     fn numeric_value_covers_all_derived_integer_datatypes() {
-        // Regression (#906): `numeric_value` must read EVERY xsd numeric-derived
+        // `numeric_value` must read EVERY xsd numeric-derived
         // datatype, not just the primitives. The omission of the derived/unsigned
         // integers (e.g. xsd:nonNegativeInteger) made a faithful
         // `"1"^^xsd:nonNegativeInteger` value read as non-numeric and spuriously
@@ -2201,7 +2202,7 @@ mod tests {
     fn class_pass_asserted_subclass() {
         // ex:b is typed ex:SubFoo and the data ASSERTS ex:SubFoo rdfs:subClassOf
         // ex:Foo, so b is a SHACL instance of ex:Foo (SHACL §4.2.5) and the
-        // sh:class ex:Foo constraint conforms — matching pySHACL. See #599.
+        // sh:class ex:Foo constraint conforms — matching pySHACL.
         let store = load_store(
             "@prefix ex: <http://example.org/ns#> . @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> . @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> . ex:a ex:p ex:b . ex:b rdf:type ex:SubFoo . ex:SubFoo rdfs:subClassOf ex:Foo .",
         );
@@ -2288,7 +2289,7 @@ mod tests {
         assert!(component_iri(&results)[0].contains("Datatype"));
     }
 
-    // ── datatype derived-integer (oxigraph canonicalization, #598) ──────────────
+    // ── datatype derived-integer (oxigraph canonicalization) ────────────────────
 
     #[test]
     fn datatype_derived_nonneg_integer_pass() {
@@ -3063,7 +3064,7 @@ mod tests {
         assert!(validate_shape(&store, &literal_focus, &shape).is_empty());
     }
 
-    // ── #700: maxLength ────────────────────────────────────────────────────────
+    // ── maxLength ─────────────────────────────────────────────────────────────
 
     #[test]
     fn max_length_pass() {
@@ -3082,7 +3083,7 @@ mod tests {
         assert!(component_iri(&results)[0].contains("MaxLength"));
     }
 
-    // ── #700: languageIn ───────────────────────────────────────────────────────
+    // ── languageIn ────────────────────────────────────────────────────────────
 
     #[test]
     fn language_in_pass_prefix_match() {
@@ -3117,7 +3118,7 @@ mod tests {
         assert!(component_iri(&results)[0].contains("LanguageIn"));
     }
 
-    // ── #700: not ──────────────────────────────────────────────────────────────
+    // ── not ───────────────────────────────────────────────────────────────────
 
     #[test]
     fn not_pass_when_inner_violated() {
@@ -3153,7 +3154,7 @@ mod tests {
         assert!(component_iri(&results)[0].contains("NotConstraintComponent"));
     }
 
-    // ── #700: closed ───────────────────────────────────────────────────────────
+    // ── closed ────────────────────────────────────────────────────────────────
 
     fn closed_shape(ignored: Vec<NamedNode>, path_iris: &[&str]) -> Shape {
         use crate::shapes::Path;
@@ -3238,7 +3239,7 @@ mod tests {
     fn closed_violation_carries_predicate_box_roles() {
         // The offending (undeclared) predicate ex:age declares a graph-box role;
         // the closed-world result must carry it as PATH attribution — closed
-        // violations previously dropped predicate roles (#700 Gap B).
+        // violations must not drop predicate roles.
         let vocab = meta_vocab();
         let store = load_store(&format!(
             "@prefix ex: <{EX}> .\n\
