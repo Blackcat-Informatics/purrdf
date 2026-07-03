@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The static, allocation-free **read view** over an RDF dataset (purrdf P2,
-//! #836). See [`docs/design/purrdf-backend-contract.md`](../../../docs/design/purrdf-backend-contract.md).
+//! ). See [`docs/design/purrdf-backend-contract.md`](../../../docs/design/purrdf-backend-contract.md).
 //!
 //! [`DatasetView`] is the id-based, borrowed read interface: it yields `Copy`
 //! [`QuadIds`] and borrowed [`QuadRef`]s (no per-quad allocation, no term-string clones), and offers
 //! [`DatasetView::quads_for_pattern`] keyed on dataset-local [`TermId`]s plus a
 //! [`GraphMatch`]. The default `quads_for_pattern` is a linear scan; backends with
-//! access-pattern indexes (P4, #838) override it.
+//! access-pattern indexes (P4) override it.
 //!
 //! This is the **static** trait layer (generic `impl DatasetView`, RPITIT — not
 //! object-safe). Per the backend contract (C1), backend selection is compile-time
@@ -95,7 +95,7 @@ pub trait DatasetView: sealed::Sealed {
     /// Quads matching an optional `(s, p, o)` id pattern and a [`GraphMatch`].
     ///
     /// The default is an id-equality linear scan (no string resolution); backends
-    /// with access-pattern indexes (P4, #838) override this with an indexed lookup.
+    /// with access-pattern indexes (P4) override this with an indexed lookup.
     /// Callers resolve term *values* to ids first (`term_id_by_value`, P4).
     fn quads_for_pattern(
         &self,
@@ -124,7 +124,7 @@ pub trait DatasetView: sealed::Sealed {
 }
 
 /// The **write companion** to [`DatasetView`] — the mutation surface a copy-on-write
-/// or backed-by-store dataset exposes (purrdf P5, #839; backend contract C4).
+/// or backed-by-store dataset exposes (purrdf P5; backend contract C4).
 ///
 /// Where [`DatasetView`] reads in dataset-local [`TermId`]s, `DatasetMut` mutates by
 /// **value**: its [`Quad`](DatasetMut::Quad) associated type is an owned, dataset-
@@ -170,7 +170,7 @@ pub trait DatasetMut: sealed::Sealed {
     ) -> Vec<Self::Quad>;
 }
 
-/// The production read view: the immutable value-interned [`RdfDataset`] (#819 C1).
+/// The production read view: the immutable value-interned [`RdfDataset`] (C1).
 impl DatasetView for RdfDataset {
     #[inline]
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
@@ -197,7 +197,7 @@ impl DatasetView for RdfDataset {
         o: Option<TermId>,
         g: GraphMatch,
     ) -> impl Iterator<Item = QuadIds> + '_ {
-        // Indexed override (P4b, #891): lazy permutation indexes + a bound-set ->
+        // Indexed override (P4b): lazy permutation indexes + a bound-set ->
         // permutation -> partition_point dispatch, byte-identical to the trait's
         // default linear scan (differential proptest in `ir/dataset.rs`).
         Self::quads_for_pattern_indexed(self, s, p, o, g)

@@ -8,7 +8,7 @@ workspace. It owns the shared RDF model, RDF diagnostics, the interned IR
 (`TermId`/`RdfDataset`), store traits, `DatasetView`, and the oxigraph-free GTS
 readers.
 
-This crate is the **strong ring-fence** of the purrdf plan (#885, P2b): it has
+This crate is the **strong ring-fence** of the purrdf plan (P2b): it has
 **no oxigraph dependency at all**, so an accidental `use oxigraph` here is a
 compile error rather than a lint miss. The oxigraph adapter lives in the sibling
 `purrdf` crate, which depends on and re-exports this kernel. The invariant is

@@ -95,7 +95,7 @@ pub(crate) fn ground_term_to_value(term: &GroundTerm) -> TermValue {
         GroundTerm::NamedNode(n) => named_node_to_value(n),
         GroundTerm::Literal(l) => literal_to_value(l),
         GroundTerm::Triple(t) => ground_triple_to_value(t),
-        // Injection-only (#906 GAP-A): a substituted blank-node focus node. The
+        // Injection-only (GAP-A): a substituted blank-node focus node. The
         // default blank scope matches the dataset's interned blank identity for
         // `term_id_by_value` resolution.
         GroundTerm::BlankNode(b) => TermValue::Blank {

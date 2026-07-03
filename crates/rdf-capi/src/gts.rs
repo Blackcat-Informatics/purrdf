@@ -11,7 +11,7 @@
 //! GTS is a lossless container: both the plain-graph data AND the full RDF-1.2
 //! statement layer (quoted triples + reifier bindings) survive the round-trip.
 //! The earlier `gts-missing-reifier-binding` gap was closed by the native
-//! text-codec work (#909); see [`purrdf_from_gts`].
+//! text-codec work; see [`purrdf_from_gts`].
 
 use std::os::raw::c_char;
 
@@ -32,7 +32,7 @@ use crate::status::PurrdfStatus;
 /// **Lossless**, including the RDF-1.2 statement layer: a reifier-bound quoted
 /// triple written by `to_gts` is read back intact via the canonical fold-back
 /// (`read_graph` → `import_gts_graph`). The earlier `gts-missing-reifier-binding`
-/// gap was closed by the native text-codec work (#909).
+/// gap was closed by the native text-codec work.
 ///
 /// # Safety
 /// `bytes` must be valid for `len` bytes; the out-params must be writable.

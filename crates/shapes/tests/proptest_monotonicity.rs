@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Property-based SHACL conformance monotonicity (#787, T6 of #781).
+//! Property-based SHACL conformance monotonicity (T6 of).
 //!
 //! # The property
 //!

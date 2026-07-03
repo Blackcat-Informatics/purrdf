@@ -352,7 +352,7 @@ mod tests {
         // With no folded annotations the reifier's annotations are emitted as
         // standalone triples that reference it by blank-node label, so the
         // reifier must keep that label (not collapse to an anonymous `[]`),
-        // else the rdf:reifies binding is severed from its annotations. (#666)
+        // else the rdf:reifies binding is severed from its annotations.
         let triple = RdfTriple::new(
             iri("http://example.org/s"),
             "http://example.org/p",

@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! W3C RDF 1.2 syntax-suite **round-trip** conformance gate for the native
-//! `purrdf` text codecs (#909 acceptance: "W3C syntax test suites round-trip").
+//! `purrdf` text codecs (acceptance: "W3C syntax test suites round-trip").
 //!
 //! This harness is deliberately **oxigraph-free**: a green run proves the native Turtle /
 //! TriG / N-Triples / N-Quads / RDF-XML codecs parse and round-trip the official W3C
-//! suites with no Store dependency (EPIC #906 end-state).
+//! suites with no Store dependency ( end-state).
 //!
 //! ## What it does (per the W3C RDF test semantics)
 //!
@@ -42,7 +42,7 @@ use purrdf_rdf::{
 /// strict W3C manifest expects, keyed by `mf:name` → reason. A failing allowlisted case
 /// is tolerated; a passing allowlisted case is flagged STALE (prune it).
 ///
-/// As of purrdf-gts 0.9.7 (#909) the native codecs pass the **entire** W3C RDF 1.2 syntax
+/// As of purrdf-gts 0.9.7 the native codecs pass the **entire** W3C RDF 1.2 syntax
 /// suite — Turtle, TriG, N-Triples, N-Quads, and RDF/XML — with NO gaps:
 ///
 /// - The former **G2** serializer gap (a triple term in quad-object position tripping a

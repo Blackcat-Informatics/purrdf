@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! SPARQL property-path evaluation (S8 #914) — the wasm-safe in-engine runtime.
+//! SPARQL property-path evaluation (S8) — the wasm-safe in-engine runtime.
 //!
 //! A property path constrains two endpoints by a *relation* between them rather
 //! than a single triple. This module evaluates the `Path` graph pattern entirely in

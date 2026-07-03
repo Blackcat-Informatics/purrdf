@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Typed term identity and interned-term storage for the immutable IR (#819 C1).
+//! Typed term identity and interned-term storage for the immutable IR (C1).
 //!
 //! These types realize the normative C0 identity contract (see
 //! `docs/design/819-rdf-ir-dataflow.md`, *Appendix C0*):
@@ -31,7 +31,7 @@ pub(crate) const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-synta
 /// (C0.8). Any consumer needing a durable identifier MUST resolve the term to its
 /// RDF value rather than retaining a `TermId`.
 ///
-/// # Layout (#837 P3a)
+/// # Layout (P3a)
 ///
 /// The inner value is a [`NonZeroU32`] holding `dense_index + 1`, so the all-zero
 /// bit pattern is free for the [`Option`] niche: `Option<TermId>` is **4 bytes**
@@ -98,7 +98,7 @@ impl TermId {
     }
 }
 
-// The NonZeroU32 niche is the load-bearing P3a invariant (#837): it is *why*
+// The NonZeroU32 niche is the load-bearing P3a invariant: it is *why*
 // `Option<TermId>` — and the `g` graph slot of every quad row — costs no extra
 // word. These compile-time assertions fail the build if the niche ever regresses.
 const _: () = assert!(size_of::<TermId>() == 4);
@@ -146,7 +146,7 @@ impl Default for BlankScope {
 /// An interned literal. The identity key per C0.1: datatype is ALWAYS expanded to
 /// an interned IRI [`TermId`]; the language tag is lowercased; base direction is in
 /// the key; and the lexical spelling is preserved verbatim.
-/// A `(offset, len)` range into the interner's byte arena (#879 P3b). Each interned
+/// A `(offset, len)` range into the interner's byte arena (P3b). Each interned
 /// string is stored once in the arena rather than as its own `Box<str>`, so a term
 /// holds only this 8-byte range — `InternedTerm` becomes `Copy` and per-term heap
 /// allocations collapse to one growable arena.
@@ -186,7 +186,7 @@ pub(crate) struct InternedLiteral {
 
 /// An interned term — the storage form behind a [`TermId`]. Crate-private: the IR
 /// exposes terms through resolved views, never this internal representation. Strings
-/// are `StrRange`s into the interner's byte arena (#879).
+/// are `StrRange`s into the interner's byte arena.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum InternedTerm {
     /// An IRI, by its arena range.
@@ -201,8 +201,7 @@ pub(crate) enum InternedTerm {
 }
 
 /// A **dataset-independent** term value — the lookup key for
-/// [`RdfDataset::term_id_by_value`](super::RdfDataset::term_id_by_value) (purrdf P4,
-/// #838).
+/// [`RdfDataset::term_id_by_value`](super::RdfDataset::term_id_by_value) (purrdf P4).
 ///
 /// Unlike [`crate::ir::TermRef`] (whose literal-datatype and triple-component slots carry
 /// dataset-local [`TermId`]s), `TermValue` expresses every component **by value** —
@@ -323,7 +322,7 @@ impl TermValue {
 // `Hash` is hand-written (not derived) with **explicit** discriminant tags so it is
 // robust against compiler-dependent enum-discriminant hashing AND matches the
 // allocation-free `RdfDataset::hash_term` (which hashes the interned representation
-// directly) byte-for-byte (#838). The two MUST stay in sync — the
+// directly) byte-for-byte. The two MUST stay in sync — the
 // `term_id_by_value` round-trip tests fail if they diverge. `String`/`Box<str>`/
 // `&str` all hash via `str`, so the by-value datatype here matches the resolved IRI
 // string there.
@@ -385,7 +384,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "cannot exceed u32::MAX entries")]
     fn term_id_from_index_rejects_u32_max() {
-        // `index + 1` would overflow the id space; the mint hard-fails (#837).
+        // `index + 1` would overflow the id space; the mint hard-fails.
         let _ = TermId::from_index(u32::MAX);
     }
 
@@ -408,7 +407,7 @@ mod tests {
     fn interned_literal_equality_includes_direction() {
         let a = InternedLiteral {
             // The arena range is irrelevant here — this pins that base direction
-            // participates in literal identity (#879: lexical form is now a range).
+            // participates in literal identity (: lexical form is now a range).
             lexical_form: StrRange { offset: 0, len: 1 },
             datatype: TermId::from_index(0),
             language: None,

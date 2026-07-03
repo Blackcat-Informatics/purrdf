@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Layout / IR benchmark for the value-interned `RdfDataset` (#819 C1, Task 7).
+//! Layout / IR benchmark for the value-interned `RdfDataset` (C1, Task 7).
 //!
-//! The #819 RFC removes "columnar" and "zero-copy" as *asserted* commitments and
+//! The RFC removes "columnar" and "zero-copy" as *asserted* commitments and
 //! replaces them with a measurable gate: *"Layout is chosen by benchmark, not
 //! asserted"* and *"Benchmarks report total allocated bytes, allocation count, peak
 //! memory, index-build cost, and end-to-end latency — not only quads/sec."* This
@@ -454,7 +454,7 @@ fn bench_resolve(c: &mut Criterion) {
     group.finish();
 }
 
-/// P4b (#891) indexed `quads_for_pattern` vs the linear scan, on WARM permutation
+/// P4b indexed `quads_for_pattern` vs the linear scan, on WARM permutation
 /// indexes. Each `(s|p|o)`-bound shape exercises a different permutation (SPOG / POS /
 /// OSP); the scan baseline is the same id-equality filter the trait default runs.
 fn bench_pattern_warm(c: &mut Criterion) {

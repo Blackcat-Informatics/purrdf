@@ -119,7 +119,7 @@ impl PyShapes {
 
     /// Validate an N-Triples data graph against these parsed shapes.
     fn validate_nt(&self, py: Python<'_>, data_nt: &str) -> PyResult<PyValidationReport> {
-        // Native codec ingest (#909): lenient on private-use language tags, every
+        // Native codec ingest: lenient on private-use language tags, every
         // malformed line reported in one pass. The engine runs over the frozen IR.
         // Both the ingest and the validation run detached (GIL released).
         let shapes = &self.inner;
@@ -137,7 +137,7 @@ impl PyShapes {
     /// `data` must be an object (typically `purrdf_validate.ValidationStore`) that
     /// exposes an internal `_store_capsule()` method returning a capsule borrowing a
     /// frozen `Arc<RdfDataset>` snapshot. This avoids serialising the store to
-    /// N-Triples for each validation phase (#634).
+    /// N-Triples for each validation phase.
     ///
     /// # Errors
     ///
@@ -239,7 +239,7 @@ impl PyValidationReport {
 ///
 /// Exposes the legacy `validate(shapes_ttl, data_nt)` function and the reusable
 /// `Shapes` / `ValidationReport` wrappers used by the Rust-native orchestration
-/// in `purrdf-validate`. Called by the unified `purrdf_native` cdylib (#630) to
+/// in `purrdf-validate`. Called by the unified `purrdf_native` cdylib to
 /// populate the `purrdf_native.shacl` submodule.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate, m)?)?;

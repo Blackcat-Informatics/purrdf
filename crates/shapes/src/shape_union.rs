@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The shared SHACL shape-file set (#700).
+//! The shared SHACL shape-file set.
 //!
 //! Replicates EXACTLY the shape union the Python validator builds in
 //! `src/purrdf_tools/validate.py::_shapes_turtle` so the JSON-Schema emitter sees
@@ -76,13 +76,13 @@ pub fn shape_files(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 /// [`shapes::from_dataset_with_prefixes`] (the frozen IR does not retain prefix
 /// maps): SHACL-AF `sh:select` queries — e.g. the music `MetricGroupShape`
 /// uniqueness constraint — use prefixed names like `meta:` and fail to parse
-/// without them. This mirrors the live validator (`engine::parse_shapes`, #578).
+/// without them. This mirrors the live validator (`engine::parse_shapes`).
 /// When the same prefix is declared in multiple files, the last declaration wins
 /// (deterministic via the merge order over the sorted file list).
 ///
 /// Blank labels are scoped per source file: a NodeShape's anonymous property shapes
 /// (`sh:property [ … ]`) restart the blank counter per file, so merging several
-/// shape files unscoped would fuse distinct property shapes (#909).
+/// shape files unscoped would fuse distinct property shapes.
 /// [`RdfDataset::union`] standardizes each input's blanks apart under a fresh scope,
 /// providing exactly that per-file isolation.
 ///
@@ -99,7 +99,7 @@ pub fn load_shapes(repo_root: &Path) -> Result<(Arc<RdfDataset>, Shapes), String
             .map_err(|e| format!("failed to read shape file {}: {e}", file.display()))?;
         let text = std::str::from_utf8(&bytes)
             .map_err(|e| format!("shape file {} is not UTF-8: {e}", file.display()))?;
-        // Parse via the native codecs (#909). The native codec drops document
+        // Parse via the native codecs. The native codec drops document
         // prefixes once it folds to the IR, so the per-file `@prefix` map is
         // recovered by scanning the source text — see the doc comment above.
         let dataset = parse_dataset(&bytes, "text/turtle", None)

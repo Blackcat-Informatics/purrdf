@@ -13,7 +13,7 @@
 //! `VALUES`/template constant absent from the data.
 //!
 //! [`ScratchInterner::intern`] **first probes the dataset**
-//! (`term_id_by_value`, P4 #838): if the value already exists, the binding is
+//! (`term_id_by_value`, P4): if the value already exists, the binding is
 //! promoted to [`SolutionTerm::Existing`] and never becomes `Computed`. The
 //! consequence is load-bearing:
 //!

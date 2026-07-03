@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The **authoritative** GTS ingestion path: a [`StreamingSink`] that preserves
-//! per-segment blank-node scope while folding into the immutable IR (#819 C2.a).
+//! per-segment blank-node scope while folding into the immutable IR (C2.a).
 //!
 //! `purrdf_gts::reader::read()` folds every segment into one append-order term
 //! table, which destroys per-segment blank-node scope (the same `_:b1` label in

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Acceptance tests for the phase-specific Merkle cache + SCC/profile
-//! composition (RFC #820 §12 / §8, child S6a). All fixtures are hermetic
+//! composition ( §12 / §8, child S6a). All fixtures are hermetic
 //! (`tempfile`); no repository state is read.
 
 use std::fmt::Write as _;

@@ -5,7 +5,7 @@
 //!
 //! All constants are plain `&'static str` IRIs. Native query patterns key on the
 //! IRI string directly; constructors like [`crate::term::NamedNode::from`] wrap one
-//! into a term when a value is needed (EPIC #906).
+//! into a term when a value is needed.
 
 /// SHACL namespace constants (`http://www.w3.org/ns/shacl#`).
 pub mod sh {

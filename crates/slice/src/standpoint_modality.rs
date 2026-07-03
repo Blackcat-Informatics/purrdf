@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Factored claim-modality projection (#769, ME3 of #766).
+//! Factored claim-modality projection (ME3 of).
 //!
 //! The closed 5-value `purrdf:StandpointModality` vocabulary fuses four separable
 //! epistemic notions onto one axis. The standpoint slice now decomposes it into
@@ -18,7 +18,7 @@
 //!   or a HARD [`ProjectionVerdict::Unsupported`]. A tuple with no legacy twin
 //!   (e.g. `supportBoth`, `modalForceCounterfactual`, `assertoricRetract`,
 //!   `truthStrategic`) is NEVER silently approximated to a nearby value — the
-//!   `logic-compile`'s `compat.rs` "never silently approximate" doctrine (#767), transplanted to
+//!   `logic-compile`'s `compat.rs` "never silently approximate" doctrine, transplanted to
 //!   the purrdf: domain (Principle 9).
 //!
 //! # Single source of truth
@@ -32,7 +32,7 @@
 /// separator that cannot occur in a local name (mirrors `logic-compile`'s `ir.rs` `SEP`).
 const SEP: &str = "\u{1f}";
 
-/// The canonical six-axis decomposition of a standpoint modality (#769).
+/// The canonical six-axis decomposition of a standpoint modality.
 ///
 /// Axis values are local names (e.g. `"polarityDeny"`), not enums, so a new value
 /// individual added to `module.ttl` joins the vocabulary without a Rust change —

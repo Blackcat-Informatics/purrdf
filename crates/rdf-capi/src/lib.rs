@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! # libpurrdf — the PurRDF purrdf semantic RDF-1.2 C-ABI (purrdf P8, #842)
+//! # libpurrdf — the PurRDF purrdf semantic RDF-1.2 C-ABI (purrdf P8)
 //!
 //! A stable, SemVer-disciplined `extern "C"` surface over the native
 //! `purrdf` semantic stack. It is the rich companion to the permissive

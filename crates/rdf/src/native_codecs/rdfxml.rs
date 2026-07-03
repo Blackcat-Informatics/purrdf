@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! First-party RDF/XML codec (W3C RDF 1.1 / RDF-XML grammar) — EPIC #906.
+//! First-party RDF/XML codec (W3C RDF 1.1 / RDF-XML grammar) — .
 //!
 //! This module REPLACES the external purrdf-gts `rdf_codecs::{from_rdf_xml,
 //! to_rdf_xml}` codecs (the first-party mandate: RDF/XML must NOT be parsed or

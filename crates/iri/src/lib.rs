@@ -5,7 +5,7 @@
 //!
 //! A pure-Rust, **zero-runtime-dependency**, wasm-clean leaf crate: the drop-in
 //! replacement for the oxigraph-family `oxiri`, and the second foundation slice of
-//! the native SPARQL engine (purrdf S2, EPIC #906). It is deliberately decoupled
+//! the native SPARQL engine (purrdf S2). It is deliberately decoupled
 //! from `purrdf-core` (no dependency in either direction yet); the IR keeps
 //! IRIs **lexical-verbatim** (Constitution C0.1) and this crate is the
 //! validation/resolution layer beside it.

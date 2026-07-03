@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Oxigraph-free RDF query surface for the slice emitters and linters (EPIC #906).
+//! Oxigraph-free RDF query surface for the slice emitters and linters.
 //!
 //! The slice crate used to parse Turtle/N-Triples into an `oxigraph::store::Store`
 //! and pattern-match it. Every store/term type is now native: parsing folds the

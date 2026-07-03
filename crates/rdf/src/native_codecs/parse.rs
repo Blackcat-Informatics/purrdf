@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn malformed_text_is_rejected_without_unwinding() {
-        // The first-party line/Turtle-family parser (EPIC #906) returns a clean parse
+        // The first-party line/Turtle-family parser returns a clean parse
         // diagnostic for malformed input rather than unwinding — strictly better than
         // the prior purrdf-gts codec, which panicked on this fragment and relied on the
         // `catch_unwind` guard to convert the panic to `native-codec-panic`. The guard

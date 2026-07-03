@@ -3554,7 +3554,7 @@ mod tests {
         );
     }
 
-    // ── Bounded repetition {n,m} + predicate wildcard (#1010 PurRDF extensions) ──
+    // ── Bounded repetition {n,m} + predicate wildcard (PurRDF extensions) ──
 
     fn path_of(q: &str) -> PropertyPathExpression {
         match unproject(select_pattern(q)) {

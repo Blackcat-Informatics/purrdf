@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The **permissive RDF 1.2 ingestion protocol** (purrdf P6, #840): the neutral
+//! The **permissive RDF 1.2 ingestion protocol** (purrdf P6): the neutral
 //! event seam that an RDF *source* (a parser, a GTS reader, a frozen-dataset
 //! replayer) uses to push a dataset *into* a *sink* (an IR builder, a serializer)
 //! WITHOUT either side knowing the other's concrete types.

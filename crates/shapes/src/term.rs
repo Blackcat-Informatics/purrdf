@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The SHACL engine's native RDF 1.2 term value model (EPIC #906).
+//! The SHACL engine's native RDF 1.2 term value model.
 //!
 //! The engine, constraint evaluator, path evaluator, shape parser, and report all
 //! work over ONE term value type. Historically that type was

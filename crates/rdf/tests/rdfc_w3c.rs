@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! W3C RDF Dataset Canonicalization (RDFC-1.0) conformance gate (#910).
+//! W3C RDF Dataset Canonicalization (RDFC-1.0) conformance gate.
 //!
 //! The vendored W3C `rdf-canon` test suite (`tests/fixtures/rdfc/`, see
 //! `SOURCE.md`) is the acceptance gate for the native canonicalizer. Each
 //! `testNNN-in.nq` input is parsed with the native [`purrdf_rdf::parse_dataset`] codec
-//! (oxigraph-free, EPIC #906), canonicalized graph-preservingly by
+//! (oxigraph-free), canonicalized graph-preservingly by
 //! [`purrdf_rdf::canonicalize_with`], and its canonical N-Quads compared to
 //! the expected `testNNN-rdfc10.nq`. Inputs WITHOUT an expected output are
 //! **negative** (poison / complexity-limit) tests that must abort rather than
@@ -16,7 +16,7 @@
 //! blank-node symmetries can only be resolved by RDFC-1.0's n-degree permutation
 //! backtracking — a weaker (hash-only) implementation fails them.
 //!
-//! ## Sharding + heavy carve-out for the 25 s per-test budget (#1045)
+//! ## Sharding + heavy carve-out for the 25 s per-test budget
 //!
 //! The full 65-fixture suite runs ~28–32 s on CI, over the always-on 25 s budget.
 //! Per-fixture timing (2026-06-26) showed the cost is NOT spread: exactly one
@@ -42,11 +42,11 @@ use purrdf_rdf::{canonicalize_with, parse_dataset, CanonHash, NativeRdfFormat};
 /// ("blank node - diamond (uses SHA-384)").
 const SHA384_TESTS: &[&str] = &["test075"];
 
-/// How many independent shard tests the GATED (non-heavy) subset is split across (#1045).
+/// How many independent shard tests the GATED (non-heavy) subset is split across.
 const NUM_SHARDS: usize = 4;
 
 /// OFF-GATE heavy fixtures: stems whose canonicalization is too slow to fit the 25 s
-/// always-on per-test budget (#1045). Carved out of the gated shards and exercised
+/// always-on per-test budget. Carved out of the gated shards and exercised
 /// only on the maint lane via [`w3c_rdfc10_heavy_offgate`].
 ///
 /// Current entry: `test074` — the suite's sole negative/poison vector. The native
@@ -87,7 +87,7 @@ fn fixtures_dir() -> PathBuf {
 /// gated shards so the suite stays green while the gap stays VISIBLE and tracked
 /// (not silently dropped).
 ///
-/// NOW EMPTY (EPIC #906): the first-party N-Triples/N-Quads/Turtle/TriG parser decodes
+/// NOW EMPTY: the first-party N-Triples/N-Quads/Turtle/TriG parser decodes
 /// `\u`/`\U` UCHAR escapes inside IRIREFs (reusing the sparql-algebra term lexer), so
 /// `test060` (`<urn:ex:s:000:s⁰1>` etc.) parses and canonicalizes correctly. The slot
 /// is retained (empty) so a future native-parse gap can be tracked here rather than
@@ -230,7 +230,7 @@ fn run_w3c_shard(shard: usize) {
 }
 
 // ---------------------------------------------------------------------------
-// Gated shard entry points (#1045)
+// Gated shard entry points
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -255,7 +255,7 @@ fn w3c_rdfc10_shard_3() {
 
 // ---------------------------------------------------------------------------
 // Off-gate heavy vectors (maint lane only; excluded from the per-commit gate via
-// `default-filter` in `.config/nextest.toml`) (#1045)
+// `default-filter` in `.config/nextest.toml`)
 // ---------------------------------------------------------------------------
 
 /// OFF-GATE: runs exactly the [`HEAVY_OFFGATE_STEMS`] (the sole negative/poison

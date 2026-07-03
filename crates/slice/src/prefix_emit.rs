@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Prefix-set projections (#1009 §2): the importable named prefix set
+//! Prefix-set projections (§2): the importable named prefix set
 //! (`<vocab>CorePrefixes`) and the JSON-LD `@context` document — both *projections*
 //! of the single prefix authority (the caller's [`SliceVocab`] entry plus
 //! [`crate::mapping_support::PREFIX_REGISTRY`]).
@@ -10,7 +10,7 @@
 //! shape / `.rq` author redeclaring the same prefixes, publish ONE named set,
 //! importable by IRI, that consumers reference with `... sh:prefixes
 //! <prefix>:CorePrefixes .`. The same registry also drives the JSON-LD `@context`,
-//! which replaces the now-retired Python `jsonld_context.py` builder (#933 Python
+//! which replaces the now-retired Python `jsonld_context.py` builder (Python
 //! cull — the `@context` builder moves to Rust).
 //!
 //! Both artifacts are emitted as the `mappings` stage's projection family (they
@@ -75,7 +75,7 @@ pub fn emit_core_prefixes(vocab: &SliceVocab) -> String {
 
 /// Emit the JSON-LD `@context` document from the prefix authority.
 ///
-/// Replaces `src/purrdf_tools/jsonld_context.py::build_context` (#933). Shape:
+/// Replaces `src/purrdf_tools/jsonld_context.py::build_context`. Shape:
 /// `{"@context": {"@vocab": <vocab ns>, <prefix>: <namespace>, ...}}` with a
 /// trailing newline, 2-space indent, registry insertion order preserved (the
 /// caller's vocab entry first) — the same logical document the retired Python

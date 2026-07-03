@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 [`purrdf`](../purrdf) umbrella crate and surfaced to JavaScript/TypeScript through the
 [RDF/JS](https://rdf.js.org/) community spec (`DataFactory`, `DatasetCore`,
 `Stream`/`Sink`). It is parcel **P10** of the purrdf program
-(EPIC #832, [`docs/design/PurRDF-PLAN.md`](../../docs/design/PurRDF-PLAN.md)).
+([`docs/design/PurRDF-PLAN.md`](../../docs/design/PurRDF-PLAN.md)).
 
 This crate (`purrdf-wasm`) is the Rust cdylib; the published npm/ESM package lives
 in [`js/`](./js/) and is named **`@blackcatinformatics/purrdf`**.

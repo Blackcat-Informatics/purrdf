@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Capture the native SPARQL engine as committed goldens (EPIC #906 Task 2/8).
+//! Capture the native SPARQL engine as committed goldens ( Task 2/8).
 //!
-//! EPIC #906 removed oxigraph; the native [`NativeSparqlEngine`] is now the SOLE
+//!  removed oxigraph; the native [`NativeSparqlEngine`] is now the SOLE
 //! SPARQL authority (the cutover proved native ≡ oxigraph). This maintainer-only
 //! binary captures the native engine's deterministic SPARQL outputs over OUR corpus
 //! (`queries/**` + `generated/queries/**`) and over the GAP-A `$this`-substitution

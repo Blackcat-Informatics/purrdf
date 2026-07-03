@@ -68,11 +68,11 @@ pub struct ManifestView {
     /// `<vocab>sliceProfile` values — the named profiles this slice declares
     /// membership in (e.g. `claims`, `memory`, `narrative`). Profile-document
     /// generation lives in the pipeline; this view exposes the raw declarations
-    /// so docs consumers can compute per-term profile membership (#1026).
+    /// so docs consumers can compute per-term profile membership.
     pub profiles: Vec<String>,
     /// `<vocab>sliceDependsOn` values — the slice IRIs this slice depends on.
     /// A named profile's membership is the closure of its declared members over
-    /// this relation (#330); docs reuse it for the same closure (#1026).
+    /// this relation; docs reuse it for the same closure.
     pub depends_on: Vec<String>,
 }
 
@@ -88,7 +88,7 @@ pub struct SliceRecord {
     pub artifacts: Vec<ArtifactRecord>,
     /// The on-disk slice directory the record was loaded from. Retained so the
     /// authoritative `manifest.ttl` path is known without any scan/substring
-    /// match (#820 G8: the discover walk already knows it).
+    /// match (G8: the discover walk already knows it).
     pub slice_dir: PathBuf,
 }
 
@@ -384,10 +384,10 @@ fn compute_semantic_digest(bytes: &[u8], path: &Path) -> Result<String, SliceErr
     // non-deterministically, so a plain sorted-N-Triples digest would differ
     // run-to-run for any artifact that uses blank nodes (e.g. SHACL property shapes,
     // OWL restrictions). Canonicalization makes the *semantic* digest a stable
-    // function of the graph's identity (RFC #820 §12 — semantic, path-independent,
+    // function of the graph's identity ( §12 — semantic, path-independent,
     // deterministic keys).
     //
-    // Native full RDFC-1.0 (#910): the `canonical_nquads_flat` projection flattens the
+    // Native full RDFC-1.0: the `canonical_nquads_flat` projection flattens the
     // RDF 1.2 statement overlay back to plain `rdf:reifies`/annotation triples and
     // canonicalizes that flat set, byte-identical to the prior oxigraph-quad path.
     let canonical = dataset.canonical_nquads_flat()?;

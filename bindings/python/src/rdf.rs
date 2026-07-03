@@ -33,7 +33,7 @@ fn normalize_rdf12_to_owl(py: Python<'_>, rdf12_ttl: &str) -> PyResult<String> {
         .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
-/// The machine-readable RDF↔GTS loss matrix as deterministic JSON (#819 C0).
+/// The machine-readable RDF↔GTS loss matrix as deterministic JSON (C0).
 ///
 /// Mirrors the committed `generated/rdf-loss-matrix.json` artifact so Python
 /// consumers read the same enumerated, intentional conversion losses the Rust
@@ -43,7 +43,7 @@ fn loss_matrix_json() -> String {
     loss::loss_matrix_json()
 }
 
-/// Canonical, review-friendly Turtle serialization over the purrdf IR (#819
+/// Canonical, review-friendly Turtle serialization over the purrdf IR (
 /// Task 9) — the native replacement for rdflib `longturtle` in `purrdf normalize`.
 ///
 /// `extra_prefixes` is the project's standard prefix set; only prefixes the
@@ -64,7 +64,7 @@ fn canonicalize_turtle(
 
 /// Register the `purrdf` surface on a Python module.
 ///
-/// Called by the unified `purrdf_native` cdylib (#630) to populate the
+/// Called by the unified `purrdf_native` cdylib to populate the
 /// `purrdf_native.rdf` submodule; the legacy `import purrdf` name resolves to
 /// that same submodule object via a Python shim.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -73,15 +73,15 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(loss_matrix_json, m)?)?;
     m.add_function(wrap_pyfunction!(canonicalize_turtle, m)?)?;
     // The native oxigraph Store / SPARQL / parse / canonicalize surface that
-    // replaces the external `pyoxigraph` package (#667).
+    // replaces the external `pyoxigraph` package.
     crate::py_store::register(m)?;
     // The native RDF → GTS producer surface (snapshot author + compile_gts) and
-    // the `PyRdfDataset` Arc handle (#819 Task 8 / C7).
+    // the `PyRdfDataset` Arc handle (Task 8 / C7).
     crate::py_gts::register(m)?;
     // The native GTS fold-view and database export surface.
     crate::py_gts_view::register(m)?;
     // The native SSSOM codec surface (parse + validate + RDF serialize) that
-    // replaces the external `sssom` package on the mapping-compile path (#848).
+    // replaces the external `sssom` package on the mapping-compile path.
     crate::py_sssom::register(m)?;
     Ok(())
 }

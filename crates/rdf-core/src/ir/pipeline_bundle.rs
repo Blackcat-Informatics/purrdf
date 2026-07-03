@@ -5,7 +5,7 @@
 //! the frozen hot graph, its out-of-band lookaside, the content-addressed blob
 //! store, the provenance sidecar, and a typed-handle lane.
 //!
-//! ## Kernel boundary (#885)
+//! ## Kernel boundary
 //!
 //! The kernel owns the bundle SHAPE but NOT the concrete handle payloads. The
 //! payload type `H` is generic so that pipeline-side types (logic programs,

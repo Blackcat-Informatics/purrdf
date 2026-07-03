@@ -5,7 +5,7 @@
 //!
 //! The canonical mutation semantics live in `purrdf-core::MutableDataset`.
 //! This adapter keeps Python on that COW surface; query / update run on the native
-//! `NativeSparqlEngine` over a frozen snapshot (EPIC #906 — no oxigraph).
+//! `NativeSparqlEngine` over a frozen snapshot ( — no oxigraph).
 
 use purrdf_core::ir::{MutableDataset, QuadValues};
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -139,7 +139,7 @@ impl PyMutableDataset {
         let explicit_from_graph = from_graph.is_some();
         let inner = &self.inner;
         // Materialize the effective set into the IR verbatim, then serialize through
-        // the native codec (#909) — literal lexical forms are preserved. Both steps
+        // the native codec — literal lexical forms are preserved. Both steps
         // run detached (GIL released).
         let buf: Vec<u8> = py.detach(|| {
             let quads: Vec<RdfQuad> = inner

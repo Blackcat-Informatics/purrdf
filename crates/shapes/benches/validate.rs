@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Baseline benchmark for the SHACL Core validator (#630 acceleration, Phase 0).
+//! Baseline benchmark for the SHACL Core validator (acceleration, Phase 0).
 //!
 //! Sweeps the whole committed conformance corpus through
 //! [`purrdf_shapes::engine::validate_graphs`] — parse data + shapes, resolve focus
@@ -56,11 +56,11 @@ fn bench_validate(c: &mut Criterion) {
 
 /// Build a 40-class rdfs:subClassOf chain + 3000 typed focus nodes as N-Triples.
 ///
-/// This is the measurement instrument for #828 item 2 (focus-node parallelism).
+/// This is the measurement instrument for item 2 (focus-node parallelism).
 /// The engine validates focus nodes SERIALLY: a rayon `par_iter` over this 3000-
 /// node workload was measured here and regressed ~9% (per-focus work is too cheap
 /// — ~5 µs — to amortize thread-pool dispatch and shared-`Store` read contention),
-/// confirming #827. The `ShaclDataGraph: Send + Sync` bound keeps the seam ready;
+/// confirming. The `ShaclDataGraph: Send + Sync` bound keeps the seam ready;
 /// the parallel path re-enters once per-focus cost exceeds ~50–100 µs.
 fn large_hierarchy_inputs() -> (String, String) {
     // Shape: one NodeShape targeting ex:C0 with sh:pattern + sh:minCount constraints.

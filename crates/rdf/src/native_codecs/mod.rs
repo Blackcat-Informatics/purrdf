@@ -1,20 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Native RDF text codecs (#909 / EPIC #906 S3).
+//! Native RDF text codecs (S3).
 //!
 //! The codec-only backend that parses and serializes Turtle / TriG / N-Triples /
 //! N-Quads / RDF/XML, emitting through the `purrdf-events` seam into the frozen
 //! [`RdfDataset`] IR. The line/Turtle family and RDF/XML are now FIRST-PARTY (EPIC
-//! #906: `text_parse` for the line/Turtle family, `rdfxml` for RDF/XML); they no
+//! `text_parse` for the line/Turtle family, `rdfxml` for RDF/XML); they no
 //! longer route through the external `purrdf-gts` text/RDF-XML codecs. It implements
 //! the narrow
 //! [`RdfParserBackend`]/[`RdfSerializer`] traits and is **codec-only** — it never
 //! touches the oxigraph Store, so it compiles under `--no-default-features --features
-//! gts` (no oxigraph). That is the EPIC #906 end-state: the text path needs no Store.
+//! gts` (no oxigraph). That is the  end-state: the text path needs no Store.
 //!
 //! [`GtsCodecBackend`] is the always-on native replacement for `OxigraphBackend`'s
-//! codec role; the workspace-wide sweep (#909 Tasks 2–5) routes every
+//! codec role; the workspace-wide sweep (Tasks 2–5) routes every
 //! `oxigraph::io` text parse/serialize call site through it.
 
 mod media_type;
@@ -24,7 +24,7 @@ mod media_type;
 // `SerGraph` from a real purrdf-gts model graph read out of a bundle.
 pub(crate) mod ser_model;
 // `pub(crate)` so the legacy `dataset_io` oxigraph path can reuse the SHARED
-// `fold_statement_layer` (one fold, no drift) — #909 Task 1.
+// `fold_statement_layer` (one fold, no drift) — Task 1.
 pub(crate) mod parse;
 mod serialize;
 // First-party JSON-LD-star / YAML-LD-star codec: serializes the frozen IR to the PurRDF
@@ -33,11 +33,11 @@ mod serialize;
 // validate / pipeline consumers share, so all three call it here (the codec previously
 // lived in `purrdf-pipeline::stages::yaml_ld`, above `rdf` and `validate`).
 pub mod jsonld;
-// First-party N-Triples / N-Quads / Turtle / TriG text parser (EPIC #906): lowers
+// First-party N-Triples / N-Quads / Turtle / TriG text parser: lowers
 // directly to the in-memory GtsGraph the statement-layer fold consumes, replacing the
 // purrdf-gts text codecs for the line/Turtle family.
 mod text_parse;
-// First-party RDF/XML codec (EPIC #906): implements the W3C RDF/XML grammar in-repo on
+// First-party RDF/XML codec: implements the W3C RDF/XML grammar in-repo on
 // a pure-Rust XML DOM (`roxmltree`), parsing straight into the frozen IR through the
 // shared statement-layer fold and serializing from the first-party `SerGraph` —
 // replacing the external purrdf-gts `rdf_codecs::{from_rdf_xml, to_rdf_xml}` codec
@@ -190,7 +190,7 @@ mod tests {
         let asserts = b.intern_iri("https://e/asserts");
         b.push_quad(s, asserts, inner, None);
         let ds = b.freeze().expect("freeze");
-        // FINDING (#909): purrdf-gts 0.9.5's `to_turtle`/`to_ntriples`/`to_trig`/
+        // FINDING: purrdf-gts 0.9.5's `to_turtle`/`to_ntriples`/`to_trig`/
         // `to_rdf_xml` event-source serializers CANNOT emit a quoted-triple term that
         // appears as a quad object — they hit a self-reifier "cycle while declaring
         // term N" (reproducible directly against purrdf-gts's own `from_nquads` output).

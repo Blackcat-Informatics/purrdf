@@ -17,7 +17,7 @@
 pub mod codec;
 pub mod compact;
 pub mod cose;
-// emojihash + randomart now live in the standalone `visual-hashing` crate (#16);
+// emojihash + randomart now live in the standalone `visual-hashing` crate;
 // re-exported here so `purrdf_gts::emojihash::…` paths keep resolving.
 pub use visual_hashing as emojihash;
 pub mod examples;

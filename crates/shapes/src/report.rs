@@ -114,7 +114,7 @@ impl ValidationResult {
     /// a triple term.
     ///
     /// This lets a consumer render the focus without naming the (oxigraph) [`Term`] type
-    /// in its own surface (EPIC #906) — it is the exact value-extraction the PurRDF
+    /// in its own surface — it is the exact value-extraction the PurRDF
     /// scoreboard's `shacl_term_to_str` performed.
     #[must_use]
     pub fn focus_value(&self) -> String {
@@ -167,7 +167,7 @@ pub type ResultTuple = (
 );
 
 impl ValidationReport {
-    /// Emit the report as N-Triples text using the native purrdf codec (#909).
+    /// Emit the report as N-Triples text using the native purrdf codec.
     ///
     /// The report is built into an in-memory [`Store`] as quads in the default
     /// graph, folded back to the IR ([`dataset_from_store`]), then serialised via
@@ -494,7 +494,7 @@ pub fn tuples_from_ntriples(nt: &str) -> Result<BTreeSet<ResultTuple>, String> {
 }
 
 /// Parse a SHACL report N-Triples string into a query-able [`IrDataGraph`] via the
-/// native purrdf codec (#909) — no oxigraph.
+/// native purrdf codec — no oxigraph.
 fn dataset_from_ntriples(nt: &str) -> Result<IrDataGraph, String> {
     let dataset = ::purrdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
         .map_err(|e| format!("N-Triples parse error: {e}"))?;

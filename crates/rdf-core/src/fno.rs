@@ -3,7 +3,7 @@
 
 //! Native FnO (W3C Function Ontology) typed model + serializer.
 //!
-//! This is the PyO3-free Rust FnO model and serializer (#848). It carries a single,
+//! This is the PyO3-free Rust FnO model and serializer. It carries a single,
 //! fully-resolved **catalog** of the PurRDF projection-function surface
 //! (`generated/projections/functions.fno.ttl`) into an owned RDF quad set and
 //! serializes it to N-Triples text.

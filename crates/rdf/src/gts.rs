@@ -6,7 +6,7 @@
 //! The oxigraph-free reader half (`read_graph`, `read_all_segments`,
 //! `lookaside_from_graph`, …) lives in this adapter crate so `purrdf-core`
 //! remains independent of transport. The oxigraph-FREE
-//! [`flattened_dataset_from_bytes`] (EPIC #906 Task 4) is the load path the native
+//! [`flattened_dataset_from_bytes`] ( Task 4) is the load path the native
 //! SPARQL conformance gate replays against the frozen goldens.
 
 pub use crate::gts_core::*;
@@ -140,7 +140,7 @@ mod tests {
 
     /// The oxigraph-free [`flattened_dataset_from_bytes`] folds the one named-graph
     /// quad into the DEFAULT graph (graph component `None`). This is the load contract
-    /// the EPIC #906 Task-4 native conformance gate relies on, and it accepts a
+    /// the  Task-4 native conformance gate relies on, and it accepts a
     /// private (`x-purrdf-…`) language tag.
     #[test]
     fn flattened_dataset_from_bytes_folds_named_graph_into_default() {

@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Differential equivalence across the two native engine entry-paths (#819 C4,
-//! EPIC #906).
+//! Differential equivalence across the two native engine entry-paths (C4).
 //!
 //! Historically this proved the IR-native SHACL backend agreed with an oxigraph
 //! `Store` oracle. The engine is now IR-native end-to-end (no oxigraph backend), so
@@ -33,7 +32,7 @@ const PREFIXES: &str = r"
 ";
 
 /// Parse a Turtle data document (so RDF 1.2 `<<( … )>>` reifier syntax can be
-/// expressed) into a frozen dataset via the native codec (#909).
+/// expressed) into a frozen dataset via the native codec.
 fn load_data_turtle(ttl: &str) -> Arc<RdfDataset> {
     parse_dataset(ttl.as_bytes(), "text/turtle", None).expect("valid Turtle")
 }

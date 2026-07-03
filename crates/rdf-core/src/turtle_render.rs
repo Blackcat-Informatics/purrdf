@@ -82,7 +82,7 @@ impl<'a> Renderer<'a> {
         // TABLES, not `quads` — so the canonical renderer must fold in `reifier_quads`
         // (`<reifier> rdf:reifies << s p o >>`) and `annotation_quads`
         // (`<reifier> <pred> <value>`) alongside the base quads, or it silently drops the
-        // whole statement layer (#1155 bug 2). Folding them in here — rather than a
+        // whole statement layer (bug 2). Folding them in here — rather than a
         // separate emission pass — keeps a reifier subject's `rdf:reifies` edge and its
         // annotations on ONE flat top-level subject (`<reifier> rdf:reifies << s p o >> ;
         // <ann> <v> .`), which round-trips idempotently: the quoted triple term renders as
@@ -229,7 +229,7 @@ impl<'a> Renderer<'a> {
         };
         // `a` (rdf:type) first, then `rdf:reifies` — the reifier's defining edge must
         // precede its annotations so a parser that folds a reifier's sibling triples as
-        // annotations sees the `rdf:reifies` binding first (idempotent #1155 round trip
+        // annotations sees the `rdf:reifies` binding first (idempotent round trip
         // and the canonical committed form `<r> rdf:reifies << s p o >> ; <ann> .`).
         let mut preds: Vec<TermId> = props.keys().copied().collect();
         preds.sort_by_cached_key(|p| {
@@ -856,7 +856,7 @@ mod tests {
         let ds = b.freeze().unwrap();
         let out = render(&ds, &[("rdf".to_string(), RDF.to_string())]);
         // The reifier renders FLAT — the quoted triple inline, the annotation alongside
-        // — never nested into an intermediate `[ rdf:reifies … ]` blank (#1155).
+        // — never nested into an intermediate `[ rdf:reifies … ]` blank.
         assert!(
             out.contains("rdf:reifies <<( <https://ex/s> <https://ex/p> <https://ex/o> )>>"),
             "reifier must render the quoted triple flat, got:\n{out}"

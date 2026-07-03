@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! JSON-LD `@graph` projector for PurRDF instance data (#700).
+//! JSON-LD `@graph` projector for PurRDF instance data.
 //!
 //! Walks an oxigraph data graph (the default graph) and emits a JSON-LD document
 //! `{ "@context": {<prefix map>}, "@graph": [ <node objects> ] }`. The projection

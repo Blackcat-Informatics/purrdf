@@ -8,8 +8,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 This directory is a **vendored subset** of the official W3C RDF 1.2 test suites,
 used by `crates/rdf/tests/native_codec_conformance.rs` to prove the native
 `purrdf` text codecs (Turtle / TriG / N-Triples / N-Quads / RDF-XML) parse the
-W3C syntax suites and **round-trip** them with no oxigraph dependency (#909 /
-EPIC #906).
+W3C syntax suites and **round-trip** them with no oxigraph dependency.
 
 ## Provenance
 
@@ -28,7 +27,7 @@ has no `syntax/` subdir upstream; its negative-syntax tests live in
 
 **Trimmed:** the `c14n/` (canonicalization) sub-suites for N-Triples and N-Quads
 were **not** vendored — they test RDF dataset canonicalization (RDFC-1.0), not
-text-codec round-trip, and are out of scope for #909. The top-level aggregator
+text-codec round-trip, and are out of scope here. The top-level aggregator
 `manifest.ttl` (which only `mf:include`s the sub-manifests and the RDF 1.1
 suites) was also not vendored; the harness reads the `syntax/`/`eval/`
 sub-manifests directly.

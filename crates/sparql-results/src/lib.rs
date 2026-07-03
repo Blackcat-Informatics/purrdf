@@ -8,7 +8,7 @@
 //! [`SparqlResult`] (SELECT solutions, ASK boolean, or CONSTRUCT graph) into the
 //! four W3C SPARQL Results formats — JSON (SRJ), XML, CSV, and TSV — plus an
 //! additive, provenance-carrying `purrdf` extension. It replaces the
-//! oxigraph-family `sparesults` on the results path (purrdf S9, EPIC #906).
+//! oxigraph-family `sparesults` on the results path (purrdf S9).
 //!
 //! It depends **only** on `purrdf-core` (with `default-features = false`) so
 //! it stays oxigraph-free and wasm-clean. Term and N-Triples syntax are produced
