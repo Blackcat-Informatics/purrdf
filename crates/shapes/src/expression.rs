@@ -10,11 +10,12 @@
 //! The wiring-free expression kinds are implemented directly: [`NodeExpr::Constant`],
 //! [`NodeExpr::This`], [`NodeExpr::Path`], [`NodeExpr::Union`],
 //! [`NodeExpr::Intersection`], [`NodeExpr::If`], and the native set operators
-//! [`NodeExpr::Distinct`], [`NodeExpr::Count`], [`NodeExpr::OrderBy`],
-//! [`NodeExpr::Offset`], and [`NodeExpr::Limit`]. The numeric aggregates
+//! [`NodeExpr::Distinct`], [`NodeExpr::Count`], [`NodeExpr::Offset`], and
+//! [`NodeExpr::Limit`]. [`NodeExpr::OrderBy`] and the numeric aggregates
 //! [`NodeExpr::Min`] / [`NodeExpr::Max`] / [`NodeExpr::Sum`] delegate to the
-//! SPARQL engine ([`crate::sparql::eval_aggregate`]) so numeric type-promotion
-//! and ordering match exactly. Builtin function calls ([`FnCall::Builtin`]) and
+//! SPARQL engine ([`crate::sparql::eval_order`] /
+//! [`crate::sparql::eval_aggregate`]) so value/numeric ordering and
+//! type-promotion match the engine exactly. Builtin function calls ([`FnCall::Builtin`]) and
 //! the `sh:if` effective-boolean-value route through the SPARQL seam
 //! ([`crate::sparql::eval_scalar_expr`]); user-defined functions
 //! ([`FnCall::UserDefined`]) are a hard capability error. The shape-bearing kind
@@ -223,13 +224,24 @@ pub fn bool_literal(b: bool) -> Term {
     ))
 }
 
-/// Whether `terms` is exactly the single canonical `"true"^^xsd:boolean` term.
+/// Whether `terms` is exactly one `xsd:boolean` literal whose parsed VALUE is
+/// true.
 ///
-/// An empty result, a `"false"` result, a non-boolean literal, or more than one
-/// term are all not-true.
+/// Both the canonical `"true"` and the alternative valid lexical `"1"` are
+/// accepted (delegated to the XSD boolean value parser). A `"false"`/`"0"`
+/// result, a non-boolean datatype (e.g. `"5"^^xsd:integer` — EBV-true but NOT a
+/// boolean-true value, a genuine violation per SHACL-AF), an IRI, a blank node,
+/// an empty result, or more than one term are all not-true. This is a value-true
+/// check on `xsd:boolean`, deliberately narrower than full effective-boolean-value.
 #[must_use]
 pub fn is_true(terms: &[Term]) -> bool {
-    matches!(terms, [only] if *only == bool_literal(true))
+    let [Term::Literal(lit)] = terms else {
+        return false;
+    };
+    matches!(
+        purrdf_xsd::parse_by_iri(lit.value(), lit.datatype_str()),
+        Ok(Some(purrdf_xsd::XsdValue::Boolean(true)))
+    )
 }
 
 // ── Evaluator ───────────────────────────────────────────────────────────────────
@@ -253,7 +265,16 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
     match expr {
         NodeExpr::Constant(t) => Ok(vec![t.clone()]),
         NodeExpr::This => Ok(vec![focus.clone()]),
-        NodeExpr::Path(p) => Ok(path::eval(store, focus, p)),
+        NodeExpr::Path(p) => {
+            // Node-expression set outputs are canonicalized HERE (sort+dedup) so
+            // sh:offset / sh:limit applied directly to a bare Path set are
+            // deterministic. `path::eval`'s crate-wide first-seen iteration order
+            // is left untouched (it is used elsewhere for path traversal).
+            let mut v = path::eval(store, focus, p);
+            v.sort_by_key(Term::to_string);
+            v.dedup();
+            Ok(v)
+        }
         NodeExpr::Union(exprs) => {
             let mut out: Vec<Term> = Vec::new();
             for sub in exprs {
@@ -373,13 +394,13 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
             ))])
         }
         NodeExpr::OrderBy { of, descending } => {
-            // Ordering PRESERVES duplicates (SPARQL sequence semantics) — no dedup.
-            let mut out = eval_node_expr(store, focus, of, guard)?;
-            out.sort_by_key(Term::to_string);
-            if *descending {
-                out.reverse();
-            }
-            Ok(out)
+            // Ordering follows SPARQL ORDER BY *value* semantics via the engine
+            // (numeric/typed value order — e.g. "2"^^xsd:integer < "10"^^xsd:integer
+            // — NOT N-Triples lexical order), and PRESERVES duplicates (SPARQL
+            // sequence semantics — no dedup). Blank-node / quoted-triple operands
+            // cannot appear in a VALUES block and are a hard error.
+            let operands = eval_node_expr(store, focus, of, guard)?;
+            crate::sparql::eval_order(&store.sparql_dataset(), &operands, *descending)
         }
         NodeExpr::Offset { of, n } => {
             let out = eval_node_expr(store, focus, of, guard)?;
@@ -422,6 +443,11 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
                     kept.push(value);
                 }
             }
+            // Canonicalize the node-expression set output here (sort+dedup) so
+            // sh:offset / sh:limit over a bare Filter set are deterministic
+            // rather than store-iteration-order dependent.
+            kept.sort_by_key(Term::to_string);
+            kept.dedup();
             Ok(kept)
         }
         NodeExpr::Exists(inner) => {
@@ -517,9 +543,51 @@ mod tests {
         let data = load_data(DATA);
         let mut guard = RecursionGuard::new();
         let expr = NodeExpr::Path(pred("p"));
-        let mut result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("path evals");
-        result.sort_by_key(Term::to_string);
+        // The Path arm canonicalizes (sort+dedup) locally, so the result is
+        // returned already sorted — no manual sort needed.
+        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("path evals");
         assert_eq!(result, vec![ex("b"), ex("c")]);
+        let sorted = {
+            let mut v = result.clone();
+            v.sort_by_key(Term::to_string);
+            v
+        };
+        assert_eq!(result, sorted, "Path result must be returned sorted");
+    }
+
+    #[test]
+    fn filter_result_is_returned_sorted() {
+        use crate::report::Severity;
+
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::new();
+        // An empty (no-constraint) shape: every candidate conforms, so the Filter
+        // output is exactly its candidate set — canonicalized (sort+dedup) locally.
+        let shape = Shape {
+            id: ex("leaf"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![],
+            severity: Severity::Violation,
+            message: None,
+            deactivated: false,
+            box_roles: vec![],
+        };
+        // Candidates supplied out of sorted order (c, a, b) to prove ordering.
+        let expr = NodeExpr::Filter {
+            nodes: Box::new(NodeExpr::Union(vec![
+                NodeExpr::Constant(ex("c")),
+                NodeExpr::Constant(ex("a")),
+                NodeExpr::Constant(ex("b")),
+            ])),
+            shape: Box::new(shape),
+        };
+        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("filter evals");
+        assert_eq!(
+            result,
+            vec![ex("a"), ex("b"), ex("c")],
+            "Filter result must be returned sorted"
+        );
     }
 
     #[test]
@@ -658,6 +726,31 @@ mod tests {
         assert!(
             is_true(&[bool_literal(true)]),
             "single canonical true ⇒ true"
+        );
+        // A value-true xsd:boolean written with the alternative lexical "1" is
+        // still boolean-true (value semantics, not canonical-lexical matching).
+        assert!(
+            is_true(&[Term::Literal(Literal::new_typed_literal(
+                "1",
+                NamedNode::new_unchecked(xsd::BOOLEAN),
+            ))]),
+            "\"1\"^^xsd:boolean ⇒ true"
+        );
+        assert!(
+            !is_true(&[Term::Literal(Literal::new_typed_literal(
+                "0",
+                NamedNode::new_unchecked(xsd::BOOLEAN),
+            ))]),
+            "\"0\"^^xsd:boolean ⇒ false"
+        );
+        // A non-boolean that is merely EBV-true (a genuine violation per
+        // SHACL-AF: the expression must yield boolean true, not EBV-true).
+        assert!(
+            !is_true(&[Term::Literal(Literal::new_typed_literal(
+                "5",
+                NamedNode::new_unchecked(xsd::INTEGER),
+            ))]),
+            "\"5\"^^xsd:integer ⇒ false (not EBV-broadened)"
         );
     }
 

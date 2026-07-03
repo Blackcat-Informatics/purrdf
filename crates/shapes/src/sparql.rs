@@ -279,6 +279,74 @@ pub fn eval_aggregate(
     Ok(value)
 }
 
+/// Order an explicit list of operand `values` by SPARQL `ORDER BY` *value*
+/// semantics, on the native engine.
+///
+/// This keeps SHACL-AF `sh:orderby` on the single SPARQL path so typed/numeric
+/// ordering matches the engine exactly — e.g. `"2"^^xsd:integer` sorts BEFORE
+/// `"10"^^xsd:integer` (value order), unlike a lexical `Term::to_string` sort.
+/// The operands are inlined into a one-column `VALUES` block and ordered:
+///
+/// ```sparql
+/// SELECT ?v WHERE { VALUES (?v) { (t0) (t1) ... } } ORDER BY ?v
+/// ```
+///
+/// (`ORDER BY DESC(?v)` when `descending`). `ORDER BY` over `VALUES` returns one
+/// row per input row in order, so DUPLICATES are PRESERVED (no `DISTINCT`).
+///
+/// Each `ti` is rendered through the workspace [`Term`] serializer (N-Triples
+/// term syntax), exactly as [`eval_aggregate`]. Blank nodes and quoted triples
+/// cannot appear in a `VALUES` block, so an operand of either kind is a hard
+/// error. The empty operand set is `Ok(vec![])`.
+///
+/// # Errors
+///
+/// Returns `Err(String)` if an operand is a blank node or quoted triple,
+/// execution fails, or the result is not a SELECT.
+pub fn eval_order(
+    dataset: &Arc<RdfDataset>,
+    values: &[Term],
+    descending: bool,
+) -> Result<Vec<Term>, String> {
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Inline each operand into the VALUES block via the workspace Term serializer.
+    let mut rows = String::new();
+    for term in values {
+        match term {
+            Term::NamedNode(_) | Term::Literal(_) => {
+                rows.push('(');
+                rows.push_str(&term.to_string());
+                rows.push_str(") ");
+            }
+            Term::BlankNode(_) | Term::Triple(_) => {
+                return Err(format!(
+                    "order-by operand {term} cannot appear in a SPARQL VALUES block (not orderable in VALUES)"
+                ));
+            }
+        }
+    }
+
+    let order = if descending { "DESC(?v)" } else { "?v" };
+    let select = format!("SELECT ?v WHERE {{ VALUES (?v) {{ {rows}}} }} ORDER BY {order}");
+    let (variables, result_rows) =
+        run_select(dataset, &select, &[]).map_err(|e| format!("order-by {e}"))?;
+
+    let v_index = column_index(&variables, "v");
+    let mut out: Vec<Term> = Vec::with_capacity(result_rows.len());
+    for row in &result_rows {
+        match v_index.and_then(|i| row.get(i)).and_then(Option::as_ref) {
+            Some(value) => out.push(term_value_to_native(value)),
+            None => {
+                return Err("order-by query produced a solution row with no ?v binding".to_owned());
+            }
+        }
+    }
+    Ok(out)
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// A materialized SELECT result: the projected variable names and the rows of
@@ -559,6 +627,52 @@ mod tests {
         let dataset = dataset_from_ntriples(&[]);
         let err = eval_aggregate(&dataset, "AVG", &[int_lit("1")]).unwrap_err();
         assert!(err.contains("unsupported aggregate"), "got: {err}");
+    }
+
+    // ── eval_order ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn eval_order_integers_by_value_not_lexical() {
+        let dataset = dataset_from_ntriples(&[]);
+        // Lexically "10" < "2", but by VALUE 2 < 10 — the engine must order by value.
+        let vals = [int_lit("2"), int_lit("10")];
+        assert_eq!(
+            eval_order(&dataset, &vals, false).expect("asc order"),
+            vec![int_lit("2"), int_lit("10")]
+        );
+        assert_eq!(
+            eval_order(&dataset, &vals, true).expect("desc order"),
+            vec![int_lit("10"), int_lit("2")]
+        );
+    }
+
+    #[test]
+    fn eval_order_preserves_duplicates() {
+        let dataset = dataset_from_ntriples(&[]);
+        let vals = [int_lit("2"), int_lit("2"), int_lit("10")];
+        assert_eq!(
+            eval_order(&dataset, &vals, false).expect("asc order"),
+            vec![int_lit("2"), int_lit("2"), int_lit("10")],
+            "ORDER BY over VALUES preserves one row per input (no DISTINCT)"
+        );
+    }
+
+    #[test]
+    fn eval_order_empty_is_empty() {
+        let dataset = dataset_from_ntriples(&[]);
+        assert!(eval_order(&dataset, &[], false)
+            .expect("empty order")
+            .is_empty());
+    }
+
+    #[test]
+    fn eval_order_blank_node_operand_is_error() {
+        let dataset = dataset_from_ntriples(&[]);
+        let err = eval_order(&dataset, &[Term::blank("b0")], false).unwrap_err();
+        assert!(
+            err.contains("cannot appear in a SPARQL VALUES block"),
+            "got: {err}"
+        );
     }
 
     #[test]
