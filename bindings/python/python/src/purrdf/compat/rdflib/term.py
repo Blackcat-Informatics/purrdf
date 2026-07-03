@@ -35,8 +35,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BNode",
-    "Identifier",
     "IdentifiedNode",
+    "Identifier",
     "Literal",
     "Node",
     "URIRef",
