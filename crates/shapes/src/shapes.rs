@@ -17,6 +17,7 @@ use std::sync::{Arc, OnceLock};
 use ::purrdf::RdfDataset;
 
 use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
+use crate::expression::{FnCall, NodeExpr};
 use crate::model::{rdf, rdfs, sh, BoxRoleVocab};
 use crate::report::Severity;
 use crate::term::{NamedNode, Term};
@@ -1544,6 +1545,343 @@ impl<'s> Parser<'s> {
             self.parse_node_shape(id)
         }
     }
+
+    // ── SHACL-AF node expressions (spec §5) ─────────────────────────────────────
+
+    /// Parse a shapes-graph node into a SHACL-AF [`NodeExpr`] (spec §5).
+    ///
+    /// Paging/ordering wrappers (`sh:limit` / `sh:offset` / `sh:orderby`) are
+    /// peeled first and applied on top of the node's *core* expression in SPARQL
+    /// pipeline order (`ORDER BY` → `OFFSET` → `LIMIT`, with `LIMIT` outermost);
+    /// everything else dispatches through [`parse_node_expr_core`](Self::parse_node_expr_core).
+    ///
+    /// A blank node is guarded against cyclic self-reference (mirroring
+    /// [`parse_inline_shape`](Self::parse_inline_shape)); the guard key is
+    /// namespaced so it never collides with the shape-parsing `in_flight` set.
+    // The constraint engine that calls this (the `sh:expression` component) is
+    // wired in a later task; until then it is reachable only from the unit tests.
+    #[allow(dead_code)]
+    fn parse_node_expr(&mut self, node: &Term) -> Result<NodeExpr, String> {
+        // NOTE: paging/ordering surface (`sh:limit`/`sh:offset`/`sh:orderby`) is
+        // under-specified by SHACL-AF. Assumption pinned here (a later corpus
+        // task validates it): these keys WRAP the same node's core expression —
+        // the inner operand is this very node parsed with the paging keys
+        // ignored, NOT a separate `sh:nodes` operand. A node carrying only paging
+        // keys (no core expression) therefore hard-fails in `parse_node_expr_core`.
+        let guard_key = format!("nodeexpr:{node}");
+        let is_blank = matches!(node, Term::BlankNode(_));
+        if is_blank {
+            if self.in_flight.contains(&guard_key) {
+                return Err(format!("cyclic node expression on {node}"));
+            }
+            self.in_flight.insert(guard_key.clone());
+        }
+        let result = self.parse_node_expr_wrapped(node);
+        if is_blank {
+            self.in_flight.remove(&guard_key);
+        }
+        result
+    }
+
+    /// Apply the paging/ordering wrappers on top of the core expression.
+    fn parse_node_expr_wrapped(&mut self, node: &Term) -> Result<NodeExpr, String> {
+        let mut expr = self.parse_node_expr_core(node)?;
+
+        // ORDER BY (innermost wrapper).
+        if let Some(dir) = self.first_object_of(node, sh::ORDERBY) {
+            // NOTE: the ordering DIRECTION surface is under-specified. Assumption:
+            // `sh:orderby` points at a direction marker read as the boolean literal
+            // `true` ⇒ descending; anything else (including a non-boolean object)
+            // ⇒ ascending. A later corpus task pins the real comparator shape.
+            let descending = matches!(&dir, Term::Literal(lit) if lit.value() == "true");
+            expr = NodeExpr::OrderBy {
+                of: Box::new(expr),
+                descending,
+            };
+        }
+
+        // OFFSET.
+        if let Some(off) = self.first_object_of(node, sh::OFFSET) {
+            let n = parse_u64(&off).ok_or_else(|| {
+                format!("sh:offset value is not a non-negative integer on {node}")
+            })?;
+            expr = NodeExpr::Offset {
+                of: Box::new(expr),
+                n,
+            };
+        }
+
+        // LIMIT (outermost wrapper).
+        if let Some(lim) = self.first_object_of(node, sh::LIMIT) {
+            let n = parse_u64(&lim)
+                .ok_or_else(|| format!("sh:limit value is not a non-negative integer on {node}"))?;
+            expr = NodeExpr::Limit {
+                of: Box::new(expr),
+                n,
+            };
+        }
+
+        Ok(expr)
+    }
+
+    /// Parse the non-paging *core* of a node expression.
+    ///
+    /// Dispatches on the single structural SHACL-AF key the node carries, in a
+    /// fixed deterministic order, and hard-fails when a node carries two
+    /// mutually-exclusive expression keys (ambiguous).
+    fn parse_node_expr_core(&mut self, node: &Term) -> Result<NodeExpr, String> {
+        // Literals are always constant term expressions (they bear no triples).
+        if matches!(node, Term::Literal(_)) {
+            return Ok(NodeExpr::Constant(node.clone()));
+        }
+        // The focus-node expression `sh:this`.
+        if let Term::NamedNode(n) = node {
+            if n.as_str() == sh::THIS {
+                return Ok(NodeExpr::This);
+            }
+        }
+
+        // Which mutually-exclusive structural key does the node carry?
+        let primary = [
+            sh::PATH,
+            sh::FILTER_SHAPE,
+            sh::UNION,
+            sh::INTERSECTION,
+            sh::IF,
+            sh::COUNT,
+            sh::DISTINCT,
+            sh::MIN,
+            sh::MAX,
+            sh::SUM,
+            sh::EXISTS,
+        ];
+        let present: Vec<&str> = primary
+            .into_iter()
+            .filter(|&p| self.first_object_of(node, p).is_some())
+            .collect();
+        if present.len() > 1 {
+            return Err(format!(
+                "ambiguous node expression on {node}: multiple expression keys {present:?}"
+            ));
+        }
+
+        if let Some(&key) = present.first() {
+            return self.parse_structural_node_expr(node, key);
+        }
+
+        // No structural key: a function call, a plain constant IRI, or malformed.
+        self.parse_call_or_constant(node)
+    }
+
+    /// Dispatch a node carrying exactly one structural expression `key`.
+    fn parse_structural_node_expr(&mut self, node: &Term, key: &str) -> Result<NodeExpr, String> {
+        match key {
+            sh::PATH => {
+                let path_node = self
+                    .first_object_of(node, sh::PATH)
+                    .ok_or_else(|| format!("sh:path node expression on {node} lost its object"))?;
+                let path = self.parse_path(&path_node, node, &mut HashSet::new())?;
+                Ok(NodeExpr::Path(path))
+            }
+            sh::FILTER_SHAPE => {
+                let shape_ref = self
+                    .first_object_of(node, sh::FILTER_SHAPE)
+                    .ok_or_else(|| {
+                        format!("sh:filterShape node expression on {node} lost its object")
+                    })?;
+                let nodes_obj = self.first_object_of(node, sh::NODES).ok_or_else(|| {
+                    format!("sh:filterShape node expression on {node} requires sh:nodes")
+                })?;
+                let inner = self.parse_node_expr(&nodes_obj)?;
+                let shape = self.parse_inline_shape(shape_ref)?;
+                Ok(NodeExpr::Filter {
+                    nodes: Box::new(inner),
+                    shape: Box::new(shape),
+                })
+            }
+            sh::UNION => Ok(NodeExpr::Union(self.parse_node_expr_list(node, sh::UNION)?)),
+            sh::INTERSECTION => Ok(NodeExpr::Intersection(
+                self.parse_node_expr_list(node, sh::INTERSECTION)?,
+            )),
+            sh::IF => {
+                let cond_obj = self
+                    .first_object_of(node, sh::IF)
+                    .ok_or_else(|| format!("sh:if node expression on {node} lost its object"))?;
+                let cond = self.parse_node_expr(&cond_obj)?;
+                // Per spec a missing `sh:then`/`sh:else` yields the empty set; the
+                // empty union is the canonical empty-set node expression.
+                let then = match self.first_object_of(node, sh::THEN) {
+                    Some(t) => self.parse_node_expr(&t)?,
+                    None => NodeExpr::Union(vec![]),
+                };
+                let els = match self.first_object_of(node, sh::ELSE) {
+                    Some(t) => self.parse_node_expr(&t)?,
+                    None => NodeExpr::Union(vec![]),
+                };
+                Ok(NodeExpr::If {
+                    cond: Box::new(cond),
+                    then: Box::new(then),
+                    els: Box::new(els),
+                })
+            }
+            sh::COUNT => {
+                let of_obj = self
+                    .first_object_of(node, sh::COUNT)
+                    .ok_or_else(|| format!("sh:count node expression on {node} lost its object"))?;
+                // Distinct counting is `[ sh:count [ sh:distinct <expr> ] ]`: an
+                // inner `sh:distinct` lowers to `Count { distinct: true, .. }`.
+                match self.parse_node_expr(&of_obj)? {
+                    NodeExpr::Distinct(inner) => Ok(NodeExpr::Count {
+                        distinct: true,
+                        of: inner,
+                    }),
+                    other => Ok(NodeExpr::Count {
+                        distinct: false,
+                        of: Box::new(other),
+                    }),
+                }
+            }
+            sh::DISTINCT => {
+                let of_obj = self.first_object_of(node, sh::DISTINCT).ok_or_else(|| {
+                    format!("sh:distinct node expression on {node} lost its object")
+                })?;
+                Ok(NodeExpr::Distinct(Box::new(self.parse_node_expr(&of_obj)?)))
+            }
+            sh::MIN => {
+                let of_obj = self
+                    .first_object_of(node, sh::MIN)
+                    .ok_or_else(|| format!("sh:min node expression on {node} lost its object"))?;
+                Ok(NodeExpr::Min(Box::new(self.parse_node_expr(&of_obj)?)))
+            }
+            sh::MAX => {
+                let of_obj = self
+                    .first_object_of(node, sh::MAX)
+                    .ok_or_else(|| format!("sh:max node expression on {node} lost its object"))?;
+                Ok(NodeExpr::Max(Box::new(self.parse_node_expr(&of_obj)?)))
+            }
+            sh::SUM => {
+                let of_obj = self
+                    .first_object_of(node, sh::SUM)
+                    .ok_or_else(|| format!("sh:sum node expression on {node} lost its object"))?;
+                Ok(NodeExpr::Sum(Box::new(self.parse_node_expr(&of_obj)?)))
+            }
+            sh::EXISTS => {
+                // NOTE: the IR models `sh:exists` as a shape re-entry
+                // (`Exists(Box<Shape>)`), so the object is parsed as an inline
+                // shape rather than a node expression. A later corpus task
+                // validates this reading.
+                let shape_ref = self.first_object_of(node, sh::EXISTS).ok_or_else(|| {
+                    format!("sh:exists node expression on {node} lost its object")
+                })?;
+                let shape = self.parse_inline_shape(shape_ref)?;
+                Ok(NodeExpr::Exists(Box::new(shape)))
+            }
+            other => Err(format!(
+                "internal error: unhandled node-expression key <{other}> on {node}"
+            )),
+        }
+    }
+
+    /// Parse the RDF list at `(node, predicate)` into a vector of node expressions.
+    fn parse_node_expr_list(
+        &mut self,
+        node: &Term,
+        predicate: &str,
+    ) -> Result<Vec<NodeExpr>, String> {
+        let list_head = self
+            .first_object_of(node, predicate)
+            .ok_or_else(|| format!("<{predicate}> node expression on {node} lost its object"))?;
+        let items = self.walk_rdf_list(&list_head, node)?;
+        let mut exprs = Vec::with_capacity(items.len());
+        for item in items {
+            exprs.push(self.parse_node_expr(&item)?);
+        }
+        Ok(exprs)
+    }
+
+    /// Parse a node carrying no structural key: a function call or a plain
+    /// constant IRI (a blank node with neither hard-fails).
+    fn parse_call_or_constant(&mut self, node: &Term) -> Result<NodeExpr, String> {
+        // The SHACL-AF vocabulary terms that structure a node expression — none of
+        // them can be the predicate of a function-call expression.
+        const KNOWN: &[&str] = &[
+            sh::PATH,
+            sh::FILTER_SHAPE,
+            sh::NODES,
+            sh::UNION,
+            sh::INTERSECTION,
+            sh::IF,
+            sh::THEN,
+            sh::ELSE,
+            sh::COUNT,
+            sh::DISTINCT,
+            sh::MIN,
+            sh::MAX,
+            sh::SUM,
+            sh::LIMIT,
+            sh::OFFSET,
+            sh::ORDERBY,
+            sh::EXISTS,
+        ];
+        // Gather the candidate (function IRI, arg-list head) triples, ignoring
+        // rdf:type (a classification triple) and every SHACL structural key.
+        let mut candidates: Vec<(NamedNode, Term)> = self
+            .data
+            .quads_for_pattern(Some(node), None, None, GraphFilter::AnyGraph)
+            .into_iter()
+            .filter(|q| q.predicate.as_str() != rdf::TYPE && !KNOWN.contains(&q.predicate.as_str()))
+            .map(|q| (q.predicate, q.object))
+            .collect();
+        candidates.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
+        candidates.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+
+        if candidates.is_empty() {
+            // No structural key and no function predicate: an IRI is a plain
+            // constant term expression; a blank node is malformed.
+            if matches!(node, Term::NamedNode(_)) {
+                return Ok(NodeExpr::Constant(node.clone()));
+            }
+            return Err(format!(
+                "unrecognised node expression on {node}: no SHACL-AF key and no function call"
+            ));
+        }
+        if candidates.len() > 1 {
+            return Err(format!(
+                "ambiguous function-call node expression on {node}: multiple candidate predicates"
+            ));
+        }
+
+        let (fn_iri, args_head) = candidates
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("internal error: function-call candidate vanished on {node}"))?;
+        // The single object must be an RDF list of argument node expressions
+        // (`rdf:nil` is the empty argument list).
+        let nil = Term::NamedNode(NamedNode::from(rdf::NIL));
+        let is_list = args_head == nil || self.first_object_of(&args_head, rdf::FIRST).is_some();
+        if !is_list {
+            return Err(format!(
+                "function-call node expression <{}> on {node} must carry an RDF list of arguments",
+                fn_iri.as_str()
+            ));
+        }
+        let items = self.walk_rdf_list(&args_head, node)?;
+        let mut args = Vec::with_capacity(items.len());
+        for item in items {
+            args.push(self.parse_node_expr(&item)?);
+        }
+        // A user-defined function is typed `sh:SPARQLFunction` (or `sh:Function`)
+        // in the shapes graph; anything else is treated as a builtin.
+        let iri_term = Term::NamedNode(fn_iri.clone());
+        let user_defined =
+            self.has_type(&iri_term, sh::SPARQL_FUNCTION) || self.has_type(&iri_term, sh::FUNCTION);
+        let call = if user_defined {
+            FnCall::UserDefined { iri: fn_iri, args }
+        } else {
+            FnCall::Builtin { iri: fn_iri, args }
+        };
+        Ok(NodeExpr::Call(call))
+    }
 }
 
 // ── Helper functions ───────────────────────────────────────────────────────────
@@ -2592,5 +2930,267 @@ mod tests {
                 && err.contains("requires an IRI sh:path"),
             "error should document the supported path boundary, got: {err}"
         );
+    }
+
+    // ── SHACL-AF node expressions (Task 2 parser) ──────────────────────────────
+
+    /// Build a `Parser` over a Turtle shapes graph and parse `subject`'s
+    /// `ex:expr` object as a node expression.
+    fn parse_expr(ttl: &str) -> Result<NodeExpr, String> {
+        let dataset = load_store(ttl);
+        let data = IrDataGraph::new(Arc::clone(&dataset));
+        let mut parser = Parser::new(&data, &[], None);
+        let root = Term::NamedNode(NamedNode::from("http://example.org/ns#root"));
+        let expr_obj = parser
+            .first_object_of(&root, "http://example.org/ns#expr")
+            .expect("ex:root ex:expr must be present");
+        parser.parse_node_expr(&expr_obj)
+    }
+
+    /// Wrap an `ex:expr` object triple in the standard prefix header.
+    fn expr_ttl(body: &str) -> String {
+        format!("{PREFIXES}\n{body}")
+    }
+
+    #[test]
+    fn node_expr_constant_iri() {
+        let expr = parse_expr(&expr_ttl("ex:root ex:expr ex:someConstant .")).expect("parse");
+        match expr {
+            NodeExpr::Constant(Term::NamedNode(n)) => {
+                assert_eq!(n.as_str(), "http://example.org/ns#someConstant");
+            }
+            other => panic!("expected Constant(NamedNode), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_this() {
+        let expr = parse_expr(&expr_ttl("ex:root ex:expr sh:this .")).expect("parse");
+        assert!(matches!(expr, NodeExpr::This), "got {expr:?}");
+    }
+
+    #[test]
+    fn node_expr_path() {
+        let expr = parse_expr(&expr_ttl("ex:root ex:expr [ sh:path ex:knows ] .")).expect("parse");
+        match expr {
+            NodeExpr::Path(Path::Predicate(n)) => {
+                assert_eq!(n.as_str(), "http://example.org/ns#knows");
+            }
+            other => panic!("expected Path(Predicate), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_union_two_members() {
+        let expr = parse_expr(&expr_ttl(
+            "ex:root ex:expr [ sh:union ( sh:this [ sh:path ex:knows ] ) ] .",
+        ))
+        .expect("parse");
+        match expr {
+            NodeExpr::Union(members) => {
+                assert_eq!(members.len(), 2);
+                assert!(matches!(members[0], NodeExpr::This));
+                assert!(matches!(members[1], NodeExpr::Path(_)));
+            }
+            other => panic!("expected Union, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_intersection_two_members() {
+        let expr = parse_expr(&expr_ttl(
+            "ex:root ex:expr [ sh:intersection ( [ sh:path ex:a ] [ sh:path ex:b ] ) ] .",
+        ))
+        .expect("parse");
+        match expr {
+            NodeExpr::Intersection(members) => assert_eq!(members.len(), 2),
+            other => panic!("expected Intersection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_if_then_else() {
+        let expr = parse_expr(&expr_ttl(
+            "ex:root ex:expr [ sh:if sh:this ; sh:then ex:yes ; sh:else ex:no ] .",
+        ))
+        .expect("parse");
+        match expr {
+            NodeExpr::If { cond, then, els } => {
+                assert!(matches!(*cond, NodeExpr::This));
+                assert!(matches!(*then, NodeExpr::Constant(_)));
+                assert!(matches!(*els, NodeExpr::Constant(_)));
+            }
+            other => panic!("expected If, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_if_missing_branches_default_empty() {
+        let expr = parse_expr(&expr_ttl("ex:root ex:expr [ sh:if sh:this ] .")).expect("parse");
+        match expr {
+            NodeExpr::If { then, els, .. } => {
+                assert!(matches!(*then, NodeExpr::Union(ref v) if v.is_empty()));
+                assert!(matches!(*els, NodeExpr::Union(ref v) if v.is_empty()));
+            }
+            other => panic!("expected If, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_count_plain() {
+        let expr = parse_expr(&expr_ttl(
+            "ex:root ex:expr [ sh:count [ sh:path ex:knows ] ] .",
+        ))
+        .expect("parse");
+        match expr {
+            NodeExpr::Count { distinct, of } => {
+                assert!(!distinct, "plain count is not distinct");
+                assert!(matches!(*of, NodeExpr::Path(_)));
+            }
+            other => panic!("expected Count, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_count_distinct() {
+        let expr = parse_expr(&expr_ttl(
+            "ex:root ex:expr [ sh:count [ sh:distinct [ sh:path ex:knows ] ] ] .",
+        ))
+        .expect("parse");
+        match expr {
+            NodeExpr::Count { distinct, of } => {
+                assert!(distinct, "sh:count over sh:distinct is a distinct count");
+                assert!(
+                    matches!(*of, NodeExpr::Path(_)),
+                    "inner unwraps the distinct"
+                );
+            }
+            other => panic!("expected Count, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_min_max_sum() {
+        let min = parse_expr(&expr_ttl("ex:root ex:expr [ sh:min [ sh:path ex:v ] ] ."))
+            .expect("parse min");
+        assert!(matches!(min, NodeExpr::Min(_)), "got {min:?}");
+        let max = parse_expr(&expr_ttl("ex:root ex:expr [ sh:max [ sh:path ex:v ] ] ."))
+            .expect("parse max");
+        assert!(matches!(max, NodeExpr::Max(_)), "got {max:?}");
+        let sum = parse_expr(&expr_ttl("ex:root ex:expr [ sh:sum [ sh:path ex:v ] ] ."))
+            .expect("parse sum");
+        assert!(matches!(sum, NodeExpr::Sum(_)), "got {sum:?}");
+    }
+
+    #[test]
+    fn node_expr_exists_is_a_shape() {
+        let expr = parse_expr(&expr_ttl(
+            "ex:root ex:expr [ sh:exists [ sh:nodeKind sh:IRI ] ] .",
+        ))
+        .expect("parse");
+        match expr {
+            NodeExpr::Exists(shape) => {
+                assert!(
+                    shape
+                        .constraints
+                        .iter()
+                        .any(|c| matches!(c, Constraint::NodeKind(NodeKindValue::Iri))),
+                    "exists shape should carry its constraints"
+                );
+            }
+            other => panic!("expected Exists, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_filter_shape() {
+        let expr = parse_expr(&expr_ttl(
+            "ex:root ex:expr [ sh:filterShape [ sh:nodeKind sh:IRI ] ; sh:nodes sh:this ] .",
+        ))
+        .expect("parse");
+        match expr {
+            NodeExpr::Filter { nodes, shape } => {
+                assert!(matches!(*nodes, NodeExpr::This));
+                assert!(shape
+                    .constraints
+                    .iter()
+                    .any(|c| matches!(c, Constraint::NodeKind(NodeKindValue::Iri))));
+            }
+            other => panic!("expected Filter, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_filter_shape_missing_nodes_errors() {
+        let err = parse_expr(&expr_ttl(
+            "ex:root ex:expr [ sh:filterShape [ sh:nodeKind sh:IRI ] ] .",
+        ))
+        .expect_err("sh:filterShape without sh:nodes must hard-fail");
+        assert!(err.contains("sh:nodes"), "got: {err}");
+    }
+
+    #[test]
+    fn node_expr_builtin_function_call() {
+        // A function IRI with no rdf:type classification is a builtin.
+        let expr = parse_expr(&expr_ttl(
+            "ex:root ex:expr [ ex:multiply ( sh:this ex:two ) ] .",
+        ))
+        .expect("parse");
+        match expr {
+            NodeExpr::Call(FnCall::Builtin { iri, args }) => {
+                assert_eq!(iri.as_str(), "http://example.org/ns#multiply");
+                assert_eq!(args.len(), 2);
+                assert!(matches!(args[0], NodeExpr::This));
+            }
+            other => panic!("expected Call(Builtin), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_user_defined_function_call() {
+        // The function IRI is typed sh:SPARQLFunction → user-defined.
+        let expr = parse_expr(&expr_ttl(
+            "ex:myFn a sh:SPARQLFunction .\n\
+             ex:root ex:expr [ ex:myFn ( sh:this ) ] .",
+        ))
+        .expect("parse");
+        match expr {
+            NodeExpr::Call(FnCall::UserDefined { iri, args }) => {
+                assert_eq!(iri.as_str(), "http://example.org/ns#myFn");
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("expected Call(UserDefined), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_ambiguous_keys_error() {
+        let err = parse_expr(&expr_ttl(
+            "ex:root ex:expr [ sh:min [ sh:path ex:a ] ; sh:max [ sh:path ex:b ] ] .",
+        ))
+        .expect_err("two mutually-exclusive expression keys must hard-fail");
+        assert!(err.contains("ambiguous"), "got: {err}");
+    }
+
+    #[test]
+    fn node_expr_limit_offset_orderby_wrap_core() {
+        // Paging keys wrap the same node's core expression: LIMIT(OFFSET(ORDERBY(core))).
+        let expr = parse_expr(&expr_ttl(
+            "ex:root ex:expr [ sh:path ex:v ; sh:orderby true ; sh:offset 2 ; sh:limit 5 ] .",
+        ))
+        .expect("parse");
+        let NodeExpr::Limit { of, n } = expr else {
+            panic!("expected outermost Limit, got {expr:?}");
+        };
+        assert_eq!(n, 5);
+        let NodeExpr::Offset { of, n } = *of else {
+            panic!("expected Offset under Limit, got {of:?}");
+        };
+        assert_eq!(n, 2);
+        let NodeExpr::OrderBy { of, descending } = *of else {
+            panic!("expected OrderBy under Offset, got {of:?}");
+        };
+        assert!(descending, "sh:orderby true ⇒ descending");
+        assert!(matches!(*of, NodeExpr::Path(_)), "core is the path");
     }
 }
