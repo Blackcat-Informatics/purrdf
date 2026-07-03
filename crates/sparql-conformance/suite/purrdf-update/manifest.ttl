@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# First-party SPARQL 1.1 UPDATE evaluation cases. These exercise the harness's
+# UPDATE-eval path (ut: vocabulary → SparqlEngine::update → canonical-N-Quads
+# post-state diff) ahead of vendoring the full W3C update corpus. Written in the
+# W3C `mf:UpdateEvaluationTest` / `ut:` shape so they validate the exact parsing
+# path the vendored suite will use. Fixtures use example.org (PurRDF mints no IRIs).
+
+@prefix mf:   <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix ut:   <http://www.w3.org/2009/sparql/tests/test-update#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix :     <http://purrdf.test/update#> .
+
+<> a mf:Manifest ;
+   rdfs:label "purrdf first-party UPDATE evaluation suite" ;
+   mf:entries ( :insert-data :delete-insert-where :named-graph-insert ) .
+
+:insert-data a mf:UpdateEvaluationTest ;
+   mf:name "INSERT DATA into an empty default graph" ;
+   mf:action [ ut:request <insert-data.ru> ; ut:data <empty.ttl> ] ;
+   mf:result [ ut:data <insert-data-result.ttl> ] .
+
+:delete-insert-where a mf:UpdateEvaluationTest ;
+   mf:name "DELETE/INSERT ... WHERE rewrites a predicate" ;
+   mf:action [ ut:request <delete-insert-where.ru> ; ut:data <delete-insert-where-data.ttl> ] ;
+   mf:result [ ut:data <delete-insert-where-result.ttl> ] .
+
+:named-graph-insert a mf:UpdateEvaluationTest ;
+   mf:name "INSERT DATA into a named graph, empty default graph result" ;
+   mf:action [ ut:request <named-graph-insert.ru> ; ut:data <empty.ttl> ] ;
+   mf:result [
+       ut:data <empty.ttl> ;
+       ut:graphData [ ut:graph <named-graph-insert-result.ttl> ; rdfs:label "http://example.org/g1" ]
+   ] .

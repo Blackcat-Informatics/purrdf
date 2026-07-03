@@ -6,14 +6,16 @@
 # This ledger governs rdflib's OWN, verbatim-vendored tests (see vendor/) run
 # against `purrdf.compat.rdflib` via the top-level rdflib shadow (see runner.py). Each key
 # is a pytest node id RELATIVE to vendor/ (e.g. `test_collection.py::test_x`);
-# each value is a concrete reason a real gap exists, with the tracking issue.
+# each value is a concrete, self-describing reason a real gap exists.
 #
 # runner.py applies these as STRICT xfails: a ledgered test that starts passing
 # (XPASS) FAILS the gate, and a stale key (matching no collected test) FAILS the
 # gate — so this ledger only ever SHRINKS, never drifts. Mirrors the Rust
 # conformance harnesses' XPASS discipline (AGENTS.md §2).
 #
-# Scoreboard when authored: 50 passed / 36 xfailed (0 xpassed, 0 failed).
+# Current scoreboard (reconciled to the live suite): 62 passed / 24 xfailed
+# (0 xpassed, 0 failed, 0 errors; ledger 24/24 applied, 0 stale). This ledger
+# only shrinks: as gaps close, keys are pruned here and the pass count rises.
 # Grouped by theme in the comments below.
 
 [xfail]
@@ -51,13 +53,22 @@
 # The compat facade does not forward the graph's bound namespaces into the
 # native SPARQL parser as PREFIX declarations, so queries that rely on
 # graph-level prefix bindings (rather than in-query PREFIX) hard-error.
-"test_agg_undef.py::test_values_outside_group_by" = "graph-bound prefixes are not forwarded to the native SPARQL parser and a top-level VALUES block is rejected ('unexpected trailing token VALUES'), so this aggregate-over-UNDEF query is a parse hard-error"
 "test_agg_distinct.py::test_count_optional_values" = "graph-bound prefix 'ex' is not forwarded to the native SPARQL parser, so the query fails with 'undeclared prefix ex' rather than being evaluated"
 
 # --- Theme: SPARQL aggregate / filter evaluation semantics ---
 "test_agg_distinct.py::test_count_distinct" = "COUNT(DISTINCT ?x) grouped aggregation yields an empty Result under the native engine instead of the two expected grouped counts"
 "test_nested_filters.py::test_nested_filter_outer_binding_propagation" = "FILTER bindings from an outer group are not propagated into a nested group as rdflib does, so the computed solution set diverges from the expected set"
 "test_conjunctive_graph.py::test_graph_ids[check-kws1]" = "ConjunctiveGraph.parse forwards a StringInputSource down a filesystem path in this keyword combination, raising FileNotFoundError instead of parsing the in-memory source"
+
+# --- Theme: purrdf is stricter than rdflib (SPARQL conformance, not a purrdf gap) ---
+# The upstream rdflib test source concatenates two adjacent Python string
+# literals with no separating space — "SELECT ?p" "WHERE { ... }" becomes
+# "SELECT ?pWHERE { ... } GROUP BY ?p" — which projects the non-group-key
+# variable ?pWHERE under GROUP BY ?p. purrdf's native engine rejects this per
+# SPARQL 1.1 §11.3 (a projected variable must be a group key or confined to an
+# aggregate); rdflib leniently accepts it and returns ?pWHERE unbound. Vendored
+# verbatim, so the upstream typo is preserved and our correct rejection ledgered.
+"test_having.py::test_group_by" = "upstream test typo 'SELECT ?p' 'WHERE ...' concatenates to 'SELECT ?pWHERE ...', projecting the non-group-key variable ?pWHERE under GROUP BY; purrdf correctly rejects per SPARQL 1.1 §11.3 while rdflib leniently returns it unbound"
 
 # --- Theme: ConjunctiveGraph legacy semantics ---
 "test_conjunctive_graph.py::test_bnode_publicid" = "ConjunctiveGraph.parse(data=..., publicID=BNode) does not retain triples under a blank-node context the way rdflib does, so the graph reports no triples"

@@ -24,16 +24,39 @@ const BASE: &str = "http://purrdf.test/manifest/";
 
 const MF: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#";
 
+/// The SPARQL-1.1 update-test vocabulary (`ut:`). Update tests describe their
+/// pre-state (`ut:data`/`ut:graphData`), the update request (`ut:request`), and
+/// their expected post-state (an `mf:result` node carrying `ut:data`/
+/// `ut:graphData`). A named graph is a blank node `[ ut:graph <file> ;
+/// rdfs:label "graph-iri" ]` — the graph IRI is the `rdfs:label`, not the file.
+const UT: &str = "http://www.w3.org/2009/sparql/tests/test-update#";
+
+/// The RDF Schema namespace; `rdfs:label` carries the graph IRI of a
+/// `ut:graphData` entry in an update test.
+const RDFS_LABEL_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
+
+/// The SPARQL service-description namespace; `sd:entailmentRegime` on a query
+/// test's action lists the entailment regimes under which its expected result
+/// holds (an RDF list of `http://www.w3.org/ns/entailment/*` IRIs).
+const SD_NS: &str = "http://www.w3.org/ns/sparql-service-description#";
+
 /// The kind of a discovered SPARQL test case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestKind {
     /// `mf:QueryEvaluationTest` (and result-format variants): run the query and
     /// diff the result.
     QueryEval,
+    /// `mf:UpdateEvaluationTest`: apply the `ut:request` update to the pre-state
+    /// dataset and diff the resulting dataset against the expected post-state.
+    UpdateEval,
     /// `mf:PositiveSyntaxTest(11)`: the query must parse.
     PositiveSyntax,
     /// `mf:NegativeSyntaxTest(11)`: the query must fail to parse.
     NegativeSyntax,
+    /// `mf:PositiveUpdateSyntaxTest`: the UPDATE request must parse.
+    PositiveUpdateSyntax,
+    /// `mf:NegativeUpdateSyntaxTest`: the UPDATE request must fail to parse.
+    NegativeUpdateSyntax,
     /// A manifest entry whose `rdf:type` the harness does not model — recorded and
     /// surfaced (never silently skipped).
     Unknown,
@@ -48,6 +71,19 @@ pub enum ExpectedResult {
     Srj(PathBuf),
     /// A graph (`CONSTRUCT`/`DESCRIBE`) — compared as canonical N-Quads.
     Graph(PathBuf),
+    /// A Turtle-encoded `rs:ResultSet` description of a SELECT solution sequence
+    /// (`rs:resultVariable`/`rs:solution`/`rs:binding`/`rs:variable`/`rs:value`) —
+    /// compared as a solution multiset, not a graph.
+    ResultSetTurtle(PathBuf),
+    /// An UPDATE post-state: the expected default-graph data (`ut:data`) and
+    /// named graphs (`ut:graphData`), compared to the mutated dataset as
+    /// canonical N-Quads. Empty vectors denote an empty expected dataset.
+    DatasetState {
+        /// Expected default-graph Turtle files.
+        data: Vec<PathBuf>,
+        /// Expected named graphs as `(graph IRI, file)`.
+        graph_data: Vec<(String, PathBuf)>,
+    },
     /// Syntax tests carry no result.
     None,
     /// A result file whose extension the harness does not model.
@@ -71,6 +107,11 @@ pub struct SparqlTestCase {
     pub graph_data: Vec<(String, PathBuf)>,
     /// `SERVICE` endpoint data: `(endpoint IRI, local file)` (`qt:serviceData`).
     pub service_data: Vec<(String, PathBuf)>,
+    /// The best-supported entailment regime for this case (`sd:entailmentRegime`),
+    /// if any: the dataset is materialized under it before the query runs. `None`
+    /// for a plain (Simple-entailment) test or one whose only regimes the native
+    /// reasoner cannot materialize (OWL-Direct / D / RIF).
+    pub regime: Option<purrdf_entail::Regime>,
     /// The expected result.
     pub expected: ExpectedResult,
 }
@@ -122,6 +163,7 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
                 data: Vec::new(),
                 graph_data: Vec::new(),
                 service_data: Vec::new(),
+                regime: None,
                 expected: ExpectedResult::None,
             });
         // A test may carry several rdf:type values; prefer a recognized kind.
@@ -158,12 +200,161 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
         }
     }
 
-    Ok(by_test.into_values().collect())
+    let mut cases: Vec<SparqlTestCase> = by_test.into_values().collect();
+    // Update tests carry their pre-state, request, and post-state under the `ut:`
+    // vocabulary, which the query SELECT above does not read. Fill those fields in
+    // with a dedicated pass so the `ut:` shape (nested graphData blank nodes) is
+    // read explicitly rather than shoe-horned into the query SELECT.
+    if cases.iter().any(|c| c.kind == TestKind::UpdateEval) {
+        load_update_details(&dataset, &dir, &mut cases)?;
+    }
+    // Entailment tests declare an `sd:entailmentRegime` list; select the regime
+    // the native reasoner should materialize before the query runs.
+    load_entailment_regimes(&dataset, &mut cases)?;
+    Ok(cases)
+}
+
+/// Set `regime` for each test that declares an `sd:entailmentRegime` list,
+/// choosing the regime the native reasoner should materialize under.
+fn load_entailment_regimes(
+    dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
+    cases: &mut [SparqlTestCase],
+) -> Result<(), String> {
+    let query = format!(
+        "PREFIX mf: <{MF}>\n\
+         PREFIX sd: <{SD_NS}>\n\
+         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
+         SELECT ?test ?regime WHERE {{\n\
+         ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
+         ?test mf:action ?act .\n\
+         {{ ?act sd:entailmentRegime ?regime }}\n\
+         UNION\n\
+         {{ ?act sd:entailmentRegime/rdf:rest*/rdf:first ?regime }}\n\
+         }}"
+    );
+    let rows = query_rows(dataset, &query)?;
+    if rows.is_empty() {
+        return Ok(()); // no entailment tests in this manifest
+    }
+    let mut by_test: BTreeMap<String, Vec<purrdf_entail::Regime>> = BTreeMap::new();
+    for row in &rows {
+        if let (Some(test), Some(reg)) = (iri_of(row, "test"), iri_of(row, "regime")) {
+            if let Some(r) = purrdf_entail::Regime::from_iri(&reg) {
+                by_test.entry(test).or_default().push(r);
+            }
+        }
+    }
+    for case in cases.iter_mut() {
+        if let Some(regimes) = by_test.get(&case.iri) {
+            case.regime = pick_regime(regimes);
+        }
+    }
+    Ok(())
+}
+
+/// Choose the regime to materialize: prefer the weakest that still entails (RDFS),
+/// then OWL-RL, then the identity regimes. Boundaries the native reasoner cannot
+/// materialize (OWL-Direct / D) yield `None` — the case runs unmaterialized and,
+/// if it needs those entailments, is recorded as a typed `Entailment` xfail.
+fn pick_regime(regimes: &[purrdf_entail::Regime]) -> Option<purrdf_entail::Regime> {
+    use purrdf_entail::Regime::{OwlRl, Rdf, Rdfs, Simple};
+    [Rdfs, OwlRl, Rdf, Simple]
+        .into_iter()
+        .find(|pref| regimes.contains(pref))
+}
+
+/// An accumulated expected post-state: `(default-graph files, named graphs)`.
+type ExpectedState = (Vec<PathBuf>, Vec<(String, PathBuf)>);
+
+/// Fill in the `ut:`-vocabulary fields for every [`TestKind::UpdateEval`] case:
+/// the `ut:request` update file, the pre-state (`ut:data`/`ut:graphData`), and
+/// the expected post-state (`mf:result` → `ut:data`/`ut:graphData`).
+fn load_update_details(
+    dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
+    dir: &Path,
+    cases: &mut [SparqlTestCase],
+) -> Result<(), String> {
+    let query = format!(
+        "PREFIX mf: <{MF}>\n\
+         PREFIX ut: <{UT}>\n\
+         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
+         PREFIX rdfs: <{RDFS_LABEL_NS}>\n\
+         SELECT ?test ?request ?inData ?inGraph ?inLabel ?resData ?resGraph ?resLabel WHERE {{\n\
+         ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
+         ?test mf:action ?act .\n\
+         OPTIONAL {{ ?act ut:request ?request }}\n\
+         OPTIONAL {{ ?act ut:data ?inData }}\n\
+         OPTIONAL {{ ?act ut:graphData ?ig . ?ig ut:graph ?inGraph . OPTIONAL {{ ?ig rdfs:label ?inLabel }} }}\n\
+         OPTIONAL {{ ?test mf:result ?res .\n\
+           OPTIONAL {{ ?res ut:data ?resData }}\n\
+           OPTIONAL {{ ?res ut:graphData ?rg . ?rg ut:graph ?resGraph . OPTIONAL {{ ?rg rdfs:label ?resLabel }} }}\n\
+         }}\n\
+         }}"
+    );
+    let rows = query_rows(dataset, &query)?;
+
+    // Accumulate the expected post-state per test IRI (built as we scan rows).
+    let mut expected: BTreeMap<String, ExpectedState> = BTreeMap::new();
+
+    let by_iri: BTreeMap<String, usize> = cases
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.kind == TestKind::UpdateEval)
+        .map(|(i, c)| (c.iri.clone(), i))
+        .collect();
+
+    for row in &rows {
+        let Some(test_iri) = iri_of(row, "test") else {
+            continue;
+        };
+        let Some(&idx) = by_iri.get(test_iri.as_str()) else {
+            continue; // not an update test (or not modeled) — leave untouched
+        };
+        let case = &mut cases[idx];
+
+        if let Some(req) = iri_of(row, "request") {
+            case.query = local_path(dir, &req);
+        }
+        push_unique_path(
+            &mut case.data,
+            iri_of(row, "inData").map(|i| local_path(dir, &i)),
+        );
+        if let Some(g) = iri_of(row, "inGraph") {
+            let name = lexical_of(row, "inLabel").unwrap_or_else(|| g.clone());
+            let path = local_path(dir, &g);
+            if !case.graph_data.iter().any(|(n, _)| *n == name) {
+                case.graph_data.push((name, path));
+            }
+        }
+
+        let acc = expected.entry(test_iri.clone()).or_default();
+        push_unique_path(
+            &mut acc.0,
+            iri_of(row, "resData").map(|i| local_path(dir, &i)),
+        );
+        if let Some(g) = iri_of(row, "resGraph") {
+            let name = lexical_of(row, "resLabel").unwrap_or_else(|| g.clone());
+            let path = local_path(dir, &g);
+            if !acc.1.iter().any(|(n, _)| *n == name) {
+                acc.1.push((name, path));
+            }
+        }
+    }
+
+    for (iri, idx) in by_iri {
+        let (data, graph_data) = expected.remove(&iri).unwrap_or_default();
+        cases[idx].expected = ExpectedResult::DatasetState { data, graph_data };
+    }
+    Ok(())
 }
 
 /// Run `query` against `dataset` and return its solution rows as variable→value
 /// maps (unbound cells omitted).
-fn query_rows(
+///
+/// `pub(crate)` because [`crate::rs_resultset`] reuses the exact same
+/// dog-fooded query-and-decode path to read the `rs:ResultSet` Turtle result
+/// encoding, rather than duplicating a second ad hoc SPARQL runner.
+pub(crate) fn query_rows(
     dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
     query: &str,
 ) -> Result<Vec<BTreeMap<String, TermValue>>, String> {
@@ -236,18 +427,44 @@ fn classify(type_term: Option<&TermValue>) -> TestKind {
     let local = t.strip_prefix(MF).unwrap_or(t);
     match local {
         "QueryEvaluationTest" | "CSVResultFormatTest" => TestKind::QueryEval,
+        "UpdateEvaluationTest" => TestKind::UpdateEval,
         "PositiveSyntaxTest" | "PositiveSyntaxTest11" => TestKind::PositiveSyntax,
         "NegativeSyntaxTest" | "NegativeSyntaxTest11" => TestKind::NegativeSyntax,
+        "PositiveUpdateSyntaxTest" | "PositiveUpdateSyntaxTest11" => TestKind::PositiveUpdateSyntax,
+        "NegativeUpdateSyntaxTest" | "NegativeUpdateSyntaxTest11" => TestKind::NegativeUpdateSyntax,
         _ => TestKind::Unknown,
     }
 }
 
-/// Classify a result file by extension.
+/// The `rs:` (SPARQL result-set) vocabulary namespace: a Turtle file describing
+/// an `rs:ResultSet` encodes a SELECT solution sequence, not a graph, so it
+/// must be routed to [`ExpectedResult::ResultSetTurtle`] rather than
+/// [`ExpectedResult::Graph`]. See [`crate::rs_resultset`].
+const RS_NS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#";
+
+/// Classify a result file by extension; a `.ttl` file is additionally content-
+/// sniffed for the `rs:ResultSet` encoding (a plain substring check — the real
+/// parse in [`crate::rs_resultset`] validates the shape and errors loudly on a
+/// false positive, so this is a routing hint, not the correctness boundary).
 fn classify_result(path: &Path) -> ExpectedResult {
     match path.extension().and_then(|e| e.to_str()) {
         Some("srx") => ExpectedResult::Srx(path.to_path_buf()),
         Some("srj") => ExpectedResult::Srj(path.to_path_buf()),
+        Some("ttl") if is_rs_resultset_turtle(path) => {
+            ExpectedResult::ResultSetTurtle(path.to_path_buf())
+        }
         Some("ttl" | "nt" | "nq" | "rdf") => ExpectedResult::Graph(path.to_path_buf()),
         _ => ExpectedResult::Unsupported(path.to_path_buf()),
     }
+}
+
+/// Whether `path` textually mentions the `rs:ResultSet` type IRI. Cheap and
+/// content-based (not extension-based) because the W3C suite ships `.ttl`
+/// result files in both shapes (plain CONSTRUCT graphs and `rs:ResultSet`
+/// solution descriptions) under the same extension.
+fn is_rs_resultset_turtle(path: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    text.contains(RS_NS) && text.contains("ResultSet")
 }

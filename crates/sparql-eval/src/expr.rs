@@ -25,7 +25,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use purrdf_core::{BlankScope, DatasetView, GraphMatch, TermRef, TermValue};
+use purrdf_core::{BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermRef, TermValue};
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
 use purrdf_xsd::{
     effective_boolean_value, numeric_abs, numeric_add, numeric_ceil, numeric_div, numeric_floor,
@@ -44,6 +44,7 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 
 /// Evaluate an expression over a solution. See the [module docs](self) for the
 /// `Ok(Some)` / `Ok(None)` / `Err` contract.
@@ -229,6 +230,9 @@ pub(crate) fn eval_extend(
     let schema = Arc::new(schema);
 
     let rows = if crate::parallel::is_parallel_safe(expr) {
+        // Parallel path: `is_parallel_safe` excludes `BNODE` (every arity), so the
+        // per-solution `BNODE(strExpr)` memo (`ctx.current_row`/`ctx.bnode_memo`) is
+        // never observed here — no per-row `current_row` bookkeeping is needed.
         let base = ctx.scratch.computed_count();
         let minted = crate::parallel::par_chunk_try_map_init(
             &seq.rows,
@@ -248,8 +252,13 @@ pub(crate) fn eval_extend(
             .collect()
     } else {
         let mut rows = Vec::with_capacity(seq.rows.len());
-        for mut row in seq.rows {
+        for (idx, mut row) in seq.rows.into_iter().enumerate() {
             row.resize(width, None);
+            // §17.4.2.2: BNODE(strExpr) memoizes per solution — see `ctx.current_row`'s
+            // doc. This Extend maps `seq`'s rows 1:1 in order, so the row's position
+            // here matches its position in every other Extend of the same chain. A
+            // BNODE-bearing `expr` is exactly what forces this sequential branch.
+            ctx.current_row = idx as u64;
             let value = eval_expr(expr, &row, &schema, ctx)?;
             row[col] = value;
             rows.push(row);
@@ -375,6 +384,29 @@ fn ebv_of(
 
 /// The effective boolean value of a concrete term (`None` = type error).
 fn ebv_term(ctx: &mut EvalCtx<'_>, term: SolutionTerm) -> Option<bool> {
+    // A language-tagged string (rdf:langString / rdf:dirLangString) has no effective
+    // boolean value — EBV covers only xsd:string, xsd:boolean, and the numeric types.
+    let is_lang_tagged = match term {
+        SolutionTerm::Existing(id) => {
+            matches!(
+                ctx.dataset.resolve(id),
+                TermRef::Literal {
+                    language: Some(_),
+                    ..
+                }
+            )
+        }
+        SolutionTerm::Computed(sid) => matches!(
+            ctx.scratch.computed_value(sid),
+            TermValue::Literal {
+                language: Some(_),
+                ..
+            }
+        ),
+    };
+    if is_lang_tagged {
+        return None;
+    }
     match xsd_of_term(ctx, term) {
         Some(xv) => effective_boolean_value(&xv),
         None => None,
@@ -423,6 +455,19 @@ fn term_is_literal(ctx: &EvalCtx<'_>, term: SolutionTerm) -> bool {
         }
         SolutionTerm::Computed(sid) => {
             matches!(ctx.scratch.computed_value(sid), TermValue::Literal { .. })
+        }
+    }
+}
+
+/// Whether a solution term is a triple term, checked on the borrowed view (no
+/// materialization) — mirrors [`term_is_literal`].
+fn term_is_triple(ctx: &EvalCtx<'_>, term: SolutionTerm) -> bool {
+    match term {
+        SolutionTerm::Existing(id) => {
+            matches!(ctx.dataset.resolve(id), TermRef::Triple { .. })
+        }
+        SolutionTerm::Computed(sid) => {
+            matches!(ctx.scratch.computed_value(sid), TermValue::Triple { .. })
         }
     }
 }
@@ -489,9 +534,16 @@ fn equal(
     // freeze), the scratch interner dedups by value, and the promotion rule makes
     // an Existing/Computed cross-pair unequal in value. So `rdf_equal`'s
     // structural `a == b` fallback can never fire once `ta != tb`; only the
-    // value-space comparison and the literal/non-literal split remain — evaluated
-    // here on borrowed views (no owned TermValue clones), semantically identical
-    // to `rdf_equal(&value_of(ctx, ta), &value_of(ctx, tb))`.
+    // value-space comparison, the triple-term recursion, and the literal/
+    // non-literal split remain — evaluated here on borrowed views (no owned
+    // `TermValue` clones) EXCEPT for the triple-term case, which materializes
+    // both sides to recurse componentwise (RDF 1.2 `op-2`: triple terms compare
+    // structurally under `=`, not sameTerm-or-unequal).
+    if term_is_triple(ctx, ta) && term_is_triple(ctx, tb) {
+        let av = value_of(ctx, ta);
+        let bv = value_of(ctx, tb);
+        return Ok(rdf_equal(&av, &bv).map(|eq| bool_term(ctx, eq)));
+    }
     let ax = xsd_of_term(ctx, ta);
     let bx = xsd_of_term(ctx, tb);
     let eq = match (ax, bx) {
@@ -548,6 +600,27 @@ fn eval_in(
 
 /// RDF term value-equality (`=`). `None` = type error (two literals not comparable).
 fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
+    // RDF 1.2 triple terms compare *structurally*, componentwise, under this SAME
+    // `=` relation (recursively) — not by identity. Checked before the XSD/literal
+    // path so a triple-term pair never falls through to the "distinct non-literal
+    // kind ⇒ unequal" default, which would wrongly treat e.g. `<<(:a :b 123)>>` and
+    // `<<(:a :b 123.0)>>` as unequal even though `123 = 123.0` in the XSD value
+    // space (W3C `eval-triple-terms` `op-2`).
+    if let (
+        TermValue::Triple {
+            s: s1,
+            p: p1,
+            o: o1,
+        },
+        TermValue::Triple {
+            s: s2,
+            p: p2,
+            o: o2,
+        },
+    ) = (a, b)
+    {
+        return triple_equal(s1, p1, o1, s2, p2, o2);
+    }
     match (xsd_of(a), xsd_of(b)) {
         (Some(ax), Some(bx)) => value_cmp(&ax, &bx).map(|o| o == Ordering::Equal),
         _ => {
@@ -561,6 +634,31 @@ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
                 Some(false)
             }
         }
+    }
+}
+
+/// Componentwise `=` over two triple terms (SPARQL §17.4.1.7 extended to RDF 1.2
+/// triple terms): equal iff subject, predicate, and object are pairwise `=`-equal.
+/// A component that is definitely unequal short-circuits the whole comparison to
+/// `false` (even if another component errored); otherwise any component error
+/// propagates as an error (`None`).
+fn triple_equal(
+    s1: &TermValue,
+    p1: &TermValue,
+    o1: &TermValue,
+    s2: &TermValue,
+    p2: &TermValue,
+    o2: &TermValue,
+) -> Option<bool> {
+    let rs = rdf_equal(s1, s2);
+    let rp = rdf_equal(p1, p2);
+    let ro = rdf_equal(o1, o2);
+    if rs == Some(false) || rp == Some(false) || ro == Some(false) {
+        Some(false)
+    } else if rs.is_none() || rp.is_none() || ro.is_none() {
+        None
+    } else {
+        Some(true)
     }
 }
 
@@ -870,7 +968,10 @@ fn exists(
 /// `NamedNode` (blank nodes and triple terms cannot appear as triple-pattern
 /// constants in a `Bgp`, so those positions are left as variables — the later
 /// seed-join in the uncorrelated path handles them instead).
-fn substitute_pattern(pattern: &GraphPattern, bindings: &[(Variable, Expression)]) -> GraphPattern {
+pub(crate) fn substitute_pattern(
+    pattern: &GraphPattern,
+    bindings: &[(Variable, Expression)],
+) -> GraphPattern {
     match pattern {
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
             patterns: patterns
@@ -925,7 +1026,22 @@ fn substitute_pattern(pattern: &GraphPattern, bindings: &[(Variable, Expression)
             inner,
             silent,
         } => GraphPattern::Service {
-            name: name.clone(),
+            // A variable endpoint (`SERVICE ?g`) bound to an IRI by the enclosing
+            // solution becomes a concrete named endpoint, so the substituted
+            // pattern federates against the resolved IRI (the LATERAL seam).
+            name: match name {
+                purrdf_sparql_algebra::NamedNodePattern::Variable(v) => bindings
+                    .iter()
+                    .find(|(bv, _)| bv == v)
+                    .and_then(|(_, e)| match e {
+                        Expression::NamedNode(n) => Some(
+                            purrdf_sparql_algebra::NamedNodePattern::NamedNode(n.clone()),
+                        ),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| name.clone()),
+                purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
+            },
             inner: Box::new(substitute_pattern(inner, bindings)),
             silent: *silent,
         },
@@ -1134,7 +1250,7 @@ fn substitute_expr(expr: &Expression, bindings: &[(Variable, Expression)]) -> Ex
 
 /// Build the binding list for substitution from the outer row's bound variables,
 /// materializing each `SolutionTerm` to a constant `Expression`.
-fn outer_bindings_for_substitution(
+pub(crate) fn outer_bindings_for_substitution(
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
     ctx: &EvalCtx<'_>,
@@ -1243,6 +1359,30 @@ fn eval_function(
             ))),
             _ => Ok(None),
         },
+        // RDF 1.2 base-direction accessors/tests.
+        Function::LangDir => match arg(&vals, 0) {
+            Some(TermValue::Literal { direction, .. }) => {
+                Ok(Some(string_term(ctx, direction.map_or("", |d| d.as_str()))))
+            }
+            _ => Ok(None),
+        },
+        // `hasLANG`/`hasLANGDIR` are total over a bound term: false for any term
+        // that is not a language-tagged / directional literal (only an unbound
+        // argument yields unbound).
+        Function::HasLang => match arg(&vals, 0) {
+            None => Ok(None),
+            Some(TermValue::Literal { language, .. }) => {
+                Ok(Some(bool_term(ctx, language.is_some())))
+            }
+            Some(_) => Ok(Some(bool_term(ctx, false))),
+        },
+        Function::HasLangDir => match arg(&vals, 0) {
+            None => Ok(None),
+            Some(TermValue::Literal { direction, .. }) => {
+                Ok(Some(bool_term(ctx, direction.is_some())))
+            }
+            Some(_) => Ok(Some(bool_term(ctx, false))),
+        },
         Function::Datatype => match arg(&vals, 0) {
             Some(TermValue::Literal { datatype, .. }) => {
                 Ok(Some(intern(ctx, TermValue::Iri(datatype.clone()))))
@@ -1272,23 +1412,35 @@ fn eval_function(
         Function::Iri | Function::Uri => match arg(&vals, 0) {
             Some(TermValue::Iri(iri)) => Ok(Some(intern(ctx, TermValue::Iri(iri.clone())))),
             Some(TermValue::Literal { lexical_form, .. }) => {
-                Ok(Some(intern(ctx, TermValue::Iri(lexical_form.clone()))))
+                match resolve_against_base(ctx.base_iri.as_deref(), lexical_form) {
+                    Some(resolved) => Ok(Some(intern(ctx, TermValue::Iri(resolved)))),
+                    // Relative reference with no base to resolve against — a SPARQL
+                    // expression error (unbound), not a silent identity pass-through.
+                    None => Ok(None),
+                }
             }
             _ => Ok(None),
         },
         Function::StrLang => eval_str_lang(ctx, &vals),
+        Function::StrLangDir => eval_str_lang_dir(ctx, &vals),
         Function::StrDt => eval_str_dt(ctx, &vals),
+        // BNODE(): always mints a fresh blank node, even called twice in the same
+        // solution (contrast BNODE(strExpr) below — SPARQL 1.1 §17.4.2.2).
+        Function::BNode if vals.is_empty() => Ok(Some(mint_bnode(ctx))),
+        // BNODE(strExpr): the SAME argument string within the SAME query solution
+        // (§17.4.2.2) reuses the previously-minted blank; see `ctx.bnode_memo`'s
+        // doc for the row-identity mechanism and its scope.
         Function::BNode => {
-            // BNODE() / BNODE(str): mint a fresh blank node per call.
-            ctx.bnode_counter += 1;
-            let label = format!("bnode{}", ctx.bnode_counter);
-            Ok(Some(intern(
-                ctx,
-                TermValue::Blank {
-                    label,
-                    scope: BlankScope::DEFAULT,
-                },
-            )))
+            let Some((s, _)) = string_arg(&vals, 0) else {
+                return Ok(None);
+            };
+            let key = (ctx.current_row, s);
+            if let Some(existing) = ctx.bnode_memo.get(&key) {
+                return Ok(Some(*existing));
+            }
+            let term = mint_bnode(ctx);
+            ctx.bnode_memo.insert(key, term);
+            Ok(Some(term))
         }
 
         // ---- RDF 1.2 triple-term functions --------------------------------
@@ -1489,17 +1641,37 @@ fn eval_function(
 /// XPath casting rules): `xsd:decimal("5.355e1"^^xsd:double)` is the decimal value
 /// `53.55`, NOT a re-parse of the scientific-notation lexical (which is not a valid
 /// `xsd:decimal` lexical). The direct lexical parse handles same-representation casts
-/// (and string/boolean/temporal targets); when it fails, a numeric source is cast by
-/// VALUE through [`cast_numeric_value`].
+/// (and string/boolean/temporal targets); when it fails, a numeric-or-boolean source is
+/// cast by VALUE through [`cast_numeric_value`] (this also covers `xsd:boolean` as
+/// EITHER the source or the target of a numeric cast, per XPath's boolean/numeric
+/// casting rules).
+///
+/// `xsd:string(x)` is handled BEFORE the generic lexical-copy path: casting a
+/// `boolean`/numeric source to `xsd:string` is a VALUE-space operation with its own
+/// XPath-mandated string form ([`numeric_or_bool_to_xpath_string`]) that is generally
+/// NOT the source's own lexical form (e.g. `xsd:string("0"^^xsd:boolean)` is
+/// `"false"`, not `"0"`) — only a source with no numeric/boolean value (a plain
+/// string, an already-`xsd:string` literal, an unrecognized datatype, …) falls back to
+/// copying its lexical form verbatim.
 fn eval_xsd_cast(
     ctx: &mut EvalCtx<'_>,
     target: XsdDatatype,
     source: Option<&TermValue>,
 ) -> Option<SolutionTerm> {
     let source = source?;
+    if target == XsdDatatype::String {
+        if let TermValue::Iri(iri) = source {
+            return Some(string_term(ctx, iri));
+        }
+        if let Some(s) = xsd_of(source)
+            .as_ref()
+            .and_then(numeric_or_bool_to_xpath_string)
+        {
+            return Some(string_term(ctx, &s));
+        }
+    }
     let lexical = match source {
         TermValue::Literal { lexical_form, .. } => lexical_form.clone(),
-        TermValue::Iri(iri) if target == XsdDatatype::String => iri.clone(),
         _ => return None,
     };
     // The operand-mapping rules pin XSD 1.0, so a `xsd:float`/`xsd:double` constructor
@@ -1509,17 +1681,24 @@ fn eval_xsd_cast(
         return Some(xsd_to_term(ctx, &value));
     }
     // The lexical is not directly valid for `target`. If both source and target are
-    // numeric, convert by value (e.g. a `double`/`float` scientific-notation lexical
-    // into the equivalent `decimal`/`integer`), matching the spec's casting tower.
+    // numeric-or-boolean, convert by value (e.g. a `double`/`float` scientific-notation
+    // lexical into the equivalent `decimal`/`integer`, or a numeric source into
+    // `xsd:boolean`), matching the spec's casting tower.
     let value = cast_numeric_value(&xsd_of(source)?, target)?;
     Some(xsd_to_term(ctx, &value))
 }
 
-/// Cast a numeric [`XsdValue`] to a numeric `target` datatype **by value** (the
-/// SPARQL §17.1 numeric casting rules): the source's numeric value is re-expressed in
-/// the target's value space. Returns `None` when the source is non-numeric, the target
-/// is non-numeric, or the value is out of the target's range (e.g. a non-integral
-/// double cast to integer truncates toward zero, as XPath `xs:integer` mandates).
+/// Cast a numeric-or-boolean [`XsdValue`] to a numeric-or-`xsd:boolean` `target`
+/// datatype **by value** (the SPARQL §17.1 / XPath casting rules): the source's value
+/// is re-expressed in the target's value space. Returns `None` when the source has no
+/// numeric value, the target is not numeric/boolean, or the value is out of the
+/// target's range (e.g. a non-integral double cast to integer truncates toward zero,
+/// as XPath `xs:integer` mandates).
+///
+/// `xsd:boolean` participates on BOTH sides: a boolean source is `1.0`/`0.0` for a
+/// numeric target, and a numeric target of `xsd:boolean` is XPath's numeric effective
+/// boolean value (zero or `NaN` → `false`, else `true`) — the same rule SPARQL's own
+/// effective boolean value uses for numerics ([`effective_boolean_value`]).
 fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
     use purrdf_xsd::parse as xsd_parse;
     // The source's exact numeric value, as the widest faithful form available.
@@ -1528,11 +1707,15 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
         XsdValue::Decimal(d) => d.to_f64(),
         XsdValue::Float(f) => f64::from(*f),
         XsdValue::Double(d) => *d,
+        XsdValue::Boolean(b) => f64::from(u8::from(*b)),
         _ => return None,
     };
     match target {
         XsdDatatype::Double => Some(XsdValue::Double(as_f64)),
         XsdDatatype::Float => Some(XsdValue::Float(as_f64 as f32)),
+        // Zero or NaN is false; every other numeric value (including negatives and
+        // subnormals) is true — XPath's numeric-to-boolean casting rule.
+        XsdDatatype::Boolean => Some(XsdValue::Boolean(as_f64 != 0.0 && !as_f64.is_nan())),
         XsdDatatype::Decimal => {
             // A non-finite double has no decimal value (a SPARQL expression error).
             if !as_f64.is_finite() {
@@ -1566,6 +1749,59 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
             xsd_parse(&format!("{truncated:.0}"), target).ok()
         }
         _ => None,
+    }
+}
+
+/// The XPath F&O §19 "Casting to `xs:string`" string form of a boolean or numeric
+/// value — DISTINCT from the value's XSD canonical **literal** lexical mapping (which
+/// [`XsdValue::canonical_lexical`] provides for writing an actual `xsd:double`/
+/// `xsd:float` term). Returns `None` for a non-numeric, non-boolean value (the caller
+/// then falls back to copying the source's own lexical form).
+///
+/// - `xsd:boolean` → `"true"`/`"false"`.
+/// - `xsd:integer` (and derived) → the plain decimal digits (no fractional part ever).
+/// - `xsd:decimal` → its XSD 1.1 canonical lexical form directly: an integer-valued
+///   decimal already has no decimal point there (`1.0` → `"1"`), so the cast-to-string
+///   and the literal serialization share ONE decimal-formatting path.
+/// - `xsd:float`/`xsd:double` → [`xpath_double_to_xpath_string`] (plain decimal
+///   notation in the "ordinary" magnitude range, scientific outside it).
+fn numeric_or_bool_to_xpath_string(value: &XsdValue) -> Option<String> {
+    match value {
+        XsdValue::Boolean(b) => Some(if *b { "true" } else { "false" }.to_owned()),
+        XsdValue::Integer { value, .. } => Some(value.to_string()),
+        XsdValue::Decimal(d) => Some(d.canonical_lexical()),
+        XsdValue::Float(f) => Some(xpath_double_to_xpath_string(f64::from(*f))),
+        XsdValue::Double(d) => Some(xpath_double_to_xpath_string(*d)),
+        _ => None,
+    }
+}
+
+/// XPath F&O's number→`xs:string` casting algorithm for `xs:float`/`xs:double`: values
+/// with an absolute magnitude in `[0.000001, 100000000)` are written in plain
+/// (non-exponential) decimal notation; every other finite value uses scientific
+/// notation (`mantissa Eexponent`, no padding). This is intentionally NOT the XSD
+/// canonical literal mapping ([`purrdf_xsd::numeric::canonical_double`]), which always
+/// uses mandatory exponential notation — this is the distinct, narrower rule XPath
+/// specifies for the STRING VALUE of a numeric cast.
+fn xpath_double_to_xpath_string(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".to_owned();
+    }
+    if value.is_infinite() {
+        return if value > 0.0 { "INF" } else { "-INF" }.to_owned();
+    }
+    if value == 0.0 {
+        return if value.is_sign_negative() { "-0" } else { "0" }.to_owned();
+    }
+    let abs = value.abs();
+    if (1e-6..1e8).contains(&abs) {
+        format_plain_decimal(value)
+    } else {
+        // Scientific notation, without the XSD-canonical mandatory ".0" mantissa pad
+        // this cast rule doesn't require.
+        let raw = format!("{value:e}");
+        let (mantissa, exp) = raw.split_once('e').unwrap_or((raw.as_str(), "0"));
+        format!("{mantissa}E{exp}")
     }
 }
 
@@ -1767,7 +2003,7 @@ fn eval_string_arg_expr(
                 return Ok(None);
             };
             let value = value_of(ctx, term);
-            Ok(string_arg_value(&value))
+            Ok(string_arg_value(&value).map(|(s, l, _)| (s, l)))
         }
     }
 }
@@ -1850,18 +2086,49 @@ fn is_numeric(v: &XsdValue) -> bool {
 /// Extract `(lexical, language)` from a plain/`xsd:string`/`rdf:langString` literal
 /// argument. `None` for any other term (a string-function type error).
 fn string_arg(vals: &[Option<TermValue>], i: usize) -> Option<(String, Option<String>)> {
+    string_arg_value(arg(vals, i)?).map(|(s, l, _)| (s, l))
+}
+
+/// Extract the lexical form of a *plain* string argument — a simple literal or
+/// an explicitly `xsd:string`-typed one — for built-ins whose first argument
+/// must NOT already carry a language tag (`STRLANG`/`STRDT`, SPARQL 1.1
+/// §17.4.2.4/§17.4.2.5). Unlike [`string_arg`], a `rdf:langString` (or RDF 1.2
+/// `rdf:dirLangString`) argument is a type error here, not an accepted input
+/// whose language would silently be discarded.
+fn plain_string_arg(vals: &[Option<TermValue>], i: usize) -> Option<String> {
+    match arg(vals, i)? {
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            ..
+        } if datatype == XSD_STRING => Some(lexical_form.clone()),
+        _ => None,
+    }
+}
+
+/// Like [`string_arg`] but also returns the RDF 1.2 base direction (for functions
+/// that must preserve or inspect it, e.g. `CONCAT`).
+fn string_arg3(
+    vals: &[Option<TermValue>],
+    i: usize,
+) -> Option<(String, Option<String>, Option<RdfTextDirection>)> {
     string_arg_value(arg(vals, i)?)
 }
 
-fn string_arg_value(value: &TermValue) -> Option<(String, Option<String>)> {
+fn string_arg_value(
+    value: &TermValue,
+) -> Option<(String, Option<String>, Option<RdfTextDirection>)> {
     match value {
         TermValue::Literal {
             lexical_form,
             datatype,
             language,
-            ..
-        } if datatype == XSD_STRING || datatype == RDF_LANG_STRING => {
-            Some((lexical_form.clone(), language.clone()))
+            direction,
+        } if datatype == XSD_STRING
+            || datatype == RDF_LANG_STRING
+            || datatype == RDF_DIR_LANG_STRING =>
+        {
+            Some((lexical_form.clone(), language.clone(), *direction))
         }
         _ => None,
     }
@@ -1909,27 +2176,55 @@ fn make_string(ctx: &mut EvalCtx<'_>, lexical: String, lang: Option<String>) -> 
     }
 }
 
-/// `CONCAT(...)`: concatenate string arguments. The result keeps a common language
-/// tag iff every argument shares it; otherwise it is `xsd:string`.
+/// Intern a string literal keeping a language tag and (RDF 1.2) base direction:
+/// `rdf:dirLangString` when both are present, `rdf:langString` when only a
+/// language is, else `xsd:string`. A direction without a language is dropped.
+fn make_string_dir(
+    ctx: &mut EvalCtx<'_>,
+    lexical: String,
+    lang: Option<String>,
+    dir: Option<RdfTextDirection>,
+) -> SolutionTerm {
+    match (lang, dir) {
+        (Some(l), Some(d)) => intern(
+            ctx,
+            TermValue::Literal {
+                lexical_form: lexical,
+                datatype: RDF_DIR_LANG_STRING.to_owned(),
+                language: Some(l),
+                direction: Some(d),
+            },
+        ),
+        (Some(l), None) => make_string(ctx, lexical, Some(l)),
+        (None, _) => string_term(ctx, &lexical),
+    }
+}
+
+/// `CONCAT(...)`: concatenate string arguments. The result keeps the language tag
+/// **and** base direction iff *every* argument shares the same `(lang, dir)` pair;
+/// if either facet differs across arguments the result is a plain `xsd:string`.
 fn eval_concat(
     ctx: &mut EvalCtx<'_>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let mut out = String::new();
-    let mut common: Option<Option<String>> = None;
+    let mut common: Option<(Option<String>, Option<RdfTextDirection>)> = None;
+    let mut consistent = true;
     for i in 0..vals.len() {
-        let Some((s, lang)) = string_arg(vals, i) else {
+        let Some((s, lang, dir)) = string_arg3(vals, i) else {
             return Ok(None);
         };
         out.push_str(&s);
-        common = Some(match common {
-            None => lang,
-            Some(prev) if prev == lang => prev,
-            Some(_) => None,
-        });
+        match &common {
+            None => common = Some((lang, dir)),
+            Some((cl, cd)) if *cl == lang && *cd == dir => {}
+            Some(_) => consistent = false,
+        }
     }
-    let lang = common.flatten();
-    Ok(Some(make_string(ctx, out, lang)))
+    match common {
+        Some((lang, dir)) if consistent => Ok(Some(make_string_dir(ctx, out, lang, dir))),
+        _ => Ok(Some(string_term(ctx, &out))),
+    }
 }
 
 /// `SUBSTR(str, start[, length])` with 1-based indexing over Unicode scalars.
@@ -1963,15 +2258,38 @@ fn eval_substr(
     Ok(Some(make_string(ctx, slice, lang)))
 }
 
+/// SPARQL 1.1 §17.4.1.1 "argument compatibility": whether a string operand
+/// tagged `arg1_lang` may be compared against one tagged `arg2_lang`.
+/// Compatible when: both are simple/`xsd:string` (no language); both carry the
+/// *same* language tag (compared case-insensitively per RFC 4646); or `arg1`
+/// has a language tag and `arg2` is simple/`xsd:string`. NOT compatible the
+/// other way around (`arg1` simple, `arg2` tagged) — a plain string cannot be
+/// searched for a language-tagged pattern.
+fn args_compatible(arg1_lang: Option<&str>, arg2_lang: Option<&str>) -> bool {
+    match (arg1_lang, arg2_lang) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+    }
+}
+
 /// `STRBEFORE`/`STRAFTER(haystack, needle)`.
 fn eval_str_before_after(
     ctx: &mut EvalCtx<'_>,
     vals: &[Option<TermValue>],
     before: bool,
 ) -> Result<Option<SolutionTerm>, EvalError> {
-    let (Some((h, lang)), Some((n, _))) = (string_arg(vals, 0), string_arg(vals, 1)) else {
+    let (Some((h, lang)), Some((n, needle_lang))) = (string_arg(vals, 0), string_arg(vals, 1))
+    else {
         return Ok(None);
     };
+    // §17.4.1.1: the needle must be argument-compatible with the haystack, or
+    // the call is a type error (unbound) — e.g. a `@cy`-tagged needle can never
+    // match an untagged or `@en`-tagged haystack.
+    if !args_compatible(lang.as_deref(), needle_lang.as_deref()) {
+        return Ok(None);
+    }
     // An empty needle matches at the start: STRBEFORE → "", STRAFTER → the haystack.
     let result = match h.find(&n) {
         Some(idx) => {
@@ -2087,10 +2405,51 @@ fn eval_str_lang(
     ctx: &mut EvalCtx<'_>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
-    let (Some((lex, _)), Some((lang, _))) = (string_arg(vals, 0), string_arg(vals, 1)) else {
+    // §17.4.2.5: the lexical-form argument must be a simple/`xsd:string` literal
+    // — one that ALREADY carries a language tag (or RDF 1.2 base direction) is a
+    // type error, not silently re-tagged.
+    let (Some(lex), Some((lang, _))) = (plain_string_arg(vals, 0), string_arg(vals, 1)) else {
         return Ok(None);
     };
+    if lang.is_empty() {
+        return Ok(None); // an empty language tag is not a valid rdf:langString
+    }
     Ok(Some(make_string(ctx, lex, Some(lang.to_ascii_lowercase()))))
+}
+
+/// `STRLANGDIR(lexical, lang, dir)` — RDF 1.2 directional-language-string
+/// constructor. An empty `dir` yields a plain `rdf:langString`; `ltr`/`rtl`
+/// (case-insensitive) yield an `rdf:dirLangString`; any other direction errors.
+fn eval_str_lang_dir(
+    ctx: &mut EvalCtx<'_>,
+    vals: &[Option<TermValue>],
+) -> Result<Option<SolutionTerm>, EvalError> {
+    let (Some((lex, _)), Some((lang, _)), Some((dir, _))) = (
+        string_arg(vals, 0),
+        string_arg(vals, 1),
+        string_arg(vals, 2),
+    ) else {
+        return Ok(None);
+    };
+    if lang.is_empty() {
+        return Ok(None); // a directional language string needs a language
+    }
+    // The base direction must be exactly `ltr`/`rtl` (case-sensitive); anything
+    // else, including an empty string, is a type error (unbound).
+    let direction = match dir.as_str() {
+        "ltr" => RdfTextDirection::Ltr,
+        "rtl" => RdfTextDirection::Rtl,
+        _ => return Ok(None),
+    };
+    Ok(Some(intern(
+        ctx,
+        TermValue::Literal {
+            lexical_form: lex,
+            datatype: RDF_DIR_LANG_STRING.to_owned(),
+            language: Some(lang.to_ascii_lowercase()),
+            direction: Some(direction),
+        },
+    )))
 }
 
 /// `STRDT(lexical, datatypeIri)`.
@@ -2098,7 +2457,9 @@ fn eval_str_dt(
     ctx: &mut EvalCtx<'_>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
-    let Some((lex, _)) = string_arg(vals, 0) else {
+    // §17.4.2.4: the lexical-form argument must be a simple/`xsd:string` literal
+    // — a language-tagged (or RDF 1.2 direction-tagged) argument is a type error.
+    let Some(lex) = plain_string_arg(vals, 0) else {
         return Ok(None);
     };
     let Some(TermValue::Iri(dt)) = arg(vals, 1) else {
@@ -2115,6 +2476,14 @@ fn eval_triple_ctor(
     let (Some(s), Some(p), Some(o)) = (arg(vals, 0), arg(vals, 1), arg(vals, 2)) else {
         return Ok(None);
     };
+    // A triple term's subject must be an IRI or blank node and its predicate an
+    // IRI. Under RDF 1.2 a triple term may nest only in *object* position, so a
+    // triple term (or literal) in the subject/predicate slot is a type error, as
+    // is a literal predicate — all of which yield an unbound result.
+    if !matches!(s, TermValue::Iri(_) | TermValue::Blank { .. }) || !matches!(p, TermValue::Iri(_))
+    {
+        return Ok(None);
+    }
     let triple = TermValue::Triple {
         s: Box::new(s.clone()),
         p: Box::new(p.clone()),
@@ -2229,6 +2598,34 @@ fn next_u64(ctx: &mut EvalCtx<'_>) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     z ^ (z >> 31)
+}
+
+/// Mint a fresh blank node (`BNODE()`/`BNODE(strExpr)`'s cache-miss path).
+fn mint_bnode(ctx: &mut EvalCtx<'_>) -> SolutionTerm {
+    ctx.bnode_counter += 1;
+    let label = format!("bnode{}", ctx.bnode_counter);
+    intern(
+        ctx,
+        TermValue::Blank {
+            label,
+            scope: BlankScope::DEFAULT,
+        },
+    )
+}
+
+/// Resolve `reference` for the `IRI()`/`URI()` built-in (SPARQL 1.1 §17.4.2.6):
+/// an already-absolute reference (has an RFC-3986 scheme) is returned unchanged;
+/// a relative reference is resolved against `base` (the query's effective base
+/// IRI). Returns `None` when `reference` is relative and there is no base (or
+/// either string fails to parse as an IRI/IRI-reference) — a SPARQL expression
+/// error, matching every other malformed-argument built-in in this module.
+fn resolve_against_base(base: Option<&str>, reference: &str) -> Option<String> {
+    if purrdf_iri::parse(reference).is_ok_and(|iri| iri.has_scheme()) {
+        return Some(reference.to_owned());
+    }
+    let base = base?;
+    let base_iri = purrdf_iri::parse(base).ok()?;
+    Some(base_iri.resolve(reference).ok()?.as_str().to_owned())
 }
 
 /// Percent-encode every byte except unreserved characters (RFC 3986 §2.3:
@@ -2692,25 +3089,26 @@ mod tests {
     #[test]
     fn function_ceil() {
         let ds = empty_ds();
-        // CEIL(2.1) = 3 (as xsd:decimal)
+        // CEIL(2.1) = 3 (xsd:decimal; XSD 1.1 whole-decimal lexical has no point)
         let expr = Expression::FunctionCall(Function::Ceil, vec![typed_lit("2.1", XDEC)]);
-        assert_eq!(lex(&ds, &expr), Some("3.0".to_owned()));
+        assert_eq!(lex(&ds, &expr), Some("3".to_owned()));
     }
 
     #[test]
     fn function_floor() {
         let ds = empty_ds();
-        // FLOOR(2.9) = 2 (as xsd:decimal)
+        // FLOOR(2.9) = 2 (xsd:decimal; XSD 1.1 whole-decimal lexical has no point)
         let expr = Expression::FunctionCall(Function::Floor, vec![typed_lit("2.9", XDEC)]);
-        assert_eq!(lex(&ds, &expr), Some("2.0".to_owned()));
+        assert_eq!(lex(&ds, &expr), Some("2".to_owned()));
     }
 
     #[test]
     fn function_round() {
         let ds = empty_ds();
-        // ROUND(2.5) = 3 (round-half-toward-+infinity per XPath fn:round)
+        // ROUND(2.5) = 3 (round-half-toward-+infinity per XPath fn:round; XSD 1.1
+        // whole-decimal lexical has no point)
         let expr = Expression::FunctionCall(Function::Round, vec![typed_lit("2.5", XDEC)]);
-        assert_eq!(lex(&ds, &expr), Some("3.0".to_owned()));
+        assert_eq!(lex(&ds, &expr), Some("3".to_owned()));
     }
 
     // ---- BIND integration: arithmetic column over a real BGP ---------------
@@ -2944,8 +3342,8 @@ mod tests {
         let seconds = Expression::FunctionCall(Function::Seconds, vec![dt]);
         assert_eq!(lex(&ds, &hours), Some("10".to_owned()));
         assert_eq!(lex(&ds, &minutes), Some("30".to_owned()));
-        // SECONDS returns xsd:decimal; canonical form of integer-valued decimal is "45.0"
-        assert_eq!(lex(&ds, &seconds), Some("45.0".to_owned()));
+        // SECONDS returns xsd:decimal; XSD 1.1 whole-decimal lexical has no point.
+        assert_eq!(lex(&ds, &seconds), Some("45".to_owned()));
     }
 
     #[test]

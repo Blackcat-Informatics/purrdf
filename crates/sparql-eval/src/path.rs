@@ -43,7 +43,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, TermId, TermRef};
+use purrdf_core::{RdfDataset, TermId, TermRef, TermValue};
 use purrdf_sparql_algebra::{NamedNode, PropertyPathExpression, TermPattern, Variable};
 
 use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
@@ -54,10 +54,29 @@ use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 use crate::{DetHashMap, DetHashSet};
 
-/// Excluded-predicate sets for every `NegatedPropertySet` in the path, resolved to
-/// dataset ids ONCE per `eval_path` call and keyed by the excluded slice's data
-/// pointer (stable for the immutable path AST).
-type NegatedCache = BTreeMap<usize, BTreeSet<TermId>>;
+/// The pre-resolved exclusion sets for one `NegatedPropertySet`, split by
+/// element direction (SPARQL 1.1 §18.2/§18.3): `!(p1|^p2|...)` decomposes into
+/// a forward-only negated step over the plain elements and a reverse-only
+/// negated step over the `^`-elements, unioned. Each side is `None` when that
+/// direction has NO elements at all — a direction with zero listed elements
+/// contributes NOTHING to the union (it is omitted, not treated as "excludes
+/// nothing so everything forward-matches"); `Some(empty set)` cannot occur
+/// because an empty `TermId` set would only arise from a non-empty element
+/// list whose IRIs are simply absent from the dataset, which still
+/// legitimately participates (excluding nothing that occurs).
+struct NegatedSets {
+    /// Predicates excluded from a **forward** hop (the plain, non-`^` elements),
+    /// or `None` if the set has no plain elements.
+    forward: Option<BTreeSet<TermId>>,
+    /// Predicates excluded from a **reverse** hop (the `^`-prefixed elements),
+    /// or `None` if the set has no inverted elements.
+    inverse: Option<BTreeSet<TermId>>,
+}
+
+/// Per-`NegatedPropertySet` exclusion sets, resolved to dataset ids ONCE per
+/// `eval_path` call and keyed by the element slice's data pointer (stable for
+/// the immutable path AST).
+type NegatedCache = BTreeMap<usize, NegatedSets>;
 type ReachKey = (usize, TermId, bool);
 type ReachCache = RefCell<DetHashMap<ReachKey, Rc<BTreeSet<TermId>>>>;
 
@@ -86,12 +105,22 @@ fn build_negated_cache(path: &PropertyPathExpression, dataset: &RdfDataset) -> N
 fn collect_negated(path: &PropertyPathExpression, dataset: &RdfDataset, cache: &mut NegatedCache) {
     use PropertyPathExpression as P;
     match path {
-        P::NegatedPropertySet(ps) => {
-            let key = ps.as_ptr() as usize;
+        P::NegatedPropertySet(elems) => {
+            let key = elems.as_ptr() as usize;
             cache.entry(key).or_insert_with(|| {
-                ps.iter()
-                    .filter_map(|p| dataset.term_id_by_value(&named_node_to_value(p)))
-                    .collect()
+                let mut forward = None;
+                let mut inverse = None;
+                for e in elems {
+                    let target = if e.inverse {
+                        inverse.get_or_insert_with(BTreeSet::new)
+                    } else {
+                        forward.get_or_insert_with(BTreeSet::new)
+                    };
+                    if let Some(id) = dataset.term_id_by_value(&named_node_to_value(&e.predicate)) {
+                        target.insert(id);
+                    }
+                }
+                NegatedSets { forward, inverse }
             });
         }
         P::Reverse(i) | P::ZeroOrOne(i) | P::ZeroOrMore(i) | P::OneOrMore(i) => {
@@ -111,13 +140,21 @@ fn collect_negated(path: &PropertyPathExpression, dataset: &RdfDataset, cache: &
 ///
 /// The result schema is the variable endpoints in subject-then-object order
 /// (deduplicated, so `?x p+ ?x` is a single column). A blank-node endpoint is an
-/// anonymous variable that is projected away (like BGP, SPARQL §4.1.4); a ground
-/// endpoint absent from the dataset makes the whole path empty.
+/// anonymous variable that is projected away (like BGP, SPARQL §4.1.4).
+///
+/// A ground endpoint absent from the dataset (it is never the subject or object
+/// of any quad — e.g. the whole graph is empty) is NOT automatically an empty
+/// result: SPARQL 1.1's zero-length-path identity (`?`, `*`, `{0,…}`) matches a
+/// node to itself regardless of whether that node happens to appear in any
+/// triple, so `:o :p* :o` and `?s :p* :o` both still admit the trivial
+/// self-pairing (W3C `property-path/zero_or_more_set_start` /
+/// `zero_or_more_set_end`). A non-reflexive path cannot connect an absent node
+/// to anything else (it has no edges to traverse), so it correctly stays empty.
 pub(crate) fn eval_path(
     subject: &TermPattern,
     path: &PropertyPathExpression,
     object: &TermPattern,
-    ctx: &EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_>,
 ) -> Result<SolutionSeq, EvalError> {
     let dataset = ctx.dataset;
     let scope = ctx.active_dataset.scope_for(ctx.active_graph);
@@ -133,11 +170,6 @@ pub(crate) fn eval_path(
     let s_end = resolve_end(subject, dataset)?;
     let o_end = resolve_end(object, dataset)?;
 
-    // An absent ground endpoint cannot match anything.
-    let (Some(s_end), Some(o_end)) = (s_end, o_end) else {
-        return Ok(SolutionSeq::empty(Arc::new(schema)));
-    };
-
     // Pre-resolve all NegatedPropertySet excluded predicates once for this eval call.
     let pctx = PathCtx {
         dataset,
@@ -146,36 +178,98 @@ pub(crate) fn eval_path(
         reach_cache: RefCell::new(DetHashMap::default()),
     };
 
-    let mut rows: Vec<Solution> = Vec::new();
-    let push_pair = |rows: &mut Vec<Solution>, s_id: Option<TermId>, o_id: Option<TermId>| {
-        let mut row = vec![None; width];
-        if let (Some(c), Some(id)) = (s_col, s_id) {
-            row[c] = Some(SolutionTerm::Existing(id));
+    // SPARQL 1.1 §18.3: a path with NO repetition operator (`*`/`+`/`?`/`{n,m}`)
+    // anywhere in its tree evaluates as if unrolled into a BGP — each distinct
+    // combination of matching triples is its own solution, so a node reachable
+    // by several derivations (e.g. `pp11`'s `:p1/:p2` through two different
+    // intermediates) surfaces as that many DUPLICATE result rows (a MULTISET).
+    // A path containing repetition anywhere instead uses the ALP fixpoint
+    // semantics (`reach`/`closure`), which is a SET of reachable nodes — no
+    // duplicates, and required for termination on cyclic/infinite graphs. Both
+    // shapes are unified behind `node_reach`, which returns a `Vec` either way
+    // (with genuine duplicates in the bag case, and none in the set case).
+    let bag = !path_has_repetition(path);
+    let node_reach = |node: TermId, forward: bool| -> Vec<TermId> {
+        if bag {
+            simple_reach_multiset(path, node, forward, &pctx)
+        } else {
+            reach_cached(path, node, forward, &pctx)
+                .iter()
+                .copied()
+                .collect()
         }
-        if let (Some(c), Some(id)) = (o_col, o_id) {
-            row[c] = Some(SolutionTerm::Existing(id));
-        }
-        rows.push(row);
     };
 
+    let mut rows: Vec<Solution> = Vec::new();
+    let push_pair =
+        |rows: &mut Vec<Solution>, s_id: Option<SolutionTerm>, o_id: Option<SolutionTerm>| {
+            let mut row = vec![None; width];
+            if let (Some(c), Some(id)) = (s_col, s_id) {
+                row[c] = Some(id);
+            }
+            if let (Some(c), Some(id)) = (o_col, o_id) {
+                row[c] = Some(id);
+            }
+            rows.push(row);
+        };
+
     match (s_end, o_end) {
-        // Both ground: an ASK-shaped membership test. The schema is empty, so a hit
-        // is the unit solution (one row binding nothing) and a miss is no rows.
+        // Both ground: an ASK-shaped membership test. The schema is empty, so
+        // each derivation reaching `oid` is its own unit solution (one empty
+        // row) — for a SET path (`bag == false`) that count is always 0 or 1.
         (Endpoint::Bound(sid), Endpoint::Bound(oid)) => {
-            if reach(path, sid, true, &pctx).contains(&oid) {
+            let count = node_reach(sid, true).iter().filter(|&&y| y == oid).count();
+            for _ in 0..count {
                 rows.push(vec![None; width]);
             }
         }
+        // Both ground but absent from the dataset entirely: the only way they can
+        // ever connect is the reflexive zero-length identity, when they are the
+        // SAME term (an absent node has no edges to traverse for anything else).
+        (Endpoint::BoundAbsent(sval), Endpoint::BoundAbsent(oval)) => {
+            if sval == oval && path_is_reflexive(path) {
+                rows.push(vec![None; width]);
+            }
+        }
+        // One side present in the dataset, the other absent: they cannot be the
+        // same term (an equal value would have resolved to the same `TermId` on
+        // both sides), and an absent node has no edges — so no path connects them.
+        (Endpoint::Bound(_), Endpoint::BoundAbsent(_))
+        | (Endpoint::BoundAbsent(_), Endpoint::Bound(_)) => {}
         // Subject ground, object variable: walk forward from the subject.
         (Endpoint::Bound(sid), Endpoint::Free { .. }) => {
-            for y in reach_cached(path, sid, true, &pctx).iter().copied() {
-                push_pair(&mut rows, Some(sid), Some(y));
+            for y in node_reach(sid, true) {
+                push_pair(
+                    &mut rows,
+                    Some(SolutionTerm::Existing(sid)),
+                    Some(SolutionTerm::Existing(y)),
+                );
+            }
+        }
+        // Subject ground but absent from the dataset, object variable: only the
+        // zero-length reflexive pair (subject bound to itself) can ever match.
+        (Endpoint::BoundAbsent(sval), Endpoint::Free { .. }) => {
+            if path_is_reflexive(path) {
+                let term = ctx.scratch.intern(dataset, sval);
+                push_pair(&mut rows, Some(term), Some(term));
             }
         }
         // Object ground, subject variable: walk backward from the object.
         (Endpoint::Free { .. }, Endpoint::Bound(oid)) => {
-            for x in reach_cached(path, oid, false, &pctx).iter().copied() {
-                push_pair(&mut rows, Some(x), Some(oid));
+            for x in node_reach(oid, false) {
+                push_pair(
+                    &mut rows,
+                    Some(SolutionTerm::Existing(x)),
+                    Some(SolutionTerm::Existing(oid)),
+                );
+            }
+        }
+        // Object ground but absent from the dataset, subject variable: symmetric
+        // to the subject-absent case above.
+        (Endpoint::Free { .. }, Endpoint::BoundAbsent(oval)) => {
+            if path_is_reflexive(path) {
+                let term = ctx.scratch.intern(dataset, oval);
+                push_pair(&mut rows, Some(term), Some(term));
             }
         }
         // Both variable: enumerate the node universe (so zero-length `*`/`?`/`{0,…}`
@@ -185,21 +279,41 @@ pub(crate) fn eval_path(
             let same = sv == ov;
             if same {
                 // Reflexive paths (p*, p?, p{0,m}) admit the zero-length identity, so
-                // every node trivially reaches itself — skip the reach call entirely.
-                // Non-reflexive paths (p, p+, p{n,…} with n>0, etc.) require an actual
-                // traversal to discover whether x cycles back to itself.
+                // every node trivially reaches itself — skip the reach call entirely
+                // (and note `reflexive` is only ever true for a repetition path, i.e.
+                // `bag == false`, so the multiset-count branch below never double-
+                // counts a reflexive path's zero-length step). Non-reflexive paths
+                // require an actual traversal to discover whether x cycles back to
+                // itself — and for a bag path, count EACH derivation as its own row.
                 let reflexive = path_is_reflexive(path);
                 for x in node_universe(dataset, &pctx.scope) {
-                    if reflexive || reach_cached(path, x, true, &pctx).contains(&x) {
-                        push_pair(&mut rows, Some(x), Some(x));
+                    if reflexive {
+                        push_pair(
+                            &mut rows,
+                            Some(SolutionTerm::Existing(x)),
+                            Some(SolutionTerm::Existing(x)),
+                        );
+                    } else {
+                        let count = node_reach(x, true).into_iter().filter(|&y| y == x).count();
+                        for _ in 0..count {
+                            push_pair(
+                                &mut rows,
+                                Some(SolutionTerm::Existing(x)),
+                                Some(SolutionTerm::Existing(x)),
+                            );
+                        }
                     }
                 }
             } else {
                 // PINNED: spec-mandated distinct-var enumeration — enumerate every node
                 // in the universe and materialise all forward reachability. DO NOT alter.
                 for x in node_universe(dataset, &pctx.scope) {
-                    for y in reach_cached(path, x, true, &pctx).iter().copied() {
-                        push_pair(&mut rows, Some(x), Some(y));
+                    for y in node_reach(x, true) {
+                        push_pair(
+                            &mut rows,
+                            Some(SolutionTerm::Existing(x)),
+                            Some(SolutionTerm::Existing(y)),
+                        );
                     }
                 }
             }
@@ -212,32 +326,38 @@ pub(crate) fn eval_path(
     })
 }
 
-/// A resolved path endpoint: a ground dataset id, or a free (variable / blank)
-/// position. A ground term absent from the dataset resolves to `None`.
+/// A resolved path endpoint: a ground dataset id, a ground term absent from the
+/// dataset, or a free (variable / blank) position.
 enum Endpoint {
     /// A ground constant resolved to its dataset id.
     Bound(TermId),
+    /// A ground constant that is not the subject or object of any quad in the
+    /// dataset. Still a valid RDF term for the zero-length reflexive identity
+    /// (see [`eval_path`]'s doc comment) — just not reachable by any real hop.
+    BoundAbsent(TermValue),
     /// A free position — a real variable, or a blank node treated as an anonymous
     /// (projected-away) variable. The variable identity is carried so two free
     /// endpoints sharing a name evaluate the reflexive `?x p ?x` case.
     Free { var: Variable },
 }
 
-/// Resolve an endpoint term. `Ok(None)` = a ground constant absent from the
-/// dataset (so the whole path is empty).
-fn resolve_end(term: &TermPattern, dataset: &RdfDataset) -> Result<Option<Endpoint>, EvalError> {
+/// Resolve an endpoint term to a [`Endpoint`].
+fn resolve_end(term: &TermPattern, dataset: &RdfDataset) -> Result<Endpoint, EvalError> {
     match term {
-        TermPattern::Variable(v) => Ok(Some(Endpoint::Free { var: v.clone() })),
+        TermPattern::Variable(v) => Ok(Endpoint::Free { var: v.clone() }),
         // A blank node in a path endpoint is an anonymous variable (SPARQL §4.1.4):
         // give it a NUL-prefixed synthetic name (the grammar can never produce one),
         // so two distinct blank labels are distinct vars and a repeated label
         // co-refers, exactly as in a BGP.
-        TermPattern::BlankNode(b) => Ok(Some(Endpoint::Free {
+        TermPattern::BlankNode(b) => Ok(Endpoint::Free {
             var: Variable::new(format!("\u{0}bnode:{}", b.as_str())),
-        })),
+        }),
         other => {
             let value = ground_term_pattern_to_value(other)?;
-            Ok(dataset.term_id_by_value(&value).map(Endpoint::Bound))
+            Ok(match dataset.term_id_by_value(&value) {
+                Some(id) => Endpoint::Bound(id),
+                None => Endpoint::BoundAbsent(value),
+            })
         }
     }
 }
@@ -274,18 +394,6 @@ fn node_universe(dataset: &RdfDataset, scope: &GraphScope) -> BTreeSet<TermId> {
         out.insert(q.o);
     });
     out
-}
-
-/// The nodes `y` such that `(node, y)` is in `path`'s relation when `forward`, or
-/// `(y, node)` when `!forward`. The ALP primitive — structural recursion over the
-/// path expression; cycle-safe and deterministic.
-fn reach(
-    path: &PropertyPathExpression,
-    node: TermId,
-    forward: bool,
-    ctx: &PathCtx<'_>,
-) -> BTreeSet<TermId> {
-    reach_cached(path, node, forward, ctx).as_ref().clone()
 }
 
 fn reach_cached(
@@ -346,7 +454,7 @@ fn reach_uncached(
         }
         P::OneOrMore(inner) => closure(inner, node, forward, ctx),
         P::Range { inner, min, max } => range_reach(inner, node, forward, *min, *max, ctx),
-        P::NegatedPropertySet(ps) => step_negated(ps, node, forward, ctx),
+        P::NegatedPropertySet(elems) => step_negated(elems, node, forward, ctx),
         P::Wildcard { namespace } => step_wildcard(namespace.as_ref(), node, forward, ctx),
     }
 }
@@ -377,6 +485,80 @@ fn path_is_reflexive(path: &PropertyPathExpression) -> bool {
     }
 }
 
+/// Whether `path` contains a repetition operator (`*`, `+`, `?`, `{n,m}`)
+/// anywhere in its tree — the SPARQL 1.1 §18.3 dividing line between the two
+/// evaluation strategies `eval_path` dispatches on:
+///
+/// - `false` (a "simple" path of only `/`, `|`, `^`, `!(…)`, a single
+///   predicate, or `<any>`): evaluates as if unrolled into a BGP, so a node
+///   pair reachable via several distinct triple combinations is a MULTISET —
+///   one result row per derivation (`pp11`, `pp31`). See
+///   [`simple_reach_multiset`].
+/// - `true`: evaluates via the ALP fixpoint (`reach`/`closure`), a SET of
+///   reachable nodes with no duplicates — required for termination on
+///   cyclic/infinite graphs, and mandated even when the repetition is nested
+///   under a combinator (e.g. `(:p/:q)+`).
+fn path_has_repetition(path: &PropertyPathExpression) -> bool {
+    use PropertyPathExpression as P;
+    match path {
+        P::ZeroOrMore(_) | P::OneOrMore(_) | P::ZeroOrOne(_) | P::Range { .. } => true,
+        P::NamedNode(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => false,
+        P::Reverse(inner) => path_has_repetition(inner),
+        P::Sequence(a, b) | P::Alternative(a, b) => {
+            path_has_repetition(a) || path_has_repetition(b)
+        }
+    }
+}
+
+/// The MULTISET of nodes `y` such that `(node,y)` (forward) or `(y,node)`
+/// (backward) is in `path`'s relation, for a path with NO repetition operator
+/// (see [`path_has_repetition`]) — one entry per distinct underlying triple
+/// combination, so a `Sequence`/`Alternative` that can be satisfied several
+/// ways yields that many entries. Deterministic: every leaf step iterates the
+/// dataset's `TermId` order (via the same `step_*` primitives `reach` uses)
+/// and `Sequence`/`Alternative` compose that order structurally, so row order
+/// is stable run-to-run. Must never be called on a path containing repetition
+/// (`path_has_repetition(path)` is checked once by the caller, `eval_path`).
+fn simple_reach_multiset(
+    path: &PropertyPathExpression,
+    node: TermId,
+    forward: bool,
+    ctx: &PathCtx<'_>,
+) -> Vec<TermId> {
+    use PropertyPathExpression as P;
+    match path {
+        P::NamedNode(p) => step_predicate(p, node, forward, ctx).into_iter().collect(),
+        P::Reverse(inner) => simple_reach_multiset(inner, node, !forward, ctx),
+        P::Sequence(a, b) => {
+            // Forward: step `a` then `b`. Backward: step `b` then `a`, each backward
+            // — same direction-swap `reach_uncached`'s `Sequence` arm applies.
+            let (first, second): (&P, &P) = if forward { (a, b) } else { (b, a) };
+            let mut out = Vec::new();
+            for mid in simple_reach_multiset(first, node, forward, ctx) {
+                out.extend(simple_reach_multiset(second, mid, forward, ctx));
+            }
+            out
+        }
+        P::Alternative(a, b) => {
+            let mut out = simple_reach_multiset(a, node, forward, ctx);
+            out.extend(simple_reach_multiset(b, node, forward, ctx));
+            out
+        }
+        P::NegatedPropertySet(elems) => step_negated(elems, node, forward, ctx)
+            .into_iter()
+            .collect(),
+        P::Wildcard { namespace } => step_wildcard(namespace.as_ref(), node, forward, ctx)
+            .into_iter()
+            .collect(),
+        P::ZeroOrMore(_) | P::OneOrMore(_) | P::ZeroOrOne(_) | P::Range { .. } => {
+            unreachable!(
+                "simple_reach_multiset called on a path containing repetition; \
+                 eval_path must check path_has_repetition first"
+            )
+        }
+    }
+}
+
 /// One predicate hop. Forward: objects of `(node, p, ?)`; backward: subjects of
 /// `(?, p, node)`. A predicate absent from the dataset yields nothing.
 fn step_predicate(
@@ -403,15 +585,38 @@ fn step_predicate(
     out
 }
 
-/// `!(p1|…|pn)`: one hop along any predicate NOT in the excluded set.
-/// Uses the pre-resolved `cache` to avoid re-resolving excluded IRIs on every call.
+/// `!(p1|…|^q1|…)`: one hop along any predicate NOT in the excluded set, per
+/// direction (SPARQL 1.1 §18.3). The plain elements exclude a **forward** hop;
+/// the `^`-elements exclude a **reverse** hop; the two contributions are
+/// unioned, and a direction with no listed elements is omitted entirely (see
+/// [`NegatedSets`]). Uses the pre-resolved `cache` to avoid re-resolving
+/// excluded IRIs on every call.
 fn step_negated(
-    excluded: &[NamedNode],
+    elems: &[purrdf_sparql_algebra::NegatedPathElement],
     node: TermId,
     forward: bool,
     ctx: &PathCtx<'_>,
 ) -> BTreeSet<TermId> {
-    let excluded = &ctx.cache[&(excluded.as_ptr() as usize)];
+    let sets = &ctx.cache[&(elems.as_ptr() as usize)];
+    let mut out = BTreeSet::new();
+    if let Some(excluded) = &sets.forward {
+        out.extend(step_excluding(excluded, node, forward, ctx));
+    }
+    if let Some(excluded) = &sets.inverse {
+        out.extend(step_excluding(excluded, node, !forward, ctx));
+    }
+    out
+}
+
+/// One hop along any predicate NOT in `excluded`, in the given direction —
+/// the direction-parameterised primitive `step_negated` composes twice (once
+/// per element kind) to get the full negated-set relation.
+fn step_excluding(
+    excluded: &BTreeSet<TermId>,
+    node: TermId,
+    forward: bool,
+    ctx: &PathCtx<'_>,
+) -> BTreeSet<TermId> {
     let mut out = BTreeSet::new();
     if forward {
         ctx.scope
@@ -609,6 +814,15 @@ mod tests {
         PropertyPathExpression::NamedNode(nn(local))
     }
 
+    /// A negated-property-set element: `npe("p", false)` is the plain `:p`,
+    /// `npe("p", true)` is the inverted `^:p`.
+    fn npe(local: &str, inverse: bool) -> purrdf_sparql_algebra::NegatedPathElement {
+        purrdf_sparql_algebra::NegatedPathElement {
+            predicate: nn(local),
+            inverse,
+        }
+    }
+
     fn var(name: &str) -> TermPattern {
         TermPattern::Variable(Variable::new(name))
     }
@@ -634,8 +848,8 @@ mod tests {
         object: &TermPattern,
         vars: &[&str],
     ) -> Vec<Vec<Option<String>>> {
-        let ctx = EvalCtx::new(ds);
-        let seq = eval_path(subject, path, object, &ctx).expect("path eval");
+        let mut ctx = EvalCtx::new(ds);
+        let seq = eval_path(subject, path, object, &mut ctx).expect("path eval");
         let cols: Vec<usize> = vars
             .iter()
             .map(|v| {
@@ -651,8 +865,17 @@ mod tests {
                 cols.iter()
                     .map(|&c| match row[c] {
                         Some(SolutionTerm::Existing(id)) => Some(local_of(ds, id)),
-                        Some(SolutionTerm::Computed(_)) => {
-                            panic!("path never mints computed terms")
+                        // A reflexive zero-length pairing on a ground endpoint absent
+                        // from the dataset mints a `Computed` term for that value
+                        // (see `eval_path`'s `BoundAbsent` handling) — resolve it back
+                        // through the scratch interner the same way the real
+                        // evaluator's result egress does.
+                        Some(term @ SolutionTerm::Computed(_)) => {
+                            let value = ctx.scratch.value_of(ds, term);
+                            Some(match value {
+                                TermValue::Iri(s) => s.strip_prefix(EX).unwrap_or(&s).to_owned(),
+                                other => format!("{other:?}"),
+                            })
                         }
                         None => None,
                     })
@@ -679,8 +902,9 @@ mod tests {
             cache: build_negated_cache(path, ds),
             reach_cache: RefCell::new(DetHashMap::default()),
         };
-        let mut v: Vec<String> = reach(path, sid, forward, &pctx)
-            .into_iter()
+        let mut v: Vec<String> = reach_cached(path, sid, forward, &pctx)
+            .iter()
+            .copied()
             .map(|id| local_of(ds, id))
             .collect();
         v.sort();
@@ -840,9 +1064,40 @@ mod tests {
     fn negated_property_set_excludes_named() {
         let ds = graph_of(&[("a", "p", "b"), ("a", "q", "c"), ("a", "r", "d")]);
         // !(:p|:q) → only the :r edge.
-        let neg = PropertyPathExpression::NegatedPropertySet(vec![nn("p"), nn("q")]);
+        let neg =
+            PropertyPathExpression::NegatedPropertySet(vec![npe("p", false), npe("q", false)]);
         let rows = run(&ds, &ground("a"), &neg, &var("o"), &["o"]);
         assert_eq!(rows, col1(&["d"]));
+    }
+
+    #[test]
+    fn negated_property_set_pure_inverse() {
+        // W3C nps_inverse: !^:pr — from :od, the only reverse-non-:pr edge is
+        // :sd :pd :od (^:pd), i.e. the forward-listed part is EMPTY and must be
+        // omitted from the union entirely (not "match every forward edge").
+        let ds = graph_of(&[("sd", "pd", "od"), ("sr", "pr", "or")]);
+        let neg = PropertyPathExpression::NegatedPropertySet(vec![npe("pr", true)]);
+        let rows = run(&ds, &var("s"), &neg, &var("o"), &["s", "o"]);
+        assert_eq!(
+            rows,
+            vec![vec![Some("od".to_owned()), Some("sd".to_owned())]]
+        );
+    }
+
+    #[test]
+    fn negated_property_set_direct_and_inverse() {
+        // W3C nps_direct_and_inverse: !(:pd|^:pr) decomposes into
+        // Alternative(NegatedPropertySet([:pd]), Reverse(NegatedPropertySet([:pr]))).
+        let ds = graph_of(&[("sd", "pd", "od"), ("sr", "pr", "or")]);
+        let neg =
+            PropertyPathExpression::NegatedPropertySet(vec![npe("pd", false), npe("pr", true)]);
+        let rows = run(&ds, &var("s"), &neg, &var("o"), &["s", "o"]);
+        let mut expected = vec![
+            vec![Some("sr".to_owned()), Some("or".to_owned())],
+            vec![Some("od".to_owned()), Some("sd".to_owned())],
+        ];
+        expected.sort_by_key(|row| format!("{row:?}"));
+        assert_eq!(rows, expected);
     }
 
     #[test]
@@ -878,13 +1133,13 @@ mod tests {
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c")]);
         let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
         // :a :p+ :c  → true (one unit solution).
-        let ctx = EvalCtx::new(&ds);
-        let hit = eval_path(&ground("a"), &plus, &ground("c"), &ctx).expect("eval");
+        let mut ctx = EvalCtx::new(&ds);
+        let hit = eval_path(&ground("a"), &plus, &ground("c"), &mut ctx).expect("eval");
         assert_eq!(hit.len(), 1);
         assert!(hit.schema.is_empty());
         // :a :p+ :a  → false (no solutions; acyclic).
-        let ctx = EvalCtx::new(&ds);
-        let miss = eval_path(&ground("a"), &plus, &ground("a"), &ctx).expect("eval");
+        let mut ctx = EvalCtx::new(&ds);
+        let miss = eval_path(&ground("a"), &plus, &ground("a"), &mut ctx).expect("eval");
         assert!(miss.is_empty());
     }
 
@@ -964,8 +1219,8 @@ mod tests {
         let ds = graph_of(&[("a", "p", "b")]);
         let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
         // :nobody is not in the graph → empty, but the schema still carries ?o.
-        let ctx = EvalCtx::new(&ds);
-        let seq = eval_path(&ground("nobody"), &plus, &var("o"), &ctx).expect("eval");
+        let mut ctx = EvalCtx::new(&ds);
+        let seq = eval_path(&ground("nobody"), &plus, &var("o"), &mut ctx).expect("eval");
         assert!(seq.is_empty());
         assert_eq!(seq.schema.vars(), &[Variable::new("o")]);
     }
@@ -1015,10 +1270,10 @@ mod tests {
     fn determinism_rows_are_termid_ordered() {
         let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
         let star = PropertyPathExpression::ZeroOrMore(Box::new(named("p")));
-        let ctx = EvalCtx::new(&ds);
-        let first = eval_path(&ground("a"), &star, &var("o"), &ctx).expect("eval");
-        let ctx = EvalCtx::new(&ds);
-        let second = eval_path(&ground("a"), &star, &var("o"), &ctx).expect("eval");
+        let mut ctx = EvalCtx::new(&ds);
+        let first = eval_path(&ground("a"), &star, &var("o"), &mut ctx).expect("eval");
+        let mut ctx = EvalCtx::new(&ds);
+        let second = eval_path(&ground("a"), &star, &var("o"), &mut ctx).expect("eval");
         // Identical row order run-to-run (BTreeSet over TermId).
         let ids = |seq: &SolutionSeq| -> Vec<Option<SolutionTerm>> {
             seq.rows.iter().map(|r| r[0]).collect()
@@ -1035,8 +1290,45 @@ mod tests {
         // then from b it follows :r to c. The :p edge is never followed.
         // Expected: {b, c}.
         let ds = graph_of(&[("a", "r", "b"), ("b", "r", "c"), ("a", "p", "x")]);
-        let neg = PropertyPathExpression::NegatedPropertySet(vec![nn("p")]);
+        let neg = PropertyPathExpression::NegatedPropertySet(vec![npe("p", false)]);
         let plus = PropertyPathExpression::OneOrMore(Box::new(neg));
         assert_eq!(reach_locals(&ds, &plus, "a", true), vec!["b", "c"]);
+    }
+
+    // ---- ground endpoint absent from the dataset (Gap: zero-length identity) --
+
+    #[test]
+    fn zero_or_more_reflexive_ground_endpoint_absent_from_empty_dataset() {
+        // W3C zero_or_more_set_start / zero_or_more_set_end: `:p*` on a
+        // completely empty dataset still admits the zero-length reflexive
+        // pairing for a ground endpoint that never appears in any triple.
+        let ds = graph_of(&[]);
+        let star = PropertyPathExpression::ZeroOrMore(Box::new(named("p")));
+        // ?s :p* :o → s = :o (the object, bound to itself)
+        let rows = run(&ds, &var("s"), &star, &ground("o"), &["s"]);
+        assert_eq!(rows, col1(&["o"]));
+        // :s :p* ?o → o = :s (the subject, bound to itself)
+        let rows = run(&ds, &ground("s"), &star, &var("o"), &["o"]);
+        assert_eq!(rows, col1(&["s"]));
+    }
+
+    #[test]
+    fn zero_or_one_reflexive_ground_endpoint_absent_from_empty_dataset() {
+        // Same shape as above but for `?` (zero_or_one_set_start/_end).
+        let ds = graph_of(&[]);
+        let opt = PropertyPathExpression::ZeroOrOne(Box::new(named("p")));
+        let rows = run(&ds, &var("s"), &opt, &ground("o"), &["s"]);
+        assert_eq!(rows, col1(&["o"]));
+        let rows = run(&ds, &ground("s"), &opt, &var("o"), &["o"]);
+        assert_eq!(rows, col1(&["s"]));
+    }
+
+    #[test]
+    fn non_reflexive_ground_endpoint_absent_from_dataset_is_empty() {
+        // A non-reflexive path (no *, +, ? at the relevant position) cannot
+        // connect an absent node to anything else — it has no edges.
+        let ds = graph_of(&[("a", "p", "b")]);
+        let rows = run(&ds, &var("s"), &named("p"), &ground("nobody"), &["s"]);
+        assert_eq!(rows, col1(&[]));
     }
 }

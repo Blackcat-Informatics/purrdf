@@ -37,7 +37,10 @@ fn snapshot_quoted_triple_paren() {
 
 #[test]
 fn snapshot_quoted_triple_bare() {
-    // The `<< s p o >>` spelling must lower identically to the paren form.
+    // A bare `<< s p o >>` is a *reifying triple* (RDF 1.2), NOT a triple term: it
+    // mints a fresh reifier `_:b`, emits `_:b rdf:reifies <<( s p o )>>`, and the
+    // reifier stands in object position. This is distinct from the paren triple-term
+    // form `<<( s p o )>>` (a value), which lowers to a single triple.
     insta::assert_debug_snapshot!(parse(
         "SELECT ?r WHERE { ?r rdf:reifies << ?s purrdf:p ?o >> }"
     ));

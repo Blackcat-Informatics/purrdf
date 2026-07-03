@@ -10,8 +10,11 @@
 //! the RFC-3986 §5.4 *resolution* table in `resolution.rs`: together they cover the
 //! two halves of the acceptance criterion ("parse/validate" + "base resolution").
 //!
-//! Provenance of each case is noted inline. Where a string is a valid IRI but not a
-//! valid (ASCII-only) URI, it appears in [`valid_iri_only`].
+//! Provenance of each case is noted inline; the authoritative source map (which
+//! RFC section each vector is verbatim/faithful to, and why there is no vendored
+//! W3C IRI manifest for this zero-dep crate) is `tests/PROVENANCE.md`. Where a
+//! string is a valid IRI but not a valid (ASCII-only) URI, it appears in
+//! [`valid_iri_only`].
 
 use purrdf_iri::{parse, parse_uri};
 

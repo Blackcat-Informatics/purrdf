@@ -214,18 +214,38 @@ enum Component {
         o: TermId,
         g: Option<TermId>,
     },
-    /// A reifier binding `r <urn:purrdf:rdfc:reifies> t`.
-    Reifier { r: TermId, t: TermId },
-    /// An annotation `r p o` in the reserved annotation graph.
-    Annotation { r: TermId, p: TermId, o: TermId },
+    /// A reifier binding `r <urn:purrdf:rdfc:reifies> t` in graph `g` (`None` =
+    /// default graph — the graph slot then stays empty, byte-identical to the
+    /// pre-graph-dimension form).
+    Reifier {
+        r: TermId,
+        t: TermId,
+        g: Option<TermId>,
+    },
+    /// An annotation `r p o` in the reserved annotation graph, itself scoped to graph
+    /// `g` (`None` = default graph).
+    Annotation {
+        r: TermId,
+        p: TermId,
+        o: TermId,
+        g: Option<TermId>,
+    },
 }
 
-/// One quad slot: a dataset term, or a synthetic sentinel IRI (overlay predicate /
-/// graph) that has no [`TermId`].
+/// One quad slot: a dataset term, a synthetic sentinel IRI (overlay predicate) that
+/// has no [`TermId`], or the annotation-overlay graph marker (the reserved annotation
+/// sentinel plus the annotation's own named graph, if any).
 #[derive(Clone, Copy)]
 enum Slot {
     Term(TermId),
     Sentinel(&'static str),
+    /// The annotation overlay's graph position: the reserved annotation sentinel and,
+    /// for a named-graph annotation, the graph term. `None` renders exactly as the
+    /// bare sentinel (byte-identical to the default-graph form); `Some(g)` appends the
+    /// real graph term so a named-graph annotation stays lossless and distinct from a
+    /// genuine quad. The graph term keeps its [`TermId`] so a blank-node graph still
+    /// participates in canonical labeling.
+    AnnotationGraph(Option<TermId>),
 }
 
 impl Component {
@@ -238,17 +258,19 @@ impl Component {
                 Slot::Term(o),
                 g.map(Slot::Term),
             ),
-            Self::Reifier { r, t } => (
+            Self::Reifier { r, t, g } => (
                 Slot::Term(r),
                 Slot::Sentinel(SENTINEL_REIFIES),
                 Slot::Term(t),
-                None,
+                // The reifier's graph reuses the (previously always-empty) graph slot,
+                // so a default-graph reifier (`g == None`) is byte-identical to before.
+                g.map(Slot::Term),
             ),
-            Self::Annotation { r, p, o } => (
+            Self::Annotation { r, p, o, g } => (
                 Slot::Term(r),
                 Slot::Term(p),
                 Slot::Term(o),
-                Some(Slot::Sentinel(SENTINEL_ANNOTATION_GRAPH)),
+                Some(Slot::AnnotationGraph(g)),
             ),
         }
     }
@@ -258,8 +280,9 @@ impl Component {
     fn for_each_blank(self, ds: &RdfDataset, f: &mut impl FnMut(TermId)) {
         let (s, p, o, g) = self.slots();
         for slot in [Some(s), Some(p), Some(o), g].into_iter().flatten() {
-            if let Slot::Term(id) = slot {
-                blanks_in_term(ds, id, f);
+            match slot {
+                Slot::Term(id) | Slot::AnnotationGraph(Some(id)) => blanks_in_term(ds, id, f),
+                Slot::Sentinel(_) | Slot::AnnotationGraph(None) => {}
             }
         }
     }
@@ -288,11 +311,11 @@ fn collect_components(ds: &RdfDataset, f: &mut impl FnMut(Component)) {
             g: q.g,
         });
     }
-    for (r, t) in ds.reifiers() {
-        f(Component::Reifier { r, t });
+    for (r, t, g) in ds.reifiers_with_graph() {
+        f(Component::Reifier { r, t, g });
     }
-    for (r, p, o) in ds.annotations() {
-        f(Component::Annotation { r, p, o });
+    for (r, p, o, g) in ds.annotations_with_graph() {
+        f(Component::Annotation { r, p, o, g });
     }
 }
 
@@ -632,7 +655,12 @@ impl<'a> CanonState<'a> {
         issuer: &IdIssuer,
         f: &mut impl FnMut(TermId, HashHex),
     ) {
-        let Slot::Term(id) = slot else { return };
+        // The annotation-overlay graph marker carries a real graph term whose blanks
+        // are "related" exactly like any graph-slot term.
+        let id = match slot {
+            Slot::Term(id) | Slot::AnnotationGraph(Some(id)) => id,
+            Slot::Sentinel(_) | Slot::AnnotationGraph(None) => return,
+        };
         match self.ds.resolve(id) {
             TermRef::Blank { .. } => {
                 if id != focus {
@@ -707,6 +735,9 @@ impl<'a> CanonState<'a> {
                 TermRef::Iri(iri) => iri.to_owned(),
                 other => unreachable!("predicate must be an IRI, got {other:?}"),
             },
+            Slot::AnnotationGraph(_) => {
+                unreachable!("the annotation-graph marker is never a predicate slot")
+            }
         }
     }
 
@@ -751,6 +782,20 @@ impl<'a> CanonState<'a> {
                 out.push('>');
             }
             Slot::Term(id) => self.write_term(id, render, out),
+            Slot::AnnotationGraph(g) => {
+                // `None`: bare annotation sentinel — byte-identical to the pre-graph
+                // form. `Some(g)`: sentinel then the graph term, so a named-graph
+                // annotation stays lossless and never collides with a genuine quad
+                // (which never carries two graph tokens). Not re-parsed — this string
+                // is only hashed / byte-compared as the canonical oracle.
+                out.push('<');
+                write_iri_escaped(SENTINEL_ANNOTATION_GRAPH, out);
+                out.push('>');
+                if let Some(g) = g {
+                    out.push(' ');
+                    self.write_term(g, render, out);
+                }
+            }
         }
     }
 

@@ -38,13 +38,13 @@ Latest measured matrix (`make conformance`, all GREEN, exit 0):
 | IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 19 | 0 | 0 |
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 shards | 0 | 0 |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 250 | 0 | 0 |
-| SPARQL 1.1 evaluation (subset) | W3C sparql11 + first-party | 30 | 3 | 0 |
+| SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 615 | 35 | 0 |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 114 | 6 | 0 |
 | SHACL (first-party corpus) | first-party frozen reports | 48 | 0 | 0 |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1,051 | 54 | 0 |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 groups | 0 | 0 |
-| rdflib LSP drop-in gate | rdflib 7.6 own tests | 50 | 36 | 0 |
-| purrdf.compat parity | first-party (differential vs rdflib) | 295 | 7 | 0 |
+| rdflib LSP drop-in gate | rdflib 7.6 own tests | 62 | 24 | 0 |
+| purrdf.compat parity | first-party (differential vs rdflib) | 325 | 7 | 0 |
 
 The RDFC, SHACL-corpus, and ShEx-syntax rows count harness test functions
 (each fans out over its fixtures internally); the fixture-level totals are in
@@ -64,10 +64,11 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SHACL | W3C data-shapes, `core/` + `sparql/` | **114 / 120** · 6 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **48 / 48** frozen expected reports |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
-| SPARQL 1.1 | W3C suite via `purrdf-sparql-conformance` | **30** pass · 3 xfail (SERVICE federation) |
+| SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **615** pass · 35 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 35 non-passes are 30 spec-inherent entailment-regime cases + 5 upstream-errata fixtures) |
+| Entailment (RDFS / OWL-RL) | native `purrdf-entail` forward-materialization reasoner | RDFS + OWL-RL closure; **40/70** W3C entailment cases (OWL-Direct/DL/RIF/D ledgered) |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
-| rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **50** pass · 36 strict-xfail (ledgered) |
-| purrdf.compat parity | first-party differential vs rdflib 7.6 | **295** pass · 7 strict-xfail (ledgered) |
+| rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **62** pass · 24 strict-xfail (ledgered) |
+| purrdf.compat parity | first-party differential vs rdflib 7.6 | **325** pass · 7 strict-xfail (ledgered) |
 | GTS transport | frozen cross-language vectors, `vectors/` | byte-exact |
 
 ## Where the suites live
@@ -125,13 +126,13 @@ A harness never skips silently. The three mechanisms:
    (imports, semantic actions) are skipped by their manifest trait tags and
    counted exactly; nothing else may be skipped.
 
-The ledgers themselves (each entry = one node id + a concrete reason + tracking
-issue):
+The ledgers themselves (each entry = one node id + a concrete, self-describing
+reason):
 
 - `bindings/python/tests/xfail_ledger.toml` — the first-party
   `purrdf.compat` parity ledger (7 strict xfails).
 - `bindings/python/tests/rdflib_suite/xfail_ledger.toml` — the rdflib
-  drop-in (LSP) gate ledger governing rdflib's own vendored tests (36 strict
+  drop-in (LSP) gate ledger governing rdflib's own vendored tests (24 strict
   xfails). Both are applied as **strict** xfails, so an XPASS or a stale key
   fails the run.
 - The Rust harnesses embed their ledgers in-code (e.g. the SHACL `w3c_conformance`
@@ -143,21 +144,37 @@ issue):
 These are **tracked, never silent** — each is a ledgered xfail/skip or an open
 issue, so the matrix stays honest:
 
-- **Full W3C SPARQL 1.1/1.2 *eval* vendoring** — the SPARQL row runs a curated
-  subset (the W3C `service`, `subquery`, `aggregates` manifests plus first-party
-  extension/list-function suites), not the full several-thousand-case eval
-  corpus. Vendoring the complete suite is a tracked follow-up. It is a breadth
-  gap, not a correctness regression: the modelled cases are green.
-- **SPARQL 1.2 is draft** — SPARQL 1.2 is a W3C draft, so no frozen 1.2 eval
-  corpus is vendored yet; it rides on the same follow-up.
-- **SPARQL `SERVICE` federation** — 3 W3C `service` cases are strict xfails: the
-  native engine has no remote query source wired in.
+- **SPARQL 1.1 / 1.2 eval** — the full W3C SPARQL 1.1 **query + update**
+  evaluation suites plus the SPARQL 1.2 / RDF-1.2 suite are vendored verbatim
+  (`crates/sparql-conformance/suite/`, pinned commit `426c7df`) and every
+  non-pass is a typed strict-xfail in `crates/sparql-conformance/src/xfail.rs`.
+  The value-mismatch / property-path / update-semantics / cast / function /
+  reifier residuals described in earlier revisions are **resolved**: XSD casts,
+  numeric/string functions, property paths, UPDATE semantics, `CONSTRUCT WHERE`,
+  grouping, EXISTS-over-GRAPH-var, and the SPARQL 1.2 triple-term / reifier /
+  annotation surface (including graph-scoped reifiers) all pass. **All 7 W3C
+  `service` federation cases pass** (via the lateral SERVICE seam). The only
+  remaining non-passes are the **35 ledgered xfails**: **30 spec-inherent
+  entailment-regime cases** (OWL-Direct/DL, RIF-rule, and RDF-axiomatic-triple
+  entailment that a forward-materialization reasoner cannot reach) and **5
+  upstream-errata fixtures** (three `cast-decimal`/`-double`/`-float` cases with
+  internally-inconsistent non-canonical XSD lexicals, and `coalesce01` /
+  `plus-1-corrected` whose expected whole-valued `xsd:decimal` uses the legacy
+  `X.0` form the engine's XSD-1.1 canonical serializer does not emit). Both
+  classes are value/datatype-correct where applicable; only a spec-inherent
+  regime or a vendored fixture's non-canonical lexical differs.
+- **Entailment** — the native `purrdf-entail` reasoner materializes RDFS +
+  OWL-RL closure; RDF/RDFS/OWL-RL cases pass, and OWL-Direct(DL)/RIF/D-entailment
+  cases are `entailment` xfails (spec-inherent boundaries of a
+  forward-materialization reasoner).
 - **SHACL** — 6 W3C `sparql/` cases are ledgered.
 - **ShEx Import / SemanticAction** — 54 shexTest cases are trait-skipped.
-- **rdflib drop-in residuals** — 36 rdflib-suite + 7 compat-parity strict
-  xfails cover literal facet processing, binary-datatype value maps, SERVICE /
-  custom-function callback, and prefix-recovery gaps; see the two ledgers above
-  for the per-test reasons.
+- **rdflib drop-in residuals** — 23 rdflib-suite + 7 compat-parity strict
+  xfails cover Graph-subclass identity through set operators, rdf:List /
+  Collection mutation, `Result.bindings` / `SELECT *` subselect projection,
+  graph-prefix forwarding, aggregate/nested-FILTER evaluation, and
+  ConjunctiveGraph legacy semantics; see the two ledgers above for the per-test
+  reasons.
 
 ## Comparison caveats
 

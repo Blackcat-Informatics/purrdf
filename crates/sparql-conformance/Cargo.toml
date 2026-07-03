@@ -29,6 +29,8 @@ purrdf = { workspace = true }
 purrdf-core = { workspace = true }
 # Hand-rolled SPARQL Results readers for the expected SRX/SRJ files.
 purrdf-sparql-results = { workspace = true }
+# Native RDFS/OWL-RL entailment closure for `sd:entailmentRegime` tests.
+purrdf-entail = { workspace = true }
 # UTF-8 path type used by the datatest-stable harness signature.
 camino = { workspace = true }
 

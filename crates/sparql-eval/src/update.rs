@@ -30,7 +30,11 @@
 //! - **Blank nodes.** `INSERT DATA` blanks are minted fresh, ONE shared blank-map
 //!   for the whole op (they co-refer within the op). `DELETE DATA` is blank-free (a
 //!   parser invariant). Template (`DELETE`/`INSERT … WHERE`) blanks are minted fresh
-//!   per solution row, exactly like `CONSTRUCT`.
+//!   per solution row, exactly like `CONSTRUCT`. All of this mints from ONE
+//!   monotonic counter threaded across the whole request ([`eval_update`]'s
+//!   `bnode_counter`), never reset between operations, so a `_:b` label in one
+//!   operation is a distinct blank from the same label in another operation
+//!   (SPARQL 1.1 Update §4.1.1 / §19.6).
 //! - **`LOAD` host seam.** The core is network-free. `LOAD <iri>` needs a host
 //!   [`GraphResolver`] to fetch + parse the source into a frozen dataset; with no
 //!   resolver, `LOAD` hard-fails unless `SILENT`.
@@ -85,29 +89,52 @@ pub(crate) fn eval_update(
     resolver: Option<&dyn GraphResolver>,
     cfg: &UpdateEvalConfig<'_>,
 ) -> Result<(), RdfDiagnostic> {
+    // A single monotonic counter threaded across EVERY operation in this request, so
+    // a synthetic blank label minted by operation N can never collide with one minted
+    // by operation N+1 — even though each operation's own `_:b` → label map starts
+    // empty. Per SPARQL 1.1 Update §4.1.1 / §19.6, a blank-node label is scoped to the
+    // single operation (and, inside an INSERT/DELETE … WHERE, freshly per solution
+    // row): `_:b` in one operation is a DIFFERENT blank node from `_:b` in another
+    // operation of the same request. Resetting the counter per-operation (the
+    // previous behaviour) let two operations mint the same synthetic label, so their
+    // blanks silently unified in the shared store.
+    let mut bnode_counter: u64 = 0;
     for op in &update.operations {
-        apply_operation(op, m, resolver, cfg)?;
+        apply_operation(op, m, resolver, cfg, &mut bnode_counter)?;
     }
     Ok(())
 }
 
-/// Apply one update operation to `m`.
+/// Apply one update operation to `m`. `bnode_counter` is the request-wide monotonic
+/// blank-mint counter (see [`eval_update`]) — never reset between operations.
 fn apply_operation(
     op: &GraphUpdateOperation,
     m: &mut MutableDataset,
     resolver: Option<&dyn GraphResolver>,
     cfg: &UpdateEvalConfig<'_>,
+    bnode_counter: &mut u64,
 ) -> Result<(), RdfDiagnostic> {
     match op {
-        GraphUpdateOperation::InsertData { data } => insert_data(data, m),
-        GraphUpdateOperation::DeleteData { data } => delete_data(data, m),
+        GraphUpdateOperation::InsertData { data } => insert_data(data, m, bnode_counter),
+        GraphUpdateOperation::DeleteData { data } => delete_data(data, m, bnode_counter),
         GraphUpdateOperation::DeleteInsert {
             delete,
             insert,
             with,
             using,
             pattern,
-        } => delete_insert(delete, insert, with.as_ref(), using, pattern, m, cfg),
+        } => delete_insert(
+            DeleteInsertSpec {
+                delete,
+                insert,
+                with: with.as_ref(),
+                using,
+                pattern,
+            },
+            m,
+            cfg,
+            bnode_counter,
+        ),
         GraphUpdateOperation::Load {
             silent,
             source,
@@ -145,12 +172,16 @@ fn apply_operation(
 ///
 /// DATA never queries the dataset, so it takes the snapshot-free ground path: no
 /// `m.freeze()` (which would compact the whole base+delta for nothing) and no
-/// `EvalCtx`. A local counter mints the op's blanks.
-fn insert_data(data: &[QuadPattern], m: &mut MutableDataset) -> Result<(), RdfDiagnostic> {
+/// `EvalCtx`. Blanks mint from the request-wide `counter` (see [`eval_update`]), so
+/// this op's labels never collide with another operation's.
+fn insert_data(
+    data: &[QuadPattern],
+    m: &mut MutableDataset,
+    counter: &mut u64,
+) -> Result<(), RdfDiagnostic> {
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
-    let mut counter: u64 = 0;
     for qp in data {
-        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, &mut counter) {
+        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter) {
             m.insert(q);
         }
     }
@@ -159,11 +190,14 @@ fn insert_data(data: &[QuadPattern], m: &mut MutableDataset) -> Result<(), RdfDi
 
 /// `DELETE DATA`: instantiate each quad (variable-free AND blank-free — parser
 /// guaranteed) and remove the result. Snapshot-free, like [`insert_data`].
-fn delete_data(data: &[QuadPattern], m: &mut MutableDataset) -> Result<(), RdfDiagnostic> {
+fn delete_data(
+    data: &[QuadPattern],
+    m: &mut MutableDataset,
+    counter: &mut u64,
+) -> Result<(), RdfDiagnostic> {
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
-    let mut counter: u64 = 0;
     for qp in data {
-        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, &mut counter) {
+        if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter) {
             m.remove(&q);
         }
     }
@@ -172,16 +206,31 @@ fn delete_data(data: &[QuadPattern], m: &mut MutableDataset) -> Result<(), RdfDi
 
 // ── DELETE / INSERT … WHERE ──────────────────────────────────────────────────
 
+/// The DELETE/INSERT/WITH/USING/WHERE fields of a `GraphUpdateOperation::DeleteInsert`,
+/// bundled so [`delete_insert`] stays under clippy's argument-count ceiling.
+#[derive(Clone, Copy)]
+struct DeleteInsertSpec<'a> {
+    delete: &'a [QuadPattern],
+    insert: &'a [QuadPattern],
+    with: Option<&'a purrdf_sparql_algebra::NamedNode>,
+    using: &'a [UsingClause],
+    pattern: &'a purrdf_sparql_algebra::GraphPattern,
+}
+
 /// `DELETE { ... } INSERT { ... } WHERE { ... }` and its shorthands.
 fn delete_insert(
-    delete: &[QuadPattern],
-    insert: &[QuadPattern],
-    with: Option<&purrdf_sparql_algebra::NamedNode>,
-    using: &[UsingClause],
-    pattern: &purrdf_sparql_algebra::GraphPattern,
+    spec: DeleteInsertSpec<'_>,
     m: &mut MutableDataset,
     cfg: &UpdateEvalConfig<'_>,
+    bnode_counter: &mut u64,
 ) -> Result<(), RdfDiagnostic> {
+    let DeleteInsertSpec {
+        delete,
+        insert,
+        with,
+        using,
+        pattern,
+    } = spec;
     // The WITH graph is the default target for delete/insert quads whose own
     // QuadPattern.graph is None (template target — independent of the WHERE dataset).
     let with_value = with.map(named_node_to_value);
@@ -192,6 +241,11 @@ fn delete_insert(
     if let Some(preds) = cfg.standpoint_predicates {
         ctx = ctx.with_standpoint_predicates(preds.clone());
     }
+    // Seed the WHERE/template context from the request-wide counter (never reset
+    // between operations — see `eval_update`) and hand it back below, so blanks
+    // minted by this operation (template blanks, `BNODE()`, `rdf:List` cells) stay
+    // disjoint from every other operation's in the same request.
+    ctx.bnode_counter = *bnode_counter;
 
     // Scope the WHERE active dataset (§3.1.3): USING (if present) builds a custom
     // dataset and replaces WITH's effect on the WHERE; otherwise WITH scopes the WHERE
@@ -246,6 +300,7 @@ fn delete_insert(
             }
         }
     }
+    *bnode_counter = ctx.bnode_counter;
     drop(ctx);
     drop(snap);
 

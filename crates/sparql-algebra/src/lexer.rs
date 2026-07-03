@@ -35,8 +35,14 @@ pub enum Token {
     BlankNodeLabel(String),
     /// An anonymous blank node `[]` (with only whitespace inside).
     Anon,
-    /// A string literal's unescaped content (quote style is not retained).
+    /// A short string literal's unescaped content (`'...'` / `"..."`; quote
+    /// style is not retained).
     StringLit(String),
+    /// A long (triple-quoted) string literal's unescaped content
+    /// (`'''...'''` / `"""..."""`). Kept distinct from [`Token::StringLit`] so
+    /// grammar productions that admit only short strings — e.g. the SPARQL 1.2
+    /// `VersionSpecifier` — can reject the long form.
+    LongStringLit(String),
     /// An integer literal (lexical form).
     Integer(String),
     /// A decimal literal (lexical form).
@@ -70,6 +76,10 @@ pub enum Token {
     Slash,
     /// `|`
     Pipe,
+    /// `{|` — RDF 1.2 annotation-block open.
+    AnnotationOpen,
+    /// `|}` — RDF 1.2 annotation-block close.
+    AnnotationClose,
     /// `^`
     Caret,
     /// `*`
@@ -241,6 +251,10 @@ impl<'a> Lexer<'a> {
             '_' if self.peek(1) == Some(':') => self.lex_blank_label(start),
             ':' => self.lex_prefixed_name(start),
             '@' => self.lex_lang_tag(start),
+            '{' if self.peek(1) == Some('|') => {
+                self.pos += 2;
+                Ok(Token::AnnotationOpen)
+            }
             '{' => self.single(Token::LBrace),
             '}' => self.single(Token::RBrace),
             '(' => self.single(Token::LParen),
@@ -251,12 +265,16 @@ impl<'a> Lexer<'a> {
             ';' => self.single(Token::Semicolon),
             ',' => self.single(Token::Comma),
             '/' => self.single(Token::Slash),
+            '|' if self.peek(1) == Some('}') => {
+                self.pos += 2;
+                Ok(Token::AnnotationClose)
+            }
             '|' => Ok(self.two_or_one('|', Token::Or, '\0', Token::Or, Token::Pipe)),
             '^' => Ok(self.two_or_one('^', Token::HatHat, '\0', Token::HatHat, Token::Caret)),
             '*' => self.single(Token::Star),
             '+' => self.single(Token::Plus),
             '-' => self.single(Token::Minus),
-            '!' => Ok(self.two_or_one('!', Token::Bang, '=', Token::NotEq, Token::Bang)),
+            '!' => Ok(self.two_or_one('=', Token::NotEq, '\0', Token::NotEq, Token::Bang)),
             '=' => self.single(Token::Eq),
             '~' => self.single(Token::Tilde),
             '&' => self.lex_and(start),
@@ -457,7 +475,7 @@ impl<'a> Lexer<'a> {
                 if long {
                     if self.peek(1) == Some(quote) && self.peek(2) == Some(quote) {
                         self.pos += 3;
-                        return Ok(Token::StringLit(value));
+                        return Ok(Token::LongStringLit(value));
                     }
                     // a lone quote inside a long string is literal
                     value.push(c);
@@ -487,12 +505,16 @@ impl<'a> Lexer<'a> {
 
     fn lex_blank_label(&mut self, start: usize) -> Result<Token> {
         self.pos += 2; // `_:`
-        let label = self.take_while(|c| is_pn_chars(c) || c == '.');
-        let label = label.trim_end_matches('.').to_string();
+        let raw = self.take_while(|c| is_pn_chars(c) || c == '.');
+        let label = raw.trim_end_matches('.');
+        // Push `pos` back over the over-consumed trailing dots: a trailing `.` is
+        // the statement terminator, not part of the label. `.` is ASCII (1 byte),
+        // so the trimmed byte-length delta equals the dot run.
+        self.pos -= raw.len() - label.len();
         if label.is_empty() {
             return Err(ParseError::lex("empty blank node label after `_:`", start));
         }
-        Ok(Token::BlankNodeLabel(label))
+        Ok(Token::BlankNodeLabel(label.to_string()))
     }
 
     fn lex_bracket_or_anon(&mut self) -> Result<Token> {
@@ -725,6 +747,14 @@ mod tests {
         tokenize(s).unwrap().into_iter().map(|s| s.token).collect()
     }
 
+    fn toks_turtle(s: &str) -> Vec<Token> {
+        tokenize_turtle(s)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.token)
+            .collect()
+    }
+
     #[test]
     fn iri_vs_operators() {
         assert_eq!(toks("<http://x/y>"), vec![Token::Iri("http://x/y".into())]);
@@ -822,6 +852,28 @@ mod tests {
     fn anon_and_blank() {
         assert_eq!(toks("[]"), vec![Token::Anon]);
         assert_eq!(toks("_:b1"), vec![Token::BlankNodeLabel("b1".into())]);
+    }
+
+    #[test]
+    fn blank_label_trailing_dot_is_statement_terminator() {
+        // A trailing `.` after a blank-node label is the Turtle statement
+        // terminator, not part of the label: it must surface as its own `Dot`
+        // token and must not be swallowed into the label string.
+        assert_eq!(
+            toks_turtle(":x :p _:y."),
+            vec![
+                Token::PrefixedName(String::new(), "x".into()),
+                Token::PrefixedName(String::new(), "p".into()),
+                Token::BlankNodeLabel("y".into()),
+                Token::Dot,
+            ]
+        );
+        // An internal `.` is kept as part of the label; only the final,
+        // over-consumed trailing dot is pushed back as the terminator.
+        assert_eq!(
+            toks_turtle("_:a.b."),
+            vec![Token::BlankNodeLabel("a.b".into()), Token::Dot]
+        );
     }
 
     #[test]

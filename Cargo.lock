@@ -1091,6 +1091,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-entail"
+version = "0.2.1"
+dependencies = [
+ "criterion",
+ "purrdf-core",
+]
+
+[[package]]
 name = "purrdf-events"
 version = "0.2.1"
 
@@ -1227,6 +1235,7 @@ dependencies = [
  "datatest-stable",
  "purrdf",
  "purrdf-core",
+ "purrdf-entail",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
@@ -1243,6 +1252,7 @@ dependencies = [
  "md-5",
  "pretty_assertions",
  "purrdf-core",
+ "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-results",
  "purrdf-xsd",

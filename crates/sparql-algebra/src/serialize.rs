@@ -677,6 +677,10 @@ fn fmt_function_name(s: &mut String, f: &Function) {
         Function::Predicate => "PREDICATE",
         Function::Object => "OBJECT",
         Function::IsTriple => "isTRIPLE",
+        Function::LangDir => "LANGDIR",
+        Function::StrLangDir => "STRLANGDIR",
+        Function::HasLang => "hasLANG",
+        Function::HasLangDir => "hasLANGDIR",
         Function::Purrdf(call) => {
             // Emit the ORIGINAL IRI the call was parsed from (recorded in the AST
             // node). PurRDF mints no vocabulary of its own, so no namespace is ever

@@ -51,6 +51,10 @@ sha2 = { workspace = true }
 # SPARQL Results reader for decoding remote SERVICE responses. Wasm-clean
 # (hand-rolled, no serde). No oxigraph-family edge.
 purrdf-sparql-results = { workspace = true }
+# RFC-3986 IRI parsing/resolution, for the IRI()/URI() built-in's relative-reference
+# resolution against the query's base IRI (SPARQL 1.1 §17.4.2.6). Already a
+# wasm-clean foundation leaf the algebra parser depends on for the same purpose.
+purrdf-iri = { workspace = true }
 # Deterministic two-phase parallel evaluation primitives (`parallel` module):
 # fork-join per BGP/group row batch, reduced back in source order. Unconditional —
 # rayon compiles cleanly on wasm32-unknown-unknown and degrades to inline-sequential
@@ -96,4 +100,12 @@ harness = false
 # so there is no wall-time A/B; the deterministic win is a `bgp` unit test).
 # Report-only; `make bench` lane only — excluded from `make check`.
 name = "cost_based_bgp_planner"
+harness = false
+
+[[bench]]
+# LATERAL variable-endpoint SERVICE: per-left-row substitute+forward cost of
+# `SERVICE ?g` (the LATERAL path) vs the constant-forward fixed-IRI SERVICE (Join),
+# over an offline LocalRemoteQuerySource at two scales. Report-only; `make bench`
+# lane only — excluded from `make check`.
+name = "lateral_service"
 harness = false

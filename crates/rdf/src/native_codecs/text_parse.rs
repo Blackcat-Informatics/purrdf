@@ -345,7 +345,7 @@ impl<'a> TokenCursor<'a> {
                 };
                 Ok(Node::Bnode(label))
             }
-            Some(Token::StringLit(_)) => self.literal(),
+            Some(Token::StringLit(_) | Token::LongStringLit(_)) => self.literal(),
             other => Err(err(format!(
                 "unexpected token {other:?} in {:?}",
                 self.line
@@ -368,7 +368,7 @@ impl<'a> TokenCursor<'a> {
 
     /// A string literal with an optional `@lang[--dir]` tag or `^^<datatype>`.
     fn literal(&mut self) -> Result<Node, RdfDiagnostic> {
-        let Some(Token::StringLit(value)) = self.bump() else {
+        let Some(Token::StringLit(value) | Token::LongStringLit(value)) = self.bump() else {
             unreachable!()
         };
         let mut lang = None;
@@ -798,7 +798,7 @@ impl<'a> DocParser<'a> {
             }
             Some(Token::LBracket) => self.blank_node_property_list(graph),
             Some(Token::LParen) => self.collection(graph),
-            Some(Token::StringLit(_)) => self.literal(),
+            Some(Token::StringLit(_) | Token::LongStringLit(_)) => self.literal(),
             Some(Token::Integer(_) | Token::Decimal(_) | Token::Double(_)) => {
                 self.numeric_literal("")
             }
@@ -956,7 +956,7 @@ impl<'a> DocParser<'a> {
     }
 
     fn literal(&mut self) -> Result<Node, RdfDiagnostic> {
-        let Some(Token::StringLit(value)) = self.bump() else {
+        let Some(Token::StringLit(value) | Token::LongStringLit(value)) = self.bump() else {
             unreachable!()
         };
         let mut lang = None;
@@ -1086,11 +1086,12 @@ impl<'a> DocParser<'a> {
                 // (the doubled/trailing form `; ;`) denotes empty items and emits no
                 // triples. Consume the run, then decide on the first non-`;` token.
                 while self.eat(&Token::Semicolon) {}
-                // `Pipe` terminates a trailing `;` inside a `{| … |}` annotation block.
+                // `AnnotationClose` (`|}`) terminates a trailing `;` inside a
+                // `{| … |}` annotation block.
                 if self.at(&Token::Dot)
                     || self.at(&Token::RBracket)
                     || self.at(&Token::RBrace)
-                    || self.at(&Token::Pipe)
+                    || self.at(&Token::AnnotationClose)
                 {
                     break;
                 }
@@ -1129,9 +1130,8 @@ impl<'a> DocParser<'a> {
                 };
                 self.emit_reifies(&reifier, s, p, o, graph);
                 pending = Some(reifier);
-            } else if self.at(&Token::LBrace) && self.peek2() == Some(&Token::Pipe) {
-                self.bump(); // `{`
-                self.bump(); // `|`
+            } else if self.at(&Token::AnnotationOpen) {
+                self.bump(); // `{|`
                 let reifier = match pending.take() {
                     Some(reifier) => reifier,
                     None => {
@@ -1141,8 +1141,7 @@ impl<'a> DocParser<'a> {
                     }
                 };
                 self.predicate_object_list(&reifier, graph)?;
-                self.expect(&Token::Pipe)?; // `|` of `|}`
-                self.expect(&Token::RBrace)?; // `}` of `|}`
+                self.expect(&Token::AnnotationClose)?; // `|}`
             } else {
                 break;
             }
@@ -1893,6 +1892,41 @@ mod tests {
         assert_eq!(
             nodes[2],
             Node::Iri("https://example.org/vocab/report/shacl/sarif".to_owned())
+        );
+    }
+
+    /// Regression for the lexer trailing-dot bug: `_:y.` at end of statement must
+    /// tokenize as blank-node label `y` followed by a `Dot` terminator (not label
+    /// `y.` with no terminator). Proves the fix end-to-end by parsing a document
+    /// where the same blank node appears once immediately followed by `.` and once
+    /// followed by whitespace, and asserting both statements resolve to the SAME
+    /// blank-node identity.
+    #[test]
+    fn blank_node_immediately_followed_by_dot_is_same_node_as_later_reference() {
+        let text = "@prefix : <https://example.org/> .\n\
+                    :x :p _:y.\n\
+                    _:y :q :z .\n";
+        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        assert_eq!(statements.len(), 2, "must yield exactly two triples");
+
+        let first = &statements[0];
+        assert_eq!(first[0], Node::Iri("https://example.org/x".to_owned()));
+        assert_eq!(first[1], Node::Iri("https://example.org/p".to_owned()));
+        let Node::Bnode(label_as_object) = &first[2] else {
+            panic!("expected blank-node object, got {:?}", first[2]);
+        };
+
+        let second = &statements[1];
+        let Node::Bnode(label_as_subject) = &second[0] else {
+            panic!("expected blank-node subject, got {:?}", second[0]);
+        };
+        assert_eq!(second[1], Node::Iri("https://example.org/q".to_owned()));
+        assert_eq!(second[2], Node::Iri("https://example.org/z".to_owned()));
+
+        assert_eq!(
+            label_as_object, label_as_subject,
+            "the trailing-dot blank node in statement 1 must be the SAME node as \
+             the blank node referenced in statement 2"
         );
     }
 

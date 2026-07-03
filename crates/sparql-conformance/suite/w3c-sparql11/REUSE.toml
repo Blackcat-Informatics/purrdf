@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# REUSE.toml (REUSE spec 3.3): declares licensing for the PurRDF-authored files
+# in this vendored tree that carry no per-file `.license` sidecar. Verbatim W3C
+# files each carry their own `LicenseRef-W3C-Test-Suite` sidecar; the files below
+# are first-party (harness selectors + semantically-reconstructed expected
+# results, see PROVENANCE.md) and are covered by the repo's MIT OR Apache-2.0.
+
+version = 1
+
+# The curated `aggregates`/`subquery`/`service` selectors are PurRDF-authored
+# (they reference a hand-picked subset), as are the reconstructed aggregates/
+# subquery `.srx` expected-results. Verbatim upstream groups (bind, functions,
+# property-path, …) instead carry a per-file `.license` sidecar on every file,
+# manifest included, so they are NOT annotated here.
+[[annotations]]
+path = [
+  "aggregates/manifest.ttl",
+  "subquery/manifest.ttl",
+  "service/manifest.ttl",
+  "aggregates/*.srx",
+  "subquery/*.srx",
+]
+SPDX-FileCopyrightText = "2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>"
+SPDX-License-Identifier = "MIT OR Apache-2.0"

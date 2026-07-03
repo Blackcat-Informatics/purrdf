@@ -22,6 +22,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	cargo clippy --workspace --all-targets --locked -- -D warnings
 	cargo check --workspace --lib --tests --locked
 	python3 scripts/check-no-features.py
+	python3 scripts/check-licenses.py
 	bash scripts/check-generated.sh
 	cargo test --workspace --locked
 	$(MAKE) rdf-core-hygiene
@@ -62,7 +63,8 @@ wasm: ## Prove the release crates build for wasm32-unknown-unknown (SKIP locally
 		cargo check --locked --target wasm32-unknown-unknown --lib \
 			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-gts -p purrdf-core \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
-			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf -p purrdf-wasm; \
+			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
+			-p purrdf -p purrdf-wasm; \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
 	else \
