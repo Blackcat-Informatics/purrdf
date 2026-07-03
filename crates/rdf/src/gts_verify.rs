@@ -30,6 +30,7 @@ use std::fmt::Write as _;
 use purrdf_gts::mmr::{prove_file, verify_proof};
 use purrdf_gts::reader;
 use purrdf_gts::verify::verify_file;
+use purrdf_gts::wire::hex;
 
 use crate::gts_core::diagnostics_to_error;
 use crate::{RdfDataset, RdfDiagnostic};
@@ -127,7 +128,7 @@ pub fn verify_content_chain(
     }
     for head in &graph.segment_heads {
         let mut id = String::with_capacity(71);
-        let _ = write!(id, "blake3:{}", hex_lower(head));
+        let _ = write!(id, "blake3:{}", hex(head));
         included.insert(id);
     }
 
@@ -165,17 +166,6 @@ pub fn verify_content_chain(
         digests_included,
         head_matched,
     })
-}
-
-/// Lowercase-hex render of raw bytes (segment-head ids carry no `blake3:` prefix).
-fn hex_lower(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }
 
 #[cfg(test)]
@@ -299,7 +289,7 @@ mod tests {
             blob_frame_id, head,
             "the blob frame id must not equal the segment head"
         );
-        let content_iri = format!("blake3:{}", super::hex_lower(&blob_frame_id));
+        let content_iri = format!("blake3:{}", purrdf_gts::wire::hex(&blob_frame_id));
         assert_ne!(
             content_iri,
             digest_str(BLOB_PAYLOAD),
