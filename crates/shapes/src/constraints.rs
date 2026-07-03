@@ -2993,11 +2993,16 @@ mod tests {
         // leniency (the arm trims before validating). Guards the accept-set now
         // owned by `purrdf_xsd::parse_double_xsd10`.
         let ok = |x: &str| purrdf_xsd::parse_double_xsd10(x.trim()).is_ok();
-        for good in ["INF", "-INF", "NaN", "1", "1.", ".5", "+1.5", "1e10", "1E+5", "1e400", " 1.5 "] {
+        for good in [
+            "INF", "-INF", "NaN", "1", "1.", ".5", "+1.5", "1e10", "1E+5", "1e400", " 1.5 ",
+        ] {
             assert!(ok(good), "{good:?} is in the XSD-1.0 double lexical space");
         }
         for bad in ["+INF", "inf", "Infinity", "1e", "1.5.5", "", "abc"] {
-            assert!(!ok(bad), "{bad:?} is NOT in the XSD-1.0 double lexical space");
+            assert!(
+                !ok(bad),
+                "{bad:?} is NOT in the XSD-1.0 double lexical space"
+            );
         }
     }
 
