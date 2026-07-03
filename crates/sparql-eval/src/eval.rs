@@ -434,19 +434,26 @@ impl<'d> EvalCtx<'d> {
     ///   mints is deduped against its own clone of the index exactly as the
     ///   parent would dedup it. A child's fresh mints are ephemeral — discarded
     ///   for a read-only FILTER predicate (the surviving rows are the original
-    ///   rows, nothing new escapes) or folded back by VALUE via
-    ///   [`crate::parallel::absorb_row`] when a worker's output can carry a
-    ///   freshly-minted cell, which re-interns it against the parent so its id
-    ///   is valid in the parent's space (a raw child `ScratchId` is never
+    ///   rows, nothing new escapes) or, for a minting worker, captured by
+    ///   [`crate::parallel::portable_row`] as a `Vec` of
+    ///   [`crate::parallel::PortableTerm`] while the child's scratch is still
+    ///   alive and re-interned against the parent by
+    ///   [`crate::parallel::reintern_minted_row`] so each freshly-minted cell's
+    ///   id is valid in the parent's space (a raw child `ScratchId` is never
     ///   reused in the parent — only the id space, not individual ids, is
     ///   shared by the clone).
     /// - **Fresh** (`regex_cache`, `cached_bool_terms`, `const_atom_cache`,
     ///   `xsd_parse_cache`, `constructed`, `in_substituted_exists`): per-worker
     ///   mutable state that must NOT be shared, so each worker mints its own
-    ///   constructed-quad buffer without contending on a lock. The caller folds
-    ///   a child's fresh state back into the parent deterministically via
-    ///   [`crate::parallel::absorb_row`] / [`crate::parallel::absorb_constructed`]
-    ///   in source order, so the result is bit-identical to sequential evaluation.
+    ///   constructed-quad buffer without contending on a lock. The caller
+    ///   classifies each worker row with [`crate::parallel::minted_row`] into a
+    ///   [`crate::parallel::MintedRow`] (`Direct` — no post-fork mint, passed
+    ///   through untouched — or `Portable`) and folds it back into the parent
+    ///   via [`crate::parallel::reintern_minted_row`], invoked once per row in
+    ///   source-index order across all workers, so the result is bit-identical
+    ///   to sequential evaluation. A read-only FILTER-predicate worker never
+    ///   reaches this path: only the boolean result and the original `Copy` row
+    ///   escape, so its child scratch is discarded whole.
     /// - **Copied scalars** (`bnode_counter`, `rng_state`): their only stateful
     ///   builtins (`BNODE`, `RAND`/`UUID`/`STRUUID`, and the PurRDF list
     ///   constructors) are excluded from parallel evaluation by

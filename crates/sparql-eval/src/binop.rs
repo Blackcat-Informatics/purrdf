@@ -382,7 +382,8 @@ pub(crate) fn eval_left_join(
 /// the real one. A safe `expr` only decides which merged rows pass; every
 /// surviving cell is copied from `lrow`/`rrow` by [`merge`] (which interns
 /// nothing — see its doc comment), so nothing new escapes a forked child's
-/// scratch and it is discarded after use — no `absorb` needed.
+/// scratch and it is discarded after use — no re-interning via
+/// [`crate::parallel::reintern_minted_row`] is needed.
 fn left_outer_join_filtered(
     l: &SolutionSeq,
     r: &SolutionSeq,

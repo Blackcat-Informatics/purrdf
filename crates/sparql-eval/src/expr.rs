@@ -175,7 +175,7 @@ pub(crate) fn eval_ebv(
 /// the sequential result. A safe expression only decides keep/drop; the
 /// surviving rows are the ORIGINAL rows (never a value derived from the child's
 /// scratch), so each forked child's scratch is discarded after use — nothing to
-/// `absorb`.
+/// re-intern via [`crate::parallel::reintern_minted_row`].
 pub(crate) fn eval_filter(
     expr: &Expression,
     inner: &GraphPattern,
