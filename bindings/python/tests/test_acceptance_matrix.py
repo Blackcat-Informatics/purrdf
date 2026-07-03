@@ -7,21 +7,21 @@ import and run their core paths against ``purrdf.compat.rdflib`` (the shim), wit
 their ``import rdflib`` / plugin lookups resolving to purrdf rather than the
 genuine rdflib.
 
-Mechanism (identical in spirit to the rdflib LSP conformance gate): the
-``acceptance`` dependency group installs each consumer, which drags in the *real*
-rdflib. To make a consumer run on purrdf WITHOUT mutating this parent process
-(whose in-process rdflib is the differential oracle), every row runs in a
-SUBPROCESS whose ``PYTHONPATH`` prepends ``bindings/python-rdflib-shadow``; the
-child's ``import rdflib`` then resolves to the purrdf shadow, shadowing the
-installed real rdflib for that child only. The parent's ``sys.modules`` /
-``sys.path`` are never touched.
+Mechanism (identical in spirit to the rdflib LSP conformance gate): the ``dev``
+dependency group installs each consumer, which drags in the *real* rdflib. To
+make a consumer run on purrdf WITHOUT mutating this parent process (whose
+in-process rdflib is the differential oracle), every row runs in a SUBPROCESS
+whose ``PYTHONPATH`` prepends ``bindings/python-rdflib-shadow``; the child's
+``import rdflib`` then resolves to the purrdf shadow, shadowing the installed
+real rdflib for that child only. The parent's ``sys.modules`` / ``sys.path`` are
+never touched.
 
 Each row's driver lives in ``tests/acceptance/driver_<package>.py`` and prints a
 single ``ACCEPT_RESULT <json>`` line this module parses. Outcomes:
 
 * ``pass``          — core path ran, lookups resolved  → the test passes.
 * ``fail``          — installed but a genuine compat gap → ledgered strict-xfail.
-* ``unavailable``   — package not installed             → the test SKIPS.
+* ``missing``       — package not installed             → hard environment error.
 * ``misconfigured`` — the shadow was not in force        → hard error (never silent).
 
 Ledgered strict xfails are applied from ``xfail_ledger.toml``; if a ledgered row
@@ -84,10 +84,12 @@ def _run_driver(package: str) -> tuple[int, dict[str, Any], str]:
 
 
 def _require_core_path(package: str) -> dict[str, Any]:
-    """Skip when the package is absent; otherwise require its core path to pass."""
+    """Fail hard when the package is absent; otherwise require its core path to pass."""
     _rc, record, raw = _run_driver(package)
-    if record["outcome"] == "unavailable":
-        pytest.skip(record.get("reason", f"{package} not installed"))
+    assert record["outcome"] != "missing", (
+        f"{package} is required in the test environment but is not installed; "
+        f"sync the `dev` dependency group:\n{raw}"
+    )
     assert record["outcome"] == "pass", (
         f"{package} acceptance core path did not run green "
         f"(stage={record.get('stage')}, error={record.get('error')}):\n{raw}"
@@ -148,7 +150,7 @@ def test_acceptance_matrix_summary() -> None:
     Not a pass/fail gate on the ledgered rows (those are owned by their own
     strict-xfail tests); this asserts every driver produced a parseable,
     known-outcome record under an in-force shadow, and that at least one consumer
-    was actually exercised (never a silently all-unavailable green).
+    was actually exercised (never a silently all-missing green).
     """
     packages = ("sparqlwrapper", "pyshacl", "sssom")
     rows: list[tuple[str, dict[str, Any]]] = []
@@ -163,11 +165,15 @@ def test_acceptance_matrix_summary() -> None:
         note = record.get("detail") or record.get("reason") or record.get("error", "")
         print(f"  {package:<16} {outcome:<12} v{version:<10} {note}")
 
-    known = {"pass", "fail", "unavailable"}
+    known = {"pass", "fail", "missing"}
     for package, record in rows:
+        assert record["outcome"] != "missing", (
+            f"{package} is required in the test environment but is not installed; "
+            "sync the `dev` dependency group"
+        )
         assert record["outcome"] in known, (package, record)
     exercised = [p for p, r in rows if r["outcome"] in {"pass", "fail"}]
     assert exercised, (
-        "no downstream consumer was exercised — the acceptance dependency group "
-        "is not installed; sync it to evaluate the matrix"
+        "no downstream consumer was exercised — the acceptance dependencies "
+        "are not installed; sync the `dev` dependency group to evaluate the matrix"
     )

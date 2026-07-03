@@ -165,8 +165,8 @@ jobs:
       - name: Python binding tests (maturin build + pytest)
         working-directory: bindings/python
         run: |
-          uv run --group acceptance maturin develop
-          uv run --group acceptance pytest tests -q
+          uv run maturin develop
+          uv run pytest tests -q
 
   # The single conformance matrix: runs the native Rust W3C
   # harnesses (RDFC-1.0, IRI, syntax codecs, SPARQL-eval subset, SHACL, shexTest)
