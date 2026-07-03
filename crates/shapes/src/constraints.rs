@@ -1412,31 +1412,6 @@ fn is_xsd_decimal_lexical(s: &str) -> bool {
     seen_digit
 }
 
-/// `xsd:double`/`xsd:float` lexical space: the three special values exactly
-/// (INF, -INF, NaN — case-sensitive per XSD), or a mantissa (decimal lexical)
-/// with an optional [eE][+-]?digits exponent.
-fn is_xsd_double_lexical(s: &str) -> bool {
-    let s = s.trim();
-    if matches!(s, "INF" | "-INF" | "NaN") {
-        return true;
-    }
-    // Split optional exponent.
-    let (mantissa, exponent) = match s.split_once(['e', 'E']) {
-        Some((m, e)) => (m, Some(e)),
-        None => (s, None),
-    };
-    if !is_xsd_decimal_lexical(mantissa) {
-        return false;
-    }
-    match exponent {
-        None => true,
-        Some(exp) => {
-            let digits = exp.strip_prefix(['+', '-']).unwrap_or(exp);
-            !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
-        }
-    }
-}
-
 /// Check that a `Term` satisfies `sh:datatype` requirements.
 ///
 /// - Must be a `Literal` whose datatype IRI matches `dt_iri` EXACTLY (spec
@@ -1448,7 +1423,7 @@ fn is_xsd_double_lexical(s: &str) -> bool {
 ///   xsd:double/float, xsd:boolean), and for a DERIVED integer type validates
 ///   the VALUE space: the native codec keeps `"-2"^^xsd:nonNegativeInteger`
 ///   faithfully typed, but the value is outside the derived range and must
-///   violate (see #598 / corpus case 32).
+///   violate.
 fn check_datatype(value: &Term, dt_iri: &NamedNode) -> bool {
     let Term::Literal(lit) = value else {
         return false;
@@ -1496,8 +1471,12 @@ fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
     match dt {
         "http://www.w3.org/2001/XMLSchema#integer" => is_xsd_integer_lexical(lex),
         "http://www.w3.org/2001/XMLSchema#decimal" => is_xsd_decimal_lexical(lex),
-        "http://www.w3.org/2001/XMLSchema#double" => is_xsd_double_lexical(lex),
-        "http://www.w3.org/2001/XMLSchema#float" => is_xsd_double_lexical(lex),
+        "http://www.w3.org/2001/XMLSchema#double" => {
+            purrdf_xsd::parse_double_xsd10(lex.trim()).is_ok()
+        }
+        "http://www.w3.org/2001/XMLSchema#float" => {
+            purrdf_xsd::parse_float_xsd10(lex.trim()).is_ok()
+        }
         "http://www.w3.org/2001/XMLSchema#boolean" => {
             matches!(lex.trim(), "true" | "false" | "1" | "0")
         }
@@ -1509,7 +1488,6 @@ fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
 /// shape's required XSD *derived* integer type, by validating the lexical value
 /// against the derived type's value space. Every XSD integer-derived type
 /// canonicalizes to `xsd:integer` in oxigraph; only that base is considered here.
-/// See #598.
 fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> bool {
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
     if stored_dt != XSD_INTEGER || !is_xsd_integer_lexical(lex) {
@@ -3005,6 +2983,22 @@ mod tests {
             !check_datatype(&value, &dt_iri),
             "+INF must not conform for xsd:double"
         );
+    }
+
+    #[test]
+    fn xsd_1_0_double_lexical_space_is_pinned() {
+        // The XSD-1.0 double/float lexical space, exactly: the three specials
+        // INF/-INF/NaN (not the XSD 1.1 "+INF"), a decimal mantissa with an
+        // optional [eE][+-]?digits exponent, and the SHACL-legacy whitespace
+        // leniency (the arm trims before validating). Guards the accept-set now
+        // owned by `purrdf_xsd::parse_double_xsd10`.
+        let ok = |x: &str| purrdf_xsd::parse_double_xsd10(x.trim()).is_ok();
+        for good in ["INF", "-INF", "NaN", "1", "1.", ".5", "+1.5", "1e10", "1E+5", "1e400", " 1.5 "] {
+            assert!(ok(good), "{good:?} is in the XSD-1.0 double lexical space");
+        }
+        for bad in ["+INF", "inf", "Infinity", "1e", "1.5.5", "", "abc"] {
+            assert!(!ok(bad), "{bad:?} is NOT in the XSD-1.0 double lexical space");
+        }
     }
 
     #[test]
