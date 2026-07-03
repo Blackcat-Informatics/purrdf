@@ -421,6 +421,21 @@ impl Parser<'_> {
             }
         }
 
+        // §11.1 grammar note: the `SELECT *` shorthand is illegal in an aggregate
+        // query — an explicit `GROUP BY` (keys or expression conditions) or any
+        // aggregate makes the projection ill-defined, so it is a hard syntax
+        // error (vendored W3C `syntax-query` `syn-bad-01`: `SELECT * … GROUP BY`).
+        if star
+            && (!modifiers.group_by.is_empty()
+                || !modifiers.group_extends.is_empty()
+                || !aggregates.is_empty())
+        {
+            return Err(ParseError::syntax(
+                "SELECT * is not allowed in an aggregate query (GROUP BY or aggregation)",
+                self.span(),
+            ));
+        }
+
         // §18.2.4.1 grouping constraint: when the query aggregates (an explicit
         // `GROUP BY`, or one or more aggregates in the SELECT clause ⇒ an implicit
         // single group), every BARE projected variable — one named directly as a
@@ -1239,6 +1254,19 @@ impl Parser<'_> {
                 self.expect_kw("AS")?;
                 let variable = self.expect_var()?;
                 self.expect(&Token::RParen)?;
+                // §19.6: the variable introduced by BIND must not already be
+                // in-scope in the group graph pattern up to this point — a
+                // re-binding is a hard syntax error, not a silent shadow
+                // (vendored W3C `syntax-query` `syntax-BINDscope6/7/8`).
+                if visible_variables(&g).contains(&variable) {
+                    return Err(ParseError::syntax(
+                        format!(
+                            "BIND target ?{} is already in scope in the group graph pattern",
+                            variable.as_str()
+                        ),
+                        self.span(),
+                    ));
+                }
                 g = GraphPattern::Extend {
                     inner: Box::new(g),
                     variable,
@@ -4058,6 +4086,45 @@ mod tests {
             matches!(err, ParseError::Unsupported(_)),
             "expected Unsupported for aggregate in GROUP BY key, got {err:?}"
         );
+    }
+
+    #[test]
+    fn select_star_with_group_by_is_rejected() {
+        // §11.1: `SELECT *` is illegal in an aggregate query (vendored W3C
+        // `syntax-query` `syn-bad-01`). Both an explicit GROUP BY and a bare
+        // aggregate must trip it.
+        let q = format!("{GM}SELECT * {{ ?s ?p ?o }} GROUP BY ?s");
+        let err = SparqlParser::new().parse_query(&q).unwrap_err();
+        assert!(
+            matches!(err, ParseError::Syntax { .. }),
+            "expected Syntax for SELECT * with GROUP BY, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn bind_target_already_in_scope_is_rejected() {
+        // §19.6: re-binding an in-scope variable via BIND is a hard error
+        // (vendored W3C `syntax-query` `syntax-BINDscope6/7/8`). Cover the flat
+        // BGP, a preceding nested group, and a preceding UNION.
+        for body in [
+            "?s purrdf:p ?o . ?s purrdf:q ?o1 . BIND((1 + ?o) AS ?o1)",
+            "{ ?s purrdf:p ?o . ?s purrdf:q ?o1 . } BIND((1 + ?o) AS ?o1)",
+            "{ { ?s purrdf:p ?Y } UNION { ?s purrdf:p ?Z } } BIND(1 AS ?Y)",
+        ] {
+            let q = format!("{GM}SELECT * WHERE {{ {body} }}");
+            let err = SparqlParser::new()
+                .parse_query(&q)
+                .expect_err("BIND over in-scope var must fail");
+            assert!(
+                matches!(err, ParseError::Syntax { .. }),
+                "expected Syntax for BIND scope violation in {body:?}, got {err:?}"
+            );
+        }
+        // A BIND target that is genuinely fresh still parses.
+        let ok = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o . BIND((1 + ?o) AS ?o1) }}");
+        SparqlParser::new()
+            .parse_query(&ok)
+            .expect("fresh BIND target parses");
     }
 
     #[test]
