@@ -70,17 +70,28 @@ impl ContentDigest {
     /// Parse a 64-char hex digest. Returns `None` on any malformed input
     /// (wrong length or non-hex characters).
     pub fn from_hex(hex: &str) -> Option<Self> {
-        if hex.len() != 64 {
-            return None;
-        }
-        let mut buf = [0u8; 32];
-        for (i, byte) in buf.iter_mut().enumerate() {
-            let hi = (hex.as_bytes()[i * 2] as char).to_digit(16)?;
-            let lo = (hex.as_bytes()[i * 2 + 1] as char).to_digit(16)?;
-            *byte = (hi * 16 + lo) as u8;
-        }
-        Some(Self(buf))
+        decode_hex_32(hex).map(Self)
     }
+}
+
+/// Decode a 64-char hex string into 32 raw bytes. Returns `None` on any
+/// malformed input (wrong length or non-hex characters). Case-insensitive
+/// (accepts both `0-9a-f` and `0-9A-F`).
+///
+/// Shared by [`ContentDigest::from_hex`] and
+/// [`crate::content_id::Blake3ContentId::from_hex`] so the two content-id
+/// domains (SHA-256 vs BLAKE3) do not duplicate the decode loop.
+pub(crate) fn decode_hex_32(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut buf = [0u8; 32];
+    for (i, byte) in buf.iter_mut().enumerate() {
+        let hi = (hex.as_bytes()[i * 2] as char).to_digit(16)?;
+        let lo = (hex.as_bytes()[i * 2 + 1] as char).to_digit(16)?;
+        *byte = (hi * 16 + lo) as u8;
+    }
+    Some(buf)
 }
 
 impl fmt::Debug for ContentDigest {
