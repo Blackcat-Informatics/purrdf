@@ -44,7 +44,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 250 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 767 | 35 | 35 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 114 | 6 | 6 | 0 | GREEN |
-| SHACL (first-party corpus) | first-party frozen reports | 1 | 0 | 0 | 0 | GREEN |
+| SHACL (first-party corpus) | first-party frozen reports | 48 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 | 0 | 0 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 62 | 24 | 24 | 0 | GREEN |

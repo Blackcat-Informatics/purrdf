@@ -115,7 +115,11 @@ def _suite_cargo(
         source=source,
         passed=passed,
         xskip=ignored,
-        failed=max(failed, 0),
+        # Preserve the -1 "no scoreboard / compile error" sentinel so the
+        # ratchet skips its budget check (a compile failure is already RED and
+        # must not be re-diagnosed as "LEDGER SHRANK"); render/totals already
+        # treat failed < 0 as "err".
+        failed=failed,
         detail=detail,
         ok=(rc == 0 and failed == 0),
         log=out,
@@ -161,6 +165,30 @@ def _suite_shacl_w3c() -> SuiteResult:
             detail=detail, ok=(rc == 0 and failed == 0), log=out,
         )
     return _suite_cargo("SHACL Core + SHACL-SPARQL", "W3C data-shapes", cmd)
+
+
+def _suite_shapes_corpus() -> SuiteResult:
+    """First-party SHACL corpus: scrape the harness's per-fixture scoreboard so
+    the matrix reports a report-level Pass count, not the single test-function
+    tally that ``_suite_cargo`` would yield."""
+    cmd = [
+        "cargo", "test", "-p", "purrdf-shapes", "--locked",
+        "--test", "conformance", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(r"SHAPES-CORPUS: passed (\d+) total (\d+)", out)
+    if m:
+        passed, total = int(m.group(1)), int(m.group(2))
+        detail = f"{passed}/{total} byte-frozen expected reports"
+        return SuiteResult(
+            "SHACL (first-party corpus)", "first-party frozen reports",
+            passed=passed, xskip=0, failed=(total - passed),
+            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
+        )
+    return _suite_cargo(
+        "SHACL (first-party corpus)", "first-party frozen reports", cmd
+    )
 
 
 def _suite_shex_validation() -> SuiteResult:
@@ -375,11 +403,7 @@ def native_suites() -> list[SuiteResult]:
         _suite_codec(),
         _suite_sparql(),
         _suite_shacl_w3c(),
-        _suite_cargo(
-            "SHACL (first-party corpus)", "first-party frozen reports",
-            ["cargo", "test", "-p", "purrdf-shapes", "--locked", "--test", "conformance"],
-            detail="48 byte-frozen expected reports",
-        ),
+        _suite_shapes_corpus(),
         _suite_shex_validation(),
         _suite_cargo(
             "ShEx syntax + ShExC/ShExJ round-trip", "shexTest v2.1.0",
