@@ -23,9 +23,12 @@ use std::sync::Arc;
 
 use hashbrown::HashTable;
 
-use crate::{RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTextDirection};
+use crate::{
+    Blake3ContentId, ContentIdScheme, RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm,
+    RdfTextDirection,
+};
 
-use super::dataset::{QuadHandle, QuadIds, QuadRow, RdfDataset, TermRef};
+use super::dataset::{FastHasher, QuadHandle, QuadIds, QuadRow, RdfDataset, TermRef};
 use super::term::{
     arena_str, BlankScope, InternedLiteral, InternedTerm, StrRange, TermId, RDF_LANG_STRING,
     XSD_STRING,
@@ -193,6 +196,15 @@ struct Interner {
     /// ranges through the arena and comparing BY VALUE (so equal strings dedup to
     /// one id even though the table itself stores neither strings nor ranges).
     index: HashTable<u32>,
+    /// The caller-supplied content-id recognition spelling (e.g. `"blake3:"`).
+    /// `None` (the default) means recognition is INACTIVE: no fabricated default,
+    /// per the no-vocabulary-minting policy. Fixed at construction time (see
+    /// [`RdfDatasetBuilder::with_content_addressing`]) — there is no setter.
+    content_scheme: Option<ContentIdScheme>,
+    /// Side table from a recognized content-id term to its decoded
+    /// [`Blake3ContentId`]. Empty while recognition is inactive; populated at
+    /// intern time in the miss branch of [`Interner::intern`] (IRI arm only).
+    content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
 }
 
 impl Interner {
@@ -201,6 +213,8 @@ impl Interner {
             arena: Vec::new(),
             terms: Vec::new(),
             index: HashTable::new(),
+            content_scheme: None,
+            content_ids: HashMap::default(),
         }
     }
 
@@ -237,6 +251,20 @@ impl Interner {
             }
         }
         let i = u32::try_from(self.terms.len()).expect("term table exceeds u32::MAX entries");
+        // Content-id recognition (miss branch, IRI arm ONLY): gated first on
+        // `content_scheme` so the check is a single `Option` branch — skipped
+        // entirely, with zero further work, when recognition is inactive. Computed
+        // here (borrowing `&lookup`) BEFORE the moving `match lookup` below consumes
+        // `iri`. A prefix hit with a bad hex suffix is an ORDINARY IRI, not an error:
+        // `from_hex` returning `None` is correct, not a swallowed failure.
+        let recognized: Option<Blake3ContentId> = match &lookup {
+            TermLookup::Iri(iri) => self
+                .content_scheme
+                .as_ref()
+                .and_then(|scheme| iri.strip_prefix(scheme.prefix()))
+                .and_then(Blake3ContentId::from_hex),
+            _ => None,
+        };
         // Miss: now (and only now) push the strings to the arena and build the term.
         let term = match lookup {
             TermLookup::Iri(iri) => InternedTerm::Iri(self.push_str(iri)),
@@ -262,6 +290,9 @@ impl Interner {
             TermLookup::Triple { s, p, o } => InternedTerm::Triple { s, p, o },
         };
         self.terms.push(term);
+        if let Some(id) = recognized {
+            self.content_ids.insert(TermId::from_index(i), id);
+        }
         let (arena, terms) = (&self.arena, &self.terms);
         self.index.insert_unique(hash, i, |&i| {
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -269,6 +300,36 @@ impl Interner {
             h.finish()
         });
         TermId::from_index(i)
+    }
+
+    /// The decoded content id for a recognized term, if any (builder-level
+    /// accessor for tests; the frozen-dataset public accessor is separate).
+    #[cfg(test)]
+    fn content_id(&self, id: TermId) -> Option<Blake3ContentId> {
+        self.content_ids.get(&id).copied()
+    }
+
+    /// Look up the [`TermId`] of an already-interned IRI, WITHOUT interning a new
+    /// term on a miss. Mirrors the hit path of [`Interner::intern`]'s IRI arm
+    /// exactly (same hash, same `term_eq` comparison), so it agrees with `intern`
+    /// on every IRI that has actually been interned.
+    ///
+    /// Used at [`RdfDatasetBuilder::materialize`] to resolve the configured
+    /// derivation-predicate IRI to a frozen `TermId` without minting a new term
+    /// after the arena/term table are otherwise frozen-bound: terms are frozen at
+    /// that point, so a miss here must return `None`, never insert.
+    fn lookup_iri(&self, iri: &str) -> Option<TermId> {
+        let lookup = TermLookup::Iri(iri);
+        let hash = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            hash_lookup(&lookup, &mut h);
+            h.finish()
+        };
+        let (arena, terms) = (&self.arena, &self.terms);
+        self.index
+            .find(hash, |&i| term_eq(arena, &terms[i as usize], &lookup))
+            .copied()
+            .map(TermId::from_index)
     }
 
     fn term(&self, id: TermId) -> &InternedTerm {
@@ -318,6 +379,12 @@ pub struct RdfDatasetBuilder {
     /// blank nodes from different source datasets can never collide even when their
     /// labels are identical (standardize-apart, C0.2).
     next_merge_scope: u32,
+    /// The caller-supplied predicate IRI that marks a derivation edge between a
+    /// content-addressed term and the term(s) it was derived from. `None` (the
+    /// default) means no derivation predicate is configured — no fabricated
+    /// default, per the no-vocabulary-minting policy. Fixed at construction time
+    /// (see [`RdfDatasetBuilder::with_content_addressing`]) — there is no setter.
+    derivation_predicate: Option<String>,
 }
 
 /// A dataset builder whose structural validation has already passed.
@@ -390,7 +457,27 @@ impl RdfDatasetBuilder {
             locations: Vec::new(),
             // Merge scopes start at 1; scope 0 is BlankScope::DEFAULT (local pushes).
             next_merge_scope: 1,
+            derivation_predicate: None,
         }
+    }
+
+    /// A fresh builder configured for content addressing: `scheme` marks which
+    /// IRIs are content-id term references and `derivation_predicate`, if given,
+    /// is the predicate IRI used to record derivation edges.
+    ///
+    /// This is the **single** construction path for content addressing (§19
+    /// one-path): the config is fixed here, before any term is interned, and
+    /// deliberately has no setter — a builder's content-addressing config never
+    /// changes mid-build.
+    #[must_use]
+    pub fn with_content_addressing(
+        scheme: ContentIdScheme,
+        derivation_predicate: Option<String>,
+    ) -> Self {
+        let mut builder = Self::new();
+        builder.interner.content_scheme = Some(scheme);
+        builder.derivation_predicate = derivation_predicate;
+        builder
     }
 
     /// Intern an IRI term. Idempotent: the same IRI string yields the same id.
@@ -724,8 +811,15 @@ impl RdfDatasetBuilder {
             mut reifiers,
             mut annotations,
             locations,
+            derivation_predicate,
             ..
         } = self;
+
+        // Resolve the configured derivation-predicate IRI to its frozen `TermId`
+        // via a lookup-only probe (never interns): terms are frozen from this
+        // point on, so an IRI that was configured but never actually interned
+        // resolves to `None` — "no derivations present", not an error.
+        let derivation_predicate = derivation_predicate.and_then(|iri| interner.lookup_iri(&iri));
 
         // Deterministic, reproducible frozen order: sort by id tuples. Terms keep
         // their interning (allocation) order, which is itself deterministic for a
@@ -778,6 +872,8 @@ impl RdfDatasetBuilder {
             annotations.into_boxed_slice(),
             locations.into_boxed_slice(),
             caps,
+            interner.content_ids,
+            derivation_predicate,
         )
     }
 }
@@ -825,6 +921,111 @@ mod tests {
         let d = b.intern_iri("http://example.org/y");
         assert_eq!(a, c);
         assert_ne!(a, d);
+    }
+
+    /// No fabricated default: a plain `new`/`default` builder has content-id
+    /// recognition INACTIVE.
+    #[test]
+    fn new_builder_has_no_content_scheme() {
+        let b = RdfDatasetBuilder::new();
+        assert!(b.interner.content_scheme.is_none());
+        assert!(b.derivation_predicate.is_none());
+    }
+
+    /// `with_content_addressing` is the single construction path: it fixes the
+    /// scheme (and, optionally, the derivation predicate) before any intern.
+    #[test]
+    fn with_content_addressing_sets_config() {
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let b = RdfDatasetBuilder::with_content_addressing(
+            scheme.clone(),
+            Some("http://example.org/derivedFrom".to_string()),
+        );
+        assert_eq!(b.interner.content_scheme, Some(scheme));
+        assert_eq!(
+            b.derivation_predicate.as_deref(),
+            Some("http://example.org/derivedFrom")
+        );
+    }
+
+    /// A recognized `blake3:<64hex>` IRI gets a side-table entry with the exact
+    /// decoded bytes.
+    #[test]
+    fn intern_iri_recognizes_content_id() {
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let hex = "ab".repeat(32);
+        let id = b.intern_iri(&format!("blake3:{hex}"));
+        let expected = Blake3ContentId::from_hex(&hex).expect("valid hex");
+        assert_eq!(b.interner.content_id(id), Some(expected));
+    }
+
+    /// Interning the same content-id IRI twice yields the same `TermId` and
+    /// exactly one side-table entry (idempotent, no double-insert drift).
+    #[test]
+    fn intern_iri_content_id_is_idempotent() {
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let iri = format!("blake3:{}", "cd".repeat(32));
+        let a = b.intern_iri(&iri);
+        let c = b.intern_iri(&iri);
+        assert_eq!(a, c);
+        assert_eq!(b.interner.content_ids.len(), 1);
+    }
+
+    /// A prefix hit with a malformed hex suffix is an ORDINARY IRI, not an
+    /// error: no side-table entry, but interning still succeeds.
+    #[test]
+    fn intern_iri_rejects_malformed_suffix_as_ordinary_iri() {
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+
+        let too_short = format!("blake3:{}", "a".repeat(63));
+        let too_long = format!("blake3:{}", "a".repeat(65));
+        let non_hex = format!("blake3:{}z", "a".repeat(63));
+        let uppercase = format!("blake3:{}", "AB".repeat(32));
+
+        for iri in [&too_short, &too_long, &non_hex, &uppercase] {
+            let id = b.intern_iri(iri);
+            assert_eq!(
+                b.interner.content_id(id),
+                None,
+                "unexpected match for {iri}"
+            );
+        }
+        assert!(b.interner.content_ids.is_empty());
+    }
+
+    /// An ordinary IRI with no content-id prefix at all gets no entry.
+    #[test]
+    fn intern_iri_ordinary_iri_has_no_content_id() {
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let id = b.intern_iri("http://example.org/x");
+        assert_eq!(b.interner.content_id(id), None);
+    }
+
+    /// Recognition is IRI-arm only: a blank node whose label happens to look
+    /// like a content-id IRI is never recognized (rejected by construction,
+    /// not by a runtime check).
+    #[test]
+    fn intern_blank_never_recognized_as_content_id() {
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let label = format!("blake3:{}", "ef".repeat(32));
+        let id = b.intern_blank(&label, BlankScope::DEFAULT);
+        assert_eq!(b.interner.content_id(id), None);
+        assert!(b.interner.content_ids.is_empty());
+    }
+
+    /// With recognition inactive (plain `new()`), a `blake3:<64hex>` IRI is
+    /// interned as an ordinary IRI: no side-table entry.
+    #[test]
+    fn intern_iri_no_recognition_when_scheme_inactive() {
+        let mut b = RdfDatasetBuilder::new();
+        let id = b.intern_iri(&format!("blake3:{}", "12".repeat(32)));
+        assert_eq!(b.interner.content_id(id), None);
+        assert!(b.interner.content_ids.is_empty());
     }
 
     #[test]

@@ -10,6 +10,7 @@
 //! SPARQL conformance gate replays against the frozen goldens.
 
 pub use crate::gts_core::*;
+pub use crate::gts_verify::{verify_content_chain, ContentChainVerification};
 
 use crate::native_codecs::ser_model::{SerGraph, SerTerm, SerTermKind};
 use crate::RdfDiagnostic;
