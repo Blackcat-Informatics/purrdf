@@ -17,6 +17,15 @@ import OWL`` → ``from purrdf.compat.rdflib.namespace import OWL`` and so on.
 from __future__ import annotations
 
 from . import parser, paths, plugin, serializer, store, util
+
+#: Target rdflib API compatibility level. This must stay in sync with the locked
+#: rdflib version in ``bindings/python/uv.lock``; tests enforce the invariant.
+__version__ = "7.6.0"
+
+#: RDFLib's literal-normalization switch. pyshacl's monkey patch toggles this at
+#: runtime; exposing it keeps the top-level module assignment from failing.
+NORMALIZE_LITERALS = True
+
 from .graph import (
     DATASET_DEFAULT_GRAPH_ID,
     BatchAddGraph,
@@ -64,9 +73,10 @@ from .namespace import (
 )
 from .query import Result, ResultRow
 from .resource import Resource
-from .term import BNode, Identifier, Literal, Node, URIRef, Variable
+from .term import BNode, IdentifiedNode, Identifier, Literal, Node, URIRef, Variable
 
 __all__ = [
+    "NORMALIZE_LITERALS",
     "BRICK",
     "CSVW",
     "DC",
@@ -105,6 +115,7 @@ __all__ = [
     "DefinedNamespace",
     "DefinedNamespaceMeta",
     "Graph",
+    "IdentifiedNode",
     "Identifier",
     "Literal",
     "Namespace",

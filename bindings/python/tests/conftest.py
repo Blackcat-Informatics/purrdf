@@ -23,6 +23,21 @@ import pytest
 
 _LEDGER_PATH = Path(__file__).parent / "xfail_ledger.toml"
 
+# bindings/python/uv.lock carries the exact rdflib oracle resolved for this repo.
+# The compat shim's ``__version__`` must track it so the reported API level cannot
+# drift from the dependency used in tests.
+_UV_LOCK_PATH = Path(__file__).resolve().parent.parent / "uv.lock"
+
+
+def _locked_rdflib_version() -> str:
+    """Return the exact ``rdflib`` version recorded in ``uv.lock``."""
+    data = tomllib.loads(_UV_LOCK_PATH.read_text(encoding="utf-8"))
+    for package in data.get("package", []):
+        if package.get("name") == "rdflib":
+            return str(package["version"])
+    raise RuntimeError("rdflib entry not found in uv.lock")
+
+
 # The verbatim-vendored rdflib suite under `rdflib_suite/vendor/` is rdflib's
 # OWN test tree; it is meant to run ONLY in the shadow subprocess driven by
 # `test_rdflib_suite.py` (where `import rdflib` == the purrdf shim). It must
@@ -67,3 +82,9 @@ def oracle() -> ModuleType:
     import rdflib
 
     return rdflib
+
+
+@pytest.fixture
+def locked_rdflib_version() -> str:
+    """Exact rdflib version locked in ``uv.lock`` (the oracle target)."""
+    return _locked_rdflib_version()

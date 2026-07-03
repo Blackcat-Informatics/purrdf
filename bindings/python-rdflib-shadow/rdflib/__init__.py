@@ -33,6 +33,9 @@ import purrdf.compat.rdflib as _compat
 for _name in _compat.__all__:
     globals()[_name] = getattr(_compat, _name)
 
+# Expose the API version the shim targets.
+__version__ = _compat.__version__
+
 # Submodules real rdflib code reaches for. Register each purrdf compat submodule
 # under the shadow's dotted name so both `import rdflib.<sub>` and
 # `from rdflib.<sub> import X` resolve to the single source of truth. Order
@@ -54,6 +57,8 @@ _SUBMODULES: tuple[str, ...] = (
     "resource",
     "plugins",
     "plugins.sparql",
+    "plugins.serializers",
+    "plugins.serializers.turtle",
 )
 
 for _sub in _SUBMODULES:

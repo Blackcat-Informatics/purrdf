@@ -11,10 +11,13 @@ supports is checked against the ``oracle`` (real rdflib); behaviors it lacks
 
 from __future__ import annotations
 
+import abc
 import datetime
 from types import ModuleType
 
 import pytest
+
+from _shadow_test_utils import _run_in_shadow
 
 XSD = "http://www.w3.org/2001/XMLSchema#"
 EX = "http://example.org/"
@@ -92,6 +95,45 @@ def test_calendar_duration_falls_back_to_lexical(compat: ModuleType, name: str) 
     """``xsd:duration``/``yearMonthDuration`` keep the lexical form (no ``isodate``)."""
     value = _lit(compat, "P1Y2M", XSD + name).toPython()
     assert value == "P1Y2M"
+
+
+def test_topython_honors_to_python_mapping_override(compat: ModuleType) -> None:
+    """Private ``_toPythonMapping`` overrides are honored with a bare-string key.
+
+    RDFLib's ``_toPythonMapping`` keys are ``URIRef`` instances, but ``URIRef`` is a
+    ``str`` subclass with inherited hash/equality. Consumers such as pyshacl patch the
+    table with plain strings, so the shim must look up ``dt`` directly rather than
+    re-wrapping it in ``URIRef``.
+    """
+    from purrdf.compat.rdflib.term import _toPythonMapping
+
+    dt = EX + "custom-datatype"
+    calls: list[str] = []
+
+    def converter(lexical: str) -> str:
+        calls.append(lexical)
+        return f"converted:{lexical}"
+
+    original = _toPythonMapping.get(dt)
+    try:
+        # Register with a plain string key, matching how pyshacl mutates rdflib.
+        _toPythonMapping[dt] = converter
+        lit = _lit(compat, "hello", dt)
+        assert lit.toPython() == "converted:hello"
+        assert calls == ["hello"]
+
+        # A converter that raises falls back to the lexical string (rdflib parity).
+        _toPythonMapping[dt] = lambda lexical: (_ for _ in ()).throw(ValueError("boom"))
+        assert _lit(compat, "world", dt).toPython() == "world"
+
+        # A ``None`` mapping entry also falls back to the lexical string.
+        _toPythonMapping[dt] = None
+        assert _lit(compat, "none", dt).toPython() == "none"
+    finally:
+        if original is None:
+            _toPythonMapping.pop(dt, None)
+        else:
+            _toPythonMapping[dt] = original
 
 
 def test_daytime_duration_is_timedelta(compat: ModuleType) -> None:
@@ -341,3 +383,46 @@ def test_rdf12_triple_term_has_no_rdflib_counterpart(compat: ModuleType) -> None
     )
     term = compat_term.from_native(inner)
     assert term is not None
+
+
+# ── IdentifiedNode hierarchy (rdflib 7.6 parity) ────────────────────────────────
+
+
+def test_identified_node_hierarchy(compat: ModuleType) -> None:
+    """URIRef and BNode inherit from IdentifiedNode; Literal and Variable do not."""
+    assert issubclass(compat.URIRef, compat.IdentifiedNode)
+    assert issubclass(compat.BNode, compat.IdentifiedNode)
+    assert not issubclass(compat.Literal, compat.IdentifiedNode)
+    assert not issubclass(compat.Variable, compat.IdentifiedNode)
+    # IdentifiedNode itself is still a str subclass and an Identifier.
+    assert issubclass(compat.IdentifiedNode, compat.Identifier)
+    assert issubclass(compat.IdentifiedNode, str)
+    # MRO parity with rdflib 7.6: IdentifiedNode -> Identifier -> Node -> ABC -> str -> object.
+    assert compat.IdentifiedNode.__mro__ == (
+        compat.IdentifiedNode,
+        compat.Identifier,
+        compat.Node,
+        abc.ABC,
+        str,
+        object,
+    )
+
+
+def test_identified_node_importable_from_compat_term() -> None:
+    """``from purrdf.compat.rdflib.term import IdentifiedNode`` resolves."""
+    from purrdf.compat.rdflib.term import IdentifiedNode
+
+    assert IdentifiedNode.__name__ == "IdentifiedNode"
+    assert IdentifiedNode.__module__ == "purrdf.compat.rdflib.term"
+
+
+def test_identified_node_resolves_through_shadow() -> None:
+    """Under the shadow distribution, ``rdflib.term.IdentifiedNode`` is the shim class."""
+    code = (
+        "from purrdf.compat.rdflib.term import IdentifiedNode as CompatIdentifiedNode\n"
+        "from rdflib.term import IdentifiedNode as ShadowIdentifiedNode\n"
+        "assert ShadowIdentifiedNode is CompatIdentifiedNode, "
+        "f'{ShadowIdentifiedNode} is not {CompatIdentifiedNode}'\n"
+        "print('OK')\n"
+    )
+    assert _run_in_shadow(code).strip() == "OK"

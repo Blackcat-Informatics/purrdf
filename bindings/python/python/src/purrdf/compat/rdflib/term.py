@@ -17,11 +17,13 @@ is a P9 concern — here term equality follows RDFLib's *term* equality over
 
 from __future__ import annotations
 
+import abc
 import datetime
 import re
+import warnings
 from decimal import Decimal
 from functools import total_ordering
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 from uuid import uuid4
 
 import purrdf
@@ -29,6 +31,19 @@ import purrdf
 if TYPE_CHECKING:
     from purrdf import BlankNode, NamedNode
     from purrdf import Literal as _NativeLiteral
+
+
+__all__ = [
+    "BNode",
+    "IdentifiedNode",
+    "Identifier",
+    "Literal",
+    "Node",
+    "URIRef",
+    "Variable",
+    "from_native",
+    "to_native",
+]
 
 
 class _SupportsNormalizeUri(Protocol):
@@ -173,12 +188,29 @@ _DAYTIME_DURATION_RE = re.compile(
 )
 
 
-class Identifier(str):
+class Node(abc.ABC):
+    """RDFLib's abstract ``Node`` base (mirrors ``rdflib.term.Node``).
+
+    In RDFLib 7.6 ``Node`` is an abstract base with ``n3`` as its only abstract
+    method; every concrete term inherits from it. The shim preserves it as a
+    distinct base so ``isinstance(x, Node)`` and the ``IdentifiedNode`` MRO
+    match real rdflib.
+    """
+
+    __slots__ = ()
+
+    @abc.abstractmethod
+    def n3(self, namespace_manager: _SupportsNormalizeUri | None = None) -> str:
+        """Return the N3/Turtle form (subclasses implement)."""
+        ...
+
+
+class Identifier(Node, str):
     """A ``str``-subclass RDF term (mirrors ``rdflib.term.Identifier``).
 
-    The compat surface collapses RDFLib's abstract ``Node`` base into this class
-    (``Node`` below is an alias): every concrete term is a ``str`` subclass, so a
-    separate non-``str`` base buys nothing and only introduces type-boundary noise.
+    In RDFLib 7.6 :class:`Identifier` inherits from both :class:`Node` and
+    ``str``; the shim keeps the same MRO so type checks and plugin discovery
+    behave identically.
     """
 
     __slots__ = ()
@@ -192,11 +224,19 @@ class Identifier(str):
         return f"<{self}>"
 
 
-#: RDFLib's abstract ``Node`` base — collapsed to :class:`Identifier` here.
-Node = Identifier
+class IdentifiedNode(Identifier, abc.ABC):
+    """A ``str``-subclass base for URI and blank nodes (mirrors ``rdflib.term.IdentifiedNode``).
+
+    In RDFLib 7.6 this is the shared abstract base class of :class:`URIRef` and
+    :class:`BNode`; :class:`Literal` and :class:`Variable` intentionally do *not*
+    inherit from it. The shim keeps the same hierarchy so type checks and plugin
+    discovery that rely on ``isinstance(x, IdentifiedNode)`` behave identically.
+    """
+
+    __slots__ = ()
 
 
-class URIRef(Identifier):
+class URIRef(IdentifiedNode):
     """An IRI term — RDFLib-shaped, backed by :class:`purrdf.NamedNode`."""
 
     __slots__ = ()
@@ -261,7 +301,7 @@ class URIRef(Identifier):
         return NegatedPath(self)
 
 
-class BNode(Identifier):
+class BNode(IdentifiedNode):
     """A blank-node term — RDFLib-shaped, backed by :class:`purrdf.BlankNode`."""
 
     __slots__ = ()
@@ -318,6 +358,19 @@ def _coerce_value(lexical: str, datatype: URIRef | None, language: str | None) -
     if language is not None or datatype is None:
         return lexical
     dt = str(datatype)
+    # Private-internals consumers (e.g. pyshacl's bool patch) may have mutated the
+    # rdflib-style ``_toPythonMapping``; honor that override before falling back
+    # to the native-backed coercion table.  RDFLib stores URIRef keys, but URIRef
+    # is a str subclass with inherited hash/equality, so a bare string lookup is
+    # equivalent and avoids an allocation.
+    if dt in _toPythonMapping:
+        conv = _toPythonMapping[dt]
+        if conv is not None:
+            try:
+                return conv(lexical)
+            except Exception:  # noqa: BLE001 - rdflib parity: bad lexical → lexical string
+                return lexical
+        return lexical
     if dt in _XSD_STRINGLIKE:
         return lexical
     if dt == _XSD_BOOLEAN:
@@ -657,6 +710,40 @@ class Variable(Identifier):
     def to_native(self) -> purrdf.Variable:
         """Return the native :class:`purrdf.Variable` counterpart."""
         return purrdf.Variable(str(self))
+
+
+# ── Private-internals compatibility shims ─────────────────────────────────────
+#
+# These are NOT public rdflib API. They exist only because downstream consumers
+# (notably pyshacl) reach into rdflib's private Python internals and mutate them
+# at runtime. The shim keeps the absolute minimum surface needed for those
+# consumers to function, while the real value-space work stays in Rust.
+
+#: The XSD namespace prefix used by rdflib's private ``_XSD_PFX`` symbol.
+_XSD_PFX: str = _XSD
+
+
+def _parseBoolean(value: str | bytes) -> bool:  # noqa: N802 - rdflib API name
+    """Parse an XSD boolean lexical form (rdflib 7.6 private API parity).
+
+    Lexical space is ``{"true", "false", "1", "0"}``; any other input emits a
+    warning and maps to ``False``, matching rdflib's lenient behavior.
+    """
+    new_value = value.lower()
+    if new_value in ("1", "true", b"1", b"true"):
+        return True
+    if new_value not in ("0", "false", b"0", b"false"):
+        warnings.warn(
+            f"Parsing weird boolean, {value!r} does not map to True or False",
+            category=UserWarning,
+            stacklevel=2,
+        )
+    return False
+
+
+#: Runtime-mutable datatype → converter table mirroring rdflib's private
+#: ``_toPythonMapping``. Consumers such as pyshacl patch the boolean entry.
+_toPythonMapping: dict[str, Callable[[str], Any] | None] = {}
 
 
 def to_native(

@@ -141,11 +141,7 @@ def _discover_entry_points() -> None:
     """Register third-party plugins published against RDFLib's entry-point groups."""
     all_entry_points = entry_points()
     for group, kind in rdflib_entry_points.items():
-        if hasattr(all_entry_points, "select"):
-            eps = all_entry_points.select(group=group)
-        else:  # pragma: no cover - Python < 3.10 fallback
-            eps = all_entry_points.get(group, [])  # type: ignore[attr-defined]
-        for ep in eps:
+        for ep in all_entry_points.select(group=group):
             _plugins[(ep.name, kind)] = PKGPlugin(ep.name, kind, ep)
 
 

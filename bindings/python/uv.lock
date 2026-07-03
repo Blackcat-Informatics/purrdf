@@ -963,16 +963,14 @@ rdflib = [
 ]
 
 [package.dev-dependencies]
-acceptance = [
-    { name = "pyshacl" },
-    { name = "sparqlwrapper" },
-    { name = "sssom" },
-]
 dev = [
     { name = "maturin" },
     { name = "mypy" },
+    { name = "pyshacl" },
     { name = "pytest" },
     { name = "rdflib" },
+    { name = "sparqlwrapper" },
+    { name = "sssom" },
 ]
 
 [package.metadata]
@@ -980,16 +978,14 @@ requires-dist = [{ name = "purrdf-rdflib", marker = "extra == 'rdflib'", directo
 provides-extras = ["rdflib"]
 
 [package.metadata.requires-dev]
-acceptance = [
-    { name = "pyshacl" },
-    { name = "sparqlwrapper" },
-    { name = "sssom" },
-]
 dev = [
     { name = "maturin", specifier = ">=1.7,<2" },
     { name = "mypy", specifier = ">=1.10" },
+    { name = "pyshacl" },
     { name = "pytest", specifier = ">=8,<10" },
     { name = "rdflib", specifier = ">=7.1,<8" },
+    { name = "sparqlwrapper" },
+    { name = "sssom" },
 ]
 
 [[package]]
