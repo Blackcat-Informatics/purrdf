@@ -11,6 +11,7 @@ supports is checked against the ``oracle`` (real rdflib); behaviors it lacks
 
 from __future__ import annotations
 
+import abc
 import datetime
 from types import ModuleType
 
@@ -357,6 +358,15 @@ def test_identified_node_hierarchy(compat: ModuleType) -> None:
     # IdentifiedNode itself is still a str subclass and an Identifier.
     assert issubclass(compat.IdentifiedNode, compat.Identifier)
     assert issubclass(compat.IdentifiedNode, str)
+    # MRO parity with rdflib 7.6: IdentifiedNode -> Identifier -> Node -> ABC -> str -> object.
+    assert compat.IdentifiedNode.__mro__ == (
+        compat.IdentifiedNode,
+        compat.Identifier,
+        compat.Node,
+        abc.ABC,
+        str,
+        object,
+    )
 
 
 def test_identified_node_importable_from_compat_term() -> None:

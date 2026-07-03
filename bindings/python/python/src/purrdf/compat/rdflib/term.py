@@ -17,6 +17,7 @@ is a P9 concern — here term equality follows RDFLib's *term* equality over
 
 from __future__ import annotations
 
+import abc
 import datetime
 import re
 import warnings
@@ -187,12 +188,29 @@ _DAYTIME_DURATION_RE = re.compile(
 )
 
 
-class Identifier(str):
+class Node(abc.ABC):
+    """RDFLib's abstract ``Node`` base (mirrors ``rdflib.term.Node``).
+
+    In RDFLib 7.6 ``Node`` is an abstract base with ``n3`` as its only abstract
+    method; every concrete term inherits from it. The shim preserves it as a
+    distinct base so ``isinstance(x, Node)`` and the ``IdentifiedNode`` MRO
+    match real rdflib.
+    """
+
+    __slots__ = ()
+
+    @abc.abstractmethod
+    def n3(self, namespace_manager: _SupportsNormalizeUri | None = None) -> str:
+        """Return the N3/Turtle form (subclasses implement)."""
+        ...
+
+
+class Identifier(Node, str):
     """A ``str``-subclass RDF term (mirrors ``rdflib.term.Identifier``).
 
-    The compat surface collapses RDFLib's abstract ``Node`` base into this class
-    (``Node`` below is an alias): every concrete term is a ``str`` subclass, so a
-    separate non-``str`` base buys nothing and only introduces type-boundary noise.
+    In RDFLib 7.6 :class:`Identifier` inherits from both :class:`Node` and
+    ``str``; the shim keeps the same MRO so type checks and plugin discovery
+    behave identically.
     """
 
     __slots__ = ()
@@ -206,11 +224,7 @@ class Identifier(str):
         return f"<{self}>"
 
 
-#: RDFLib's abstract ``Node`` base — collapsed to :class:`Identifier` here.
-Node = Identifier
-
-
-class IdentifiedNode(Identifier):
+class IdentifiedNode(Identifier, abc.ABC):
     """A ``str``-subclass base for URI and blank nodes (mirrors ``rdflib.term.IdentifiedNode``).
 
     In RDFLib 7.6 this is the shared abstract base class of :class:`URIRef` and
