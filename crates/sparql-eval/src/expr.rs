@@ -1503,34 +1503,61 @@ fn eval_function(
 /// XPath casting rules): `xsd:decimal("5.355e1"^^xsd:double)` is the decimal value
 /// `53.55`, NOT a re-parse of the scientific-notation lexical (which is not a valid
 /// `xsd:decimal` lexical). The direct lexical parse handles same-representation casts
-/// (and string/boolean/temporal targets); when it fails, a numeric source is cast by
-/// VALUE through [`cast_numeric_value`].
+/// (and string/boolean/temporal targets); when it fails, a numeric-or-boolean source is
+/// cast by VALUE through [`cast_numeric_value`] (this also covers `xsd:boolean` as
+/// EITHER the source or the target of a numeric cast, per XPath's boolean/numeric
+/// casting rules).
+///
+/// `xsd:string(x)` is handled BEFORE the generic lexical-copy path: casting a
+/// `boolean`/numeric source to `xsd:string` is a VALUE-space operation with its own
+/// XPath-mandated string form ([`numeric_or_bool_to_xpath_string`]) that is generally
+/// NOT the source's own lexical form (e.g. `xsd:string("0"^^xsd:boolean)` is
+/// `"false"`, not `"0"`) — only a source with no numeric/boolean value (a plain
+/// string, an already-`xsd:string` literal, an unrecognized datatype, …) falls back to
+/// copying its lexical form verbatim.
 fn eval_xsd_cast(
     ctx: &mut EvalCtx<'_>,
     target: XsdDatatype,
     source: Option<&TermValue>,
 ) -> Option<SolutionTerm> {
     let source = source?;
+    if target == XsdDatatype::String {
+        if let TermValue::Iri(iri) = source {
+            return Some(string_term(ctx, iri));
+        }
+        if let Some(s) = xsd_of(source)
+            .as_ref()
+            .and_then(numeric_or_bool_to_xpath_string)
+        {
+            return Some(string_term(ctx, &s));
+        }
+    }
     let lexical = match source {
         TermValue::Literal { lexical_form, .. } => lexical_form.clone(),
-        TermValue::Iri(iri) if target == XsdDatatype::String => iri.clone(),
         _ => return None,
     };
     if let Ok(value) = parse(&lexical, target) {
         return Some(xsd_to_term(ctx, &value));
     }
     // The lexical is not directly valid for `target`. If both source and target are
-    // numeric, convert by value (e.g. a `double`/`float` scientific-notation lexical
-    // into the equivalent `decimal`/`integer`), matching the spec's casting tower.
+    // numeric-or-boolean, convert by value (e.g. a `double`/`float` scientific-notation
+    // lexical into the equivalent `decimal`/`integer`, or a numeric source into
+    // `xsd:boolean`), matching the spec's casting tower.
     let value = cast_numeric_value(&xsd_of(source)?, target)?;
     Some(xsd_to_term(ctx, &value))
 }
 
-/// Cast a numeric [`XsdValue`] to a numeric `target` datatype **by value** (the
-/// SPARQL §17.1 numeric casting rules): the source's numeric value is re-expressed in
-/// the target's value space. Returns `None` when the source is non-numeric, the target
-/// is non-numeric, or the value is out of the target's range (e.g. a non-integral
-/// double cast to integer truncates toward zero, as XPath `xs:integer` mandates).
+/// Cast a numeric-or-boolean [`XsdValue`] to a numeric-or-`xsd:boolean` `target`
+/// datatype **by value** (the SPARQL §17.1 / XPath casting rules): the source's value
+/// is re-expressed in the target's value space. Returns `None` when the source has no
+/// numeric value, the target is not numeric/boolean, or the value is out of the
+/// target's range (e.g. a non-integral double cast to integer truncates toward zero,
+/// as XPath `xs:integer` mandates).
+///
+/// `xsd:boolean` participates on BOTH sides: a boolean source is `1.0`/`0.0` for a
+/// numeric target, and a numeric target of `xsd:boolean` is XPath's numeric effective
+/// boolean value (zero or `NaN` → `false`, else `true`) — the same rule SPARQL's own
+/// effective boolean value uses for numerics ([`effective_boolean_value`]).
 fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
     use purrdf_xsd::parse as xsd_parse;
     // The source's exact numeric value, as the widest faithful form available.
@@ -1539,11 +1566,15 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
         XsdValue::Decimal(d) => d.to_f64(),
         XsdValue::Float(f) => f64::from(*f),
         XsdValue::Double(d) => *d,
+        XsdValue::Boolean(b) => f64::from(u8::from(*b)),
         _ => return None,
     };
     match target {
         XsdDatatype::Double => Some(XsdValue::Double(as_f64)),
         XsdDatatype::Float => Some(XsdValue::Float(as_f64 as f32)),
+        // Zero or NaN is false; every other numeric value (including negatives and
+        // subnormals) is true — XPath's numeric-to-boolean casting rule.
+        XsdDatatype::Boolean => Some(XsdValue::Boolean(as_f64 != 0.0 && !as_f64.is_nan())),
         XsdDatatype::Decimal => {
             // A non-finite double has no decimal value (a SPARQL expression error).
             if !as_f64.is_finite() {
@@ -1577,6 +1608,65 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
             xsd_parse(&format!("{truncated:.0}"), target).ok()
         }
         _ => None,
+    }
+}
+
+/// The XPath F&O §19 "Casting to `xs:string`" string form of a boolean or numeric
+/// value — DISTINCT from the value's XSD canonical **literal** lexical mapping (which
+/// [`XsdValue::canonical_lexical`] provides for writing an actual `xsd:double`/
+/// `xsd:float` term). Returns `None` for a non-numeric, non-boolean value (the caller
+/// then falls back to copying the source's own lexical form).
+///
+/// - `xsd:boolean` → `"true"`/`"false"`.
+/// - `xsd:integer` (and derived) → the plain decimal digits (no fractional part ever).
+/// - `xsd:decimal` → its canonical lexical with a bare `.0` suffix dropped (the cast
+///   rule never shows a fractional zero for a whole value: `1.0` casts to `"1"`).
+/// - `xsd:float`/`xsd:double` → [`xpath_double_to_xpath_string`] (plain decimal
+///   notation in the "ordinary" magnitude range, scientific outside it).
+fn numeric_or_bool_to_xpath_string(value: &XsdValue) -> Option<String> {
+    match value {
+        XsdValue::Boolean(b) => Some(if *b { "true" } else { "false" }.to_owned()),
+        XsdValue::Integer { value, .. } => Some(value.to_string()),
+        XsdValue::Decimal(d) => {
+            let canonical = d.canonical_lexical();
+            Some(
+                canonical
+                    .strip_suffix(".0")
+                    .map_or_else(|| canonical.clone(), str::to_owned),
+            )
+        }
+        XsdValue::Float(f) => Some(xpath_double_to_xpath_string(f64::from(*f))),
+        XsdValue::Double(d) => Some(xpath_double_to_xpath_string(*d)),
+        _ => None,
+    }
+}
+
+/// XPath F&O's number→`xs:string` casting algorithm for `xs:float`/`xs:double`: values
+/// with an absolute magnitude in `[0.000001, 100000000)` are written in plain
+/// (non-exponential) decimal notation; every other finite value uses scientific
+/// notation (`mantissa Eexponent`, no padding). This is intentionally NOT the XSD
+/// canonical literal mapping ([`purrdf_xsd::numeric::canonical_double`]), which always
+/// uses mandatory exponential notation — this is the distinct, narrower rule XPath
+/// specifies for the STRING VALUE of a numeric cast.
+fn xpath_double_to_xpath_string(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".to_owned();
+    }
+    if value.is_infinite() {
+        return if value > 0.0 { "INF" } else { "-INF" }.to_owned();
+    }
+    if value == 0.0 {
+        return if value.is_sign_negative() { "-0" } else { "0" }.to_owned();
+    }
+    let abs = value.abs();
+    if (1e-6..1e8).contains(&abs) {
+        format_plain_decimal(value)
+    } else {
+        // Scientific notation, without the XSD-canonical mandatory ".0" mantissa pad
+        // this cast rule doesn't require.
+        let raw = format!("{value:e}");
+        let (mantissa, exp) = raw.split_once('e').unwrap_or((raw.as_str(), "0"));
+        format!("{mantissa}E{exp}")
     }
 }
 

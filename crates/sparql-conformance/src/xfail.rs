@@ -111,31 +111,34 @@ pub const XFAIL: &[Xfail] = &[
         iri_suffix: "bindings/manifest#graph",
         reason: XfailReason::ValueMismatch,
     },
-    // --- XSD cast: the engine evaluates but the cast result's datatype/lexical
-    //     form diverges from the spec's expected solution. -----------------------
-    Xfail {
-        iri_suffix: "cast/manifest#cast-bool",
-        reason: XfailReason::ValueMismatch,
-    },
+    // --- XSD cast (`cast-decimal`/`cast-double`/`cast-float`): the fixture's
+    //     expected `xsd:decimal`/`xsd:double`/`xsd:float` lexicals are NOT the XSD
+    //     canonical mapping and are internally inconsistent about it (e.g. an
+    //     `xsd:integer` `0` cast to `xsd:decimal` expects the bare, non-canonical
+    //     "0" while the same cast of `1` correctly expects canonical "1.0"; a
+    //     `double`/`float` constructor cast of `xsd:boolean true` correctly expects
+    //     the canonical "1.0E0" while casting the string "1" expects the
+    //     non-canonical, non-exponential "1"). The native engine emits the true
+    //     XSD canonical literal mapping (mandatory exponential notation for
+    //     double/float, a mandatory fractional digit for decimal) for every case
+    //     uniformly, which cannot also reproduce these fixtures' inconsistent
+    //     per-row non-canonical shortcuts — this is the vendored fixture's
+    //     erratum, consistent with these three cases never having been promoted
+    //     past `dawgt:approval dawgt:Proposed` in the manifest. `cast-bool`,
+    //     `cast-int`, and `cast-string` (the numeric→boolean/integer casts and the
+    //     XPath F&O §19 numeric/boolean→`xsd:string` casting rule) are spec-clean
+    //     and pass natively; they are not ledgered here.
     Xfail {
         iri_suffix: "cast/manifest#cast-decimal",
-        reason: XfailReason::ValueMismatch,
+        reason: XfailReason::UpstreamErratum,
     },
     Xfail {
         iri_suffix: "cast/manifest#cast-double",
-        reason: XfailReason::ValueMismatch,
+        reason: XfailReason::UpstreamErratum,
     },
     Xfail {
         iri_suffix: "cast/manifest#cast-float",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "cast/manifest#cast-int",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "cast/manifest#cast-string",
-        reason: XfailReason::ValueMismatch,
+        reason: XfailReason::UpstreamErratum,
     },
     // --- EXISTS whose inner pattern references the enclosing GRAPH variable
     //     yields the wrong solution set. ------------------------------------------
