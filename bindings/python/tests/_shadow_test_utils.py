@@ -20,25 +20,31 @@ from pathlib import Path
 _SHADOW_DIR = Path(__file__).resolve().parent.parent.parent / "python-rdflib-shadow"
 
 
-def _run_in_shadow(code: str) -> str:
-    """Run ``code`` in a child interpreter whose ``import rdflib`` is the shadow.
+def _run_with_shadow(argv: list[str | Path]) -> subprocess.CompletedProcess[str]:
+    """Run ``argv`` in a child process with the rdflib shadow prepended to ``PYTHONPATH``.
 
-    Prepends the shadow distribution's package root to ``PYTHONPATH`` so a plain
-    ``import rdflib`` in the child resolves to the purrdf shadow rather than the
-    real rdflib installed in this (parent) environment.
+    The shadow distribution's package root is inserted first so ``import rdflib``
+    in the child resolves to the purrdf shadow rather than the real rdflib
+    installed in this (parent) environment.  The caller decides how to interpret
+    the return code and output.
     """
     env = dict(os.environ)
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = (
         f"{_SHADOW_DIR}{os.pathsep}{existing}" if existing else str(_SHADOW_DIR)
     )
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
+    return subprocess.run(
+        [str(arg) for arg in argv],
         env=env,
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def _run_in_shadow(code: str) -> str:
+    """Run ``code`` in a child interpreter whose ``import rdflib`` is the shadow."""
+    proc = _run_with_shadow([sys.executable, "-c", code])
     assert proc.returncode == 0, (
         f"shadow subprocess failed (rc={proc.returncode})\n"
         f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"

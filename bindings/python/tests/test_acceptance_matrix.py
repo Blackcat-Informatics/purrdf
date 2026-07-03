@@ -32,18 +32,16 @@ same XPASS discipline as the Rust conformance harnesses (AGENTS.md §2).
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from _shadow_test_utils import _SHADOW_DIR, _run_with_shadow
+
 _TESTS_DIR = Path(__file__).resolve().parent
 _ACCEPTANCE_DIR = _TESTS_DIR / "acceptance"
-# tests/ -> python/ -> bindings/ -> python-rdflib-shadow/
-_SHADOW_DIR = _TESTS_DIR.parent.parent / "python-rdflib-shadow"
 
 _RESULT_PREFIX = "ACCEPT_RESULT "
 
@@ -58,18 +56,7 @@ def _run_driver(package: str) -> tuple[int, dict[str, Any], str]:
     driver = _ACCEPTANCE_DIR / f"driver_{package}.py"
     assert driver.is_file(), f"missing acceptance driver: {driver}"
 
-    env = dict(os.environ)
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (
-        f"{_SHADOW_DIR}{os.pathsep}{existing}" if existing else str(_SHADOW_DIR)
-    )
-    proc = subprocess.run(
-        [sys.executable, str(driver)],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    proc = _run_with_shadow([sys.executable, driver])
     raw = f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
     record: dict[str, Any] = {}
     for line in proc.stdout.splitlines():
