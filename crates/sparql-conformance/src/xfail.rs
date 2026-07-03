@@ -92,21 +92,6 @@ pub const XFAIL: &[Xfail] = &[
     // curated subset simply never exercised it. Grouped by root cause. Suffixes
     // are group-qualified (`<group>/manifest#<name>`) so they cannot cross-match.
 
-    // The expected result is a Turtle-encoded `rs:ResultSet` (decoded by
-    // `crate::rs_resultset` into the same solution-multiset shape SRX/SRJ use —
-    // this is no longer a result-format gap). The residual failure is a genuine
-    // SPARQL evaluation gap: `GRAPH ?g { VALUES (?g ?t) {...} }` must iterate
-    // every named graph in the dataset and JOIN each candidate ?g against the
-    // VALUES row's (possibly already-bound) ?g, keeping only compatible rows.
-    // The native evaluator instead only visits the one named graph that has
-    // triples (an empty named graph such as `empty.ttl` is invisible — no quad
-    // carries its graph term) and drops the VALUES-side ?g binding rather than
-    // joining it, so `("bar", <empty.ttl>)` wrongly reports `<data02.ttl>` and
-    // the `(<empty.ttl>, "foo")` row is missing entirely.
-    Xfail {
-        iri_suffix: "bindings/manifest#graph",
-        reason: XfailReason::ValueMismatch,
-    },
     // --- XSD cast (`cast-decimal`/`cast-double`/`cast-float`): the fixture's
     //     expected `xsd:decimal`/`xsd:double`/`xsd:float` lexicals are NOT the XSD
     //     canonical mapping and are internally inconsistent about it (e.g. an
@@ -135,12 +120,6 @@ pub const XFAIL: &[Xfail] = &[
     Xfail {
         iri_suffix: "cast/manifest#cast-float",
         reason: XfailReason::UpstreamErratum,
-    },
-    // --- EXISTS whose inner pattern references the enclosing GRAPH variable
-    //     yields the wrong solution set. ------------------------------------------
-    Xfail {
-        iri_suffix: "exists/manifest#exists-graph-variable",
-        reason: XfailReason::UnsupportedConstruct,
     },
     // --- Whole-valued `xsd:decimal` lexical form: the vendored W3C SPARQL 1.1
     //     suite is INTERNALLY INCONSISTENT, at the SAME `dawgt:Approved`
@@ -171,16 +150,6 @@ pub const XFAIL: &[Xfail] = &[
     Xfail {
         iri_suffix: "functions/manifest#plus-1-corrected",
         reason: XfailReason::UpstreamErratum,
-    },
-    // --- Grouping: projecting a non-grouped variable must be a query error;
-    //     the parser/algebra does not yet reject it (negative-syntax tests). -----
-    Xfail {
-        iri_suffix: "grouping/manifest#group06",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
-        iri_suffix: "grouping/manifest#group07",
-        reason: XfailReason::UnsupportedConstruct,
     },
     // === Full W3C sparql11 UPDATE-eval groups (commit 426c7df) ===============
     //

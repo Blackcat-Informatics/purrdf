@@ -421,6 +421,40 @@ impl Parser<'_> {
             }
         }
 
+        // §18.2.4.1 grouping constraint: when the query aggregates (an explicit
+        // `GROUP BY`, or one or more aggregates in the SELECT clause ⇒ an implicit
+        // single group), every BARE projected variable — one named directly as a
+        // `Var`, not the fresh target of a `(expr AS ?v)` — must be one of the
+        // `GROUP BY` keys (explicit or the synthetic var of an expression-valued
+        // GROUP BY condition). A bare projected variable that is neither a group
+        // key nor confined to an aggregate is a hard query error, not a silently
+        // wrong answer (this is the vendored W3C `grouping/group06`/`group07`
+        // negative-syntax cases: `SELECT ?s ?v { ... } GROUP BY ?s` projects the
+        // ungrouped, non-aggregated `?v`). `SELECT *` is exempted here: its
+        // projection is derived structurally from the (already-grouped) algebra
+        // node below, so it can only ever expose grouped/aggregate variables.
+        if !star {
+            let is_aggregating = !modifiers.group_by.is_empty() || !aggregates.is_empty();
+            if is_aggregating {
+                let as_targets: std::collections::HashSet<&Variable> =
+                    select_exprs.iter().map(|(v, _)| v).collect();
+                let group_vars: std::collections::HashSet<&Variable> =
+                    modifiers.group_by.iter().collect();
+                for var in &projected {
+                    if !as_targets.contains(var) && !group_vars.contains(var) {
+                        return Err(ParseError::syntax(
+                            format!(
+                                "SELECT projects ?{}, which is neither a GROUP BY key nor \
+                                 confined to an aggregate",
+                                var.as_str()
+                            ),
+                            self.span(),
+                        ));
+                    }
+                }
+            }
+        }
+
         // Trailing `ValuesClause` (§18.2.4.3): a `VALUES DataBlock` after the
         // solution modifiers — valid on both a top-level query and a `SubSelect`.
         // It is joined with the WHERE group graph pattern *before* grouping and

@@ -508,6 +508,14 @@ impl MutableDataset {
             builder.push_annotation(reifier, pred, obj);
         }
 
+        // Carry the base's explicitly-declared (possibly empty) named graphs
+        // through the same re-intern path so `GRAPH ?g` enumeration survives a
+        // mutation freeze even when a declared graph gained/kept zero quads.
+        for g in base.named_graphs() {
+            let g = self.intern_base(&mut builder, g);
+            builder.declare_named_graph(g);
+        }
+
         builder.freeze()
     }
 

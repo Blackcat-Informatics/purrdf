@@ -172,6 +172,22 @@ pub struct RdfDataset {
     /// lazily on the first pattern query that selects them. `OnceLock` keeps the
     /// frozen dataset `Send + Sync`.
     indexes: QuadIndexes,
+    /// Every named graph *known* to this dataset: the union of every graph term
+    /// that owns at least one quad AND every graph the caller explicitly declared
+    /// via [`RdfDatasetBuilder::declare_named_graph`](super::builder::RdfDatasetBuilder::declare_named_graph)
+    /// even if it owns none. Sorted, deduplicated, ascending `TermId` order.
+    ///
+    /// This is additive metadata ONLY for `GRAPH ?g`-style enumeration
+    /// (SPARQL §8.3/§18.6): a quad-store's normal "a named graph exists iff it
+    /// holds a quad" doctrine (see `purrdf-sparql-eval`'s `dataset_spec` module and
+    /// `update.rs`'s `CREATE GRAPH`/`CLEAR`/`DROP` semantics) is unchanged — those
+    /// paths never consult this field. It exists purely so a caller that KNOWS a
+    /// named graph is part of its dataset (e.g. the W3C test harness's
+    /// `qt:graphData` — the RDF dataset abstraction of RDF 1.1 §3 permits a named
+    /// graph with an empty graph) can register that fact for the one algebra
+    /// operator (`GRAPH ?g`) whose spec-mandated enumeration is "every named graph
+    /// in the dataset", not "every named graph with a triple".
+    named_graphs: Box<[TermId]>,
 }
 
 /// The lazy non-identity permutation indexes over the freeze-sorted `quads` table
@@ -361,6 +377,7 @@ impl RdfDataset {
     /// validation.
     ///
     /// [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_parts(
         arena: Box<[u8]>,
         terms: Box<[InternedTerm]>,
@@ -369,6 +386,7 @@ impl RdfDataset {
         annotations: Box<[(TermId, TermId, TermId)]>,
         locations: Box<[(QuadHandle, RdfLocation)]>,
         caps: RdfStoreCapabilities,
+        named_graphs: Box<[TermId]>,
     ) -> Self {
         Self {
             arena,
@@ -380,7 +398,14 @@ impl RdfDataset {
             caps,
             value_index: OnceLock::new(),
             indexes: QuadIndexes::default(),
+            named_graphs,
         }
+    }
+
+    /// Every named graph known to this dataset (quad-bearing or explicitly
+    /// declared empty — see the `named_graphs` field doc). Sorted, deduplicated.
+    pub fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
+        self.named_graphs.iter().copied()
     }
 
     /// Resolve a term id to the owned [`RdfTerm`] model, recursively for triple
@@ -526,6 +551,14 @@ impl RdfDataset {
         self.annotations().map(|(reifier, predicate, object)| {
             self.to_owned_annotation(reifier, predicate, object)
         })
+    }
+
+    /// Iterate over every known named graph (see [`RdfDataset::named_graphs`])
+    /// resolved to its owned [`RdfTerm`] — the merge-safe form
+    /// [`RdfDatasetBuilder::push_dataset`](super::builder::RdfDatasetBuilder::push_dataset)
+    /// re-interns into another builder's arena.
+    pub fn owned_named_graphs(&self) -> impl Iterator<Item = RdfTerm> + '_ {
+        self.named_graphs().map(|g| self.to_owned_term(g))
     }
 
     /// Project the quads of one named graph into a fresh default-graph dataset.
@@ -1283,6 +1316,7 @@ impl RdfDataset {
             caps: self.caps,
             value_index: OnceLock::new(),
             indexes: QuadIndexes::default(),
+            named_graphs: self.named_graphs.clone(),
         }
     }
 

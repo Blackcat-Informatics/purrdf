@@ -312,6 +312,10 @@ pub struct RdfDatasetBuilder {
     /// Sparse source locations keyed by the pushed-quad ordinal. Only quads with a
     /// recorded location appear here.
     locations: Vec<(QuadHandle, RdfLocation)>,
+    /// Named graphs EXPLICITLY declared to exist even with zero quads (see
+    /// [`declare_named_graph`](Self::declare_named_graph)). Deduplicated at freeze
+    /// alongside every graph term that DOES own a quad.
+    declared_graphs: Vec<TermId>,
     /// Counter for the next blank-node scope to use when merging a foreign dataset
     /// via [`push_dataset`](RdfDatasetBuilder::push_dataset). Each call to
     /// `push_dataset` claims one fresh scope (starting at 1; 0 = DEFAULT) so that
@@ -388,6 +392,7 @@ impl RdfDatasetBuilder {
             annotations: Vec::new(),
             annotation_index: HashTable::new(),
             locations: Vec::new(),
+            declared_graphs: Vec::new(),
             // Merge scopes start at 1; scope 0 is BlankScope::DEFAULT (local pushes).
             next_merge_scope: 1,
         }
@@ -396,6 +401,19 @@ impl RdfDatasetBuilder {
     /// Intern an IRI term. Idempotent: the same IRI string yields the same id.
     pub fn intern_iri(&mut self, iri: &str) -> TermId {
         self.interner.intern(TermLookup::Iri(iri))
+    }
+
+    /// Explicitly declare that a named graph exists, even if it turns out to own
+    /// zero quads. The frozen dataset's `GRAPH ?g` enumeration
+    /// ([`RdfDataset::named_graphs`](super::dataset::RdfDataset::named_graphs))
+    /// is the union of this declaration list and every graph term that DOES own a
+    /// quad — everything else in the engine (quad matching, `CREATE`/`CLEAR`/`DROP
+    /// GRAPH`, capability flags) keeps the ordinary "a graph exists iff it holds a
+    /// quad" doctrine untouched. Idempotent (deduplicated at freeze); `g` must be a
+    /// [`TermId`] already interned in THIS builder (typically via
+    /// [`intern_iri`](Self::intern_iri)).
+    pub fn declare_named_graph(&mut self, g: TermId) {
+        self.declared_graphs.push(g);
     }
 
     /// Intern a blank node. Identity is `(label, scope)` (C0.2): same label + same
@@ -586,6 +604,10 @@ impl RdfDatasetBuilder {
         for annotation in other.owned_annotations() {
             self.push_owned_annotation_scoped(&annotation, scope);
         }
+        for graph in other.owned_named_graphs() {
+            let g = self.intern_owned_term_scoped(&graph, scope);
+            self.declare_named_graph(g);
+        }
     }
 
     /// Crate-internal read access to an interned term. [`freeze`](Self::freeze) and
@@ -724,6 +746,7 @@ impl RdfDatasetBuilder {
             mut reifiers,
             mut annotations,
             locations,
+            declared_graphs,
             ..
         } = self;
 
@@ -767,6 +790,13 @@ impl RdfDatasetBuilder {
         annotations.sort_unstable();
         locations.sort_unstable_by_key(|(handle, _)| *handle);
 
+        // The frozen `GRAPH ?g` enumeration set: every graph term that owns a quad,
+        // UNION every graph the caller explicitly declared (possibly empty).
+        let mut named_graphs: Vec<TermId> = declared_graphs;
+        named_graphs.extend(quads.iter().filter_map(|q| q.g));
+        named_graphs.sort_unstable();
+        named_graphs.dedup();
+
         let caps =
             compute_capabilities(&interner.terms, &quads, &reifiers, &annotations, &locations);
 
@@ -778,6 +808,7 @@ impl RdfDatasetBuilder {
             annotations.into_boxed_slice(),
             locations.into_boxed_slice(),
             caps,
+            named_graphs.into_boxed_slice(),
         )
     }
 }

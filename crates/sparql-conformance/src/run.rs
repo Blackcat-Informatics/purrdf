@@ -87,6 +87,25 @@ fn data_media_type(path: &std::path::Path) -> &'static str {
     }
 }
 
+/// The per-file base IRI a `qt:data`/`qt:graphData` Turtle file is parsed
+/// against: `<BASE><file name>`, matching how the manifest's OWN relative
+/// reference (e.g. `<exists-graph-variable.ttl>`) resolves against the harness's
+/// sentinel [`BASE`] — the vendored suite never nests fixtures in
+/// subdirectories, so a bare file name round-trips the manifest's relative
+/// reference exactly. Using the SHARED harness-wide [`BASE`] for every file
+/// instead (as opposed to the file's own resolved IRI) would make a bare `<>`
+/// inside the Turtle content resolve to the same IRI for every fixture, instead
+/// of self-referencing that fixture's own `qt:data`/`qt:graphData` graph name —
+/// the exact self-reference some W3C fixtures (e.g. `exists-graph-variable`)
+/// depend on.
+fn file_base_iri(path: &std::path::Path) -> String {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    format!("{BASE}{name}")
+}
+
 /// Build a dataset from default-graph Turtle files (`data`) and named-graph files
 /// (`graph_data`, each `(graph IRI, file)`). Shared by the query pre-state loader
 /// and the UPDATE pre-/post-state builders.
@@ -102,7 +121,7 @@ pub fn build_dataset(
     let mut combined_nq: Vec<u8> = Vec::new();
     for data in data {
         let chunk = std::fs::read(data).map_err(|e| format!("read {}: {e}", data.display()))?;
-        let ds = purrdf::parse_dataset(&chunk, data_media_type(data), Some(BASE))
+        let ds = purrdf::parse_dataset(&chunk, data_media_type(data), Some(&file_base_iri(data)))
             .map_err(|e| format!("parse data {}: {e}", data.display()))?;
         let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
             .map_err(|e| format!("serialize {}: {e}", data.display()))?;
@@ -113,11 +132,24 @@ pub fn build_dataset(
     }
 
     // Serialize each qt:graphData Turtle file to N-Quads, then tag every triple line
-    // with the named-graph IRI so it is placed in that named graph.
+    // with the named-graph IRI so it is placed in that named graph. A file that
+    // parses to ZERO quads (e.g. `empty.ttl`) leaves no trace in N-Quads text — the
+    // format has no syntax for "this named graph exists but is empty" — so its IRI
+    // is separately remembered in `empty_graphs` and explicitly declared on the
+    // final builder below (RdfDataset's `named_graphs`, RDF 1.1 §3's "an RDF
+    // dataset MAY include an empty named graph").
+    let mut empty_graphs: Vec<&str> = Vec::new();
     for (graph_iri, path) in graph_data {
         let chunk = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        let ds = purrdf::parse_dataset(&chunk, data_media_type(path), Some(BASE))
+        // Parse against the graph's OWN resolved IRI (not the shared harness
+        // `BASE`) so a bare `<>` inside the file self-references this named
+        // graph, exactly like a real per-file base would.
+        let ds = purrdf::parse_dataset(&chunk, data_media_type(path), Some(graph_iri))
             .map_err(|e| format!("parse graph data {}: {e}", path.display()))?;
+        if ds.quad_count() == 0 {
+            empty_graphs.push(graph_iri.as_str());
+            continue;
+        }
         let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
             .map_err(|e| format!("serialize graph data {}: {e}", path.display()))?;
         let nq_text = std::str::from_utf8(&nq)
@@ -143,8 +175,23 @@ pub fn build_dataset(
         }
     }
 
-    purrdf::parse_dataset(&combined_nq, "application/n-quads", Some(BASE))
-        .map_err(|e| format!("parse combined n-quads: {e}"))
+    let parsed = purrdf::parse_dataset(&combined_nq, "application/n-quads", Some(BASE))
+        .map_err(|e| format!("parse combined n-quads: {e}"))?;
+    if empty_graphs.is_empty() {
+        return Ok(parsed);
+    }
+
+    // Re-intern the parsed quads into a fresh builder (standard `push_dataset`
+    // merge) so the empty graph IRIs can be declared alongside them before freeze.
+    let mut builder = purrdf_core::RdfDatasetBuilder::new();
+    builder.push_dataset(&parsed);
+    for graph_iri in empty_graphs {
+        let g = builder.intern_iri(graph_iri);
+        builder.declare_named_graph(g);
+    }
+    builder
+        .freeze()
+        .map_err(|e| format!("freeze dataset with declared empty graphs: {e}"))
 }
 
 /// Run `case`, optionally resolving `SERVICE` clauses through `remote`.
