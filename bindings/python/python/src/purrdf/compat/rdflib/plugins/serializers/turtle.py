@@ -4,6 +4,6 @@
 
 from __future__ import annotations
 
-from ..serializers import TurtleSerializer
+from . import TurtleSerializer
 
 __all__ = ["TurtleSerializer"]
