@@ -601,18 +601,6 @@ pub const XFAIL: &[Xfail] = &[
         reason: XfailReason::UnsupportedConstruct,
     },
     Xfail {
-        iri_suffix: "lang-basedir/manifest#haslang",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "lang-basedir/manifest#haslangdir",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "lang-basedir/manifest#langdir",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
         iri_suffix: "lang-basedir/manifest#langdir-literal",
         reason: XfailReason::ParseUnsupported,
     },

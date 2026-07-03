@@ -25,7 +25,7 @@
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-use purrdf_core::{BlankScope, DatasetView, GraphMatch, TermRef, TermValue};
+use purrdf_core::{BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermRef, TermValue};
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
 use purrdf_xsd::{
     effective_boolean_value, numeric_abs, numeric_add, numeric_ceil, numeric_div, numeric_floor,
@@ -44,6 +44,7 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 
 /// Evaluate an expression over a solution. See the [module docs](self) for the
 /// `Ok(Some)` / `Ok(None)` / `Err` contract.
@@ -1208,6 +1209,31 @@ fn eval_function(
             ))),
             _ => Ok(None),
         },
+        // RDF 1.2 base-direction accessors/tests.
+        Function::LangDir => match arg(&vals, 0) {
+            Some(TermValue::Literal { direction, .. }) => Ok(Some(string_term(
+                ctx,
+                direction.map_or("", |d| d.as_str()),
+            ))),
+            _ => Ok(None),
+        },
+        // `hasLANG`/`hasLANGDIR` are total over a bound term: false for any term
+        // that is not a language-tagged / directional literal (only an unbound
+        // argument yields unbound).
+        Function::HasLang => match arg(&vals, 0) {
+            None => Ok(None),
+            Some(TermValue::Literal { language, .. }) => {
+                Ok(Some(bool_term(ctx, language.is_some())))
+            }
+            Some(_) => Ok(Some(bool_term(ctx, false))),
+        },
+        Function::HasLangDir => match arg(&vals, 0) {
+            None => Ok(None),
+            Some(TermValue::Literal { direction, .. }) => {
+                Ok(Some(bool_term(ctx, direction.is_some())))
+            }
+            Some(_) => Ok(Some(bool_term(ctx, false))),
+        },
         Function::Datatype => match arg(&vals, 0) {
             Some(TermValue::Literal { datatype, .. }) => {
                 Ok(Some(intern(ctx, TermValue::Iri(datatype.clone()))))
@@ -1242,6 +1268,7 @@ fn eval_function(
             _ => Ok(None),
         },
         Function::StrLang => eval_str_lang(ctx, &vals),
+        Function::StrLangDir => eval_str_lang_dir(ctx, &vals),
         Function::StrDt => eval_str_dt(ctx, &vals),
         Function::BNode => {
             // BNODE() / BNODE(str): mint a fresh blank node per call.
@@ -2053,6 +2080,40 @@ fn eval_str_lang(
         return Ok(None);
     };
     Ok(Some(make_string(ctx, lex, Some(lang.to_ascii_lowercase()))))
+}
+
+/// `STRLANGDIR(lexical, lang, dir)` — RDF 1.2 directional-language-string
+/// constructor. An empty `dir` yields a plain `rdf:langString`; `ltr`/`rtl`
+/// (case-insensitive) yield an `rdf:dirLangString`; any other direction errors.
+fn eval_str_lang_dir(
+    ctx: &mut EvalCtx<'_>,
+    vals: &[Option<TermValue>],
+) -> Result<Option<SolutionTerm>, EvalError> {
+    let (Some((lex, _)), Some((lang, _)), Some((dir, _))) =
+        (string_arg(vals, 0), string_arg(vals, 1), string_arg(vals, 2))
+    else {
+        return Ok(None);
+    };
+    let direction = match dir.to_ascii_lowercase().as_str() {
+        "ltr" => Some(RdfTextDirection::Ltr),
+        "rtl" => Some(RdfTextDirection::Rtl),
+        "" => None,
+        _ => return Ok(None),
+    };
+    let datatype = if direction.is_some() {
+        RDF_DIR_LANG_STRING
+    } else {
+        RDF_LANG_STRING
+    };
+    Ok(Some(intern(
+        ctx,
+        TermValue::Literal {
+            lexical_form: lex,
+            datatype: datatype.to_owned(),
+            language: Some(lang.to_ascii_lowercase()),
+            direction,
+        },
+    )))
 }
 
 /// `STRDT(lexical, datatypeIri)`.

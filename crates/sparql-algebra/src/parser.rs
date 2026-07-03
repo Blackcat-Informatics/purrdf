@@ -2527,6 +2527,10 @@ fn builtin_function(upper: &str) -> Option<Function> {
     Some(match upper {
         "STR" => Function::Str,
         "LANG" => Function::Lang,
+        "LANGDIR" => Function::LangDir,
+        "STRLANGDIR" => Function::StrLangDir,
+        "HASLANG" => Function::HasLang,
+        "HASLANGDIR" => Function::HasLangDir,
         "LANGMATCHES" => Function::LangMatches,
         "DATATYPE" => Function::Datatype,
         "IRI" => Function::Iri,

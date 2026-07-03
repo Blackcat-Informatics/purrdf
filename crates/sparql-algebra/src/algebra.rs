@@ -821,6 +821,17 @@ pub enum Function {
     Object,
     /// `isTRIPLE(t)` — RDF 1.2 triple-term test.
     IsTriple,
+    /// `LANGDIR(literal)` — RDF 1.2 base-direction accessor (`"ltr"`/`"rtl"`,
+    /// or the empty string when the literal carries no base direction).
+    LangDir,
+    /// `STRLANGDIR(lex, lang, dir)` — RDF 1.2 directional-language-string
+    /// constructor (an `rdf:dirLangString`).
+    StrLangDir,
+    /// `hasLANG(literal)` — RDF 1.2 test: does the literal carry a language tag?
+    HasLang,
+    /// `hasLANGDIR(literal)` — RDF 1.2 test: does the literal carry a base
+    /// direction?
+    HasLangDir,
     /// An extension function call (a CLOSED, exhaustive local-name seam, dispatched
     /// at parse time from an IRI under a *caller-configured* extension-function
     /// namespace — there is no default namespace). Carries the original call IRI
