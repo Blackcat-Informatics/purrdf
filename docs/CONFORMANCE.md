@@ -4,11 +4,12 @@
 # Conformance
 
 Every PurRDF engine is gated by its official test suite. The suites are
-vendored and **frozen** in-repo (never hand-edited), the harnesses assert
-**exact counts** in both directions (a new failure breaks the build, and so
-does a silently-fixed expected-failure — XPASS discipline), and every
-expected-failure ledger entry carries a precise reason, so the ledgers double
-as roadmaps.
+vendored and **byte-frozen** in-repo — never hand-edited, and SHA-256-verified
+on every `make check` by `scripts/check-corpus-frozen.py` so a silent content
+edit fails the build. The harnesses assert **exact counts** in both directions
+(a new failure breaks the build, and so does a silently-fixed expected-failure —
+XPASS discipline), and every expected-failure ledger entry carries a precise
+reason, so the ledgers double as roadmaps.
 
 ## Single conformance matrix
 
