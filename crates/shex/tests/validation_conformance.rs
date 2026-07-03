@@ -21,6 +21,7 @@
 //! * **XFAIL**: genuine engine gaps, listed exactly (name + reason). A
 //!   passing xfail fails the harness (a stale ledger is a test error).
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::fs;
@@ -273,9 +274,26 @@ fn read_schema(url: &str) -> Result<Schema, String> {
 /// Load a schema and fold in its transitive imports. The import resolver reads
 /// each imported IRI from the vendored corpus, parsing it with its own IRI as
 /// base (per-document base resolution).
+///
+/// The `resolve_imports` resolver returns `Option<Schema>`, so a failed import
+/// read/parse would otherwise be flattened into a generic "no such import"
+/// error. Capture the first concrete error instead of discarding it via
+/// `.ok()`, so a future import parse regression surfaces its real cause rather
+/// than a vague unresolved-import message.
 fn load_schema(url: &str) -> Result<Schema, String> {
     let root = read_schema(url)?;
-    resolve_imports(root, &|iri| read_schema(iri).ok()).map_err(|e| e.to_string())
+    let import_err: RefCell<Option<String>> = RefCell::new(None);
+    let resolved = resolve_imports(root, &|iri| match read_schema(iri) {
+        Ok(schema) => Some(schema),
+        Err(e) => {
+            import_err.borrow_mut().get_or_insert(e);
+            None
+        }
+    });
+    if let Some(e) = import_err.into_inner() {
+        return Err(e);
+    }
+    resolved.map_err(|e| e.to_string())
 }
 
 /// Read a `sht:semActs` document (a bare sequence of semantic actions) as a
