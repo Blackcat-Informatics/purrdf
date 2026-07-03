@@ -21,7 +21,7 @@ import random
 import re
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, overload
+from typing import IO, TYPE_CHECKING, Any, Literal as TypingLiteral, overload
 from urllib.parse import urljoin, urlparse
 
 import purrdf
@@ -93,10 +93,9 @@ def _de_skolemize_uri(uri: URIRef) -> BNode:
         _EXTERNAL_SKOLEMS[key] = bnode
     return bnode
 
+
 #: A Turtle/TriG/N3/SPARQL prefix declaration: ``@prefix foo: <iri>`` / ``PREFIX foo: <iri>``.
-_PREFIX_DECL_RE = re.compile(
-    r"@?prefix\s+([^\s:]*)\s*:\s*<([^>\s]*)>", re.IGNORECASE
-)
+_PREFIX_DECL_RE = re.compile(r"@?prefix\s+([^\s:]*)\s*:\s*<([^>\s]*)>", re.IGNORECASE)
 
 
 def _scan_prefixes(text: str) -> list[tuple[str, str]]:
@@ -109,6 +108,7 @@ def _scan_prefixes(text: str) -> list[tuple[str, str]]:
     ledger for the residual prefix-wiring gap).
     """
     return [(m.group(1), m.group(2)) for m in _PREFIX_DECL_RE.finditer(text)]
+
 
 #: A graph triple of compat terms.
 _Triple = tuple[Identifier, Identifier, Identifier]
@@ -312,14 +312,16 @@ class Graph:
         *,
         namespace_manager: NamespaceManager | None = None,
         base: str | None = None,
-        bind_namespaces: str | None = None,
+        bind_namespaces: TypingLiteral["none", "core", "rdflib"] = "rdflib",
     ) -> None:
         """Create an empty graph (or import an existing native store/dataset).
 
-        ``bind_namespaces`` is accepted for RDFLib 7.x API parity but is currently a
-        no-op; namespace prefixes are managed through the graph's namespace manager.
+        ``bind_namespaces`` mirrors RDFLib 7.x: ``"none"`` leaves the namespace
+        manager empty, ``"core"`` pre-binds ``owl``/``rdf``/``rdfs``/``xsd``/``xml``,
+        and ``"rdflib"`` (the default) binds the full shipped vocabulary set.
+        When an explicit ``namespace_manager`` is supplied, ``bind_namespaces`` is
+        ignored, matching RDFLib's behavior.
         """
-        _ = bind_namespaces
         if isinstance(store, purrdf.MutableDataset):
             self._store = store
         else:
@@ -329,7 +331,9 @@ class Graph:
                 if nquads.strip():
                     self._store.load(nquads, format=_NQ)
         self._nsm = (
-            namespace_manager if namespace_manager is not None else (NamespaceManager())
+            namespace_manager
+            if namespace_manager is not None
+            else NamespaceManager(bind_namespaces=bind_namespaces)
         )
         # RDFLib assigns a fresh BNode name when no identifier is given, and wraps
         # a bare string as a URIRef — its __hash__/__eq__ contract keys on this.
@@ -743,9 +747,7 @@ class Graph:
 
     # ── skolemization ───────────────────────────────────────────────────────────────
 
-    def _process_skolem_tuples(
-        self, target: Graph, func: Any
-    ) -> None:
+    def _process_skolem_tuples(self, target: Graph, func: Any) -> None:
         """Copy every triple through ``func`` into ``target`` (RDFLib helper)."""
         for t in self.triples((None, None, None)):
             target.add(func(t))
@@ -859,9 +861,7 @@ class Graph:
         """Return the ``prefix:local`` form of ``uri`` (delegates to the nsm)."""
         return self._nsm.qname(uri)
 
-    def compute_qname(
-        self, uri: str, generate: bool = True
-    ) -> tuple[str, URIRef, str]:
+    def compute_qname(self, uri: str, generate: bool = True) -> tuple[str, URIRef, str]:
         """Return the ``(prefix, namespace, local)`` split of ``uri``."""
         return self._nsm.compute_qname(uri, generate)
 
@@ -1082,7 +1082,9 @@ class Graph:
             nt = res.serialize(_NT)
             if nt:
                 constructed._store.load(nt, format=_NT)
-            form = "DESCRIBE" if _query_form(query_object) == "DESCRIBE" else "CONSTRUCT"
+            form = (
+                "DESCRIBE" if _query_form(query_object) == "DESCRIBE" else "CONSTRUCT"
+            )
             return Result(form, graph=constructed)
         variables = list(res.variables)
         var_names = tuple(v.value for v in variables)
@@ -1224,9 +1226,7 @@ class Graph:
     ) -> None:
         """Add a quad and remember exact literal provenance at the RDFLib boundary."""
         native_graph = (
-            purrdf.DefaultGraph()
-            if graph_name is None
-            else _native_subject(graph_name)
+            purrdf.DefaultGraph() if graph_name is None else _native_subject(graph_name)
         )
         self._store.add(
             purrdf.Quad(
@@ -1407,9 +1407,7 @@ class Dataset(Graph):
                 names.add(name)
         return names
 
-    def contexts(
-        self, triple: _Pattern | None = None
-    ) -> Iterator[_DatasetGraph]:
+    def contexts(self, triple: _Pattern | None = None) -> Iterator[_DatasetGraph]:
         """Yield each graph (default + named) as a context :class:`Graph`.
 
         With ``triple`` given, only graphs containing a matching triple are

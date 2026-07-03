@@ -70,23 +70,19 @@ def test_skolemize_deskolemize_roundtrip(
         g.add((b, mod.URIRef(f"{EX}p"), mod.Literal("v")))
         sk = g.skolemize()
         subjects = [str(s) for s, _p, _o in sk]
-        assert subjects == [
-            "https://rdflib.github.io/.well-known/genid/rdflib/abc"
-        ]
+        assert subjects == ["https://rdflib.github.io/.well-known/genid/rdflib/abc"]
         de = sk.de_skolemize()
         assert [str(s) for s, _p, _o in de] == ["abc"]
 
 
-def test_skolemize_specific_bnode_only(
-    compat: ModuleType, oracle: ModuleType
-) -> None:
+def test_skolemize_specific_bnode_only(compat: ModuleType, oracle: ModuleType) -> None:
     """Passing ``bnode`` skolemizes only that node, leaving others blank."""
     for mod in (compat, oracle):
         g = mod.Graph()
         b1, b2 = mod.BNode("one"), mod.BNode("two")
         g.add((b1, mod.URIRef(f"{EX}p"), b2))
         sk = g.skolemize(bnode=b1)
-        (s, _p, o), = list(sk)
+        ((s, _p, o),) = list(sk)
         assert str(s).endswith("/rdflib/one")
         assert str(o) == "two"  # untouched blank node
 
@@ -151,9 +147,7 @@ def test_qname_and_compute_qname(compat: ModuleType, oracle: ModuleType) -> None
     assert (cp, str(cn), cl) == (op, str(on), ol)
 
 
-def test_graph_hash_and_eq_contract(
-    compat: ModuleType, oracle: ModuleType
-) -> None:
+def test_graph_hash_and_eq_contract(compat: ModuleType, oracle: ModuleType) -> None:
     """``__hash__``/``__eq__`` key on the identifier — matching rdflib's contract."""
     for mod in (compat, oracle):
         ident = mod.URIRef(f"{EX}g")
@@ -247,11 +241,55 @@ def test_parse_string_datatype_collapse_matches_oracle(
     store (bypassing the literal-variant map), so the plain/``xsd:string`` collapse
     cannot be re-expanded. Ledgered as a strict xfail.
     """
-    nt = (
-        f'<{EX}s> <{EX}p> "foo" .\n'
-        f'<{EX}s> <{EX}p> "foo"^^<{XSD}string> .\n'
-    )
+    nt = f'<{EX}s> <{EX}p> "foo" .\n<{EX}s> <{EX}p> "foo"^^<{XSD}string> .\n'
     cg, og = compat.Graph(), oracle.Graph()
     cg.parse(data=nt, format="nt")
     og.parse(data=nt, format="nt")
     assert len(cg) == len(og)
+
+
+# ── bind_namespaces parity ────────────────────────────────────────────────────────
+
+
+def _prefixes(mod: ModuleType, graph: object) -> set[tuple[str, str]]:
+    """Return the bound (prefix, namespace) pairs of ``graph`` as strings."""
+    return {(prefix, str(ns)) for prefix, ns in graph.namespace_manager.namespaces()}
+
+
+def test_bind_namespaces_none(compat: ModuleType, oracle: ModuleType) -> None:
+    """``Graph(bind_namespaces=\"none\")`` starts with no bound prefixes."""
+    assert _prefixes(compat, compat.Graph(bind_namespaces="none")) == set()
+    assert _prefixes(oracle, oracle.Graph(bind_namespaces="none")) == set()
+
+
+def test_bind_namespaces_core(compat: ModuleType, oracle: ModuleType) -> None:
+    """``Graph(bind_namespaces=\"core\")`` pre-binds the core vocabulary prefixes."""
+    expected = {
+        ("owl", "http://www.w3.org/2002/07/owl#"),
+        ("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
+        ("rdfs", "http://www.w3.org/2000/01/rdf-schema#"),
+        ("xsd", "http://www.w3.org/2001/XMLSchema#"),
+        ("xml", "http://www.w3.org/XML/1998/namespace"),
+    }
+    assert _prefixes(compat, compat.Graph(bind_namespaces="core")) == expected
+    assert _prefixes(oracle, oracle.Graph(bind_namespaces="core")) == expected
+
+
+def test_bind_namespaces_ignored_with_explicit_namespace_manager(
+    compat: ModuleType, oracle: ModuleType
+) -> None:
+    """An explicit namespace_manager overrides ``bind_namespaces``, like rdflib."""
+    for mod in (compat, oracle):
+        nm = mod.Graph(bind_namespaces="none").namespace_manager
+        g = mod.Graph(namespace_manager=nm, bind_namespaces="core")
+        assert _prefixes(mod, g) == set()
+
+
+def test_bind_namespaces_default_is_rdflib(
+    compat: ModuleType, oracle: ModuleType
+) -> None:
+    """The default ``bind_namespaces`` binds the full rdflib vocabulary set."""
+    assert _prefixes(compat, compat.Graph()) == _prefixes(oracle, oracle.Graph())
+    assert ("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#") in _prefixes(
+        compat, compat.Graph()
+    )
