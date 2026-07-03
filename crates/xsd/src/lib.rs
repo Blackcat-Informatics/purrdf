@@ -69,8 +69,9 @@
 //! * binary: `hexBinary`/`base64Binary` (hand-rolled codecs — still zero-dep).
 //!
 //! The derived-integer facets and the binary types are **not** modelled by
-//! `oxsdatatypes`; the gregorian family matches it. Bignum (arbitrary-precision
-//! integer/decimal) is a deferred enhancement (i128 + scale ≤ 18 hard-fail on range).
+//! `oxsdatatypes`; the gregorian family matches it. Integer and decimal are
+//! `i128`-bounded (decimal scale ≤ 18); lexicals beyond that domain hard-fail on
+//! range rather than promoting to arbitrary precision.
 //!
 //! # Hard-fail
 //!

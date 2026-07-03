@@ -201,7 +201,8 @@ pub enum XsdError {
     /// The lexical form is well-formed but exceeds this crate's representable range
     /// (e.g. an integer beyond `i128`, a derived integer out of its subtype bounds,
     /// or a decimal beyond `i128` mantissa). This is a deliberate hard-fail rather
-    /// than saturation; bignum support is a deferred enhancement.
+    /// than saturation: values outside the `i128` / scale-≤18 domain are rejected,
+    /// never silently truncated.
     OutOfRange {
         /// The datatype the lexical was being parsed as.
         datatype: XsdDatatype,
