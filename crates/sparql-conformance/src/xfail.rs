@@ -96,12 +96,6 @@ pub const XFAIL: &[Xfail] = &[
         iri_suffix: "service3",
         reason: XfailReason::UnsupportedConstruct,
     },
-    // A trailing top-level `VALUES` clause after the `WHERE` block is not yet
-    // accepted by the parser (only inline `VALUES` inside a group is).
-    Xfail {
-        iri_suffix: "service4a",
-        reason: XfailReason::UnsupportedConstruct,
-    },
     // Variable-endpoint `SERVICE ?var` needs the lateral binding seam to bind
     // the endpoint from the surrounding solution before federating.
     Xfail {
@@ -114,45 +108,6 @@ pub const XFAIL: &[Xfail] = &[
     // curated subset simply never exercised it. Grouped by root cause. Suffixes
     // are group-qualified (`<group>/manifest#<name>`) so they cannot cross-match.
 
-    // --- Trailing / post-WHERE top-level VALUES not yet parsed (see the
-    //     `service4a` case). The `values*` cases are top-level VALUES after the
-    //     WHERE block; `inline2` is a VALUES placement the parser rejects. ------
-    Xfail {
-        iri_suffix: "bindings/manifest#values1",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "bindings/manifest#values2",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "bindings/manifest#values3",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "bindings/manifest#values4",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "bindings/manifest#values5",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "bindings/manifest#values6",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "bindings/manifest#values7",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "bindings/manifest#values8",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "bindings/manifest#inline2",
-        reason: XfailReason::ParseUnsupported,
-    },
     // Expected result is a Turtle-encoded `rs:ResultSet` (not a CONSTRUCT graph);
     // the harness models `.ttl` results as graphs, so the SELECT solutions cannot
     // be compared against the result-set encoding yet.

@@ -32,7 +32,7 @@ typed reason — nothing is silently skipped.
 | Group | Cases | Green | Ledgered (reason) |
 |-------|------:|------:|-------------------|
 | bind | 10 | 10 | — |
-| bindings | 11 | 1 | 9 parse-unsupported (VALUES), 1 result-format |
+| bindings | 11 | 10 | 1 result-format (Turtle `rs:ResultSet`) |
 | cast | 6 | 0 | 6 value-mismatch (XSD cast lexical/datatype) |
 | construct | 7 | 2 | 1 parse-unsupported, 4 unsupported-construct (CONSTRUCT WHERE) |
 | exists | 6 | 5 | 1 unsupported-construct (EXISTS over GRAPH var) |
@@ -43,8 +43,9 @@ typed reason — nothing is silently skipped.
 | property-path | 33 | 24 | 9 property-path (inverse-in-NPS, `*`/`?` over sets) |
 
 The ledgered gaps are genuine (the curated subset simply never exercised these
-surfaces). `parse-unsupported` VALUES cases are cleared by the trailing-`VALUES`
-parser fix; `value-mismatch` marks real evaluation-correctness gaps to close.
+surfaces). The trailing-`VALUES` parser fix (§18.2.4.3) cleared the 9 `bindings`
+VALUES cases and the `service` group's `service4a`; `value-mismatch` marks real
+evaluation-correctness gaps still to close.
 
 ## Full W3C UPDATE-eval groups (commit `426c7df`)
 

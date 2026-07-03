@@ -375,6 +375,20 @@ impl Parser<'_> {
 
         let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
 
+        // Trailing `ValuesClause` (§18.2.4.3): a `VALUES DataBlock` after the
+        // solution modifiers — valid on both a top-level query and a `SubSelect`.
+        // It is joined with the WHERE group graph pattern *before* grouping and
+        // projection, so the inline data is visible to aggregation and `SELECT *`.
+        let where_pat = if self.peek_kw("VALUES") {
+            let values = self.parse_inline_data()?;
+            GraphPattern::Join {
+                left: Box::new(where_pat),
+                right: Box::new(values),
+            }
+        } else {
+            where_pat
+        };
+
         // Build the algebra (§18.2.4 ordering).
         let mut p = where_pat;
         // Expression-valued GROUP BY conditions bind their synthetic/explicit
@@ -2929,6 +2943,24 @@ mod tests {
         let q =
             format!("{GM}SELECT ?a WHERE {{ ?a a purrdf:T }} SELECT ?b WHERE {{ ?b a purrdf:U }}");
         assert!(SparqlParser::new().parse_query(&q).is_err());
+    }
+
+    #[test]
+    fn trailing_values_clause_is_accepted() {
+        // §18.2.4.3: a `VALUES DataBlock` after the WHERE / solution modifiers,
+        // both at the top level and on a SubSelect.
+        let q = format!("{GM}SELECT ?a WHERE {{ ?a a purrdf:T }} VALUES ?a {{ purrdf:x purrdf:y }}");
+        assert!(
+            matches!(parse(&q), Query::Select { .. }),
+            "trailing top-level VALUES must parse"
+        );
+        let q2 = format!(
+            "{GM}SELECT ?s ?o WHERE {{ {{ SELECT * WHERE {{ ?s ?p ?o }} VALUES (?o) {{ (purrdf:b) }} }} }}"
+        );
+        assert!(
+            matches!(parse(&q2), Query::Select { .. }),
+            "trailing VALUES on a sub-select must parse"
+        );
     }
     #[test]
     fn custom_function_arg_aggregate_reaches_group() {
