@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The permissive-ingestion bridge (purrdf P6, #840): wire the immutable IR to the
+//! The permissive-ingestion bridge (purrdf P6): wire the immutable IR to the
 //! dependency-free `purrdf-events` protocol.
 //!
 //! Two pieces live here:
@@ -21,7 +21,7 @@
 //!   already-frozen `&RdfDataset` *into* any sink: it declares a `term` event for
 //!   every term in [`TermId`] order (so it declares-before-reference), then the quad
 //!   / reifier / annotation events. This is the in-repo source that lets P6 be tested
-//!   end-to-end without the cross-repo GTS source (deferred, purrdf-gts#249).
+//!   end-to-end without the cross-repo GTS source (deferred).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

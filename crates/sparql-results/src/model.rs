@@ -11,7 +11,7 @@
 //!
 //! Honesty note: population of this structure is **incremental**. The fields are
 //! typed and threaded through the serializer surface now, but the evaluator and
-//! the S11 (#917) derivation graph fill them in progressively — most results
+//! the S11 derivation graph fill them in progressively — most results
 //! today carry an empty value.
 
 /// Result-level provenance carried alongside a SPARQL result. Default is empty →
@@ -38,7 +38,7 @@ impl ResultProvenance {
 }
 
 /// Per-solution provenance hook. Typed-but-mostly-empty today; populated as the
-/// evaluator / S11 (#917) derivation graph begins producing it.
+/// evaluator / S11 derivation graph begins producing it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SolutionProvenance {
     /// Source references (e.g. named-graph / quad IRIs) that produced this solution.

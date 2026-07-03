@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The **consuming** GTS `Graph` importer (#819 C2.b).
+//! The **consuming** GTS `Graph` importer (C2.b).
 //!
 //! Where [`super::import_sink`] is the authoritative, scope-preserving *streaming*
 //! path, this is the convenience path: it takes an already-folded

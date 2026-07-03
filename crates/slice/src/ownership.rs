@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Native ownership + dependency analyzer (RFC #820 §10 / S4).
+//! Native ownership + dependency analyzer (§10 / S4).
 //!
 //! This module derives an **evidence-bearing dependency graph** from validated
 //! term ownership. It is the manifest-driven replacement for the path-derived
@@ -594,7 +594,7 @@ fn parse_rdf_artifact(artifact: &ArtifactRecord) -> Result<Dataset, SliceError> 
     // A malformed ownership-bearing artifact must FAIL LOUDLY, never be silently
     // dropped — a swallowed parse error would hide a term from the
     // one-validated-owner gate and miscompute the dependency graph
-    // (no-optionality / hard-fail doctrine, #820).
+    // (no-optionality / hard-fail doctrine).
     Dataset::parse_turtle(artifact.content.as_slice(), &artifact.logical_path)
 }
 
@@ -642,7 +642,7 @@ fn collect_declared_terms(store: &Dataset, vocab_ns: &str) -> BTreeSet<NamedNode
 /// scoped to the manifest's own slice subject ONLY. A `sliceDependsOn` triple
 /// whose subject is some *other* resource in the manifest (e.g. a blank-node
 /// description or an unrelated IRI) is never picked up — only edges authored on
-/// the slice itself reconcile against computed dependencies (#820 G8 MED).
+/// the slice itself reconcile against computed dependencies (G8 MED).
 fn collect_slice_depends_on(
     record: &SliceRecord,
     depends_on_iri: &str,

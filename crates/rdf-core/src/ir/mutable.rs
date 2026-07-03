@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The copy-on-write, suppression-delta **mutable dataset** (purrdf P5, #839).
+//! The copy-on-write, suppression-delta **mutable dataset** (purrdf P5).
 //!
 //! A [`MutableDataset`] branches cheaply off a shared, frozen
 //! [`Arc<RdfDataset>`](RdfDataset) base and records mutations as an *append delta*
@@ -149,7 +149,7 @@ impl DeltaBuilder {
     }
 }
 
-/// A copy-on-write mutable RDF dataset (purrdf P5, #839). Branches cheaply off a
+/// A copy-on-write mutable RDF dataset (purrdf P5). Branches cheaply off a
 /// shared frozen base; records mutations as an append delta + a suppression set; and
 /// compacts back to a frozen [`RdfDataset`] via [`freeze`](Self::freeze).
 ///

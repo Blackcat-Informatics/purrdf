@@ -3,8 +3,8 @@
 
 //! Native Store / SPARQL / parse / canonicalize surface for the `purrdf` Python
 //! extension — the in-repo replacement for the external `pyoxigraph` package
-//! (#667). Backed entirely by the oxigraph-free `purrdf-core` IR + the native
-//! SPARQL engine (EPIC #906): no `oxigraph` types cross this surface.
+//!. Backed entirely by the oxigraph-free `purrdf-core` IR + the native
+//! SPARQL engine: no `oxigraph` types cross this surface.
 //!
 //! # Why this exists
 //!
@@ -21,10 +21,10 @@
 //! This module lives in the dedicated Python binding crate. The RDF kernel stays
 //! PyO3-free.
 //!
-//! # Single-responsibility layout (#835)
+//! # Single-responsibility layout
 //!
 //! This module is the thin facade over five focused submodules, split along the
-//! P2 backend-trait seams so the trait extraction (#836) is a clean lift:
+//! P2 backend-trait seams so the trait extraction is a clean lift:
 //!
 //! * [`term`] — the term object model (`NamedNode` … `Quad`, `Variable`) and the
 //!   Python ⇄ oxigraph term converters/extractors (`TermFactory` seam).

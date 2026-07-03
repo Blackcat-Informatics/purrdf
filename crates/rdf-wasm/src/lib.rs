@@ -3,7 +3,7 @@
 
 //! # purrdf — a wasm32, in-memory RDF 1.2 engine with an idiomatic RDF/JS API
 //!
-//! Parcel **P10** of the purrdf program (EPIC #832, `docs/design/PurRDF-PLAN.md`).
+//! Parcel **P10** of the purrdf program (`docs/design/PurRDF-PLAN.md`).
 //! This crate compiles the oxigraph-free, PyO3-free [`purrdf`](purrdf) kernel to
 //! `wasm32-unknown-unknown` and exposes it to JavaScript/TypeScript through the
 //! [RDF/JS](https://rdf.js.org/) community spec — `DataFactory`, `DatasetCore`, and
@@ -21,7 +21,7 @@
 //!   host can provide SERVICE federation; this default browser surface installs no
 //!   remote source, so `SERVICE` / `LOAD` hard-fails here rather than silently
 //!   returning a partial answer.
-//! - **Separate from the C-ABI (P8 #842).** WASM has its own ownership model,
+//! - **Separate from the C-ABI (P8).** WASM has its own ownership model,
 //!   packaging, and async I/O; it is not a C-ABI consumer and does not depend on the
 //!   `no_std` track.
 //!
@@ -44,7 +44,7 @@
 
 use wasm_bindgen::prelude::*;
 
-// The idiomatic RDF/JS surface, built up parcel by parcel (issue #846):
+// The idiomatic RDF/JS surface, built up parcel by parcel:
 //   * `term`    — RDF/JS Term types (NamedNode/BlankNode/Literal/Variable/DefaultGraph
 //                 + the RDF-1.2 Quad-as-term wedge)
 //   * `factory` — the RDF/JS DataFactory over the engine's owned term model

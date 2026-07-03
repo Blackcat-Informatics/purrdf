@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Gate 1 (#819 C1): `RdfDataset::quads()` performs **zero allocations** and never
+//! Gate 1 (C1): `RdfDataset::quads()` performs **zero allocations** and never
 //! clones or formats a term, and `quad_refs()` resolves terms without allocating.
 //!
 //! The proof is operational, not a slogan: this test installs a process-global
@@ -11,7 +11,7 @@
 //! `#[global_allocator]`, it observes every heap allocation any code in the loop body
 //! would make — there is nowhere for a hidden allocation to hide.
 
-// Rich colored line-diffs on assert_eq! failure (#871); shadows the std macro
+// Rich colored line-diffs on assert_eq! failure; shadows the std macro
 // for this file. Identical behaviour on pass; insta snapshots are unaffected.
 use pretty_assertions::assert_eq;
 use std::alloc::{GlobalAlloc, Layout, System};

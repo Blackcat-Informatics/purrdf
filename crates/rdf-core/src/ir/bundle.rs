@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The `GtsBundle` — the frozen hot graph paired with its out-of-band envelope
-//! (#819 C2).
+//! (C2).
 //!
 //! An [`RdfDataset`] is the immutable, value-interned RDF 1.2 graph: the *hot*
 //! triple/quad surface every consumer reasons over. Material that travels *with*
@@ -10,7 +10,7 @@
 //! suppression overlays, opaque nodes, signatures — lives in the [`RdfEnvelope`],
 //! keyed through the crate's existing [`RdfLookaside`] (`store.rs`).
 //!
-//! Both [`GtsBundle`] and [`RdfEnvelope`] are `#[non_exhaustive]`: #820 extends the
+//! Both [`GtsBundle`] and [`RdfEnvelope`] are `#[non_exhaustive]`: extends the
 //! envelope additively with provenance / units / artifacts / blob fields, and a
 //! `#[non_exhaustive]` struct lets those land without a breaking change. Consumers
 //! therefore construct these only through the provided constructors.
@@ -43,7 +43,7 @@ impl GtsBundle {
 /// Out-of-band material that travels with an [`RdfDataset`] but is not part of the
 /// hot graph (C0.6).
 ///
-/// `#[non_exhaustive]` because #820 grows this envelope additively (provenance,
+/// `#[non_exhaustive]` because grows this envelope additively (provenance,
 /// units, artifacts, decoded blobs); construct it via [`RdfEnvelope::new`] or
 /// [`RdfEnvelope::default`].
 #[non_exhaustive]

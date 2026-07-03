@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Evented, ID-addressed OUTPUT of a frozen [`RdfDataset`] (#819 C6).
+//! Evented, ID-addressed OUTPUT of a frozen [`RdfDataset`] (C6).
 //!
 //! [`RdfDatasetVisitor`] is the **frozen-dataset OUTPUT visitor**: it is the dual of
 //! the permissive ingestion protocol (the `purrdf-events` `RdfEventSink`, purrdf
-//! P6 #840) — where that ingestion sink folds an
+//! P6) — where that ingestion sink folds an
 //! *external* event stream *into* the
 //! IR, [`RdfDataset::emit`] walks an *already-frozen* dataset and streams it *out* as
 //! events, so downstream consumers — the chase materializer, SHACL result emission,

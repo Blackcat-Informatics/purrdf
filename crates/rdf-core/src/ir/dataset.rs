@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The frozen, immutable `RdfDataset` and its infallible, zero-allocation
-//! iteration surface (#819 C1).
+//! iteration surface (C1).
 //!
 //! A `RdfDataset` is produced only by
 //! [`RdfDatasetBuilder::freeze`](super::builder::RdfDatasetBuilder::freeze)
@@ -89,7 +89,7 @@ pub(crate) struct QuadRow {
     pub g: Option<TermId>,
 }
 
-// #837 P3a: with the `NonZeroU32` `TermId` niche, the `g: Option<TermId>` slot
+//  P3a: with the `NonZeroU32` `TermId` niche, the `g: Option<TermId>` slot
 // costs no discriminant word, so a quad row is 16 bytes (3×4 ids + 4 for the
 // niche-packed optional graph) rather than 20. This is the ~20%-off-the-quad-table
 // win; the assertion fails the build if the niche or field layout regresses.
@@ -156,7 +156,7 @@ pub struct QuadRef<'a> {
 /// flags are computed once at freeze.
 #[derive(Debug)]
 pub struct RdfDataset {
-    /// The byte arena owning every interned string ONCE (#879 P3b); `terms` hold
+    /// The byte arena owning every interned string ONCE (P3b); `terms` hold
     /// `StrRange`s into it, and `resolve` borrows `&str` from here.
     arena: Box<[u8]>,
     /// The interned term table; addressed by [`TermId::index`].
@@ -177,7 +177,7 @@ pub struct RdfDataset {
     locations: Box<[(QuadHandle, RdfLocation)]>,
     /// Capability flags, computed ONCE at freeze.
     caps: RdfStoreCapabilities,
-    /// Lazy value→id reverse index for [`RdfDataset::term_id_by_value`] (#838).
+    /// Lazy value→id reverse index for [`RdfDataset::term_id_by_value`].
     /// Keyed by a canonical **hash** of each term's dataset-independent value (with
     /// `Vec<TermId>` buckets to resolve the rare collision), NOT by full
     /// [`TermValue`] copies — so building it duplicates **no** term strings (~10×
@@ -185,7 +185,7 @@ pub struct RdfDataset {
     /// dropped at freeze); `OnceLock` keeps the frozen dataset `Send + Sync`.
     value_index: OnceLock<ValueIndex>,
     /// Lazy permutation quad indexes for indexed
-    /// [`quads_for_pattern`](RdfDataset::quads_for_pattern_indexed) (#891 P4b). SPOG
+    /// [`quads_for_pattern`](RdfDataset::quads_for_pattern_indexed) (P4b). SPOG
     /// is free (the `quads` table is already freeze-sorted by `(s, p, o, g)`); the
     /// other five orderings are `u32` ordinal-indirection arrays (4 B/quad) built
     /// lazily on the first pattern query that selects them. `OnceLock` keeps the
@@ -234,7 +234,7 @@ pub struct RdfDataset {
 }
 
 /// The lazy non-identity permutation indexes over the freeze-sorted `quads` table
-/// (#891 P4b). Each is a `u32`-per-quad ordinal-indirection array: `arr[i]` is the
+/// (P4b). Each is a `u32`-per-quad ordinal-indirection array: `arr[i]` is the
 /// ordinal into the [`RdfDataset`] quads table of the `i`-th quad in that permutation's
 /// order. SPOG needs no array (the table is already SPOG-sorted); these five cover
 /// the remaining bound-set shapes. All five warm ≈ 20 B/quad on top of the table.
@@ -745,7 +745,7 @@ impl RdfDataset {
     }
 
     /// Borrow (building on first access) the ordinal-indirection array for a
-    /// non-identity permutation (#891 P4b): `arr[i]` is the ordinal into `self.quads`
+    /// non-identity permutation (P4b): `arr[i]` is the ordinal into `self.quads`
     /// of the `i`-th quad in `perm`'s order. Sorted by [`perm_key`]; `OnceLock` makes
     /// the first-access build race-safe and keeps the dataset `Send + Sync`. Never
     /// called for [`QuadPermutation::Spog`] (the table is already that order).
@@ -1074,7 +1074,7 @@ impl RdfDataset {
     }
 
     /// The id of an interned term given its **dataset-independent** value, or
-    /// `None` if the dataset contains no such term (purrdf P4, #838).
+    /// `None` if the dataset contains no such term (purrdf P4).
     ///
     /// The reverse hash→id index is built **lazily on first call** (the builder's
     /// interner index is dropped at freeze) and cached; `OnceLock::get_or_init`
@@ -1204,7 +1204,7 @@ impl RdfDataset {
     /// The borrowed twin of [`reifiers`](Self::reifiers): consumers that read the
     /// RDF 1.2 statement layer off the concrete IR (the GTS writer, the oxigraph
     /// materializer) use this to read reifiers WITHOUT the owned `RdfReifier` model —
-    /// the id-based read surface for the purrdf consumer migration (#886).
+    /// the id-based read surface for the purrdf consumer migration.
     #[inline]
     pub fn reifier_refs(&self) -> impl Iterator<Item = (TermRef<'_>, TermRef<'_>)> + '_ {
         self.reifiers()
@@ -1617,8 +1617,8 @@ impl<'a> IntoIterator for &'a RdfDataset {
 // serialization across threads. These guards fail the build if that ever regresses.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
-    // RdfDataset carries lazy `OnceLock` indexes — the value index (#838) and the
-    // permutation quad indexes (#891 P4b). `OnceLock` (not `RefCell`) is what keeps
+    // RdfDataset carries lazy `OnceLock` indexes — the value index and the
+    // permutation quad indexes (P4b). `OnceLock` (not `RefCell`) is what keeps
     // this guard holding once those interior-mutable caches are added.
     assert_send_sync::<RdfDataset>();
     assert_send_sync::<TermId>();
@@ -1751,7 +1751,7 @@ mod tests {
     fn term_id_by_value_is_dataset_independent_not_id_based() {
         // The SAME value maps to DIFFERENT ids across datasets; a value lookup must
         // return each dataset's OWN id (proves it is value-keyed, never smuggling a
-        // foreign dataset-local id — the #838 correctness rule).
+        // foreign dataset-local id — the correctness rule).
         let val = TermValue::Iri("http://example.org/x".to_string());
         let mut a = RdfDatasetBuilder::new();
         let _pad = iri(&mut a, "pad"); // shift x's id in dataset `a`
@@ -1795,7 +1795,7 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
         let (o1, o2) = (iri(&mut b, "o1"), iri(&mut b, "o2"));
-        // Extend<QuadIds>: bulk-push ids interned in THIS builder (#841).
+        // Extend<QuadIds>: bulk-push ids interned in THIS builder.
         b.extend([
             QuadIds {
                 s,
@@ -1814,7 +1814,7 @@ mod tests {
         assert_eq!(ds.quad_count(), 2);
         // IntoIterator for &RdfDataset yields one QuadRef per quad.
         assert_eq!((&*ds).into_iter().count(), 2);
-        // The named iterator is ExactSize, DoubleEnded, and Fused (#841).
+        // The named iterator is ExactSize, DoubleEnded, and Fused.
         let mut it = ds.quad_refs();
         assert_eq!(it.len(), 2);
         assert!(it.next_back().is_some());
@@ -1965,7 +1965,7 @@ mod tests {
 
     #[test]
     fn reifier_and_annotation_refs_resolve_to_borrowed_terms() {
-        // The borrowed read surface (#886) must resolve every reifier/annotation id to
+        // The borrowed read surface must resolve every reifier/annotation id to
         // its `TermRef` with full fidelity — including a triple-term reifier statement
         // and a directional literal annotation object (MAXIMAL INFORMATION FLOW).
         let mut b = RdfDatasetBuilder::new();
@@ -2337,7 +2337,7 @@ mod tests {
             }
         }
 
-        /// The #891 P4b correctness gate: the indexed `quads_for_pattern` must return
+        /// The P4b correctness gate: the indexed `quads_for_pattern` must return
         /// EXACTLY the same quad set as a linear scan, for every `(s?, p?, o?) ×
         /// GraphMatch` shape. The index only narrows candidates; the residual filter is
         /// the same predicate the scan applies, so any divergence is a range-math bug.

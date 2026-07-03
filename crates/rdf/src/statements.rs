@@ -7,7 +7,7 @@
 //! and `rdf12-to-owl.rq`) as pure structural folds over the purrdf model, so
 //! the RDF 1.2 statement lead artifact (`generated/statements/purrdf.rdf12.ttl`)
 //! is produced with **no Apache Jena, no Docker, and no SPARQL engine**. The native
-//! [`parse_dataset`] codec (#909) only *parses* the input
+//! [`parse_dataset`] codec only *parses* the input
 //! Turtle into the IR; the projection itself is a fold over native RDF quads (the
 //! IR flattened back to a flat quad stream) into RDF 1.2 triple terms.
 //!
@@ -455,7 +455,7 @@ ex:ax a owl:Axiom ;
         // Two DIFFERENT rdf:reifies triple terms for one reifier subject: corrupt
         // input the codec must hard-fail on, never silently last-write-win.
         //
-        // FINDING (#909): the rejection now fires EARLIER — the native
+        // FINDING: the rejection now fires EARLIER — the native
         // `parse_dataset` folds the statement layer during parse and detects the
         // conflicting reifier rebind there, so `parse_quads` surfaces it as a
         // `statements-turtle-parse` error before `normalize_rdf12_to_owl` reaches its

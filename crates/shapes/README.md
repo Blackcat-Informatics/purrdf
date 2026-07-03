@@ -20,7 +20,7 @@
 ontology toolchain. It validates an RDF 1.2 data graph against a SHACL shapes
 graph with no inference (parity with pySHACL `inference="none"`), using the
 non-SPARQL constraint/target surface. SPARQL-based constraints and targets
-arrive in issue #577.
+are planned for a future release.
 
 In four-box terms, the data graph is usually the ABox, the shapes graph is a
 TBox/RBox validation surface, and RDF 1.2 reifier metadata is the CBox. The
@@ -38,7 +38,7 @@ The Python SHACL surface is exposed from `bindings/python` as part of the
 **PyO3-free** — it links as a plain `rlib` into the future Rust compiler without
 any Python dependency.
 
-This crate is gated by a SHACL conformance corpus and is part of **EPIC #575**.
+This crate is gated by a SHACL conformance corpus.
 
 ---
 
@@ -86,7 +86,7 @@ Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`,
 
 `purrdf-shapes` is developed by [Blackcat Informatics® Inc.](https://blackcatinformatics.ca)
 as part of the [PurRDF ontology and tooling](https://github.com/Blackcat-Informatics/purrdf)
-suite. See EPIC #575 for the full roadmap.
+suite.
 
 Related packages:
 

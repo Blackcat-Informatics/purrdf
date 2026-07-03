@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Native standpoint-projection emission — PurRDF's hand-authored
-//! `generated/queries/standpoint-*.rq` SPARQL CONSTRUCT projections (#861).
+//! `generated/queries/standpoint-*.rq` SPARQL CONSTRUCT projections.
 //!
 //! Unlike the per-profile SPARQL projections (the correspondence lowerings), these
 //! queries are NOT compiled from the `mapping-dsl/` tree: they are fixed,

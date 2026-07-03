@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The machine-readable RDF↔GTS loss ledger (#819 C0).
+//! The machine-readable RDF↔GTS loss ledger (C0).
 //!
 //! "RDF 1.2 fidelity" cannot be claimed for a conversion until either the GTS
 //! representation is extended to carry every RDF 1.2 feature, **or** every
@@ -479,8 +479,8 @@ mod tests {
     use std::path::PathBuf;
 
     /// The intentional loss codes this ledger is required to enumerate.
-    /// `direction-dropped` was retired by purrdf-gts#212 (`Term.direction`) and
-    /// `multi-reifier-collapsed` by purrdf-gts#213 (reifier-id-keyed
+    /// `direction-dropped` was retired by  (`Term.direction`) and
+    /// `multi-reifier-collapsed` by  (reifier-id-keyed
     /// `Graph.reifiers`); both now round-trip losslessly.
     const EXPECTED_CODES: [&str; 2] = ["blob-bytes-absent", "bnode-scope-flatten"];
 

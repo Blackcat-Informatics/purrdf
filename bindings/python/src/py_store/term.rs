@@ -6,7 +6,7 @@
 //! `Variable` pyclasses, plus the Python ⇄ native-IR term converters and
 //! extractors the store, query, and io seams share.
 //!
-//! # Native backing (EPIC #906)
+//! # Native backing
 //!
 //! Every pyclass is backed by the oxigraph-free `purrdf_core` owned model
 //! (`RdfTerm` / `RdfLiteral` / `RdfTriple` / `RdfQuad`) plus `String` for IRI
@@ -538,7 +538,7 @@ fn quad_key(quad: &RdfQuad) -> String {
 /// Build a Python `Quad` object from a native [`RdfQuad`].
 ///
 /// Cross-crate constructor for the engine crates that produce quads natively (the
-/// RL closure in `purrdf-logic`, issue #630): they assemble a native `RdfQuad` and
+/// RL closure in `purrdf-logic`): they assemble a native `RdfQuad` and
 /// hand Python a live `purrdf.Quad` directly, so the closure result never makes
 /// a round-trip through an intermediate N-Triples string the Python side has to
 /// re-parse. The returned object is the same `PyQuad` the parser/SPARQL surface
@@ -556,7 +556,7 @@ pub(super) fn quad_to_py(py: Python<'_>, quad: &RdfQuad) -> PyResult<Py<PyAny>> 
 
 /// Build the live `purrdf.Quad` list for every (flattened) quad of a native
 /// [`RdfDataset`](crate::RdfDataset) — the oxigraph-free cross-crate entry point for
-/// engine crates (`purrdf-logic`'s RL closure, #630 / EPIC #906) that produce a
+/// engine crates (e.g. `purrdf-logic`'s RL closure) that produce a
 /// frozen IR dataset and must hand Python live quad objects without naming any
 /// oxigraph type themselves.
 ///

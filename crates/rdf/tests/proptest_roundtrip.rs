@@ -1,24 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Property-based round-trip tests (#787, T6 of #781): `parse ∘ serialize = id`,
+//! Property-based round-trip tests (T6 of): `parse ∘ serialize = id`,
 //! modulo canonical form, for the native RDF serialization codecs the kernel exposes.
 //!
 //! # Equivalence is canonical, never byte-exact
 //!
 //! A faithful round-trip is allowed to rename blank nodes and to collapse the
 //! `"x"` ≡ `"x"^^xsd:string` distinction. Byte equality would therefore produce
-//! spurious failures (cf. the GTS codec-skew doctrine, PR #595: the drift gate is
+//! spurious failures (cf. the GTS codec-skew doctrine, : the drift gate is
 //! semantic). Every property here compares **RDFC-1.0 canonical quad sets** via the
-//! native [`purrdf_rdf::canonical_flat_nquads`] (#910), the same comparator the
+//! native [`purrdf_rdf::canonical_flat_nquads`], the same comparator the
 //! production native canonicalizer wraps.
 //!
-//! # Single generator, three codecs (EPIC #906 — native only)
+//! # Single generator, three codecs ( — native only)
 //!
 //! One generator authors a frozen [`RdfDataset`] fixture; the native text codecs
 //! ([`purrdf_rdf::serialize_dataset`] / [`purrdf_rdf::parse_dataset`]) serialize and
 //! re-parse it for N-Quads and TriG, and the GTS fold/unfold path covers the third
-//! codec. EPIC #906 removed oxigraph, so this gate now exercises the native codecs
+//! codec.  removed oxigraph, so this gate now exercises the native codecs
 //! against the native RDFC-1.0 comparator directly (it is no longer a cross-check
 //! against an independent oxigraph implementation — the native engine is the sole
 //! authority). The native text codec's own isomorphism round-trips additionally live
@@ -34,9 +34,9 @@
 //!
 //! * **JSON-LD** is no longer exercised here: the native text codecs cover Turtle /
 //!   TriG / N-Triples / N-Quads / RDF-XML (no JSON-LD), and the prior JSON-LD
-//!   property tested oxigraph's JSON-LD serializer — removed with oxigraph (EPIC #906).
+//!   property tested oxigraph's JSON-LD serializer — removed with oxigraph.
 //! * **CLIF / CGIF / XCL** round-trips: depend on the open Common Logic epic
-//!   (#718/#719) and do not exist yet.
+//!   and do not exist yet.
 
 use proptest::prelude::*;
 use purrdf_rdf::{
@@ -51,7 +51,7 @@ const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 const XSD_NON_NEGATIVE_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
 
-// ── Canonical comparator (native RDFC-1.0, #910) ─────────────────────────────────
+// ── Canonical comparator (native RDFC-1.0) ─────────────────────────────────
 
 /// The native flat RDFC-1.0 canonical N-Quads of a dataset — the comparator for every
 /// round-trip property (blank-node labels canonicalized, lines sorted/deduped).

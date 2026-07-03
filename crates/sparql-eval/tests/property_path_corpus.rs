@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Integration test: a real corpus-shaped property-path query evaluates end-to-end
-//! through the public API (S8 #914).
+//! through the public API (S8).
 //!
-//! This proves the #914 gap is closed on the public path — a `rdfs:subClassOf*`
+//! This proves the gap is closed on the public path — a `rdfs:subClassOf*`
 //! query (the most common corpus shape, e.g. `queries/competency/agents.rq`) is
 //! parsed by [`SparqlParser`] and evaluated by [`evaluate_query`], returning
 //! solutions rather than the old `EvalError::Unsupported("property path …")`.

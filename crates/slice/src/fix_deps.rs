@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Native `<vocab>sliceDependsOn` reconciliation patcher (#820 G8).
+//! Native `<vocab>sliceDependsOn` reconciliation patcher (G8).
 //!
 //! Replaces the former Python `slice_fix_deps` line-regex Turtle surgery with an
 //! **RDF-aware, surgical** manifest patcher driven by the native ownership

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Native [`RdfQuad`] ⇄ [`RdfDataset`] conversions (EPIC #906).
+//! Native [`RdfQuad`] ⇄ [`RdfDataset`] conversions.
 //!
 //! A consumer that already holds (or wants) a flat owned-[`RdfQuad`] stream can fold it
 //! into the frozen IR (or un-fold the IR back into the source-faithful quad stream).
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(flat.len(), 2);
     }
 
-    /// Native flat-canonical determinism + shape gate (EPIC #906): over an input that
+    /// Native flat-canonical determinism + shape gate: over an input that
     /// exercises every literal/term shape (simple, typed, lang, blank-node, and an RDF
     /// 1.2 reifier with an annotation), `canonical_flat_nquads` must
     /// (a) re-materialize the RDF 1.2 statement layer as plain `rdf:reifies` /

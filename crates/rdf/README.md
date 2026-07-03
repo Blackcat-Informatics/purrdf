@@ -10,7 +10,7 @@ GTS readers) and adds parsing/materialization, Turtle normalization, statement
 codecs, and GTS adapters. Python bindings live in `bindings/python` and are not
 compiled into this crate.
 
-The core/adapter split (#885, P2b) makes the oxigraph boundary a **crate
+The core/adapter split (P2b) makes the oxigraph boundary a **crate
 boundary**: `purrdf-core` never names oxigraph, so leaks are compile errors.
 Most consumers should depend on the umbrella `purrdf` crate, which re-exports
 this implementation crate and includes the first-class slice and shape APIs.

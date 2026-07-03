@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Native RDF-text ingestion for the SHACL engine (#909).
+//! Native RDF-text ingestion for the SHACL engine.
 //!
 //! The SHACL engine ingests two kinds of RDF text: the shapes graph (Turtle) and
 //! the data graph (N-Triples). It used to drive the oxigraph `io` RDF parser
 //! directly so it could (a) recover the document `@prefix` map — oxigraph stores
 //! drop prefixes, but SHACL-AF `sh:select` queries reference prefixed names — and
-//! (b) accumulate EVERY syntax error in one pass (#828 item 4) instead of
+//! (b) accumulate EVERY syntax error in one pass (item 4) instead of
 //! short-circuiting on the first.
 //!
 //! This module reproduces both capabilities on top of the native purrdf
@@ -79,7 +79,7 @@ fn scan_prefixes(text: &str) -> impl Iterator<Item = (String, String)> + '_ {
 ///
 /// On a clean parse the dataset is returned. On a syntax error the document is
 /// re-parsed one top-level statement at a time so EVERY independently-malformed
-/// statement is reported (the multi-error contract, #828 item 4); the returned
+/// statement is reported (the multi-error contract, item 4); the returned
 /// `Err` is the list of per-statement error strings.
 pub fn parse_turtle_to_dataset(ttl: &str) -> Result<Arc<RdfDataset>, Vec<String>> {
     if ttl.is_empty() {

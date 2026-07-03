@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The SHACL engine's data-access abstraction (#819 C4, EPIC #906).
+//! The SHACL engine's data-access abstraction (C4).
 //!
 //! [`ShaclDataGraph`] is the single seam through which the SHACL Core engine reads
 //! the data graph. The engine, constraint evaluator, and path evaluator are all
@@ -154,7 +154,7 @@ impl ShaclDataGraph for IrDataGraph {
             GraphFilter::DefaultGraph => GraphMatch::Default,
         };
 
-        // Indexed pattern lookup (#891 P4b): only matched quads are materialized into
+        // Indexed pattern lookup (P4b): only matched quads are materialized into
         // native terms — no whole-table scan per call.
         let mut out = Vec::new();
         for q in dataset.quads_for_pattern(s_id, p_id, o_id, graph_match) {

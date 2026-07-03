@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Pre-freeze structural validation for the immutable `RdfDataset` (#819 C1).
+//! Pre-freeze structural validation for the immutable `RdfDataset` (C1).
 //!
 //! [`validate`] is invoked by [`RdfDatasetBuilder::freeze`] BEFORE any dataset is
 //! materialized; on any failure it returns a precise [`RdfDiagnostic`] and freeze

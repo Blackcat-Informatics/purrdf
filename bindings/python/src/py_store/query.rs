@@ -6,7 +6,7 @@
 //! `QueryBoolean` (ASK) pyclasses, plus the `materialize_results` adapter the
 //! store seam uses to turn a native [`SparqlResult`] into these objects.
 //!
-//! Native backing (EPIC #906): solution cells are `purrdf_core::TermValue`,
+//! Native backing: solution cells are `purrdf_core::TermValue`,
 //! CONSTRUCT triples are `RdfTriple`. The engine is `NativeSparqlEngine`; the
 //! oxigraph `QueryResults` type is gone from this surface.
 

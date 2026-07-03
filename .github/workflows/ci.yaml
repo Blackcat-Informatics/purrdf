@@ -45,6 +45,9 @@ jobs:
       - name: Check generated artifacts
         run: bash scripts/check-generated.sh
 
+      - name: Check for stale issue references in comments/docs
+        run: python3 scripts/check-issue-refs.py
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 45

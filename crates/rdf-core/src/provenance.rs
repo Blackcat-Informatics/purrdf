@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Generic provenance sidecar for the immutable RDF 1.2 dataset (#820 S2).
+//! Generic provenance sidecar for the immutable RDF 1.2 dataset (S2).
 //!
 //! This module realizes the normative S0 provenance contract from
 //! `docs/design/820-slices-first-class.md`. The types here are **kernel-generic**:

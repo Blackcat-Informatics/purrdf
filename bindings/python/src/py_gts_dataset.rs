@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! `PyRdfDataset` — a Python handle to a frozen, immutable [`crate::RdfDataset`]
-//! (#819 C7 foundation).
+//! (C7 foundation).
 //!
 //! This pyclass wraps an `Arc<RdfDataset>` so a parsed RDF artifact can cross the
 //! FFI boundary ONCE (as bytes), be frozen into the validated IR, and then be
 //! consumed natively (count, GTS emission) WITHOUT re-serializing back to text.
-//! A later commit (#819 C7) migrates the text-exchange call sites onto this
+//! A later commit (C7) migrates the text-exchange call sites onto this
 //! handle so the producer/consumer seam stops round-tripping through N-Quads.
 //!
 //! Construction parses Turtle/N-Quads/TriG through the PyO3-free
@@ -60,7 +60,7 @@ impl PyRdfDataset {
     /// Emit a GTS byte stream for this dataset under `profile`. Uses the
     /// [`gts_write`] encoder (separate `terms`/`quads`/`reifies`/`annot` frames via
     /// `Writer::deterministic`); the folded graph is semantically identical to the
-    /// snapshot-frame producer (the SEMANTIC-FOLD gate, #819 STEP 1).
+    /// snapshot-frame producer (the SEMANTIC-FOLD gate, STEP 1).
     #[pyo3(signature = (profile="dist"))]
     fn to_gts(&self, py: Python<'_>, profile: &str) -> PyResult<Py<PyBytes>> {
         // A bare dataset carries no out-of-band envelope, so the lookaside is empty

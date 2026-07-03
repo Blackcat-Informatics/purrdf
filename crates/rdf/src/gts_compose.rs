@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The pyo3-free GTS snapshot compose core (#861 P6).
+//! The pyo3-free GTS snapshot compose core (P6).
 //!
 //! This is the byte-emitting heart of `src/purrdf_tools/gts_producer.py::_Builder`,
 //! lifted out of the Python binding surface so the non-python
@@ -28,7 +28,7 @@ use purrdf_gts::writer::{term_to_wire, Writer};
 /// The `rdf:reifies` predicate IRI (RDF 1.2 statement layer).
 pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-/// Payloads larger than this select `zstd-rsyncable` over `zstd` (#513).
+/// Payloads larger than this select `zstd-rsyncable` over `zstd`.
 pub const DEFAULT_RSYNCABLE_THRESHOLD: usize = 65536;
 /// zstd compression level for the committed `dist` bundle's frames (purrdf-gts 0.9.11
 /// per-frame level). The writer's `Fastest` default left the rsyncable bundle at
@@ -751,7 +751,7 @@ mod tests {
 
     #[test]
     fn conflicting_reifier_rebind_is_rejected() {
-        // FINDING (#909): two DIFFERENT `rdf:reifies` triple terms for one reifier
+        // FINDING: two DIFFERENT `rdf:reifies` triple terms for one reifier
         // subject is HARD-rejected (CONSTITUTION P7, never silently last-write-win).
         // The native `parse_dataset` folds the statement layer during parse and detects
         // the conflicting rebind there ("conflicting rdf:reifies binding"), before the

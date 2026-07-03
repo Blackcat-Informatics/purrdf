@@ -12,7 +12,7 @@
 //! * [`ParseError::Syntax`] — the token stream violates the SPARQL grammar.
 //! * [`ParseError::Unsupported`] — the query is well-formed SPARQL but uses a
 //!   construct outside this crate's in-scope subset (purrdf S5 scope). It is a
-//!   hard error, NOT a parse-it-anyway: the downstream evaluator (S6 #912) must
+//!   hard error, NOT a parse-it-anyway: the downstream evaluator (S6) must
 //!   never be handed a partially-understood algebra.
 //! * [`ParseError::Iri`] — an IRI/CURIE in term position failed RFC-3987
 //!   validation (delegated to `purrdf-iri`).

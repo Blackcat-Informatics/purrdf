@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! PyO3 Python bindings for `purrdf-slice` (#820 S8).
+//! PyO3 Python bindings for `purrdf-slice` (S8).
 //!
 //! # Engine core separation
 //!
@@ -13,7 +13,7 @@
 //! # What is exposed
 //!
 //! This binding makes the native slice machinery the authoritative slice
-//! catalog/analyzer for the Python tooling (#820 S8), retiring the redundant
+//! catalog/analyzer for the Python tooling (S8), retiring the redundant
 //! Python `slice_ownership_lint` / `module_specs` plumbing:
 //!
 //! * [`PySliceCatalog`] — manifest-based discovery (`SliceCatalog::discover`),
@@ -128,7 +128,7 @@ impl PyArtifactRecord {
 
     /// The raw artifact bytes (content cache). Exposed so the GTS producer can
     /// fold each ontology artifact into the self-describing S3 bundle as a
-    /// content-addressed blob without a second disk read (#820 S3).
+    /// content-addressed blob without a second disk read (S3).
     #[getter]
     fn content<'py>(&self, py: Python<'py>) -> Bound<'py, pyo3::types::PyBytes> {
         pyo3::types::PyBytes::new(py, &self.inner.content)
@@ -234,7 +234,7 @@ impl PySliceRecord {
     }
 
     /// The on-disk slice directory this record was discovered from. Authoritative
-    /// — no scan or substring match is needed to locate the slice's files (#820 G8).
+    /// — no scan or substring match is needed to locate the slice's files (G8).
     #[getter]
     fn slice_dir(&self) -> String {
         self.slice_dir.clone()
@@ -250,7 +250,7 @@ impl PySliceRecord {
 // ── SliceCatalog ───────────────────────────────────────────────────────────────
 
 /// The native slice catalog: manifest-based discovery of every slice under a
-/// root directory, the authoritative slice machinery (#820 S8).
+/// root directory, the authoritative slice machinery (S8).
 #[pyclass(name = "SliceCatalog", module = "purrdf_slice")]
 #[derive(Debug)]
 pub struct PySliceCatalog {
@@ -305,7 +305,7 @@ impl PySliceCatalog {
 
     /// Compute the RDF-aware `purrdf:sliceDependsOn` reconciliation patches for
     /// every manifest with undeclared (add) or stale (remove) semantic edges
-    /// (#820 G8). Each result carries the manifest path, original text, and the
+    /// (G8). Each result carries the manifest path, original text, and the
     /// surgically-patched, re-parse-validated text. Hard-fails (`ValueError`) on
     /// any manifest read/parse error or post-patch validation failure — no silent
     /// skips, no wrong-manifest matching, no malformed Turtle.
@@ -410,7 +410,7 @@ impl PyDependencyEdge {
 // ── OwnershipReport ────────────────────────────────────────────────────────────
 
 /// Format one ownership diagnostic as a single error string, equivalent to the
-/// retired path-derived `slice_ownership_lint` finding (#329) but derived from
+/// retired path-derived `slice_ownership_lint` finding but derived from
 /// the term's *physical origin*, not its directory name.
 fn ownership_error_string(diag: &OwnershipDiagnostic) -> Option<String> {
     match diag {
@@ -563,7 +563,7 @@ impl PyOwnershipAnalyzer {
     }
 
     /// Emit the computed `purrdf:graph/slice-analysis` named graph as a Turtle
-    /// body string (#820 S7, gap G5).
+    /// body string (S7, gap G5).
     ///
     /// This is the production consumer of `purrdf_slice::analysis::emit_analysis_graph`:
     /// it builds the `tier_of` / `term_count_of` closures from the analyzer's own

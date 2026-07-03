@@ -5,7 +5,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # `purrdf-capi` — libpurrdf
 
-The **purrdf semantic C-ABI** (purrdf parcel P8, issue #842): a stable,
+The **purrdf semantic C-ABI** (purrdf parcel P8): a stable,
 SemVer-disciplined `extern "C"` surface over the native `purrdf` RDF-1.2
 stack. It is the rich companion to the permissive `libgts` C-ABI — where
 `libgts` is transport/format only, **libpurrdf** exposes parse, serialize,

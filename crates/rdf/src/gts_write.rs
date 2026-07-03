@@ -7,7 +7,7 @@
 //! [`purrdf_gts::writer::Writer`] to canonicalise it. All interning, term remapping,
 //! and frame authoring is delegated to `purrdf-gts`.
 //!
-//! The writer consumes the IR directly (purrdf P2c part 1, #886): it reads the
+//! The writer consumes the IR directly (purrdf P2c part 1): it reads the
 //! frozen dataset's quad/reifier/annotation tables and resolves each row to the
 //! owned model at the boundary, then interns into the GTS term table. Out-of-band material
 //! (GTS metadata, suppressions) is passed in explicitly as an [`RdfLookaside`]
@@ -121,7 +121,7 @@ struct InternState {
     terms: Vec<Term>,
     index: HashMap<RdfTerm, usize>,
     /// Triple component ids → reifier term ids. RDF 1.2 permits several distinct
-    /// explicit reifiers for one (s,p,o) (purrdf-gts#213); they are all retained.
+    /// explicit reifiers for one (s,p,o); they are all retained.
     /// A nested triple term reuses the first-bound reifier for its single
     /// `Term.reifier` slot. Reifiers are IRI/blank-node terms already in `terms`.
     reifier_map: HashMap<Triple3, Vec<usize>>,
@@ -153,7 +153,7 @@ fn bind_explicit_reifier(
     let o = intern_term(state, &reifier.statement.object)?;
 
     // RDF 1.2 allows several distinct explicit reifiers for the same triple
-    // content (purrdf-gts#213); record each one, deduplicating only an identical
+    // content; record each one, deduplicating only an identical
     // (rid, (s,p,o)) pair. Every distinct reifier is emitted as its own
     // `graph.reifiers` row below, so no binding is collapsed.
     let bound = state.reifier_map.entry((s, p, o)).or_default();
@@ -251,7 +251,7 @@ fn intern_literal(
         None
     };
 
-    // RDF 1.2 literal base direction now round-trips through GTS (purrdf-gts#212):
+    // RDF 1.2 literal base direction now round-trips through GTS:
     // map the IR's RdfTextDirection onto the GTS Term.direction string. Lexical
     // form, datatype, language tag, and direction are all preserved.
     let lang = literal.language.clone();
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn direction_roundtrips_through_gts() {
-        // RDF 1.2 directional language-tagged literal (purrdf-gts#212): the base
+        // RDF 1.2 directional language-tagged literal: the base
         // direction must survive RDF IR -> GTS -> read. This proves the retired
         // `direction-dropped` loss is genuinely gone, not merely undocumented.
         let mut lit = RdfLiteral::language_tagged("\u{645}\u{631}\u{62d}\u{628}\u{627}", "ar");
@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn two_reifiers_same_triple_both_survive() {
         // RDF 1.2 permits several distinct explicit reifiers for one (s,p,o).
-        // purrdf-gts#213 lets the writer keep both, so `multi-reifier-collapsed`
+        //  lets the writer keep both, so `multi-reifier-collapsed`
         // is no longer a loss: both bindings must survive the round-trip.
         let statement = RdfTriple::new(
             RdfTerm::iri("https://example.org/s"),

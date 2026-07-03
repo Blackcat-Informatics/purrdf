@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Media-type → native RDF text format routing (#909 / EPIC #906 S3).
+//! Media-type → native RDF text format routing (S3).
 //!
 //! [`NativeRdfFormat`] is the single chokepoint the eventual `oxigraph::io::RdfFormat`
 //! removal (S14) retargets: every codec consumer names a format by media type at the

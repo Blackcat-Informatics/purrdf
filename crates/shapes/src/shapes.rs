@@ -2403,7 +2403,7 @@ mod tests {
         );
     }
 
-    // ── #700: sh:maxLength parses to Constraint::MaxLength ────────────────────
+    // ──: sh:maxLength parses to Constraint::MaxLength ────────────────────
 
     #[test]
     fn test_max_length_parses() {
@@ -2427,7 +2427,7 @@ mod tests {
         assert!(has_max, "expected MaxLength(5), got {:?}", ps.constraints);
     }
 
-    // ── #700: sh:languageIn parses to Constraint::LanguageIn ──────────────────
+    // ──: sh:languageIn parses to Constraint::LanguageIn ──────────────────
 
     #[test]
     fn test_language_in_parses() {
@@ -2459,7 +2459,7 @@ mod tests {
         );
     }
 
-    // ── #700: sh:not parses to Constraint::Not(nested shape) ──────────────────
+    // ──: sh:not parses to Constraint::Not(nested shape) ──────────────────
 
     #[test]
     fn test_not_parses() {
@@ -2488,7 +2488,7 @@ mod tests {
         );
     }
 
-    // ── #700: sh:closed true (+ sh:ignoredProperties) parses to Closed ────────
+    // ──: sh:closed true (+ sh:ignoredProperties) parses to Closed ────────
 
     #[test]
     fn test_closed_parses() {
@@ -2526,7 +2526,7 @@ mod tests {
     fn test_ignored_properties_non_iri_member_errors() {
         // A non-IRI sh:ignoredProperties member (a literal) is malformed: the
         // shapes graph must HARD-fail to load rather than silently dropping it
-        // (#700 Gap H).
+        // (Gap H).
         let ttl = format!(
             r#"{PREFIXES}
             ex:ClosedShape a sh:NodeShape ;
@@ -2544,7 +2544,7 @@ mod tests {
         );
     }
 
-    // ── #700: sh:closed false emits NO Closed constraint ──────────────────────
+    // ──: sh:closed false emits NO Closed constraint ──────────────────────
 
     #[test]
     fn test_closed_false_emits_nothing() {
