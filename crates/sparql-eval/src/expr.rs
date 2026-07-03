@@ -817,7 +817,10 @@ fn exists(
 /// `NamedNode` (blank nodes and triple terms cannot appear as triple-pattern
 /// constants in a `Bgp`, so those positions are left as variables — the later
 /// seed-join in the uncorrelated path handles them instead).
-fn substitute_pattern(pattern: &GraphPattern, bindings: &[(Variable, Expression)]) -> GraphPattern {
+pub(crate) fn substitute_pattern(
+    pattern: &GraphPattern,
+    bindings: &[(Variable, Expression)],
+) -> GraphPattern {
     match pattern {
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
             patterns: patterns
@@ -872,7 +875,22 @@ fn substitute_pattern(pattern: &GraphPattern, bindings: &[(Variable, Expression)
             inner,
             silent,
         } => GraphPattern::Service {
-            name: name.clone(),
+            // A variable endpoint (`SERVICE ?g`) bound to an IRI by the enclosing
+            // solution becomes a concrete named endpoint, so the substituted
+            // pattern federates against the resolved IRI (the LATERAL seam).
+            name: match name {
+                purrdf_sparql_algebra::NamedNodePattern::Variable(v) => bindings
+                    .iter()
+                    .find(|(bv, _)| bv == v)
+                    .and_then(|(_, e)| match e {
+                        Expression::NamedNode(n) => Some(
+                            purrdf_sparql_algebra::NamedNodePattern::NamedNode(n.clone()),
+                        ),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| name.clone()),
+                other => other.clone(),
+            },
             inner: Box::new(substitute_pattern(inner, bindings)),
             silent: *silent,
         },
@@ -1081,7 +1099,7 @@ fn substitute_expr(expr: &Expression, bindings: &[(Variable, Expression)]) -> Ex
 
 /// Build the binding list for substitution from the outer row's bound variables,
 /// materializing each `SolutionTerm` to a constant `Expression`.
-fn outer_bindings_for_substitution(
+pub(crate) fn outer_bindings_for_substitution(
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
     ctx: &EvalCtx<'_>,

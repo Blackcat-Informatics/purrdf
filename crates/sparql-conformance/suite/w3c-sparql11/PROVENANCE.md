@@ -116,21 +116,17 @@ resolves every endpoint through an in-memory source (`LocalRemoteQuerySource`),
 which dog-foods the native engine — no socket, no live HTTP, fully deterministic.
 The whole group therefore runs offline alongside the rest of the suite.
 
-Of the seven vendored cases, four pass outright (a simple `SERVICE` join, a
-`SERVICE` with an `OPTIONAL SERVICE`, a `SERVICE SILENT` against an invalid
-endpoint that swallows to the join identity, and `service7` whose upstream
-expected-result file uses an empty `<binding>` element to denote an unbound
-variable — an older producer convention that the reader now tolerates correctly).
-The remaining three are recorded as explicit expected-failures (never silently
-skipped) for these capability gaps:
+All seven vendored cases now pass. The last three capability gaps were closed:
 
-- **nested `SERVICE`** — a `SERVICE` clause inside another `SERVICE`'s pattern is
-  not yet evaluated against its inner endpoint (*unsupported-construct*).
-- **trailing top-level `VALUES`** — a `VALUES` clause after the `WHERE` block is
-  not yet accepted by the parser, only inline `VALUES` inside a group
-  (*unsupported-construct*).
-- **variable-endpoint `SERVICE ?var`** — needs the lateral binding seam to bind the
-  endpoint from the surrounding solution before federating (*pending-service*).
+- **nested `SERVICE`** (`service3`) — a `SERVICE` inside another `SERVICE`'s
+  pattern now resolves: the in-memory source threads itself into the forwarded
+  evaluation, so the inner endpoint is resolved against the same sources.
+- **trailing top-level `VALUES`** (`service4a`) — the parser now accepts a
+  `VALUES DataBlock` after the WHERE/solution-modifiers (§18.2.4.3), joined with
+  the group graph pattern.
+- **variable-endpoint `SERVICE ?var`** (`service5`) — evaluated via the LATERAL
+  seam: the endpoint variable is bound from the enclosing solution per row and
+  substituted into a concrete `SERVICE <iri>` before federating.
 
 Live federation over real HTTP endpoints is exercised separately by the maintainer
 network-lane test (`crates/sparql-eval/tests/service_live.rs`), which drives the

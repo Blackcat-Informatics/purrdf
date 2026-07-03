@@ -53,6 +53,78 @@ pub(crate) fn eval_join(
     Ok(hash_join(&l, &r))
 }
 
+/// Evaluate `LATERAL` (a correlated join): for each left solution μ, evaluate
+/// `right` with μ's bindings substituted in as ground constants, then merge each
+/// right solution ν with μ over the ordered-union schema.
+///
+/// Unlike `Join` (which evaluates `right` once, unconstrained), LATERAL evaluates
+/// `right` **once per left row** — required when `right`'s *evaluation* depends on
+/// μ, the sole case being a variable-endpoint `SERVICE ?g` whose endpoint IRI is
+/// bound by μ. Reuses the correlated-EXISTS substitution machinery, including the
+/// address-keyed-cache ABA guard (`in_substituted_exists`) around the inner eval.
+pub(crate) fn eval_lateral(
+    left: &GraphPattern,
+    right: &GraphPattern,
+    ctx: &mut EvalCtx<'_>,
+) -> Result<SolutionSeq, EvalError> {
+    let l = eval(left, ctx)?;
+    let left_schema = Rc::clone(&l.schema);
+    let left_len = left_schema.len();
+
+    // Evaluate `right` once per left row with μ substituted in; accumulate the
+    // per-row results and the union of their schemas (stable across rows for the
+    // SERVICE ?var use, but computed generally).
+    let mut right_schema = VarSchema::new();
+    let mut per_row: Vec<(Solution, SolutionSeq)> = Vec::with_capacity(l.rows.len());
+    for mu in &l.rows {
+        let bindings = crate::expr::outer_bindings_for_substitution(mu, &left_schema, ctx);
+        let substituted = crate::expr::substitute_pattern(right, &bindings);
+        // `substituted` is a per-row heap temporary whose node addresses do not
+        // outlive this call; flag the window so address-keyed memoization is
+        // bypassed, and restore afterwards (even on error) so nesting is correct.
+        let prev = ctx.in_substituted_exists;
+        ctx.in_substituted_exists = true;
+        let r = eval(&substituted, ctx);
+        ctx.in_substituted_exists = prev;
+        let r = r?;
+        for v in r.schema.vars() {
+            right_schema.push(v.clone());
+        }
+        per_row.push((mu.clone(), r));
+    }
+
+    let out = Rc::new(left_schema.union(&right_schema));
+    let out_len = out.len();
+    let mut rows: Vec<Solution> = Vec::new();
+    for (mu, r) in &per_row {
+        let right_to_out = right_to_out_map(&r.schema, &out);
+        for nu in &r.rows {
+            // Start from μ: left columns are out[0..left_len] in the same order.
+            let mut row = vec![None; out_len];
+            row[..left_len].copy_from_slice(mu);
+            // Overlay ν, requiring compatibility on any column μ already bound
+            // (disjoint for SERVICE, so this never rejects there).
+            let mut compatible_row = true;
+            for (j, cell) in nu.iter().enumerate() {
+                if let Some(t) = cell {
+                    let oi = right_to_out[j];
+                    match row[oi] {
+                        Some(existing) if existing != *t => {
+                            compatible_row = false;
+                            break;
+                        }
+                        _ => row[oi] = Some(*t),
+                    }
+                }
+            }
+            if compatible_row {
+                rows.push(row);
+            }
+        }
+    }
+    Ok(SolutionSeq { schema: out, rows })
+}
+
 /// Evaluate `left UNION right` as a multiset concatenation over the union schema.
 pub(crate) fn eval_union(
     left: &GraphPattern,

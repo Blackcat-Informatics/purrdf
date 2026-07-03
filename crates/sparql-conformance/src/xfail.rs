@@ -90,18 +90,6 @@ pub struct Xfail {
 /// The registry. Each entry is justified inline. Vendored W3C cases that the
 /// native engine cannot yet pass are recorded here rather than skipped.
 pub const XFAIL: &[Xfail] = &[
-    // A `SERVICE` clause nested inside another `SERVICE`'s pattern is not yet
-    // evaluated: the inner endpoint is never resolved against its source.
-    Xfail {
-        iri_suffix: "service3",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    // Variable-endpoint `SERVICE ?var` needs the lateral binding seam to bind
-    // the endpoint from the surrounding solution before federating.
-    Xfail {
-        iri_suffix: "service5",
-        reason: XfailReason::PendingService,
-    },
     // === Full W3C sparql11 query-eval groups (commit 426c7df) ===============
     //
     // Every case below is a real gap the full vendored suite exposes; the

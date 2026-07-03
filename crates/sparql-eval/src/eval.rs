@@ -462,12 +462,7 @@ pub fn eval(pattern: &GraphPattern, ctx: &mut EvalCtx<'_>) -> Result<SolutionSeq
             inner,
             silent,
         } => crate::remote::eval_service(name, inner, *silent, ctx),
-        // Implemented incrementally over the remaining S6 build tasks; until then
-        // (and permanently, for out-of-scope nodes) a hard error names the construct.
-        other @ GraphPattern::Lateral { .. } => Err(EvalError::Unsupported(format!(
-            "graph pattern `{}` is not yet implemented in sparql-eval",
-            pattern_kind(other)
-        ))),
+        GraphPattern::Lateral { left, right } => crate::binop::eval_lateral(left, right, ctx),
     }
 }
 
@@ -593,30 +588,6 @@ fn memoized_term_value(
     }
 }
 
-/// A short, stable name for a [`GraphPattern`] variant, for diagnostics.
-pub(crate) fn pattern_kind(pattern: &GraphPattern) -> &'static str {
-    match pattern {
-        GraphPattern::Bgp { .. } => "BGP",
-        GraphPattern::Path { .. } => "property path",
-        GraphPattern::Join { .. } => "Join",
-        GraphPattern::LeftJoin { .. } => "OPTIONAL (LeftJoin)",
-        GraphPattern::Lateral { .. } => "LATERAL",
-        GraphPattern::Filter { .. } => "FILTER",
-        GraphPattern::Union { .. } => "UNION",
-        GraphPattern::Graph { .. } => "GRAPH",
-        GraphPattern::Extend { .. } => "BIND (Extend)",
-        GraphPattern::Minus { .. } => "MINUS",
-        GraphPattern::Service { .. } => "SERVICE",
-        GraphPattern::Values { .. } => "VALUES",
-        GraphPattern::OrderBy { .. } => "ORDER BY",
-        GraphPattern::Project { .. } => "Project",
-        GraphPattern::Distinct { .. } => "DISTINCT",
-        GraphPattern::Reduced { .. } => "REDUCED",
-        GraphPattern::Slice { .. } => "LIMIT/OFFSET (Slice)",
-        GraphPattern::Group { .. } => "GROUP BY",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,18 +604,18 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_variant_hard_errors_with_its_name() {
+    fn lateral_of_units_is_the_unit_sequence() {
         let ds = RdfDatasetBuilder::new().freeze().expect("freeze empty");
         let mut ctx = EvalCtx::new(&ds);
-        // LATERAL remains permanently out of scope (SERVICE is now evaluated via
-        // the remote seam); a still-unsupported node names itself.
+        // LATERAL(Z, Z): the left unit table drives one substituted evaluation of
+        // the right unit table, merging to a single binding-nothing solution.
         let pattern = GraphPattern::Lateral {
             left: Box::new(GraphPattern::Bgp { patterns: vec![] }),
             right: Box::new(GraphPattern::Bgp { patterns: vec![] }),
         };
-        let err = eval(&pattern, &mut ctx).unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported(_)));
-        assert!(err.to_string().contains("LATERAL"));
+        let seq = eval(&pattern, &mut ctx).expect("LATERAL of units");
+        assert_eq!(seq.len(), 1);
+        assert!(seq.schema.is_empty());
     }
 
     #[test]

@@ -1040,14 +1040,24 @@ impl Parser<'_> {
                 let silent = self.eat_kw("SILENT");
                 let name = self.parse_var_or_iri_name()?;
                 let inner = self.parse_group_graph_pattern()?;
-                g = join(
-                    g,
-                    GraphPattern::Service {
-                        name,
-                        inner: Box::new(inner),
-                        silent,
-                    },
-                );
+                let is_var_endpoint = matches!(name, NamedNodePattern::Variable(_));
+                let service = GraphPattern::Service {
+                    name,
+                    inner: Box::new(inner),
+                    silent,
+                };
+                // A variable endpoint (`SERVICE ?g`) is correlated with the
+                // enclosing pattern — it must bind the endpoint from the
+                // surrounding solution before federating — so it becomes a
+                // LATERAL join. A fixed-IRI endpoint stays a plain join.
+                g = if is_var_endpoint {
+                    GraphPattern::Lateral {
+                        left: Box::new(g),
+                        right: Box::new(service),
+                    }
+                } else {
+                    join(g, service)
+                };
             } else if self.eat_kw("FILTER") {
                 filters.push(self.parse_constraint()?);
             } else if self.eat_kw("BIND") {
