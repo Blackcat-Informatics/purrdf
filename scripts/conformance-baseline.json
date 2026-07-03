@@ -1,0 +1,45 @@
+{
+  "_doc": "Monotone-shrink ratchet budget for the conformance matrix. Each key is the exact suite name emitted by conformance-matrix.py; `ledgered` is the allowed count of ledgered gaps (the XFail/Skip column). The gate asserts the live count EQUALS this budget: a larger count (a regressed or newly-ledgered gap) fails RED, and a smaller count (a fixed gap) also fails RED until the budget is lowered here to lock the gain. This budget is authoritative and may only ever be edited DOWNWARD; a raise must be justified in review. Reasons describe the technical gap only.",
+  "suites": {
+    "IRI (RFC 3987 / RFC 3986 resolution)": {
+      "ledgered": 0,
+      "note": "no ledgered gaps"
+    },
+    "RDFC-1.0 canonicalization": {
+      "ledgered": 0,
+      "note": "no ledgered gaps"
+    },
+    "Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)": {
+      "ledgered": 0,
+      "note": "no ledgered gaps"
+    },
+    "SPARQL 1.1/1.2 evaluation (full corpus)": {
+      "ledgered": 35,
+      "note": "30 spec-inherent entailment-regime cases (OWL-Direct/DL, RIF-rule, and RDF-axiomatic-triple entailment beyond a forward-materialization reasoner) + 5 upstream-errata fixtures with non-canonical XSD lexicals"
+    },
+    "SHACL Core + SHACL-SPARQL": {
+      "ledgered": 6,
+      "note": "SHACL-SPARQL custom constraint components (sh:ConstraintComponent validators) and $this/$shapesGraph pre-binding semantics are unsupported"
+    },
+    "SHACL (first-party corpus)": {
+      "ledgered": 0,
+      "note": "no ledgered gaps"
+    },
+    "ShEx 2.1 validation": {
+      "ledgered": 0,
+      "note": "no ledgered gaps"
+    },
+    "ShEx syntax + ShExC/ShExJ round-trip": {
+      "ledgered": 0,
+      "note": "no ledgered gaps"
+    },
+    "rdflib LSP drop-in gate": {
+      "ledgered": 24,
+      "note": "rdflib-suite strict xfails: Graph-subclass set-operator identity, rdf:List/Collection mutation, Result.bindings/SELECT* subselect projection, graph-prefix forwarding, aggregate/nested-FILTER evaluation, and ConjunctiveGraph legacy semantics"
+    },
+    "purrdf.compat parity": {
+      "ledgered": 7,
+      "note": "purrdf.compat differential strict xfails vs rdflib 7.6"
+    }
+  }
+}

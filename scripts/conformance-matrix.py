@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -39,6 +40,7 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PY_DIR = _REPO_ROOT / "bindings" / "python"
+_BASELINE_PATH = _REPO_ROOT / "scripts" / "conformance-baseline.json"
 
 # ---------------------------------------------------------------------------
 # Result model
@@ -56,6 +58,7 @@ class SuiteResult:
     failed: int = 0
     detail: str = ""
     ok: bool = False
+    budget: int | None = None  # ratchet ceiling from conformance-baseline.json
     log: str = field(default="", repr=False)
 
     @property
@@ -292,6 +295,62 @@ def _int(m: re.Match[str] | None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Monotone-shrink ratchet
+# ---------------------------------------------------------------------------
+
+
+def load_budget() -> dict[str, int]:
+    """Load the ratchet budget: suite name -> allowed ledgered-gap count."""
+    data = json.loads(_BASELINE_PATH.read_text(encoding="utf-8"))
+    return {name: entry["ledgered"] for name, entry in data["suites"].items()}
+
+
+def _augment(detail: str, msg: str) -> str:
+    return f"{detail} · {msg}" if detail else msg
+
+
+def enforce_ratchet(results: list[SuiteResult], budget: dict[str, int]) -> None:
+    """Gate each suite's ledgered count against its committed budget.
+
+    The budget in ``conformance-baseline.json`` is authoritative and may only
+    ever be edited DOWNWARD. The live ledgered count must EQUAL its budget:
+
+      * a count ABOVE budget (a regressed or newly-ledgered gap) fails RED — fix
+        the gap, do not raise the budget;
+      * a count BELOW budget (a fixed gap) also fails RED until the budget is
+        lowered here, which locks the gain in — this is the ratchet, by design;
+      * a run suite with no budget entry fails RED.
+
+    Suites that could not emit a scoreboard (``failed < 0`` — a compile error or
+    aborted harness) keep their own failure and are not re-diagnosed here.
+    """
+    for r in results:
+        r.budget = budget.get(r.name)
+        if r.failed < 0:
+            continue
+        if r.budget is None:
+            r.ok = False
+            r.detail = _augment(
+                r.detail,
+                f'NO BUDGET: add "{r.name}" to scripts/conformance-baseline.json',
+            )
+        elif r.xskip > r.budget:
+            r.ok = False
+            r.detail = _augment(
+                r.detail,
+                f"LEDGER GREW: {r.xskip} > budget {r.budget} — a gap regressed; "
+                "fix it, do not raise the budget",
+            )
+        elif r.xskip < r.budget:
+            r.ok = False
+            r.detail = _augment(
+                r.detail,
+                f"LEDGER SHRANK: {r.xskip} < budget {r.budget} — lower it in "
+                "scripts/conformance-baseline.json to lock the gain",
+            )
+
+
+# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
@@ -333,22 +392,24 @@ def render(results: list[SuiteResult]) -> str:
     src_w = max(len(r.source) for r in results)
     header = (
         f"  {'SUITE':<{name_w}}  {'SOURCE':<{src_w}}  "
-        f"{'PASS':>6}  {'XF/SKIP':>7}  {'FAIL':>5}  STATUS"
+        f"{'PASS':>6}  {'XF/SKIP':>7}  {'BUDGET':>6}  {'FAIL':>5}  STATUS"
     )
     lines = ["", "PurRDF conformance matrix", "=" * len(header), header, "-" * len(header)]
     for r in results:
         fail_cell = "err" if r.failed < 0 else str(r.failed)
+        budget_cell = "-" if r.budget is None else str(r.budget)
         lines.append(
             f"  {r.name:<{name_w}}  {r.source:<{src_w}}  "
-            f"{r.passed:>6}  {r.xskip:>7}  {fail_cell:>5}  {r.status}"
+            f"{r.passed:>6}  {r.xskip:>7}  {budget_cell:>6}  {fail_cell:>5}  {r.status}"
         )
     tot_pass = sum(r.passed for r in results)
     tot_xskip = sum(r.xskip for r in results)
+    tot_budget = sum(r.budget or 0 for r in results)
     tot_fail = sum(max(r.failed, 0) for r in results)
     lines.append("-" * len(header))
     lines.append(
         f"  {'TOTAL':<{name_w}}  {'':<{src_w}}  "
-        f"{tot_pass:>6}  {tot_xskip:>7}  {tot_fail:>5}"
+        f"{tot_pass:>6}  {tot_xskip:>7}  {tot_budget:>6}  {tot_fail:>5}"
     )
     lines.append("")
     notes = [r for r in results if r.detail]
@@ -372,15 +433,16 @@ def render_markdown(results: list[SuiteResult]) -> str:
     rows = [
         "## PurRDF conformance matrix",
         "",
-        "| Suite | Source | Pass | XFail/Skip | Fail | Status |",
-        "| --- | --- | ---: | ---: | ---: | :---: |",
+        "| Suite | Source | Pass | XFail/Skip | Budget | Fail | Status |",
+        "| --- | --- | ---: | ---: | ---: | ---: | :---: |",
     ]
     for r in results:
         fail_cell = "err" if r.failed < 0 else str(r.failed)
+        budget_cell = "—" if r.budget is None else str(r.budget)
         badge = "GREEN" if r.ok else "RED"
         rows.append(
             f"| {r.name} | {r.source} | {r.passed} | {r.xskip} | "
-            f"{fail_cell} | {badge} |"
+            f"{budget_cell} | {fail_cell} | {badge} |"
         )
     green = all(r.ok for r in results)
     rows.append("")
@@ -410,6 +472,10 @@ def main() -> int:
         build = not args.no_build
         results.append(_suite_py_rdflib_gate(build))
         results.append(_suite_py_compat(build=False))
+
+    # Monotone-shrink ratchet: every run suite's ledgered-gap count must equal
+    # its committed budget (growth and silent shrink both fail RED).
+    enforce_ratchet(results, load_budget())
 
     text = render(results)
     print(text)

@@ -115,16 +115,28 @@ one reported matrix.
 
 ## Ledger discipline
 
-A harness never skips silently. The three mechanisms:
+A harness never skips silently. The four mechanisms:
 
 1. **Exact totals** — each harness asserts the number of discovered tests, so
    corpus drift (a deleted or unreachable manifest entry) fails loudly.
 2. **XFAIL ledgers** — known gaps are listed with a reason string; the
    harness asserts each still fails. Fixing one without removing its entry
    breaks the build ("XPASS"), which keeps the ledger honest.
-3. **Trait skips (ShEx only)** — whole spec features staged for later
-   (imports, semantic actions) are skipped by their manifest trait tags and
-   counted exactly; nothing else may be skipped.
+3. **Trait skips (ShEx only)** — the mechanism to skip whole spec features by
+   their manifest trait tags, counted exactly. The trait-skip list is currently
+   **empty**: imports and semantic actions are now fully validated, so nothing
+   is skipped.
+4. **Monotone budget (ratchet)** — `scripts/conformance-baseline.json` records,
+   per suite, the exact allowed count of ledgered gaps (the XFail/Skip column).
+   The conformance gate (`scripts/conformance-matrix.py`) asserts each suite's
+   live count **equals** its budget: a larger count (a regressed or
+   newly-ledgered gap) fails RED, and a smaller count (a fixed gap) also fails
+   RED until the budget is lowered to lock the gain in. The budget is
+   authoritative and **may only ever be edited downward** — so a *fixed* gap
+   legitimately requires a downward budget edit (the "shrink is also RED"
+   behavior is by design, not a defect), and a raise must be justified in
+   review. This is what makes "the skip list only shrinks" a mechanical
+   guarantee rather than a convention.
 
 The ledgers themselves (each entry = one node id + a concrete, self-describing
 reason):
