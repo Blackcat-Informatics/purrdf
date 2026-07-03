@@ -5,8 +5,7 @@
 //! `CanonicalizationAlgorithm` pyclass and the `canonicalize_quads` wrapper.
 //!
 //! All canonicalization runs the **native full W3C RDFC-1.0** engine
-//! (`purrdf_core::ir::canon`); there is no oxigraph on this path (/ EPIC
-//! ). The `CanonicalizationAlgorithm` pyclass is retained for Python API
+//! (`purrdf_core::ir::canon`); there is no oxigraph on this path. The `CanonicalizationAlgorithm` pyclass is retained for Python API
 //! compatibility, but both variants resolve to the one native canonicalizer
 //! (greenfield: a single canonicalization algorithm).
 

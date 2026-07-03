@@ -3,14 +3,14 @@
 
 //! `purrdf-core` -- oxigraph-free, PyO3-free RDF 1.2 kernel for the PurRDF Rust workspace.
 //!
-//! This crate is the ring-fenced core (/ purrdf P2b) extracted out of
+//! This crate is the ring-fenced core (purrdf P2b) extracted out of
 //! `purrdf`: the immutable value-interned IR, the owned value model, structured
 //! diagnostics, dataset capability flags, the loss ledger, and provenance. It
 //! models RDF 1.2 terms directly, preserves
 //! source/location context where adapters can provide it, and keeps reporting
 //! structured but SARIF-free. The oxigraph adapters and the PyO3 extension surface
 //! live in the sibling `purrdf` crate; **nothing here may pull oxigraph** — that
-//! is the acceptance gate of.
+//! is the acceptance gate.
 //!
 //! # `no_std` readiness
 //!

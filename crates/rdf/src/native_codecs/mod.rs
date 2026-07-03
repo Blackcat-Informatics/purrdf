@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Native RDF text codecs (/  S3).
+//! Native RDF text codecs (S3).
 //!
 //! The codec-only backend that parses and serializes Turtle / TriG / N-Triples /
 //! N-Quads / RDF/XML, emitting through the `purrdf-events` seam into the frozen

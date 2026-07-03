@@ -556,7 +556,7 @@ pub(super) fn quad_to_py(py: Python<'_>, quad: &RdfQuad) -> PyResult<Py<PyAny>> 
 
 /// Build the live `purrdf.Quad` list for every (flattened) quad of a native
 /// [`RdfDataset`](crate::RdfDataset) — the oxigraph-free cross-crate entry point for
-/// engine crates (`purrdf-logic`'s RL closure, / ) that produce a
+/// engine crates (e.g. `purrdf-logic`'s RL closure) that produce a
 /// frozen IR dataset and must hand Python live quad objects without naming any
 /// oxigraph type themselves.
 ///

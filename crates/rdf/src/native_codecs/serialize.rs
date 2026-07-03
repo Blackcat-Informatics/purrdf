@@ -100,8 +100,7 @@ pub(crate) fn serialize_into<W: Write>(
 }
 
 /// Outcome of serializing an [`RdfDataset`] to a concrete RDF format through the
-/// native codecs (universal transcoder helper, ported onto the native path in
-/// ).
+/// native codecs (universal transcoder helper, ported onto the native path).
 #[derive(Debug, Clone)]
 pub struct SerializeOutcome {
     /// The serialized document bytes.

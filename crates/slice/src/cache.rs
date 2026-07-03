@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Phase-specific, path-independent, semantic Merkle cache keys plus
-//! SCC / profile composition ( §12 / §8, child S6a).
+//! SCC / profile composition (§12 / §8, child S6a).
 //!
 //! # Principle 12 — semantic, phase-specific, path-independent cache keys
 //!

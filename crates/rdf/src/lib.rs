@@ -8,7 +8,7 @@
 //! terms directly, preserves source/location context where adapters can provide it,
 //! and keeps reporting structured but SARIF-free.
 //!
-//! # Crate boundary (/ purrdf P2b)
+//! # Crate boundary (purrdf P2b)
 //!
 //! The oxigraph-free, PyO3-free kernel — the immutable IR, the owned value model,
 //! diagnostics, dataset capability flags, the loss ledger, provenance, the FnO and
@@ -49,7 +49,7 @@ mod gts_verify;
 // re-exported here for existing `purrdf::describe::*` callers.
 pub use purrdf_core::describe;
 pub mod gts_view;
-// The native RDF text codecs (/  S3): the codec-only `GtsCodecBackend`
+// The native RDF text codecs (S3): the codec-only `GtsCodecBackend`
 // over the `purrdf-gts` Turtle/TriG/NT/NQ/RDF-XML codecs, oxigraph-free.
 pub mod native_codecs;
 // Oxigraph-free `RdfQuad` ⇄ `RdfDataset` conversions: the native twins of

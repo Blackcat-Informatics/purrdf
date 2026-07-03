@@ -36,7 +36,7 @@
 //!   TriG / N-Triples / N-Quads / RDF-XML (no JSON-LD), and the prior JSON-LD
 //!   property tested oxigraph's JSON-LD serializer — removed with oxigraph.
 //! * **CLIF / CGIF / XCL** round-trips: depend on the open Common Logic epic
-//!   (/) and do not exist yet.
+//!   and do not exist yet.
 
 use proptest::prelude::*;
 use purrdf_rdf::{

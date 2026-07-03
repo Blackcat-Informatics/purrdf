@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Structural AST goldens (purrdf S5 /).
+//! Structural AST goldens (purrdf S5).
 //!
 //! The corpus suite asserts only that queries parse (`Ok`); it does not pin the
 //! *shape* of the produced algebra, so a refactor could silently change what a

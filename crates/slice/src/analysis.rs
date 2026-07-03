@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Slice-analysis graph emitter ( §11 / S7).
+//! Slice-analysis graph emitter (§11 / S7).
 //!
 //! Serialises computed dependency edges into the `<vocab>graph/slice-analysis`
 //! named graph (the graph IRI and every emitted term derive from the caller's

@@ -35,7 +35,7 @@
 //!   `no-optionality` doctrine).
 //!
 //! The crate carries **zero oxigraph-family dependencies** and builds for
-//! `wasm32-unknown-unknown` (the wasm query path of ); both invariants are
+//! `wasm32-unknown-unknown` (the wasm query path); both invariants are
 //! gated by `make rdf-core-hygiene`.
 
 #![forbid(unsafe_code)]

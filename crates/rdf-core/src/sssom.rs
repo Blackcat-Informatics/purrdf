@@ -881,7 +881,7 @@ ex:A\tskos:exactMatch\tex:B\tsemapv:ManualMappingCuration\t1:1
     fn serialize_preserves_unknown_columns_roundtrip() {
         // A non-PurRDF SSSOM file carrying an extra column must survive
         // parse → serialize_tsv (lossless round-trip), not be silently dropped
-        // because the column set is built only from SSSOM_ORDER (H-1 /).
+        // because the column set is built only from SSSOM_ORDER (H-1).
         let doc = "\
 # mapping_set_id: https://example.org/x
 # curie_map:

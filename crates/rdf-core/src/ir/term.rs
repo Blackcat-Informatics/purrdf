@@ -201,8 +201,7 @@ pub(crate) enum InternedTerm {
 }
 
 /// A **dataset-independent** term value — the lookup key for
-/// [`RdfDataset::term_id_by_value`](super::RdfDataset::term_id_by_value) (purrdf P4,
-/// ).
+/// [`RdfDataset::term_id_by_value`](super::RdfDataset::term_id_by_value) (purrdf P4).
 ///
 /// Unlike [`crate::ir::TermRef`] (whose literal-datatype and triple-component slots carry
 /// dataset-local [`TermId`]s), `TermValue` expresses every component **by value** —

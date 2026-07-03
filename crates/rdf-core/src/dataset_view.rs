@@ -124,7 +124,7 @@ pub trait DatasetView: sealed::Sealed {
 }
 
 /// The **write companion** to [`DatasetView`] — the mutation surface a copy-on-write
-/// or backed-by-store dataset exposes (purrdf P5,; backend contract C4).
+/// or backed-by-store dataset exposes (purrdf P5; backend contract C4).
 ///
 /// Where [`DatasetView`] reads in dataset-local [`TermId`]s, `DatasetMut` mutates by
 /// **value**: its [`Quad`](DatasetMut::Quad) associated type is an owned, dataset-

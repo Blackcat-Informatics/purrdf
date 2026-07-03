@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Differential equivalence across the two native engine entry-paths (C4,
-//! ).
+//! Differential equivalence across the two native engine entry-paths (C4).
 //!
 //! Historically this proved the IR-native SHACL backend agreed with an oxigraph
 //! `Store` oracle. The engine is now IR-native end-to-end (no oxigraph backend), so

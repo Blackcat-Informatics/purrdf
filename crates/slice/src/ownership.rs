@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Native ownership + dependency analyzer ( §10 / S4).
+//! Native ownership + dependency analyzer (§10 / S4).
 //!
 //! This module derives an **evidence-bearing dependency graph** from validated
 //! term ownership. It is the manifest-driven replacement for the path-derived
