@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! XSD value-space conformance vectors (acceptance artifact #1 for):
+//! XSD value-space conformance vectors (acceptance artifact 1 for):
 //! per-datatype lexical → value → canonical round-trips, the parse-by-IRI contract,
 //! the zero-dep numeric bounds, and the partial-order edge cases.
 

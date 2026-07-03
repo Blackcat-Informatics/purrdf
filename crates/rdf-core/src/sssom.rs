@@ -911,7 +911,7 @@ ex:A\tskos:exactMatch\tex:B\tsemapv:ManualMappingCuration\t1:1
     #[test]
     fn diagnostic_line_survives_interleaved_comment() {
         // A `#` provenance comment between data rows must not shift the reported
-        // line of a later row's diagnostic. Before M-1 (gemini #1+#2 on) a
+        // line of a later row's diagnostic. Before M-1, a
         // flat offset ignored the filtered comment and reported the wrong line.
         let doc = "\
 # mapping_set_id: https://example.org/x

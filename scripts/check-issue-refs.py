@@ -15,9 +15,10 @@ misleading, so we do not allow new ones. This lint scans:
   files — markdown header anchors (``#101-...``), hex color codes, inline code,
   and fenced code blocks are excluded.
 
-The issue token pattern is ``#`` followed by 3–5 decimal digits that is not
-followed by another digit, a hex letter, or a hyphen. This avoids 6-digit hex
-colors and markdown anchors while still catching references like ``#123``.
+The issue token pattern is ``#`` followed by 1–5 decimal digits that is not
+followed by another digit, a hex letter, a hyphen, or a decimal fraction
+(so ``#3.1`` section numbers are not flagged). This avoids 6-digit hex colors
+and markdown anchors while still catching references like ``#16`` or ``#123``.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ import re
 import sys
 from pathlib import Path
 
-ISSUE_RE = re.compile(r"#\d{3,5}(?![\dA-Fa-f-])")
+ISSUE_RE = re.compile(r"#\d{1,5}(?![\dA-Fa-f-])(?!\.\d)")
 
 SCAN_DIRS = ("crates", "bindings", "docs")
 
