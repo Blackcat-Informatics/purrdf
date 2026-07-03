@@ -22,8 +22,14 @@
 //!   imported schemas contribute only their labeled `shapes` (per the spec,
 //!   `start` is not imported).
 //! * **Merge policy.** A shape label may be declared once. A re-declaration
-//!   that is byte-identical is deduplicated; a genuinely conflicting
-//!   re-declaration is a hard [`ShexError::Import`] error.
+//!   whose [`ShapeDecl`] is *structurally* equal (AST `==`, not byte-identical)
+//!   is deduplicated; a genuinely conflicting re-declaration is a hard
+//!   [`ShexError::Import`] error. This strictness is deliberate: the importing
+//!   document is **not** treated as authoritative last-writer-wins over an
+//!   import, so a real disagreement surfaces instead of being silently
+//!   shadowed. Because each document is parsed independently to the same AST,
+//!   structurally-equal shapes dedup regardless of the source syntax
+//!   (ShExC vs ShExJ) they were written in.
 
 use std::collections::{HashSet, VecDeque};
 

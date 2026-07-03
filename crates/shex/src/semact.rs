@@ -14,7 +14,10 @@
 //!   scope; an extension decides success from the action's code and context.
 //! * **Inert by default.** An action whose IRI has no registered extension is
 //!   a no-op that succeeds, so a schema carrying actions this engine does not
-//!   understand still validates by its structural semantics.
+//!   understand still validates by its structural semantics. This is an
+//!   intentional reading of the spec — an unrecognized semantic-action IRI does
+//!   not fail validation — and is therefore distinct from a swallowed error: no
+//!   outcome is discarded, the action simply carries no constraint here.
 //! * **The Test extension.** [`SemActRegistry::with_test`] ships the
 //!   `http://shex.io/extensions/Test/` extension used by the shexTest suite:
 //!   `fail(...)` code fails, everything else (`print(...)`, no code) succeeds.
