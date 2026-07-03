@@ -115,6 +115,30 @@ def test_shadow_plugins_sparql_importable() -> None:
     assert _run_in_shadow(code).strip() == "OK"
 
 
+def test_shadow_version_matches_rdflib_api() -> None:
+    """``rdflib.__version__`` exposes the rdflib API version the shim targets."""
+    code = (
+        "import rdflib\n"
+        "assert rdflib.__version__ == '7.6.0', rdflib.__version__\n"
+        "print('OK')\n"
+    )
+    assert _run_in_shadow(code).strip() == "OK"
+
+
+def test_shadow_plugins_serializers_turtle_importable() -> None:
+    """``rdflib.plugins.serializers.turtle`` resolves through the shadow."""
+    code = (
+        "from rdflib.plugins.serializers.turtle import TurtleSerializer\n"
+        "from purrdf.compat.rdflib.plugins.serializers import TurtleSerializer as PurrdfTS\n"
+        "assert TurtleSerializer is PurrdfTS, TurtleSerializer\n"
+        "import sys\n"
+        "assert 'rdflib.plugins.serializers.turtle' in sys.modules\n"
+        "assert 'rdflib.plugins.serializers' in sys.modules\n"
+        "print('OK')\n"
+    )
+    assert _run_in_shadow(code).strip() == "OK"
+
+
 def test_shadow_submodule_identity() -> None:
     """Shadow submodules are the very same objects as the purrdf compat ones."""
     code = (

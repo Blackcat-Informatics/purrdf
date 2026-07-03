@@ -125,9 +125,9 @@ def test_pyshacl_core_path() -> None:
 def test_sssom_core_path() -> None:
     """sssom serializes a mapping set to RDF via its rdflib-backed writer.
 
-    Ledgered strict-xfail: sssom's linkml dependency deep-imports rdflib's private
-    serializer module (``rdflib.plugins.serializers.turtle``), which the shim does
-    not provide, so ``import sssom`` fails before purrdf code is reached.
+    sssom's linkml dependency deep-imports rdflib's private serializer module
+    (``rdflib.plugins.serializers.turtle``); the shim now exposes that module so
+    sssom reaches its core path and produces a purrdf-backed graph.
     """
     _require_core_path("sssom")
 

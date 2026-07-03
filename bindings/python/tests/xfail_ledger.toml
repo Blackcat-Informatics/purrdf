@@ -21,10 +21,9 @@
 "tests/test_graph_facade.py::test_parse_string_datatype_collapse_matches_oracle" = "parse() loads straight into the native store, which collapses a plain string and its explicit xsd:string sibling into one quad; the literal-variant provenance map is only populated on the add()/_add_quad boundary, so a parse-introduced collapse cannot be re-expanded to rdflib's two distinct terms without native per-term retention (literal provenance residual gap)"
 
 # Downstream-acceptance rows (drivers in tests/acceptance/). Real
-# third-party rdflib consumers run against the shim in a shadow subprocess. These
-# two are ledgered because they couple to rdflib's PRIVATE Python internals, which
+# third-party rdflib consumers run against the shim in a shadow subprocess. This
+# row is ledgered because it couples to rdflib's PRIVATE Python internals, which
 # the purrdf shim — a public-surface reimplementation over a native-Rust core —
-# deliberately does not replicate. Strict-xfail: if either starts passing, the
-# XPASS fails the run and forces this ledger to shrink.
-"tests/test_acceptance_matrix.py::test_pyshacl_core_path" = "pyshacl imports fail against the shim before validate() runs. The first observed gap is a missing term class: pyshacl.pytypes does `from rdflib.term import IdentifiedNode`, but the shim's term model collapses rdflib's abstract node bases and does not expose IdentifiedNode (the shared URIRef/BNode base). Behind that, pyshacl is not a public-surface consumer at all: it reads rdflib.__version__ to version-gate a suite of monkeypatches against rdflib's private Python internals (rdflib.term._toPythonMapping / _parseBoolean and the rdflib.plugins.sparql Python query algebra), which the public-surface, native-Rust-backed shim does not reimplement. Both are import-time couplings to rdflib internals, so pyshacl cannot reach its core path through the drop-in."
-"tests/test_acceptance_matrix.py::test_sssom_core_path" = "sssom cannot be imported through the shadow: it depends on linkml, whose package __init__ does `from rdflib.plugins.serializers.turtle import TurtleSerializer`, reaching into rdflib's private serializer implementation module. The shim provides the public rdflib surface plus native serializers, not rdflib's internal serializer class tree, so that deep import raises ModuleNotFoundError at sssom import time — upstream of any purrdf code path."
+# deliberately does not replicate. Strict-xfail: if it starts passing, the XPASS
+# fails the run and forces this ledger to shrink.
+"tests/test_acceptance_matrix.py::test_pyshacl_core_path" = "pyshacl now imports against the shim (IdentifiedNode and __version__ gaps closed), but its validate() path calls rdflib_bool_patch(), which imports private rdflib.term internals (`_XSD_PFX`, `_toPythonMapping`, `_parseBoolean`) and mutates `rdflib.NORMALIZE_LITERALS`. These are not public rdflib surface and are not replicated by the native-Rust-backed shim, so pyshacl cannot run its core validation path through the drop-in."

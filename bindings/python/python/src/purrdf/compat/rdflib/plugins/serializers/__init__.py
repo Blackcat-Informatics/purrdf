@@ -21,7 +21,22 @@ from typing import IO, Any
 
 import purrdf
 
-from ..serializer import Serializer
+from ...serializer import Serializer
+
+__all__ = [
+    "HextuplesSerializer",
+    "JsonLDSerializer",
+    "LongTurtleSerializer",
+    "N3Serializer",
+    "NQuadsSerializer",
+    "NT11Serializer",
+    "NTSerializer",
+    "PrettyXMLSerializer",
+    "TriGSerializer",
+    "TriXSerializer",
+    "TurtleSerializer",
+    "XMLSerializer",
+]
 
 _TURTLE = purrdf.RdfFormat.TURTLE
 _NT = purrdf.RdfFormat.N_TRIPLES
