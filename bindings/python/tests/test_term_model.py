@@ -97,6 +97,45 @@ def test_calendar_duration_falls_back_to_lexical(compat: ModuleType, name: str) 
     assert value == "P1Y2M"
 
 
+def test_topython_honors_to_python_mapping_override(compat: ModuleType) -> None:
+    """Private ``_toPythonMapping`` overrides are honored with a bare-string key.
+
+    RDFLib's ``_toPythonMapping`` keys are ``URIRef`` instances, but ``URIRef`` is a
+    ``str`` subclass with inherited hash/equality. Consumers such as pyshacl patch the
+    table with plain strings, so the shim must look up ``dt`` directly rather than
+    re-wrapping it in ``URIRef``.
+    """
+    from purrdf.compat.rdflib.term import _toPythonMapping
+
+    dt = EX + "custom-datatype"
+    calls: list[str] = []
+
+    def converter(lexical: str) -> str:
+        calls.append(lexical)
+        return f"converted:{lexical}"
+
+    original = _toPythonMapping.get(dt)
+    try:
+        # Register with a plain string key, matching how pyshacl mutates rdflib.
+        _toPythonMapping[dt] = converter
+        lit = _lit(compat, "hello", dt)
+        assert lit.toPython() == "converted:hello"
+        assert calls == ["hello"]
+
+        # A converter that raises falls back to the lexical string (rdflib parity).
+        _toPythonMapping[dt] = lambda lexical: (_ for _ in ()).throw(ValueError("boom"))
+        assert _lit(compat, "world", dt).toPython() == "world"
+
+        # A ``None`` mapping entry also falls back to the lexical string.
+        _toPythonMapping[dt] = None
+        assert _lit(compat, "none", dt).toPython() == "none"
+    finally:
+        if original is None:
+            _toPythonMapping.pop(dt, None)
+        else:
+            _toPythonMapping[dt] = original
+
+
 def test_daytime_duration_is_timedelta(compat: ModuleType) -> None:
     """``xsd:dayTimeDuration`` maps to a ``datetime.timedelta`` (rdflib parity)."""
     value = _lit(compat, "P1DT2H", XSD + "dayTimeDuration").toPython()

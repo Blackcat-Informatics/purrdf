@@ -360,10 +360,11 @@ def _coerce_value(lexical: str, datatype: URIRef | None, language: str | None) -
     dt = str(datatype)
     # Private-internals consumers (e.g. pyshacl's bool patch) may have mutated the
     # rdflib-style ``_toPythonMapping``; honor that override before falling back
-    # to the native-backed coercion table.
-    dt_ref = URIRef(dt)
-    if dt_ref in _toPythonMapping:
-        conv = _toPythonMapping[dt_ref]
+    # to the native-backed coercion table.  RDFLib stores URIRef keys, but URIRef
+    # is a str subclass with inherited hash/equality, so a bare string lookup is
+    # equivalent and avoids an allocation.
+    if dt in _toPythonMapping:
+        conv = _toPythonMapping[dt]
         if conv is not None:
             try:
                 return conv(lexical)
@@ -742,7 +743,7 @@ def _parseBoolean(value: str | bytes) -> bool:  # noqa: N802 - rdflib API name
 
 #: Runtime-mutable datatype → converter table mirroring rdflib's private
 #: ``_toPythonMapping``. Consumers such as pyshacl patch the boolean entry.
-_toPythonMapping: dict[URIRef, Callable[[str], Any] | None] = {}
+_toPythonMapping: dict[str, Callable[[str], Any] | None] = {}
 
 
 def to_native(
