@@ -84,11 +84,11 @@ def test_shadow_plugins_sparql_importable() -> None:
     assert _run_in_shadow(code).strip() == "OK"
 
 
-def test_shadow_version_matches_rdflib_api() -> None:
+def test_shadow_version_matches_rdflib_api(locked_rdflib_version: str) -> None:
     """``rdflib.__version__`` exposes the rdflib API version the shim targets."""
     code = (
         "import rdflib\n"
-        "assert rdflib.__version__ == '7.6.0', rdflib.__version__\n"
+        f"assert rdflib.__version__ == {locked_rdflib_version!r}, rdflib.__version__\n"
         "print('OK')\n"
     )
     assert _run_in_shadow(code).strip() == "OK"

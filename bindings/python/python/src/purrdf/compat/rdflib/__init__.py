@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from . import parser, paths, plugin, serializer, store, util
 
+#: Target rdflib API compatibility level. This must stay in sync with the locked
+#: rdflib version in ``bindings/python/uv.lock``; tests enforce the invariant.
 __version__ = "7.6.0"
 
 #: RDFLib's literal-normalization switch. pyshacl's monkey patch toggles this at
