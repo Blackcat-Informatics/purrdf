@@ -10,10 +10,14 @@
 //! with the data URL as base) and its focus/shape (or shape-map JSON), runs
 //! [`purrdf_shex::validate`], and compares the verdict.
 //!
-//! * **SKIP** (a counted category): entries whose traits demand machinery
-//!   this engine deliberately does not ship — `Import`, `SemanticAction`,
-//!   `Extends`, `ExtendsDiamond`. Nothing else is skipped; `Greedy`,
-//!   `Exhaustive` and `OutsideBMP` entries are attempted.
+//! * **SKIP**: the trait-skip list ([`SKIP_TRAITS`]) is now **empty** — every
+//!   trait in the corpus is exercised (`Import` resolved, `SemanticAction`
+//!   dispatched via the Test extension, `Greedy`/`Exhaustive`/`OutsideBMP`
+//!   attempted). The harness asserts nothing is skipped so a regression that
+//!   re-adds a skip is caught. The `Import` (32/32) and `SemanticAction`
+//!   (22/22) trait totals are additionally locked by exact-count assertions,
+//!   so a silent drop in classified/attempted entries under those traits is
+//!   caught even though every entry still passes.
 //! * **XFAIL**: genuine engine gaps, listed exactly (name + reason). A
 //!   passing xfail fails the harness (a stale ledger is a test error).
 
@@ -24,7 +28,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use purrdf_rdf::{parse_dataset, DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
-use purrdf_shex::{parse_shexc, parse_shexj, validate, ConformanceStatus, Schema, ShapeSelector};
+use purrdf_shex::{
+    parse_shexc, parse_shexj, resolve_imports, validate_with, ConformanceStatus, ResultShapeMap,
+    Schema, SemAct, SemActRegistry, ShapeExpr, ShapeSelector, ValidationOptions,
+};
 
 /// The corpus is byte-frozen; drift in the entry count means the vectors
 /// were touched, which this harness must notice.
@@ -33,8 +40,10 @@ const ENTRY_COUNT: usize = 1105;
 /// The URL prefix the vendored tree mirrors.
 const CORPUS_URL: &str = "https://raw.githubusercontent.com/shexSpec/shexTest/master/";
 
-/// Traits this engine deliberately does not implement (skipped, counted).
-const SKIP_TRAITS: &[&str] = &["Import", "SemanticAction", "Extends", "ExtendsDiamond"];
+/// Traits this engine deliberately does not implement (skipped, counted). The
+/// engine now runs every trait in the corpus, so this list is empty and the
+/// harness asserts nothing is skipped.
+const SKIP_TRAITS: &[&str] = &[];
 
 /// Genuine engine gaps: entries expected to produce the WRONG verdict, each
 /// with a reason. A passing xfail fails the harness.
@@ -153,6 +162,10 @@ struct Entry {
     focus: Option<TermValue>,
     map_url: Option<String>,
     result_url: Option<String>,
+    /// `sht:semActs` — query-level semantic actions supplied out-of-band.
+    sem_acts_url: Option<String>,
+    /// `sht:shapeExterns` — a schema resolving this entry's `EXTERNAL` shapes.
+    shape_externs_url: Option<String>,
 }
 
 fn read_entry(m: &Manifest, id: TermId) -> Entry {
@@ -205,6 +218,12 @@ fn read_entry(m: &Manifest, id: TermId) -> Entry {
         .object(action, &format!("{SHT}map"))
         .and_then(|o| m.iri(o));
     let result_url = m.object(id, &format!("{MF}result")).and_then(|o| m.iri(o));
+    let sem_acts_url = m
+        .object(action, &format!("{SHT}semActs"))
+        .and_then(|o| m.iri(o));
+    let shape_externs_url = m
+        .object(action, &format!("{SHT}shapeExterns"))
+        .and_then(|o| m.iri(o));
     Entry {
         name,
         expect_conformant,
@@ -215,6 +234,8 @@ fn read_entry(m: &Manifest, id: TermId) -> Entry {
         focus,
         map_url,
         result_url,
+        sem_acts_url,
+        shape_externs_url,
     }
 }
 
@@ -226,21 +247,85 @@ struct Caches {
     data: HashMap<String, Result<Arc<RdfDataset>, String>>,
 }
 
+/// Read one schema document, choosing ShExC/ShExJ by the on-disk extension
+/// and parsing with `url` as base. An import IRI carries no extension, so
+/// `.shex` then `.json` are tried; a schema URL names the file directly.
+fn read_schema(url: &str) -> Result<Schema, String> {
+    let base = url_to_path(url);
+    let candidates: Vec<PathBuf> = if base.extension().is_some() {
+        vec![base]
+    } else {
+        vec![base.with_extension("shex"), base.with_extension("json")]
+    };
+    for path in candidates {
+        let Ok(source) = fs::read_to_string(&path) else {
+            continue;
+        };
+        return if path.extension().is_some_and(|x| x == "json") {
+            parse_shexj(&source).map_err(|e| e.to_string())
+        } else {
+            parse_shexc(&source, Some(url)).map_err(|e| e.to_string())
+        };
+    }
+    Err(format!("no schema document for {url}"))
+}
+
+/// Load a schema and fold in its transitive imports. The import resolver reads
+/// each imported IRI from the vendored corpus, parsing it with its own IRI as
+/// base (per-document base resolution).
+fn load_schema(url: &str) -> Result<Schema, String> {
+    let root = read_schema(url)?;
+    resolve_imports(root, &|iri| read_schema(iri).ok()).map_err(|e| e.to_string())
+}
+
+/// Read a `sht:semActs` document (a bare sequence of semantic actions) as a
+/// start-actions-only schema and return those actions.
+fn read_sem_acts(url: &str) -> Result<Vec<SemAct>, String> {
+    let source =
+        fs::read_to_string(url_to_path(url)).map_err(|e| format!("read semActs {url}: {e}"))?;
+    Ok(parse_shexc(&source, Some(url))
+        .map_err(|e| e.to_string())?
+        .start_acts)
+}
+
+/// Validate one entry with the shexTest-shaped options: the Test extension is
+/// registered, any `sht:semActs` fire as start actions, and any
+/// `sht:shapeExterns` schema resolves the entry's `EXTERNAL` shapes.
+fn validate_entry(
+    entry: &Entry,
+    schema: &Schema,
+    data: &RdfDataset,
+    associations: &[(TermValue, ShapeSelector)],
+) -> Result<ResultShapeMap, String> {
+    let extern_acts = match &entry.sem_acts_url {
+        Some(url) => read_sem_acts(url)?,
+        None => Vec::new(),
+    };
+    let externs = match &entry.shape_externs_url {
+        Some(url) => Some(read_schema(url)?),
+        None => None,
+    };
+    let resolver = |label: &str| -> Option<ShapeExpr> {
+        externs.as_ref().and_then(|s| {
+            s.shapes
+                .iter()
+                .find(|decl| decl.id.as_str() == label)
+                .map(|decl| decl.expr.clone())
+        })
+    };
+    let options = ValidationOptions {
+        external_resolver: Some(&resolver),
+        sem_acts: SemActRegistry::with_test(),
+        extern_start_acts: &extern_acts,
+    };
+    Ok(validate_with(schema, data, associations, &options))
+}
+
 impl Caches {
     fn schema(&mut self, url: &str) -> Result<Arc<Schema>, String> {
         self.schemas
             .entry(url.to_owned())
-            .or_insert_with(|| {
-                let path = url_to_path(url);
-                let source = fs::read_to_string(&path)
-                    .map_err(|e| format!("read {}: {e}", path.display()))?;
-                let schema = if Path::new(url).extension().is_some_and(|x| x == "json") {
-                    parse_shexj(&source).map_err(|e| e.to_string())?
-                } else {
-                    parse_shexc(&source, Some(url)).map_err(|e| e.to_string())?
-                };
-                Ok(Arc::new(schema))
-            })
+            .or_insert_with(|| load_schema(url).map(Arc::new))
             .clone()
     }
 
@@ -285,7 +370,7 @@ fn run_shape_map_entry(entry: &Entry, caches: &mut Caches) -> Result<(), String>
             ShapeSelector::Label(shape.to_owned()),
         ));
     }
-    let outcome = validate(&schema, &data, &associations);
+    let outcome = validate_entry(entry, &schema, &data, &associations)?;
 
     let result_url = entry
         .result_url
@@ -335,7 +420,7 @@ fn run_focus_entry(entry: &Entry, caches: &mut Caches) -> Result<(), String> {
         .shape
         .clone()
         .map_or(ShapeSelector::Start, ShapeSelector::Label);
-    let outcome = validate(&schema, &data, &[(focus, selector)]);
+    let outcome = validate_entry(entry, &schema, &data, &[(focus, selector)])?;
     let conformant = outcome.all_conformant();
     if conformant == entry.expect_conformant {
         Ok(())
@@ -423,6 +508,25 @@ fn validation_conformance() {
     }
     println!("{board}");
 
+    assert!(
+        skipped.is_empty(),
+        "the trait-skip list is empty, so no entry may be skipped: {skipped:?}\n{board}"
+    );
+    // Exact-count locks on the two trait categories this harness closed:
+    // `Import` (imports are now resolved) and `SemanticAction` (semantic
+    // actions now dispatch via the Test extension). A regression that stops
+    // classifying or attempting entries under these traits — without
+    // tripping the generic pass/fail gates below — must still fail here.
+    assert_eq!(
+        trait_totals.get("Import").copied(),
+        Some((32, 32)),
+        "Import trait coverage regressed\n{board}"
+    );
+    assert_eq!(
+        trait_totals.get("SemanticAction").copied(),
+        Some((22, 22)),
+        "SemanticAction trait coverage regressed\n{board}"
+    );
     assert!(
         stale_xfails.is_empty(),
         "XFAIL entries now pass (remove them from the ledger): {stale_xfails:?}\n{board}"

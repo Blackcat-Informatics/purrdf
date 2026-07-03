@@ -31,7 +31,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{ShapeExpr, TripleConstraint, TripleExpr};
+use crate::ast::{SemAct, ShapeExpr, TripleConstraint, TripleExpr};
 
 /// A `{min, max}` cardinality; `max == None` is unbounded.
 #[derive(Clone, Copy, Debug)]
@@ -65,23 +65,29 @@ pub(crate) struct Slot<'a> {
     pub value_expr: Option<&'a ShapeExpr>,
     /// The constraint's own cardinality.
     pub card: Card,
+    /// The constraint's semantic actions, fired when it matches ≥1 triple.
+    pub sem_acts: &'a [SemAct],
 }
 
 /// A compiled triple-expression node.
 #[derive(Debug)]
-pub(crate) enum CNode {
+pub(crate) enum CNode<'a> {
     /// A leaf [`Slot`], by index.
     Slot(usize),
-    /// `EachOf` with a group cardinality.
-    Each(Vec<Self>, Card),
-    /// `OneOf` with a group cardinality.
-    One(Vec<Self>, Card),
+    /// `EachOf` with a group cardinality and the group's own semantic
+    /// actions (fired only when this node actually participated in the
+    /// winning match — see [`participating_group_acts`]).
+    Each(Vec<Self>, Card, Vec<&'a SemAct>),
+    /// `OneOf` with a group cardinality and the group's own semantic
+    /// actions (fired only for the selected branch(es) — see
+    /// [`participating_group_acts`]).
+    One(Vec<Self>, Card, Vec<&'a SemAct>),
 }
 
-/// A compiled triple expression: the tree plus its slot table.
+/// A compiled triple expression: the tree and its slot table.
 #[derive(Debug)]
 pub(crate) struct Compiled<'a> {
-    pub root: CNode,
+    pub root: CNode<'a>,
     pub slots: Vec<Slot<'a>>,
 }
 
@@ -101,19 +107,20 @@ fn compile_node<'a>(
     te_map: &HashMap<&'a str, &'a TripleExpr>,
     slots: &mut Vec<Slot<'a>>,
     stack: &mut Vec<&'a str>,
-) -> Result<CNode, String> {
+) -> Result<CNode<'a>, String> {
     match expr {
         TripleExpr::TripleConstraint(tc) => Ok(CNode::Slot(push_slot(tc, slots))),
         TripleExpr::EachOf(group) | TripleExpr::OneOf(group) => {
             let card = Card::from_ast(group.min, group.max);
+            let acts: Vec<&'a SemAct> = group.sem_acts.iter().collect();
             let children = group
                 .expressions
                 .iter()
                 .map(|child| compile_node(child, te_map, slots, stack))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(match expr {
-                TripleExpr::EachOf(_) => CNode::Each(children, card),
-                _ => CNode::One(children, card),
+                TripleExpr::EachOf(_) => CNode::Each(children, card, acts),
+                _ => CNode::One(children, card, acts),
             })
         }
         TripleExpr::Ref(label) => {
@@ -137,6 +144,7 @@ fn push_slot<'a>(tc: &'a TripleConstraint, slots: &mut Vec<Slot<'a>>) -> usize {
         inverse: tc.inverse == Some(true),
         value_expr: tc.value_expr.as_deref(),
         card: Card::from_ast(tc.min, tc.max),
+        sem_acts: &tc.sem_acts,
     });
     slots.len() - 1
 }
@@ -199,7 +207,7 @@ fn wrap(inner: Iv, card: Card) -> Option<Iv> {
 }
 
 /// Bottom-up repetition interval of `node` for per-slot count ranges.
-fn reps(node: &CNode, slots: &[Slot<'_>], counts: &[(u64, u64)]) -> Option<Iv> {
+fn reps(node: &CNode<'_>, slots: &[Slot<'_>], counts: &[(u64, u64)]) -> Option<Iv> {
     match node {
         CNode::Slot(i) => wrap(
             Iv {
@@ -208,20 +216,71 @@ fn reps(node: &CNode, slots: &[Slot<'_>], counts: &[(u64, u64)]) -> Option<Iv> {
             },
             slots[*i].card,
         ),
-        CNode::Each(children, card) => {
+        CNode::Each(children, card, _) => {
             let mut inner = Iv { lo: 0, hi: None };
             for child in children {
                 inner = intersect(inner, reps(child, slots, counts)?)?;
             }
             wrap(inner, *card)
         }
-        CNode::One(children, card) => {
+        CNode::One(children, card, _) => {
             let mut inner = Iv { lo: 0, hi: Some(0) };
             for child in children {
                 inner = sum(inner, reps(child, slots, counts)?);
             }
             wrap(inner, *card)
         }
+    }
+}
+
+// ── group semantic-action participation (ShEx 2.1 §5.5.2) ──────────────────
+
+/// The total number of triples the winning assignment routed to the slots
+/// reachable under `node`.
+fn leaf_triple_count(node: &CNode<'_>, counts: &[(u64, u64)]) -> u64 {
+    match node {
+        CNode::Slot(i) => counts[*i].0,
+        CNode::Each(children, _, _) | CNode::One(children, _, _) => children
+            .iter()
+            .map(|child| leaf_triple_count(child, counts))
+            .sum(),
+    }
+}
+
+/// Collect the `EachOf`/`OneOf` group semantic actions that actually
+/// participated in the winning match, in deterministic (pre-order,
+/// parent-before-children) traversal order.
+///
+/// A group's own actions fire only when the group's triple expression
+/// actually took part in the match: at least one triple was routed, by the
+/// winning assignment, to a slot reachable underneath it. For `OneOf` this
+/// means only the selected branch(es) — an alternative that consumed no
+/// triples did not fire, even though the overall choice matched (ShEx 2.1
+/// §5.5.2; contrast the flat, ungated firing this replaces).
+pub(crate) fn participating_group_acts<'a>(
+    compiled: &'a Compiled<'a>,
+    counts: &[(u64, u64)],
+) -> Vec<&'a SemAct> {
+    let mut acts = Vec::new();
+    collect_participating(&compiled.root, counts, &mut acts);
+    acts
+}
+
+fn collect_participating<'a>(
+    node: &'a CNode<'a>,
+    counts: &[(u64, u64)],
+    out: &mut Vec<&'a SemAct>,
+) {
+    let (children, group_acts) = match node {
+        CNode::Slot(_) => return,
+        CNode::Each(children, _, acts) | CNode::One(children, _, acts) => (children, acts),
+    };
+    if leaf_triple_count(node, counts) == 0 {
+        return;
+    }
+    out.extend(group_acts.iter().copied());
+    for child in children {
+        collect_participating(child, counts, out);
     }
 }
 
@@ -245,18 +304,26 @@ pub(crate) struct ArcOptions {
 /// Search state budget: candidate-assignment steps before giving up.
 const SEARCH_BUDGET: u64 = 200_000;
 
+/// A winning assignment search result: per-slot `(lo, hi)` counts, plus the
+/// slot each arc was routed to (`None` when diverted to `EXTRA`).
+pub(crate) type Assignment = (Vec<(u64, u64)>, Vec<Option<usize>>);
+
 /// Backtracking search over arc→slot assignments for expressions where a
 /// `(predicate, direction)` occurs in more than one slot. Deterministic:
 /// arcs in the caller's (sorted) order, candidates in slot order, `EXTRA`
-/// diversion tried last. Returns `Ok(true)` on a match, `Ok(false)` when no
-/// assignment matches, and `Err` when the budget is exhausted.
+/// diversion tried last. Returns `Ok(Some((counts, assignment)))` on a match,
+/// where `assignment[i]` is the slot arc `i` was routed to (`None` when
+/// diverted to `EXTRA`); `Ok(None)` when no assignment matches; `Err` when
+/// the budget is exhausted.
 pub(crate) fn assignment_search(
     compiled: &Compiled<'_>,
     arcs: &[ArcOptions],
-) -> Result<bool, String> {
+) -> Result<Option<Assignment>, String> {
     let mut counts = vec![(0u64, 0u64); compiled.slots.len()];
+    let mut assignment = vec![None; arcs.len()];
     let mut budget = SEARCH_BUDGET;
-    search(compiled, arcs, 0, &mut counts, &mut budget)
+    let found = search(compiled, arcs, 0, &mut counts, &mut assignment, &mut budget)?;
+    Ok(found.then_some((counts, assignment)))
 }
 
 fn search(
@@ -264,6 +331,7 @@ fn search(
     arcs: &[ArcOptions],
     index: usize,
     counts: &mut Vec<(u64, u64)>,
+    assignment: &mut Vec<Option<usize>>,
     budget: &mut u64,
 ) -> Result<bool, String> {
     if *budget == 0 {
@@ -276,14 +344,17 @@ fn search(
     for &slot in &arc.candidates {
         counts[slot].0 += 1;
         counts[slot].1 += 1;
-        if search(compiled, arcs, index + 1, counts, budget)? {
+        assignment[index] = Some(slot);
+        if search(compiled, arcs, index + 1, counts, assignment, budget)? {
             return Ok(true);
         }
         counts[slot].0 -= 1;
         counts[slot].1 -= 1;
+        assignment[index] = None;
     }
     if arc.extra_allowed {
-        return search(compiled, arcs, index + 1, counts, budget);
+        assignment[index] = None;
+        return search(compiled, arcs, index + 1, counts, assignment, budget);
     }
     Ok(false)
 }
@@ -380,7 +451,10 @@ mod tests {
                 extra_allowed: false,
             },
         ];
-        assert_eq!(assignment_search(&compiled, &arcs), Ok(true));
+        assert_eq!(
+            assignment_search(&compiled, &arcs),
+            Ok(Some((vec![(1, 1), (1, 1)], vec![Some(0), Some(1)])))
+        );
         // Both arcs only fit slot 0 → slot 1 starves.
         let arcs = vec![
             ArcOptions {
@@ -392,6 +466,6 @@ mod tests {
                 extra_allowed: false,
             },
         ];
-        assert_eq!(assignment_search(&compiled, &arcs), Ok(false));
+        assert_eq!(assignment_search(&compiled, &arcs), Ok(None));
     }
 }
