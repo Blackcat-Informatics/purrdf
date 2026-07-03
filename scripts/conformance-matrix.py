@@ -487,10 +487,17 @@ def write_doc_block(block: str) -> None:
     _DOC_PATH.write_text(f"{head}\n{block}\n{tail}", encoding="utf-8")
 
 
+def _normalize(text: str) -> str:
+    """Strip surrounding whitespace and fold CRLF to LF so a Windows/autocrlf
+    checkout does not read as drift against the LF-rendered block."""
+    return text.replace("\r\n", "\n").strip()
+
+
 def check_doc_block(block: str) -> bool:
     """True iff the committed matrix block equals the freshly measured one."""
     _, inner, _ = _split_doc(_DOC_PATH.read_text(encoding="utf-8"))
-    if inner.strip() == block.strip():
+    inner, block = _normalize(inner), _normalize(block)
+    if inner == block:
         return True
     print(
         f"\n{_DOC_PATH.relative_to(_REPO_ROOT)} conformance-matrix block is stale; "
@@ -498,8 +505,8 @@ def check_doc_block(block: str) -> bool:
         file=sys.stderr,
     )
     diff = difflib.unified_diff(
-        inner.strip().splitlines(),
-        block.strip().splitlines(),
+        inner.splitlines(),
+        block.splitlines(),
         fromfile="committed",
         tofile="measured",
         lineterm="",
