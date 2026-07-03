@@ -15,18 +15,19 @@
 //!    segment head must equal the caller's `expected_head` (a mismatch surfaces
 //!    as a reader `TruncatedLog` diagnostic).
 //! 3. **Digest inclusion**: every content-addressed term's cached BLAKE3 digest
-//!    (from `rdf-core`'s content-id side table) must be an included blob id or
-//!    segment-head id in the verified chain.
-//!
-//! Inclusion is checked against the file's blob ids (`graph.blobs` keys, already
-//! spelled `blake3:<hex>`) and its segment-head ids (rendered `blake3:<hex>`).
-//! It deliberately does **not** use the MMR proof API: `mmr::prove_file` operates
-//! on frame ids, and a content-addressed blob digest is not necessarily an MMR
-//! leaf, so an MMR check here would produce false failures for legitimately
-//! included blobs. The blob/segment-head membership test is exact and total.
+//!    (from `rdf-core`'s content-id side table) must be included in the
+//!    verified chain, where inclusion is the union of three tests: the digest
+//!    is a blob id (`graph.blobs` key, already spelled `blake3:<hex>`), the
+//!    digest is a segment-head id (rendered `blake3:<hex>`), or the digest is
+//!    provable as an MMR leaf (a frame id) against an `index` frame's
+//!    committed root via [`purrdf_gts::mmr::prove_file`] and
+//!    [`purrdf_gts::mmr::verify_proof`]. The cheap blob/segment-head
+//!    membership test runs first; the MMR proof is only attempted on a miss.
 
-use std::collections::BTreeSet;
+use std::collections::HashSet;
+use std::fmt::Write as _;
 
+use purrdf_gts::mmr::{prove_file, verify_proof};
 use purrdf_gts::reader;
 use purrdf_gts::verify::verify_file;
 
@@ -99,14 +100,18 @@ pub fn verify_content_chain(
     }
     let head_matched = true;
 
-    // 3. Digest inclusion: the file's content ids are its blob ids (already
-    //    `blake3:<hex>`) plus its segment-head ids (rendered `blake3:<hex>`).
-    let mut included: BTreeSet<String> = BTreeSet::new();
+    // 3. Digest inclusion: cheap membership set first (blob ids, already
+    //    `blake3:<hex>`, plus rendered segment-head ids), then on a miss fall
+    //    back to an MMR leaf proof (the digest as a frame id).
+    let mut included: HashSet<String> =
+        HashSet::with_capacity(graph.blobs.len() + graph.segment_heads.len());
     for (digest, _entry) in &graph.blobs {
         included.insert(digest.clone());
     }
     for head in &graph.segment_heads {
-        included.insert(format!("blake3:{}", hex_lower(head)));
+        let mut id = String::with_capacity(71);
+        let _ = write!(id, "blake3:{}", hex_lower(head));
+        included.insert(id);
     }
 
     // `content_ids()` yields sorted-by-`TermId` pairs, so both the match count
@@ -114,8 +119,13 @@ pub fn verify_content_chain(
     let mut digests_included = 0usize;
     let mut missing: Vec<String> = Vec::new();
     for (term_id, digest) in dataset.content_ids() {
-        let content_id = format!("blake3:{}", digest.to_hex());
-        if included.contains(&content_id) {
+        let mut content_id = String::with_capacity(71);
+        let _ = write!(content_id, "blake3:{}", digest.to_hex());
+        let is_included = included.contains(&content_id)
+            || prove_file(gts_bytes, digest.as_bytes())
+                .and_then(|proof| verify_proof(&proof))
+                .is_ok();
+        if is_included {
             digests_included += 1;
         } else {
             missing.push(format!("term#{} {content_id}", term_id.index()));
@@ -206,6 +216,32 @@ mod tests {
         (bytes, head)
     }
 
+    /// Build a signed GTS file carrying one inline blob followed by an
+    /// `index` frame with an MMR root (`add_index_with_mmr`). Returns
+    /// `(bytes, head, blob_frame_id)`: `head` is the index frame's id (the
+    /// segment head), and `blob_frame_id` is the covered blob frame's id — a
+    /// genuine MMR leaf that is neither a `graph.blobs` key (those are keyed
+    /// by payload digest, not frame id) nor the segment head.
+    fn build_file_with_index() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let mut writer = Writer::new("purrdf.gts");
+        let (signing_key, kid) = parse_secret_signing_key(&secret_armor(), Some(KID))
+            .expect("parse fixture secret key")
+            .into_parts();
+        writer.sign_with(signing_key, &kid);
+        writer.add_meta(Value::Map(vec![(
+            Value::Text("gts:transportKey".to_owned()),
+            Value::Map(vec![
+                (Value::Text("kid".to_owned()), Value::Text(kid)),
+                (Value::Text("gpg".to_owned()), Value::Text(public_armor())),
+            ]),
+        )]));
+        let blob_frame_id = writer.add_blob(BLOB_PAYLOAD, Some("text/plain"), Some("doc"));
+        writer.add_index_with_mmr();
+        let bytes = writer.to_bytes();
+        let head = writer.head().to_vec();
+        (bytes, head, blob_frame_id)
+    }
+
     /// Freeze a content-addressing dataset that references `content_iri` as the
     /// subject of a single quad.
     fn dataset_referencing(content_iri: &str) -> Arc<RdfDataset> {
@@ -233,6 +269,50 @@ mod tests {
         assert!(
             result.signatures_valid >= 1,
             "at least one COSE signature was cryptographically valid"
+        );
+    }
+
+    #[test]
+    fn mmr_leaf_frame_id_is_included_via_union() {
+        let (bytes, head, blob_frame_id) = build_file_with_index();
+        // The blob frame id is a genuine MMR leaf: neither a `graph.blobs` key
+        // (those are payload digests) nor the segment head (the index frame's
+        // id). It must still verify via the MMR-proof arm of the union.
+        assert_ne!(
+            blob_frame_id, head,
+            "the blob frame id must not equal the segment head"
+        );
+        let content_iri = format!("blake3:{}", super::hex_lower(&blob_frame_id));
+        assert_ne!(
+            content_iri,
+            digest_str(BLOB_PAYLOAD),
+            "the frame id must not equal the blob's payload digest"
+        );
+        let dataset = dataset_referencing(&content_iri);
+
+        let result = verify_content_chain(&dataset, &bytes, &head)
+            .expect("an MMR-leaf frame id verifies via the union inclusion test");
+        assert_eq!(
+            result.digests_included, 1,
+            "the frame-id digest is included via the MMR proof arm"
+        );
+    }
+
+    #[test]
+    fn absent_frame_digest_still_hard_fails() {
+        let (bytes, head, _blob_frame_id) = build_file_with_index();
+        // A digest that is not a blob id, not the segment head, and not a
+        // covered MMR leaf.
+        let absent = format!("blake3:{}", "cd".repeat(32));
+        let dataset = dataset_referencing(&absent);
+
+        let err = verify_content_chain(&dataset, &bytes, &head)
+            .expect_err("a digest absent from blobs, segment heads, and the MMR must fail");
+        assert_eq!(err.code, "gts-verify-digest-inclusion");
+        let detail = err.detail.unwrap_or_default();
+        assert!(
+            detail.contains("term#0") && detail.contains(&absent),
+            "detail names the missing term and digest: {detail}"
         );
     }
 
