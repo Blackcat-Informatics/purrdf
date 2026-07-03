@@ -31,7 +31,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{ShapeExpr, TripleConstraint, TripleExpr};
+use crate::ast::{SemAct, ShapeExpr, TripleConstraint, TripleExpr};
 
 /// A `{min, max}` cardinality; `max == None` is unbounded.
 #[derive(Clone, Copy, Debug)]
@@ -65,6 +65,8 @@ pub(crate) struct Slot<'a> {
     pub value_expr: Option<&'a ShapeExpr>,
     /// The constraint's own cardinality.
     pub card: Card,
+    /// The constraint's semantic actions, fired when it matches ≥1 triple.
+    pub sem_acts: &'a [SemAct],
 }
 
 /// A compiled triple-expression node.
@@ -78,11 +80,15 @@ pub(crate) enum CNode {
     One(Vec<Self>, Card),
 }
 
-/// A compiled triple expression: the tree plus its slot table.
+/// A compiled triple expression: the tree, its slot table, and the
+/// group-level semantic actions gathered in traversal order.
 #[derive(Debug)]
 pub(crate) struct Compiled<'a> {
     pub root: CNode,
     pub slots: Vec<Slot<'a>>,
+    /// `EachOf`/`OneOf` group semantic actions, fired when the expression
+    /// matches (inclusions inlined, so actions behind `&ref` are included).
+    pub group_acts: Vec<&'a SemAct>,
 }
 
 /// Compile a triple expression, inlining `TripleExprRef`s via `te_map`.
@@ -91,25 +97,32 @@ pub(crate) fn compile<'a>(
     te_map: &HashMap<&'a str, &'a TripleExpr>,
 ) -> Result<Compiled<'a>, String> {
     let mut slots = Vec::new();
+    let mut group_acts = Vec::new();
     let mut stack: Vec<&'a str> = Vec::new();
-    let root = compile_node(expr, te_map, &mut slots, &mut stack)?;
-    Ok(Compiled { root, slots })
+    let root = compile_node(expr, te_map, &mut slots, &mut group_acts, &mut stack)?;
+    Ok(Compiled {
+        root,
+        slots,
+        group_acts,
+    })
 }
 
 fn compile_node<'a>(
     expr: &'a TripleExpr,
     te_map: &HashMap<&'a str, &'a TripleExpr>,
     slots: &mut Vec<Slot<'a>>,
+    group_acts: &mut Vec<&'a SemAct>,
     stack: &mut Vec<&'a str>,
 ) -> Result<CNode, String> {
     match expr {
         TripleExpr::TripleConstraint(tc) => Ok(CNode::Slot(push_slot(tc, slots))),
         TripleExpr::EachOf(group) | TripleExpr::OneOf(group) => {
             let card = Card::from_ast(group.min, group.max);
+            group_acts.extend(group.sem_acts.iter());
             let children = group
                 .expressions
                 .iter()
-                .map(|child| compile_node(child, te_map, slots, stack))
+                .map(|child| compile_node(child, te_map, slots, group_acts, stack))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(match expr {
                 TripleExpr::EachOf(_) => CNode::Each(children, card),
@@ -124,7 +137,7 @@ fn compile_node<'a>(
                 return Err(format!("cyclic triple-expression inclusion of {label}"));
             }
             stack.push(label.as_str());
-            let node = compile_node(target, te_map, slots, stack)?;
+            let node = compile_node(target, te_map, slots, group_acts, stack)?;
             stack.pop();
             Ok(node)
         }
@@ -137,6 +150,7 @@ fn push_slot<'a>(tc: &'a TripleConstraint, slots: &mut Vec<Slot<'a>>) -> usize {
         inverse: tc.inverse == Some(true),
         value_expr: tc.value_expr.as_deref(),
         card: Card::from_ast(tc.min, tc.max),
+        sem_acts: &tc.sem_acts,
     });
     slots.len() - 1
 }
@@ -248,12 +262,13 @@ const SEARCH_BUDGET: u64 = 200_000;
 /// Backtracking search over arc→slot assignments for expressions where a
 /// `(predicate, direction)` occurs in more than one slot. Deterministic:
 /// arcs in the caller's (sorted) order, candidates in slot order, `EXTRA`
-/// diversion tried last. Returns `Ok(true)` on a match, `Ok(false)` when no
-/// assignment matches, and `Err` when the budget is exhausted.
+/// diversion tried last. Returns `Ok(Some(counts))` with the winning per-slot
+/// counts on a match, `Ok(None)` when no assignment matches, and `Err` when
+/// the budget is exhausted.
 pub(crate) fn assignment_search(
     compiled: &Compiled<'_>,
     arcs: &[ArcOptions],
-) -> Result<bool, String> {
+) -> Result<Option<Vec<(u64, u64)>>, String> {
     let mut counts = vec![(0u64, 0u64); compiled.slots.len()];
     let mut budget = SEARCH_BUDGET;
     search(compiled, arcs, 0, &mut counts, &mut budget)
@@ -265,19 +280,19 @@ fn search(
     index: usize,
     counts: &mut Vec<(u64, u64)>,
     budget: &mut u64,
-) -> Result<bool, String> {
+) -> Result<Option<Vec<(u64, u64)>>, String> {
     if *budget == 0 {
         return Err("triple-expression matcher budget exhausted".to_owned());
     }
     *budget -= 1;
     let Some(arc) = arcs.get(index) else {
-        return Ok(counts_match(compiled, counts));
+        return Ok(counts_match(compiled, counts).then(|| counts.clone()));
     };
     for &slot in &arc.candidates {
         counts[slot].0 += 1;
         counts[slot].1 += 1;
-        if search(compiled, arcs, index + 1, counts, budget)? {
-            return Ok(true);
+        if let Some(winning) = search(compiled, arcs, index + 1, counts, budget)? {
+            return Ok(Some(winning));
         }
         counts[slot].0 -= 1;
         counts[slot].1 -= 1;
@@ -285,7 +300,7 @@ fn search(
     if arc.extra_allowed {
         return search(compiled, arcs, index + 1, counts, budget);
     }
-    Ok(false)
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -380,7 +395,10 @@ mod tests {
                 extra_allowed: false,
             },
         ];
-        assert_eq!(assignment_search(&compiled, &arcs), Ok(true));
+        assert_eq!(
+            assignment_search(&compiled, &arcs),
+            Ok(Some(vec![(1, 1), (1, 1)]))
+        );
         // Both arcs only fit slot 0 → slot 1 starves.
         let arcs = vec![
             ArcOptions {
@@ -392,6 +410,6 @@ mod tests {
                 extra_allowed: false,
             },
         ];
-        assert_eq!(assignment_search(&compiled, &arcs), Ok(false));
+        assert_eq!(assignment_search(&compiled, &arcs), Ok(None));
     }
 }

@@ -610,6 +610,7 @@ fn external_shapes_use_the_resolver_hook() {
     };
     let options = ValidationOptions {
         external_resolver: Some(&resolver),
+        ..ValidationOptions::default()
     };
     let result = validate_with(&schema, &data, &map, &options);
     assert_eq!(result.entries[0].status, ConformanceStatus::Conformant);

@@ -31,7 +31,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermRef, TermValue};
 
-use crate::ast::{Schema, Shape, ShapeExpr, TripleExpr};
+use crate::ast::{Schema, SemAct, Shape, ShapeExpr, TripleExpr};
+use crate::semact::{SemActContext, SemActRegistry};
 use matcher::{ArcOptions, CNode, Card, Compiled};
 use node::{FactKind, NodeFacts, RDF_LANG_STRING};
 
@@ -97,12 +98,20 @@ pub struct ValidationOptions<'a> {
     /// Resolves `EXTERNAL` shape declarations by label. Without it, an
     /// `EXTERNAL` shape fails every node (its semantics are unavailable).
     pub external_resolver: Option<&'a ExternalResolver<'a>>,
+    /// Extensions dispatched for semantic actions. The default registry is
+    /// empty, so every semantic action is an inert success.
+    pub sem_acts: SemActRegistry<'a>,
+    /// Query-level semantic actions supplied out-of-band (the shexTest
+    /// `sht:semActs` / the no-code `%iri%` form), fired as start actions.
+    pub extern_start_acts: &'a [SemAct],
 }
 
 impl core::fmt::Debug for ValidationOptions<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ValidationOptions")
             .field("external_resolver", &self.external_resolver.map(|_| "<fn>"))
+            .field("sem_acts", &self.sem_acts)
+            .field("extern_start_acts", &self.extern_start_acts.len())
             .finish()
     }
 }
@@ -140,7 +149,30 @@ pub fn validate_with(
             .collect(),
         None => Vec::new(),
     };
-    let mut engine = Engine::new(schema, data, &externals);
+    // Start actions (schema `startActs` and any query-level actions) fire
+    // once before the map is checked; a failure fails the whole validation.
+    let start_ctx = SemActContext::default();
+    if !options
+        .sem_acts
+        .dispatch_all(&schema.start_acts, &start_ctx)
+        || !options
+            .sem_acts
+            .dispatch_all(options.extern_start_acts, &start_ctx)
+    {
+        return ResultShapeMap {
+            entries: map
+                .iter()
+                .map(|(value, selector)| ResultEntry {
+                    node: value.clone(),
+                    shape: selector.clone(),
+                    status: ConformanceStatus::Nonconformant,
+                    reason: Some("start semantic action failed".to_owned()),
+                })
+                .collect(),
+        };
+    }
+
+    let mut engine = Engine::new(schema, data, &externals, &options.sem_acts);
     let mut entries = Vec::with_capacity(map.len());
     for (value, selector) in map {
         let outcome = engine.check_association(value, selector);
@@ -172,6 +204,7 @@ type Pair = (TermId, u32);
 
 struct Engine<'a> {
     data: &'a RdfDataset,
+    sem_acts: &'a SemActRegistry<'a>,
     start: Option<&'a ShapeExpr>,
     shape_map: HashMap<&'a str, &'a ShapeExpr>,
     te_map: HashMap<&'a str, &'a TripleExpr>,
@@ -187,7 +220,12 @@ struct Engine<'a> {
 }
 
 impl<'a> Engine<'a> {
-    fn new(schema: &'a Schema, data: &'a RdfDataset, externals: &'a [(String, ShapeExpr)]) -> Self {
+    fn new(
+        schema: &'a Schema,
+        data: &'a RdfDataset,
+        externals: &'a [(String, ShapeExpr)],
+        sem_acts: &'a SemActRegistry<'a>,
+    ) -> Self {
         let mut shape_map: HashMap<&'a str, &'a ShapeExpr> = schema
             .shapes
             .iter()
@@ -205,6 +243,7 @@ impl<'a> Engine<'a> {
         }
         Self {
             data,
+            sem_acts,
             start: schema.start.as_deref(),
             shape_map,
             te_map: te_labels.into_iter().collect(),
@@ -331,6 +370,7 @@ impl<'a> Engine<'a> {
                     },
                 ),
                 slots: Vec::new(),
+                group_acts: Vec::new(),
             },
         };
         // Per-(predicate, direction) slot indexes, in deterministic order.
@@ -435,14 +475,75 @@ impl<'a> Engine<'a> {
                     counts[slot].1 += 1;
                 }
             }
-            matcher::counts_match(&compiled, &counts)
+            matcher::counts_match(&compiled, &counts).then_some(counts)
         } else {
             matcher::assignment_search(&compiled, &options)?
         };
-        if matched {
-            Ok(())
-        } else {
-            Err(cardinality_reason(&compiled, &arcs, &value_failures))
+        let Some(counts) = matched else {
+            return Err(cardinality_reason(&compiled, &arcs, &value_failures));
+        };
+        // The neighbourhood matched; fire semantic actions (§5.5.2).
+        self.fire_sem_acts(focus, shape, &compiled, &counts)
+    }
+
+    /// Dispatch the semantic actions that a successful shape match triggers:
+    /// each matched triple constraint's actions, the expression's group
+    /// actions, then the shape's own actions. A failing action fails the
+    /// match. A no-op when no extension is registered.
+    fn fire_sem_acts(
+        &self,
+        focus: Focus<'_>,
+        shape: &Shape,
+        compiled: &Compiled<'_>,
+        counts: &[(u64, u64)],
+    ) -> Result<(), String> {
+        if self.sem_acts.is_empty() {
+            return Ok(());
+        }
+        let focus_value = self.focus_value(focus);
+        for (index, slot) in compiled.slots.iter().enumerate() {
+            if counts[index].0 == 0 || slot.sem_acts.is_empty() {
+                continue;
+            }
+            let ctx = SemActContext {
+                focus: Some(focus_value.clone()),
+                predicate: Some(slot.predicate.to_owned()),
+                value: None,
+            };
+            if !self.sem_acts.dispatch_all(slot.sem_acts, &ctx) {
+                return Err(format!(
+                    "semantic action failed on {}<{}>",
+                    if slot.inverse { "^" } else { "" },
+                    slot.predicate
+                ));
+            }
+        }
+        let group_ctx = SemActContext {
+            focus: Some(focus_value.clone()),
+            predicate: None,
+            value: None,
+        };
+        for act in &compiled.group_acts {
+            if !self.sem_acts.dispatch(act, &group_ctx) {
+                return Err("group semantic action failed".to_owned());
+            }
+        }
+        let shape_ctx = SemActContext {
+            focus: Some(focus_value),
+            predicate: None,
+            value: None,
+        };
+        if !self.sem_acts.dispatch_all(&shape.sem_acts, &shape_ctx) {
+            return Err("shape semantic action failed".to_owned());
+        }
+        Ok(())
+    }
+
+    /// The focus node as an owned [`TermValue`].
+    fn focus_value(&self, focus: Focus<'_>) -> TermValue {
+        match focus {
+            Focus::Id(id) => self.data.term_value(id),
+            Focus::Detached(value) => value.clone(),
         }
     }
 }

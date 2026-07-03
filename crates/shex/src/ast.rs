@@ -18,8 +18,9 @@
 //! * `min`/`max` are `None` when no explicit cardinality was written.
 //! * Empty `Vec`s stand for "absent" list-valued properties.
 //!
-//! Semantic actions and annotations are carried faithfully but are inert in
-//! phase 1 (no extension dispatch, no validator).
+//! Annotations are carried faithfully but inert. Semantic actions are carried
+//! and dispatched by the validator through a [`crate::semact::SemActRegistry`]
+//! (unregistered extensions remain inert).
 
 /// A shape-expression or triple-expression label: an absolute (or, when the
 /// schema was parsed without a base, relative) IRI, or a blank-node label
@@ -326,8 +327,8 @@ pub struct TripleConstraint {
     pub annotations: Vec<Annotation>,
 }
 
-/// A semantic action `%name{ code %}` / `%name%` (ShExJ `SemAct`). Carried
-/// verbatim and inert in phase 1.
+/// A semantic action `%name{ code %}` / `%name%` (ShExJ `SemAct`), dispatched
+/// during validation via a [`crate::semact::SemActRegistry`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SemAct {
     /// The extension IRI.
