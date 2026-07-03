@@ -42,7 +42,7 @@ fn endpoint_dataset(i: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let name = b.intern_iri("http://ex/name");
     let s = b.intern_iri("http://ex/s");
-    let lit = b.intern_literal(RdfLiteral::simple(&format!("ep{i}")));
+    let lit = b.intern_literal(RdfLiteral::simple(format!("ep{i}")));
     b.push_quad(s, name, lit, None);
     b.freeze().expect("freeze endpoint")
 }

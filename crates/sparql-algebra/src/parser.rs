@@ -268,6 +268,18 @@ impl Parser<'_> {
                 let (prefix, _) = self.expect_pname_ns()?;
                 let iri = self.expect_iriref()?;
                 self.prefixes.insert(prefix, iri);
+            } else if self.eat_kw("VERSION") {
+                // SPARQL 1.2 version declaration: `VERSION <string>`. Recorded and
+                // otherwise inert — it declares the query's target spec version.
+                match self.bump() {
+                    Some(Token::StringLit(_)) => {}
+                    other => {
+                        return Err(ParseError::syntax(
+                            format!("expected a version string after VERSION, found {other:?}"),
+                            self.span(),
+                        ))
+                    }
+                }
             } else {
                 break;
             }
@@ -376,6 +388,39 @@ impl Parser<'_> {
 
         let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
 
+        // §19.8: each SELECT `(expr AS ?v)` target must be fresh — not already in
+        // scope. When the query aggregates (an explicit `GROUP BY` or any
+        // aggregate ⇒ implicit single group), only the grouping keys and
+        // group-expression targets stay visible to the projection; the raw WHERE
+        // pattern variables are projected away by grouping, so re-binding one via
+        // `(expr AS ?v)` is legal (e.g. `SELECT (123 AS ?z) … GROUP BY ?s`).
+        if !select_exprs.is_empty() {
+            let aggregating = !modifiers.group_by.is_empty()
+                || !modifiers.group_extends.is_empty()
+                || !aggregates.is_empty();
+            let mut in_scope: std::collections::HashSet<Variable> = if aggregating {
+                modifiers
+                    .group_by
+                    .iter()
+                    .cloned()
+                    .chain(modifiers.group_extends.iter().map(|(v, _)| v.clone()))
+                    .collect()
+            } else {
+                visible_variables(&where_pat).into_iter().collect()
+            };
+            for (var, _) in &select_exprs {
+                if !in_scope.insert(var.clone()) {
+                    return Err(ParseError::syntax(
+                        format!(
+                            "SELECT expression target ?{} is already in scope",
+                            var.as_str()
+                        ),
+                        self.span(),
+                    ));
+                }
+            }
+        }
+
         // Trailing `ValuesClause` (§18.2.4.3): a `VALUES DataBlock` after the
         // solution modifiers — valid on both a top-level query and a `SubSelect`.
         // It is joined with the WHERE group graph pattern *before* grouping and
@@ -458,6 +503,46 @@ impl Parser<'_> {
 
     fn parse_construct(&mut self, base_iri: Option<NamedNode>) -> Result<Query> {
         self.expect_kw("CONSTRUCT")?;
+        // Short form (§16.2.1): `CONSTRUCT DatasetClause* WHERE { TriplesTemplate }`
+        // with no explicit template — the template *is* the WHERE triples block.
+        if !self.at(&Token::LBrace) {
+            let dataset = self.parse_dataset_clauses()?;
+            self.expect_kw("WHERE")?;
+            self.expect(&Token::LBrace)?;
+            let template = self.parse_construct_template()?;
+            self.expect(&Token::RBrace)?;
+            let where_pat = GraphPattern::Bgp {
+                patterns: template.clone(),
+            };
+            let mut aggregates = Vec::new();
+            let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
+            if !aggregates.is_empty()
+                || !modifiers.group_by.is_empty()
+                || !modifiers.having.is_empty()
+            {
+                return Err(ParseError::unsupported("aggregation/HAVING in CONSTRUCT"));
+            }
+            let mut p = where_pat;
+            if !modifiers.order_by.is_empty() {
+                p = GraphPattern::OrderBy {
+                    inner: Box::new(p),
+                    expression: modifiers.order_by,
+                };
+            }
+            if modifiers.offset.is_some() || modifiers.limit.is_some() {
+                p = GraphPattern::Slice {
+                    inner: Box::new(p),
+                    start: modifiers.offset.unwrap_or(0),
+                    length: modifiers.limit,
+                };
+            }
+            return Ok(Query::Construct {
+                template,
+                pattern: p,
+                dataset,
+                base_iri,
+            });
+        }
         // Long form: CONSTRUCT { template } WHERE { ... }
         self.expect(&Token::LBrace)?;
         let template = self.parse_construct_template()?;
@@ -568,17 +653,19 @@ impl Parser<'_> {
     }
 
     fn parse_construct_template(&mut self) -> Result<Vec<TriplePattern>> {
-        // A bag of triples (TriplesTemplate): subject predicate-object lists,
-        // `.`-separated. Simple predicates only (paths are not valid here).
-        let mut triples = Vec::new();
-        while !self.at(&Token::RBrace) {
-            let subject = self.parse_term_pattern()?;
-            self.parse_predicate_object_list(&subject, &mut triples, &mut Vec::new())?;
-            if !self.eat(&Token::Dot) {
-                break;
-            }
+        // A `TriplesTemplate` (§16.2 grammar) — the same triples-block grammar as
+        // a group's BGP, so RDF 1.2 reifiers/annotations and triple terms desugar
+        // identically. Property paths are *not* valid in a template.
+        if self.at(&Token::RBrace) {
+            return Ok(Vec::new());
         }
-        Ok(triples)
+        match self.parse_triples_block()? {
+            GraphPattern::Bgp { patterns } => Ok(patterns),
+            _ => Err(ParseError::syntax(
+                "property paths are not allowed in a CONSTRUCT template",
+                self.span(),
+            )),
+        }
     }
 
     // ── SPARQL 1.1 Update (§3 + grammar §19) ─────────────────────────────────
@@ -870,8 +957,7 @@ impl Parser<'_> {
                 // statement separator between triple blocks
             } else {
                 let mut triples = Vec::new();
-                let subject = self.parse_term_pattern()?;
-                self.parse_predicate_object_list(&subject, &mut triples, &mut Vec::new())?;
+                self.parse_template_triple(&mut triples)?;
                 self.eat(&Token::Dot);
                 for triple in triples {
                     if is_delete {
@@ -888,6 +974,41 @@ impl Parser<'_> {
         Ok(quads)
     }
 
+    /// Parse one subject + predicate-object list of an update template
+    /// (`TriplesTemplate`), emitting the (RDF 1.2-desugared) triples into
+    /// `triples`. Mirrors the subject dispatch of [`parse_triples_block`] so
+    /// reifiers, annotations, triple terms, collections and blank-node property
+    /// lists all desugar identically; property paths are not admissible here.
+    fn parse_template_triple(&mut self, triples: &mut Vec<TriplePattern>) -> Result<()> {
+        let mut paths = Vec::new();
+        let (subject, standalone_ok) = if self.at(&Token::LBracket) {
+            (
+                self.parse_blank_node_property_list(triples, &mut paths)?,
+                true,
+            )
+        } else if self.at(&Token::LParen) {
+            (self.parse_collection(triples, &mut paths)?, false)
+        } else if self.at(&Token::TripleOpen) {
+            let node = self.parse_triple_node(triples, &mut paths)?;
+            let standalone = !matches!(node, TermPattern::Triple(_));
+            (node, standalone)
+        } else {
+            (self.parse_term_pattern()?, false)
+        };
+        let standalone = standalone_ok
+            && (self.at(&Token::Dot) || self.at(&Token::RBrace) || self.at(&Token::LBrace));
+        if !standalone {
+            self.parse_predicate_object_list(&subject, triples, &mut paths)?;
+        }
+        if !paths.is_empty() {
+            return Err(ParseError::syntax(
+                "property paths are not allowed in an update template",
+                self.span(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Parse a nested `GRAPH g { triples }` group, scoping each parsed triple to
     /// `graph` and pushing the resulting quad patterns into `quads`.
     fn collect_quad_group(
@@ -899,8 +1020,7 @@ impl Parser<'_> {
         self.expect(&Token::LBrace)?;
         let mut triples = Vec::new();
         while !self.at(&Token::RBrace) {
-            let subject = self.parse_term_pattern()?;
-            self.parse_predicate_object_list(&subject, &mut triples, &mut Vec::new())?;
+            self.parse_template_triple(&mut triples)?;
             if !self.eat(&Token::Dot) {
                 break;
             }
@@ -1111,7 +1231,13 @@ impl Parser<'_> {
             } else if self.at(&Token::LParen) {
                 (self.parse_collection(&mut triples, &mut paths)?, false)
             } else if self.at(&Token::TripleOpen) {
-                (self.parse_triple_node(&mut triples, &mut paths)?, false)
+                // A reifying triple `<< s p o >>` emits its own reifier triples, so
+                // it may stand alone (`<< s p o >> .`) with no predicate-object
+                // list. A *triple term* `<<( s p o )>>` is a value: it may head a
+                // subject's predicate-object list but must not stand alone.
+                let node = self.parse_triple_node(&mut triples, &mut paths)?;
+                let standalone_ok = !matches!(node, TermPattern::Triple(_));
+                (node, standalone_ok)
             } else {
                 (self.parse_term_pattern()?, false)
             };
@@ -1264,20 +1390,57 @@ impl Parser<'_> {
         Ok(reifier)
     }
 
-    /// Parse the `s p o` inside a `<< … >>` / `<<( … )>>`.
+    /// Parse the `s p o` inside a `<< … >>` (reifying triple) / `<<( … )>>`
+    /// (triple term). Per RDF 1.2 the component productions are restricted: a
+    /// **triple term**'s subject is a `Var | iri | BlankNode` (no nested triple
+    /// node), while a **reifying triple**'s subject may itself be a triple node.
+    /// Neither admits an RDF collection or a populated blank-node property list in
+    /// any position (both would emit auxiliary triples a single triple cannot
+    /// carry).
     fn parse_inner_triple(
         &mut self,
         triples: &mut Vec<TriplePattern>,
         paths: &mut Vec<GraphPattern>,
     ) -> Result<TriplePattern> {
-        let subject = self.parse_graph_node(triples, paths)?;
+        let subject = self.parse_triple_node_component(triples, paths)?;
         let predicate = self.parse_predicate_name()?;
-        let object = self.parse_graph_node(triples, paths)?;
+        let object = self.parse_triple_node_component(triples, paths)?;
         Ok(TriplePattern {
             subject,
             predicate,
             object,
         })
+    }
+
+    /// Parse one subject/object component of a triple node. A nested `<< … >>` /
+    /// `<<( … )>>` is admissible, but an RDF collection `( … )` or a populated
+    /// blank-node property list `[ p o … ]` is not (each would emit auxiliary
+    /// triples a single triple cannot carry); only the anonymous `[]` (a fresh
+    /// blank node) is.
+    fn parse_triple_node_component(
+        &mut self,
+        triples: &mut Vec<TriplePattern>,
+        paths: &mut Vec<GraphPattern>,
+    ) -> Result<TermPattern> {
+        match self.peek() {
+            Some(Token::TripleOpen) => self.parse_triple_node(triples, paths),
+            Some(Token::LParen) => Err(ParseError::syntax(
+                "an RDF collection is not allowed inside a triple term or reifying triple",
+                self.span(),
+            )),
+            Some(Token::LBracket) => {
+                self.expect(&Token::LBracket)?;
+                if !self.eat(&Token::RBracket) {
+                    return Err(ParseError::syntax(
+                        "a populated blank-node property list is not allowed inside a \
+                         triple term or reifying triple",
+                        self.span(),
+                    ));
+                }
+                Ok(TermPattern::BlankNode(self.fresh_anon()))
+            }
+            _ => self.parse_term_pattern(),
+        }
     }
 
     /// Emit `reifier rdf:reifies <<( t )>>` for a reification.
@@ -1294,13 +1457,24 @@ impl Parser<'_> {
         });
     }
 
-    /// A reifier id after `~`: a variable, IRI, or blank node — or, when none is
+    /// A reifier id after `~` (§ `Reifier ::= '~' VarOrReifierId?`): a variable,
+    /// IRI, labelled blank node `_:b`, or anonymous `[]` — or, when none is
     /// present, a fresh blank node.
     fn parse_reifier_id(&mut self) -> Result<TermPattern> {
         match self.peek() {
             Some(Token::Variable(_)) => Ok(TermPattern::Variable(self.expect_var()?)),
             Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
                 Ok(TermPattern::NamedNode(self.expect_iri_node()?))
+            }
+            Some(Token::BlankNodeLabel(_)) => {
+                let Some(Token::BlankNodeLabel(l)) = self.bump() else {
+                    unreachable!()
+                };
+                Ok(TermPattern::BlankNode(BlankNode::new(l)))
+            }
+            Some(Token::Anon) => {
+                self.pos += 1;
+                Ok(TermPattern::BlankNode(self.fresh_anon()))
             }
             Some(Token::LBracket) => {
                 self.expect(&Token::LBracket)?;
@@ -1328,13 +1502,25 @@ impl Parser<'_> {
             predicate: pred.clone(),
             object: object.clone(),
         };
+        // An annotation block `{| … |}` binds to the reifier of the immediately
+        // preceding `~ id` if one is pending (so `~ :r {| … |}` annotates `:r`
+        // rather than a fresh node — important for DELETE templates, which forbid
+        // blank nodes); otherwise it mints a fresh blank reifier.
+        let mut pending: Option<TermPattern> = None;
         loop {
             if self.eat(&Token::Tilde) {
                 let reifier = self.parse_reifier_id()?;
                 self.emit_reifies(&reifier, &base, triples);
+                pending = Some(reifier);
             } else if self.eat(&Token::AnnotationOpen) {
-                let reifier = TermPattern::BlankNode(self.fresh_anon());
-                self.emit_reifies(&reifier, &base, triples);
+                let reifier = match pending.take() {
+                    Some(r) => r,
+                    None => {
+                        let r = TermPattern::BlankNode(self.fresh_anon());
+                        self.emit_reifies(&r, &base, triples);
+                        r
+                    }
+                };
                 self.parse_predicate_object_list(&reifier, triples, paths)?;
                 self.expect(&Token::AnnotationClose)?;
             } else {
@@ -1623,7 +1809,11 @@ impl Parser<'_> {
                 Ok(TermPattern::BlankNode(self.fresh_anon()))
             }
             Some(
-                Token::StringLit(_) | Token::Integer(_) | Token::Decimal(_) | Token::Double(_),
+                Token::StringLit(_)
+                | Token::LongStringLit(_)
+                | Token::Integer(_)
+                | Token::Decimal(_)
+                | Token::Double(_),
             ) => Ok(TermPattern::Literal(self.parse_literal()?)),
             Some(Token::Word(w)) if w == "true" || w == "false" => {
                 let b = matches!(self.bump(), Some(Token::Word(w)) if w == "true");
@@ -1693,7 +1883,7 @@ impl Parser<'_> {
             Some(Token::Double(s)) => {
                 Ok(Literal::new_typed(s, NamedNode::new_unchecked(XSD_DOUBLE)))
             }
-            Some(Token::StringLit(s)) => {
+            Some(Token::StringLit(s) | Token::LongStringLit(s)) => {
                 if let Some(Token::LangTag(_)) = self.peek() {
                     let Some(Token::LangTag(tag)) = self.bump() else {
                         unreachable!()
@@ -1744,7 +1934,14 @@ impl Parser<'_> {
         if self.eat(&Token::LParen) {
             // VALUES ( ?a ?b ) { ( v v ) ... }
             while let Some(Token::Variable(_)) = self.peek() {
-                variables.push(self.expect_var()?);
+                let v = self.expect_var()?;
+                if variables.contains(&v) {
+                    return Err(ParseError::syntax(
+                        format!("duplicate variable ?{} in VALUES clause", v.as_str()),
+                        self.span(),
+                    ));
+                }
+                variables.push(v);
             }
             self.expect(&Token::RParen)?;
             self.expect(&Token::LBrace)?;
@@ -1813,7 +2010,21 @@ impl Parser<'_> {
         self.expect(&Token::TripleOpen)?;
         let parens = self.eat(&Token::LParen);
         let subject = self.parse_ground_term()?;
-        let predicate = self.expect_iri_node()?;
+        // A ground triple term's subject is an `iri | BlankNode` — never a literal
+        // or a nested triple term (only the *object* may nest).
+        if matches!(subject, GroundTerm::Triple(_) | GroundTerm::Literal(_)) {
+            return Err(ParseError::syntax(
+                "a literal or nested triple term may not be the subject of a triple term",
+                self.span(),
+            ));
+        }
+        // The predicate is an IRI or the `a` keyword (rdf:type).
+        let predicate = if matches!(self.peek(), Some(Token::Word(w)) if w == "a") {
+            self.pos += 1;
+            NamedNode::new_unchecked("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+        } else {
+            self.expect_iri_node()?
+        };
         let object = self.parse_ground_term()?;
         if parens {
             self.expect(&Token::RParen)?;
@@ -2101,6 +2312,48 @@ impl Parser<'_> {
         }
     }
 
+    /// Parse an RDF 1.2 triple term `<<( s p o )>>` in *expression* position
+    /// (`ExprTripleTerm`, §17.4). It denotes the same value as `TRIPLE(s, p, o)`,
+    /// so it lowers to that function call. Only the triple-*term* form (`<<(`) is
+    /// valid here — a reifying triple `<< … >>` is not an expression.
+    fn parse_triple_term_expr(
+        &mut self,
+        aggs: &mut Vec<(Variable, AggregateExpression)>,
+    ) -> Result<Expression> {
+        self.expect(&Token::TripleOpen)?;
+        if !self.eat(&Token::LParen) {
+            return Err(ParseError::syntax(
+                "a reifying triple `<< … >>` is not valid in expression position; \
+                 use a triple term `<<( s p o )>>`",
+                self.span(),
+            ));
+        }
+        // A triple term's subject is a `Var | iri` here — never a literal or a
+        // nested triple term.
+        if matches!(
+            self.peek(),
+            Some(
+                Token::TripleOpen
+                    | Token::StringLit(_)
+                    | Token::LongStringLit(_)
+                    | Token::Integer(_)
+                    | Token::Decimal(_)
+                    | Token::Double(_)
+            )
+        ) {
+            return Err(ParseError::syntax(
+                "a literal or nested triple term may not be the subject of a triple term",
+                self.span(),
+            ));
+        }
+        let s = self.parse_primary_with_aggs(aggs)?;
+        let p = self.parse_primary_with_aggs(aggs)?;
+        let o = self.parse_primary_with_aggs(aggs)?;
+        self.expect(&Token::RParen)?;
+        self.expect(&Token::TripleClose)?;
+        Ok(Expression::FunctionCall(Function::Triple, vec![s, p, o]))
+    }
+
     fn parse_primary_expression(&mut self) -> Result<Expression> {
         let mut sink = Vec::new();
         let e = self.parse_primary_with_aggs(&mut sink)?;
@@ -2124,11 +2377,13 @@ impl Parser<'_> {
             Some(Token::Variable(_)) => Ok(Expression::Variable(self.expect_var()?)),
             Some(Token::Iri(_) | Token::PrefixedName(_, _)) => self.parse_iri_or_function(aggs),
             Some(
-                Token::StringLit(_) | Token::Integer(_) | Token::Decimal(_) | Token::Double(_),
+                Token::StringLit(_)
+                | Token::LongStringLit(_)
+                | Token::Integer(_)
+                | Token::Decimal(_)
+                | Token::Double(_),
             ) => Ok(Expression::Literal(self.parse_literal()?)),
-            Some(Token::TripleOpen) => Err(ParseError::unsupported(
-                "quoted triple in expression position",
-            )),
+            Some(Token::TripleOpen) => self.parse_triple_term_expr(aggs),
             Some(Token::Word(w)) => {
                 let w = w.clone();
                 if w == "true" || w == "false" {
@@ -2304,7 +2559,7 @@ impl Parser<'_> {
             self.expect_kw("SEPARATOR")?;
             self.expect(&Token::Eq)?;
             match self.bump() {
-                Some(Token::StringLit(s)) => Ok(Some(s)),
+                Some(Token::StringLit(s) | Token::LongStringLit(s)) => Ok(Some(s)),
                 other => Err(ParseError::syntax(
                     format!("expected SEPARATOR string, found {other:?}"),
                     self.span(),
@@ -3085,7 +3340,8 @@ mod tests {
     fn trailing_values_clause_is_accepted() {
         // §18.2.4.3: a `VALUES DataBlock` after the WHERE / solution modifiers,
         // both at the top level and on a SubSelect.
-        let q = format!("{GM}SELECT ?a WHERE {{ ?a a purrdf:T }} VALUES ?a {{ purrdf:x purrdf:y }}");
+        let q =
+            format!("{GM}SELECT ?a WHERE {{ ?a a purrdf:T }} VALUES ?a {{ purrdf:x purrdf:y }}");
         assert!(
             matches!(parse(&q), Query::Select { .. }),
             "trailing top-level VALUES must parse"

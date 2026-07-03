@@ -134,7 +134,12 @@ fn decode_binding(value: &Json) -> Result<TermValue, Error> {
         "literal" | "typed-literal" => {
             let v = binding_value(obj)?;
             let language = obj_get(obj, "xml:lang").and_then(Json::as_str);
-            let direction = match obj_get(obj, "dir").and_then(Json::as_str) {
+            // SPARQL 1.2 JSON results carry the base direction under `its:dir`
+            // (the i18n/ITS convention); accept the bare `dir` spelling too.
+            let direction = match obj_get(obj, "its:dir")
+                .or_else(|| obj_get(obj, "dir"))
+                .and_then(Json::as_str)
+            {
                 Some("ltr") => Some(RdfTextDirection::Ltr),
                 Some("rtl") => Some(RdfTextDirection::Rtl),
                 Some(other) => return Err(fmt(&format!("unknown base direction `{other}`"))),

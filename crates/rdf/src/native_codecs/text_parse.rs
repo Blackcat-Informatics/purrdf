@@ -345,7 +345,7 @@ impl<'a> TokenCursor<'a> {
                 };
                 Ok(Node::Bnode(label))
             }
-            Some(Token::StringLit(_)) => self.literal(),
+            Some(Token::StringLit(_) | Token::LongStringLit(_)) => self.literal(),
             other => Err(err(format!(
                 "unexpected token {other:?} in {:?}",
                 self.line
@@ -368,7 +368,7 @@ impl<'a> TokenCursor<'a> {
 
     /// A string literal with an optional `@lang[--dir]` tag or `^^<datatype>`.
     fn literal(&mut self) -> Result<Node, RdfDiagnostic> {
-        let Some(Token::StringLit(value)) = self.bump() else {
+        let Some(Token::StringLit(value) | Token::LongStringLit(value)) = self.bump() else {
             unreachable!()
         };
         let mut lang = None;
@@ -798,7 +798,7 @@ impl<'a> DocParser<'a> {
             }
             Some(Token::LBracket) => self.blank_node_property_list(graph),
             Some(Token::LParen) => self.collection(graph),
-            Some(Token::StringLit(_)) => self.literal(),
+            Some(Token::StringLit(_) | Token::LongStringLit(_)) => self.literal(),
             Some(Token::Integer(_) | Token::Decimal(_) | Token::Double(_)) => {
                 self.numeric_literal("")
             }
@@ -956,7 +956,7 @@ impl<'a> DocParser<'a> {
     }
 
     fn literal(&mut self) -> Result<Node, RdfDiagnostic> {
-        let Some(Token::StringLit(value)) = self.bump() else {
+        let Some(Token::StringLit(value) | Token::LongStringLit(value)) = self.bump() else {
             unreachable!()
         };
         let mut lang = None;
@@ -1082,11 +1082,12 @@ impl<'a> DocParser<'a> {
                 break;
             }
             if self.eat(&Token::Semicolon) {
-                // `Pipe` terminates a trailing `;` inside a `{| … |}` annotation block.
+                // `AnnotationClose` (`|}`) terminates a trailing `;` inside a
+                // `{| … |}` annotation block.
                 if self.at(&Token::Dot)
                     || self.at(&Token::RBracket)
                     || self.at(&Token::RBrace)
-                    || self.at(&Token::Pipe)
+                    || self.at(&Token::AnnotationClose)
                 {
                     break;
                 }
@@ -1125,9 +1126,8 @@ impl<'a> DocParser<'a> {
                 };
                 self.emit_reifies(&reifier, s, p, o, graph);
                 pending = Some(reifier);
-            } else if self.at(&Token::LBrace) && self.peek2() == Some(&Token::Pipe) {
-                self.bump(); // `{`
-                self.bump(); // `|`
+            } else if self.at(&Token::AnnotationOpen) {
+                self.bump(); // `{|`
                 let reifier = match pending.take() {
                     Some(reifier) => reifier,
                     None => {
@@ -1137,8 +1137,7 @@ impl<'a> DocParser<'a> {
                     }
                 };
                 self.predicate_object_list(&reifier, graph)?;
-                self.expect(&Token::Pipe)?; // `|` of `|}`
-                self.expect(&Token::RBrace)?; // `}` of `|}`
+                self.expect(&Token::AnnotationClose)?; // `|}`
             } else {
                 break;
             }

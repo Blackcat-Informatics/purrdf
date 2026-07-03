@@ -497,7 +497,10 @@ mod tests {
             (X, RDF_TYPE, A),
         ]);
         let closed = materialize(&ds, Regime::Rdfs).expect("rdfs");
-        assert!(has(&closed, A, RDFS_SUBCLASSOF, C), "subClassOf transitivity");
+        assert!(
+            has(&closed, A, RDFS_SUBCLASSOF, C),
+            "subClassOf transitivity"
+        );
         assert!(has(&closed, X, RDF_TYPE, B), "rdfs9 one hop");
         assert!(has(&closed, X, RDF_TYPE, C), "rdfs9 transitive typing");
     }

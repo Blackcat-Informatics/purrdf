@@ -323,6 +323,29 @@ fn ebv_of(
 
 /// The effective boolean value of a concrete term (`None` = type error).
 fn ebv_term(ctx: &mut EvalCtx<'_>, term: SolutionTerm) -> Option<bool> {
+    // A language-tagged string (rdf:langString / rdf:dirLangString) has no effective
+    // boolean value — EBV covers only xsd:string, xsd:boolean, and the numeric types.
+    let is_lang_tagged = match term {
+        SolutionTerm::Existing(id) => {
+            matches!(
+                ctx.dataset.resolve(id),
+                TermRef::Literal {
+                    language: Some(_),
+                    ..
+                }
+            )
+        }
+        SolutionTerm::Computed(sid) => matches!(
+            ctx.scratch.computed_value(sid),
+            TermValue::Literal {
+                language: Some(_),
+                ..
+            }
+        ),
+    };
+    if is_lang_tagged {
+        return None;
+    }
     match xsd_of_term(ctx, term) {
         Some(xv) => effective_boolean_value(&xv),
         None => None,
@@ -890,7 +913,7 @@ pub(crate) fn substitute_pattern(
                         _ => None,
                     })
                     .unwrap_or_else(|| name.clone()),
-                other => other.clone(),
+                purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
             },
             inner: Box::new(substitute_pattern(inner, bindings)),
             silent: *silent,
@@ -1211,10 +1234,9 @@ fn eval_function(
         },
         // RDF 1.2 base-direction accessors/tests.
         Function::LangDir => match arg(&vals, 0) {
-            Some(TermValue::Literal { direction, .. }) => Ok(Some(string_term(
-                ctx,
-                direction.map_or("", |d| d.as_str()),
-            ))),
+            Some(TermValue::Literal { direction, .. }) => {
+                Ok(Some(string_term(ctx, direction.map_or("", |d| d.as_str()))))
+            }
             _ => Ok(None),
         },
         // `hasLANG`/`hasLANGDIR` are total over a bound term: false for any term
@@ -1756,7 +1778,7 @@ fn eval_string_arg_expr(
                 return Ok(None);
             };
             let value = value_of(ctx, term);
-            Ok(string_arg_value(&value))
+            Ok(string_arg_value(&value).map(|(s, l, _)| (s, l)))
         }
     }
 }
@@ -1839,18 +1861,32 @@ fn is_numeric(v: &XsdValue) -> bool {
 /// Extract `(lexical, language)` from a plain/`xsd:string`/`rdf:langString` literal
 /// argument. `None` for any other term (a string-function type error).
 fn string_arg(vals: &[Option<TermValue>], i: usize) -> Option<(String, Option<String>)> {
+    string_arg_value(arg(vals, i)?).map(|(s, l, _)| (s, l))
+}
+
+/// Like [`string_arg`] but also returns the RDF 1.2 base direction (for functions
+/// that must preserve or inspect it, e.g. `CONCAT`).
+fn string_arg3(
+    vals: &[Option<TermValue>],
+    i: usize,
+) -> Option<(String, Option<String>, Option<RdfTextDirection>)> {
     string_arg_value(arg(vals, i)?)
 }
 
-fn string_arg_value(value: &TermValue) -> Option<(String, Option<String>)> {
+fn string_arg_value(
+    value: &TermValue,
+) -> Option<(String, Option<String>, Option<RdfTextDirection>)> {
     match value {
         TermValue::Literal {
             lexical_form,
             datatype,
             language,
-            ..
-        } if datatype == XSD_STRING || datatype == RDF_LANG_STRING => {
-            Some((lexical_form.clone(), language.clone()))
+            direction,
+        } if datatype == XSD_STRING
+            || datatype == RDF_LANG_STRING
+            || datatype == RDF_DIR_LANG_STRING =>
+        {
+            Some((lexical_form.clone(), language.clone(), *direction))
         }
         _ => None,
     }
@@ -1898,27 +1934,55 @@ fn make_string(ctx: &mut EvalCtx<'_>, lexical: String, lang: Option<String>) -> 
     }
 }
 
-/// `CONCAT(...)`: concatenate string arguments. The result keeps a common language
-/// tag iff every argument shares it; otherwise it is `xsd:string`.
+/// Intern a string literal keeping a language tag and (RDF 1.2) base direction:
+/// `rdf:dirLangString` when both are present, `rdf:langString` when only a
+/// language is, else `xsd:string`. A direction without a language is dropped.
+fn make_string_dir(
+    ctx: &mut EvalCtx<'_>,
+    lexical: String,
+    lang: Option<String>,
+    dir: Option<RdfTextDirection>,
+) -> SolutionTerm {
+    match (lang, dir) {
+        (Some(l), Some(d)) => intern(
+            ctx,
+            TermValue::Literal {
+                lexical_form: lexical,
+                datatype: RDF_DIR_LANG_STRING.to_owned(),
+                language: Some(l),
+                direction: Some(d),
+            },
+        ),
+        (Some(l), None) => make_string(ctx, lexical, Some(l)),
+        (None, _) => string_term(ctx, &lexical),
+    }
+}
+
+/// `CONCAT(...)`: concatenate string arguments. The result keeps the language tag
+/// **and** base direction iff *every* argument shares the same `(lang, dir)` pair;
+/// if either facet differs across arguments the result is a plain `xsd:string`.
 fn eval_concat(
     ctx: &mut EvalCtx<'_>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let mut out = String::new();
-    let mut common: Option<Option<String>> = None;
+    let mut common: Option<(Option<String>, Option<RdfTextDirection>)> = None;
+    let mut consistent = true;
     for i in 0..vals.len() {
-        let Some((s, lang)) = string_arg(vals, i) else {
+        let Some((s, lang, dir)) = string_arg3(vals, i) else {
             return Ok(None);
         };
         out.push_str(&s);
-        common = Some(match common {
-            None => lang,
-            Some(prev) if prev == lang => prev,
-            Some(_) => None,
-        });
+        match &common {
+            None => common = Some((lang, dir)),
+            Some((cl, cd)) if *cl == lang && *cd == dir => {}
+            Some(_) => consistent = false,
+        }
     }
-    let lang = common.flatten();
-    Ok(Some(make_string(ctx, out, lang)))
+    match common {
+        Some((lang, dir)) if consistent => Ok(Some(make_string_dir(ctx, out, lang, dir))),
+        _ => Ok(Some(string_term(ctx, &out))),
+    }
 }
 
 /// `SUBSTR(str, start[, length])` with 1-based indexing over Unicode scalars.
@@ -2079,6 +2143,9 @@ fn eval_str_lang(
     let (Some((lex, _)), Some((lang, _))) = (string_arg(vals, 0), string_arg(vals, 1)) else {
         return Ok(None);
     };
+    if lang.is_empty() {
+        return Ok(None); // an empty language tag is not a valid rdf:langString
+    }
     Ok(Some(make_string(ctx, lex, Some(lang.to_ascii_lowercase()))))
 }
 
@@ -2089,29 +2156,30 @@ fn eval_str_lang_dir(
     ctx: &mut EvalCtx<'_>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
-    let (Some((lex, _)), Some((lang, _)), Some((dir, _))) =
-        (string_arg(vals, 0), string_arg(vals, 1), string_arg(vals, 2))
-    else {
+    let (Some((lex, _)), Some((lang, _)), Some((dir, _))) = (
+        string_arg(vals, 0),
+        string_arg(vals, 1),
+        string_arg(vals, 2),
+    ) else {
         return Ok(None);
     };
-    let direction = match dir.to_ascii_lowercase().as_str() {
-        "ltr" => Some(RdfTextDirection::Ltr),
-        "rtl" => Some(RdfTextDirection::Rtl),
-        "" => None,
+    if lang.is_empty() {
+        return Ok(None); // a directional language string needs a language
+    }
+    // The base direction must be exactly `ltr`/`rtl` (case-sensitive); anything
+    // else, including an empty string, is a type error (unbound).
+    let direction = match dir.as_str() {
+        "ltr" => RdfTextDirection::Ltr,
+        "rtl" => RdfTextDirection::Rtl,
         _ => return Ok(None),
-    };
-    let datatype = if direction.is_some() {
-        RDF_DIR_LANG_STRING
-    } else {
-        RDF_LANG_STRING
     };
     Ok(Some(intern(
         ctx,
         TermValue::Literal {
             lexical_form: lex,
-            datatype: datatype.to_owned(),
+            datatype: RDF_DIR_LANG_STRING.to_owned(),
             language: Some(lang.to_ascii_lowercase()),
-            direction,
+            direction: Some(direction),
         },
     )))
 }
@@ -2138,6 +2206,14 @@ fn eval_triple_ctor(
     let (Some(s), Some(p), Some(o)) = (arg(vals, 0), arg(vals, 1), arg(vals, 2)) else {
         return Ok(None);
     };
+    // A triple term's subject must be an IRI or blank node and its predicate an
+    // IRI. Under RDF 1.2 a triple term may nest only in *object* position, so a
+    // triple term (or literal) in the subject/predicate slot is a type error, as
+    // is a literal predicate — all of which yield an unbound result.
+    if !matches!(s, TermValue::Iri(_) | TermValue::Blank { .. }) || !matches!(p, TermValue::Iri(_))
+    {
+        return Ok(None);
+    }
     let triple = TermValue::Triple {
         s: Box::new(s.clone()),
         p: Box::new(p.clone()),

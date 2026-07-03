@@ -35,8 +35,14 @@ pub enum Token {
     BlankNodeLabel(String),
     /// An anonymous blank node `[]` (with only whitespace inside).
     Anon,
-    /// A string literal's unescaped content (quote style is not retained).
+    /// A short string literal's unescaped content (`'...'` / `"..."`; quote
+    /// style is not retained).
     StringLit(String),
+    /// A long (triple-quoted) string literal's unescaped content
+    /// (`'''...'''` / `"""..."""`). Kept distinct from [`Token::StringLit`] so
+    /// grammar productions that admit only short strings — e.g. the SPARQL 1.2
+    /// `VersionSpecifier` — can reject the long form.
+    LongStringLit(String),
     /// An integer literal (lexical form).
     Integer(String),
     /// A decimal literal (lexical form).
@@ -268,7 +274,7 @@ impl<'a> Lexer<'a> {
             '*' => self.single(Token::Star),
             '+' => self.single(Token::Plus),
             '-' => self.single(Token::Minus),
-            '!' => Ok(self.two_or_one('!', Token::Bang, '=', Token::NotEq, Token::Bang)),
+            '!' => Ok(self.two_or_one('=', Token::NotEq, '\0', Token::NotEq, Token::Bang)),
             '=' => self.single(Token::Eq),
             '~' => self.single(Token::Tilde),
             '&' => self.lex_and(start),
@@ -469,7 +475,7 @@ impl<'a> Lexer<'a> {
                 if long {
                     if self.peek(1) == Some(quote) && self.peek(2) == Some(quote) {
                         self.pos += 3;
-                        return Ok(Token::StringLit(value));
+                        return Ok(Token::LongStringLit(value));
                     }
                     // a lone quote inside a long string is literal
                     value.push(c);
