@@ -142,8 +142,10 @@ impl Decimal {
         frac_ord
     }
 
-    /// XSD canonical lexical form: decimal point mandatory, no trailing fractional
-    /// zeros except the one required to keep a digit after the point.
+    /// XSD 1.1 canonical lexical form (§3.3.3.2 `decimalCanonicalMap`): an
+    /// integer-valued decimal has NO decimal point (`3` → `"3"`, `-2` → `"-2"`,
+    /// `0` → `"0"`); a non-integer decimal keeps its fractional part with trailing
+    /// zeros trimmed (`2.50` → `"2.5"`, `-0.250` → `"-0.25"`).
     #[must_use]
     pub fn canonical_lexical(&self) -> String {
         let neg = self.mantissa < 0;
@@ -161,15 +163,15 @@ impl Decimal {
             ("0".to_string(), format!("{pad}{digits}"))
         };
 
-        // Trim trailing zeros from the fractional part, keep at least one digit.
+        // XSD 1.1 §3.3.3.2: an integer-valued decimal (an empty fractional part
+        // after trimming trailing zeros) has NO decimal point at all.
         let frac_trimmed = frac_part.trim_end_matches('0');
-        let frac_final = if frac_trimmed.is_empty() {
-            "0"
-        } else {
-            frac_trimmed
-        };
         let sign = if neg { "-" } else { "" };
-        format!("{sign}{int_part}.{frac_final}")
+        if frac_trimmed.is_empty() {
+            format!("{sign}{int_part}")
+        } else {
+            format!("{sign}{int_part}.{frac_trimmed}")
+        }
     }
 }
 
@@ -967,13 +969,25 @@ pub fn numeric_round(a: &XsdValue) -> Result<XsdValue, XsdError> {
             let scale = u32::from(d.scale());
             // threshold = 5 × 10^(scale-1). For scale 1 that is 5, scale 2 → 50, etc.
             let threshold = 5i128 * 10i128.pow(scale - 1);
-            // frac_m has the same sign as the mantissa (it is mantissa % 10^scale).
-            // We round toward +inf on the half: add 1 if frac_m >= +threshold (positive
-            // half case), leave alone otherwise. For negatives, frac_m is negative and
-            // -2.5 → whole=-2, frac=-5 (at scale 1), threshold=5: frac_m=-5 < 5, so
-            // whole stays -2 (rounds toward zero = toward +inf for negative half).
+            // `fn:round` is `floor(x + 0.5)` — round to nearest, ties toward +infinity.
+            // `whole` is truncated toward zero and `frac_m` carries the value's sign:
+            //
+            //   * frac_m >=  threshold  (frac >= +0.5): step up      → whole + 1
+            //         (positive half `1.5` → `2`; `2.5` → `3`).
+            //   * frac_m <  -threshold  (frac <  -0.5): step down     → whole - 1
+            //         (`-1.6` → `-2`: the nearest integer is one step MORE negative;
+            //          the previous code wrongly left this at `whole` = `-1`).
+            //   * otherwise (|frac| < 0.5, OR a negative half frac_m == -threshold):
+            //         stay at `whole` — a negative tie rounds toward +inf, so
+            //         `-2.5` → `-2` and `-1.5` → `-1`.
             let result = if frac_m >= threshold {
                 whole.checked_add(1).ok_or_else(|| XsdError::OutOfRange {
+                    datatype: XsdDatatype::Decimal,
+                    lexical: d.canonical_lexical(),
+                    reason: "round overflow",
+                })?
+            } else if frac_m < -threshold {
+                whole.checked_sub(1).ok_or_else(|| XsdError::OutOfRange {
                     datatype: XsdDatatype::Decimal,
                     lexical: d.canonical_lexical(),
                     reason: "round overflow",
@@ -1093,14 +1107,33 @@ mod tests {
     #[test]
     fn decimal_parse_and_canonical() {
         assert_eq!(dec("12.34").canonical_lexical(), "12.34");
-        assert_eq!(dec("12.00").canonical_lexical(), "12.0");
-        assert_eq!(dec("100").canonical_lexical(), "100.0");
+        // XSD 1.1 §3.3.3.2: integer-valued decimals canonicalize with no point.
+        assert_eq!(dec("12.00").canonical_lexical(), "12");
+        assert_eq!(dec("100").canonical_lexical(), "100");
         assert_eq!(dec("-0.5").canonical_lexical(), "-0.5");
         assert_eq!(dec(".5").canonical_lexical(), "0.5");
-        assert_eq!(dec("1.").canonical_lexical(), "1.0");
+        assert_eq!(dec("1.").canonical_lexical(), "1");
         assert_eq!(dec("0.005").canonical_lexical(), "0.005");
         assert!(parse_decimal("1.2.3").is_err());
         assert!(parse_decimal("").is_err());
+    }
+
+    #[test]
+    fn round_decimal_nearest_ties_toward_positive_infinity() {
+        // `fn:round` = floor(x + 0.5): round to nearest, ties toward +infinity.
+        let round = |s: &str| as_decimal(&numeric_round(&dec_val(s)).unwrap());
+        // Positive: half rounds up, sub-half stays.
+        assert_eq!(round("2.5").cmp_exact(&dec("3")), Ordering::Equal);
+        assert_eq!(round("1.1").cmp_exact(&dec("1")), Ordering::Equal);
+        // Negative below the half-point rounds AWAY from zero (the fixed bug:
+        // `-1.6` must be `-2`, not `-1`).
+        assert_eq!(round("-1.6").cmp_exact(&dec("-2")), Ordering::Equal);
+        // Negative sub-half stays toward zero.
+        assert_eq!(round("-1.4").cmp_exact(&dec("-1")), Ordering::Equal);
+        // Negative ties round toward +infinity (toward zero): `-1.5` → `-1`,
+        // `-2.5` → `-2`.
+        assert_eq!(round("-1.5").cmp_exact(&dec("-1")), Ordering::Equal);
+        assert_eq!(round("-2.5").cmp_exact(&dec("-2")), Ordering::Equal);
     }
 
     #[test]

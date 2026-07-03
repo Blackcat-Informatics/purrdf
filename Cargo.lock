@@ -1252,6 +1252,7 @@ dependencies = [
  "md-5",
  "pretty_assertions",
  "purrdf-core",
+ "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-results",
  "purrdf-xsd",

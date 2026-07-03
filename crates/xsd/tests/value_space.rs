@@ -35,10 +35,10 @@ const CANONICAL_VECTORS: &[(&str, D, &str)] = &[
     ("0", D::NonPositiveInteger, "0"),
     // Leading-zero stripping still applies.
     ("007", D::Int, "7"),
-    // decimal
-    ("12.00", D::Decimal, "12.0"),
+    // decimal (XSD 1.1: integer-valued decimals canonicalize with no point)
+    ("12.00", D::Decimal, "12"),
     (".5", D::Decimal, "0.5"),
-    ("100", D::Decimal, "100.0"),
+    ("100", D::Decimal, "100"),
     ("-0.250", D::Decimal, "-0.25"),
     // double / float
     ("1.0E2", D::Double, "1.0E2"),

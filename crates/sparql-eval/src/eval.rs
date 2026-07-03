@@ -150,6 +150,22 @@ pub struct EvalCtx<'d> {
     /// A monotonic counter for minting fresh blank nodes (`BNODE()` and CONSTRUCT
     /// template blanks).
     pub bnode_counter: u64,
+    /// The row ordinal of the solution currently being extended, set by
+    /// [`crate::expr::eval_extend`] right before it evaluates that row's
+    /// expression. `BNODE(strExpr)` (SPARQL 1.1 §17.4.2.2) uses this to
+    /// memoize per-solution: the row/argument pair identifies "the same query
+    /// solution" across the chain of `Extend` nodes one `SELECT`'s
+    /// `(expr AS ?v)` list (or a `WHERE`-clause `BIND`) lowers to, since each
+    /// `Extend` maps the SAME ordered row sequence 1:1 with no row dropped,
+    /// added, or reordered between them.
+    pub(crate) current_row: u64,
+    /// Per-solution memo for `BNODE(strExpr)`, keyed by `(current_row, argument
+    /// string)`: two calls with an equal argument at the same row ordinal reuse
+    /// the same minted blank (SPARQL 1.1 §17.4.2.2); the zero-argument `BNODE()`
+    /// form bypasses this entirely and always mints fresh. Query-scoped like the
+    /// other caches on this context — never cleared mid-query, since a later row
+    /// never revisits an earlier row's ordinal within the same `Extend` chain.
+    pub(crate) bnode_memo: DetHashMap<(u64, String), SolutionTerm>,
     /// The evaluation-time value of NOW() — an xsd:dateTime, captured once at
     /// context construction (from the host platform's real wall clock, see
     /// [`crate::clock::wall_clock_now`]) so all NOW() calls in a query return the
@@ -253,6 +269,12 @@ pub struct EvalCtx<'d> {
     /// allocation can reuse a dropped node's address) and must be bypassed
     /// entirely while this flag is set.
     pub(crate) in_substituted_exists: bool,
+    /// The query's effective base IRI (see [`purrdf_sparql_algebra::Query::base_iri`]),
+    /// set once per `evaluate_query` call. `IRI()`/`URI()` resolves a relative-reference
+    /// string argument against this (SPARQL 1.1 §17.4.2.6); `None` means no base was
+    /// ever supplied (an explicit `BASE` decl nor a caller document base), so a
+    /// relative argument cannot be resolved and the call is a type error.
+    pub(crate) base_iri: Option<String>,
 }
 
 impl core::fmt::Debug for EvalCtx<'_> {
@@ -283,6 +305,8 @@ impl<'d> EvalCtx<'d> {
             active_graph: GraphMatch::Default,
             active_dataset: ActiveDataset::store_default(),
             bnode_counter: 0,
+            current_row: 0,
+            bnode_memo: DetHashMap::default(),
             now: now_val,
             rng_state: rng_seed,
             options: EvalOptions::default(),
@@ -297,6 +321,7 @@ impl<'d> EvalCtx<'d> {
             bgp_order_cache: None,
             constructed: Vec::new(),
             in_substituted_exists: false,
+            base_iri: None,
         }
     }
 
@@ -485,6 +510,9 @@ pub enum Outcome {
 pub fn evaluate_query(query: &Query, ctx: &mut EvalCtx<'_>) -> Result<Outcome, EvalError> {
     // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
     ctx.active_dataset = ActiveDataset::from_query_dataset(query.dataset(), ctx.dataset);
+    // Install the query's effective base IRI so IRI()/URI() can resolve a relative
+    // string argument against it (SPARQL 1.1 §17.4.2.6).
+    ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
     match query {
         Query::Select { pattern, .. } => Ok(Outcome::Solutions(eval(pattern, ctx)?)),
         Query::Ask { pattern, .. } => Ok(Outcome::Boolean(!eval(pattern, ctx)?.is_empty())),

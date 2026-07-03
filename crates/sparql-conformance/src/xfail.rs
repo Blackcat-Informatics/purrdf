@@ -146,63 +146,35 @@ pub const XFAIL: &[Xfail] = &[
         iri_suffix: "exists/manifest#exists-graph-variable",
         reason: XfailReason::UnsupportedConstruct,
     },
-    // --- Built-in functions: the engine evaluates but the produced value/lexical
-    //     form diverges (numeric CEIL/FLOOR/ROUND datatype, unary plus, SECONDS,
-    //     STRAFTER/STRBEFORE, STRDT/STRLANG, IRI). ---------------------------------
-    // `BNODE(strExpr)` must return the SAME blank node for every call with an
-    // equal argument within one solution (SPARQL 1.1 §17.4.2.2); the native
-    // evaluator mints a fresh blank per call regardless of argument equality, so
-    // two `foo`/`foo` (or `BAZ`/`BAZ`) calls in one row yield distinct blanks. A
-    // real engine gap in `purrdf-sparql-eval`, not a comparer limitation — the
-    // solution-multiset comparer now does full bnode-isomorphism (RDFC-1.0), so
-    // this is no longer a labelling/non-determinism false negative.
+    // --- Whole-valued `xsd:decimal` lexical form: the vendored W3C SPARQL 1.1
+    //     suite is INTERNALLY INCONSISTENT, at the SAME `dawgt:Approved`
+    //     resolution, about how a COMPUTED integer-valued `xsd:decimal` result is
+    //     serialized. `functions#coalesce01` (Approved) expects `?div = 0/2` as
+    //     "0.0" and `4/2` as "2.0" — the XSD-1.0-legacy form WITH a mandatory
+    //     decimal point — while `functions#ceil01`/`floor01`/`round01`/`seconds`
+    //     (also Approved) expect "3"/"2"/"1"/"0" — the XSD 1.1 canonical form with
+    //     NO decimal point for an integer-valued decimal. The Proposed
+    //     `plus-1-corrected` (whose `?sum = ?x + ?y` COMPUTES a whole decimal)
+    //     follows coalesce01's "1.0"/"3.0" legacy form. No single deterministic
+    //     serializer can satisfy both sets, so one side is an unavoidable
+    //     vendored-fixture erratum. (`plus-2-corrected` is deliberately NOT
+    //     ledgered: its "1.0" is an ECHOED source decimal from `data-builtin-3.ttl`
+    //     preserved verbatim by the round-trip codec — it never flows through the
+    //     canonical serializer, so it is unaffected and still passes.)
+    //
+    //     PurRDF targets SPARQL 1.1, which normatively references XSD 1.1, so the
+    //     engine emits the XSD 1.1 canonical decimal (§3.3.3.2: no decimal point
+    //     for an integer-valued decimal) uniformly. The ceil/floor/round/seconds
+    //     fixtures therefore PASS natively; the fixtures below carry the legacy
+    //     "X.0" expectation and are the ledgered erratum. Their value and datatype
+    //     are computed correctly — only the divergent legacy lexical differs.
     Xfail {
-        iri_suffix: "functions/manifest#bnode01",
-        reason: XfailReason::ValueMismatch,
+        iri_suffix: "functions/manifest#coalesce01",
+        reason: XfailReason::UpstreamErratum,
     },
     Xfail {
-        iri_suffix: "functions/manifest#ceil01",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#floor01",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#round01",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#iri01",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#seconds",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#strafter02",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#strbefore02",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#strdt01",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#strdt03-rdf11",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#strlang01",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#strlang03-rdf11",
-        reason: XfailReason::ValueMismatch,
+        iri_suffix: "functions/manifest#plus-1-corrected",
+        reason: XfailReason::UpstreamErratum,
     },
     // --- Grouping: projecting a non-grouped variable must be a query error;
     //     the parser/algebra does not yet reject it (negative-syntax tests). -----

@@ -82,6 +82,19 @@ impl Query {
             | Self::Ask { dataset, .. } => dataset,
         }
     }
+
+    /// The query's effective base IRI (an explicit `BASE` decl, or the
+    /// caller-supplied document base the parser was constructed with) — the base
+    /// against which a runtime `IRI()`/`URI()` call resolves its string argument
+    /// (SPARQL 1.1 §17.4.2.6). `None` when neither was ever supplied.
+    pub fn base_iri(&self) -> Option<&NamedNode> {
+        match self {
+            Self::Select { base_iri, .. }
+            | Self::Construct { base_iri, .. }
+            | Self::Describe { base_iri, .. }
+            | Self::Ask { base_iri, .. } => base_iri.as_ref(),
+        }
+    }
 }
 
 /// A SPARQL query **dataset clause** (`FROM` / `FROM NAMED`, §13.2). An empty

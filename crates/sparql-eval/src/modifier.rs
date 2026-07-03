@@ -1083,11 +1083,9 @@ mod tests {
         };
         let seq = eval(&group, &mut ctx).expect("avg");
         let result = agg_lex(&ds, &ctx, &seq, "avg");
-        // AVG(2, 4) = 6 / 2 = 3.0 — result is decimal (integer ÷ integer → decimal).
-        assert!(
-            result.starts_with("3.0"),
-            "AVG(2,4) should be 3.0…, got {result}"
-        );
+        // AVG(2, 4) = 6 / 2 = 3 — result is decimal (integer ÷ integer → decimal);
+        // XSD 1.1 whole-decimal lexical has no point ("3", not "3.0").
+        assert_eq!(result, "3", "AVG(2,4) should be 3, got {result}");
     }
 
     #[test]
