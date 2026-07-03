@@ -260,11 +260,36 @@ impl MapParser<'_> {
 
     fn parse_term(&mut self) -> Result<TermValue> {
         match self.peek() {
+            Some('<') if self.peek_at(1) == Some('<') => self.parse_triple_term(),
             Some('<') => Ok(TermValue::iri(self.parse_iri()?)),
             Some('_') => self.parse_blank(),
             Some('"') => self.parse_literal(),
-            _ => Err(self.err("expected a term (<iri>, _:blank or \"literal\")")),
+            _ => Err(self.err("expected a term (<iri>, _:blank, \"literal\" or <<triple>>)")),
         }
+    }
+
+    /// An RDF-1.2 quoted-triple term `<< subject predicate object >>`,
+    /// tolerating arbitrary whitespace between the tokens. Recurses so the
+    /// three inner positions accept any node the emitter can produce,
+    /// including nested `<< >>` terms.
+    fn parse_triple_term(&mut self) -> Result<TermValue> {
+        self.pos += 2; // '<<'
+        self.skip_ws();
+        let s = self.parse_term()?;
+        self.skip_ws();
+        let p = self.parse_term()?;
+        self.skip_ws();
+        let o = self.parse_term()?;
+        self.skip_ws();
+        if self.peek() != Some('>') || self.peek_at(1) != Some('>') {
+            return Err(self.err("expected '>>' to close a quoted-triple term"));
+        }
+        self.pos += 2;
+        Ok(TermValue::Triple {
+            s: Box::new(s),
+            p: Box::new(p),
+            o: Box::new(o),
+        })
     }
 
     fn parse_predicate(&mut self) -> Result<String> {

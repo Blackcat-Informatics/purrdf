@@ -129,6 +129,85 @@ fn unknown_predicate_selects_nothing() {
     assert!(got.is_empty());
 }
 
+// ── RDF-1.2 quoted-triple term parsing ──────────────────────────────────────
+
+fn parse_node(src: &str) -> TermValue {
+    let map = parse_shape_map(&format!("{src}@START"), None).expect("term parses");
+    match &map.0[0].node {
+        NodeSelector::Node(value) => value.clone(),
+        other => panic!("expected a concrete node, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_quoted_triple_term() {
+    let got = parse_node("<< <http://a.example/s> <http://a.example/p> <http://a.example/o> >>");
+    assert_eq!(
+        got,
+        TermValue::Triple {
+            s: Box::new(iri("http://a.example/s")),
+            p: Box::new(iri("http://a.example/p")),
+            o: Box::new(iri("http://a.example/o")),
+        }
+    );
+}
+
+#[test]
+fn parses_quoted_triple_term_tolerates_extra_whitespace() {
+    let got =
+        parse_node("<<   <http://a.example/s>\t<http://a.example/p>\n\n<http://a.example/o>   >>");
+    assert_eq!(
+        got,
+        TermValue::Triple {
+            s: Box::new(iri("http://a.example/s")),
+            p: Box::new(iri("http://a.example/p")),
+            o: Box::new(iri("http://a.example/o")),
+        }
+    );
+}
+
+#[test]
+fn parses_nested_quoted_triple_term() {
+    let got = parse_node(
+        "<< << <http://a.example/s> <http://a.example/p> <http://a.example/o> >> <http://a.example/p2> <http://a.example/o2> >>",
+    );
+    let inner = TermValue::Triple {
+        s: Box::new(iri("http://a.example/s")),
+        p: Box::new(iri("http://a.example/p")),
+        o: Box::new(iri("http://a.example/o")),
+    };
+    assert_eq!(
+        got,
+        TermValue::Triple {
+            s: Box::new(inner),
+            p: Box::new(iri("http://a.example/p2")),
+            o: Box::new(iri("http://a.example/o2")),
+        }
+    );
+}
+
+#[test]
+fn parses_quoted_triple_with_blank_and_literal_positions() {
+    let got = parse_node(r#"<< _:b1 <http://a.example/p> "lit"@en >>"#);
+    assert_eq!(
+        got,
+        TermValue::Triple {
+            s: Box::new(TermValue::blank("b1")),
+            p: Box::new(iri("http://a.example/p")),
+            o: Box::new(TermValue::lang_literal("lit", "en")),
+        }
+    );
+}
+
+#[test]
+fn quoted_triple_term_requires_closing_delimiter() {
+    let err = parse_shape_map(
+        "<< <http://a.example/s> <http://a.example/p> <http://a.example/o> @START",
+        None,
+    );
+    assert!(err.is_err());
+}
+
 #[test]
 fn resolve_then_validate() {
     let data = data();
