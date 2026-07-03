@@ -355,15 +355,13 @@ def test_rdf12_triple_term_has_no_rdflib_counterpart(compat: ModuleType) -> None
 
 def test_identified_node_hierarchy(compat: ModuleType) -> None:
     """URIRef and BNode inherit from IdentifiedNode; Literal and Variable do not."""
-    from purrdf.compat.rdflib.term import IdentifiedNode
-
-    assert issubclass(compat.URIRef, IdentifiedNode)
-    assert issubclass(compat.BNode, IdentifiedNode)
-    assert not issubclass(compat.Literal, IdentifiedNode)
-    assert not issubclass(compat.Variable, IdentifiedNode)
+    assert issubclass(compat.URIRef, compat.IdentifiedNode)
+    assert issubclass(compat.BNode, compat.IdentifiedNode)
+    assert not issubclass(compat.Literal, compat.IdentifiedNode)
+    assert not issubclass(compat.Variable, compat.IdentifiedNode)
     # IdentifiedNode itself is still a str subclass and an Identifier.
-    assert issubclass(IdentifiedNode, compat.Identifier)
-    assert issubclass(IdentifiedNode, str)
+    assert issubclass(compat.IdentifiedNode, compat.Identifier)
+    assert issubclass(compat.IdentifiedNode, str)
 
 
 def test_identified_node_importable_from_compat_term() -> None:
