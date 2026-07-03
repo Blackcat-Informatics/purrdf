@@ -40,6 +40,7 @@ fn w3c_sparql11_inventory() {
         "negation",
         "project-expression",
         "property-path",
+        "entailment",
         // full verbatim update-eval groups (commit 426c7df)
         "add",
         "basic-update",

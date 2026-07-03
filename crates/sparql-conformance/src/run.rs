@@ -49,7 +49,15 @@ pub enum RunOutcome {
 ///
 /// Returns a message on any read, parse, or serialize failure (never silent).
 pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
-    build_dataset(&case.data, &case.graph_data)
+    let ds = build_dataset(&case.data, &case.graph_data)?;
+    // For an entailment test, materialize the regime's closure into the dataset
+    // before it is frozen and queried (forward-materialization; the eval loop is
+    // untouched — it queries an already-reasoned dataset).
+    match case.regime {
+        Some(regime) => purrdf_entail::materialize(&ds, regime)
+            .map_err(|e| format!("entailment ({regime:?}) for {}: {e}", case.iri)),
+        None => Ok(ds),
+    }
 }
 
 /// Build a dataset from default-graph Turtle files (`data`) and named-graph files

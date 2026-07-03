@@ -333,6 +333,25 @@ fn chase(facts: &mut HashSet<[u32; 3]>, c: &Consts, interner: &Interner, owl: bo
                 add([cc, c.sco, c.resource]);
             }
         }
+        // rdf1 + rdfs6: every predicate is a property, reflexively a subProperty of
+        // itself. scm-sco / scm-spo: the endpoints of subClassOf / subPropertyOf are
+        // reflexively related to themselves (their domain/range is axiomatically
+        // rdfs:Class / rdf:Property, so rdfs10/rdfs6 make them reflexive).
+        for &p in by_pred.keys() {
+            add([p, c.spo, p]);
+        }
+        for (&cc, ds) in &sco_by_left {
+            add([cc, c.sco, cc]);
+            for &d in ds {
+                add([d, c.sco, d]);
+            }
+        }
+        for (&p, qs) in &spo_by_left {
+            add([p, c.spo, p]);
+            for &q in qs {
+                add([q, c.spo, q]);
+            }
+        }
 
         if owl {
             // scm-eqc: equivalentClass ⇒ mutual subClassOf.

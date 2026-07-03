@@ -1235,6 +1235,7 @@ dependencies = [
  "datatest-stable",
  "purrdf",
  "purrdf-core",
+ "purrdf-entail",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",

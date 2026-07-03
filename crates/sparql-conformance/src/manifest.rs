@@ -35,6 +35,11 @@ const UT: &str = "http://www.w3.org/2009/sparql/tests/test-update#";
 /// `ut:graphData` entry in an update test.
 const RDFS_LABEL_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
 
+/// The SPARQL service-description namespace; `sd:entailmentRegime` on a query
+/// test's action lists the entailment regimes under which its expected result
+/// holds (an RDF list of `http://www.w3.org/ns/entailment/*` IRIs).
+const SD_NS: &str = "http://www.w3.org/ns/sparql-service-description#";
+
 /// The kind of a discovered SPARQL test case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestKind {
@@ -94,6 +99,11 @@ pub struct SparqlTestCase {
     pub graph_data: Vec<(String, PathBuf)>,
     /// `SERVICE` endpoint data: `(endpoint IRI, local file)` (`qt:serviceData`).
     pub service_data: Vec<(String, PathBuf)>,
+    /// The best-supported entailment regime for this case (`sd:entailmentRegime`),
+    /// if any: the dataset is materialized under it before the query runs. `None`
+    /// for a plain (Simple-entailment) test or one whose only regimes the native
+    /// reasoner cannot materialize (OWL-Direct / D / RIF).
+    pub regime: Option<purrdf_entail::Regime>,
     /// The expected result.
     pub expected: ExpectedResult,
 }
@@ -145,6 +155,7 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
                 data: Vec::new(),
                 graph_data: Vec::new(),
                 service_data: Vec::new(),
+                regime: None,
                 expected: ExpectedResult::None,
             });
         // A test may carry several rdf:type values; prefer a recognized kind.
@@ -189,7 +200,59 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
     if cases.iter().any(|c| c.kind == TestKind::UpdateEval) {
         load_update_details(&dataset, &dir, &mut cases)?;
     }
+    // Entailment tests declare an `sd:entailmentRegime` list; select the regime
+    // the native reasoner should materialize before the query runs.
+    load_entailment_regimes(&dataset, &mut cases)?;
     Ok(cases)
+}
+
+/// Set `regime` for each test that declares an `sd:entailmentRegime` list,
+/// choosing the regime the native reasoner should materialize under.
+fn load_entailment_regimes(
+    dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
+    cases: &mut [SparqlTestCase],
+) -> Result<(), String> {
+    let query = format!(
+        "PREFIX mf: <{MF}>\n\
+         PREFIX sd: <{SD_NS}>\n\
+         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
+         SELECT ?test ?regime WHERE {{\n\
+         ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
+         ?test mf:action ?act .\n\
+         {{ ?act sd:entailmentRegime ?regime }}\n\
+         UNION\n\
+         {{ ?act sd:entailmentRegime/rdf:rest*/rdf:first ?regime }}\n\
+         }}"
+    );
+    let rows = query_rows(dataset, &query)?;
+    if rows.is_empty() {
+        return Ok(()); // no entailment tests in this manifest
+    }
+    let mut by_test: BTreeMap<String, Vec<purrdf_entail::Regime>> = BTreeMap::new();
+    for row in &rows {
+        if let (Some(test), Some(reg)) = (iri_of(row, "test"), iri_of(row, "regime")) {
+            if let Some(r) = purrdf_entail::Regime::from_iri(&reg) {
+                by_test.entry(test).or_default().push(r);
+            }
+        }
+    }
+    for case in cases.iter_mut() {
+        if let Some(regimes) = by_test.get(&case.iri) {
+            case.regime = pick_regime(regimes);
+        }
+    }
+    Ok(())
+}
+
+/// Choose the regime to materialize: prefer the weakest that still entails (RDFS),
+/// then OWL-RL, then the identity regimes. Boundaries the native reasoner cannot
+/// materialize (OWL-Direct / D) yield `None` — the case runs unmaterialized and,
+/// if it needs those entailments, is recorded as a typed `Entailment` xfail.
+fn pick_regime(regimes: &[purrdf_entail::Regime]) -> Option<purrdf_entail::Regime> {
+    use purrdf_entail::Regime::{OwlRl, Rdf, Rdfs, Simple};
+    [Rdfs, OwlRl, Rdf, Simple]
+        .into_iter()
+        .find(|pref| regimes.contains(pref))
 }
 
 /// An accumulated expected post-state: `(default-graph files, named graphs)`.
