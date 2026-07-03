@@ -48,7 +48,11 @@ def repo_root() -> Path:
 
 def _is_frozen_payload(rel: Path) -> bool:
     """Vendored payload only — skip first-party sidecars so editing them (e.g. a
-    provenance README) does not require regenerating the freeze manifest."""
+    provenance README) does not require regenerating the freeze manifest, and
+    skip hidden files so OS metadata (``.DS_Store``, editor dotfiles) never
+    contaminates the manifest across contributors' platforms."""
+    if rel.name.startswith("."):
+        return False
     if rel.name == "README.md":
         return False
     if rel.suffix == ".license":
@@ -59,14 +63,23 @@ def _is_frozen_payload(rel: Path) -> bool:
 
 
 def hash_tree(root: Path) -> list[tuple[str, str]]:
-    """Return sorted ``(relpath, sha256-hex)`` for every payload file under *root*."""
+    """Return sorted ``(relpath, sha256-hex)`` for every payload file under *root*.
+
+    Ordering is by the POSIX relative-path string, not by ``Path`` objects:
+    ``Path`` sorts by component tuples and case-folds on Windows, which would
+    emit a differently-ordered/cased manifest off-Linux. Sorting the final
+    ``(posix_rel, digest)`` tuples keeps the manifest reproducible everywhere.
+    """
     entries: list[tuple[str, str]] = []
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
         rel = path.relative_to(root)
         if not _is_frozen_payload(rel):
             continue
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         entries.append((rel.as_posix(), digest))
+    entries.sort()
     return entries
 
 
