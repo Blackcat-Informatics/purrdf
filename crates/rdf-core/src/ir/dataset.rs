@@ -1437,7 +1437,8 @@ impl RdfDataset {
     /// `A`), so a cycle terminates instead of looping or panicking.
     #[must_use]
     pub fn predecessor_chain(&self, start: TermId) -> Vec<TermId> {
-        let mut visited: std::collections::HashSet<TermId> = std::collections::HashSet::new();
+        let mut visited: std::collections::HashSet<TermId, FastHasher> =
+            std::collections::HashSet::default();
         visited.insert(start);
         let mut result = Vec::new();
         let mut stack: Vec<TermId> = self.predecessors(start).to_vec();
