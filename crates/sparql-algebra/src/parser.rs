@@ -16,8 +16,8 @@ use std::collections::HashMap;
 
 use crate::algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, GraphTarget,
-    GraphUpdateOperation, OrderExpression, PropertyPathExpression, Query, QueryDataset, Update,
-    UsingClause,
+    GraphUpdateOperation, NegatedPathElement, OrderExpression, PropertyPathExpression, Query,
+    QueryDataset, Update, UsingClause,
 };
 use crate::ast::{
     BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
@@ -1773,21 +1773,21 @@ impl Parser<'_> {
         Ok(PropertyPathExpression::NegatedPropertySet(nodes))
     }
 
-    fn parse_path_one_in_set(&mut self) -> Result<NamedNode> {
-        // `!(^iri)` — an inverse link inside a negated property set — cannot be
-        // represented by NegatedPropertySet(Vec<NamedNode>), which carries no
-        // per-element direction. Hard-fail rather than silently miscompiling it
-        // to the forward `!(iri)` (no-optionality / no silent degradation).
-        if self.eat(&Token::Caret) {
-            return Err(ParseError::unsupported(
-                "inverse link (^) inside a negated property set",
-            ));
-        }
+    fn parse_path_one_in_set(&mut self) -> Result<NegatedPathElement> {
+        // `^iri` — an inverse link inside a negated property set (SPARQL 1.1
+        // §18.2 `PathOneInPropertySet`) — excludes a *reverse* hop rather than a
+        // forward one; see `NegatedPathElement` and the evaluator's decomposition
+        // into a forward/reverse `Alternative`.
+        let inverse = self.eat(&Token::Caret);
         if matches!(self.peek(), Some(Token::Word(w)) if w == "a") {
             self.pos += 1;
-            return Ok(NamedNode::new_unchecked(RDF_TYPE));
+            return Ok(NegatedPathElement {
+                predicate: NamedNode::new_unchecked(RDF_TYPE),
+                inverse,
+            });
         }
-        self.expect_iri_node()
+        let predicate = self.expect_iri_node()?;
+        Ok(NegatedPathElement { predicate, inverse })
     }
 
     // ── terms ────────────────────────────────────────────────────────────────
@@ -2992,15 +2992,22 @@ mod tests {
     }
 
     #[test]
-    fn inverse_in_negated_property_set_is_unsupported() {
-        // `!(^iri)` cannot be represented by NegatedPropertySet (no per-element
-        // direction); it must hard-fail rather than silently become `!(iri)`.
+    fn inverse_in_negated_property_set_parses_with_direction() {
+        // `!(^iri)` — the inverse element is preserved as a `NegatedPathElement`
+        // with `inverse: true`, not silently degraded to the forward `!(iri)`.
         let q = format!("{GM}SELECT ?x WHERE {{ ?x !(^purrdf:p) ?y }}");
-        let err = SparqlParser::new().parse_query(&q).unwrap_err();
-        assert!(
-            matches!(err, ParseError::Unsupported(_)),
-            "expected Unsupported for inverse-in-negated-set, got {err:?}"
-        );
+        let pattern = unproject(select_pattern(&q));
+        let GraphPattern::Path { path, .. } = pattern else {
+            panic!("expected a Path pattern, got {pattern:?}");
+        };
+        match path {
+            PropertyPathExpression::NegatedPropertySet(elems) => {
+                assert_eq!(elems.len(), 1);
+                assert!(elems[0].inverse, "^purrdf:p must set inverse: true");
+                assert_eq!(elems[0].predicate.as_str(), "https://x/p");
+            }
+            other => panic!("expected NegatedPropertySet, got {other:?}"),
+        }
     }
 
     #[test]

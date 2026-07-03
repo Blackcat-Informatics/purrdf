@@ -44,9 +44,6 @@ pub enum XfailReason {
     /// An UPDATE operation whose post-state the engine computes differently
     /// (e.g. graph-existence edge cases where `CREATE`/`CLEAR` are no-ops).
     UpdateSemantics,
-    /// A property-path form (negated property sets, nested `{n,m}`, etc.) the
-    /// path evaluator does not yet handle.
-    PropertyPath,
     /// Syntax the parser does not yet accept — e.g. RDF-1.2 triple-term/reifier
     /// grammar. A genuine unimplemented feature (real work to land), tracked here
     /// until the parser implements it; the ledger shrinks as each lands.
@@ -71,7 +68,6 @@ impl XfailReason {
             Self::CustomFunction => "custom-function",
             Self::ResultFormat => "result-format",
             Self::UpdateSemantics => "update-semantics",
-            Self::PropertyPath => "property-path",
             Self::ParseUnsupported => "parse-unsupported",
             Self::ValueMismatch => "value-mismatch",
         }
@@ -185,45 +181,6 @@ pub const XFAIL: &[Xfail] = &[
     Xfail {
         iri_suffix: "grouping/manifest#group07",
         reason: XfailReason::UnsupportedConstruct,
-    },
-    // --- Property paths: inverse (`^`) inside a negated property set, and
-    //     zero-or-more / zero-or-one over a property set at a bound endpoint,
-    //     are not yet evaluated (pp11/pp31 drop a result). -----------------------
-    Xfail {
-        iri_suffix: "property-path/manifest#nps_a_inverse",
-        reason: XfailReason::PropertyPath,
-    },
-    Xfail {
-        iri_suffix: "property-path/manifest#nps_direct_and_inverse",
-        reason: XfailReason::PropertyPath,
-    },
-    Xfail {
-        iri_suffix: "property-path/manifest#nps_inverse",
-        reason: XfailReason::PropertyPath,
-    },
-    Xfail {
-        iri_suffix: "property-path/manifest#pp11",
-        reason: XfailReason::PropertyPath,
-    },
-    Xfail {
-        iri_suffix: "property-path/manifest#pp31",
-        reason: XfailReason::PropertyPath,
-    },
-    Xfail {
-        iri_suffix: "property-path/manifest#zero_or_more_set_end",
-        reason: XfailReason::PropertyPath,
-    },
-    Xfail {
-        iri_suffix: "property-path/manifest#zero_or_more_set_start",
-        reason: XfailReason::PropertyPath,
-    },
-    Xfail {
-        iri_suffix: "property-path/manifest#zero_or_one_set_end",
-        reason: XfailReason::PropertyPath,
-    },
-    Xfail {
-        iri_suffix: "property-path/manifest#zero_or_one_set_start",
-        reason: XfailReason::PropertyPath,
     },
     // === Full W3C sparql11 UPDATE-eval groups (commit 426c7df) ===============
     //

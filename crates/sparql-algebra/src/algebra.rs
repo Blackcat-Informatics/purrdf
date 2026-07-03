@@ -612,6 +612,26 @@ pub enum GraphPattern {
     },
 }
 
+/// One element of a negated property set list (`!(p1|^p2|...)`, SPARQL 1.1
+/// §18.2 grammar production `PathOneInPropertySet`): a predicate IRI plus
+/// whether it was written with a leading `^`.
+///
+/// A plain element (`inverse: false`) excludes that predicate from the
+/// **forward** hop; a `^`-prefixed element (`inverse: true`) excludes it from
+/// the **reverse** hop. Per §18.3's evaluation semantics, a negated set with
+/// both kinds of element decomposes into the union (`Alternative`) of a
+/// forward-only negated step over the plain elements and a reverse-only
+/// negated step (`Reverse(NegatedPropertySet(inverse elements))`) over the
+/// `^`-elements — see `sparql-eval`'s `path` module for the evaluator.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NegatedPathElement {
+    /// The excluded predicate IRI.
+    pub predicate: NamedNode,
+    /// `true` for a `^iri` element (excludes a reverse hop); `false` for a
+    /// plain `iri` element (excludes a forward hop).
+    pub inverse: bool,
+}
+
 /// A SPARQL property-path expression (§18.1.7 / §9).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PropertyPathExpression {
@@ -629,8 +649,9 @@ pub enum PropertyPathExpression {
     OneOrMore(Box<Self>),
     /// `path?` — zero or one.
     ZeroOrOne(Box<Self>),
-    /// `!(p1|...|pn)` — negated property set.
-    NegatedPropertySet(Vec<NamedNode>),
+    /// `!(p1|...|pn)` — negated property set, each element optionally inverted
+    /// (`^pi`, SPARQL 1.1 §18.2/§18.3). See [`NegatedPathElement`].
+    NegatedPropertySet(Vec<NegatedPathElement>),
     /// `path{min,max}` — **bounded repetition** (a PurRDF extension *beyond* SPARQL
     /// 1.1 §9, which has only `*`/`+`/`?`).  `max == None` means unbounded (`{n,}`);
     /// `max == Some(min)` is exactly-`n` (`{n}`).  The invariant `min <= max` (when
@@ -673,10 +694,16 @@ impl core::fmt::Display for PropertyPathExpression {
                 Some(m) => write!(f, "{}{{{min},{m}}}", PathElt(inner)),
                 None => write!(f, "{}{{{min},}}", PathElt(inner)),
             },
-            Self::NegatedPropertySet(nodes) => {
-                let inner = nodes
+            Self::NegatedPropertySet(elems) => {
+                let inner = elems
                     .iter()
-                    .map(|n| format!("<{}>", n.as_str()))
+                    .map(|e| {
+                        if e.inverse {
+                            format!("^<{}>", e.predicate.as_str())
+                        } else {
+                            format!("<{}>", e.predicate.as_str())
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join("|");
                 write!(f, "!({inner})")
