@@ -103,6 +103,7 @@ jobs:
             -p purrdf-slice \
             -p purrdf-shapes \
             -p purrdf-shex \
+            -p purrdf-entail \
             -p purrdf \
             -p purrdf-wasm
 
@@ -131,6 +132,7 @@ jobs:
           cargo bench -p purrdf-rdf --bench native_codecs --no-run --locked
           cargo bench -p purrdf-sparql-eval --no-run --locked
           cargo bench -p purrdf-shapes --bench validate --no-run --locked
+          cargo bench -p purrdf-entail --no-run --locked
 
   # The Python binding gate — separate from the Rust `workspace`/`test` jobs above
   # (AGENTS.md §3: `make check` stays a pure-Rust gate). Builds the native module

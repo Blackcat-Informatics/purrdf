@@ -1091,6 +1091,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-entail"
+version = "0.2.1"
+dependencies = [
+ "criterion",
+ "purrdf-core",
+]
+
+[[package]]
 name = "purrdf-events"
 version = "0.2.1"
 

@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-entail"
+description = "PurRDF native entailment: wasm-clean forward-materialization RDFS + OWL-RL closure over the RdfDataset IR"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# The frozen RDF 1.2 IR (RdfDataset / builder / TermValue). The reasoner indexes
+# purrdf terms directly and emits a derived dataset — no external reasoner, no
+# string round-trip. purrdf-core is wasm32-unknown-unknown-clean, keeping this
+# crate wasm-clean (MAXIMAL PORTABILITY).
+purrdf-core = { workspace = true }
+
+[dev-dependencies]
+# Report-only chase microbenchmark; `make bench` lane, excluded from `make check`.
+criterion = { workspace = true }
+
+[[bench]]
+# Forward-materialization chase latency over a synthetic subclass hierarchy at two
+# depths — a regression watch on the semi-naive fixpoint. Report-only.
+name = "chase"
+harness = false
