@@ -38,7 +38,7 @@ Latest measured matrix (`make conformance`, all GREEN, exit 0):
 | IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 19 | 0 | 0 |
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 shards | 0 | 0 |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 250 | 0 | 0 |
-| SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 437 | 213 | 0 |
+| SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 614 | 36 | 0 |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 114 | 6 | 0 |
 | SHACL (first-party corpus) | first-party frozen reports | 48 | 0 | 0 |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1,051 | 54 | 0 |
@@ -64,7 +64,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SHACL | W3C data-shapes, `core/` + `sparql/` | **114 / 120** · 6 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **48 / 48** frozen expected reports |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
-| SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **437** pass · 213 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 vendored as a first-class spec, residual RDF-star features tracked) |
+| SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **614** pass · 36 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 36 non-passes are 31 spec-inherent entailment-regime cases + 5 upstream-errata fixtures) |
 | Entailment (RDFS / OWL-RL) | native `purrdf-entail` forward-materialization reasoner | RDFS + OWL-RL closure; **39/70** W3C entailment cases (OWL-Direct/DL/RIF/D ledgered) |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **63** pass · 23 strict-xfail (ledgered) |
@@ -144,24 +144,25 @@ reason):
 These are **tracked, never silent** — each is a ledgered xfail/skip or an open
 issue, so the matrix stays honest:
 
-- **SPARQL 1.1 eval** — the full W3C SPARQL 1.1 **query + update** evaluation
-  suites are vendored verbatim (`crates/sparql-conformance/suite/w3c-sparql11/`,
-  pinned commit `426c7df`) and every non-pass is a typed strict-xfail in
-  `crates/sparql-conformance/src/xfail.rs`. The residuals: `value-mismatch`
-  (XSD cast + numeric/string-function lexical/datatype form), `property-path`
-  (inverse-in-NPS, `*`/`?` over property sets), `update-semantics` (COPY/ADD
-  edge cases, cross-op blank-node scoping), `unsupported-construct`
-  (`CONSTRUCT WHERE`, grouping validation, EXISTS-over-GRAPH-var),
-  `non-deterministic` (`BNODE()` labels), and `result-format` (Turtle
-  `rs:ResultSet`). **All 7 W3C `service` federation cases pass** (via the lateral
-  SERVICE seam + trailing-`VALUES` parser fix).
-- **SPARQL 1.2 / RDF-1.2** — a complete, first-class spec here (RDF-star: triple
-  terms, reifiers, base direction), vendored under `suite/w3c-sparql12/`
-  (SHA-pinned for reproducibility/errata, the same as every other suite). The
-  surface the engine already satisfies passes; the residual triple-term/reifier
-  grammar and evaluation are `parse-unsupported`/`unsupported-construct` xfails —
-  **genuine unimplemented features tracked until they land**, not
-  provisional-spec placeholders.
+- **SPARQL 1.1 / 1.2 eval** — the full W3C SPARQL 1.1 **query + update**
+  evaluation suites plus the SPARQL 1.2 / RDF-1.2 suite are vendored verbatim
+  (`crates/sparql-conformance/suite/`, pinned commit `426c7df`) and every
+  non-pass is a typed strict-xfail in `crates/sparql-conformance/src/xfail.rs`.
+  The value-mismatch / property-path / update-semantics / cast / function /
+  reifier residuals described in earlier revisions are **resolved**: XSD casts,
+  numeric/string functions, property paths, UPDATE semantics, `CONSTRUCT WHERE`,
+  grouping, EXISTS-over-GRAPH-var, and the SPARQL 1.2 triple-term / reifier /
+  annotation surface (including graph-scoped reifiers) all pass. **All 7 W3C
+  `service` federation cases pass** (via the lateral SERVICE seam). The only
+  remaining non-passes are the **36 ledgered xfails**: **31 spec-inherent
+  entailment-regime cases** (OWL-Direct/DL, RIF-rule, and RDF-axiomatic-triple
+  entailment that a forward-materialization reasoner cannot reach) and **5
+  upstream-errata fixtures** (three `cast-decimal`/`-double`/`-float` cases with
+  internally-inconsistent non-canonical XSD lexicals, and `coalesce01` /
+  `plus-1-corrected` whose expected whole-valued `xsd:decimal` uses the legacy
+  `X.0` form the engine's XSD-1.1 canonical serializer does not emit). Both
+  classes are value/datatype-correct where applicable; only a spec-inherent
+  regime or a vendored fixture's non-canonical lexical differs.
 - **Entailment** — the native `purrdf-entail` reasoner materializes RDFS +
   OWL-RL closure; RDF/RDFS/OWL-RL cases pass, and OWL-Direct(DL)/RIF/D-entailment
   cases are `entailment` xfails (spec-inherent boundaries of a
