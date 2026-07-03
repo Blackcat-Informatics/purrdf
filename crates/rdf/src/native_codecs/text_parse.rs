@@ -1082,6 +1082,10 @@ impl<'a> DocParser<'a> {
                 break;
             }
             if self.eat(&Token::Semicolon) {
+                // A predicateObjectList item after `;` is optional, so a run of `;`
+                // (the doubled/trailing form `; ;`) denotes empty items and emits no
+                // triples. Consume the run, then decide on the first non-`;` token.
+                while self.eat(&Token::Semicolon) {}
                 // `Pipe` terminates a trailing `;` inside a `{| … |}` annotation block.
                 if self.at(&Token::Dot)
                     || self.at(&Token::RBracket)
@@ -1890,5 +1894,113 @@ mod tests {
             nodes[2],
             Node::Iri("https://example.org/vocab/report/shacl/sarif".to_owned())
         );
+    }
+
+    /// The Turtle/TriG `predicateObjectList` grammar makes the item after `;`
+    /// OPTIONAL (`';' predicateObjectListItem?` in effect), so an interior doubled
+    /// `;` denotes an empty item between two real ones and must emit no extra triple.
+    #[test]
+    fn turtle_doubled_semicolon_interior_emits_no_extra_triple() {
+        let text = "<https://example.org/s> a <https://example.org/C> ; ; \
+                     <https://example.org/p> <https://example.org/o> .";
+        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        assert_eq!(statements.len(), 2);
+    }
+
+    /// A longer run of consecutive `;` (three in a row) collapses the same way: each
+    /// extra `;` past the first is just another empty item, never an extra triple.
+    #[test]
+    fn turtle_semicolon_run_of_three_emits_no_extra_triples() {
+        let text =
+            "<https://example.org/s> <https://example.org/p1> <https://example.org/o1> ; ; ; \
+                     <https://example.org/p2> <https://example.org/o2> .";
+        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        assert_eq!(statements.len(), 2);
+    }
+
+    /// A trailing `; ;` before the terminating `.` is the doubled/trailing empty-item
+    /// form: it must not require (or produce) a following predicate-object pair.
+    #[test]
+    fn turtle_trailing_doubled_semicolon_emits_no_extra_triple() {
+        let text = "<https://example.org/s> <https://example.org/p> <https://example.org/o> ; ; .";
+        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        assert_eq!(statements.len(), 1);
+    }
+
+    /// The same empty-item rule applies inside a blank-node property list `[ … ]`:
+    /// a doubled `;` there must parse and yield the same statements as the collapsed
+    /// (single `;`) form.
+    #[test]
+    fn turtle_doubled_semicolon_inside_blank_node_property_list() {
+        let collapsed = "<https://example.org/s> <https://example.org/p> \
+                          [ <https://example.org/a> <https://example.org/b> ; \
+                            <https://example.org/c> <https://example.org/d> ] .";
+        let doubled = "<https://example.org/s> <https://example.org/p> \
+                        [ <https://example.org/a> <https://example.org/b> ; ; \
+                          <https://example.org/c> <https://example.org/d> ] .";
+        let expected = DocParser::new(collapsed, None, false)
+            .parse()
+            .expect("collapsed parses");
+        let actual = DocParser::new(doubled, None, false)
+            .parse()
+            .expect("doubled parses");
+        assert_eq!(actual, expected);
+    }
+
+    /// The empty-item rule applies inside an RDF 1.2 annotation block `{| … |}` too: a
+    /// doubled `;` separating two annotation predicate-object pairs must parse and
+    /// yield IDENTICAL statements (including the minted reifier and its `rdf:reifies`
+    /// triple) to the same document written with a single `;`.
+    #[test]
+    fn turtle_doubled_semicolon_inside_annotation_block() {
+        let collapsed = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+                          {| <https://example.org/a> <https://example.org/b> ; \
+                             <https://example.org/c> <https://example.org/d> |} .";
+        let doubled = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+                        {| <https://example.org/a> <https://example.org/b> ; ; \
+                           <https://example.org/c> <https://example.org/d> |} .";
+        let expected = DocParser::new(collapsed, None, false)
+            .parse()
+            .expect("collapsed parses");
+        let actual = DocParser::new(doubled, None, false)
+            .parse()
+            .expect("doubled parses");
+        assert_eq!(actual, expected);
+    }
+
+    /// A trailing `;` inside an annotation block (`{| … ; |}`) is the empty-item form
+    /// terminated by `Pipe` rather than `Dot`/`RBracket`/`RBrace` — this specifically
+    /// exercises the `Pipe` branch of the terminator check after the `;` run is drained.
+    #[test]
+    fn turtle_trailing_semicolon_inside_annotation_block_before_pipe() {
+        let no_trailing =
+            "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+                            {| <https://example.org/a> <https://example.org/b> |} .";
+        let trailing = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+                         {| <https://example.org/a> <https://example.org/b> ; |} .";
+        let expected = DocParser::new(no_trailing, None, false)
+            .parse()
+            .expect("no-trailing parses");
+        let actual = DocParser::new(trailing, None, false)
+            .parse()
+            .expect("trailing parses");
+        assert_eq!(actual, expected);
+    }
+
+    /// A LEADING empty item is still illegal: `predicate()` runs at the top of the
+    /// `predicateObjectList` loop before any `;` handling, so a `;` with no preceding
+    /// predicate-object pair for this subject has no predicate to parse and must error.
+    #[test]
+    fn turtle_leading_semicolon_before_any_predicate_is_an_error() {
+        let text = "<https://example.org/s> ; <https://example.org/p> <https://example.org/o> .";
+        assert!(DocParser::new(text, None, false).parse().is_err());
+    }
+
+    /// A subject followed immediately by `;` and then `.` (no predicate-object pair at
+    /// all) is also illegal for the same reason: `predicate()` has nothing to consume.
+    #[test]
+    fn turtle_leading_semicolon_with_no_predicate_object_is_an_error() {
+        let text = "<https://example.org/s> ; .";
+        assert!(DocParser::new(text, None, false).parse().is_err());
     }
 }
