@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The fallible `RdfDataset` builder: value-interning plus the quad / reifier /
-//! annotation / source-location tables, and the validate-then-freeze path (#819 C1).
+//! annotation / source-location tables, and the validate-then-freeze path (C1).
 //!
 //! This module owns term storage and value-interning. The C0 literal-identity
 //! policy (datatype expansion, language lowercasing, direction-in-key, verbatim
@@ -44,7 +44,7 @@ fn hash_of<T: Hash>(value: &T) -> u64 {
     hasher.finish()
 }
 
-/// **Store-once** insert-or-find (#880 P3c): `vec` is the sole owner of the values;
+/// **Store-once** insert-or-find (P3c): `vec` is the sole owner of the values;
 /// `table` holds only their `u32` indices, with hash/eq that look INTO `vec`. Returns
 /// the index of the (existing or newly pushed) value. No value is ever stored twice.
 ///
@@ -61,7 +61,7 @@ fn store_once<T: Hash + Eq>(vec: &mut Vec<T>, table: &mut HashTable<u32>, value:
     i
 }
 
-/// A borrowed term lookup key (#879 P3b): carries the string components by reference
+/// A borrowed term lookup key (P3b): carries the string components by reference
 /// so the interner can dedup BY VALUE *before* anything is pushed to the arena.
 /// Mirrors [`InternedTerm`] but with `&str` where the stored form holds a `StrRange`.
 #[derive(Clone, Copy)]
@@ -188,7 +188,7 @@ fn term_eq(arena: &[u8], term: &InternedTerm, lookup: &TermLookup<'_>) -> bool {
 /// unit (SRP). Private: the builder is the only public surface.
 #[derive(Debug)]
 struct Interner {
-    /// The byte arena owning every interned string ONCE (#879 P3b); terms hold ranges.
+    /// The byte arena owning every interned string ONCE (P3b); terms hold ranges.
     arena: Vec<u8>,
     /// Dense table of interned terms (range-backed); the sole structural owner.
     terms: Vec<InternedTerm>,
@@ -359,7 +359,7 @@ pub struct RdfDatasetBuilder {
     /// Owns terms + the value-intern index + the C0 identity policy.
     interner: Interner,
     /// Deduplicated quad rows in first-seen order; `g == None` is the default graph.
-    /// The **sole** owner of each row; `quad_index` holds only indices (#880 P3c).
+    /// The **sole** owner of each row; `quad_index` holds only indices (P3c).
     quads: Vec<QuadRow>,
     /// Store-once dedup index into `quads` (replaces the duplicate `HashSet<QuadRow>`).
     quad_index: HashTable<u32>,
@@ -716,7 +716,7 @@ impl RdfDatasetBuilder {
     }
 
     /// Resolve a term's [`StrRange`] to a `&str` borrowed from the builder's arena
-    /// (for build-time readers that have an interned term's range, #879).
+    /// (for build-time readers that have an interned term's range).
     pub(crate) fn interned_str(&self, range: StrRange) -> &str {
         arena_str(self.interner.arena(), range)
     }

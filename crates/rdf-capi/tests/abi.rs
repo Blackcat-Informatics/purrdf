@@ -792,8 +792,8 @@ fn gts_round_trips_a_plain_graph() {
 /// The C-ABI's `purrdf_to_gts` → `purrdf_from_gts` round-trip preserves the
 /// RDF-1.2 star layer (quoted triples + reifier bindings) losslessly. The C-ABI
 /// calls the canonical kernel path (`to_gts` → `read_graph` → `import_gts_graph`);
-/// the earlier `gts-missing-reifier-binding` gap (formerly tracked in #1032) was
-/// closed by the native text-codec work (#909), so a reifier-bound quoted triple
+/// the earlier `gts-missing-reifier-binding` gap (formerly tracked in) was
+/// closed by the native text-codec work, so a reifier-bound quoted triple
 /// now survives intact rather than failing with a `GtsError`.
 #[test]
 fn gts_star_roundtrip_preserves_the_statement_layer() {

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! W3C-conformance golden corpus for the native SPARQL Results serializer
-//! (purrdf S9, EPIC #906 / #915).
+//! (purrdf S9,  /).
 //!
 //! A single, realistic "books" running-example dataset (the shape from the W3C
 //! SPARQL Results spec) is serialized to ALL FOUR formats (JSON/XML/CSV/TSV) and

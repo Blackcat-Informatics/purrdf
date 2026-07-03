@@ -27,7 +27,7 @@ const LONGLINK_NAME: &str = "././@LongLink";
 /// `'L'` (LongLink) record carrying the full path (NUL-terminated, 512-padded);
 /// the real header then truncates the name to 100 bytes (GNU convention — readers
 /// take the path from the LongLink). Names ≤ 100 bytes emit no LongLink and are
-/// byte-identical to the pre-#897 writer, so existing archive blobs are
+/// byte-identical to the pre writer, so existing archive blobs are
 /// fold-stable.
 ///
 /// # Errors
@@ -114,7 +114,7 @@ pub fn read_archive(tar: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
 /// A single USTAR 512-byte header with the given `typeflag` (`b'0'` regular file,
 /// `b'L'` GNU LongLink). A name longer than 100 bytes is truncated into the field
 /// — the caller MUST have emitted a preceding LongLink record carrying the full
-/// path. For a name ≤ 100 bytes the bytes are identical to the pre-#897
+/// path. For a name ≤ 100 bytes the bytes are identical to the pre
 /// single-typeflag header.
 fn ustar_header(name: &str, size: usize, typeflag: u8) -> Result<[u8; 512], String> {
     let nb = name.as_bytes();

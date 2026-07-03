@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The shared GTS term resolver (#819 C2).
+//! The shared GTS term resolver (C2).
 //!
 //! GTS graph readers and the consuming [`super::import_graph`] importer both fold a
 //! *folded* `purrdf_gts::model::Graph` into RDF terms, and both need the SAME
@@ -36,7 +36,7 @@ use crate::{RdfLiteral, RdfLocation, RdfTerm, RdfTriple};
 /// eager resolver here and the move-based importer in [`super::import_graph`].
 pub(crate) const MAX_GTS_TERM_NESTING_DEPTH: usize = 16;
 
-/// Parse a GTS literal base-direction string (`"ltr"`/`"rtl"`, purrdf-gts#212)
+/// Parse a GTS literal base-direction string (`"ltr"`/`"rtl"`)
 /// into the IR's [`RdfTextDirection`]. `None` is legitimate absence; an
 /// unrecognized non-empty value is a hard error rather than a silent drop —
 /// the GTS round-trip is ours, so a malformed direction is corrupt input, not

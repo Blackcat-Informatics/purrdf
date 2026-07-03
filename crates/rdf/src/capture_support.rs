@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Shared corpus-classification helpers for the native golden-capture binary
-//! (EPIC #906 Task 2/8).
+//! ( Task 2/8).
 //!
 //! These pure helpers — corpus enumeration, the nondeterministic / multi-query /
 //! deferred-construct classifiers, and the stable solution-row key — are used by the
@@ -27,7 +27,7 @@ pub fn is_nondeterministic(query_text: &str) -> bool {
 
 /// Returns true if the error message matches a known-deferred SPARQL construct
 /// (property paths, SERVICE federation, LATERAL, DESCRIBE, RDF-1.2 triple terms in
-/// patterns). These are in-scope for later S8 (#914) / S6b (#928) / SPARQL-1.2 work;
+/// patterns). These are in-scope for later S8 / S6b / SPARQL-1.2 work;
 /// an Err here is expected, not a gap.
 #[must_use]
 pub fn is_deferred_construct(err_msg: &str) -> bool {

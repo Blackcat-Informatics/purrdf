@@ -264,7 +264,7 @@ pub enum GroundTerm {
     Literal(Literal),
     /// A ground RDF 1.2 quoted triple term.
     Triple(Box<GroundTriple>),
-    /// A blank node — **injection-only** (purrdf S5, EPIC #906 GAP-A). The SPARQL
+    /// A blank node — **injection-only** (purrdf S5,  GAP-A). The SPARQL
     /// grammar forbids a blank node in a `VALUES`/`DataBlock` cell, so the
     /// [parser](crate::parser) NEVER produces this variant. It exists solely so
     /// [`Query::substitute_variable`](crate::Query::substitute_variable) can pre-bind

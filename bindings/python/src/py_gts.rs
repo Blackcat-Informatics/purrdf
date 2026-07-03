@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The native `RDF → GTS` producer surface for the `purrdf` Python extension
-//! (#819 Task 8 / C7).
+//! (Task 8 / C7).
 //!
 //! This module moves the byte-emitting core of `src/purrdf_tools/gts_producer.py`
 //! into Rust. The Python `_Builder` interns terms, content-sorts them, and emits
@@ -14,7 +14,7 @@
 //!
 //! To preserve **byte-identity** with the existing producer — and, crucially, the
 //! `snapshot_content_id()` self-attestation that `feedback_bundle.py` relies on
-//! (#654) — this module replicates `_Builder` exactly:
+//! — this module replicates `_Builder` exactly:
 //!
 //! * the same interning order (append-order, scope-aware blank nodes);
 //! * the same content sort (`(kind, value, datatype-IRI, lang)`, IRIs first);
@@ -33,14 +33,14 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 
 use crate::bundle::{RdfBundle, UnitMetadata};
 // The byte-emitting compose core now lives in the pyo3-free `gts_compose` module
-// (#861 P6); this surface is the thin pyo3 wrapper that delegates to it.
+// (P6); this surface is the thin pyo3 wrapper that delegates to it.
 use crate::gts_compose::{emit_gts, BlobRow, SnapshotBuilder, DEFAULT_RSYNCABLE_THRESHOLD};
 use crate::ir::RdfDataset;
 use crate::provenance::{DatasetProvenance, OriginKind};
 use crate::py_store::{parse_quads, PyRdfFormat};
 use crate::{flat_dataset_from_quads, NativeRdfFormat, RdfQuad};
 
-/// The `rep`-label prefix every S3 slice-artifact blob carries (#820 S3). A blob
+/// The `rep`-label prefix every S3 slice-artifact blob carries (S3). A blob
 /// authored from the slice catalog rides ahead of the snapshot with
 /// `rep == "slice-artifact:{role}:{logical_path}"`, so a repo-free consumer can
 /// recover each ontology artifact by role + logical path + content digest. This
@@ -53,7 +53,7 @@ const SLICE_ARTIFACT_REP_PREFIX: &str = "slice-artifact:";
 /// bundle's normalized artifact path. Only the small ontology text artifacts
 /// (module / shapes / docs / manifest) are passed here; the large external DATA
 /// blobs (`graph.blobs`) STAY by-reference and never travel this channel
-/// (blob-by-reference doctrine, purrdf-gts#248).
+/// (blob-by-reference doctrine).
 struct SliceArtifactRow {
     slice_iri: String,
     slice_name: String,
@@ -71,7 +71,7 @@ fn dataset_from_quads(quads: &[RdfQuad]) -> Result<std::sync::Arc<RdfDataset>, S
 
 /// Assemble the self-describing S3 [`RdfBundle`] from the slice-artifact rows and
 /// the parsed base graph, hard-fail `validate()` it, and return the artifact bytes
-/// as content-addressed [`BlobRow`]s to embed (#820 S3, gap G4).
+/// as content-addressed [`BlobRow`]s to embed (S3, gap G4).
 ///
 /// One [`UnitId`] per slice (metadata = slice IRI + name), one content-addressed
 /// `ArtifactRecord` per ontology artifact, every blob inserted into the bundle's
@@ -225,7 +225,7 @@ fn parse_rdf(data: &[u8], format: PyRdfFormat) -> PyResult<Vec<RdfQuad>> {
 }
 
 /// Parse RDF bytes into a frozen native [`RdfDataset`] for `SnapshotBuilder`
-/// ingestion (the native carrier path, #909). The native parse folds the RDF 1.2
+/// ingestion (the native carrier path). The native parse folds the RDF 1.2
 /// statement layer into the dataset's reifier/annotation side-tables and preserves
 /// named graphs, so `add_dataset_scoped` reproduces the legacy oxigraph ingestion
 /// byte-for-byte. The blank-node `scope` is applied at INGESTION (by
@@ -388,7 +388,7 @@ fn from_json_ld(
     Ok(PyBytes::new(py, &nquads).unbind())
 }
 
-/// Serialize RDF bytes to **RDF/XML** via the FIRST-PARTY native codec (EPIC #906):
+/// Serialize RDF bytes to **RDF/XML** via the FIRST-PARTY native codec:
 /// parse the input RDF bytes into the frozen IR, then emit RDF/XML through the in-repo
 /// `native_codecs::rdfxml` serializer — no longer the external purrdf-gts RDF/XML codec.
 #[pyfunction]
@@ -410,7 +410,7 @@ fn to_rdf_xml(py: Python<'_>, data: &Bound<'_, PyBytes>, format: PyRdfFormat) ->
 }
 
 /// Parse **RDF/XML** text into N-Quads bytes, via the FIRST-PARTY native codec
-/// (EPIC #906): parse RDF/XML into the frozen IR, then serialize to N-Quads — no longer
+/// parse RDF/XML into the frozen IR, then serialize to N-Quads — no longer
 /// the external purrdf-gts RDF/XML codec.
 #[pyfunction]
 fn from_rdf_xml(py: Python<'_>, text: &str) -> PyResult<Py<PyBytes>> {
@@ -545,7 +545,7 @@ fn compile_gts_native(
                 .map_err(PyValueError::new_err)?;
         }
 
-        // S3 (#820, gap G4): assemble the self-describing RdfBundle from the slice
+        // S3 (gap G4): assemble the self-describing RdfBundle from the slice
         // catalog rows, hard-fail `validate()`, and fold each ontology artifact in as
         // a content-addressed blob through the SAME channel doc_blobs ride. The base
         // graph is the bundle's hot dataset. Large external DATA blobs (graph.blobs)
@@ -577,7 +577,7 @@ fn compile_gts_native(
 }
 
 /// The `blake3:<hex>` snapshot content id of a base graph (RDF bytes), mirroring
-/// `_Builder.snapshot_content_id` for the feedback-bundle self-attestation (#654).
+/// `_Builder.snapshot_content_id` for the feedback-bundle self-attestation.
 #[pyfunction]
 #[pyo3(signature = (data, *, format))]
 fn snapshot_content_id_native(

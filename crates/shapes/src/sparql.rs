@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Pure SPARQL evaluation helpers for SHACL-AF, over the native engine (EPIC #906).
+//! Pure SPARQL evaluation helpers for SHACL-AF, over the native engine.
 //!
 //! [`eval_target`] runs a `sh:SPARQLTarget` SELECT query and returns the bound
 //! `?this` focus nodes. [`eval_sparql_constraint`] runs a `sh:SPARQLConstraint`
@@ -11,7 +11,7 @@
 //! Both run the [`NativeSparqlEngine`] over the borrowed `Arc<RdfDataset>` — there is
 //! no oxigraph SPARQL engine and no materialized `Store`. Focus-node substitution
 //! uses [`SparqlRequest::substitutions`] (the native replacement for oxigraph's
-//! `PreparedSparqlQuery::substitute_variable`, EPIC #906 GAP-A).
+//! `PreparedSparqlQuery::substitute_variable`,  GAP-A).
 
 use std::sync::Arc;
 

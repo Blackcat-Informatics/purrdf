@@ -3,7 +3,7 @@
 
 //! PyO3 bindings for the native SSSOM codec — the `purrdf` SSSOM surface that
 //! replaces the `sssom` PyPI package's parse + validate behaviour on the
-//! `purrdf-dev regenerate` / mappings-generator path (#848).
+//! `purrdf-dev regenerate` / mappings-generator path.
 //!
 //! # Kernel-clean separation
 //!

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Prefix-consistency lint (#1009 §2).
+//! Prefix-consistency lint (§2).
 //!
 //! The article's §2 win — "a prefix-consistency lint falls out for free" once the
 //! prefix authority ([`crate::mapping_support::PREFIX_REGISTRY`]) is the single named
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn config_prefixes_match_the_rust_registry() {
-        // Dual-authority parity (#933): the Python `config.PREFIXES` mirror must
+        // Dual-authority parity: the Python `config.PREFIXES` mirror must
         // agree with the Rust authority exactly — same prefix→namespace pairs, same
         // insertion order. Parsing failure or any divergence is a hard test failure
         // (the registry comment pins them as mirrors; this is the missing guard).

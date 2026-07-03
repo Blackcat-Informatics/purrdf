@@ -296,7 +296,7 @@ pub struct RdfBlobOrigin {
 /// A content-addressed reference to a blob that travels with an RDF store.
 ///
 /// Carries the blob_id ([`digest`](Self::digest)) and declared metadata — but
-/// **never** the payload bytes (purrdf-gts#214 made the bytes reachable; the IR
+/// **never** the payload bytes ( made the bytes reachable; the IR
 /// deliberately does not materialize them). The bytes are recovered by streaming
 /// from [`origin`](Self::origin) when a destination is materialized.
 #[derive(Debug, Clone, PartialEq)]

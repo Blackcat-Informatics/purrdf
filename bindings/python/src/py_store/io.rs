@@ -6,7 +6,7 @@
 //! pure-Rust `parse_quads` / `serialize_triples` cores plus the `read_input`
 //! helper the store seam shares.
 //!
-//! Native backing (EPIC #906): the parse/serialize cores produce and consume the
+//! Native backing: the parse/serialize cores produce and consume the
 //! oxigraph-free owned model (`RdfQuad` / `RdfTriple`) via the native codecs — no
 //! `oxigraph::model::*` and no `flat_oxigraph_quads_from_dataset` bridge.
 
@@ -46,7 +46,7 @@ pub(crate) enum PyRdfFormat {
 }
 
 impl PyRdfFormat {
-    /// The native codec format selector (#909): the always-on replacement for the
+    /// The native codec format selector: the always-on replacement for the
     /// oxigraph `RdfFormat` router on the parse/serialize path.
     pub(crate) fn to_native(self) -> NativeRdfFormat {
         match self {
@@ -114,7 +114,7 @@ pub(crate) fn serialize(
 
 // ── Pure-Rust cores (unit-tested without a Python interpreter) ───────────────────
 
-/// Parse RDF bytes into owned quads via the native codec (#909) with no blank-node
+/// Parse RDF bytes into owned quads via the native codec with no blank-node
 /// renaming. Routes through [`parse_dataset`](crate::parse_dataset) → IR → the flat
 /// quad un-fold ([`flat_rdf_quads_from_dataset`]) so the `rdf:reifies` / annotation
 /// rows of the RDF 1.2 statement layer reappear in the quad stream exactly as a flat
@@ -143,7 +143,7 @@ pub(crate) fn serialize_triples(
 
 /// Freeze a flat native quad list into the IR verbatim — RDF 1.2 triple-term objects
 /// preserved as triple-term objects (no statement-layer fold), named graphs kept —
-/// for native serialization (#909). Shared by the `Store`/`MutableDataset` dump
+/// for native serialization. Shared by the `Store`/`MutableDataset` dump
 /// paths.
 pub(super) fn dataset_from_quads_verbatim(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, String> {
     flat_dataset_from_quads(quads)
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn parse_quads_accepts_private_language_tag_in_turtle_and_ntriples() {
-        // #909: the project's `@x-purrdf-*` private-use tags exceed BCP-47's 8-char
+        // the project's `@x-purrdf-*` private-use tags exceed BCP-47's 8-char
         // subtag limit (`afrikaans` is 9 chars). purrdf-gts runs its Turtle / N-Triples
         // codecs in `lenient` mode — matching the prior oxigraph `RdfParser::lenient()`
         // path — so these tags parse in EVERY format, not just N-Quads.

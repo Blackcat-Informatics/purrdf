@@ -23,7 +23,7 @@ pub enum EvalError {
     /// This is the hard-fail boundary: `SERVICE`, `LATERAL`, SPARQL `UPDATE`, and
     /// not-yet-implemented builtins all surface here rather than being partially
     /// evaluated. The string names the unsupported construct. (Property paths are now
-    /// evaluated in-engine — S8 #914 — and `DESCRIBE` now evaluates via the canonical
+    /// evaluated in-engine — S8 — and `DESCRIBE` now evaluates via the canonical
     /// Symmetric CBD, so neither is here.)
     Unsupported(String),
 

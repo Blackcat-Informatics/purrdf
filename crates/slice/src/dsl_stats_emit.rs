@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Native DSL surface-count emission — PurRDF's committed, drift-gated
-//! `generated/mappings/dsl-stats.json` (#861).
+//! `generated/mappings/dsl-stats.json`.
 //!
 //! Emits the counts summary over the SAME merged mapping-DSL source set every
 //! other emitter loads (the shared

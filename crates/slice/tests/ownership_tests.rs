@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Hermetic acceptance tests for the native ownership + dependency analyzer
-//! (RFC #820 §10 / S4). Each test builds minimal slice directories on disk
+//! ( §10 / S4). Each test builds minimal slice directories on disk
 //! under a `tempfile::TempDir`, discovers them via [`SliceCatalog::discover`],
 //! and asserts on the [`OwnershipReport`].
 
@@ -728,7 +728,7 @@ fn values_quoted_triple_iri_reaches_dependency_walk() {
 fn malformed_artifact_hard_fails_analysis() {
     // A slice whose module.ttl is malformed RDF must make analyze() return Err,
     // never silently drop the artifact (which would hide its terms from the
-    // one-validated-owner gate). No-optionality / hard-fail doctrine (#820).
+    // one-validated-owner gate). No-optionality / hard-fail doctrine.
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 

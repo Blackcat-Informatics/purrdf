@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Narrow purrdf backend traits (P2d, #887).
+//! Narrow purrdf backend traits (P2d).
 //!
 //! These are the dependency-inversion seams that remain after `DatasetView`
-//! (#836), the oxigraph crate ring-fence (#885), and `DatasetMut` (#839): term
+//! the oxigraph crate ring-fence, and `DatasetMut`: term
 //! interning, parser ingress, SPARQL execution, and serializer egress. They live in
 //! `purrdf-core` so consumers can depend on the contract without depending on
 //! oxigraph. Concrete oxigraph adapters live in the sibling `purrdf` crate.
@@ -103,7 +103,7 @@ pub trait RdfParserBackend {
 
 /// SPARQL operation request.
 ///
-/// `substitutions` carries variable **pre-bindings** (purrdf S5, EPIC #906 GAP-A):
+/// `substitutions` carries variable **pre-bindings** (purrdf S5,  GAP-A):
 /// each `(name, value)` pre-binds the query variable `name` to `value` before
 /// evaluation, as if the `WHERE` had been joined with a single-row
 /// `VALUES { ?name value }`. This is the native replacement for oxigraph's

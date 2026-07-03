@@ -274,7 +274,7 @@ mod tests {
         );
         assert_eq!(RdfTerm::blank_node("b0").to_string(), "_:b0");
         // `Display` MUST delegate to the single-source-of-truth serializer for ALL
-        // four RDF term kinds (IRI, blank node, literal, triple term) (#841).
+        // four RDF term kinds (IRI, blank node, literal, triple term).
         for t in [
             RdfTerm::iri("https://example.org/x"),
             RdfTerm::blank_node("b1"),

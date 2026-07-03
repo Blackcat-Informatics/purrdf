@@ -4,16 +4,16 @@
 //! The graph-pattern evaluation recursion and its [`EvalCtx`].
 //!
 //! [`eval`] maps a [`GraphPattern`] to a [`SolutionSeq`] over the dataset in
-//! [`EvalCtx`]. The recursion is filled in across the S6 build tasks (#912); each
+//! [`EvalCtx`]. The recursion is filled in across the S6 build tasks; each
 //! not-yet-implemented variant hard-errors ([`EvalError::Unsupported`]) rather than
 //! returning a partial bag (the `no-optionality` doctrine).
 //!
 //! Evaluation pins the **concrete** [`RdfDataset`] rather than a generic
-//! `DatasetView`: the value→id bridge [`RdfDataset::term_id_by_value`] (P4 #838),
+//! `DatasetView`: the value→id bridge [`RdfDataset::term_id_by_value`] (P4),
 //! which BGP constant-resolution needs, is an inherent method on the frozen dataset
 //! and is not part of the `DatasetView` trait. The dataset still exposes its
 //! indexed read surface through `DatasetView` (the inherent `quads_for_pattern`
-//! override, P4b #891).
+//! override, P4b).
 
 use std::sync::Arc;
 
@@ -539,8 +539,8 @@ impl<'d> EvalCtx<'d> {
 ///
 /// Implemented incrementally over the S6 build tasks; an unimplemented variant
 /// returns [`EvalError::Unsupported`] naming the construct. Property paths are
-/// evaluated in-engine (S8 #914, the `path` module); the remaining out-of-scope
-/// nodes (`Service`, `Lateral`) stay permanent hard errors (SERVICE is S6b #928).
+/// evaluated in-engine (S8, the `path` module); the remaining out-of-scope
+/// nodes (`Service`, `Lateral`) stay permanent hard errors (SERVICE is S6b).
 pub fn eval(pattern: &GraphPattern, ctx: &mut EvalCtx<'_>) -> Result<SolutionSeq, EvalError> {
     match pattern {
         GraphPattern::Bgp { patterns } => crate::bgp::eval_bgp(patterns, ctx),

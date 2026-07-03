@@ -3,7 +3,7 @@
 
 //! Integration test: `compiles_generated_query_set_once`
 //!
-//! **Requirement #912 / S6 — Requirement 11 evidence.**
+//! **Requirement / S6 — Requirement 11 evidence.**
 //!
 //! The requirement states: "Plan cache / DSL→native-plan path so the static
 //! generated query corpus compiles once."

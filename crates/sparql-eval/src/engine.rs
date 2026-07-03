@@ -4,9 +4,9 @@
 //! The native [`SparqlEngine`] implementation and its parse-memoizing plan cache.
 //!
 //! [`NativeSparqlEngine`] is the single required impl of the `purrdf-core`
-//! `SparqlEngine` seam (#887) — the native replacement for the oxigraph-family
+//! `SparqlEngine` seam — the native replacement for the oxigraph-family
 //! `spareval` on the query path. Its `Dataset` is the concrete frozen
-//! [`RdfDataset`]: the evaluator needs `term_id_by_value` (P4 #838), which is an
+//! [`RdfDataset`]: the evaluator needs `term_id_by_value` (P4), which is an
 //! inherent method on the dataset rather than part of the `DatasetView` trait.
 //!
 //! The [`PlanCache`] memoizes parsing so the static generated query corpus compiles
@@ -88,7 +88,7 @@ impl PlanCache {
     }
 }
 
-/// The native, RDF-1.2-first multiset SPARQL engine (purrdf S6, #912).
+/// The native, RDF-1.2-first multiset SPARQL engine (purrdf S6).
 ///
 /// Domain-vocabulary seams are **caller configuration**, never engine constants:
 ///
@@ -212,7 +212,7 @@ impl NativeSparqlEngine {
     }
 }
 
-/// Evaluate `prepared`, applying any pre-binding `substitutions` first (#906 GAP-A).
+/// Evaluate `prepared`, applying any pre-binding `substitutions` first (GAP-A).
 ///
 /// When there are no substitutions the cached parse is evaluated directly (the hot
 /// path). Otherwise the cached parse is **cloned** and rewritten — the substitution
@@ -378,7 +378,7 @@ mod tests {
             .expect("query")
     }
 
-    // ── substitution / pre-binding (#906 GAP-A) ────────────────────────────────
+    // ── substitution / pre-binding (GAP-A) ────────────────────────────────
 
     /// A dataset for substitution tests:
     ///   :a   :p  :x    (IRI subject)

@@ -8,7 +8,7 @@
 //! terms directly, preserves source/location context where adapters can provide it,
 //! and keeps reporting structured but SARIF-free.
 //!
-//! # Crate boundary (#885 / purrdf P2b)
+//! # Crate boundary (/ purrdf P2b)
 //!
 //! The oxigraph-free, PyO3-free kernel — the immutable IR, the owned value model,
 //! diagnostics, dataset capability flags, the loss ledger, provenance, the FnO and
@@ -19,7 +19,7 @@
 //! *here* is the native text/statement/normalize surface ([`native_codecs`],
 //! [`native_quads`], [`statements`], [`turtle_normalize`]), the [`gts_compose`]
 //! author, the `flattened_dataset_from_bytes` GTS helper in [`gts`], and the
-//! the Python bindings now live in `bindings/python`. EPIC #906 removed the last
+//! the Python bindings now live in `bindings/python`.  removed the last
 //! oxigraph adapters, so the entire crate is now oxigraph-free.
 
 // ---------------------------------------------------------------------------
@@ -49,27 +49,27 @@ mod gts_verify;
 // re-exported here for existing `purrdf::describe::*` callers.
 pub use purrdf_core::describe;
 pub mod gts_view;
-// The native RDF text codecs (#909 / EPIC #906 S3): the codec-only `GtsCodecBackend`
+// The native RDF text codecs (/  S3): the codec-only `GtsCodecBackend`
 // over the `purrdf-gts` Turtle/TriG/NT/NQ/RDF-XML codecs, oxigraph-free.
 pub mod native_codecs;
-// Oxigraph-free `RdfQuad` ⇄ `RdfDataset` conversions (EPIC #906): the native twins of
+// Oxigraph-free `RdfQuad` ⇄ `RdfDataset` conversions: the native twins of
 // the oxigraph-quad helpers, available to every Rust consumer without pulling the
 // oxigraph Store adapter.
 pub mod native_quads;
-// The PyO3-free GTS snapshot compose core (#861 P6): SnapshotBuilder + emit_gts +
+// The PyO3-free GTS snapshot compose core (P6): SnapshotBuilder + emit_gts +
 // BlobRow, lifted out of the Python binding surface so purrdf-pipeline can
 // author a full multi-named-graph snapshot without pulling pyo3. Oxigraph-free
-// (EPIC #906).
+//.
 pub mod dataset_io;
 pub mod gts_compose;
 // The native OWL ↔ RDF 1.2 statement codec is fully oxigraph-free (it folds over the
-// native flat-quad stream) (EPIC #906).
+// native flat-quad stream).
 pub mod statements;
-// Shared corpus-classification helpers (EPIC #906 Task 2): the pure corpus
+// Shared corpus-classification helpers ( Task 2): the pure corpus
 // enumeration / classification helpers the native golden-capture binary
 // (src/bin/capture_sparql_goldens.rs) uses. Oxigraph-free.
 pub mod capture_support;
-// Canonical, review-friendly Turtle serializer over the IR (#819 Task 9): the
+// Canonical, review-friendly Turtle serializer over the IR (Task 9): the
 // native replacement for rdflib `longturtle` in `purrdf normalize`. Oxigraph-free.
 pub mod turtle_normalize;
 

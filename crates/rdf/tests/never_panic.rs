@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! "Reject malformed, never panic" property gate (T7, #788) for the purrdf
+//! "Reject malformed, never panic" property gate (T7) for the purrdf
 //! format frontends.
 //!
 //! Every parser given arbitrary input must return — `Ok` or `Err` — and NEVER
@@ -16,7 +16,7 @@
 //! timeout would be a false red.
 //!
 //! The parser under test is the native, oxigraph-free [`purrdf_rdf::parse_dataset`]
-//! codec (EPIC #906): it must return `Ok`/`Err` and NEVER panic on arbitrary input
+//! codec: it must return `Ok`/`Err` and NEVER panic on arbitrary input
 //! across every text format it accepts (N-Quads / Turtle / TriG / N-Triples).
 
 use proptest::prelude::*;

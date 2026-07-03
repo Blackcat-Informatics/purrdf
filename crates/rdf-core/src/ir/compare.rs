@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The `RdfDataset`-direct structural comparator (#819 C1/C2): the equality oracle
+//! The `RdfDataset`-direct structural comparator (C1/C2): the equality oracle
 //! for importer equivalence and downstream tests.
 //!
 //! [`datasets_isomorphic`] decides whether two frozen datasets are
 //! **RDF-structurally isomorphic**: the same quads (under a blank-node bijection),
 //! the same reifier bindings, and the same annotations. It operates **directly on
 //! [`RdfDataset`]** and **NEVER consults oxigraph**. That is deliberate and is the
-//! acceptance gate of #819 (design doc *Appendix C0*, point 4): oxigraph
+//! acceptance gate of (design doc *Appendix C0*, point 4): oxigraph
 //! canonicalizes typed-literal lexical forms (`0.70` → `0.7`, `+00:00` → `Z`) and
 //! drops the reifier/annotation overlay entirely — so two datasets that differ only
 //! in lexical spelling or in reifier COUNT would compare *equal* through oxigraph,
@@ -34,7 +34,7 @@
 //! ([`super::canon::canonicalize`]): two datasets are isomorphic **iff** their
 //! canonical N-Quads strings are byte-equal. RDFC-1.0 resolves blank-node
 //! automorphisms via hash-partition + permutation backtracking, so — unlike the
-//! simplified FNV signature refinement this comparator used to carry (#910) — the
+//! simplified FNV signature refinement this comparator used to carry — the
 //! oracle is **exact**: never a false positive *and* never a false negative, even on
 //! pathologically symmetric blank graphs. The canonicalizer folds the RDF-1.2
 //! reifier/annotation overlay and triple terms into the canonical form, so reifier
@@ -49,7 +49,7 @@ use super::dataset::RdfDataset;
 ///
 /// Backed by full RDFC-1.0 canonicalization, this is an **exact** oracle: it never
 /// reports a false positive *or* a false negative (the simplified comparator's
-/// pathological-symmetry false negative is gone, #910).
+/// pathological-symmetry false negative is gone).
 pub fn datasets_isomorphic(a: &RdfDataset, b: &RdfDataset) -> bool {
     // Cheap structural rejections that do not depend on blank labeling — they avoid
     // running the (poison-guarded) canonicalizer on obviously-different inputs.

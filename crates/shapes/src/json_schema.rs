@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! SHACL → JSON Schema (draft 2020-12) + OpenAPI 3.1 emitter (#700).
+//! SHACL → JSON Schema (draft 2020-12) + OpenAPI 3.1 emitter.
 //!
 //! Compiles a parsed [`Shapes`] graph into a closed-world JSON Schema describing
 //! the JSON-LD projection of PurRDF instance data (see [`crate::instance`]). The
@@ -21,7 +21,7 @@
 //! * **Language-tagged literal** — `{"@value": "<lexical>", "@language": "<tag>"}`.
 //! * **Plain string** — a bare JSON string.
 //! * **Statement metadata** — an optional `@annotation` key on any property value
-//!   object, referencing `#/$defs/Annotation` (RDF-1.2 reifier metadata, #699).
+//!   object, referencing `#/$defs/Annotation` (RDF-1.2 reifier metadata).
 //!
 //! # SPARQL losses
 //!
@@ -293,7 +293,7 @@ impl<'ns> Ctx<'ns> {
 /// namespace with no declared prefix, or when two distinct target classes
 /// would share a `$defs` key — see [`Namespaces::def_key`].
 pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
-    // Keying invariant (#700 Gap D, fail-closed): every primary-namespace `$def`
+    // Keying invariant (Gap D, fail-closed): every primary-namespace `$def`
     // is keyed by the class LOCAL NAME and the `@type` discriminator is
     // `<primary_prefix>:<LocalName>`. That is sound ONLY while every target
     // class is in a declared namespace and no two distinct class IRIs share a
@@ -344,7 +344,7 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
         }
     }
 
-    // The shared statement-metadata fragment (#699).
+    // The shared statement-metadata fragment.
     defs.insert("Annotation".to_owned(), annotation_def());
 
     let class_names: Vec<String> = defs
@@ -354,7 +354,7 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
         .collect();
     // `class_names` is already sorted because `defs` is a BTree-ordered Map iter.
 
-    // The `@type`-discriminated `Node` schema (#700 closed-world enforcement):
+    // The `@type`-discriminated `Node` schema (closed-world enforcement):
     // a node typed `<primary>:Foo` MUST satisfy `#/$defs/Foo`. Inserted AFTER
     // `class_names` is snapshotted so `Node` itself is never treated as a class
     // branch.
@@ -370,7 +370,7 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
     }
 }
 
-/// Enforce the keying precondition (#700 Gap D): every active `sh:targetClass`
+/// Enforce the keying precondition (Gap D): every active `sh:targetClass`
 /// is in a DECLARED namespace (so [`Namespaces::def_key`] yields a stable
 /// `$defs` key and [`node_def`] can rebuild its `@type` const) and those keys
 /// are collision-free. Panics with a descriptive message otherwise
@@ -412,7 +412,7 @@ fn assert_target_class_keys_are_unambiguous(shapes: &Shapes, ns: &Namespaces) {
 ///
 /// Every instance node — whether a `@graph` member or a bare single-node root —
 /// is validated by the single `#/$defs/Node` schema, which discriminates on
-/// `@type` (closed-world enforcement, #700).
+/// `@type` (closed-world enforcement).
 fn root_schema(defs: &Map<String, Value>, ns: &Namespaces) -> Value {
     let node_ref = json!({ "$ref": "#/$defs/Node" });
 
@@ -420,7 +420,7 @@ fn root_schema(defs: &Map<String, Value>, ns: &Namespaces) -> Value {
     // envelope branch REQUIRES `@graph`, so a bare single-node document cannot
     // slip through this permissive branch and escape `Node` discrimination — a
     // bare node must satisfy the `node_ref` branch of the root `anyOf` instead
-    // (closed-world: a bare incomplete node is rejected, #700).
+    // (closed-world: a bare incomplete node is rejected).
     let graph_envelope = json!({
         "type": "object",
         "required": ["@graph"],
@@ -450,7 +450,7 @@ fn root_schema(defs: &Map<String, Value>, ns: &Namespaces) -> Value {
     })
 }
 
-/// Build the `@type`-discriminated `Node` schema (#700).
+/// Build the `@type`-discriminated `Node` schema.
 ///
 /// A node carries `@id`/`@type`/`@annotation` permissively, then an `allOf` of
 /// per-class conditionals (sorted by class name for determinism). Each entry
@@ -557,11 +557,11 @@ fn openapi_doc(defs: &Map<String, Value>) -> Value {
     })
 }
 
-// ── The `@annotation` fragment (#699 statement metadata) ─────────────────────
+// ── The `@annotation` fragment (statement metadata) ─────────────────────
 
 /// The shared `$defs/Annotation` object schema: free-form statement metadata.
 ///
-/// Permissive on purpose — #699 tightens it. Values may be node refs
+/// Permissive on purpose — future work tightens it. Values may be node refs
 /// (`{"@id":..}`), scalars, or typed literals (`{"@value":..,"@type":..}`).
 fn annotation_def() -> Value {
     json!({
@@ -1162,7 +1162,7 @@ mod tests {
     fn unknown_namespace_target_class_hard_fails() {
         // A target class from an UNDECLARED namespace has no prefix CURIE to key
         // its `$defs`/discriminator by; the keying guard must reject it loudly
-        // (#700 Gap D). A DECLARED non-primary prefix (e.g. logic:) is accepted —
+        // (Gap D). A DECLARED non-primary prefix (e.g. logic:) is accepted —
         // see `logic_target_class_keyed_by_curie`.
         compile_ttl(
             r"
@@ -1178,7 +1178,7 @@ mod tests {
     fn logic_target_class_keyed_by_curie() {
         // A non-primary but KNOWN-prefix target class (logic:) keys its `$defs` body
         // by the full CURIE and discriminates `@type` on that same CURIE, so a
-        // closed-world logic node is enforced exactly like a primary-namespace node (#772).
+        // closed-world logic node is enforced exactly like a primary-namespace node.
         let schema = schema_of(&compile_ttl(
             r"
             @prefix logic: <https://blackcatinformatics.ca/logic/> .
@@ -1367,7 +1367,7 @@ mod tests {
         // nickname (no maxCount, minCount<=1) accepts BOTH the bare single form
         // AND the array form: the projector emits a bare scalar for a single
         // value and an array only for multiple values, so the schema must accept
-        // either or it would reject SHACL-conformant single-value data (#700).
+        // either or it would reject SHACL-conformant single-value data.
         let nickname = &person["properties"]["meta:nickname"];
         let alts = nickname["anyOf"]
             .as_array()
@@ -1608,7 +1608,7 @@ mod tests {
 
     /// Self-consistency invariant: EVERY `#/$defs/<name>` ref the emitter writes
     /// must resolve to an actually-emitted key in the top-level `$defs`. This is
-    /// the bug guard for #700 — an object property whose `sh:class` points at a
+    /// the bug guard — an object property whose `sh:class` points at a
     /// class with NO NodeShape must NOT emit a dangling `$ref`.
     #[test]
     fn every_ref_resolves() {

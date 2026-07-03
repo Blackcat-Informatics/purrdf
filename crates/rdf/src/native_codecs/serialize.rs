@@ -36,7 +36,7 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// The full RDF 1.2 statement layer (reifier bindings + annotations) is emitted for
 /// every star-capable format. To serialize the base quads ONLY — for a star-incapable
 /// projection target where the statement layer is declared loss (RDF/XML, JSON-LD in
-/// the #671 transcode contract) — use [`serialize_dataset_base_only`].
+/// the transcode contract) — use [`serialize_dataset_base_only`].
 pub fn serialize_dataset(
     dataset: &RdfDataset,
     media_type: &str,
@@ -49,7 +49,7 @@ pub fn serialize_dataset(
 /// base quads and DROPPING the RDF 1.2 statement layer (reifier bindings +
 /// annotations).
 ///
-/// This is the projection egress for star-incapable targets in the #671 transcode
+/// This is the projection egress for star-incapable targets in the transcode
 /// loss contract: the dropped statement-row count is the caller's to record as
 /// declared loss (`rdf12-star-unrepresentable` / `rdf12-star-jsonld-rejected`) — the
 /// drop here is never silent (CONSTITUTION P7), it is the realized count the caller
@@ -100,24 +100,24 @@ pub(crate) fn serialize_into<W: Write>(
 }
 
 /// Outcome of serializing an [`RdfDataset`] to a concrete RDF format through the
-/// native codecs (#671 universal transcoder helper, ported onto the native path in
-/// #909).
+/// native codecs (universal transcoder helper, ported onto the native path in
+/// ).
 #[derive(Debug, Clone)]
 pub struct SerializeOutcome {
     /// The serialized document bytes.
     pub bytes: Vec<u8>,
     /// The number of RDF-1.2 statement-layer rows (reifier bindings + annotation
     /// triples) dropped because the target format does not carry the star layer in
-    /// the #671 transcode contract. Zero for star-capable formats.
+    /// the transcode contract. Zero for star-capable formats.
     pub statement_rows_dropped: usize,
 }
 
 /// Whether a [`NativeRdfFormat`] carries the RDF-1.2 statement layer (quoted-triple
-/// reifiers + annotations) under the #671 transcode loss contract.
+/// reifiers + annotations) under the transcode loss contract.
 ///
 /// Turtle, N-Triples, N-Quads and TriG are star-capable. RDF/XML is treated as
 /// star-INcapable here even though the native serializer *can* emit classic
-/// `rdf:Statement` reification: the #671 loss ledger
+/// `rdf:Statement` reification: the loss ledger
 /// (`crates/rdf-core/src/loss.rs`) declares `*→rdfxml` as `rdf12-star-unrepresentable`
 /// because classic reification is a lossy projection, not faithful RDF-1.2 star.
 /// Keeping the predicate aligned with the ledger keeps the realized-loss accounting
@@ -134,7 +134,7 @@ fn is_star_capable(format: NativeRdfFormat) -> bool {
 
 /// Serialize the frozen IR to a concrete [`NativeRdfFormat`], returning the bytes and
 /// the count of RDF-1.2 statement-layer rows dropped because the target format does
-/// not carry the star layer (the #671 projection doctrine).
+/// not carry the star layer (the projection doctrine).
 ///
 /// Star-capable formats (Turtle, N-Triples, N-Quads, TriG) emit the full RDF-1.2
 /// statement layer and report `statement_rows_dropped = 0`. Star-incapable formats
@@ -467,8 +467,8 @@ fn direction_str(direction: RdfTextDirection) -> String {
 
 #[cfg(test)]
 mod serialize_to_format_tests {
-    //! Coverage for the #671 universal-transcoder helper
-    //! [`serialize_dataset_to_format`], ported onto the native codecs in #909.
+    //! Coverage for the universal-transcoder helper
+    //! [`serialize_dataset_to_format`], ported onto the native codecs in.
     //! (JSON-LD is no longer routed through this helper — it has no [`NativeRdfFormat`]
     //! variant — so the JSON-LD drop accounting is exercised in
     //! `crates/pipeline/src/transcode.rs` via the native `yaml_ld` serializer.)
@@ -575,7 +575,7 @@ mod serialize_to_format_tests {
         let ds = reifier_dataset();
         let out = serialize_dataset_to_format(&ds, NativeRdfFormat::RdfXml, None)
             .expect("serialize to RDF/XML");
-        // 1 reifier + 1 annotation = 2 statement rows declared dropped (the #671
+        // 1 reifier + 1 annotation = 2 statement rows declared dropped (the
         // loss contract treats classic reification as non-faithful star).
         assert_eq!(out.statement_rows_dropped, 2);
         let text = text_of(&out);

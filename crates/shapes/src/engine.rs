@@ -60,7 +60,7 @@ fn objects_of<G: ShaclDataGraph>(data: &G, pred: &NamedNode) -> Vec<Term> {
 /// subclass relationships present in the data. It is NOT OWL/RDFS inference: we
 /// read `rdfs:subClassOf` triples that exist and materialize nothing. (The
 /// "no-inference contract" means no reasoner is run, not that asserted subclass
-/// edges are ignored.) See #599.
+/// edges are ignored.) See the issue tracker.
 pub(crate) fn subclass_closure<G: ShaclDataGraph>(
     data: &G,
     class_iri: &NamedNode,
@@ -231,13 +231,13 @@ where
 
         // Per-focus constraint evaluation stays SERIAL. A rayon `par_iter` over the
         // focus loop was measured on `shacl_validate/large_hierarchy` (3000 focus
-        // nodes) and REGRESSED ~9% (15.71 ms → 16.43 ms), confirming #827: per-focus
+        // nodes) and REGRESSED ~9% (15.71 ms → 16.43 ms), confirming that per-focus
         // work (~5 µs: an rdfs:subClassOf BFS-backed lookup + a `sh:pattern` regex)
         // is dwarfed by thread-pool dispatch and shared-`Store` read contention. The
         // `ShaclDataGraph: Send + Sync` bound (data.rs) keeps the seam ready, but the
         // parallel path waits on the re-entry condition: per-focus cost >50–100 µs,
         // i.e. once SHACL-SPARQL constraints are common or the IR-native backend runs
-        // end-to-end (dropping the shared-`Store` contention). See #828 (item 2).
+        // end-to-end (dropping the shared-`Store` contention). See the issue tracker (item 2).
         for focus in &focus_nodes {
             if !include_focus(shape, focus) {
                 continue;
@@ -417,12 +417,12 @@ pub fn parse_shapes_with_config(
     shapes_ttl: &str,
     box_role_vocab: Option<crate::model::BoxRoleVocab>,
 ) -> Result<Shapes, String> {
-    // Parse the shapes graph via the native purrdf codecs (#909) — no
+    // Parse the shapes graph via the native purrdf codecs — no
     // the oxigraph `io` parser. The native codec drops document prefixes once it folds to
     // the IR, so we recover the `@prefix`/SPARQL `PREFIX` map by scanning the
     // source text: SHACL-AF sh:select queries (and pySHACL) rely on prefixed
-    // names. See #578. A syntax error is reported per-statement so
-    // a SHACL author sees the full list in one pass (#828 item 4), not the
+    // names. See the issue tracker. A syntax error is reported per-statement so
+    // a SHACL author sees the full list in one pass (item 4), not the
     // fix-one-rerun-find-the-next loop.
     let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(shapes_ttl)
         .map_err(|errors| errors.join("\n"))?;
@@ -442,7 +442,7 @@ pub fn parse_shapes_with_config(
 /// The purrdf ontology carries private-use `@x-purrdf-*` language tags whose
 /// subtag exceeds BCP-47's 8-char limit (e.g. `@x-purrdf-afrikaans`); the strict
 /// parser rejects the entire file on these, which would make the real ontology
-/// un-validatable. Lenient parsing skips that check so the data ingests. See #597.
+/// un-validatable. Lenient parsing skips that check so the data ingests. See the issue tracker.
 ///
 /// # Errors
 ///
@@ -463,9 +463,9 @@ pub fn validate_graphs_with_config(
     shapes_ttl: &str,
     box_role_vocab: Option<crate::model::BoxRoleVocab>,
 ) -> Result<ValidationReport, String> {
-    // Parse the data graph via the native codecs (#909). Every malformed
+    // Parse the data graph via the native codecs. Every malformed
     // N-Triples line is reported in one pass — same multi-error contract as
-    // `parse_shapes`. See #828 (item 4).
+    // `parse_shapes`. See the issue tracker (item 4).
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
 
@@ -519,7 +519,7 @@ mod tests {
         validate_dataset(data.as_ref(), shapes).expect("validate_dataset must succeed")
     }
 
-    // ── Multi-error syntax reporting (#828 item 4) ─────────────────────────────
+    // ── Multi-error syntax reporting (item 4) ─────────────────────────────
 
     #[test]
     fn parse_shapes_reports_all_syntax_errors() {
@@ -749,7 +749,7 @@ mod tests {
     // Test 4: sh:targetClass honors ASSERTED rdfs:subClassOf (SHACL §4.2.5).
     // This is NOT OWL inference — the subclass edge is asserted in the data; we
     // read it, materialize nothing. (Inverted from the former no-subclass
-    // contract; see #599.)
+    // contract; see the issue tracker.)
     #[test]
     fn target_class_honors_asserted_subclass() {
         let shapes_ttl = format!(

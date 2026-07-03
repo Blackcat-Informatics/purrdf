@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Native **full W3C RDFC-1.0** RDF Dataset Canonicalization (#910), oxigraph-free.
+//! Native **full W3C RDFC-1.0** RDF Dataset Canonicalization, oxigraph-free.
 //!
 //! This module is the canonicalization authority for the purrdf family. It
-//! replaces `oxrdf`'s `Dataset::canonicalize` (EPIC #906 oxigraph eviction) and
+//! replaces `oxrdf`'s `Dataset::canonicalize` ( oxigraph eviction) and
 //! supersedes the simplified FNV signature comparator that `compare.rs` used to
 //! carry: it implements the real algorithm — *Hash First Degree Quads* (§4.6),
 //! initial canonical assignment (§4.4), and *Hash N-Degree Quads* (§4.8) with
@@ -34,7 +34,7 @@
 //!
 //! Because the sentinels are disjoint from genuine quads, the **reifier COUNT**
 //! and **annotation presence** stay observable in the canonical form — preserving
-//! the #819 lossless identity contract (two datasets differing only in reifier
+//! the lossless identity contract (two datasets differing only in reifier
 //! count or an annotation compare UNEQUAL). RDFC-1.0 canonicalizes blank labels
 //! **only**: literal lexical forms, datatypes, language tags and base directions
 //! are emitted verbatim (`0.70` ≠ `0.7`, `@en--ltr` ≠ `@en--rtl`).
@@ -1123,7 +1123,7 @@ mod tests {
         assert_ne!(canon(&build("o1")), canon(&build("o2")));
     }
 
-    /// Reifier COUNT is observable in the canonical form (the #819 headline gate).
+    /// Reifier COUNT is observable in the canonical form (the headline gate).
     #[test]
     fn reifier_count_shows_in_canon() {
         let build = |reifiers: &[&str]| -> Arc<RdfDataset> {

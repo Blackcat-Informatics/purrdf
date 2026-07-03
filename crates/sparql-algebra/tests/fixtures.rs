@@ -3,7 +3,7 @@
 
 //! Curated SPARQL syntax fixtures — the in-house stand-in for the W3C SPARQL
 //! syntax suite (the full official suite is deferred to a follow-up, the
-//! option-3 deferral noted on #911).
+//! option-3 deferral noted on).
 //!
 //! POSITIVE fixtures: one per in-scope feature; each MUST parse.
 //! NEGATIVE fixtures: out-of-scope or malformed; each MUST hard-fail with the

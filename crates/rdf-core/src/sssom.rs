@@ -4,7 +4,7 @@
 //! Native SSSOM (Simple Standard for Sharing Ontology Mappings) codec.
 //!
 //! This is the PyO3-free Rust replacement for the `sssom` PyPI package's
-//! parse + validate behaviour (#848). It carries the PurRDF mapping artifacts
+//! parse + validate behaviour. It carries the PurRDF mapping artifacts
 //! (`generated/mappings/*.sssom.tsv`) in and out of an owned IR and adds a
 //! native RDF serializer the Python toolkit never had (the SUBSUME/ENHANCE
 //! deliverable).
@@ -881,7 +881,7 @@ ex:A\tskos:exactMatch\tex:B\tsemapv:ManualMappingCuration\t1:1
     fn serialize_preserves_unknown_columns_roundtrip() {
         // A non-PurRDF SSSOM file carrying an extra column must survive
         // parse → serialize_tsv (lossless round-trip), not be silently dropped
-        // because the column set is built only from SSSOM_ORDER (H-1 / #855).
+        // because the column set is built only from SSSOM_ORDER (H-1 /).
         let doc = "\
 # mapping_set_id: https://example.org/x
 # curie_map:
@@ -911,7 +911,7 @@ ex:A\tskos:exactMatch\tex:B\tsemapv:ManualMappingCuration\t1:1
     #[test]
     fn diagnostic_line_survives_interleaved_comment() {
         // A `#` provenance comment between data rows must not shift the reported
-        // line of a later row's diagnostic. Before M-1 (gemini #1+#2 on #855) a
+        // line of a later row's diagnostic. Before M-1 (gemini #1+#2 on) a
         // flat offset ignored the filtered comment and reported the wrong line.
         let doc = "\
 # mapping_set_id: https://example.org/x

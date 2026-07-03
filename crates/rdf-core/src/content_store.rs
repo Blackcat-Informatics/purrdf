@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Content-addressed blob store for the self-describing bundle (#820 S3).
+//! Content-addressed blob store for the self-describing bundle (S3).
 //!
 //! [`ContentStore`] is the **one** place bytes live. The RDF IR, the
 //! [`ArtifactRecord`](crate::bundle::ArtifactRecord), and every quad hold a

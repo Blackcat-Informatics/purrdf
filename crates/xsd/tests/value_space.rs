@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! XSD value-space conformance vectors (acceptance artifact #1 for #907):
+//! XSD value-space conformance vectors (acceptance artifact #1 for):
 //! per-datatype lexical → value → canonical round-trips, the parse-by-IRI contract,
 //! the zero-dep numeric bounds, and the partial-order edge cases.
 
@@ -126,7 +126,7 @@ fn numeric_bounds_are_hard_failed_not_saturated() {
         Err(XsdError::OutOfRange { .. })
     ));
     // NOTE: corpus-range exposure (that our actual literals stay within i128 /
-    // scale-18) is proven downstream at S5 #911 / S6 #912 integration; this test
+    // scale-18) is proven downstream at S5 / S6 integration; this test
     // proves only that the bound itself hard-fails.
 }
 

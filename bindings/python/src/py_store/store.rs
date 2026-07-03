@@ -5,7 +5,7 @@
 //! SPARQL-capable `Store`, the canonicalization-capable `Dataset`, and the
 //! `QuadIter` snapshot iterator they share.
 //!
-//! # Native backing (EPIC #906)
+//! # Native backing
 //!
 //! `Store` wraps a copy-on-write [`MutableDataset`] over the oxigraph-free
 //! `purrdf-core` IR — never `oxigraph::store::Store`. Mutation (`add` / `remove`
@@ -64,7 +64,7 @@ impl PyStore {
     ) -> PyResult<()> {
         let format = format.ok_or_else(|| PyValueError::new_err("load: format is required"))?;
         let data = read_input(input, path)?;
-        // Parse natively (#909) into the flat quad stream, then insert into the COW set.
+        // Parse natively into the flat quad stream, then insert into the COW set.
         //
         // Blank-node labels in a serialized document are document-local: two distinct
         // documents may reuse the same label (`_:b0`) for *different* nodes, and the same
@@ -217,7 +217,7 @@ impl PyStore {
                 Some(extract_graph_name(from_graph)?)
             };
         let buf: Vec<u8> = py.detach(|| {
-            // Serialize natively (#909): materialize the store's quads into the IR
+            // Serialize natively: materialize the store's quads into the IR
             // verbatim (preserving literal lexical forms) and dispatch to the codec.
             let (quads, selection) = match &graph_projection {
                 None => (self.collect_all_quads(), SerializeGraph::Dataset),
@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn same_label_different_scopes_yields_distinct_nodes() {
-        // The regression guard (#909): the SAME document-local blank label loaded
+        // The regression guard: the SAME document-local blank label loaded
         // under two different scopes (two `Store::load` calls) MUST become two
         // distinct nodes once surfaced.
         let quad = RdfQuad::new(RdfTerm::blank_node("b0"), "https://e/p", iri("https://e/o"));
@@ -664,7 +664,7 @@ mod tests {
         assert_eq!(lit.datatype, None, "plain literal stays datatype-less");
     }
 
-    // ── capsule boundary (EPIC #906) ─────────────────────────────────────────────
+    // ── capsule boundary ─────────────────────────────────────────────
     //
     // These tests pin the `_store_capsule` contract WITHOUT a Python interpreter:
     // they exercise the same snapshot → `Box<Arc<RdfDataset>>` → raw-address →

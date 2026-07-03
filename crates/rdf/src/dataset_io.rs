@@ -4,7 +4,7 @@
 //! RDF text/bytes ingress into the frozen [`RdfDataset`] IR.
 //!
 //! The text codec is the oxigraph-free native [`parse_dataset`](crate::parse_dataset)
-//! path (#909 / EPIC #906 S3); the read model handed to PurRDF consumers is the
+//! path (/  S3); the read model handed to PurRDF consumers is the
 //! concrete IR. This module is deliberately PyO3-free so logic, SHACL, and pipeline
 //! stages can route parsed inputs through the same `RdfDataset` path as the Python
 //! `RdfDataset` handle. The already-parsed-quads → IR fold lives in
@@ -19,7 +19,7 @@ use crate::{parse_dataset, NativeRdfFormat, RdfDataset};
 /// Parse RDF bytes and freeze them into a validated [`RdfDataset`] via the native
 /// codec path.
 ///
-/// `format` is a [`NativeRdfFormat`] codec selector — the workspace-wide #909 sweep
+/// `format` is a [`NativeRdfFormat`] codec selector — the workspace-wide sweep
 /// (Tasks 2–6) routed every call site onto the native enum. The RDF 1.2 statement
 /// layer is folded in: a `rdf:reifies` triple-term object becomes a reifier binding,
 /// and a reifier subject's other triples become annotations (matching the GTS
@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn dataset_from_bytes_routes_each_native_format() {
-        // The codec selector is the native enum across every format — the #909 sweep
+        // The codec selector is the native enum across every format — the sweep
         // removed the temporary oxigraph::io::RdfFormat From shim entirely.
         let nq = "<https://e/s> <https://e/p> <https://e/o> <https://e/g> .\n";
         let ds = dataset_from_bytes(nq.as_bytes(), NativeRdfFormat::NQuads).expect("build nquads");

@@ -3,55 +3,55 @@
 
 //! `purrdf-core` -- oxigraph-free, PyO3-free RDF 1.2 kernel for the PurRDF Rust workspace.
 //!
-//! This crate is the ring-fenced core (#885 / purrdf P2b) extracted out of
+//! This crate is the ring-fenced core (/ purrdf P2b) extracted out of
 //! `purrdf`: the immutable value-interned IR, the owned value model, structured
 //! diagnostics, dataset capability flags, the loss ledger, and provenance. It
 //! models RDF 1.2 terms directly, preserves
 //! source/location context where adapters can provide it, and keeps reporting
 //! structured but SARIF-free. The oxigraph adapters and the PyO3 extension surface
 //! live in the sibling `purrdf` crate; **nothing here may pull oxigraph** — that
-//! is the acceptance gate of #885.
+//! is the acceptance gate of.
 //!
-//! # `no_std` readiness (#841)
+//! # `no_std` readiness
 //!
 //! The immutable IR ([`ir`]) is the kernel's purest layer and is **file-IO-free**
 //! (no `std::fs`/`std::io`), the first prerequisite for an eventual `alloc`-only
 //! `no_std` core for embedded / C-ABI consumers. The remaining blocker is the
 //! interner's `std::collections::{HashMap, HashSet}` (not in `alloc`); migrating it
-//! to `hashbrown` is tracked as **P3c (#880)**. New IR code therefore prefers
+//! to `hashbrown` is tracked as **P3c**. New IR code therefore prefers
 //! `core::`/`alloc::` over `std::` where the item exists in both (e.g. `core::fmt`,
 //! `alloc::sync::Arc`) so the eventual `#![no_std]` flip stays mechanical. Per the
 //! purrdf plan, `no_std` is for embedded/C-ABI targets and is **not** a WASM
 //! prerequisite. Common types are re-exported from [`prelude`].
 
 pub mod bundle;
-// Narrow purrdf backend traits (P2d, #887): term interning, parser ingress,
+// Narrow purrdf backend traits (P2d): term interning, parser ingress,
 // SPARQL execution, and serializer egress. PyO3-free, oxigraph-free — pure
 // contract only; concrete adapters live in `purrdf`.
 pub mod backend;
 pub mod content_id;
 pub mod content_store;
-// The static, allocation-free read view over an RDF dataset (purrdf P2, #836):
+// The static, allocation-free read view over an RDF dataset (purrdf P2):
 // `DatasetView` + `GraphMatch`. PyO3-free, oxigraph-free — pure kernel.
 pub mod dataset_view;
 pub mod describe;
 pub mod diagnostic;
-// Native FnO (W3C Function Ontology) typed catalog model + serializer (#848).
+// Native FnO (W3C Function Ontology) typed catalog model + serializer.
 // PyO3-free; the `purrdf-slice` FnO emitter builds a `FnoCatalog` from the slice
 // framework and serializes it here, replacing rdflib `emit_fno`/`_emit_fnom`.
 pub mod fno;
-// The immutable, value-interned RDF 1.2 dataset IR (#819 C1).
+// The immutable, value-interned RDF 1.2 dataset IR (C1).
 pub mod ir;
-// Generic provenance sidecar for the immutable RDF 1.2 dataset (#820 S2):
+// Generic provenance sidecar for the immutable RDF 1.2 dataset (S2):
 // UnitId/ArtifactId/OriginSetId newtypes, interners, AssertionOccurrence,
 // DatasetProvenance, and the provenance gate. No PurRDF-specific concepts here.
 pub mod lookaside;
 pub mod provenance;
-// The machine-readable RDF↔GTS loss ledger and its drift-gated matrix (#819 C0).
+// The machine-readable RDF↔GTS loss ledger and its drift-gated matrix (C0).
 pub mod loss;
 pub mod model;
 // Native SSSOM (Simple Standard for Sharing Ontology Mappings) TSV codec +
-// validator + RDF serializer (#848). PyO3-free; replaces the `sssom` PyPI
+// validator + RDF serializer. PyO3-free; replaces the `sssom` PyPI
 // package's parse+validate behaviour for the PurRDF mapping artifacts.
 pub mod sssom;
 pub mod store;

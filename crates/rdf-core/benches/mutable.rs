@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The copy-on-write `MutableDataset` measured hypothesis (purrdf P5, #839).
+//! The copy-on-write `MutableDataset` measured hypothesis (purrdf P5).
 //!
 //! The PLAN frames COW as *"a measured hypothesis, not an assumed win — benchmark it
 //! against a simpler hash-indexed mutable store before committing"*. This harness is

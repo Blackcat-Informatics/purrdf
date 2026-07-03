@@ -4,7 +4,7 @@
 //! Corpus conformance: every hand-authored `queries/**/*.rq` and every committed
 //! DSL-generated `generated/queries/*.rq` MUST parse into the algebra.
 //!
-//! This is the acceptance gate for purrdf S5 (#911): parse our 90 `.rq` files
+//! This is the acceptance gate for purrdf S5: parse our 90 `.rq` files
 //! plus the DSL-generated projections. Both trees are tracked in git, so reading
 //! them directly pins the test to committed artifacts (no regeneration needed).
 //!

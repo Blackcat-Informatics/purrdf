@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The self-describing bundle resource layer (#820 S3).
+//! The self-describing bundle resource layer (S3).
 //!
 //! [`RdfBundle`] is the kernel-generic, repo-free package that carries
 //! *everything* needed to recover a compilation product without a filesystem:
 //!
 //! ```text
 //! RdfBundle
-//! ├── dataset:    RdfDataset          // #819 — the hot graph
-//! ├── provenance: DatasetProvenance   // #820 S2 — units / occurrences / origins
+//! ├── dataset:    RdfDataset          // — the hot graph
+//! ├── provenance: DatasetProvenance   // S2 — units / occurrences / origins
 //! ├── units:      UnitCatalog         // UnitId -> metadata
 //! ├── artifacts:  ArtifactIndex       // ArtifactId -> ArtifactRecord (no bytes)
 //! └── blobs:      ContentStore        // the actual bytes, content-addressed
@@ -374,7 +374,7 @@ impl From<ContentStoreError> for BundleError {
 #[derive(Debug)]
 pub struct RdfBundle {
     /// The immutable, value-interned RDF 1.2 dataset — the hot graph. Shared
-    /// via `Arc` because `RdfDataset` is a frozen, non-clonable value (#819 C1).
+    /// via `Arc` because `RdfDataset` is a frozen, non-clonable value (C1).
     pub dataset: Arc<RdfDataset>,
     /// Generic provenance sidecar (units / occurrences / origin sets).
     pub provenance: DatasetProvenance,

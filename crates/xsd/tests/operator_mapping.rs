@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The SPARQL operator-mapping table (acceptance artifact #2 for #907).
+//! The SPARQL operator-mapping table (acceptance artifact #2 for).
 //!
 //! Each row asserts `value_cmp(lhs, rhs)`, which is the value-space primitive behind
 //! the SPARQL `=`, `<`, `>`, `<=`, `>=` operators (the evaluator derives those and

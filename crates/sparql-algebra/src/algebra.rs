@@ -10,7 +10,7 @@
 //! `pattern` and a consumer walks *into* the pattern to find `Project`/`Distinct`/
 //! `Slice`/`OrderBy`/`Group`.
 //!
-//! ## S6 extension seam (#912)
+//! ## S6 extension seam
 //!
 //! This algebra is intentionally a faithful, standard, *evaluable* IR — the form
 //! the downstream evaluator S6 (`sparql-eval`) consumes. The greenfield lever for

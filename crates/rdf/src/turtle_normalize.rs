@@ -17,7 +17,7 @@
 //! wasm-clean kernel ([`purrdf_core::turtle_render`]); it is re-exported here so
 //! existing `purrdf::turtle_normalize::render` callers resolve unchanged. The text
 //! *parser* edge ([`canonical_turtle`] / `ingest`) is the native codec — fully
-//! oxigraph-free (EPIC #906).
+//! oxigraph-free.
 
 use std::sync::Arc;
 
@@ -129,9 +129,9 @@ mod tests {
 
     #[test]
     fn reifier_annotation_render_is_flat_and_idempotent() {
-        // #1155 bug 2 + Task 5 guard. The canonical renderer must emit the RDF 1.2
+        //  bug 2 + Task 5 guard. The canonical renderer must emit the RDF 1.2
         // statement layer (reifier bindings + annotations) from the SIDE-TABLES — which
-        // `canonical_turtle`/`ingest` flattens away, but the #1142 byte-exact fold renders
+        // `canonical_turtle`/`ingest` flattens away, but the byte-exact fold renders
         // directly — flat (never nested) and byte-idempotent under parse→render→parse.
         // Use `parse_dataset` + `render` directly (NOT `canonical_turtle`, which flattens
         // the side-tables before rendering and so never exercises this path).

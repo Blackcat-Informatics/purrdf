@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Engine-side variable **pre-binding** (purrdf S6, EPIC #906 GAP-A).
+//! Engine-side variable **pre-binding** (purrdf S6,  GAP-A).
 //!
 //! Bridges the engine's egress term model ([`TermValue`]) to the algebra's
 //! [`Query::substitute_variable`] rewrite. Each `(name, value)` of a
