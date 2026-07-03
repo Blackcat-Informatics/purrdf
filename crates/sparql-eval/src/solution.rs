@@ -14,7 +14,7 @@
 //! tuple hash, and join keys are precomputed column ordinals rather than per-probe
 //! variable-name lookups.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use purrdf_sparql_algebra::Variable;
 
@@ -128,14 +128,14 @@ pub type Solution = Vec<Option<SolutionTerm>>;
 #[derive(Clone, Debug)]
 pub struct SolutionSeq {
     /// The shared variable schema (so a row is just a `Vec<Option<SolutionTerm>>`).
-    pub schema: Rc<VarSchema>,
+    pub schema: Arc<VarSchema>,
     /// The solution rows (a bag — duplicates significant).
     pub rows: Vec<Solution>,
 }
 
 impl SolutionSeq {
     /// An empty sequence over `schema` (zero solutions).
-    pub fn empty(schema: Rc<VarSchema>) -> Self {
+    pub fn empty(schema: Arc<VarSchema>) -> Self {
         Self {
             schema,
             rows: Vec::new(),
@@ -147,7 +147,7 @@ impl SolutionSeq {
     /// identity, so this is the correct seed for an empty group pattern.
     pub fn unit() -> Self {
         Self {
-            schema: Rc::new(VarSchema::new()),
+            schema: Arc::new(VarSchema::new()),
             rows: vec![Vec::new()],
         }
     }

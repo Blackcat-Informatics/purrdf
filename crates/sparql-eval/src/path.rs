@@ -41,6 +41,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, TermId, TermRef};
 use purrdf_sparql_algebra::{NamedNode, PropertyPathExpression, TermPattern, Variable};
@@ -134,7 +135,7 @@ pub(crate) fn eval_path(
 
     // An absent ground endpoint cannot match anything.
     let (Some(s_end), Some(o_end)) = (s_end, o_end) else {
-        return Ok(SolutionSeq::empty(Rc::new(schema)));
+        return Ok(SolutionSeq::empty(Arc::new(schema)));
     };
 
     // Pre-resolve all NegatedPropertySet excluded predicates once for this eval call.
@@ -206,7 +207,7 @@ pub(crate) fn eval_path(
     }
 
     Ok(SolutionSeq {
-        schema: Rc::new(schema),
+        schema: Arc::new(schema),
         rows,
     })
 }
@@ -580,7 +581,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use purrdf_core::RdfDatasetBuilder;
     use purrdf_sparql_algebra::NamedNode;
-    use std::sync::Arc;
 
     const EX: &str = "http://ex/";
 

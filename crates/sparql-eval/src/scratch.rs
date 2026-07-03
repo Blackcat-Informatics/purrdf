@@ -46,8 +46,13 @@ impl ScratchId {
         Self(u32::try_from(index).expect("scratch table cannot exceed u32::MAX entries"))
     }
 
+    /// The raw table index behind this id. `pub(crate)` for
+    /// [`crate::parallel::portable_row`], which must compare a `Computed` id
+    /// against the parent's fork-time `computed_count()` to decide whether it
+    /// was already valid in the parent's id space or freshly minted by the
+    /// child after the fork.
     #[inline]
-    fn index(self) -> usize {
+    pub(crate) fn index(self) -> usize {
         self.0 as usize
     }
 }
@@ -99,7 +104,7 @@ impl SolutionTerm {
 /// values to one [`ScratchId`]. Stateless with respect to the dataset: the dataset
 /// is passed to each operation so the interner does not hold a borrow that would
 /// conflict with the evaluator's other dataset access.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ScratchInterner {
     /// `ScratchId` index → the computed value.
     values: Vec<TermValue>,

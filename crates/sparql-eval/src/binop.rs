@@ -16,7 +16,7 @@
 //! a compatibility scan over all build rows. The common case — two fully-bound BGPs
 //! — stays an O(n+m) hash join.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use purrdf_sparql_algebra::{Expression, GraphPattern};
 
@@ -54,14 +54,93 @@ pub(crate) fn eval_join(
 }
 
 /// Evaluate `left UNION right` as a multiset concatenation over the union schema.
+///
+/// Gated on [`crate::parallel::is_parallel_safe_pattern`] over **both** branches:
+/// if either reaches an unsafe (counter/RNG-mutating) builtin, the sequential
+/// body below runs, evaluating both branches directly against the real `ctx`
+/// exactly as before this task. Otherwise both branches mint new `Computed`
+/// terms that must escape into the union's output rows, so they are evaluated
+/// concurrently (`rayon::join`) against their own forked child context, and each
+/// branch's escaping rows are captured via [`crate::parallel::portable_row`]
+/// **while its child is still alive** (the child is dropped the instant its
+/// closure returns). Only once both branches are done does the MAIN thread
+/// re-intern them back into `ctx.scratch`, left branch first then right, via
+/// [`crate::parallel::reintern_portable_row`] — reproducing the sequential
+/// concat's exact row order (left rows, then right rows) and column layout.
 pub(crate) fn eval_union(
     left: &GraphPattern,
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_>,
 ) -> Result<SolutionSeq, EvalError> {
-    let l = eval(left, ctx)?;
-    let r = eval(right, ctx)?;
+    if !crate::parallel::is_parallel_safe_pattern(left)
+        || !crate::parallel::is_parallel_safe_pattern(right)
+    {
+        let l = eval(left, ctx)?;
+        let r = eval(right, ctx)?;
+        return Ok(concat_union(&l, &r));
+    }
 
+    let base = ctx.scratch.computed_count();
+    // A shared (immutable) borrow of `ctx`: both closures below only need
+    // `fork_for_worker`'s `&self` access, so they run concurrently over the same
+    // `&EvalCtx` — `EvalCtx: Sync` (see its definition) makes this sound.
+    let ctx_ref: &EvalCtx<'_> = ctx;
+
+    // Each closure forks its own child, evaluates its branch on it, and
+    // classifies every result row (see [`crate::parallel::minted_row`]): a row
+    // the child minted nothing new into (the common case for a UNION-over-BGP
+    // branch) is kept as-is with zero extra allocation, and only a row
+    // carrying a genuinely fresh cell pays for the portable-materialize round
+    // trip. The child (and its scratch) does not survive past this closure.
+    let eval_branch = |pattern: &GraphPattern| -> Result<PortableBranch, EvalError> {
+        let mut child = ctx_ref.fork_for_worker();
+        let seq = eval(pattern, &mut child)?;
+        let minted: Vec<_> = seq
+            .rows
+            .into_iter()
+            .map(|row| crate::parallel::minted_row(&child.scratch, base, row))
+            .collect();
+        Ok((seq.schema, minted))
+    };
+
+    let (left_result, right_result) = rayon::join(|| eval_branch(left), || eval_branch(right));
+    let (l_schema, l_minted) = left_result?;
+    let (r_schema, r_minted) = right_result?;
+
+    let out = l_schema.union(&r_schema);
+    let out_len = out.len();
+    let left_len = l_schema.len();
+    let right_to_out = right_to_out_map(&r_schema, &out);
+
+    let mut rows = Vec::with_capacity(l_minted.len() + r_minted.len());
+    for minted in l_minted {
+        let mut row = vec![None; out_len];
+        let reinterned =
+            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
+        row[..left_len].copy_from_slice(&reinterned);
+        rows.push(row);
+    }
+    for minted in r_minted {
+        let reinterned =
+            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
+        let mut row = vec![None; out_len];
+        for (j, &cell) in reinterned.iter().enumerate() {
+            row[right_to_out[j]] = cell;
+        }
+        rows.push(row);
+    }
+
+    Ok(SolutionSeq {
+        schema: Arc::new(out),
+        rows,
+    })
+}
+
+/// The sequential `UNION` body: concatenate `l` then `r` over the ordered
+/// union schema (left columns first). Shared by both the sequential fallback
+/// and (conceptually) documents the exact row shape the parallel path in
+/// [`eval_union`] must reproduce.
+fn concat_union(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -82,11 +161,17 @@ pub(crate) fn eval_union(
         rows.push(row);
     }
 
-    Ok(SolutionSeq {
-        schema: Rc::new(out),
+    SolutionSeq {
+        schema: Arc::new(out),
         rows,
-    })
+    }
 }
+
+/// One `UNION` branch's forked-child result: its output schema plus every
+/// result row classified via [`crate::parallel::minted_row`] — `Direct` (no
+/// remap needed) or `Portable` (materialized while the branch's forked child
+/// is still alive) — so it survives that child being dropped.
+type PortableBranch = (Arc<VarSchema>, Vec<crate::parallel::MintedRow>);
 
 /// The mapping from a right operand's column ordinal to its ordinal in `out`.
 fn right_to_out_map(right: &VarSchema, out: &VarSchema) -> Vec<usize> {
@@ -168,10 +253,14 @@ fn hash_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
     // Build side = right (split into key-indexed + wild rows).
     let (keyed, wild) = build_index(r, &shared);
 
-    // Probe-side cardinality is a cheap, usually-tight lower-bound estimate for
-    // the output (the common star join is ~1:1), avoiding most growth reallocs.
-    let mut rows = Vec::with_capacity(l.rows.len());
-    for lrow in &l.rows {
+    // Each left row's worker returns its merged matches in the same order as the
+    // sequential path (keyed-bucket matches in `idxs` order, then wild matches; or,
+    // for the unbound-shared-column case, the compatibility scan over `r.rows` in
+    // order); flattening across rows in index order reproduces the exact sequential
+    // row sequence. Captures only read-only borrows: `keyed`/`wild`/`r.rows` (the
+    // prebuilt index), `right_to_out`/`shared` (pure layout), `left_len`/`out_len`
+    // (`Copy`), and `merge`/`compatible` (pure fns).
+    let rows = crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
         match bound_key(lrow, &shared, KeySide::Left) {
             // Probe is fully bound on shared columns: hit the matching bucket
             // (exact key ⇒ compatible) plus any wild build rows it is compatible
@@ -179,12 +268,12 @@ fn hash_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
             Some(key) => {
                 if let Some(idxs) = keyed.get(&key) {
                     for &idx in idxs {
-                        rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                     }
                 }
                 for &idx in &wild {
                     if compatible(lrow, &r.rows[idx], &shared) {
-                        rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                     }
                 }
             }
@@ -193,15 +282,15 @@ fn hash_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
             None => {
                 for rrow in &r.rows {
                     if compatible(lrow, rrow, &shared) {
-                        rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
                     }
                 }
             }
         }
-    }
+    });
 
     SolutionSeq {
-        schema: Rc::new(out),
+        schema: Arc::new(out),
         rows,
     }
 }
@@ -285,38 +374,74 @@ pub(crate) fn eval_left_join(
 /// A left outer join whose right-side pairings must additionally satisfy `expr`
 /// (the inline `OPTIONAL { ... FILTER expr }` condition, §18.6). A left solution
 /// with no pairing that is both compatible and passes the filter is emitted alone.
+///
+/// Gated on [`crate::parallel::is_parallel_safe`] exactly like `eval_filter`: an
+/// unsafe `expr` (reaches `RAND`/`UUID`/`STRUUID`/`BNODE`/the PurRDF list
+/// constructors) MUST run on the real `ctx` sequentially, since a forked child
+/// would advance a throwaway copy of the per-query counter/RNG state instead of
+/// the real one. A safe `expr` only decides which merged rows pass; every
+/// surviving cell is copied from `lrow`/`rrow` by [`merge`] (which interns
+/// nothing — see its doc comment), so nothing new escapes a forked child's
+/// scratch and it is discarded after use — no re-interning via
+/// [`crate::parallel::reintern_minted_row`] is needed.
 fn left_outer_join_filtered(
     l: &SolutionSeq,
     r: &SolutionSeq,
     expr: &Expression,
     ctx: &mut EvalCtx<'_>,
 ) -> Result<SolutionSeq, EvalError> {
-    let out = Rc::new(l.schema.union(&r.schema));
+    let out = Arc::new(l.schema.union(&r.schema));
     let out_len = out.len();
     let left_len = l.schema.len();
     let right_to_out = right_to_out_map(&r.schema, &out);
     let shared = l.schema.shared_columns(&r.schema);
 
     // A left outer join emits at least one row per left row.
-    let mut rows = Vec::with_capacity(l.rows.len());
-    for lrow in &l.rows {
-        let mut matched = false;
-        for rrow in &r.rows {
-            if !compatible(lrow, rrow, &shared) {
-                continue;
+    let rows = if crate::parallel::is_parallel_safe(expr) {
+        crate::parallel::par_chunk_try_map_init(
+            &l.rows,
+            || ctx.fork_for_worker(),
+            |child, acc, lrow| {
+                let before = acc.len();
+                for rrow in &r.rows {
+                    if !compatible(lrow, rrow, &shared) {
+                        continue;
+                    }
+                    let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
+                    if crate::expr::eval_ebv(expr, &merged, &out, child)? == Some(true) {
+                        acc.push(merged);
+                    }
+                }
+                if acc.len() == before {
+                    let mut row = vec![None; out_len];
+                    row[..left_len].copy_from_slice(lrow);
+                    acc.push(row);
+                }
+                Ok(())
+            },
+        )?
+    } else {
+        let mut rows = Vec::with_capacity(l.rows.len());
+        for lrow in &l.rows {
+            let mut matched = false;
+            for rrow in &r.rows {
+                if !compatible(lrow, rrow, &shared) {
+                    continue;
+                }
+                let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
+                if crate::expr::eval_ebv(expr, &merged, &out, ctx)? == Some(true) {
+                    rows.push(merged);
+                    matched = true;
+                }
             }
-            let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
-            if crate::expr::eval_ebv(expr, &merged, &out, ctx)? == Some(true) {
-                rows.push(merged);
-                matched = true;
+            if !matched {
+                let mut row = vec![None; out_len];
+                row[..left_len].copy_from_slice(lrow);
+                rows.push(row);
             }
         }
-        if !matched {
-            let mut row = vec![None; out_len];
-            row[..left_len].copy_from_slice(lrow);
-            rows.push(row);
-        }
-    }
+        rows
+    };
     Ok(SolutionSeq { schema: out, rows })
 }
 
@@ -331,42 +456,45 @@ fn left_outer_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
 
     let (keyed, wild) = build_index(r, &shared);
 
-    // A left outer join emits at least one row per left row.
-    let mut rows = Vec::with_capacity(l.rows.len());
-    for lrow in &l.rows {
-        let before = rows.len();
+    // A left outer join emits at least one row per left row. Each worker returns the
+    // matched merges (keyed then wild, same order as the sequential path) or, when
+    // none match, the single padded left-alone row — reproducing the existing "emit
+    // alone iff no match" per-row semantics inside the worker so flattening in index
+    // order is byte-identical to the sequential path.
+    let rows = crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
+        let before = acc.len();
         match bound_key(lrow, &shared, KeySide::Left) {
             Some(key) => {
                 if let Some(idxs) = keyed.get(&key) {
                     for &idx in idxs {
-                        rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                     }
                 }
                 for &idx in &wild {
                     if compatible(lrow, &r.rows[idx], &shared) {
-                        rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                     }
                 }
             }
             None => {
                 for rrow in &r.rows {
                     if compatible(lrow, rrow, &shared) {
-                        rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
                     }
                 }
             }
         }
         // No compatible right solution → keep the left solution alone (the OPTIONAL
         // contributed nothing, its variables stay unbound).
-        if rows.len() == before {
+        if acc.len() == before {
             let mut row = vec![None; out_len];
             row[..left_len].copy_from_slice(lrow);
-            rows.push(row);
+            acc.push(row);
         }
-    }
+    });
 
     SolutionSeq {
-        schema: Rc::new(out),
+        schema: Arc::new(out),
         rows,
     }
 }
@@ -387,20 +515,15 @@ pub(crate) fn eval_minus(
     let r = eval(right, ctx)?;
     let shared = l.schema.shared_columns(&r.schema);
 
-    let rows = l
-        .rows
-        .iter()
-        .filter(|lrow| {
-            // Keep the left row unless some right row removes it.
-            !r.rows.iter().any(|rrow| {
-                compatible(lrow, rrow, &shared)
-                    && shared
-                        .iter()
-                        .any(|&(la, ra)| lrow[la].is_some() && rrow[ra].is_some())
-            })
+    let rows = crate::parallel::par_retain(&l.rows, |lrow| {
+        // Keep the left row unless some right row removes it.
+        !r.rows.iter().any(|rrow| {
+            compatible(lrow, rrow, &shared)
+                && shared
+                    .iter()
+                    .any(|&(la, ra)| lrow[la].is_some() && rrow[ra].is_some())
         })
-        .cloned()
-        .collect();
+    });
 
     Ok(SolutionSeq {
         schema: l.schema,
@@ -413,11 +536,10 @@ mod tests {
     use super::*;
     use crate::eval::EvalCtx;
     use pretty_assertions::assert_eq;
-    use purrdf_core::{RdfDataset, RdfDatasetBuilder};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
     use purrdf_sparql_algebra::{
         NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
     };
-    use std::sync::Arc;
 
     fn graph() -> Arc<RdfDataset> {
         // :a :knows :b ; :likes :cake .
@@ -464,7 +586,7 @@ mod tests {
                 cols.iter()
                     .map(|&c| {
                         row[c].map(|t| match scratch.value_of(ds, t) {
-                            purrdf_core::TermValue::Iri(s) => s,
+                            TermValue::Iri(s) => s,
                             other => format!("{other:?}"),
                         })
                     })
@@ -628,7 +750,7 @@ mod tests {
 
         // Inner over schema [x]: x=1, x=2, and one wild row (x unbound).
         let inner = SolutionSeq {
-            schema: Rc::new(VarSchema::from_vars([Variable::new("x")])),
+            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
             rows: vec![vec![t(1)], vec![t(2)], vec![None]],
         };
         // Probe layout is the FULL outer schema [x, y]; shared = {x} → [(0, 0)].
@@ -665,7 +787,7 @@ mod tests {
 
         // Same shape but NO wild inner row, so a keyed miss is a true non-match.
         let inner2 = SolutionSeq {
-            schema: Rc::new(VarSchema::from_vars([Variable::new("x")])),
+            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
             rows: vec![vec![t(1)], vec![t(2)]],
         };
         let (keyed2, wild2) = build_index(&inner2, &shared);
@@ -683,7 +805,7 @@ mod tests {
             &inner2.rows
         ));
         let empty = SolutionSeq {
-            schema: Rc::new(VarSchema::from_vars([Variable::new("x")])),
+            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
             rows: vec![],
         };
         let (ek, ew) = build_index(&empty, &shared);
@@ -706,5 +828,143 @@ mod tests {
         let right = bgp(vp("x"), pred("http://ex/knows"), vp("y")); // 1 row
         let seq = eval_minus(&left, &right, &mut ctx).expect("minus");
         assert_eq!(seq.len(), 2);
+    }
+
+    /// Determinism smoke test (Task 6): a 3-branch `UNION` (the `d_union_4` bench
+    /// shape) where each branch `BIND`s a freshly-computed value — two branches
+    /// minting the SAME value (`11`), one minting a DISJOINT value (`12`) — so the
+    /// escaping-computed-term merge in [`eval_union`] is exercised both ways.
+    /// Evaluated once with the parallel `UNION` path FORCED and once with the
+    /// sequential path FORCED, the two must produce byte-identical rows (schema
+    /// and row order, left-branch rows then right-branch rows, nested left-to-right).
+    #[test]
+    fn union_three_branches_with_overlapping_and_disjoint_binds_agree() {
+        use purrdf_sparql_algebra::Variable;
+
+        let mut b = RdfDatasetBuilder::new();
+        let p1 = b.intern_iri("http://ex/p1");
+        let p2 = b.intern_iri("http://ex/p2");
+        let p3 = b.intern_iri("http://ex/p3");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        let ten = b.intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: "10".to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        });
+        let twenty = b.intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: "20".to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        });
+        b.push_quad(a, p1, ten, None);
+        b.push_quad(bb, p2, twenty, None);
+        b.push_quad(c, p3, ten, None);
+        let ds = b.freeze().expect("freeze");
+
+        let one = || {
+            Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
+                "1",
+                NamedNode::new_unchecked(XINT),
+            ))
+        };
+        let nine = || {
+            Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
+                "9",
+                NamedNode::new_unchecked(XINT),
+            ))
+        };
+        let two = || {
+            Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
+                "2",
+                NamedNode::new_unchecked(XINT),
+            ))
+        };
+
+        // branch1: {?s :p1 ?o} BIND(?o + 1 AS ?sum)  -> s=a, o=10, sum=11
+        let branch1 = GraphPattern::Extend {
+            inner: Box::new(bgp(vp("s"), pred("http://ex/p1"), vp("o"))),
+            variable: Variable::new("sum"),
+            expression: Expression::Add(
+                Box::new(Expression::Variable(Variable::new("o"))),
+                Box::new(one()),
+            ),
+        };
+        // branch2: {?s :p2 ?o} BIND(?o - 9 AS ?sum)  -> s=b, o=20, sum=11 (SAME as branch1)
+        let branch2 = GraphPattern::Extend {
+            inner: Box::new(bgp(vp("s"), pred("http://ex/p2"), vp("o"))),
+            variable: Variable::new("sum"),
+            expression: Expression::Subtract(
+                Box::new(Expression::Variable(Variable::new("o"))),
+                Box::new(nine()),
+            ),
+        };
+        // branch3: {?s :p3 ?o} BIND(?o + 2 AS ?sum)  -> s=c, o=10, sum=12 (DISJOINT)
+        let branch3 = GraphPattern::Extend {
+            inner: Box::new(bgp(vp("s"), pred("http://ex/p3"), vp("o"))),
+            variable: Variable::new("sum"),
+            expression: Expression::Add(
+                Box::new(Expression::Variable(Variable::new("o"))),
+                Box::new(two()),
+            ),
+        };
+
+        let pattern = GraphPattern::Union {
+            left: Box::new(GraphPattern::Union {
+                left: Box::new(branch1),
+                right: Box::new(branch2),
+            }),
+            right: Box::new(branch3),
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&pattern, &mut ctx).expect("eval");
+            let schema = seq.schema.vars().to_vec();
+            let s_col = seq.schema.index_of(&Variable::new("s")).unwrap();
+            let sum_col = seq.schema.index_of(&Variable::new("sum")).unwrap();
+            let resolved: Vec<(TermValue, TermValue)> = seq
+                .rows
+                .iter()
+                .map(|row| {
+                    (
+                        ctx.scratch.value_of(&ds, row[s_col].unwrap()),
+                        ctx.scratch.value_of(&ds, row[sum_col].unwrap()),
+                    )
+                })
+                .collect();
+            (schema, seq.rows, resolved)
+        };
+
+        let (schema_par, rows_par, resolved_par) = run(true);
+        let (schema_seq, rows_seq, resolved_seq) = run(false);
+
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential UNION paths must produce byte-identical row order"
+        );
+        assert_eq!(
+            resolved_par, resolved_seq,
+            "resolved (s, sum) values must match regardless of path"
+        );
+        // Row order: branch1 then branch2 then branch3 (left-to-right nesting).
+        let expected_sums = vec!["11".to_owned(), "11".to_owned(), "12".to_owned()];
+        let got_sums: Vec<String> = resolved_seq
+            .iter()
+            .map(|(_, v)| match v {
+                TermValue::Literal { lexical_form, .. } => lexical_form.clone(),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(got_sums, expected_sums);
     }
 }

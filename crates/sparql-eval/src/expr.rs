@@ -23,7 +23,7 @@
 //! `SERVICE` (S6b #928), property paths (S8 #914), and `Function::Custom`.
 
 use std::cmp::Ordering;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use purrdf_core::{BlankScope, DatasetView, GraphMatch, TermRef, TermValue};
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
@@ -166,6 +166,16 @@ pub(crate) fn eval_ebv(
 
 /// `Filter(expr, inner)`: keep solutions whose `expr` has effective boolean value
 /// `true`; an error/unbound (or `false`) drops the row.
+///
+/// [`crate::parallel::is_parallel_safe`] gates the strategy: an expression that
+/// can reach a stateful builtin (`RAND`/`UUID`/`STRUUID`/`BNODE`, the PurRDF list
+/// constructors) MUST run on the real `ctx` sequentially, so its per-query
+/// counter/RNG state advances exactly as it would without this parallel path — a
+/// forked child would advance a throwaway copy instead, silently diverging from
+/// the sequential result. A safe expression only decides keep/drop; the
+/// surviving rows are the ORIGINAL rows (never a value derived from the child's
+/// scratch), so each forked child's scratch is discarded after use — nothing to
+/// re-intern via [`crate::parallel::reintern_minted_row`].
 pub(crate) fn eval_filter(
     expr: &Expression,
     inner: &GraphPattern,
@@ -173,17 +183,39 @@ pub(crate) fn eval_filter(
 ) -> Result<SolutionSeq, EvalError> {
     let seq = eval(inner, ctx)?;
     let schema = seq.schema.clone();
-    let mut rows = Vec::new();
-    for row in seq.rows {
-        if eval_ebv(expr, &row, &schema, ctx)? == Some(true) {
-            rows.push(row);
+    let rows = if crate::parallel::is_parallel_safe(expr) {
+        crate::parallel::par_chunk_try_map_init(
+            &seq.rows,
+            || ctx.fork_for_worker(),
+            |child, acc, row| {
+                if eval_ebv(expr, row, &schema, child)? == Some(true) {
+                    acc.push(row.clone());
+                }
+                Ok(())
+            },
+        )?
+    } else {
+        let mut rows = Vec::new();
+        for row in seq.rows {
+            if eval_ebv(expr, &row, &schema, ctx)? == Some(true) {
+                rows.push(row);
+            }
         }
-    }
+        rows
+    };
     Ok(SolutionSeq { schema, rows })
 }
 
 /// `Extend(inner, var, expr)` (BIND): add `var` bound to `expr`'s value for each
 /// solution. An error/unbound value leaves `var` unbound (the row is NOT dropped).
+///
+/// Gated on [`crate::parallel::is_parallel_safe`] like `eval_filter`: an unsafe
+/// `expr` MUST run on the real `ctx` sequentially. A safe `expr` mints a NEW
+/// `Computed` term that escapes into the output row (unlike FILTER's read-only
+/// predicate), so each worker's forked child materializes its bound row via
+/// [`crate::parallel::portable_row`] while its scratch is still alive, and this
+/// function re-interns each portable row against `ctx.scratch` afterwards, in
+/// source-index order, via [`crate::parallel::reintern_portable_row`].
 pub(crate) fn eval_extend(
     inner: &GraphPattern,
     var: &Variable,
@@ -194,15 +226,36 @@ pub(crate) fn eval_extend(
     let mut schema = (*seq.schema).clone();
     let col = schema.push(var.clone());
     let width = schema.len();
-    let schema = Rc::new(schema);
+    let schema = Arc::new(schema);
 
-    let mut rows = Vec::with_capacity(seq.rows.len());
-    for mut row in seq.rows {
-        row.resize(width, None);
-        let value = eval_expr(expr, &row, &schema, ctx)?;
-        row[col] = value;
-        rows.push(row);
-    }
+    let rows = if crate::parallel::is_parallel_safe(expr) {
+        let base = ctx.scratch.computed_count();
+        let minted = crate::parallel::par_chunk_try_map_init(
+            &seq.rows,
+            || ctx.fork_for_worker(),
+            |child, acc, in_row| {
+                let mut row = in_row.clone();
+                row.resize(width, None);
+                let value = eval_expr(expr, &row, &schema, child)?;
+                row[col] = value;
+                acc.push(crate::parallel::minted_row(&child.scratch, base, row));
+                Ok(())
+            },
+        )?;
+        minted
+            .into_iter()
+            .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))
+            .collect()
+    } else {
+        let mut rows = Vec::with_capacity(seq.rows.len());
+        for mut row in seq.rows {
+            row.resize(width, None);
+            let value = eval_expr(expr, &row, &schema, ctx)?;
+            row[col] = value;
+            rows.push(row);
+        }
+        rows
+    };
     Ok(SolutionSeq { schema, rows })
 }
 
@@ -709,7 +762,7 @@ fn exists(
     let inner_expr_vars = if ctx.in_substituted_exists {
         let mut vars = DetHashSet::default();
         pattern_expr_vars(pattern, &mut vars);
-        Rc::new(vars)
+        Arc::new(vars)
     } else {
         let pattern_key = std::ptr::from_ref::<GraphPattern>(pattern) as usize;
         ctx.exists_expr_vars_cache
@@ -717,7 +770,7 @@ fn exists(
             .or_insert_with(|| {
                 let mut vars = DetHashSet::default();
                 pattern_expr_vars(pattern, &mut vars);
-                Rc::new(vars)
+                Arc::new(vars)
             })
             .clone()
     };
@@ -776,14 +829,14 @@ fn exists(
         let entry = match cached {
             Some(entry) => entry,
             None => {
-                let inner = Rc::new(eval(pattern, ctx)?);
+                let inner = Arc::new(eval(pattern, ctx)?);
                 // `shared` is computed against the FULL outer schema (not just the
                 // row's bound vars), so one index serves every row: an outer var
                 // unbound in a given row is `None` in the probe and matches anything
                 // via `compatible`, exactly as the prior bound-only seed-join did.
                 let shared = schema.shared_columns(&inner.schema);
                 let (keyed, wild) = crate::binop::build_index(&inner, &shared);
-                let entry = Rc::new(crate::eval::ExistsInner {
+                let entry = Arc::new(crate::eval::ExistsInner {
                     inner,
                     shared,
                     keyed,
@@ -1973,11 +2026,11 @@ fn eval_regex(
 /// The compiled regex for `(pattern, flags)`, from the per-query cache.
 ///
 /// The hit path probes with the **borrowed** strings (the two-level map avoids
-/// allocating a `(String, String)` key per row) and returns an `Rc` clone — the
+/// allocating a `(String, String)` key per row) and returns an `Arc` clone — the
 /// rows of one filter share a single compiled regex and therefore its lazy-DFA
 /// cache pool, instead of each row cloning a fresh one. Compile failures are
 /// cached as `None` (same errors, compiled once).
-fn cached_regex(ctx: &mut EvalCtx<'_>, pattern: &str, flags: &str) -> Option<Rc<regex::Regex>> {
+fn cached_regex(ctx: &mut EvalCtx<'_>, pattern: &str, flags: &str) -> Option<Arc<regex::Regex>> {
     if let Some(cached) = ctx
         .regex_cache
         .get(pattern)
@@ -1985,7 +2038,7 @@ fn cached_regex(ctx: &mut EvalCtx<'_>, pattern: &str, flags: &str) -> Option<Rc<
     {
         return cached.clone();
     }
-    let compiled = build_regex(pattern, flags).map(Rc::new);
+    let compiled = build_regex(pattern, flags).map(Arc::new);
     ctx.regex_cache
         .entry(pattern.to_owned())
         .or_default()
@@ -2283,7 +2336,6 @@ mod tests {
     use super::*;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder};
     use purrdf_sparql_algebra::{Literal, NamedNode};
-    use std::sync::Arc;
 
     fn empty_ds() -> Arc<RdfDataset> {
         RdfDatasetBuilder::new().freeze().expect("freeze")
@@ -3148,15 +3200,44 @@ mod tests {
     fn exists_memo_populates_cache_once() {
         // Two outer rows share the same EXISTS site; with the memo on the inner
         // pattern is evaluated and cached exactly once.
+        //
+        // Driven directly via `eval`/`eval_ebv` on ONE shared `ctx`, rather than
+        // through `evaluate_query`'s FILTER node: this EXISTS reaches no unsafe
+        // builtin, so (Task 5) `eval_filter` routes it through
+        // `crate::parallel::par_chunk_try_map_init`, which runs the per-row loop on a
+        // FORKED child context — the memo would land on that (discarded-after-use)
+        // child, not on a `ctx` inspected from outside `evaluate_query`. This
+        // reproduces the identical per-row loop shape the forked child runs,
+        // directly on `ctx`, to keep exercising the underlying "cache built once,
+        // not once per outer row" invariant.
+        use purrdf_sparql_algebra::{
+            NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        };
+
         let ds = knows_ds();
-        let parsed = purrdf_sparql_algebra::SparqlParser::new()
-            .parse_query(
-                "SELECT ?s ?o WHERE { ?s <http://ex/knows> ?o \
-                 FILTER EXISTS { ?z <http://ex/member> ?m } }",
-            )
-            .expect("parse");
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let outer = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("s"),
+                predicate: pred("http://ex/knows"),
+                object: vp("o"),
+            }],
+        };
+        let inner = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("z"),
+                predicate: pred("http://ex/member"),
+                object: vp("m"),
+            }],
+        };
+
         let mut ctx = EvalCtx::new(&ds);
-        crate::eval::evaluate_query(&parsed, &mut ctx).expect("eval");
+        let seq = eval(&outer, &mut ctx).expect("outer bgp");
+        let exists_expr = Expression::Exists(Box::new(inner));
+        for row in &seq.rows {
+            eval_ebv(&exists_expr, row, &seq.schema, &mut ctx).expect("ebv");
+        }
         assert_eq!(
             ctx.exists_inner_cache.len(),
             1,
@@ -3248,16 +3329,40 @@ mod tests {
     fn uncorrelated_exists_fast_path_still_uses_cache() {
         // Verify the fast/memoized path is still taken when there is no expression
         // correlation: the cache must be populated after the query.
+        //
+        // Driven directly via `eval`/`eval_ebv` on ONE shared `ctx` rather than
+        // through `evaluate_query`'s FILTER node — see
+        // `exists_memo_populates_cache_once`'s comment: Task 5 routes this
+        // parallel-safe FILTER through a forked child context, so the memo would
+        // land there, not on a `ctx` inspected from outside `evaluate_query`.
+        use purrdf_sparql_algebra::{
+            NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        };
+
         let ds = knows_ds();
-        let q = "SELECT ?s ?o WHERE { \
-                   ?s <http://ex/knows> ?o \
-                   FILTER EXISTS { ?z <http://ex/member> ?m } \
-                 }";
-        let parsed = purrdf_sparql_algebra::SparqlParser::new()
-            .parse_query(q)
-            .expect("parse");
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let outer = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("s"),
+                predicate: pred("http://ex/knows"),
+                object: vp("o"),
+            }],
+        };
+        let inner = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("z"),
+                predicate: pred("http://ex/member"),
+                object: vp("m"),
+            }],
+        };
+
         let mut ctx = EvalCtx::new(&ds);
-        crate::eval::evaluate_query(&parsed, &mut ctx).expect("eval");
+        let seq = eval(&outer, &mut ctx).expect("outer bgp");
+        let exists_expr = Expression::Exists(Box::new(inner));
+        for row in &seq.rows {
+            eval_ebv(&exists_expr, row, &seq.schema, &mut ctx).expect("ebv");
+        }
         assert_eq!(
             ctx.exists_inner_cache.len(),
             1,
@@ -3459,5 +3564,99 @@ mod tests {
             None,
             "unbound argument ⇒ SPARQL error (None)"
         );
+    }
+
+    /// Determinism smoke test (Task 6): a chained `BIND` — `BIND(?o + 5 AS ?sum)`
+    /// then `BIND(CONCAT("v-", STR(?sum)) AS ?label)` over three rows — mints both
+    /// a NUMERIC (`?sum`) and a STRING (`?label`) `Computed` term per row, each of
+    /// which must escape a forked child via [`crate::parallel::portable_row`]/
+    /// [`crate::parallel::reintern_portable_row`]. Evaluated once with the
+    /// parallel `Extend` path FORCED and once with the sequential path FORCED,
+    /// the two must produce byte-identical rows (row order + resolved values).
+    #[test]
+    fn bind_chain_numeric_and_string_forced_parallel_and_sequential_agree() {
+        use purrdf_core::RdfLiteral;
+        use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
+
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+        let mut b = RdfDatasetBuilder::new();
+        let val = b.intern_iri("http://ex/val");
+        for (s, n) in [("a", "10"), ("b", "20"), ("c", "30")] {
+            let subj = b.intern_iri(&format!("http://ex/{s}"));
+            let v = b.intern_literal(RdfLiteral {
+                lexical_form: n.to_owned(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(subj, val, v, None);
+        }
+        let ds = b.freeze().expect("freeze");
+
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let scan = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("s"),
+                predicate: pred("http://ex/val"),
+                object: vp("o"),
+            }],
+        };
+        let bind_sum = GraphPattern::Extend {
+            inner: Box::new(scan),
+            variable: Variable::new("sum"),
+            expression: Expression::Add(
+                Box::new(Expression::Variable(Variable::new("o"))),
+                Box::new(typed_lit("5", XINT)),
+            ),
+        };
+        let bind_label = GraphPattern::Extend {
+            inner: Box::new(bind_sum),
+            variable: Variable::new("label"),
+            expression: Expression::FunctionCall(
+                Function::Concat,
+                vec![
+                    lit("v-"),
+                    Expression::FunctionCall(
+                        Function::Str,
+                        vec![Expression::Variable(Variable::new("sum"))],
+                    ),
+                ],
+            ),
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&bind_label, &mut ctx).expect("eval");
+            let schema = seq.schema.vars().to_vec();
+            let label_col = seq.schema.index_of(&Variable::new("label")).unwrap();
+            let labels: Vec<String> = seq
+                .rows
+                .iter()
+                .map(
+                    |row| match ctx.scratch.value_of(&ds, row[label_col].unwrap()) {
+                        TermValue::Literal { lexical_form, .. } => lexical_form,
+                        other => format!("{other:?}"),
+                    },
+                )
+                .collect();
+            (schema, seq.rows, labels)
+        };
+
+        let (schema_par, rows_par, labels_par) = run(true);
+        let (schema_seq, rows_seq, labels_seq) = run(false);
+
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential BIND paths must produce byte-identical row order"
+        );
+        assert_eq!(labels_par, labels_seq);
+        assert_eq!(labels_seq, vec!["v-15", "v-25", "v-35"]);
     }
 }
