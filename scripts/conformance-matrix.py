@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -41,6 +42,9 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PY_DIR = _REPO_ROOT / "bindings" / "python"
 _BASELINE_PATH = _REPO_ROOT / "scripts" / "conformance-baseline.json"
+_DOC_PATH = _REPO_ROOT / "docs" / "CONFORMANCE.md"
+_DOC_BEGIN = "<!-- BEGIN GENERATED: conformance-matrix -->"
+_DOC_END = "<!-- END GENERATED: conformance-matrix -->"
 
 # ---------------------------------------------------------------------------
 # Result model
@@ -429,10 +433,10 @@ def render(results: list[SuiteResult]) -> str:
     return "\n".join(lines)
 
 
-def render_markdown(results: list[SuiteResult]) -> str:
+def render_matrix_table(results: list[SuiteResult]) -> str:
+    """The Markdown matrix table only (no title, no verdict) — the canonical
+    block embedded in both the CI job summary and docs/CONFORMANCE.md."""
     rows = [
-        "## PurRDF conformance matrix",
-        "",
         "| Suite | Source | Pass | XFail/Skip | Budget | Fail | Status |",
         "| --- | --- | ---: | ---: | ---: | ---: | :---: |",
     ]
@@ -444,11 +448,64 @@ def render_markdown(results: list[SuiteResult]) -> str:
             f"| {r.name} | {r.source} | {r.passed} | {r.xskip} | "
             f"{budget_cell} | {fail_cell} | {badge} |"
         )
-    green = all(r.ok for r in results)
-    rows.append("")
-    rows.append(f"**Verdict: {'GREEN' if green else 'RED'}**")
-    rows.append("")
     return "\n".join(rows)
+
+
+def render_markdown(results: list[SuiteResult]) -> str:
+    green = all(r.ok for r in results)
+    return "\n".join(
+        [
+            "## PurRDF conformance matrix",
+            "",
+            render_matrix_table(results),
+            "",
+            f"**Verdict: {'GREEN' if green else 'RED'}**",
+            "",
+        ]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Generated doc block (drift guard over docs/CONFORMANCE.md's matrix table)
+# ---------------------------------------------------------------------------
+
+
+def _split_doc(text: str) -> tuple[str, str, str]:
+    """Return (head-through-BEGIN, current inner, END-through-tail)."""
+    if _DOC_BEGIN not in text or _DOC_END not in text:
+        raise SystemExit(
+            f"conformance-matrix: markers not found in {_DOC_PATH.relative_to(_REPO_ROOT)} "
+            f"({_DOC_BEGIN} / {_DOC_END})"
+        )
+    i = text.index(_DOC_BEGIN) + len(_DOC_BEGIN)
+    j = text.index(_DOC_END)
+    return text[:i], text[i:j], text[j:]
+
+
+def write_doc_block(block: str) -> None:
+    head, _, tail = _split_doc(_DOC_PATH.read_text(encoding="utf-8"))
+    _DOC_PATH.write_text(f"{head}\n{block}\n{tail}", encoding="utf-8")
+
+
+def check_doc_block(block: str) -> bool:
+    """True iff the committed matrix block equals the freshly measured one."""
+    _, inner, _ = _split_doc(_DOC_PATH.read_text(encoding="utf-8"))
+    if inner.strip() == block.strip():
+        return True
+    print(
+        f"\n{_DOC_PATH.relative_to(_REPO_ROOT)} conformance-matrix block is stale; "
+        "regenerate with `python3 scripts/conformance-matrix.py --write-doc`.",
+        file=sys.stderr,
+    )
+    diff = difflib.unified_diff(
+        inner.strip().splitlines(),
+        block.strip().splitlines(),
+        fromfile="committed",
+        tofile="measured",
+        lineterm="",
+    )
+    print("\n".join(diff), file=sys.stderr)
+    return False
 
 
 def main() -> int:
@@ -463,7 +520,18 @@ def main() -> int:
         action="store_true",
         help="skip `maturin develop` before the Python suites (assume prebuilt)",
     )
+    parser.add_argument(
+        "--write-doc",
+        action="store_true",
+        help="rewrite the generated matrix block in docs/CONFORMANCE.md from the "
+        "measured results (instead of drift-checking it)",
+    )
     args = parser.parse_args()
+
+    if args.write_doc and args.no_python:
+        # The committed doc block reflects the full 10-row matrix; a native-only
+        # run cannot reproduce it.
+        parser.error("--write-doc requires the full suite (do not pass --no-python)")
 
     results = native_suites()
     if not args.no_python:
@@ -492,7 +560,19 @@ def main() -> int:
             fh.write(render_markdown(results))
             fh.write("\n")
 
-    return 0 if all(r.ok for r in results) else 1
+    # Keep the published ledger honest: regenerate or drift-check the matrix
+    # block in docs/CONFORMANCE.md against the freshly measured results. Only in
+    # a full run (a native-only run cannot reproduce the whole table).
+    doc_ok = True
+    if not args.no_python:
+        block = render_matrix_table(results)
+        if args.write_doc:
+            write_doc_block(block)
+            print(f"wrote matrix block to {_DOC_PATH.relative_to(_REPO_ROOT)}")
+        else:
+            doc_ok = check_doc_block(block)
+
+    return 0 if (all(r.ok for r in results) and doc_ok) else 1
 
 
 if __name__ == "__main__":
