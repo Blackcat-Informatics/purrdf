@@ -302,12 +302,16 @@ pub struct RdfDatasetBuilder {
     quads: Vec<QuadRow>,
     /// Store-once dedup index into `quads` (replaces the duplicate `HashSet<QuadRow>`).
     quad_index: HashTable<u32>,
-    /// `(reifier, triple-term)` bindings. Several reifiers MAY bind one triple term
-    /// and the same binding MAY be pushed more than once; duplicates collapse (C0.4).
-    reifiers: Vec<(TermId, TermId)>,
+    /// `(reifier, triple-term, graph)` bindings. Several reifiers MAY bind one triple
+    /// term and the same binding MAY be pushed more than once; duplicates collapse
+    /// (C0.4). The `graph` slot (`None` = default graph) records the named graph the
+    /// reifier declaration was asserted in, so a reifier inside a TriG `GRAPH g { … }`
+    /// block is matchable under `GRAPH ?g`.
+    reifiers: Vec<(TermId, TermId, Option<TermId>)>,
     reifier_index: HashTable<u32>,
-    /// `(reifier, predicate, object)` annotations; duplicates collapse (C0.5).
-    annotations: Vec<(TermId, TermId, TermId)>,
+    /// `(reifier, predicate, object, graph)` annotations; duplicates collapse (C0.5).
+    /// The `graph` slot mirrors [`Self::reifiers`].
+    annotations: Vec<(TermId, TermId, TermId, Option<TermId>)>,
     annotation_index: HashTable<u32>,
     /// Sparse source locations keyed by the pushed-quad ordinal. Only quads with a
     /// recorded location appear here.
@@ -537,7 +541,11 @@ impl RdfDatasetBuilder {
         let o = self.intern_owned_term_scoped(&reifier.statement.object, scope);
         let triple = self.intern_triple(s, p, o);
         let reifier_id = self.intern_owned_term_scoped(&reifier.reifier, scope);
-        self.push_reifier(reifier_id, triple);
+        let g = reifier
+            .graph
+            .as_ref()
+            .map(|g| self.intern_owned_term_scoped(g, scope));
+        self.push_reifier_in_graph(reifier_id, triple, g);
     }
 
     /// Push one owned RDF 1.2 statement annotation into this builder, re-interning
@@ -552,7 +560,11 @@ impl RdfDatasetBuilder {
         let reifier_id = self.intern_owned_term_scoped(&annotation.reifier, scope);
         let p = self.intern_iri(&annotation.predicate);
         let o = self.intern_owned_term_scoped(&annotation.object, scope);
-        self.push_annotation(reifier_id, p, o);
+        let g = annotation
+            .graph
+            .as_ref()
+            .map(|g| self.intern_owned_term_scoped(g, scope));
+        self.push_annotation_in_graph(reifier_id, p, o, g);
     }
 
     /// Merge every quad, reifier, and annotation of `other` into this builder,
@@ -672,15 +684,36 @@ impl RdfDatasetBuilder {
     /// `push_owned_reifier` (e.g. a named-graph projection) would carry reifiers the
     /// renderer / pattern-matcher cannot see, because the predicate id is absent.
     pub fn push_reifier(&mut self, reifier: TermId, triple: TermId) {
+        self.push_reifier_in_graph(reifier, triple, None);
+    }
+
+    /// Like [`push_reifier`](Self::push_reifier) but records the named graph the
+    /// reifier declaration was asserted in (`None` = default graph). A `(reifier,
+    /// triple, graph)` triplet pushed twice collapses to one; the SAME `(reifier,
+    /// triple)` in two distinct graphs is two bindings.
+    pub fn push_reifier_in_graph(&mut self, reifier: TermId, triple: TermId, g: Option<TermId>) {
         let _ = self.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies");
-        let binding = (reifier, triple);
+        let binding = (reifier, triple, g);
         store_once(&mut self.reifiers, &mut self.reifier_index, binding);
     }
 
     /// Push a statement annotation `(reifier, predicate, object)`. Duplicate
     /// annotations collapse to one (C0.5).
     pub fn push_annotation(&mut self, reifier: TermId, p: TermId, o: TermId) {
-        let annotation = (reifier, p, o);
+        self.push_annotation_in_graph(reifier, p, o, None);
+    }
+
+    /// Like [`push_annotation`](Self::push_annotation) but records the named graph the
+    /// annotation was asserted in (`None` = default graph); see
+    /// [`push_reifier_in_graph`](Self::push_reifier_in_graph).
+    pub fn push_annotation_in_graph(
+        &mut self,
+        reifier: TermId,
+        p: TermId,
+        o: TermId,
+        g: Option<TermId>,
+    ) {
+        let annotation = (reifier, p, o, g);
         store_once(
             &mut self.annotations,
             &mut self.annotation_index,
@@ -728,12 +761,12 @@ impl RdfDatasetBuilder {
     }
 
     /// Borrow the accumulated reifier bindings (validation reads these).
-    pub(crate) fn reifier_rows(&self) -> &[(TermId, TermId)] {
+    pub(crate) fn reifier_rows(&self) -> &[(TermId, TermId, Option<TermId>)] {
         &self.reifiers
     }
 
     /// Borrow the accumulated annotation rows (validation reads these).
-    pub(crate) fn annotation_rows(&self) -> &[(TermId, TermId, TermId)] {
+    pub(crate) fn annotation_rows(&self) -> &[(TermId, TermId, TermId, Option<TermId>)] {
         &self.annotations
     }
 
@@ -794,6 +827,11 @@ impl RdfDatasetBuilder {
         // UNION every graph the caller explicitly declared (possibly empty).
         let mut named_graphs: Vec<TermId> = declared_graphs;
         named_graphs.extend(quads.iter().filter_map(|q| q.g));
+        // A reifier / annotation declared inside a `GRAPH g { … }` block owns no base
+        // quad in g (the `<< … >>` folds entirely into the side-tables), so g would be
+        // invisible to `GRAPH ?g` enumeration unless its overlay rows are counted too.
+        named_graphs.extend(reifiers.iter().filter_map(|(_, _, g)| *g));
+        named_graphs.extend(annotations.iter().filter_map(|(_, _, _, g)| *g));
         named_graphs.sort_unstable();
         named_graphs.dedup();
 
@@ -819,12 +857,14 @@ use crate::{RdfDiagnostic, RdfStoreCapabilities};
 fn compute_capabilities(
     terms: &[InternedTerm],
     quads: &[QuadRow],
-    reifiers: &[(TermId, TermId)],
-    annotations: &[(TermId, TermId, TermId)],
+    reifiers: &[(TermId, TermId, Option<TermId>)],
+    annotations: &[(TermId, TermId, TermId, Option<TermId>)],
     locations: &[(QuadHandle, RdfLocation)],
 ) -> RdfStoreCapabilities {
     RdfStoreCapabilities {
-        named_graphs: quads.iter().any(|q| q.g.is_some()),
+        named_graphs: quads.iter().any(|q| q.g.is_some())
+            || reifiers.iter().any(|(_, _, g)| g.is_some())
+            || annotations.iter().any(|(_, _, _, g)| g.is_some()),
         quoted_triples: terms
             .iter()
             .any(|t| matches!(t, InternedTerm::Triple { .. })),

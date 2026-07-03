@@ -76,17 +76,29 @@ pub fn to_writer(
         let s = intern_term(&mut state, &reifier.statement.subject)?;
         let p = intern_iri(&mut state, &reifier.statement.predicate)?;
         let o = intern_term(&mut state, &reifier.statement.object)?;
-        // purrdf-gts 0.9.11 row-array `(rid, (s,p,o), graph?)`: purrdf's reification is
-        // standpoint-scoped, never graph-scoped, so the graph slot is always `None`.
-        graph.reifiers.push((rid, (s, p, o), None));
+        // purrdf-gts row-array `(rid, (s,p,o), graph?)`: the graph slot records the
+        // named graph the reifier was declared in (`None` = default graph), so a
+        // reifier inside a TriG `GRAPH g { … }` block round-trips through GTS.
+        let g = reifier
+            .graph
+            .as_ref()
+            .map(|g| intern_graph_name(&mut state, g))
+            .transpose()?;
+        graph.reifiers.push((rid, (s, p, o), g));
     }
 
     for annotation in &annotations {
         let r = intern_term(&mut state, &annotation.reifier)?;
         let p = intern_iri(&mut state, &annotation.predicate)?;
         let v = intern_term(&mut state, &annotation.object)?;
-        // 0.9.11 row-array `(reifier, predicate, value, graph?)`; graph always `None`.
-        graph.annotations.push((r, p, v, None));
+        // Row-array `(reifier, predicate, value, graph?)`; the graph slot mirrors the
+        // reifier row above.
+        let g = annotation
+            .graph
+            .as_ref()
+            .map(|g| intern_graph_name(&mut state, g))
+            .transpose()?;
+        graph.annotations.push((r, p, v, g));
     }
 
     apply_lookaside(&state, &mut graph, lookaside.clone());

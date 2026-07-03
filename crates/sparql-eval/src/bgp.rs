@@ -158,18 +158,17 @@ pub(crate) fn eval_bgp(
                             next.push(extended);
                         }
                     }
-                    // The RDF 1.2 reification layer is a dataset-level (default-graph)
-                    // side-table outside `quads`, so fold its virtual triples in here
-                    // — additively (no double counting) — whenever this scope includes
-                    // the default graph. A `GRAPH ?g`/named scope (`gm` matching only a
-                    // named graph) never sees it, matching the store-default treatment.
-                    if gm.matches(None) {
-                        emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies_id, |quad| {
-                            if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                                next.push(extended);
-                            }
-                        });
-                    }
+                    // The RDF 1.2 reification layer is a side-table outside `quads`, so
+                    // fold its virtual triples in here — additively (no double
+                    // counting). Each reifier/annotation row carries its own graph, so
+                    // the probe binds `?g` under `GRAPH ?g`: a default-graph reifier
+                    // shows only when the scope admits the default graph (unchanged),
+                    // and a `GRAPH :g`-scoped reifier shows only under that named graph.
+                    emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies_id, *gm, |quad| {
+                        if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
+                            next.push(extended);
+                        }
+                    });
                 }
                 // A FROM/USING-merged default graph: union the per-graph reads, but
                 // RDF-merge unions *triples*, so a triple present in two merged graphs
@@ -875,6 +874,7 @@ fn bind_pos(out: &mut Solution, pos: &Pos, id: TermId, dataset: &RdfDataset) -> 
 /// applies (`quads_for_pattern`), because — unlike `quads_for_pattern` — the virtual
 /// side-table walks are not pre-narrowed by the probe. A callback keeps this hot path
 /// lazy without boxing or allocating an intermediate candidate buffer.
+#[allow(clippy::too_many_arguments)]
 fn emit_virtual_candidates(
     dataset: &RdfDataset,
     cp: &CompiledPattern,
@@ -882,6 +882,7 @@ fn emit_virtual_candidates(
     p: Option<TermId>,
     o: Option<TermId>,
     reifies_id: Option<TermId>,
+    gm: GraphMatch,
     mut emit: impl FnMut(QuadIds),
 ) {
     // Reifier layer: only when the predicate can be `rdf:reifies`. The object must also
@@ -899,7 +900,8 @@ fn emit_virtual_candidates(
         };
         if predicate_can_reify && object_can_be_triple_term(&cp.o, dataset) {
             for quad in dataset.reifier_quads().filter(move |q| {
-                s.is_none_or(|id| q.s == id)
+                gm.matches(q.g)
+                    && s.is_none_or(|id| q.s == id)
                     && p.is_none_or(|id| q.p == id)
                     && o.is_none_or(|id| q.o == id)
             }) {
@@ -909,26 +911,29 @@ fn emit_virtual_candidates(
     }
 
     // Annotation layer: index by the bound reifier subject when possible, else scan.
+    // Every candidate carries the annotation's own graph, filtered against the active
+    // graph scope (`gm`) so `GRAPH ?g` binds `?g` to the graph the annotation is in.
     match s {
         Some(reifier) => {
             for quad in dataset
-                .annotations_of(reifier)
-                .map(|(pred, obj)| QuadIds {
+                .annotations_of_with_graph(reifier)
+                .map(|(pred, obj, g)| QuadIds {
                     s: reifier,
                     p: pred,
                     o: obj,
-                    g: None,
+                    g,
                 })
-                .filter(|q| p.is_none_or(|id| q.p == id) && o.is_none_or(|id| q.o == id))
+                .filter(|q| {
+                    gm.matches(q.g) && p.is_none_or(|id| q.p == id) && o.is_none_or(|id| q.o == id)
+                })
             {
                 emit(quad);
             }
         }
         None => {
-            for quad in dataset
-                .annotation_quads()
-                .filter(|q| p.is_none_or(|id| q.p == id) && o.is_none_or(|id| q.o == id))
-            {
+            for quad in dataset.annotation_quads().filter(|q| {
+                gm.matches(q.g) && p.is_none_or(|id| q.p == id) && o.is_none_or(|id| q.o == id)
+            }) {
                 emit(quad);
             }
         }

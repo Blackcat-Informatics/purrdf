@@ -497,17 +497,19 @@ impl MutableDataset {
         // `push_annotation`, not land as a flat quad. Their term ids are BASE ids, so
         // resolve each to a value and re-intern into the builder.
         let mut reifier_subjects: HashSet<TermValue> = HashSet::new();
-        for (reifier, triple) in base.reifiers() {
+        for (reifier, triple, graph) in base.reifiers_with_graph() {
             reifier_subjects.insert(self.base_value(reifier));
             let reifier = self.intern_base(&mut builder, reifier);
             let triple = self.intern_base(&mut builder, triple);
-            builder.push_reifier(reifier, triple);
+            let graph = graph.map(|g| self.intern_base(&mut builder, g));
+            builder.push_reifier_in_graph(reifier, triple, graph);
         }
-        for (reifier, pred, obj) in base.annotations() {
+        for (reifier, pred, obj, graph) in base.annotations_with_graph() {
             let reifier = self.intern_base(&mut builder, reifier);
             let pred = self.intern_base(&mut builder, pred);
             let obj = self.intern_base(&mut builder, obj);
-            builder.push_annotation(reifier, pred, obj);
+            let graph = graph.map(|g| self.intern_base(&mut builder, g));
+            builder.push_annotation_in_graph(reifier, pred, obj, graph);
         }
 
         // 2. DELTA-added quads (no source location — they were minted in memory, not
@@ -552,7 +554,8 @@ impl MutableDataset {
             let p = intern_value(&mut builder, p);
             let o = intern_value(&mut builder, o);
             let triple = builder.intern_triple(s, p, o);
-            builder.push_reifier(reifier, triple);
+            let g = q.g.as_ref().map(|g| intern_value(&mut builder, g));
+            builder.push_reifier_in_graph(reifier, triple, g);
         }
         for (q, &is_decl) in added_values.iter().zip(&reifier_decl) {
             if is_decl {
@@ -561,10 +564,13 @@ impl MutableDataset {
             let s = intern_value(&mut builder, &q.s);
             let p = intern_value(&mut builder, &q.p);
             let o = intern_value(&mut builder, &q.o);
-            if q.g.is_none() && reifier_subjects.contains(&q.s) {
-                builder.push_annotation(s, p, o);
+            let g = q.g.as_ref().map(|g| intern_value(&mut builder, g));
+            // A quad whose subject is a reifier is that reifier's annotation, in its
+            // own graph — mirroring `fold_statement_layer`'s pass 2 so an UPDATE freeze
+            // and a parse of the same statement agree.
+            if reifier_subjects.contains(&q.s) {
+                builder.push_annotation_in_graph(s, p, o, g);
             } else {
-                let g = q.g.as_ref().map(|g| intern_value(&mut builder, g));
                 builder.push_quad(s, p, o, g);
             }
         }

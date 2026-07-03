@@ -254,44 +254,31 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
         interner.builder.attach_location(handle, location);
     }
 
-    // Reifier bindings: bind the reifier resource to the interned triple term.
+    // Reifier bindings: bind the reifier resource to the interned triple term, carrying
+    // the reifier declaration's own named graph (`None` = default graph).
     for (reifier_id, (s, p, o), graph) in reifiers.iter().copied() {
         let location = RdfLocation::logical("gts:reifier").with_gts_reifier(reifier_id);
-        if graph.is_some() {
-            return Err(RdfDiagnostic::error(
-                "rdf-ir-graph-scoped-reifier",
-                format!(
-                    "graph-scoped reifier {reifier_id} has no representation in the \
-                     graph-free RDF 1.2 statement layer"
-                ),
-            )
-            .with_location(location));
-        }
         let reifier = interner.resolve_row_term(reifier_id, "reifier", &location)?;
         let s = interner.resolve_row_term(s, "reified subject", &location)?;
         let p = interner.resolve_row_term(p, "reified predicate", &location)?;
         let o = interner.resolve_row_term(o, "reified object", &location)?;
+        let g = graph
+            .map(|g| interner.resolve_row_term(g, "reifier graph", &location))
+            .transpose()?;
         let triple = interner.builder.intern_triple(s, p, o);
-        interner.builder.push_reifier(reifier, triple);
+        interner.builder.push_reifier_in_graph(reifier, triple, g);
     }
 
     // Annotations `(reifier, predicate, value, graph?)`.
     for (r, p, v, graph) in annotations.iter().copied() {
         let location = RdfLocation::logical("gts:annotation").with_gts_reifier(r);
-        if graph.is_some() {
-            return Err(RdfDiagnostic::error(
-                "rdf-ir-graph-scoped-annotation",
-                format!(
-                    "graph-scoped annotation on reifier {r} has no representation in the \
-                     graph-free RDF 1.2 statement layer"
-                ),
-            )
-            .with_location(location));
-        }
         let r = interner.resolve_row_term(r, "annotation reifier", &location)?;
         let p = interner.resolve_row_term(p, "annotation predicate", &location)?;
         let v = interner.resolve_row_term(v, "annotation object", &location)?;
-        interner.builder.push_annotation(r, p, v);
+        let g = graph
+            .map(|g| interner.resolve_row_term(g, "annotation graph", &location))
+            .transpose()?;
+        interner.builder.push_annotation_in_graph(r, p, v, g);
     }
 
     let dataset = interner.builder.freeze()?;

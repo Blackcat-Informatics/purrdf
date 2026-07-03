@@ -297,51 +297,12 @@ pub const XFAIL: &[Xfail] = &[
     //
     // SPARQL 1.2 (RDF-star: triple terms, reifiers, base-direction) is a complete
     // first-class spec here (see suite/w3c-sparql12/PROVENANCE.md). The engine now
-    // passes the full triple-term/reifier/annotation *syntax* surface (every
-    // syntax-triple-terms, version, expression and codepoint case is green). The
-    // residual eval-triple-terms cases below are NOT syntax gaps — each is a typed,
-    // per-case-justified *evaluation* residual.
-    //
-    // --- ROOT CAUSE (graphs-1, graphs-2, expr-1): the RDF 1.2 reifier/annotation
-    //     side tables carry NO graph dimension — every `<reifier> rdf:reifies
-    //     <<( s p o )>>` binding and every statement annotation is folded out of
-    //     the flat quad stream at PARSE time and stored graph-blind (see the fold
-    //     in `purrdf-rdf::native_codecs::parse::fold_statement_layer`, which even
-    //     documents "folds the `rdf:reifies` binding graph-blind", and
-    //     `RdfDataset::reifier_quads`/`annotation_quads`, which unconditionally
-    //     yield `g: None`). So a reifier declared inside `GRAPH :g { << s p o >>
-    //     ... }` in TriG is indistinguishable, post-parse, from one declared in the
-    //     default graph — the `GRAPH :g` placement is silently dropped.
-    //
-    //     `graphs-1`/`graphs-2` need a pattern `<< ?s ?p ?o >> ?q ?z` evaluated
-    //     under `GRAPH ?g` to bind `?g` to the graph the reifier/annotation actually
-    //     came from; `expr-1`'s data spans THREE named graphs that reify
-    //     overlapping-subject statements, so telling them apart also needs the
-    //     reifier's own graph. All three need the SAME fix: thread a graph
-    //     dimension through the reifier/annotation side tables end-to-end
-    //     (`RdfDatasetBuilder::push_reifier`/`push_annotation`, `RdfDataset`'s
-    //     storage, the RDFC-1.0 sentinel canonicalization in
-    //     `purrdf-core::ir::canon` — which currently spends its ONE sentinel
-    //     "graph" slot signaling "this is an annotation row", so a REAL graph needs
-    //     a redesigned encoding — the GTS reader/writer, and every BGP/CONSTRUCT/
-    //     UPDATE call site that reads `reifiers()`/`annotations()`). That is a
-    //     cross-cutting IR change (~200 call sites across `rdf-core`, `rdf`, `gts`,
-    //     `sparql-eval`, and the wasm bindings), not a query-evaluator fix, and
-    //     risks the RDFC-1.0 lossless-identity contract other already-passing
-    //     fixtures rely on — out of scope for this pass; left correctly typed as an
-    //     unsupported construct rather than attempted piecemeal. -------------------
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#graphs-1",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#graphs-2",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#expr-1",
-        reason: XfailReason::UnsupportedConstruct,
-    },
+    // passes the full triple-term/reifier/annotation surface — including the
+    // graph-scoped `eval-triple-terms` cases (`graphs-1`, `graphs-2`, `expr-1`): the
+    // RDF 1.2 reifier/annotation side-tables carry a graph dimension end-to-end
+    // (parse fold, IR storage, RDFC-1.0 canonicalization, the GTS reader/writer, the
+    // N-Quads/TriG serializer, and the BGP virtual-candidate match), so a reifier
+    // declared inside `GRAPH g { << s p o >> … }` binds `?g` under `GRAPH ?g`.
 ];
 
 /// The registered [`XfailReason`] for `case_iri`, if any.

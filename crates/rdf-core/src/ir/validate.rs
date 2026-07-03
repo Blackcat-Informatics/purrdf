@@ -56,10 +56,13 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
     }
 
     // 3. Reifier id-reference validity; the reified target MUST be a triple term.
-    for (i, (reifier, triple)) in builder.reifier_rows().iter().enumerate() {
+    for (i, (reifier, triple, graph)) in builder.reifier_rows().iter().enumerate() {
         check_id_in_range(*reifier, term_count, || format!("reifier #{i} resource"))?;
         check_id_in_range(*triple, term_count, || format!("reifier #{i} target"))?;
         require_asserted_subject(builder, *reifier, || format!("reifier #{i} resource"))?;
+        if let Some(g) = graph {
+            require_graph_name(builder, *g, || format!("reifier #{i} graph"))?;
+        }
         if !matches!(builder.term(*triple), InternedTerm::Triple { .. }) {
             return Err(diag(
                 "rdf-ir-reifier-not-triple",
@@ -72,12 +75,15 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
     }
 
     // 4. Annotation id-reference validity + predicate-is-IRI.
-    for (i, (reifier, p, o)) in builder.annotation_rows().iter().enumerate() {
+    for (i, (reifier, p, o, graph)) in builder.annotation_rows().iter().enumerate() {
         check_id_in_range(*reifier, term_count, || format!("annotation #{i} reifier"))?;
         check_id_in_range(*p, term_count, || format!("annotation #{i} predicate"))?;
         check_id_in_range(*o, term_count, || format!("annotation #{i} object"))?;
         require_iri_predicate(builder, *p, || format!("annotation #{i} predicate"))?;
         require_asserted_subject(builder, *reifier, || format!("annotation #{i} reifier"))?;
+        if let Some(g) = graph {
+            require_graph_name(builder, *g, || format!("annotation #{i} graph"))?;
+        }
     }
 
     Ok(())
