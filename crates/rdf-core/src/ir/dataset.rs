@@ -41,6 +41,11 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
 pub(crate) type FastHasher = BuildHasherDefault<ahash::AHasher>;
 type ValueIndex = HashMap<u64, Vec<TermId>, FastHasher>;
+/// Lazy successor→predecessors reverse index for
+/// [`RdfDataset::predecessors`]: each successor `TermId` maps to its
+/// predecessor `TermId`s (decoded from the PREDECESSOR-LINK annotation rows),
+/// sorted for deterministic egress.
+type PredecessorIndex = HashMap<TermId, Box<[TermId]>, FastHasher>;
 const QUAD_ARITY: usize = 4;
 
 /// A handle identifying a pushed quad by its dense (deduplicated) ordinal, used to
@@ -188,6 +193,15 @@ pub struct RdfDataset {
     /// configured" and "configured but never interned" — both mean "no
     /// derivations present", not an error (no-fabricated-default policy).
     derivation_predicate: Option<TermId>,
+    /// Lazy successor→predecessors reverse index backing
+    /// [`RdfDataset::predecessors`]/[`RdfDataset::predecessor_chain`]. DERIVED,
+    /// NON-SERIALIZED: a pure function of the frozen `annotations` table plus
+    /// the configured `derivation_predicate`, identical determinism-safety
+    /// rationale to `value_index`/`indexes` — built lazily (`OnceLock` keeps
+    /// the frozen dataset `Send + Sync`), never persisted, and read only by
+    /// dataset-local `TermId`s (C0.8: never serialized, never read by a
+    /// writer).
+    predecessor_index: OnceLock<PredecessorIndex>,
 }
 
 /// The lazy non-identity permutation indexes over the freeze-sorted `quads` table
@@ -401,6 +415,7 @@ impl RdfDataset {
             indexes: QuadIndexes::default(),
             content_ids,
             derivation_predicate,
+            predecessor_index: OnceLock::new(),
         }
     }
 
@@ -1306,6 +1321,7 @@ impl RdfDataset {
             indexes: QuadIndexes::default(),
             content_ids: self.content_ids.clone(),
             derivation_predicate: self.derivation_predicate,
+            predecessor_index: OnceLock::new(),
         }
     }
 
@@ -1382,20 +1398,61 @@ impl RdfDataset {
     /// `predecessor`. Empty when no derivation predicate is configured, or the
     /// predicate was never interned, or `successor` has no such annotation.
     ///
-    /// This is a **linear scan** over the whole annotation table — it is the
-    /// private building block for `predecessors`, the single PUBLIC O(1)
-    /// accessor added on top of it (content-addressing task 6). Callers are
-    /// never offered both an O(n) and an O(1) form for the same lookup (ETHOS
-    /// §19); this form stays private and exists only so the O(1) index has a
-    /// linear-scan reference implementation to build from and test against.
-    #[allow(dead_code)] // consumed by the `predecessors` index in the next step
-    fn derived_from(&self, successor: TermId) -> impl Iterator<Item = TermId> + '_ {
-        let predicate = self.derivation_predicate();
-        self.annotations()
-            .filter(move |&(reifier, p, _)| {
-                predicate.is_some_and(|predicate| reifier == successor && p == predicate)
-            })
-            .map(|(_, _, object)| object)
+    /// The SINGLE public predecessor accessor: `O(1)` after the reverse index
+    /// (built once, lazily, on first call via `OnceLock::get_or_init` — mirrors
+    /// [`term_id_by_value`](Self::term_id_by_value)) is warm. The whole
+    /// annotation table is scanned exactly ONCE to build the index — never
+    /// per-call — with each successor's predecessor bucket sorted so the
+    /// returned slice's order is deterministic and reproducible regardless of
+    /// annotation push order. There is no separate linear-scan twin of this
+    /// query (ETHOS §19 one-path): the index build is the single decoding of
+    /// the PREDECESSOR-LINK shape.
+    #[must_use]
+    pub fn predecessors(&self, successor: TermId) -> &[TermId] {
+        let index = self.predecessor_index.get_or_init(|| {
+            let mut map: HashMap<TermId, Vec<TermId>, FastHasher> = HashMap::default();
+            if let Some(predicate) = self.derivation_predicate() {
+                for (reifier, p, object) in self.annotations() {
+                    if p == predicate {
+                        map.entry(reifier).or_default().push(object);
+                    }
+                }
+            }
+            map.into_iter()
+                .map(|(successor, mut predecessors)| {
+                    predecessors.sort_unstable();
+                    (successor, predecessors.into_boxed_slice())
+                })
+                .collect()
+        });
+        index.get(&successor).map_or(&[][..], |b| &b[..])
+    }
+
+    /// The full set of `successor`'s transitive ancestors, walking
+    /// [`predecessors`](Self::predecessors) repeatedly. `start` itself is never
+    /// included in the result. Traversal is depth-first: each node's direct
+    /// predecessors (already sorted by [`predecessors`]) are pushed in order and
+    /// fully explored before moving to the next sibling, giving a deterministic,
+    /// reproducible visiting order. A `HashSet` of already-visited term ids
+    /// guards against a derivation cycle (`A` derived from `B` derived from
+    /// `A`), so a cycle terminates instead of looping or panicking.
+    #[must_use]
+    pub fn predecessor_chain(&self, start: TermId) -> Vec<TermId> {
+        let mut visited: std::collections::HashSet<TermId> = std::collections::HashSet::new();
+        visited.insert(start);
+        let mut result = Vec::new();
+        let mut stack: Vec<TermId> = self.predecessors(start).to_vec();
+        stack.reverse(); // pop() takes from the back; reverse so we visit in sorted order.
+        while let Some(node) = stack.pop() {
+            if !visited.insert(node) {
+                continue;
+            }
+            result.push(node);
+            let mut next: Vec<TermId> = self.predecessors(node).to_vec();
+            next.reverse();
+            stack.extend(next);
+        }
+        result
     }
 }
 
@@ -2493,12 +2550,12 @@ mod tests {
             }
         }
 
-        /// `derived_from` decodes a PREDECESSOR-LINK annotation: `successor` is the
+        /// `predecessors` decodes a PREDECESSOR-LINK annotation: `successor` is the
         /// reifier, the configured derivation predicate is the annotation
         /// predicate, and the annotation object is the predecessor. Configured but
         /// unused → empty; a term with no such annotation → empty.
         #[test]
-        fn derived_from_reads_the_predecessor_link_annotation() {
+        fn predecessors_reads_the_predecessor_link_annotation() {
             let mut b = RdfDatasetBuilder::with_content_addressing(
                 ContentIdScheme::new("blake3:").expect("valid scheme"),
                 Some(DERIVED_FROM.to_string()),
@@ -2516,21 +2573,20 @@ mod tests {
 
             let ds = b.freeze().expect("valid dataset");
 
-            let predecessors: Vec<TermId> = ds.derived_from(successor).collect();
-            assert_eq!(predecessors, vec![predecessor]);
+            assert_eq!(ds.predecessors(successor), &[predecessor]);
 
             assert_eq!(
-                ds.derived_from(unrelated).count(),
-                0,
+                ds.predecessors(unrelated),
+                &[] as &[TermId],
                 "a term with no PREDECESSOR-LINK annotation has no predecessors"
             );
         }
 
-        /// No derivation predicate configured → `derived_from` is always empty,
-        /// even if the dataset happens to carry annotations that would otherwise
-        /// match by coincidence.
+        /// No derivation predicate configured → `predecessors`/`predecessor_chain`
+        /// are always empty, even if the dataset happens to carry annotations
+        /// that would otherwise match by coincidence.
         #[test]
-        fn derived_from_empty_when_no_derivation_predicate_configured() {
+        fn predecessors_empty_when_no_derivation_predicate_configured() {
             let mut b = RdfDatasetBuilder::new();
             let successor = b.intern_iri("http://example.org/successor");
             let predicate = b.intern_iri("http://example.org/somePredicate");
@@ -2538,7 +2594,111 @@ mod tests {
             b.push_annotation(successor, predicate, predecessor);
 
             let ds = b.freeze().expect("valid dataset");
-            assert_eq!(ds.derived_from(successor).count(), 0);
+            assert_eq!(ds.predecessors(successor), &[] as &[TermId]);
+            assert_eq!(ds.predecessor_chain(successor), Vec::<TermId>::new());
+        }
+
+        /// A chain `A -[derivedFrom]-> B -[derivedFrom]-> C`: direct predecessors
+        /// resolve one hop, `predecessor_chain` walks the whole ancestry in
+        /// order, and the terminal node (`C`) has no predecessors.
+        #[test]
+        fn predecessor_chain_walks_a_linear_derivation_chain() {
+            let mut b = RdfDatasetBuilder::with_content_addressing(
+                ContentIdScheme::new("blake3:").expect("valid scheme"),
+                Some(DERIVED_FROM.to_string()),
+            );
+            let derived_from = b.intern_iri(DERIVED_FROM);
+            let a = b.intern_iri("http://example.org/a");
+            let c = b.intern_iri("http://example.org/c");
+            let bb = b.intern_iri("http://example.org/b");
+
+            // A derivedFrom B, B derivedFrom C: push_annotation(successor, pred, predecessor).
+            b.push_annotation(a, derived_from, bb);
+            b.push_annotation(bb, derived_from, c);
+
+            let ds = b.freeze().expect("valid dataset");
+
+            assert_eq!(ds.predecessors(a), &[bb]);
+            assert_eq!(ds.predecessors(bb), &[c]);
+            assert_eq!(ds.predecessors(c), &[] as &[TermId]);
+
+            assert_eq!(ds.predecessor_chain(a), vec![bb, c]);
+        }
+
+        /// Multiple predecessors of one successor resolve to the sorted set of
+        /// their `TermId`s, regardless of the order the annotations were pushed.
+        #[test]
+        fn predecessors_of_multiple_predecessors_are_sorted() {
+            let mut b = RdfDatasetBuilder::with_content_addressing(
+                ContentIdScheme::new("blake3:").expect("valid scheme"),
+                Some(DERIVED_FROM.to_string()),
+            );
+            let derived_from = b.intern_iri(DERIVED_FROM);
+            let x = b.intern_iri("http://example.org/x");
+            let p2 = b.intern_iri("http://example.org/p2");
+            let p1 = b.intern_iri("http://example.org/p1");
+
+            // Push in an order that would NOT already be TermId-sorted.
+            b.push_annotation(x, derived_from, p2);
+            b.push_annotation(x, derived_from, p1);
+
+            let ds = b.freeze().expect("valid dataset");
+
+            let mut expected = [p1, p2];
+            expected.sort_unstable();
+            assert_eq!(ds.predecessors(x), &expected);
+        }
+
+        /// A derivation cycle (`A -[derivedFrom]-> B -[derivedFrom]-> A`) must not
+        /// hang or panic: `predecessor_chain` terminates and returns a finite,
+        /// deterministic ancestor set.
+        #[test]
+        fn predecessor_chain_terminates_on_a_cycle() {
+            let mut b = RdfDatasetBuilder::with_content_addressing(
+                ContentIdScheme::new("blake3:").expect("valid scheme"),
+                Some(DERIVED_FROM.to_string()),
+            );
+            let derived_from = b.intern_iri(DERIVED_FROM);
+            let a = b.intern_iri("http://example.org/a");
+            let bb = b.intern_iri("http://example.org/b");
+
+            b.push_annotation(a, derived_from, bb);
+            b.push_annotation(bb, derived_from, a);
+
+            let ds = b.freeze().expect("valid dataset");
+
+            let chain = ds.predecessor_chain(a);
+            assert_eq!(chain, vec![bb], "cycle back to `start` is not re-included");
+        }
+
+        /// Two threads racing to build the lazy predecessor index on first access
+        /// observe identical results — `OnceLock::get_or_init` guarantees a single
+        /// build even under concurrent first calls (mirrors `term_id_by_value`'s
+        /// concurrency contract).
+        #[test]
+        fn predecessors_concurrent_first_build_is_consistent() {
+            let mut b = RdfDatasetBuilder::with_content_addressing(
+                ContentIdScheme::new("blake3:").expect("valid scheme"),
+                Some(DERIVED_FROM.to_string()),
+            );
+            let derived_from = b.intern_iri(DERIVED_FROM);
+            let a = b.intern_iri("http://example.org/a");
+            let bb = b.intern_iri("http://example.org/b");
+            b.push_annotation(a, derived_from, bb);
+
+            // `freeze` already returns an `Arc<RdfDataset>` — clone the `Arc`
+            // handle (not the dataset) to share it between threads.
+            let ds = b.freeze().expect("valid dataset");
+
+            let ds1 = ds.clone();
+            let ds2 = ds;
+            let t1 = std::thread::spawn(move || ds1.predecessors(a).to_vec());
+            let t2 = std::thread::spawn(move || ds2.predecessors(a).to_vec());
+
+            let r1 = t1.join().expect("thread 1 joins");
+            let r2 = t2.join().expect("thread 2 joins");
+            assert_eq!(r1, vec![bb]);
+            assert_eq!(r1, r2);
         }
     }
 }
