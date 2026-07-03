@@ -2,7 +2,7 @@
 
 These fixtures are the **canonicalization (`rdfc10`) test vectors** from the W3C
 `rdf-canon` test suite, vendored verbatim for the native RDFC-1.0 conformance gate
-(`crates/rdf/tests/rdfc_w3c.rs`, issue #910).
+(`crates/rdf/tests/rdfc_w3c.rs`).
 
 - **Upstream:** <https://github.com/w3c/rdf-canon> — `tests/rdfc10/`
 - **Spec:** *RDF Dataset Canonicalization* (RDFC-1.0), W3C Recommendation —
