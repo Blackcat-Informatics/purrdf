@@ -745,11 +745,37 @@ impl Parser<'_> {
         let base_iri = self.base.clone().map(NamedNode::new).transpose()?;
 
         let mut operations = Vec::new();
+        // §4.1.1 + grammar note: a blank node label in `INSERT DATA` ground data
+        // is scoped to that one operation — reusing it in another `INSERT DATA`
+        // of the same request denotes a fresh vs. same blank ambiguity and is a
+        // hard syntax error (vendored W3C `syntax-update-1` `syntax-update-54`).
+        // This applies ONLY to ground `INSERT DATA` quads: blank nodes in an
+        // `INSERT { … } WHERE` template are minted fresh per solution, so the
+        // same template label legitimately recurs across operations (vendored
+        // W3C `basic-update` `insert-where-same-bnode`). `DELETE DATA` / DELETE
+        // templates are blank-free by invariant, and anonymous blanks carry
+        // process-unique ids, so only author-written `_:label`s can collide.
+        let mut prior_bnode_labels: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         loop {
             if self.pos >= self.tokens.len() {
                 break;
             }
             let op = self.parse_update_operation()?;
+            let mut this_op_labels: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            if let GraphUpdateOperation::InsertData { data } = &op {
+                collect_quad_bnode_labels(data, &mut this_op_labels);
+            }
+            for label in &this_op_labels {
+                if prior_bnode_labels.contains(label) {
+                    return Err(ParseError::syntax(
+                        format!("blank node label _:{label} is reused across update operations"),
+                        self.span(),
+                    ));
+                }
+            }
+            prior_bnode_labels.extend(this_op_labels);
             operations.push(op);
             // An operation separator. Without it, the request is done (a stray
             // trailing token is caught by `expect_eof` at the public entry).
@@ -2900,6 +2926,30 @@ fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
     }
 }
 
+/// Collect the labels of every blank node in a run of quad patterns, descending
+/// into RDF-1.2 quoted triples. Used to enforce the §19.6 rule that a blank node
+/// label may not be shared across two operations of one update request.
+fn collect_quad_bnode_labels(quads: &[QuadPattern], out: &mut std::collections::HashSet<String>) {
+    for q in quads {
+        collect_triple_bnode_labels(&q.triple, out);
+    }
+}
+
+fn collect_triple_bnode_labels(t: &TriplePattern, out: &mut std::collections::HashSet<String>) {
+    collect_term_bnode_labels(&t.subject, out);
+    collect_term_bnode_labels(&t.object, out);
+}
+
+fn collect_term_bnode_labels(t: &TermPattern, out: &mut std::collections::HashSet<String>) {
+    match t {
+        TermPattern::BlankNode(b) => {
+            out.insert(b.as_str().to_owned());
+        }
+        TermPattern::Triple(tp) => collect_triple_bnode_labels(tp, out),
+        _ => {}
+    }
+}
+
 /// Hard-fail if any subject/object position of a triple pattern (descending into
 /// RDF 1.2 quoted triples) is a blank node. Blank nodes are disallowed in DELETE
 /// templates and `DELETE WHERE` (SPARQL 1.1 Update §3.1.3 / §3.1.3.2).
@@ -3753,6 +3803,23 @@ mod tests {
         };
         assert_eq!(data.len(), 1);
         assert!(matches!(data[0].triple.subject, TermPattern::BlankNode(_)));
+    }
+
+    #[test]
+    fn update_reused_blank_label_across_operations_is_rejected() {
+        // §19.6: a blank node label is scoped to one operation — sharing `_:b1`
+        // across two INSERT DATA operations of a request is illegal (vendored
+        // W3C `syntax-update-1` `syntax-update-54`).
+        let err = update_err(
+            "INSERT DATA { _:b1 purrdf:p purrdf:o } ; INSERT DATA { _:b1 purrdf:p purrdf:o }",
+        );
+        assert!(
+            matches!(err, ParseError::Syntax { .. }),
+            "expected Syntax for reused blank label across operations, got {err:?}"
+        );
+        // The same label WITHIN one operation is fine (one blank node), and a
+        // fresh label per operation is fine.
+        parse_update("INSERT DATA { _:b1 purrdf:p _:b1 } ; INSERT DATA { _:b2 purrdf:p purrdf:o }");
     }
 
     #[test]

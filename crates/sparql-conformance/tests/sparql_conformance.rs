@@ -55,6 +55,8 @@ fn w3c_sparql11_inventory() {
         "update-silent",
         // full verbatim syntax groups (commit 426c7df)
         "syntax-query",
+        "syntax-update-1",
+        "syntax-update-2",
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("suite/w3c-sparql11");
     for group in EXPECTED_GROUPS {
