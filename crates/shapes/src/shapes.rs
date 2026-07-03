@@ -1809,15 +1809,15 @@ impl<'s> Parser<'s> {
                 Ok(NodeExpr::Sum(Box::new(self.parse_node_expr(&of_obj)?)))
             }
             sh::EXISTS => {
-                // NOTE: the IR models `sh:exists` as a shape re-entry
-                // (`Exists(Box<Shape>)`), so the object is parsed as an inline
-                // shape rather than a node expression. A later corpus task
-                // validates this reading.
-                let shape_ref = self.first_object_of(node, sh::EXISTS).ok_or_else(|| {
+                // Adopted semantics: `sh:exists` is a node-expression predicate —
+                // true iff its inner NODE EXPRESSION yields at least one node for
+                // the focus. (A shape does not "produce nodes", so the operand is
+                // an expression, not a shape.)
+                let inner_obj = self.first_object_of(node, sh::EXISTS).ok_or_else(|| {
                     format!("sh:exists node expression on {node} lost its object")
                 })?;
-                let shape = self.parse_inline_shape(shape_ref)?;
-                Ok(NodeExpr::Exists(Box::new(shape)))
+                let inner = self.parse_node_expr(&inner_obj)?;
+                Ok(NodeExpr::Exists(Box::new(inner)))
             }
             other => Err(format!(
                 "internal error: unhandled node-expression key <{other}> on {node}"
@@ -3126,19 +3126,17 @@ mod tests {
     }
 
     #[test]
-    fn node_expr_exists_is_a_shape() {
+    fn node_expr_exists_is_a_node_expression() {
+        // Adopted semantics: `sh:exists` takes a NODE EXPRESSION, not a shape.
         let expr = parse_expr(&expr_ttl(
-            "ex:root ex:expr [ sh:exists [ sh:nodeKind sh:IRI ] ] .",
+            "ex:root ex:expr [ sh:exists [ sh:path ex:p ] ] .",
         ))
         .expect("parse");
         match expr {
-            NodeExpr::Exists(shape) => {
+            NodeExpr::Exists(inner) => {
                 assert!(
-                    shape
-                        .constraints
-                        .iter()
-                        .any(|c| matches!(c, Constraint::NodeKind(NodeKindValue::Iri))),
-                    "exists shape should carry its constraints"
+                    matches!(*inner, NodeExpr::Path(_)),
+                    "exists operand should be a node expression, got {inner:?}"
                 );
             }
             other => panic!("expected Exists, got {other:?}"),

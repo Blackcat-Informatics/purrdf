@@ -17,9 +17,13 @@
 //! and ordering match exactly. Builtin function calls ([`FnCall::Builtin`]) and
 //! the `sh:if` effective-boolean-value route through the SPARQL seam
 //! ([`crate::sparql::eval_scalar_expr`]); user-defined functions
-//! ([`FnCall::UserDefined`]) are a hard capability error. The remaining kinds
-//! (`sh:filterShape`, `EXISTS`) need the constraint engine wired in and return a
-//! hard error until later tasks land them.
+//! ([`FnCall::UserDefined`]) are a hard capability error. The shape-bearing kind
+//! [`NodeExpr::Filter`] (`sh:filterShape` / `sh:nodes`) re-enters the constraint
+//! engine ([`crate::constraints::conforms`]) under a depth-bounded
+//! [`RecursionGuard`] so a cyclic filter reference fails closed with a hard
+//! error rather than overflowing the stack. [`NodeExpr::Exists`] (`sh:exists`)
+//! is a node-expression predicate: true iff its inner expression yields at least
+//! one node for the focus.
 //!
 //! # Determinism
 //!
@@ -106,8 +110,10 @@ pub enum NodeExpr {
         /// Whether to sort in descending order.
         descending: bool,
     },
-    /// `sh:exists` — whether any node conforms to the given shape.
-    Exists(Box<Shape>),
+    /// `sh:exists` — true iff the inner node expression yields at least one node
+    /// for the focus. Adopted semantics: `sh:exists` takes a NODE EXPRESSION (a
+    /// shape does not "produce nodes"), evaluated for existence of any result.
+    Exists(Box<Self>),
     /// A builtin or user-defined function call.
     Call(FnCall),
 }
@@ -136,19 +142,50 @@ pub enum FnCall {
 /// Detects cyclic re-entry into an in-flight `(shape id, focus)` pair while
 /// evaluating shape-bearing node expressions (filters / `sh:exists`).
 ///
-/// The guard is explicit: [`enter`](Self::enter) records a pair and errors on a
+/// The guard has two layers. Within a single expression tree,
+/// [`enter`](Self::enter) records an `(shape id, focus)` pair and errors on a
 /// repeat; the caller must [`exit`](Self::exit) the same pair on every path once
-/// its sub-evaluation completes.
+/// its sub-evaluation completes. Across the constraint boundary — a
+/// [`NodeExpr::Filter`] re-enters [`crate::constraints::conforms`], which builds
+/// a FRESH guard per value node, so the in-flight set does not carry over — the
+/// guard also tracks a monotone [`depth`](Self::depth). The constraint engine
+/// seeds each nested evaluation with the caller's depth and hard-fails past
+/// [`MAX_RECURSION_DEPTH`], so a mutually-recursive filter/exists cycle
+/// fails closed instead of overflowing the stack.
 #[derive(Debug, Default)]
 pub struct RecursionGuard {
     stack: HashSet<(String, String)>,
+    depth: u32,
 }
 
+/// Maximum nested `sh:filterShape` / `sh:exists` re-entry depth. Legitimate
+/// SHACL shapes nest only a handful of filter layers; a mutually-recursive cycle
+/// grows without bound and trips this ceiling, fail-closed, well before the
+/// native stack is exhausted.
+pub const MAX_RECURSION_DEPTH: u32 = 64;
+
 impl RecursionGuard {
-    /// A fresh guard with no in-flight pairs.
+    /// A fresh guard with no in-flight pairs, at depth zero.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A fresh guard seeded at `depth` — used when the constraint engine
+    /// re-enters expression evaluation across the `conforms` boundary so the
+    /// filter/exists recursion depth is preserved across the fresh guard.
+    #[must_use]
+    pub fn with_depth(depth: u32) -> Self {
+        Self {
+            stack: HashSet::new(),
+            depth,
+        }
+    }
+
+    /// The current filter/exists re-entry depth carried by this guard.
+    #[must_use]
+    pub fn depth(&self) -> u32 {
+        self.depth
     }
 
     /// Record `(shape_id, focus)` as in-flight.
@@ -199,17 +236,14 @@ pub fn is_true(terms: &[Term]) -> bool {
 
 /// Evaluate a node expression against `store`, from `focus`.
 ///
-/// Returns the node set the expression maps `focus` to. Only the wiring-free
-/// kinds are implemented; every other kind returns a hard `Err` until its
-/// dependency (constraint engine / SPARQL evaluator) is wired in a later task.
+/// Returns the node set the expression maps `focus` to. [`NodeExpr::Filter`]
+/// re-enters the constraint engine under `guard`; a cyclic filter reference is a
+/// hard `Err` (see [`RecursionGuard`]).
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` for a not-yet-implemented expression kind, on a
-/// recursion cycle, or when a sub-expression errors.
-// `guard` is currently only threaded through recursion — the shape-bearing kinds
-// (`Filter` / `Exists`) that enter/exit it are wired in a later task.
-#[allow(clippy::only_used_in_recursion)]
+/// Returns `Err(String)` for an unsupported (user-defined function) kind, on a
+/// recursion cycle or depth-limit breach, or when a sub-expression errors.
 pub fn eval_node_expr<G: ShaclDataGraph>(
     store: &G,
     focus: &Term,
@@ -364,9 +398,39 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
         NodeExpr::Min(of) => aggregate(store, focus, of, "MIN", guard),
         NodeExpr::Max(of) => aggregate(store, focus, of, "MAX", guard),
         NodeExpr::Sum(of) => aggregate(store, focus, of, "SUM", guard),
-        NodeExpr::Filter { .. } | NodeExpr::Exists(_) => Err(format!(
-            "node expression kind not yet implemented: {expr:?}"
-        )),
+        NodeExpr::Filter { nodes, shape } => {
+            // Candidate nodes retained iff they conform to `shape`. The re-entry
+            // into `conforms` is a fresh guard/subtree, so we (a) guard the
+            // in-flight `(shape id, candidate)` pair against same-tree re-entry
+            // and (b) thread the monotone depth across the constraint boundary so
+            // a cross-shape filter cycle fails closed (depth ceiling) rather than
+            // overflowing the stack.
+            let candidates = eval_node_expr(store, focus, nodes, guard)?;
+            let shape_id = shape.id.to_string();
+            let next_depth = guard.depth().saturating_add(1);
+            let mut kept: Vec<Term> = Vec::new();
+            for value in candidates {
+                let value_str = value.to_string();
+                guard.enter(&shape_id, &value_str)?;
+                // Capture the Result, exit the guard, THEN propagate — a clean
+                // exit before the `?` avoids leaving stale in-flight state.
+                let keep = crate::constraints::conforms_with_depth(
+                    store, &value, shape, next_depth,
+                );
+                guard.exit(&shape_id, &value_str);
+                if keep? {
+                    kept.push(value);
+                }
+            }
+            Ok(kept)
+        }
+        NodeExpr::Exists(inner) => {
+            // `sh:exists` is a node-expression predicate: true iff `inner`
+            // produces at least one node for the focus. A nested Filter inside
+            // `inner` re-enters the guarded constraint engine itself.
+            let out = eval_node_expr(store, focus, inner, guard)?;
+            Ok(vec![bool_literal(!out.is_empty())])
+        }
     }
 }
 
@@ -546,41 +610,37 @@ mod tests {
     fn if_propagates_condition_error() {
         let data = load_data("");
         let mut guard = RecursionGuard::new();
-        // A not-yet-implemented kind as the condition must surface its error.
+        // A hard-erroring kind as the condition must surface its error.
         let expr = NodeExpr::If {
-            cond: Box::new(NodeExpr::Exists(Box::new(Shape {
-                id: ex("S"),
-                targets: vec![],
-                constraints: vec![],
-                property_shapes: vec![],
-                severity: crate::report::Severity::Violation,
-                message: None,
-                deactivated: false,
-                box_roles: vec![],
-            }))),
+            cond: Box::new(NodeExpr::Call(FnCall::UserDefined {
+                iri: NamedNode::new_unchecked("http://example.org/ns#myFn"),
+                args: vec![],
+            })),
             then: Box::new(NodeExpr::Constant(ex("yes"))),
             els: Box::new(NodeExpr::Constant(ex("no"))),
         };
         let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
-        assert!(err.contains("not yet implemented"), "got: {err}");
+        assert!(err.contains("user-defined function"), "got: {err}");
     }
 
     #[test]
-    fn unimplemented_kind_is_hard_error() {
-        let data = load_data("");
+    fn exists_true_when_inner_yields_nodes() {
+        let data = load_data(DATA);
         let mut guard = RecursionGuard::new();
-        let expr = NodeExpr::Exists(Box::new(Shape {
-            id: ex("S"),
-            targets: vec![],
-            constraints: vec![],
-            property_shapes: vec![],
-            severity: crate::report::Severity::Violation,
-            message: None,
-            deactivated: false,
-            box_roles: vec![],
-        }));
-        let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
-        assert!(err.contains("not yet implemented"), "got: {err}");
+        // ex:a has ex:p values → exists true.
+        let expr = NodeExpr::Exists(Box::new(NodeExpr::Path(pred("p"))));
+        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("exists evals");
+        assert_eq!(result, vec![bool_literal(true)]);
+    }
+
+    #[test]
+    fn exists_false_when_inner_empty() {
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::new();
+        // ex:a has no ex:missing edge → exists false.
+        let expr = NodeExpr::Exists(Box::new(NodeExpr::Path(pred("missing"))));
+        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("exists evals");
+        assert_eq!(result, vec![bool_literal(false)]);
     }
 
     #[test]
@@ -926,5 +986,74 @@ mod tests {
         guard
             .enter("shapeA", "focusX")
             .expect("re-enter after exit ok");
+    }
+
+    /// A `sh:filterShape` chain deeper than [`MAX_RECURSION_DEPTH`] re-enters the
+    /// constraint engine past the depth ceiling and must fail CLOSED — a hard
+    /// `Err` naming the recursion depth — instead of overflowing the stack.
+    ///
+    /// The shapes graph parser flattens IRI-referenced shape cycles at load time
+    /// (substituting an empty shape for an in-flight IRI), so an unbounded
+    /// re-entry can only arise from a hand-built (or future non-parser) shape
+    /// tree; this test builds that tree directly. Each level's `sh:expression`
+    /// filters `sh:this` through the next shape, so validating the outermost
+    /// shape re-enters `conforms` once per level.
+    #[test]
+    fn filter_chain_deeper_than_max_depth_fails_closed() {
+        use crate::report::Severity;
+        use crate::shapes::Constraint;
+
+        // The validator's per-level frame (the large `eval_constraint` match) is
+        // sizeable, so a `MAX_RECURSION_DEPTH`-deep chain needs more than a test
+        // thread's default 2 MiB stack. Run on a generous stack so the DEPTH
+        // GUARD — not a stack overflow — is what terminates the recursion; the
+        // guard is what protects the (larger) production stack in the same way.
+        let handle = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let data = load_data(DATA);
+
+                let make_shape = |id: Term, constraints: Vec<Constraint>| Shape {
+                    id,
+                    targets: vec![],
+                    constraints,
+                    property_shapes: vec![],
+                    severity: Severity::Violation,
+                    message: None,
+                    deactivated: false,
+                    box_roles: vec![],
+                };
+
+                // Innermost shape: no constraints ⇒ every node trivially conforms.
+                let mut shape = make_shape(ex("leaf"), vec![]);
+                // Wrap one filter-through-inner layer per level, past the ceiling.
+                let levels = MAX_RECURSION_DEPTH + 5;
+                for i in 0..levels {
+                    let expr = NodeExpr::Filter {
+                        nodes: Box::new(NodeExpr::This),
+                        shape: Box::new(shape),
+                    };
+                    shape = make_shape(
+                        ex(&format!("s{i}")),
+                        vec![Constraint::Expression {
+                            expr,
+                            message: None,
+                            severity: None,
+                        }],
+                    );
+                }
+
+                crate::constraints::conforms(&data, &ex("a"), &shape)
+            })
+            .expect("spawn deep-stack thread");
+
+        let err = handle
+            .join()
+            .expect("deep-stack thread must not overflow — the depth guard terminates it")
+            .expect_err("a filter chain past the depth ceiling must be a hard error");
+        assert!(
+            err.contains("recursion depth"),
+            "error should name the recursion depth, got: {err}"
+        );
     }
 }
