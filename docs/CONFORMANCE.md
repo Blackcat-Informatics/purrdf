@@ -43,7 +43,7 @@ Latest measured matrix (`make conformance`, all GREEN, exit 0):
 | SHACL (first-party corpus) | first-party frozen reports | 48 | 0 | 0 |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1,051 | 54 | 0 |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 groups | 0 | 0 |
-| rdflib LSP drop-in gate | rdflib 7.6 own tests | 63 | 23 | 0 |
+| rdflib LSP drop-in gate | rdflib 7.6 own tests | 62 | 24 | 0 |
 | purrdf.compat parity | first-party (differential vs rdflib) | 325 | 7 | 0 |
 
 The RDFC, SHACL-corpus, and ShEx-syntax rows count harness test functions
@@ -67,7 +67,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **615** pass · 35 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 35 non-passes are 30 spec-inherent entailment-regime cases + 5 upstream-errata fixtures) |
 | Entailment (RDFS / OWL-RL) | native `purrdf-entail` forward-materialization reasoner | RDFS + OWL-RL closure; **40/70** W3C entailment cases (OWL-Direct/DL/RIF/D ledgered) |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
-| rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **63** pass · 23 strict-xfail (ledgered) |
+| rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **62** pass · 24 strict-xfail (ledgered) |
 | purrdf.compat parity | first-party differential vs rdflib 7.6 | **325** pass · 7 strict-xfail (ledgered) |
 | GTS transport | frozen cross-language vectors, `vectors/` | byte-exact |
 
@@ -132,7 +132,7 @@ reason):
 - `bindings/python/tests/xfail_ledger.toml` — the first-party
   `purrdf.compat` parity ledger (7 strict xfails).
 - `bindings/python/tests/rdflib_suite/xfail_ledger.toml` — the rdflib
-  drop-in (LSP) gate ledger governing rdflib's own vendored tests (23 strict
+  drop-in (LSP) gate ledger governing rdflib's own vendored tests (24 strict
   xfails). Both are applied as **strict** xfails, so an XPASS or a stale key
   fails the run.
 - The Rust harnesses embed their ledgers in-code (e.g. the SHACL `w3c_conformance`

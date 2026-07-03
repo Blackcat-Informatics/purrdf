@@ -60,6 +60,16 @@
 "test_nested_filters.py::test_nested_filter_outer_binding_propagation" = "FILTER bindings from an outer group are not propagated into a nested group as rdflib does, so the computed solution set diverges from the expected set"
 "test_conjunctive_graph.py::test_graph_ids[check-kws1]" = "ConjunctiveGraph.parse forwards a StringInputSource down a filesystem path in this keyword combination, raising FileNotFoundError instead of parsing the in-memory source"
 
+# --- Theme: purrdf is stricter than rdflib (SPARQL conformance, not a purrdf gap) ---
+# The upstream rdflib test source concatenates two adjacent Python string
+# literals with no separating space — "SELECT ?p" "WHERE { ... }" becomes
+# "SELECT ?pWHERE { ... } GROUP BY ?p" — which projects the non-group-key
+# variable ?pWHERE under GROUP BY ?p. purrdf's native engine rejects this per
+# SPARQL 1.1 §11.3 (a projected variable must be a group key or confined to an
+# aggregate); rdflib leniently accepts it and returns ?pWHERE unbound. Vendored
+# verbatim, so the upstream typo is preserved and our correct rejection ledgered.
+"test_having.py::test_group_by" = "upstream test typo 'SELECT ?p' 'WHERE ...' concatenates to 'SELECT ?pWHERE ...', projecting the non-group-key variable ?pWHERE under GROUP BY; purrdf correctly rejects per SPARQL 1.1 §11.3 while rdflib leniently returns it unbound"
+
 # --- Theme: ConjunctiveGraph legacy semantics ---
 "test_conjunctive_graph.py::test_bnode_publicid" = "ConjunctiveGraph.parse(data=..., publicID=BNode) does not retain triples under a blank-node context the way rdflib does, so the graph reports no triples"
 "test_conjunctive_graph.py::test_quad_contexts" = "iterating a ConjunctiveGraph yields 4-tuple quads, whereas rdflib's default-union iteration yields 3-tuple triples, so the flattened triple set does not match"
