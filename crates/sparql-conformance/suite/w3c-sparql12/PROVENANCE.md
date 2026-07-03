@@ -28,12 +28,14 @@ discovers each leaf `manifest.ttl` directly); the ten group sub-manifests are:
 
 ## Classification
 
-Cases the engine already satisfies pass (codepoint-escapes, grouping, rdf11, and
-a substantial part of the triple-term syntax). The remaining non-passes are
-recorded in `crates/sparql-conformance/src/xfail.rs` with a typed reason. These
-are **genuine unimplemented RDF-1.2 features** — triple-term/reifier grammar the
-parser does not yet accept (`parse-unsupported`) and triple-term evaluation
-semantics (`unsupported-construct`) — i.e. **real work to implement**, not
-provisional-spec placeholders. Every non-pass is a typed xfail (no silent skips),
-and an inventory tripwire guards the vendored group set; the ledger shrinks as
-each feature lands.
+The engine satisfies the **entire** vendored SPARQL 1.2 surface: the RDF-star
+triple-term/reifier/annotation grammar (`syntax-triple-terms-{positive,negative}`),
+triple-term evaluation (`eval-triple-terms`), and the `expression`, `version`,
+`lang-basedir`, `grouping`, `codepoint-escapes`, and `rdf11` groups all pass. As
+of the current harness run there are **zero** ledgered SPARQL 1.2 residuals in
+`crates/sparql-conformance/src/xfail.rs` — the triple-term/reifier grammar and
+evaluation semantics that earlier carried typed `parse-unsupported` /
+`unsupported-construct` reasons are now fully implemented, so every 1.2 case is a
+genuine pass. Coverage stays **enforced, not assumed**: every case is run (no
+silent skips), an inventory tripwire guards the vendored group set, and any future
+non-pass must re-enter the ledger as a typed xfail.
