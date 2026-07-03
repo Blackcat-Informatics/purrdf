@@ -14,7 +14,10 @@
 //!   trait in the corpus is exercised (`Import` resolved, `SemanticAction`
 //!   dispatched via the Test extension, `Greedy`/`Exhaustive`/`OutsideBMP`
 //!   attempted). The harness asserts nothing is skipped so a regression that
-//!   re-adds a skip is caught.
+//!   re-adds a skip is caught. The `Import` (32/32) and `SemanticAction`
+//!   (22/22) trait totals are additionally locked by exact-count assertions,
+//!   so a silent drop in classified/attempted entries under those traits is
+//!   caught even though every entry still passes.
 //! * **XFAIL**: genuine engine gaps, listed exactly (name + reason). A
 //!   passing xfail fails the harness (a stale ledger is a test error).
 
@@ -508,6 +511,21 @@ fn validation_conformance() {
     assert!(
         skipped.is_empty(),
         "the trait-skip list is empty, so no entry may be skipped: {skipped:?}\n{board}"
+    );
+    // Exact-count locks on the two trait categories this harness closed:
+    // `Import` (imports are now resolved) and `SemanticAction` (semantic
+    // actions now dispatch via the Test extension). A regression that stops
+    // classifying or attempting entries under these traits — without
+    // tripping the generic pass/fail gates below — must still fail here.
+    assert_eq!(
+        trait_totals.get("Import").copied(),
+        Some((32, 32)),
+        "Import trait coverage regressed\n{board}"
+    );
+    assert_eq!(
+        trait_totals.get("SemanticAction").copied(),
+        Some((22, 22)),
+        "SemanticAction trait coverage regressed\n{board}"
     );
     assert!(
         stale_xfails.is_empty(),
