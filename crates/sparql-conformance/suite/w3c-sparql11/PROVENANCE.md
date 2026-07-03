@@ -5,9 +5,12 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # Vendored W3C SPARQL 1.1 conformance fixtures
 
-This tree vendors a **curated subset** of the official W3C SPARQL 1.1 test suite,
-exercising the exotic-aggregation, deep-subquery, and federated-`SERVICE` surface.
-It is consumed by the native conformance harness (`crates/sparql-conformance`).
+This tree vendors the official W3C SPARQL 1.1 test suite: the full query-eval,
+UPDATE-eval, entailment-regime, and **complete syntax** (query + update +
+federation) groups verbatim at a pinned commit, plus a small PurRDF-curated
+`aggregates`/`subquery`/`service` selector subset over the exotic-aggregation,
+deep-subquery, and federated-`SERVICE` surface. It is consumed by the native
+conformance harness (`crates/sparql-conformance`).
 
 ## Source
 
@@ -69,6 +72,30 @@ The engine's UPDATE implementation is strong: 97 of 102 cases pass outright.
 
 The 5 `update-semantics` residuals are genuine post-state divergences (COPY/ADD
 graph edge cases; blank-node scoping across separate INSERT operations).
+
+## Full W3C syntax groups (commit `426c7df`)
+
+The complete SPARQL 1.1 syntax surface is vendored verbatim and gated through the
+parser only (`SparqlParser::parse_query` for query-syntax cases,
+`parse_update` for update-syntax cases) — no dataset, no evaluation. Positive
+cases must parse `Ok`, negatives must parse `Err`. Syntax tests are parsed with
+the test file's own IRI as the in-scope `BASE` (§4.1.1.1), matching the W3C
+convention, so relative IRI references resolve. **The entire surface passes —
+zero ledgered residuals.**
+
+| Group | Cases | Green | Ledgered (reason) |
+|-------|------:|------:|-------------------|
+| syntax-query | 94 | 94 | — |
+| syntax-update-1 | 54 | 54 | — |
+| syntax-update-2 | 1 | 1 | — |
+| syntax-fed | 3 | 3 | — |
+
+Six genuine parser gaps surfaced by these groups were fixed in-branch (not
+ledgered): two relative-IRI positives (resolved via the per-file `BASE` above);
+`SELECT *` in an aggregate query is now rejected (§11.1); a `BIND(… AS ?v)`
+whose target is already in scope is rejected (§19.6); and reuse of a blank-node
+label across two `INSERT DATA` operations is rejected (§4.1.1) — while the same
+template label legitimately recurs across `INSERT … WHERE` operations.
 
 ## W3C entailment-regime group (commit `426c7df`)
 

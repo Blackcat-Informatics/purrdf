@@ -421,6 +421,21 @@ impl Parser<'_> {
             }
         }
 
+        // §11.1 grammar note: the `SELECT *` shorthand is illegal in an aggregate
+        // query — an explicit `GROUP BY` (keys or expression conditions) or any
+        // aggregate makes the projection ill-defined, so it is a hard syntax
+        // error (vendored W3C `syntax-query` `syn-bad-01`: `SELECT * … GROUP BY`).
+        if star
+            && (!modifiers.group_by.is_empty()
+                || !modifiers.group_extends.is_empty()
+                || !aggregates.is_empty())
+        {
+            return Err(ParseError::syntax(
+                "SELECT * is not allowed in an aggregate query (GROUP BY or aggregation)",
+                self.span(),
+            ));
+        }
+
         // §18.2.4.1 grouping constraint: when the query aggregates (an explicit
         // `GROUP BY`, or one or more aggregates in the SELECT clause ⇒ an implicit
         // single group), every BARE projected variable — one named directly as a
@@ -730,11 +745,39 @@ impl Parser<'_> {
         let base_iri = self.base.clone().map(NamedNode::new).transpose()?;
 
         let mut operations = Vec::new();
+        // §4.1.1 + grammar note: a blank node label in `INSERT DATA` ground data
+        // is scoped to that one operation — reusing it in another `INSERT DATA`
+        // of the same request denotes a fresh vs. same blank ambiguity and is a
+        // hard syntax error (vendored W3C `syntax-update-1` `syntax-update-54`).
+        // This applies ONLY to ground `INSERT DATA` quads: blank nodes in an
+        // `INSERT { … } WHERE` template are minted fresh per solution, so the
+        // same template label legitimately recurs across operations (vendored
+        // W3C `basic-update` `insert-where-same-bnode`). `DELETE DATA` / DELETE
+        // templates are blank-free by invariant, and anonymous blanks carry
+        // process-unique ids, so only author-written `_:label`s can collide.
+        let mut prior_bnode_labels: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        // Reused across iterations to avoid reallocating the set each loop.
+        let mut this_op_labels: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         loop {
             if self.pos >= self.tokens.len() {
                 break;
             }
             let op = self.parse_update_operation()?;
+            this_op_labels.clear();
+            if let GraphUpdateOperation::InsertData { data } = &op {
+                collect_quad_bnode_labels(data, &mut this_op_labels);
+            }
+            for label in &this_op_labels {
+                if prior_bnode_labels.contains(label) {
+                    return Err(ParseError::syntax(
+                        format!("blank node label _:{label} is reused across update operations"),
+                        self.span(),
+                    ));
+                }
+            }
+            prior_bnode_labels.extend(this_op_labels.drain());
             operations.push(op);
             // An operation separator. Without it, the request is done (a stray
             // trailing token is caught by `expect_eof` at the public entry).
@@ -1239,6 +1282,19 @@ impl Parser<'_> {
                 self.expect_kw("AS")?;
                 let variable = self.expect_var()?;
                 self.expect(&Token::RParen)?;
+                // §19.6: the variable introduced by BIND must not already be
+                // in-scope in the group graph pattern up to this point — a
+                // re-binding is a hard syntax error, not a silent shadow
+                // (vendored W3C `syntax-query` `syntax-BINDscope6/7/8`).
+                if visible_variables(&g).contains(&variable) {
+                    return Err(ParseError::syntax(
+                        format!(
+                            "BIND target ?{} is already in scope in the group graph pattern",
+                            variable.as_str()
+                        ),
+                        self.span(),
+                    ));
+                }
                 g = GraphPattern::Extend {
                     inner: Box::new(g),
                     variable,
@@ -2821,10 +2877,15 @@ fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
         }
         GraphPattern::Join { left, right }
         | GraphPattern::Union { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::Minus { left, right } => {
+        | GraphPattern::Lateral { left, right } => {
             collect_vars(left, out);
             collect_vars(right, out);
+        }
+        // SPARQL §18.2.1: variables occurring only in the right operand of
+        // MINUS are not in scope in the enclosing group graph pattern, so we
+        // descend into `left` only.
+        GraphPattern::Minus { left, .. } => {
+            collect_vars(left, out);
         }
         GraphPattern::LeftJoin { left, right, .. } => {
             collect_vars(left, out);
@@ -2869,6 +2930,30 @@ fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
                 push_var(v, out);
             }
         }
+    }
+}
+
+/// Collect the labels of every blank node in a run of quad patterns, descending
+/// into RDF-1.2 quoted triples. Used to enforce the §19.6 rule that a blank node
+/// label may not be shared across two operations of one update request.
+fn collect_quad_bnode_labels(quads: &[QuadPattern], out: &mut std::collections::HashSet<String>) {
+    for q in quads {
+        collect_triple_bnode_labels(&q.triple, out);
+    }
+}
+
+fn collect_triple_bnode_labels(t: &TriplePattern, out: &mut std::collections::HashSet<String>) {
+    collect_term_bnode_labels(&t.subject, out);
+    collect_term_bnode_labels(&t.object, out);
+}
+
+fn collect_term_bnode_labels(t: &TermPattern, out: &mut std::collections::HashSet<String>) {
+    match t {
+        TermPattern::BlankNode(b) => {
+            out.insert(b.as_str().to_owned());
+        }
+        TermPattern::Triple(tp) => collect_triple_bnode_labels(tp, out),
+        _ => {}
     }
 }
 
@@ -3728,6 +3813,49 @@ mod tests {
     }
 
     #[test]
+    fn update_reused_blank_label_across_operations_is_rejected() {
+        // §19.6: a blank node label is scoped to one operation — sharing `_:b1`
+        // across two INSERT DATA operations of a request is illegal (vendored
+        // W3C `syntax-update-1` `syntax-update-54`).
+        let err = update_err(
+            "INSERT DATA { _:b1 purrdf:p purrdf:o } ; INSERT DATA { _:b1 purrdf:p purrdf:o }",
+        );
+        assert!(
+            matches!(err, ParseError::Syntax { .. }),
+            "expected Syntax for reused blank label across operations, got {err:?}"
+        );
+        // The same label WITHIN one operation is fine (one blank node), and a
+        // fresh label per operation is fine.
+        parse_update("INSERT DATA { _:b1 purrdf:p _:b1 } ; INSERT DATA { _:b2 purrdf:p purrdf:o }");
+    }
+
+    #[test]
+    fn update_reused_blank_label_inside_quoted_triple_across_operations_is_rejected() {
+        // §19.6 still applies when the blank label is nested inside an RDF 1.2
+        // quoted triple term: reusing `_:b` across two INSERT DATA operations is
+        // illegal even though the label never appears at top level. This exercises
+        // the `TermPattern::Triple` descent in `collect_term_bnode_labels`.
+        let err = update_err(concat!(
+            "INSERT DATA { purrdf:s rdf:reifies <<( _:b purrdf:p purrdf:o )>> } ; ",
+            "INSERT DATA { purrdf:s rdf:reifies <<( _:b purrdf:p purrdf:o )>> }",
+        ));
+        assert!(
+            matches!(err, ParseError::Syntax { .. }),
+            "expected Syntax for reused blank label inside quoted triple across operations, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn update_blank_label_inside_quoted_triple_within_one_operation_is_allowed() {
+        // The same blank label confined to a single operation is one blank node —
+        // nesting it inside a quoted triple must not trigger a false rejection.
+        parse_update(concat!(
+            "INSERT DATA { purrdf:s rdf:reifies <<( _:b purrdf:p _:b )>> } ; ",
+            "INSERT DATA { purrdf:s rdf:reifies <<( _:c purrdf:p purrdf:o )>> }",
+        ));
+    }
+
+    #[test]
     fn update_insert_data_labeled_blank_node_is_allowed() {
         let u = parse_update("INSERT DATA { _:b purrdf:p purrdf:o }");
         let GraphUpdateOperation::InsertData { data } = &u.operations[0] else {
@@ -4057,6 +4185,78 @@ mod tests {
         assert!(
             matches!(err, ParseError::Unsupported(_)),
             "expected Unsupported for aggregate in GROUP BY key, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn select_star_with_group_by_is_rejected() {
+        // §11.1: `SELECT *` is illegal in an aggregate query (vendored W3C
+        // `syntax-query` `syn-bad-01`). Both an explicit GROUP BY and a bare
+        // aggregate must trip it.
+        let q = format!("{GM}SELECT * {{ ?s ?p ?o }} GROUP BY ?s");
+        let err = SparqlParser::new().parse_query(&q).unwrap_err();
+        assert!(
+            matches!(err, ParseError::Syntax { .. }),
+            "expected Syntax for SELECT * with GROUP BY, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn bind_target_already_in_scope_is_rejected() {
+        // §19.6: re-binding an in-scope variable via BIND is a hard error
+        // (vendored W3C `syntax-query` `syntax-BINDscope6/7/8`). Cover the flat
+        // BGP, a preceding nested group, and a preceding UNION.
+        for body in [
+            "?s purrdf:p ?o . ?s purrdf:q ?o1 . BIND((1 + ?o) AS ?o1)",
+            "{ ?s purrdf:p ?o . ?s purrdf:q ?o1 . } BIND((1 + ?o) AS ?o1)",
+            "{ { ?s purrdf:p ?Y } UNION { ?s purrdf:p ?Z } } BIND(1 AS ?Y)",
+        ] {
+            let q = format!("{GM}SELECT * WHERE {{ {body} }}");
+            let err = SparqlParser::new()
+                .parse_query(&q)
+                .expect_err("BIND over in-scope var must fail");
+            assert!(
+                matches!(err, ParseError::Syntax { .. }),
+                "expected Syntax for BIND scope violation in {body:?}, got {err:?}"
+            );
+        }
+        // A BIND target that is genuinely fresh still parses.
+        let ok = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o . BIND((1 + ?o) AS ?o1) }}");
+        SparqlParser::new()
+            .parse_query(&ok)
+            .expect("fresh BIND target parses");
+    }
+
+    #[test]
+    fn bind_target_only_in_minus_right_is_allowed() {
+        // §18.2.1: a variable occurring only in the right operand of MINUS is
+        // NOT in scope in the enclosing group, so binding it via BIND is legal.
+        // `?v` appears solely inside the MINUS-right, so `BIND(1 AS ?v)` is fresh.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o MINUS {{ ?x purrdf:q ?v }} BIND(1 AS ?v) }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("BIND over a MINUS-right-only var must parse");
+    }
+
+    #[test]
+    fn select_star_excludes_minus_right_only_vars() {
+        // §18.2.1: `SELECT *` must not project variables that occur only in the
+        // right operand of MINUS. `?v` is MINUS-right-only, so the projection is
+        // exactly {?s, ?o}.
+        let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o MINUS {{ ?x purrdf:q ?v }} }}");
+        let GraphPattern::Project { variables, .. } = select_pattern(&q) else {
+            panic!("expected a Project wrapper for SELECT *");
+        };
+        let names: Vec<&str> = variables.iter().map(Variable::as_str).collect();
+        assert!(
+            names.contains(&"s") && names.contains(&"o"),
+            "expected ?s and ?o in projection, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"v") && !names.contains(&"x"),
+            "MINUS-right-only vars must not be projected, got {names:?}"
         );
     }
 

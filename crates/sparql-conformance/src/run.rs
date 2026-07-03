@@ -208,12 +208,24 @@ pub fn run(
         .map_err(|e| format!("read query {}: {e}", case.query.display()))?;
 
     match case.kind {
+        // W3C syntax tests are parsed against the test file's own IRI as the
+        // in-scope BASE (§4.1.1.1), so relative IRI references in the query
+        // (e.g. `<x>`, `FROM <file>`) resolve to absolute term-position IRIs
+        // rather than being (correctly) rejected as scheme-less. The harness's
+        // per-file sentinel base mirrors how the manifest's own relative
+        // `mf:action <file.rq>` resolves against [`BASE`].
         TestKind::PositiveSyntax | TestKind::NegativeSyntax => {
-            let parsed_ok = SparqlParser::new().parse_query(&query_text).is_ok();
+            let parsed_ok = SparqlParser::new()
+                .with_base_iri(file_base_iri(&case.query))
+                .parse_query(&query_text)
+                .is_ok();
             Ok(RunOutcome::Syntax { parsed_ok })
         }
         TestKind::PositiveUpdateSyntax | TestKind::NegativeUpdateSyntax => {
-            let parsed_ok = SparqlParser::new().parse_update(&query_text).is_ok();
+            let parsed_ok = SparqlParser::new()
+                .with_base_iri(file_base_iri(&case.query))
+                .parse_update(&query_text)
+                .is_ok();
             Ok(RunOutcome::Syntax { parsed_ok })
         }
         TestKind::QueryEval => {
