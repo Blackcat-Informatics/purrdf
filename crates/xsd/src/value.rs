@@ -162,6 +162,16 @@ pub fn parse(lexical: &str, datatype: XsdDatatype) -> Result<XsdValue, XsdError>
     }
 }
 
+/// As [`parse`], but applies the XSD-1.0 lexical restriction for `Float`/`Double`
+/// (rejects `+INF`). All other datatypes behave exactly as [`parse`].
+pub fn parse_xsd10(s: &str, dt: XsdDatatype) -> Result<XsdValue, XsdError> {
+    match dt {
+        XsdDatatype::Float => crate::numeric::parse_float_xsd10(s).map(XsdValue::Float),
+        XsdDatatype::Double => crate::numeric::parse_double_xsd10(s).map(XsdValue::Double),
+        _ => parse(s, dt),
+    }
+}
+
 /// Parse a lexical form by datatype IRI.
 ///
 /// Returns `Ok(None)` when `datatype_iri` is **not** an XSD value-space datatype —

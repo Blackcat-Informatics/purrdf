@@ -300,6 +300,38 @@ pub fn parse_float(s: &str) -> Result<f32, XsdError> {
         .map_err(|_| invalid(dt, s, "not a valid float lexical"))
 }
 
+/// XSD **1.0**-pinned `xsd:double` parse: identical to [`parse_double`] but rejects
+/// the XSD 1.1-only `+INF` spelling of positive infinity. XSD 1.0 (referenced by
+/// the ShEx/SHACL/SPARQL conformance suites) spells positive infinity only `INF`;
+/// spec-pinned consumers call this to opt out of the 1.1-only lexical without
+/// turning the whole crate back to 1.0.
+pub fn parse_double_xsd10(s: &str) -> Result<f64, XsdError> {
+    if s == "+INF" {
+        return Err(invalid(
+            XsdDatatype::Double,
+            s,
+            "XSD 1.0 spells positive infinity INF",
+        ));
+    }
+    parse_double(s)
+}
+
+/// XSD **1.0**-pinned `xsd:float` parse: identical to [`parse_float`] but rejects
+/// the XSD 1.1-only `+INF` spelling of positive infinity. XSD 1.0 (referenced by
+/// the ShEx/SHACL/SPARQL conformance suites) spells positive infinity only `INF`;
+/// spec-pinned consumers call this to opt out of the 1.1-only lexical without
+/// turning the whole crate back to 1.0.
+pub fn parse_float_xsd10(s: &str) -> Result<f32, XsdError> {
+    if s == "+INF" {
+        return Err(invalid(
+            XsdDatatype::Float,
+            s,
+            "XSD 1.0 spells positive infinity INF",
+        ));
+    }
+    parse_float(s)
+}
+
 /// Shared finite-numeric parse for double; returns `f64`.
 fn parse_ieee(s: &str, dt: XsdDatatype) -> Result<f64, XsdError> {
     match s {
@@ -1232,6 +1264,60 @@ mod tests {
         assert_eq!(canonical_double(f64::INFINITY), "INF");
         assert_eq!(canonical_double(f64::NEG_INFINITY), "-INF");
         assert_eq!(canonical_double(f64::NAN), "NaN");
+    }
+
+    #[test]
+    fn parse_float_still_accepts_plus_inf() {
+        // Regression guard: the XSD 1.1 default parse must keep accepting `+INF`.
+        assert_eq!(parse_float("+INF").unwrap(), f32::INFINITY);
+    }
+
+    #[test]
+    fn parse_double_still_accepts_plus_inf() {
+        // Regression guard: the XSD 1.1 default parse must keep accepting `+INF`.
+        assert_eq!(parse_double("+INF").unwrap(), f64::INFINITY);
+    }
+
+    #[test]
+    fn parse_float_xsd10_rejects_plus_inf() {
+        assert!(parse_float_xsd10("+INF").is_err());
+    }
+
+    #[test]
+    fn parse_double_xsd10_rejects_plus_inf() {
+        assert!(parse_double_xsd10("+INF").is_err());
+    }
+
+    #[test]
+    fn parse_float_xsd10_accepts_xsd10_lexicals() {
+        assert_eq!(parse_float_xsd10("INF").unwrap(), f32::INFINITY);
+        assert_eq!(parse_float_xsd10("-INF").unwrap(), f32::NEG_INFINITY);
+        assert!(parse_float_xsd10("NaN").unwrap().is_nan());
+        assert_eq!(parse_float_xsd10("1.5").unwrap(), 1.5f32);
+        assert_eq!(parse_float_xsd10("1e10").unwrap(), 1e10f32);
+    }
+
+    #[test]
+    fn parse_double_xsd10_accepts_xsd10_lexicals() {
+        assert_eq!(parse_double_xsd10("INF").unwrap(), f64::INFINITY);
+        assert_eq!(parse_double_xsd10("-INF").unwrap(), f64::NEG_INFINITY);
+        assert!(parse_double_xsd10("NaN").unwrap().is_nan());
+        assert_eq!(parse_double_xsd10("1.5").unwrap(), 1.5f64);
+        assert_eq!(parse_double_xsd10("1e10").unwrap(), 1e10f64);
+    }
+
+    #[test]
+    fn value_parse_xsd10_rejects_plus_inf_for_float_and_double() {
+        assert!(crate::value::parse_xsd10("+INF", D::Double).is_err());
+        assert!(crate::value::parse_xsd10("+INF", D::Float).is_err());
+    }
+
+    #[test]
+    fn value_parse_xsd10_unaffected_for_non_float_double_datatypes() {
+        // Non-float/double datatypes must behave exactly as `parse`.
+        let xsd10 = crate::value::parse_xsd10("1", D::Integer).unwrap();
+        let xsd11 = crate::value::parse("1", D::Integer).unwrap();
+        assert_eq!(xsd10.canonical_lexical(), xsd11.canonical_lexical());
     }
 
     #[test]

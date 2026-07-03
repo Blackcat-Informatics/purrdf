@@ -4,10 +4,10 @@
 //! `purrdf-xsd` — the native XSD **value space** for the RDF 1.2 query stack.
 //!
 //! This is a pure-Rust, **zero-runtime-dependency**, wasm-clean leaf crate. It is
-//! the drop-in replacement for the oxigraph-family `oxsdatatypes`, and the first
-//! foundation slice of the native SPARQL engine (purrdf S1, EPIC #906): the SPARQL
-//! evaluator evaluates `FILTER`/`ORDER BY` over *typed values*, which this crate
-//! supplies. It is deliberately decoupled from `purrdf-core` (no dependency in
+//! the drop-in replacement for the oxigraph-family `oxsdatatypes`, and the
+//! foundation layer of the native SPARQL engine: the SPARQL evaluator evaluates
+//! `FILTER`/`ORDER BY` over *typed values*, which this crate supplies. It is
+//! deliberately decoupled from `purrdf-core` (no dependency in
 //! either direction yet); the IR keeps literals **lexical-verbatim** (Constitution
 //! C0.1) and this crate is the value layer that complements it.
 //!
@@ -35,13 +35,24 @@
 //! # XSD version: 1.1
 //!
 //! purrdf-xsd targets the **XSD 1.1** value spaces (W3C REC 2012-04-05).
-//! Two load-bearing consequences for the year lexical affect slices #911/#912:
+//! Two load-bearing consequences for the year lexical:
 //!
 //! * Year `0000` is **permitted** (XSD 1.1; it denotes 1 BCE). XSD 1.0 forbade it.
 //! * The year field must have **at least 4 digits**. A year field wider than 4 digits
 //!   must **not** have a leading zero — e.g. `00044-03-15` and `012345-01-01` are
 //!   invalid; `12345-06-15` and `-12345-06-15` are valid. Exactly 4 digits with a
 //!   leading zero (`0044`, `0000`) are valid.
+//!
+//! # XSD 1.0 compatibility
+//!
+//! The crate stays honestly XSD 1.1 by default: [`parse`]/[`numeric::parse_float`]/
+//! [`numeric::parse_double`] accept the XSD 1.1-only `+INF` spelling of positive
+//! infinity for `xsd:float`/`xsd:double`. Spec-pinned consumers that reference XSD
+//! 1.0 (e.g. ShEx/SHACL/SPARQL conformance suites written against the 1.0 lexical
+//! space) call [`parse_xsd10`]/[`parse_float_xsd10`]/[`parse_double_xsd10`] instead,
+//! which reject `+INF` (XSD 1.0 spells positive infinity only `INF`). This is an
+//! opt-in function, not a Cargo feature — the kernel's default behavior never
+//! changes underneath a caller that did not ask for it.
 //!
 //! # Datatype coverage
 //!
@@ -81,9 +92,10 @@ pub use binary::{canonical_base64, canonical_hex, parse_base64, parse_binary, pa
 pub use datatype::{XsdDatatype, XSD_NS};
 pub use numeric::{
     numeric_abs, numeric_add, numeric_ceil, numeric_div, numeric_floor, numeric_mul, numeric_round,
-    numeric_sub, numeric_unary_minus, numeric_unary_plus, Decimal,
+    numeric_sub, numeric_unary_minus, numeric_unary_plus, parse_double_xsd10, parse_float_xsd10,
+    Decimal,
 };
 pub use ops::{effective_boolean_value, value_cmp, value_eq};
 pub use simple::{normalize_whitespace_collapse, normalize_whitespace_replace};
 pub use temporal::{datetime_epoch, datetime_from_unix_seconds};
-pub use value::{parse, parse_by_iri, XsdError, XsdValue};
+pub use value::{parse, parse_by_iri, parse_xsd10, XsdError, XsdValue};
