@@ -297,7 +297,7 @@ pub fn read_all_segments(bytes: &[u8]) -> Result<Graph, RdfDiagnostic> {
     read_graph(bytes, true)
 }
 
-fn diagnostics_to_error(graph: &Graph) -> RdfDiagnostic {
+pub(crate) fn diagnostics_to_error(graph: &Graph) -> RdfDiagnostic {
     let joined = graph
         .diagnostics
         .iter()

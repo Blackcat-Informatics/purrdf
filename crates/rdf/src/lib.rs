@@ -39,6 +39,10 @@ mod gts_core;
 mod gts_import_graph;
 mod gts_import_sink;
 mod gts_resolve;
+// Full content-chain verification (content-addressed terms task 7): COSE
+// signatures + expected-head replay + digest inclusion, re-exported through the
+// `gts` adapter surface below.
+mod gts_verify;
 // Per-subject Symmetric-CBD subgraph extraction: the subgraph that *describes* a
 // term/slice, used by the docs multi-format export AND by the native engine's DESCRIBE
 // evaluation. It lives in `purrdf-core` (pure IR, no codec/gts) so both the higher
