@@ -309,6 +309,29 @@ impl Interner {
         self.content_ids.get(&id).copied()
     }
 
+    /// Look up the [`TermId`] of an already-interned IRI, WITHOUT interning a new
+    /// term on a miss. Mirrors the hit path of [`Interner::intern`]'s IRI arm
+    /// exactly (same hash, same `term_eq` comparison), so it agrees with `intern`
+    /// on every IRI that has actually been interned.
+    ///
+    /// Used at [`RdfDatasetBuilder::materialize`] to resolve the configured
+    /// derivation-predicate IRI to a frozen `TermId` without minting a new term
+    /// after the arena/term table are otherwise frozen-bound: terms are frozen at
+    /// that point, so a miss here must return `None`, never insert.
+    fn lookup_iri(&self, iri: &str) -> Option<TermId> {
+        let lookup = TermLookup::Iri(iri);
+        let hash = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            hash_lookup(&lookup, &mut h);
+            h.finish()
+        };
+        let (arena, terms) = (&self.arena, &self.terms);
+        self.index
+            .find(hash, |&i| term_eq(arena, &terms[i as usize], &lookup))
+            .copied()
+            .map(TermId::from_index)
+    }
+
     fn term(&self, id: TermId) -> &InternedTerm {
         &self.terms[id.index()]
     }
@@ -788,8 +811,15 @@ impl RdfDatasetBuilder {
             mut reifiers,
             mut annotations,
             locations,
+            derivation_predicate,
             ..
         } = self;
+
+        // Resolve the configured derivation-predicate IRI to its frozen `TermId`
+        // via a lookup-only probe (never interns): terms are frozen from this
+        // point on, so an IRI that was configured but never actually interned
+        // resolves to `None` — "no derivations present", not an error.
+        let derivation_predicate = derivation_predicate.and_then(|iri| interner.lookup_iri(&iri));
 
         // Deterministic, reproducible frozen order: sort by id tuples. Terms keep
         // their interning (allocation) order, which is itself deterministic for a
@@ -842,6 +872,8 @@ impl RdfDatasetBuilder {
             annotations.into_boxed_slice(),
             locations.into_boxed_slice(),
             caps,
+            interner.content_ids,
+            derivation_predicate,
         )
     }
 }

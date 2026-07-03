@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
+use crate::content_id::Blake3ContentId;
 use crate::dataset_view::GraphMatch;
 use crate::{
     RdfAnnotation, RdfLiteral, RdfLocation, RdfQuad, RdfReifier, RdfStoreCapabilities, RdfTerm,
@@ -172,6 +173,21 @@ pub struct RdfDataset {
     /// lazily on the first pattern query that selects them. `OnceLock` keeps the
     /// frozen dataset `Send + Sync`.
     indexes: QuadIndexes,
+    /// Frozen side table from a content-addressed term to its decoded
+    /// [`Blake3ContentId`] (moved from the builder's [`Interner`](super::builder)
+    /// at [`materialize`](super::builder::RdfDatasetBuilder::materialize)). Empty
+    /// when content-id recognition was never configured. NON-SERIALIZED: this is a
+    /// derived side table for readers, never a byte-producing input — no
+    /// serializer or the GTS writer may fold it into their output. Egress is
+    /// sorted-by-`TermId` only (see [`content_ids`](Self::content_ids)); raw
+    /// `HashMap` iteration order must never leak to a caller.
+    content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
+    /// The derivation-predicate IRI's frozen [`TermId`], resolved at
+    /// [`materialize`](super::builder::RdfDatasetBuilder::materialize) IFF that IRI
+    /// was already interned. `None` covers BOTH "no derivation predicate
+    /// configured" and "configured but never interned" — both mean "no
+    /// derivations present", not an error (no-fabricated-default policy).
+    derivation_predicate: Option<TermId>,
 }
 
 /// The lazy non-identity permutation indexes over the freeze-sorted `quads` table
@@ -361,6 +377,7 @@ impl RdfDataset {
     /// validation.
     ///
     /// [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_parts(
         arena: Box<[u8]>,
         terms: Box<[InternedTerm]>,
@@ -369,6 +386,8 @@ impl RdfDataset {
         annotations: Box<[(TermId, TermId, TermId)]>,
         locations: Box<[(QuadHandle, RdfLocation)]>,
         caps: RdfStoreCapabilities,
+        content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
+        derivation_predicate: Option<TermId>,
     ) -> Self {
         Self {
             arena,
@@ -380,6 +399,8 @@ impl RdfDataset {
             caps,
             value_index: OnceLock::new(),
             indexes: QuadIndexes::default(),
+            content_ids,
+            derivation_predicate,
         }
     }
 
@@ -1283,6 +1304,8 @@ impl RdfDataset {
             caps: self.caps,
             value_index: OnceLock::new(),
             indexes: QuadIndexes::default(),
+            content_ids: self.content_ids.clone(),
+            derivation_predicate: self.derivation_predicate,
         }
     }
 
@@ -1317,6 +1340,43 @@ impl RdfDataset {
         self.quads.len().hash(&mut h);
         self.terms.len().hash(&mut h);
         h.finish()
+    }
+
+    /// The decoded [`Blake3ContentId`] of a content-addressed term, or `None` if
+    /// `id` was never recognized as one (content-id recognition was inactive, or
+    /// this term's value did not match the configured scheme). `O(1)`.
+    #[inline]
+    #[must_use]
+    pub fn content_id(&self, id: TermId) -> Option<Blake3ContentId> {
+        self.content_ids.get(&id).copied()
+    }
+
+    /// Every content-addressed term in this dataset, as `(TermId, Blake3ContentId)`
+    /// pairs in SORTED `TermId` order. This sorted egress is the ONLY exposed
+    /// iteration over the frozen `content_ids` side table — the underlying
+    /// `HashMap`'s iteration order is never leaked, so any byte-producing
+    /// consumer that folds over this sees a reproducible sequence.
+    pub fn content_ids(&self) -> impl Iterator<Item = (TermId, Blake3ContentId)> + '_ {
+        let mut pairs: Vec<(TermId, Blake3ContentId)> = self
+            .content_ids
+            .iter()
+            .map(|(&id, &cid)| (id, cid))
+            .collect();
+        pairs.sort_unstable_by_key(|(id, _)| *id);
+        pairs.into_iter()
+    }
+
+    /// The frozen [`TermId`] of the configured derivation-predicate IRI, or `None`
+    /// if no derivation predicate is configured OR it was never interned (both
+    /// cases mean "no derivations present" — not an error). `pub(crate)`: the
+    /// derivation-traversal helpers (content-addressing tasks 5/6) are the
+    /// intended readers.
+    // Not yet called outside this module's tests: the derivation-traversal
+    // helpers that consume it land in a follow-up content-addressing task.
+    #[allow(dead_code)]
+    #[inline]
+    pub(crate) fn derivation_predicate(&self) -> Option<TermId> {
+        self.derivation_predicate
     }
 }
 
@@ -2245,6 +2305,173 @@ mod tests {
             let estimate = ds.cardinality_estimate(s, p, o, GraphMatch::Any);
             prop_assert_eq!(estimate, count,
                 "a prefix-covered pattern must be EXACT, not just an upper bound");
+        }
+    }
+
+    mod content_addressing {
+        use super::*;
+        use crate::{Blake3ContentId, ContentIdScheme};
+
+        const DERIVED_FROM: &str = "http://example.org/wasDerivedFrom";
+
+        fn hex_iri(scheme_prefix: &str, byte: u8) -> String {
+            format!("{scheme_prefix}{}", hex::encode([byte; 32]))
+        }
+
+        /// Tiny local hex encoder so this test module carries no extra dependency:
+        /// mirrors what `Blake3ContentId::from_hex` decodes.
+        mod hex {
+            pub(super) fn encode(bytes: [u8; 32]) -> String {
+                let mut s = String::with_capacity(64);
+                for b in bytes {
+                    use std::fmt::Write as _;
+                    let _ = write!(s, "{b:02x}");
+                }
+                s
+            }
+        }
+
+        /// `content_id`/`content_ids`/`derivation_predicate` round-trip through
+        /// freeze: content-addressed terms resolve to their decoded digest, ordinary
+        /// terms resolve to `None`, `content_ids()` yields exactly the
+        /// content-addressed entries in sorted `TermId` order, and the derivation
+        /// predicate resolves to the `TermId` it was actually interned as.
+        #[test]
+        fn content_ids_and_derivation_predicate_round_trip() {
+            let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+            let mut b =
+                RdfDatasetBuilder::with_content_addressing(scheme, Some(DERIVED_FROM.to_string()));
+
+            let ca1_iri = hex_iri("blake3:", 0xAA);
+            let ca2_iri = hex_iri("blake3:", 0xBB);
+            let ca1 = b.intern_iri(&ca1_iri);
+            let ca2 = b.intern_iri(&ca2_iri);
+            let ordinary = b.intern_iri("http://example.org/plain");
+            let derived_from = b.intern_iri(DERIVED_FROM);
+
+            b.push_quad(ca1, derived_from, ca2, None);
+            b.push_quad(ordinary, derived_from, ca1, None);
+
+            let ds = b.freeze().expect("valid dataset");
+
+            let expected1 = Blake3ContentId::from_hex(&hex::encode([0xAA; 32])).expect("valid hex");
+            let expected2 = Blake3ContentId::from_hex(&hex::encode([0xBB; 32])).expect("valid hex");
+            assert_eq!(ds.content_id(ca1), Some(expected1));
+            assert_eq!(ds.content_id(ca2), Some(expected2));
+            assert_eq!(
+                ds.content_id(ordinary),
+                None,
+                "an ordinary IRI has no content id"
+            );
+            assert_eq!(
+                ds.content_id(derived_from),
+                None,
+                "the predicate IRI itself is not content-addressed"
+            );
+
+            let entries: Vec<(TermId, Blake3ContentId)> = ds.content_ids().collect();
+            assert_eq!(
+                entries,
+                {
+                    let mut expected = vec![(ca1, expected1), (ca2, expected2)];
+                    expected.sort_unstable_by_key(|(id, _)| *id);
+                    expected
+                },
+                "content_ids() yields exactly the content-addressed entries, sorted by TermId"
+            );
+            // Explicit sortedness check independent of the expected-vec construction.
+            assert!(entries.windows(2).all(|w| w[0].0 < w[1].0));
+
+            assert_eq!(
+                ds.derivation_predicate(),
+                Some(derived_from),
+                "the configured derivation predicate resolves to its interned TermId"
+            );
+        }
+
+        /// A configured derivation-predicate IRI that is never actually interned
+        /// resolves to `None` — not an error (no-fabricated-default policy: both
+        /// "unconfigured" and "configured but absent" mean "no derivations").
+        #[test]
+        fn derivation_predicate_none_when_never_interned() {
+            let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+            let mut b =
+                RdfDatasetBuilder::with_content_addressing(scheme, Some(DERIVED_FROM.to_string()));
+            // Intern unrelated terms and push a quad so the dataset is non-empty and
+            // freezes, but never touch `DERIVED_FROM`.
+            let s = b.intern_iri("http://example.org/s");
+            let p = b.intern_iri("http://example.org/p");
+            let o = b.intern_iri("http://example.org/o");
+            b.push_quad(s, p, o, None);
+
+            let ds = b.freeze().expect("valid dataset");
+            assert_eq!(
+                ds.derivation_predicate(),
+                None,
+                "an unused derivation predicate IRI must resolve to None, not error"
+            );
+        }
+
+        /// A dataset built with NO content-addressing configuration has an empty
+        /// side table and no derivation predicate.
+        #[test]
+        fn no_content_addressing_configured_is_empty() {
+            let mut b = RdfDatasetBuilder::new();
+            let iri = hex_iri("blake3:", 0xCC);
+            let id = b.intern_iri(&iri);
+            let s = b.intern_iri("http://example.org/s");
+            let p = b.intern_iri("http://example.org/p");
+            b.push_quad(s, p, id, None);
+
+            let ds = b.freeze().expect("valid dataset");
+            assert_eq!(ds.content_id(id), None);
+            assert_eq!(ds.content_ids().count(), 0);
+            assert_eq!(ds.derivation_predicate(), None);
+        }
+
+        /// INDEX-STABILITY REGRESSION TEST (load-bearing invariant): the frozen
+        /// `content_ids` side table is keyed by `TermId`, and `materialize` passes
+        /// the interner's term table through to `from_parts` UNSORTED so that
+        /// `TermId::from_index(i)` stays valid post-freeze (see the comment on
+        /// `RdfDatasetBuilder::materialize`). This test captures each
+        /// content-addressed term's `TermId` BEFORE freeze (from the builder) and
+        /// asserts that the SAME id looks up the SAME digest AFTER freeze — i.e.
+        /// term intern order equals frozen term-table index order.
+        ///
+        /// If a future optimization sorts/reorders terms at freeze without also
+        /// remapping `content_ids`' keys, this test fails: it is the guard against
+        /// that class of silent corruption.
+        #[test]
+        fn content_id_lookup_is_stable_across_freeze() {
+            let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+            let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+
+            // Interleave ordinary and content-addressed terms so a naive value-sort
+            // at freeze (e.g. sorting by IRI string) would visibly reorder them.
+            let mut expected: Vec<(TermId, Blake3ContentId)> = Vec::new();
+            let mut last_ordinary = None;
+            for n in 0..8u8 {
+                let ordinary = b.intern_iri(&format!("http://example.org/z{n}"));
+                last_ordinary = Some(ordinary);
+                let ca_iri = hex_iri("blake3:", n);
+                let ca_id = b.intern_iri(&ca_iri);
+                let digest = Blake3ContentId::from_hex(&hex::encode([n; 32])).expect("valid hex");
+                expected.push((ca_id, digest));
+            }
+            let s = last_ordinary.expect("at least one ordinary term interned");
+            let p = b.intern_iri("http://example.org/p");
+            let o = expected[0].0;
+            b.push_quad(s, p, o, None);
+
+            let ds = b.freeze().expect("valid dataset");
+
+            for (id, digest) in expected {
+                assert_eq!(
+                    ds.content_id(id),
+                    Some(digest),
+                    "TermId captured before freeze must resolve to the same digest after freeze"
+                );
+            }
         }
     }
 }
