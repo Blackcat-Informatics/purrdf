@@ -2875,10 +2875,15 @@ fn collect_vars(p: &GraphPattern, out: &mut Vec<Variable>) {
         }
         GraphPattern::Join { left, right }
         | GraphPattern::Union { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::Minus { left, right } => {
+        | GraphPattern::Lateral { left, right } => {
             collect_vars(left, out);
             collect_vars(right, out);
+        }
+        // SPARQL §18.2.1: variables occurring only in the right operand of
+        // MINUS are not in scope in the enclosing group graph pattern, so we
+        // descend into `left` only.
+        GraphPattern::Minus { left, .. } => {
+            collect_vars(left, out);
         }
         GraphPattern::LeftJoin { left, right, .. } => {
             collect_vars(left, out);
@@ -4192,6 +4197,39 @@ mod tests {
         SparqlParser::new()
             .parse_query(&ok)
             .expect("fresh BIND target parses");
+    }
+
+    #[test]
+    fn bind_target_only_in_minus_right_is_allowed() {
+        // §18.2.1: a variable occurring only in the right operand of MINUS is
+        // NOT in scope in the enclosing group, so binding it via BIND is legal.
+        // `?v` appears solely inside the MINUS-right, so `BIND(1 AS ?v)` is fresh.
+        let q = format!(
+            "{GM}SELECT * WHERE {{ ?s purrdf:p ?o MINUS {{ ?x purrdf:q ?v }} BIND(1 AS ?v) }}"
+        );
+        SparqlParser::new()
+            .parse_query(&q)
+            .expect("BIND over a MINUS-right-only var must parse");
+    }
+
+    #[test]
+    fn select_star_excludes_minus_right_only_vars() {
+        // §18.2.1: `SELECT *` must not project variables that occur only in the
+        // right operand of MINUS. `?v` is MINUS-right-only, so the projection is
+        // exactly {?s, ?o}.
+        let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o MINUS {{ ?x purrdf:q ?v }} }}");
+        let GraphPattern::Project { variables, .. } = select_pattern(&q) else {
+            panic!("expected a Project wrapper for SELECT *");
+        };
+        let names: Vec<&str> = variables.iter().map(Variable::as_str).collect();
+        assert!(
+            names.contains(&"s") && names.contains(&"o"),
+            "expected ?s and ?o in projection, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"v") && !names.contains(&"x"),
+            "MINUS-right-only vars must not be projected, got {names:?}"
+        );
     }
 
     #[test]
