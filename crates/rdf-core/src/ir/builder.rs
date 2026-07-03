@@ -203,8 +203,7 @@ struct Interner {
     content_scheme: Option<ContentIdScheme>,
     /// Side table from a recognized content-id term to its decoded
     /// [`Blake3ContentId`]. Empty while recognition is inactive; populated at
-    /// intern time once a later change wires the miss-branch recognition hook.
-    #[allow(dead_code, reason = "populated once intern-time recognition lands")]
+    /// intern time in the miss branch of [`Interner::intern`] (IRI arm only).
     content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
 }
 
@@ -252,6 +251,20 @@ impl Interner {
             }
         }
         let i = u32::try_from(self.terms.len()).expect("term table exceeds u32::MAX entries");
+        // Content-id recognition (miss branch, IRI arm ONLY): gated first on
+        // `content_scheme` so the check is a single `Option` branch — skipped
+        // entirely, with zero further work, when recognition is inactive. Computed
+        // here (borrowing `&lookup`) BEFORE the moving `match lookup` below consumes
+        // `iri`. A prefix hit with a bad hex suffix is an ORDINARY IRI, not an error:
+        // `from_hex` returning `None` is correct, not a swallowed failure.
+        let recognized: Option<Blake3ContentId> = match &lookup {
+            TermLookup::Iri(iri) => self
+                .content_scheme
+                .as_ref()
+                .and_then(|scheme| iri.strip_prefix(scheme.prefix()))
+                .and_then(Blake3ContentId::from_hex),
+            _ => None,
+        };
         // Miss: now (and only now) push the strings to the arena and build the term.
         let term = match lookup {
             TermLookup::Iri(iri) => InternedTerm::Iri(self.push_str(iri)),
@@ -277,6 +290,9 @@ impl Interner {
             TermLookup::Triple { s, p, o } => InternedTerm::Triple { s, p, o },
         };
         self.terms.push(term);
+        if let Some(id) = recognized {
+            self.content_ids.insert(TermId::from_index(i), id);
+        }
         let (arena, terms) = (&self.arena, &self.terms);
         self.index.insert_unique(hash, i, |&i| {
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -284,6 +300,13 @@ impl Interner {
             h.finish()
         });
         TermId::from_index(i)
+    }
+
+    /// The decoded content id for a recognized term, if any (builder-level
+    /// accessor for tests; the frozen-dataset public accessor is separate).
+    #[cfg(test)]
+    fn content_id(&self, id: TermId) -> Option<Blake3ContentId> {
+        self.content_ids.get(&id).copied()
     }
 
     fn term(&self, id: TermId) -> &InternedTerm {
@@ -891,6 +914,86 @@ mod tests {
             b.derivation_predicate.as_deref(),
             Some("http://example.org/derivedFrom")
         );
+    }
+
+    /// A recognized `blake3:<64hex>` IRI gets a side-table entry with the exact
+    /// decoded bytes.
+    #[test]
+    fn intern_iri_recognizes_content_id() {
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let hex = "ab".repeat(32);
+        let id = b.intern_iri(&format!("blake3:{hex}"));
+        let expected = Blake3ContentId::from_hex(&hex).expect("valid hex");
+        assert_eq!(b.interner.content_id(id), Some(expected));
+    }
+
+    /// Interning the same content-id IRI twice yields the same `TermId` and
+    /// exactly one side-table entry (idempotent, no double-insert drift).
+    #[test]
+    fn intern_iri_content_id_is_idempotent() {
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let iri = format!("blake3:{}", "cd".repeat(32));
+        let a = b.intern_iri(&iri);
+        let c = b.intern_iri(&iri);
+        assert_eq!(a, c);
+        assert_eq!(b.interner.content_ids.len(), 1);
+    }
+
+    /// A prefix hit with a malformed hex suffix is an ORDINARY IRI, not an
+    /// error: no side-table entry, but interning still succeeds.
+    #[test]
+    fn intern_iri_rejects_malformed_suffix_as_ordinary_iri() {
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+
+        let too_short = format!("blake3:{}", "a".repeat(63));
+        let too_long = format!("blake3:{}", "a".repeat(65));
+        let non_hex = format!("blake3:{}z", "a".repeat(63));
+        let uppercase = format!("blake3:{}", "AB".repeat(32));
+
+        for iri in [&too_short, &too_long, &non_hex, &uppercase] {
+            let id = b.intern_iri(iri);
+            assert_eq!(
+                b.interner.content_id(id),
+                None,
+                "unexpected match for {iri}"
+            );
+        }
+        assert!(b.interner.content_ids.is_empty());
+    }
+
+    /// An ordinary IRI with no content-id prefix at all gets no entry.
+    #[test]
+    fn intern_iri_ordinary_iri_has_no_content_id() {
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let id = b.intern_iri("http://example.org/x");
+        assert_eq!(b.interner.content_id(id), None);
+    }
+
+    /// Recognition is IRI-arm only: a blank node whose label happens to look
+    /// like a content-id IRI is never recognized (rejected by construction,
+    /// not by a runtime check).
+    #[test]
+    fn intern_blank_never_recognized_as_content_id() {
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let label = format!("blake3:{}", "ef".repeat(32));
+        let id = b.intern_blank(&label, BlankScope::DEFAULT);
+        assert_eq!(b.interner.content_id(id), None);
+        assert!(b.interner.content_ids.is_empty());
+    }
+
+    /// With recognition inactive (plain `new()`), a `blake3:<64hex>` IRI is
+    /// interned as an ordinary IRI: no side-table entry.
+    #[test]
+    fn intern_iri_no_recognition_when_scheme_inactive() {
+        let mut b = RdfDatasetBuilder::new();
+        let id = b.intern_iri(&format!("blake3:{}", "12".repeat(32)));
+        assert_eq!(b.interner.content_id(id), None);
+        assert!(b.interner.content_ids.is_empty());
     }
 
     #[test]
