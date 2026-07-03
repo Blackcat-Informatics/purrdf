@@ -1371,12 +1371,31 @@ impl RdfDataset {
     /// cases mean "no derivations present" — not an error). `pub(crate)`: the
     /// derivation-traversal helpers (content-addressing tasks 5/6) are the
     /// intended readers.
-    // Not yet called outside this module's tests: the derivation-traversal
-    // helpers that consume it land in a follow-up content-addressing task.
-    #[allow(dead_code)]
     #[inline]
     pub(crate) fn derivation_predicate(&self) -> Option<TermId> {
         self.derivation_predicate
+    }
+
+    /// The predecessor(s) of `successor`, decoded from the annotation
+    /// side-table: rows shaped `(successor, derivation_predicate, predecessor)`
+    /// (a PREDECESSOR-LINK annotation on the successor's reifier) yield
+    /// `predecessor`. Empty when no derivation predicate is configured, or the
+    /// predicate was never interned, or `successor` has no such annotation.
+    ///
+    /// This is a **linear scan** over the whole annotation table — it is the
+    /// private building block for `predecessors`, the single PUBLIC O(1)
+    /// accessor added on top of it (content-addressing task 6). Callers are
+    /// never offered both an O(n) and an O(1) form for the same lookup (ETHOS
+    /// §19); this form stays private and exists only so the O(1) index has a
+    /// linear-scan reference implementation to build from and test against.
+    #[allow(dead_code)] // consumed by the `predecessors` index in the next step
+    fn derived_from(&self, successor: TermId) -> impl Iterator<Item = TermId> + '_ {
+        let predicate = self.derivation_predicate();
+        self.annotations()
+            .filter(move |&(reifier, p, _)| {
+                predicate.is_some_and(|predicate| reifier == successor && p == predicate)
+            })
+            .map(|(_, _, object)| object)
     }
 }
 
@@ -2472,6 +2491,54 @@ mod tests {
                     "TermId captured before freeze must resolve to the same digest after freeze"
                 );
             }
+        }
+
+        /// `derived_from` decodes a PREDECESSOR-LINK annotation: `successor` is the
+        /// reifier, the configured derivation predicate is the annotation
+        /// predicate, and the annotation object is the predecessor. Configured but
+        /// unused → empty; a term with no such annotation → empty.
+        #[test]
+        fn derived_from_reads_the_predecessor_link_annotation() {
+            let mut b = RdfDatasetBuilder::with_content_addressing(
+                ContentIdScheme::new("blake3:").expect("valid scheme"),
+                Some(DERIVED_FROM.to_string()),
+            );
+            let successor = b.intern_iri("http://example.org/successor");
+            let predecessor = b.intern_iri("http://example.org/predecessor");
+            let derived_from = b.intern_iri(DERIVED_FROM);
+            let unrelated = b.intern_iri("http://example.org/unrelated");
+
+            // successor -[derivation_predicate]-> predecessor, as an annotation on
+            // the successor's own reifier id (successor IS the reifier here).
+            b.push_annotation(successor, derived_from, predecessor);
+            // A different predicate on the same reifier must not be picked up.
+            b.push_annotation(successor, unrelated, predecessor);
+
+            let ds = b.freeze().expect("valid dataset");
+
+            let predecessors: Vec<TermId> = ds.derived_from(successor).collect();
+            assert_eq!(predecessors, vec![predecessor]);
+
+            assert_eq!(
+                ds.derived_from(unrelated).count(),
+                0,
+                "a term with no PREDECESSOR-LINK annotation has no predecessors"
+            );
+        }
+
+        /// No derivation predicate configured → `derived_from` is always empty,
+        /// even if the dataset happens to carry annotations that would otherwise
+        /// match by coincidence.
+        #[test]
+        fn derived_from_empty_when_no_derivation_predicate_configured() {
+            let mut b = RdfDatasetBuilder::new();
+            let successor = b.intern_iri("http://example.org/successor");
+            let predicate = b.intern_iri("http://example.org/somePredicate");
+            let predecessor = b.intern_iri("http://example.org/predecessor");
+            b.push_annotation(successor, predicate, predecessor);
+
+            let ds = b.freeze().expect("valid dataset");
+            assert_eq!(ds.derived_from(successor).count(), 0);
         }
     }
 }
