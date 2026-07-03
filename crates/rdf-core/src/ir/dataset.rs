@@ -38,7 +38,7 @@ use super::term::{arena_str, BlankScope, InternedTerm, TermId, TermValue};
 /// as virtual triples in [`RdfDataset::reifier_quads`].
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
-type FastHasher = BuildHasherDefault<ahash::AHasher>;
+pub(crate) type FastHasher = BuildHasherDefault<ahash::AHasher>;
 type ValueIndex = HashMap<u64, Vec<TermId>, FastHasher>;
 const QUAD_ARITY: usize = 4;
 

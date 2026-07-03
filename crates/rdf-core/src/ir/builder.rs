@@ -23,9 +23,12 @@ use std::sync::Arc;
 
 use hashbrown::HashTable;
 
-use crate::{RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTextDirection};
+use crate::{
+    Blake3ContentId, ContentIdScheme, RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm,
+    RdfTextDirection,
+};
 
-use super::dataset::{QuadHandle, QuadIds, QuadRow, RdfDataset, TermRef};
+use super::dataset::{FastHasher, QuadHandle, QuadIds, QuadRow, RdfDataset, TermRef};
 use super::term::{
     arena_str, BlankScope, InternedLiteral, InternedTerm, StrRange, TermId, RDF_LANG_STRING,
     XSD_STRING,
@@ -193,6 +196,16 @@ struct Interner {
     /// ranges through the arena and comparing BY VALUE (so equal strings dedup to
     /// one id even though the table itself stores neither strings nor ranges).
     index: HashTable<u32>,
+    /// The caller-supplied content-id recognition spelling (e.g. `"blake3:"`).
+    /// `None` (the default) means recognition is INACTIVE: no fabricated default,
+    /// per the no-vocabulary-minting policy. Fixed at construction time (see
+    /// [`RdfDatasetBuilder::with_content_addressing`]) — there is no setter.
+    content_scheme: Option<ContentIdScheme>,
+    /// Side table from a recognized content-id term to its decoded
+    /// [`Blake3ContentId`]. Empty while recognition is inactive; populated at
+    /// intern time once a later change wires the miss-branch recognition hook.
+    #[allow(dead_code, reason = "populated once intern-time recognition lands")]
+    content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
 }
 
 impl Interner {
@@ -201,6 +214,8 @@ impl Interner {
             arena: Vec::new(),
             terms: Vec::new(),
             index: HashTable::new(),
+            content_scheme: None,
+            content_ids: HashMap::default(),
         }
     }
 
@@ -318,6 +333,12 @@ pub struct RdfDatasetBuilder {
     /// blank nodes from different source datasets can never collide even when their
     /// labels are identical (standardize-apart, C0.2).
     next_merge_scope: u32,
+    /// The caller-supplied predicate IRI that marks a derivation edge between a
+    /// content-addressed term and the term(s) it was derived from. `None` (the
+    /// default) means no derivation predicate is configured — no fabricated
+    /// default, per the no-vocabulary-minting policy. Fixed at construction time
+    /// (see [`RdfDatasetBuilder::with_content_addressing`]) — there is no setter.
+    derivation_predicate: Option<String>,
 }
 
 /// A dataset builder whose structural validation has already passed.
@@ -390,7 +411,27 @@ impl RdfDatasetBuilder {
             locations: Vec::new(),
             // Merge scopes start at 1; scope 0 is BlankScope::DEFAULT (local pushes).
             next_merge_scope: 1,
+            derivation_predicate: None,
         }
+    }
+
+    /// A fresh builder configured for content addressing: `scheme` marks which
+    /// IRIs are content-id term references and `derivation_predicate`, if given,
+    /// is the predicate IRI used to record derivation edges.
+    ///
+    /// This is the **single** construction path for content addressing (§19
+    /// one-path): the config is fixed here, before any term is interned, and
+    /// deliberately has no setter — a builder's content-addressing config never
+    /// changes mid-build.
+    #[must_use]
+    pub fn with_content_addressing(
+        scheme: ContentIdScheme,
+        derivation_predicate: Option<String>,
+    ) -> Self {
+        let mut builder = Self::new();
+        builder.interner.content_scheme = Some(scheme);
+        builder.derivation_predicate = derivation_predicate;
+        builder
     }
 
     /// Intern an IRI term. Idempotent: the same IRI string yields the same id.
@@ -825,6 +866,31 @@ mod tests {
         let d = b.intern_iri("http://example.org/y");
         assert_eq!(a, c);
         assert_ne!(a, d);
+    }
+
+    /// No fabricated default: a plain `new`/`default` builder has content-id
+    /// recognition INACTIVE (recognition itself is wired in a later task).
+    #[test]
+    fn new_builder_has_no_content_scheme() {
+        let b = RdfDatasetBuilder::new();
+        assert!(b.interner.content_scheme.is_none());
+        assert!(b.derivation_predicate.is_none());
+    }
+
+    /// `with_content_addressing` is the single construction path: it fixes the
+    /// scheme (and, optionally, the derivation predicate) before any intern.
+    #[test]
+    fn with_content_addressing_sets_config() {
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let b = RdfDatasetBuilder::with_content_addressing(
+            scheme.clone(),
+            Some("http://example.org/derivedFrom".to_string()),
+        );
+        assert_eq!(b.interner.content_scheme, Some(scheme));
+        assert_eq!(
+            b.derivation_predicate.as_deref(),
+            Some("http://example.org/derivedFrom")
+        );
     }
 
     #[test]
