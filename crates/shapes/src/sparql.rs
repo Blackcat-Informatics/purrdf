@@ -133,6 +133,58 @@ pub fn eval_sparql_constraint(
     Ok(out)
 }
 
+/// Evaluate a single SPARQL scalar expression against `dataset`, with `args`
+/// pre-bound as query variables.
+///
+/// The expression is wrapped in `SELECT ((<sparql_expr>) AS ?result) WHERE {}`
+/// so it is evaluated exactly once (the empty `WHERE` yields a single solution
+/// row). Each `(var_name, term)` in `args` is pre-bound to the query variable
+/// `var_name` via the SAME substitution mechanism [`eval_sparql_constraint`]
+/// uses for `$this`, so the expression may reference `?var_name`.
+///
+/// Returns:
+/// - `Ok(Some(term))` when the single row bound `?result` (the expression
+///   produced a value);
+/// - `Ok(None)` when `?result` is unbound or no row was produced (a SPARQL
+///   error/undef result — the correct SHACL-AF "no value" signal);
+/// - `Err(String)` on an engine error, a non-SELECT result, or the impossible
+///   case of more than one solution row.
+///
+/// # Errors
+///
+/// Returns `Err(String)` if execution fails, the result is not a SELECT, or the
+/// query somehow yields more than one row.
+pub fn eval_scalar_expr(
+    dataset: &Arc<RdfDataset>,
+    sparql_expr: &str,
+    args: &[(String, Term)],
+) -> Result<Option<Term>, String> {
+    let select = format!("SELECT (({sparql_expr}) AS ?result) WHERE {{}}");
+    let subs: Vec<(String, TermValue)> = args
+        .iter()
+        .map(|(name, term)| (name.clone(), term.to_term_value()))
+        .collect();
+    let (variables, rows) =
+        run_select(dataset, &select, &subs).map_err(|e| format!("scalar expression {e}"))?;
+
+    if rows.len() > 1 {
+        return Err(format!(
+            "scalar expression produced {} solution rows (expected exactly one)",
+            rows.len()
+        ));
+    }
+    let Some(row) = rows.first() else {
+        // No row at all is a degenerate/undef result → no value.
+        return Ok(None);
+    };
+    let result_index = column_index(&variables, "result");
+    let value = result_index
+        .and_then(|i| row.get(i))
+        .and_then(Option::as_ref)
+        .map(term_value_to_native);
+    Ok(value)
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// A materialized SELECT result: the projected variable names and the rows of
@@ -297,5 +349,51 @@ mod tests {
         )
         .expect("eval must succeed for non-matching focus");
         assert_eq!(results_other.len(), 0);
+    }
+
+    // ── eval_scalar_expr ──────────────────────────────────────────────────────
+
+    #[test]
+    fn eval_scalar_expr_strlen() {
+        let dataset = dataset_from_ntriples(&[]);
+        let result = eval_scalar_expr(&dataset, "STRLEN(\"abc\")", &[])
+            .expect("scalar eval must succeed")
+            .expect("bound result");
+        assert_eq!(
+            result,
+            Term::Literal(crate::term::Literal::new_typed_literal(
+                "3",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+            ))
+        );
+    }
+
+    #[test]
+    fn eval_scalar_expr_with_arg_substitution() {
+        let dataset = dataset_from_ntriples(&[]);
+        let arg = Term::Literal(crate::term::Literal::new_typed_literal(
+            "abcd",
+            NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
+        ));
+        let result = eval_scalar_expr(&dataset, "STRLEN(?a0)", &[("a0".to_owned(), arg)])
+            .expect("scalar eval must succeed")
+            .expect("bound result");
+        assert_eq!(
+            result,
+            Term::Literal(crate::term::Literal::new_typed_literal(
+                "4",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+            ))
+        );
+    }
+
+    #[test]
+    fn eval_scalar_expr_type_error_is_none() {
+        let dataset = dataset_from_ntriples(&[]);
+        // STRLEN of an integer is a type error → the projection expression is
+        // an error → ?result is unbound → Ok(None).
+        let result = eval_scalar_expr(&dataset, "STRLEN(1 + 2)", &[])
+            .expect("scalar eval must succeed despite the SPARQL type error");
+        assert_eq!(result, None);
     }
 }

@@ -7,12 +7,14 @@
 //! [`Vec<Term>`]). This module defines the intermediate representation
 //! ([`NodeExpr`]) and a deterministic evaluator ([`eval_node_expr`]).
 //!
-//! Only the wiring-free expression kinds are implemented here: [`NodeExpr::Constant`],
+//! The wiring-free expression kinds are implemented directly: [`NodeExpr::Constant`],
 //! [`NodeExpr::This`], [`NodeExpr::Path`], [`NodeExpr::Union`],
-//! [`NodeExpr::Intersection`], and [`NodeExpr::If`]. The remaining kinds
-//! (filters, aggregates, `EXISTS`, and function calls) need the constraint
-//! engine / SPARQL evaluator wired in and return a hard error until later tasks
-//! land them.
+//! [`NodeExpr::Intersection`], and [`NodeExpr::If`]. Builtin function calls
+//! ([`FnCall::Builtin`]) and the `sh:if` effective-boolean-value route through
+//! the SPARQL seam ([`crate::sparql::eval_scalar_expr`]); user-defined
+//! functions ([`FnCall::UserDefined`]) are a hard capability error. The
+//! remaining kinds (filters, aggregates, `EXISTS`) need the constraint engine
+//! wired in and return a hard error until later tasks land them.
 //!
 //! # Determinism
 //!
@@ -244,13 +246,74 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
         NodeExpr::If { cond, then, els } => {
             // Propagate a condition error rather than swallowing it.
             let cond_nodes = eval_node_expr(store, focus, cond, guard)?;
-            // NOTE: full effective-boolean-value routing through sparql-eval is
-            // wired in the function-call task; for now a condition is true iff it
-            // yields the single canonical `"true"^^xsd:boolean` term (an empty or
-            // non-true result selects `els`).
-            let branch = if is_true(&cond_nodes) { then } else { els };
+            // Per SHACL-AF the condition is a single value routed through SPARQL
+            // effective-boolean-value. `IF(?c, true, false)` applies EBV to its
+            // first argument, so a bound `?result` of `true`^^xsd:boolean means
+            // EBV-true, `false` means EBV-false. An unbound result (`Ok(None)`)
+            // is a genuine SPARQL type error (EBV of a non-EBV-able value).
+            //
+            // NOTE: a legitimately empty condition result (0 terms) selects
+            // `els` — an absent value is not an error. A type error on a present
+            // value, however, is a malformed condition and we propagate it as a
+            // hard `Err` (the no-swallowed-errors rule) rather than silently
+            // selecting a branch.
+            let branch = match cond_nodes.as_slice() {
+                [] => els,
+                [t] => {
+                    let ebv = crate::sparql::eval_scalar_expr(
+                        &store.sparql_dataset(),
+                        "IF(?c, true, false)",
+                        &[("c".to_owned(), t.clone())],
+                    )?;
+                    match ebv {
+                        Some(term) if term == bool_literal(true) => then,
+                        Some(term) if term == bool_literal(false) => els,
+                        _ => {
+                            return Err(format!(
+                                "sh:if condition value {t} has no effective boolean value"
+                            ));
+                        }
+                    }
+                }
+                more => {
+                    return Err(format!(
+                        "sh:if condition must yield at most one value, got {}",
+                        more.len()
+                    ));
+                }
+            };
             eval_node_expr(store, focus, branch, guard)
         }
+        NodeExpr::Call(FnCall::Builtin { iri, args }) => {
+            // Each argument must collapse to exactly one scalar term (SHACL-AF
+            // function-call arg semantics).
+            let mut arg_terms: Vec<(String, Term)> = Vec::with_capacity(args.len());
+            for (idx, arg) in args.iter().enumerate() {
+                let values = eval_node_expr(store, focus, arg, guard)?;
+                let [only] = values.as_slice() else {
+                    return Err(format!(
+                        "builtin function <{}> argument {idx} must yield exactly one value, got {}",
+                        iri.as_str(),
+                        values.len()
+                    ));
+                };
+                arg_terms.push((format!("a{idx}"), only.clone()));
+            }
+            // Render `<iri>(?a0, ?a1, ...)` and route through the SPARQL seam.
+            let placeholders: Vec<String> = (0..arg_terms.len()).map(|i| format!("?a{i}")).collect();
+            let expr_string = format!("<{}>({})", iri.as_str(), placeholders.join(", "));
+            match crate::sparql::eval_scalar_expr(&store.sparql_dataset(), &expr_string, &arg_terms)?
+            {
+                // A SPARQL error/unbound result is the correct SHACL-AF "no
+                // value" signal — an empty node set, not a forced violation.
+                Some(term) => Ok(vec![term]),
+                None => Ok(Vec::new()),
+            }
+        }
+        NodeExpr::Call(FnCall::UserDefined { iri, .. }) => Err(format!(
+            "SHACL-AF user-defined function <{iri}> requires the dynamic SPARQL function registry capability, which is not yet available",
+            iri = iri.as_str()
+        )),
         NodeExpr::Filter { .. }
         | NodeExpr::Count { .. }
         | NodeExpr::Distinct(_)
@@ -260,8 +323,7 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
         | NodeExpr::Limit { .. }
         | NodeExpr::Offset { .. }
         | NodeExpr::OrderBy { .. }
-        | NodeExpr::Exists(_)
-        | NodeExpr::Call(_) => Err(format!(
+        | NodeExpr::Exists(_) => Err(format!(
             "node expression kind not yet implemented: {expr:?}"
         )),
     }
@@ -466,6 +528,118 @@ mod tests {
             is_true(&[bool_literal(true)]),
             "single canonical true ⇒ true"
         );
+    }
+
+    #[test]
+    fn builtin_call_evaluates_through_sparql_seam() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::new();
+        // The `xsd:boolean` constructor is a call-position builtin the SPARQL
+        // engine resolves (an XSD cast): xsd:boolean("true") → true.
+        let expr = NodeExpr::Call(FnCall::Builtin {
+            iri: NamedNode::new_unchecked(xsd::BOOLEAN),
+            args: vec![NodeExpr::Constant(Term::Literal(
+                Literal::new_simple_literal("true"),
+            ))],
+        });
+        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("builtin evals");
+        assert_eq!(result, vec![bool_literal(true)]);
+    }
+
+    #[test]
+    fn builtin_call_unsupported_fn_is_hard_error() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::new();
+        // An IRI the SPARQL engine does not resolve as a builtin cast is a hard
+        // seam error (an unsupported custom function), not a swallowed empty set.
+        let expr = NodeExpr::Call(FnCall::Builtin {
+            iri: NamedNode::new_unchecked("http://example.org/ns#nope"),
+            args: vec![NodeExpr::Constant(Term::Literal(
+                Literal::new_simple_literal("x"),
+            ))],
+        });
+        let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
+        assert!(err.contains("custom SPARQL function"), "got: {err}");
+    }
+
+    #[test]
+    fn builtin_call_arg_arity_error() {
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::new();
+        // ex:a ex:p reaches {b, c} — two terms — so the single-arg builtin must
+        // reject the >1-term argument.
+        let expr = NodeExpr::Call(FnCall::Builtin {
+            iri: NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
+            args: vec![NodeExpr::Path(pred("p"))],
+        });
+        let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
+        assert!(
+            err.contains("argument 0 must yield exactly one value, got 2"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn user_defined_call_is_capability_error() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::new();
+        let expr = NodeExpr::Call(FnCall::UserDefined {
+            iri: NamedNode::new_unchecked("http://example.org/ns#myFn"),
+            args: vec![],
+        });
+        let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
+        assert!(
+            err.contains(
+                "requires the dynamic SPARQL function registry capability, which is not yet available"
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn if_numeric_condition_ebv_true_selects_then() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::new();
+        // A non-zero xsd:integer has EBV true.
+        let expr = NodeExpr::If {
+            cond: Box::new(NodeExpr::Constant(Term::Literal(
+                Literal::new_typed_literal("5", NamedNode::new_unchecked(xsd::INTEGER)),
+            ))),
+            then: Box::new(NodeExpr::Constant(ex("yes"))),
+            els: Box::new(NodeExpr::Constant(ex("no"))),
+        };
+        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("if evals");
+        assert_eq!(result, vec![ex("yes")]);
+    }
+
+    #[test]
+    fn if_numeric_condition_ebv_false_selects_els() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::new();
+        // Zero has EBV false.
+        let expr = NodeExpr::If {
+            cond: Box::new(NodeExpr::Constant(Term::Literal(
+                Literal::new_typed_literal("0", NamedNode::new_unchecked(xsd::INTEGER)),
+            ))),
+            then: Box::new(NodeExpr::Constant(ex("yes"))),
+            els: Box::new(NodeExpr::Constant(ex("no"))),
+        };
+        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("if evals");
+        assert_eq!(result, vec![ex("no")]);
+    }
+
+    #[test]
+    fn if_non_ebv_condition_is_hard_error() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::new();
+        // An IRI has no effective boolean value → a genuine type error → Err.
+        let expr = NodeExpr::If {
+            cond: Box::new(NodeExpr::Constant(ex("iri"))),
+            then: Box::new(NodeExpr::Constant(ex("yes"))),
+            els: Box::new(NodeExpr::Constant(ex("no"))),
+        };
+        let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
+        assert!(err.contains("no effective boolean value"), "got: {err}");
     }
 
     #[test]

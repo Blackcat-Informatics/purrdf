@@ -38,6 +38,7 @@ Each directory contains `data.nt` (N-Triples data graph), `shapes.ttl` (Turtle s
 | 51-expr-if | `sh:expression [ sh:if [ sh:path ex:flag ] ; sh:then true ; sh:else false ]` on `sh:targetClass ex:C`; `ex:ok` has `ex:flag true` (→ then → true), `ex:bad` has `ex:flag false` (→ else → false) | false | 1 — focus `ex:bad`, value `ex:bad`, ExpressionConstraintComponent |
 | 52-expr-path | `sh:expression [ sh:path ex:p ]` on `sh:targetClass ex:C`; `ex:s` has a single `ex:p true` (→ conforms), `ex:t` has `ex:p false` (→ result is not the single `true`) | false | 1 — focus `ex:t`, value `ex:t`, ExpressionConstraintComponent |
 | 53-expr-union | `sh:expression [ sh:union ( [ sh:path ex:p ] true ) ]` on `sh:targetClass ex:C`; the union of `ex:p`'s single `true` and the constant `true` dedups to exactly one `true` | **true** | 0 — the deduplicated union yields the single canonical `true` |
+| 54-expr-builtin-fn | `sh:expression [ xsd:boolean ( [ sh:path ex:flag ] ) ]` on `sh:targetClass ex:C`; the builtin `xsd:boolean` cast (a call-position function routed through the SPARQL seam) turns `ex:flag`'s value into a boolean — `ex:ok` has `ex:flag "true"` (→ `true` → conforms), `ex:bad` has `ex:flag "false"` (→ `false` → result is not the single `true`) | false | 1 — focus `ex:bad`, value `ex:bad`, ExpressionConstraintComponent |
 
 ## Notes
 
