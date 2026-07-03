@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check test bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
+.PHONY: help metadata fmt check check-issue-refs test bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
 	capi-build capi-header capi-check capi-install
 
 help: ## Show this help.
@@ -24,9 +24,13 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	python3 scripts/check-no-features.py
 	python3 scripts/check-licenses.py
 	bash scripts/check-generated.sh
+	python3 scripts/check-issue-refs.py
 	cargo test --workspace --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm
+
+check-issue-refs: ## Reject #NNN issue-reference tokens in comments and docs.
+	python3 scripts/check-issue-refs.py
 
 test: ## Run the workspace test suite.
 	cargo test --workspace --locked
