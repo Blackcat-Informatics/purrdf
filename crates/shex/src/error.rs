@@ -41,8 +41,16 @@ pub enum ShexError {
     /// object model.
     Shexj(String),
     /// An `IMPORT`ed schema could not be resolved by the caller-supplied
-    /// import resolver (no ambient I/O — resolution is injected).
-    Import(String),
+    /// import resolver (no ambient I/O — resolution is injected). Carries the
+    /// import IRI and the concrete cause the resolver reported, so a read or
+    /// parse failure behind an import surfaces its real reason rather than a
+    /// vague "unresolved import".
+    Import {
+        /// The import IRI that failed to resolve.
+        iri: String,
+        /// The concrete failure the resolver surfaced for `iri`.
+        cause: Box<Self>,
+    },
     /// Two schemas in the same import closure declare the same shape label
     /// with conflicting definitions.
     ImportConflict(String),
@@ -70,9 +78,13 @@ impl ShexError {
         Self::Shexj(reason.into())
     }
 
-    /// Construct a [`ShexError::Import`] for an unresolvable import IRI.
-    pub fn import(iri: impl Into<String>) -> Self {
-        Self::Import(iri.into())
+    /// Construct a [`ShexError::Import`] for an unresolvable import IRI,
+    /// preserving the concrete `cause` the resolver reported.
+    pub fn import(iri: impl Into<String>, cause: Self) -> Self {
+        Self::Import {
+            iri: iri.into(),
+            cause: Box::new(cause),
+        }
     }
 
     /// Construct a [`ShexError::ImportConflict`] for a conflicting shape label.
@@ -92,7 +104,7 @@ impl fmt::Display for ShexError {
                 write!(f, "invalid IRI {lexical:?}: {reason}")
             }
             Self::Shexj(reason) => write!(f, "ShExJ error: {reason}"),
-            Self::Import(iri) => write!(f, "unresolved IMPORT <{iri}>"),
+            Self::Import { iri, cause } => write!(f, "unresolved IMPORT <{iri}>: {cause}"),
             Self::ImportConflict(label) => {
                 write!(f, "conflicting redefinition of shape {label}")
             }
