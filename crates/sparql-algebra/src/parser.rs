@@ -27,6 +27,7 @@ use crate::error::{ParseError, Result};
 use crate::lexer::{tokenize, Spanned, Token};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
 const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
 const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
@@ -1109,6 +1110,8 @@ impl Parser<'_> {
                 )
             } else if self.at(&Token::LParen) {
                 (self.parse_collection(&mut triples, &mut paths)?, false)
+            } else if self.at(&Token::TripleOpen) {
+                (self.parse_triple_node(&mut triples, &mut paths)?, false)
             } else {
                 (self.parse_term_pattern()?, false)
             };
@@ -1222,9 +1225,123 @@ impl Parser<'_> {
             self.parse_blank_node_property_list(triples, paths)
         } else if self.at(&Token::LParen) {
             self.parse_collection(triples, paths)
+        } else if self.at(&Token::TripleOpen) {
+            self.parse_triple_node(triples, paths)
         } else {
             self.parse_term_pattern()
         }
+    }
+
+    /// Parse an RDF 1.2 triple node in a term position:
+    ///
+    /// * `<<( s p o )>>` — a **triple term** (a value), yielded directly; or
+    /// * `<< s p o [~ reifier] >>` — a **reifying triple**, desugared to a
+    ///   reifier `R` with `R rdf:reifies <<( s p o )>>` (R fresh unless given),
+    ///   and `R` is the term.
+    ///
+    /// The inner `s`/`o` may themselves be triple nodes (nesting is supported).
+    fn parse_triple_node(
+        &mut self,
+        triples: &mut Vec<TriplePattern>,
+        paths: &mut Vec<GraphPattern>,
+    ) -> Result<TermPattern> {
+        self.expect(&Token::TripleOpen)?;
+        let is_triple_term = self.eat(&Token::LParen);
+        let inner = self.parse_inner_triple(triples, paths)?;
+        if is_triple_term {
+            self.expect(&Token::RParen)?;
+            self.expect(&Token::TripleClose)?;
+            return Ok(TermPattern::Triple(Box::new(inner)));
+        }
+        // Reifying triple: optional `~ reifier`, else a fresh blank reifier.
+        let reifier = if self.eat(&Token::Tilde) {
+            self.parse_reifier_id()?
+        } else {
+            TermPattern::BlankNode(self.fresh_anon())
+        };
+        self.expect(&Token::TripleClose)?;
+        self.emit_reifies(&reifier, &inner, triples);
+        Ok(reifier)
+    }
+
+    /// Parse the `s p o` inside a `<< … >>` / `<<( … )>>`.
+    fn parse_inner_triple(
+        &mut self,
+        triples: &mut Vec<TriplePattern>,
+        paths: &mut Vec<GraphPattern>,
+    ) -> Result<TriplePattern> {
+        let subject = self.parse_graph_node(triples, paths)?;
+        let predicate = self.parse_predicate_name()?;
+        let object = self.parse_graph_node(triples, paths)?;
+        Ok(TriplePattern {
+            subject,
+            predicate,
+            object,
+        })
+    }
+
+    /// Emit `reifier rdf:reifies <<( t )>>` for a reification.
+    fn emit_reifies(
+        &self,
+        reifier: &TermPattern,
+        t: &TriplePattern,
+        triples: &mut Vec<TriplePattern>,
+    ) {
+        triples.push(TriplePattern {
+            subject: reifier.clone(),
+            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_REIFIES)),
+            object: TermPattern::Triple(Box::new(t.clone())),
+        });
+    }
+
+    /// A reifier id after `~`: a variable, IRI, or blank node — or, when none is
+    /// present, a fresh blank node.
+    fn parse_reifier_id(&mut self) -> Result<TermPattern> {
+        match self.peek() {
+            Some(Token::Variable(_)) => Ok(TermPattern::Variable(self.expect_var()?)),
+            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
+                Ok(TermPattern::NamedNode(self.expect_iri_node()?))
+            }
+            Some(Token::LBracket) => {
+                self.expect(&Token::LBracket)?;
+                self.expect(&Token::RBracket)?;
+                Ok(TermPattern::BlankNode(self.fresh_anon()))
+            }
+            _ => Ok(TermPattern::BlankNode(self.fresh_anon())),
+        }
+    }
+
+    /// Parse RDF 1.2 annotation syntax trailing an asserted triple `(s, pred, o)`:
+    /// zero or more reifiers `~ [id]` and annotation blocks `{| predObjList |}`.
+    /// Each emits a fresh (or given) reifier `R` with `R rdf:reifies <<( s p o )>>`;
+    /// an annotation block additionally applies its predicate-object list to `R`.
+    fn parse_triple_annotations(
+        &mut self,
+        subject: &TermPattern,
+        pred: &NamedNodePattern,
+        object: &TermPattern,
+        triples: &mut Vec<TriplePattern>,
+        paths: &mut Vec<GraphPattern>,
+    ) -> Result<()> {
+        let base = TriplePattern {
+            subject: subject.clone(),
+            predicate: pred.clone(),
+            object: object.clone(),
+        };
+        loop {
+            if self.eat(&Token::Tilde) {
+                let reifier = self.parse_reifier_id()?;
+                self.emit_reifies(&reifier, &base, triples);
+            } else if self.eat(&Token::AnnotationOpen) {
+                let reifier = TermPattern::BlankNode(self.fresh_anon());
+                self.emit_reifies(&reifier, &base, triples);
+                self.parse_predicate_object_list(&reifier, triples, paths)?;
+                self.expect(&Token::AnnotationClose)?;
+            } else {
+                break;
+            }
+        }
+        Ok(())
     }
 
     /// True when the next token starts a non-triples element of a group.
@@ -1263,11 +1380,16 @@ impl Parser<'_> {
                 // RDF collection `( … )` (both emit their own triples here).
                 let object = self.parse_graph_node(triples, paths)?;
                 match &verb {
-                    Verb::Simple(pred) => triples.push(TriplePattern {
-                        subject: subject.clone(),
-                        predicate: pred.clone(),
-                        object,
-                    }),
+                    Verb::Simple(pred) => {
+                        triples.push(TriplePattern {
+                            subject: subject.clone(),
+                            predicate: pred.clone(),
+                            object: object.clone(),
+                        });
+                        // RDF 1.2 annotation syntax (`~ reifier`, `{| … |}`) may
+                        // trail the object, reifying the triple just asserted.
+                        self.parse_triple_annotations(subject, pred, &object, triples, paths)?;
+                    }
                     Verb::Path(path) => paths.push(GraphPattern::Path {
                         subject: subject.clone(),
                         path: path.clone(),

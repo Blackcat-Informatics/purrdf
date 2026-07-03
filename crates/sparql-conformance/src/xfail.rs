@@ -453,22 +453,6 @@ pub const XFAIL: &[Xfail] = &[
     // does not yet accept, `unsupported-construct` for triple-term eval semantics
     // — real work to land, not provisional-spec placeholders.
     Xfail {
-        iri_suffix: "eval-triple-terms/manifest#basic-2",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#basic-3",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#basic-4",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#basic-5",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
         iri_suffix: "eval-triple-terms/manifest#basic-7",
         reason: XfailReason::ParseUnsupported,
     },
@@ -525,36 +509,8 @@ pub const XFAIL: &[Xfail] = &[
         reason: XfailReason::UnsupportedConstruct,
     },
     Xfail {
-        iri_suffix: "eval-triple-terms/manifest#pattern-1",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#pattern-10",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#pattern-2",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#pattern-5",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#pattern-6",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#pattern-7",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    Xfail {
         iri_suffix: "eval-triple-terms/manifest#pattern-8",
         reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#pattern-9",
-        reason: XfailReason::UnsupportedConstruct,
     },
     Xfail {
         iri_suffix: "eval-triple-terms/manifest#results-reifiedtriples-1j",
@@ -629,47 +585,7 @@ pub const XFAIL: &[Xfail] = &[
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-anonreifier-01",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-anonreifier-02",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-anonreifier-03",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-anonreifier-04",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-anonreifier-05",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-anonreifier-06",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-anonreifier-07",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-anonreifier-08",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
         iri_suffix: "syntax-triple-terms-positive/manifest#annotation-anonreifier-09",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-anonreifier-multiple-01",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-anonreifier-multiple-02",
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
@@ -681,59 +597,11 @@ pub const XFAIL: &[Xfail] = &[
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-01",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-02",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
         iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-03",
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-04",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-05",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-06",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-07",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-08",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
         iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-09",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-multiple-01",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-multiple-02",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-multiple-03",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-multiple-04",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#annotation-reifier-multiple-05",
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
@@ -785,19 +653,7 @@ pub const XFAIL: &[Xfail] = &[
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#basic-reifier-01",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#basic-reifier-02",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
         iri_suffix: "syntax-triple-terms-positive/manifest#basic-reifier-03",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#basic-reifier-04",
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
@@ -837,15 +693,7 @@ pub const XFAIL: &[Xfail] = &[
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#bnode-reifier-01",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
         iri_suffix: "syntax-triple-terms-positive/manifest#bnode-reifier-02",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#bnode-reifier-03",
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
@@ -865,10 +713,6 @@ pub const XFAIL: &[Xfail] = &[
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#inside-reifier-01",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
         iri_suffix: "syntax-triple-terms-positive/manifest#inside-reifier-02",
         reason: XfailReason::ParseUnsupported,
     },
@@ -885,31 +729,7 @@ pub const XFAIL: &[Xfail] = &[
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#update-anonreifier-02",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#update-anonreifier-03",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#update-anonreifier-04",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#update-anonreifier-05",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#update-anonreifier-06",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
         iri_suffix: "syntax-triple-terms-positive/manifest#update-reifier-01",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#update-reifier-02",
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
@@ -921,31 +741,11 @@ pub const XFAIL: &[Xfail] = &[
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#update-reifier-05",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#update-reifier-06",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
         iri_suffix: "syntax-triple-terms-positive/manifest#update-reifier-07",
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {
         iri_suffix: "syntax-triple-terms-positive/manifest#update-reifier-08",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#update-tripleterm-03",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#update-tripleterm-04",
-        reason: XfailReason::ParseUnsupported,
-    },
-    Xfail {
-        iri_suffix: "syntax-triple-terms-positive/manifest#update-tripleterm-05",
         reason: XfailReason::ParseUnsupported,
     },
     Xfail {

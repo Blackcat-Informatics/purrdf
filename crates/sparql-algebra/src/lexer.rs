@@ -70,6 +70,10 @@ pub enum Token {
     Slash,
     /// `|`
     Pipe,
+    /// `{|` — RDF 1.2 annotation-block open.
+    AnnotationOpen,
+    /// `|}` — RDF 1.2 annotation-block close.
+    AnnotationClose,
     /// `^`
     Caret,
     /// `*`
@@ -241,6 +245,10 @@ impl<'a> Lexer<'a> {
             '_' if self.peek(1) == Some(':') => self.lex_blank_label(start),
             ':' => self.lex_prefixed_name(start),
             '@' => self.lex_lang_tag(start),
+            '{' if self.peek(1) == Some('|') => {
+                self.pos += 2;
+                Ok(Token::AnnotationOpen)
+            }
             '{' => self.single(Token::LBrace),
             '}' => self.single(Token::RBrace),
             '(' => self.single(Token::LParen),
@@ -251,6 +259,10 @@ impl<'a> Lexer<'a> {
             ';' => self.single(Token::Semicolon),
             ',' => self.single(Token::Comma),
             '/' => self.single(Token::Slash),
+            '|' if self.peek(1) == Some('}') => {
+                self.pos += 2;
+                Ok(Token::AnnotationClose)
+            }
             '|' => Ok(self.two_or_one('|', Token::Or, '\0', Token::Or, Token::Pipe)),
             '^' => Ok(self.two_or_one('^', Token::HatHat, '\0', Token::HatHat, Token::Caret)),
             '*' => self.single(Token::Star),
