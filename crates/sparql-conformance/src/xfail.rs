@@ -154,23 +154,10 @@ pub const XFAIL: &[Xfail] = &[
     // === Full W3C sparql11 UPDATE-eval groups (commit 426c7df) ===============
     //
     // The update groups (add/basic-update/clear/copy/delete*/drop/move/
-    // update-silent) run through the UpdateEval harness path; the vast majority
-    // pass. The one residual gap is a per-operation blank-node scoping
-    // difference (compared by RDFC-1.0 canonical N-Quads, so it is a genuine
-    // structural divergence, not blank-node relabelling).
+    // update-silent) run through the UpdateEval harness path and all pass
+    // natively (including per-operation blank-node scoping, compared by
+    // RDFC-1.0 canonical N-Quads).
 
-    // Blank-node scoping across separate INSERT operations in one request: a
-    // `_:b` label in one operation must denote a fresh bnode distinct from the
-    // same label in another operation; the engine reuses it, so the post-state
-    // triple count diverges.
-    Xfail {
-        iri_suffix: "basic-update/manifest#insert-where-same-bnode",
-        reason: XfailReason::UpdateSemantics,
-    },
-    Xfail {
-        iri_suffix: "basic-update/manifest#insert-where-same-bnode2",
-        reason: XfailReason::UpdateSemantics,
-    },
     // === W3C sparql11 entailment-regime group (commit 426c7df) ================
     //
     // The native reasoner (purrdf-entail) materializes RDF/RDFS + OWL-RL-shaped
