@@ -65,6 +65,32 @@ fn w3c_sparql11_inventory() {
     }
 }
 
+/// Inventory tripwire for the quarantined SPARQL 1.2 (RDF-1.2 DRAFT) tree.
+#[test]
+fn w3c_sparql12_inventory() {
+    const EXPECTED_GROUPS: &[&str] = &[
+        "grouping",
+        "codepoint-escapes",
+        "syntax-triple-terms-negative",
+        "syntax-triple-terms-positive",
+        "eval-triple-terms",
+        "expression",
+        "version",
+        "lang-basedir",
+        "rdf11",
+        "syntax",
+    ];
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("suite/w3c-sparql12");
+    for group in EXPECTED_GROUPS {
+        let manifest = root.join(group).join("manifest.ttl");
+        assert!(
+            manifest.is_file(),
+            "vendored W3C sparql12 group '{group}' lost its manifest: {}",
+            manifest.display()
+        );
+    }
+}
+
 datatest_stable::harness! {
     { test = run_manifest_case, root = "suite", pattern = r".*/manifest\.ttl$" },
 }

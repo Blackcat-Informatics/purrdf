@@ -1,0 +1,17 @@
+W3C Test Suite License
+======================
+
+The vendored W3C SPARQL 1.1 test files in this tree (query `.rq` and data `.ttl`
+files, marked with `SPDX-License-Identifier: LicenseRef-W3C-Test-Suite`) are part
+of the W3C test suite and are published by the W3C under the
+
+    W3C Software and Document License (W3C Test Suite License)
+
+The canonical, authoritative license text is published at:
+
+    https://www.w3.org/Consortium/Legal/2015/copyright-software-and-document
+
+The files are vendored verbatim and are NOT relicensed. See PROVENANCE.md in the
+parent directory for the exact upstream source (w3c/rdf-tests, sparql/sparql11/)
+and fetch date. The PURRDF-authored selector manifests and expected-result
+reconstructions in this tree are licensed MIT OR Apache-2.0 (see their SPDX headers).

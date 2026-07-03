@@ -60,6 +60,19 @@ pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
     }
 }
 
+/// The native media type for a data file, by extension. Most fixtures are Turtle,
+/// but the RDF-1.2 eval-triple-term tests carry `.trig` quad data (GRAPH blocks),
+/// which the Turtle codec rejects.
+fn data_media_type(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("trig") => "application/trig",
+        Some("nq") => "application/n-quads",
+        Some("nt") => "application/n-triples",
+        Some("rdf") => "application/rdf+xml",
+        _ => "text/turtle",
+    }
+}
+
 /// Build a dataset from default-graph Turtle files (`data`) and named-graph files
 /// (`graph_data`, each `(graph IRI, file)`). Shared by the query pre-state loader
 /// and the UPDATE pre-/post-state builders.
@@ -75,7 +88,7 @@ pub fn build_dataset(
     let mut combined_nq: Vec<u8> = Vec::new();
     for data in data {
         let chunk = std::fs::read(data).map_err(|e| format!("read {}: {e}", data.display()))?;
-        let ds = purrdf::parse_dataset(&chunk, "text/turtle", Some(BASE))
+        let ds = purrdf::parse_dataset(&chunk, data_media_type(data), Some(BASE))
             .map_err(|e| format!("parse data {}: {e}", data.display()))?;
         let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
             .map_err(|e| format!("serialize {}: {e}", data.display()))?;
@@ -89,7 +102,7 @@ pub fn build_dataset(
     // with the named-graph IRI so it is placed in that named graph.
     for (graph_iri, path) in graph_data {
         let chunk = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        let ds = purrdf::parse_dataset(&chunk, "text/turtle", Some(BASE))
+        let ds = purrdf::parse_dataset(&chunk, data_media_type(path), Some(BASE))
             .map_err(|e| format!("parse graph data {}: {e}", path.display()))?;
         let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
             .map_err(|e| format!("serialize graph data {}: {e}", path.display()))?;
@@ -137,6 +150,12 @@ pub fn run(
         TestKind::PositiveSyntax | TestKind::NegativeSyntax => {
             let parsed_ok = purrdf_sparql_algebra::SparqlParser::new()
                 .parse_query(&query_text)
+                .is_ok();
+            Ok(RunOutcome::Syntax { parsed_ok })
+        }
+        TestKind::PositiveUpdateSyntax | TestKind::NegativeUpdateSyntax => {
+            let parsed_ok = purrdf_sparql_algebra::SparqlParser::new()
+                .parse_update(&query_text)
                 .is_ok();
             Ok(RunOutcome::Syntax { parsed_ok })
         }

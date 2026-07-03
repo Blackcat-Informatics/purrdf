@@ -53,6 +53,10 @@ pub enum TestKind {
     PositiveSyntax,
     /// `mf:NegativeSyntaxTest(11)`: the query must fail to parse.
     NegativeSyntax,
+    /// `mf:PositiveUpdateSyntaxTest`: the UPDATE request must parse.
+    PositiveUpdateSyntax,
+    /// `mf:NegativeUpdateSyntaxTest`: the UPDATE request must fail to parse.
+    NegativeUpdateSyntax,
     /// A manifest entry whose `rdf:type` the harness does not model — recorded and
     /// surfaced (never silently skipped).
     Unknown,
@@ -418,6 +422,8 @@ fn classify(type_term: Option<&TermValue>) -> TestKind {
         "UpdateEvaluationTest" => TestKind::UpdateEval,
         "PositiveSyntaxTest" | "PositiveSyntaxTest11" => TestKind::PositiveSyntax,
         "NegativeSyntaxTest" | "NegativeSyntaxTest11" => TestKind::NegativeSyntax,
+        "PositiveUpdateSyntaxTest" | "PositiveUpdateSyntaxTest11" => TestKind::PositiveUpdateSyntax,
+        "NegativeUpdateSyntaxTest" | "NegativeUpdateSyntaxTest11" => TestKind::NegativeUpdateSyntax,
         _ => TestKind::Unknown,
     }
 }

@@ -31,10 +31,12 @@ use crate::run::RunOutcome;
 pub fn compare(case: &SparqlTestCase, outcome: &RunOutcome) -> Result<(), String> {
     match outcome {
         RunOutcome::Syntax { parsed_ok } => match case.kind {
-            TestKind::PositiveSyntax if *parsed_ok => Ok(()),
-            TestKind::PositiveSyntax => Err("positive-syntax test failed to parse".to_owned()),
-            TestKind::NegativeSyntax if !*parsed_ok => Ok(()),
-            TestKind::NegativeSyntax => {
+            TestKind::PositiveSyntax | TestKind::PositiveUpdateSyntax if *parsed_ok => Ok(()),
+            TestKind::PositiveSyntax | TestKind::PositiveUpdateSyntax => {
+                Err("positive-syntax test failed to parse".to_owned())
+            }
+            TestKind::NegativeSyntax | TestKind::NegativeUpdateSyntax if !*parsed_ok => Ok(()),
+            TestKind::NegativeSyntax | TestKind::NegativeUpdateSyntax => {
                 Err("negative-syntax test parsed but should have failed".to_owned())
             }
             other => Err(format!("syntax outcome for non-syntax kind {other:?}")),
