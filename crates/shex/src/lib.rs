@@ -46,6 +46,7 @@
 
 pub mod ast;
 pub mod error;
+pub mod imports;
 pub mod lexer;
 pub mod parser;
 pub mod shexc;
@@ -59,6 +60,7 @@ pub use ast::{
     ShapeLabel, StemValue, TripleConstraint, TripleExpr, TripleExprGroup, ValueSetValue,
 };
 pub use error::{Result, ShexError};
+pub use imports::{resolve_imports, ImportResolver};
 pub use parser::parse_shexc;
 pub use shexc::to_shexc;
 pub use shexj::{parse_shexj, to_shexj};

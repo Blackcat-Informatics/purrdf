@@ -40,6 +40,9 @@ pub enum ShexError {
     /// The ShExJ document is not valid JSON or does not match the ShExJ
     /// object model.
     Shexj(String),
+    /// An `IMPORT`ed schema could not be resolved by the caller-supplied
+    /// import resolver (no ambient I/O — resolution is injected).
+    Import(String),
 }
 
 impl ShexError {
@@ -63,6 +66,11 @@ impl ShexError {
     pub fn shexj(reason: impl Into<String>) -> Self {
         Self::Shexj(reason.into())
     }
+
+    /// Construct a [`ShexError::Import`] for an unresolvable import IRI.
+    pub fn import(iri: impl Into<String>) -> Self {
+        Self::Import(iri.into())
+    }
 }
 
 impl fmt::Display for ShexError {
@@ -76,6 +84,7 @@ impl fmt::Display for ShexError {
                 write!(f, "invalid IRI {lexical:?}: {reason}")
             }
             Self::Shexj(reason) => write!(f, "ShExJ error: {reason}"),
+            Self::Import(iri) => write!(f, "unresolved IMPORT <{iri}>"),
         }
     }
 }

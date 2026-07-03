@@ -11,9 +11,9 @@
 //! [`purrdf_shex::validate`], and compares the verdict.
 //!
 //! * **SKIP** (a counted category): entries whose traits demand machinery
-//!   this engine deliberately does not ship — `Import`, `SemanticAction`,
-//!   `Extends`, `ExtendsDiamond`. Nothing else is skipped; `Greedy`,
-//!   `Exhaustive` and `OutsideBMP` entries are attempted.
+//!   this engine deliberately does not ship — `SemanticAction`, `Extends`,
+//!   `ExtendsDiamond`. Nothing else is skipped; `Greedy`, `Exhaustive` and
+//!   `OutsideBMP` entries are attempted, and `Import` is now resolved.
 //! * **XFAIL**: genuine engine gaps, listed exactly (name + reason). A
 //!   passing xfail fails the harness (a stale ledger is a test error).
 
@@ -24,7 +24,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use purrdf_rdf::{parse_dataset, DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
-use purrdf_shex::{parse_shexc, parse_shexj, validate, ConformanceStatus, Schema, ShapeSelector};
+use purrdf_shex::{
+    parse_shexc, parse_shexj, resolve_imports, validate, ConformanceStatus, Schema, ShapeSelector,
+};
 
 /// The corpus is byte-frozen; drift in the entry count means the vectors
 /// were touched, which this harness must notice.
@@ -34,7 +36,7 @@ const ENTRY_COUNT: usize = 1105;
 const CORPUS_URL: &str = "https://raw.githubusercontent.com/shexSpec/shexTest/master/";
 
 /// Traits this engine deliberately does not implement (skipped, counted).
-const SKIP_TRAITS: &[&str] = &["Import", "SemanticAction", "Extends", "ExtendsDiamond"];
+const SKIP_TRAITS: &[&str] = &["SemanticAction", "Extends", "ExtendsDiamond"];
 
 /// Genuine engine gaps: entries expected to produce the WRONG verdict, each
 /// with a reason. A passing xfail fails the harness.
@@ -226,21 +228,42 @@ struct Caches {
     data: HashMap<String, Result<Arc<RdfDataset>, String>>,
 }
 
+/// Read one schema document, choosing ShExC/ShExJ by the on-disk extension
+/// and parsing with `url` as base. An import IRI carries no extension, so
+/// `.shex` then `.json` are tried; a schema URL names the file directly.
+fn read_schema(url: &str) -> Result<Schema, String> {
+    let base = url_to_path(url);
+    let candidates: Vec<PathBuf> = if base.extension().is_some() {
+        vec![base]
+    } else {
+        vec![base.with_extension("shex"), base.with_extension("json")]
+    };
+    for path in candidates {
+        let Ok(source) = fs::read_to_string(&path) else {
+            continue;
+        };
+        return if path.extension().is_some_and(|x| x == "json") {
+            parse_shexj(&source).map_err(|e| e.to_string())
+        } else {
+            parse_shexc(&source, Some(url)).map_err(|e| e.to_string())
+        };
+    }
+    Err(format!("no schema document for {url}"))
+}
+
+/// Load a schema and fold in its transitive imports. The import resolver reads
+/// each imported IRI from the vendored corpus, parsing it with its own IRI as
+/// base (per-document base resolution).
+fn load_schema(url: &str) -> Result<Schema, String> {
+    let root = read_schema(url)?;
+    resolve_imports(root, &|iri| read_schema(iri).ok()).map_err(|e| e.to_string())
+}
+
 impl Caches {
     fn schema(&mut self, url: &str) -> Result<Arc<Schema>, String> {
         self.schemas
             .entry(url.to_owned())
-            .or_insert_with(|| {
-                let path = url_to_path(url);
-                let source = fs::read_to_string(&path)
-                    .map_err(|e| format!("read {}: {e}", path.display()))?;
-                let schema = if Path::new(url).extension().is_some_and(|x| x == "json") {
-                    parse_shexj(&source).map_err(|e| e.to_string())?
-                } else {
-                    parse_shexc(&source, Some(url)).map_err(|e| e.to_string())?
-                };
-                Ok(Arc::new(schema))
-            })
+            .or_insert_with(|| load_schema(url).map(Arc::new))
             .clone()
     }
 
