@@ -24,7 +24,7 @@ and markdown anchors while still catching references like ``#16`` or ``#123``.
 from __future__ import annotations
 
 import re
-import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 ISSUE_RE = re.compile(r"#\d{1,5}(?![\dA-Fa-f-])(?!\.\d)")
@@ -36,13 +36,13 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def iter_scan_paths(root: Path):
+def iter_scan_paths(root: Path) -> Iterator[Path]:
     """Yield every ``.rs`` and ``.md`` file the lint enforces."""
     for name in SCAN_DIRS:
         base = root / name
         if not base.is_dir():
             continue
-        for path in base.rglob("*"):
+        for path in sorted(base.rglob("*")):
             if path.is_file() and path.suffix in (".rs", ".md"):
                 yield path
     for md in sorted(root.glob("*.md")):
@@ -226,14 +226,14 @@ def find_inline_code_spans(line: str) -> list[tuple[int, int]]:
             if line[k] != "`":
                 k += 1
                 continue
-            l = k
-            while l < n and line[l] == "`":
-                l += 1
-            if l - k == run_len:
-                spans.append((i, l))
-                i = l
+            m = k
+            while m < n and line[m] == "`":
+                m += 1
+            if m - k == run_len:
+                spans.append((i, m))
+                i = m
                 break
-            k = l
+            k = m
         else:
             i = j
 
