@@ -757,13 +757,15 @@ impl Parser<'_> {
         // process-unique ids, so only author-written `_:label`s can collide.
         let mut prior_bnode_labels: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        // Reused across iterations to avoid reallocating the set each loop.
+        let mut this_op_labels: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         loop {
             if self.pos >= self.tokens.len() {
                 break;
             }
             let op = self.parse_update_operation()?;
-            let mut this_op_labels: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
+            this_op_labels.clear();
             if let GraphUpdateOperation::InsertData { data } = &op {
                 collect_quad_bnode_labels(data, &mut this_op_labels);
             }
@@ -775,7 +777,7 @@ impl Parser<'_> {
                     ));
                 }
             }
-            prior_bnode_labels.extend(this_op_labels);
+            prior_bnode_labels.extend(this_op_labels.drain());
             operations.push(op);
             // An operation separator. Without it, the request is done (a stray
             // trailing token is caught by `expect_eof` at the public entry).
