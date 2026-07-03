@@ -162,6 +162,16 @@ pub fn parse(lexical: &str, datatype: XsdDatatype) -> Result<XsdValue, XsdError>
     }
 }
 
+/// As [`parse`], but applies the XSD-1.0 lexical restriction for `Float`/`Double`
+/// (rejects `+INF`). All other datatypes behave exactly as [`parse`].
+pub fn parse_xsd10(s: &str, dt: XsdDatatype) -> Result<XsdValue, XsdError> {
+    match dt {
+        XsdDatatype::Float => crate::numeric::parse_float_xsd10(s).map(XsdValue::Float),
+        XsdDatatype::Double => crate::numeric::parse_double_xsd10(s).map(XsdValue::Double),
+        _ => parse(s, dt),
+    }
+}
+
 /// Parse a lexical form by datatype IRI.
 ///
 /// Returns `Ok(None)` when `datatype_iri` is **not** an XSD value-space datatype —
@@ -191,7 +201,8 @@ pub enum XsdError {
     /// The lexical form is well-formed but exceeds this crate's representable range
     /// (e.g. an integer beyond `i128`, a derived integer out of its subtype bounds,
     /// or a decimal beyond `i128` mantissa). This is a deliberate hard-fail rather
-    /// than saturation; bignum support is a deferred enhancement.
+    /// than saturation: values outside the `i128` / scale-≤18 domain are rejected,
+    /// never silently truncated.
     OutOfRange {
         /// The datatype the lexical was being parsed as.
         datatype: XsdDatatype,

@@ -142,16 +142,11 @@ fn check_datatype(datatype: &str, facts: &NodeFacts<'_>) -> Result<(), String> {
     }
     if let Some(xsd) = XsdDatatype::from_iri(datatype) {
         if is_checked_datatype(xsd) {
-            purrdf_xsd::parse(facts.lexical, xsd)
+            // shexTest v2.1.0 pins the XSD 1.0 float/double lexical space
+            // (INF/-INF, not the XSD 1.1 "+INF" spelling), so validate with the
+            // XSD-1.0-restricted parser rather than the 1.1 kernel default.
+            purrdf_xsd::parse_xsd10(facts.lexical, xsd)
                 .map_err(|e| format!("ill-formed <{datatype}> literal {:?}: {e}", facts.lexical))?;
-            // shexTest v2.1.0 pins the XSD **1.0** float/double lexical
-            // space, which has INF/-INF but not "+INF" (an XSD 1.1
-            // addition that purrdf-xsd accepts).
-            if matches!(xsd, XsdDatatype::Float | XsdDatatype::Double) && facts.lexical == "+INF" {
-                return Err(format!(
-                    "ill-formed <{datatype}> literal \"+INF\": XSD 1.0 spells positive infinity INF"
-                ));
-            }
         }
     }
     Ok(())
@@ -250,7 +245,7 @@ fn numeric_value(facts: &NodeFacts<'_>) -> Result<XsdValue, String> {
             "numeric facet requires a numeric datatype, got <{datatype}>"
         ));
     }
-    purrdf_xsd::parse(facts.lexical, xsd)
+    purrdf_xsd::parse_xsd10(facts.lexical, xsd)
         .map_err(|e| format!("ill-formed numeric literal {:?}: {e}", facts.lexical))
 }
 
@@ -501,5 +496,50 @@ mod tests {
         assert!(check_datatype("http://www.w3.org/2001/XMLSchema#integer", &facts).is_err());
         let ok = literal_facts("42", "http://www.w3.org/2001/XMLSchema#integer", None);
         assert!(check_datatype("http://www.w3.org/2001/XMLSchema#integer", &ok).is_ok());
+    }
+
+    #[test]
+    fn float_double_pin_xsd_1_0_positive_infinity() {
+        // shexTest v2.1.0 pins XSD 1.0: `INF` is a valid positive infinity but
+        // the XSD 1.1 `+INF` spelling is not.
+        for dt in [
+            "http://www.w3.org/2001/XMLSchema#double",
+            "http://www.w3.org/2001/XMLSchema#float",
+        ] {
+            let inf = literal_facts("INF", dt, None);
+            assert!(check_datatype(dt, &inf).is_ok(), "INF valid for <{dt}>");
+            let plus_inf = literal_facts("+INF", dt, None);
+            assert!(
+                check_datatype(dt, &plus_inf).is_err(),
+                "+INF must be rejected for <{dt}>"
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_facet_pins_xsd_1_0_positive_infinity() {
+        // A numeric facet with no accompanying datatype constraint routes
+        // through `numeric_value` rather than `check_datatype`; it must pin
+        // XSD 1.0 too, so `+INF` is rejected while `INF` is accepted.
+        let nc = NodeConstraint {
+            mininclusive: Some(NumericLiteral::Integer(0)),
+            ..NodeConstraint::default()
+        };
+        let dt = "http://www.w3.org/2001/XMLSchema#double";
+        let plus_inf = literal_facts("+INF", dt, None);
+        assert!(
+            check_numeric_facets(&nc, &plus_inf).is_err(),
+            "+INF must be rejected via the numeric-facet path"
+        );
+        let inf = literal_facts("INF", dt, None);
+        assert!(
+            check_numeric_facets(&nc, &inf).is_ok(),
+            "INF >= 0 must pass the numeric-facet path"
+        );
+        let one_point_five = literal_facts("1.5", dt, None);
+        assert!(
+            check_numeric_facets(&nc, &one_point_five).is_ok(),
+            "1.5 >= 0 must pass the numeric-facet path"
+        );
     }
 }
