@@ -2,7 +2,11 @@
 
 Frozen copy of the W3C SHACL test suite, vendored for the
 `purrdf-shapes` conformance harness. **Do not hand-edit** — byte-frozen
-third-party conformance data.
+third-party conformance data. The freeze is enforced: `make check` runs
+`scripts/check-corpus-frozen.py`, which SHA-256-verifies every file here
+against `scripts/conformance-frozen/vectors-shacl.sha256`, so a silent content
+edit fails the build. A deliberate re-vendor regenerates that manifest with
+`python3 scripts/check-corpus-frozen.py --update`.
 
 - Upstream: <https://github.com/w3c/data-shapes>
   (`data-shapes-test-suite/tests/`)

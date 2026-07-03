@@ -38,11 +38,12 @@ use crate::error::{Result, ShexError};
 
 /// A hook resolving an `IMPORT` IRI to its parsed [`Schema`].
 ///
-/// Returning `None` means the import could not be resolved (unknown IRI,
-/// unreadable document, parse failure) and surfaces as a
-/// [`ShexError::Import`]. The resolver is expected to parse each document with
-/// its own IRI as base so that relative IRIs resolve per-document.
-pub type ImportResolver<'a> = dyn Fn(&str) -> Option<Schema> + 'a;
+/// Returning `Err` means the import could not be resolved (unknown IRI,
+/// unreadable document, parse failure); the concrete cause is preserved and
+/// surfaces inside [`ShexError::Import`] rather than being flattened into a
+/// vague "unresolved import". The resolver is expected to parse each document
+/// with its own IRI as base so that relative IRIs resolve per-document.
+pub type ImportResolver<'a> = dyn Fn(&str) -> Result<Schema> + 'a;
 
 /// Flatten `root` and its transitive imports into a single import-free schema.
 ///
@@ -77,7 +78,7 @@ pub fn resolve_imports(root: Schema, resolver: &ImportResolver<'_>) -> Result<Sc
         if !visited.insert(iri.clone()) {
             continue;
         }
-        let imported = resolver(&iri).ok_or_else(|| ShexError::import(iri))?;
+        let imported = resolver(&iri).map_err(|cause| ShexError::import(iri, cause))?;
         for nested in imported.imports {
             if !visited.contains(&nested) {
                 queue.push_back(nested);

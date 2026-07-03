@@ -53,8 +53,10 @@ fn conformance_corpus() {
     );
 
     let mut failures: Vec<String> = Vec::new();
+    let mut passed = 0usize;
 
     for case_path in &cases {
+        let case_failures_before = failures.len();
         let case_name = case_path
             .file_name()
             .unwrap()
@@ -113,7 +115,15 @@ fn conformance_corpus() {
                 "[{case_name}] tuple set mismatch:\n  EXPECTED-ONLY: {only_expected:#?}\n  PRODUCED-ONLY: {only_produced:#?}"
             ));
         }
+
+        if failures.len() == case_failures_before {
+            passed += 1;
+        }
     }
+
+    // Fixture-level scoreboard (surfaced under `--nocapture`) so the conformance
+    // matrix scrapes a per-report count instead of the single test-function tally.
+    println!("SHAPES-CORPUS: passed {passed} total {}", cases.len());
 
     assert!(
         failures.is_empty(),

@@ -2,7 +2,12 @@
 
 Frozen copy of the official ShEx test suite, vendored for the
 `purrdf-shex` conformance harness. **Do not hand-edit** — treat exactly
-like the GTS vectors: byte-frozen third-party conformance data.
+like the GTS vectors: byte-frozen third-party conformance data. The freeze is
+enforced: `make check` runs `scripts/check-corpus-frozen.py`, which
+SHA-256-verifies every file here against
+`scripts/conformance-frozen/vectors-shexTest.sha256`, so a silent content edit
+fails the build. A deliberate re-vendor regenerates that manifest with
+`python3 scripts/check-corpus-frozen.py --update`.
 
 - Upstream: <https://github.com/shexSpec/shexTest>
 - Tag: `v2.1.0` (commit `8772d2d32c94bfba21a30c09915dfc7662e1539f`)

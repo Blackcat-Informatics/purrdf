@@ -24,6 +24,7 @@ and markdown anchors while still catching references like ``#16`` or ``#123``.
 from __future__ import annotations
 
 import re
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -37,17 +38,31 @@ def repo_root() -> Path:
 
 
 def iter_scan_paths(root: Path) -> Iterator[Path]:
-    """Yield every ``.rs`` and ``.md`` file the lint enforces."""
-    for name in SCAN_DIRS:
-        base = root / name
-        if not base.is_dir():
+    """Yield every tracked ``.rs`` and ``.md`` file the lint enforces.
+
+    Enumeration is driven by ``git ls-files`` rather than a filesystem walk so
+    the scan covers exactly the committed first-party source. Untracked build
+    artifacts and third-party trees (``bindings/python/.venv`` linkml docs,
+    ``target/``) are never scanned, keeping the lint deterministic and free of
+    "green in CI, red locally" divergence.
+    """
+    out = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    for rel in sorted(part for part in out.split("\0") if part):
+        if Path(rel).suffix not in (".rs", ".md"):
             continue
-        for path in sorted(base.rglob("*")):
-            if path.is_file() and path.suffix in (".rs", ".md"):
-                yield path
-    for md in sorted(root.glob("*.md")):
-        if md.is_file():
-            yield md
+        segments = rel.split("/")
+        in_scan_dir = segments[0] in SCAN_DIRS
+        root_md = len(segments) == 1 and rel.endswith(".md")
+        if not (in_scan_dir or root_md):
+            continue
+        path = root / rel
+        if path.is_file():
+            yield path
 
 
 def pos_to_line_col(src: str, pos: int) -> tuple[int, int]:

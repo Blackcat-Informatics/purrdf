@@ -39,6 +39,9 @@ jobs:
       - name: Check vendored-corpus license hygiene
         run: python3 scripts/check-licenses.py
 
+      - name: Check vendored-corpus byte-freeze
+        run: python3 scripts/check-corpus-frozen.py
+
       - name: Check generated artifacts
         run: bash scripts/check-generated.sh
 

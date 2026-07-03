@@ -30,6 +30,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
+import json
 import os
 import re
 import subprocess
@@ -39,6 +41,10 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PY_DIR = _REPO_ROOT / "bindings" / "python"
+_BASELINE_PATH = _REPO_ROOT / "scripts" / "conformance-baseline.json"
+_DOC_PATH = _REPO_ROOT / "docs" / "CONFORMANCE.md"
+_DOC_BEGIN = "<!-- BEGIN GENERATED: conformance-matrix -->"
+_DOC_END = "<!-- END GENERATED: conformance-matrix -->"
 
 # ---------------------------------------------------------------------------
 # Result model
@@ -56,6 +62,7 @@ class SuiteResult:
     failed: int = 0
     detail: str = ""
     ok: bool = False
+    budget: int | None = None  # ratchet ceiling from conformance-baseline.json
     log: str = field(default="", repr=False)
 
     @property
@@ -108,7 +115,11 @@ def _suite_cargo(
         source=source,
         passed=passed,
         xskip=ignored,
-        failed=max(failed, 0),
+        # Preserve the -1 "no scoreboard / compile error" sentinel so the
+        # ratchet skips its budget check (a compile failure is already RED and
+        # must not be re-diagnosed as "LEDGER SHRANK"); render/totals already
+        # treat failed < 0 as "err".
+        failed=failed,
         detail=detail,
         ok=(rc == 0 and failed == 0),
         log=out,
@@ -154,6 +165,30 @@ def _suite_shacl_w3c() -> SuiteResult:
             detail=detail, ok=(rc == 0 and failed == 0), log=out,
         )
     return _suite_cargo("SHACL Core + SHACL-SPARQL", "W3C data-shapes", cmd)
+
+
+def _suite_shapes_corpus() -> SuiteResult:
+    """First-party SHACL corpus: scrape the harness's per-fixture scoreboard so
+    the matrix reports a report-level Pass count, not the single test-function
+    tally that ``_suite_cargo`` would yield."""
+    cmd = [
+        "cargo", "test", "-p", "purrdf-shapes", "--locked",
+        "--test", "conformance", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(r"SHAPES-CORPUS: passed (\d+) total (\d+)", out)
+    if m:
+        passed, total = int(m.group(1)), int(m.group(2))
+        detail = f"{passed}/{total} byte-frozen expected reports"
+        return SuiteResult(
+            "SHACL (first-party corpus)", "first-party frozen reports",
+            passed=passed, xskip=0, failed=(total - passed),
+            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
+        )
+    return _suite_cargo(
+        "SHACL (first-party corpus)", "first-party frozen reports", cmd
+    )
 
 
 def _suite_shex_validation() -> SuiteResult:
@@ -292,6 +327,62 @@ def _int(m: re.Match[str] | None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Monotone-shrink ratchet
+# ---------------------------------------------------------------------------
+
+
+def load_budget() -> dict[str, int]:
+    """Load the ratchet budget: suite name -> allowed ledgered-gap count."""
+    data = json.loads(_BASELINE_PATH.read_text(encoding="utf-8"))
+    return {name: entry["ledgered"] for name, entry in data["suites"].items()}
+
+
+def _augment(detail: str, msg: str) -> str:
+    return f"{detail} · {msg}" if detail else msg
+
+
+def enforce_ratchet(results: list[SuiteResult], budget: dict[str, int]) -> None:
+    """Gate each suite's ledgered count against its committed budget.
+
+    The budget in ``conformance-baseline.json`` is authoritative and may only
+    ever be edited DOWNWARD. The live ledgered count must EQUAL its budget:
+
+      * a count ABOVE budget (a regressed or newly-ledgered gap) fails RED — fix
+        the gap, do not raise the budget;
+      * a count BELOW budget (a fixed gap) also fails RED until the budget is
+        lowered here, which locks the gain in — this is the ratchet, by design;
+      * a run suite with no budget entry fails RED.
+
+    Suites that could not emit a scoreboard (``failed < 0`` — a compile error or
+    aborted harness) keep their own failure and are not re-diagnosed here.
+    """
+    for r in results:
+        r.budget = budget.get(r.name)
+        if r.failed < 0:
+            continue
+        if r.budget is None:
+            r.ok = False
+            r.detail = _augment(
+                r.detail,
+                f'NO BUDGET: add "{r.name}" to scripts/conformance-baseline.json',
+            )
+        elif r.xskip > r.budget:
+            r.ok = False
+            r.detail = _augment(
+                r.detail,
+                f"LEDGER GREW: {r.xskip} > budget {r.budget} — a gap regressed; "
+                "fix it, do not raise the budget",
+            )
+        elif r.xskip < r.budget:
+            r.ok = False
+            r.detail = _augment(
+                r.detail,
+                f"LEDGER SHRANK: {r.xskip} < budget {r.budget} — lower it in "
+                "scripts/conformance-baseline.json to lock the gain",
+            )
+
+
+# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
@@ -312,11 +403,7 @@ def native_suites() -> list[SuiteResult]:
         _suite_codec(),
         _suite_sparql(),
         _suite_shacl_w3c(),
-        _suite_cargo(
-            "SHACL (first-party corpus)", "first-party frozen reports",
-            ["cargo", "test", "-p", "purrdf-shapes", "--locked", "--test", "conformance"],
-            detail="48 byte-frozen expected reports",
-        ),
+        _suite_shapes_corpus(),
         _suite_shex_validation(),
         _suite_cargo(
             "ShEx syntax + ShExC/ShExJ round-trip", "shexTest v2.1.0",
@@ -333,22 +420,24 @@ def render(results: list[SuiteResult]) -> str:
     src_w = max(len(r.source) for r in results)
     header = (
         f"  {'SUITE':<{name_w}}  {'SOURCE':<{src_w}}  "
-        f"{'PASS':>6}  {'XF/SKIP':>7}  {'FAIL':>5}  STATUS"
+        f"{'PASS':>6}  {'XF/SKIP':>7}  {'BUDGET':>6}  {'FAIL':>5}  STATUS"
     )
     lines = ["", "PurRDF conformance matrix", "=" * len(header), header, "-" * len(header)]
     for r in results:
         fail_cell = "err" if r.failed < 0 else str(r.failed)
+        budget_cell = "-" if r.budget is None else str(r.budget)
         lines.append(
             f"  {r.name:<{name_w}}  {r.source:<{src_w}}  "
-            f"{r.passed:>6}  {r.xskip:>7}  {fail_cell:>5}  {r.status}"
+            f"{r.passed:>6}  {r.xskip:>7}  {budget_cell:>6}  {fail_cell:>5}  {r.status}"
         )
     tot_pass = sum(r.passed for r in results)
     tot_xskip = sum(r.xskip for r in results)
+    tot_budget = sum(r.budget or 0 for r in results)
     tot_fail = sum(max(r.failed, 0) for r in results)
     lines.append("-" * len(header))
     lines.append(
         f"  {'TOTAL':<{name_w}}  {'':<{src_w}}  "
-        f"{tot_pass:>6}  {tot_xskip:>7}  {tot_fail:>5}"
+        f"{tot_pass:>6}  {tot_xskip:>7}  {tot_budget:>6}  {tot_fail:>5}"
     )
     lines.append("")
     notes = [r for r in results if r.detail]
@@ -368,25 +457,86 @@ def render(results: list[SuiteResult]) -> str:
     return "\n".join(lines)
 
 
-def render_markdown(results: list[SuiteResult]) -> str:
+def render_matrix_table(results: list[SuiteResult]) -> str:
+    """The Markdown matrix table only (no title, no verdict) — the canonical
+    block embedded in both the CI job summary and docs/CONFORMANCE.md."""
     rows = [
-        "## PurRDF conformance matrix",
-        "",
-        "| Suite | Source | Pass | XFail/Skip | Fail | Status |",
-        "| --- | --- | ---: | ---: | ---: | :---: |",
+        "| Suite | Source | Pass | XFail/Skip | Budget | Fail | Status |",
+        "| --- | --- | ---: | ---: | ---: | ---: | :---: |",
     ]
     for r in results:
         fail_cell = "err" if r.failed < 0 else str(r.failed)
+        budget_cell = "—" if r.budget is None else str(r.budget)
         badge = "GREEN" if r.ok else "RED"
         rows.append(
             f"| {r.name} | {r.source} | {r.passed} | {r.xskip} | "
-            f"{fail_cell} | {badge} |"
+            f"{budget_cell} | {fail_cell} | {badge} |"
         )
-    green = all(r.ok for r in results)
-    rows.append("")
-    rows.append(f"**Verdict: {'GREEN' if green else 'RED'}**")
-    rows.append("")
     return "\n".join(rows)
+
+
+def render_markdown(results: list[SuiteResult]) -> str:
+    green = all(r.ok for r in results)
+    return "\n".join(
+        [
+            "## PurRDF conformance matrix",
+            "",
+            render_matrix_table(results),
+            "",
+            f"**Verdict: {'GREEN' if green else 'RED'}**",
+            "",
+        ]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Generated doc block (drift guard over docs/CONFORMANCE.md's matrix table)
+# ---------------------------------------------------------------------------
+
+
+def _split_doc(text: str) -> tuple[str, str, str]:
+    """Return (head-through-BEGIN, current inner, END-through-tail)."""
+    if _DOC_BEGIN not in text or _DOC_END not in text:
+        raise SystemExit(
+            f"conformance-matrix: markers not found in {_DOC_PATH.relative_to(_REPO_ROOT)} "
+            f"({_DOC_BEGIN} / {_DOC_END})"
+        )
+    i = text.index(_DOC_BEGIN) + len(_DOC_BEGIN)
+    j = text.index(_DOC_END)
+    return text[:i], text[i:j], text[j:]
+
+
+def write_doc_block(block: str) -> None:
+    head, _, tail = _split_doc(_DOC_PATH.read_text(encoding="utf-8"))
+    _DOC_PATH.write_text(f"{head}\n{block}\n{tail}", encoding="utf-8")
+
+
+def _normalize(text: str) -> str:
+    """Strip surrounding whitespace and fold CRLF to LF so a Windows/autocrlf
+    checkout does not read as drift against the LF-rendered block."""
+    return text.replace("\r\n", "\n").strip()
+
+
+def check_doc_block(block: str) -> bool:
+    """True iff the committed matrix block equals the freshly measured one."""
+    _, inner, _ = _split_doc(_DOC_PATH.read_text(encoding="utf-8"))
+    inner, block = _normalize(inner), _normalize(block)
+    if inner == block:
+        return True
+    print(
+        f"\n{_DOC_PATH.relative_to(_REPO_ROOT)} conformance-matrix block is stale; "
+        "regenerate with `python3 scripts/conformance-matrix.py --write-doc`.",
+        file=sys.stderr,
+    )
+    diff = difflib.unified_diff(
+        inner.splitlines(),
+        block.splitlines(),
+        fromfile="committed",
+        tofile="measured",
+        lineterm="",
+    )
+    print("\n".join(diff), file=sys.stderr)
+    return False
 
 
 def main() -> int:
@@ -401,7 +551,18 @@ def main() -> int:
         action="store_true",
         help="skip `maturin develop` before the Python suites (assume prebuilt)",
     )
+    parser.add_argument(
+        "--write-doc",
+        action="store_true",
+        help="rewrite the generated matrix block in docs/CONFORMANCE.md from the "
+        "measured results (instead of drift-checking it)",
+    )
     args = parser.parse_args()
+
+    if args.write_doc and args.no_python:
+        # The committed doc block reflects the full 10-row matrix; a native-only
+        # run cannot reproduce it.
+        parser.error("--write-doc requires the full suite (do not pass --no-python)")
 
     results = native_suites()
     if not args.no_python:
@@ -410,6 +571,10 @@ def main() -> int:
         build = not args.no_build
         results.append(_suite_py_rdflib_gate(build))
         results.append(_suite_py_compat(build=False))
+
+    # Monotone-shrink ratchet: every run suite's ledgered-gap count must equal
+    # its committed budget (growth and silent shrink both fail RED).
+    enforce_ratchet(results, load_budget())
 
     text = render(results)
     print(text)
@@ -426,7 +591,19 @@ def main() -> int:
             fh.write(render_markdown(results))
             fh.write("\n")
 
-    return 0 if all(r.ok for r in results) else 1
+    # Keep the published ledger honest: regenerate or drift-check the matrix
+    # block in docs/CONFORMANCE.md against the freshly measured results. Only in
+    # a full run (a native-only run cannot reproduce the whole table).
+    doc_ok = True
+    if not args.no_python:
+        block = render_matrix_table(results)
+        if args.write_doc:
+            write_doc_block(block)
+            print(f"wrote matrix block to {_DOC_PATH.relative_to(_REPO_ROOT)}")
+        else:
+            doc_ok = check_doc_block(block)
+
+    return 0 if (all(r.ok for r in results) and doc_ok) else 1
 
 
 if __name__ == "__main__":

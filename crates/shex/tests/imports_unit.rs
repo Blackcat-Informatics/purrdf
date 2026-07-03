@@ -27,6 +27,15 @@ fn resolver_map(docs: &[(&str, &str)]) -> HashMap<String, String> {
         .collect()
 }
 
+/// Adapt an in-memory lookup to the `ImportResolver` contract: a miss is a
+/// concrete cause, not a silent `None`.
+fn missing_or(
+    found: Option<purrdf_shex::Schema>,
+    iri: &str,
+) -> Result<purrdf_shex::Schema, ShexError> {
+    found.ok_or_else(|| ShexError::shexj(format!("no test document {iri}")))
+}
+
 fn dataset() -> Arc<RdfDataset> {
     // n1 <p1> n2 ; n2 <p2> "X"
     let mut b = RdfDatasetBuilder::new();
@@ -45,8 +54,10 @@ fn transitive_import_merges_and_validates() {
     // Root S1 references S2, which lives in the imported document.
     let root = schema("IMPORT <http://a.example/imported>\n<S1> { <p1> @<http://a.example/S2> }");
     let docs = resolver_map(&[("http://a.example/imported", "<S2> { <p2> . }")]);
-    let merged =
-        resolve_imports(root, &|iri| docs.get(iri).map(|s| schema(s))).expect("imports resolve");
+    let merged = resolve_imports(root, &|iri| {
+        missing_or(docs.get(iri).map(|s| schema(s)), iri)
+    })
+    .expect("imports resolve");
     assert!(merged.imports.is_empty(), "imports flattened away");
     assert_eq!(merged.shapes.len(), 2, "S1 and imported S2 present");
 
@@ -76,8 +87,10 @@ fn cyclic_imports_terminate() {
         "http://a.example/a".to_owned(),
         "IMPORT <http://a.example/b>\n<S1> { <p1> @<http://a.example/S2> }".to_owned(),
     );
-    let merged =
-        resolve_imports(root, &|iri| docs.get(iri).map(|s| schema(s))).expect("cycle terminates");
+    let merged = resolve_imports(root, &|iri| {
+        missing_or(docs.get(iri).map(|s| schema(s)), iri)
+    })
+    .expect("cycle terminates");
     assert_eq!(merged.shapes.len(), 2, "identical S1 deduped, S2 merged");
 }
 
@@ -85,8 +98,10 @@ fn cyclic_imports_terminate() {
 fn self_import_dedups() {
     let root = schema("IMPORT <http://a.example/self>\n<S1> { <p1> . }");
     let docs = resolver_map(&[("http://a.example/self", "<S1> { <p1> . }")]);
-    let merged =
-        resolve_imports(root, &|iri| docs.get(iri).map(|s| schema(s))).expect("self-import ok");
+    let merged = resolve_imports(root, &|iri| {
+        missing_or(docs.get(iri).map(|s| schema(s)), iri)
+    })
+    .expect("self-import ok");
     assert_eq!(merged.shapes.len(), 1, "self re-declaration deduped");
 }
 
@@ -97,7 +112,10 @@ fn root_start_wins_over_import() {
         "http://a.example/i",
         "start=@<http://a.example/S2>\n<S2> { <p2> . }",
     )]);
-    let merged = resolve_imports(root, &|iri| docs.get(iri).map(|s| schema(s))).expect("resolves");
+    let merged = resolve_imports(root, &|iri| {
+        missing_or(docs.get(iri).map(|s| schema(s)), iri)
+    })
+    .expect("resolves");
     // Root's start is kept; the imported start is dropped.
     assert!(merged.start.is_some(), "root start preserved");
     // The start must reference S1 (root), not S2 (import).
@@ -109,8 +127,10 @@ fn root_start_wins_over_import() {
 fn conflicting_redefinition_errors() {
     let root = schema("IMPORT <http://a.example/i>\n<S1> { <p1> . }");
     let docs = resolver_map(&[("http://a.example/i", "<S1> { <p2> . }")]);
-    let err = resolve_imports(root, &|iri| docs.get(iri).map(|s| schema(s)))
-        .expect_err("conflicting S1 rejected");
+    let err = resolve_imports(root, &|iri| {
+        missing_or(docs.get(iri).map(|s| schema(s)), iri)
+    })
+    .expect_err("conflicting S1 rejected");
     assert!(
         matches!(err, ShexError::ImportConflict(_)),
         "typed conflict variant: {err:?}"
@@ -125,13 +145,17 @@ fn conflicting_redefinition_errors() {
 #[test]
 fn unresolved_import_errors() {
     let root = schema("IMPORT <http://a.example/missing>\n<S1> { <p1> . }");
-    let err = resolve_imports(root, &|_| None).expect_err("missing import rejected");
+    let err =
+        resolve_imports(root, &|iri| missing_or(None, iri)).expect_err("missing import rejected");
     assert!(
-        matches!(err, ShexError::Import(_)),
+        matches!(err, ShexError::Import { .. }),
         "typed unresolved variant: {err:?}"
     );
+    // The concrete resolver cause is preserved, not flattened away.
+    let rendered = format!("{err}");
     assert!(
-        format!("{err}").contains("unresolved IMPORT"),
-        "typed unresolved error: {err}"
+        rendered.contains("unresolved IMPORT")
+            && rendered.contains("no test document http://a.example/missing"),
+        "unresolved error surfaces its concrete cause: {err}"
     );
 }

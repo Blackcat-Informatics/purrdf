@@ -23,6 +23,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	cargo check --workspace --lib --tests --locked
 	python3 scripts/check-no-features.py
 	python3 scripts/check-licenses.py
+	python3 scripts/check-corpus-frozen.py
 	bash scripts/check-generated.sh
 	python3 scripts/check-issue-refs.py
 	cargo test --workspace --locked
