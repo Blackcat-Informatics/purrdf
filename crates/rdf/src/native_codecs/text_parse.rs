@@ -2003,4 +2003,44 @@ mod tests {
         let text = "<https://example.org/s> ; .";
         assert!(DocParser::new(text, None, false).parse().is_err());
     }
+
+    /// A LEADING `;` inside a blank-node property list `[ … ]` is also illegal:
+    /// `predicate()` runs at the top of the `predicateObjectList` loop before any `;`
+    /// handling, so a `;` with no preceding predicate-object pair inside the blank
+    /// node has no predicate to parse and must error.
+    #[test]
+    fn turtle_leading_semicolon_inside_blank_node_property_list_is_an_error() {
+        let text = "<https://example.org/s> <https://example.org/p> \
+                     [ ; <https://example.org/a> <https://example.org/b> ] .";
+        assert!(DocParser::new(text, None, false).parse().is_err());
+    }
+
+    /// A LEADING `;` inside an RDF 1.2 annotation block `{| … |}` is also illegal for
+    /// the same reason: `predicate()` has nothing to consume before the first `;`.
+    #[test]
+    fn turtle_leading_semicolon_inside_annotation_block_is_an_error() {
+        let text = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+                     {| ; <https://example.org/a> <https://example.org/b> |} .";
+        assert!(DocParser::new(text, None, false).parse().is_err());
+    }
+
+    /// A DOUBLED trailing `;` before the annotation-block `Pipe` (`{| a b ; ; |}`)
+    /// must drain the whole run of semicolons and then break on `Pipe`, parsing
+    /// IDENTICALLY to the no-trailing form — this pairs the `while self.eat(&Token::Semicolon) {}`
+    /// drain with the `Pipe` terminator, distinct from the single-`;` trailing case.
+    #[test]
+    fn turtle_doubled_trailing_semicolon_inside_annotation_block_before_pipe() {
+        let no_trailing =
+            "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+                            {| <https://example.org/a> <https://example.org/b> |} .";
+        let doubled = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+                        {| <https://example.org/a> <https://example.org/b> ; ; |} .";
+        let expected = DocParser::new(no_trailing, None, false)
+            .parse()
+            .expect("no-trailing parses");
+        let actual = DocParser::new(doubled, None, false)
+            .parse()
+            .expect("doubled parses");
+        assert_eq!(actual, expected);
+    }
 }
