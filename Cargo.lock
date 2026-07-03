@@ -1246,6 +1246,7 @@ dependencies = [
  "purrdf-sparql-algebra",
  "purrdf-sparql-results",
  "purrdf-xsd",
+ "rayon",
  "regex",
  "sha1",
  "sha2",

@@ -54,6 +54,7 @@ pub mod eval;
 mod expr;
 mod list_fn;
 mod modifier;
+pub(crate) mod parallel;
 mod path;
 pub mod remote;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this

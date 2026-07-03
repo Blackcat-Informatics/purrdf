@@ -409,6 +409,65 @@ impl<'d> EvalCtx<'d> {
         self
     }
 
+    /// Fork a `Send` child context for a parallel worker (Task 4-6's fork-join
+    /// evaluation), sharing this context's immutable/read-only state and starting
+    /// its mutable evaluation state fresh.
+    ///
+    /// The split is what makes fork-join deterministic under [`crate::parallel`]:
+    ///
+    /// - **Shared** (`dataset`/`remote`/`bgp_order_cache`/`options`, and the cheap
+    ///   `Clone`s `active_graph`/`active_dataset`/`now`/`standpoint_predicates`):
+    ///   read-only for the duration of evaluation, so sharing them across workers
+    ///   cannot introduce a data race or a cross-worker ordering dependency.
+    /// - **Cloned** (`exists_inner_cache`/`exists_expr_vars_cache`): cheap
+    ///   `Arc`-valued maps, so a memo the parent already warmed (e.g. from
+    ///   evaluating an earlier sibling sequentially) is inherited by the child
+    ///   instead of rebuilt — a performance inheritance, not a correctness
+    ///   requirement, since a cache miss just re-derives the same value.
+    /// - **Fresh** (`scratch`, `regex_cache`, `cached_bool_terms`,
+    ///   `const_atom_cache`, `xsd_parse_cache`, `constructed`,
+    ///   `in_substituted_exists`): per-worker mutable state that must NOT be
+    ///   shared, so each worker mints its own [`crate::scratch::ScratchId`] space
+    ///   and constructed-quad buffer without contending on a lock. The caller
+    ///   folds a child's fresh state back into the parent deterministically via
+    ///   [`crate::parallel::absorb_row`] / [`crate::parallel::absorb_constructed`]
+    ///   in source order, so the result is bit-identical to sequential evaluation.
+    /// - **Copied scalars** (`bnode_counter`, `rng_state`): their only stateful
+    ///   builtins (`BNODE`, `RAND`/`UUID`/`STRUUID`, and the PurRDF list
+    ///   constructors) are excluded from parallel evaluation by
+    ///   [`crate::parallel::is_parallel_safe`], so the copied value is never
+    ///   actually observed divergently across workers — copying it here is
+    ///   harmless rather than load-bearing.
+    ///
+    /// Exercised by `parallel`'s unit tests; has no production caller until
+    /// Tasks 4-6 wire fork-join into the evaluator, hence the crate-build-only
+    /// `allow(dead_code)` (lifted the moment a caller lands).
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn fork_for_worker(&self) -> Self {
+        Self {
+            dataset: self.dataset,
+            scratch: ScratchInterner::new(),
+            active_graph: self.active_graph,
+            active_dataset: self.active_dataset.clone(),
+            bnode_counter: self.bnode_counter,
+            now: self.now.clone(),
+            rng_state: self.rng_state,
+            options: self.options,
+            standpoint_predicates: self.standpoint_predicates.clone(),
+            exists_inner_cache: self.exists_inner_cache.clone(),
+            exists_expr_vars_cache: self.exists_expr_vars_cache.clone(),
+            regex_cache: DetHashMap::default(),
+            cached_bool_terms: [None, None],
+            const_atom_cache: DetHashMap::default(),
+            xsd_parse_cache: DetHashMap::default(),
+            remote: self.remote,
+            bgp_order_cache: self.bgp_order_cache,
+            constructed: Vec::new(),
+            in_substituted_exists: false,
+        }
+    }
+
     /// A compact hashable encoding of the active graph, for [`ExistsCacheKey`].
     pub(crate) fn graph_key(&self) -> (u8, u32) {
         match self.active_graph {
