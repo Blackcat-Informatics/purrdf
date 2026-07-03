@@ -302,10 +302,34 @@ pub const XFAIL: &[Xfail] = &[
     // residual eval-triple-terms cases below are NOT syntax gaps — each is a typed,
     // per-case-justified *evaluation* residual.
     //
-    // --- Structural triple-term matching *through the reifier layer* under a
-    //     `GRAPH ?g` scope: a pattern `<< s p ?o >>` must unify against reifier
-    //     quads in named graphs. The reifier virtual layer is not yet scanned for
-    //     structural (variable-binding) triple-term probes here → no rows. --------
+    // --- ROOT CAUSE (graphs-1, graphs-2, expr-1): the RDF 1.2 reifier/annotation
+    //     side tables carry NO graph dimension — every `<reifier> rdf:reifies
+    //     <<( s p o )>>` binding and every statement annotation is folded out of
+    //     the flat quad stream at PARSE time and stored graph-blind (see the fold
+    //     in `purrdf-rdf::native_codecs::parse::fold_statement_layer`, which even
+    //     documents "folds the `rdf:reifies` binding graph-blind", and
+    //     `RdfDataset::reifier_quads`/`annotation_quads`, which unconditionally
+    //     yield `g: None`). So a reifier declared inside `GRAPH :g { << s p o >>
+    //     ... }` in TriG is indistinguishable, post-parse, from one declared in the
+    //     default graph — the `GRAPH :g` placement is silently dropped.
+    //
+    //     `graphs-1`/`graphs-2` need a pattern `<< ?s ?p ?o >> ?q ?z` evaluated
+    //     under `GRAPH ?g` to bind `?g` to the graph the reifier/annotation actually
+    //     came from; `expr-1`'s data spans THREE named graphs that reify
+    //     overlapping-subject statements, so telling them apart also needs the
+    //     reifier's own graph. All three need the SAME fix: thread a graph
+    //     dimension through the reifier/annotation side tables end-to-end
+    //     (`RdfDatasetBuilder::push_reifier`/`push_annotation`, `RdfDataset`'s
+    //     storage, the RDFC-1.0 sentinel canonicalization in
+    //     `purrdf-core::ir::canon` — which currently spends its ONE sentinel
+    //     "graph" slot signaling "this is an annotation row", so a REAL graph needs
+    //     a redesigned encoding — the GTS reader/writer, and every BGP/CONSTRUCT/
+    //     UPDATE call site that reads `reifiers()`/`annotations()`). That is a
+    //     cross-cutting IR change (~200 call sites across `rdf-core`, `rdf`, `gts`,
+    //     `sparql-eval`, and the wasm bindings), not a query-evaluator fix, and
+    //     risks the RDFC-1.0 lossless-identity contract other already-passing
+    //     fixtures rely on — out of scope for this pass; left correctly typed as an
+    //     unsupported construct rather than attempted piecemeal. -------------------
     Xfail {
         iri_suffix: "eval-triple-terms/manifest#graphs-1",
         reason: XfailReason::UnsupportedConstruct,
@@ -315,34 +339,8 @@ pub const XFAIL: &[Xfail] = &[
         reason: XfailReason::UnsupportedConstruct,
     },
     Xfail {
-        iri_suffix: "eval-triple-terms/manifest#op-2",
-        reason: XfailReason::UnsupportedConstruct,
-    },
-    // --- Reifier-layer canonical encoding: a CONSTRUCT/UPDATE that *emits*
-    //     `rdf:reifies` triples writes them as plain default-graph triples, whereas
-    //     reifiers *loaded* from Turtle canonicalize through the internal reifier
-    //     layer (`urn:purrdf:rdfc:reifies` + annotation graph). The two datasets
-    //     are semantically equal but their canonical N-Quads differ — a real
-    //     representation-consistency gap to close in the dataset builder. ---------
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#construct-5",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
         iri_suffix: "eval-triple-terms/manifest#expr-1",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#update-1",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#update-2",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#update-3",
-        reason: XfailReason::ValueMismatch,
+        reason: XfailReason::UnsupportedConstruct,
     },
 ];
 

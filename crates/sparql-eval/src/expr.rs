@@ -402,6 +402,19 @@ fn term_is_literal(ctx: &EvalCtx<'_>, term: SolutionTerm) -> bool {
     }
 }
 
+/// Whether a solution term is a triple term, checked on the borrowed view (no
+/// materialization) — mirrors [`term_is_literal`].
+fn term_is_triple(ctx: &EvalCtx<'_>, term: SolutionTerm) -> bool {
+    match term {
+        SolutionTerm::Existing(id) => {
+            matches!(ctx.dataset.resolve(id), TermRef::Triple { .. })
+        }
+        SolutionTerm::Computed(sid) => {
+            matches!(ctx.scratch.computed_value(sid), TermValue::Triple { .. })
+        }
+    }
+}
+
 /// Evaluate a comparison: both operands to values, compare in the XSD value space,
 /// and test the resulting [`Ordering`] with `keep`. `None` (error/unbound operand
 /// or incomparable values) propagates.
@@ -464,9 +477,16 @@ fn equal(
     // freeze), the scratch interner dedups by value, and the promotion rule makes
     // an Existing/Computed cross-pair unequal in value. So `rdf_equal`'s
     // structural `a == b` fallback can never fire once `ta != tb`; only the
-    // value-space comparison and the literal/non-literal split remain — evaluated
-    // here on borrowed views (no owned TermValue clones), semantically identical
-    // to `rdf_equal(&value_of(ctx, ta), &value_of(ctx, tb))`.
+    // value-space comparison, the triple-term recursion, and the literal/
+    // non-literal split remain — evaluated here on borrowed views (no owned
+    // `TermValue` clones) EXCEPT for the triple-term case, which materializes
+    // both sides to recurse componentwise (RDF 1.2 `op-2`: triple terms compare
+    // structurally under `=`, not sameTerm-or-unequal).
+    if term_is_triple(ctx, ta) && term_is_triple(ctx, tb) {
+        let av = value_of(ctx, ta);
+        let bv = value_of(ctx, tb);
+        return Ok(rdf_equal(&av, &bv).map(|eq| bool_term(ctx, eq)));
+    }
     let ax = xsd_of_term(ctx, ta);
     let bx = xsd_of_term(ctx, tb);
     let eq = match (ax, bx) {
@@ -523,6 +543,27 @@ fn eval_in(
 
 /// RDF term value-equality (`=`). `None` = type error (two literals not comparable).
 fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
+    // RDF 1.2 triple terms compare *structurally*, componentwise, under this SAME
+    // `=` relation (recursively) — not by identity. Checked before the XSD/literal
+    // path so a triple-term pair never falls through to the "distinct non-literal
+    // kind ⇒ unequal" default, which would wrongly treat e.g. `<<(:a :b 123)>>` and
+    // `<<(:a :b 123.0)>>` as unequal even though `123 = 123.0` in the XSD value
+    // space (W3C `eval-triple-terms` `op-2`).
+    if let (
+        TermValue::Triple {
+            s: s1,
+            p: p1,
+            o: o1,
+        },
+        TermValue::Triple {
+            s: s2,
+            p: p2,
+            o: o2,
+        },
+    ) = (a, b)
+    {
+        return triple_equal(s1, p1, o1, s2, p2, o2);
+    }
     match (xsd_of(a), xsd_of(b)) {
         (Some(ax), Some(bx)) => value_cmp(&ax, &bx).map(|o| o == Ordering::Equal),
         _ => {
@@ -536,6 +577,31 @@ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
                 Some(false)
             }
         }
+    }
+}
+
+/// Componentwise `=` over two triple terms (SPARQL §17.4.1.7 extended to RDF 1.2
+/// triple terms): equal iff subject, predicate, and object are pairwise `=`-equal.
+/// A component that is definitely unequal short-circuits the whole comparison to
+/// `false` (even if another component errored); otherwise any component error
+/// propagates as an error (`None`).
+fn triple_equal(
+    s1: &TermValue,
+    p1: &TermValue,
+    o1: &TermValue,
+    s2: &TermValue,
+    p2: &TermValue,
+    o2: &TermValue,
+) -> Option<bool> {
+    let rs = rdf_equal(s1, s2);
+    let rp = rdf_equal(p1, p2);
+    let ro = rdf_equal(o1, o2);
+    if rs == Some(false) || rp == Some(false) || ro == Some(false) {
+        Some(false)
+    } else if rs.is_none() || rp.is_none() || ro.is_none() {
+        None
+    } else {
+        Some(true)
     }
 }
 

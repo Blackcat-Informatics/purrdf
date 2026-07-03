@@ -543,10 +543,28 @@ impl Parser<'_> {
             let dataset = self.parse_dataset_clauses()?;
             self.expect_kw("WHERE")?;
             self.expect(&Token::LBrace)?;
+            // The short form's template *is* the WHERE triples block (§16.2.1) — but an
+            // RDF 1.2 reifier/annotation (`~ id`, `{| … |}`) inside that block desugars
+            // to a FRESH synthetic reifier blank at parse time (`parse_triple_annotations`
+            // / `parse_triple_node`). A `.clone()` of the already-desugared triples would
+            // give the WHERE match and the CONSTRUCT template the SAME reifier blank
+            // identity, which conflates two independent things: the WHERE-side reifier is
+            // a non-distinguished (matched-but-discarded) existential witness, while the
+            // template-side reifier is minted FRESH per solution row regardless of what it
+            // matched (the general CONSTRUCT template blank-node rule). Reparsing the SAME
+            // token span a second time — rewinding `self.pos`, so `fresh_anon()` mints a
+            // NEW counter value — gives the WHERE copy its OWN, independent synthetic
+            // reifier blanks, decoupled from the template's (W3C `eval-triple-terms`
+            // `construct-5`/`expr-1`: a query-supplied `~`/`{| |}` name IS a real token, so
+            // re-tokenizing reproduces the SAME label there — only the auto-generated
+            // synthetic blanks differ between the two parses).
+            let mark = self.pos;
             let template = self.parse_construct_template()?;
+            self.pos = mark;
+            let where_patterns = self.parse_construct_template()?;
             self.expect(&Token::RBrace)?;
             let where_pat = GraphPattern::Bgp {
-                patterns: template.clone(),
+                patterns: where_patterns,
             };
             let mut aggregates = Vec::new();
             let modifiers = self.parse_solution_modifiers(&mut aggregates)?;

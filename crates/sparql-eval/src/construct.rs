@@ -26,7 +26,9 @@ use std::sync::Arc;
 use purrdf_core::loss::{
     LOSS_ANNOTATION_LAYER_DROPPED, LOSS_REIFIER_LAYER_DROPPED, LOSS_STANDPOINT_SCOPE_DROPPED,
 };
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermFactory, TermId, TermValue};
+use purrdf_core::{
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, TermFactory, TermId, TermRef, TermValue,
+};
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern, TermPattern, TriplePattern};
 
 use crate::error::EvalError;
@@ -97,6 +99,9 @@ pub(crate) fn eval_construct(
         .map(|(i, _)| i)
         .collect();
     let has_reifier_decls = !reifier_decl_indices.is_empty();
+    // Interned once (idempotent), used by pass 2 below to recognize a
+    // *dynamically*-produced `rdf:reifies` edge — see its doc comment.
+    let reifies_id = builder.intern_iri(RDF_REIFIES);
 
     for row in &seq.rows {
         // Template blank labels are fresh per solution row; the map co-refers a
@@ -131,13 +136,31 @@ pub(crate) fn eval_construct(
                 }
             }
 
-            // Pass 2: emit remaining triples, routing by subject membership.
+            // Pass 2: emit remaining triples, routing by VALUE, not just template
+            // position. A template slot with a variable predicate/object (e.g. the
+            // `?q ?z` half of `S P O {| ?q ?z |}`) is only STATICALLY a plain
+            // annotation triple — but the `WHERE` reifier/annotation virtual layer
+            // (`emit_virtual_candidates`, `sparql-eval::bgp`) also unifies a fully
+            // generic pattern's predicate/object against the reifier's OWN
+            // `rdf:reifies` edge (it IS a real, matchable triple), so ONE solution
+            // row can legitimately bind `?q = rdf:reifies, ?z = <<( s p o )>>` — the
+            // same fact `reifier_decl_indices` already declared for this row. Routing
+            // that row's `?q ?z` slot by POSITION alone would re-push it as a
+            // spurious "annotation whose predicate is rdf:reifies", doubling the
+            // reifier's encoding; routing it by VALUE instead recognizes the
+            // dynamically-produced edge and calls `push_reifier` again, which is an
+            // idempotent no-op against the identical pass-1 binding (W3C
+            // `eval-triple-terms` `construct-5`).
             for (idx, triple) in instantiated.iter().enumerate() {
                 if reifier_decl_indices.contains(&idx) {
                     continue; // already handled in pass 1
                 }
                 if let Some((s, p, o)) = *triple {
-                    if reifier_ids.contains(&s) {
+                    let is_dynamic_reifies =
+                        p == reifies_id && matches!(builder.resolve(o), TermRef::Triple { .. });
+                    if is_dynamic_reifies {
+                        builder.push_reifier(s, o);
+                    } else if reifier_ids.contains(&s) {
                         builder.push_annotation(s, p, o);
                     } else {
                         builder.push_quad(s, p, o, None);
