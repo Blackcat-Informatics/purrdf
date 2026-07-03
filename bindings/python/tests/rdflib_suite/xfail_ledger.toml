@@ -53,7 +53,6 @@
 # The compat facade does not forward the graph's bound namespaces into the
 # native SPARQL parser as PREFIX declarations, so queries that rely on
 # graph-level prefix bindings (rather than in-query PREFIX) hard-error.
-"test_agg_undef.py::test_values_outside_group_by" = "graph-bound prefixes are not forwarded to the native SPARQL parser and a top-level VALUES block is rejected ('unexpected trailing token VALUES'), so this aggregate-over-UNDEF query is a parse hard-error"
 "test_agg_distinct.py::test_count_optional_values" = "graph-bound prefix 'ex' is not forwarded to the native SPARQL parser, so the query fails with 'undeclared prefix ex' rather than being evaluated"
 
 # --- Theme: SPARQL aggregate / filter evaluation semantics ---

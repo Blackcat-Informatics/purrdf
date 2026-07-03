@@ -198,16 +198,19 @@ def _suite_sparql() -> SuiteResult:
         unexpected += int(m.group(3))
         failed += int(m.group(4))
     if matched:
-        detail = f"{passed} pass · {xfail} xfail (SERVICE)"
+        detail = f"{passed} pass · {xfail} xfail (ledgered)"
         return SuiteResult(
-            "SPARQL 1.1 evaluation (subset)", "W3C sparql11 + first-party",
+            "SPARQL 1.1/1.2 evaluation (full corpus)",
+            "W3C sparql11 + sparql12(draft) + first-party",
             passed=passed, xskip=xfail, failed=failed + unexpected,
             detail=detail,
             ok=(rc == 0 and cargo_failed == 0 and failed == 0 and unexpected == 0),
             log=out,
         )
     return _suite_cargo(
-        "SPARQL 1.1 evaluation (subset)", "W3C sparql11 + first-party", cmd
+        "SPARQL 1.1/1.2 evaluation (full corpus)",
+        "W3C sparql11 + sparql12(draft) + first-party",
+        cmd,
     )
 
 
