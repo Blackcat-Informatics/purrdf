@@ -33,7 +33,7 @@ use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermRef, TermValu
 
 use crate::ast::{Schema, SemAct, Shape, ShapeExpr, TripleExpr};
 use crate::semact::{SemActContext, SemActRegistry};
-use matcher::{ArcOptions, CNode, Card, Compiled};
+use matcher::{ArcOptions, Assignment, CNode, Card, Compiled};
 use node::{FactKind, NodeFacts, RDF_LANG_STRING};
 
 // ── public API ──────────────────────────────────────────────────────────────
@@ -254,6 +254,9 @@ pub fn validate_with(
     };
     // Start actions (schema `startActs` and any query-level actions) fire
     // once before the map is checked; a failure fails the whole validation.
+    // They run once for the whole shape map rather than per association, so
+    // no single focus node is in scope here — `focus`/`predicate`/`value`
+    // all stay `None`.
     let start_ctx = SemActContext::default();
     if !options
         .sem_acts
@@ -567,38 +570,55 @@ impl<'a> Engine<'a> {
             .values()
             .chain(inverse.values())
             .all(|v| v.len() == 1);
-        let matched = if unique {
+        // `assignment[i]` is the slot arc `i` was routed to (`None` when
+        // diverted to `EXTRA`), kept alongside `counts` so semantic actions
+        // can be fired per matched arc rather than merely per slot.
+        let (counts, assignment): Assignment = if unique {
             let mut counts = vec![(0u64, 0u64); compiled.slots.len()];
-            for option in &options {
+            let mut assignment = vec![None; options.len()];
+            for (index, option) in options.iter().enumerate() {
                 // An arc with a candidate MUST be matched (EXTRA never
                 // diverts a matching arc); a candidate-less arc was already
                 // vetted as EXTRA-divertible above and consumes nothing.
                 if let Some(&slot) = option.candidates.first() {
                     counts[slot].0 += 1;
                     counts[slot].1 += 1;
+                    assignment[index] = Some(slot);
                 }
             }
-            matcher::counts_match(&compiled, &counts).then_some(counts)
+            if !matcher::counts_match(&compiled, &counts) {
+                return Err(cardinality_reason(&compiled, &arcs, &value_failures));
+            }
+            (counts, assignment)
         } else {
-            matcher::assignment_search(&compiled, &options)?
+            match matcher::assignment_search(&compiled, &options)? {
+                Some(found) => found,
+                None => return Err(cardinality_reason(&compiled, &arcs, &value_failures)),
+            }
         };
-        let Some(counts) = matched else {
-            return Err(cardinality_reason(&compiled, &arcs, &value_failures));
-        };
+        // Per-slot matched value nodes, in arc order, for firing triple-
+        // constraint semantic actions once per matched arc (§5.5.2).
+        let mut matched_values: Vec<Vec<TermId>> = vec![Vec::new(); compiled.slots.len()];
+        for (index, slot) in assignment.iter().enumerate() {
+            if let Some(slot) = slot {
+                matched_values[*slot].push(arcs[index].2);
+            }
+        }
         // The neighbourhood matched; fire semantic actions (§5.5.2).
-        self.fire_sem_acts(focus, shape, &compiled, &counts)
+        self.fire_sem_acts(focus, shape, &compiled, &counts, &matched_values)
     }
 
     /// Dispatch the semantic actions that a successful shape match triggers:
-    /// each matched triple constraint's actions, the expression's group
-    /// actions, then the shape's own actions. A failing action fails the
-    /// match. A no-op when no extension is registered.
+    /// each matched triple constraint's actions (once per matched arc), the
+    /// expression's group actions, then the shape's own actions. A failing
+    /// action fails the match. A no-op when no extension is registered.
     fn fire_sem_acts(
         &self,
         focus: Focus<'_>,
         shape: &Shape,
         compiled: &Compiled<'_>,
         counts: &[(u64, u64)],
+        matched_values: &[Vec<TermId>],
     ) -> Result<(), String> {
         if self.sem_acts.is_empty() {
             return Ok(());
@@ -608,17 +628,21 @@ impl<'a> Engine<'a> {
             if counts[index].0 == 0 || slot.sem_acts.is_empty() {
                 continue;
             }
-            let ctx = SemActContext {
-                focus: Some(focus_value.clone()),
-                predicate: Some(slot.predicate.to_owned()),
-                value: None,
-            };
-            if !self.sem_acts.dispatch_all(slot.sem_acts, &ctx) {
-                return Err(format!(
-                    "semantic action failed on {}<{}>",
-                    if slot.inverse { "^" } else { "" },
-                    slot.predicate
-                ));
+            // Fire once per matched arc so `ctx.value` names the actual
+            // object (or, for `^`, subject) node of that triple.
+            for &value_id in &matched_values[index] {
+                let ctx = SemActContext {
+                    focus: Some(focus_value.clone()),
+                    predicate: Some(slot.predicate.to_owned()),
+                    value: Some(self.data.term_value(value_id)),
+                };
+                if !self.sem_acts.dispatch_all(slot.sem_acts, &ctx) {
+                    return Err(format!(
+                        "semantic action failed on {}<{}>",
+                        if slot.inverse { "^" } else { "" },
+                        slot.predicate
+                    ));
+                }
             }
         }
         let group_ctx = SemActContext {

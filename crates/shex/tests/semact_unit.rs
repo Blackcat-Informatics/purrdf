@@ -6,6 +6,7 @@
 //! inert-by-default and unregistered-extension behaviours; and a custom
 //! registered extension.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
@@ -188,4 +189,85 @@ fn custom_extension_can_veto() {
         validate_with(&schema, &data, &map, &options).entries[0].status,
         ConformanceStatus::Nonconformant
     );
+}
+
+#[test]
+fn custom_extension_fires_once_per_matched_arc_with_value_and_predicate() {
+    // s1 has two <p1> arcs (o1, o2) and one <q1> arc (o3); shape
+    // `{ <p1> {1,2} ; <q1> . }`. The Recorder extension must be invoked once
+    // per matched TRIPLE (not once per slot), and `ctx.value` must be the
+    // actual matched object of that triple with `ctx.predicate` set to the
+    // constraint's own predicate.
+    const EXT: &str = "http://example.org/Recorder";
+    let mut b = RdfDatasetBuilder::new();
+    let s1 = b.intern_iri("http://a.example/s1");
+    let p1 = b.intern_iri("http://a.example/p1");
+    let q1 = b.intern_iri("http://a.example/q1");
+    let o1 = b.intern_iri("http://a.example/o1");
+    let o2 = b.intern_iri("http://a.example/o2");
+    let o3 = b.intern_iri("http://a.example/o3");
+    b.push_quad(s1, p1, o1, None);
+    b.push_quad(s1, p1, o2, None);
+    b.push_quad(s1, q1, o3, None);
+    let data = b.freeze().expect("freeze");
+
+    let schema = parse_shexc(
+        &format!("<S1> {{ <p1> . {{1,2}} %<{EXT}>{{ rec %}} ; <q1> . %<{EXT}>{{ rec %}} }}"),
+        Some("http://a.example/"),
+    )
+    .expect("schema parses");
+
+    let calls: RefCell<Vec<(Option<String>, Option<TermValue>)>> = RefCell::new(Vec::new());
+    let mut registry = SemActRegistry::new();
+    registry.register(
+        EXT,
+        Box::new(
+            |_act: &purrdf_shex::SemAct, ctx: &purrdf_shex::SemActContext| {
+                calls
+                    .borrow_mut()
+                    .push((ctx.predicate.clone(), ctx.value.clone()));
+                true
+            },
+        ),
+    );
+    let options = ValidationOptions {
+        sem_acts: registry,
+        ..ValidationOptions::default()
+    };
+    let map = [(
+        TermValue::iri("http://a.example/s1"),
+        ShapeSelector::Label("http://a.example/S1".to_owned()),
+    )];
+    let out = validate_with(&schema, &data, &map, &options);
+    assert_eq!(out.entries[0].status, ConformanceStatus::Conformant);
+    drop(options);
+
+    let recorded = calls.into_inner();
+    assert_eq!(recorded.len(), 3, "one dispatch per matched arc, not slot");
+
+    let p1_iri = "http://a.example/p1".to_owned();
+    let q1_iri = "http://a.example/q1".to_owned();
+    let mut p1_values: Vec<TermValue> = recorded
+        .iter()
+        .filter(|(pred, _)| pred.as_ref() == Some(&p1_iri))
+        .map(|(_, value)| value.clone().expect("value populated"))
+        .collect();
+    p1_values.sort_by_key(|v| match v {
+        TermValue::Iri(iri) => iri.clone(),
+        _ => String::new(),
+    });
+    assert_eq!(
+        p1_values,
+        vec![
+            TermValue::iri("http://a.example/o1"),
+            TermValue::iri("http://a.example/o2"),
+        ]
+    );
+
+    let q1_values: Vec<TermValue> = recorded
+        .iter()
+        .filter(|(pred, _)| pred.as_ref() == Some(&q1_iri))
+        .map(|(_, value)| value.clone().expect("value populated"))
+        .collect();
+    assert_eq!(q1_values, vec![TermValue::iri("http://a.example/o3")]);
 }

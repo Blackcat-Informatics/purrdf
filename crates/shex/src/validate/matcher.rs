@@ -304,19 +304,26 @@ pub(crate) struct ArcOptions {
 /// Search state budget: candidate-assignment steps before giving up.
 const SEARCH_BUDGET: u64 = 200_000;
 
+/// A winning assignment search result: per-slot `(lo, hi)` counts, plus the
+/// slot each arc was routed to (`None` when diverted to `EXTRA`).
+pub(crate) type Assignment = (Vec<(u64, u64)>, Vec<Option<usize>>);
+
 /// Backtracking search over arc→slot assignments for expressions where a
 /// `(predicate, direction)` occurs in more than one slot. Deterministic:
 /// arcs in the caller's (sorted) order, candidates in slot order, `EXTRA`
-/// diversion tried last. Returns `Ok(Some(counts))` with the winning per-slot
-/// counts on a match, `Ok(None)` when no assignment matches, and `Err` when
+/// diversion tried last. Returns `Ok(Some((counts, assignment)))` on a match,
+/// where `assignment[i]` is the slot arc `i` was routed to (`None` when
+/// diverted to `EXTRA`); `Ok(None)` when no assignment matches; `Err` when
 /// the budget is exhausted.
 pub(crate) fn assignment_search(
     compiled: &Compiled<'_>,
     arcs: &[ArcOptions],
-) -> Result<Option<Vec<(u64, u64)>>, String> {
+) -> Result<Option<Assignment>, String> {
     let mut counts = vec![(0u64, 0u64); compiled.slots.len()];
+    let mut assignment = vec![None; arcs.len()];
     let mut budget = SEARCH_BUDGET;
-    search(compiled, arcs, 0, &mut counts, &mut budget)
+    let found = search(compiled, arcs, 0, &mut counts, &mut assignment, &mut budget)?;
+    Ok(found.then_some((counts, assignment)))
 }
 
 fn search(
@@ -324,28 +331,32 @@ fn search(
     arcs: &[ArcOptions],
     index: usize,
     counts: &mut Vec<(u64, u64)>,
+    assignment: &mut Vec<Option<usize>>,
     budget: &mut u64,
-) -> Result<Option<Vec<(u64, u64)>>, String> {
+) -> Result<bool, String> {
     if *budget == 0 {
         return Err("triple-expression matcher budget exhausted".to_owned());
     }
     *budget -= 1;
     let Some(arc) = arcs.get(index) else {
-        return Ok(counts_match(compiled, counts).then(|| counts.clone()));
+        return Ok(counts_match(compiled, counts));
     };
     for &slot in &arc.candidates {
         counts[slot].0 += 1;
         counts[slot].1 += 1;
-        if let Some(winning) = search(compiled, arcs, index + 1, counts, budget)? {
-            return Ok(Some(winning));
+        assignment[index] = Some(slot);
+        if search(compiled, arcs, index + 1, counts, assignment, budget)? {
+            return Ok(true);
         }
         counts[slot].0 -= 1;
         counts[slot].1 -= 1;
+        assignment[index] = None;
     }
     if arc.extra_allowed {
-        return search(compiled, arcs, index + 1, counts, budget);
+        assignment[index] = None;
+        return search(compiled, arcs, index + 1, counts, assignment, budget);
     }
-    Ok(None)
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -442,7 +453,7 @@ mod tests {
         ];
         assert_eq!(
             assignment_search(&compiled, &arcs),
-            Ok(Some(vec![(1, 1), (1, 1)]))
+            Ok(Some((vec![(1, 1), (1, 1)], vec![Some(0), Some(1)])))
         );
         // Both arcs only fit slot 0 → slot 1 starves.
         let arcs = vec![

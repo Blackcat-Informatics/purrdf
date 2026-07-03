@@ -30,9 +30,19 @@ pub const TEST_EXTENSION: &str = "http://shex.io/extensions/Test/";
 
 /// The context in which a semantic action fires.
 ///
-/// Fields are populated on a best-effort basis for the firing position: start
-/// actions carry no node; shape actions carry the focus; triple-constraint
-/// actions carry the focus and the matched arc's predicate.
+/// Field presence is exact per firing position, not best-effort:
+///
+/// * **Start actions** (schema `startActs` / query-level actions): all three
+///   fields are `None` — they fire once for the whole shape map, before any
+///   focus node is chosen.
+/// * **Shape and `EachOf`/`OneOf` group actions**: `focus` is the node that
+///   matched the shape; `predicate` and `value` are `None` (no single arc is
+///   implicated).
+/// * **Triple-constraint actions**: fired once per triple the constraint
+///   matched. `focus` is the node that matched the shape, `predicate` is the
+///   constraint's predicate IRI, and `value` is that triple's value node
+///   (the object for a forward arc, the subject for `^` inverse) — all three
+///   are always `Some`. A constraint matching zero triples does not fire.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SemActContext {
     /// The focus node being validated, when concrete.
@@ -40,7 +50,7 @@ pub struct SemActContext {
     /// The predicate IRI of the matched arc (triple-constraint position).
     pub predicate: Option<String>,
     /// The matched arc's value node (object for forward arcs, subject for
-    /// inverse), when a single value applies.
+    /// inverse), for a triple-constraint firing.
     pub value: Option<TermValue>,
 }
 
