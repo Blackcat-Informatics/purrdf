@@ -9,12 +9,17 @@
 //!
 //! The wiring-free expression kinds are implemented directly: [`NodeExpr::Constant`],
 //! [`NodeExpr::This`], [`NodeExpr::Path`], [`NodeExpr::Union`],
-//! [`NodeExpr::Intersection`], and [`NodeExpr::If`]. Builtin function calls
-//! ([`FnCall::Builtin`]) and the `sh:if` effective-boolean-value route through
-//! the SPARQL seam ([`crate::sparql::eval_scalar_expr`]); user-defined
-//! functions ([`FnCall::UserDefined`]) are a hard capability error. The
-//! remaining kinds (filters, aggregates, `EXISTS`) need the constraint engine
-//! wired in and return a hard error until later tasks land them.
+//! [`NodeExpr::Intersection`], [`NodeExpr::If`], and the native set operators
+//! [`NodeExpr::Distinct`], [`NodeExpr::Count`], [`NodeExpr::OrderBy`],
+//! [`NodeExpr::Offset`], and [`NodeExpr::Limit`]. The numeric aggregates
+//! [`NodeExpr::Min`] / [`NodeExpr::Max`] / [`NodeExpr::Sum`] delegate to the
+//! SPARQL engine ([`crate::sparql::eval_aggregate`]) so numeric type-promotion
+//! and ordering match exactly. Builtin function calls ([`FnCall::Builtin`]) and
+//! the `sh:if` effective-boolean-value route through the SPARQL seam
+//! ([`crate::sparql::eval_scalar_expr`]); user-defined functions
+//! ([`FnCall::UserDefined`]) are a hard capability error. The remaining kinds
+//! (`sh:filterShape`, `EXISTS`) need the constraint engine wired in and return a
+//! hard error until later tasks land them.
 //!
 //! # Determinism
 //!
@@ -314,18 +319,75 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
             "SHACL-AF user-defined function <{iri}> requires the dynamic SPARQL function registry capability, which is not yet available",
             iri = iri.as_str()
         )),
-        NodeExpr::Filter { .. }
-        | NodeExpr::Count { .. }
-        | NodeExpr::Distinct(_)
-        | NodeExpr::Min(_)
-        | NodeExpr::Max(_)
-        | NodeExpr::Sum(_)
-        | NodeExpr::Limit { .. }
-        | NodeExpr::Offset { .. }
-        | NodeExpr::OrderBy { .. }
-        | NodeExpr::Exists(_) => Err(format!(
+        NodeExpr::Distinct(of) => {
+            let mut out = eval_node_expr(store, focus, of, guard)?;
+            out.sort_by_key(Term::to_string);
+            out.dedup();
+            Ok(out)
+        }
+        NodeExpr::Count { distinct, of } => {
+            let mut out = eval_node_expr(store, focus, of, guard)?;
+            if *distinct {
+                out.sort_by_key(Term::to_string);
+                out.dedup();
+            }
+            // Element count as a canonical `xsd:integer`. `usize::to_string`
+            // avoids a lossy `as` cast.
+            Ok(vec![Term::Literal(Literal::new_typed_literal(
+                out.len().to_string(),
+                NamedNode::new_unchecked(xsd::INTEGER),
+            ))])
+        }
+        NodeExpr::OrderBy { of, descending } => {
+            // Ordering PRESERVES duplicates (SPARQL sequence semantics) — no dedup.
+            let mut out = eval_node_expr(store, focus, of, guard)?;
+            out.sort_by_key(Term::to_string);
+            if *descending {
+                out.reverse();
+            }
+            Ok(out)
+        }
+        NodeExpr::Offset { of, n } => {
+            let out = eval_node_expr(store, focus, of, guard)?;
+            let skip = usize::try_from(*n).map_err(|e| format!("sh:offset value too large: {e}"))?;
+            // Ordering is the caller's responsibility (an OrderBy wrapper) — apply
+            // the offset to the already-produced sequence. The parser nests these
+            // as `Limit(Offset(OrderBy(core)))`, so evaluation composes naturally:
+            // OrderBy runs first, then Offset skips, then Limit truncates.
+            Ok(out.into_iter().skip(skip).collect())
+        }
+        NodeExpr::Limit { of, n } => {
+            let out = eval_node_expr(store, focus, of, guard)?;
+            let take = usize::try_from(*n).map_err(|e| format!("sh:limit value too large: {e}"))?;
+            Ok(out.into_iter().take(take).collect())
+        }
+        NodeExpr::Min(of) => aggregate(store, focus, of, "MIN", guard),
+        NodeExpr::Max(of) => aggregate(store, focus, of, "MAX", guard),
+        NodeExpr::Sum(of) => aggregate(store, focus, of, "SUM", guard),
+        NodeExpr::Filter { .. } | NodeExpr::Exists(_) => Err(format!(
             "node expression kind not yet implemented: {expr:?}"
         )),
+    }
+}
+
+/// Evaluate a set aggregate (`"MIN"`/`"MAX"`/`"SUM"`) over `of`'s result via the
+/// single SPARQL path ([`crate::sparql::eval_aggregate`]).
+///
+/// The operands are evaluated first, then delegated to the SPARQL engine so
+/// numeric type-promotion and ordering match the engine exactly (there is no
+/// parallel Rust numeric fold). `SUM` of an empty set is `0`^^`xsd:integer`;
+/// `MIN`/`MAX` of an empty set is unbound → an empty node set.
+fn aggregate<G: ShaclDataGraph>(
+    store: &G,
+    focus: &Term,
+    of: &NodeExpr,
+    agg: &str,
+    guard: &mut RecursionGuard,
+) -> Result<Vec<Term>, String> {
+    let operands = eval_node_expr(store, focus, of, guard)?;
+    match crate::sparql::eval_aggregate(&store.sparql_dataset(), agg, &operands)? {
+        Some(term) => Ok(vec![term]),
+        None => Ok(Vec::new()),
     }
 }
 
@@ -486,7 +548,16 @@ mod tests {
         let mut guard = RecursionGuard::new();
         // A not-yet-implemented kind as the condition must surface its error.
         let expr = NodeExpr::If {
-            cond: Box::new(NodeExpr::Distinct(Box::new(NodeExpr::This))),
+            cond: Box::new(NodeExpr::Exists(Box::new(Shape {
+                id: ex("S"),
+                targets: vec![],
+                constraints: vec![],
+                property_shapes: vec![],
+                severity: crate::report::Severity::Violation,
+                message: None,
+                deactivated: false,
+                box_roles: vec![],
+            }))),
             then: Box::new(NodeExpr::Constant(ex("yes"))),
             els: Box::new(NodeExpr::Constant(ex("no"))),
         };
@@ -640,6 +711,209 @@ mod tests {
         };
         let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
         assert!(err.contains("no effective boolean value"), "got: {err}");
+    }
+
+    // ── Aggregation / paging / ordering ──────────────────────────────────────
+
+    /// A data graph with numeric values and orderable IRIs off one focus node.
+    const AGG_DATA: &str = r"
+        @prefix ex: <http://example.org/ns#> .
+        ex:x ex:n 1, 2, 3 .
+        ex:x ex:e ex:a, ex:b, ex:c .
+    ";
+
+    fn int_lit(n: &str) -> Term {
+        Term::Literal(Literal::new_typed_literal(
+            n,
+            NamedNode::new_unchecked(xsd::INTEGER),
+        ))
+    }
+
+    #[test]
+    fn distinct_returns_sorted_unique_set() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::new();
+        // NOTE: no node-expression kind emits a multiset (Path/Union/… all dedup),
+        // so Distinct's observable behaviour over real operands is "sorted set".
+        let expr = NodeExpr::Distinct(Box::new(NodeExpr::Path(pred("e"))));
+        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("distinct evals");
+        assert_eq!(result, vec![ex("a"), ex("b"), ex("c")]);
+    }
+
+    #[test]
+    fn count_returns_cardinality_integer() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::new();
+        let expr = NodeExpr::Count {
+            distinct: false,
+            of: Box::new(NodeExpr::Path(pred("n"))),
+        };
+        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("count evals");
+        assert_eq!(result, vec![int_lit("3")]);
+    }
+
+    #[test]
+    fn count_distinct_returns_cardinality_integer() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::new();
+        let expr = NodeExpr::Count {
+            distinct: true,
+            of: Box::new(NodeExpr::Path(pred("e"))),
+        };
+        let result =
+            eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("distinct count evals");
+        assert_eq!(result, vec![int_lit("3")]);
+    }
+
+    #[test]
+    fn count_of_empty_is_zero() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::new();
+        let expr = NodeExpr::Count {
+            distinct: false,
+            of: Box::new(NodeExpr::Path(pred("missing"))),
+        };
+        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("count evals");
+        assert_eq!(result, vec![int_lit("0")]);
+    }
+
+    #[test]
+    fn min_max_sum_over_integers() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::new();
+        let path = || Box::new(NodeExpr::Path(pred("n")));
+
+        let min =
+            eval_node_expr(&data, &ex("x"), &NodeExpr::Min(path()), &mut guard).expect("min evals");
+        assert_eq!(min, vec![int_lit("1")]);
+        let max =
+            eval_node_expr(&data, &ex("x"), &NodeExpr::Max(path()), &mut guard).expect("max evals");
+        assert_eq!(max, vec![int_lit("3")]);
+        let sum =
+            eval_node_expr(&data, &ex("x"), &NodeExpr::Sum(path()), &mut guard).expect("sum evals");
+        assert_eq!(sum, vec![int_lit("6")]);
+    }
+
+    #[test]
+    fn sum_of_empty_is_zero_min_max_of_empty_is_unbound() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::new();
+        let empty = || Box::new(NodeExpr::Path(pred("missing")));
+
+        let sum = eval_node_expr(&data, &ex("x"), &NodeExpr::Sum(empty()), &mut guard)
+            .expect("sum evals");
+        assert_eq!(sum, vec![int_lit("0")]);
+        let min = eval_node_expr(&data, &ex("x"), &NodeExpr::Min(empty()), &mut guard)
+            .expect("min evals");
+        assert!(min.is_empty(), "min of empty is unbound");
+        let max = eval_node_expr(&data, &ex("x"), &NodeExpr::Max(empty()), &mut guard)
+            .expect("max evals");
+        assert!(max.is_empty(), "max of empty is unbound");
+    }
+
+    #[test]
+    fn sum_promotes_int_and_decimal() {
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:x ex:v 1 .
+            ex:x ex:v 2.5 .
+        ",
+        );
+        let mut guard = RecursionGuard::new();
+        let expr = NodeExpr::Sum(Box::new(NodeExpr::Path(pred("v"))));
+        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("sum evals");
+        // 1 (int) + 2.5 (decimal) promotes to xsd:decimal 3.5.
+        assert_eq!(
+            result,
+            vec![Term::Literal(Literal::new_typed_literal(
+                "3.5",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#decimal"),
+            ))]
+        );
+    }
+
+    #[test]
+    fn orderby_ascending_and_descending() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::new();
+        let asc = NodeExpr::OrderBy {
+            of: Box::new(NodeExpr::Path(pred("e"))),
+            descending: false,
+        };
+        let result = eval_node_expr(&data, &ex("x"), &asc, &mut guard).expect("orderby evals");
+        assert_eq!(result, vec![ex("a"), ex("b"), ex("c")]);
+
+        let desc = NodeExpr::OrderBy {
+            of: Box::new(NodeExpr::Path(pred("e"))),
+            descending: true,
+        };
+        let result = eval_node_expr(&data, &ex("x"), &desc, &mut guard).expect("orderby evals");
+        assert_eq!(result, vec![ex("c"), ex("b"), ex("a")]);
+    }
+
+    #[test]
+    fn offset_skips_leading_values() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::new();
+        // OrderBy first so the sequence is deterministic before the offset.
+        let expr = NodeExpr::Offset {
+            of: Box::new(NodeExpr::OrderBy {
+                of: Box::new(NodeExpr::Path(pred("e"))),
+                descending: false,
+            }),
+            n: 1,
+        };
+        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("offset evals");
+        assert_eq!(result, vec![ex("b"), ex("c")]);
+    }
+
+    #[test]
+    fn limit_takes_leading_values() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::new();
+        let expr = NodeExpr::Limit {
+            of: Box::new(NodeExpr::OrderBy {
+                of: Box::new(NodeExpr::Path(pred("e"))),
+                descending: false,
+            }),
+            n: 2,
+        };
+        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("limit evals");
+        assert_eq!(result, vec![ex("a"), ex("b")]);
+    }
+
+    #[test]
+    fn composed_limit_offset_orderby() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::new();
+        // Parser nests as Limit(Offset(OrderBy(core))) — eval composes as
+        // orderby → offset → limit.
+        let expr = NodeExpr::Limit {
+            of: Box::new(NodeExpr::Offset {
+                of: Box::new(NodeExpr::OrderBy {
+                    of: Box::new(NodeExpr::Path(pred("e"))),
+                    descending: false,
+                }),
+                n: 1,
+            }),
+            n: 1,
+        };
+        // orderby → [a,b,c]; offset 1 → [b,c]; limit 1 → [b].
+        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("composed evals");
+        assert_eq!(result, vec![ex("b")]);
+    }
+
+    #[test]
+    fn aggregate_over_blank_node_is_type_error() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::new();
+        let expr = NodeExpr::Min(Box::new(NodeExpr::Constant(Term::blank("b0"))));
+        let err = eval_node_expr(&data, &ex("x"), &expr, &mut guard).unwrap_err();
+        assert!(
+            err.contains("cannot appear in a SPARQL VALUES block"),
+            "got: {err}"
+        );
     }
 
     #[test]

@@ -1,0 +1,4 @@
+<http://example.org/ns#rich> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#C> .
+<http://example.org/ns#rich> <http://example.org/ns#amt> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://example.org/ns#rich> <http://example.org/ns#amt> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://example.org/ns#poor> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#C> .

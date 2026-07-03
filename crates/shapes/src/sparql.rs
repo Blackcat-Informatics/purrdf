@@ -19,8 +19,9 @@ use ::purrdf::RdfDataset;
 use ::purrdf::{SparqlEngine, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::NativeSparqlEngine;
 
+use crate::model::xsd;
 use crate::report::{Severity, ValidationResult};
-use crate::term::{term_value_to_native, NamedNode, Term};
+use crate::term::{term_value_to_native, Literal, NamedNode, Term};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -175,6 +176,99 @@ pub fn eval_scalar_expr(
     }
     let Some(row) = rows.first() else {
         // No row at all is a degenerate/undef result → no value.
+        return Ok(None);
+    };
+    let result_index = column_index(&variables, "result");
+    let value = result_index
+        .and_then(|i| row.get(i))
+        .and_then(Option::as_ref)
+        .map(term_value_to_native);
+    Ok(value)
+}
+
+/// Evaluate a SPARQL set aggregate (`"MIN"` / `"MAX"` / `"SUM"`) over an explicit
+/// list of operand `values`, on the native engine.
+///
+/// This keeps *all* SHACL-AF aggregation on the single SPARQL path so numeric
+/// type-promotion and ordering match the engine exactly — there is no parallel
+/// Rust numeric fold. The operands are inlined into a one-column `VALUES` block:
+///
+/// ```sparql
+/// SELECT (MIN(?v) AS ?result) WHERE { VALUES (?v) { (t0) (t1) ... } }
+/// ```
+///
+/// Each `ti` is rendered through the workspace [`Term`] serializer
+/// ([`Term`]'s `Display`, i.e. N-Triples term syntax — `<iri>`, `"lex"^^<dt>`,
+/// `"lex"@lang`), which is valid inside a SPARQL `VALUES` block for IRIs and
+/// literals. Blank nodes and quoted triples cannot appear in `VALUES` (and are
+/// not comparable/numeric aggregation operands), so an operand of either kind is
+/// a hard type error.
+///
+/// The empty operand set is special-cased *before* building the query (an empty
+/// `VALUES` block is awkward and the algebra is unambiguous): `SUM` of nothing is
+/// `0`^^`xsd:integer`; `MIN`/`MAX` of nothing is unbound (`Ok(None)`).
+///
+/// Returns `Ok(Some(term))` when the aggregate bound `?result`, `Ok(None)` when
+/// it is unbound (e.g. `MIN`/`MAX` of an empty set), or `Err` on an engine error
+/// or an un-renderable operand.
+///
+/// # Errors
+///
+/// Returns `Err(String)` if `agg` is not one of `"MIN"`/`"MAX"`/`"SUM"`, an
+/// operand is a blank node or quoted triple, execution fails, the result is not a
+/// SELECT, or the query yields more than one row.
+pub fn eval_aggregate(
+    dataset: &Arc<RdfDataset>,
+    agg: &str,
+    values: &[Term],
+) -> Result<Option<Term>, String> {
+    if !matches!(agg, "MIN" | "MAX" | "SUM") {
+        return Err(format!(
+            "unsupported aggregate {agg} (expected MIN/MAX/SUM)"
+        ));
+    }
+
+    // Empty operand set: special-case before building the query.
+    if values.is_empty() {
+        return Ok(match agg {
+            "SUM" => Some(Term::Literal(Literal::new_typed_literal(
+                "0",
+                NamedNode::new_unchecked(xsd::INTEGER),
+            ))),
+            // MIN/MAX of an empty set is unbound.
+            _ => None,
+        });
+    }
+
+    // Inline each operand into the VALUES block via the workspace Term serializer.
+    let mut rows = String::new();
+    for term in values {
+        match term {
+            Term::NamedNode(_) | Term::Literal(_) => {
+                // `Term`'s Display renders N-Triples term syntax, valid in VALUES.
+                rows.push('(');
+                rows.push_str(&term.to_string());
+                rows.push_str(") ");
+            }
+            Term::BlankNode(_) | Term::Triple(_) => {
+                return Err(format!(
+                    "aggregate {agg} operand {term} cannot appear in a SPARQL VALUES block (not a comparable/numeric value)"
+                ));
+            }
+        }
+    }
+
+    let select = format!("SELECT ({agg}(?v) AS ?result) WHERE {{ VALUES (?v) {{ {rows}}} }}");
+    let (variables, result_rows) =
+        run_select(dataset, &select, &[]).map_err(|e| format!("aggregate {e}"))?;
+
+    if result_rows.len() > 1 {
+        return Err(format!(
+            "aggregate {agg} produced {} solution rows (expected exactly one)",
+            result_rows.len()
+        ));
+    }
+    let Some(row) = result_rows.first() else {
         return Ok(None);
     };
     let result_index = column_index(&variables, "result");
@@ -361,7 +455,7 @@ mod tests {
             .expect("bound result");
         assert_eq!(
             result,
-            Term::Literal(crate::term::Literal::new_typed_literal(
+            Term::Literal(Literal::new_typed_literal(
                 "3",
                 NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
             ))
@@ -371,7 +465,7 @@ mod tests {
     #[test]
     fn eval_scalar_expr_with_arg_substitution() {
         let dataset = dataset_from_ntriples(&[]);
-        let arg = Term::Literal(crate::term::Literal::new_typed_literal(
+        let arg = Term::Literal(Literal::new_typed_literal(
             "abcd",
             NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
         ));
@@ -380,11 +474,91 @@ mod tests {
             .expect("bound result");
         assert_eq!(
             result,
-            Term::Literal(crate::term::Literal::new_typed_literal(
+            Term::Literal(Literal::new_typed_literal(
                 "4",
                 NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
             ))
         );
+    }
+
+    // ── eval_aggregate ────────────────────────────────────────────────────────
+
+    fn int_lit(n: &str) -> Term {
+        Term::Literal(Literal::new_typed_literal(
+            n,
+            NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+        ))
+    }
+
+    #[test]
+    fn eval_aggregate_min_max_sum_over_integers() {
+        let dataset = dataset_from_ntriples(&[]);
+        let vals = [int_lit("1"), int_lit("2"), int_lit("3")];
+        assert_eq!(
+            eval_aggregate(&dataset, "MIN", &vals).expect("min"),
+            Some(int_lit("1"))
+        );
+        assert_eq!(
+            eval_aggregate(&dataset, "MAX", &vals).expect("max"),
+            Some(int_lit("3"))
+        );
+        assert_eq!(
+            eval_aggregate(&dataset, "SUM", &vals).expect("sum"),
+            Some(int_lit("6"))
+        );
+    }
+
+    #[test]
+    fn eval_aggregate_empty_set() {
+        let dataset = dataset_from_ntriples(&[]);
+        // SUM of empty = xsd:integer 0; MIN/MAX of empty = unbound.
+        assert_eq!(
+            eval_aggregate(&dataset, "SUM", &[]).expect("sum empty"),
+            Some(int_lit("0"))
+        );
+        assert_eq!(
+            eval_aggregate(&dataset, "MIN", &[]).expect("min empty"),
+            None
+        );
+        assert_eq!(
+            eval_aggregate(&dataset, "MAX", &[]).expect("max empty"),
+            None
+        );
+    }
+
+    #[test]
+    fn eval_aggregate_promotes_int_and_decimal() {
+        let dataset = dataset_from_ntriples(&[]);
+        let decimal = Term::Literal(Literal::new_typed_literal(
+            "2.5",
+            NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#decimal"),
+        ));
+        let vals = [int_lit("1"), decimal];
+        // 1 (int) + 2.5 (decimal) promotes to xsd:decimal 3.5.
+        assert_eq!(
+            eval_aggregate(&dataset, "SUM", &vals).expect("sum"),
+            Some(Term::Literal(Literal::new_typed_literal(
+                "3.5",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#decimal"),
+            )))
+        );
+    }
+
+    #[test]
+    fn eval_aggregate_blank_node_operand_is_error() {
+        let dataset = dataset_from_ntriples(&[]);
+        let err = eval_aggregate(&dataset, "SUM", &[Term::blank("b0")]).unwrap_err();
+        assert!(
+            err.contains("cannot appear in a SPARQL VALUES block"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn eval_aggregate_rejects_unknown_agg() {
+        let dataset = dataset_from_ntriples(&[]);
+        let err = eval_aggregate(&dataset, "AVG", &[int_lit("1")]).unwrap_err();
+        assert!(err.contains("unsupported aggregate"), "got: {err}");
     }
 
     #[test]
