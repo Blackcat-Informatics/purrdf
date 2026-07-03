@@ -104,7 +104,7 @@ pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
 /// whether that is an expected failure).
 pub fn run(
     case: &SparqlTestCase,
-    remote: Option<&dyn RemoteQuerySource>,
+    remote: Option<&(dyn RemoteQuerySource + Sync)>,
 ) -> Result<RunOutcome, String> {
     let query_text = std::fs::read_to_string(&case.query)
         .map_err(|e| format!("read query {}: {e}", case.query.display()))?;

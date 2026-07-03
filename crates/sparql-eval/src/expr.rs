@@ -23,7 +23,6 @@
 //! `SERVICE` (S6b #928), property paths (S8 #914), and `Function::Custom`.
 
 use std::cmp::Ordering;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use purrdf_core::{BlankScope, DatasetView, GraphMatch, TermRef, TermValue};
@@ -710,7 +709,7 @@ fn exists(
     let inner_expr_vars = if ctx.in_substituted_exists {
         let mut vars = DetHashSet::default();
         pattern_expr_vars(pattern, &mut vars);
-        Rc::new(vars)
+        Arc::new(vars)
     } else {
         let pattern_key = std::ptr::from_ref::<GraphPattern>(pattern) as usize;
         ctx.exists_expr_vars_cache
@@ -718,7 +717,7 @@ fn exists(
             .or_insert_with(|| {
                 let mut vars = DetHashSet::default();
                 pattern_expr_vars(pattern, &mut vars);
-                Rc::new(vars)
+                Arc::new(vars)
             })
             .clone()
     };
@@ -1974,11 +1973,11 @@ fn eval_regex(
 /// The compiled regex for `(pattern, flags)`, from the per-query cache.
 ///
 /// The hit path probes with the **borrowed** strings (the two-level map avoids
-/// allocating a `(String, String)` key per row) and returns an `Rc` clone — the
+/// allocating a `(String, String)` key per row) and returns an `Arc` clone — the
 /// rows of one filter share a single compiled regex and therefore its lazy-DFA
 /// cache pool, instead of each row cloning a fresh one. Compile failures are
 /// cached as `None` (same errors, compiled once).
-fn cached_regex(ctx: &mut EvalCtx<'_>, pattern: &str, flags: &str) -> Option<Rc<regex::Regex>> {
+fn cached_regex(ctx: &mut EvalCtx<'_>, pattern: &str, flags: &str) -> Option<Arc<regex::Regex>> {
     if let Some(cached) = ctx
         .regex_cache
         .get(pattern)
@@ -1986,7 +1985,7 @@ fn cached_regex(ctx: &mut EvalCtx<'_>, pattern: &str, flags: &str) -> Option<Rc<
     {
         return cached.clone();
     }
-    let compiled = build_regex(pattern, flags).map(Rc::new);
+    let compiled = build_regex(pattern, flags).map(Arc::new);
     ctx.regex_cache
         .entry(pattern.to_owned())
         .or_default()

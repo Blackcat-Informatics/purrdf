@@ -252,7 +252,7 @@ mod tests {
 
     fn run_with_source(
         ds: &Arc<RdfDataset>,
-        source: &dyn RemoteQuerySource,
+        source: &(dyn RemoteQuerySource + Sync),
         query: &str,
     ) -> Result<SparqlResult, EvalError> {
         use crate::eval::evaluate_query;

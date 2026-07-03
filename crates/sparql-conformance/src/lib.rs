@@ -129,7 +129,7 @@ fn verdict_of(case: &SparqlTestCase) -> Verdict {
     };
     let remote = remote
         .as_ref()
-        .map(|s| s as &dyn purrdf_sparql_eval::RemoteQuerySource);
+        .map(|s| s as &(dyn purrdf_sparql_eval::RemoteQuerySource + Sync));
     match run::run(case, remote) {
         Ok(outcome) => match compare::compare(case, &outcome) {
             Ok(()) => Verdict::Pass,

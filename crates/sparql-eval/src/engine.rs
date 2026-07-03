@@ -199,7 +199,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &Arc<RdfDataset>,
         request: SparqlRequest<'_>,
-        source: &dyn crate::remote::RemoteQuerySource,
+        source: &(dyn crate::remote::RemoteQuerySource + Sync),
     ) -> Result<SparqlResult, RdfDiagnostic> {
         let prepared = self.cache.borrow_mut().prepare_with(
             request.query,
@@ -1446,20 +1446,38 @@ mod tests {
         };
 
         engine.query(&ds, req()).expect("first query");
-        assert_eq!(engine.order_cache.borrow().len(), 1, "one BGP cached");
+        assert_eq!(
+            engine
+                .order_cache
+                .read()
+                .expect("order cache lock poisoned")
+                .len(),
+            1,
+            "one BGP cached"
+        );
         let first = engine
             .order_cache
-            .borrow()
+            .read()
+            .expect("order cache lock poisoned")
             .values()
             .next()
             .expect("cached order")
             .clone();
 
         engine.query(&ds, req()).expect("second query");
-        assert_eq!(engine.order_cache.borrow().len(), 1, "no duplicate entry");
+        assert_eq!(
+            engine
+                .order_cache
+                .read()
+                .expect("order cache lock poisoned")
+                .len(),
+            1,
+            "no duplicate entry"
+        );
         let second = engine
             .order_cache
-            .borrow()
+            .read()
+            .expect("order cache lock poisoned")
             .values()
             .next()
             .expect("cached order")
@@ -1498,7 +1516,11 @@ mod tests {
         assert_eq!(rows.len(), 2);
 
         assert_eq!(
-            engine.order_cache.borrow().len(),
+            engine
+                .order_cache
+                .read()
+                .expect("order cache lock poisoned")
+                .len(),
             2,
             "distinct datasets ⇒ distinct fingerprints ⇒ two cache entries"
         );

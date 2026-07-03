@@ -221,7 +221,7 @@ fn plan_or_cached_order(
         return Arc::from(cost_based_order(compiled, dataset, scope));
     };
     let key = (dataset.stats_fingerprint(), bgp_shape_key(compiled, scope));
-    if let Some(order) = cache.borrow().get(&key) {
+    if let Some(order) = cache.read().expect("order cache lock poisoned").get(&key) {
         // A shape-key collision is NOT licensed by the stats-fingerprint safety
         // argument: a wrong-length order would index out of bounds in the join loop.
         // Guard it — on a length mismatch fall through and re-plan.
@@ -230,7 +230,10 @@ fn plan_or_cached_order(
         }
     }
     let order: Arc<[usize]> = Arc::from(cost_based_order(compiled, dataset, scope));
-    cache.borrow_mut().insert(key, Arc::clone(&order));
+    cache
+        .write()
+        .expect("order cache lock poisoned")
+        .insert(key, Arc::clone(&order));
     order
 }
 

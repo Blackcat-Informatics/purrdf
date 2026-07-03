@@ -15,7 +15,6 @@
 //! indexed read surface through `DatasetView` (the inherent `quads_for_pattern`
 //! override, P4b #891).
 
-use std::rc::Rc;
 use std::sync::Arc;
 
 use purrdf_core::{GraphMatch, RdfDataset, TermFactory, TermValue};
@@ -129,7 +128,7 @@ pub(crate) fn schema_fingerprint(schema: &crate::solution::VarSchema) -> u64 {
 /// materialised as triples (Principle 12). A stale or colliding key is at worst a
 /// suboptimal order (the reorder is a permutation of a commutative join), never an
 /// incorrect result, so the fingerprint can be cheap.
-pub type BgpOrderCache = std::cell::RefCell<DetHashMap<(u64, u64), Arc<[usize]>>>;
+pub type BgpOrderCache = std::sync::RwLock<DetHashMap<(u64, u64), Arc<[usize]>>>;
 
 /// The mutable evaluation context threaded through [`eval`].
 pub struct EvalCtx<'d> {
@@ -178,15 +177,15 @@ pub struct EvalCtx<'d> {
     /// Correlation detection runs for every outer row; caching this pure walk keeps
     /// the row loop focused on the cheap membership test against currently-bound
     /// outer variables.
-    pub(crate) exists_expr_vars_cache: DetHashMap<usize, Rc<crate::DetHashSet<Variable>>>,
+    pub(crate) exists_expr_vars_cache: DetHashMap<usize, Arc<crate::DetHashSet<Variable>>>,
     /// Per-query cache for SPARQL `REGEX`/`REPLACE` pattern+flag compilations,
     /// keyed pattern-then-flags so a hit probes with **borrowed** strings (no
-    /// per-row key allocation). The compiled regex is behind an `Rc`, so a hit
+    /// per-row key allocation). The compiled regex is behind an `Arc`, so a hit
     /// hands out a cheap pointer clone that **shares** the regex's lazy-DFA cache
     /// pool instead of minting a fresh one per row. Dynamic pattern expressions
     /// still compile per distinct value, but a filter over many rows no longer
     /// rebuilds the same automata (or their DFA caches) for every row.
-    pub(crate) regex_cache: DetHashMap<String, DetHashMap<String, Option<Rc<regex::Regex>>>>,
+    pub(crate) regex_cache: DetHashMap<String, DetHashMap<String, Option<Arc<regex::Regex>>>>,
     /// Lazily-resolved solution terms for the `xsd:boolean` literals `"false"` /
     /// `"true"` (indexed by `usize::from(bool)`), so per-row boolean expression
     /// results skip the value-hash intern probe. Interning is deterministic per
@@ -225,7 +224,7 @@ pub struct EvalCtx<'d> {
     /// The `SERVICE` federation source, if one is injected. `None` in
     /// the default engine path: a non-silent `SERVICE` then hard-fails. Tests and
     /// the conformance harness inject an in-memory source via [`EvalCtx::with_remote`].
-    pub(crate) remote: Option<&'d dyn crate::remote::RemoteQuerySource>,
+    pub(crate) remote: Option<&'d (dyn crate::remote::RemoteQuerySource + Sync)>,
     /// The shared, dataset-aware BGP join-order cache, if one is injected. `None` for
     /// a directly-built context (e.g. a unit test): planning then runs every BGP, which
     /// is semantically identical — just not memoised. The engine injects its own cache
@@ -254,6 +253,17 @@ pub struct EvalCtx<'d> {
     /// entirely while this flag is set.
     pub(crate) in_substituted_exists: bool,
 }
+
+/// Compile-time proof that [`EvalCtx`] is `Send + Sync`, so a future parallel
+/// worker can hold `&EvalCtx`/build its own from a shared `&'d RdfDataset`
+/// across threads. Every field must stay `Send + Sync` for this to hold — the
+/// `Rc`/`RefCell` fields that used to block it were switched to `Arc`/`RwLock`
+/// and `remote`'s trait object was given an explicit `+ Sync` bound precisely
+/// so this assertion compiles.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<EvalCtx<'static>>();
+};
 
 impl core::fmt::Debug for EvalCtx<'_> {
     /// Summarized: the injected `SERVICE` source (`remote`) is a plain `dyn`
@@ -382,7 +392,10 @@ impl<'d> EvalCtx<'d> {
     /// Attach a `SERVICE` federation source for this evaluation. The borrow shares
     /// the dataset lifetime `'d`; the engine's default path leaves it `None`.
     #[must_use]
-    pub fn with_remote(mut self, source: &'d dyn crate::remote::RemoteQuerySource) -> Self {
+    pub fn with_remote(
+        mut self,
+        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
+    ) -> Self {
         self.remote = Some(source);
         self
     }
