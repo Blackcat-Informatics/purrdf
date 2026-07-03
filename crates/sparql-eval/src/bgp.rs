@@ -135,26 +135,34 @@ pub(crate) fn eval_bgp(
     let mut rows: Vec<Solution> = vec![vec![None; working.len()]];
     for &i in order.iter() {
         let cp = &compiled[i];
-        let mut next = Vec::new();
         // The probe's bound-axis shape is fixed across this slot's rows (a variable is
         // bound by an earlier pattern for every row or for none), so the permutation
-        // choice is loop-invariant: compute the `QuadProbePlan` once (on the first
-        // single-graph probe) and reuse it, instead of re-selecting per row.
-        let mut probe_plan: Option<QuadProbePlan> = None;
-        for row in &rows {
+        // choice is loop-invariant: for a single-graph scope, compute the
+        // `QuadProbePlan` once from the first row (non-empty — the loop `break`s above
+        // the moment `rows` empties) and capture the `Copy` plan in every worker,
+        // instead of re-selecting it per row.
+        let plan: Option<QuadProbePlan> = match &scope {
+            GraphScope::One(gm) => Some(RdfDataset::probe_plan(
+                query_id(&cp.s, &rows[0]).is_some(),
+                query_id(&cp.p, &rows[0]).is_some(),
+                query_id(&cp.o, &rows[0]).is_some(),
+                *gm,
+            )),
+            GraphScope::Merge(_) => None,
+        };
+        let next = crate::parallel::par_flat_map(&rows, |_, row| {
             let s = query_id(&cp.s, row);
             let p = query_id(&cp.p, row);
             let o = query_id(&cp.o, row);
+            let mut out = Vec::new();
             match &scope {
                 // Single-graph scope (store default / a named graph): the indexed
                 // partition_point read, unchanged — no de-dup overhead.
                 GraphScope::One(gm) => {
-                    let plan = *probe_plan.get_or_insert_with(|| {
-                        RdfDataset::probe_plan(s.is_some(), p.is_some(), o.is_some(), *gm)
-                    });
+                    let plan = plan.expect("plan computed above for GraphScope::One");
                     for quad in ctx.dataset.quads_for_pattern_with_plan(&plan, s, p, o, *gm) {
                         if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                            next.push(extended);
+                            out.push(extended);
                         }
                     }
                     // The RDF 1.2 reification layer is a dataset-level (default-graph)
@@ -165,7 +173,7 @@ pub(crate) fn eval_bgp(
                     if gm.matches(None) {
                         emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies_id, |quad| {
                             if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                                next.push(extended);
+                                out.push(extended);
                             }
                         });
                     }
@@ -174,7 +182,9 @@ pub(crate) fn eval_bgp(
                 // RDF-merge unions *triples*, so a triple present in two merged graphs
                 // must bind once — de-dupe by (s, p, o) for this pattern+row. The
                 // reification layer is store-default content (not part of an explicitly
-                // FROM-named merge), so it is not folded into a merged scope.
+                // FROM-named merge), so it is not folded into a merged scope. `seen` is
+                // local to this row's worker (each row gets its own), identical to the
+                // sequential path.
                 GraphScope::Merge(gs) => {
                     let mut seen: DetHashSet<(TermId, TermId, TermId)> = DetHashSet::default();
                     for &g in gs {
@@ -183,13 +193,14 @@ pub(crate) fn eval_bgp(
                                 continue;
                             }
                             if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                                next.push(extended);
+                                out.push(extended);
                             }
                         }
                     }
                 }
             }
-        }
+            out
+        });
         rows = next;
         if rows.is_empty() {
             break;

@@ -168,10 +168,15 @@ fn hash_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
     // Build side = right (split into key-indexed + wild rows).
     let (keyed, wild) = build_index(r, &shared);
 
-    // Probe-side cardinality is a cheap, usually-tight lower-bound estimate for
-    // the output (the common star join is ~1:1), avoiding most growth reallocs.
-    let mut rows = Vec::with_capacity(l.rows.len());
-    for lrow in &l.rows {
+    // Each left row's worker returns its merged matches in the same order as the
+    // sequential path (keyed-bucket matches in `idxs` order, then wild matches; or,
+    // for the unbound-shared-column case, the compatibility scan over `r.rows` in
+    // order); flattening across rows in index order reproduces the exact sequential
+    // row sequence. Captures only read-only borrows: `keyed`/`wild`/`r.rows` (the
+    // prebuilt index), `right_to_out`/`shared` (pure layout), `left_len`/`out_len`
+    // (`Copy`), and `merge`/`compatible` (pure fns).
+    let rows = crate::parallel::par_flat_map(&l.rows, |_, lrow| {
+        let mut out_rows = Vec::new();
         match bound_key(lrow, &shared, KeySide::Left) {
             // Probe is fully bound on shared columns: hit the matching bucket
             // (exact key ⇒ compatible) plus any wild build rows it is compatible
@@ -179,12 +184,12 @@ fn hash_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
             Some(key) => {
                 if let Some(idxs) = keyed.get(&key) {
                     for &idx in idxs {
-                        rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        out_rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                     }
                 }
                 for &idx in &wild {
                     if compatible(lrow, &r.rows[idx], &shared) {
-                        rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        out_rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                     }
                 }
             }
@@ -193,12 +198,13 @@ fn hash_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
             None => {
                 for rrow in &r.rows {
                     if compatible(lrow, rrow, &shared) {
-                        rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        out_rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
                     }
                 }
             }
         }
-    }
+        out_rows
+    });
 
     SolutionSeq {
         schema: Arc::new(out),
@@ -331,39 +337,43 @@ fn left_outer_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
 
     let (keyed, wild) = build_index(r, &shared);
 
-    // A left outer join emits at least one row per left row.
-    let mut rows = Vec::with_capacity(l.rows.len());
-    for lrow in &l.rows {
-        let before = rows.len();
+    // A left outer join emits at least one row per left row. Each worker returns the
+    // matched merges (keyed then wild, same order as the sequential path) or, when
+    // none match, the single padded left-alone row — reproducing the existing "emit
+    // alone iff no match" per-row semantics inside the worker so flattening in index
+    // order is byte-identical to the sequential path.
+    let rows = crate::parallel::par_flat_map(&l.rows, |_, lrow| {
+        let mut out_rows = Vec::new();
         match bound_key(lrow, &shared, KeySide::Left) {
             Some(key) => {
                 if let Some(idxs) = keyed.get(&key) {
                     for &idx in idxs {
-                        rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        out_rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                     }
                 }
                 for &idx in &wild {
                     if compatible(lrow, &r.rows[idx], &shared) {
-                        rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        out_rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                     }
                 }
             }
             None => {
                 for rrow in &r.rows {
                     if compatible(lrow, rrow, &shared) {
-                        rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        out_rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
                     }
                 }
             }
         }
         // No compatible right solution → keep the left solution alone (the OPTIONAL
         // contributed nothing, its variables stay unbound).
-        if rows.len() == before {
+        if out_rows.is_empty() {
             let mut row = vec![None; out_len];
             row[..left_len].copy_from_slice(lrow);
-            rows.push(row);
+            out_rows.push(row);
         }
-    }
+        out_rows
+    });
 
     SolutionSeq {
         schema: Arc::new(out),
@@ -387,20 +397,15 @@ pub(crate) fn eval_minus(
     let r = eval(right, ctx)?;
     let shared = l.schema.shared_columns(&r.schema);
 
-    let rows = l
-        .rows
-        .iter()
-        .filter(|lrow| {
-            // Keep the left row unless some right row removes it.
-            !r.rows.iter().any(|rrow| {
-                compatible(lrow, rrow, &shared)
-                    && shared
-                        .iter()
-                        .any(|&(la, ra)| lrow[la].is_some() && rrow[ra].is_some())
-            })
+    let rows = crate::parallel::par_retain(&l.rows, |lrow| {
+        // Keep the left row unless some right row removes it.
+        !r.rows.iter().any(|rrow| {
+            compatible(lrow, rrow, &shared)
+                && shared
+                    .iter()
+                    .any(|&(la, ra)| lrow[la].is_some() && rrow[ra].is_some())
         })
-        .cloned()
-        .collect();
+    });
 
     Ok(SolutionSeq {
         schema: l.schema,

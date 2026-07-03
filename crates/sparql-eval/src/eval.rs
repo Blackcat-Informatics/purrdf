@@ -795,4 +795,91 @@ mod tests {
             schema_fingerprint(&s(&["x", "y"]))
         );
     }
+
+    /// Determinism smoke test (Task 4): a query exercising BGP, JOIN, a
+    /// non-filtered OPTIONAL, and MINUS evaluated once with the parallel path
+    /// FORCED (via [`crate::parallel::force_parallel_for_test`]) and once with
+    /// the sequential path FORCED must produce byte-identical `Vec<Solution>`
+    /// rows (schema and row order both). This is a narrower, faster-running
+    /// tripwire than the full Task 7 gate — it catches an ordering regression
+    /// in any of the four read-only nodes wired in this task immediately,
+    /// something the conformance suite's multiset comparisons would not.
+    #[test]
+    fn parallel_and_sequential_paths_agree_bit_for_bit() {
+        use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable};
+
+        // :a :knows :b . :b :knows :c .
+        // :a :likes :cake . :b :likes :tea . :c :likes :juice .
+        // :tea :extra :hot .
+        // :a :bad :x .
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri("http://ex/knows");
+        let likes = b.intern_iri("http://ex/likes");
+        let extra = b.intern_iri("http://ex/extra");
+        let bad = b.intern_iri("http://ex/bad");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
+        let cake = b.intern_iri("http://ex/cake");
+        let tea = b.intern_iri("http://ex/tea");
+        let juice = b.intern_iri("http://ex/juice");
+        let hot = b.intern_iri("http://ex/hot");
+        let x = b.intern_iri("http://ex/x");
+        b.push_quad(a, knows, bb, None);
+        b.push_quad(bb, knows, c, None);
+        b.push_quad(a, likes, cake, None);
+        b.push_quad(bb, likes, tea, None);
+        b.push_quad(c, likes, juice, None);
+        b.push_quad(tea, extra, hot, None);
+        b.push_quad(a, bad, x, None);
+        let ds = b.freeze().expect("freeze");
+
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let bgp = |s, p, o| GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: s,
+                predicate: p,
+                object: o,
+            }],
+        };
+
+        // { ?x :knows ?y } JOIN { ?y :likes ?z } OPTIONAL { ?z :extra ?w } MINUS { ?x :bad ?v }
+        let knows_bgp = bgp(vp("x"), pred("http://ex/knows"), vp("y"));
+        let likes_bgp = bgp(vp("y"), pred("http://ex/likes"), vp("z"));
+        let join = GraphPattern::Join {
+            left: Box::new(knows_bgp),
+            right: Box::new(likes_bgp),
+        };
+        let extra_bgp = bgp(vp("z"), pred("http://ex/extra"), vp("w"));
+        let optional = GraphPattern::LeftJoin {
+            left: Box::new(join),
+            right: Box::new(extra_bgp),
+            expression: None,
+        };
+        let bad_bgp = bgp(vp("x"), pred("http://ex/bad"), vp("v"));
+        let pattern = GraphPattern::Minus {
+            left: Box::new(optional),
+            right: Box::new(bad_bgp),
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&pattern, &mut ctx).expect("eval");
+            (seq.schema.vars().to_vec(), seq.rows)
+        };
+
+        let (schema_par, rows_par) = run(true);
+        let (schema_seq, rows_seq) = run(false);
+
+        assert_eq!(schema_par, schema_seq, "schema must match regardless of path");
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential paths must produce byte-identical row order"
+        );
+        // Sanity: the MINUS removes the x=a row (it has a :bad edge); only the
+        // x=b/y=c/z=juice row (with ?w unbound, no :extra match) survives.
+        assert_eq!(rows_seq.len(), 1);
+    }
 }

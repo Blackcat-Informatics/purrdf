@@ -240,6 +240,12 @@ fn pattern_reaches_unsafe_builtin(pattern: &GraphPattern) -> bool {
 /// not order-stable) and, on failure, the first `Err` **by source index** wins
 /// regardless of which worker finished first.
 ///
+/// Internally gated on [`should_parallelize`]: at or below [`PARALLEL_MIN_ROWS`]
+/// this runs a plain sequential `iter().enumerate()` fold (bit-identical output,
+/// no rayon hand-off cost); above it, rayon's indexed `par_iter`. Callers get a
+/// single call site — the `#[cfg(test)]` force seam in [`should_parallelize`]
+/// routes through here.
+///
 /// Mirrors `purrdf_rdf::native_codecs::text_parse::parse_lines_parallel_with_chunk_size`:
 /// every worker result is collected into a plain `Vec` FIRST, then walked in
 /// order and `?`-propagated, so a fast late item can never race ahead of an
@@ -249,6 +255,14 @@ where
     T: Sync,
     F: Fn(usize, &T) -> Result<Vec<Solution>, EvalError> + Sync + Send,
 {
+    if !should_parallelize(items.len()) {
+        let mut out = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            out.extend(worker(i, item)?);
+        }
+        return Ok(out);
+    }
+
     use rayon::prelude::*;
 
     let per_item: Vec<Result<Vec<Solution>, EvalError>> = items
@@ -262,6 +276,57 @@ where
         out.extend(result?);
     }
     Ok(out)
+}
+
+/// The infallible sibling of [`par_try_flat_map`]: run `worker` over every item
+/// of `items` and flatten the per-item `Vec<R>` results in source-index order.
+/// Same internal [`should_parallelize`] gate — sequential at/below the
+/// threshold, rayon's indexed `par_iter` above it — so there is exactly one
+/// call site per caller and the `#[cfg(test)]` force seam applies uniformly.
+pub(crate) fn par_flat_map<T, R, F>(items: &[T], worker: F) -> Vec<R>
+where
+    T: Sync,
+    R: Send,
+    F: Fn(usize, &T) -> Vec<R> + Sync + Send,
+{
+    if !should_parallelize(items.len()) {
+        let mut out = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            out.extend(worker(i, item));
+        }
+        return out;
+    }
+
+    use rayon::prelude::*;
+
+    let per_item: Vec<Vec<R>> = items.par_iter().enumerate().map(|(i, item)| worker(i, item)).collect();
+
+    let mut out = Vec::with_capacity(per_item.iter().map(Vec::len).sum());
+    for result in per_item {
+        out.extend(result);
+    }
+    out
+}
+
+/// An order-stable, internally-gated parallel filter-clone: keep every item of
+/// `items` for which `keep` returns `true`, cloning it into the output in
+/// source order. Sequential at/below [`PARALLEL_MIN_ROWS`] (a plain retain);
+/// above it, rayon's indexed `par_iter().filter().cloned()`, which preserves
+/// source order exactly like the sequential path (never `par_sort`/
+/// `par_bridge`). Used by `MINUS`, whose predicate is a pure read-only
+/// compatibility check.
+pub(crate) fn par_retain<T, F>(items: &[T], keep: F) -> Vec<T>
+where
+    T: Clone + Sync + Send,
+    F: Fn(&T) -> bool + Sync + Send,
+{
+    if !should_parallelize(items.len()) {
+        return items.iter().filter(|item| keep(item)).cloned().collect();
+    }
+
+    use rayon::prelude::*;
+
+    items.par_iter().filter(|item| keep(item)).cloned().collect()
 }
 
 /// Fold one row produced by a forked worker's `local` scratch back into the
@@ -486,6 +551,51 @@ mod tests {
         });
         let err = result.unwrap_err();
         assert_eq!(err, EvalError::internal("error at 5"));
+    }
+
+    // ---- par_flat_map ---------------------------------------------------------
+
+    #[test]
+    fn par_flat_map_flattens_in_index_order_forced_parallel() {
+        let _guard = force_parallel_for_test(true);
+        let items: Vec<usize> = (0..64).collect();
+        let result = par_flat_map(&items, |i, &item| {
+            if item % 7 != 0 {
+                std::thread::yield_now();
+            }
+            vec![i]
+        });
+        let expected: Vec<usize> = (0..64).collect();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn par_flat_map_flattens_in_index_order_forced_sequential() {
+        let _guard = force_parallel_for_test(false);
+        let items: Vec<usize> = (0..64).collect();
+        let result = par_flat_map(&items, |i, _| vec![i]);
+        let expected: Vec<usize> = (0..64).collect();
+        assert_eq!(result, expected);
+    }
+
+    // ---- par_retain -------------------------------------------------------
+
+    #[test]
+    fn par_retain_preserves_order_forced_parallel() {
+        let _guard = force_parallel_for_test(true);
+        let items: Vec<usize> = (0..64).collect();
+        let kept = par_retain(&items, |&i| i % 3 == 0);
+        let expected: Vec<usize> = (0..64).filter(|i| i % 3 == 0).collect();
+        assert_eq!(kept, expected);
+    }
+
+    #[test]
+    fn par_retain_preserves_order_forced_sequential() {
+        let _guard = force_parallel_for_test(false);
+        let items: Vec<usize> = (0..64).collect();
+        let kept = par_retain(&items, |&i| i % 3 == 0);
+        let expected: Vec<usize> = (0..64).filter(|i| i % 3 == 0).collect();
+        assert_eq!(kept, expected);
     }
 
     // ---- fork_for_worker + absorb_row -----------------------------------------
