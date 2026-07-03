@@ -849,7 +849,9 @@ mod tests {
     /// something the conformance suite's multiset comparisons would not.
     #[test]
     fn parallel_and_sequential_paths_agree_bit_for_bit() {
-        use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable};
+        use purrdf_sparql_algebra::{
+            NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        };
 
         // :a :knows :b . :b :knows :c .
         // :a :likes :cake . :b :likes :tea . :c :likes :juice .
@@ -916,7 +918,10 @@ mod tests {
         let (schema_par, rows_par) = run(true);
         let (schema_seq, rows_seq) = run(false);
 
-        assert_eq!(schema_par, schema_seq, "schema must match regardless of path");
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
         assert_eq!(
             rows_par, rows_seq,
             "parallel and sequential paths must produce byte-identical row order"
@@ -1012,7 +1017,10 @@ mod tests {
         let (schema_par, rows_par) = run(true);
         let (schema_seq, rows_seq) = run(false);
 
-        assert_eq!(schema_par, schema_seq, "schema must match regardless of path");
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
         assert_eq!(
             rows_par, rows_seq,
             "parallel and sequential FILTER paths must produce byte-identical row order"
@@ -1078,7 +1086,10 @@ mod tests {
         let (schema_par, rows_par) = run(true);
         let (schema_seq, rows_seq) = run(false);
 
-        assert_eq!(schema_par, schema_seq, "schema must match regardless of path");
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
         assert_eq!(
             rows_par, rows_seq,
             "parallel and sequential FILTER EXISTS paths must produce byte-identical row order"
@@ -1143,10 +1154,9 @@ mod tests {
         let right = bgp(vp("y"), pred("http://ex/age"), vp("a"));
         let cond = Expression::Greater(
             Box::new(Expression::Variable(Variable::new("a"))),
-            Box::new(Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
-                "40",
-                NamedNode::new_unchecked(XINT),
-            ))),
+            Box::new(Expression::Literal(
+                purrdf_sparql_algebra::Literal::new_typed("40", NamedNode::new_unchecked(XINT)),
+            )),
         );
         let pattern = GraphPattern::LeftJoin {
             left: Box::new(left),
@@ -1164,7 +1174,10 @@ mod tests {
         let (schema_par, rows_par) = run(true);
         let (schema_seq, rows_seq) = run(false);
 
-        assert_eq!(schema_par, schema_seq, "schema must match regardless of path");
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
         assert_eq!(
             rows_par, rows_seq,
             "parallel and sequential OPTIONAL-FILTER paths must produce byte-identical row order"

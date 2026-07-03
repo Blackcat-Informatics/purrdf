@@ -209,6 +209,14 @@ pub(crate) fn eval_filter(
 
 /// `Extend(inner, var, expr)` (BIND): add `var` bound to `expr`'s value for each
 /// solution. An error/unbound value leaves `var` unbound (the row is NOT dropped).
+///
+/// Gated on [`crate::parallel::is_parallel_safe`] like `eval_filter`: an unsafe
+/// `expr` MUST run on the real `ctx` sequentially. A safe `expr` mints a NEW
+/// `Computed` term that escapes into the output row (unlike FILTER's read-only
+/// predicate), so each worker's forked child materializes its bound row via
+/// [`crate::parallel::portable_row`] while its scratch is still alive, and this
+/// function re-interns each portable row against `ctx.scratch` afterwards, in
+/// source-index order, via [`crate::parallel::reintern_portable_row`].
 pub(crate) fn eval_extend(
     inner: &GraphPattern,
     var: &Variable,
@@ -221,13 +229,37 @@ pub(crate) fn eval_extend(
     let width = schema.len();
     let schema = Arc::new(schema);
 
-    let mut rows = Vec::with_capacity(seq.rows.len());
-    for mut row in seq.rows {
-        row.resize(width, None);
-        let value = eval_expr(expr, &row, &schema, ctx)?;
-        row[col] = value;
-        rows.push(row);
-    }
+    let rows = if crate::parallel::is_parallel_safe(expr) {
+        let base = ctx.scratch.computed_count();
+        let prows = crate::parallel::par_try_flat_map_init(
+            &seq.rows,
+            || ctx.fork_for_worker(),
+            |child, _, in_row| {
+                let mut row = in_row.clone();
+                row.resize(width, None);
+                let value = eval_expr(expr, &row, &schema, child)?;
+                row[col] = value;
+                Ok(vec![crate::parallel::portable_row(
+                    &child.scratch,
+                    base,
+                    &row,
+                )])
+            },
+        )?;
+        prows
+            .iter()
+            .map(|prow| crate::parallel::reintern_portable_row(&mut ctx.scratch, ctx.dataset, prow))
+            .collect()
+    } else {
+        let mut rows = Vec::with_capacity(seq.rows.len());
+        for mut row in seq.rows {
+            row.resize(width, None);
+            let value = eval_expr(expr, &row, &schema, ctx)?;
+            row[col] = value;
+            rows.push(row);
+        }
+        rows
+    };
     Ok(SolutionSeq { schema, rows })
 }
 
@@ -3182,7 +3214,9 @@ mod tests {
         // reproduces the identical per-row loop shape the forked child runs,
         // directly on `ctx`, to keep exercising the underlying "cache built once,
         // not once per outer row" invariant.
-        use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable};
+        use purrdf_sparql_algebra::{
+            NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        };
 
         let ds = knows_ds();
         let vp = |n: &str| TermPattern::Variable(Variable::new(n));
@@ -3305,7 +3339,9 @@ mod tests {
         // `exists_memo_populates_cache_once`'s comment: Task 5 routes this
         // parallel-safe FILTER through a forked child context, so the memo would
         // land there, not on a `ctx` inspected from outside `evaluate_query`.
-        use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable};
+        use purrdf_sparql_algebra::{
+            NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        };
 
         let ds = knows_ds();
         let vp = |n: &str| TermPattern::Variable(Variable::new(n));
@@ -3532,5 +3568,99 @@ mod tests {
             None,
             "unbound argument ⇒ SPARQL error (None)"
         );
+    }
+
+    /// Determinism smoke test (Task 6): a chained `BIND` — `BIND(?o + 5 AS ?sum)`
+    /// then `BIND(CONCAT("v-", STR(?sum)) AS ?label)` over three rows — mints both
+    /// a NUMERIC (`?sum`) and a STRING (`?label`) `Computed` term per row, each of
+    /// which must escape a forked child via [`crate::parallel::portable_row`]/
+    /// [`crate::parallel::reintern_portable_row`]. Evaluated once with the
+    /// parallel `Extend` path FORCED and once with the sequential path FORCED,
+    /// the two must produce byte-identical rows (row order + resolved values).
+    #[test]
+    fn bind_chain_numeric_and_string_forced_parallel_and_sequential_agree() {
+        use purrdf_core::RdfLiteral;
+        use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
+
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+        let mut b = RdfDatasetBuilder::new();
+        let val = b.intern_iri("http://ex/val");
+        for (s, n) in [("a", "10"), ("b", "20"), ("c", "30")] {
+            let subj = b.intern_iri(&format!("http://ex/{s}"));
+            let v = b.intern_literal(RdfLiteral {
+                lexical_form: n.to_owned(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(subj, val, v, None);
+        }
+        let ds = b.freeze().expect("freeze");
+
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let scan = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("s"),
+                predicate: pred("http://ex/val"),
+                object: vp("o"),
+            }],
+        };
+        let bind_sum = GraphPattern::Extend {
+            inner: Box::new(scan),
+            variable: Variable::new("sum"),
+            expression: Expression::Add(
+                Box::new(Expression::Variable(Variable::new("o"))),
+                Box::new(typed_lit("5", XINT)),
+            ),
+        };
+        let bind_label = GraphPattern::Extend {
+            inner: Box::new(bind_sum),
+            variable: Variable::new("label"),
+            expression: Expression::FunctionCall(
+                Function::Concat,
+                vec![
+                    lit("v-"),
+                    Expression::FunctionCall(
+                        Function::Str,
+                        vec![Expression::Variable(Variable::new("sum"))],
+                    ),
+                ],
+            ),
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&bind_label, &mut ctx).expect("eval");
+            let schema = seq.schema.vars().to_vec();
+            let label_col = seq.schema.index_of(&Variable::new("label")).unwrap();
+            let labels: Vec<String> = seq
+                .rows
+                .iter()
+                .map(
+                    |row| match ctx.scratch.value_of(&ds, row[label_col].unwrap()) {
+                        TermValue::Literal { lexical_form, .. } => lexical_form,
+                        other => format!("{other:?}"),
+                    },
+                )
+                .collect();
+            (schema, seq.rows, labels)
+        };
+
+        let (schema_par, rows_par, labels_par) = run(true);
+        let (schema_seq, rows_seq, labels_seq) = run(false);
+
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential BIND paths must produce byte-identical row order"
+        );
+        assert_eq!(labels_par, labels_seq);
+        assert_eq!(labels_seq, vec!["v-15", "v-25", "v-35"]);
     }
 }

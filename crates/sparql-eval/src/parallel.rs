@@ -3,27 +3,39 @@
 
 //! Deterministic two-phase parallel evaluation primitives.
 //!
-//! [`crate::bgp`]'s per-batch evaluation, `binop`'s `Join`/`LeftJoin`/`MINUS`, and
-//! (Task 5) `expr::eval_filter` / `binop::left_outer_join_filtered`'s FILTER
-//! predicates are all wired to the fork-join model below. `absorb_row` /
-//! `absorb_constructed` are still unused outside this module's own tests — no
-//! wired caller yet mints a NEW value that must escape a forked child (Task 6:
-//! parallel `GROUP BY`/aggregate and `CONSTRUCT` list-mint sites) — hence the
-//! crate-build-only `allow(dead_code)` below (lifted the moment a caller lands
-//! for those two). The two phases, always in this order:
+//! [`crate::bgp`]'s per-batch evaluation, `binop`'s `Join`/`LeftJoin`/`MINUS`/
+//! `Union`, `expr::eval_filter`/`eval_extend`, `binop::left_outer_join_filtered`,
+//! and `modifier::eval_group`'s per-group aggregates are all wired to the
+//! fork-join model below. The two phases, always in this order:
 //!
 //! 1. **Fork.** [`crate::eval::EvalCtx::fork_for_worker`] gives each worker a
 //!    `Send` child context with its own scratch/constructed state, so workers
 //!    never contend on a lock or share mutable evaluation state.
-//! 2. **Join.** [`par_try_flat_map`] / [`par_try_flat_map_init`] run the workers
-//!    via rayon's *indexed* `collect` (never `par_sort`/`par_bridge`, which are
-//!    not order-stable) and then reduce strictly in source-index order:
-//!    successes flatten in index order and the first `Err` **by index** wins,
-//!    regardless of which worker finished first. [`absorb_row`] /
-//!    [`absorb_constructed`] fold a worker's fresh scratch/constructed state back
-//!    into the parent, also index-ordered by the caller. The result is
-//!    bit-identical to the sequential evaluation of the same pattern —
-//!    parallelism is purely a scheduling change.
+//! 2. **Join.** [`par_try_flat_map_init`]/[`par_flat_map`]/[`par_retain`] run the
+//!    workers via rayon's *indexed* `collect` (never `par_sort`/`par_bridge`,
+//!    which are not order-stable) and then reduce strictly in source-index
+//!    order: successes flatten in index order and the first `Err` **by index**
+//!    wins, regardless of which worker finished first.
+//!
+//! A read-only FILTER predicate discards its child's scratch mints entirely (the
+//! surviving rows are the original rows, nothing new escapes). A **minting** node
+//! — `UNION`, per-group aggregates, `BIND`/`Extend` — is different: its output
+//! rows can carry a cell the child *just interned*, and the child (and its
+//! scratch) is dropped the moment the fork-join call returns, so that cell's
+//! `ScratchId` cannot be resolved against the child after the fact. Those callers
+//! instead materialize each escaping row to a dataset-independent
+//! ([`PortableTerm`]) form **while the child is still alive** ([`portable_row`])
+//! and the node re-interns it against the **parent** scratch afterwards, strictly
+//! in source-index order ([`reintern_portable_row`]) — see those two functions'
+//! doc comments for the base-aware id rule that makes this exact, not just
+//! value-equal, to the sequential path.
+//!
+//! Note there is no `constructed`-merging counterpart here: the parallel minting
+//! path only ever runs when [`is_parallel_safe`]/[`is_parallel_safe_pattern`]
+//! passes, which excludes every builtin that pushes to
+//! [`crate::eval::EvalCtx::constructed`] (the blank-minting list constructors) —
+//! so a forked child on this path never populates `constructed`, and there is
+//! nothing to fold back.
 //!
 //! [`is_parallel_safe`] is the gate deciding whether an expression may run under
 //! this model at all: any builtin whose result depends on the per-query mutable
@@ -33,15 +45,13 @@
 //! fork-join would make its result depend on worker scheduling, not just row
 //! content.
 
-#![cfg_attr(not(test), allow(dead_code))]
-
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_sparql_algebra::{
     AggregateExpression, Expression, Function, GraphPattern, OrderExpression,
 };
 
 use crate::error::EvalError;
-use crate::scratch::ScratchInterner;
+use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::Solution;
 
 /// Rows/groups at or below this stay sequential (thread spin-up would dominate
@@ -114,10 +124,12 @@ pub(crate) fn should_parallelize(work_items: usize) -> bool {
 ///   fresh blank nodes from the shared `bnode_counter` (so a list cell's label
 ///   never collides with a `BNODE()` or CONSTRUCT-template blank) AND pushes
 ///   the new cell quads onto `EvalCtx::constructed`. `constructed` is
-///   dataset-independent so the cells themselves fold back deterministically
-///   (see [`absorb_constructed`]), but the *label* is only collision-free
+///   dataset-independent so the cells themselves would fold back
+///   deterministically if ever needed, but the *label* is only collision-free
 ///   against the single shared counter; two forked workers each minting from
-///   their own fresh `bnode_counter` could produce colliding cell labels.
+///   their own fresh `bnode_counter` could produce colliding cell labels. (In
+///   practice this whole builtin is excluded from the parallel path anyway —
+///   see the module docs' note on why no `constructed`-merge exists here.)
 ///
 /// Every other reader-only PurRDF list function (`listLength`/`listGet`/
 /// `listIndexOf`/`listContains`) and `heldIn` touch neither counter, so they are
@@ -127,13 +139,23 @@ pub(crate) fn is_parallel_safe(expr: &Expression) -> bool {
     !expr_reaches_unsafe_builtin(expr)
 }
 
+/// Whether `pattern` (recursively) is safe to evaluate under the fork-join
+/// parallel model — the pattern-level twin of [`is_parallel_safe`], for callers
+/// (e.g. `UNION`) that must gate a whole sub-pattern rather than a single
+/// expression. Exposes the same walk [`is_parallel_safe`] already runs
+/// internally for `EXISTS`.
+pub(crate) fn is_parallel_safe_pattern(pattern: &GraphPattern) -> bool {
+    !pattern_reaches_unsafe_builtin(pattern)
+}
+
 /// `true` iff `expr` (recursively) reaches an unsafe builtin — see
 /// [`is_parallel_safe`].
 fn expr_reaches_unsafe_builtin(expr: &Expression) -> bool {
     match expr {
-        Expression::NamedNode(_) | Expression::Literal(_) | Expression::Variable(_) | Expression::Bound(_) => {
-            false
-        }
+        Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Variable(_)
+        | Expression::Bound(_) => false,
         Expression::Or(a, b)
         | Expression::And(a, b)
         | Expression::Equal(a, b)
@@ -145,7 +167,9 @@ fn expr_reaches_unsafe_builtin(expr: &Expression) -> bool {
         | Expression::Add(a, b)
         | Expression::Subtract(a, b)
         | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => expr_reaches_unsafe_builtin(a) || expr_reaches_unsafe_builtin(b),
+        | Expression::Divide(a, b) => {
+            expr_reaches_unsafe_builtin(a) || expr_reaches_unsafe_builtin(b)
+        }
         Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
             expr_reaches_unsafe_builtin(a)
         }
@@ -172,7 +196,8 @@ fn function_is_unsafe(f: &Function) -> bool {
         Function::Rand | Function::Uuid | Function::StrUuid | Function::BNode => true,
         Function::Purrdf(call) => matches!(
             call.fn_kind,
-            purrdf_sparql_algebra::PurrdfFn::ListSlice | purrdf_sparql_algebra::PurrdfFn::ListConcat
+            purrdf_sparql_algebra::PurrdfFn::ListSlice
+                | purrdf_sparql_algebra::PurrdfFn::ListConcat
         ),
         _ => false,
     }
@@ -208,9 +233,7 @@ fn pattern_reaches_unsafe_builtin(pattern: &GraphPattern) -> bool {
         } => {
             pattern_reaches_unsafe_builtin(left)
                 || pattern_reaches_unsafe_builtin(right)
-                || expression
-                    .as_ref()
-                    .is_some_and(expr_reaches_unsafe_builtin)
+                || expression.as_ref().is_some_and(expr_reaches_unsafe_builtin)
         }
         GraphPattern::OrderBy { inner, expression } => {
             pattern_reaches_unsafe_builtin(inner)
@@ -234,76 +257,40 @@ fn pattern_reaches_unsafe_builtin(pattern: &GraphPattern) -> bool {
     }
 }
 
-/// Run `worker` over every item of `items` and reduce the results
-/// **deterministically**: order-stable success flattening (rayon's indexed
-/// `collect` preserves source order — never `par_sort`/`par_bridge`, which are
-/// not order-stable) and, on failure, the first `Err` **by source index** wins
-/// regardless of which worker finished first.
-///
-/// Internally gated on [`should_parallelize`]: at or below [`PARALLEL_MIN_ROWS`]
-/// this runs a plain sequential `iter().enumerate()` fold (bit-identical output,
-/// no rayon hand-off cost); above it, rayon's indexed `par_iter`. Callers get a
-/// single call site — the `#[cfg(test)]` force seam in [`should_parallelize`]
-/// routes through here.
-///
-/// Mirrors `purrdf_rdf::native_codecs::text_parse::parse_lines_parallel_with_chunk_size`:
-/// every worker result is collected into a plain `Vec` FIRST, then walked in
-/// order and `?`-propagated, so a fast late item can never race ahead of an
-/// earlier item's diagnostic.
-pub(crate) fn par_try_flat_map<T, F>(items: &[T], worker: F) -> Result<Vec<Solution>, EvalError>
-where
-    T: Sync,
-    F: Fn(usize, &T) -> Result<Vec<Solution>, EvalError> + Sync + Send,
-{
-    if !should_parallelize(items.len()) {
-        let mut out = Vec::new();
-        for (i, item) in items.iter().enumerate() {
-            out.extend(worker(i, item)?);
-        }
-        return Ok(out);
-    }
-
-    use rayon::prelude::*;
-
-    let per_item: Vec<Result<Vec<Solution>, EvalError>> = items
-        .par_iter()
-        .enumerate()
-        .map(|(i, item)| worker(i, item))
-        .collect();
-
-    let mut out = Vec::with_capacity(per_item.iter().map(|r| r.as_ref().map_or(0, Vec::len)).sum());
-    for result in per_item {
-        out.extend(result?);
-    }
-    Ok(out)
-}
-
-/// The fork-per-worker sibling of [`par_try_flat_map`]: instead of one immutable
-/// `worker` closure applied per item, each rayon *worker thread* first runs
-/// `init` **once** to build its own `S` (e.g. an `EvalCtx::fork_for_worker`
+/// The fork-per-worker sibling of [`par_flat_map`]/[`par_retain`]: instead of one
+/// immutable `worker` closure applied per item, each rayon *worker thread* first
+/// runs `init` **once** to build its own `S` (e.g. an `EvalCtx::fork_for_worker`
 /// child) and then reuses that state across every item it is scheduled, via
 /// rayon's `map_init`. This avoids forking a fresh child per row — the fork
 /// (cloning the scratch interner, the `exists_inner_cache`, etc.) is real, if
 /// cheap, work that should happen once per worker thread, not once per row.
 ///
-/// Internally gated on [`should_parallelize`] exactly like [`par_try_flat_map`]:
-/// at or below [`PARALLEL_MIN_ROWS`], `init` runs exactly once and every item is
-/// folded sequentially over that single state (bit-identical to a hand-written
-/// sequential loop — no rayon hand-off, no extra `init` calls); above it,
-/// `par_iter().map_init` gives each worker thread its own `S` and the results
-/// are collected into an indexed `Vec` first, then reduced in source order —
-/// the same "collect first, then walk in order" shape as [`par_try_flat_map`],
-/// so a fast late item can never race ahead of an earlier item's diagnostic.
-pub(crate) fn par_try_flat_map_init<T, S, Init, F>(
+/// Internally gated on [`should_parallelize`]: at or below [`PARALLEL_MIN_ROWS`],
+/// `init` runs exactly once and every item is folded sequentially over that
+/// single state (bit-identical to a hand-written sequential loop — no rayon
+/// hand-off, no extra `init` calls); above it, `par_iter().map_init` gives each
+/// worker thread its own `S` and the results are collected into an indexed
+/// `Vec` first, then reduced strictly in source order: successes flatten in
+/// index order and the first `Err` **by index** wins regardless of which
+/// worker finished first — so a fast late item can never race ahead of an
+/// earlier item's diagnostic (mirrors
+/// `purrdf_rdf::native_codecs::text_parse::parse_lines_parallel_with_chunk_size`).
+///
+/// Generic over the returned element type `R` (not just [`Solution`]): a
+/// minting caller (e.g. `eval_extend`, `eval_group`'s per-group compute) returns
+/// [`PortableTerm`] rows instead, since the worker's forked child (and its
+/// scratch) is gone by the time the caller can re-intern against the parent.
+pub(crate) fn par_try_flat_map_init<T, S, R, Init, F>(
     items: &[T],
     init: Init,
     worker: F,
-) -> Result<Vec<Solution>, EvalError>
+) -> Result<Vec<R>, EvalError>
 where
     T: Sync,
     S: Send,
+    R: Send,
     Init: Fn() -> S + Sync + Send,
-    F: Fn(&mut S, usize, &T) -> Result<Vec<Solution>, EvalError> + Sync + Send,
+    F: Fn(&mut S, usize, &T) -> Result<Vec<R>, EvalError> + Sync + Send,
 {
     if !should_parallelize(items.len()) {
         let mut state = init();
@@ -316,21 +303,26 @@ where
 
     use rayon::prelude::*;
 
-    let per_item: Vec<Result<Vec<Solution>, EvalError>> = items
+    let per_item: Vec<Result<Vec<R>, EvalError>> = items
         .par_iter()
         .enumerate()
         .map_init(&init, |state, (i, item)| worker(state, i, item))
         .collect();
 
-    let mut out = Vec::with_capacity(per_item.iter().map(|r| r.as_ref().map_or(0, Vec::len)).sum());
+    let mut out = Vec::with_capacity(
+        per_item
+            .iter()
+            .map(|r| r.as_ref().map_or(0, Vec::len))
+            .sum(),
+    );
     for result in per_item {
         out.extend(result?);
     }
     Ok(out)
 }
 
-/// The infallible sibling of [`par_try_flat_map`]: run `worker` over every item
-/// of `items` and flatten the per-item `Vec<R>` results in source-index order.
+/// The infallible sibling of [`par_try_flat_map_init`]: run `worker` over every
+/// item of `items` and flatten the per-item `Vec<R>` results in source-index order.
 /// Same internal [`should_parallelize`] gate — sequential at/below the
 /// threshold, rayon's indexed `par_iter` above it — so there is exactly one
 /// call site per caller and the `#[cfg(test)]` force seam applies uniformly.
@@ -350,7 +342,11 @@ where
 
     use rayon::prelude::*;
 
-    let per_item: Vec<Vec<R>> = items.par_iter().enumerate().map(|(i, item)| worker(i, item)).collect();
+    let per_item: Vec<Vec<R>> = items
+        .par_iter()
+        .enumerate()
+        .map(|(i, item)| worker(i, item))
+        .collect();
 
     let mut out = Vec::with_capacity(per_item.iter().map(Vec::len).sum());
     for result in per_item {
@@ -377,40 +373,82 @@ where
 
     use rayon::prelude::*;
 
-    items.par_iter().filter(|item| keep(item)).cloned().collect()
+    items
+        .par_iter()
+        .filter(|item| keep(item))
+        .cloned()
+        .collect()
 }
 
-/// Fold one row produced by a forked worker's `local` scratch back into the
-/// `main` (parent) scratch, re-interning any [`crate::scratch::SolutionTerm::Computed`]
-/// cell against `main`/`dataset` so its [`crate::scratch::ScratchId`] is valid in the
-/// parent's id space. `Existing`/`None` cells pass through unchanged (they are
-/// already dataset-space ids, valid in any scratch).
-pub(crate) fn absorb_row(
-    main: &mut ScratchInterner,
-    dataset: &RdfDataset,
+/// One cell of a minting node's output row, materialized to a form that
+/// survives the forked child (and its scratch) being dropped.
+///
+/// A forked child's scratch is a **clone** of the parent's at fork time (see
+/// [`crate::eval::EvalCtx::fork_for_worker`]), so a [`crate::scratch::SolutionTerm::Computed`]
+/// id already carries meaning independent of *which* scratch resolves it, as
+/// long as that id was minted before the fork: `base` (the parent's
+/// [`ScratchInterner::computed_count`] at fork time) is the dividing line.
+///
+/// - `sid < base` — already a valid PARENT id (the child inherited it via the
+///   clone); pass it through unchanged as [`PortableTerm::Parent`].
+/// - `sid >= base` — a term the CHILD freshly minted after the fork; the
+///   parent has never seen it, so it is captured as its dataset-independent
+///   [`TermValue`] ([`PortableTerm::Fresh`]) while the child (and its scratch)
+///   is still alive, for the caller to re-intern against the parent later.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PortableTerm {
+    /// A term already valid in the parent's id space: an `Existing` dataset
+    /// term, or a `Computed` id minted before the fork.
+    Parent(SolutionTerm),
+    /// A value the child minted after the fork; not yet interned anywhere but
+    /// the child's own (about-to-be-dropped) scratch.
+    Fresh(TermValue),
+}
+
+/// Materialize one output `row` produced against a forked child's `local`
+/// scratch into a portable form, while `local` is still alive. `base` is the
+/// parent's [`ScratchInterner::computed_count`] captured **at fork time** —
+/// see [`PortableTerm`] for the id rule this relies on.
+pub(crate) fn portable_row(
     local: &ScratchInterner,
+    base: usize,
     row: &Solution,
-) -> Solution {
+) -> Vec<Option<PortableTerm>> {
     row.iter()
         .map(|cell| match cell {
-            Some(crate::scratch::SolutionTerm::Computed(sid)) => {
-                Some(main.intern(dataset, local.computed_value(*sid).clone()))
+            None => None,
+            Some(SolutionTerm::Computed(sid)) if sid.index() >= base => {
+                Some(PortableTerm::Fresh(local.computed_value(*sid).clone()))
             }
-            other => *other,
+            Some(term) => Some(PortableTerm::Parent(*term)),
         })
         .collect()
 }
 
-/// Append a forked worker's constructed cells onto `main`, in the order given.
-/// The cells are dataset-independent [`TermValue`] triples (no id space to
-/// re-map, unlike [`absorb_row`]) — the caller is responsible for invoking this
-/// once per child **in source-index order**, which is what makes the merged
-/// buffer deterministic.
-pub(crate) fn absorb_constructed(
-    main: &mut Vec<(TermValue, TermValue, TermValue)>,
-    child: Vec<(TermValue, TermValue, TermValue)>,
-) {
-    main.extend(child);
+/// Re-intern a [`portable_row`] output back into the `main` (parent) scratch:
+/// a [`PortableTerm::Parent`] cell passes through unchanged (already valid in
+/// `main`'s id space); a [`PortableTerm::Fresh`] cell is interned against
+/// `main`/`dataset`, deduplicating against anything `main` (or an
+/// earlier-reinterned sibling row, when the caller processes rows in source
+/// order as required) already holds.
+///
+/// Callers MUST invoke this once per row **in source-index order** across all
+/// workers — that ordering, not anything in this function, is what makes two
+/// workers minting the same fresh value converge on the same parent id
+/// deterministically (whichever reinterns first wins the id; the same value
+/// reinterned again is deduplicated against it, not re-minted).
+pub(crate) fn reintern_portable_row(
+    main: &mut ScratchInterner,
+    dataset: &RdfDataset,
+    prow: &[Option<PortableTerm>],
+) -> Solution {
+    prow.iter()
+        .map(|cell| match cell {
+            None => None,
+            Some(PortableTerm::Parent(term)) => Some(*term),
+            Some(PortableTerm::Fresh(value)) => Some(main.intern(dataset, value.clone())),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -511,7 +549,11 @@ mod tests {
         let rand = call(Function::Rand, vec![]);
         let safe = Expression::Literal(Literal::new_simple("ok"));
 
-        let in_if = Expression::If(Box::new(cond), Box::new(safe.clone()), Box::new(rand.clone()));
+        let in_if = Expression::If(
+            Box::new(cond),
+            Box::new(safe.clone()),
+            Box::new(rand.clone()),
+        );
         assert!(!is_parallel_safe(&in_if));
 
         let in_coalesce = Expression::Coalesce(vec![safe.clone(), rand.clone()]);
@@ -523,9 +565,9 @@ mod tests {
 
     #[test]
     fn unsafe_inside_nested_exists_filter_is_detected() {
-        let vp = |n: &str| purrdf_sparql_algebra::TermPattern::Variable(
-            purrdf_sparql_algebra::Variable::new(n),
-        );
+        let vp = |n: &str| {
+            purrdf_sparql_algebra::TermPattern::Variable(purrdf_sparql_algebra::Variable::new(n))
+        };
         let pred = |iri: &str| {
             purrdf_sparql_algebra::NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri))
         };
@@ -555,55 +597,6 @@ mod tests {
         assert!(is_parallel_safe(&safe_exists));
     }
 
-    // ---- par_try_flat_map ----------------------------------------------------
-
-    #[test]
-    fn par_try_flat_map_flattens_in_index_order() {
-        let items: Vec<usize> = (0..64).collect();
-        let result = par_try_flat_map(&items, |i, &item| {
-            // Deliberately makes later-indexed items "finish faster" by doing less
-            // work, to prove the reduce is still index-ordered rather than
-            // completion-ordered.
-            if item % 7 != 0 {
-                std::thread::yield_now();
-            }
-            Ok(vec![vec![
-                Some(crate::scratch::SolutionTerm::Existing(
-                    purrdf_core::TermId::from_index(i as u32),
-                )),
-            ]])
-        })
-        .expect("no errors");
-        let indices: Vec<u32> = result
-            .iter()
-            .map(|row| match row[0] {
-                Some(crate::scratch::SolutionTerm::Existing(id)) => id.index() as u32,
-                _ => unreachable!(),
-            })
-            .collect();
-        let expected: Vec<u32> = (0..64).collect();
-        assert_eq!(indices, expected);
-    }
-
-    #[test]
-    fn par_try_flat_map_surfaces_the_lower_indexed_error() {
-        let items: Vec<usize> = (0..32).collect();
-        let result: Result<Vec<Solution>, EvalError> = par_try_flat_map(&items, |i, _| {
-            if i == 20 {
-                // The "slow" earlier error: give the scheduler a chance to let a
-                // later index finish first.
-                std::thread::yield_now();
-                return Err(EvalError::internal("error at 20"));
-            }
-            if i == 5 {
-                return Err(EvalError::internal("error at 5"));
-            }
-            Ok(vec![])
-        });
-        let err = result.unwrap_err();
-        assert_eq!(err, EvalError::internal("error at 5"));
-    }
-
     // ---- par_try_flat_map_init -------------------------------------------------
 
     #[test]
@@ -621,7 +614,7 @@ mod tests {
                 if item % 7 != 0 {
                     std::thread::yield_now();
                 }
-                Ok(vec![vec![Some(crate::scratch::SolutionTerm::Existing(
+                Ok(vec![vec![Some(SolutionTerm::Existing(
                     purrdf_core::TermId::from_index(i as u32),
                 ))]])
             },
@@ -630,7 +623,7 @@ mod tests {
         let indices: Vec<u32> = result
             .iter()
             .map(|row| match row[0] {
-                Some(crate::scratch::SolutionTerm::Existing(id)) => id.index() as u32,
+                Some(SolutionTerm::Existing(id)) => id.index() as u32,
                 _ => unreachable!(),
             })
             .collect();
@@ -653,15 +646,17 @@ mod tests {
                 init_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 0_u64
             },
-            |_state, i, _item| Ok(vec![vec![Some(crate::scratch::SolutionTerm::Existing(
-                purrdf_core::TermId::from_index(i as u32),
-            ))]]),
+            |_state, i, _item| {
+                Ok(vec![vec![Some(SolutionTerm::Existing(
+                    purrdf_core::TermId::from_index(i as u32),
+                ))]])
+            },
         )
         .expect("no errors");
         let indices: Vec<u32> = result
             .iter()
             .map(|row| match row[0] {
-                Some(crate::scratch::SolutionTerm::Existing(id)) => id.index() as u32,
+                Some(SolutionTerm::Existing(id)) => id.index() as u32,
                 _ => unreachable!(),
             })
             .collect();
@@ -674,8 +669,10 @@ mod tests {
     #[test]
     fn par_try_flat_map_init_surfaces_the_lower_indexed_error() {
         let items: Vec<usize> = (0..32).collect();
-        let result: Result<Vec<Solution>, EvalError> =
-            par_try_flat_map_init(&items, || (), |(), i, _| {
+        let result: Result<Vec<Solution>, EvalError> = par_try_flat_map_init(
+            &items,
+            || (),
+            |(), i, _| {
                 if i == 20 {
                     std::thread::yield_now();
                     return Err(EvalError::internal("error at 20"));
@@ -684,7 +681,8 @@ mod tests {
                     return Err(EvalError::internal("error at 5"));
                 }
                 Ok(vec![])
-            });
+            },
+        );
         let err = result.unwrap_err();
         assert_eq!(err, EvalError::internal("error at 5"));
     }
@@ -734,10 +732,19 @@ mod tests {
         assert_eq!(kept, expected);
     }
 
-    // ---- fork_for_worker + absorb_row -----------------------------------------
+    // ---- fork_for_worker + portable_row/reintern_portable_row -----------------
+
+    fn lit(s: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: s.to_owned(),
+            datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
 
     #[test]
-    fn fork_and_absorb_row_round_trips_computed_values() {
+    fn portable_row_round_trips_fresh_and_pre_fork_and_existing_and_none() {
         let ds = RdfDatasetBuilder::new()
             .freeze()
             .expect("freeze empty dataset");
@@ -745,70 +752,70 @@ mod tests {
 
         // Seed the PARENT scratch with an already-minted value BEFORE forking, so
         // an input row carrying that `Computed` id (as a real parallel worker's
-        // input rows would) is something the fork must be able to resolve.
-        let existing_value = TermValue::Literal {
-            lexical_form: "already minted".to_owned(),
-            datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
-            language: None,
-            direction: None,
-        };
-        let existing_term = parent.scratch.intern(&ds, existing_value.clone());
+        // input rows would) is something the fork must be able to resolve, and
+        // `portable_row` must classify it as `Parent` (sid < base), not `Fresh`.
+        let pre_fork_value = lit("already minted");
+        let pre_fork_term = parent.scratch.intern(&ds, pre_fork_value.clone());
+        let base = parent.scratch.computed_count();
 
         let mut child = parent.fork_for_worker();
-
-        // The fork must resolve the PARENT's pre-existing `Computed` term
-        // identically — this is the fix under test: a fresh (empty) child scratch
-        // would panic (`values[sid.index()]` out of bounds) or, if it happened not
-        // to, resolve nonsense. `fork_for_worker` now clones the parent scratch, so
-        // this must round-trip.
         assert_eq!(
-            child.scratch.value_of(&ds, existing_term),
-            existing_value,
+            child.scratch.value_of(&ds, pre_fork_term),
+            pre_fork_value,
             "child must resolve a Computed id it inherited from the parent scratch"
         );
 
-        // The child mints a NEW value (not known to the parent at fork time).
-        let value = TermValue::Literal {
-            lexical_form: "hello parallel".to_owned(),
-            datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
-            language: None,
-            direction: None,
-        };
-        let child_term = child.scratch.intern(&ds, value.clone());
-        let row: Solution = vec![Some(existing_term), Some(child_term)];
+        // The child mints a NEW value (not known to the parent at fork time) —
+        // `portable_row` must classify this as `Fresh` (sid >= base).
+        let fresh_value = lit("hello parallel");
+        let fresh_term = child.scratch.intern(&ds, fresh_value.clone());
+        let row: Solution = vec![None, Some(pre_fork_term), Some(fresh_term)];
 
-        let absorbed = absorb_row(&mut parent.scratch, &ds, &child.scratch, &row);
-        // The pre-existing term passes through absorb unchanged (still resolves in
-        // the parent, which already owned it).
-        let absorbed_existing = absorbed[0].expect("cell present");
-        assert_eq!(parent.scratch.value_of(&ds, absorbed_existing), existing_value);
-        // The child's fresh mint is folded back into the parent's id space and
+        let prow = portable_row(&child.scratch, base, &row);
+        assert_eq!(prow[0], None);
+        assert_eq!(prow[1], Some(PortableTerm::Parent(pre_fork_term)));
+        assert_eq!(prow[2], Some(PortableTerm::Fresh(fresh_value.clone())));
+
+        let reinterned = reintern_portable_row(&mut parent.scratch, &ds, &prow);
+        assert_eq!(reinterned[0], None);
+        // The pre-fork term passes through unchanged and still resolves in the
+        // parent (which already owned it).
+        assert_eq!(reinterned[1], Some(pre_fork_term));
+        assert_eq!(
+            parent.scratch.value_of(&ds, reinterned[1].unwrap()),
+            pre_fork_value
+        );
+        // The child's fresh mint is folded into the parent's id space and
         // resolves to the same value there.
-        let main_term = absorbed[1].expect("cell present");
-        assert_eq!(parent.scratch.value_of(&ds, main_term), value);
+        let reinterned_fresh = reinterned[2].expect("cell present");
+        assert_eq!(parent.scratch.value_of(&ds, reinterned_fresh), fresh_value);
     }
 
     #[test]
-    fn absorb_constructed_appends_in_call_order() {
-        let cell = |n: &str| TermValue::Iri(format!("http://ex/{n}"));
-        let mut main: Vec<(TermValue, TermValue, TermValue)> = vec![(
-            cell("s0"),
-            cell("p0"),
-            cell("o0"),
-        )];
-        let child_a = vec![(cell("s1"), cell("p1"), cell("o1"))];
-        let child_b = vec![(cell("s2"), cell("p2"), cell("o2"))];
+    fn reintern_portable_row_dedups_two_children_minting_the_same_value() {
+        let ds = RdfDatasetBuilder::new()
+            .freeze()
+            .expect("freeze empty dataset");
+        let mut parent = crate::eval::EvalCtx::new(&ds);
+        let base = parent.scratch.computed_count();
 
-        absorb_constructed(&mut main, child_a);
-        absorb_constructed(&mut main, child_b);
+        let mut child_a = parent.fork_for_worker();
+        let mut child_b = parent.fork_for_worker();
+        let shared_value = lit("same value from two workers");
+        let term_a = child_a.scratch.intern(&ds, shared_value.clone());
+        let term_b = child_b.scratch.intern(&ds, shared_value);
+
+        let row_a: Solution = vec![Some(term_a)];
+        let row_b: Solution = vec![Some(term_b)];
+        let prow_a = portable_row(&child_a.scratch, base, &row_a);
+        let prow_b = portable_row(&child_b.scratch, base, &row_b);
+
+        let reinterned_a = reintern_portable_row(&mut parent.scratch, &ds, &prow_a);
+        let reinterned_b = reintern_portable_row(&mut parent.scratch, &ds, &prow_b);
 
         assert_eq!(
-            main,
-            vec![
-                (cell("s0"), cell("p0"), cell("o0")),
-                (cell("s1"), cell("p1"), cell("o1")),
-                (cell("s2"), cell("p2"), cell("o2")),
-            ]
+            reinterned_a[0], reinterned_b[0],
+            "two workers minting the same fresh value must reintern to the same parent id"
         );
     }
 }

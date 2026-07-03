@@ -481,19 +481,60 @@ pub(crate) fn eval_group(
         out_schema.push(out_var.clone());
     }
     let out_schema = Arc::new(out_schema);
+    let out_width = out_schema.len();
+    let var_count = variables.len();
 
-    let mut rows = Vec::with_capacity(order.len());
-    for key in &order {
-        let idxs = &groups[key];
-        let mut row = vec![None; out_schema.len()];
-        for (i, _) in variables.iter().enumerate() {
-            row[i] = key[i];
+    // Every aggregate expression must be parallel-safe (no RAND/UUID/STRUUID/
+    // BNODE/list-mint reachable) for the per-group compute below to run under
+    // the fork-join model; `should_parallelize` (inside `par_try_flat_map_init`)
+    // still gates on group count.
+    let safe = aggregates.iter().all(|(_, agg)| match agg {
+        AggregateExpression::CountStar { .. } => true,
+        AggregateExpression::FunctionCall { expression, .. } => {
+            crate::parallel::is_parallel_safe(expression)
         }
-        for (j, (_, agg)) in aggregates.iter().enumerate() {
-            row[variables.len() + j] = eval_aggregate(agg, idxs, &seq.rows, &in_schema, ctx)?;
+    });
+
+    let rows = if safe {
+        let base = ctx.scratch.computed_count();
+        let prows = crate::parallel::par_try_flat_map_init(
+            &order,
+            || ctx.fork_for_worker(),
+            |child, _, key| {
+                let idxs = &groups[key];
+                let mut row = vec![None; out_width];
+                for (i, _) in variables.iter().enumerate() {
+                    row[i] = key[i];
+                }
+                for (j, (_, agg)) in aggregates.iter().enumerate() {
+                    row[var_count + j] = eval_aggregate(agg, idxs, &seq.rows, &in_schema, child)?;
+                }
+                Ok(vec![crate::parallel::portable_row(
+                    &child.scratch,
+                    base,
+                    &row,
+                )])
+            },
+        )?;
+        prows
+            .iter()
+            .map(|prow| crate::parallel::reintern_portable_row(&mut ctx.scratch, ctx.dataset, prow))
+            .collect()
+    } else {
+        let mut rows = Vec::with_capacity(order.len());
+        for key in &order {
+            let idxs = &groups[key];
+            let mut row = vec![None; out_width];
+            for (i, _) in variables.iter().enumerate() {
+                row[i] = key[i];
+            }
+            for (j, (_, agg)) in aggregates.iter().enumerate() {
+                row[var_count + j] = eval_aggregate(agg, idxs, &seq.rows, &in_schema, ctx)?;
+            }
+            rows.push(row);
         }
-        rows.push(row);
-    }
+        rows
+    };
 
     Ok(SolutionSeq {
         schema: out_schema,
@@ -1249,5 +1290,111 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Determinism smoke test (Task 6): `GROUP BY ?cat` with `COUNT(*)`/`AVG(?val)`/
+    /// `MAX(?val)` over 220 groups (the `e_group_aggregate` bench shape) evaluated
+    /// once with the parallel per-group path FORCED and once with the sequential
+    /// path FORCED must produce byte-identical rows — group ORDER (first-seen) is
+    /// always computed sequentially, but the per-group `AVG`/`MAX` compute (which
+    /// mints fresh `Computed` terms that must escape a forked child via
+    /// [`crate::parallel::portable_row`]/[`crate::parallel::reintern_portable_row`])
+    /// runs under fork-join when FORCED.
+    #[test]
+    fn group_aggregate_forced_parallel_and_sequential_agree() {
+        use purrdf_core::RdfLiteral;
+
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        const GROUPS: i64 = 220;
+        const ROWS: i64 = 260;
+
+        let mut b = RdfDatasetBuilder::new();
+        let cat_pred = b.intern_iri("http://ex/cat");
+        let val_pred = b.intern_iri("http://ex/val");
+        for i in 0..ROWS {
+            let subj = b.intern_iri(&format!("http://ex/s{i}"));
+            let cat = b.intern_literal(RdfLiteral {
+                lexical_form: format!("cat{}", i % GROUPS),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            });
+            let val = b.intern_literal(RdfLiteral {
+                lexical_form: i.to_string(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(subj, cat_pred, cat, None);
+            b.push_quad(subj, val_pred, val, None);
+        }
+        let ds = b.freeze().expect("freeze");
+
+        let inner = GraphPattern::Join {
+            left: Box::new(GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                        "http://ex/cat",
+                    )),
+                    object: TermPattern::Variable(Variable::new("cat")),
+                }],
+            }),
+            right: Box::new(GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                        "http://ex/val",
+                    )),
+                    object: TermPattern::Variable(Variable::new("val")),
+                }],
+            }),
+        };
+        let group = GraphPattern::Group {
+            inner: Box::new(inner),
+            variables: vec![Variable::new("cat")],
+            aggregates: vec![
+                (
+                    Variable::new("cnt"),
+                    AggregateExpression::CountStar { distinct: false },
+                ),
+                (
+                    Variable::new("avg"),
+                    AggregateExpression::FunctionCall {
+                        function: AggregateFunction::Avg,
+                        expression: Box::new(Expression::Variable(Variable::new("val"))),
+                        distinct: false,
+                    },
+                ),
+                (
+                    Variable::new("mx"),
+                    AggregateExpression::FunctionCall {
+                        function: AggregateFunction::Max,
+                        expression: Box::new(Expression::Variable(Variable::new("val"))),
+                        distinct: false,
+                    },
+                ),
+            ],
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&group, &mut ctx).expect("eval");
+            (seq.schema.vars().to_vec(), seq.rows)
+        };
+
+        let (schema_par, rows_par) = run(true);
+        let (schema_seq, rows_seq) = run(false);
+
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential per-group aggregate paths must produce byte-identical rows"
+        );
+        assert_eq!(rows_seq.len() as i64, GROUPS);
     }
 }

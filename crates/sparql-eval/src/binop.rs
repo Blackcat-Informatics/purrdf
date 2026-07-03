@@ -54,14 +54,90 @@ pub(crate) fn eval_join(
 }
 
 /// Evaluate `left UNION right` as a multiset concatenation over the union schema.
+///
+/// Gated on [`crate::parallel::is_parallel_safe_pattern`] over **both** branches:
+/// if either reaches an unsafe (counter/RNG-mutating) builtin, the sequential
+/// body below runs, evaluating both branches directly against the real `ctx`
+/// exactly as before this task. Otherwise both branches mint new `Computed`
+/// terms that must escape into the union's output rows, so they are evaluated
+/// concurrently (`rayon::join`) against their own forked child context, and each
+/// branch's escaping rows are captured via [`crate::parallel::portable_row`]
+/// **while its child is still alive** (the child is dropped the instant its
+/// closure returns). Only once both branches are done does the MAIN thread
+/// re-intern them back into `ctx.scratch`, left branch first then right, via
+/// [`crate::parallel::reintern_portable_row`] — reproducing the sequential
+/// concat's exact row order (left rows, then right rows) and column layout.
 pub(crate) fn eval_union(
     left: &GraphPattern,
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_>,
 ) -> Result<SolutionSeq, EvalError> {
-    let l = eval(left, ctx)?;
-    let r = eval(right, ctx)?;
+    if !crate::parallel::is_parallel_safe_pattern(left)
+        || !crate::parallel::is_parallel_safe_pattern(right)
+    {
+        let l = eval(left, ctx)?;
+        let r = eval(right, ctx)?;
+        return Ok(concat_union(&l, &r));
+    }
 
+    let base = ctx.scratch.computed_count();
+    // A shared (immutable) borrow of `ctx`: both closures below only need
+    // `fork_for_worker`'s `&self` access, so they run concurrently over the same
+    // `&EvalCtx` — `EvalCtx: Sync` (see its definition) makes this sound.
+    let ctx_ref: &EvalCtx<'_> = ctx;
+
+    // Each closure forks its own child, evaluates its branch on it, and
+    // materializes every result row to a portable form while the child (and its
+    // scratch) is still alive — the child does not survive past this closure.
+    let eval_branch = |pattern: &GraphPattern| -> Result<PortableBranch, EvalError> {
+        let mut child = ctx_ref.fork_for_worker();
+        let seq = eval(pattern, &mut child)?;
+        let prows: Vec<_> = seq
+            .rows
+            .iter()
+            .map(|row| crate::parallel::portable_row(&child.scratch, base, row))
+            .collect();
+        Ok((seq.schema, prows))
+    };
+
+    let (left_result, right_result) = rayon::join(|| eval_branch(left), || eval_branch(right));
+    let (l_schema, l_prows) = left_result?;
+    let (r_schema, r_prows) = right_result?;
+
+    let out = l_schema.union(&r_schema);
+    let out_len = out.len();
+    let left_len = l_schema.len();
+    let right_to_out = right_to_out_map(&r_schema, &out);
+
+    let mut rows = Vec::with_capacity(l_prows.len() + r_prows.len());
+    for prow in &l_prows {
+        let mut row = vec![None; out_len];
+        let reinterned =
+            crate::parallel::reintern_portable_row(&mut ctx.scratch, ctx.dataset, prow);
+        row[..left_len].copy_from_slice(&reinterned);
+        rows.push(row);
+    }
+    for prow in &r_prows {
+        let reinterned =
+            crate::parallel::reintern_portable_row(&mut ctx.scratch, ctx.dataset, prow);
+        let mut row = vec![None; out_len];
+        for (j, &cell) in reinterned.iter().enumerate() {
+            row[right_to_out[j]] = cell;
+        }
+        rows.push(row);
+    }
+
+    Ok(SolutionSeq {
+        schema: Arc::new(out),
+        rows,
+    })
+}
+
+/// The sequential `UNION` body: concatenate `l` then `r` over the ordered
+/// union schema (left columns first). Shared by both the sequential fallback
+/// and (conceptually) documents the exact row shape the parallel path in
+/// [`eval_union`] must reproduce.
+fn concat_union(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -82,11 +158,20 @@ pub(crate) fn eval_union(
         rows.push(row);
     }
 
-    Ok(SolutionSeq {
+    SolutionSeq {
         schema: Arc::new(out),
         rows,
-    })
+    }
 }
+
+/// One `UNION` branch's forked-child result, materialized to a portable form:
+/// its output schema plus every result row re-expressed as portable cells (see
+/// [`crate::parallel::portable_row`]) so it survives the branch's forked child
+/// being dropped.
+type PortableBranch = (
+    Arc<VarSchema>,
+    Vec<Vec<Option<crate::parallel::PortableTerm>>>,
+);
 
 /// The mapping from a right operand's column ordinal to its ordinal in `out`.
 fn right_to_out_map(right: &VarSchema, out: &VarSchema) -> Vec<usize> {
@@ -453,7 +538,7 @@ mod tests {
     use super::*;
     use crate::eval::EvalCtx;
     use pretty_assertions::assert_eq;
-    use purrdf_core::{RdfDataset, RdfDatasetBuilder};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
     use purrdf_sparql_algebra::{
         NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
     };
@@ -503,7 +588,7 @@ mod tests {
                 cols.iter()
                     .map(|&c| {
                         row[c].map(|t| match scratch.value_of(ds, t) {
-                            purrdf_core::TermValue::Iri(s) => s,
+                            TermValue::Iri(s) => s,
                             other => format!("{other:?}"),
                         })
                     })
@@ -745,5 +830,143 @@ mod tests {
         let right = bgp(vp("x"), pred("http://ex/knows"), vp("y")); // 1 row
         let seq = eval_minus(&left, &right, &mut ctx).expect("minus");
         assert_eq!(seq.len(), 2);
+    }
+
+    /// Determinism smoke test (Task 6): a 3-branch `UNION` (the `d_union_4` bench
+    /// shape) where each branch `BIND`s a freshly-computed value — two branches
+    /// minting the SAME value (`11`), one minting a DISJOINT value (`12`) — so the
+    /// escaping-computed-term merge in [`eval_union`] is exercised both ways.
+    /// Evaluated once with the parallel `UNION` path FORCED and once with the
+    /// sequential path FORCED, the two must produce byte-identical rows (schema
+    /// and row order, left-branch rows then right-branch rows, nested left-to-right).
+    #[test]
+    fn union_three_branches_with_overlapping_and_disjoint_binds_agree() {
+        use purrdf_sparql_algebra::Variable;
+
+        let mut b = RdfDatasetBuilder::new();
+        let p1 = b.intern_iri("http://ex/p1");
+        let p2 = b.intern_iri("http://ex/p2");
+        let p3 = b.intern_iri("http://ex/p3");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        let ten = b.intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: "10".to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        });
+        let twenty = b.intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: "20".to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        });
+        b.push_quad(a, p1, ten, None);
+        b.push_quad(bb, p2, twenty, None);
+        b.push_quad(c, p3, ten, None);
+        let ds = b.freeze().expect("freeze");
+
+        let one = || {
+            Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
+                "1",
+                NamedNode::new_unchecked(XINT),
+            ))
+        };
+        let nine = || {
+            Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
+                "9",
+                NamedNode::new_unchecked(XINT),
+            ))
+        };
+        let two = || {
+            Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
+                "2",
+                NamedNode::new_unchecked(XINT),
+            ))
+        };
+
+        // branch1: {?s :p1 ?o} BIND(?o + 1 AS ?sum)  -> s=a, o=10, sum=11
+        let branch1 = GraphPattern::Extend {
+            inner: Box::new(bgp(vp("s"), pred("http://ex/p1"), vp("o"))),
+            variable: Variable::new("sum"),
+            expression: Expression::Add(
+                Box::new(Expression::Variable(Variable::new("o"))),
+                Box::new(one()),
+            ),
+        };
+        // branch2: {?s :p2 ?o} BIND(?o - 9 AS ?sum)  -> s=b, o=20, sum=11 (SAME as branch1)
+        let branch2 = GraphPattern::Extend {
+            inner: Box::new(bgp(vp("s"), pred("http://ex/p2"), vp("o"))),
+            variable: Variable::new("sum"),
+            expression: Expression::Subtract(
+                Box::new(Expression::Variable(Variable::new("o"))),
+                Box::new(nine()),
+            ),
+        };
+        // branch3: {?s :p3 ?o} BIND(?o + 2 AS ?sum)  -> s=c, o=10, sum=12 (DISJOINT)
+        let branch3 = GraphPattern::Extend {
+            inner: Box::new(bgp(vp("s"), pred("http://ex/p3"), vp("o"))),
+            variable: Variable::new("sum"),
+            expression: Expression::Add(
+                Box::new(Expression::Variable(Variable::new("o"))),
+                Box::new(two()),
+            ),
+        };
+
+        let pattern = GraphPattern::Union {
+            left: Box::new(GraphPattern::Union {
+                left: Box::new(branch1),
+                right: Box::new(branch2),
+            }),
+            right: Box::new(branch3),
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&pattern, &mut ctx).expect("eval");
+            let schema = seq.schema.vars().to_vec();
+            let s_col = seq.schema.index_of(&Variable::new("s")).unwrap();
+            let sum_col = seq.schema.index_of(&Variable::new("sum")).unwrap();
+            let resolved: Vec<(TermValue, TermValue)> = seq
+                .rows
+                .iter()
+                .map(|row| {
+                    (
+                        ctx.scratch.value_of(&ds, row[s_col].unwrap()),
+                        ctx.scratch.value_of(&ds, row[sum_col].unwrap()),
+                    )
+                })
+                .collect();
+            (schema, seq.rows, resolved)
+        };
+
+        let (schema_par, rows_par, resolved_par) = run(true);
+        let (schema_seq, rows_seq, resolved_seq) = run(false);
+
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential UNION paths must produce byte-identical row order"
+        );
+        assert_eq!(
+            resolved_par, resolved_seq,
+            "resolved (s, sum) values must match regardless of path"
+        );
+        // Row order: branch1 then branch2 then branch3 (left-to-right nesting).
+        let expected_sums = vec!["11".to_owned(), "11".to_owned(), "12".to_owned()];
+        let got_sums: Vec<String> = resolved_seq
+            .iter()
+            .map(|(_, v)| match v {
+                TermValue::Literal { lexical_form, .. } => lexical_form.clone(),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(got_sums, expected_sums);
     }
 }
