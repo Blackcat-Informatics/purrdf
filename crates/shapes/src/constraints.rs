@@ -2986,12 +2986,37 @@ mod tests {
     }
 
     #[test]
+    fn xsd_float_accepts_inf() {
+        // "INF"^^xsd:float is a valid XSD special value.
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}float"));
+        let value = Term::Literal(Literal::new_typed_literal("INF", dt_iri.clone()));
+        assert!(
+            check_datatype(&value, &dt_iri),
+            "INF should conform for xsd:float"
+        );
+    }
+
+    #[test]
+    fn xsd_float_rejects_plus_inf() {
+        // "+INF" is NOT in the xsd:double/float lexical space (only INF, -INF, NaN).
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}float"));
+        let value = Term::Literal(Literal::new_typed_literal("+INF", dt_iri.clone()));
+        assert!(
+            !check_datatype(&value, &dt_iri),
+            "+INF must not conform for xsd:float"
+        );
+    }
+
+    #[test]
     fn xsd_1_0_double_lexical_space_is_pinned() {
-        // The XSD-1.0 double/float lexical space, exactly: the three specials
-        // INF/-INF/NaN (not the XSD 1.1 "+INF"), a decimal mantissa with an
-        // optional [eE][+-]?digits exponent, and the SHACL-legacy whitespace
-        // leniency (the arm trims before validating). Guards the accept-set now
-        // owned by `purrdf_xsd::parse_double_xsd10`.
+        // Characterizes the XSD-1.0 double/float accept-set, exactly: the
+        // three specials INF/-INF/NaN (not the XSD 1.1 "+INF"), a decimal
+        // mantissa with an optional [eE][+-]?digits exponent, and the
+        // SHACL-legacy whitespace leniency (the arm trims before
+        // validating). This is not a differential test against an external
+        // oracle — it directly pins the accept-set now owned by
+        // `purrdf_xsd::parse_double_xsd10`, which SHACL's `xsd_lexical_valid`
+        // relies on as defense-in-depth for float/double literals.
         let ok = |x: &str| purrdf_xsd::parse_double_xsd10(x.trim()).is_ok();
         for good in [
             "INF", "-INF", "NaN", "1", "1.", ".5", "+1.5", "1e10", "1E+5", "1e400", " 1.5 ",
