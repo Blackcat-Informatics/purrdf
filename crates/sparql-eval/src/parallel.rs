@@ -11,11 +11,12 @@
 //! 1. **Fork.** [`crate::eval::EvalCtx::fork_for_worker`] gives each worker a
 //!    `Send` child context with its own scratch/constructed state, so workers
 //!    never contend on a lock or share mutable evaluation state.
-//! 2. **Join.** [`par_try_flat_map_init`]/[`par_flat_map`]/[`par_retain`] run the
-//!    workers via rayon's *indexed* `collect` (never `par_sort`/`par_bridge`,
-//!    which are not order-stable) and then reduce strictly in source-index
-//!    order: successes flatten in index order and the first `Err` **by index**
-//!    wins, regardless of which worker finished first.
+//! 2. **Join.** [`par_chunk_try_map_init`]/[`par_chunk_map`]/[`par_retain`] run
+//!    the workers via rayon's *indexed* `par_chunks`/`par_iter` (never
+//!    `par_sort`/`par_bridge`, which are not order-stable) and then reduce
+//!    strictly in source-index order: successes concatenate in chunk (hence
+//!    source) order and the first `Err` **by chunk index** wins, regardless of
+//!    which worker finished first.
 //!
 //! A read-only FILTER predicate discards its child's scratch mints entirely (the
 //! surviving rows are the original rows, nothing new escapes). A **minting** node
@@ -58,6 +59,31 @@ use crate::solution::Solution;
 /// the work for small inputs). Initial value; Task 7's bench tunes it.
 pub(crate) const PARALLEL_MIN_ROWS: usize = 1024;
 
+/// Floor on a chunk's item count: below this, splitting further would hand
+/// rayon workers slivers dominated by per-chunk overhead (the fork, the `Vec`
+/// staging) rather than real work. Mirrors the byte-based floor
+/// `purrdf_rdf::native_codecs::text_parse::PARALLEL_MIN_CHUNK_BYTES` applies to
+/// the parser's chunk geometry, just in item-count terms.
+const PARALLEL_MIN_CHUNK_ITEMS: usize = 16;
+
+/// The chunk size for a [`par_chunk_map`]/[`par_chunk_try_map_init`] run over
+/// `len` items: aim for roughly four chunks per rayon worker thread, so
+/// work-stealing has enough slices to balance ragged per-item costs (a BGP
+/// pattern whose candidate count varies row to row, a GROUP BY group whose
+/// size varies group to group) without handing every thread only one
+/// coarse-grained slice. Clamped below by [`PARALLEL_MIN_CHUNK_ITEMS`] so a
+/// small-but-still-parallel input (just over [`PARALLEL_MIN_ROWS`]) on a
+/// many-thread machine never degenerates into chunks of a handful of items
+/// each — mirrors the parser's `len / (threads * 4)` geometry.
+fn chunk_size_for(len: usize) -> usize {
+    #[cfg(test)]
+    if let Some(forced) = FORCE_CHUNK_SIZE.with(std::cell::Cell::get) {
+        return forced.max(1);
+    }
+    let threads = rayon::current_num_threads().max(1);
+    (len / (threads * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
+}
+
 #[cfg(test)]
 std::thread_local! {
     /// Test-only override for [`should_parallelize`], so a bench/test can force
@@ -86,6 +112,38 @@ pub(crate) struct ForceParallelGuard {
 impl Drop for ForceParallelGuard {
     fn drop(&mut self) {
         FORCE_PARALLEL.with(|cell| cell.set(self.previous));
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Test-only override for [`chunk_size_for`]'s result, so a test can pin an
+    /// exact chunk size (hence an exact chunk count) regardless of
+    /// `rayon::current_num_threads()`, which varies by machine/CI runner.
+    /// Never consulted outside `cfg(test)`.
+    static FORCE_CHUNK_SIZE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Force [`chunk_size_for`] to always return `size` for the current thread
+/// until the returned guard is dropped (restores the prior override).
+/// Test-only — lets a test span an exact number of chunks deterministically.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn force_chunk_size_for_test(size: usize) -> ForceChunkSizeGuard {
+    let previous = FORCE_CHUNK_SIZE.with(|cell| cell.replace(Some(size)));
+    ForceChunkSizeGuard { previous }
+}
+
+/// RAII guard restoring the prior [`FORCE_CHUNK_SIZE`] override on drop.
+#[cfg(test)]
+pub(crate) struct ForceChunkSizeGuard {
+    previous: Option<usize>,
+}
+
+#[cfg(test)]
+impl Drop for ForceChunkSizeGuard {
+    fn drop(&mut self) {
+        FORCE_CHUNK_SIZE.with(|cell| cell.set(self.previous));
     }
 }
 
@@ -257,102 +315,127 @@ fn pattern_reaches_unsafe_builtin(pattern: &GraphPattern) -> bool {
     }
 }
 
-/// The fork-per-worker sibling of [`par_flat_map`]/[`par_retain`]: instead of one
-/// immutable `worker` closure applied per item, each rayon *worker thread* first
-/// runs `init` **once** to build its own `S` (e.g. an `EvalCtx::fork_for_worker`
-/// child) and then reuses that state across every item it is scheduled, via
-/// rayon's `map_init`. This avoids forking a fresh child per row — the fork
-/// (cloning the scratch interner, the `exists_inner_cache`, etc.) is real, if
-/// cheap, work that should happen once per worker thread, not once per row.
+/// Chunk-based, infallible parallel collect: split `items` into index-ordered
+/// chunks (never `par_sort`/`par_bridge`), give each chunk worker ONE `Vec<R>`
+/// accumulator (`push` is called once per item, appending into it), and
+/// concatenate the per-chunk accumulators in chunk order. This is the
+/// allocation shape [`purrdf_rdf::native_codecs::text_parse::parse_lines_parallel_with_chunk_size`]
+/// uses for its phase 1: one allocation per CHUNK, not one per item — the
+/// per-item shape (a fresh `Vec` returned by every worker call, flattened
+/// afterwards) this replaces cost an extra small allocation for every row of
+/// an N-row BGP/join/filter loop, pure overhead the chunk shape avoids.
 ///
-/// Internally gated on [`should_parallelize`]: at or below [`PARALLEL_MIN_ROWS`],
-/// `init` runs exactly once and every item is folded sequentially over that
-/// single state (bit-identical to a hand-written sequential loop — no rayon
-/// hand-off, no extra `init` calls); above it, `par_iter().map_init` gives each
-/// worker thread its own `S` and the results are collected into an indexed
-/// `Vec` first, then reduced strictly in source order: successes flatten in
-/// index order and the first `Err` **by index** wins regardless of which
-/// worker finished first — so a fast late item can never race ahead of an
-/// earlier item's diagnostic (mirrors
-/// `purrdf_rdf::native_codecs::text_parse::parse_lines_parallel_with_chunk_size`).
-///
-/// Generic over the returned element type `R` (not just [`Solution`]): a
-/// minting caller (e.g. `eval_extend`, `eval_group`'s per-group compute) returns
-/// [`PortableTerm`] rows instead, since the worker's forked child (and its
-/// scratch) is gone by the time the caller can re-intern against the parent.
-pub(crate) fn par_try_flat_map_init<T, S, R, Init, F>(
-    items: &[T],
-    init: Init,
-    worker: F,
-) -> Result<Vec<R>, EvalError>
-where
-    T: Sync,
-    S: Send,
-    R: Send,
-    Init: Fn() -> S + Sync + Send,
-    F: Fn(&mut S, usize, &T) -> Result<Vec<R>, EvalError> + Sync + Send,
-{
-    if !should_parallelize(items.len()) {
-        let mut state = init();
-        let mut out = Vec::new();
-        for (i, item) in items.iter().enumerate() {
-            out.extend(worker(&mut state, i, item)?);
-        }
-        return Ok(out);
-    }
-
-    use rayon::prelude::*;
-
-    let per_item: Vec<Result<Vec<R>, EvalError>> = items
-        .par_iter()
-        .enumerate()
-        .map_init(&init, |state, (i, item)| worker(state, i, item))
-        .collect();
-
-    let mut out = Vec::with_capacity(
-        per_item
-            .iter()
-            .map(|r| r.as_ref().map_or(0, Vec::len))
-            .sum(),
-    );
-    for result in per_item {
-        out.extend(result?);
-    }
-    Ok(out)
-}
-
-/// The infallible sibling of [`par_try_flat_map_init`]: run `worker` over every
-/// item of `items` and flatten the per-item `Vec<R>` results in source-index order.
-/// Same internal [`should_parallelize`] gate — sequential at/below the
-/// threshold, rayon's indexed `par_iter` above it — so there is exactly one
-/// call site per caller and the `#[cfg(test)]` force seam applies uniformly.
-pub(crate) fn par_flat_map<T, R, F>(items: &[T], worker: F) -> Vec<R>
+/// Internally gated on [`should_parallelize`]: at or below [`PARALLEL_MIN_ROWS`]
+/// this is a single sequential pass pushing into one `Vec` (bit-identical to a
+/// hand-written loop, no rayon hand-off); above it, `items.par_chunks(..)` (an
+/// *indexed*, order-preserving split) runs `push` over each chunk into its own
+/// accumulator, and the chunk accumulators are concatenated strictly in chunk
+/// (hence source) order — so the result is byte-identical to the sequential
+/// pass regardless of chunk geometry or worker scheduling.
+pub(crate) fn par_chunk_map<T, R>(items: &[T], push: impl Fn(&mut Vec<R>, &T) + Sync) -> Vec<R>
 where
     T: Sync,
     R: Send,
-    F: Fn(usize, &T) -> Vec<R> + Sync + Send,
 {
     if !should_parallelize(items.len()) {
         let mut out = Vec::new();
-        for (i, item) in items.iter().enumerate() {
-            out.extend(worker(i, item));
+        for item in items {
+            push(&mut out, item);
         }
         return out;
     }
 
     use rayon::prelude::*;
 
-    let per_item: Vec<Vec<R>> = items
-        .par_iter()
-        .enumerate()
-        .map(|(i, item)| worker(i, item))
+    let size = chunk_size_for(items.len());
+    let chunk_outs: Vec<Vec<R>> = items
+        .par_chunks(size)
+        .map(|chunk| {
+            let mut acc = Vec::new();
+            for item in chunk {
+                push(&mut acc, item);
+            }
+            acc
+        })
         .collect();
 
-    let mut out = Vec::with_capacity(per_item.iter().map(Vec::len).sum());
-    for result in per_item {
-        out.extend(result);
+    let mut out = Vec::with_capacity(chunk_outs.iter().map(Vec::len).sum());
+    for chunk_out in chunk_outs {
+        out.extend(chunk_out);
     }
     out
+}
+
+/// The fallible, fork-per-worker sibling of [`par_chunk_map`]: each rayon
+/// *chunk* worker first runs `init` **once** to build its own `S` (e.g. an
+/// `EvalCtx::fork_for_worker` child), then folds `push` over every item of its
+/// chunk into one `Vec<R>` accumulator, short-circuiting the chunk on the
+/// first `Err`. This forks one child per CHUNK, not per item — the fork
+/// (cloning the scratch interner, the `exists_inner_cache`, etc.) is real, if
+/// cheap, work that should happen a handful of times, not once per row — and
+/// gives the chunk exactly one output allocation instead of one per item.
+///
+/// Internally gated on [`should_parallelize`]: at or below [`PARALLEL_MIN_ROWS`],
+/// `init` runs exactly once and every item folds sequentially over that single
+/// state into one `Vec` (bit-identical to a hand-written sequential loop, no
+/// rayon hand-off, no extra `init` calls); above it, `items.par_chunks(..)`
+/// (an *indexed*, order-preserving split) runs each chunk to completion,
+/// collecting `Vec<Result<Vec<R>, EvalError>>` in chunk order, then reduces
+/// strictly in that order: successes concatenate in chunk (hence source)
+/// order and the first `Err` **by chunk index** wins regardless of which
+/// worker finished first — so a fast late chunk can never race ahead of an
+/// earlier chunk's diagnostic (mirrors
+/// `purrdf_rdf::native_codecs::text_parse::parse_lines_parallel_with_chunk_size`'s
+/// phase 2 reduce). Within a chunk, items are folded in source order, so the
+/// overall output is exactly source order.
+///
+/// Generic over the returned element type `R` (not just [`Solution`]): a
+/// minting caller (e.g. `eval_extend`, `eval_group`'s per-group compute) can
+/// push [`MintedRow`]s instead, since the worker's forked child (and its
+/// scratch) is gone by the time the caller can re-intern against the parent.
+pub(crate) fn par_chunk_try_map_init<T, S, R>(
+    items: &[T],
+    init: impl Fn() -> S + Sync,
+    push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
+) -> Result<Vec<R>, EvalError>
+where
+    T: Sync,
+    R: Send,
+{
+    if !should_parallelize(items.len()) {
+        let mut state = init();
+        let mut out = Vec::new();
+        for item in items {
+            push(&mut state, &mut out, item)?;
+        }
+        return Ok(out);
+    }
+
+    use rayon::prelude::*;
+
+    let size = chunk_size_for(items.len());
+    let per_chunk: Vec<Result<Vec<R>, EvalError>> = items
+        .par_chunks(size)
+        .map(|chunk| {
+            let mut state = init();
+            let mut acc = Vec::new();
+            for item in chunk {
+                push(&mut state, &mut acc, item)?;
+            }
+            Ok(acc)
+        })
+        .collect();
+
+    let mut out = Vec::with_capacity(
+        per_chunk
+            .iter()
+            .map(|r| r.as_ref().map_or(0, Vec::len))
+            .sum(),
+    );
+    for chunk_result in per_chunk {
+        out.extend(chunk_result?);
+    }
+    Ok(out)
 }
 
 /// An order-stable, internally-gated parallel filter-clone: keep every item of
@@ -449,6 +532,61 @@ pub(crate) fn reintern_portable_row(
             Some(PortableTerm::Fresh(value)) => Some(main.intern(dataset, value.clone())),
         })
         .collect()
+}
+
+/// One row escaping a minting fork-join worker (a `UNION` branch, a GROUP BY
+/// group, a `BIND`): either already valid in the PARENT id space, or one that
+/// must be re-interned via a [`portable_row`] captured while the minting
+/// child's scratch is still alive.
+///
+/// This is the "no-mint fast path": a `Computed(sid)` cell with `sid < base`
+/// is already a valid parent id (the child inherited it via the fork-time
+/// scratch clone — see [`PortableTerm`]'s doc comment for the exact rule), so
+/// a row none of whose cells is a POST-fork mint needs no remap at all — the
+/// [`portable_row`]/[`reintern_portable_row`] round trip would be a correct
+/// no-op that still pays a per-cell match and a `Vec<Option<PortableTerm>>`
+/// allocation. This matters most for a UNION branch that is pure BGP (mints
+/// nothing) or a `MIN`/`MAX`/`SAMPLE` group (whose result is an existing bound
+/// value passed through) — `BIND`/most aggregates mint a genuinely new value
+/// and always take the `Portable` arm, exactly as before this fast path.
+pub(crate) enum MintedRow {
+    /// No cell of this row is a post-fork mint — pass it through untouched.
+    Direct(Solution),
+    /// At least one cell was freshly minted by the child after the fork;
+    /// captured in portable form for [`reintern_minted_row`] to re-intern.
+    Portable(Vec<Option<PortableTerm>>),
+}
+
+/// Classify one worker-produced `row` into a [`MintedRow`]: `Direct` iff no
+/// cell is a `Computed(sid)` with `sid >= base` (a post-fork mint), else
+/// `Portable` (materialized against `local` — the minting child's scratch —
+/// while it is still alive). See [`MintedRow`] for the reasoning.
+pub(crate) fn minted_row(local: &ScratchInterner, base: usize, row: Solution) -> MintedRow {
+    let has_fresh_mint = row
+        .iter()
+        .any(|cell| matches!(cell, Some(SolutionTerm::Computed(sid)) if sid.index() >= base));
+    if has_fresh_mint {
+        MintedRow::Portable(portable_row(local, base, &row))
+    } else {
+        MintedRow::Direct(row)
+    }
+}
+
+/// Re-intern one [`MintedRow`] back into the parent (`main`) scratch: a
+/// `Direct` row passes through unchanged; a `Portable` row goes through
+/// [`reintern_portable_row`]. Callers MUST invoke this once per row in
+/// source-index order across all workers — see [`reintern_portable_row`]'s doc
+/// comment for why that ordering (not anything in this function) is what makes
+/// the result deterministic.
+pub(crate) fn reintern_minted_row(
+    main: &mut ScratchInterner,
+    dataset: &RdfDataset,
+    row: MintedRow,
+) -> Solution {
+    match row {
+        MintedRow::Direct(solution) => solution,
+        MintedRow::Portable(prow) => reintern_portable_row(main, dataset, &prow),
+    }
 }
 
 #[cfg(test)]
@@ -597,26 +735,81 @@ mod tests {
         assert!(is_parallel_safe(&safe_exists));
     }
 
-    // ---- par_try_flat_map_init -------------------------------------------------
+    // ---- par_chunk_map ----------------------------------------------------
 
     #[test]
-    fn par_try_flat_map_init_flattens_in_index_order_forced_parallel() {
-        let _guard = force_parallel_for_test(true);
+    fn par_chunk_map_matches_sequential_one_chunk() {
+        // A chunk size far bigger than the input: everything lands in a
+        // single chunk, exercising the "one chunk" boundary.
+        let _parallel_guard = force_parallel_for_test(true);
+        let _chunk_guard = force_chunk_size_for_test(1000);
+        let items: Vec<usize> = (0..64).collect();
+        let result = par_chunk_map(&items, |acc, &item| {
+            if item % 7 != 0 {
+                std::thread::yield_now();
+            }
+            acc.push(item * 2);
+        });
+        let expected: Vec<usize> = (0..64).map(|i| i * 2).collect();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn par_chunk_map_matches_sequential_many_chunks() {
+        // A tiny chunk size over a larger input spans many chunk boundaries
+        // (100 items / chunk size 7 ⇒ 15 chunks, several ragged).
+        let _parallel_guard = force_parallel_for_test(true);
+        let _chunk_guard = force_chunk_size_for_test(7);
+        let items: Vec<usize> = (0..100).collect();
+        let result = par_chunk_map(&items, |acc, &item| {
+            if item % 3 == 0 {
+                std::thread::yield_now();
+            }
+            acc.push(item * 2);
+        });
+        let expected: Vec<usize> = (0..100).map(|i| i * 2).collect();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn par_chunk_map_forced_sequential_matches_forced_parallel() {
+        let items: Vec<usize> = (0..100).collect();
+        let push = |acc: &mut Vec<usize>, &item: &usize| acc.push(item * 2);
+
+        let sequential = {
+            let _guard = force_parallel_for_test(false);
+            par_chunk_map(&items, push)
+        };
+        let parallel = {
+            let _parallel_guard = force_parallel_for_test(true);
+            let _chunk_guard = force_chunk_size_for_test(9);
+            par_chunk_map(&items, push)
+        };
+        assert_eq!(sequential, parallel);
+    }
+
+    // ---- par_chunk_try_map_init ---------------------------------------------
+
+    #[test]
+    fn par_chunk_try_map_init_flattens_in_index_order_one_chunk() {
+        let _parallel_guard = force_parallel_for_test(true);
+        let _chunk_guard = force_chunk_size_for_test(1000);
         let init_calls = std::sync::atomic::AtomicUsize::new(0);
         let items: Vec<usize> = (0..64).collect();
-        let result = par_try_flat_map_init(
+        let result = par_chunk_try_map_init(
             &items,
             || {
                 init_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                0_u64 // per-worker state: unused counter, just proves init ran.
+                0_u64 // per-chunk state: unused counter, just proves init ran.
             },
-            |_state, i, &item| {
+            |_state, acc, &item| {
                 if item % 7 != 0 {
                     std::thread::yield_now();
                 }
-                Ok(vec![vec![Some(SolutionTerm::Existing(
-                    purrdf_core::TermId::from_index(i as u32),
-                ))]])
+                acc.push(vec![Some(SolutionTerm::Existing(
+                    purrdf_core::TermId::from_index(item as u32),
+                ))]);
+                Ok(())
             },
         )
         .expect("no errors");
@@ -629,27 +822,64 @@ mod tests {
             .collect();
         let expected: Vec<u32> = (0..64).collect();
         assert_eq!(indices, expected);
-        // At least one worker thread ran `init` (forced parallel with 64 items and
-        // rayon's default pool); it never runs per-row (64 items, far fewer inits).
-        assert!(init_calls.load(std::sync::atomic::Ordering::Relaxed) >= 1);
-        assert!(init_calls.load(std::sync::atomic::Ordering::Relaxed) <= 64);
+        // A single chunk ⇒ `init` runs exactly once.
+        assert_eq!(init_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[test]
-    fn par_try_flat_map_init_flattens_in_index_order_forced_sequential() {
-        let _guard = force_parallel_for_test(false);
+    fn par_chunk_try_map_init_flattens_in_index_order_many_chunks() {
+        let _parallel_guard = force_parallel_for_test(true);
+        let _chunk_guard = force_chunk_size_for_test(7);
         let init_calls = std::sync::atomic::AtomicUsize::new(0);
-        let items: Vec<usize> = (0..64).collect();
-        let result = par_try_flat_map_init(
+        let items: Vec<usize> = (0..100).collect();
+        let result = par_chunk_try_map_init(
             &items,
             || {
                 init_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 0_u64
             },
-            |_state, i, _item| {
-                Ok(vec![vec![Some(SolutionTerm::Existing(
-                    purrdf_core::TermId::from_index(i as u32),
-                ))]])
+            |_state, acc, &item| {
+                if item % 3 == 0 {
+                    std::thread::yield_now();
+                }
+                acc.push(vec![Some(SolutionTerm::Existing(
+                    purrdf_core::TermId::from_index(item as u32),
+                ))]);
+                Ok(())
+            },
+        )
+        .expect("no errors");
+        let indices: Vec<u32> = result
+            .iter()
+            .map(|row| match row[0] {
+                Some(SolutionTerm::Existing(id)) => id.index() as u32,
+                _ => unreachable!(),
+            })
+            .collect();
+        let expected: Vec<u32> = (0..100).collect();
+        assert_eq!(indices, expected);
+        // 100 items / chunk size 7 ⇒ 15 chunks, so `init` ran more than once but
+        // never once per item.
+        let inits = init_calls.load(std::sync::atomic::Ordering::Relaxed);
+        assert!((1..=15).contains(&inits), "inits={inits}");
+    }
+
+    #[test]
+    fn par_chunk_try_map_init_forced_sequential_runs_init_exactly_once() {
+        let _guard = force_parallel_for_test(false);
+        let init_calls = std::sync::atomic::AtomicUsize::new(0);
+        let items: Vec<usize> = (0..64).collect();
+        let result = par_chunk_try_map_init(
+            &items,
+            || {
+                init_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                0_u64
+            },
+            |_state, acc, &item| {
+                acc.push(vec![Some(SolutionTerm::Existing(
+                    purrdf_core::TermId::from_index(item as u32),
+                ))]);
+                Ok(())
             },
         )
         .expect("no errors");
@@ -662,54 +892,34 @@ mod tests {
             .collect();
         let expected: Vec<u32> = (0..64).collect();
         assert_eq!(indices, expected);
-        // Sequential path: `init` runs exactly once, never per row.
         assert_eq!(init_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[test]
-    fn par_try_flat_map_init_surfaces_the_lower_indexed_error() {
-        let items: Vec<usize> = (0..32).collect();
-        let result: Result<Vec<Solution>, EvalError> = par_try_flat_map_init(
+    fn par_chunk_try_map_init_surfaces_the_lower_chunk_indexed_error() {
+        // Chunk size 5 over 40 items ⇒ 8 chunks; index 22 (chunk 4) and index 6
+        // (chunk 1) both error, index 22's chunk is nudged to finish first via
+        // `yield_now`, but the chunk-index-ordered reduce must still surface
+        // chunk 1's (index 6's) error, never chunk 4's.
+        let _parallel_guard = force_parallel_for_test(true);
+        let _chunk_guard = force_chunk_size_for_test(5);
+        let items: Vec<usize> = (0..40).collect();
+        let result: Result<Vec<Solution>, EvalError> = par_chunk_try_map_init(
             &items,
             || (),
-            |(), i, _| {
-                if i == 20 {
+            |(), _acc, &i| {
+                if i == 22 {
                     std::thread::yield_now();
-                    return Err(EvalError::internal("error at 20"));
+                    return Err(EvalError::internal("error at 22"));
                 }
-                if i == 5 {
-                    return Err(EvalError::internal("error at 5"));
+                if i == 6 {
+                    return Err(EvalError::internal("error at 6"));
                 }
-                Ok(vec![])
+                Ok(())
             },
         );
         let err = result.unwrap_err();
-        assert_eq!(err, EvalError::internal("error at 5"));
-    }
-
-    // ---- par_flat_map ---------------------------------------------------------
-
-    #[test]
-    fn par_flat_map_flattens_in_index_order_forced_parallel() {
-        let _guard = force_parallel_for_test(true);
-        let items: Vec<usize> = (0..64).collect();
-        let result = par_flat_map(&items, |i, &item| {
-            if item % 7 != 0 {
-                std::thread::yield_now();
-            }
-            vec![i]
-        });
-        let expected: Vec<usize> = (0..64).collect();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn par_flat_map_flattens_in_index_order_forced_sequential() {
-        let _guard = force_parallel_for_test(false);
-        let items: Vec<usize> = (0..64).collect();
-        let result = par_flat_map(&items, |i, _| vec![i]);
-        let expected: Vec<usize> = (0..64).collect();
-        assert_eq!(result, expected);
+        assert_eq!(err, EvalError::internal("error at 6"));
     }
 
     // ---- par_retain -------------------------------------------------------

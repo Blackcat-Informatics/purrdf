@@ -486,7 +486,7 @@ pub(crate) fn eval_group(
 
     // Every aggregate expression must be parallel-safe (no RAND/UUID/STRUUID/
     // BNODE/list-mint reachable) for the per-group compute below to run under
-    // the fork-join model; `should_parallelize` (inside `par_try_flat_map_init`)
+    // the fork-join model; `should_parallelize` (inside `par_chunk_try_map_init`)
     // still gates on group count.
     let safe = aggregates.iter().all(|(_, agg)| match agg {
         AggregateExpression::CountStar { .. } => true,
@@ -497,10 +497,10 @@ pub(crate) fn eval_group(
 
     let rows = if safe {
         let base = ctx.scratch.computed_count();
-        let prows = crate::parallel::par_try_flat_map_init(
+        let minted = crate::parallel::par_chunk_try_map_init(
             &order,
             || ctx.fork_for_worker(),
-            |child, _, key| {
+            |child, acc, key| {
                 let idxs = &groups[key];
                 let mut row = vec![None; out_width];
                 for (i, _) in variables.iter().enumerate() {
@@ -509,16 +509,13 @@ pub(crate) fn eval_group(
                 for (j, (_, agg)) in aggregates.iter().enumerate() {
                     row[var_count + j] = eval_aggregate(agg, idxs, &seq.rows, &in_schema, child)?;
                 }
-                Ok(vec![crate::parallel::portable_row(
-                    &child.scratch,
-                    base,
-                    &row,
-                )])
+                acc.push(crate::parallel::minted_row(&child.scratch, base, row));
+                Ok(())
             },
         )?;
-        prows
-            .iter()
-            .map(|prow| crate::parallel::reintern_portable_row(&mut ctx.scratch, ctx.dataset, prow))
+        minted
+            .into_iter()
+            .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))
             .collect()
     } else {
         let mut rows = Vec::with_capacity(order.len());

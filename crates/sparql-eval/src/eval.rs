@@ -789,7 +789,7 @@ mod tests {
         // The `ctx.exists_inner_cache.len()` check this test used to make against
         // `ctx` directly no longer applies: this EXISTS reaches no unsafe builtin,
         // so (Task 5) `expr::eval_filter` routes it through
-        // `crate::parallel::par_try_flat_map_init`, which runs the per-row loop on
+        // `crate::parallel::par_chunk_try_map_init`, which runs the per-row loop on
         // a FORKED child context (`EvalCtx::fork_for_worker`), not `ctx` itself —
         // even below the parallel threshold, exactly one child is forked and reused
         // across every outer row. So the cache still builds exactly once per query,

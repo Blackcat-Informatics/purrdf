@@ -184,15 +184,14 @@ pub(crate) fn eval_filter(
     let seq = eval(inner, ctx)?;
     let schema = seq.schema.clone();
     let rows = if crate::parallel::is_parallel_safe(expr) {
-        crate::parallel::par_try_flat_map_init(
+        crate::parallel::par_chunk_try_map_init(
             &seq.rows,
             || ctx.fork_for_worker(),
-            |child, _, row| {
-                Ok(if eval_ebv(expr, row, &schema, child)? == Some(true) {
-                    vec![row.clone()]
-                } else {
-                    Vec::new()
-                })
+            |child, acc, row| {
+                if eval_ebv(expr, row, &schema, child)? == Some(true) {
+                    acc.push(row.clone());
+                }
+                Ok(())
             },
         )?
     } else {
@@ -231,24 +230,21 @@ pub(crate) fn eval_extend(
 
     let rows = if crate::parallel::is_parallel_safe(expr) {
         let base = ctx.scratch.computed_count();
-        let prows = crate::parallel::par_try_flat_map_init(
+        let minted = crate::parallel::par_chunk_try_map_init(
             &seq.rows,
             || ctx.fork_for_worker(),
-            |child, _, in_row| {
+            |child, acc, in_row| {
                 let mut row = in_row.clone();
                 row.resize(width, None);
                 let value = eval_expr(expr, &row, &schema, child)?;
                 row[col] = value;
-                Ok(vec![crate::parallel::portable_row(
-                    &child.scratch,
-                    base,
-                    &row,
-                )])
+                acc.push(crate::parallel::minted_row(&child.scratch, base, row));
+                Ok(())
             },
         )?;
-        prows
-            .iter()
-            .map(|prow| crate::parallel::reintern_portable_row(&mut ctx.scratch, ctx.dataset, prow))
+        minted
+            .into_iter()
+            .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))
             .collect()
     } else {
         let mut rows = Vec::with_capacity(seq.rows.len());
@@ -3208,7 +3204,7 @@ mod tests {
         // Driven directly via `eval`/`eval_ebv` on ONE shared `ctx`, rather than
         // through `evaluate_query`'s FILTER node: this EXISTS reaches no unsafe
         // builtin, so (Task 5) `eval_filter` routes it through
-        // `crate::parallel::par_try_flat_map_init`, which runs the per-row loop on a
+        // `crate::parallel::par_chunk_try_map_init`, which runs the per-row loop on a
         // FORKED child context — the memo would land on that (discarded-after-use)
         // child, not on a `ctx` inspected from outside `evaluate_query`. This
         // reproduces the identical per-row loop shape the forked child runs,

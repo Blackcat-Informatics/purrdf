@@ -150,11 +150,10 @@ pub(crate) fn eval_bgp(
             )),
             GraphScope::Merge(_) => None,
         };
-        let next = crate::parallel::par_flat_map(&rows, |_, row| {
+        let next = crate::parallel::par_chunk_map(&rows, |acc, row| {
             let s = query_id(&cp.s, row);
             let p = query_id(&cp.p, row);
             let o = query_id(&cp.o, row);
-            let mut out = Vec::new();
             match &scope {
                 // Single-graph scope (store default / a named graph): the indexed
                 // partition_point read, unchanged — no de-dup overhead.
@@ -162,7 +161,7 @@ pub(crate) fn eval_bgp(
                     let plan = plan.expect("plan computed above for GraphScope::One");
                     for quad in ctx.dataset.quads_for_pattern_with_plan(&plan, s, p, o, *gm) {
                         if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                            out.push(extended);
+                            acc.push(extended);
                         }
                     }
                     // The RDF 1.2 reification layer is a dataset-level (default-graph)
@@ -173,7 +172,7 @@ pub(crate) fn eval_bgp(
                     if gm.matches(None) {
                         emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies_id, |quad| {
                             if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                                out.push(extended);
+                                acc.push(extended);
                             }
                         });
                     }
@@ -193,13 +192,12 @@ pub(crate) fn eval_bgp(
                                 continue;
                             }
                             if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                                out.push(extended);
+                                acc.push(extended);
                             }
                         }
                     }
                 }
             }
-            out
         });
         rows = next;
         if rows.is_empty() {

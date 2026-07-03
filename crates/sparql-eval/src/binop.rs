@@ -87,39 +87,42 @@ pub(crate) fn eval_union(
     let ctx_ref: &EvalCtx<'_> = ctx;
 
     // Each closure forks its own child, evaluates its branch on it, and
-    // materializes every result row to a portable form while the child (and its
-    // scratch) is still alive — the child does not survive past this closure.
+    // classifies every result row (see [`crate::parallel::minted_row`]): a row
+    // the child minted nothing new into (the common case for a UNION-over-BGP
+    // branch) is kept as-is with zero extra allocation, and only a row
+    // carrying a genuinely fresh cell pays for the portable-materialize round
+    // trip. The child (and its scratch) does not survive past this closure.
     let eval_branch = |pattern: &GraphPattern| -> Result<PortableBranch, EvalError> {
         let mut child = ctx_ref.fork_for_worker();
         let seq = eval(pattern, &mut child)?;
-        let prows: Vec<_> = seq
+        let minted: Vec<_> = seq
             .rows
-            .iter()
-            .map(|row| crate::parallel::portable_row(&child.scratch, base, row))
+            .into_iter()
+            .map(|row| crate::parallel::minted_row(&child.scratch, base, row))
             .collect();
-        Ok((seq.schema, prows))
+        Ok((seq.schema, minted))
     };
 
     let (left_result, right_result) = rayon::join(|| eval_branch(left), || eval_branch(right));
-    let (l_schema, l_prows) = left_result?;
-    let (r_schema, r_prows) = right_result?;
+    let (l_schema, l_minted) = left_result?;
+    let (r_schema, r_minted) = right_result?;
 
     let out = l_schema.union(&r_schema);
     let out_len = out.len();
     let left_len = l_schema.len();
     let right_to_out = right_to_out_map(&r_schema, &out);
 
-    let mut rows = Vec::with_capacity(l_prows.len() + r_prows.len());
-    for prow in &l_prows {
+    let mut rows = Vec::with_capacity(l_minted.len() + r_minted.len());
+    for minted in l_minted {
         let mut row = vec![None; out_len];
         let reinterned =
-            crate::parallel::reintern_portable_row(&mut ctx.scratch, ctx.dataset, prow);
+            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
         row[..left_len].copy_from_slice(&reinterned);
         rows.push(row);
     }
-    for prow in &r_prows {
+    for minted in r_minted {
         let reinterned =
-            crate::parallel::reintern_portable_row(&mut ctx.scratch, ctx.dataset, prow);
+            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
         let mut row = vec![None; out_len];
         for (j, &cell) in reinterned.iter().enumerate() {
             row[right_to_out[j]] = cell;
@@ -164,14 +167,11 @@ fn concat_union(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
     }
 }
 
-/// One `UNION` branch's forked-child result, materialized to a portable form:
-/// its output schema plus every result row re-expressed as portable cells (see
-/// [`crate::parallel::portable_row`]) so it survives the branch's forked child
-/// being dropped.
-type PortableBranch = (
-    Arc<VarSchema>,
-    Vec<Vec<Option<crate::parallel::PortableTerm>>>,
-);
+/// One `UNION` branch's forked-child result: its output schema plus every
+/// result row classified via [`crate::parallel::minted_row`] — `Direct` (no
+/// remap needed) or `Portable` (materialized while the branch's forked child
+/// is still alive) — so it survives that child being dropped.
+type PortableBranch = (Arc<VarSchema>, Vec<crate::parallel::MintedRow>);
 
 /// The mapping from a right operand's column ordinal to its ordinal in `out`.
 fn right_to_out_map(right: &VarSchema, out: &VarSchema) -> Vec<usize> {
@@ -260,8 +260,7 @@ fn hash_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
     // row sequence. Captures only read-only borrows: `keyed`/`wild`/`r.rows` (the
     // prebuilt index), `right_to_out`/`shared` (pure layout), `left_len`/`out_len`
     // (`Copy`), and `merge`/`compatible` (pure fns).
-    let rows = crate::parallel::par_flat_map(&l.rows, |_, lrow| {
-        let mut out_rows = Vec::new();
+    let rows = crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
         match bound_key(lrow, &shared, KeySide::Left) {
             // Probe is fully bound on shared columns: hit the matching bucket
             // (exact key ⇒ compatible) plus any wild build rows it is compatible
@@ -269,12 +268,12 @@ fn hash_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
             Some(key) => {
                 if let Some(idxs) = keyed.get(&key) {
                     for &idx in idxs {
-                        out_rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                     }
                 }
                 for &idx in &wild {
                     if compatible(lrow, &r.rows[idx], &shared) {
-                        out_rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                     }
                 }
             }
@@ -283,12 +282,11 @@ fn hash_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
             None => {
                 for rrow in &r.rows {
                     if compatible(lrow, rrow, &shared) {
-                        out_rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
                     }
                 }
             }
         }
-        out_rows
     });
 
     SolutionSeq {
@@ -399,26 +397,26 @@ fn left_outer_join_filtered(
 
     // A left outer join emits at least one row per left row.
     let rows = if crate::parallel::is_parallel_safe(expr) {
-        crate::parallel::par_try_flat_map_init(
+        crate::parallel::par_chunk_try_map_init(
             &l.rows,
             || ctx.fork_for_worker(),
-            |child, _, lrow| {
-                let mut out_rows = Vec::new();
+            |child, acc, lrow| {
+                let before = acc.len();
                 for rrow in &r.rows {
                     if !compatible(lrow, rrow, &shared) {
                         continue;
                     }
                     let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
                     if crate::expr::eval_ebv(expr, &merged, &out, child)? == Some(true) {
-                        out_rows.push(merged);
+                        acc.push(merged);
                     }
                 }
-                if out_rows.is_empty() {
+                if acc.len() == before {
                     let mut row = vec![None; out_len];
                     row[..left_len].copy_from_slice(lrow);
-                    out_rows.push(row);
+                    acc.push(row);
                 }
-                Ok(out_rows)
+                Ok(())
             },
         )?
     } else {
@@ -462,37 +460,36 @@ fn left_outer_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
     // none match, the single padded left-alone row — reproducing the existing "emit
     // alone iff no match" per-row semantics inside the worker so flattening in index
     // order is byte-identical to the sequential path.
-    let rows = crate::parallel::par_flat_map(&l.rows, |_, lrow| {
-        let mut out_rows = Vec::new();
+    let rows = crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
+        let before = acc.len();
         match bound_key(lrow, &shared, KeySide::Left) {
             Some(key) => {
                 if let Some(idxs) = keyed.get(&key) {
                     for &idx in idxs {
-                        out_rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                     }
                 }
                 for &idx in &wild {
                     if compatible(lrow, &r.rows[idx], &shared) {
-                        out_rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                        acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
                     }
                 }
             }
             None => {
                 for rrow in &r.rows {
                     if compatible(lrow, rrow, &shared) {
-                        out_rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                        acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
                     }
                 }
             }
         }
         // No compatible right solution → keep the left solution alone (the OPTIONAL
         // contributed nothing, its variables stay unbound).
-        if out_rows.is_empty() {
+        if acc.len() == before {
             let mut row = vec![None; out_len];
             row[..left_len].copy_from_slice(lrow);
-            out_rows.push(row);
+            acc.push(row);
         }
-        out_rows
     });
 
     SolutionSeq {
