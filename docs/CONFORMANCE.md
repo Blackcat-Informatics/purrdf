@@ -44,7 +44,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 250 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 767 | 35 | 35 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 114 | 6 | 6 | 0 | GREEN |
-| SHACL (first-party corpus) | first-party frozen reports | 48 | 0 | 0 | 0 | GREEN |
+| SHACL (first-party corpus) | first-party frozen reports | 59 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 | 0 | 0 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 62 | 24 | 24 | 0 | GREEN |
@@ -69,7 +69,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative syntax | shexTest v2.1.0, `negativeSyntax/` | **99 / 99** rejected |
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes, `core/` + `sparql/` | **114 / 120** · 6 ledgered |
-| SHACL (first-party corpus) | `crates/shapes/corpus/` | **48 / 48** frozen expected reports |
+| SHACL (first-party corpus) | `crates/shapes/corpus/` | **59 / 59** frozen expected reports |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
 | SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **767** pass · 35 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 35 non-passes are 30 spec-inherent entailment-regime cases + 5 upstream-errata fixtures) |
 | Entailment (RDFS / OWL-RL) | native `purrdf-entail` forward-materialization reasoner | RDFS + OWL-RL closure; **40/70** W3C entailment cases (OWL-Direct/DL/RIF/D ledgered) |
@@ -85,9 +85,10 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   ShEx 2.1). See its README for provenance.
 - `vectors/shacl/` — the W3C SHACL test suite (`data-shapes-test-suite`),
   `core/` and `sparql/` manifests. See its README for provenance.
-- `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 48 cases with
+- `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 59 cases with
   byte-frozen expected reports, covering purrdf-specific behavior (reifier
-  shapes, path forms, property pairs, qualified shapes).
+  shapes, path forms, property pairs, qualified shapes, SHACL-AF
+  `sh:expression`).
 - `crates/sparql-conformance/` — the W3C SPARQL 1.1 harness plus first-party
   extension-function and standpoint suites.
 - `crates/rdf/tests/corpus/w3c/` — the W3C rdf-tests syntax corpus (Turtle,
@@ -186,7 +187,11 @@ issue, so the matrix stays honest:
   OWL-RL closure; RDF/RDFS/OWL-RL cases pass, and OWL-Direct(DL)/RIF/D-entailment
   cases are `entailment` xfails (spec-inherent boundaries of a
   forward-materialization reasoner).
-- **SHACL** — 6 W3C `sparql/` cases are ledgered.
+- **SHACL** — 6 W3C `sparql/` cases are ledgered. SHACL-AF `sh:expression`
+  support is exercised by the first-party shapes corpus
+  (`crates/shapes/corpus`); a `vectors/shacl/af/` seam is wired for future
+  upstream AF manifests (empty at the pinned commit, so it discovers 0 tests
+  today).
 - **rdflib drop-in residuals** — 23 rdflib-suite + 7 compat-parity strict
   xfails cover Graph-subclass identity through set operators, rdf:List /
   Collection mutation, `Result.bindings` / `SELECT *` subselect projection,
