@@ -3828,6 +3828,32 @@ mod tests {
     }
 
     #[test]
+    fn update_reused_blank_label_inside_quoted_triple_across_operations_is_rejected() {
+        // §19.6 still applies when the blank label is nested inside an RDF 1.2
+        // quoted triple term: reusing `_:b` across two INSERT DATA operations is
+        // illegal even though the label never appears at top level. This exercises
+        // the `TermPattern::Triple` descent in `collect_term_bnode_labels`.
+        let err = update_err(concat!(
+            "INSERT DATA { purrdf:s rdf:reifies <<( _:b purrdf:p purrdf:o )>> } ; ",
+            "INSERT DATA { purrdf:s rdf:reifies <<( _:b purrdf:p purrdf:o )>> }",
+        ));
+        assert!(
+            matches!(err, ParseError::Syntax { .. }),
+            "expected Syntax for reused blank label inside quoted triple across operations, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn update_blank_label_inside_quoted_triple_within_one_operation_is_allowed() {
+        // The same blank label confined to a single operation is one blank node —
+        // nesting it inside a quoted triple must not trigger a false rejection.
+        parse_update(concat!(
+            "INSERT DATA { purrdf:s rdf:reifies <<( _:b purrdf:p _:b )>> } ; ",
+            "INSERT DATA { purrdf:s rdf:reifies <<( _:c purrdf:p purrdf:o )>> }",
+        ));
+    }
+
+    #[test]
     fn update_insert_data_labeled_blank_node_is_allowed() {
         let u = parse_update("INSERT DATA { _:b purrdf:p purrdf:o }");
         let GraphUpdateOperation::InsertData { data } = &u.operations[0] else {
