@@ -86,6 +86,107 @@ impl ResultShapeMap {
             .iter()
             .all(|e| e.status == ConformanceStatus::Conformant)
     }
+
+    /// Serialize as a result shape map: a JSON array of
+    /// `{"node","shape","status","reason"?}` objects, in entry order with a
+    /// fixed field order. Nodes and shapes use the same term syntax
+    /// [`crate::shapemap::parse_shape_map`] accepts (`<iri>` / `_:label` /
+    /// Turtle literal, and `START` / `<label>`); `status` is `conformant` or
+    /// `nonconformant`; `reason` is present only for nonconformant entries.
+    #[must_use]
+    pub fn to_result_json(&self) -> String {
+        let mut out = String::from("[");
+        for (index, entry) in self.entries.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"node\":");
+            push_json_string(&mut out, &node_term_string(&entry.node));
+            out.push_str(",\"shape\":");
+            push_json_string(&mut out, &shape_term_string(&entry.shape));
+            out.push_str(",\"status\":");
+            push_json_string(&mut out, status_str(entry.status));
+            if let Some(reason) = &entry.reason {
+                out.push_str(",\"reason\":");
+                push_json_string(&mut out, reason);
+            }
+            out.push('}');
+        }
+        out.push(']');
+        out
+    }
+}
+
+/// `xsd:string`, the implicit datatype omitted from a literal's term syntax.
+const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+
+/// Append `s` as a JSON string literal (serde_json handles escaping).
+fn push_json_string(out: &mut String, s: &str) {
+    out.push_str(&serde_json::to_string(s).expect("a &str always serializes"));
+}
+
+/// The result-map spelling of a conformance status.
+fn status_str(status: ConformanceStatus) -> &'static str {
+    match status {
+        ConformanceStatus::Conformant => "conformant",
+        ConformanceStatus::Nonconformant => "nonconformant",
+    }
+}
+
+/// A term in the shape-map term syntax (`<iri>` / `_:label` / Turtle literal).
+fn node_term_string(value: &TermValue) -> String {
+    match value {
+        TermValue::Iri(iri) => format!("<{iri}>"),
+        TermValue::Blank { label, .. } => format!("_:{label}"),
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            ..
+        } => {
+            let mut lit = format!("\"{}\"", turtle_escape(lexical_form));
+            if let Some(language) = language {
+                lit.push('@');
+                lit.push_str(language);
+            } else if datatype != XSD_STRING {
+                lit.push_str("^^<");
+                lit.push_str(datatype);
+                lit.push('>');
+            }
+            lit
+        }
+        TermValue::Triple { s, p, o } => format!(
+            "<< {} {} {} >>",
+            node_term_string(s),
+            node_term_string(p),
+            node_term_string(o)
+        ),
+    }
+}
+
+/// A shape label in the shape-map syntax (`START` / `<label>` / `_:label`).
+fn shape_term_string(shape: &ShapeSelector) -> String {
+    match shape {
+        ShapeSelector::Start => "START".to_owned(),
+        ShapeSelector::Label(label) if label.starts_with("_:") => label.clone(),
+        ShapeSelector::Label(label) => format!("<{label}>"),
+    }
+}
+
+/// Escape a literal's lexical form for a double-quoted Turtle string.
+fn turtle_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// A hook resolving an `EXTERNAL` shape declaration's label to its
