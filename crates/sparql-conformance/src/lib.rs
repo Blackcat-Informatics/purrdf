@@ -18,6 +18,7 @@
 pub mod compare;
 pub mod manifest;
 pub mod paths;
+pub mod rs_resultset;
 pub mod run;
 pub mod service;
 pub mod xfail;

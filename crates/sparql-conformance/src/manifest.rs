@@ -71,6 +71,10 @@ pub enum ExpectedResult {
     Srj(PathBuf),
     /// A graph (`CONSTRUCT`/`DESCRIBE`) — compared as canonical N-Quads.
     Graph(PathBuf),
+    /// A Turtle-encoded `rs:ResultSet` description of a SELECT solution sequence
+    /// (`rs:resultVariable`/`rs:solution`/`rs:binding`/`rs:variable`/`rs:value`) —
+    /// compared as a solution multiset, not a graph.
+    ResultSetTurtle(PathBuf),
     /// An UPDATE post-state: the expected default-graph data (`ut:data`) and
     /// named graphs (`ut:graphData`), compared to the mutated dataset as
     /// canonical N-Quads. Empty vectors denote an empty expected dataset.
@@ -346,7 +350,11 @@ fn load_update_details(
 
 /// Run `query` against `dataset` and return its solution rows as variable→value
 /// maps (unbound cells omitted).
-fn query_rows(
+///
+/// `pub(crate)` because [`crate::rs_resultset`] reuses the exact same
+/// dog-fooded query-and-decode path to read the `rs:ResultSet` Turtle result
+/// encoding, rather than duplicating a second ad hoc SPARQL runner.
+pub(crate) fn query_rows(
     dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
     query: &str,
 ) -> Result<Vec<BTreeMap<String, TermValue>>, String> {
@@ -428,12 +436,35 @@ fn classify(type_term: Option<&TermValue>) -> TestKind {
     }
 }
 
-/// Classify a result file by extension.
+/// The `rs:` (SPARQL result-set) vocabulary namespace: a Turtle file describing
+/// an `rs:ResultSet` encodes a SELECT solution sequence, not a graph, so it
+/// must be routed to [`ExpectedResult::ResultSetTurtle`] rather than
+/// [`ExpectedResult::Graph`]. See [`crate::rs_resultset`].
+const RS_NS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#";
+
+/// Classify a result file by extension; a `.ttl` file is additionally content-
+/// sniffed for the `rs:ResultSet` encoding (a plain substring check — the real
+/// parse in [`crate::rs_resultset`] validates the shape and errors loudly on a
+/// false positive, so this is a routing hint, not the correctness boundary).
 fn classify_result(path: &Path) -> ExpectedResult {
     match path.extension().and_then(|e| e.to_str()) {
         Some("srx") => ExpectedResult::Srx(path.to_path_buf()),
         Some("srj") => ExpectedResult::Srj(path.to_path_buf()),
+        Some("ttl") if is_rs_resultset_turtle(path) => {
+            ExpectedResult::ResultSetTurtle(path.to_path_buf())
+        }
         Some("ttl" | "nt" | "nq" | "rdf") => ExpectedResult::Graph(path.to_path_buf()),
         _ => ExpectedResult::Unsupported(path.to_path_buf()),
     }
+}
+
+/// Whether `path` textually mentions the `rs:ResultSet` type IRI. Cheap and
+/// content-based (not extension-based) because the W3C suite ships `.ttl`
+/// result files in both shapes (plain CONSTRUCT graphs and `rs:ResultSet`
+/// solution descriptions) under the same extension.
+fn is_rs_resultset_turtle(path: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    text.contains(RS_NS) && text.contains("ResultSet")
 }

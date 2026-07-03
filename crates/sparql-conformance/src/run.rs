@@ -7,13 +7,14 @@ use std::sync::Arc;
 
 use purrdf::{serialize_dataset, SerializeGraph};
 use purrdf_core::{RdfDataset, SparqlEngine, SparqlRequest, SparqlResult};
+use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 use purrdf_sparql_eval::{
     NativeSparqlEngine, ParserOptions, RemoteQuerySource, StandpointPredicates,
 };
 
 use crate::manifest::{SparqlTestCase, TestKind};
 
-const BASE: &str = "http://purrdf.test/manifest/";
+pub(crate) const BASE: &str = "http://purrdf.test/manifest/";
 
 /// The extension-function namespace the first-party suite fixtures spell their
 /// calls under. PurRDF itself mints no vocabulary — the namespace is HARNESS
@@ -25,7 +26,15 @@ const EXT_NS: &str = "https://example.org/ext/";
 #[derive(Debug)]
 pub enum RunOutcome {
     /// A `QueryEvaluationTest` result.
-    Eval(SparqlResult),
+    Eval {
+        /// The engine's result.
+        result: SparqlResult,
+        /// Whether the query carries a **top-level** `ORDER BY` (§18.5): the row
+        /// order of a `SELECT`'s solutions is then observable and the comparer
+        /// must check it as an ordered sequence, not a multiset. `SparqlResult`
+        /// carries no ordered flag, so it is derived here from the parsed query.
+        ordered: bool,
+    },
     /// An `UpdateEvaluationTest` post-state: the dataset after applying the update.
     Update(Arc<RdfDataset>),
     /// A syntax test: did the query parse?
@@ -153,15 +162,11 @@ pub fn run(
 
     match case.kind {
         TestKind::PositiveSyntax | TestKind::NegativeSyntax => {
-            let parsed_ok = purrdf_sparql_algebra::SparqlParser::new()
-                .parse_query(&query_text)
-                .is_ok();
+            let parsed_ok = SparqlParser::new().parse_query(&query_text).is_ok();
             Ok(RunOutcome::Syntax { parsed_ok })
         }
         TestKind::PositiveUpdateSyntax | TestKind::NegativeUpdateSyntax => {
-            let parsed_ok = purrdf_sparql_algebra::SparqlParser::new()
-                .parse_update(&query_text)
-                .is_ok();
+            let parsed_ok = SparqlParser::new().parse_update(&query_text).is_ok();
             Ok(RunOutcome::Syntax { parsed_ok })
         }
         TestKind::QueryEval => {
@@ -176,10 +181,11 @@ pub fn run(
             // deployment would supply its own gmeow IRIs instead — everything
             // flows through configuration, not constants.) Harmless for the W3C
             // suites, which never call the extension functions.
+            let parser_options = ParserOptions {
+                extension_fn_namespaces: vec![EXT_NS.to_owned()],
+            };
             let engine = NativeSparqlEngine::new()
-                .with_parser_options(ParserOptions {
-                    extension_fn_namespaces: vec![EXT_NS.to_owned()],
-                })
+                .with_parser_options(parser_options.clone())
                 .with_standpoint_predicates(StandpointPredicates::new(
                     format!("{EXT_NS}accordingTo"),
                     format!("{EXT_NS}sharpens"),
@@ -194,7 +200,8 @@ pub fn run(
                 None => engine.query(&dataset, request),
             }
             .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
-            Ok(RunOutcome::Eval(result))
+            let ordered = query_is_top_level_ordered(&query_text, &parser_options);
+            Ok(RunOutcome::Eval { result, ordered })
         }
         TestKind::UpdateEval => {
             // Apply the `ut:request` update to the pre-state dataset; the mutated
@@ -214,5 +221,39 @@ pub fn run(
             Ok(RunOutcome::Update(dataset))
         }
         TestKind::Unknown => Err(format!("unmodeled test type for {}", case.iri)),
+    }
+}
+
+/// Whether `query_text` is a `SELECT` with a **top-level** `ORDER BY`, i.e. one
+/// whose sort determines the observable row order of the whole result.
+///
+/// A `SELECT`'s modifier chain wraps the ordered pattern outermost-to-innermost
+/// as `Slice → Distinct/Reduced → Project → OrderBy → …` (see the algebra
+/// parser's query-form construction), so a top-level `ORDER BY` is found by
+/// descending through exactly those solution-modifier wrappers and checking for
+/// an [`GraphPattern::OrderBy`] before any other node. An `ORDER BY` buried
+/// inside a sub-`SELECT` (below a join, `GRAPH`, etc.) does NOT surface here —
+/// only the sub-query's own slice is observable, not its sort — which is
+/// exactly the W3C rule (§18.5: order is only defined for a top-level sort).
+///
+/// A parse failure (or a non-`SELECT` form) yields `false`: an unordered
+/// comparison is the conservative default, and a query the harness could not
+/// parse would already have failed evaluation before reaching the comparer.
+fn query_is_top_level_ordered(query_text: &str, options: &ParserOptions) -> bool {
+    let Ok(Query::Select { pattern, .. }) =
+        SparqlParser::new().parse_query_with(query_text, options)
+    else {
+        return false;
+    };
+    let mut node = &pattern;
+    loop {
+        match node {
+            GraphPattern::OrderBy { .. } => return true,
+            GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => node = inner,
+            _ => return false,
+        }
     }
 }

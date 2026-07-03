@@ -96,12 +96,20 @@ pub const XFAIL: &[Xfail] = &[
     // curated subset simply never exercised it. Grouped by root cause. Suffixes
     // are group-qualified (`<group>/manifest#<name>`) so they cannot cross-match.
 
-    // Expected result is a Turtle-encoded `rs:ResultSet` (not a CONSTRUCT graph);
-    // the harness models `.ttl` results as graphs, so the SELECT solutions cannot
-    // be compared against the result-set encoding yet.
+    // The expected result is a Turtle-encoded `rs:ResultSet` (decoded by
+    // `crate::rs_resultset` into the same solution-multiset shape SRX/SRJ use —
+    // this is no longer a result-format gap). The residual failure is a genuine
+    // SPARQL evaluation gap: `GRAPH ?g { VALUES (?g ?t) {...} }` must iterate
+    // every named graph in the dataset and JOIN each candidate ?g against the
+    // VALUES row's (possibly already-bound) ?g, keeping only compatible rows.
+    // The native evaluator instead only visits the one named graph that has
+    // triples (an empty named graph such as `empty.ttl` is invisible — no quad
+    // carries its graph term) and drops the VALUES-side ?g binding rather than
+    // joining it, so `("bar", <empty.ttl>)` wrongly reports `<data02.ttl>` and
+    // the `(<empty.ttl>, "foo")` row is missing entirely.
     Xfail {
         iri_suffix: "bindings/manifest#graph",
-        reason: XfailReason::ResultFormat,
+        reason: XfailReason::ValueMismatch,
     },
     // --- XSD cast: the engine evaluates but the cast result's datatype/lexical
     //     form diverges from the spec's expected solution. -----------------------
@@ -137,15 +145,17 @@ pub const XFAIL: &[Xfail] = &[
     },
     // --- Built-in functions: the engine evaluates but the produced value/lexical
     //     form diverges (numeric CEIL/FLOOR/ROUND datatype, unary plus, SECONDS,
-    //     STRAFTER/STRBEFORE, STRDT/STRLANG, IRI). `bnode0*` differ only by blank-
-    //     node label (the harness does not do bnode isomorphism). -----------------
+    //     STRAFTER/STRBEFORE, STRDT/STRLANG, IRI). ---------------------------------
+    // `BNODE(strExpr)` must return the SAME blank node for every call with an
+    // equal argument within one solution (SPARQL 1.1 §17.4.2.2); the native
+    // evaluator mints a fresh blank per call regardless of argument equality, so
+    // two `foo`/`foo` (or `BAZ`/`BAZ`) calls in one row yield distinct blanks. A
+    // real engine gap in `purrdf-sparql-eval`, not a comparer limitation — the
+    // solution-multiset comparer now does full bnode-isomorphism (RDFC-1.0), so
+    // this is no longer a labelling/non-determinism false negative.
     Xfail {
         iri_suffix: "functions/manifest#bnode01",
-        reason: XfailReason::NonDeterministic,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#bnode02",
-        reason: XfailReason::NonDeterministic,
+        reason: XfailReason::ValueMismatch,
     },
     Xfail {
         iri_suffix: "functions/manifest#ceil01",
@@ -161,14 +171,6 @@ pub const XFAIL: &[Xfail] = &[
     },
     Xfail {
         iri_suffix: "functions/manifest#iri01",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#plus-1-corrected",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#plus-2-corrected",
         reason: XfailReason::ValueMismatch,
     },
     Xfail {
@@ -193,10 +195,6 @@ pub const XFAIL: &[Xfail] = &[
     },
     Xfail {
         iri_suffix: "functions/manifest#strlang01",
-        reason: XfailReason::ValueMismatch,
-    },
-    Xfail {
-        iri_suffix: "functions/manifest#strlang02",
         reason: XfailReason::ValueMismatch,
     },
     Xfail {
@@ -416,30 +414,6 @@ pub const XFAIL: &[Xfail] = &[
     // residual eval-triple-terms cases below are NOT syntax gaps — each is a typed,
     // per-case-justified *evaluation* residual.
     //
-    // --- Blank-node labelling: the produced solution is correct up to a bijection
-    //     of blank-node labels, but the multiset comparer matches blanks by label
-    //     (the harness deliberately does not do bnode isomorphism — see compare.rs
-    //     and the `functions/manifest#bnode01` precedent). ------------------------
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#op-1",
-        reason: XfailReason::NonDeterministic,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#order-1",
-        reason: XfailReason::NonDeterministic,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#order-2",
-        reason: XfailReason::NonDeterministic,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#results-reifiedtriples-1j",
-        reason: XfailReason::NonDeterministic,
-    },
-    Xfail {
-        iri_suffix: "eval-triple-terms/manifest#results-reifiedtriples-1x",
-        reason: XfailReason::NonDeterministic,
-    },
     // --- Structural triple-term matching *through the reifier layer* under a
     //     `GRAPH ?g` scope: a pattern `<< s p ?o >>` must unify against reifier
     //     quads in named graphs. The reifier virtual layer is not yet scanned for

@@ -3,21 +3,30 @@
 
 //! Comparing a run outcome against the manifest's expected result.
 //!
-//! * `SELECT` → the solution sequence as a **multiset** of bound (var, term)
-//!   mappings (W3C solution-set equality).
+//! * `SELECT` → the solution sequence compared with a **single global
+//!   blank-node bijection** over the whole result set (W3C solution-set
+//!   equality), as a multiset when there is no top-level `ORDER BY` and as an
+//!   ordered sequence when there is (see [`compare_solutions`]).
 //! * `ASK` → boolean equality.
 //! * `CONSTRUCT`/`DESCRIBE` → canonical (RDFC-1.0) N-Quads equality.
 //! * syntax tests → parse success/failure matches the kind.
 //!
-//! Blank-node isomorphism is **not** performed: results containing blank nodes
-//! are compared by label and any genuine bnode-labelling difference must be
-//! recorded in [`crate::xfail`] rather than masked.
+//! Blank-node equality reuses the same RDFC-1.0 canonicalizer the
+//! CONSTRUCT/UPDATE dataset comparison is built on ([`purrdf_core::canonicalize`]):
+//! the **entire** result set is encoded as ONE synthetic dataset (a distinct
+//! solution blank node per row, one quad `(solution, var-predicate, value)` per
+//! bound cell) and canonicalized once, so a single bijection must map every
+//! blank node across every row at once (never a looser per-row bijection) while
+//! non-blank terms — IRIs, literals including datatype/language/base-direction,
+//! and their variable positions — still compare exactly. See
+//! [`encode_solution_set`].
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, SparqlResult, TermValue};
+use purrdf_core::{
+    BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult, TermId, TermValue,
+};
 use purrdf_sparql_results::ParsedSolutions;
 
 use crate::manifest::{ExpectedResult, SparqlTestCase, TestKind};
@@ -41,7 +50,7 @@ pub fn compare(case: &SparqlTestCase, outcome: &RunOutcome) -> Result<(), String
             }
             other => Err(format!("syntax outcome for non-syntax kind {other:?}")),
         },
-        RunOutcome::Eval(result) => compare_eval(case, result),
+        RunOutcome::Eval { result, ordered } => compare_eval(case, result, *ordered),
         RunOutcome::Update(actual) => compare_update(case, actual),
     }
 }
@@ -69,7 +78,11 @@ fn compare_update(case: &SparqlTestCase, actual: &Arc<RdfDataset>) -> Result<(),
 }
 
 /// Compare an evaluation result against the expected result file.
-fn compare_eval(case: &SparqlTestCase, result: &SparqlResult) -> Result<(), String> {
+///
+/// `ordered` is `true` when the query has a top-level `ORDER BY` (§18.5): a
+/// `SELECT`'s solution rows are then compared as an ordered *sequence* rather
+/// than a multiset (see [`compare_solutions`]).
+fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> Result<(), String> {
     match (&case.expected, result) {
         (ExpectedResult::Srx(path) | ExpectedResult::Srj(path), SparqlResult::Boolean(actual)) => {
             let expected = read_boolean(path, matches!(case.expected, ExpectedResult::Srj(_)))?;
@@ -86,7 +99,19 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult) -> Result<(), Stri
             },
         ) => {
             let expected = read_solutions(path, matches!(case.expected, ExpectedResult::Srj(_)))?;
-            compare_solutions(variables, rows, &expected)
+            compare_solutions(variables, rows, &expected, ordered)
+        }
+        (
+            ExpectedResult::ResultSetTurtle(path),
+            SparqlResult::Solutions {
+                variables, rows, ..
+            },
+        ) => {
+            let expected = crate::rs_resultset::parse(
+                &std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?,
+            )
+            .map_err(|e| format!("parse expected rs:ResultSet {}: {e}", path.display()))?;
+            compare_solutions(variables, rows, &expected, ordered)
         }
         (ExpectedResult::Graph(path), SparqlResult::Graph(actual)) => {
             let expected_bytes =
@@ -114,74 +139,148 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult) -> Result<(), Stri
     }
 }
 
-/// Compare a native solution sequence against the expected one as a multiset of
-/// bound (variable, term) mappings.
+/// Compare a native solution sequence against the expected one under W3C
+/// solution-set equality with a **single global blank-node bijection**.
+///
+/// Both sides are encoded as one synthetic dataset each (see
+/// [`encode_solution_set`]) and canonicalized once; equality is byte-equality of
+/// the two canonical N-Quads strings. When `ordered` is `true` (a top-level
+/// `ORDER BY`) each row also carries an ordinal literal so position is pinned
+/// into the canonical output — the comparison becomes an ordered-sequence match
+/// while blank-node identity stays global-bijection-normalized.
 fn compare_solutions(
     variables: &[String],
     rows: &[Vec<Option<TermValue>>],
     expected: &ParsedSolutions,
+    ordered: bool,
 ) -> Result<(), String> {
-    let actual_keys = solution_multiset(variables, rows);
-    let expected_keys = solution_multiset(&expected.variables, &expected.rows);
-    if actual_keys == expected_keys {
+    let actual_canon = encode_solution_set(variables, rows, ordered)?;
+    let expected_canon = encode_solution_set(&expected.variables, &expected.rows, ordered)?;
+    if actual_canon == expected_canon {
         Ok(())
     } else {
+        let mode = if ordered {
+            "ordered sequence"
+        } else {
+            "multiset"
+        };
         Err(format!(
-            "solution multiset mismatch: {} expected rows vs {} actual rows",
+            "solution {mode} mismatch: {} expected rows vs {} actual rows",
             expected.rows.len(),
             rows.len()
         ))
     }
 }
 
-/// A canonical, sorted multiset of solution rows. Each row is the sorted list of
-/// its bound `var=term` pairs (unbound cells omitted), so variable *order* and
-/// unbound columns do not affect equality (W3C solution-set semantics).
-fn solution_multiset(variables: &[String], rows: &[Vec<Option<TermValue>>]) -> Vec<String> {
-    let mut out: Vec<String> = rows
-        .iter()
-        .map(|row| {
-            let mut pairs: BTreeMap<&str, String> = BTreeMap::new();
-            for (var, cell) in variables.iter().zip(row) {
-                if let Some(term) = cell {
-                    pairs.insert(var, term_key(term));
-                }
+/// The reserved namespace for the synthetic terms [`encode_solution_set`]
+/// mints. No real query result term can occupy `urn:purrdf:conformance:` and
+/// `write_iri_escaped` escapes exotic variable names injectively, so the
+/// per-variable predicate IRIs and the ordinal predicate cannot collide with,
+/// or be forged from, result data.
+const CONFORMANCE_NS: &str = "urn:purrdf:conformance:";
+
+/// The scope every value blank node is interned under, so a blank node shared
+/// across rows keeps ONE [`TermId`] and its global coreference survives into
+/// the canonical form. Distinct from [`SOLUTION_SCOPE`] so a value blank can
+/// never accidentally alias a synthetic solution blank.
+const VALUE_SCOPE: BlankScope = BlankScope(1);
+
+/// The scope the per-row synthetic *solution* blank nodes are interned under.
+const SOLUTION_SCOPE: BlankScope = BlankScope(2);
+
+/// `xsd:integer` — the datatype of the ordinal literal pinning row position in
+/// the ordered-comparison encoding.
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+/// Encode a whole solution set as canonical RDFC-1.0 N-Quads.
+///
+/// Every row becomes a distinct **solution blank node** (in [`SOLUTION_SCOPE`]);
+/// each bound cell `(var, value)` becomes one quad
+/// `(solution, urn:purrdf:conformance:var:<var>, value)`. Because the entire
+/// set is one dataset canonicalized once, RDFC-1.0 must find a SINGLE bijection
+/// mapping every blank node across every row simultaneously — so a result whose
+/// blanks only line up row-by-row (but not globally) is correctly UNEQUAL.
+/// Value blank nodes are interned in [`VALUE_SCOPE`] keyed by `(label, scope)`,
+/// so a blank shared across rows keeps one [`TermId`] and its coreference is
+/// preserved; two structurally-identical rows produce two automorphic solution
+/// blanks that RDFC-1.0 still emits as two lines, preserving multiplicity.
+///
+/// When `ordered`, each solution blank additionally gets
+/// `(solution, urn:purrdf:conformance:index, "<i>"^^xsd:integer)`: the ordinal
+/// literal is a ground term, so it distinguishes row `i` from row `j` in the
+/// canonical output and the comparison becomes position-sensitive.
+///
+/// # Errors
+///
+/// Returns the freeze diagnostic if the interned terms do not form a
+/// structurally valid dataset (e.g. an ill-formed triple term with a literal in
+/// subject/predicate position from a crafted fixture) — propagated rather than
+/// panicked, honoring the harness's never-panic intent.
+fn encode_solution_set(
+    variables: &[String],
+    rows: &[Vec<Option<TermValue>>],
+    ordered: bool,
+) -> Result<String, String> {
+    let mut builder = RdfDatasetBuilder::new();
+    let index_predicate = builder.intern_iri(&format!("{CONFORMANCE_NS}index"));
+    for (i, row) in rows.iter().enumerate() {
+        // A distinct solution blank per row (its label is the row ordinal, but
+        // its identity is bijection-normalized away by RDFC-1.0 — only its
+        // structure, i.e. the cells hanging off it, is observable).
+        let solution = builder.intern_blank(&format!("row{i}"), SOLUTION_SCOPE);
+        for (var, cell) in variables.iter().zip(row) {
+            if let Some(term) = cell {
+                let predicate = builder.intern_iri(&format!("{CONFORMANCE_NS}var:{var}"));
+                let object = intern_term_value(&mut builder, term);
+                builder.push_quad(solution, predicate, object, None);
             }
-            pairs
-                .into_iter()
-                .map(|(v, t)| format!("{v}={t}"))
-                .collect::<Vec<_>>()
-                .join("\u{1f}")
-        })
-        .collect();
-    out.sort();
-    out
+        }
+        if ordered {
+            let ordinal = builder.intern_literal(RdfLiteral {
+                lexical_form: i.to_string(),
+                datatype: Some(XSD_INTEGER.to_owned()),
+                language: None,
+                direction: None,
+            });
+            builder.push_quad(solution, index_predicate, ordinal, None);
+        }
+    }
+    let dataset = builder
+        .freeze()
+        .map_err(|e| format!("encode solution set for comparison: {e}"))?;
+    Ok(purrdf_core::canonicalize(&dataset).nquads)
 }
 
-/// Field separator used inside a Literal key.  US (U+001F) cannot appear in
-/// any RDF lexical form, datatype IRI, or language tag, so it is collision-free
-/// as an internal delimiter while the row-level separator at the call site also
-/// uses U+001F.  The type-prefix character (`L:`, `I:`, etc.) keeps variants
-/// mutually unambiguous even without an additional guard byte.
-const FIELD_SEP: char = '\u{1f}';
-
-/// A canonical string key for a term value.
-fn term_key(term: &TermValue) -> String {
+/// Intern one [`TermValue`] into `builder`, recursively for triple terms.
+///
+/// Every value blank node — top-level or nested in a triple term — is interned
+/// under the single shared [`VALUE_SCOPE`], keyed by its label, so a blank with
+/// the same label in two different rows resolves to ONE [`TermId`] and its
+/// coreference across the whole result set is preserved through
+/// canonicalization. (Result blank nodes are single-scope in practice: both the
+/// engine and the SRX/SRJ/`rs:ResultSet` readers mint them in the default
+/// scope, so forcing one scope here cannot merge two originally-distinct
+/// blanks.)
+fn intern_term_value(builder: &mut RdfDatasetBuilder, term: &TermValue) -> TermId {
     match term {
-        TermValue::Iri(i) => format!("I:{i}"),
-        TermValue::Blank { label, .. } => format!("B:{label}"),
+        TermValue::Iri(iri) => builder.intern_iri(iri),
+        TermValue::Blank { label, .. } => builder.intern_blank(label, VALUE_SCOPE),
         TermValue::Literal {
             lexical_form,
             datatype,
             language,
             direction,
-        } => format!(
-            "L:{lexical_form}{FIELD_SEP}{datatype}{FIELD_SEP}{}{FIELD_SEP}{}",
-            language.as_deref().unwrap_or(""),
-            direction.map_or("", purrdf_core::RdfTextDirection::as_str)
-        ),
+        } => builder.intern_literal(RdfLiteral {
+            lexical_form: lexical_form.clone(),
+            datatype: Some(datatype.clone()),
+            language: language.clone(),
+            direction: *direction,
+        }),
         TermValue::Triple { s, p, o } => {
-            format!("T:({} {} {})", term_key(s), term_key(p), term_key(o))
+            let s = intern_term_value(builder, s);
+            let p = intern_term_value(builder, p);
+            let o = intern_term_value(builder, o);
+            builder.intern_triple(s, p, o)
         }
     }
 }
@@ -240,26 +339,174 @@ mod tests {
         }
     }
 
+    fn blank(label: &str) -> TermValue {
+        TermValue::Blank {
+            label: label.to_owned(),
+            scope: BlankScope::DEFAULT,
+        }
+    }
+
+    /// Encode a one-variable, one-row set (unordered) to its canonical form.
+    fn one(term: TermValue) -> String {
+        encode_solution_set(&["x".to_owned()], &[vec![Some(term)]], false).expect("encode")
+    }
+
     #[test]
-    fn term_key_pipe_in_lexical_form_does_not_collide_with_pipe_in_datatype() {
-        // Prior to the fix, `L:a|b|dt||` and `L:a|b|dt||` were the same key
-        // for two structurally distinct literals.  With FIELD_SEP = U+001F the
-        // keys are distinct because the separator byte cannot appear in either
-        // field.
-        let key1 = term_key(&lit("a|b", "dt"));
-        let key2 = term_key(&lit("a", "b|dt"));
+    fn literal_field_boundaries_do_not_collide() {
+        // Two structurally distinct literals whose lexical form / datatype
+        // share a `|` byte across the split must still encode differently.
         assert_ne!(
-            key1, key2,
-            "literals with | in different fields must produce different keys"
+            one(lit("a|b", "dt")),
+            one(lit("a", "b|dt")),
+            "literals with | in different fields must encode differently"
         );
     }
 
     #[test]
-    fn term_key_iri_cannot_collide_with_literal() {
-        // An IRI key starts with `I:` and a Literal key starts with `L:`, so
-        // they can never be equal regardless of content.
-        let iri_key = term_key(&TermValue::Iri("L:something".to_owned()));
-        let lit_key = term_key(&lit("something", "dt"));
-        assert_ne!(iri_key, lit_key, "IRI and Literal keys must stay distinct");
+    fn iri_cannot_collide_with_literal() {
+        assert_ne!(
+            one(TermValue::Iri("L:something".to_owned())),
+            one(lit("something", "dt")),
+            "IRI and Literal encodings must stay distinct"
+        );
+    }
+
+    #[test]
+    fn blank_node_relabelling_is_isomorphic() {
+        // A single-column row bound to a blank node must encode identically
+        // regardless of the blank's original label — the core isomorphism fix.
+        assert_eq!(
+            one(blank("b0")),
+            one(blank("totally-different")),
+            "blank-node label must not affect equality"
+        );
+    }
+
+    #[test]
+    fn shared_blank_across_columns_is_distinguished_from_two_distinct_blanks() {
+        // ?x and ?y bound to the SAME blank (coreference) must differ from ?x
+        // and ?y bound to two independent blanks, even though both relabel away.
+        let vars = ["x".to_owned(), "y".to_owned()];
+        let shared =
+            encode_solution_set(&vars, &[vec![Some(blank("b0")), Some(blank("b0"))]], false)
+                .expect("encode");
+        let distinct =
+            encode_solution_set(&vars, &[vec![Some(blank("b0")), Some(blank("b1"))]], false)
+                .expect("encode");
+        assert_ne!(
+            shared, distinct,
+            "coreference between two variables is observable, not just blank count"
+        );
+        // ...but relabelling the SAME coreference must still collapse.
+        let shared_relabelled = encode_solution_set(
+            &vars,
+            &[vec![Some(blank("zzz")), Some(blank("zzz"))]],
+            false,
+        )
+        .expect("encode");
+        assert_eq!(shared, shared_relabelled);
+    }
+
+    #[test]
+    fn term_position_is_not_normalized_away() {
+        // The same blank bound to ?x vs to ?y is a different row (position
+        // matters); only blank *identity* is bijection-normalized.
+        let vars = ["x".to_owned(), "y".to_owned()];
+        let a =
+            encode_solution_set(&vars, &[vec![Some(blank("b0")), None]], false).expect("encode");
+        let b =
+            encode_solution_set(&vars, &[vec![None, Some(blank("b0"))]], false).expect("encode");
+        assert_ne!(a, b, "variable position must still compare exactly");
+    }
+
+    /// DEFECT 1 gate: the WHOLE-SET bijection must reject a result whose blanks
+    /// only line up per row. Expected `[{?x=_:a},{?x=_:b}]` (two distinct
+    /// blanks) vs actual `[{?x=_:z},{?x=_:z}]` (one blank in both rows): no
+    /// global bijection exists, so they MUST be unequal.
+    #[test]
+    fn cross_row_bijection_rejects_row_local_relabelling() {
+        let vars = ["x".to_owned()];
+        let two_distinct = &[vec![Some(blank("a"))], vec![Some(blank("b"))]];
+        let one_shared = &[vec![Some(blank("z"))], vec![Some(blank("z"))]];
+        assert_ne!(
+            encode_solution_set(&vars, two_distinct, false).expect("encode"),
+            encode_solution_set(&vars, one_shared, false).expect("encode"),
+            "two distinct blanks must NOT equal the same blank repeated (no global bijection)"
+        );
+    }
+
+    /// DEFECT 1 gate: a genuine GLOBAL relabelling must still be equal.
+    /// `[{?x=_:a},{?x=_:b}]` vs `[{?x=_:p},{?x=_:q}]` — one bijection a↦p, b↦q.
+    #[test]
+    fn cross_row_global_relabelling_is_equal() {
+        let vars = ["x".to_owned()];
+        let ab = &[vec![Some(blank("a"))], vec![Some(blank("b"))]];
+        let pq = &[vec![Some(blank("p"))], vec![Some(blank("q"))]];
+        assert_eq!(
+            encode_solution_set(&vars, ab, false).expect("encode"),
+            encode_solution_set(&vars, pq, false).expect("encode"),
+            "a global bijection over all rows must compare equal"
+        );
+    }
+
+    /// DEFECT 2 gate: with `ordered = true`, row order is observable — the same
+    /// rows in a different order must NOT be equal; the identical order must be.
+    #[test]
+    fn ordered_comparison_is_position_sensitive() {
+        let vars = ["x".to_owned()];
+        let forward = &[
+            vec![Some(lit("1", XSD_INTEGER))],
+            vec![Some(lit("2", XSD_INTEGER))],
+        ];
+        let reverse = &[
+            vec![Some(lit("2", XSD_INTEGER))],
+            vec![Some(lit("1", XSD_INTEGER))],
+        ];
+        assert_ne!(
+            encode_solution_set(&vars, forward, true).expect("encode"),
+            encode_solution_set(&vars, reverse, true).expect("encode"),
+            "ordered: a different row order must compare unequal"
+        );
+        assert_eq!(
+            encode_solution_set(&vars, forward, true).expect("encode"),
+            encode_solution_set(&vars, forward, true).expect("encode"),
+            "ordered: identical order must compare equal"
+        );
+        // The SAME two orders compare EQUAL when unordered (multiset).
+        assert_eq!(
+            encode_solution_set(&vars, forward, false).expect("encode"),
+            encode_solution_set(&vars, reverse, false).expect("encode"),
+            "unordered: row order must not matter"
+        );
+    }
+
+    /// The `compare_solutions` seam reports ordered vs multiset in its error and
+    /// passes an equal set either way.
+    #[test]
+    fn compare_solutions_ordered_flag_threads_through() {
+        let vars = vec!["x".to_owned()];
+        let rows = vec![vec![Some(lit("1", XSD_INTEGER))]];
+        let expected = ParsedSolutions {
+            variables: vars.clone(),
+            rows: rows.clone(),
+        };
+        assert!(compare_solutions(&vars, &rows, &expected, true).is_ok());
+        assert!(compare_solutions(&vars, &rows, &expected, false).is_ok());
+
+        let reversed_expected = ParsedSolutions {
+            variables: vars.clone(),
+            rows: vec![
+                vec![Some(lit("2", XSD_INTEGER))],
+                vec![Some(lit("1", XSD_INTEGER))],
+            ],
+        };
+        let two_rows = vec![
+            vec![Some(lit("1", XSD_INTEGER))],
+            vec![Some(lit("2", XSD_INTEGER))],
+        ];
+        let err = compare_solutions(&vars, &two_rows, &reversed_expected, true).unwrap_err();
+        assert!(err.contains("ordered sequence"), "message: {err}");
+        // Same rows, opposite order, compare EQUAL when unordered.
+        assert!(compare_solutions(&vars, &two_rows, &reversed_expected, false).is_ok());
     }
 }
