@@ -12,16 +12,11 @@ supports is checked against the ``oracle`` (real rdflib); behaviors it lacks
 from __future__ import annotations
 
 import datetime
-import os
-import subprocess
-import sys
-from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-# bindings/python/tests/ -> bindings/ -> python-rdflib-shadow/
-_SHADOW_DIR = Path(__file__).resolve().parent.parent.parent / "python-rdflib-shadow"
+from _shadow_test_utils import _run_in_shadow
 
 XSD = "http://www.w3.org/2001/XMLSchema#"
 EX = "http://example.org/"
@@ -370,27 +365,6 @@ def test_identified_node_importable_from_compat_term() -> None:
 
     assert IdentifiedNode.__name__ == "IdentifiedNode"
     assert IdentifiedNode.__module__ == "purrdf.compat.rdflib.term"
-
-
-def _run_in_shadow(code: str) -> str:
-    """Run ``code`` in a child interpreter whose ``import rdflib`` is the shadow."""
-    env = dict(os.environ)
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (
-        f"{_SHADOW_DIR}{os.pathsep}{existing}" if existing else str(_SHADOW_DIR)
-    )
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode == 0, (
-        f"shadow subprocess failed (rc={proc.returncode})\n"
-        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
-    )
-    return proc.stdout
 
 
 def test_identified_node_resolves_through_shadow() -> None:

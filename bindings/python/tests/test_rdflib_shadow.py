@@ -17,42 +17,12 @@ parent still sees the genuine rdflib, untouched.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-# bindings/python/tests/ -> bindings/ -> python-rdflib-shadow/
-_SHADOW_DIR = Path(__file__).resolve().parent.parent.parent / "python-rdflib-shadow"
-
-
-def _run_in_shadow(code: str) -> str:
-    """Run ``code`` in a child interpreter whose ``import rdflib`` is the shadow.
-
-    Prepends the shadow distribution's package root to ``PYTHONPATH`` so a plain
-    ``import rdflib`` in the child resolves to the purrdf shadow rather than the
-    real rdflib installed in this (parent) environment.
-    """
-    env = dict(os.environ)
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (
-        f"{_SHADOW_DIR}{os.pathsep}{existing}" if existing else str(_SHADOW_DIR)
-    )
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode == 0, (
-        f"shadow subprocess failed (rc={proc.returncode})\n"
-        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
-    )
-    return proc.stdout
+from _shadow_test_utils import _SHADOW_DIR, _run_in_shadow
 
 
 def test_shadow_dir_exists() -> None:
@@ -65,8 +35,7 @@ def test_shadow_dir_exists() -> None:
 def test_shadow_resolves_to_purrdf() -> None:
     """``import rdflib`` in the child loads the shadow (a purrdf-backed package)."""
     out = _run_in_shadow(
-        "import rdflib; print(rdflib.__file__); "
-        "print(rdflib.Graph.__module__)"
+        "import rdflib; print(rdflib.__file__); print(rdflib.Graph.__module__)"
     )
     lines = out.strip().splitlines()
     assert str(_SHADOW_DIR) in lines[0]
