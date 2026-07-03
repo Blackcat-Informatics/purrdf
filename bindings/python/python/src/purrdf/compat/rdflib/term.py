@@ -31,6 +31,19 @@ if TYPE_CHECKING:
     from purrdf import Literal as _NativeLiteral
 
 
+__all__ = [
+    "BNode",
+    "Identifier",
+    "IdentifiedNode",
+    "Literal",
+    "Node",
+    "URIRef",
+    "Variable",
+    "from_native",
+    "to_native",
+]
+
+
 class _SupportsNormalizeUri(Protocol):
     """Structural type for a namespace manager that can abbreviate an IRI.
 
@@ -196,7 +209,19 @@ class Identifier(str):
 Node = Identifier
 
 
-class URIRef(Identifier):
+class IdentifiedNode(Identifier):
+    """A ``str``-subclass base for URI and blank nodes (mirrors ``rdflib.term.IdentifiedNode``).
+
+    In RDFLib 7.6 this is the shared abstract base class of :class:`URIRef` and
+    :class:`BNode`; :class:`Literal` and :class:`Variable` intentionally do *not*
+    inherit from it. The shim keeps the same hierarchy so type checks and plugin
+    discovery that rely on ``isinstance(x, IdentifiedNode)`` behave identically.
+    """
+
+    __slots__ = ()
+
+
+class URIRef(IdentifiedNode):
     """An IRI term — RDFLib-shaped, backed by :class:`purrdf.NamedNode`."""
 
     __slots__ = ()
@@ -261,7 +286,7 @@ class URIRef(Identifier):
         return NegatedPath(self)
 
 
-class BNode(Identifier):
+class BNode(IdentifiedNode):
     """A blank-node term — RDFLib-shaped, backed by :class:`purrdf.BlankNode`."""
 
     __slots__ = ()

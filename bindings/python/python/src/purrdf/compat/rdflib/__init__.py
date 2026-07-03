@@ -64,7 +64,7 @@ from .namespace import (
 )
 from .query import Result, ResultRow
 from .resource import Resource
-from .term import BNode, Identifier, Literal, Node, URIRef, Variable
+from .term import BNode, IdentifiedNode, Identifier, Literal, Node, URIRef, Variable
 
 __all__ = [
     "BRICK",
@@ -105,6 +105,7 @@ __all__ = [
     "DefinedNamespace",
     "DefinedNamespaceMeta",
     "Graph",
+    "IdentifiedNode",
     "Identifier",
     "Literal",
     "Namespace",

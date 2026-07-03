@@ -12,9 +12,16 @@ supports is checked against the ``oracle`` (real rdflib); behaviors it lacks
 from __future__ import annotations
 
 import datetime
+import os
+import subprocess
+import sys
+from pathlib import Path
 from types import ModuleType
 
 import pytest
+
+# bindings/python/tests/ -> bindings/ -> python-rdflib-shadow/
+_SHADOW_DIR = Path(__file__).resolve().parent.parent.parent / "python-rdflib-shadow"
 
 XSD = "http://www.w3.org/2001/XMLSchema#"
 EX = "http://example.org/"
@@ -341,3 +348,60 @@ def test_rdf12_triple_term_has_no_rdflib_counterpart(compat: ModuleType) -> None
     )
     term = compat_term.from_native(inner)
     assert term is not None
+
+
+# ── IdentifiedNode hierarchy (rdflib 7.6 parity) ────────────────────────────────
+
+
+def test_identified_node_hierarchy(compat: ModuleType) -> None:
+    """URIRef and BNode inherit from IdentifiedNode; Literal and Variable do not."""
+    from purrdf.compat.rdflib.term import IdentifiedNode
+
+    assert issubclass(compat.URIRef, IdentifiedNode)
+    assert issubclass(compat.BNode, IdentifiedNode)
+    assert not issubclass(compat.Literal, IdentifiedNode)
+    assert not issubclass(compat.Variable, IdentifiedNode)
+    # IdentifiedNode itself is still a str subclass and an Identifier.
+    assert issubclass(IdentifiedNode, compat.Identifier)
+    assert issubclass(IdentifiedNode, str)
+
+
+def test_identified_node_importable_from_compat_term() -> None:
+    """``from purrdf.compat.rdflib.term import IdentifiedNode`` resolves."""
+    from purrdf.compat.rdflib.term import IdentifiedNode
+
+    assert IdentifiedNode.__name__ == "IdentifiedNode"
+    assert IdentifiedNode.__module__ == "purrdf.compat.rdflib.term"
+
+
+def _run_in_shadow(code: str) -> str:
+    """Run ``code`` in a child interpreter whose ``import rdflib`` is the shadow."""
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{_SHADOW_DIR}{os.pathsep}{existing}" if existing else str(_SHADOW_DIR)
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, (
+        f"shadow subprocess failed (rc={proc.returncode})\n"
+        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+    )
+    return proc.stdout
+
+
+def test_identified_node_resolves_through_shadow() -> None:
+    """Under the shadow distribution, ``rdflib.term.IdentifiedNode`` is the shim class."""
+    code = (
+        "from purrdf.compat.rdflib.term import IdentifiedNode as CompatIdentifiedNode\n"
+        "from rdflib.term import IdentifiedNode as ShadowIdentifiedNode\n"
+        "assert ShadowIdentifiedNode is CompatIdentifiedNode, "
+        "f'{ShadowIdentifiedNode} is not {CompatIdentifiedNode}'\n"
+        "print('OK')\n"
+    )
+    assert _run_in_shadow(code).strip() == "OK"
