@@ -46,6 +46,13 @@ pub struct ContentChainVerification {
     pub signatures_valid: usize,
     /// Number of valid signatures whose signer is trusted by the default trust
     /// policy (from [`purrdf_gts::verify::VerificationResult::trusted`]).
+    ///
+    /// This count is **advisory**: [`verify_content_chain`] does not gate on it.
+    /// Because verification resolves the file's *embedded* transport key
+    /// (trust-on-first-use), "trusted" here means the signer matches the default
+    /// policy over that embedded key, not that the caller pinned the key out of
+    /// band. Callers who need pinned trust must compare this against their own
+    /// key policy.
     pub signatures_trusted: usize,
     /// Number of the dataset's content-addressed terms whose digest was found in
     /// the verified chain (equals the dataset's content-id count on success).
@@ -61,6 +68,16 @@ pub struct ContentChainVerification {
 /// See the [module docs](self) for the exact checks. Hard-fails on the first
 /// problem — a bad signature, a fold diagnostic, an expected-head mismatch, or a
 /// content-addressed term whose digest is not included in the file.
+///
+/// # Trust model
+///
+/// Signature verification is **trust-on-first-use**: it resolves the transport
+/// key *embedded in the file* and checks every signed frame against it. A
+/// successful return therefore means the chain is self-consistent and validly
+/// self-signed by that embedded key — not that the signer is a party the caller
+/// independently trusts. The returned [`ContentChainVerification::signatures_trusted`]
+/// is advisory and is never gated on; callers needing pinned trust must enforce
+/// their own key policy on top of this result.
 ///
 /// # Errors
 ///
