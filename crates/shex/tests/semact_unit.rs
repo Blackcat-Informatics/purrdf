@@ -117,6 +117,48 @@ fn default_registry_ignores_actions() {
 }
 
 #[test]
+fn group_act_in_unselected_oneof_branch_does_not_fire() {
+    // OneOf of two singleton groups, each with its own group-level action
+    // (forced by giving each inner triple constraint its own explicit `{1}`
+    // cardinality, so the enclosing parens become a real EachOf group
+    // rather than folding the action onto the bare constraint). Data has
+    // p1 but not p2, so the p1 branch is selected and its `print` fires;
+    // the p2 branch's `fail` must NOT fire even though it's part of a
+    // matching `OneOf`.
+    assert!(conformant_with_test(&format!(
+        "<S1> {{ ( ( <p2> . {{1}} ) %<{TEST}>{{ fail(s) %}} | ( <p1> . {{1}} ) %<{TEST}>{{ print(s) %}} ) }}"
+    )));
+}
+
+#[test]
+fn group_act_on_zero_rep_optional_group_does_not_fire() {
+    // An optional group (`?`) matching zero repetitions still carries a
+    // `fail` action; since the group did not participate (no p2 triple
+    // present), the action must not fire.
+    assert!(conformant_with_test(&format!(
+        "<S1> {{ ( <p2> . {{1}} )? %<{TEST}>{{ fail(s) %}} }}"
+    )));
+}
+
+#[test]
+fn group_act_on_matched_group_fires() {
+    // The group actually matches (p1 is present), so its `fail` action
+    // DOES fire, and the shape is nonconformant.
+    assert!(!conformant_with_test(&format!(
+        "<S1> {{ ( <p1> . {{1}} ) %<{TEST}>{{ fail(s) %}} }}"
+    )));
+}
+
+#[test]
+fn group_act_on_matched_group_print_still_conforms() {
+    // Regression: a matched group with a non-failing action still
+    // conforms.
+    assert!(conformant_with_test(&format!(
+        "<S1> {{ ( <p1> . {{1}} ) %<{TEST}>{{ print(s) %}} }}"
+    )));
+}
+
+#[test]
 fn custom_extension_can_veto() {
     // Register an extension that fails whenever its code mentions "veto".
     let schema = parse_shexc(

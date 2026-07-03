@@ -71,24 +71,24 @@ pub(crate) struct Slot<'a> {
 
 /// A compiled triple-expression node.
 #[derive(Debug)]
-pub(crate) enum CNode {
+pub(crate) enum CNode<'a> {
     /// A leaf [`Slot`], by index.
     Slot(usize),
-    /// `EachOf` with a group cardinality.
-    Each(Vec<Self>, Card),
-    /// `OneOf` with a group cardinality.
-    One(Vec<Self>, Card),
+    /// `EachOf` with a group cardinality and the group's own semantic
+    /// actions (fired only when this node actually participated in the
+    /// winning match — see [`participating_group_acts`]).
+    Each(Vec<Self>, Card, Vec<&'a SemAct>),
+    /// `OneOf` with a group cardinality and the group's own semantic
+    /// actions (fired only for the selected branch(es) — see
+    /// [`participating_group_acts`]).
+    One(Vec<Self>, Card, Vec<&'a SemAct>),
 }
 
-/// A compiled triple expression: the tree, its slot table, and the
-/// group-level semantic actions gathered in traversal order.
+/// A compiled triple expression: the tree and its slot table.
 #[derive(Debug)]
 pub(crate) struct Compiled<'a> {
-    pub root: CNode,
+    pub root: CNode<'a>,
     pub slots: Vec<Slot<'a>>,
-    /// `EachOf`/`OneOf` group semantic actions, fired when the expression
-    /// matches (inclusions inlined, so actions behind `&ref` are included).
-    pub group_acts: Vec<&'a SemAct>,
 }
 
 /// Compile a triple expression, inlining `TripleExprRef`s via `te_map`.
@@ -97,36 +97,30 @@ pub(crate) fn compile<'a>(
     te_map: &HashMap<&'a str, &'a TripleExpr>,
 ) -> Result<Compiled<'a>, String> {
     let mut slots = Vec::new();
-    let mut group_acts = Vec::new();
     let mut stack: Vec<&'a str> = Vec::new();
-    let root = compile_node(expr, te_map, &mut slots, &mut group_acts, &mut stack)?;
-    Ok(Compiled {
-        root,
-        slots,
-        group_acts,
-    })
+    let root = compile_node(expr, te_map, &mut slots, &mut stack)?;
+    Ok(Compiled { root, slots })
 }
 
 fn compile_node<'a>(
     expr: &'a TripleExpr,
     te_map: &HashMap<&'a str, &'a TripleExpr>,
     slots: &mut Vec<Slot<'a>>,
-    group_acts: &mut Vec<&'a SemAct>,
     stack: &mut Vec<&'a str>,
-) -> Result<CNode, String> {
+) -> Result<CNode<'a>, String> {
     match expr {
         TripleExpr::TripleConstraint(tc) => Ok(CNode::Slot(push_slot(tc, slots))),
         TripleExpr::EachOf(group) | TripleExpr::OneOf(group) => {
             let card = Card::from_ast(group.min, group.max);
-            group_acts.extend(group.sem_acts.iter());
+            let acts: Vec<&'a SemAct> = group.sem_acts.iter().collect();
             let children = group
                 .expressions
                 .iter()
-                .map(|child| compile_node(child, te_map, slots, group_acts, stack))
+                .map(|child| compile_node(child, te_map, slots, stack))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(match expr {
-                TripleExpr::EachOf(_) => CNode::Each(children, card),
-                _ => CNode::One(children, card),
+                TripleExpr::EachOf(_) => CNode::Each(children, card, acts),
+                _ => CNode::One(children, card, acts),
             })
         }
         TripleExpr::Ref(label) => {
@@ -137,7 +131,7 @@ fn compile_node<'a>(
                 return Err(format!("cyclic triple-expression inclusion of {label}"));
             }
             stack.push(label.as_str());
-            let node = compile_node(target, te_map, slots, group_acts, stack)?;
+            let node = compile_node(target, te_map, slots, stack)?;
             stack.pop();
             Ok(node)
         }
@@ -213,7 +207,7 @@ fn wrap(inner: Iv, card: Card) -> Option<Iv> {
 }
 
 /// Bottom-up repetition interval of `node` for per-slot count ranges.
-fn reps(node: &CNode, slots: &[Slot<'_>], counts: &[(u64, u64)]) -> Option<Iv> {
+fn reps(node: &CNode<'_>, slots: &[Slot<'_>], counts: &[(u64, u64)]) -> Option<Iv> {
     match node {
         CNode::Slot(i) => wrap(
             Iv {
@@ -222,20 +216,71 @@ fn reps(node: &CNode, slots: &[Slot<'_>], counts: &[(u64, u64)]) -> Option<Iv> {
             },
             slots[*i].card,
         ),
-        CNode::Each(children, card) => {
+        CNode::Each(children, card, _) => {
             let mut inner = Iv { lo: 0, hi: None };
             for child in children {
                 inner = intersect(inner, reps(child, slots, counts)?)?;
             }
             wrap(inner, *card)
         }
-        CNode::One(children, card) => {
+        CNode::One(children, card, _) => {
             let mut inner = Iv { lo: 0, hi: Some(0) };
             for child in children {
                 inner = sum(inner, reps(child, slots, counts)?);
             }
             wrap(inner, *card)
         }
+    }
+}
+
+// ── group semantic-action participation (ShEx 2.1 §5.5.2) ──────────────────
+
+/// The total number of triples the winning assignment routed to the slots
+/// reachable under `node`.
+fn leaf_triple_count(node: &CNode<'_>, counts: &[(u64, u64)]) -> u64 {
+    match node {
+        CNode::Slot(i) => counts[*i].0,
+        CNode::Each(children, _, _) | CNode::One(children, _, _) => children
+            .iter()
+            .map(|child| leaf_triple_count(child, counts))
+            .sum(),
+    }
+}
+
+/// Collect the `EachOf`/`OneOf` group semantic actions that actually
+/// participated in the winning match, in deterministic (pre-order,
+/// parent-before-children) traversal order.
+///
+/// A group's own actions fire only when the group's triple expression
+/// actually took part in the match: at least one triple was routed, by the
+/// winning assignment, to a slot reachable underneath it. For `OneOf` this
+/// means only the selected branch(es) — an alternative that consumed no
+/// triples did not fire, even though the overall choice matched (ShEx 2.1
+/// §5.5.2; contrast the flat, ungated firing this replaces).
+pub(crate) fn participating_group_acts<'a>(
+    compiled: &'a Compiled<'a>,
+    counts: &[(u64, u64)],
+) -> Vec<&'a SemAct> {
+    let mut acts = Vec::new();
+    collect_participating(&compiled.root, counts, &mut acts);
+    acts
+}
+
+fn collect_participating<'a>(
+    node: &'a CNode<'a>,
+    counts: &[(u64, u64)],
+    out: &mut Vec<&'a SemAct>,
+) {
+    let (children, group_acts) = match node {
+        CNode::Slot(_) => return,
+        CNode::Each(children, _, acts) | CNode::One(children, _, acts) => (children, acts),
+    };
+    if leaf_triple_count(node, counts) == 0 {
+        return;
+    }
+    out.extend(group_acts.iter().copied());
+    for child in children {
+        collect_participating(child, counts, out);
     }
 }
 

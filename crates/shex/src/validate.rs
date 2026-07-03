@@ -469,9 +469,9 @@ impl<'a> Engine<'a> {
                         min: 1,
                         max: Some(1),
                     },
+                    Vec::new(),
                 ),
                 slots: Vec::new(),
-                group_acts: Vec::new(),
             },
         };
         // Per-(predicate, direction) slot indexes, in deterministic order.
@@ -624,7 +624,7 @@ impl<'a> Engine<'a> {
             predicate: None,
             value: None,
         };
-        for act in &compiled.group_acts {
+        for act in matcher::participating_group_acts(compiled, counts) {
             if !self.sem_acts.dispatch(act, &group_ctx) {
                 return Err("group semantic action failed".to_owned());
             }
