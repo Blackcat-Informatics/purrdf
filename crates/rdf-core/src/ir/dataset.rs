@@ -48,6 +48,13 @@ type ValueIndex = HashMap<u64, Vec<TermId>, FastHasher>;
 type PredecessorIndex = HashMap<TermId, Box<[TermId]>, FastHasher>;
 const QUAD_ARITY: usize = 4;
 
+/// A reifier side-table row: `(reifier, triple-term, graph)`; `graph == None` ⇒ the
+/// default graph. Frozen sorted by this tuple order (reifier primary key).
+pub type ReifierRow = (TermId, TermId, Option<TermId>);
+/// An annotation side-table row: `(reifier, predicate, object, graph)`; see
+/// [`ReifierRow`].
+pub type AnnotationRow = (TermId, TermId, TermId, Option<TermId>);
+
 /// A handle identifying a pushed quad by its dense (deduplicated) ordinal, used to
 /// attach a source location sparsely. Like [`TermId`], it is local to one frozen
 /// dataset and is **not** persistent or merge-stable.
@@ -156,10 +163,16 @@ pub struct RdfDataset {
     terms: Box<[InternedTerm]>,
     /// Deduplicated quad rows in deterministic order (C0.5).
     quads: Box<[QuadRow]>,
-    /// `(reifier, triple-term)` bindings; many reifiers MAY bind one triple (C0.4).
-    reifiers: Box<[(TermId, TermId)]>,
-    /// `(reifier, predicate, object)` annotations, deduplicated (C0.5).
-    annotations: Box<[(TermId, TermId, TermId)]>,
+    /// `(reifier, triple-term, graph)` bindings; many reifiers MAY bind one triple
+    /// (C0.4). The `graph` slot (`None` = default graph) records the named graph the
+    /// reifier declaration was asserted in — so a reifier inside a TriG `GRAPH g { … }`
+    /// block binds `?g` under `GRAPH ?g`. Frozen sorted by `(reifier, triple, graph)`,
+    /// so `reifiers_of` (keyed on `triple`) and `annotations_of` (keyed on `reifier`)
+    /// stay range-addressable.
+    reifiers: Box<[ReifierRow]>,
+    /// `(reifier, predicate, object, graph)` annotations, deduplicated (C0.5). The
+    /// `graph` slot mirrors [`Self::reifiers`].
+    annotations: Box<[AnnotationRow]>,
     /// Sparse source locations, sorted by handle for binary-search lookup.
     locations: Box<[(QuadHandle, RdfLocation)]>,
     /// Capability flags, computed ONCE at freeze.
@@ -178,6 +191,22 @@ pub struct RdfDataset {
     /// lazily on the first pattern query that selects them. `OnceLock` keeps the
     /// frozen dataset `Send + Sync`.
     indexes: QuadIndexes,
+    /// Every named graph *known* to this dataset: the union of every graph term
+    /// that owns at least one quad AND every graph the caller explicitly declared
+    /// via [`RdfDatasetBuilder::declare_named_graph`](super::builder::RdfDatasetBuilder::declare_named_graph)
+    /// even if it owns none. Sorted, deduplicated, ascending `TermId` order.
+    ///
+    /// This is additive metadata ONLY for `GRAPH ?g`-style enumeration
+    /// (SPARQL §8.3/§18.6): a quad-store's normal "a named graph exists iff it
+    /// holds a quad" doctrine (see `purrdf-sparql-eval`'s `dataset_spec` module and
+    /// `update.rs`'s `CREATE GRAPH`/`CLEAR`/`DROP` semantics) is unchanged — those
+    /// paths never consult this field. It exists purely so a caller that KNOWS a
+    /// named graph is part of its dataset (e.g. the W3C test harness's
+    /// `qt:graphData` — the RDF dataset abstraction of RDF 1.1 §3 permits a named
+    /// graph with an empty graph) can register that fact for the one algebra
+    /// operator (`GRAPH ?g`) whose spec-mandated enumeration is "every named graph
+    /// in the dataset", not "every named graph with a triple".
+    named_graphs: Box<[TermId]>,
     /// Frozen side table from a content-addressed term to its decoded
     /// [`Blake3ContentId`] (moved from the builder's [`Interner`](super::builder)
     /// at [`materialize`](super::builder::RdfDatasetBuilder::materialize)). Empty
@@ -396,10 +425,11 @@ impl RdfDataset {
         arena: Box<[u8]>,
         terms: Box<[InternedTerm]>,
         quads: Box<[QuadRow]>,
-        reifiers: Box<[(TermId, TermId)]>,
-        annotations: Box<[(TermId, TermId, TermId)]>,
+        reifiers: Box<[ReifierRow]>,
+        annotations: Box<[AnnotationRow]>,
         locations: Box<[(QuadHandle, RdfLocation)]>,
         caps: RdfStoreCapabilities,
+        named_graphs: Box<[TermId]>,
         content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
         derivation_predicate: Option<TermId>,
     ) -> Self {
@@ -413,10 +443,17 @@ impl RdfDataset {
             caps,
             value_index: OnceLock::new(),
             indexes: QuadIndexes::default(),
+            named_graphs,
             content_ids,
             derivation_predicate,
             predecessor_index: OnceLock::new(),
         }
+    }
+
+    /// Every named graph known to this dataset (quad-bearing or explicitly
+    /// declared empty — see the `named_graphs` field doc). Sorted, deduplicated.
+    pub fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
+        self.named_graphs.iter().copied()
     }
 
     /// Resolve a term id to the owned [`RdfTerm`] model, recursively for triple
@@ -521,8 +558,13 @@ impl RdfDataset {
         quad
     }
 
-    /// Resolve a `(reifier, triple-term)` binding to an owned [`RdfReifier`].
-    pub fn to_owned_reifier(&self, reifier: TermId, triple: TermId) -> RdfReifier {
+    /// Resolve a `(reifier, triple-term, graph)` binding to an owned [`RdfReifier`].
+    pub fn to_owned_reifier(
+        &self,
+        reifier: TermId,
+        triple: TermId,
+        graph: Option<TermId>,
+    ) -> RdfReifier {
         let statement = match self.resolve(triple) {
             TermRef::Triple { s, p, o } => RdfTriple::new(
                 self.to_owned_term(s),
@@ -532,16 +574,24 @@ impl RdfDataset {
             other => unreachable!("a reifier must bind a triple term, got {other:?}"),
         };
         RdfReifier::new(self.to_owned_term(reifier), statement)
+            .in_graph(graph.map(|g| self.to_owned_term(g)))
     }
 
-    /// Resolve a `(reifier, predicate, object)` annotation to an owned
+    /// Resolve a `(reifier, predicate, object, graph)` annotation to an owned
     /// [`RdfAnnotation`].
-    pub fn to_owned_annotation(&self, reifier: TermId, p: TermId, o: TermId) -> RdfAnnotation {
+    pub fn to_owned_annotation(
+        &self,
+        reifier: TermId,
+        p: TermId,
+        o: TermId,
+        graph: Option<TermId>,
+    ) -> RdfAnnotation {
         RdfAnnotation::new(
             self.to_owned_term(reifier),
             self.iri_string(p),
             self.to_owned_term(o),
         )
+        .in_graph(graph.map(|g| self.to_owned_term(g)))
     }
 
     /// Iterate over all quads resolved to their owned [`RdfQuad`] representation.
@@ -553,15 +603,24 @@ impl RdfDataset {
 
     /// Iterate over all reifiers resolved to their owned [`RdfReifier`] representation.
     pub fn owned_reifiers(&self) -> impl Iterator<Item = RdfReifier> + '_ {
-        self.reifiers()
-            .map(|(reifier, triple)| self.to_owned_reifier(reifier, triple))
+        self.reifiers_with_graph()
+            .map(|(reifier, triple, graph)| self.to_owned_reifier(reifier, triple, graph))
     }
 
     /// Iterate over all annotations resolved to their owned [`RdfAnnotation`] representation.
     pub fn owned_annotations(&self) -> impl Iterator<Item = RdfAnnotation> + '_ {
-        self.annotations().map(|(reifier, predicate, object)| {
-            self.to_owned_annotation(reifier, predicate, object)
-        })
+        self.annotations_with_graph()
+            .map(|(reifier, predicate, object, graph)| {
+                self.to_owned_annotation(reifier, predicate, object, graph)
+            })
+    }
+
+    /// Iterate over every known named graph (see [`RdfDataset::named_graphs`])
+    /// resolved to its owned [`RdfTerm`] — the merge-safe form
+    /// [`RdfDatasetBuilder::push_dataset`](super::builder::RdfDatasetBuilder::push_dataset)
+    /// re-interns into another builder's arena.
+    pub fn owned_named_graphs(&self) -> impl Iterator<Item = RdfTerm> + '_ {
+        self.named_graphs().map(|g| self.to_owned_term(g))
     }
 
     /// Project the quads of one named graph into a fresh default-graph dataset.
@@ -602,15 +661,20 @@ impl RdfDataset {
 
         // Second pass: carry only the reifiers whose reifier IRI appeared as a subject
         // in the projected graph's quads (i.e. the reifier is "owned by" this graph).
-        for reifier in self.owned_reifiers() {
+        // The projection collapses the target named graph INTO a default-graph dataset
+        // (base quads had their graph dropped above), so the overlay rows flatten too —
+        // otherwise the projected dataset's per-graph digest would drift.
+        for mut reifier in self.owned_reifiers() {
             if graph_subjects.contains(&reifier.reifier) {
+                reifier.graph = None;
                 builder.push_owned_reifier(&reifier);
             }
         }
 
         // Likewise filter the annotation side-table by reifier subject membership.
-        for annotation in self.owned_annotations() {
+        for mut annotation in self.owned_annotations() {
             if graph_subjects.contains(&annotation.reifier) {
+                annotation.graph = None;
                 builder.push_owned_annotation(&annotation);
             }
         }
@@ -654,18 +718,20 @@ impl RdfDataset {
         }
 
         let mut kept_reifiers: HashSet<RdfTerm> = HashSet::new();
-        for reifier in self.owned_reifiers() {
+        for mut reifier in self.owned_reifiers() {
             if graph_subjects.contains(&reifier.reifier)
                 || graph_subjects.contains(&reifier.statement.subject)
             {
                 kept_reifiers.insert(reifier.reifier.clone());
+                reifier.graph = None;
                 builder.push_owned_reifier(&reifier);
             }
         }
-        for annotation in self.owned_annotations() {
+        for mut annotation in self.owned_annotations() {
             if graph_subjects.contains(&annotation.reifier)
                 || kept_reifiers.contains(&annotation.reifier)
             {
+                annotation.graph = None;
                 builder.push_owned_annotation(&annotation);
             }
         }
@@ -1098,16 +1164,36 @@ impl RdfDataset {
         }
     }
 
-    /// Iterate `(reifier, triple-term)` bindings. Zero allocation, infallible.
+    /// Iterate `(reifier, triple-term)` bindings, graph slot dropped. Zero allocation,
+    /// infallible. Consumers that need the graph dimension use
+    /// [`reifiers_with_graph`](Self::reifiers_with_graph).
     #[inline]
     pub fn reifiers(&self) -> impl Iterator<Item = (TermId, TermId)> + '_ {
+        self.reifiers.iter().map(|(r, t, _)| (*r, *t))
+    }
+
+    /// Iterate `(reifier, triple-term, graph)` bindings (`graph == None` ⇒ default
+    /// graph). Zero allocation, infallible.
+    #[inline]
+    pub fn reifiers_with_graph(
+        &self,
+    ) -> impl Iterator<Item = (TermId, TermId, Option<TermId>)> + '_ {
         self.reifiers.iter().copied()
     }
 
-    /// Iterate `(reifier, predicate, object)` annotations. Zero allocation,
-    /// infallible.
+    /// Iterate `(reifier, predicate, object)` annotations, graph slot dropped. Zero
+    /// allocation, infallible. See [`annotations_with_graph`](Self::annotations_with_graph).
     #[inline]
     pub fn annotations(&self) -> impl Iterator<Item = (TermId, TermId, TermId)> + '_ {
+        self.annotations.iter().map(|(r, p, o, _)| (*r, *p, *o))
+    }
+
+    /// Iterate `(reifier, predicate, object, graph)` annotations (`graph == None` ⇒
+    /// default graph). Zero allocation, infallible.
+    #[inline]
+    pub fn annotations_with_graph(
+        &self,
+    ) -> impl Iterator<Item = (TermId, TermId, TermId, Option<TermId>)> + '_ {
         self.annotations.iter().copied()
     }
 
@@ -1148,8 +1234,8 @@ impl RdfDataset {
     pub fn reifiers_of(&self, triple: TermId) -> impl Iterator<Item = TermId> + '_ {
         self.reifiers
             .iter()
-            .filter(move |(_, t)| *t == triple)
-            .map(|(r, _)| *r)
+            .filter(move |(_, t, _)| *t == triple)
+            .map(|(r, _, _)| *r)
     }
 
     /// The `(predicate, object)` statement annotations attached to a reifier
@@ -1161,11 +1247,23 @@ impl RdfDataset {
     /// contiguous — `partition_point` finds the start, then a `take_while` walks the
     /// run.
     pub fn annotations_of(&self, reifier: TermId) -> impl Iterator<Item = (TermId, TermId)> + '_ {
-        let start = self.annotations.partition_point(|(r, _, _)| *r < reifier);
+        self.annotations_of_with_graph(reifier)
+            .map(|(p, o, _)| (p, o))
+    }
+
+    /// Like [`annotations_of`](Self::annotations_of) but yields each annotation's graph
+    /// slot too (`None` ⇒ default graph), for a graph-aware pattern match.
+    pub fn annotations_of_with_graph(
+        &self,
+        reifier: TermId,
+    ) -> impl Iterator<Item = (TermId, TermId, Option<TermId>)> + '_ {
+        let start = self
+            .annotations
+            .partition_point(|(r, _, _, _)| *r < reifier);
         self.annotations[start..]
             .iter()
-            .take_while(move |(r, _, _)| *r == reifier)
-            .map(|(_, p, o)| (*p, *o))
+            .take_while(move |(r, _, _, _)| *r == reifier)
+            .map(|(_, p, o, g)| (*p, *o, *g))
     }
 
     /// The interned id of the `rdf:reifies` predicate IRI, or `None` if the dataset
@@ -1188,14 +1286,17 @@ impl RdfDataset {
     /// `rdf:reifies`), this yields nothing.
     pub fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         // `flat_map` over the `Option<TermId>` so the iterator type is fixed whether or
-        // not `rdf:reifies` is interned; an empty option ⇒ an empty stream.
+        // not `rdf:reifies` is interned; an empty option ⇒ an empty stream. The `g`
+        // slot carries the reifier declaration's own graph, so a `GRAPH ?g` probe binds
+        // `?g` to it.
         self.rdf_reifies_id().into_iter().flat_map(move |reifies| {
-            self.reifiers().map(move |(reifier, triple)| QuadIds {
-                s: reifier,
-                p: reifies,
-                o: triple,
-                g: None,
-            })
+            self.reifiers_with_graph()
+                .map(move |(reifier, triple, g)| QuadIds {
+                    s: reifier,
+                    p: reifies,
+                    o: triple,
+                    g,
+                })
         })
     }
 
@@ -1208,12 +1309,12 @@ impl RdfDataset {
     /// Yields in the annotation table's frozen `(reifier, predicate, object)` sorted
     /// order, so the output is deterministic.
     pub fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-        self.annotations()
-            .map(|(reifier, predicate, object)| QuadIds {
+        self.annotations_with_graph()
+            .map(|(reifier, predicate, object, g)| QuadIds {
                 s: reifier,
                 p: predicate,
                 o: object,
-                g: None,
+                g,
             })
     }
 
@@ -1319,6 +1420,7 @@ impl RdfDataset {
             caps: self.caps,
             value_index: OnceLock::new(),
             indexes: QuadIndexes::default(),
+            named_graphs: self.named_graphs.clone(),
             content_ids: self.content_ids.clone(),
             derivation_predicate: self.derivation_predicate,
             predecessor_index: OnceLock::new(),

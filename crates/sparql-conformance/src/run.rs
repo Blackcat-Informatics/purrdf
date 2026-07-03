@@ -7,13 +7,14 @@ use std::sync::Arc;
 
 use purrdf::{serialize_dataset, SerializeGraph};
 use purrdf_core::{RdfDataset, SparqlEngine, SparqlRequest, SparqlResult};
+use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 use purrdf_sparql_eval::{
     NativeSparqlEngine, ParserOptions, RemoteQuerySource, StandpointPredicates,
 };
 
 use crate::manifest::{SparqlTestCase, TestKind};
 
-const BASE: &str = "http://purrdf.test/manifest/";
+pub(crate) const BASE: &str = "http://purrdf.test/manifest/";
 
 /// The extension-function namespace the first-party suite fixtures spell their
 /// calls under. PurRDF itself mints no vocabulary — the namespace is HARNESS
@@ -25,7 +26,17 @@ const EXT_NS: &str = "https://example.org/ext/";
 #[derive(Debug)]
 pub enum RunOutcome {
     /// A `QueryEvaluationTest` result.
-    Eval(SparqlResult),
+    Eval {
+        /// The engine's result.
+        result: SparqlResult,
+        /// Whether the query carries a **top-level** `ORDER BY` (§18.5): the row
+        /// order of a `SELECT`'s solutions is then observable and the comparer
+        /// must check it as an ordered sequence, not a multiset. `SparqlResult`
+        /// carries no ordered flag, so it is derived here from the parsed query.
+        ordered: bool,
+    },
+    /// An `UpdateEvaluationTest` post-state: the dataset after applying the update.
+    Update(Arc<RdfDataset>),
     /// A syntax test: did the query parse?
     Syntax { parsed_ok: bool },
 }
@@ -47,11 +58,70 @@ pub enum RunOutcome {
 ///
 /// Returns a message on any read, parse, or serialize failure (never silent).
 pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
+    let ds = build_dataset(&case.data, &case.graph_data)?;
+    // For an entailment test, materialize the regime's closure into the dataset
+    // before it is frozen and queried (forward-materialization; the eval loop is
+    // untouched — it queries an already-reasoned dataset).
+    match case.regime {
+        Some(regime) => purrdf_entail::materialize(&ds, regime)
+            .map_err(|e| format!("entailment ({regime:?}) for {}: {e}", case.iri)),
+        None => Ok(ds),
+    }
+}
+
+/// The native media type for a data file, by extension. Most fixtures are Turtle,
+/// but the RDF-1.2 eval-triple-term tests carry `.trig` quad data (GRAPH blocks),
+/// which the Turtle codec rejects.
+fn data_media_type(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("trig") => "application/trig",
+        Some("nq") => "application/n-quads",
+        Some("nt") => "application/n-triples",
+        Some("rdf") => "application/rdf+xml",
+        _ => "text/turtle",
+    }
+}
+
+/// The per-file base IRI a `qt:data`/`qt:graphData` Turtle file is parsed
+/// against: `<BASE><file name>`, matching how the manifest's OWN relative
+/// reference (e.g. `<exists-graph-variable.ttl>`) resolves against the harness's
+/// sentinel [`BASE`] — the vendored suite never nests fixtures in
+/// subdirectories, so a bare file name round-trips the manifest's relative
+/// reference exactly. Using the SHARED harness-wide [`BASE`] for every file
+/// instead (as opposed to the file's own resolved IRI) would make a bare `<>`
+/// inside the Turtle content resolve to the same IRI for every fixture, instead
+/// of self-referencing that fixture's own `qt:data`/`qt:graphData` graph name —
+/// the exact self-reference some W3C fixtures (e.g. `exists-graph-variable`)
+/// depend on.
+fn file_base_iri(path: &std::path::Path) -> String {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    format!("{BASE}{name}")
+}
+
+/// Build a dataset from default-graph Turtle files (`data`) and named-graph files
+/// (`graph_data`, each `(graph IRI, file)`). Shared by the query pre-state loader
+/// and the UPDATE pre-/post-state builders.
+///
+/// # Errors
+///
+/// Returns a message on any read, parse, or serialize failure (never silent).
+pub fn build_dataset(
+    data: &[std::path::PathBuf],
+    graph_data: &[(String, std::path::PathBuf)],
+) -> Result<Arc<RdfDataset>, String> {
     // Serialize each qt:data Turtle file to N-Quads (default graph — no graph tag).
     let mut combined_nq: Vec<u8> = Vec::new();
-    for data in &case.data {
+    for data in data {
         let chunk = std::fs::read(data).map_err(|e| format!("read {}: {e}", data.display()))?;
-        let ds = purrdf::parse_dataset(&chunk, "text/turtle", Some(BASE))
+        let ds = purrdf::parse_dataset(&chunk, data_media_type(data), Some(&file_base_iri(data)))
             .map_err(|e| format!("parse data {}: {e}", data.display()))?;
         let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
             .map_err(|e| format!("serialize {}: {e}", data.display()))?;
@@ -62,11 +132,24 @@ pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
     }
 
     // Serialize each qt:graphData Turtle file to N-Quads, then tag every triple line
-    // with the named-graph IRI so it is placed in that named graph.
-    for (graph_iri, path) in &case.graph_data {
+    // with the named-graph IRI so it is placed in that named graph. A file that
+    // parses to ZERO quads (e.g. `empty.ttl`) leaves no trace in N-Quads text — the
+    // format has no syntax for "this named graph exists but is empty" — so its IRI
+    // is separately remembered in `empty_graphs` and explicitly declared on the
+    // final builder below (RdfDataset's `named_graphs`, RDF 1.1 §3's "an RDF
+    // dataset MAY include an empty named graph").
+    let mut empty_graphs: Vec<&str> = Vec::new();
+    for (graph_iri, path) in graph_data {
         let chunk = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        let ds = purrdf::parse_dataset(&chunk, "text/turtle", Some(BASE))
+        // Parse against the graph's OWN resolved IRI (not the shared harness
+        // `BASE`) so a bare `<>` inside the file self-references this named
+        // graph, exactly like a real per-file base would.
+        let ds = purrdf::parse_dataset(&chunk, data_media_type(path), Some(graph_iri))
             .map_err(|e| format!("parse graph data {}: {e}", path.display()))?;
+        if ds.quad_count() == 0 {
+            empty_graphs.push(graph_iri.as_str());
+            continue;
+        }
         let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
             .map_err(|e| format!("serialize graph data {}: {e}", path.display()))?;
         let nq_text = std::str::from_utf8(&nq)
@@ -92,8 +175,23 @@ pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
         }
     }
 
-    purrdf::parse_dataset(&combined_nq, "application/n-quads", Some(BASE))
-        .map_err(|e| format!("parse combined n-quads for {}: {e}", case.iri))
+    let parsed = purrdf::parse_dataset(&combined_nq, "application/n-quads", Some(BASE))
+        .map_err(|e| format!("parse combined n-quads: {e}"))?;
+    if empty_graphs.is_empty() {
+        return Ok(parsed);
+    }
+
+    // Re-intern the parsed quads into a fresh builder (standard `push_dataset`
+    // merge) so the empty graph IRIs can be declared alongside them before freeze.
+    let mut builder = purrdf_core::RdfDatasetBuilder::new();
+    builder.push_dataset(&parsed);
+    for graph_iri in empty_graphs {
+        let g = builder.intern_iri(graph_iri);
+        builder.declare_named_graph(g);
+    }
+    builder
+        .freeze()
+        .map_err(|e| format!("freeze dataset with declared empty graphs: {e}"))
 }
 
 /// Run `case`, optionally resolving `SERVICE` clauses through `remote`.
@@ -111,9 +209,11 @@ pub fn run(
 
     match case.kind {
         TestKind::PositiveSyntax | TestKind::NegativeSyntax => {
-            let parsed_ok = purrdf_sparql_algebra::SparqlParser::new()
-                .parse_query(&query_text)
-                .is_ok();
+            let parsed_ok = SparqlParser::new().parse_query(&query_text).is_ok();
+            Ok(RunOutcome::Syntax { parsed_ok })
+        }
+        TestKind::PositiveUpdateSyntax | TestKind::NegativeUpdateSyntax => {
+            let parsed_ok = SparqlParser::new().parse_update(&query_text).is_ok();
             Ok(RunOutcome::Syntax { parsed_ok })
         }
         TestKind::QueryEval => {
@@ -128,10 +228,11 @@ pub fn run(
             // deployment would supply its own gmeow IRIs instead — everything
             // flows through configuration, not constants.) Harmless for the W3C
             // suites, which never call the extension functions.
+            let parser_options = ParserOptions {
+                extension_fn_namespaces: vec![EXT_NS.to_owned()],
+            };
             let engine = NativeSparqlEngine::new()
-                .with_parser_options(ParserOptions {
-                    extension_fn_namespaces: vec![EXT_NS.to_owned()],
-                })
+                .with_parser_options(parser_options.clone())
                 .with_standpoint_predicates(StandpointPredicates::new(
                     format!("{EXT_NS}accordingTo"),
                     format!("{EXT_NS}sharpens"),
@@ -146,8 +247,60 @@ pub fn run(
                 None => engine.query(&dataset, request),
             }
             .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
-            Ok(RunOutcome::Eval(result))
+            let ordered = query_is_top_level_ordered(&query_text, &parser_options);
+            Ok(RunOutcome::Eval { result, ordered })
+        }
+        TestKind::UpdateEval => {
+            // Apply the `ut:request` update to the pre-state dataset; the mutated
+            // dataset is diffed against the expected post-state in `compare`.
+            let mut dataset = build_dataset(&case.data, &case.graph_data)?;
+            let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
+                extension_fn_namespaces: vec![EXT_NS.to_owned()],
+            });
+            let request = SparqlRequest {
+                query: &query_text,
+                base_iri: Some(BASE),
+                substitutions: &[],
+            };
+            engine
+                .update(&mut dataset, request)
+                .map_err(|e| format!("apply update {}: {e}", case.iri))?;
+            Ok(RunOutcome::Update(dataset))
         }
         TestKind::Unknown => Err(format!("unmodeled test type for {}", case.iri)),
+    }
+}
+
+/// Whether `query_text` is a `SELECT` with a **top-level** `ORDER BY`, i.e. one
+/// whose sort determines the observable row order of the whole result.
+///
+/// A `SELECT`'s modifier chain wraps the ordered pattern outermost-to-innermost
+/// as `Slice → Distinct/Reduced → Project → OrderBy → …` (see the algebra
+/// parser's query-form construction), so a top-level `ORDER BY` is found by
+/// descending through exactly those solution-modifier wrappers and checking for
+/// an [`GraphPattern::OrderBy`] before any other node. An `ORDER BY` buried
+/// inside a sub-`SELECT` (below a join, `GRAPH`, etc.) does NOT surface here —
+/// only the sub-query's own slice is observable, not its sort — which is
+/// exactly the W3C rule (§18.5: order is only defined for a top-level sort).
+///
+/// A parse failure (or a non-`SELECT` form) yields `false`: an unordered
+/// comparison is the conservative default, and a query the harness could not
+/// parse would already have failed evaluation before reaching the comparer.
+fn query_is_top_level_ordered(query_text: &str, options: &ParserOptions) -> bool {
+    let Ok(Query::Select { pattern, .. }) =
+        SparqlParser::new().parse_query_with(query_text, options)
+    else {
+        return false;
+    };
+    let mut node = &pattern;
+    loop {
+        match node {
+            GraphPattern::OrderBy { .. } => return true,
+            GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => node = inner,
+            _ => return false,
+        }
     }
 }

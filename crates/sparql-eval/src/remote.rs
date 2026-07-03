@@ -204,7 +204,10 @@ impl RemoteQuerySource for LocalRemoteQuerySource {
         let parsed = purrdf_sparql_algebra::SparqlParser::new()
             .parse_query(query_text)
             .map_err(|e| RemoteError::Decode(e.to_string()))?;
-        let mut ctx = EvalCtx::new(dataset);
+        // Thread this source into the forwarded evaluation so a nested SERVICE
+        // inside the forwarded query resolves against the same in-memory sources
+        // rather than hard-failing on a missing remote.
+        let mut ctx = EvalCtx::new(dataset).with_remote(self);
         match crate::eval::evaluate_query(&parsed, &mut ctx)
             .map_err(|e| RemoteError::Decode(e.to_string()))?
         {

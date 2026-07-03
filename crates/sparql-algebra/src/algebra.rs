@@ -82,6 +82,19 @@ impl Query {
             | Self::Ask { dataset, .. } => dataset,
         }
     }
+
+    /// The query's effective base IRI (an explicit `BASE` decl, or the
+    /// caller-supplied document base the parser was constructed with) — the base
+    /// against which a runtime `IRI()`/`URI()` call resolves its string argument
+    /// (SPARQL 1.1 §17.4.2.6). `None` when neither was ever supplied.
+    pub fn base_iri(&self) -> Option<&NamedNode> {
+        match self {
+            Self::Select { base_iri, .. }
+            | Self::Construct { base_iri, .. }
+            | Self::Describe { base_iri, .. }
+            | Self::Ask { base_iri, .. } => base_iri.as_ref(),
+        }
+    }
 }
 
 /// A SPARQL query **dataset clause** (`FROM` / `FROM NAMED`, §13.2). An empty
@@ -599,6 +612,26 @@ pub enum GraphPattern {
     },
 }
 
+/// One element of a negated property set list (`!(p1|^p2|...)`, SPARQL 1.1
+/// §18.2 grammar production `PathOneInPropertySet`): a predicate IRI plus
+/// whether it was written with a leading `^`.
+///
+/// A plain element (`inverse: false`) excludes that predicate from the
+/// **forward** hop; a `^`-prefixed element (`inverse: true`) excludes it from
+/// the **reverse** hop. Per §18.3's evaluation semantics, a negated set with
+/// both kinds of element decomposes into the union (`Alternative`) of a
+/// forward-only negated step over the plain elements and a reverse-only
+/// negated step (`Reverse(NegatedPropertySet(inverse elements))`) over the
+/// `^`-elements — see `sparql-eval`'s `path` module for the evaluator.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NegatedPathElement {
+    /// The excluded predicate IRI.
+    pub predicate: NamedNode,
+    /// `true` for a `^iri` element (excludes a reverse hop); `false` for a
+    /// plain `iri` element (excludes a forward hop).
+    pub inverse: bool,
+}
+
 /// A SPARQL property-path expression (§18.1.7 / §9).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PropertyPathExpression {
@@ -616,8 +649,9 @@ pub enum PropertyPathExpression {
     OneOrMore(Box<Self>),
     /// `path?` — zero or one.
     ZeroOrOne(Box<Self>),
-    /// `!(p1|...|pn)` — negated property set.
-    NegatedPropertySet(Vec<NamedNode>),
+    /// `!(p1|...|pn)` — negated property set, each element optionally inverted
+    /// (`^pi`, SPARQL 1.1 §18.2/§18.3). See [`NegatedPathElement`].
+    NegatedPropertySet(Vec<NegatedPathElement>),
     /// `path{min,max}` — **bounded repetition** (a PurRDF extension *beyond* SPARQL
     /// 1.1 §9, which has only `*`/`+`/`?`).  `max == None` means unbounded (`{n,}`);
     /// `max == Some(min)` is exactly-`n` (`{n}`).  The invariant `min <= max` (when
@@ -660,10 +694,16 @@ impl core::fmt::Display for PropertyPathExpression {
                 Some(m) => write!(f, "{}{{{min},{m}}}", PathElt(inner)),
                 None => write!(f, "{}{{{min},}}", PathElt(inner)),
             },
-            Self::NegatedPropertySet(nodes) => {
-                let inner = nodes
+            Self::NegatedPropertySet(elems) => {
+                let inner = elems
                     .iter()
-                    .map(|n| format!("<{}>", n.as_str()))
+                    .map(|e| {
+                        if e.inverse {
+                            format!("^<{}>", e.predicate.as_str())
+                        } else {
+                            format!("<{}>", e.predicate.as_str())
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join("|");
                 write!(f, "!({inner})")
@@ -821,6 +861,17 @@ pub enum Function {
     Object,
     /// `isTRIPLE(t)` — RDF 1.2 triple-term test.
     IsTriple,
+    /// `LANGDIR(literal)` — RDF 1.2 base-direction accessor (`"ltr"`/`"rtl"`,
+    /// or the empty string when the literal carries no base direction).
+    LangDir,
+    /// `STRLANGDIR(lex, lang, dir)` — RDF 1.2 directional-language-string
+    /// constructor (an `rdf:dirLangString`).
+    StrLangDir,
+    /// `hasLANG(literal)` — RDF 1.2 test: does the literal carry a language tag?
+    HasLang,
+    /// `hasLANGDIR(literal)` — RDF 1.2 test: does the literal carry a base
+    /// direction?
+    HasLangDir,
     /// An extension function call (a CLOSED, exhaustive local-name seam, dispatched
     /// at parse time from an IRI under a *caller-configured* extension-function
     /// namespace — there is no default namespace). Carries the original call IRI

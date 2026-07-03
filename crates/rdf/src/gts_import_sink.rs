@@ -79,11 +79,13 @@ struct SinkImporter {
     reifier_bindings: HashMap<(usize, usize), purrdf_gts::model::Triple3>,
     /// RAW quad rows `(segment_index, (s, p, o, g) gts-ids)`, resolved in phase 2.
     raw_quads: Vec<(usize, Quad)>,
-    /// RAW reifier rows `(segment_index, reifier gts-id, (s, p, o) gts-ids)`,
-    /// resolved in phase 2 to bind the reifier resource to the interned triple.
-    raw_reifiers: Vec<(usize, usize, purrdf_gts::model::Triple3)>,
-    /// RAW annotation rows `(segment_index, (r, p, v) gts-ids)`, resolved in phase 2.
-    raw_annotations: Vec<(usize, purrdf_gts::model::Triple3)>,
+    /// RAW reifier rows `(segment_index, reifier gts-id, (s, p, o) gts-ids, graph
+    /// gts-id?)`, resolved in phase 2 to bind the reifier resource (in its named graph)
+    /// to the interned triple.
+    raw_reifiers: Vec<(usize, usize, purrdf_gts::model::Triple3, Option<usize>)>,
+    /// RAW annotation rows `(segment_index, (r, p, v) gts-ids, graph gts-id?)`, resolved
+    /// in phase 2.
+    raw_annotations: Vec<(usize, purrdf_gts::model::Triple3, Option<usize>)>,
     /// Out-of-band material accumulated from blob / signature / suppression /
     /// segment-head / opaque events.
     lookaside: RdfLookaside,
@@ -347,22 +349,31 @@ impl SinkImporter {
 
         // Reifier bindings: bind the reifier resource to the interned triple term.
         let raw_reifiers = std::mem::take(&mut self.raw_reifiers);
-        for (segment_index, reifier, (s, p, o)) in raw_reifiers {
+        for (segment_index, reifier, (s, p, o), graph) in raw_reifiers {
             let reifier_id = self.resolve_term(segment_index, reifier, "reifier", 0)?;
             let s = self.resolve_term(segment_index, s, "reified subject", 0)?;
             let p = self.resolve_term(segment_index, p, "reified predicate", 0)?;
             let o = self.resolve_term(segment_index, o, "reified object", 0)?;
+            let g = match graph {
+                Some(g) => Some(self.resolve_term(segment_index, g, "reifier graph name", 0)?),
+                None => None,
+            };
             let triple_term = self.builder.intern_triple(s, p, o);
-            self.builder.push_reifier(reifier_id, triple_term);
+            self.builder
+                .push_reifier_in_graph(reifier_id, triple_term, g);
         }
 
-        // Annotations `(reifier, predicate, object)`.
+        // Annotations `(reifier, predicate, object, graph?)`.
         let raw_annotations = std::mem::take(&mut self.raw_annotations);
-        for (segment_index, (r, p, v)) in raw_annotations {
+        for (segment_index, (r, p, v), graph) in raw_annotations {
             let r = self.resolve_term(segment_index, r, "annotation reifier", 0)?;
             let p = self.resolve_term(segment_index, p, "annotation predicate", 0)?;
             let v = self.resolve_term(segment_index, v, "annotation object", 0)?;
-            self.builder.push_annotation(r, p, v);
+            let g = match graph {
+                Some(g) => Some(self.resolve_term(segment_index, g, "annotation graph name", 0)?),
+                None => None,
+            };
+            self.builder.push_annotation_in_graph(r, p, v, g);
         }
 
         Ok(())
@@ -433,63 +444,30 @@ impl StreamingSink for SinkImporter {
         if self.error.is_some() {
             return;
         }
-        // purrdf-gts 0.9.11 row-array: `(reifier_id, (s, p, o), graph?)`. The RDF 1.2
-        // statement layer is standpoint-scoped, NOT graph-scoped (world × standpoint =
-        // JOIN, not graph) — a graph-scoped reifier has no representation in the IR, so
-        // it is a HARD FAIL (no silent slot drop), not a default-to-None.
+        // purrdf-gts row-array: `(reifier_id, (s, p, o), graph?)`. The graph slot
+        // records the named graph the reifier was declared in (`None` = default graph)
+        // and is threaded into the IR's graph-scoped statement layer in phase 2.
         let (reifier_id, triple, graph) = reifier;
-        if graph.is_some() {
-            self.error = Some(
-                RdfDiagnostic::error(
-                    "rdf-ir-graph-scoped-reifier",
-                    format!(
-                        "graph-scoped reifier {reifier_id} in segment {segment_index} has no \
-                         representation in the graph-free RDF 1.2 statement layer"
-                    ),
-                )
-                .with_location(
-                    RdfLocation::logical("gts:sink")
-                        .with_gts_segment(segment_index)
-                        .with_gts_reifier(reifier_id),
-                ),
-            );
-            return;
-        }
         // Record the reifier → (s, p, o) binding for this segment so a Triple term
         // (delivered in any order) can resolve its components in phase 2, and stash
-        // the row so the reifier resource is bound to the interned triple in phase 2.
+        // the row (with its named graph, if any) so the reifier resource is bound to
+        // the interned triple in phase 2.
         self.reifier_bindings
             .insert((segment_index, reifier_id), triple);
-        self.raw_reifiers.push((segment_index, reifier_id, triple));
+        self.raw_reifiers
+            .push((segment_index, reifier_id, triple, graph));
     }
 
     fn annotation(&mut self, segment_index: usize, annotation: purrdf_gts::model::AnnotationRow) {
         if self.error.is_some() {
             return;
         }
-        // 0.9.11 row-array: `(reifier, predicate, value, graph?)`. Same no-graph-dimension
-        // doctrine as `reifier` above — a graph-scoped annotation hard-fails.
+        // Row-array: `(reifier, predicate, value, graph?)`. The graph slot records the
+        // named graph the annotation was asserted in and is threaded into the IR's
+        // graph-scoped statement layer in phase 2.
         let (reifier, predicate, value, graph) = annotation;
-        if graph.is_some() {
-            self.error = Some(
-                RdfDiagnostic::error(
-                    "rdf-ir-graph-scoped-annotation",
-                    format!(
-                        "graph-scoped annotation on reifier {reifier} in segment \
-                         {segment_index} has no representation in the graph-free RDF 1.2 \
-                         statement layer"
-                    ),
-                )
-                .with_location(
-                    RdfLocation::logical("gts:sink")
-                        .with_gts_segment(segment_index)
-                        .with_gts_reifier(reifier),
-                ),
-            );
-            return;
-        }
         self.raw_annotations
-            .push((segment_index, (reifier, predicate, value)));
+            .push((segment_index, (reifier, predicate, value), graph));
     }
 
     fn suppression(&mut self, _segment_index: usize, suppression: &Suppression) {

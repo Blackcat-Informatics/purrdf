@@ -1,0 +1,5 @@
+SPDX-FileCopyrightText: W3C <https://www.w3.org/>
+SPDX-License-Identifier: LicenseRef-W3C-Test-Suite
+
+Vendored verbatim from w3c/rdf-tests (https://github.com/w3c/rdf-tests),
+sparql/sparql12/codepoint-escapes/, commit 426c7df4b5d5d292e3ba09dc22e622ea301f230a. See ../PROVENANCE.md.

@@ -47,6 +47,13 @@ use crate::model::RdfLiteral;
 use super::dataset::{QuadHandle, TermRef};
 use super::term::TermId;
 
+/// The `rdf:reifies` predicate IRI — mirrors [`super::dataset`]'s private copy (kept
+/// local rather than exported: both classify the SAME fold, independently, from a
+/// value/id they already hold). A delta-added row shaped `_ rdf:reifies <<( … )>>`
+/// is the RDF 1.2 reifier declaration `freeze` folds out of the flat quad delta (see
+/// [`MutableDataset::freeze`]).
+const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+
 /// A dense index into a [`MutableDataset`]'s OWN delta term interner. Newtype (not a
 /// bare `u32`) so it can never be confused with a base [`TermId`]; only ever wrapped
 /// inside [`MutTermId::Delta`] and never observed outside the mutable layer.
@@ -481,31 +488,99 @@ impl MutableDataset {
             new_ord += 1;
         }
 
+        let _ = new_ord; // last value consumed by the base loop; delta quads add none.
+
+        // Carry the base's reifiers + annotations through the same path BEFORE the
+        // delta quads, so `reifier_subjects` (built next) already knows about every
+        // reifier the base declared — an UPDATE may add a fresh annotation onto a
+        // Turtle-loaded reifier, and that added row must route through
+        // `push_annotation`, not land as a flat quad. Their term ids are BASE ids, so
+        // resolve each to a value and re-intern into the builder.
+        let mut reifier_subjects: HashSet<TermValue> = HashSet::new();
+        for (reifier, triple, graph) in base.reifiers_with_graph() {
+            reifier_subjects.insert(self.base_value(reifier));
+            let reifier = self.intern_base(&mut builder, reifier);
+            let triple = self.intern_base(&mut builder, triple);
+            let graph = graph.map(|g| self.intern_base(&mut builder, g));
+            builder.push_reifier_in_graph(reifier, triple, graph);
+        }
+        for (reifier, pred, obj, graph) in base.annotations_with_graph() {
+            let reifier = self.intern_base(&mut builder, reifier);
+            let pred = self.intern_base(&mut builder, pred);
+            let obj = self.intern_base(&mut builder, obj);
+            let graph = graph.map(|g| self.intern_base(&mut builder, g));
+            builder.push_annotation_in_graph(reifier, pred, obj, graph);
+        }
+
         // 2. DELTA-added quads (no source location — they were minted in memory, not
         //    parsed from a source, so the `new_ord` mapping ends here). Remapped via
         //    value re-intern.
-        let _ = new_ord; // last value consumed by the base loop; delta quads add none.
-        for key in &self.added {
-            let q = self.quad_values_of(key);
+        //
+        // The RDF 1.2 statement layer is invisible to `MutableDataset`'s own delta
+        // model (§ module docs: it is a flat quad store) — an `INSERT`/`INSERT DATA`
+        // template that asserts `reifier rdf:reifies <<( s p o )>>` (or annotates an
+        // existing reifier) lands in `added` as an ordinary quad. Left unclassified,
+        // it would freeze as a plain default-graph quad instead of a reifier/
+        // annotation side-table row, so it would canonicalize DIFFERENTLY from the
+        // byte-identical statement loaded straight from Turtle — this is the fold
+        // `fold_statement_layer` (native codec ingest) already applies at PARSE time;
+        // this mirrors it at UPDATE-freeze time so both paths agree.
+        //
+        // Pass 1: resolve every added quad to its value ONCE, and bind any reifier
+        // declaration (`_ rdf:reifies <<( … )>>`) among them — recording its subject
+        // so pass 2 can route that reifier's OTHER added triples to `push_annotation`.
+        let added_values: Vec<QuadValues> =
+            self.added.iter().map(|k| self.quad_values_of(k)).collect();
+        let mut reifier_decl: Vec<bool> = Vec::with_capacity(added_values.len());
+        for q in &added_values {
+            let is_decl = matches!(&q.p, TermValue::Iri(iri) if iri == RDF_REIFIES)
+                && matches!(q.o, TermValue::Triple { .. });
+            if is_decl {
+                reifier_subjects.insert(q.s.clone());
+            }
+            reifier_decl.push(is_decl);
+        }
+        // Pass 2: push reifier declarations first (so the side table is populated
+        // before any freeze consumer inspects it), then classify the rest.
+        for (q, &is_decl) in added_values.iter().zip(&reifier_decl) {
+            if !is_decl {
+                continue;
+            }
+            let TermValue::Triple { s, p, o } = &q.o else {
+                unreachable!("is_decl implies a triple-term object");
+            };
+            let reifier = intern_value(&mut builder, &q.s);
+            let s = intern_value(&mut builder, s);
+            let p = intern_value(&mut builder, p);
+            let o = intern_value(&mut builder, o);
+            let triple = builder.intern_triple(s, p, o);
+            let g = q.g.as_ref().map(|g| intern_value(&mut builder, g));
+            builder.push_reifier_in_graph(reifier, triple, g);
+        }
+        for (q, &is_decl) in added_values.iter().zip(&reifier_decl) {
+            if is_decl {
+                continue;
+            }
             let s = intern_value(&mut builder, &q.s);
             let p = intern_value(&mut builder, &q.p);
             let o = intern_value(&mut builder, &q.o);
             let g = q.g.as_ref().map(|g| intern_value(&mut builder, g));
-            builder.push_quad(s, p, o, g);
+            // A quad whose subject is a reifier is that reifier's annotation, in its
+            // own graph — mirroring `fold_statement_layer`'s pass 2 so an UPDATE freeze
+            // and a parse of the same statement agree.
+            if reifier_subjects.contains(&q.s) {
+                builder.push_annotation_in_graph(s, p, o, g);
+            } else {
+                builder.push_quad(s, p, o, g);
+            }
         }
 
-        // Carry the base's reifiers + annotations through the same path. Their term
-        // ids are BASE ids, so resolve each to a value and re-intern into the builder.
-        for (reifier, triple) in base.reifiers() {
-            let reifier = self.intern_base(&mut builder, reifier);
-            let triple = self.intern_base(&mut builder, triple);
-            builder.push_reifier(reifier, triple);
-        }
-        for (reifier, pred, obj) in base.annotations() {
-            let reifier = self.intern_base(&mut builder, reifier);
-            let pred = self.intern_base(&mut builder, pred);
-            let obj = self.intern_base(&mut builder, obj);
-            builder.push_annotation(reifier, pred, obj);
+        // Carry the base's explicitly-declared (possibly empty) named graphs
+        // through the same re-intern path so `GRAPH ?g` enumeration survives a
+        // mutation freeze even when a declared graph gained/kept zero quads.
+        for g in base.named_graphs() {
+            let g = self.intern_base(&mut builder, g);
+            builder.declare_named_graph(g);
         }
 
         builder.freeze()

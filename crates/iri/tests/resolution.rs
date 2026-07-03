@@ -6,7 +6,8 @@
 //! Source of truth: RFC-3986 §5.4.1 (normal examples) and §5.4.2 (abnormal
 //! examples), the normative table with base `http://a/b/c/d;p?q`. This is the
 //! canonical committed ground truth for [`purrdf_iri::Iri::resolve`] — it is the
-//! same table every conformant URI library is measured against.
+//! same table every conformant URI library is measured against. See
+//! `tests/PROVENANCE.md` for the full source map of the IRI conformance corpus.
 
 use pretty_assertions::assert_eq;
 use purrdf_iri::parse;

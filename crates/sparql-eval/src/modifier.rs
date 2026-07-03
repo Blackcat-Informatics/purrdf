@@ -183,21 +183,27 @@ pub(crate) fn eval_graph(
 
 /// `GRAPH ?g { ... }`: evaluate the inner pattern once per named graph, binding `?g`
 /// to the graph IRI, and union the results.
+///
+/// Per SPARQL 1.1 §8.3/§18.6, `?g` ranges over **every named graph in the active
+/// dataset**, including one that owns zero quads (RDF 1.1 §3 allows an empty named
+/// graph — see [`purrdf_core::RdfDataset::named_graphs`]), NOT just graphs a `quads()`
+/// scan happens to find. And if `var` is ALREADY bound when this node is entered
+/// (e.g. an outer `VALUES (?g ?t) { ... }` nested inside the `GRAPH ?g { }` block,
+/// or any other pre-binding), each candidate graph must be JOINED against that
+/// existing binding — kept only when compatible — rather than blindly overwritten.
 fn eval_graph_var(
     var: &Variable,
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_>,
 ) -> Result<SolutionSeq, EvalError> {
-    // Enumerate the named graphs, restricted to those the active dataset admits (a
-    // `FROM NAMED` / `USING NAMED` may limit which graphs `GRAPH ?g` binds to).
-    let mut graphs: Vec<TermId> = ctx
+    // Enumerate every named graph the dataset knows about, restricted to those the
+    // active dataset admits (a `FROM NAMED` / `USING NAMED` may limit which graphs
+    // `GRAPH ?g` binds to).
+    let graphs: Vec<TermId> = ctx
         .dataset
-        .quads()
-        .filter_map(|q| q.g)
+        .named_graphs()
         .filter(|g| ctx.active_dataset.named_allows(*g))
         .collect();
-    graphs.sort();
-    graphs.dedup();
 
     let saved = ctx.active_graph;
     let mut out_schema: Option<Arc<VarSchema>> = None;
@@ -206,12 +212,33 @@ fn eval_graph_var(
         ctx.active_graph = GraphMatch::Named(g);
         let inner_seq = eval(inner, ctx)?;
         let mut sch = (*inner_seq.schema).clone();
-        let gcol = sch.push(var.clone());
-        let width = sch.len();
-        for mut row in inner_seq.rows {
-            row.resize(width, None);
-            row[gcol] = Some(SolutionTerm::Existing(g));
-            rows.push(row);
+        let candidate = SolutionTerm::Existing(g);
+        match sch.index_of(var) {
+            // `var` is already a column of the inner pattern's own schema (e.g. it
+            // came from a `VALUES` clause nested directly inside this `GRAPH ?g`
+            // block): JOIN this candidate graph against each row's existing
+            // binding instead of overwriting it — unbound rows adopt `g`,
+            // rows bound to a DIFFERENT value are rejected, rows already bound to
+            // `g` pass through unchanged.
+            Some(gcol) => {
+                for mut row in inner_seq.rows {
+                    let compatible = !matches!(row[gcol], Some(existing) if existing != candidate);
+                    if compatible {
+                        row[gcol] = Some(candidate);
+                        rows.push(row);
+                    }
+                }
+            }
+            // `var` is fresh to the inner pattern: append it as a new column.
+            None => {
+                let gcol = sch.push(var.clone());
+                let width = sch.len();
+                for mut row in inner_seq.rows {
+                    row.resize(width, None);
+                    row[gcol] = Some(candidate);
+                    rows.push(row);
+                }
+            }
         }
         out_schema = Some(Arc::new(sch));
     }
@@ -1120,11 +1147,9 @@ mod tests {
         };
         let seq = eval(&group, &mut ctx).expect("avg");
         let result = agg_lex(&ds, &ctx, &seq, "avg");
-        // AVG(2, 4) = 6 / 2 = 3.0 — result is decimal (integer ÷ integer → decimal).
-        assert!(
-            result.starts_with("3.0"),
-            "AVG(2,4) should be 3.0…, got {result}"
-        );
+        // AVG(2, 4) = 6 / 2 = 3 — result is decimal (integer ÷ integer → decimal);
+        // XSD 1.1 whole-decimal lexical has no point ("3", not "3.0").
+        assert_eq!(result, "3", "AVG(2,4) should be 3, got {result}");
     }
 
     #[test]

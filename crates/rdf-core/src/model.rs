@@ -190,6 +190,10 @@ impl RdfQuad {
 pub struct RdfReifier {
     pub reifier: RdfTerm,
     pub statement: RdfTriple,
+    /// The named graph the reifier declaration was asserted in (`None` = default
+    /// graph). A reifier declared inside a TriG/N-Quads `GRAPH g { … }` block carries
+    /// that graph so `GRAPH ?g { << … >> … }` binds `?g` to it.
+    pub graph: Option<RdfTerm>,
     pub location: Option<RdfLocation>,
 }
 
@@ -198,8 +202,16 @@ impl RdfReifier {
         Self {
             reifier,
             statement,
+            graph: None,
             location: None,
         }
+    }
+
+    /// A reifier binding asserted in a specific named graph (`None` = default graph).
+    #[must_use]
+    pub fn in_graph(mut self, graph: Option<RdfTerm>) -> Self {
+        self.graph = graph;
+        self
     }
 
     #[must_use]
@@ -217,6 +229,9 @@ pub struct RdfAnnotation {
     pub reifier: RdfTerm,
     pub predicate: String,
     pub object: RdfTerm,
+    /// The named graph the annotation was asserted in (`None` = default graph); see
+    /// [`RdfReifier::graph`].
+    pub graph: Option<RdfTerm>,
     pub location: Option<RdfLocation>,
 }
 
@@ -226,8 +241,16 @@ impl RdfAnnotation {
             reifier,
             predicate: predicate.into(),
             object,
+            graph: None,
             location: None,
         }
+    }
+
+    /// An annotation asserted in a specific named graph (`None` = default graph).
+    #[must_use]
+    pub fn in_graph(mut self, graph: Option<RdfTerm>) -> Self {
+        self.graph = graph;
+        self
     }
 
     #[must_use]

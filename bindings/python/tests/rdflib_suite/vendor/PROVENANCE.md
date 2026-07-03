@@ -59,19 +59,23 @@ collection / list API, with no dependency on rdflib's private `test.utils` /
 | `test/test_sparql/test_nested_filters.py` | `test_nested_filters.py` |
 | `test/test_conjunctivegraph/test_conjunctive_graph.py` | `test_conjunctive_graph.py` |
 
-## Scoreboard (rdflib 7.6.0 vs purrdf shim, at vendoring time)
+## Scoreboard (rdflib 7.6.0 vs purrdf shim, live)
 
-**50 passed / 36 xfailed** (0 xpassed, 0 failed, 0 collection errors).
+**62 passed / 24 xfailed** (0 xpassed, 0 failed, 0 collection errors; ledger
+24/24 applied, 0 stale).
 
-Every one of the 36 xfails has a concrete, issue-tracked reason in
+Every one of the 24 xfails has a concrete, self-describing reason in
 `../xfail_ledger.toml`, applied as a **strict** xfail (an XPASS or stale key
-fails the gate → the ledger only shrinks). Themes: XSD whitespace-facet
-processing on typed literals (9), binary-datatype value coercion (2), Graph
-subclass identity through set operators (3), rdf:List parse + Collection
-mutation (3), BatchAddGraph context handling (1), DefinedNamespace `__dir__` (1),
-SPARQL `Result.bindings` / `SELECT *` subselect projection (8), SPARQL prefix
-forwarding + `VALUES` (2), SPARQL aggregate/nested-FILTER evaluation (4),
+fails the gate → the ledger only shrinks). Themes: Graph subclass identity
+through set operators (3), rdf:List parse + Collection mutation (3),
+BatchAddGraph context handling (1), DefinedNamespace `__dir__` (1), SPARQL
+`Result.bindings` / `SELECT *` subselect projection (8), SPARQL prefix
+forwarding + `VALUES` (2), SPARQL aggregate/nested-FILTER evaluation (3),
 ConjunctiveGraph legacy semantics (3).
+
+(The XSD whitespace-facet and binary-datatype-coercion themes cited in earlier
+revisions have been fully resolved and pruned — the shrink-only mechanism raised
+the pass count from 50 to 62.)
 
 ## Deliberately EXCLUDED — explicit, not silent
 

@@ -149,6 +149,22 @@ pub struct EvalCtx<'d> {
     /// A monotonic counter for minting fresh blank nodes (`BNODE()` and CONSTRUCT
     /// template blanks).
     pub bnode_counter: u64,
+    /// The row ordinal of the solution currently being extended, set by
+    /// [`crate::expr::eval_extend`] right before it evaluates that row's
+    /// expression. `BNODE(strExpr)` (SPARQL 1.1 §17.4.2.2) uses this to
+    /// memoize per-solution: the row/argument pair identifies "the same query
+    /// solution" across the chain of `Extend` nodes one `SELECT`'s
+    /// `(expr AS ?v)` list (or a `WHERE`-clause `BIND`) lowers to, since each
+    /// `Extend` maps the SAME ordered row sequence 1:1 with no row dropped,
+    /// added, or reordered between them.
+    pub(crate) current_row: u64,
+    /// Per-solution memo for `BNODE(strExpr)`, keyed by `(current_row, argument
+    /// string)`: two calls with an equal argument at the same row ordinal reuse
+    /// the same minted blank (SPARQL 1.1 §17.4.2.2); the zero-argument `BNODE()`
+    /// form bypasses this entirely and always mints fresh. Query-scoped like the
+    /// other caches on this context — never cleared mid-query, since a later row
+    /// never revisits an earlier row's ordinal within the same `Extend` chain.
+    pub(crate) bnode_memo: DetHashMap<(u64, String), SolutionTerm>,
     /// The evaluation-time value of NOW() — an xsd:dateTime, captured once at
     /// context construction (from the host platform's real wall clock, see
     /// [`crate::clock::wall_clock_now`]) so all NOW() calls in a query return the
@@ -252,6 +268,12 @@ pub struct EvalCtx<'d> {
     /// allocation can reuse a dropped node's address) and must be bypassed
     /// entirely while this flag is set.
     pub(crate) in_substituted_exists: bool,
+    /// The query's effective base IRI (see [`purrdf_sparql_algebra::Query::base_iri`]),
+    /// set once per `evaluate_query` call. `IRI()`/`URI()` resolves a relative-reference
+    /// string argument against this (SPARQL 1.1 §17.4.2.6); `None` means no base was
+    /// ever supplied (an explicit `BASE` decl nor a caller document base), so a
+    /// relative argument cannot be resolved and the call is a type error.
+    pub(crate) base_iri: Option<String>,
 }
 
 /// Compile-time proof that [`EvalCtx`] is `Send + Sync`, so a future parallel
@@ -293,6 +315,8 @@ impl<'d> EvalCtx<'d> {
             active_graph: GraphMatch::Default,
             active_dataset: ActiveDataset::store_default(),
             bnode_counter: 0,
+            current_row: 0,
+            bnode_memo: DetHashMap::default(),
             now: now_val,
             rng_state: rng_seed,
             options: EvalOptions::default(),
@@ -307,6 +331,7 @@ impl<'d> EvalCtx<'d> {
             bgp_order_cache: None,
             constructed: Vec::new(),
             in_substituted_exists: false,
+            base_iri: None,
         }
     }
 
@@ -471,6 +496,14 @@ impl<'d> EvalCtx<'d> {
             active_graph: self.active_graph,
             active_dataset: self.active_dataset.clone(),
             bnode_counter: self.bnode_counter,
+            // Per-row `BNODE(strExpr)` memo state. Like `bnode_counter`, only ever
+            // observed by `Function::BNode`, which `is_parallel_safe` classifies
+            // UNSAFE — so a worker never evaluates it and this state is never read
+            // divergently. Each worker gets a fresh empty memo / copied scalar; both
+            // are harmless rather than load-bearing (mirrors the `bnode_counter`
+            // note above).
+            current_row: self.current_row,
+            bnode_memo: DetHashMap::default(),
             now: self.now.clone(),
             rng_state: self.rng_state,
             options: self.options,
@@ -485,6 +518,10 @@ impl<'d> EvalCtx<'d> {
             bgp_order_cache: self.bgp_order_cache,
             constructed: Vec::new(),
             in_substituted_exists: false,
+            // The query's effective base IRI is a read-only per-query constant.
+            // `IRI()`/`URI()` (parallel-safe, so reachable in a parallel `Extend`)
+            // resolve relative references against it, so every worker must see it.
+            base_iri: self.base_iri.clone(),
         }
     }
 
@@ -554,12 +591,7 @@ pub fn eval(pattern: &GraphPattern, ctx: &mut EvalCtx<'_>) -> Result<SolutionSeq
             inner,
             silent,
         } => crate::remote::eval_service(name, inner, *silent, ctx),
-        // Implemented incrementally over the remaining S6 build tasks; until then
-        // (and permanently, for out-of-scope nodes) a hard error names the construct.
-        other @ GraphPattern::Lateral { .. } => Err(EvalError::Unsupported(format!(
-            "graph pattern `{}` is not yet implemented in sparql-eval",
-            pattern_kind(other)
-        ))),
+        GraphPattern::Lateral { left, right } => crate::binop::eval_lateral(left, right, ctx),
     }
 }
 
@@ -582,6 +614,9 @@ pub enum Outcome {
 pub fn evaluate_query(query: &Query, ctx: &mut EvalCtx<'_>) -> Result<Outcome, EvalError> {
     // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
     ctx.active_dataset = ActiveDataset::from_query_dataset(query.dataset(), ctx.dataset);
+    // Install the query's effective base IRI so IRI()/URI() can resolve a relative
+    // string argument against it (SPARQL 1.1 §17.4.2.6).
+    ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
     match query {
         Query::Select { pattern, .. } => Ok(Outcome::Solutions(eval(pattern, ctx)?)),
         Query::Ask { pattern, .. } => Ok(Outcome::Boolean(!eval(pattern, ctx)?.is_empty())),
@@ -685,30 +720,6 @@ fn memoized_term_value(
     }
 }
 
-/// A short, stable name for a [`GraphPattern`] variant, for diagnostics.
-pub(crate) fn pattern_kind(pattern: &GraphPattern) -> &'static str {
-    match pattern {
-        GraphPattern::Bgp { .. } => "BGP",
-        GraphPattern::Path { .. } => "property path",
-        GraphPattern::Join { .. } => "Join",
-        GraphPattern::LeftJoin { .. } => "OPTIONAL (LeftJoin)",
-        GraphPattern::Lateral { .. } => "LATERAL",
-        GraphPattern::Filter { .. } => "FILTER",
-        GraphPattern::Union { .. } => "UNION",
-        GraphPattern::Graph { .. } => "GRAPH",
-        GraphPattern::Extend { .. } => "BIND (Extend)",
-        GraphPattern::Minus { .. } => "MINUS",
-        GraphPattern::Service { .. } => "SERVICE",
-        GraphPattern::Values { .. } => "VALUES",
-        GraphPattern::OrderBy { .. } => "ORDER BY",
-        GraphPattern::Project { .. } => "Project",
-        GraphPattern::Distinct { .. } => "DISTINCT",
-        GraphPattern::Reduced { .. } => "REDUCED",
-        GraphPattern::Slice { .. } => "LIMIT/OFFSET (Slice)",
-        GraphPattern::Group { .. } => "GROUP BY",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -725,18 +736,18 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_variant_hard_errors_with_its_name() {
+    fn lateral_of_units_is_the_unit_sequence() {
         let ds = RdfDatasetBuilder::new().freeze().expect("freeze empty");
         let mut ctx = EvalCtx::new(&ds);
-        // LATERAL remains permanently out of scope (SERVICE is now evaluated via
-        // the remote seam); a still-unsupported node names itself.
+        // LATERAL(Z, Z): the left unit table drives one substituted evaluation of
+        // the right unit table, merging to a single binding-nothing solution.
         let pattern = GraphPattern::Lateral {
             left: Box::new(GraphPattern::Bgp { patterns: vec![] }),
             right: Box::new(GraphPattern::Bgp { patterns: vec![] }),
         };
-        let err = eval(&pattern, &mut ctx).unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported(_)));
-        assert!(err.to_string().contains("LATERAL"));
+        let seq = eval(&pattern, &mut ctx).expect("LATERAL of units");
+        assert_eq!(seq.len(), 1);
+        assert!(seq.schema.is_empty());
     }
 
     #[test]

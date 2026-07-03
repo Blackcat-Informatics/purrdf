@@ -87,7 +87,10 @@ where
         if is_reifies {
             if let FoldNode::Triple { s, p, o } = object {
                 let triple_term = builder.intern_triple(s, p, o);
-                builder.push_reifier(subject, triple_term);
+                // Capture the reifier declaration's OWN graph (TriG `GRAPH g { … }`),
+                // so `GRAPH ?g { << … >> … }` binds `?g` to it. Turtle / the default
+                // graph carry `graph == None`, byte-identical to the old fold.
+                builder.push_reifier_in_graph(subject, triple_term, graph);
                 reifier_ids.insert(subject);
                 continue;
             }
@@ -99,10 +102,11 @@ where
         pending.push((subject, predicate, object_id, graph));
     }
 
-    // Pass 2: a reifier subject's other triples are annotations; the rest base quads.
+    // Pass 2: a reifier subject's other triples are annotations (carrying their own
+    // graph); the rest base quads.
     for (subject, predicate, object, graph) in pending {
         if reifier_ids.contains(&subject) {
-            builder.push_annotation(subject, predicate, object);
+            builder.push_annotation_in_graph(subject, predicate, object, graph);
         } else {
             builder.push_quad(subject, predicate, object, graph);
         }
@@ -304,7 +308,7 @@ fn dataset_from_ser_graph_impl(
     // serializer skips it identically) and is resolved when its parent quad interns the
     // object. Emitting a synthetic row for it would make a quoted triple the subject of
     // `rdf:reifies`, which the IR rejects.
-    for &(reifier_id, (s, p, o), _graph) in &graph.reifiers {
+    for &(reifier_id, (s, p, o), reifier_graph) in &graph.reifiers {
         if graph.terms.get(reifier_id).is_some_and(|term| {
             term.kind == SerTermKind::Triple && term.reifier == Some(reifier_id)
         }) {
@@ -315,12 +319,19 @@ fn dataset_from_ser_graph_impl(
         let s = interner.intern(&mut builder, s)?;
         let p = interner.intern(&mut builder, p)?;
         let o = interner.intern(&mut builder, o)?;
+        // Preserve the reifier declaration's named graph (`None` = default) through the
+        // GTS/round-trip path, unless this pass is flattening every graph to default.
+        let graph = match reifier_graph {
+            Some(_) if flatten_to_default_graph => None,
+            Some(g) => Some(interner.intern(&mut builder, g)?),
+            None => None,
+        };
         rows.push(FoldRow {
             subject,
             is_reifies: true,
             predicate,
             object: FoldNode::Triple { s, p, o },
-            graph: None,
+            graph,
         });
     }
 
@@ -348,21 +359,25 @@ fn dataset_from_ser_graph_impl(
     // Re-materialized as `<reifier> <predicate> <value>` rows so the shared fold's pass 2
     // classifies them as annotations (the reifier subject is bound above). This is the
     // GENERAL RDF-1.2 parser, so it must accept arbitrary input including the W3C suite's
-    // graph-scoped (TriG) reification — the optional graph slot is FLATTENED here, exactly
-    // as `fold_statement_layer` already folds the `rdf:reifies` binding graph-blind: the
-    // IR's statement layer is graph-free (world × standpoint = JOIN, not graph). purrdf's
-    // OWN carrier never carries a graph-scoped row (the bundle-import paths enforce that).
-    for &(reifier_id, predicate_id, value_id, _graph_slot) in &graph.annotations {
+    // graph-scoped (TriG) reification — the optional graph slot is THREADED through (so a
+    // reifier/annotation inside `GRAPH g { … }` is matchable under `GRAPH ?g`), unless
+    // this pass is flattening every named graph to the default graph.
+    for &(reifier_id, predicate_id, value_id, annotation_graph) in &graph.annotations {
         let subject = interner.intern(&mut builder, reifier_id)?;
         let is_reifies = interner.is_iri(predicate_id, RDF_REIFIES)?;
         let predicate = interner.intern(&mut builder, predicate_id)?;
         let object = interner.intern_node(&mut builder, value_id)?;
+        let graph = match annotation_graph {
+            Some(_) if flatten_to_default_graph => None,
+            Some(g) => Some(interner.intern(&mut builder, g)?),
+            None => None,
+        };
         rows.push(FoldRow {
             subject,
             is_reifies,
             predicate,
             object,
-            graph: None,
+            graph,
         });
     }
 

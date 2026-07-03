@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use super::media_type::{classify, NativeRdfFormat};
-use super::ser_model::{self, SerGraph, SerTerm, SerTermKind};
+use super::ser_model::{self, SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
 use crate::ir::TermRef;
 use crate::{RdfDataset, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermId, TermValue};
 
@@ -240,18 +240,14 @@ pub(crate) fn build_ser_graph(
     }
 
     graph.terms = std::mem::take(&mut interner.terms);
-    // Widen the narrow interner rows to the serialization row-array: purrdf reification
-    // is standpoint-scoped, so the graph slot is `None`.
-    graph.reifiers = std::mem::take(&mut interner.reifiers)
-        .into_iter()
-        .map(|(rid, spo)| (rid, spo, None))
-        .collect();
+    // The interner rows already carry the serialization row-array's graph slot (`None`
+    // = default graph): a reifier/annotation declared inside a `GRAPH g { … }` block
+    // keeps `g` so the emitted N-Quads/TriG round-trips it.
+    graph.reifiers = std::mem::take(&mut interner.reifiers);
     // Annotations populated alongside the statement rows above.
-    graph.annotations.extend(
-        std::mem::take(&mut interner.annotations)
-            .into_iter()
-            .map(|(r, p, o)| (r, p, o, None)),
-    );
+    graph
+        .annotations
+        .extend(std::mem::take(&mut interner.annotations));
     Ok(graph)
 }
 
@@ -263,16 +259,18 @@ fn push_statement_rows(
     dataset: &RdfDataset,
     _graph: &mut SerGraph,
 ) -> Result<(), RdfDiagnostic> {
-    for (reifier, triple) in dataset.reifiers() {
+    for (reifier, triple, graph) in dataset.reifiers_with_graph() {
         let reifier_id = interner.intern(dataset, reifier)?;
         let (s, p, o) = interner.intern_triple_components(dataset, triple)?;
-        interner.reifiers.push((reifier_id, (s, p, o)));
+        let g = graph.map(|g| interner.intern(dataset, g)).transpose()?;
+        interner.reifiers.push((reifier_id, (s, p, o), g));
     }
-    for (reifier, predicate, object) in dataset.annotations() {
+    for (reifier, predicate, object, graph) in dataset.annotations_with_graph() {
         let r = interner.intern(dataset, reifier)?;
         let p = interner.intern(dataset, predicate)?;
         let o = interner.intern(dataset, object)?;
-        interner.annotations.push((r, p, o));
+        let g = graph.map(|g| interner.intern(dataset, g)).transpose()?;
+        interner.annotations.push((r, p, o, g));
     }
     Ok(())
 }
@@ -285,8 +283,8 @@ struct SerGraphInterner {
     /// Reifier-id → `(s, p, o)` bindings. Carries both the statement-layer reifiers
     /// (a resource reifying a statement) and the self-reifier sentinels of inline
     /// quoted-triple terms (skipped by the N-Quads serializer).
-    reifiers: Vec<(usize, (usize, usize, usize))>,
-    annotations: Vec<(usize, usize, usize)>,
+    reifiers: Vec<SerReifierRow>,
+    annotations: Vec<SerAnnotationRow>,
     /// Value → term-id memo so equal terms collapse to one term, matching the fold the
     /// reader produces.
     memo: HashMap<TermValue, usize>,
@@ -365,7 +363,9 @@ impl SerGraphInterner {
                     direction: None,
                     reifier: Some(triple_id),
                 });
-                self.reifiers.push((triple_id, (s, p, o)));
+                // Self-reifier sentinel for an inline quoted-triple TERM — never a
+                // graph-scoped statement-layer row, so its graph slot is `None`.
+                self.reifiers.push((triple_id, (s, p, o), None));
                 triple_id
             }
         };

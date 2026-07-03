@@ -7,8 +7,8 @@ Select {
         inner: Bgp {
             patterns: [
                 TriplePattern {
-                    subject: Variable(
-                        ?r,
+                    subject: BlankNode(
+                        _:__purrdf_anon_0,
                     ),
                     predicate: NamedNode(
                         <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies>,
@@ -25,6 +25,17 @@ Select {
                                 ?o,
                             ),
                         },
+                    ),
+                },
+                TriplePattern {
+                    subject: Variable(
+                        ?r,
+                    ),
+                    predicate: NamedNode(
+                        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies>,
+                    ),
+                    object: BlankNode(
+                        _:__purrdf_anon_0,
                     ),
                 },
             ],

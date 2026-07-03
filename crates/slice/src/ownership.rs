@@ -815,9 +815,9 @@ fn walk_path(p: &purrdf_sparql_algebra::PropertyPathExpression, out: &mut BTreeS
             walk_path(a, out);
             walk_path(b, out);
         }
-        P::NegatedPropertySet(nodes) => {
-            for n in nodes {
-                insert_oxiri(n, out);
+        P::NegatedPropertySet(elems) => {
+            for e in elems {
+                insert_oxiri(&e.predicate, out);
             }
         }
         // A predicate wildcard references no named predicate to collect.
