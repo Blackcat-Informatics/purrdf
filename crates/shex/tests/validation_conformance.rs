@@ -67,12 +67,6 @@ impl Manifest {
     fn load() -> Self {
         let path = corpus_dir().join("validation/manifest.ttl");
         let text = fs::read_to_string(&path).expect("read validation manifest");
-        // Workaround for a purrdf-rdf Turtle-parser gap: three manifest
-        // entries use the legal doubled-semicolon form
-        // `a sht:ValidationFailure ; ;` (an empty predicateObjectList item),
-        // which the native codec currently rejects. Collapsing THIS exact
-        // spelling changes no triples.
-        let text = text.replace("sht:ValidationFailure ; ;", "sht:ValidationFailure ;");
         let ds = parse_dataset(
             text.as_bytes(),
             "text/turtle",
