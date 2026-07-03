@@ -1,0 +1,9 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:UnionExprShape
+    a sh:NodeShape ;
+    sh:targetClass ex:C ;
+    sh:expression [
+        sh:union ( [ sh:path ex:p ] true ) ;
+    ] .

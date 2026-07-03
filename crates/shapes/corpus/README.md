@@ -33,6 +33,11 @@ Each directory contains `data.nt` (N-Triples data graph), `shapes.ttl` (Turtle s
 | 46-less-than | `sh:lessThan ex:end` on `ex:start`; start=10, end=5 (xsd:integer comparison) | false | 1 — focus `ex:meeting`, path `ex:start`, value `"10"^^xsd:integer`, LessThanConstraintComponent |
 | 47-equals | `sh:equals ex:givenName` on `ex:firstName`; values `"Alice"` vs `"Alicia"` | false | 2 — focus `ex:person`, path `ex:firstName`, values `"Alice"` and `"Alicia"` (both asymmetric values), EqualsConstraintComponent |
 | 48-qualified-disjoint | Two sibling `sh:qualifiedValueShape` blocks on `ex:digit` with `sh:qualifiedValueShapesDisjoint true`; the thumb is typed both `ex:Thumb` and `ex:Finger`, so it is excluded from the Thumb count | false | 1 — focus `ex:hand`, path `ex:digit`, QualifiedMinCountConstraintComponent (Thumb count 0 < 1) |
+| 49-expr-constant-true | `sh:expression true` (SHACL-AF §5.7) on `sh:targetNode ex:x`; the expression yields the single canonical `true` | **true** | 0 — the boolean-true expression is satisfied |
+| 50-expr-constant-false | `sh:expression false` on `sh:targetNode ex:x`; the expression yields `false`, not `true` | false | 1 — focus `ex:x`, value `ex:x`, ExpressionConstraintComponent |
+| 51-expr-if | `sh:expression [ sh:if [ sh:path ex:flag ] ; sh:then true ; sh:else false ]` on `sh:targetClass ex:C`; `ex:ok` has `ex:flag true` (→ then → true), `ex:bad` has `ex:flag false` (→ else → false) | false | 1 — focus `ex:bad`, value `ex:bad`, ExpressionConstraintComponent |
+| 52-expr-path | `sh:expression [ sh:path ex:p ]` on `sh:targetClass ex:C`; `ex:s` has a single `ex:p true` (→ conforms), `ex:t` has `ex:p false` (→ result is not the single `true`) | false | 1 — focus `ex:t`, value `ex:t`, ExpressionConstraintComponent |
+| 53-expr-union | `sh:expression [ sh:union ( [ sh:path ex:p ] true ) ]` on `sh:targetClass ex:C`; the union of `ex:p`'s single `true` and the constant `true` dedups to exactly one `true` | **true** | 0 — the deduplicated union yields the single canonical `true` |
 
 ## Notes
 

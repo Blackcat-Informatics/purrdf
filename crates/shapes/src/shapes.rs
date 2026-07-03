@@ -205,6 +205,21 @@ pub enum Constraint {
         /// any sibling qualified shape are excluded before counting.
         disjoint: bool,
     },
+    /// `sh:expression <node expression>` — SHACL-AF §5.7 expression constraint.
+    ///
+    /// For each value node the expression is evaluated with that value node as
+    /// the focus; the constraint is satisfied iff the result is exactly the
+    /// canonical `"true"^^xsd:boolean` term.
+    Expression {
+        /// The parsed node expression to evaluate per value node.
+        expr: NodeExpr,
+        /// Optional per-constraint message override (from `sh:message` on the
+        /// expression node).
+        message: Option<String>,
+        /// Optional per-constraint severity override (from `sh:severity` on the
+        /// expression node).
+        severity: Option<Severity>,
+    },
 }
 
 /// A property shape, reached via `sh:property` from a node shape.
@@ -1097,6 +1112,37 @@ impl<'s> Parser<'s> {
             });
         }
 
+        // sh:expression — SHACL-AF §5.7 expression constraint component. Each
+        // object is a node expression parsed via `parse_node_expr`; the optional
+        // sh:message / sh:severity on the expression node override the shape
+        // defaults at eval time (mirroring sh:sparql).
+        let mut expr_nodes: Vec<Term> = self.objects_of(id, sh::EXPRESSION);
+        expr_nodes.sort_by_key(ToString::to_string);
+        for expr_node in expr_nodes {
+            let expr = self.parse_node_expr(&expr_node)?;
+
+            let mut messages: Vec<String> = self
+                .objects_of(&expr_node, sh::MESSAGE)
+                .into_iter()
+                .filter_map(|t| match t {
+                    Term::Literal(lit) => Some(lit.value().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            messages.sort();
+            let message = messages.into_iter().next();
+
+            let severity = self
+                .first_object_of(&expr_node, sh::SEVERITY)
+                .and_then(|t| severity_from_term(&t));
+
+            constraints.push(Constraint::Expression {
+                expr,
+                message,
+                severity,
+            });
+        }
+
         // sh:equals / sh:disjoint / sh:lessThan / sh:lessThanOrEquals — the
         // property-pair constraint components (§4.3). Each object must be an IRI;
         // a non-IRI object is malformed and hard-fails (no silent drop).
@@ -1558,9 +1604,6 @@ impl<'s> Parser<'s> {
     /// A blank node is guarded against cyclic self-reference (mirroring
     /// [`parse_inline_shape`](Self::parse_inline_shape)); the guard key is
     /// namespaced so it never collides with the shape-parsing `in_flight` set.
-    // The constraint engine that calls this (the `sh:expression` component) is
-    // wired in a later task; until then it is reachable only from the unit tests.
-    #[allow(dead_code)]
     fn parse_node_expr(&mut self, node: &Term) -> Result<NodeExpr, String> {
         // NOTE: paging/ordering surface (`sh:limit`/`sh:offset`/`sh:orderby`) is
         // under-specified by SHACL-AF. Assumption pinned here (a later corpus

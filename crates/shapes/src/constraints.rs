@@ -1343,6 +1343,40 @@ fn eval_constraint<G: ShaclDataGraph>(
             )
             .map_err(|e| format!("sh:sparql constraint on shape {source_shape}: {e}"))?
         }
+
+        // ── Expression (SHACL-AF §5.7) ─────────────────────────────────────────
+        // Each value node is evaluated as the focus of the node expression; the
+        // constraint is satisfied iff the result is exactly the canonical
+        // `"true"^^xsd:boolean` term (`is_true`). A sub-expression evaluation
+        // failure is a hard validation error (mirroring sh:sparql). The
+        // expression node may carry its own sh:message / sh:severity overriding
+        // the shape defaults.
+        Constraint::Expression {
+            expr,
+            message: cmsg,
+            severity: csev,
+        } => {
+            let sev = csev.clone().unwrap_or_else(|| severity.clone());
+            let msg = cmsg.clone().or_else(|| message.clone());
+            let mut results = Vec::new();
+            for value_node in value_nodes {
+                let mut guard = crate::expression::RecursionGuard::new();
+                let out = crate::expression::eval_node_expr(store, value_node, expr, &mut guard)
+                    .map_err(|e| {
+                        format!("sh:expression constraint on shape {source_shape}: {e}")
+                    })?;
+                if !crate::expression::is_true(&out) {
+                    let mut r = result!(
+                        sh::EXPRESSION_CONSTRAINT_COMPONENT,
+                        Some(value_node.clone())
+                    );
+                    r.severity.clone_from(&sev);
+                    r.message.clone_from(&msg);
+                    results.push(r);
+                }
+            }
+            results
+        }
     })
 }
 
