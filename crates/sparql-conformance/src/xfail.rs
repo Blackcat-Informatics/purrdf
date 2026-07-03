@@ -166,7 +166,17 @@ pub const XFAIL: &[Xfail] = &[
     // reasoner cannot reach — spec-inherent boundaries, each ledgered `Entailment`:
     //   - OWL-Direct-only tests (`parent*`, `simple*`) and OWL-DL query answering
     //     (`sparqldl-*`, `paper-sparqldl-Q*`, `owlds02`) — full DL is not a
-    //     materialize-and-match affair;
+    //     materialize-and-match affair. NB: despite their name, `simple*` are NOT
+    //     simple-entailment-regime tests — the manifest declares each with
+    //     `sd:entailmentRegime ent:OWL-Direct` and `sd:EntailmentProfile pr:DL`
+    //     (the "simple" refers to small class-expression queries, not the regime).
+    //     Their data (`simple.ttl`) carries zero class-expression triples
+    //     (no owl:intersectionOf/unionOf/Restriction/some|allValuesFrom), so
+    //     simple-entailment BGP matching answers every one with the empty set,
+    //     whereas the expected results are non-empty — e.g. simple1's anonymous
+    //     `[owl:intersectionOf (:A :B)]` must be read as the class (A ⊓ B) and
+    //     instance-retrieved to {:a, :d}. That is OWL Direct Semantics reasoning,
+    //     not bnode-aware subgraph/instance matching;
     //   - RIF-rule entailment (`rif*`) — the RIF regime is out of scope;
     //   - RDF axiomatic-triple entailment under the bare RDF regime (`rdf01`).
     Xfail {
