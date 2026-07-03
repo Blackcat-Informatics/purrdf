@@ -54,6 +54,9 @@ pub mod eval;
 mod expr;
 mod list_fn;
 mod modifier;
+pub(crate) mod parallel;
+#[cfg(test)]
+mod parallel_determinism_gate;
 mod path;
 pub mod remote;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this

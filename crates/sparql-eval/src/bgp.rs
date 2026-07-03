@@ -41,7 +41,6 @@ use crate::eval::{BgpOrderCache, EvalCtx};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 use crate::DetHashSet;
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification
@@ -136,13 +135,22 @@ pub(crate) fn eval_bgp(
     let mut rows: Vec<Solution> = vec![vec![None; working.len()]];
     for &i in order.iter() {
         let cp = &compiled[i];
-        let mut next = Vec::new();
         // The probe's bound-axis shape is fixed across this slot's rows (a variable is
         // bound by an earlier pattern for every row or for none), so the permutation
-        // choice is loop-invariant: compute the `QuadProbePlan` once (on the first
-        // single-graph probe) and reuse it, instead of re-selecting per row.
-        let mut probe_plan: Option<QuadProbePlan> = None;
-        for row in &rows {
+        // choice is loop-invariant: for a single-graph scope, compute the
+        // `QuadProbePlan` once from the first row (non-empty — the loop `break`s above
+        // the moment `rows` empties) and capture the `Copy` plan in every worker,
+        // instead of re-selecting it per row.
+        let plan: Option<QuadProbePlan> = match &scope {
+            GraphScope::One(gm) => Some(RdfDataset::probe_plan(
+                query_id(&cp.s, &rows[0]).is_some(),
+                query_id(&cp.p, &rows[0]).is_some(),
+                query_id(&cp.o, &rows[0]).is_some(),
+                *gm,
+            )),
+            GraphScope::Merge(_) => None,
+        };
+        let next = crate::parallel::par_chunk_map(&rows, |acc, row| {
             let s = query_id(&cp.s, row);
             let p = query_id(&cp.p, row);
             let o = query_id(&cp.o, row);
@@ -150,12 +158,10 @@ pub(crate) fn eval_bgp(
                 // Single-graph scope (store default / a named graph): the indexed
                 // partition_point read, unchanged — no de-dup overhead.
                 GraphScope::One(gm) => {
-                    let plan = *probe_plan.get_or_insert_with(|| {
-                        RdfDataset::probe_plan(s.is_some(), p.is_some(), o.is_some(), *gm)
-                    });
+                    let plan = plan.expect("plan computed above for GraphScope::One");
                     for quad in ctx.dataset.quads_for_pattern_with_plan(&plan, s, p, o, *gm) {
                         if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                            next.push(extended);
+                            acc.push(extended);
                         }
                     }
                     // The RDF 1.2 reification layer is a side-table outside `quads`, so
@@ -166,7 +172,7 @@ pub(crate) fn eval_bgp(
                     // and a `GRAPH :g`-scoped reifier shows only under that named graph.
                     emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies_id, *gm, |quad| {
                         if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                            next.push(extended);
+                            acc.push(extended);
                         }
                     });
                 }
@@ -174,7 +180,9 @@ pub(crate) fn eval_bgp(
                 // RDF-merge unions *triples*, so a triple present in two merged graphs
                 // must bind once — de-dupe by (s, p, o) for this pattern+row. The
                 // reification layer is store-default content (not part of an explicitly
-                // FROM-named merge), so it is not folded into a merged scope.
+                // FROM-named merge), so it is not folded into a merged scope. `seen` is
+                // local to this row's worker (each row gets its own), identical to the
+                // sequential path.
                 GraphScope::Merge(gs) => {
                     let mut seen: DetHashSet<(TermId, TermId, TermId)> = DetHashSet::default();
                     for &g in gs {
@@ -183,13 +191,13 @@ pub(crate) fn eval_bgp(
                                 continue;
                             }
                             if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                                next.push(extended);
+                                acc.push(extended);
                             }
                         }
                     }
                 }
             }
-        }
+        });
         rows = next;
         if rows.is_empty() {
             break;
@@ -221,7 +229,7 @@ fn plan_or_cached_order(
         return Arc::from(cost_based_order(compiled, dataset, scope));
     };
     let key = (dataset.stats_fingerprint(), bgp_shape_key(compiled, scope));
-    if let Some(order) = cache.borrow().get(&key) {
+    if let Some(order) = cache.read().expect("order cache lock poisoned").get(&key) {
         // A shape-key collision is NOT licensed by the stats-fingerprint safety
         // argument: a wrong-length order would index out of bounds in the join loop.
         // Guard it — on a length mismatch fall through and re-plan.
@@ -230,7 +238,10 @@ fn plan_or_cached_order(
         }
     }
     let order: Arc<[usize]> = Arc::from(cost_based_order(compiled, dataset, scope));
-    cache.borrow_mut().insert(key, Arc::clone(&order));
+    cache
+        .write()
+        .expect("order cache lock poisoned")
+        .insert(key, Arc::clone(&order));
     order
 }
 
@@ -956,7 +967,7 @@ fn object_can_be_triple_term(pos: &Pos, dataset: &RdfDataset) -> bool {
 /// An empty solution sequence over only the real (non-blank) variables of `working`.
 fn empty_over_real_vars(working: &VarSchema) -> SolutionSeq {
     let real = real_var_schema(working);
-    SolutionSeq::empty(Rc::new(real))
+    SolutionSeq::empty(Arc::new(real))
 }
 
 /// The schema of `working` restricted to its real variables, in order.
@@ -979,12 +990,12 @@ fn project_out_blanks(working: &VarSchema, rows: Vec<Solution>) -> SolutionSeq {
     // Fast path: no blank columns — reuse rows as-is.
     if keep.len() == working.len() {
         return SolutionSeq {
-            schema: Rc::new(real_var_schema(working)),
+            schema: Arc::new(real_var_schema(working)),
             rows,
         };
     }
 
-    let schema = Rc::new(real_var_schema(working));
+    let schema = Arc::new(real_var_schema(working));
     let projected = rows
         .into_iter()
         .map(|row| keep.iter().map(|&i| row[i]).collect())
@@ -1002,7 +1013,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
     use purrdf_sparql_algebra::{Literal, NamedNode};
-    use std::sync::Arc;
 
     /// A small graph:
     ///   :alice :knows :bob ; :name "Alice" .

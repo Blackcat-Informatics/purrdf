@@ -55,6 +55,11 @@ purrdf-sparql-results = { workspace = true }
 # resolution against the query's base IRI (SPARQL 1.1 §17.4.2.6). Already a
 # wasm-clean foundation leaf the algebra parser depends on for the same purpose.
 purrdf-iri = { workspace = true }
+# Deterministic two-phase parallel evaluation primitives (`parallel` module):
+# fork-join per BGP/group row batch, reduced back in source order. Unconditional —
+# rayon compiles cleanly on wasm32-unknown-unknown and degrades to inline-sequential
+# execution there (same pattern as purrdf-rdf's chunk-parallel text parse).
+rayon = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # OS entropy for the RAND()/UUID()/STRUUID() seed on native targets. Target-gated

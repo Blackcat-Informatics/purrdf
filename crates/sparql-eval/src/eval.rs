@@ -15,7 +15,6 @@
 //! indexed read surface through `DatasetView` (the inherent `quads_for_pattern`
 //! override, P4b #891).
 
-use std::rc::Rc;
 use std::sync::Arc;
 
 use purrdf_core::{GraphMatch, RdfDataset, TermFactory, TermValue};
@@ -95,7 +94,7 @@ pub(crate) type ExistsCacheKey = (usize, (u8, u32), u64);
 /// EXISTS` anti-join from N per-row index rebuilds into N O(1)/scan probes.
 pub(crate) struct ExistsInner {
     /// The inner pattern's unconstrained result (outer-row-independent).
-    pub inner: Rc<SolutionSeq>,
+    pub inner: Arc<SolutionSeq>,
     /// Shared columns between the outer schema and `inner.schema`, as
     /// `(outer_ordinal, inner_ordinal)` pairs (the probe's join key).
     pub shared: Vec<(usize, usize)>,
@@ -129,7 +128,7 @@ pub(crate) fn schema_fingerprint(schema: &crate::solution::VarSchema) -> u64 {
 /// materialised as triples (Principle 12). A stale or colliding key is at worst a
 /// suboptimal order (the reorder is a permutation of a commutative join), never an
 /// incorrect result, so the fingerprint can be cheap.
-pub type BgpOrderCache = std::cell::RefCell<DetHashMap<(u64, u64), Arc<[usize]>>>;
+pub type BgpOrderCache = std::sync::RwLock<DetHashMap<(u64, u64), Arc<[usize]>>>;
 
 /// The mutable evaluation context threaded through [`eval`].
 pub struct EvalCtx<'d> {
@@ -188,21 +187,21 @@ pub struct EvalCtx<'d> {
     /// over it are outer-row-independent, so this turns `expr::exists`'s per-row
     /// re-evaluation *and* per-row index rebuild into a single build per site.
     /// Naturally per-query: a fresh [`EvalCtx`] is built for each `query()` call.
-    pub(crate) exists_inner_cache: DetHashMap<ExistsCacheKey, Rc<ExistsInner>>,
+    pub(crate) exists_inner_cache: DetHashMap<ExistsCacheKey, Arc<ExistsInner>>,
     /// Per-query syntactic variable cache for expression positions inside an
     /// `EXISTS` inner pattern, keyed by the immutable inner-pattern AST address.
     /// Correlation detection runs for every outer row; caching this pure walk keeps
     /// the row loop focused on the cheap membership test against currently-bound
     /// outer variables.
-    pub(crate) exists_expr_vars_cache: DetHashMap<usize, Rc<crate::DetHashSet<Variable>>>,
+    pub(crate) exists_expr_vars_cache: DetHashMap<usize, Arc<crate::DetHashSet<Variable>>>,
     /// Per-query cache for SPARQL `REGEX`/`REPLACE` pattern+flag compilations,
     /// keyed pattern-then-flags so a hit probes with **borrowed** strings (no
-    /// per-row key allocation). The compiled regex is behind an `Rc`, so a hit
+    /// per-row key allocation). The compiled regex is behind an `Arc`, so a hit
     /// hands out a cheap pointer clone that **shares** the regex's lazy-DFA cache
     /// pool instead of minting a fresh one per row. Dynamic pattern expressions
     /// still compile per distinct value, but a filter over many rows no longer
     /// rebuilds the same automata (or their DFA caches) for every row.
-    pub(crate) regex_cache: DetHashMap<String, DetHashMap<String, Option<Rc<regex::Regex>>>>,
+    pub(crate) regex_cache: DetHashMap<String, DetHashMap<String, Option<Arc<regex::Regex>>>>,
     /// Lazily-resolved solution terms for the `xsd:boolean` literals `"false"` /
     /// `"true"` (indexed by `usize::from(bool)`), so per-row boolean expression
     /// results skip the value-hash intern probe. Interning is deterministic per
@@ -241,7 +240,7 @@ pub struct EvalCtx<'d> {
     /// The `SERVICE` federation source, if one is injected. `None` in
     /// the default engine path: a non-silent `SERVICE` then hard-fails. Tests and
     /// the conformance harness inject an in-memory source via [`EvalCtx::with_remote`].
-    pub(crate) remote: Option<&'d dyn crate::remote::RemoteQuerySource>,
+    pub(crate) remote: Option<&'d (dyn crate::remote::RemoteQuerySource + Sync)>,
     /// The shared, dataset-aware BGP join-order cache, if one is injected. `None` for
     /// a directly-built context (e.g. a unit test): planning then runs every BGP, which
     /// is semantically identical — just not memoised. The engine injects its own cache
@@ -276,6 +275,17 @@ pub struct EvalCtx<'d> {
     /// relative argument cannot be resolved and the call is a type error.
     pub(crate) base_iri: Option<String>,
 }
+
+/// Compile-time proof that [`EvalCtx`] is `Send + Sync`, so a future parallel
+/// worker can hold `&EvalCtx`/build its own from a shared `&'d RdfDataset`
+/// across threads. Every field must stay `Send + Sync` for this to hold — the
+/// `Rc`/`RefCell` fields that used to block it were switched to `Arc`/`RwLock`
+/// and `remote`'s trait object was given an explicit `+ Sync` bound precisely
+/// so this assertion compiles.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<EvalCtx<'static>>();
+};
 
 impl core::fmt::Debug for EvalCtx<'_> {
     /// Summarized: the injected `SERVICE` source (`remote`) is a plain `dyn`
@@ -407,7 +417,10 @@ impl<'d> EvalCtx<'d> {
     /// Attach a `SERVICE` federation source for this evaluation. The borrow shares
     /// the dataset lifetime `'d`; the engine's default path leaves it `None`.
     #[must_use]
-    pub fn with_remote(mut self, source: &'d dyn crate::remote::RemoteQuerySource) -> Self {
+    pub fn with_remote(
+        mut self,
+        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
+    ) -> Self {
         self.remote = Some(source);
         self
     }
@@ -419,6 +432,97 @@ impl<'d> EvalCtx<'d> {
     pub fn with_order_cache(mut self, cache: &'d BgpOrderCache) -> Self {
         self.bgp_order_cache = Some(cache);
         self
+    }
+
+    /// Fork a `Send` child context for a parallel worker (Task 4-6's fork-join
+    /// evaluation), sharing this context's immutable/read-only state and starting
+    /// its mutable evaluation state fresh.
+    ///
+    /// The split is what makes fork-join deterministic under [`crate::parallel`]:
+    ///
+    /// - **Shared** (`dataset`/`remote`/`bgp_order_cache`/`options`, and the cheap
+    ///   `Clone`s `active_graph`/`active_dataset`/`now`/`standpoint_predicates`):
+    ///   read-only for the duration of evaluation, so sharing them across workers
+    ///   cannot introduce a data race or a cross-worker ordering dependency.
+    /// - **Cloned** (`exists_inner_cache`/`exists_expr_vars_cache`): cheap
+    ///   `Arc`-valued maps, so a memo the parent already warmed (e.g. from
+    ///   evaluating an earlier sibling sequentially) is inherited by the child
+    ///   instead of rebuilt — a performance inheritance, not a correctness
+    ///   requirement, since a cache miss just re-derives the same value.
+    /// - **Cloned base, fresh appends** (`scratch`): input rows carry
+    ///   [`crate::scratch::SolutionTerm::Computed`] ids that index into THIS
+    ///   context's scratch value table, so a child given a fresh, empty scratch
+    ///   could not resolve them (wrong value, or an out-of-bounds panic). The
+    ///   whole [`crate::scratch::ScratchInterner`] (value table AND its
+    ///   value→id dedup index) is cloned instead: the child resolves every
+    ///   existing `Computed` id identically to the parent, and any NEW value it
+    ///   mints is deduped against its own clone of the index exactly as the
+    ///   parent would dedup it. A child's fresh mints are ephemeral — discarded
+    ///   for a read-only FILTER predicate (the surviving rows are the original
+    ///   rows, nothing new escapes) or, for a minting worker, captured by
+    ///   [`crate::parallel::portable_row`] as a `Vec` of
+    ///   [`crate::parallel::PortableTerm`] while the child's scratch is still
+    ///   alive and re-interned against the parent by
+    ///   [`crate::parallel::reintern_minted_row`] so each freshly-minted cell's
+    ///   id is valid in the parent's space (a raw child `ScratchId` is never
+    ///   reused in the parent — only the id space, not individual ids, is
+    ///   shared by the clone).
+    /// - **Fresh** (`regex_cache`, `cached_bool_terms`, `const_atom_cache`,
+    ///   `xsd_parse_cache`, `constructed`, `in_substituted_exists`): per-worker
+    ///   mutable state that must NOT be shared, so each worker mints its own
+    ///   constructed-quad buffer without contending on a lock. The caller
+    ///   classifies each worker row with [`crate::parallel::minted_row`] into a
+    ///   [`crate::parallel::MintedRow`] (`Direct` — no post-fork mint, passed
+    ///   through untouched — or `Portable`) and folds it back into the parent
+    ///   via [`crate::parallel::reintern_minted_row`], invoked once per row in
+    ///   source-index order across all workers, so the result is bit-identical
+    ///   to sequential evaluation. A read-only FILTER-predicate worker never
+    ///   reaches this path: only the boolean result and the original `Copy` row
+    ///   escape, so its child scratch is discarded whole.
+    /// - **Copied scalars** (`bnode_counter`, `rng_state`): their only stateful
+    ///   builtins (`BNODE`, `RAND`/`UUID`/`STRUUID`, and the PurRDF list
+    ///   constructors) are excluded from parallel evaluation by
+    ///   [`crate::parallel::is_parallel_safe`], so the copied value is never
+    ///   actually observed divergently across workers — copying it here is
+    ///   harmless rather than load-bearing.
+    ///
+    /// Called by `expr::eval_filter` and `binop::left_outer_join_filtered` (Task 5)
+    /// to give each FILTER-predicate worker its own child context.
+    #[must_use]
+    pub(crate) fn fork_for_worker(&self) -> Self {
+        Self {
+            dataset: self.dataset,
+            scratch: self.scratch.clone(),
+            active_graph: self.active_graph,
+            active_dataset: self.active_dataset.clone(),
+            bnode_counter: self.bnode_counter,
+            // Per-row `BNODE(strExpr)` memo state. Like `bnode_counter`, only ever
+            // observed by `Function::BNode`, which `is_parallel_safe` classifies
+            // UNSAFE — so a worker never evaluates it and this state is never read
+            // divergently. Each worker gets a fresh empty memo / copied scalar; both
+            // are harmless rather than load-bearing (mirrors the `bnode_counter`
+            // note above).
+            current_row: self.current_row,
+            bnode_memo: DetHashMap::default(),
+            now: self.now.clone(),
+            rng_state: self.rng_state,
+            options: self.options,
+            standpoint_predicates: self.standpoint_predicates.clone(),
+            exists_inner_cache: self.exists_inner_cache.clone(),
+            exists_expr_vars_cache: self.exists_expr_vars_cache.clone(),
+            regex_cache: DetHashMap::default(),
+            cached_bool_terms: [None, None],
+            const_atom_cache: DetHashMap::default(),
+            xsd_parse_cache: DetHashMap::default(),
+            remote: self.remote,
+            bgp_order_cache: self.bgp_order_cache,
+            constructed: Vec::new(),
+            in_substituted_exists: false,
+            // The query's effective base IRI is a read-only per-query constant.
+            // `IRI()`/`URI()` (parallel-safe, so reachable in a parallel `Extend`)
+            // resolve relative references against it, so every worker must see it.
+            base_iri: self.base_iri.clone(),
+        }
     }
 
     /// A compact hashable encoding of the active graph, for [`ExistsCacheKey`].
@@ -688,6 +792,8 @@ mod tests {
             vp("ctype"),
         );
         let inner = bgp(vp("class"), pred("http://ex/stereo"), vp("st"));
+        let outer_for_low_level_check = outer.clone();
+        let inner_for_low_level_check = inner.clone();
         let filter = GraphPattern::Filter {
             expr: Expression::Exists(Box::new(inner)),
             inner: Box::new(outer),
@@ -697,9 +803,37 @@ mod tests {
         let seq = eval(&filter, &mut ctx).expect("filter exists");
         // EXISTS keeps the two subjects with a :stereo (a, b); drops c.
         assert_eq!(seq.len(), 2);
-        // The inner pattern AND its probe index were built exactly once despite three
-        // outer rows — the per-row index rebuild is gone.
-        assert_eq!(ctx.exists_inner_cache.len(), 1);
+
+        // The `ctx.exists_inner_cache.len()` check this test used to make against
+        // `ctx` directly no longer applies: this EXISTS reaches no unsafe builtin,
+        // so (Task 5) `expr::eval_filter` routes it through
+        // `crate::parallel::par_chunk_try_map_init`, which runs the per-row loop on
+        // a FORKED child context (`EvalCtx::fork_for_worker`), not `ctx` itself —
+        // even below the parallel threshold, exactly one child is forked and reused
+        // across every outer row. So the cache still builds exactly once per query,
+        // just on that (discarded-after-use) child rather than on `ctx`. Reproduce
+        // the same shape here directly (drive `eval_ebv` for each outer row over one
+        // shared ctx, exactly as the child's per-row loop does) to keep exercising
+        // the "no per-row index rebuild" invariant.
+        let mut child_ctx = EvalCtx::new(&ds);
+        let outer_seq = eval(&outer_for_low_level_check, &mut child_ctx).expect("outer bgp");
+        let exists_expr = Expression::Exists(Box::new(inner_for_low_level_check));
+        let mut kept = 0;
+        for row in &outer_seq.rows {
+            if crate::expr::eval_ebv(&exists_expr, row, &outer_seq.schema, &mut child_ctx)
+                .expect("ebv")
+                == Some(true)
+            {
+                kept += 1;
+            }
+        }
+        assert_eq!(kept, 2);
+        assert_eq!(
+            child_ctx.exists_inner_cache.len(),
+            1,
+            "the inner pattern AND its probe index were built exactly once despite \
+             three outer rows — the per-row index rebuild is gone"
+        );
     }
 
     #[test]
@@ -721,5 +855,353 @@ mod tests {
             schema_fingerprint(&s(&["x", "y"])),
             schema_fingerprint(&s(&["x", "y"]))
         );
+    }
+
+    /// Determinism smoke test (Task 4): a query exercising BGP, JOIN, a
+    /// non-filtered OPTIONAL, and MINUS evaluated once with the parallel path
+    /// FORCED (via [`crate::parallel::force_parallel_for_test`]) and once with
+    /// the sequential path FORCED must produce byte-identical `Vec<Solution>`
+    /// rows (schema and row order both). This is a narrower, faster-running
+    /// tripwire than the full Task 7 gate — it catches an ordering regression
+    /// in any of the four read-only nodes wired in this task immediately,
+    /// something the conformance suite's multiset comparisons would not.
+    #[test]
+    fn parallel_and_sequential_paths_agree_bit_for_bit() {
+        use purrdf_sparql_algebra::{
+            NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        };
+
+        // :a :knows :b . :b :knows :c .
+        // :a :likes :cake . :b :likes :tea . :c :likes :juice .
+        // :tea :extra :hot .
+        // :a :bad :x .
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri("http://ex/knows");
+        let likes = b.intern_iri("http://ex/likes");
+        let extra = b.intern_iri("http://ex/extra");
+        let bad = b.intern_iri("http://ex/bad");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
+        let cake = b.intern_iri("http://ex/cake");
+        let tea = b.intern_iri("http://ex/tea");
+        let juice = b.intern_iri("http://ex/juice");
+        let hot = b.intern_iri("http://ex/hot");
+        let x = b.intern_iri("http://ex/x");
+        b.push_quad(a, knows, bb, None);
+        b.push_quad(bb, knows, c, None);
+        b.push_quad(a, likes, cake, None);
+        b.push_quad(bb, likes, tea, None);
+        b.push_quad(c, likes, juice, None);
+        b.push_quad(tea, extra, hot, None);
+        b.push_quad(a, bad, x, None);
+        let ds = b.freeze().expect("freeze");
+
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let bgp = |s, p, o| GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: s,
+                predicate: p,
+                object: o,
+            }],
+        };
+
+        // { ?x :knows ?y } JOIN { ?y :likes ?z } OPTIONAL { ?z :extra ?w } MINUS { ?x :bad ?v }
+        let knows_bgp = bgp(vp("x"), pred("http://ex/knows"), vp("y"));
+        let likes_bgp = bgp(vp("y"), pred("http://ex/likes"), vp("z"));
+        let join = GraphPattern::Join {
+            left: Box::new(knows_bgp),
+            right: Box::new(likes_bgp),
+        };
+        let extra_bgp = bgp(vp("z"), pred("http://ex/extra"), vp("w"));
+        let optional = GraphPattern::LeftJoin {
+            left: Box::new(join),
+            right: Box::new(extra_bgp),
+            expression: None,
+        };
+        let bad_bgp = bgp(vp("x"), pred("http://ex/bad"), vp("v"));
+        let pattern = GraphPattern::Minus {
+            left: Box::new(optional),
+            right: Box::new(bad_bgp),
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&pattern, &mut ctx).expect("eval");
+            (seq.schema.vars().to_vec(), seq.rows)
+        };
+
+        let (schema_par, rows_par) = run(true);
+        let (schema_seq, rows_seq) = run(false);
+
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential paths must produce byte-identical row order"
+        );
+        // Sanity: the MINUS removes the x=a row (it has a :bad edge); only the
+        // x=b/y=c/z=juice row (with ?w unbound, no :extra match) survives.
+        assert_eq!(rows_seq.len(), 1);
+    }
+
+    /// Determinism smoke test (Task 5): `FILTER(REGEX(...) && ?a > k)` — the
+    /// `b_scan_filter` bench shape — evaluated once with the parallel path FORCED
+    /// and once with the sequential path FORCED must produce byte-identical rows.
+    #[test]
+    fn filter_regex_and_numeric_forced_parallel_and_sequential_agree() {
+        use purrdf_core::RdfLiteral;
+        use purrdf_sparql_algebra::{
+            Expression, Function, Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern,
+            Variable,
+        };
+
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+        let mut b = RdfDatasetBuilder::new();
+        let name = b.intern_iri("http://ex/name");
+        let age = b.intern_iri("http://ex/age");
+        let p1 = b.intern_iri("http://ex/p1");
+        let p2 = b.intern_iri("http://ex/p2");
+        let p3 = b.intern_iri("http://ex/p3");
+        let name1 = b.intern_literal(RdfLiteral::simple("Name1002"));
+        let name2 = b.intern_literal(RdfLiteral::simple("Name1003"));
+        let name3 = b.intern_literal(RdfLiteral::simple("Name2002"));
+        let typed_int = |v: &str| RdfLiteral {
+            lexical_form: v.to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        };
+        let age1 = b.intern_literal(typed_int("45"));
+        let age2 = b.intern_literal(typed_int("30"));
+        let age3 = b.intern_literal(typed_int("50"));
+        b.push_quad(p1, name, name1, None);
+        b.push_quad(p1, age, age1, None);
+        b.push_quad(p2, name, name2, None);
+        b.push_quad(p2, age, age2, None);
+        b.push_quad(p3, name, name3, None);
+        b.push_quad(p3, age, age3, None);
+        let ds = b.freeze().expect("freeze");
+
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let bgp = |s, p, o| GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: s,
+                predicate: p,
+                object: o,
+            }],
+        };
+
+        let name_bgp = bgp(vp("x"), pred("http://ex/name"), vp("n"));
+        let age_bgp = bgp(vp("x"), pred("http://ex/age"), vp("a"));
+        let join = GraphPattern::Join {
+            left: Box::new(name_bgp),
+            right: Box::new(age_bgp),
+        };
+
+        let regex = Expression::FunctionCall(
+            Function::Regex,
+            vec![
+                Expression::Variable(Variable::new("n")),
+                Expression::Literal(Literal::new_simple("^Name1[0-9][0-9]2$")),
+            ],
+        );
+        let numeric = Expression::Greater(
+            Box::new(Expression::Variable(Variable::new("a"))),
+            Box::new(Expression::Literal(Literal::new_typed(
+                "40",
+                NamedNode::new_unchecked(XINT),
+            ))),
+        );
+        let cond = Expression::And(Box::new(regex), Box::new(numeric));
+        let pattern = GraphPattern::Filter {
+            expr: cond,
+            inner: Box::new(join),
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&pattern, &mut ctx).expect("eval");
+            (seq.schema.vars().to_vec(), seq.rows)
+        };
+
+        let (schema_par, rows_par) = run(true);
+        let (schema_seq, rows_seq) = run(false);
+
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential FILTER paths must produce byte-identical row order"
+        );
+        // Only p1 (Name1002, age 45) satisfies both the regex and the numeric bound.
+        assert_eq!(rows_seq.len(), 1);
+    }
+
+    /// Determinism smoke test (Task 5): `FILTER EXISTS { ... }` evaluated once with
+    /// the parallel FILTER path FORCED and once with the sequential path FORCED
+    /// must produce byte-identical rows. `EXISTS` reaches no stateful builtin, so
+    /// [`crate::parallel::is_parallel_safe`] must accept it.
+    #[test]
+    fn filter_exists_forced_parallel_and_sequential_agree() {
+        use purrdf_sparql_algebra::{
+            Expression, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        };
+
+        // :a, :b carry a :stereo; :c does not.
+        let mut b = RdfDatasetBuilder::new();
+        let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+        let cls = b.intern_iri("http://ex/Class");
+        let stereo = b.intern_iri("http://ex/stereo");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
+        let s = b.intern_iri("http://ex/S");
+        b.push_quad(a, ty, cls, None);
+        b.push_quad(bb, ty, cls, None);
+        b.push_quad(c, ty, cls, None);
+        b.push_quad(a, stereo, s, None);
+        b.push_quad(bb, stereo, s, None);
+        let ds = b.freeze().expect("freeze");
+
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let bgp = |s, p, o| GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: s,
+                predicate: p,
+                object: o,
+            }],
+        };
+
+        let outer = bgp(
+            vp("class"),
+            pred("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"),
+            vp("ctype"),
+        );
+        let inner = bgp(vp("class"), pred("http://ex/stereo"), vp("st"));
+        let pattern = GraphPattern::Filter {
+            expr: Expression::Exists(Box::new(inner)),
+            inner: Box::new(outer),
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&pattern, &mut ctx).expect("eval");
+            (seq.schema.vars().to_vec(), seq.rows)
+        };
+
+        let (schema_par, rows_par) = run(true);
+        let (schema_seq, rows_seq) = run(false);
+
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential FILTER EXISTS paths must produce byte-identical row order"
+        );
+        // EXISTS keeps the two subjects with a :stereo (a, b); drops c.
+        assert_eq!(rows_seq.len(), 2);
+    }
+
+    /// Determinism smoke test (Task 5): `OPTIONAL { ... FILTER ... }` (the inline
+    /// `LeftJoin` filter, [`crate::binop`]'s `left_outer_join_filtered`) evaluated
+    /// once with the parallel path FORCED and once with the sequential path FORCED
+    /// must produce byte-identical rows, including left-alone padded rows for a
+    /// left solution whose only compatible right row fails the filter.
+    #[test]
+    fn optional_filter_forced_parallel_and_sequential_agree() {
+        use purrdf_sparql_algebra::{
+            Expression, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        };
+
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+        // :a :knows :b (age 50) — passes the OPTIONAL filter (age > 40).
+        // :a :knows :c (age 10) — right row exists but fails the filter ⇒ left-alone.
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri("http://ex/knows");
+        let age = b.intern_iri("http://ex/age");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
+        let age50 = b.intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: "50".to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        });
+        let age10 = b.intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: "10".to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        });
+        b.push_quad(a, knows, bb, None);
+        b.push_quad(a, knows, c, None);
+        b.push_quad(bb, age, age50, None);
+        b.push_quad(c, age, age10, None);
+        let ds = b.freeze().expect("freeze");
+
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let bgp = |s, p, o| GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: s,
+                predicate: p,
+                object: o,
+            }],
+        };
+
+        // left = { ?x :knows ?y }: the two rows (x=a,y=b) and (x=a,y=c) exercise
+        // both "filter passes" (b, age 50) and "compatible right row exists but
+        // fails the filter ⇒ left-alone" (c, age 10) in one shape.
+        let left = bgp(vp("x"), pred("http://ex/knows"), vp("y"));
+        let right = bgp(vp("y"), pred("http://ex/age"), vp("a"));
+        let cond = Expression::Greater(
+            Box::new(Expression::Variable(Variable::new("a"))),
+            Box::new(Expression::Literal(
+                purrdf_sparql_algebra::Literal::new_typed("40", NamedNode::new_unchecked(XINT)),
+            )),
+        );
+        let pattern = GraphPattern::LeftJoin {
+            left: Box::new(left),
+            right: Box::new(right),
+            expression: Some(cond),
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&pattern, &mut ctx).expect("eval");
+            (seq.schema.vars().to_vec(), seq.rows)
+        };
+
+        let (schema_par, rows_par) = run(true);
+        let (schema_seq, rows_seq) = run(false);
+
+        assert_eq!(
+            schema_par, schema_seq,
+            "schema must match regardless of path"
+        );
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential OPTIONAL-FILTER paths must produce byte-identical row order"
+        );
+        // x=a/y=b/age=50 passes the filter; x=a/y=c fails it and falls back to a
+        // left-alone row (y/a unbound) — two rows total.
+        assert_eq!(rows_seq.len(), 2);
     }
 }

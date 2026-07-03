@@ -56,7 +56,7 @@ fn source(n: usize) -> LocalRemoteQuerySource {
     src
 }
 
-fn run(ds: &Arc<RdfDataset>, src: &dyn RemoteQuerySource, query: &str) -> usize {
+fn run(ds: &Arc<RdfDataset>, src: &(dyn RemoteQuerySource + Sync), query: &str) -> usize {
     let parsed = SparqlParser::new().parse_query(query).expect("parse");
     let mut ctx = EvalCtx::new(ds).with_remote(src);
     match evaluate_query(&parsed, &mut ctx).expect("eval") {

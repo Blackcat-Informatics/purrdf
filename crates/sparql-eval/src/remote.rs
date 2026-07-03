@@ -29,7 +29,6 @@
 //! identity (one empty row) so the surrounding query proceeds unchanged.
 
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, TermValue};
@@ -146,7 +145,7 @@ fn silent_or_err(silent: bool, msg: impl FnOnce() -> String) -> Result<SolutionS
 /// so a swallowed `SERVICE SILENT` leaves the surrounding query unchanged.
 fn identity_seq() -> SolutionSeq {
     SolutionSeq {
-        schema: Rc::new(VarSchema::new()),
+        schema: Arc::new(VarSchema::new()),
         rows: vec![vec![]],
     }
 }
@@ -156,7 +155,7 @@ fn identity_seq() -> SolutionSeq {
 /// but carries `TermValue` directly, so remote blank nodes survive — `GroundTerm`
 /// has no blank-node variant.)
 fn ingest(resolved: ResolvedBindings, ctx: &mut EvalCtx<'_>) -> SolutionSeq {
-    let schema = Rc::new(VarSchema::from_vars(resolved.variables));
+    let schema = Arc::new(VarSchema::from_vars(resolved.variables));
     let width = schema.len();
     let mut rows = Vec::with_capacity(resolved.rows.len());
     for binding in resolved.rows {
@@ -256,7 +255,7 @@ mod tests {
 
     fn run_with_source(
         ds: &Arc<RdfDataset>,
-        source: &dyn RemoteQuerySource,
+        source: &(dyn RemoteQuerySource + Sync),
         query: &str,
     ) -> Result<SparqlResult, EvalError> {
         use crate::eval::evaluate_query;

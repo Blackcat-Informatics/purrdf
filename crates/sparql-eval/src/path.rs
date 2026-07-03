@@ -41,6 +41,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, TermId, TermRef, TermValue};
 use purrdf_sparql_algebra::{NamedNode, PropertyPathExpression, TermPattern, Variable};
@@ -320,7 +321,7 @@ pub(crate) fn eval_path(
     }
 
     Ok(SolutionSeq {
-        schema: Rc::new(schema),
+        schema: Arc::new(schema),
         rows,
     })
 }
@@ -785,7 +786,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use purrdf_core::RdfDatasetBuilder;
     use purrdf_sparql_algebra::NamedNode;
-    use std::sync::Arc;
 
     const EX: &str = "http://ex/";
 

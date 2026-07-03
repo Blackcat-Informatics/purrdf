@@ -36,6 +36,61 @@ impl RdfLookaside {
             .iter()
             .filter(move |resource| resource.kind == kind)
     }
+
+    /// Every decodable target across all `suppress` directives (§11), flattened.
+    ///
+    /// A target is a `{"kind": ..., "id": ...}` map; this is a linear scan over
+    /// `suppressions[*].targets` that decodes each one into a typed
+    /// [`SuppressionTarget`]. A target whose `"kind"` is not one of the
+    /// integer-id-addressed kinds below, whose `"id"` is missing/not an
+    /// integer, or whose `"id"` is negative or does not fit `usize` is skipped
+    /// — that is filtering out an undecodable target, not swallowing an error.
+    ///
+    /// `frame`- and `blob`-kind targets also exist in the underlying model
+    /// (GTS §11) but are addressed by frame id bytes / content digest rather
+    /// than an integer id, so they have no [`SuppressionTargetKind`] here and
+    /// are always skipped by this decoder.
+    ///
+    /// The `by` field is intentionally never read here: it is a C0.8 display
+    /// hint (an actor label), not an id to resolve.
+    pub fn suppression_targets(&self) -> impl Iterator<Item = SuppressionTarget> + '_ {
+        self.suppressions
+            .iter()
+            .flat_map(|suppression| suppression.targets.iter())
+            .filter_map(|target| {
+                let RdfMetadataValue::Map(entries) = target else {
+                    return None;
+                };
+                let kind = match entries.get("kind")?.as_text()? {
+                    "term" => SuppressionTargetKind::Term,
+                    "quad" => SuppressionTargetKind::Quad,
+                    "reifier" => SuppressionTargetKind::Reifier,
+                    _ => return None,
+                };
+                let RdfMetadataValue::Integer(raw) = entries.get("id")? else {
+                    return None;
+                };
+                let id = usize::try_from(*raw).ok()?;
+                Some(SuppressionTarget { kind, id })
+            })
+    }
+}
+
+/// A decoded [`RdfSuppressionRecord`] target: `{"kind": ..., "id": n}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SuppressionTarget {
+    pub kind: SuppressionTargetKind,
+    pub id: usize,
+}
+
+/// The integer-id-addressed suppression target kinds. `frame` and `blob`
+/// targets exist in the underlying model but are addressed by frame id bytes
+/// / content digest rather than an integer id, so they have no variant here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuppressionTargetKind {
+    Term,
+    Quad,
+    Reifier,
 }
 
 /// Known companion/index kinds. Unknown domains remain representable.
@@ -322,5 +377,48 @@ mod tests {
         let reasoning: Vec<_> = la.resources_of_kind(RdfLookasideKind::Reasoning).collect();
         assert_eq!(reasoning.len(), 1);
         assert_eq!(reasoning[0].name.as_deref(), Some("closure"));
+    }
+
+    fn target_map(kind: &str, id: RdfMetadataValue) -> RdfMetadataValue {
+        RdfMetadataValue::Map(BTreeMap::from([
+            ("kind".to_owned(), RdfMetadataValue::Text(kind.to_owned())),
+            ("id".to_owned(), id),
+        ]))
+    }
+
+    #[test]
+    fn suppression_targets_decodes_known_kinds_and_skips_the_rest() {
+        let mut la = RdfLookaside::default();
+        la.suppressions.push(RdfSuppressionRecord {
+            reason: Some("test".to_owned()),
+            by: Some("agent:1".to_owned()),
+            targets: vec![
+                target_map("term", RdfMetadataValue::Integer(3)),
+                target_map("quad", RdfMetadataValue::Integer(7)),
+                // Unknown kind: skipped.
+                target_map("frame", RdfMetadataValue::Integer(9)),
+                // Negative id: skipped.
+                target_map("reifier", RdfMetadataValue::Integer(-1)),
+                // Overflowing id: skipped.
+                target_map("reifier", RdfMetadataValue::Integer(i128::MAX)),
+                // Not a map at all: skipped.
+                RdfMetadataValue::Text("not-a-target".to_owned()),
+            ],
+        });
+
+        let targets: Vec<_> = la.suppression_targets().collect();
+        assert_eq!(
+            targets,
+            vec![
+                SuppressionTarget {
+                    kind: SuppressionTargetKind::Term,
+                    id: 3,
+                },
+                SuppressionTarget {
+                    kind: SuppressionTargetKind::Quad,
+                    id: 7,
+                },
+            ]
+        );
     }
 }

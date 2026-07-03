@@ -87,7 +87,8 @@ pub fn validate_shape_with<G: ShaclDataGraph>(
     // --- sh:closed (node-shape-level; needs the sibling property shapes) ---
     // `eval_closed` stamps each result's box roles itself — the source roles plus
     // the OFFENDING PREDICATE's path roles — so closed-world violations carry the
-    // same predicate attribution that property-shape results do (#700 Gap B).
+    // same predicate attribution that property-shape results do — violations
+    // must not drop their predicate role.
     for constraint in &shape.constraints {
         if let Constraint::Closed { ignored } = constraint {
             results.extend(eval_closed(store, focus, shape, ignored, box_role_vocab));
@@ -1412,31 +1413,6 @@ fn is_xsd_decimal_lexical(s: &str) -> bool {
     seen_digit
 }
 
-/// `xsd:double`/`xsd:float` lexical space: the three special values exactly
-/// (INF, -INF, NaN — case-sensitive per XSD), or a mantissa (decimal lexical)
-/// with an optional [eE][+-]?digits exponent.
-fn is_xsd_double_lexical(s: &str) -> bool {
-    let s = s.trim();
-    if matches!(s, "INF" | "-INF" | "NaN") {
-        return true;
-    }
-    // Split optional exponent.
-    let (mantissa, exponent) = match s.split_once(['e', 'E']) {
-        Some((m, e)) => (m, Some(e)),
-        None => (s, None),
-    };
-    if !is_xsd_decimal_lexical(mantissa) {
-        return false;
-    }
-    match exponent {
-        None => true,
-        Some(exp) => {
-            let digits = exp.strip_prefix(['+', '-']).unwrap_or(exp);
-            !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
-        }
-    }
-}
-
 /// Check that a `Term` satisfies `sh:datatype` requirements.
 ///
 /// - Must be a `Literal` whose datatype IRI matches `dt_iri` EXACTLY (spec
@@ -1448,7 +1424,7 @@ fn is_xsd_double_lexical(s: &str) -> bool {
 ///   xsd:double/float, xsd:boolean), and for a DERIVED integer type validates
 ///   the VALUE space: the native codec keeps `"-2"^^xsd:nonNegativeInteger`
 ///   faithfully typed, but the value is outside the derived range and must
-///   violate (see #598 / corpus case 32).
+///   violate.
 fn check_datatype(value: &Term, dt_iri: &NamedNode) -> bool {
     let Term::Literal(lit) = value else {
         return false;
@@ -1496,8 +1472,12 @@ fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
     match dt {
         "http://www.w3.org/2001/XMLSchema#integer" => is_xsd_integer_lexical(lex),
         "http://www.w3.org/2001/XMLSchema#decimal" => is_xsd_decimal_lexical(lex),
-        "http://www.w3.org/2001/XMLSchema#double" => is_xsd_double_lexical(lex),
-        "http://www.w3.org/2001/XMLSchema#float" => is_xsd_double_lexical(lex),
+        "http://www.w3.org/2001/XMLSchema#double" => {
+            purrdf_xsd::parse_double_xsd10(lex.trim()).is_ok()
+        }
+        "http://www.w3.org/2001/XMLSchema#float" => {
+            purrdf_xsd::parse_float_xsd10(lex.trim()).is_ok()
+        }
         "http://www.w3.org/2001/XMLSchema#boolean" => {
             matches!(lex.trim(), "true" | "false" | "1" | "0")
         }
@@ -1509,7 +1489,6 @@ fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
 /// shape's required XSD *derived* integer type, by validating the lexical value
 /// against the derived type's value space. Every XSD integer-derived type
 /// canonicalizes to `xsd:integer` in oxigraph; only that base is considered here.
-/// See #598.
 fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> bool {
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
     if stored_dt != XSD_INTEGER || !is_xsd_integer_lexical(lex) {
@@ -1610,7 +1589,7 @@ fn numeric_value(term: &Term) -> Option<f64> {
     // violated every `sh:minInclusive`/`sh:maxInclusive` facet. (The omission was
     // masked while data round-tripped through oxigraph's NT serializer, which
     // value-space-normalized such literals to `xsd:integer`; the oxigraph-free
-    // path, #906, is the faithful one and exposes the gap.)
+    // path is the faithful one and exposes the gap.)
     let local = lit.datatype_str().strip_prefix(XSD_NS)?;
     if matches!(
         local,
@@ -1861,7 +1840,7 @@ mod tests {
 
     #[test]
     fn numeric_value_covers_all_derived_integer_datatypes() {
-        // Regression (#906): `numeric_value` must read EVERY xsd numeric-derived
+        // `numeric_value` must read EVERY xsd numeric-derived
         // datatype, not just the primitives. The omission of the derived/unsigned
         // integers (e.g. xsd:nonNegativeInteger) made a faithful
         // `"1"^^xsd:nonNegativeInteger` value read as non-numeric and spuriously
@@ -2223,7 +2202,7 @@ mod tests {
     fn class_pass_asserted_subclass() {
         // ex:b is typed ex:SubFoo and the data ASSERTS ex:SubFoo rdfs:subClassOf
         // ex:Foo, so b is a SHACL instance of ex:Foo (SHACL §4.2.5) and the
-        // sh:class ex:Foo constraint conforms — matching pySHACL. See #599.
+        // sh:class ex:Foo constraint conforms — matching pySHACL.
         let store = load_store(
             "@prefix ex: <http://example.org/ns#> . @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> . @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> . ex:a ex:p ex:b . ex:b rdf:type ex:SubFoo . ex:SubFoo rdfs:subClassOf ex:Foo .",
         );
@@ -2310,7 +2289,7 @@ mod tests {
         assert!(component_iri(&results)[0].contains("Datatype"));
     }
 
-    // ── datatype derived-integer (oxigraph canonicalization, #598) ──────────────
+    // ── datatype derived-integer (oxigraph canonicalization) ────────────────────
 
     #[test]
     fn datatype_derived_nonneg_integer_pass() {
@@ -3008,6 +2987,52 @@ mod tests {
     }
 
     #[test]
+    fn xsd_float_accepts_inf() {
+        // "INF"^^xsd:float is a valid XSD special value.
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}float"));
+        let value = Term::Literal(Literal::new_typed_literal("INF", dt_iri.clone()));
+        assert!(
+            check_datatype(&value, &dt_iri),
+            "INF should conform for xsd:float"
+        );
+    }
+
+    #[test]
+    fn xsd_float_rejects_plus_inf() {
+        // "+INF" is NOT in the xsd:double/float lexical space (only INF, -INF, NaN).
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}float"));
+        let value = Term::Literal(Literal::new_typed_literal("+INF", dt_iri.clone()));
+        assert!(
+            !check_datatype(&value, &dt_iri),
+            "+INF must not conform for xsd:float"
+        );
+    }
+
+    #[test]
+    fn xsd_1_0_double_lexical_space_is_pinned() {
+        // Characterizes the XSD-1.0 double/float accept-set, exactly: the
+        // three specials INF/-INF/NaN (not the XSD 1.1 "+INF"), a decimal
+        // mantissa with an optional [eE][+-]?digits exponent, and the
+        // SHACL-legacy whitespace leniency (the arm trims before
+        // validating). This is not a differential test against an external
+        // oracle — it directly pins the accept-set now owned by
+        // `purrdf_xsd::parse_double_xsd10`, which SHACL's `xsd_lexical_valid`
+        // relies on as defense-in-depth for float/double literals.
+        let ok = |x: &str| purrdf_xsd::parse_double_xsd10(x.trim()).is_ok();
+        for good in [
+            "INF", "-INF", "NaN", "1", "1.", ".5", "+1.5", "1e10", "1E+5", "1e400", " 1.5 ",
+        ] {
+            assert!(ok(good), "{good:?} is in the XSD-1.0 double lexical space");
+        }
+        for bad in ["+INF", "inf", "Infinity", "1e", "1.5.5", "", "abc"] {
+            assert!(
+                !ok(bad),
+                "{bad:?} is NOT in the XSD-1.0 double lexical space"
+            );
+        }
+    }
+
+    #[test]
     fn xsd_float_accepts_scientific() {
         // "1e3"^^xsd:float is valid — same lexical space as double.
         let dt_iri = NamedNode::new_unchecked(format!("{XSD}float"));
@@ -3039,7 +3064,7 @@ mod tests {
         assert!(validate_shape(&store, &literal_focus, &shape).is_empty());
     }
 
-    // ── #700: maxLength ────────────────────────────────────────────────────────
+    // ── maxLength ─────────────────────────────────────────────────────────────
 
     #[test]
     fn max_length_pass() {
@@ -3058,7 +3083,7 @@ mod tests {
         assert!(component_iri(&results)[0].contains("MaxLength"));
     }
 
-    // ── #700: languageIn ───────────────────────────────────────────────────────
+    // ── languageIn ────────────────────────────────────────────────────────────
 
     #[test]
     fn language_in_pass_prefix_match() {
@@ -3093,7 +3118,7 @@ mod tests {
         assert!(component_iri(&results)[0].contains("LanguageIn"));
     }
 
-    // ── #700: not ──────────────────────────────────────────────────────────────
+    // ── not ───────────────────────────────────────────────────────────────────
 
     #[test]
     fn not_pass_when_inner_violated() {
@@ -3129,7 +3154,7 @@ mod tests {
         assert!(component_iri(&results)[0].contains("NotConstraintComponent"));
     }
 
-    // ── #700: closed ───────────────────────────────────────────────────────────
+    // ── closed ────────────────────────────────────────────────────────────────
 
     fn closed_shape(ignored: Vec<NamedNode>, path_iris: &[&str]) -> Shape {
         use crate::shapes::Path;
@@ -3214,7 +3239,7 @@ mod tests {
     fn closed_violation_carries_predicate_box_roles() {
         // The offending (undeclared) predicate ex:age declares a graph-box role;
         // the closed-world result must carry it as PATH attribution — closed
-        // violations previously dropped predicate roles (#700 Gap B).
+        // violations must not drop predicate roles.
         let vocab = meta_vocab();
         let store = load_store(&format!(
             "@prefix ex: <{EX}> .\n\

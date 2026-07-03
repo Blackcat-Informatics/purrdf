@@ -72,3 +72,12 @@ harness = false
 # `make bench` lane only — excluded from `make check`.
 name = "mutable"
 harness = false
+
+[[bench]]
+# Intern-time content-id overhead harness: three groups measuring
+# ordinary-IRI interning with content addressing inactive vs active (prefix-miss
+# cost) and genuine `blake3:<64hex>` content-id interning (prefix-hit + decode +
+# side-table insert). Report-only — no timing/speedup assertions. `make bench`
+# lane only — excluded from `make check`.
+name = "intern_content_id"
+harness = false

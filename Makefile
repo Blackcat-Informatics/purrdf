@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check test bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test \
+.PHONY: help metadata fmt check test bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
 	capi-build capi-header capi-check capi-install
 
 help: ## Show this help.
@@ -72,7 +72,16 @@ wasm: ## Prove the release crates build for wasm32-unknown-unknown (SKIP locally
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.
-	cargo build -p purrdf-wasm --target wasm32-unknown-unknown --release --locked
+	@# +simd128 is a PLATFORM target feature (not a Cargo feature): it turns on
+	@# the wasm SIMD instruction set so memchr's byte scan (the parser hot path)
+	@# and blake3's simd128 backend run vectorized instead of scalar/SWAR. It is
+	@# scoped to this npm-artifact build only, so `make wasm` stays baseline-clean.
+	@# This raises the artifact's browser baseline to engines with wasm SIMD
+	@# (all major browsers since ~2021; Node >= 18, the package's engine floor).
+	@# Append rather than overwrite so any env / .cargo/config.toml RUSTFLAGS
+	@# (sccache, linker args, extra target features) survive alongside +simd128.
+	RUSTFLAGS="$${RUSTFLAGS} -C target-feature=+simd128" \
+		cargo build -p purrdf-wasm --target wasm32-unknown-unknown --release --locked
 	@# wasm-bindgen-cli must match the crate's exact wasm-bindgen pin (see [workspace.dependencies]).
 	PATH="$$HOME/.cargo/bin:$$PATH" wasm-bindgen \
 		$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm \
@@ -80,16 +89,29 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	@# wasm-opt -Oz is a REQUIRED build step (roughly halves the artifact).
 	@# The --enable flags cover the post-MVP features rustc emits by default
 	@# for wasm32-unknown-unknown; older binaryen builds (e.g. Ubuntu's apt
-	@# package) reject the module without them.
+	@# package) reject the module without them. --enable-simd is REQUIRED for the
+	@# +simd128 build above (binaryen rejects the SIMD-carrying module without it).
 	@command -v wasm-opt >/dev/null 2>&1 || { echo "ERROR: wasm-opt (binaryen) not found — it is a REQUIRED wasm build dependency"; exit 1; }
 	wasm-opt -Oz \
 		--enable-bulk-memory --enable-nontrapping-float-to-int \
-		--enable-sign-ext --enable-mutable-globals \
+		--enable-sign-ext --enable-mutable-globals --enable-simd \
 		-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+	@# Durable proof that +simd128 actually produced SIMD codegen: a green
+	@# wasm-pkg-test round-trip only proves the module runs correctly, not that
+	@# it is vectorized — a memchr/RUSTFLAGS/dependency regression could ship a
+	@# silently scalar artifact with every test still passing. Disassemble the
+	@# optimized module and hard-fail if no SIMD opcodes are present.
+	@command -v wasm-dis >/dev/null 2>&1 || { echo "ERROR: wasm-dis (binaryen) not found — it is a REQUIRED wasm build dependency"; exit 1; }
+	@count=$$(wasm-dis crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm | grep -cE 'v128|i8x16|i16x8|i32x4|i64x2|f32x4|f64x2' || true); \
+		[ "$$count" -gt 0 ] || { echo "ERROR: wasm-pkg produced NO SIMD opcodes (+simd128 regressed — refusing to ship a scalar artifact)"; exit 1; }; \
+		echo "OK: verified $$count SIMD opcode(s) present in the optimized wasm artifact"
 	@echo "OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)"
 
 wasm-pkg-test: wasm-pkg ## Build the wasm package and run the Node real-execution round-trip suite.
 	cd crates/rdf-wasm/js && node --test tests/*.test.mjs
+
+wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput benchmark (report-only; never a gate).
+	cd crates/rdf-wasm/js && node bench/parse.bench.mjs
 
 capi-build: ## Build libpurrdf (cdylib + staticlib + header + pkg-config) via cargo-c.
 	cargo capi build -p purrdf-capi

@@ -61,7 +61,14 @@ jobs:
           cargo install wasm-bindgen-cli --version "$PIN" --locked
 
       - name: Install binaryen (wasm-opt)
-        run: sudo apt-get update && sudo apt-get install -y binaryen
+        # The wasm-pkg build emits +simd128; wasm-opt must accept --enable-simd
+        # or it would silently fall back to (or reject) a non-SIMD module. Fail
+        # fast here rather than shipping a scalar artifact.
+        run: |
+          sudo apt-get update && sudo apt-get install -y binaryen
+          wasm-opt --version
+          printf '(module)\n' | wasm-opt --enable-simd -o /dev/null - \
+            || { echo "FAIL: installed wasm-opt lacks --enable-simd support"; exit 1; }
 
       - name: Build the wasm package
         run: make wasm-pkg
