@@ -38,7 +38,7 @@ Latest measured matrix (`make conformance`, all GREEN, exit 0):
 | IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 19 | 0 | 0 |
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 shards | 0 | 0 |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 250 | 0 | 0 |
-| SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 614 | 36 | 0 |
+| SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 615 | 35 | 0 |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 114 | 6 | 0 |
 | SHACL (first-party corpus) | first-party frozen reports | 48 | 0 | 0 |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1,051 | 54 | 0 |
@@ -64,8 +64,8 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SHACL | W3C data-shapes, `core/` + `sparql/` | **114 / 120** · 6 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **48 / 48** frozen expected reports |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
-| SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **614** pass · 36 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 36 non-passes are 31 spec-inherent entailment-regime cases + 5 upstream-errata fixtures) |
-| Entailment (RDFS / OWL-RL) | native `purrdf-entail` forward-materialization reasoner | RDFS + OWL-RL closure; **39/70** W3C entailment cases (OWL-Direct/DL/RIF/D ledgered) |
+| SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **615** pass · 35 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 35 non-passes are 30 spec-inherent entailment-regime cases + 5 upstream-errata fixtures) |
+| Entailment (RDFS / OWL-RL) | native `purrdf-entail` forward-materialization reasoner | RDFS + OWL-RL closure; **40/70** W3C entailment cases (OWL-Direct/DL/RIF/D ledgered) |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **63** pass · 23 strict-xfail (ledgered) |
 | purrdf.compat parity | first-party differential vs rdflib 7.6 | **325** pass · 7 strict-xfail (ledgered) |
@@ -154,7 +154,7 @@ issue, so the matrix stays honest:
   grouping, EXISTS-over-GRAPH-var, and the SPARQL 1.2 triple-term / reifier /
   annotation surface (including graph-scoped reifiers) all pass. **All 7 W3C
   `service` federation cases pass** (via the lateral SERVICE seam). The only
-  remaining non-passes are the **36 ledgered xfails**: **31 spec-inherent
+  remaining non-passes are the **35 ledgered xfails**: **30 spec-inherent
   entailment-regime cases** (OWL-Direct/DL, RIF-rule, and RDF-axiomatic-triple
   entailment that a forward-materialization reasoner cannot reach) and **5
   upstream-errata fixtures** (three `cast-decimal`/`-double`/`-float` cases with

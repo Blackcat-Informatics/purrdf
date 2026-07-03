@@ -74,10 +74,10 @@ graph edge cases; blank-node scoping across separate INSERT operations).
 
 The `entailment/` group's `sd:entailmentRegime` is read by the harness, which
 materializes the dataset's closure via the native `purrdf-entail` reasoner
-(RDFS + OWL-RL-shaped) before the query runs. **39 of 70 cases pass** — every
-`rdf*`/`rdfs*`/`lang`/`plainLit`/`bind*` case and many OWL cases. The 31
+(RDFS + OWL-RL-shaped) before the query runs. **40 of 70 cases pass** — every
+`rdf*`/`rdfs*`/`lang`/`plainLit`/`bind*` case and many OWL cases. The 30
 residuals are ledgered `Entailment`: OWL-Direct-only (`parent*`, `simple*`) and
-OWL-DL query answering (`sparqldl-*`, `paper-sparqldl-Q*`, `owlds02`) — full DL
+OWL-DL query answering (`sparqldl-*`, `paper-sparqldl-Q*`) — full DL
 is not a materialize-and-match affair; RIF-rule entailment (`rif*`); and RDF
 axiomatic-triple entailment under the bare RDF regime (`rdf01`). These are
 spec-inherent boundaries of a forward-materialization reasoner, not silent skips.

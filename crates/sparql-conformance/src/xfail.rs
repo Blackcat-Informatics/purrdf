@@ -165,7 +165,7 @@ pub const XFAIL: &[Xfail] = &[
     // pass. The residual failures require regimes a forward-materialization
     // reasoner cannot reach — spec-inherent boundaries, each ledgered `Entailment`:
     //   - OWL-Direct-only tests (`parent*`, `simple*`) and OWL-DL query answering
-    //     (`sparqldl-*`, `paper-sparqldl-Q*`, `owlds02`) — full DL is not a
+    //     (`sparqldl-*`, `paper-sparqldl-Q*`) — full DL is not a
     //     materialize-and-match affair. NB: despite their name, `simple*` are NOT
     //     simple-entailment-regime tests — the manifest declares each with
     //     `sd:entailmentRegime ent:OWL-Direct` and `sd:EntailmentProfile pr:DL`
@@ -277,10 +277,6 @@ pub const XFAIL: &[Xfail] = &[
     },
     Xfail {
         iri_suffix: "entailment/manifest#paper-sparqldl-Q3",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#owlds02",
         reason: XfailReason::Entailment,
     },
     Xfail {

@@ -1890,4 +1890,39 @@ mod tests {
             Node::Iri("https://example.org/vocab/report/shacl/sarif".to_owned())
         );
     }
+
+    /// Regression for the lexer trailing-dot bug: `_:y.` at end of statement must
+    /// tokenize as blank-node label `y` followed by a `Dot` terminator (not label
+    /// `y.` with no terminator). Proves the fix end-to-end by parsing a document
+    /// where the same blank node appears once immediately followed by `.` and once
+    /// followed by whitespace, and asserting both statements resolve to the SAME
+    /// blank-node identity.
+    #[test]
+    fn blank_node_immediately_followed_by_dot_is_same_node_as_later_reference() {
+        let text = "@prefix : <https://example.org/> .\n\
+                    :x :p _:y.\n\
+                    _:y :q :z .\n";
+        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        assert_eq!(statements.len(), 2, "must yield exactly two triples");
+
+        let first = &statements[0];
+        assert_eq!(first[0], Node::Iri("https://example.org/x".to_owned()));
+        assert_eq!(first[1], Node::Iri("https://example.org/p".to_owned()));
+        let Node::Bnode(label_as_object) = &first[2] else {
+            panic!("expected blank-node object, got {:?}", first[2]);
+        };
+
+        let second = &statements[1];
+        let Node::Bnode(label_as_subject) = &second[0] else {
+            panic!("expected blank-node subject, got {:?}", second[0]);
+        };
+        assert_eq!(second[1], Node::Iri("https://example.org/q".to_owned()));
+        assert_eq!(second[2], Node::Iri("https://example.org/z".to_owned()));
+
+        assert_eq!(
+            label_as_object, label_as_subject,
+            "the trailing-dot blank node in statement 1 must be the SAME node as \
+             the blank node referenced in statement 2"
+        );
+    }
 }

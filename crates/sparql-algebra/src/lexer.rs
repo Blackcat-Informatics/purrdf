@@ -505,12 +505,16 @@ impl<'a> Lexer<'a> {
 
     fn lex_blank_label(&mut self, start: usize) -> Result<Token> {
         self.pos += 2; // `_:`
-        let label = self.take_while(|c| is_pn_chars(c) || c == '.');
-        let label = label.trim_end_matches('.').to_string();
+        let raw = self.take_while(|c| is_pn_chars(c) || c == '.');
+        let label = raw.trim_end_matches('.');
+        // Push `pos` back over the over-consumed trailing dots: a trailing `.` is
+        // the statement terminator, not part of the label. `.` is ASCII (1 byte),
+        // so the trimmed byte-length delta equals the dot run.
+        self.pos -= raw.len() - label.len();
         if label.is_empty() {
             return Err(ParseError::lex("empty blank node label after `_:`", start));
         }
-        Ok(Token::BlankNodeLabel(label))
+        Ok(Token::BlankNodeLabel(label.to_string()))
     }
 
     fn lex_bracket_or_anon(&mut self) -> Result<Token> {
@@ -743,6 +747,14 @@ mod tests {
         tokenize(s).unwrap().into_iter().map(|s| s.token).collect()
     }
 
+    fn toks_turtle(s: &str) -> Vec<Token> {
+        tokenize_turtle(s)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.token)
+            .collect()
+    }
+
     #[test]
     fn iri_vs_operators() {
         assert_eq!(toks("<http://x/y>"), vec![Token::Iri("http://x/y".into())]);
@@ -840,6 +852,28 @@ mod tests {
     fn anon_and_blank() {
         assert_eq!(toks("[]"), vec![Token::Anon]);
         assert_eq!(toks("_:b1"), vec![Token::BlankNodeLabel("b1".into())]);
+    }
+
+    #[test]
+    fn blank_label_trailing_dot_is_statement_terminator() {
+        // A trailing `.` after a blank-node label is the Turtle statement
+        // terminator, not part of the label: it must surface as its own `Dot`
+        // token and must not be swallowed into the label string.
+        assert_eq!(
+            toks_turtle(":x :p _:y."),
+            vec![
+                Token::PrefixedName(String::new(), "x".into()),
+                Token::PrefixedName(String::new(), "p".into()),
+                Token::BlankNodeLabel("y".into()),
+                Token::Dot,
+            ]
+        );
+        // An internal `.` is kept as part of the label; only the final,
+        // over-consumed trailing dot is pushed back as the terminator.
+        assert_eq!(
+            toks_turtle("_:a.b."),
+            vec![Token::BlankNodeLabel("a.b".into()), Token::Dot]
+        );
     }
 
     #[test]
