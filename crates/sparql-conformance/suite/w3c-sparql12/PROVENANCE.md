@@ -3,19 +3,21 @@ SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformat
 SPDX-License-Identifier: MIT OR Apache-2.0
 -->
 
-# Vendored W3C SPARQL 1.2 conformance fixtures — DRAFT
+# Vendored W3C SPARQL 1.2 conformance fixtures
 
-> **⚠️ DRAFT — expected to churn.** SPARQL 1.2 (RDF 1.2 / RDF-star: triple terms,
-> reifiers, `<<( … )>>`) is a **W3C draft**. This tree is a point-in-time freeze;
-> re-sync it **deliberately** (not as routine maintenance), bumping the pinned
-> commit and re-classifying, because upstream case sets and semantics still move.
+PurRDF treats **SPARQL 1.2 / RDF 1.2** (RDF-star: triple terms, reifiers,
+`<<( … )>>`, base direction) as a **complete, first-class specification** — on
+exactly the same footing as SPARQL 1.1. A spec may receive errata and updates,
+like any spec; that is a reason to **pin and re-sync deliberately**, not a reason
+to treat the spec as provisional. There is no "wait until it's final" here.
 
 ## Source
 
 - Upstream: **W3C `rdf-tests`** — <https://github.com/w3c/rdf-tests>, path
-  `sparql/sparql12/` (W3C RDF & SPARQL Working Group; the top manifest is dated
-  editor's-draft **2023-12-01**).
-- Pinned commit: **`426c7df4b5d5d292e3ba09dc22e622ea301f230a`**.
+  `sparql/sparql12/` (W3C RDF & SPARQL Working Group).
+- Pinned commit: **`426c7df4b5d5d292e3ba09dc22e622ea301f230a`** — pinned for
+  reproducible builds and to track upstream errata explicitly, the same hygiene
+  every vendored suite in this repo follows.
 - Every file is vendored **verbatim**, `manifest.ttl` included, each carrying its
   own `LicenseRef-W3C-Test-Suite` `.license` sidecar.
 
@@ -26,10 +28,12 @@ discovers each leaf `manifest.ttl` directly); the ten group sub-manifests are:
 
 ## Classification
 
-The RDF-1.2 triple-term / reifier surface the native parser already supports
-passes; the remainder is recorded in `crates/sparql-conformance/src/xfail.rs`
-with a typed reason. Because this is a **draft**, a `parse-unsupported` row here
-means "grammar not yet stabilized / not yet implemented for the draft" — as the
-draft firms up, these are implemented (not left ledgered). Nothing is silently
-skipped: every non-pass is a typed xfail, and an inventory tripwire guards the
-vendored group set.
+Cases the engine already satisfies pass (codepoint-escapes, grouping, rdf11, and
+a substantial part of the triple-term syntax). The remaining non-passes are
+recorded in `crates/sparql-conformance/src/xfail.rs` with a typed reason. These
+are **genuine unimplemented RDF-1.2 features** — triple-term/reifier grammar the
+parser does not yet accept (`parse-unsupported`) and triple-term evaluation
+semantics (`unsupported-construct`) — i.e. **real work to implement**, not
+provisional-spec placeholders. Every non-pass is a typed xfail (no silent skips),
+and an inventory tripwire guards the vendored group set; the ledger shrinks as
+each feature lands.

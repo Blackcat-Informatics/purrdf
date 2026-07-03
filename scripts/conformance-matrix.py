@@ -201,7 +201,7 @@ def _suite_sparql() -> SuiteResult:
         detail = f"{passed} pass · {xfail} xfail (ledgered)"
         return SuiteResult(
             "SPARQL 1.1/1.2 evaluation (full corpus)",
-            "W3C sparql11 + sparql12(draft) + first-party",
+            "W3C sparql11 + sparql12 + first-party",
             passed=passed, xskip=xfail, failed=failed + unexpected,
             detail=detail,
             ok=(rc == 0 and cargo_failed == 0 and failed == 0 and unexpected == 0),
@@ -209,7 +209,7 @@ def _suite_sparql() -> SuiteResult:
         )
     return _suite_cargo(
         "SPARQL 1.1/1.2 evaluation (full corpus)",
-        "W3C sparql11 + sparql12(draft) + first-party",
+        "W3C sparql11 + sparql12 + first-party",
         cmd,
     )
 

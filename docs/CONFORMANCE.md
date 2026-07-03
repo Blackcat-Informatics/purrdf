@@ -38,7 +38,7 @@ Latest measured matrix (`make conformance`, all GREEN, exit 0):
 | IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 19 | 0 | 0 |
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 shards | 0 | 0 |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 250 | 0 | 0 |
-| SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12(draft) + first-party | 437 | 213 | 0 |
+| SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 437 | 213 | 0 |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 114 | 6 | 0 |
 | SHACL (first-party corpus) | first-party frozen reports | 48 | 0 | 0 |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1,051 | 54 | 0 |
@@ -64,7 +64,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SHACL | W3C data-shapes, `core/` + `sparql/` | **114 / 120** · 6 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **48 / 48** frozen expected reports |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
-| SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 draft + entailment, via `purrdf-sparql-conformance` | **437** pass · 213 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 quarantined draft) |
+| SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **437** pass · 213 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 vendored as a first-class spec, residual RDF-star features tracked) |
 | Entailment (RDFS / OWL-RL) | native `purrdf-entail` forward-materialization reasoner | RDFS + OWL-RL closure; **39/70** W3C entailment cases (OWL-Direct/DL/RIF/D ledgered) |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **63** pass · 23 strict-xfail (ledgered) |
@@ -155,11 +155,13 @@ issue, so the matrix stays honest:
   `non-deterministic` (`BNODE()` labels), and `result-format` (Turtle
   `rs:ResultSet`). **All 7 W3C `service` federation cases pass** (via the lateral
   SERVICE seam + trailing-`VALUES` parser fix).
-- **SPARQL 1.2 is draft** — the W3C SPARQL 1.2 / RDF-1.2 (RDF-star) suite is
-  vendored **quarantined** under `suite/w3c-sparql12/` (SHA-pinned, DRAFT banner).
-  The stable surface passes; the residual draft RDF-star grammar/semantics are
-  `parse-unsupported`/`unsupported-construct` xfails, implemented as the draft
-  stabilizes.
+- **SPARQL 1.2 / RDF-1.2** — a complete, first-class spec here (RDF-star: triple
+  terms, reifiers, base direction), vendored under `suite/w3c-sparql12/`
+  (SHA-pinned for reproducibility/errata, the same as every other suite). The
+  surface the engine already satisfies passes; the residual triple-term/reifier
+  grammar and evaluation are `parse-unsupported`/`unsupported-construct` xfails —
+  **genuine unimplemented features tracked until they land**, not
+  provisional-spec placeholders.
 - **Entailment** — the native `purrdf-entail` reasoner materializes RDFS +
   OWL-RL closure; RDF/RDFS/OWL-RL cases pass, and OWL-Direct(DL)/RIF/D-entailment
   cases are `entailment` xfails (spec-inherent boundaries of a

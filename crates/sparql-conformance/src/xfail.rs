@@ -47,9 +47,9 @@ pub enum XfailReason {
     /// A property-path form (negated property sets, nested `{n,m}`, etc.) the
     /// path evaluator does not yet handle.
     PropertyPath,
-    /// Syntax the parser rejects — typically unstable SPARQL 1.2 / RDF-1.2
-    /// draft grammar. (Stable-but-unimplemented syntax is in-scope work, NOT a
-    /// ledger row.)
+    /// Syntax the parser does not yet accept — e.g. RDF-1.2 triple-term/reifier
+    /// grammar. A genuine unimplemented feature (real work to land), tracked here
+    /// until the parser implements it; the ledger shrinks as each lands.
     ParseUnsupported,
     /// The engine evaluates the case but yields a different solution value or
     /// lexical form than the spec expects (e.g. a numeric-function result whose
@@ -443,14 +443,15 @@ pub const XFAIL: &[Xfail] = &[
         iri_suffix: "entailment/manifest#rdf01",
         reason: XfailReason::Entailment,
     },
-    // === W3C SPARQL 1.2 / RDF-1.2 DRAFT group (commit 426c7df) =============
+    // === W3C SPARQL 1.2 / RDF-1.2 group (commit 426c7df) ====================
     //
-    // SPARQL 1.2 (RDF-star: triple terms, reifiers, base-direction) is a W3C
-    // DRAFT (see suite/w3c-sparql12/PROVENANCE.md). The stable surface the parser
-    // already supports passes (codepoint-escapes, grouping, rdf11, and much of
-    // the triple-term syntax); the residual draft grammar is `parse-unsupported`
-    // and the triple-term eval semantics `unsupported-construct`. As the draft
-    // stabilizes these are implemented, not left ledgered.
+    // SPARQL 1.2 (RDF-star: triple terms, reifiers, base-direction) is a complete
+    // first-class spec here (see suite/w3c-sparql12/PROVENANCE.md). The surface
+    // the engine already satisfies passes (codepoint-escapes, grouping, rdf11, and
+    // much of the triple-term syntax); the residuals are genuine unimplemented
+    // features — `parse-unsupported` for triple-term/reifier grammar the parser
+    // does not yet accept, `unsupported-construct` for triple-term eval semantics
+    // — real work to land, not provisional-spec placeholders.
     Xfail {
         iri_suffix: "eval-triple-terms/manifest#basic-2",
         reason: XfailReason::UnsupportedConstruct,
