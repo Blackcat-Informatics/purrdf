@@ -74,7 +74,7 @@ name = "mutable"
 harness = false
 
 [[bench]]
-# Intern-time content-id overhead harness (#17 Task 8): three groups measuring
+# Intern-time content-id overhead harness: three groups measuring
 # ordinary-IRI interning with content addressing inactive vs active (prefix-miss
 # cost) and genuine `blake3:<64hex>` content-id interning (prefix-hit + decode +
 # side-table insert). Report-only — no timing/speedup assertions. `make bench`

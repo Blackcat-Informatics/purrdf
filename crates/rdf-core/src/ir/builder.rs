@@ -924,7 +924,7 @@ mod tests {
     }
 
     /// No fabricated default: a plain `new`/`default` builder has content-id
-    /// recognition INACTIVE (recognition itself is wired in a later task).
+    /// recognition INACTIVE.
     #[test]
     fn new_builder_has_no_content_scheme() {
         let b = RdfDatasetBuilder::new();

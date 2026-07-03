@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Intern-time content-id overhead bench (#17 Task 8).
+//! Intern-time content-id overhead bench.
 //!
 //! Content addressing (`RdfDatasetBuilder::with_content_addressing`) adds a
 //! recognition check to every `intern_iri` call: does this IRI carry the
 //! configured scheme prefix and, if so, does the suffix decode as valid hex? The
-//! #17 RFC's cost model is that this check should be near-free for IRIs that
+//! cost model is that this check is near-free for IRIs that
 //! never match the prefix (a `strip_prefix` miss) and pay a real but small cost
 //! only for genuine content-id IRIs (decode + side-table insert).
 //!

@@ -1385,8 +1385,7 @@ impl RdfDataset {
     /// The frozen [`TermId`] of the configured derivation-predicate IRI, or `None`
     /// if no derivation predicate is configured OR it was never interned (both
     /// cases mean "no derivations present" — not an error). `pub(crate)`: the
-    /// derivation-traversal helpers (content-addressing tasks 5/6) are the
-    /// intended readers.
+    /// derivation-traversal helpers are the intended readers.
     #[inline]
     pub(crate) fn derivation_predicate(&self) -> Option<TermId> {
         self.derivation_predicate
