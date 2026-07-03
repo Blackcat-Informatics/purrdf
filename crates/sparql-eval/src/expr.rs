@@ -29,8 +29,8 @@ use purrdf_core::{BlankScope, DatasetView, GraphMatch, TermRef, TermValue};
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
 use purrdf_xsd::{
     effective_boolean_value, numeric_abs, numeric_add, numeric_ceil, numeric_div, numeric_floor,
-    numeric_mul, numeric_round, numeric_sub, numeric_unary_minus, numeric_unary_plus, parse,
-    parse_by_iri, value_cmp, XsdDatatype, XsdValue,
+    numeric_mul, numeric_round, numeric_sub, numeric_unary_minus, numeric_unary_plus,
+    parse_by_iri, parse_xsd10, value_cmp, XsdDatatype, XsdValue,
 };
 use sha2::Digest; // brings the Digest trait in scope for all RustCrypto hash calls
 
@@ -1502,7 +1502,10 @@ fn eval_xsd_cast(
         TermValue::Iri(iri) if target == XsdDatatype::String => iri.clone(),
         _ => return None,
     };
-    if let Ok(value) = parse(&lexical, target) {
+    // The operand-mapping rules pin XSD 1.0, so a `xsd:float`/`xsd:double` constructor
+    // rejects the XSD 1.1-only `+INF` spelling (only `INF`); other targets are
+    // unaffected (`parse_xsd10` delegates to `parse`).
+    if let Ok(value) = parse_xsd10(&lexical, target) {
         return Some(xsd_to_term(ctx, &value));
     }
     // The lexical is not directly valid for `target`. If both source and target are
@@ -2996,6 +2999,41 @@ mod tests {
             }
             other => panic!("expected literal, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn xsd_float_double_cast_pins_xsd_1_0_positive_infinity() {
+        // The operand-mapping rules pin XSD 1.0: `INF` casts, but the XSD 1.1
+        // `+INF` spelling is a lexical error (the cast yields unbound).
+        let ds = empty_ds();
+        for dt in [
+            "http://www.w3.org/2001/XMLSchema#double",
+            "http://www.w3.org/2001/XMLSchema#float",
+        ] {
+            let cast = |lex: &str| {
+                Expression::FunctionCall(
+                    Function::Custom(NamedNode::new_unchecked(dt)),
+                    vec![lit(lex)],
+                )
+            };
+            assert_eq!(lex(&ds, &cast("INF")).as_deref(), Some("INF"), "INF casts for <{dt}>");
+            assert_eq!(lex(&ds, &cast("+INF")), None, "+INF is a cast error for <{dt}>");
+        }
+    }
+
+    #[test]
+    fn double_cast_of_a_double_typed_plus_inf_source_is_by_value() {
+        // The lexical constructor from a string applies the XSD-1.0 rules (above),
+        // but a numeric→numeric cast goes by VALUE (SPARQL 17.1): a source already
+        // typed `xsd:double` carries the value +INF, and casting that value to
+        // double is identity. So the two entry points differ by design.
+        let ds = empty_ds();
+        let dbl = "http://www.w3.org/2001/XMLSchema#double";
+        let expr = Expression::FunctionCall(
+            Function::Custom(NamedNode::new_unchecked(dbl)),
+            vec![typed_lit("+INF", dbl)],
+        );
+        assert_eq!(lex(&ds, &expr).as_deref(), Some("INF"));
     }
 
     // ---- Gap 4: RAND() deterministic with fixed seed ----------------------
