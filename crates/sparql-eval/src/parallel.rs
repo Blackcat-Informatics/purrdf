@@ -3,22 +3,27 @@
 
 //! Deterministic two-phase parallel evaluation primitives.
 //!
-//! Nothing in this module is wired into the evaluation recursion yet — it is the
-//! shared foundation the per-operator fork-join tasks (parallel BGP batches,
-//! parallel `GROUP BY` group evaluation, parallel `UNION` branches) build on. The
-//! two phases, always in this order:
+//! [`crate::bgp`]'s per-batch evaluation, `binop`'s `Join`/`LeftJoin`/`MINUS`, and
+//! (Task 5) `expr::eval_filter` / `binop::left_outer_join_filtered`'s FILTER
+//! predicates are all wired to the fork-join model below. `absorb_row` /
+//! `absorb_constructed` are still unused outside this module's own tests — no
+//! wired caller yet mints a NEW value that must escape a forked child (Task 6:
+//! parallel `GROUP BY`/aggregate and `CONSTRUCT` list-mint sites) — hence the
+//! crate-build-only `allow(dead_code)` below (lifted the moment a caller lands
+//! for those two). The two phases, always in this order:
 //!
 //! 1. **Fork.** [`crate::eval::EvalCtx::fork_for_worker`] gives each worker a
 //!    `Send` child context with its own scratch/constructed state, so workers
 //!    never contend on a lock or share mutable evaluation state.
-//! 2. **Join.** [`par_try_flat_map`] runs the workers via rayon's *indexed*
-//!    `collect` (never `par_sort`/`par_bridge`, which are not order-stable) and
-//!    then reduces strictly in source-index order: successes flatten in index
-//!    order and the first `Err` **by index** wins, regardless of which worker
-//!    finished first. [`absorb_row`] / [`absorb_constructed`] fold a worker's
-//!    fresh scratch/constructed state back into the parent, also index-ordered
-//!    by the caller. The result is bit-identical to the sequential evaluation of
-//!    the same pattern — parallelism is purely a scheduling change.
+//! 2. **Join.** [`par_try_flat_map`] / [`par_try_flat_map_init`] run the workers
+//!    via rayon's *indexed* `collect` (never `par_sort`/`par_bridge`, which are
+//!    not order-stable) and then reduce strictly in source-index order:
+//!    successes flatten in index order and the first `Err` **by index** wins,
+//!    regardless of which worker finished first. [`absorb_row`] /
+//!    [`absorb_constructed`] fold a worker's fresh scratch/constructed state back
+//!    into the parent, also index-ordered by the caller. The result is
+//!    bit-identical to the sequential evaluation of the same pattern —
+//!    parallelism is purely a scheduling change.
 //!
 //! [`is_parallel_safe`] is the gate deciding whether an expression may run under
 //! this model at all: any builtin whose result depends on the per-query mutable
@@ -27,11 +32,6 @@
 //! that state rather than a shared, ordered one — running such a builtin under
 //! fork-join would make its result depend on worker scheduling, not just row
 //! content.
-//!
-//! Every item here is exercised by this module's unit tests but, until Tasks
-//! 4-6 wire it into `bgp`/`modifier`/`binop`, has no production caller — hence
-//! the crate-build-only `allow(dead_code)` below (lifted the moment a caller
-//! lands).
 
 #![cfg_attr(not(test), allow(dead_code))]
 
@@ -269,6 +269,57 @@ where
         .par_iter()
         .enumerate()
         .map(|(i, item)| worker(i, item))
+        .collect();
+
+    let mut out = Vec::with_capacity(per_item.iter().map(|r| r.as_ref().map_or(0, Vec::len)).sum());
+    for result in per_item {
+        out.extend(result?);
+    }
+    Ok(out)
+}
+
+/// The fork-per-worker sibling of [`par_try_flat_map`]: instead of one immutable
+/// `worker` closure applied per item, each rayon *worker thread* first runs
+/// `init` **once** to build its own `S` (e.g. an `EvalCtx::fork_for_worker`
+/// child) and then reuses that state across every item it is scheduled, via
+/// rayon's `map_init`. This avoids forking a fresh child per row — the fork
+/// (cloning the scratch interner, the `exists_inner_cache`, etc.) is real, if
+/// cheap, work that should happen once per worker thread, not once per row.
+///
+/// Internally gated on [`should_parallelize`] exactly like [`par_try_flat_map`]:
+/// at or below [`PARALLEL_MIN_ROWS`], `init` runs exactly once and every item is
+/// folded sequentially over that single state (bit-identical to a hand-written
+/// sequential loop — no rayon hand-off, no extra `init` calls); above it,
+/// `par_iter().map_init` gives each worker thread its own `S` and the results
+/// are collected into an indexed `Vec` first, then reduced in source order —
+/// the same "collect first, then walk in order" shape as [`par_try_flat_map`],
+/// so a fast late item can never race ahead of an earlier item's diagnostic.
+pub(crate) fn par_try_flat_map_init<T, S, Init, F>(
+    items: &[T],
+    init: Init,
+    worker: F,
+) -> Result<Vec<Solution>, EvalError>
+where
+    T: Sync,
+    S: Send,
+    Init: Fn() -> S + Sync + Send,
+    F: Fn(&mut S, usize, &T) -> Result<Vec<Solution>, EvalError> + Sync + Send,
+{
+    if !should_parallelize(items.len()) {
+        let mut state = init();
+        let mut out = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            out.extend(worker(&mut state, i, item)?);
+        }
+        return Ok(out);
+    }
+
+    use rayon::prelude::*;
+
+    let per_item: Vec<Result<Vec<Solution>, EvalError>> = items
+        .par_iter()
+        .enumerate()
+        .map_init(&init, |state, (i, item)| worker(state, i, item))
         .collect();
 
     let mut out = Vec::with_capacity(per_item.iter().map(|r| r.as_ref().map_or(0, Vec::len)).sum());
@@ -553,6 +604,91 @@ mod tests {
         assert_eq!(err, EvalError::internal("error at 5"));
     }
 
+    // ---- par_try_flat_map_init -------------------------------------------------
+
+    #[test]
+    fn par_try_flat_map_init_flattens_in_index_order_forced_parallel() {
+        let _guard = force_parallel_for_test(true);
+        let init_calls = std::sync::atomic::AtomicUsize::new(0);
+        let items: Vec<usize> = (0..64).collect();
+        let result = par_try_flat_map_init(
+            &items,
+            || {
+                init_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                0_u64 // per-worker state: unused counter, just proves init ran.
+            },
+            |_state, i, &item| {
+                if item % 7 != 0 {
+                    std::thread::yield_now();
+                }
+                Ok(vec![vec![Some(crate::scratch::SolutionTerm::Existing(
+                    purrdf_core::TermId::from_index(i as u32),
+                ))]])
+            },
+        )
+        .expect("no errors");
+        let indices: Vec<u32> = result
+            .iter()
+            .map(|row| match row[0] {
+                Some(crate::scratch::SolutionTerm::Existing(id)) => id.index() as u32,
+                _ => unreachable!(),
+            })
+            .collect();
+        let expected: Vec<u32> = (0..64).collect();
+        assert_eq!(indices, expected);
+        // At least one worker thread ran `init` (forced parallel with 64 items and
+        // rayon's default pool); it never runs per-row (64 items, far fewer inits).
+        assert!(init_calls.load(std::sync::atomic::Ordering::Relaxed) >= 1);
+        assert!(init_calls.load(std::sync::atomic::Ordering::Relaxed) <= 64);
+    }
+
+    #[test]
+    fn par_try_flat_map_init_flattens_in_index_order_forced_sequential() {
+        let _guard = force_parallel_for_test(false);
+        let init_calls = std::sync::atomic::AtomicUsize::new(0);
+        let items: Vec<usize> = (0..64).collect();
+        let result = par_try_flat_map_init(
+            &items,
+            || {
+                init_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                0_u64
+            },
+            |_state, i, _item| Ok(vec![vec![Some(crate::scratch::SolutionTerm::Existing(
+                purrdf_core::TermId::from_index(i as u32),
+            ))]]),
+        )
+        .expect("no errors");
+        let indices: Vec<u32> = result
+            .iter()
+            .map(|row| match row[0] {
+                Some(crate::scratch::SolutionTerm::Existing(id)) => id.index() as u32,
+                _ => unreachable!(),
+            })
+            .collect();
+        let expected: Vec<u32> = (0..64).collect();
+        assert_eq!(indices, expected);
+        // Sequential path: `init` runs exactly once, never per row.
+        assert_eq!(init_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn par_try_flat_map_init_surfaces_the_lower_indexed_error() {
+        let items: Vec<usize> = (0..32).collect();
+        let result: Result<Vec<Solution>, EvalError> =
+            par_try_flat_map_init(&items, || (), |(), i, _| {
+                if i == 20 {
+                    std::thread::yield_now();
+                    return Err(EvalError::internal("error at 20"));
+                }
+                if i == 5 {
+                    return Err(EvalError::internal("error at 5"));
+                }
+                Ok(vec![])
+            });
+        let err = result.unwrap_err();
+        assert_eq!(err, EvalError::internal("error at 5"));
+    }
+
     // ---- par_flat_map ---------------------------------------------------------
 
     #[test]
@@ -606,8 +742,32 @@ mod tests {
             .freeze()
             .expect("freeze empty dataset");
         let mut parent = crate::eval::EvalCtx::new(&ds);
+
+        // Seed the PARENT scratch with an already-minted value BEFORE forking, so
+        // an input row carrying that `Computed` id (as a real parallel worker's
+        // input rows would) is something the fork must be able to resolve.
+        let existing_value = TermValue::Literal {
+            lexical_form: "already minted".to_owned(),
+            datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+            language: None,
+            direction: None,
+        };
+        let existing_term = parent.scratch.intern(&ds, existing_value.clone());
+
         let mut child = parent.fork_for_worker();
 
+        // The fork must resolve the PARENT's pre-existing `Computed` term
+        // identically — this is the fix under test: a fresh (empty) child scratch
+        // would panic (`values[sid.index()]` out of bounds) or, if it happened not
+        // to, resolve nonsense. `fork_for_worker` now clones the parent scratch, so
+        // this must round-trip.
+        assert_eq!(
+            child.scratch.value_of(&ds, existing_term),
+            existing_value,
+            "child must resolve a Computed id it inherited from the parent scratch"
+        );
+
+        // The child mints a NEW value (not known to the parent at fork time).
         let value = TermValue::Literal {
             lexical_form: "hello parallel".to_owned(),
             datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
@@ -615,10 +775,16 @@ mod tests {
             direction: None,
         };
         let child_term = child.scratch.intern(&ds, value.clone());
-        let row: Solution = vec![Some(child_term)];
+        let row: Solution = vec![Some(existing_term), Some(child_term)];
 
         let absorbed = absorb_row(&mut parent.scratch, &ds, &child.scratch, &row);
-        let main_term = absorbed[0].expect("cell present");
+        // The pre-existing term passes through absorb unchanged (still resolves in
+        // the parent, which already owned it).
+        let absorbed_existing = absorbed[0].expect("cell present");
+        assert_eq!(parent.scratch.value_of(&ds, absorbed_existing), existing_value);
+        // The child's fresh mint is folded back into the parent's id space and
+        // resolves to the same value there.
+        let main_term = absorbed[1].expect("cell present");
         assert_eq!(parent.scratch.value_of(&ds, main_term), value);
     }
 

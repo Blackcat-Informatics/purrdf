@@ -99,7 +99,7 @@ impl SolutionTerm {
 /// values to one [`ScratchId`]. Stateless with respect to the dataset: the dataset
 /// is passed to each operation so the interner does not hold a borrow that would
 /// conflict with the evaluator's other dataset access.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ScratchInterner {
     /// `ScratchId` index → the computed value.
     values: Vec<TermValue>,

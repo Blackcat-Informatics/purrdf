@@ -424,12 +424,27 @@ impl<'d> EvalCtx<'d> {
     ///   evaluating an earlier sibling sequentially) is inherited by the child
     ///   instead of rebuilt — a performance inheritance, not a correctness
     ///   requirement, since a cache miss just re-derives the same value.
-    /// - **Fresh** (`scratch`, `regex_cache`, `cached_bool_terms`,
-    ///   `const_atom_cache`, `xsd_parse_cache`, `constructed`,
-    ///   `in_substituted_exists`): per-worker mutable state that must NOT be
-    ///   shared, so each worker mints its own [`crate::scratch::ScratchId`] space
-    ///   and constructed-quad buffer without contending on a lock. The caller
-    ///   folds a child's fresh state back into the parent deterministically via
+    /// - **Cloned base, fresh appends** (`scratch`): input rows carry
+    ///   [`crate::scratch::SolutionTerm::Computed`] ids that index into THIS
+    ///   context's scratch value table, so a child given a fresh, empty scratch
+    ///   could not resolve them (wrong value, or an out-of-bounds panic). The
+    ///   whole [`crate::scratch::ScratchInterner`] (value table AND its
+    ///   value→id dedup index) is cloned instead: the child resolves every
+    ///   existing `Computed` id identically to the parent, and any NEW value it
+    ///   mints is deduped against its own clone of the index exactly as the
+    ///   parent would dedup it. A child's fresh mints are ephemeral — discarded
+    ///   for a read-only FILTER predicate (the surviving rows are the original
+    ///   rows, nothing new escapes) or folded back by VALUE via
+    ///   [`crate::parallel::absorb_row`] when a worker's output can carry a
+    ///   freshly-minted cell, which re-interns it against the parent so its id
+    ///   is valid in the parent's space (a raw child `ScratchId` is never
+    ///   reused in the parent — only the id space, not individual ids, is
+    ///   shared by the clone).
+    /// - **Fresh** (`regex_cache`, `cached_bool_terms`, `const_atom_cache`,
+    ///   `xsd_parse_cache`, `constructed`, `in_substituted_exists`): per-worker
+    ///   mutable state that must NOT be shared, so each worker mints its own
+    ///   constructed-quad buffer without contending on a lock. The caller folds
+    ///   a child's fresh state back into the parent deterministically via
     ///   [`crate::parallel::absorb_row`] / [`crate::parallel::absorb_constructed`]
     ///   in source order, so the result is bit-identical to sequential evaluation.
     /// - **Copied scalars** (`bnode_counter`, `rng_state`): their only stateful
@@ -439,15 +454,13 @@ impl<'d> EvalCtx<'d> {
     ///   actually observed divergently across workers — copying it here is
     ///   harmless rather than load-bearing.
     ///
-    /// Exercised by `parallel`'s unit tests; has no production caller until
-    /// Tasks 4-6 wire fork-join into the evaluator, hence the crate-build-only
-    /// `allow(dead_code)` (lifted the moment a caller lands).
+    /// Called by `expr::eval_filter` and `binop::left_outer_join_filtered` (Task 5)
+    /// to give each FILTER-predicate worker its own child context.
     #[must_use]
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn fork_for_worker(&self) -> Self {
         Self {
             dataset: self.dataset,
-            scratch: ScratchInterner::new(),
+            scratch: self.scratch.clone(),
             active_graph: self.active_graph,
             active_dataset: self.active_dataset.clone(),
             bnode_counter: self.bnode_counter,
@@ -761,6 +774,8 @@ mod tests {
             vp("ctype"),
         );
         let inner = bgp(vp("class"), pred("http://ex/stereo"), vp("st"));
+        let outer_for_low_level_check = outer.clone();
+        let inner_for_low_level_check = inner.clone();
         let filter = GraphPattern::Filter {
             expr: Expression::Exists(Box::new(inner)),
             inner: Box::new(outer),
@@ -770,9 +785,37 @@ mod tests {
         let seq = eval(&filter, &mut ctx).expect("filter exists");
         // EXISTS keeps the two subjects with a :stereo (a, b); drops c.
         assert_eq!(seq.len(), 2);
-        // The inner pattern AND its probe index were built exactly once despite three
-        // outer rows — the per-row index rebuild is gone.
-        assert_eq!(ctx.exists_inner_cache.len(), 1);
+
+        // The `ctx.exists_inner_cache.len()` check this test used to make against
+        // `ctx` directly no longer applies: this EXISTS reaches no unsafe builtin,
+        // so (Task 5) `expr::eval_filter` routes it through
+        // `crate::parallel::par_try_flat_map_init`, which runs the per-row loop on
+        // a FORKED child context (`EvalCtx::fork_for_worker`), not `ctx` itself —
+        // even below the parallel threshold, exactly one child is forked and reused
+        // across every outer row. So the cache still builds exactly once per query,
+        // just on that (discarded-after-use) child rather than on `ctx`. Reproduce
+        // the same shape here directly (drive `eval_ebv` for each outer row over one
+        // shared ctx, exactly as the child's per-row loop does) to keep exercising
+        // the "no per-row index rebuild" invariant.
+        let mut child_ctx = EvalCtx::new(&ds);
+        let outer_seq = eval(&outer_for_low_level_check, &mut child_ctx).expect("outer bgp");
+        let exists_expr = Expression::Exists(Box::new(inner_for_low_level_check));
+        let mut kept = 0;
+        for row in &outer_seq.rows {
+            if crate::expr::eval_ebv(&exists_expr, row, &outer_seq.schema, &mut child_ctx)
+                .expect("ebv")
+                == Some(true)
+            {
+                kept += 1;
+            }
+        }
+        assert_eq!(kept, 2);
+        assert_eq!(
+            child_ctx.exists_inner_cache.len(),
+            1,
+            "the inner pattern AND its probe index were built exactly once despite \
+             three outer rows — the per-row index rebuild is gone"
+        );
     }
 
     #[test]
@@ -881,5 +924,253 @@ mod tests {
         // Sanity: the MINUS removes the x=a row (it has a :bad edge); only the
         // x=b/y=c/z=juice row (with ?w unbound, no :extra match) survives.
         assert_eq!(rows_seq.len(), 1);
+    }
+
+    /// Determinism smoke test (Task 5): `FILTER(REGEX(...) && ?a > k)` — the
+    /// `b_scan_filter` bench shape — evaluated once with the parallel path FORCED
+    /// and once with the sequential path FORCED must produce byte-identical rows.
+    #[test]
+    fn filter_regex_and_numeric_forced_parallel_and_sequential_agree() {
+        use purrdf_core::RdfLiteral;
+        use purrdf_sparql_algebra::{
+            Expression, Function, Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern,
+            Variable,
+        };
+
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+        let mut b = RdfDatasetBuilder::new();
+        let name = b.intern_iri("http://ex/name");
+        let age = b.intern_iri("http://ex/age");
+        let p1 = b.intern_iri("http://ex/p1");
+        let p2 = b.intern_iri("http://ex/p2");
+        let p3 = b.intern_iri("http://ex/p3");
+        let name1 = b.intern_literal(RdfLiteral::simple("Name1002"));
+        let name2 = b.intern_literal(RdfLiteral::simple("Name1003"));
+        let name3 = b.intern_literal(RdfLiteral::simple("Name2002"));
+        let typed_int = |v: &str| RdfLiteral {
+            lexical_form: v.to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        };
+        let age1 = b.intern_literal(typed_int("45"));
+        let age2 = b.intern_literal(typed_int("30"));
+        let age3 = b.intern_literal(typed_int("50"));
+        b.push_quad(p1, name, name1, None);
+        b.push_quad(p1, age, age1, None);
+        b.push_quad(p2, name, name2, None);
+        b.push_quad(p2, age, age2, None);
+        b.push_quad(p3, name, name3, None);
+        b.push_quad(p3, age, age3, None);
+        let ds = b.freeze().expect("freeze");
+
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let bgp = |s, p, o| GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: s,
+                predicate: p,
+                object: o,
+            }],
+        };
+
+        let name_bgp = bgp(vp("x"), pred("http://ex/name"), vp("n"));
+        let age_bgp = bgp(vp("x"), pred("http://ex/age"), vp("a"));
+        let join = GraphPattern::Join {
+            left: Box::new(name_bgp),
+            right: Box::new(age_bgp),
+        };
+
+        let regex = Expression::FunctionCall(
+            Function::Regex,
+            vec![
+                Expression::Variable(Variable::new("n")),
+                Expression::Literal(Literal::new_simple("^Name1[0-9][0-9]2$")),
+            ],
+        );
+        let numeric = Expression::Greater(
+            Box::new(Expression::Variable(Variable::new("a"))),
+            Box::new(Expression::Literal(Literal::new_typed(
+                "40",
+                NamedNode::new_unchecked(XINT),
+            ))),
+        );
+        let cond = Expression::And(Box::new(regex), Box::new(numeric));
+        let pattern = GraphPattern::Filter {
+            expr: cond,
+            inner: Box::new(join),
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&pattern, &mut ctx).expect("eval");
+            (seq.schema.vars().to_vec(), seq.rows)
+        };
+
+        let (schema_par, rows_par) = run(true);
+        let (schema_seq, rows_seq) = run(false);
+
+        assert_eq!(schema_par, schema_seq, "schema must match regardless of path");
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential FILTER paths must produce byte-identical row order"
+        );
+        // Only p1 (Name1002, age 45) satisfies both the regex and the numeric bound.
+        assert_eq!(rows_seq.len(), 1);
+    }
+
+    /// Determinism smoke test (Task 5): `FILTER EXISTS { ... }` evaluated once with
+    /// the parallel FILTER path FORCED and once with the sequential path FORCED
+    /// must produce byte-identical rows. `EXISTS` reaches no stateful builtin, so
+    /// [`crate::parallel::is_parallel_safe`] must accept it.
+    #[test]
+    fn filter_exists_forced_parallel_and_sequential_agree() {
+        use purrdf_sparql_algebra::{
+            Expression, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        };
+
+        // :a, :b carry a :stereo; :c does not.
+        let mut b = RdfDatasetBuilder::new();
+        let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+        let cls = b.intern_iri("http://ex/Class");
+        let stereo = b.intern_iri("http://ex/stereo");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
+        let s = b.intern_iri("http://ex/S");
+        b.push_quad(a, ty, cls, None);
+        b.push_quad(bb, ty, cls, None);
+        b.push_quad(c, ty, cls, None);
+        b.push_quad(a, stereo, s, None);
+        b.push_quad(bb, stereo, s, None);
+        let ds = b.freeze().expect("freeze");
+
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let bgp = |s, p, o| GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: s,
+                predicate: p,
+                object: o,
+            }],
+        };
+
+        let outer = bgp(
+            vp("class"),
+            pred("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"),
+            vp("ctype"),
+        );
+        let inner = bgp(vp("class"), pred("http://ex/stereo"), vp("st"));
+        let pattern = GraphPattern::Filter {
+            expr: Expression::Exists(Box::new(inner)),
+            inner: Box::new(outer),
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&pattern, &mut ctx).expect("eval");
+            (seq.schema.vars().to_vec(), seq.rows)
+        };
+
+        let (schema_par, rows_par) = run(true);
+        let (schema_seq, rows_seq) = run(false);
+
+        assert_eq!(schema_par, schema_seq, "schema must match regardless of path");
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential FILTER EXISTS paths must produce byte-identical row order"
+        );
+        // EXISTS keeps the two subjects with a :stereo (a, b); drops c.
+        assert_eq!(rows_seq.len(), 2);
+    }
+
+    /// Determinism smoke test (Task 5): `OPTIONAL { ... FILTER ... }` (the inline
+    /// `LeftJoin` filter, [`crate::binop`]'s `left_outer_join_filtered`) evaluated
+    /// once with the parallel path FORCED and once with the sequential path FORCED
+    /// must produce byte-identical rows, including left-alone padded rows for a
+    /// left solution whose only compatible right row fails the filter.
+    #[test]
+    fn optional_filter_forced_parallel_and_sequential_agree() {
+        use purrdf_sparql_algebra::{
+            Expression, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        };
+
+        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+        // :a :knows :b (age 50) — passes the OPTIONAL filter (age > 40).
+        // :a :knows :c (age 10) — right row exists but fails the filter ⇒ left-alone.
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri("http://ex/knows");
+        let age = b.intern_iri("http://ex/age");
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let c = b.intern_iri("http://ex/c");
+        let age50 = b.intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: "50".to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        });
+        let age10 = b.intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: "10".to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        });
+        b.push_quad(a, knows, bb, None);
+        b.push_quad(a, knows, c, None);
+        b.push_quad(bb, age, age50, None);
+        b.push_quad(c, age, age10, None);
+        let ds = b.freeze().expect("freeze");
+
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let bgp = |s, p, o| GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: s,
+                predicate: p,
+                object: o,
+            }],
+        };
+
+        // left = { ?x :knows ?y }: the two rows (x=a,y=b) and (x=a,y=c) exercise
+        // both "filter passes" (b, age 50) and "compatible right row exists but
+        // fails the filter ⇒ left-alone" (c, age 10) in one shape.
+        let left = bgp(vp("x"), pred("http://ex/knows"), vp("y"));
+        let right = bgp(vp("y"), pred("http://ex/age"), vp("a"));
+        let cond = Expression::Greater(
+            Box::new(Expression::Variable(Variable::new("a"))),
+            Box::new(Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
+                "40",
+                NamedNode::new_unchecked(XINT),
+            ))),
+        );
+        let pattern = GraphPattern::LeftJoin {
+            left: Box::new(left),
+            right: Box::new(right),
+            expression: Some(cond),
+        };
+
+        let run = |forced: bool| {
+            let _guard = crate::parallel::force_parallel_for_test(forced);
+            let mut ctx = EvalCtx::new(&ds);
+            let seq = eval(&pattern, &mut ctx).expect("eval");
+            (seq.schema.vars().to_vec(), seq.rows)
+        };
+
+        let (schema_par, rows_par) = run(true);
+        let (schema_seq, rows_seq) = run(false);
+
+        assert_eq!(schema_par, schema_seq, "schema must match regardless of path");
+        assert_eq!(
+            rows_par, rows_seq,
+            "parallel and sequential OPTIONAL-FILTER paths must produce byte-identical row order"
+        );
+        // x=a/y=b/age=50 passes the filter; x=a/y=c fails it and falls back to a
+        // left-alone row (y/a unbound) — two rows total.
+        assert_eq!(rows_seq.len(), 2);
     }
 }

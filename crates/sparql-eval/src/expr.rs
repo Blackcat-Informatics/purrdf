@@ -166,6 +166,16 @@ pub(crate) fn eval_ebv(
 
 /// `Filter(expr, inner)`: keep solutions whose `expr` has effective boolean value
 /// `true`; an error/unbound (or `false`) drops the row.
+///
+/// [`crate::parallel::is_parallel_safe`] gates the strategy: an expression that
+/// can reach a stateful builtin (`RAND`/`UUID`/`STRUUID`/`BNODE`, the PurRDF list
+/// constructors) MUST run on the real `ctx` sequentially, so its per-query
+/// counter/RNG state advances exactly as it would without this parallel path — a
+/// forked child would advance a throwaway copy instead, silently diverging from
+/// the sequential result. A safe expression only decides keep/drop; the
+/// surviving rows are the ORIGINAL rows (never a value derived from the child's
+/// scratch), so each forked child's scratch is discarded after use — nothing to
+/// `absorb`.
 pub(crate) fn eval_filter(
     expr: &Expression,
     inner: &GraphPattern,
@@ -173,12 +183,27 @@ pub(crate) fn eval_filter(
 ) -> Result<SolutionSeq, EvalError> {
     let seq = eval(inner, ctx)?;
     let schema = seq.schema.clone();
-    let mut rows = Vec::new();
-    for row in seq.rows {
-        if eval_ebv(expr, &row, &schema, ctx)? == Some(true) {
-            rows.push(row);
+    let rows = if crate::parallel::is_parallel_safe(expr) {
+        crate::parallel::par_try_flat_map_init(
+            &seq.rows,
+            || ctx.fork_for_worker(),
+            |child, _, row| {
+                Ok(if eval_ebv(expr, row, &schema, child)? == Some(true) {
+                    vec![row.clone()]
+                } else {
+                    Vec::new()
+                })
+            },
+        )?
+    } else {
+        let mut rows = Vec::new();
+        for row in seq.rows {
+            if eval_ebv(expr, &row, &schema, ctx)? == Some(true) {
+                rows.push(row);
+            }
         }
-    }
+        rows
+    };
     Ok(SolutionSeq { schema, rows })
 }
 
@@ -3147,15 +3172,42 @@ mod tests {
     fn exists_memo_populates_cache_once() {
         // Two outer rows share the same EXISTS site; with the memo on the inner
         // pattern is evaluated and cached exactly once.
+        //
+        // Driven directly via `eval`/`eval_ebv` on ONE shared `ctx`, rather than
+        // through `evaluate_query`'s FILTER node: this EXISTS reaches no unsafe
+        // builtin, so (Task 5) `eval_filter` routes it through
+        // `crate::parallel::par_try_flat_map_init`, which runs the per-row loop on a
+        // FORKED child context — the memo would land on that (discarded-after-use)
+        // child, not on a `ctx` inspected from outside `evaluate_query`. This
+        // reproduces the identical per-row loop shape the forked child runs,
+        // directly on `ctx`, to keep exercising the underlying "cache built once,
+        // not once per outer row" invariant.
+        use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable};
+
         let ds = knows_ds();
-        let parsed = purrdf_sparql_algebra::SparqlParser::new()
-            .parse_query(
-                "SELECT ?s ?o WHERE { ?s <http://ex/knows> ?o \
-                 FILTER EXISTS { ?z <http://ex/member> ?m } }",
-            )
-            .expect("parse");
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let outer = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("s"),
+                predicate: pred("http://ex/knows"),
+                object: vp("o"),
+            }],
+        };
+        let inner = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("z"),
+                predicate: pred("http://ex/member"),
+                object: vp("m"),
+            }],
+        };
+
         let mut ctx = EvalCtx::new(&ds);
-        crate::eval::evaluate_query(&parsed, &mut ctx).expect("eval");
+        let seq = eval(&outer, &mut ctx).expect("outer bgp");
+        let exists_expr = Expression::Exists(Box::new(inner));
+        for row in &seq.rows {
+            eval_ebv(&exists_expr, row, &seq.schema, &mut ctx).expect("ebv");
+        }
         assert_eq!(
             ctx.exists_inner_cache.len(),
             1,
@@ -3247,16 +3299,38 @@ mod tests {
     fn uncorrelated_exists_fast_path_still_uses_cache() {
         // Verify the fast/memoized path is still taken when there is no expression
         // correlation: the cache must be populated after the query.
+        //
+        // Driven directly via `eval`/`eval_ebv` on ONE shared `ctx` rather than
+        // through `evaluate_query`'s FILTER node — see
+        // `exists_memo_populates_cache_once`'s comment: Task 5 routes this
+        // parallel-safe FILTER through a forked child context, so the memo would
+        // land there, not on a `ctx` inspected from outside `evaluate_query`.
+        use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable};
+
         let ds = knows_ds();
-        let q = "SELECT ?s ?o WHERE { \
-                   ?s <http://ex/knows> ?o \
-                   FILTER EXISTS { ?z <http://ex/member> ?m } \
-                 }";
-        let parsed = purrdf_sparql_algebra::SparqlParser::new()
-            .parse_query(q)
-            .expect("parse");
+        let vp = |n: &str| TermPattern::Variable(Variable::new(n));
+        let pred = |iri: &str| NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri));
+        let outer = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("s"),
+                predicate: pred("http://ex/knows"),
+                object: vp("o"),
+            }],
+        };
+        let inner = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("z"),
+                predicate: pred("http://ex/member"),
+                object: vp("m"),
+            }],
+        };
+
         let mut ctx = EvalCtx::new(&ds);
-        crate::eval::evaluate_query(&parsed, &mut ctx).expect("eval");
+        let seq = eval(&outer, &mut ctx).expect("outer bgp");
+        let exists_expr = Expression::Exists(Box::new(inner));
+        for row in &seq.rows {
+            eval_ebv(&exists_expr, row, &seq.schema, &mut ctx).expect("ebv");
+        }
         assert_eq!(
             ctx.exists_inner_cache.len(),
             1,

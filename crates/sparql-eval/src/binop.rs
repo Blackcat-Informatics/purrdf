@@ -291,6 +291,15 @@ pub(crate) fn eval_left_join(
 /// A left outer join whose right-side pairings must additionally satisfy `expr`
 /// (the inline `OPTIONAL { ... FILTER expr }` condition, §18.6). A left solution
 /// with no pairing that is both compatible and passes the filter is emitted alone.
+///
+/// Gated on [`crate::parallel::is_parallel_safe`] exactly like `eval_filter`: an
+/// unsafe `expr` (reaches `RAND`/`UUID`/`STRUUID`/`BNODE`/the PurRDF list
+/// constructors) MUST run on the real `ctx` sequentially, since a forked child
+/// would advance a throwaway copy of the per-query counter/RNG state instead of
+/// the real one. A safe `expr` only decides which merged rows pass; every
+/// surviving cell is copied from `lrow`/`rrow` by [`merge`] (which interns
+/// nothing — see its doc comment), so nothing new escapes a forked child's
+/// scratch and it is discarded after use — no `absorb` needed.
 fn left_outer_join_filtered(
     l: &SolutionSeq,
     r: &SolutionSeq,
@@ -304,25 +313,51 @@ fn left_outer_join_filtered(
     let shared = l.schema.shared_columns(&r.schema);
 
     // A left outer join emits at least one row per left row.
-    let mut rows = Vec::with_capacity(l.rows.len());
-    for lrow in &l.rows {
-        let mut matched = false;
-        for rrow in &r.rows {
-            if !compatible(lrow, rrow, &shared) {
-                continue;
+    let rows = if crate::parallel::is_parallel_safe(expr) {
+        crate::parallel::par_try_flat_map_init(
+            &l.rows,
+            || ctx.fork_for_worker(),
+            |child, _, lrow| {
+                let mut out_rows = Vec::new();
+                for rrow in &r.rows {
+                    if !compatible(lrow, rrow, &shared) {
+                        continue;
+                    }
+                    let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
+                    if crate::expr::eval_ebv(expr, &merged, &out, child)? == Some(true) {
+                        out_rows.push(merged);
+                    }
+                }
+                if out_rows.is_empty() {
+                    let mut row = vec![None; out_len];
+                    row[..left_len].copy_from_slice(lrow);
+                    out_rows.push(row);
+                }
+                Ok(out_rows)
+            },
+        )?
+    } else {
+        let mut rows = Vec::with_capacity(l.rows.len());
+        for lrow in &l.rows {
+            let mut matched = false;
+            for rrow in &r.rows {
+                if !compatible(lrow, rrow, &shared) {
+                    continue;
+                }
+                let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
+                if crate::expr::eval_ebv(expr, &merged, &out, ctx)? == Some(true) {
+                    rows.push(merged);
+                    matched = true;
+                }
             }
-            let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
-            if crate::expr::eval_ebv(expr, &merged, &out, ctx)? == Some(true) {
-                rows.push(merged);
-                matched = true;
+            if !matched {
+                let mut row = vec![None; out_len];
+                row[..left_len].copy_from_slice(lrow);
+                rows.push(row);
             }
         }
-        if !matched {
-            let mut row = vec![None; out_len];
-            row[..left_len].copy_from_slice(lrow);
-            rows.push(row);
-        }
-    }
+        rows
+    };
     Ok(SolutionSeq { schema: out, rows })
 }
 
