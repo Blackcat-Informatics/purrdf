@@ -7,17 +7,11 @@ shape, then call :func:`pyshacl.validate`, asserting it returns the
 ``(conforms, results_graph, results_text)`` triple without crashing (validation
 *semantics* are out of scope for the acceptance bar).
 
-At the current shim revision this row is a ledgered strict-xfail; pyshacl fails
-to import against the shim before ``validate`` is reached. The first observed gap
-is a missing term class — ``pyshacl.pytypes`` does ``from rdflib.term import
-IdentifiedNode``, but the shim's term model collapses rdflib's abstract node
-bases and does not expose ``IdentifiedNode``. Behind that, pyshacl is not a
-public-surface consumer at all: it reads ``rdflib.__version__`` to version-gate a
-suite of monkeypatches against rdflib's PRIVATE Python internals
-(``rdflib.term._toPythonMapping`` / ``_parseBoolean``, the ``rdflib.plugins.sparql``
-Python algebra, etc.), which the public-surface, native-Rust-backed shim does not
-reimplement. The driver still expresses the full core path so that, if the
-coupling is ever bridged, this row XPASSes and forces the ledger to shrink.
+pyshacl couples to rdflib's private Python internals
+(``rdflib.term._XSD_PFX`` / ``_toPythonMapping`` / ``_parseBoolean`` and
+``rdflib.NORMALIZE_LITERALS``); the shim exposes the minimal internals needed
+for pyshacl's ``rdflib_bool_patch`` to run so the public validate path can
+proceed against a purrdf-backed graph.
 """
 
 from __future__ import annotations

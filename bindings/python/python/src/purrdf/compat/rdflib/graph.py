@@ -312,8 +312,14 @@ class Graph:
         *,
         namespace_manager: NamespaceManager | None = None,
         base: str | None = None,
+        bind_namespaces: str | None = None,
     ) -> None:
-        """Create an empty graph (or import an existing native store/dataset)."""
+        """Create an empty graph (or import an existing native store/dataset).
+
+        ``bind_namespaces`` is accepted for RDFLib 7.x API parity but is currently a
+        no-op; namespace prefixes are managed through the graph's namespace manager.
+        """
+        _ = bind_namespaces
         if isinstance(store, purrdf.MutableDataset):
             self._store = store
         else:

@@ -19,6 +19,11 @@ from __future__ import annotations
 from . import parser, paths, plugin, serializer, store, util
 
 __version__ = "7.6.0"
+
+#: RDFLib's literal-normalization switch. pyshacl's monkey patch toggles this at
+#: runtime; exposing it keeps the top-level module assignment from failing.
+NORMALIZE_LITERALS = True
+
 from .graph import (
     DATASET_DEFAULT_GRAPH_ID,
     BatchAddGraph,
@@ -69,6 +74,7 @@ from .resource import Resource
 from .term import BNode, IdentifiedNode, Identifier, Literal, Node, URIRef, Variable
 
 __all__ = [
+    "NORMALIZE_LITERALS",
     "BRICK",
     "CSVW",
     "DC",

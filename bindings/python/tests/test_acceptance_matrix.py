@@ -24,9 +24,9 @@ single ``ACCEPT_RESULT <json>`` line this module parses. Outcomes:
 * ``unavailable``   — package not installed             → the test SKIPS.
 * ``misconfigured`` — the shadow was not in force        → hard error (never silent).
 
-The ledgered rows (pyshacl, sssom) are strict xfails in ``xfail_ledger.toml``: if
-either starts passing, the XPASS fails the run and forces the ledger to shrink —
-the same XPASS discipline as the Rust conformance harnesses (AGENTS.md §2).
+Ledgered strict xfails are applied from ``xfail_ledger.toml``; if a ledgered row
+starts passing, the XPASS fails the run and forces the ledger to shrink — the
+same XPASS discipline as the Rust conformance harnesses (AGENTS.md §2).
 """
 
 from __future__ import annotations
@@ -114,10 +114,10 @@ def test_sparqlwrapper_result_conversion() -> None:
 def test_pyshacl_core_path() -> None:
     """pyshacl.validate runs its core path against a purrdf-backed graph.
 
-    Ledgered strict-xfail: pyshacl fails to import against the shim (first a
-    missing ``rdflib.term.IdentifiedNode`` base class, then version-gated
-    monkeypatching of rdflib's private ``rdflib.term`` / ``rdflib.plugins.sparql``
-    internals), all upstream of the public surface the shim exposes.
+    pyshacl's ``rdflib_bool_patch`` imports private ``rdflib.term`` internals
+    (``_XSD_PFX``, ``_toPythonMapping``, ``_parseBoolean``) and toggles
+    ``rdflib.NORMALIZE_LITERALS``. The shim exposes the minimal private surface
+    needed for that patch to run, so the public validate path proceeds.
     """
     _require_core_path("pyshacl")
 

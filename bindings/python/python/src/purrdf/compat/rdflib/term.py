@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import datetime
 import re
+import warnings
 from decimal import Decimal
 from functools import total_ordering
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 from uuid import uuid4
 
 import purrdf
@@ -343,6 +344,18 @@ def _coerce_value(lexical: str, datatype: URIRef | None, language: str | None) -
     if language is not None or datatype is None:
         return lexical
     dt = str(datatype)
+    # Private-internals consumers (e.g. pyshacl's bool patch) may have mutated the
+    # rdflib-style ``_toPythonMapping``; honor that override before falling back
+    # to the native-backed coercion table.
+    dt_ref = URIRef(dt)
+    if dt_ref in _toPythonMapping:
+        conv = _toPythonMapping[dt_ref]
+        if conv is not None:
+            try:
+                return conv(lexical)
+            except Exception:  # noqa: BLE001 - rdflib parity: bad lexical → lexical string
+                return lexical
+        return lexical
     if dt in _XSD_STRINGLIKE:
         return lexical
     if dt == _XSD_BOOLEAN:
@@ -682,6 +695,40 @@ class Variable(Identifier):
     def to_native(self) -> purrdf.Variable:
         """Return the native :class:`purrdf.Variable` counterpart."""
         return purrdf.Variable(str(self))
+
+
+# ── Private-internals compatibility shims ─────────────────────────────────────
+#
+# These are NOT public rdflib API. They exist only because downstream consumers
+# (notably pyshacl) reach into rdflib's private Python internals and mutate them
+# at runtime. The shim keeps the absolute minimum surface needed for those
+# consumers to function, while the real value-space work stays in Rust.
+
+#: The XSD namespace prefix used by rdflib's private ``_XSD_PFX`` symbol.
+_XSD_PFX: str = _XSD
+
+
+def _parseBoolean(value: str | bytes) -> bool:  # noqa: N802 - rdflib API name
+    """Parse an XSD boolean lexical form (rdflib 7.6 private API parity).
+
+    Lexical space is ``{"true", "false", "1", "0"}``; any other input emits a
+    warning and maps to ``False``, matching rdflib's lenient behavior.
+    """
+    new_value = value.lower()
+    if new_value in ("1", "true", b"1", b"true"):
+        return True
+    if new_value not in ("0", "false", b"0", b"false"):
+        warnings.warn(
+            f"Parsing weird boolean, {value!r} does not map to True or False",
+            category=UserWarning,
+            stacklevel=2,
+        )
+    return False
+
+
+#: Runtime-mutable datatype → converter table mirroring rdflib's private
+#: ``_toPythonMapping``. Consumers such as pyshacl patch the boolean entry.
+_toPythonMapping: dict[URIRef, Callable[[str], Any] | None] = {}
 
 
 def to_native(
