@@ -29,8 +29,8 @@ use purrdf_core::{BlankScope, DatasetView, GraphMatch, TermRef, TermValue};
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
 use purrdf_xsd::{
     effective_boolean_value, numeric_abs, numeric_add, numeric_ceil, numeric_div, numeric_floor,
-    numeric_mul, numeric_round, numeric_sub, numeric_unary_minus, numeric_unary_plus,
-    parse_by_iri, parse_xsd10, value_cmp, XsdDatatype, XsdValue,
+    numeric_mul, numeric_round, numeric_sub, numeric_unary_minus, numeric_unary_plus, parse_by_iri,
+    parse_xsd10, value_cmp, XsdDatatype, XsdValue,
 };
 use sha2::Digest; // brings the Digest trait in scope for all RustCrypto hash calls
 
@@ -3016,8 +3016,16 @@ mod tests {
                     vec![lit(lex)],
                 )
             };
-            assert_eq!(lex(&ds, &cast("INF")).as_deref(), Some("INF"), "INF casts for <{dt}>");
-            assert_eq!(lex(&ds, &cast("+INF")), None, "+INF is a cast error for <{dt}>");
+            assert_eq!(
+                lex(&ds, &cast("INF")).as_deref(),
+                Some("INF"),
+                "INF casts for <{dt}>"
+            );
+            assert_eq!(
+                lex(&ds, &cast("+INF")),
+                None,
+                "+INF is a cast error for <{dt}>"
+            );
         }
     }
 
