@@ -318,7 +318,7 @@ fn load_update_details(
         if let Some(g) = iri_of(row, "inGraph") {
             let name = lexical_of(row, "inLabel").unwrap_or_else(|| g.clone());
             let path = local_path(dir, &g);
-            if !case.graph_data.iter().any(|(_, p)| *p == path) {
+            if !case.graph_data.iter().any(|(n, _)| *n == name) {
                 case.graph_data.push((name, path));
             }
         }
@@ -331,7 +331,7 @@ fn load_update_details(
         if let Some(g) = iri_of(row, "resGraph") {
             let name = lexical_of(row, "resLabel").unwrap_or_else(|| g.clone());
             let path = local_path(dir, &g);
-            if !acc.1.iter().any(|(_, p)| *p == path) {
+            if !acc.1.iter().any(|(n, _)| *n == name) {
                 acc.1.push((name, path));
             }
         }

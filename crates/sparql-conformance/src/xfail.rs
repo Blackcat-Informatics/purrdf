@@ -256,24 +256,10 @@ pub const XFAIL: &[Xfail] = &[
     //
     // The update groups (add/basic-update/clear/copy/delete*/drop/move/
     // update-silent) run through the UpdateEval harness path; the vast majority
-    // pass. The residual gaps are post-state semantics differences (compared by
-    // RDFC-1.0 canonical N-Quads, so these are genuine structural divergences,
-    // not blank-node relabelling).
+    // pass. The one residual gap is a per-operation blank-node scoping
+    // difference (compared by RDFC-1.0 canonical N-Quads, so it is a genuine
+    // structural divergence, not blank-node relabelling).
 
-    // COPY/ADD graph edge cases (e.g. copying a graph onto itself, or ADD
-    // involving graph existence) leave a different post-state.
-    Xfail {
-        iri_suffix: "copy/manifest#copy03",
-        reason: XfailReason::UpdateSemantics,
-    },
-    Xfail {
-        iri_suffix: "copy/manifest#copy04",
-        reason: XfailReason::UpdateSemantics,
-    },
-    Xfail {
-        iri_suffix: "add/manifest#add04",
-        reason: XfailReason::UpdateSemantics,
-    },
     // Blank-node scoping across separate INSERT operations in one request: a
     // `_:b` label in one operation must denote a fresh bnode distinct from the
     // same label in another operation; the engine reuses it, so the post-state

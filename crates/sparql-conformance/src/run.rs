@@ -64,7 +64,12 @@ pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
 /// but the RDF-1.2 eval-triple-term tests carry `.trig` quad data (GRAPH blocks),
 /// which the Turtle codec rejects.
 fn data_media_type(path: &std::path::Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()) {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         Some("trig") => "application/trig",
         Some("nq") => "application/n-quads",
         Some("nt") => "application/n-triples",
