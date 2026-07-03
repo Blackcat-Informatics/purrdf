@@ -10,11 +10,11 @@
 //! with the data URL as base) and its focus/shape (or shape-map JSON), runs
 //! [`purrdf_shex::validate`], and compares the verdict.
 //!
-//! * **SKIP** (a counted category): entries whose traits demand machinery
-//!   this engine deliberately does not ship — `Extends`, `ExtendsDiamond`
-//!   (neither has corpus entries). `Import` is resolved, `SemanticAction` is
-//!   dispatched (the Test extension), and `Greedy`/`Exhaustive`/`OutsideBMP`
-//!   are attempted.
+//! * **SKIP**: the trait-skip list ([`SKIP_TRAITS`]) is now **empty** — every
+//!   trait in the corpus is exercised (`Import` resolved, `SemanticAction`
+//!   dispatched via the Test extension, `Greedy`/`Exhaustive`/`OutsideBMP`
+//!   attempted). The harness asserts nothing is skipped so a regression that
+//!   re-adds a skip is caught.
 //! * **XFAIL**: genuine engine gaps, listed exactly (name + reason). A
 //!   passing xfail fails the harness (a stale ledger is a test error).
 
@@ -37,8 +37,10 @@ const ENTRY_COUNT: usize = 1105;
 /// The URL prefix the vendored tree mirrors.
 const CORPUS_URL: &str = "https://raw.githubusercontent.com/shexSpec/shexTest/master/";
 
-/// Traits this engine deliberately does not implement (skipped, counted).
-const SKIP_TRAITS: &[&str] = &["Extends", "ExtendsDiamond"];
+/// Traits this engine deliberately does not implement (skipped, counted). The
+/// engine now runs every trait in the corpus, so this list is empty and the
+/// harness asserts nothing is skipped.
+const SKIP_TRAITS: &[&str] = &[];
 
 /// Genuine engine gaps: entries expected to produce the WRONG verdict, each
 /// with a reason. A passing xfail fails the harness.
@@ -503,6 +505,10 @@ fn validation_conformance() {
     }
     println!("{board}");
 
+    assert!(
+        skipped.is_empty(),
+        "the trait-skip list is empty, so no entry may be skipped: {skipped:?}\n{board}"
+    );
     assert!(
         stale_xfails.is_empty(),
         "XFAIL entries now pass (remove them from the ledger): {stale_xfails:?}\n{board}"
