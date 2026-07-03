@@ -24,7 +24,7 @@
 //! * **Merge policy.** A shape label may be declared once. A re-declaration
 //!   whose [`ShapeDecl`] is *structurally* equal (AST `==`, not byte-identical)
 //!   is deduplicated; a genuinely conflicting re-declaration is a hard
-//!   [`ShexError::Import`] error. This strictness is deliberate: the importing
+//!   [`ShexError::ImportConflict`] error. This strictness is deliberate: the importing
 //!   document is **not** treated as authoritative last-writer-wins over an
 //!   import, so a real disagreement surfaces instead of being silently
 //!   shadowed. Because each document is parsed independently to the same AST,
@@ -54,8 +54,8 @@ pub type ImportResolver<'a> = dyn Fn(&str) -> Option<Schema> + 'a;
 /// # Errors
 ///
 /// Returns [`ShexError::Import`] when the resolver cannot supply an imported
-/// IRI, or when two schemas declare the same shape label with different
-/// definitions.
+/// IRI, or [`ShexError::ImportConflict`] when two schemas declare the same
+/// shape label with different definitions.
 pub fn resolve_imports(root: Schema, resolver: &ImportResolver<'_>) -> Result<Schema> {
     let mut merged = Schema {
         imports: Vec::new(),
@@ -102,10 +102,7 @@ fn merge_decl(
         if shapes.iter().any(|existing| existing == &decl) {
             return Ok(());
         }
-        return Err(ShexError::import(format!(
-            "conflicting redefinition of shape {}",
-            decl.id
-        )));
+        return Err(ShexError::import_conflict(decl.id));
     }
     seen.insert(decl.id.clone());
     shapes.push(decl);

@@ -43,6 +43,9 @@ pub enum ShexError {
     /// An `IMPORT`ed schema could not be resolved by the caller-supplied
     /// import resolver (no ambient I/O — resolution is injected).
     Import(String),
+    /// Two schemas in the same import closure declare the same shape label
+    /// with conflicting definitions.
+    ImportConflict(String),
 }
 
 impl ShexError {
@@ -71,6 +74,11 @@ impl ShexError {
     pub fn import(iri: impl Into<String>) -> Self {
         Self::Import(iri.into())
     }
+
+    /// Construct a [`ShexError::ImportConflict`] for a conflicting shape label.
+    pub fn import_conflict(label: impl Into<String>) -> Self {
+        Self::ImportConflict(label.into())
+    }
 }
 
 impl fmt::Display for ShexError {
@@ -85,6 +93,9 @@ impl fmt::Display for ShexError {
             }
             Self::Shexj(reason) => write!(f, "ShExJ error: {reason}"),
             Self::Import(iri) => write!(f, "unresolved IMPORT <{iri}>"),
+            Self::ImportConflict(label) => {
+                write!(f, "conflicting redefinition of shape {label}")
+            }
         }
     }
 }

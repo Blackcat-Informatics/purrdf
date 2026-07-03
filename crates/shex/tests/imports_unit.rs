@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
-use purrdf_shex::{parse_shexc, resolve_imports, validate, ConformanceStatus, ShapeSelector};
+use purrdf_shex::{
+    parse_shexc, resolve_imports, validate, ConformanceStatus, ShapeSelector, ShexError,
+};
 
 /// Parse `src` as ShExC with a fixed base.
 fn schema(src: &str) -> purrdf_shex::Schema {
@@ -110,8 +112,13 @@ fn conflicting_redefinition_errors() {
     let err = resolve_imports(root, &|iri| docs.get(iri).map(|s| schema(s)))
         .expect_err("conflicting S1 rejected");
     assert!(
-        format!("{err}").contains("conflicting"),
-        "typed conflict error: {err}"
+        matches!(err, ShexError::ImportConflict(_)),
+        "typed conflict variant: {err:?}"
+    );
+    assert_eq!(
+        format!("{err}"),
+        "conflicting redefinition of shape http://a.example/S1",
+        "accurate conflict message: {err}"
     );
 }
 
@@ -119,6 +126,10 @@ fn conflicting_redefinition_errors() {
 fn unresolved_import_errors() {
     let root = schema("IMPORT <http://a.example/missing>\n<S1> { <p1> . }");
     let err = resolve_imports(root, &|_| None).expect_err("missing import rejected");
+    assert!(
+        matches!(err, ShexError::Import(_)),
+        "typed unresolved variant: {err:?}"
+    );
     assert!(
         format!("{err}").contains("unresolved IMPORT"),
         "typed unresolved error: {err}"
