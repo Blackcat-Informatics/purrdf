@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
 use crate::model::{rdf, rdfs, sh};
+use crate::report::Severity;
 use crate::shapes::build_prefix_header;
 use crate::term::{NamedNode, Term};
 
@@ -37,6 +38,10 @@ pub struct Validator {
     pub kind: ValidatorKind,
     /// Full query text with any `PREFIX` header already prepended.
     pub query_text: String,
+    /// Optional human-readable message declared on the validator node.
+    pub message: Option<String>,
+    /// Optional severity declared on the validator node.
+    pub severity: Option<Severity>,
 }
 
 /// Declaration of a single `sh:Parameter` for a constraint component.
@@ -63,6 +68,10 @@ pub struct Component {
     pub property_validator: Option<Validator>,
     /// Optional generic validator (`sh:validator`).
     pub validator: Option<Validator>,
+    /// Optional human-readable message declared on the component node.
+    pub message: Option<String>,
+    /// Optional severity declared on the component node.
+    pub severity: Option<Severity>,
 }
 
 /// Registry of custom constraint components keyed by component IRI string.
@@ -139,6 +148,18 @@ impl ComponentRegistry {
             registry.components.insert(id, component);
         }
         Ok(registry)
+    }
+}
+
+/// Map an `sh:severity` object term to a [`Severity`]: the three built-in
+/// `sh:` severities map to their variants, any OTHER IRI is preserved verbatim
+/// (SHACL allows custom severity IRIs), and a non-IRI object yields `None`.
+pub(crate) fn severity_from_term(t: &Term) -> Option<Severity> {
+    match t {
+        Term::NamedNode(n) => {
+            Some(Severity::from_iri(n.as_str()).unwrap_or_else(|| Severity::Other(n.clone())))
+        }
+        _ => None,
     }
 }
 
@@ -397,7 +418,24 @@ fn parse_validator(
         )
     })?;
 
-    Ok(Validator { kind, query_text })
+    let mut messages: Vec<String> = objects_of(data, validator, sh::MESSAGE)
+        .into_iter()
+        .filter_map(|t| match t {
+            Term::Literal(lit) => Some(lit.value().to_owned()),
+            _ => None,
+        })
+        .collect();
+    messages.sort();
+    let message = messages.into_iter().next();
+    let severity =
+        first_object_of(data, validator, sh::SEVERITY).and_then(|t| severity_from_term(&t));
+
+    Ok(Validator {
+        kind,
+        query_text,
+        message,
+        severity,
+    })
 }
 
 /// Parse a single constraint component node and its parameters / validators.
@@ -459,12 +497,26 @@ fn parse_component(
         })
         .transpose()?;
 
+    let mut component_messages: Vec<String> = objects_of(data, component, sh::MESSAGE)
+        .into_iter()
+        .filter_map(|t| match t {
+            Term::Literal(lit) => Some(lit.value().to_owned()),
+            _ => None,
+        })
+        .collect();
+    component_messages.sort();
+    let message = component_messages.into_iter().next();
+    let severity =
+        first_object_of(data, component, sh::SEVERITY).and_then(|t| severity_from_term(&t));
+
     Ok(Component {
         id: NamedNode::from(component_iri),
         parameters,
         node_validator,
         property_validator,
         validator,
+        message,
+        severity,
     })
 }
 
@@ -512,9 +564,13 @@ mod tests {
             node_validator: Some(Validator {
                 kind: ValidatorKind::Ask,
                 query_text: "ASK { ?this a ex:Thing }".to_owned(),
+                message: None,
+                severity: None,
             }),
             property_validator: None,
             validator: None,
+            message: None,
+            severity: None,
         };
         let id = component.id.as_str().to_owned();
         let param_path = component.parameters[0].path.as_str().to_owned();

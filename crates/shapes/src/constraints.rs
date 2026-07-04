@@ -1409,6 +1409,7 @@ fn eval_constraint<G: ShaclDataGraph>(
             )
             .map_err(|e| format!("sh:sparql constraint on shape {source_shape}: {e}"))?
         }
+<<<<<<< HEAD
 
         // ── Expression (SHACL-AF §5.7) ─────────────────────────────────────────
         // Each value node is evaluated as the focus of the node expression; the
@@ -1449,6 +1450,14 @@ fn eval_constraint<G: ShaclDataGraph>(
                 }
             }
             results
+        }
+
+        // ── Custom constraint components (SHACL-SPARQL) ─────────────────────────
+        // Task 4 will implement evaluation; the placeholder keeps the crate
+        // compiling and makes the new variant reachable for parsing tests.
+        Constraint::Component { .. } => {
+            // TODO(#12)
+            vec![]
         }
     })
 }
