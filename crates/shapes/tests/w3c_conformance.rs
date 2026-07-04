@@ -62,10 +62,11 @@ const VECTORS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/sh
 /// Exact number of `sht:Validate` entries the manifest tree must discover.
 /// Bump only when the vendored corpus itself changes (it is byte-frozen).
 ///
-/// Note: the corpus ships 121 files with a `sht:Validate` entry, but upstream's
-/// `sparql/component/manifest.ttl` never `mf:include`s `nodeValidator-001.ttl`,
-/// so the manifest tree — the suite's own definition of membership — yields 120.
-const TOTAL_TESTS: usize = 120;
+/// Note: the corpus ships 121 files with a `sht:Validate` entry in `core/` +
+/// `sparql/`, but upstream's `sparql/component/manifest.ttl` never
+/// `mf:include`s `nodeValidator-001.ttl`, so that subtree yields 120.
+/// The vendored SHACL-AF seam at `af/` adds 6 more `sht:Validate` entries.
+const TOTAL_TESTS: usize = 126;
 
 mod mf {
     pub(crate) const INCLUDE: &str =
@@ -97,7 +98,18 @@ const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 /// A test listed here MUST fail; when engine work fixes it, the harness errors
 /// with `XPASS` and the entry must be removed. This is the SHACL completion
 /// roadmap — keep reasons precise.
-const XFAIL: &[(&str, &str)] = &[];
+const XFAIL: &[(&str, &str)] = &[
+    (
+        "af/function/simpleSPARQLFunction-boolean",
+        "ASK-based sh:SPARQLFunction is not yet supported in the sh:expression \
+         node-expression path (function body uses sh:ask and returns xsd:boolean)",
+    ),
+    (
+        "af/target/sparqlTargetType-001",
+        "sh:SPARQLTargetType (parameterized custom target types) is not yet \
+         implemented in the shapes parser / engine",
+    ),
+];
 
 // ── Test-case model ───────────────────────────────────────────────────────────
 
@@ -466,8 +478,8 @@ fn w3c_shacl_conformance() {
     // First-party AF (Advanced Features) seam: the vendored root manifest stays
     // pristine (no mf:include is added to it), so future upstream AF manifests
     // slot in at `af/manifest.ttl` and are discovered here without re-vendoring.
-    // The placeholder ships zero entries today, so this discovers 0 tests and
-    // TOTAL_TESTS stays 120.
+    // Today this adds 6 SHACL-AF validation tests from expression/, function/,
+    // and target/ sub-manifests.
     let af = root.join("af/manifest.ttl");
     if af.exists() {
         collect_manifest(&af, &root, &mut tests);
