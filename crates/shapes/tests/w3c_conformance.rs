@@ -99,16 +99,8 @@ const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 /// with `XPASS` and the entry must be removed. This is the SHACL completion
 /// roadmap — keep reasons precise.
 const XFAIL: &[(&str, &str)] = &[
-    (
-        "af/function/simpleSPARQLFunction-boolean",
-        "ASK-based sh:SPARQLFunction is not yet supported in the sh:expression \
-         node-expression path (function body uses sh:ask and returns xsd:boolean)",
-    ),
-    (
-        "af/target/sparqlTargetType-001",
-        "sh:SPARQLTargetType (parameterized custom target types) is not yet \
-         implemented in the shapes parser / engine",
-    ),
+    // All ledgered AF tests now pass; keep this ledger empty unless new
+    // validation-only gaps are discovered.
 ];
 
 // ── Test-case model ───────────────────────────────────────────────────────────

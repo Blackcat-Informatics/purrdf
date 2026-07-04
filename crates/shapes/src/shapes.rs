@@ -82,14 +82,41 @@ pub enum Target {
     /// The shape node is itself an `rdfs:Class` → implicit class target.
     ImplicitClass(Term),
     /// `sh:target [ rdf:type sh:SPARQLTarget ; sh:select "SELECT ?this …" ]`
+    /// or a `sh:target [ rdf:type <CustomTargetType> ; <param> <value> ]` that
+    /// has been instantiated from a `sh:SPARQLTargetType` declaration.
     ///
     /// The query is validated (parseable + SELECT-form) at shape-load time. The
     /// native SPARQL engine re-parses the text at eval time, so only the query
-    /// string is retained.
+    /// string is retained. `substitutions` holds pre-bound parameter values for
+    /// `sh:SPARQLTargetType` instances; it is empty for plain `sh:SPARQLTarget`.
     Sparql {
         /// The SPARQL SELECT query text (with any injected PREFIX header).
         select: String,
+        /// Pre-bound parameter substitutions for `sh:SPARQLTargetType` instances.
+        substitutions: Vec<(String, Term)>,
     },
+}
+
+/// A parsed `sh:SPARQLTargetType` declaration.
+#[derive(Debug, Clone)]
+pub struct SparqlTargetType {
+    /// The target type IRI.
+    pub id: Term,
+    /// Parameters in declaration order, each naming the predicate that supplies
+    /// the value at a target instance.
+    pub params: Vec<TargetTypeParam>,
+    /// The raw SPARQL SELECT query text (without prefix header; the header is
+    /// injected when the target type is instantiated on a shape).
+    pub select: String,
+}
+
+/// A single parameter of a `sh:SPARQLTargetType` declaration.
+#[derive(Debug, Clone)]
+pub struct TargetTypeParam {
+    /// The predicate IRI that supplies the parameter value at the target instance.
+    pub predicate: NamedNode,
+    /// The SPARQL variable name (local name of the predicate).
+    pub var: String,
 }
 
 /// The SPARQL validator form carried by a custom constraint component constraint.
@@ -323,6 +350,10 @@ pub struct Shapes {
     /// `sh:sparql`/`sh:SPARQLTarget` queries and `sh:expression` node expressions
     /// resolve. Empty when the graph declares no functions.
     pub functions: Arc<UserFunctionRegistry>,
+    /// SHACL-AF `sh:SPARQLTargetType` declarations declared in the shapes graph,
+    /// keyed by target-type IRI string. Empty when the graph declares no custom
+    /// target types.
+    pub target_types: std::collections::BTreeMap<String, SparqlTargetType>,
     /// The named-graph IRI under which the original shapes dataset is exposed
     /// to SHACL-SPARQL queries, when known.
     pub shapes_graph: Option<String>,
@@ -337,6 +368,7 @@ impl Default for Shapes {
             node_shapes: Vec::new(),
             box_role_vocab: None,
             functions: Arc::new(UserFunctionRegistry::new()),
+            target_types: std::collections::BTreeMap::new(),
             shapes_graph: None,
             shapes_dataset: ::purrdf::RdfDatasetBuilder::new()
                 .freeze()
@@ -444,6 +476,10 @@ struct Parser<'s> {
     shapes_dataset: Arc<RdfDataset>,
     /// The named-graph IRI under which the shapes dataset is exposed.
     shapes_graph: Option<String>,
+    /// Registry of SHACL-AF `sh:SPARQLTargetType` declarations declared in the
+    /// shapes graph. Populated before shape parsing so target-type instances can
+    /// be resolved during target parsing.
+    target_types: std::collections::BTreeMap<String, SparqlTargetType>,
 }
 
 // ── Prefix-header helper (used by shapes and component registry) ───────────────
@@ -530,6 +566,7 @@ impl<'s> Parser<'s> {
             component_registry: ComponentRegistry::default(),
             shapes_dataset,
             shapes_graph,
+            target_types: std::collections::BTreeMap::new(),
         }
     }
 
@@ -594,6 +631,10 @@ impl<'s> Parser<'s> {
         // malformed component, parameter, or validator query is a hard failure.
         self.component_registry = ComponentRegistry::parse(self.data, &self.doc_prefixes)?;
 
+        // SHACL-AF parameterized target types are parsed up-front so that
+        // `sh:target` blank nodes can be instantiated during shape target parsing.
+        self.target_types = self.parse_sparql_target_types()?;
+
         // Parse each top-level shape in stable (sorted) order. A node with
         // sh:path is a (standalone) PROPERTY shape: its path-scoped constraints
         // are wrapped in a single-property Shape carrying the node's targets.
@@ -615,8 +656,151 @@ impl<'s> Parser<'s> {
             node_shapes,
             box_role_vocab: self.box_role_vocab.clone(),
             functions: Arc::new(functions),
+            target_types: self.target_types.clone(),
             shapes_graph: self.shapes_graph.clone(),
             shapes_dataset: Arc::clone(&self.shapes_dataset),
+        })
+    }
+
+    /// Parse every `sh:SPARQLTargetType` declaration in the shapes graph into a
+    /// map keyed by target-type IRI string.
+    ///
+    /// Each declaration must have one or more `sh:parameter`s naming a predicate
+    /// (via `sh:path`), a `sh:select` SELECT query, and may carry a `sh:prefixes`
+    /// declaration. Malformed declarations are hard failures.
+    fn parse_sparql_target_types(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, SparqlTargetType>, String> {
+        let mut ids: Vec<Term> = self
+            .quads_with(None, Some(rdf::TYPE), Some(sh::SPARQL_TARGET_TYPE))
+            .into_iter()
+            .map(|q| q.subject)
+            .collect();
+        ids.sort_by_key(ToString::to_string);
+        ids.dedup();
+
+        let mut registry: std::collections::BTreeMap<String, SparqlTargetType> =
+            std::collections::BTreeMap::new();
+        for id in ids {
+            let iri = match &id {
+                Term::NamedNode(n) => n.as_str().to_owned(),
+                other => {
+                    return Err(format!("sh:SPARQLTargetType must be an IRI, got {other}"));
+                }
+            };
+            let target_type = self.parse_one_sparql_target_type(&id, &iri)?;
+            registry.insert(iri, target_type);
+        }
+        Ok(registry)
+    }
+
+    /// Parse a single `sh:SPARQLTargetType` declaration node.
+    fn parse_one_sparql_target_type(
+        &self,
+        id: &Term,
+        iri: &str,
+    ) -> Result<SparqlTargetType, String> {
+        // Parameters, ordered by (sh:order, predicate IRI).
+        let mut raw: Vec<(f64, NamedNode, String)> = Vec::new();
+        for p_node in self.objects_of(id, sh::PARAMETER_PROPERTY) {
+            let predicate = self
+                .first_object_of(&p_node, sh::PATH)
+                .or_else(|| self.first_object_of(&p_node, sh::PREDICATE))
+                .and_then(|t| match t {
+                    Term::NamedNode(n) => Some(n),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "sh:SPARQLTargetType <{iri}> has a sh:parameter without an IRI sh:path/sh:predicate"
+                    )
+                })?;
+            let var = local_name(predicate.as_str()).to_owned();
+            if var.is_empty() {
+                return Err(format!(
+                    "sh:SPARQLTargetType <{iri}> has a sh:parameter whose predicate <{}> has an empty local name",
+                    predicate.as_str()
+                ));
+            }
+            const RESERVED_VARS: [&str; 6] = [
+                "this",
+                "path",
+                "PATH",
+                "value",
+                "shapesGraph",
+                "currentShape",
+            ];
+            if RESERVED_VARS.contains(&var.as_str()) {
+                return Err(format!(
+                    "sh:SPARQLTargetType <{iri}> parameter variable ?{var} is a SHACL/SHACL-AF reserved name"
+                ));
+            }
+            let order = match self.first_object_of(&p_node, sh::ORDER) {
+                None => f64::INFINITY,
+                Some(Term::Literal(lit)) => lit.value().parse::<f64>().map_err(|_| {
+                    format!(
+                        "sh:SPARQLTargetType <{iri}> parameter ?{var} has a non-numeric sh:order '{}'",
+                        lit.value()
+                    )
+                })?,
+                Some(other) => {
+                    return Err(format!(
+                        "sh:SPARQLTargetType <{iri}> parameter ?{var} has a non-literal sh:order {other}"
+                    ));
+                }
+            };
+            raw.push((order, predicate, var));
+        }
+        raw.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.as_str().cmp(b.1.as_str()))
+        });
+
+        // Reject colliding derived variable names.
+        let mut seen: HashSet<&str> = HashSet::new();
+        for (_, _, var) in &raw {
+            if !seen.insert(var.as_str()) {
+                return Err(format!(
+                    "sh:SPARQLTargetType <{iri}> has two parameters whose variable name ?{var} collides"
+                ));
+            }
+        }
+
+        let params: Vec<TargetTypeParam> = raw
+            .into_iter()
+            .map(|(_, predicate, var)| TargetTypeParam { predicate, var })
+            .collect();
+
+        // sh:select is required and must be a SELECT query.
+        let raw_select = self
+            .first_object_of(id, sh::SELECT)
+            .and_then(|t| match t {
+                Term::Literal(lit) => Some(lit.value().to_owned()),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!("sh:SPARQLTargetType <{iri}> is missing a sh:select string literal")
+            })?;
+        let select = format!("{}{raw_select}", self.prefix_header(&[id]));
+        match purrdf_sparql_algebra::SparqlParser::new().parse_query(&select) {
+            Ok(purrdf_sparql_algebra::Query::Select { .. }) => {}
+            Ok(_) => {
+                return Err(format!(
+                    "sh:SPARQLTargetType <{iri}> must be a SELECT query (ASK/CONSTRUCT/DESCRIBE are not valid)"
+                ));
+            }
+            Err(e) => {
+                return Err(format!(
+                    "sh:SPARQLTargetType <{iri}> has an unparsable sh:select query: {e}"
+                ));
+            }
+        }
+
+        Ok(SparqlTargetType {
+            id: id.clone(),
+            params,
+            select: raw_select,
         })
     }
 
@@ -1124,51 +1308,116 @@ impl<'s> Parser<'s> {
             }
         }
 
-        // sh:target — SHACL-AF extension targets.  Only sh:SPARQLTarget is
-        // supported; any other rdf:type on the target blank node is a hard error.
+        // sh:target — SHACL-AF extension targets. Supports plain sh:SPARQLTarget
+        // and parameterized sh:SPARQLTargetType instances.
         let mut sparql_targets: Vec<Term> = self.objects_of(id, sh::TARGET);
         sparql_targets.sort_by_key(Term::to_string);
         for t_node in sparql_targets {
-            // Require rdf:type sh:SPARQLTarget on the target blank node.
-            if !self.has_type(&t_node, sh::SPARQL_TARGET) {
-                return Err(format!(
-                    "unsupported sh:target type on shape {id}: target node {t_node} \
-                     is not typed sh:SPARQLTarget"
-                ));
+            if self.has_type(&t_node, sh::SPARQL_TARGET) {
+                // Plain sh:SPARQLTarget: sh:select is required on the blank node.
+                let raw_select = self
+                    .first_object_of(&t_node, sh::SELECT)
+                    .and_then(|t| match t {
+                        Term::Literal(lit) => Some(lit.value().to_owned()),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        format!(
+                            "sh:SPARQLTarget on shape {id} is missing a sh:select string literal"
+                        )
+                    })?;
+                // SHACL-AF sh:prefixes may be declared on the shape or the target node.
+                let select = format!("{}{raw_select}", self.prefix_header(&[id, &t_node]));
+
+                // Parse-time query validation via the native parser (hard-fail on
+                // unparsable queries). SHACL-SPARQL requires a SELECT; ASK/CONSTRUCT/
+                // DESCRIBE parse but cannot bind ?this and would panic at eval — reject
+                // at the boundary.
+                match purrdf_sparql_algebra::SparqlParser::new().parse_query(&select) {
+                    Ok(purrdf_sparql_algebra::Query::Select { .. }) => {}
+                    Ok(_) => {
+                        return Err(format!(
+                            "sh:SPARQLTarget on shape {id} must be a SELECT query (ASK/CONSTRUCT/DESCRIBE are not valid SHACL-SPARQL)"
+                        ));
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "sh:SPARQLTarget on shape {id} has an unparsable sh:select query: {e}"
+                        ));
+                    }
+                }
+
+                targets.push(Target::Sparql {
+                    select,
+                    substitutions: vec![],
+                });
+                continue;
             }
 
-            // sh:select is required on the SPARQLTarget blank node.
-            let raw_select = self
-                .first_object_of(&t_node, sh::SELECT)
-                .and_then(|t| match t {
-                    Term::Literal(lit) => Some(lit.value().to_owned()),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    format!("sh:SPARQLTarget on shape {id} is missing a sh:select string literal")
-                })?;
-            // SHACL-AF sh:prefixes may be declared on the shape or the target node.
-            let select = format!("{}{raw_select}", self.prefix_header(&[id, &t_node]));
+            // Not a plain SPARQLTarget: look for an rdf:type that names a declared
+            // sh:SPARQLTargetType.
+            let type_terms: Vec<Term> = self.objects_of(&t_node, rdf::TYPE);
+            let mut matched: Option<(NamedNode, SparqlTargetType)> = None;
+            for t in type_terms {
+                if let Term::NamedNode(n) = &t {
+                    if let Some(target_type) = self.target_types.get(n.as_str()) {
+                        matched = Some((n.clone(), target_type.clone()));
+                        break;
+                    }
+                }
+            }
+            let Some((type_iri, target_type)) = matched else {
+                return Err(format!(
+                    "unsupported sh:target type on shape {id}: target node {t_node} \
+                     is neither typed sh:SPARQLTarget nor a declared sh:SPARQLTargetType"
+                ));
+            };
 
-            // Parse-time query validation via the native parser (hard-fail on
-            // unparsable queries). SHACL-SPARQL requires a SELECT; ASK/CONSTRUCT/
-            // DESCRIBE parse but cannot bind ?this and would panic at eval — reject
-            // at the boundary.
+            // Collect parameter bindings from the target instance.
+            let mut substitutions: Vec<(String, Term)> = Vec::new();
+            for param in &target_type.params {
+                let values = self.objects_of(&t_node, param.predicate.as_str());
+                if values.len() > 1 {
+                    return Err(format!(
+                        "sh:target instance of <{type_iri}> on shape {id} has {count} values for parameter <{pred}>, only one is allowed",
+                        count = values.len(),
+                        pred = param.predicate.as_str()
+                    ));
+                }
+                let Some(value) = values.into_iter().next() else {
+                    return Err(format!(
+                        "sh:target instance of <{type_iri}> on shape {id} is missing required parameter <{pred}>",
+                        pred = param.predicate.as_str()
+                    ));
+                };
+                substitutions.push((param.var.clone(), value));
+            }
+
+            // Build the query with prefixes from the shape, the target instance,
+            // and the target-type declaration itself.
+            let select = format!(
+                "{}{}",
+                self.prefix_header(&[id, &t_node, &target_type.id]),
+                target_type.select
+            );
             match purrdf_sparql_algebra::SparqlParser::new().parse_query(&select) {
                 Ok(purrdf_sparql_algebra::Query::Select { .. }) => {}
                 Ok(_) => {
                     return Err(format!(
-                        "sh:SPARQLTarget on shape {id} must be a SELECT query (ASK/CONSTRUCT/DESCRIBE are not valid SHACL-SPARQL)"
+                        "sh:target instance of <{type_iri}> on shape {id} must be a SELECT query"
                     ));
                 }
                 Err(e) => {
                     return Err(format!(
-                        "sh:SPARQLTarget on shape {id} has an unparsable sh:select query: {e}"
+                        "sh:target instance of <{type_iri}> on shape {id} has an unparsable sh:select query: {e}"
                     ));
                 }
             }
 
-            targets.push(Target::Sparql { select });
+            targets.push(Target::Sparql {
+                select,
+                substitutions,
+            });
         }
 
         Ok(targets)

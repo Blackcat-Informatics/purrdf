@@ -18,8 +18,8 @@
       "note": "30 spec-inherent entailment-regime cases (OWL-Direct/DL, RIF-rule, and RDF-axiomatic-triple entailment beyond a forward-materialization reasoner) + 5 upstream-errata fixtures with non-canonical XSD lexicals"
     },
     "SHACL Core + SHACL-SPARQL": {
-      "ledgered": 6,
-      "note": "SHACL-SPARQL custom constraint components (sh:ConstraintComponent validators) and $this/$shapesGraph pre-binding semantics are unsupported"
+      "ledgered": 0,
+      "note": "no ledgered gaps"
     },
     "SHACL (first-party corpus)": {
       "ledgered": 0,

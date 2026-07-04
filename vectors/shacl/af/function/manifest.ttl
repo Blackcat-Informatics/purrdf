@@ -8,5 +8,6 @@
   a mf:Manifest ;
   rdfs:label "SHACL-AF SPARQL function tests" ;
   mf:include <callSPARQLFunction.ttl> ;
-  mf:include <simpleSPARQLFunction.ttl> ;
+  mf:include <simpleSPARQLFunction-boolean.ttl> ;
+  mf:include <simpleSPARQLFunction-args.ttl> ;
   .
