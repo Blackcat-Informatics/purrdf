@@ -57,6 +57,32 @@ impl ParseError {
             at,
         }
     }
+
+    /// The byte offset the failure was reported at, for the position-bearing
+    /// variants ([`Lex`](Self::Lex)/[`Syntax`](Self::Syntax)). `None` for
+    /// [`Unsupported`](Self::Unsupported)/[`Iri`](Self::Iri), which are not tied
+    /// to a single source position.
+    #[must_use]
+    pub fn byte_offset(&self) -> Option<usize> {
+        match self {
+            Self::Lex { at, .. } | Self::Syntax { at, .. } => Some(*at),
+            Self::Unsupported(_) | Self::Iri { .. } => None,
+        }
+    }
+
+    /// Resolve this error's byte offset to a 1-based source [`Position`] against
+    /// the original query text.
+    ///
+    /// This is the source-tracing seam: the lexer keeps a cheap byte offset on
+    /// the happy path, and the line/column table is built here, on the error
+    /// path only. `None` for variants without a byte offset.
+    ///
+    /// [`Position`]: purrdf_iri::Position
+    #[must_use]
+    pub fn locate(&self, src: &str) -> Option<purrdf_iri::Position> {
+        self.byte_offset()
+            .map(|at| purrdf_iri::LineIndex::new(src).locate(src, at))
+    }
 }
 
 impl fmt::Display for ParseError {
@@ -91,3 +117,34 @@ impl std::error::Error for ParseError {}
 
 /// Convenience alias for fallible SPARQL parse operations.
 pub type Result<T> = core::result::Result<T, ParseError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_offset_only_for_positional_variants() {
+        assert_eq!(ParseError::lex("x", 7).byte_offset(), Some(7));
+        assert_eq!(ParseError::syntax("y", 3).byte_offset(), Some(3));
+        assert_eq!(ParseError::unsupported("SERVICE").byte_offset(), None);
+        assert_eq!(
+            ParseError::Iri {
+                lexical: "::".into(),
+                reason: "bad".into()
+            }
+            .byte_offset(),
+            None
+        );
+    }
+
+    #[test]
+    fn locate_resolves_line_and_column() {
+        // Offset points at the 'x' on the third line.
+        let src = "SELECT *\nWHERE {\n  x }";
+        let at = src.find('x').unwrap();
+        let pos = ParseError::syntax("unexpected token", at).locate(src).unwrap();
+        assert_eq!((pos.line, pos.column), (3, 3));
+        assert_eq!(pos.byte_offset, at);
+        assert!(ParseError::unsupported("SERVICE").locate(src).is_none());
+    }
+}

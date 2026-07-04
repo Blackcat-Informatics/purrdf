@@ -91,6 +91,34 @@ impl ShexError {
     pub fn import_conflict(label: impl Into<String>) -> Self {
         Self::ImportConflict(label.into())
     }
+
+    /// The byte offset the failure was reported at, for the position-bearing
+    /// variants ([`Lex`](Self::Lex)/[`Syntax`](Self::Syntax)). `None` for the
+    /// others — in particular [`Import`](Self::Import), whose offset (if any)
+    /// belongs to a *different* source document than the one being parsed.
+    #[must_use]
+    pub fn byte_offset(&self) -> Option<usize> {
+        match self {
+            Self::Lex { at, .. } | Self::Syntax { at, .. } => Some(*at),
+            Self::Iri { .. } | Self::Shexj(_) | Self::Import { .. } | Self::ImportConflict(_) => {
+                None
+            }
+        }
+    }
+
+    /// Resolve this error's byte offset to a 1-based source [`Position`] against
+    /// the original ShExC text.
+    ///
+    /// The lexer keeps a cheap byte offset on the happy path; the line/column
+    /// table is built here, on the error path only. `None` for variants without
+    /// a byte offset in this document.
+    ///
+    /// [`Position`]: purrdf_iri::Position
+    #[must_use]
+    pub fn locate(&self, src: &str) -> Option<purrdf_iri::Position> {
+        self.byte_offset()
+            .map(|at| purrdf_iri::LineIndex::new(src).locate(src, at))
+    }
 }
 
 impl fmt::Display for ShexError {
@@ -124,3 +152,28 @@ impl std::error::Error for ShexError {}
 
 /// Convenience alias for fallible ShEx parse operations.
 pub type Result<T> = core::result::Result<T, ShexError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_offset_only_for_positional_variants() {
+        assert_eq!(ShexError::lex("x", 5).byte_offset(), Some(5));
+        assert_eq!(ShexError::syntax("y", 9).byte_offset(), Some(9));
+        assert_eq!(ShexError::shexj("bad").byte_offset(), None);
+        assert_eq!(
+            ShexError::import("http://example.org/s", ShexError::syntax("z", 1)).byte_offset(),
+            None
+        );
+    }
+
+    #[test]
+    fn locate_resolves_line_and_column() {
+        let src = "PREFIX ex: <http://example.org/>\n<S> {\n  ex:p .\n}";
+        let at = src.find("ex:p").unwrap();
+        let pos = ShexError::syntax("unexpected", at).locate(src).unwrap();
+        assert_eq!((pos.line, pos.column), (3, 3));
+        assert!(ShexError::shexj("bad").locate(src).is_none());
+    }
+}
