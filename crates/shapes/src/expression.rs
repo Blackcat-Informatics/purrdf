@@ -28,10 +28,11 @@
 //!
 //! # Determinism
 //!
-//! [`Term`] is intentionally not `Ord`, so any set-shaped output is ordered with
-//! the repo idiom `v.sort_by_key(Term::to_string); v.dedup();` (matching
-//! [`crate::sparql::eval_target`]). The evaluator is wasm32-clean: no clocks,
-//! threads, RNG, or filesystem.
+//! [`Term`] is intentionally not `Ord`, so this module orders any set-shaped
+//! output with `v.sort_by_cached_key(Term::to_string); v.dedup();` (caching the
+//! rendered key once per element; the sibling [`crate::sparql::eval_target`]
+//! sorts the same set-shaped way via `sort_by_key`). The evaluator is
+//! wasm32-clean: no clocks, threads, RNG, or filesystem.
 
 use std::collections::HashSet;
 
@@ -271,7 +272,7 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
             // deterministic. `path::eval`'s crate-wide first-seen iteration order
             // is left untouched (it is used elsewhere for path traversal).
             let mut v = path::eval(store, focus, p);
-            v.sort_by_key(Term::to_string);
+            v.sort_by_cached_key(Term::to_string);
             v.dedup();
             Ok(v)
         }
@@ -280,7 +281,7 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
             for sub in exprs {
                 out.extend(eval_node_expr(store, focus, sub, guard)?);
             }
-            out.sort_by_key(Term::to_string);
+            out.sort_by_cached_key(Term::to_string);
             out.dedup();
             Ok(out)
         }
@@ -292,14 +293,16 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
             let mut acc: HashSet<Term> = eval_node_expr(store, focus, first, guard)?
                 .into_iter()
                 .collect();
+            // Reuse a single scratch set across operands (clear + refill) rather
+            // than allocating a fresh `HashSet` per iteration.
+            let mut next: HashSet<Term> = HashSet::new();
             for sub in iter {
-                let next: HashSet<Term> = eval_node_expr(store, focus, sub, guard)?
-                    .into_iter()
-                    .collect();
+                next.clear();
+                next.extend(eval_node_expr(store, focus, sub, guard)?);
                 acc.retain(|t| next.contains(t));
             }
             let mut out: Vec<Term> = acc.into_iter().collect();
-            out.sort_by_key(Term::to_string);
+            out.sort_by_cached_key(Term::to_string);
             out.dedup();
             Ok(out)
         }
@@ -376,14 +379,14 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
         )),
         NodeExpr::Distinct(of) => {
             let mut out = eval_node_expr(store, focus, of, guard)?;
-            out.sort_by_key(Term::to_string);
+            out.sort_by_cached_key(Term::to_string);
             out.dedup();
             Ok(out)
         }
         NodeExpr::Count { distinct, of } => {
             let mut out = eval_node_expr(store, focus, of, guard)?;
             if *distinct {
-                out.sort_by_key(Term::to_string);
+                out.sort_by_cached_key(Term::to_string);
                 out.dedup();
             }
             // Element count as a canonical `xsd:integer`. `usize::to_string`
@@ -446,7 +449,7 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
             // Canonicalize the node-expression set output here (sort+dedup) so
             // sh:offset / sh:limit over a bare Filter set are deterministic
             // rather than store-iteration-order dependent.
-            kept.sort_by_key(Term::to_string);
+            kept.sort_by_cached_key(Term::to_string);
             kept.dedup();
             Ok(kept)
         }
@@ -549,7 +552,7 @@ mod tests {
         assert_eq!(result, vec![ex("b"), ex("c")]);
         let sorted = {
             let mut v = result.clone();
-            v.sort_by_key(Term::to_string);
+            v.sort_by_cached_key(Term::to_string);
             v
         };
         assert_eq!(result, sorted, "Path result must be returned sorted");
@@ -601,7 +604,7 @@ mod tests {
         // Explicitly assert deterministic (sorted) order.
         let sorted = {
             let mut v = result.clone();
-            v.sort_by_key(Term::to_string);
+            v.sort_by_cached_key(Term::to_string);
             v
         };
         assert_eq!(result, sorted);

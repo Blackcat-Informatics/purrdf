@@ -1425,12 +1425,15 @@ fn eval_constraint<G: ShaclDataGraph>(
             let sev = csev.clone().unwrap_or_else(|| severity.clone());
             let msg = cmsg.clone().or_else(|| message.clone());
             let mut results = Vec::new();
+            // Seed the guard with the ambient filter/exists depth so a
+            // `sh:filterShape` re-entry through this expression keeps the
+            // cross-shape recursion count monotone (fail-closed at the depth
+            // ceiling) rather than resetting it per constraint. The guard is
+            // hoisted above the loop: `enter`/`exit` are balanced on every path,
+            // so its in-flight set is empty between value nodes, and `depth` is
+            // loop-invariant — reusing it only avoids re-allocating the set.
+            let mut guard = crate::expression::RecursionGuard::with_depth(depth);
             for value_node in value_nodes {
-                // Seed the guard with the ambient filter/exists depth so a
-                // `sh:filterShape` re-entry through this expression keeps the
-                // cross-shape recursion count monotone (fail-closed at the depth
-                // ceiling) rather than resetting it per constraint.
-                let mut guard = crate::expression::RecursionGuard::with_depth(depth);
                 let out = crate::expression::eval_node_expr(store, value_node, expr, &mut guard)
                     .map_err(|e| {
                         format!("sh:expression constraint on shape {source_shape}: {e}")
