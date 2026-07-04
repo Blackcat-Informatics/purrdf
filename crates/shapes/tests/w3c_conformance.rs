@@ -97,25 +97,7 @@ const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 /// A test listed here MUST fail; when engine work fixes it, the harness errors
 /// with `XPASS` and the entry must be removed. This is the SHACL completion
 /// roadmap — keep reasons precise.
-const XFAIL: &[(&str, &str)] = &[
-    // ── SHACL-SPARQL ──────────────────────────────────────────────────────────
-    (
-        "sparql/pre-binding/pre-binding-002",
-        "$this pre-binding is not visible inside FILTER-only UNION branches \
-         (SPARQL pre-binding semantics); the query yields no solutions so no \
-         violation is produced",
-    ),
-    (
-        "sparql/pre-binding/pre-binding-005",
-        "$this pre-binding is not visible inside a FILTER-only group \
-         ({ FILTER(bound($this)) }); the query yields no solutions",
-    ),
-    (
-        "sparql/pre-binding/shapesGraph-001",
-        "$shapesGraph/$currentShape pre-bound variables are unsupported (the \
-         SPARQL dataset carries no shapes graph), so the constraint never fires",
-    ),
-];
+const XFAIL: &[(&str, &str)] = &[];
 
 // ── Test-case model ───────────────────────────────────────────────────────────
 
@@ -140,6 +122,9 @@ struct TestCase {
     section: String,
     shapes_path: PathBuf,
     data_path: PathBuf,
+    /// IRI supplied by `sht:shapesGraph` (often `<>` resolving to the test file),
+    /// used as the named graph for `$shapesGraph` pre-binding in SHACL-SPARQL.
+    shapes_graph_iri: Option<String>,
     expected: Expected,
 }
 
@@ -288,6 +273,11 @@ fn parse_entry(
     let shapes_path = graph_path(sht::SHAPES_GRAPH, "sht:shapesGraph");
     let data_path = graph_path(sht::DATA_GRAPH, "sht:dataGraph");
 
+    let shapes_graph_iri = object(g, &action, sht::SHAPES_GRAPH).and_then(|t| match t {
+        Term::NamedNode(n) => Some(n.as_str().to_owned()),
+        _ => None,
+    });
+
     let result = object(g, entry, mf::RESULT)
         .unwrap_or_else(|| panic!("{id}: sht:Validate entry has no mf:result"));
     let expected = match &result {
@@ -303,6 +293,7 @@ fn parse_entry(
         section,
         shapes_path,
         data_path,
+        shapes_graph_iri,
         expected,
     })
 }
@@ -359,8 +350,14 @@ fn validate_case(tc: &TestCase) -> Result<purrdf_shapes::report::ValidationRepor
     )
     .map_err(|e| format!("shapes graph parse error: {e}"))?;
     let doc_prefixes = purrdf_shapes::text_ingest::extract_prefixes(&shapes_text);
-    let shapes = purrdf_shapes::shapes::from_dataset_with_prefixes(&shapes_dataset, &doc_prefixes)
-        .map_err(|e| format!("shapes parse error: {e}"))?;
+    let shapes_graph_iri = tc.shapes_graph_iri.as_deref();
+    let shapes = purrdf_shapes::shapes::from_dataset_with_config_and_graph(
+        &shapes_dataset,
+        &doc_prefixes,
+        None,
+        shapes_graph_iri.map(ToOwned::to_owned),
+    )
+    .map_err(|e| format!("shapes parse error: {e}"))?;
 
     let data_dataset = if tc.data_path == tc.shapes_path {
         shapes_dataset
@@ -368,8 +365,12 @@ fn validate_case(tc: &TestCase) -> Result<purrdf_shapes::report::ValidationRepor
         parse_turtle_file(&tc.data_path).map_err(|e| format!("data graph parse error: {e}"))?
     };
 
-    purrdf_shapes::engine::validate_dataset(data_dataset.as_ref(), &shapes)
-        .map_err(|e| format!("validation error: {e}"))
+    purrdf_shapes::engine::validate_dataset_with_shapes_graph(
+        data_dataset.as_ref(),
+        &shapes,
+        shapes_graph_iri,
+    )
+    .map_err(|e| format!("validation error: {e}"))
 }
 
 /// Multiset of comparison tuples the engine produced.

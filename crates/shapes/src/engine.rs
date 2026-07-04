@@ -9,12 +9,13 @@
 
 use std::sync::Arc;
 
-use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
+use ::purrdf::{RdfDataset, RdfDatasetBuilder, RdfTerm};
+
+use crate::data::{GraphFilter, IrDataGraph, Quad, ShaclDataGraph};
 use crate::model::{rdf, rdfs};
 use crate::report::ValidationReport;
 use crate::shapes::{Shape, Shapes, Target};
 use crate::term::{NamedNode, Term};
-use ::purrdf::RdfDataset;
 
 // ── Target resolution helpers ─────────────────────────────────────────────────
 
@@ -347,6 +348,106 @@ where
     validate_with_focus_filter(&reference, shapes, include_focus)
 }
 
+/// A [`ShaclDataGraph`] that evaluates SHACL Core constraints over a projected
+/// data graph while exposing a combined data+shapes dataset to SHACL-SPARQL.
+struct IrDataGraphWithShapes {
+    /// The data graph used for Core pattern lookups.
+    data: IrDataGraph,
+    /// The combined dataset handed to the native SPARQL engine: data in the
+    /// default graph, shapes in a named graph when a shapes-graph IRI is known.
+    sparql_dataset: Arc<RdfDataset>,
+    /// The named-graph IRI under which the shapes dataset is exposed, when known.
+    shapes_graph_iri: Option<String>,
+}
+
+impl ShaclDataGraph for IrDataGraphWithShapes {
+    fn quads_for_pattern(
+        &self,
+        subject: Option<&Term>,
+        predicate: Option<&Term>,
+        object: Option<&Term>,
+        graph: GraphFilter,
+    ) -> Vec<Quad> {
+        self.data
+            .quads_for_pattern(subject, predicate, object, graph)
+    }
+
+    fn sparql_dataset(&self) -> Arc<RdfDataset> {
+        Arc::clone(&self.sparql_dataset)
+    }
+
+    fn shapes_graph_iri(&self) -> Option<&str> {
+        self.shapes_graph_iri.as_deref()
+    }
+}
+
+/// Build the dataset exposed to SHACL-SPARQL paths.
+///
+/// Data quads stay in their original graphs (the projected default graph). When
+/// a shapes-graph IRI is known, every quad from [`Shapes::shapes_dataset`] is
+/// placed into a named graph with that IRI.
+///
+/// Returns the combined dataset and the shapes-graph IRI actually used, if any.
+fn build_sparql_dataset(
+    data: Arc<RdfDataset>,
+    shapes: &Shapes,
+    override_graph: Option<&str>,
+) -> Result<(Arc<RdfDataset>, Option<String>), String> {
+    let graph_iri = override_graph
+        .map(ToOwned::to_owned)
+        .or_else(|| shapes.shapes_graph.clone());
+    let Some(ref graph_iri) = graph_iri else {
+        return Ok((data, None));
+    };
+    if shapes.shapes_dataset.quad_count() == 0 {
+        return Ok((data, None));
+    }
+
+    let mut builder = RdfDatasetBuilder::new();
+    builder.push_dataset(data.as_ref());
+
+    let graph_term = RdfTerm::iri(graph_iri);
+    for mut quad in shapes.shapes_dataset.owned_quads() {
+        quad.graph_name = Some(graph_term.clone());
+        builder.push_owned_quad(&quad);
+    }
+
+    builder
+        .freeze()
+        .map_err(|e| e.to_string())
+        .map(|ds| (ds, Some(graph_iri.clone())))
+}
+
+/// Validate a frozen [`RdfDataset`] against parsed SHACL shapes, exposing the
+/// shapes graph as a named graph to SHACL-SPARQL paths.
+///
+/// `shapes_graph_iri` overrides [`Shapes::shapes_graph`] when both are present.
+pub fn validate_dataset_with_shapes_graph(
+    data: &RdfDataset,
+    shapes: &Shapes,
+    shapes_graph_iri: Option<&str>,
+) -> Result<ValidationReport, String> {
+    let projected = project_dataset(data)?;
+    validate_projected_dataset_with_shapes_graph(projected, shapes, shapes_graph_iri)
+}
+
+/// Validate an already-projected dataset with a shapes-graph overlay.
+pub fn validate_projected_dataset_with_shapes_graph(
+    projected: Arc<RdfDataset>,
+    shapes: &Shapes,
+    shapes_graph_iri: Option<&str>,
+) -> Result<ValidationReport, String> {
+    let data_graph = IrDataGraph::new(Arc::clone(&projected));
+    let (sparql_dataset, shapes_graph_iri) =
+        build_sparql_dataset(projected, shapes, shapes_graph_iri)?;
+    let graph = IrDataGraphWithShapes {
+        data: data_graph,
+        sparql_dataset,
+        shapes_graph_iri,
+    };
+    validate_with(&graph, shapes)
+}
+
 /// Build a SHACL-projection dataset from the source [`RdfDataset`], flattening
 /// every quad into the default graph and materializing reifier bindings as
 /// `rdf:reifies` triples and statement annotations as plain triples.
@@ -620,7 +721,7 @@ mod tests {
     #[test]
     fn validate_stub_always_conforms() {
         let data = load_data_nt("");
-        let shapes = crate::shapes::from_dataset(&data).expect("empty shapes graph parses");
+        let shapes = Shapes::default();
         let report = validate(&data, &shapes);
         assert!(report.conforms);
         assert!(report.results.is_empty());

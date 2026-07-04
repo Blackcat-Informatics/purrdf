@@ -40,8 +40,8 @@ use crate::term::{term_value_to_native, Literal, NamedNode, Term};
 /// (`Boolean` / `Graph` are rejected), or if any solution row has no `?this`
 /// binding.
 pub fn eval_target(dataset: &Arc<RdfDataset>, select: &str) -> Result<Vec<Term>, String> {
-    let solutions = run_select_with_substitutions(dataset, select, &[])
-        .map_err(|e| format!("SPARQLTarget {e}"))?;
+    let solutions =
+        run_select_generic(dataset, select, &[]).map_err(|e| format!("SPARQLTarget {e}"))?;
 
     let this_index = column_index(&solutions.0, "this");
 
@@ -65,8 +65,10 @@ pub fn eval_target(dataset: &Arc<RdfDataset>, select: &str) -> Result<Vec<Term>,
 /// Execute a SHACL-AF `sh:SPARQLConstraint` SELECT query for a single focus node,
 /// mapping each solution row to a [`ValidationResult`].
 ///
-/// `?this` / `$this` is pre-bound to `focus` before evaluation. Each solution row
-/// produces exactly one result:
+/// `$this` is pre-bound to `focus`, and when known `$shapesGraph` and
+/// `$currentShape` are pre-bound to `shapes_graph_iri` and `current_shape`, before
+/// the query is run through the SHACL-specific pre-binding rewrite. Each solution
+/// row produces exactly one result:
 ///
 /// | SPARQL binding | `ValidationResult` field |
 /// |---|---|
@@ -82,6 +84,7 @@ pub fn eval_target(dataset: &Arc<RdfDataset>, select: &str) -> Result<Vec<Term>,
 /// # Errors
 ///
 /// Returns `Err(String)` if execution fails or if the result is not a SELECT.
+#[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
 pub fn eval_sparql_constraint(
     dataset: &Arc<RdfDataset>,
     focus: &Term,
@@ -90,6 +93,8 @@ pub fn eval_sparql_constraint(
     source_shape: &Term,
     severity: &Severity,
     message: Option<&String>,
+    shapes_graph_iri: Option<&str>,
+    current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
     // Pre-bind `$this` to THIS focus node (GAP-A substitution — the native
     // replacement for oxigraph's per-focus `PreparedSparqlQuery::substitute_variable`).
@@ -100,8 +105,9 @@ pub fn eval_sparql_constraint(
     // is memoized by the thread-local engine's plan cache, so per-focus evaluation
     // re-runs the plan, not the parse.
     let subs = [("this".to_owned(), focus.to_term_value())];
-    let (variables, rows) = run_select_with_substitutions(dataset, select, &subs)
-        .map_err(|e| format!("SPARQLConstraint {e}"))?;
+    let (variables, rows) =
+        run_select_with_shacl_prebinding(dataset, select, &subs, shapes_graph_iri, current_shape)
+            .map_err(|e| format!("SPARQLConstraint {e}"))?;
     let path_index = column_index(&variables, "path");
     let value_index = column_index(&variables, "value");
 
@@ -167,7 +173,7 @@ pub fn eval_scalar_expr(
         .iter()
         .map(|(name, term)| (name.clone(), term.to_term_value()))
         .collect();
-    let (variables, rows) = run_select_with_substitutions(dataset, &select, &subs)
+    let (variables, rows) = run_select_generic(dataset, &select, &subs)
         .map_err(|e| format!("scalar expression {e}"))?;
 
     if rows.len() > 1 {
@@ -261,8 +267,8 @@ pub fn eval_aggregate(
     }
 
     let select = format!("SELECT ({agg}(?v) AS ?result) WHERE {{ VALUES (?v) {{ {rows}}} }}");
-    let (variables, result_rows) = run_select_with_substitutions(dataset, &select, &[])
-        .map_err(|e| format!("aggregate {e}"))?;
+    let (variables, result_rows) =
+        run_select_generic(dataset, &select, &[]).map_err(|e| format!("aggregate {e}"))?;
 
     if result_rows.len() > 1 {
         return Err(format!(
@@ -333,8 +339,8 @@ pub fn eval_order(
 
     let order = if descending { "DESC(?v)" } else { "?v" };
     let select = format!("SELECT ?v WHERE {{ VALUES (?v) {{ {rows}}} }} ORDER BY {order}");
-    let (variables, result_rows) = run_select_with_substitutions(dataset, &select, &[])
-        .map_err(|e| format!("order-by {e}"))?;
+    let (variables, result_rows) =
+        run_select_generic(dataset, &select, &[]).map_err(|e| format!("order-by {e}"))?;
 
     let v_index = column_index(&variables, "v");
     let mut out: Vec<Term> = Vec::with_capacity(result_rows.len());
@@ -365,10 +371,10 @@ thread_local! {
     static SPARQL_ENGINE: NativeSparqlEngine = NativeSparqlEngine::new();
 
     /// The SHACL-AF function registry (`sh:SPARQLFunction`) in scope for the current
-    /// validation, set by [`enter_function_scope`]. `run_select_with_substitutions` reads it to decide
+    /// validation, set by [`enter_function_scope`]. `run_select_generic` reads it to decide
     /// whether a call-position IRI can resolve to a user function. Kept alongside the
     /// engine (this module's established thread-local pattern) because validation is
-    /// serial: a single guard on the validation thread covers every `run_select_with_substitutions` on
+    /// serial: a single guard on the validation thread covers every `run_select_generic` on
     /// that thread. Parallel FILTER workers inside the engine do NOT read this — they
     /// receive the registry through `EvalCtx` (propagated in `fork_for_worker`).
     static CURRENT_FUNCTIONS: RefCell<Option<Arc<UserFunctionRegistry>>> = const { RefCell::new(None) };
@@ -397,11 +403,13 @@ pub fn enter_function_scope(registry: Arc<UserFunctionRegistry>) -> FunctionScop
     FunctionScope { previous }
 }
 
-/// Run a SELECT query over the dataset, returning `(variables, rows)`. Rejects
-/// non-SELECT result forms. When a non-empty SHACL-AF function registry is in scope
-/// (see [`enter_function_scope`]), the query runs through the engine's user-function
-/// path so a call-position IRI can resolve to a declared `sh:SPARQLFunction`.
-pub(crate) fn run_select_with_substitutions(
+/// Run a SELECT query over the dataset using the generic SPARQL `query` path
+/// with variable substitutions.
+///
+/// This is the path used by SHACL-AF node expressions (scalar, aggregate,
+/// order-by). It does NOT apply the SHACL-specific pre-binding rewrite used for
+/// `sh:sparql` constraint/component bodies.
+pub(crate) fn run_select_generic(
     dataset: &Arc<RdfDataset>,
     select: &str,
     substitutions: &[(String, TermValue)],
@@ -434,23 +442,73 @@ pub(crate) fn run_select_with_substitutions(
     }
 }
 
-/// Run an ASK query over the dataset with the given variable substitutions.
-/// Rejects non-boolean result forms.
-pub(crate) fn run_ask_with_substitutions(
+/// Run a SELECT query over the dataset using SHACL-SPARQL pre-binding semantics.
+///
+/// Pre-binds `$this`, and when known `$shapesGraph` and `$currentShape`, then
+/// applies the SHACL-specific substitution rewrite (FILTER/EXISTS expression
+/// substitution and `BOUND($v)` → `true`).
+pub(crate) fn run_select_with_shacl_prebinding(
+    dataset: &Arc<RdfDataset>,
+    select: &str,
+    substitutions: &[(String, TermValue)],
+    shapes_graph_iri: Option<&str>,
+    current_shape: Option<&Term>,
+) -> Result<SelectRows, String> {
+    let mut subs: Vec<(String, TermValue)> = substitutions.to_vec();
+    if let Some(iri) = shapes_graph_iri {
+        subs.push(("shapesGraph".to_owned(), TermValue::Iri(iri.to_owned())));
+    }
+    if let Some(shape) = current_shape {
+        subs.push(("currentShape".to_owned(), shape.to_term_value()));
+    }
+
+    let result = SPARQL_ENGINE
+        .with(|engine| {
+            CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
+                Some(registry) if !registry.is_empty() => engine
+                    .query_with_shacl_prebinding_and_functions(
+                        dataset, select, None, &subs, registry,
+                    ),
+                _ => engine.query_with_shacl_prebinding(dataset, select, None, &subs),
+            })
+        })
+        .map_err(|e| format!("query evaluation error: {e}"))?;
+    match result {
+        SparqlResult::Solutions {
+            variables, rows, ..
+        } => Ok((variables, rows)),
+        SparqlResult::Boolean(_) => {
+            Err("query must be a SELECT, got a boolean (ASK) result".to_owned())
+        }
+        SparqlResult::Graph(_) => {
+            Err("query must be a SELECT, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
+        }
+    }
+}
+
+/// Run an ASK query using SHACL-SPARQL pre-binding semantics.
+pub(crate) fn run_ask_with_shacl_prebinding(
     dataset: &Arc<RdfDataset>,
     ask: &str,
     substitutions: &[(String, TermValue)],
+    shapes_graph_iri: Option<&str>,
+    current_shape: Option<&Term>,
 ) -> Result<bool, String> {
+    let mut subs: Vec<(String, TermValue)> = substitutions.to_vec();
+    if let Some(iri) = shapes_graph_iri {
+        subs.push(("shapesGraph".to_owned(), TermValue::Iri(iri.to_owned())));
+    }
+    if let Some(shape) = current_shape {
+        subs.push(("currentShape".to_owned(), shape.to_term_value()));
+    }
+
     let result = SPARQL_ENGINE
         .with(|engine| {
-            engine.query(
-                dataset,
-                SparqlRequest {
-                    query: ask,
-                    base_iri: None,
-                    substitutions,
-                },
-            )
+            CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
+                Some(registry) if !registry.is_empty() => engine
+                    .query_with_shacl_prebinding_and_functions(dataset, ask, None, &subs, registry),
+                _ => engine.query_with_shacl_prebinding(dataset, ask, None, &subs),
+            })
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match result {
@@ -557,6 +615,8 @@ mod tests {
             &dummy_shape(),
             &Severity::Violation,
             None,
+            None,
+            None,
         )
         .expect("eval must succeed for self-referencing focus");
         assert_eq!(results.len(), 1);
@@ -576,6 +636,8 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
+            None,
+            None,
             None,
         )
         .expect("eval must succeed for non-matching focus");
@@ -752,5 +814,50 @@ mod tests {
         let result = eval_scalar_expr(&dataset, "STRLEN(1 + 2)", &[])
             .expect("scalar eval must succeed despite the SPARQL type error");
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn eval_sparql_constraint_shapes_graph_and_current_shape() {
+        let shapes_ttl = r#"
+            @prefix ex: <http://example.org/> .
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            ex:Shape a sh:NodeShape ;
+                sh:targetNode ex:Node ;
+                ex:prop 42 ;
+                sh:sparql ex:Constraint .
+            ex:Constraint sh:select """
+                SELECT $this
+                WHERE {
+                    FILTER bound($shapesGraph)
+                    GRAPH $shapesGraph {
+                        FILTER bound($currentShape)
+                        $currentShape ex:prop 42 .
+                    }
+                }
+            """ .
+        "#;
+        let shapes_dataset =
+            crate::text_ingest::parse_turtle_to_dataset(shapes_ttl).expect("valid shapes");
+        let prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
+        let shapes = crate::shapes::from_dataset_with_config_and_graph(
+            &shapes_dataset,
+            &prefixes,
+            None,
+            Some("http://example.org/shapes".to_owned()),
+        )
+        .expect("parse shapes");
+
+        let data = dataset_from_ntriples(&[
+            "<http://example.org/Node> <http://example.org/p> <http://example.org/o> .",
+        ]);
+        let report =
+            crate::engine::validate_dataset_with_shapes_graph(data.as_ref(), &shapes, None)
+                .expect("validate");
+        assert!(!report.conforms, "constraint must fire");
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(
+            report.results[0].focus_node,
+            named_term("http://example.org/Node")
+        );
     }
 }
