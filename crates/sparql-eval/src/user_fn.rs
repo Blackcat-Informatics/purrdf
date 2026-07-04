@@ -215,15 +215,20 @@ pub(crate) fn eval_user_function(
     }
 
     // Bind each supplied argument to its parameter variable, type-checking as we go.
-    // An unbound (`None`) argument leaves the parameter variable unbound rather than
-    // binding it to a sentinel — matching SHACL-AF's pre-binding semantics.
+    // A mandatory parameter with an unbound (`None`) argument yields no result node
+    // (SHACL-AF §5.2/§9.5): the function is not evaluated at all. An unbound OPTIONAL
+    // argument simply leaves that parameter variable unbound (pre-binding semantics).
     let mut substitutions: Vec<(String, TermValue)> = Vec::with_capacity(args.len());
-    for (arg, param) in args.iter().zip(&func.params) {
-        if let Some(value) = arg {
-            param
-                .constraint
-                .check(iri, &format!("parameter ?{}", param.var), value)?;
-            substitutions.push((param.var.clone(), value.clone()));
+    for (idx, (arg, param)) in args.iter().zip(&func.params).enumerate() {
+        match arg {
+            Some(value) => {
+                param
+                    .constraint
+                    .check(iri, &format!("parameter ?{}", param.var), value)?;
+                substitutions.push((param.var.clone(), value.clone()));
+            }
+            None if idx < func.required => return Ok(None),
+            None => {}
         }
     }
 
@@ -371,6 +376,48 @@ mod tests {
         };
         assert_eq!(run(4), "true");
         assert_eq!(run(5), "false");
+    }
+
+    /// SHACL-AF §5.2/§9.5: a call missing a mandatory argument yields no result
+    /// node. The body here ignores its parameter and always succeeds, so only the
+    /// mandatory-argument guard (not an unbound `?n`) can suppress the value.
+    #[test]
+    fn unbound_mandatory_parameter_yields_no_value() {
+        let mut registry = UserFunctionRegistry::new();
+        registry.insert(
+            EX_EVEN,
+            UserFunction {
+                params: vec![int_param("n")],
+                required: 1,
+                body: parse("ASK {}"),
+                kind: UserFnBody::Ask,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        let ds = empty_dataset();
+        // `?missing` is never bound, so the sole mandatory argument is unbound.
+        let query = format!("SELECT ((<{EX_EVEN}>(?missing)) AS ?v) WHERE {{}}");
+        let result = NativeSparqlEngine::new()
+            .query_with_user_functions(
+                &ds,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                &registry,
+            )
+            .expect("query");
+        match result {
+            SparqlResult::Solutions { rows, .. } => {
+                assert!(
+                    rows[0][0].is_none(),
+                    "unbound mandatory argument must yield no value, got {:?}",
+                    rows[0][0]
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
     }
 
     /// A call with the wrong argument count is a hard [`EvalError::Function`].
