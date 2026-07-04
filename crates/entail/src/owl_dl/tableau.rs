@@ -398,6 +398,7 @@ impl<'a> Tableau<'a> {
             if find(st, i) != i {
                 continue;
             }
+            changed |= self.rule_unfold(st, i);
             changed |= self.rule_and(st, i);
             changed |= self.rule_all(st, i);
             changed |= self.rule_nominal(st, i);
@@ -409,6 +410,25 @@ impl<'a> Tableau<'a> {
                 return changed;
             }
         }
+        changed
+    }
+
+    /// Absorption (lazy-unfolding) rule: a named class `A ∈ L(x)` adds every `D` with
+    /// an absorbed GCI `A ⊑ D`. This replaces branching a `¬A ⊔ D` disjunction on every
+    /// node with a deterministic add triggered only where `A` actually holds.
+    fn rule_unfold(&self, st: &mut State, x: usize) -> bool {
+        let mut adds: Vec<u32> = Vec::new();
+        for &cid in &st.nodes[x].label {
+            if let Some(sups) = self.kb.unfold.get(&cid) {
+                for &s in sups {
+                    if !st.nodes[x].label.contains(&s) {
+                        adds.push(s);
+                    }
+                }
+            }
+        }
+        let changed = !adds.is_empty();
+        st.nodes[x].label.extend(adds);
         changed
     }
 

@@ -27,23 +27,6 @@ pub(crate) enum Role {
     Inv(u32),
 }
 
-impl Role {
-    /// The inverse of this role (`r ↦ r⁻`, `r⁻ ↦ r`).
-    pub(crate) fn inverse(self) -> Self {
-        match self {
-            Self::Named(p) => Self::Inv(p),
-            Self::Inv(p) => Self::Named(p),
-        }
-    }
-
-    /// The underlying named property id, ignoring direction.
-    pub(crate) fn property(self) -> u32 {
-        match self {
-            Self::Named(p) | Self::Inv(p) => p,
-        }
-    }
-}
-
 /// A Description-Logic concept (class expression) over interned term ids.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Concept {
@@ -69,8 +52,6 @@ pub(crate) enum Concept {
     Max(u32, Role, Box<Self>),
     /// `{a₁,…,aₙ}` — a nominal (`owl:oneOf`), interned individual ids (sorted, deduped).
     Nominal(Vec<u32>),
-    /// `∃r.{a}` (`owl:hasValue`) — sugar that [`Concept::nnf`] rewrites to `Some`.
-    HasValue(Role, u32),
 }
 
 impl Concept {
@@ -82,7 +63,7 @@ impl Concept {
     }
 
     /// Rewrite into negation-normal form: every `¬` pushed to an atomic
-    /// (`Named` / `Nominal`) leaf, `HasValue` desugared to `∃r.{a}`.
+    /// (`Named` / `Nominal`) leaf.
     pub(crate) fn nnf(self) -> Self {
         match self {
             Self::Top | Self::Bottom | Self::Named(_) => self,
@@ -93,7 +74,6 @@ impl Concept {
             Self::All(r, c) => Self::All(r, Box::new(c.nnf())),
             Self::Min(n, r, c) => Self::Min(n, r, Box::new(c.nnf())),
             Self::Max(n, r, c) => Self::Max(n, r, Box::new(c.nnf())),
-            Self::HasValue(r, a) => Self::Some(r, Box::new(Self::Nominal(vec![a]))).nnf(),
             Self::Not(inner) => Self::neg(*inner),
         }
     }
@@ -120,7 +100,6 @@ impl Concept {
             }
             // ¬(≤n r.C) = ≥(n+1) r.C.
             Self::Max(n, r, c) => Self::Min(n + 1, r, Box::new(c.nnf())),
-            Self::HasValue(r, a) => Self::neg(Self::Some(r, Box::new(Self::Nominal(vec![a])))),
         }
     }
 }
@@ -136,10 +115,12 @@ pub(crate) enum Decomp {
     Top,
     /// `⊥`.
     Bottom,
-    /// A named class id.
-    Named(u32),
-    /// `¬A` for an atomic class id `A`.
-    NegNamed(u32),
+    /// A named class (atomic positive leaf). The class is identified by the
+    /// concept id indexing this decomposition, so the tableau reads the leaf
+    /// opaquely and needs no term id here.
+    Named,
+    /// `¬A` for an atomic class `A` (atomic negative leaf).
+    NegNamed,
     /// `⊓` over child concept ids.
     And(Vec<u32>),
     /// `⊔` over child concept ids.
@@ -189,10 +170,10 @@ impl ConceptTable {
         let decomp = match c {
             Concept::Top => Decomp::Top,
             Concept::Bottom => Decomp::Bottom,
-            Concept::Named(a) => Decomp::Named(*a),
+            Concept::Named(_) => Decomp::Named,
             Concept::Nominal(ids) => Decomp::Nominal(ids.clone()),
             Concept::Not(inner) => match inner.as_ref() {
-                Concept::Named(a) => Decomp::NegNamed(*a),
+                Concept::Named(_) => Decomp::NegNamed,
                 Concept::Nominal(ids) => Decomp::NegNominal(ids.clone()),
                 // NNF guarantees `Not` wraps only an atomic leaf.
                 other => unreachable!("non-atomic under Not in NNF: {other:?}"),
@@ -203,7 +184,6 @@ impl ConceptTable {
             Concept::All(r, c) => Decomp::All(*r, self.intern_nnf(c)),
             Concept::Min(n, r, c) => Decomp::Min(*n, *r, self.intern_nnf(c)),
             Concept::Max(n, r, c) => Decomp::Max(*n, *r, self.intern_nnf(c)),
-            Concept::HasValue(..) => unreachable!("HasValue is desugared by nnf"),
         };
         let id = u32::try_from(self.concepts.len()).expect("concept count fits u32");
         self.concepts.push(c.clone());
@@ -216,12 +196,6 @@ impl ConceptTable {
     /// The decomposed structure behind a concept id.
     pub(crate) fn decomp(&self, id: u32) -> &Decomp {
         &self.decomp[id as usize]
-    }
-
-    /// The canonical NNF concept behind an id.
-    #[cfg(test)]
-    pub(crate) fn concept(&self, id: u32) -> &Concept {
-        &self.concepts[id as usize]
     }
 
     /// The id of the NNF of `¬c` where `c` is the concept with id `id`.
@@ -314,12 +288,6 @@ mod tests {
     }
 
     #[test]
-    fn has_value_desugars() {
-        let hv = Concept::HasValue(r(), 7).nnf();
-        assert_eq!(hv, Concept::Some(r(), Box::new(Concept::Nominal(vec![7]))));
-    }
-
-    #[test]
     fn interning_is_stable_and_negation_is_involutive() {
         let mut t = ConceptTable::default();
         let a = t.intern(Concept::Named(1));
@@ -330,6 +298,6 @@ mod tests {
         t.finalize();
         let na = t.negate(a);
         assert_eq!(t.negate(na), a, "negation is involutive");
-        assert!(matches!(t.decomp(na), Decomp::NegNamed(1)));
+        assert!(matches!(t.decomp(na), Decomp::NegNamed));
     }
 }

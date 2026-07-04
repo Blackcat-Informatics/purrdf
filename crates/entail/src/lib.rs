@@ -29,6 +29,8 @@ pub(crate) mod owl_dl;
 pub(crate) mod rdfs;
 pub(crate) mod vocab;
 
+pub use owl_dl::query::{materialize_dl, QNode, QTriple};
+
 /// A SPARQL entailment regime (`sparql:entailmentRegime`), by its W3C IRI's local
 /// name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

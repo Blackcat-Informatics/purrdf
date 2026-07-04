@@ -15,21 +15,23 @@
 //! all working sets are `BTreeSet`/`BTreeMap` or insertion-ordered `Vec`s, and the
 //! tableau branches in a fixed order — nothing is ever read out of a `HashMap`.
 //!
-//! The reasoning entry points are exercised by the module's own tests and wired into
-//! the public `materialize`-style query seam in a subsequent task; until then the
-//! `pub(crate)` surface is unreferenced from non-test crate code.
-#![allow(dead_code)]
+//! The reasoning entry points are exercised by the module's own tests and by the
+//! query-answering layer ([`crate::owl_dl::query`]), which wires them into the public
+//! [`crate::materialize_dl`] seam.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::RdfDataset;
 
 use crate::interner::Interner;
-use crate::owl_dl::concept::{Concept, ConceptTable};
+#[cfg(test)]
+use crate::owl_dl::concept::Concept;
+use crate::owl_dl::concept::ConceptTable;
 use crate::EntailError;
 
 pub(crate) mod concept;
 pub(crate) mod parser;
+pub(crate) mod query;
 pub(crate) mod tableau;
 
 /// A Description-Logic knowledge base: the interned TBox/RBox/ABox plus the concept
@@ -45,14 +47,18 @@ pub(crate) struct Kb {
     pub(crate) bottom: u32,
     /// General concept inclusions `sub ⊑ sup`, as concept-id pairs.
     pub(crate) tbox: Vec<(u32, u32)>,
-    /// The internalized TBox: meta-concept ids `nnf(¬sub ⊔ sup)`, one per GCI.
+    /// The internalized TBox: meta-concept ids `nnf(¬sub ⊔ sup)`, one per
+    /// non-absorbable GCI (a GCI whose left side is not a single named class).
     pub(crate) meta: Vec<u32>,
+    /// The **absorbed** TBox: a named-class concept id `A` → the super-concept ids it
+    /// entails (`A ⊑ D`). A lazy-unfolding rule adds each `D` to any node labelled `A`
+    /// rather than branching a `¬A ⊔ D` disjunction on *every* node — the standard
+    /// absorption optimization that keeps a many-axiom TBox from exploding.
+    pub(crate) unfold: BTreeMap<u32, Vec<u32>>,
     /// `owl:inverseOf` partners (symmetric), property term id → its inverses.
     pub(crate) inverses: BTreeMap<u32, BTreeSet<u32>>,
     /// Role hierarchy: super-property term id → its sub-property term ids.
     pub(crate) role_sub: BTreeMap<u32, BTreeSet<u32>>,
-    /// Functional property term ids (also internalized as `⊤ ⊑ ≤1 r.⊤`).
-    pub(crate) functional: BTreeSet<u32>,
     /// Concept assertions `a : C` — `(individual term id, concept id)`.
     pub(crate) abox_types: Vec<(u32, u32)>,
     /// Role assertions `a r b` — `(subject, property, object)` term ids.
@@ -64,7 +70,9 @@ pub(crate) struct Kb {
 }
 
 impl Kb {
-    /// An empty knowledge base (with `⊤`/`⊥` pre-interned).
+    /// An empty knowledge base (with `⊤`/`⊥` pre-interned). Used by the tableau's own
+    /// unit tests, which assemble a knowledge base axiom-by-axiom.
+    #[cfg(test)]
     pub(crate) fn empty() -> Self {
         let mut table = ConceptTable::default();
         let top = table.top();
@@ -76,9 +84,9 @@ impl Kb {
             bottom,
             tbox: Vec::new(),
             meta: Vec::new(),
+            unfold: BTreeMap::new(),
             inverses: BTreeMap::new(),
             role_sub: BTreeMap::new(),
-            functional: BTreeSet::new(),
             abox_types: Vec::new(),
             abox_roles: Vec::new(),
             same_as: Vec::new(),
@@ -95,18 +103,28 @@ impl Kb {
         parser::build(ds)
     }
 
-    /// Record a general concept inclusion `sub ⊑ sup` and its internalized form.
+    /// Record a general concept inclusion `sub ⊑ sup`, absorbing it into the lazy
+    /// [`Kb::unfold`] index when its left side is a single named class, else
+    /// internalizing it as a meta-concept disjunction. Used by the tableau unit tests
+    /// (the RDF build path records inclusions inline in [`parser`]).
+    #[cfg(test)]
     pub(crate) fn push_gci(&mut self, sub: Concept, sup: Concept) {
         let sub_id = self.table.intern(sub.clone());
         let sup_id = self.table.intern(sup.clone());
         self.tbox.push((sub_id, sup_id));
-        let meta = Concept::Or(vec![Concept::Not(Box::new(sub)), sup]);
-        let meta_id = self.table.intern(meta);
-        self.meta.push(meta_id);
+        if matches!(sub, Concept::Named(_)) {
+            self.unfold.entry(sub_id).or_default().push(sup_id);
+        } else {
+            let meta = Concept::Or(vec![Concept::Not(Box::new(sub)), sup]);
+            let meta_id = self.table.intern(meta);
+            self.meta.push(meta_id);
+        }
     }
 
     /// Intern a query concept and refresh the negation cache so it can be negated by
-    /// [`Kb::entails_instance`] / [`Kb::entails_subclass`].
+    /// [`Kb::entails_instance`] / [`Kb::entails_subclass`]. Used by the module's unit
+    /// tests; the query layer interns in bulk and calls [`Kb::finalize`] once.
+    #[cfg(test)]
     pub(crate) fn intern_query(&mut self, c: Concept) -> u32 {
         let id = self.table.intern(c);
         self.table.finalize();

@@ -12,6 +12,12 @@
 //! `owl:inverseOf`, `owl:FunctionalProperty`, …) becomes TBox/RBox axioms. Class
 //! expressions are interned to [`Concept`]s and memoized by their RDF node id.
 //!
+//! The class-expression extraction is factored into [`CeExtractor`] — a reusable view
+//! over an interned `subject → predicate → objects` index plus the shared [`Vocab`] and
+//! [`Interner`]. The knowledge-base build uses it over the dataset's own triples; the
+//! query-answering layer ([`crate::owl_dl::query`]) reuses the very same extractor over
+//! a query's ground class-expression sub-graph, so there is one class-expression parser.
+//!
 //! Every extraction is deterministic (all indices are `BTreeMap`/insertion-ordered
 //! `Vec`s) and any malformed class-expression graph is a hard [`EntailError::Parse`],
 //! never a silent skip.
@@ -36,50 +42,53 @@ use crate::vocab::{
 };
 use crate::EntailError;
 
-/// The interned vocabulary term ids the reverse mapping keys on.
-struct Vocab {
-    ty: u32,
-    thing: u32,
-    nothing: u32,
-    class: u32,
-    restriction: u32,
-    on_property: u32,
-    some_values: u32,
-    all_values: u32,
-    has_value: u32,
-    intersection: u32,
-    union: u32,
-    complement: u32,
-    one_of: u32,
-    min_card: u32,
-    max_card: u32,
-    card: u32,
-    min_qcard: u32,
-    max_qcard: u32,
-    qcard: u32,
-    on_class: u32,
-    sub_class: u32,
-    equiv_class: u32,
-    disjoint: u32,
-    domain: u32,
-    range: u32,
-    inverse_of: u32,
-    equiv_prop: u32,
-    sub_prop: u32,
-    functional: u32,
-    same_as: u32,
-    first: u32,
-    rest: u32,
-    nil: u32,
-    named_individual: u32,
+/// The interned vocabulary term ids the reverse mapping keys on. Fields are
+/// `pub(crate)` so the query-answering layer can build the same class-expression
+/// view and recognize query class expressions using the identical ids.
+pub(crate) struct Vocab {
+    pub(crate) ty: u32,
+    pub(crate) thing: u32,
+    pub(crate) nothing: u32,
+    pub(crate) class: u32,
+    pub(crate) restriction: u32,
+    pub(crate) on_property: u32,
+    pub(crate) some_values: u32,
+    pub(crate) all_values: u32,
+    pub(crate) has_value: u32,
+    pub(crate) intersection: u32,
+    pub(crate) union: u32,
+    pub(crate) complement: u32,
+    pub(crate) one_of: u32,
+    pub(crate) min_card: u32,
+    pub(crate) max_card: u32,
+    pub(crate) card: u32,
+    pub(crate) min_qcard: u32,
+    pub(crate) max_qcard: u32,
+    pub(crate) qcard: u32,
+    pub(crate) on_class: u32,
+    pub(crate) sub_class: u32,
+    pub(crate) equiv_class: u32,
+    pub(crate) disjoint: u32,
+    pub(crate) domain: u32,
+    pub(crate) range: u32,
+    pub(crate) inverse_of: u32,
+    pub(crate) equiv_prop: u32,
+    pub(crate) sub_prop: u32,
+    pub(crate) functional: u32,
+    pub(crate) same_as: u32,
+    pub(crate) first: u32,
+    pub(crate) rest: u32,
+    pub(crate) nil: u32,
+    pub(crate) named_individual: u32,
     /// Class/property-typing objects that mark structure, not an instance assertion.
-    structural_types: BTreeSet<u32>,
+    pub(crate) structural_types: BTreeSet<u32>,
     /// Predicates consumed by class-expression / list / axiom extraction.
-    structural_preds: BTreeSet<u32>,
+    pub(crate) structural_preds: BTreeSet<u32>,
 }
 
 impl Vocab {
-    fn intern(i: &mut Interner) -> Self {
+    /// Intern (idempotently) the vocabulary IRIs into `i`, returning their ids.
+    pub(crate) fn intern(i: &mut Interner) -> Self {
         let ty = i.intern_iri(RDF_TYPE);
         let restriction = i.intern_iri(OWL_RESTRICTION);
         let class = i.intern_iri(OWL_CLASS);
@@ -201,200 +210,70 @@ impl Vocab {
     }
 }
 
-/// Parse `ds`'s default graph into a knowledge base.
-///
-/// # Errors
-///
-/// [`EntailError::Parse`] on a malformed class-expression graph (a restriction with no
-/// `owl:onProperty`, a non-integer cardinality literal, a broken RDF list, …).
-pub(crate) fn build(ds: &RdfDataset) -> Result<Kb, EntailError> {
-    let mut p = Parser::new(ds);
-    p.build()
+/// A `subject → predicate → objects` index over interned term ids (insertion-ordered
+/// objects; deterministic lookups). Shared by the knowledge-base build and the query
+/// class-expression view.
+pub(crate) type TripleIndex = BTreeMap<u32, BTreeMap<u32, Vec<u32>>>;
+
+/// Insert `(s, p, o)` into `index`.
+pub(crate) fn index_insert(index: &mut TripleIndex, s: u32, p: u32, o: u32) {
+    index.entry(s).or_default().entry(p).or_default().push(o);
 }
 
-/// The reverse-mapping working state.
-struct Parser<'a> {
-    ds: &'a RdfDataset,
-    interner: Interner,
-    table: ConceptTable,
-    top: u32,
-    bottom: u32,
-    /// `subject → predicate → objects` (insertion-ordered; deterministic lookups).
-    index: BTreeMap<u32, BTreeMap<u32, Vec<u32>>>,
-    /// The default-graph triples in dataset order.
-    triples: Vec<(u32, u32, u32)>,
-    v: Vocab,
+/// A reusable class-expression extractor: it decodes the OWL-2-RDF class-expression
+/// vocabulary rooted at an RDF node into a [`Concept`], memoizing per node id.
+///
+/// It borrows an interned [`TripleIndex`], the [`Interner`] (to distinguish blank
+/// inverse-role nodes and parse cardinality literals), and the shared [`Vocab`]; the
+/// concept-interning [`ConceptTable`] is *not* needed here (extraction returns a
+/// [`Concept`] tree; interning is the caller's concern).
+pub(crate) struct CeExtractor<'a> {
+    index: &'a TripleIndex,
+    interner: &'a Interner,
+    v: &'a Vocab,
     /// Node id → its class expression (memoized).
     expr_cache: BTreeMap<u32, Concept>,
     /// Nodes on the current recursion stack (cycle guard).
     in_progress: BTreeSet<u32>,
-    // --- accumulators ---
-    tbox: Vec<(u32, u32)>,
-    meta: Vec<u32>,
-    inverses: BTreeMap<u32, BTreeSet<u32>>,
-    role_sub: BTreeMap<u32, BTreeSet<u32>>,
-    functional: BTreeSet<u32>,
-    abox_types: Vec<(u32, u32)>,
-    abox_roles: Vec<(u32, u32, u32)>,
-    same_as: Vec<(u32, u32)>,
-    individuals: BTreeSet<u32>,
 }
 
-impl<'a> Parser<'a> {
-    fn new(ds: &'a RdfDataset) -> Self {
-        let mut interner = Interner::default();
-        let v = Vocab::intern(&mut interner);
-        let mut table = ConceptTable::default();
-        let top = table.top();
-        let bottom = table.bottom();
+impl<'a> CeExtractor<'a> {
+    /// Build an extractor over `index`, resolving terms through `interner` and keying
+    /// on `v`.
+    pub(crate) fn new(index: &'a TripleIndex, interner: &'a Interner, v: &'a Vocab) -> Self {
         Self {
-            ds,
+            index,
             interner,
-            table,
-            top,
-            bottom,
-            index: BTreeMap::new(),
-            triples: Vec::new(),
             v,
             expr_cache: BTreeMap::new(),
             in_progress: BTreeSet::new(),
-            tbox: Vec::new(),
-            meta: Vec::new(),
-            inverses: BTreeMap::new(),
-            role_sub: BTreeMap::new(),
-            functional: BTreeSet::new(),
-            abox_types: Vec::new(),
-            abox_roles: Vec::new(),
-            same_as: Vec::new(),
-            individuals: BTreeSet::new(),
         }
     }
 
-    /// Drive the full extraction.
-    fn build(&mut self) -> Result<Kb, EntailError> {
-        // Intern every default-graph triple and build the subject index.
-        for q in self.ds.quads() {
-            if q.g.is_some() {
-                continue;
+    /// Whether `node` denotes a (compound / anonymous) class expression — i.e. it
+    /// carries one of the class-expression-defining predicates or is typed
+    /// `owl:Restriction`. A plain named class returns `false`.
+    pub(crate) fn is_class_expression(&self, node: u32) -> bool {
+        for p in [
+            self.v.intersection,
+            self.v.union,
+            self.v.complement,
+            self.v.one_of,
+            self.v.on_property,
+        ] {
+            if self.get(node, p).is_some() {
+                return true;
             }
-            let s = self.interner.intern(self.ds.term_value(q.s));
-            let p = self.interner.intern(self.ds.term_value(q.p));
-            let o = self.interner.intern(self.ds.term_value(q.o));
-            self.triples.push((s, p, o));
-            self.index
-                .entry(s)
-                .or_default()
-                .entry(p)
-                .or_default()
-                .push(o);
         }
-
-        let triples = self.triples.clone();
-        for (s, p, o) in triples {
-            self.axiom(s, p, o)?;
-        }
-
-        self.table.finalize();
-        Ok(Kb {
-            interner: std::mem::take(&mut self.interner),
-            table: std::mem::take(&mut self.table),
-            top: self.top,
-            bottom: self.bottom,
-            tbox: std::mem::take(&mut self.tbox),
-            meta: std::mem::take(&mut self.meta),
-            inverses: std::mem::take(&mut self.inverses),
-            role_sub: std::mem::take(&mut self.role_sub),
-            functional: std::mem::take(&mut self.functional),
-            abox_types: std::mem::take(&mut self.abox_types),
-            abox_roles: std::mem::take(&mut self.abox_roles),
-            same_as: std::mem::take(&mut self.same_as),
-            individuals: std::mem::take(&mut self.individuals),
-        })
-    }
-
-    /// Interpret one `(s, p, o)` triple as an axiom / ABox fact.
-    fn axiom(&mut self, s: u32, p: u32, o: u32) -> Result<(), EntailError> {
-        if p == self.v.sub_class {
-            let sub = self.expr(s)?;
-            let sup = self.expr(o)?;
-            self.gci(sub, sup);
-        } else if p == self.v.equiv_class {
-            let a = self.expr(s)?;
-            let b = self.expr(o)?;
-            self.gci(a.clone(), b.clone());
-            self.gci(b, a);
-        } else if p == self.v.disjoint {
-            let a = self.expr(s)?;
-            let b = self.expr(o)?;
-            self.gci(Concept::And(vec![a, b]), Concept::Bottom);
-        } else if p == self.v.domain {
-            let d = self.expr(o)?;
-            self.gci(Concept::Some(Role::Named(s), Box::new(Concept::Top)), d);
-        } else if p == self.v.range {
-            let d = self.expr(o)?;
-            self.gci(Concept::Top, Concept::All(Role::Named(s), Box::new(d)));
-        } else if p == self.v.inverse_of {
-            self.inverses.entry(s).or_default().insert(o);
-            self.inverses.entry(o).or_default().insert(s);
-        } else if p == self.v.equiv_prop {
-            self.role_sub.entry(s).or_default().insert(o);
-            self.role_sub.entry(o).or_default().insert(s);
-        } else if p == self.v.sub_prop {
-            // s ⊑ o : `o` has sub-role `s`.
-            self.role_sub.entry(o).or_default().insert(s);
-        } else if p == self.v.same_as {
-            self.same_as.push((s, o));
-            self.individuals.insert(s);
-            self.individuals.insert(o);
-        } else if p == self.v.ty {
-            self.type_assertion(s, o)?;
-        } else if !self.v.structural_preds.contains(&p) && self.interner.is_subject(o) {
-            // Any remaining user predicate is an object-property (role) assertion.
-            self.abox_roles.push((s, p, o));
-            self.individuals.insert(s);
-            self.individuals.insert(o);
-        }
-        Ok(())
-    }
-
-    /// Handle `s rdf:type o`.
-    fn type_assertion(&mut self, s: u32, o: u32) -> Result<(), EntailError> {
-        if o == self.v.functional {
-            self.functional.insert(s);
-            // Global functionality: ⊤ ⊑ ≤1 s.⊤.
-            self.gci(
-                Concept::Top,
-                Concept::Max(1, Role::Named(s), Box::new(Concept::Top)),
-            );
-            return Ok(());
-        }
-        if o == self.v.named_individual {
-            self.individuals.insert(s);
-            return Ok(());
-        }
-        if self.v.structural_types.contains(&o) {
-            return Ok(());
-        }
-        // An instance-typing assertion `s : C` for a (possibly anonymous) class C.
-        let c = self.expr(o)?;
-        let cid = self.table.intern(c);
-        self.abox_types.push((s, cid));
-        self.individuals.insert(s);
-        Ok(())
-    }
-
-    /// Record a GCI `sub ⊑ sup` and its internalized meta-concept `nnf(¬sub ⊔ sup)`.
-    fn gci(&mut self, sub: Concept, sup: Concept) {
-        let sub_id = self.table.intern(sub.clone());
-        let sup_id = self.table.intern(sup.clone());
-        self.tbox.push((sub_id, sup_id));
-        let meta = Concept::Or(vec![Concept::Not(Box::new(sub)), sup]);
-        let meta_id = self.table.intern(meta);
-        self.meta.push(meta_id);
+        self.is_typed(node, self.v.restriction)
     }
 
     /// The class expression denoted by RDF node `node` (memoized).
-    fn expr(&mut self, node: u32) -> Result<Concept, EntailError> {
+    ///
+    /// # Errors
+    ///
+    /// [`EntailError::Parse`] on a malformed class-expression graph.
+    pub(crate) fn expr(&mut self, node: u32) -> Result<Concept, EntailError> {
         if let Some(c) = self.expr_cache.get(&node) {
             return Ok(c.clone());
         }
@@ -560,6 +439,183 @@ impl<'a> Parser<'a> {
             .get(&s)
             .and_then(|m| m.get(&self.v.ty))
             .is_some_and(|os| os.contains(&o))
+    }
+}
+
+/// Parse `ds`'s default graph into a knowledge base.
+///
+/// # Errors
+///
+/// [`EntailError::Parse`] on a malformed class-expression graph (a restriction with no
+/// `owl:onProperty`, a non-integer cardinality literal, a broken RDF list, …).
+pub(crate) fn build(ds: &RdfDataset) -> Result<Kb, EntailError> {
+    let mut interner = Interner::default();
+    let v = Vocab::intern(&mut interner);
+    let mut table = ConceptTable::default();
+    let top = table.top();
+    let bottom = table.bottom();
+
+    // Intern every default-graph triple and build the subject index.
+    let mut index: TripleIndex = BTreeMap::new();
+    let mut triples: Vec<(u32, u32, u32)> = Vec::new();
+    for q in ds.quads() {
+        if q.g.is_some() {
+            continue;
+        }
+        let s = interner.intern(ds.term_value(q.s));
+        let p = interner.intern(ds.term_value(q.p));
+        let o = interner.intern(ds.term_value(q.o));
+        triples.push((s, p, o));
+        index_insert(&mut index, s, p, o);
+    }
+
+    let mut acc = Accums::default();
+    {
+        let mut ce = CeExtractor::new(&index, &interner, &v);
+        for &spo in &triples {
+            axiom(&mut ce, &mut table, &mut acc, &v, &interner, spo)?;
+        }
+    }
+
+    table.finalize();
+    Ok(Kb {
+        interner,
+        table,
+        top,
+        bottom,
+        tbox: acc.tbox,
+        meta: acc.meta,
+        unfold: acc.unfold,
+        inverses: acc.inverses,
+        role_sub: acc.role_sub,
+        abox_types: acc.abox_types,
+        abox_roles: acc.abox_roles,
+        same_as: acc.same_as,
+        individuals: acc.individuals,
+    })
+}
+
+/// The knowledge-base accumulators filled while scanning axioms.
+#[derive(Default)]
+struct Accums {
+    tbox: Vec<(u32, u32)>,
+    meta: Vec<u32>,
+    unfold: BTreeMap<u32, Vec<u32>>,
+    inverses: BTreeMap<u32, BTreeSet<u32>>,
+    role_sub: BTreeMap<u32, BTreeSet<u32>>,
+    abox_types: Vec<(u32, u32)>,
+    abox_roles: Vec<(u32, u32, u32)>,
+    same_as: Vec<(u32, u32)>,
+    individuals: BTreeSet<u32>,
+}
+
+/// Interpret one `(s, p, o)` triple as an axiom / ABox fact.
+fn axiom(
+    ce: &mut CeExtractor<'_>,
+    table: &mut ConceptTable,
+    acc: &mut Accums,
+    v: &Vocab,
+    interner: &Interner,
+    (s, p, o): (u32, u32, u32),
+) -> Result<(), EntailError> {
+    if p == v.sub_class {
+        let sub = ce.expr(s)?;
+        let sup = ce.expr(o)?;
+        gci(table, acc, sub, sup);
+    } else if p == v.equiv_class {
+        let a = ce.expr(s)?;
+        let b = ce.expr(o)?;
+        gci(table, acc, a.clone(), b.clone());
+        gci(table, acc, b, a);
+    } else if p == v.disjoint {
+        let a = ce.expr(s)?;
+        let b = ce.expr(o)?;
+        gci(table, acc, Concept::And(vec![a, b]), Concept::Bottom);
+    } else if p == v.domain {
+        let d = ce.expr(o)?;
+        gci(
+            table,
+            acc,
+            Concept::Some(Role::Named(s), Box::new(Concept::Top)),
+            d,
+        );
+    } else if p == v.range {
+        let d = ce.expr(o)?;
+        gci(
+            table,
+            acc,
+            Concept::Top,
+            Concept::All(Role::Named(s), Box::new(d)),
+        );
+    } else if p == v.inverse_of {
+        acc.inverses.entry(s).or_default().insert(o);
+        acc.inverses.entry(o).or_default().insert(s);
+    } else if p == v.equiv_prop {
+        acc.role_sub.entry(s).or_default().insert(o);
+        acc.role_sub.entry(o).or_default().insert(s);
+    } else if p == v.sub_prop {
+        // s ⊑ o : `o` has sub-role `s`.
+        acc.role_sub.entry(o).or_default().insert(s);
+    } else if p == v.same_as {
+        acc.same_as.push((s, o));
+        acc.individuals.insert(s);
+        acc.individuals.insert(o);
+    } else if p == v.ty {
+        type_assertion(ce, table, acc, v, s, o)?;
+    } else if !v.structural_preds.contains(&p) && interner.is_subject(o) {
+        // Any remaining user predicate is an object-property (role) assertion.
+        acc.abox_roles.push((s, p, o));
+        acc.individuals.insert(s);
+        acc.individuals.insert(o);
+    }
+    Ok(())
+}
+
+/// Handle `s rdf:type o`.
+fn type_assertion(
+    ce: &mut CeExtractor<'_>,
+    table: &mut ConceptTable,
+    acc: &mut Accums,
+    v: &Vocab,
+    s: u32,
+    o: u32,
+) -> Result<(), EntailError> {
+    if o == v.functional {
+        // Global functionality: ⊤ ⊑ ≤1 s.⊤.
+        gci(
+            table,
+            acc,
+            Concept::Top,
+            Concept::Max(1, Role::Named(s), Box::new(Concept::Top)),
+        );
+        return Ok(());
+    }
+    if o == v.named_individual {
+        acc.individuals.insert(s);
+        return Ok(());
+    }
+    if v.structural_types.contains(&o) {
+        return Ok(());
+    }
+    // An instance-typing assertion `s : C` for a (possibly anonymous) class C.
+    let c = ce.expr(o)?;
+    let cid = table.intern(c);
+    acc.abox_types.push((s, cid));
+    acc.individuals.insert(s);
+    Ok(())
+}
+
+/// Record a GCI `sub ⊑ sup`, absorbing it into the lazy-unfolding index when its left
+/// side is a single named class, else internalizing it as `nnf(¬sub ⊔ sup)`.
+fn gci(table: &mut ConceptTable, acc: &mut Accums, sub: Concept, sup: Concept) {
+    let sub_id = table.intern(sub.clone());
+    let sup_id = table.intern(sup.clone());
+    acc.tbox.push((sub_id, sup_id));
+    if matches!(sub, Concept::Named(_)) {
+        acc.unfold.entry(sub_id).or_default().push(sup_id);
+    } else {
+        let meta = Concept::Or(vec![Concept::Not(Box::new(sub)), sup]);
+        acc.meta.push(table.intern(meta));
     }
 }
 

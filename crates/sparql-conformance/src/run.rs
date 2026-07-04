@@ -6,8 +6,14 @@
 use std::sync::Arc;
 
 use purrdf::{serialize_dataset, SerializeGraph};
-use purrdf_core::{RdfDataset, SparqlEngine, SparqlRequest, SparqlResult};
-use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
+use purrdf_core::{
+    RdfDataset, RdfTextDirection, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
+};
+use purrdf_entail::{QNode, QTriple};
+use purrdf_sparql_algebra::{
+    BaseDirection, GraphPattern, Literal, NamedNodePattern, Query, SparqlParser, TermPattern,
+    TriplePattern,
+};
 use purrdf_sparql_eval::{
     NativeSparqlEngine, ParserOptions, RemoteQuerySource, StandpointPredicates,
 };
@@ -58,14 +64,19 @@ pub enum RunOutcome {
 ///
 /// Returns a message on any read, parse, or serialize failure (never silent).
 pub fn load_dataset(case: &SparqlTestCase) -> Result<Arc<RdfDataset>, String> {
+    use purrdf_entail::Regime;
     let ds = build_dataset(&case.data, &case.graph_data)?;
-    // For an entailment test, materialize the regime's closure into the dataset
-    // before it is frozen and queried (forward-materialization; the eval loop is
-    // untouched — it queries an already-reasoned dataset).
+    // For a forward-materializable entailment regime, close the dataset before it is
+    // queried (the eval loop is untouched — it queries an already-reasoned dataset).
+    // `OWL-Direct` is NOT forward-materializable: it is query-directed and handled by
+    // the caller (the `QueryEval` arm) via `purrdf_entail::materialize_dl`, so the RAW
+    // dataset is returned here. `RIF` (unwired) and `D` likewise pass through raw.
     match case.regime {
-        Some(regime) => purrdf_entail::materialize(&ds, regime)
-            .map_err(|e| format!("entailment ({regime:?}) for {}: {e}", case.iri)),
-        None => Ok(ds),
+        Some(regime @ (Regime::Simple | Regime::Rdf | Regime::Rdfs | Regime::OwlRl)) => {
+            purrdf_entail::materialize(&ds, regime)
+                .map_err(|e| format!("entailment ({regime:?}) for {}: {e}", case.iri))
+        }
+        _ => Ok(ds),
     }
 }
 
@@ -229,7 +240,16 @@ pub fn run(
             Ok(RunOutcome::Syntax { parsed_ok })
         }
         TestKind::QueryEval => {
-            let dataset = load_dataset(case)?;
+            let mut dataset = load_dataset(case)?;
+            // OWL-Direct is query-directed: augment the RAW dataset with the DL
+            // entailments its basic graph pattern needs, then hand the augmented
+            // dataset to the UNMODIFIED engine (whose simple-entailment answers then
+            // coincide with the OWL Direct-Semantics certain answers).
+            if case.regime == Some(purrdf_entail::Regime::OwlDirect) {
+                let bgp = collect_query_bgp(&query_text);
+                dataset = purrdf_entail::materialize_dl(&dataset, &bgp)
+                    .map_err(|e| format!("OWL-Direct entailment for {}: {e}", case.iri))?;
+            }
             // Both the extension-function namespace and the standpoint predicate
             // table are CALLER configuration (the engine has no defaults): the
             // purrdf-extend suite's standpoint cases exercise `ext:heldIn` and the
@@ -314,5 +334,102 @@ fn query_is_top_level_ordered(query_text: &str, options: &ParserOptions) -> bool
             | GraphPattern::Slice { inner, .. } => node = inner,
             _ => return false,
         }
+    }
+}
+
+/// Parse `query_text` and collect every basic-graph-pattern triple, translated into
+/// the neutral [`QTriple`] representation the OWL-Direct reasoner consumes.
+///
+/// A parse failure yields an empty pattern: the reasoner then augments only the
+/// data's own vocabulary, and the engine (which will also fail to parse) reports the
+/// error. RDF-1.2 quoted-triple term positions (absent from the entailment fixtures)
+/// are skipped — they are never a class-expression scaffold.
+fn collect_query_bgp(query_text: &str) -> Vec<QTriple> {
+    let Ok(query) = SparqlParser::new()
+        .with_base_iri(BASE)
+        .parse_query(query_text)
+    else {
+        return Vec::new();
+    };
+    let pattern = match &query {
+        Query::Select { pattern, .. }
+        | Query::Construct { pattern, .. }
+        | Query::Describe { pattern, .. }
+        | Query::Ask { pattern, .. } => pattern,
+    };
+    let mut triples: Vec<&TriplePattern> = Vec::new();
+    collect_bgp(pattern, &mut triples);
+    triples
+        .into_iter()
+        .filter_map(|tp| {
+            Some(QTriple {
+                s: term_to_qnode(&tp.subject)?,
+                p: named_node_pattern_to_qnode(&tp.predicate),
+                o: term_to_qnode(&tp.object)?,
+            })
+        })
+        .collect()
+}
+
+/// Recursively gather every [`TriplePattern`] out of `p` (from `Bgp` nodes, descending
+/// through every join / filter / graph / optional / union / modifier wrapper).
+fn collect_bgp<'a>(p: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
+    match p {
+        GraphPattern::Bgp { patterns } => out.extend(patterns.iter()),
+        GraphPattern::Join { left, right }
+        | GraphPattern::Union { left, right }
+        | GraphPattern::Minus { left, right }
+        | GraphPattern::Lateral { left, right }
+        | GraphPattern::LeftJoin { left, right, .. } => {
+            collect_bgp(left, out);
+            collect_bgp(right, out);
+        }
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Extend { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Project { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. }
+        | GraphPattern::Group { inner, .. } => collect_bgp(inner, out),
+        GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
+    }
+}
+
+/// Translate a subject/object [`TermPattern`] into a [`QNode`] (`None` for an RDF-1.2
+/// quoted-triple term, which cannot scaffold a class expression).
+fn term_to_qnode(t: &TermPattern) -> Option<QNode> {
+    Some(match t {
+        TermPattern::Variable(v) => QNode::Var(v.as_str().to_owned()),
+        TermPattern::NamedNode(n) => QNode::Term(TermValue::iri(n.as_str())),
+        TermPattern::BlankNode(b) => QNode::Term(TermValue::blank(b.as_str())),
+        TermPattern::Literal(l) => QNode::Term(literal_to_term_value(l)),
+        TermPattern::Triple(_) => return None,
+    })
+}
+
+/// Translate a predicate [`NamedNodePattern`] into a [`QNode`].
+fn named_node_pattern_to_qnode(p: &NamedNodePattern) -> QNode {
+    match p {
+        NamedNodePattern::NamedNode(n) => QNode::Term(TermValue::iri(n.as_str())),
+        NamedNodePattern::Variable(v) => QNode::Var(v.as_str().to_owned()),
+    }
+}
+
+/// Translate an algebra [`Literal`] into a [`TermValue`] (language lowercased per C0.1).
+fn literal_to_term_value(l: &Literal) -> TermValue {
+    match l.language() {
+        Some(lang) => TermValue::Literal {
+            lexical_form: l.value().to_owned(),
+            datatype: l.datatype().as_str().to_owned(),
+            language: Some(lang.to_ascii_lowercase()),
+            direction: l.direction().map(|d| match d {
+                BaseDirection::Ltr => RdfTextDirection::Ltr,
+                BaseDirection::Rtl => RdfTextDirection::Rtl,
+            }),
+        },
+        None => TermValue::typed_literal(l.value(), l.datatype().as_str()),
     }
 }
