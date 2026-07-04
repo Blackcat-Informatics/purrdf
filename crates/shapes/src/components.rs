@@ -65,12 +65,12 @@ pub(crate) struct Component {
     pub id: NamedNode,
     /// Declared parameters, sorted by path IRI string for determinism.
     pub parameters: Vec<Parameter>,
-    /// Optional node-scope validator (`sh:nodeValidator`).
-    pub node_validator: Option<Validator>,
-    /// Optional property-scope validator (`sh:propertyValidator`).
-    pub property_validator: Option<Validator>,
-    /// Optional generic validator (`sh:validator`).
-    pub validator: Option<Validator>,
+    /// Node-scope validators (`sh:nodeValidator`).
+    pub node_validators: Vec<Validator>,
+    /// Property-scope validators (`sh:propertyValidator`).
+    pub property_validators: Vec<Validator>,
+    /// Generic validators (`sh:validator`).
+    pub validators: Vec<Validator>,
     /// Optional human-readable message declared on the component node.
     pub message: Option<String>,
     /// Optional severity declared on the component node.
@@ -637,48 +637,25 @@ fn parse_component(
     parameters.sort_by(|a, b| a.path.as_str().cmp(b.path.as_str()));
     let param_names: Vec<String> = parameters.iter().map(|p| p.name.clone()).collect();
 
-    let node_validator = objects_of(data, component, sh::NODE_VALIDATOR)
+    let mut node_validator_nodes: Vec<Term> = objects_of(data, component, sh::NODE_VALIDATOR);
+    node_validator_nodes.sort_by_key(ToString::to_string);
+    let node_validators = node_validator_nodes
         .into_iter()
-        .next()
-        .map(|v| {
-            parse_validator(
-                data,
-                doc_prefixes,
-                component,
-                &v,
-                &param_names,
-                subclass_memo,
-            )
-        })
-        .transpose()?;
-    let property_validator = objects_of(data, component, sh::PROPERTY_VALIDATOR)
+        .map(|v| parse_validator(data, doc_prefixes, component, &v, &param_names, subclass_memo))
+        .collect::<Result<Vec<Validator>, _>>()?;
+    let mut property_validator_nodes: Vec<Term> =
+        objects_of(data, component, sh::PROPERTY_VALIDATOR);
+    property_validator_nodes.sort_by_key(ToString::to_string);
+    let property_validators = property_validator_nodes
         .into_iter()
-        .next()
-        .map(|v| {
-            parse_validator(
-                data,
-                doc_prefixes,
-                component,
-                &v,
-                &param_names,
-                subclass_memo,
-            )
-        })
-        .transpose()?;
-    let validator = objects_of(data, component, sh::VALIDATOR)
+        .map(|v| parse_validator(data, doc_prefixes, component, &v, &param_names, subclass_memo))
+        .collect::<Result<Vec<Validator>, _>>()?;
+    let mut validator_nodes: Vec<Term> = objects_of(data, component, sh::VALIDATOR);
+    validator_nodes.sort_by_key(ToString::to_string);
+    let validators = validator_nodes
         .into_iter()
-        .next()
-        .map(|v| {
-            parse_validator(
-                data,
-                doc_prefixes,
-                component,
-                &v,
-                &param_names,
-                subclass_memo,
-            )
-        })
-        .transpose()?;
+        .map(|v| parse_validator(data, doc_prefixes, component, &v, &param_names, subclass_memo))
+        .collect::<Result<Vec<Validator>, _>>()?;
 
     let mut component_messages: Vec<String> = objects_of(data, component, sh::MESSAGE)
         .into_iter()
@@ -695,9 +672,9 @@ fn parse_component(
     Ok(Component {
         id: NamedNode::from(component_iri),
         parameters,
-        node_validator,
-        property_validator,
-        validator,
+        node_validators,
+        property_validators,
+        validators,
         message,
         severity,
     })
@@ -745,14 +722,14 @@ mod tests {
                 name: "param".to_owned(),
                 optional: false,
             }],
-            node_validator: Some(Validator {
+            node_validators: vec![Validator {
                 kind: ValidatorKind::Ask,
                 query_text: "ASK { ?this a ex:Thing }".to_owned(),
                 message: None,
                 severity: None,
-            }),
-            property_validator: None,
-            validator: None,
+            }],
+            property_validators: vec![],
+            validators: vec![],
             message: None,
             severity: None,
         };
@@ -786,7 +763,7 @@ mod tests {
         assert!(component.parameters[0].optional);
         assert_eq!(component.parameters[1].name, "requiredParam");
         assert!(!component.parameters[1].optional);
-        let validator = component.validator.as_ref().expect("validator present");
+        let validator = component.validators.first().expect("validator present");
         assert!(matches!(validator.kind, ValidatorKind::Ask));
         assert!(validator.query_text.contains("PREFIX ex:"));
     }
@@ -811,8 +788,8 @@ mod tests {
         assert_eq!(component.parameters[0].name, "lang");
         assert!(!component.parameters[0].optional);
         let validator = component
-            .property_validator
-            .as_ref()
+            .property_validators
+            .first()
             .expect("propertyValidator present");
         assert!(matches!(validator.kind, ValidatorKind::Select));
         assert!(validator.query_text.contains("PREFIX ex:"));
@@ -837,7 +814,7 @@ mod tests {
         assert_eq!(component.parameters.len(), 2);
         assert_eq!(component.parameters[0].name, "test1");
         assert_eq!(component.parameters[1].name, "test2");
-        let validator = component.validator.as_ref().expect("validator present");
+        let validator = component.validators.first().expect("validator present");
         assert!(matches!(validator.kind, ValidatorKind::Ask));
         assert!(validator.query_text.contains("CONCAT"));
     }

@@ -16,7 +16,7 @@ use std::sync::{Arc, OnceLock};
 
 use ::purrdf::RdfDataset;
 
-use crate::components::{severity_from_term, ComponentRegistry, ValidatorKind};
+use crate::components::{severity_from_term, ComponentRegistry, Validator, ValidatorKind};
 use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
 use crate::expression::{FnCall, NodeExpr};
 use crate::model::{rdf, rdfs, sh, BoxRoleVocab};
@@ -1258,8 +1258,9 @@ impl<'s> Parser<'s> {
         // for all required parameters of a declared component is treated as a
         // usage of that component. Components are processed in deterministic
         // order; parameter bindings follow the component's declared parameter
-        // order. If no applicable validator exists for this shape scope the
-        // component is skipped silently.
+        // order. All validators applicable to the current shape scope are
+        // emitted as separate constraints; if none apply, the component is
+        // skipped silently.
         let shape_severity = self
             .first_object_of(id, sh::SEVERITY)
             .and_then(|t| severity_from_term(&t));
@@ -1292,47 +1293,51 @@ impl<'s> Parser<'s> {
                 continue;
             }
 
-            let validator = if is_property_shape {
+            let matching: Vec<&Validator> = if is_property_shape {
                 component
-                    .property_validator
-                    .as_ref()
-                    .or(component.validator.as_ref())
+                    .property_validators
+                    .iter()
+                    .chain(component.validators.iter())
+                    .collect()
             } else {
                 component
-                    .node_validator
-                    .as_ref()
-                    .or(component.validator.as_ref())
+                    .node_validators
+                    .iter()
+                    .chain(component.validators.iter())
+                    .collect()
             };
-            let Some(validator) = validator else {
+            if matching.is_empty() {
                 continue;
-            };
+            }
 
-            let component_validator = match &validator.kind {
-                ValidatorKind::Ask => ComponentValidator::Ask {
-                    ask: validator.query_text.clone(),
-                },
-                ValidatorKind::Select => ComponentValidator::Select {
-                    select: validator.query_text.clone(),
-                },
-            };
+            for validator in matching {
+                let component_validator = match &validator.kind {
+                    ValidatorKind::Ask => ComponentValidator::Ask {
+                        ask: validator.query_text.clone(),
+                    },
+                    ValidatorKind::Select => ComponentValidator::Select {
+                        select: validator.query_text.clone(),
+                    },
+                };
 
-            let severity = shape_severity
-                .clone()
-                .or_else(|| validator.severity.clone())
-                .or_else(|| component.severity.clone());
-            let message = shape_message
-                .clone()
-                .or_else(|| validator.message.clone())
-                .or_else(|| component.message.clone());
+                let severity = shape_severity
+                    .clone()
+                    .or_else(|| validator.severity.clone())
+                    .or_else(|| component.severity.clone());
+                let message = shape_message
+                    .clone()
+                    .or_else(|| validator.message.clone())
+                    .or_else(|| component.message.clone());
 
-            constraints.push(Constraint::Component {
-                component: component.id.clone(),
-                source_shape: id.clone(),
-                bindings,
-                validator: component_validator,
-                message,
-                severity,
-            });
+                constraints.push(Constraint::Component {
+                    component: component.id.clone(),
+                    source_shape: id.clone(),
+                    bindings: bindings.clone(),
+                    validator: component_validator,
+                    message,
+                    severity,
+                });
+            }
         }
 
         Ok(constraints)
