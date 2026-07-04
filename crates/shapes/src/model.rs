@@ -256,6 +256,8 @@ pub mod sh {
 
     pub const PARAMETER: &str = "http://www.w3.org/ns/shacl#Parameter";
 
+    pub const PARAMETER_PROPERTY: &str = "http://www.w3.org/ns/shacl#parameter";
+
     pub const NODE_VALIDATOR: &str = "http://www.w3.org/ns/shacl#nodeValidator";
 
     pub const PROPERTY_VALIDATOR: &str = "http://www.w3.org/ns/shacl#propertyValidator";

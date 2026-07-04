@@ -16,6 +16,7 @@ use std::sync::{Arc, OnceLock};
 
 use ::purrdf::RdfDataset;
 
+use crate::components::ComponentRegistry;
 use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
 use crate::expression::{FnCall, NodeExpr};
 use crate::model::{rdf, rdfs, sh, BoxRoleVocab};
@@ -353,6 +354,78 @@ struct Parser<'s> {
     doc_prefixes: Vec<(String, String)>,
     /// The caller-supplied box-role vocabulary; `None` = feature inactive.
     box_role_vocab: Option<BoxRoleVocab>,
+    /// Registry of SHACL-SPARQL custom constraint components declared in the
+    /// shapes graph. Populated before shape parsing so malformed components are
+    /// rejected as hard failures.
+    component_registry: ComponentRegistry,
+}
+
+// ── Prefix-header helper (used by shapes and component registry) ───────────────
+
+/// Return all objects for `(subject, predicate, ?)`.
+fn objects_of(data: &IrDataGraph, subject: &Term, predicate: &str) -> Vec<Term> {
+    if !subject.is_subject() {
+        return vec![];
+    }
+    let pred = Term::NamedNode(NamedNode::from(predicate));
+    data.quads_for_pattern(Some(subject), Some(&pred), None, GraphFilter::AnyGraph)
+        .into_iter()
+        .map(|q| q.object)
+        .collect()
+}
+
+/// Return the first object for `(subject, predicate, ?)`, if any.
+fn first_object_of(data: &IrDataGraph, subject: &Term, predicate: &str) -> Option<Term> {
+    objects_of(data, subject, predicate).into_iter().next()
+}
+
+/// Build the SPARQL `PREFIX` header prepended to a SHACL-SPARQL query.
+///
+/// Two sources contribute, lowest precedence first:
+///
+/// 1. The shapes **document's** `@prefix` declarations (the pySHACL-compatible
+///    fallback — real shapes rely on these without `sh:prefixes`).
+/// 2. SHACL-AF `sh:prefixes` → `sh:declare` on the `owners` (spec §5.2.1), which
+///    **override** the document fallback for any colliding prefix.
+///
+/// Output is one `PREFIX p: <ns>` line per prefix, sorted (a `BTreeMap` keeps
+/// it deterministic and one-entry-per-prefix). Empty when nothing is declared.
+pub(crate) fn build_prefix_header(
+    data: &IrDataGraph,
+    doc_prefixes: &[(String, String)],
+    owners: &[&Term],
+) -> String {
+    let mut map: std::collections::BTreeMap<String, String> = doc_prefixes
+        .iter()
+        .map(|(p, ns)| (p.clone(), ns.clone()))
+        .collect();
+    // `sh:prefix` is a string literal; `sh:namespace` is typically an
+    // `xsd:anyURI` literal but the SHACL spec also permits a bare IRI
+    // (NamedNode). Accept both lexical forms so an IRI-valued namespace is
+    // not silently dropped (which would omit a PREFIX line and break the
+    // dependent SHACL-AF query — a silent under-validation, P11/§11).
+    let term_value = |t: Term| match t {
+        Term::Literal(lit) => Some(lit.value().to_owned()),
+        Term::NamedNode(node) => Some(node.as_str().to_owned()),
+        _ => None, // blank node / quoted triple: not a prefix or namespace value
+    };
+    for owner in owners {
+        for prefixes_node in objects_of(data, owner, sh::PREFIXES) {
+            for declare in objects_of(data, &prefixes_node, sh::DECLARE) {
+                let prefix = first_object_of(data, &declare, sh::PREFIX).and_then(term_value);
+                let namespace = first_object_of(data, &declare, sh::NAMESPACE).and_then(term_value);
+                if let (Some(p), Some(ns)) = (prefix, namespace) {
+                    map.insert(p, ns); // sh:prefixes overrides the document fallback
+                }
+            }
+        }
+    }
+    use std::fmt::Write as _;
+    let mut header = String::new();
+    for (prefix, namespace) in map {
+        let _ = writeln!(header, "PREFIX {prefix}: <{namespace}>");
+    }
+    header
 }
 
 impl<'s> Parser<'s> {
@@ -366,6 +439,7 @@ impl<'s> Parser<'s> {
             in_flight: HashSet::new(),
             doc_prefixes: doc_prefixes.to_vec(),
             box_role_vocab,
+            component_registry: ComponentRegistry::default(),
         }
     }
 
@@ -426,10 +500,9 @@ impl<'s> Parser<'s> {
             }
         }
 
-        // The pre-binding restrictions gate every SHACL-SPARQL ASK validator in
-        // the graph (custom constraint components are otherwise unsupported,
-        // but a restricted query must still hard-fail per SHACL-SPARQL §5.2.1).
-        self.check_ask_validators()?;
+        // Custom SHACL-SPARQL constraint components are parsed up-front; any
+        // malformed component, parameter, or validator query is a hard failure.
+        self.component_registry = ComponentRegistry::parse(self.data, &self.doc_prefixes)?;
 
         // Parse each top-level shape in stable (sorted) order. A node with
         // sh:path is a (standalone) PROPERTY shape: its path-scoped constraints
@@ -575,42 +648,7 @@ impl<'s> Parser<'s> {
     /// Output is one `PREFIX p: <ns>` line per prefix, sorted (a `BTreeMap` keeps
     /// it deterministic and one-entry-per-prefix). Empty when nothing is declared.
     fn prefix_header(&self, owners: &[&Term]) -> String {
-        let mut map: std::collections::BTreeMap<String, String> = self
-            .doc_prefixes
-            .iter()
-            .map(|(p, ns)| (p.clone(), ns.clone()))
-            .collect();
-        // `sh:prefix` is a string literal; `sh:namespace` is typically an
-        // `xsd:anyURI` literal but the SHACL spec also permits a bare IRI
-        // (NamedNode). Accept both lexical forms so an IRI-valued namespace is
-        // not silently dropped (which would omit a PREFIX line and break the
-        // dependent SHACL-AF query — a silent under-validation, P11/§11).
-        let term_value = |t: Term| match t {
-            Term::Literal(lit) => Some(lit.value().to_owned()),
-            Term::NamedNode(node) => Some(node.as_str().to_owned()),
-            _ => None, // blank node / quoted triple: not a prefix or namespace value
-        };
-        for owner in owners {
-            for prefixes_node in self.objects_of(owner, sh::PREFIXES) {
-                for declare in self.objects_of(&prefixes_node, sh::DECLARE) {
-                    let prefix = self
-                        .first_object_of(&declare, sh::PREFIX)
-                        .and_then(term_value);
-                    let namespace = self
-                        .first_object_of(&declare, sh::NAMESPACE)
-                        .and_then(term_value);
-                    if let (Some(p), Some(ns)) = (prefix, namespace) {
-                        map.insert(p, ns); // sh:prefixes overrides the document fallback
-                    }
-                }
-            }
-        }
-        use std::fmt::Write as _;
-        let mut header = String::new();
-        for (prefix, namespace) in map {
-            let _ = writeln!(header, "PREFIX {prefix}: <{namespace}>");
-        }
-        header
+        build_prefix_header(self.data, &self.doc_prefixes, owners)
     }
 
     /// Parse a top-level node shape.
@@ -1283,37 +1321,6 @@ impl<'s> Parser<'s> {
             siblings.push(self.parse_inline_shape(node)?);
         }
         Ok(siblings)
-    }
-
-    /// Enforce the SHACL-SPARQL §5.2.1 pre-binding restrictions on every
-    /// `sh:ask` validator in the shapes graph.
-    ///
-    /// Custom SPARQL constraint components are otherwise unsupported by this
-    /// engine, but a validator whose ASK query is ILLEGAL under pre-binding
-    /// (its `$this`/`$value` variables are pre-bound at execution) must still
-    /// be rejected as a hard failure (W3C `unsupported-sparql-006`). An
-    /// UNPARSABLE ask query is skipped — the component never executes here, so
-    /// only well-formed-but-restricted queries hard-fail.
-    fn check_ask_validators(&self) -> Result<(), String> {
-        let mut asks: Vec<(Term, String)> = self
-            .quads_with(None, Some(sh::ASK), None)
-            .into_iter()
-            .filter_map(|q| match q.object {
-                Term::Literal(lit) => Some((q.subject, lit.value().to_owned())),
-                _ => None,
-            })
-            .collect();
-        asks.sort_by(|a, b| (a.0.to_string(), &a.1).cmp(&(b.0.to_string(), &b.1)));
-        for (validator, raw_ask) in asks {
-            let query_text = format!("{}{raw_ask}", self.prefix_header(&[&validator]));
-            let Ok(query) = purrdf_sparql_algebra::SparqlParser::new().parse_query(&query_text)
-            else {
-                continue; // unsupported component — never executed by this engine
-            };
-            crate::prebinding::check_ask(&query, &["this", "value"])
-                .map_err(|e| format!("sh:ask validator {validator}: {e}"))?;
-        }
-        Ok(())
     }
 
     /// Parse a property shape node.
