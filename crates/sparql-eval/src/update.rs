@@ -3,7 +3,7 @@
 
 //! SPARQL 1.1 **UPDATE** evaluation over a [`MutableDataset`].
 //!
-//! [`eval_update`] applies a parsed [`Update`] to a copy-on-write
+//! `eval_update` applies a parsed [`Update`] to a copy-on-write
 //! [`MutableDataset`] in request order — each operation observes the effects of the
 //! earlier ones through the shared `m`. The engine seam ([`engine`](crate::engine))
 //! drives this; the read query path is unchanged.
@@ -31,7 +31,7 @@
 //!   for the whole op (they co-refer within the op). `DELETE DATA` is blank-free (a
 //!   parser invariant). Template (`DELETE`/`INSERT … WHERE`) blanks are minted fresh
 //!   per solution row, exactly like `CONSTRUCT`. All of this mints from ONE
-//!   monotonic counter threaded across the whole request ([`eval_update`]'s
+//!   monotonic counter threaded across the whole request (`eval_update`'s
 //!   `bnode_counter`), never reset between operations, so a `_:b` label in one
 //!   operation is a distinct blank from the same label in another operation
 //!   (SPARQL 1.1 Update §4.1.1 / §19.6).

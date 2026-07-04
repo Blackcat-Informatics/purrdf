@@ -18,7 +18,7 @@
 /// In-band machine code: a `CONSTRUCT` whose `WHERE` bound an RDF-1.2 reifier (via
 /// an `rdf:reifies` triple pattern) but whose template drops that reifier — the
 /// reification layer is lost at the projection. Declared in-band on the output
-/// graph (a `logic:ProjectionLoss` node), NOT in this compile-time ledger.
+/// graph (a caller-configured `ProjectionLoss` node), NOT in this compile-time ledger.
 pub const LOSS_REIFIER_LAYER_DROPPED: &str = "reifier-layer-dropped";
 
 /// In-band machine code: a dropped reifier (see [`LOSS_REIFIER_LAYER_DROPPED`])
@@ -28,8 +28,8 @@ pub const LOSS_ANNOTATION_LAYER_DROPPED: &str = "annotation-layer-dropped";
 
 /// In-band machine code: a dropped, annotated reifier (see
 /// [`LOSS_ANNOTATION_LAYER_DROPPED`]) where one of the dropped annotation
-/// predicates was `purrdf:accordingTo` — the standpoint scope is lost. Emitted in
-/// addition to the annotation-layer code, never alone.
+/// predicates was the caller-configured standpoint `accordingTo` predicate — the
+/// standpoint scope is lost. Emitted in addition to the annotation-layer code, never alone.
 pub const LOSS_STANDPOINT_SCOPE_DROPPED: &str = "standpoint-scope-dropped";
 
 /// One enumerated, intentional conversion loss between two representations.

@@ -55,6 +55,68 @@ pub fn compare(case: &SparqlTestCase, outcome: &RunOutcome) -> Result<(), String
     }
 }
 
+/// Compare two SPARQL results for equality.
+///
+/// `SELECT` solutions are compared as a multiset when `ordered` is `false` and as an
+/// ordered sequence when `ordered` is `true`. `ASK` booleans are compared directly.
+/// `CONSTRUCT`/`DESCRIBE` graphs are compared by RDFC-1.0 canonical N-Quads.
+///
+/// # Errors
+///
+/// Returns a human-readable mismatch description; `Ok(())` means the results are
+/// equal under the chosen comparison.
+pub fn compare_results(
+    left: &SparqlResult,
+    right: &SparqlResult,
+    ordered: bool,
+) -> Result<(), String> {
+    match (left, right) {
+        (SparqlResult::Boolean(l), SparqlResult::Boolean(r)) if l == r => Ok(()),
+        (SparqlResult::Boolean(l), SparqlResult::Boolean(r)) => {
+            Err(format!("ASK mismatch: {l} vs {r}"))
+        }
+        (
+            SparqlResult::Solutions {
+                variables: l_vars,
+                rows: l_rows,
+                ..
+            },
+            SparqlResult::Solutions {
+                variables: r_vars,
+                rows: r_rows,
+                ..
+            },
+        ) => {
+            if l_vars != r_vars {
+                return Err(format!("variable lists differ: {l_vars:?} vs {r_vars:?}"));
+            }
+            compare_solutions(
+                l_vars,
+                l_rows,
+                &ParsedSolutions {
+                    variables: r_vars.clone(),
+                    rows: r_rows.clone(),
+                },
+                ordered,
+            )
+        }
+        (SparqlResult::Graph(l), SparqlResult::Graph(r)) => {
+            let l_canon = purrdf_core::canonicalize(l).nquads;
+            let r_canon = purrdf_core::canonicalize(r).nquads;
+            if l_canon == r_canon {
+                Ok(())
+            } else {
+                Err("graph results differ (canonical N-Quads mismatch)".to_owned())
+            }
+        }
+        (l, r) => Err(format!(
+            "result kind mismatch: {} vs {}",
+            result_kind(l),
+            result_kind(r)
+        )),
+    }
+}
+
 /// Compare an UPDATE post-state dataset against the expected [`ExpectedResult::DatasetState`].
 ///
 /// The mutated dataset and the expected dataset are compared graph-preservingly

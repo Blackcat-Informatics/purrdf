@@ -17,11 +17,16 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use purrdf_core::{
-    MutableDataset, RdfDataset, RdfDiagnostic, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
+    GraphMatch, MutableDataset, RdfDataset, RdfDiagnostic, SparqlEngine, SparqlRequest,
+    SparqlResult, TermValue,
 };
 use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
 
-use crate::eval::{evaluate_query, BgpOrderCache, EvalCtx, Outcome, StandpointPredicates};
+use crate::dataset_spec::ActiveDataset;
+use crate::eval::{
+    evaluate_query, BgpOrderCache, EvalCtx, EvalOptions, LossVocabulary, Outcome,
+    StandpointPredicates,
+};
 use crate::update::{eval_update, GraphResolver};
 use crate::DetHashMap;
 
@@ -94,12 +99,16 @@ impl PlanCache {
 ///
 /// - [`Self::with_parser_options`] configures the extension-function namespace
 ///   set (default: EMPTY — extension functions are off and a call-position IRI
-///   is an ordinary custom function). A gmeow deployment supplies its
-///   `https://blackcatinformatics.ca/gmeow/` namespace here so
-///   `gmeow:heldIn(...)` queries parse as extension calls.
+///   is an ordinary custom function). A deployment whose queries spell the closed
+///   function set under its own namespace (e.g. `http://example.org/ns/gmeow/`)
+///   supplies that namespace here so that prefix's function calls parse as
+///   extension calls.
 /// - [`Self::with_standpoint_predicates`] supplies the `accordingTo`/`sharpens`
 ///   predicate table that `heldIn` and loss-aware `CONSTRUCT` read from
 ///   the caller's data. Without it, `heldIn` is a hard evaluation error.
+/// - [`Self::with_loss_vocabulary`] supplies the `ProjectionLoss` vocabulary IRIs
+///   emitted by loss-aware `CONSTRUCT` when a reifier is dropped. Without it,
+///   loss declarations stay inactive.
 #[derive(Default)]
 pub struct NativeSparqlEngine {
     cache: RefCell<PlanCache>,
@@ -115,6 +124,14 @@ pub struct NativeSparqlEngine {
     /// evaluation context. `None` (the default) means `heldIn` hard-errors
     /// and `CONSTRUCT` emits no standpoint-scope loss attribution.
     standpoint_predicates: Option<StandpointPredicates>,
+    /// The caller-supplied loss-declaration vocabulary threaded into every
+    /// evaluation context. `None` (the default) means loss-aware `CONSTRUCT`
+    /// emits no in-band loss declarations.
+    loss_vocabulary: Option<LossVocabulary>,
+    /// Evaluation-time options threaded into every per-query context. Defaults to
+    /// production settings; tests and benches override individual flags through
+    /// [`Self::with_eval_options`].
+    eval_options: EvalOptions,
 }
 
 // `dyn GraphResolver` is not `Debug`, so derive can't apply; report its presence by
@@ -133,6 +150,8 @@ impl std::fmt::Debug for NativeSparqlEngine {
             )
             .field("parser_options", &self.parser_options)
             .field("standpoint_predicates", &self.standpoint_predicates)
+            .field("loss_vocabulary", &self.loss_vocabulary)
+            .field("eval_options", &self.eval_options)
             .finish()
     }
 }
@@ -173,16 +192,83 @@ impl NativeSparqlEngine {
         self
     }
 
+    /// Supply the caller's loss-declaration vocabulary (see [`LossVocabulary`]):
+    /// the `ProjectionLoss`/`lossCode`/`lostReifies` IRIs emitted by loss-aware
+    /// `CONSTRUCT` when a reifier is dropped by the template. There is **no
+    /// built-in default** — without this configuration loss declarations stay
+    /// inactive and a dropped reifier is projected like a plain `CONSTRUCT`.
+    #[must_use]
+    pub fn with_loss_vocabulary(mut self, vocab: LossVocabulary) -> Self {
+        self.loss_vocabulary = Some(vocab);
+        self
+    }
+
+    /// Set the evaluation-time options threaded into every per-query context.
+    /// Production callers should leave the defaults; tests and benchmarks use
+    /// this to flip individual measurement seams (e.g. the differential planner-
+    /// correctness test forces the structural BGP order).
+    #[must_use]
+    pub fn with_eval_options(mut self, options: EvalOptions) -> Self {
+        self.eval_options = options;
+        self
+    }
+
     /// Build the per-query evaluation context, threading the engine-level
-    /// configuration (order cache + standpoint predicate table) into it.
-    /// `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already correct by construction:
-    /// [`EvalCtx::new`] samples the real host wall clock and OS entropy itself.
+    /// configuration (order cache + standpoint predicate table + loss vocabulary +
+    /// eval options) into it. `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already
+    /// correct by construction: [`EvalCtx::new`] samples the real host wall clock
+    /// and OS entropy itself.
     fn eval_ctx<'d>(&'d self, dataset: &'d RdfDataset) -> EvalCtx<'d> {
-        let mut ctx = EvalCtx::new(dataset).with_order_cache(&self.order_cache);
+        let mut ctx = EvalCtx::new(dataset)
+            .with_order_cache(&self.order_cache)
+            .with_eval_options(self.eval_options);
         if let Some(predicates) = &self.standpoint_predicates {
             ctx = ctx.with_standpoint_predicates(predicates.clone());
         }
+        if let Some(vocab) = &self.loss_vocabulary {
+            ctx = ctx.with_loss_vocabulary(vocab.clone());
+        }
         ctx
+    }
+
+    /// Explain the cost-based BGP join order the engine would choose for
+    /// `query_text` against `dataset`.
+    ///
+    /// Returns an ordered list of triple-pattern strings: for every BGP in the
+    /// query with at least two triple patterns, the patterns are listed in the
+    /// order the planner selected. BGPs are visited in a left-to-right DFS over
+    /// the algebra, so subqueries, OPTIONAL/UNION branches, and GRAPH blocks are
+    /// all represented in query-text order. This is a pure-introspection API: it
+    /// does not evaluate the query and does not mutate the engine state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse.
+    pub fn explain_query(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        query_text: &str,
+        base_iri: Option<&str>,
+    ) -> Result<Vec<String>, RdfDiagnostic> {
+        let prepared =
+            self.cache
+                .borrow_mut()
+                .prepare_with(query_text, base_iri, &self.parser_options)?;
+        let active_dataset = ActiveDataset::from_query_dataset(prepared.query.dataset(), dataset);
+        let mut out = Vec::new();
+        let pattern = match &prepared.query {
+            Query::Select { pattern, .. } | Query::Ask { pattern, .. } => pattern,
+            Query::Construct { pattern, .. } | Query::Describe { pattern, .. } => pattern,
+        };
+        crate::bgp::explain_pattern_orders(
+            dataset,
+            &active_dataset,
+            GraphMatch::Default,
+            pattern,
+            &mut out,
+        )
+        .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
+        Ok(out)
     }
 
     /// Evaluate a SPARQL query under SHACL-SPARQL pre-binding semantics.
@@ -1279,7 +1365,7 @@ mod tests {
 
     /// The gmeow ontology namespace — a deployment alias for the same closed
     /// extension-function set, with its own domain standpoint predicates.
-    const GMEOW_NS: &str = "https://blackcatinformatics.ca/gmeow/";
+    const GMEOW_NS: &str = "http://example.org/ns/gmeow/";
 
     /// A standpoint dataset in the GMEOW vocabulary: reifier `:r` held in `:T1`
     /// (via `gmeow:accordingTo`), and `:T1 gmeow:sharpens :T2`.
@@ -1717,6 +1803,43 @@ mod tests {
             }
             other => panic!("expected solutions, got {other:?}"),
         }
+    }
+
+    /// The `explain_query` API returns a non-empty ordered list of triple-pattern
+    /// strings for a multi-pattern BGP, proving the planner chose an order and that
+    /// the introspection path does not leak internal types.
+    #[test]
+    fn explain_query_returns_non_empty_order_for_multi_pattern_bgp() {
+        let ds = social();
+        let engine = NativeSparqlEngine::new();
+        let plan = engine
+            .explain_query(
+                &ds,
+                "SELECT ?o ?n WHERE { \
+                 <http://ex/a> <http://ex/knows> ?o . \
+                 <http://ex/a> <http://ex/name> ?n }",
+                None,
+            )
+            .expect("explain");
+        assert!(
+            plan.len() >= 2,
+            "expected at least two triple-pattern strings, got {plan:?}"
+        );
+        // Both patterns are present (order may vary with cardinality, but both IRIs
+        // are constants so the planner still has to schedule both).
+        let has_knows = plan.iter().any(|s| s.contains("<http://ex/knows>"));
+        let has_name = plan.iter().any(|s| s.contains("<http://ex/name>"));
+        assert!(has_knows, "explain output missing knows pattern: {plan:?}");
+        assert!(has_name, "explain output missing name pattern: {plan:?}");
+    }
+
+    /// `explain_query` errors cleanly on malformed SPARQL.
+    #[test]
+    fn explain_query_rejects_malformed_sparql() {
+        let ds = social();
+        let engine = NativeSparqlEngine::new();
+        let err = engine.explain_query(&ds, "SELECT ?x WHERE { not sparql }", None);
+        assert!(err.is_err(), "malformed query must produce a diagnostic");
     }
 
     /// `RAND()`/`UUID()`/`STRUUID()` are seeded from live OS entropy, not a fixed

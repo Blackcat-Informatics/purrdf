@@ -33,6 +33,8 @@ purrdf-sparql-results = { workspace = true }
 purrdf-entail = { workspace = true }
 # UTF-8 path type used by the datatest-stable harness signature.
 camino = { workspace = true }
+# RIF-in-XML (normative RIF XML syntax) reader for the RIF entailment cases.
+roxmltree = { workspace = true }
 
 [dev-dependencies]
 datatest-stable = { workspace = true }

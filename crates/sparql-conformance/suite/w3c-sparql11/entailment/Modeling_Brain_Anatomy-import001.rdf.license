@@ -1,0 +1,8 @@
+SPDX-FileCopyrightText: W3C <https://www.w3.org/>
+SPDX-License-Identifier: LicenseRef-W3C-Test-Suite
+
+Vendored verbatim from the W3C test suites. Source:
+https://www.w3.org/2005/rules/test/repository/tc/Modeling_Brain_Anatomy/Modeling_Brain_Anatomy-import001.rdf
+The SPARQL 1.1 entailment .ttl fixtures reference these RIF rule/import documents,
+which are absent from w3c/rdf-tests; they are the referenced W3C RIF Working Group
+test-case documents. See ../PROVENANCE.md.
