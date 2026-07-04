@@ -249,6 +249,53 @@ mod tests {
     }
 
     #[test]
+    fn rdfs_emission_order_is_deterministic() {
+        // Each `close` call seeds a fresh, randomly-hashed `HashSet` of facts, so a
+        // hash-order-dependent emission (the bug just fixed) would assign the novel
+        // inferred vocabulary terms (e.g. `rdf:Property` from predicate typing) new
+        // ids in different orders across two runs, diverging the id-sorted output.
+        // A closure that introduces novel terms + an order-sensitive fingerprint of
+        // the emitted quads therefore locks in the deterministic-emission contract.
+        let p = "http://example.org/p";
+        let q = "http://example.org/q";
+        let y = "http://example.org/y";
+        let input = &[
+            (A, RDFS_SUBCLASSOF, B),
+            (B, RDFS_SUBCLASSOF, C),
+            (p, RDFS_DOMAIN, A),
+            (p, RDFS_RANGE, B),
+            (q, RDFS_DOMAIN, C),
+            (X, p, y),
+            (X, RDF_TYPE, A),
+        ];
+        let ds = dataset(input);
+
+        // Two independently-seeded materializations of the SAME input.
+        let first = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+        let second = materialize(&ds, Regime::OwlRl).expect("owl-rl");
+
+        let fingerprint = |closed: &RdfDataset| -> Vec<String> {
+            closed
+                .quad_refs()
+                .map(|q| format!("{:?}|{:?}|{:?}", q.s, q.p, q.o))
+                .collect()
+        };
+        let fp_first = fingerprint(&first);
+        let fp_second = fingerprint(&second);
+
+        assert_eq!(
+            fp_first, fp_second,
+            "inferred-triple emission order must be deterministic across runs"
+        );
+        // Prove inference actually happened, guarding against an empty-closure
+        // false-positive (equal-but-trivial fingerprints).
+        assert!(
+            fp_first.len() > input.len(),
+            "closure must derive novel triples for the guard to be meaningful"
+        );
+    }
+
+    #[test]
     fn simple_regime_is_identity() {
         let ds = dataset(&[(A, RDFS_SUBCLASSOF, B), (X, RDF_TYPE, A)]);
         let closed = materialize(&ds, Regime::Simple).expect("simple");
