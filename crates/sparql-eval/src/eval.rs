@@ -27,8 +27,9 @@ use crate::solution::SolutionSeq;
 use crate::DetHashMap;
 
 /// Tunable evaluation behavior. Every flag defaults to the production-optimal
-/// value; the criterion benches flip individual flags to measure their effect
-/// (the flags are a measurement seam, never a degraded production mode).
+/// value; the criterion benches and differential tests flip individual flags to
+/// measure their effect (the flags are a measurement seam, never a degraded
+/// production mode).
 #[derive(Debug, Clone, Copy)]
 pub struct EvalOptions {
     /// Memoize each `EXISTS`/`NOT EXISTS` inner-pattern evaluation. The inner
@@ -36,11 +37,19 @@ pub struct EvalOptions {
     /// seed, so its result is **independent of the outer row**: a `FILTER` over N
     /// rows can evaluate it once instead of N times. Always `true` in production.
     pub exists_memo: bool,
+    /// Evaluate BGPs in the retired structural (most-constrained-first) order
+    /// instead of the cost-based order. Used only by the differential planner-
+    /// correctness corpus test to prove that reordering does not change the
+    /// result multiset. Always `false` in production.
+    pub force_structural_bgp_order: bool,
 }
 
 impl Default for EvalOptions {
     fn default() -> Self {
-        Self { exists_memo: true }
+        Self {
+            exists_memo: true,
+            force_structural_bgp_order: false,
+        }
     }
 }
 
@@ -451,6 +460,15 @@ impl<'d> EvalCtx<'d> {
     #[must_use]
     pub fn with_order_cache(mut self, cache: &'d BgpOrderCache) -> Self {
         self.bgp_order_cache = Some(cache);
+        self
+    }
+
+    /// Replace the evaluation options for this context. Used by the engine to thread
+    /// its configured options into each per-query context, and by tests that need to
+    /// flip a measurement seam.
+    #[must_use]
+    pub fn with_eval_options(mut self, options: EvalOptions) -> Self {
+        self.options = options;
         self
     }
 

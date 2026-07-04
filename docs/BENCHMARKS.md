@@ -30,7 +30,15 @@ They live under `crates/*/benches/`:
 - `crates/rdf-core/benches/mutable.rs` — copy-on-write mutation paths.
 - `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput.
 - `crates/sparql-eval/benches/{query_eval,cost_based_bgp_planner,exists_decorrelation}.rs`
-  — SPARQL evaluation and planner costs.
+  — SPARQL evaluation and planner costs. The `cost_based_bgp_planner` bench is a
+  regression watch on the cost-based BGP join planner; the deterministic win over
+  the retired structural heuristic is gated by the `bgp` unit tests (which count
+  real intermediate rows) and by the differential corpus test in
+  `crates/sparql-conformance/tests/cost_planner_corpus.rs`.
+
+`NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
+list of triple-pattern strings, so callers can audit planner decisions without
+running the query.
 - `crates/shapes/benches/validate.rs` — SHACL validation.
 - `crates/gts/benches/authoring.rs` — GTS container authoring.
 
