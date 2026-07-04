@@ -13,11 +13,12 @@
 //! uses [`SparqlRequest::substitutions`] (the native replacement for oxigraph's
 //! `PreparedSparqlQuery::substitute_variable`,  GAP-A).
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use ::purrdf::RdfDataset;
 use ::purrdf::{SparqlEngine, SparqlRequest, SparqlResult, TermValue};
-use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_sparql_eval::{NativeSparqlEngine, UserFunctionRegistry};
 
 use crate::model::xsd;
 use crate::report::{Severity, ValidationResult};
@@ -361,25 +362,62 @@ thread_local! {
     /// per-focus blowup on the whole-ontology conformance shapes). Validation is
     /// serial, and the cache is keyed on `(base, query text)`, so reuse is sound.
     static SPARQL_ENGINE: NativeSparqlEngine = NativeSparqlEngine::new();
+
+    /// The SHACL-AF function registry (`sh:SPARQLFunction`) in scope for the current
+    /// validation, set by [`enter_function_scope`]. `run_select` reads it to decide
+    /// whether a call-position IRI can resolve to a user function. Kept alongside the
+    /// engine (this module's established thread-local pattern) because validation is
+    /// serial: a single guard on the validation thread covers every `run_select` on
+    /// that thread. Parallel FILTER workers inside the engine do NOT read this — they
+    /// receive the registry through `EvalCtx` (propagated in `fork_for_worker`).
+    static CURRENT_FUNCTIONS: RefCell<Option<Arc<UserFunctionRegistry>>> = const { RefCell::new(None) };
+}
+
+/// An RAII scope that installs `registry` as the current SHACL-AF function table for
+/// the duration of a validation, restoring the previous value on drop (so nested
+/// validations compose). The engine holds this for the whole validation pass.
+#[must_use]
+#[derive(Debug)]
+pub struct FunctionScope {
+    previous: Option<Arc<UserFunctionRegistry>>,
+}
+
+impl Drop for FunctionScope {
+    fn drop(&mut self) {
+        let restore = self.previous.take();
+        CURRENT_FUNCTIONS.with(|slot| *slot.borrow_mut() = restore);
+    }
+}
+
+/// Install `registry` as the current SHACL-AF function table, returning a guard that
+/// restores the previous table when dropped.
+pub fn enter_function_scope(registry: Arc<UserFunctionRegistry>) -> FunctionScope {
+    let previous = CURRENT_FUNCTIONS.with(|slot| slot.borrow_mut().replace(registry));
+    FunctionScope { previous }
 }
 
 /// Run a SELECT query over the dataset, returning `(variables, rows)`. Rejects
-/// non-SELECT result forms.
+/// non-SELECT result forms. When a non-empty SHACL-AF function registry is in scope
+/// (see [`enter_function_scope`]), the query runs through the engine's user-function
+/// path so a call-position IRI can resolve to a declared `sh:SPARQLFunction`.
 fn run_select(
     dataset: &Arc<RdfDataset>,
     select: &str,
     substitutions: &[(String, TermValue)],
 ) -> Result<SelectRows, String> {
+    let request = SparqlRequest {
+        query: select,
+        base_iri: None,
+        substitutions,
+    };
     let result = SPARQL_ENGINE
         .with(|engine| {
-            engine.query(
-                dataset,
-                SparqlRequest {
-                    query: select,
-                    base_iri: None,
-                    substitutions,
-                },
-            )
+            CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
+                Some(registry) if !registry.is_empty() => {
+                    engine.query_with_user_functions(dataset, request, registry)
+                }
+                _ => engine.query(dataset, request),
+            })
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match result {

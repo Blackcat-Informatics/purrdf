@@ -214,6 +214,12 @@ where
     G: ShaclDataGraph,
     F: FnMut(&Shape, &Term) -> bool,
 {
+    // Install the shapes graph's SHACL-AF function table (`sh:SPARQLFunction`) for
+    // this whole validation pass. Held on the serial validation thread so every
+    // `sh:sparql`/`sh:SPARQLTarget`/`sh:expression` query resolves declared user
+    // functions; the guard restores the previous table on drop.
+    let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+
     let mut all_results = Vec::new();
     // Per-call subclass-closure memo: keyed by class IRI, value is the full
     // transitive closure of asserted rdfs:subClassOf edges below that class.
