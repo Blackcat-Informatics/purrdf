@@ -282,15 +282,20 @@ pub(crate) fn eval_select_validator(
     let path_structure = path.filter(|p| !matches!(p, Path::Predicate(_))).cloned();
 
     let mut results = Vec::with_capacity(rows.len());
+    let mut row_bindings: Vec<(String, Term)> = Vec::with_capacity(variables.len());
+    let mut template_bindings: Vec<(String, Term)> =
+        Vec::with_capacity(variables.len() + bindings.len());
     for row in &rows {
-        let row_bindings: Vec<(String, Term)> = variables
-            .iter()
-            .zip(row.iter())
-            .filter_map(|(var, cell)| {
-                cell.as_ref()
-                    .map(|tv| (var.clone(), term_value_to_native(tv)))
-            })
-            .collect();
+        row_bindings.clear();
+        row_bindings.extend(
+            variables
+                .iter()
+                .zip(row.iter())
+                .filter_map(|(var, cell)| {
+                    cell.as_ref()
+                        .map(|tv| (var.clone(), term_value_to_native(tv)))
+                }),
+        );
 
         let focus_node = this_index
             .and_then(|i| row.get(i))
@@ -312,7 +317,8 @@ pub(crate) fn eval_select_validator(
             .and_then(Option::as_ref)
             .map(term_value_to_native);
 
-        let mut template_bindings = row_bindings;
+        template_bindings.clear();
+        template_bindings.extend_from_slice(&row_bindings);
         for (name, value) in bindings {
             if !template_bindings.iter().any(|(n, _)| n == name) {
                 template_bindings.push((name.clone(), value.clone()));
