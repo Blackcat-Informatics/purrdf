@@ -25,6 +25,7 @@ use std::sync::Arc;
 use purrdf_core::RdfDataset;
 
 pub(crate) mod interner;
+pub(crate) mod owl_dl;
 pub(crate) mod rdfs;
 pub(crate) mod vocab;
 

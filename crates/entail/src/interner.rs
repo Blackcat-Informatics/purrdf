@@ -44,6 +44,12 @@ impl Interner {
         &self.values[id as usize]
     }
 
+    /// The id already assigned to `iri`, if it has been interned (lookup only).
+    #[cfg(test)]
+    pub(crate) fn id_of_iri(&self, iri: &str) -> Option<u32> {
+        self.map.get(&TermValue::Iri(iri.to_owned())).copied()
+    }
+
     /// Whether `id` may occupy a triple *subject* position (an IRI or blank node —
     /// never a literal or triple term reached by an inverse/range rule).
     pub(crate) fn is_subject(&self, id: u32) -> bool {
