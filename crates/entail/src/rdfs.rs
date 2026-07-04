@@ -98,8 +98,13 @@ pub(crate) fn close(ds: &RdfDataset, owl: bool) -> Result<Arc<RdfDataset>, Entai
     // Emit: original quads (all graphs) + newly inferred default-graph triples.
     let mut b = RdfDatasetBuilder::new();
     b.push_dataset(ds);
-    for t in &facts {
-        if original.contains(t) {
+    // `HashSet` iteration order is not stable across runs, so sort the accumulated
+    // facts by their interned term ids to get a deterministic (not insertion-order)
+    // emission order, matching the RIF path.
+    let mut ordered: Vec<[u32; 3]> = facts.iter().copied().collect();
+    ordered.sort_unstable();
+    for t in ordered {
+        if original.contains(&t) {
             continue;
         }
         let s = intern_into(&mut b, interner.value(t[0]));
