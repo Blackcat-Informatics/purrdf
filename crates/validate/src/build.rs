@@ -190,6 +190,42 @@ pub fn diagnostics_to_sarif_string(diagnostics: &[RdfDiagnostic], options: &Sari
     crate::model::to_json_pretty(&build_diagnostics_sarif(diagnostics, options))
 }
 
+/// SARIF rendering as a method on a validation report.
+///
+/// This is the ergonomic surface: with `use purrdf_validate::SarifReport;` in
+/// scope, `report.to_sarif(&opts)` reads as a method — yet the writer never
+/// leaves this boundary crate, so `purrdf-shapes` stays free of any SARIF/serde
+/// concern.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_validate::{SarifOptions, SarifReport};
+/// use purrdf_shapes::report::ValidationReport;
+///
+/// let report = ValidationReport { conforms: true, results: vec![] };
+/// let sarif = report.to_sarif(&SarifOptions::default());
+/// assert!(sarif.contains("\"version\": \"2.1.0\""));
+/// ```
+pub trait SarifReport {
+    /// Render this report to a SARIF 2.1.0 JSON string (logical locations only).
+    fn to_sarif(&self, options: &SarifOptions) -> String;
+
+    /// Render this report to SARIF with source context (physical locations,
+    /// resolved provenance) from `sources`.
+    fn to_sarif_with(&self, options: &SarifOptions, sources: &SarifSources<'_>) -> String;
+}
+
+impl SarifReport for ValidationReport {
+    fn to_sarif(&self, options: &SarifOptions) -> String {
+        report_to_sarif_string(self, options)
+    }
+
+    fn to_sarif_with(&self, options: &SarifOptions, sources: &SarifSources<'_>) -> String {
+        crate::model::to_json_pretty(&build_report_sarif_with(self, options, sources))
+    }
+}
+
 // ── internal ────────────────────────────────────────────────────────────────
 
 fn result_to_sarif(result: &ValidationResult, sources: &SarifSources<'_>) -> SarifResult {
@@ -654,6 +690,48 @@ mod tests {
         let region = phys.region.as_ref().expect("region");
         assert_eq!(region.start_line, Some(3));
         assert_eq!(region.start_column, Some(5));
+    }
+
+    #[test]
+    fn emitted_sarif_satisfies_structural_invariants() {
+        // A dependency-free structural check of the SARIF 2.1.0 shape, so the
+        // `make check` gate (which does not run the Python jsonschema lane)
+        // still guards the emitted structure. The Python binding test validates
+        // the same output against the full vendored OASIS schema.
+        let report = ValidationReport {
+            conforms: false,
+            results: vec![
+                result(
+                    "http://www.w3.org/ns/shacl#DatatypeConstraintComponent",
+                    Severity::Violation,
+                    None,
+                ),
+                result(
+                    "http://www.w3.org/ns/shacl#MinCountConstraintComponent",
+                    Severity::Warning,
+                    Some("min"),
+                ),
+            ],
+        };
+        let json = report_to_sarif_string(&report, &SarifOptions::default());
+        let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+        assert_eq!(value["version"], "2.1.0");
+        assert!(value["$schema"].is_string());
+        let runs = value["runs"].as_array().expect("runs array");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0]["tool"]["driver"]["name"], "purrdf");
+
+        let allowed = ["error", "warning", "note", "none"];
+        for r in runs[0]["results"].as_array().expect("results array") {
+            assert!(r["ruleId"].is_string(), "ruleId must be a string");
+            assert!(r["message"]["text"].is_string(), "message.text required");
+            let level = r["level"].as_str().expect("level string");
+            assert!(allowed.contains(&level), "level {level} must be a SARIF level");
+            // Every result has a rule registered in the driver.
+            let idx = r["ruleIndex"].as_u64().expect("ruleIndex") as usize;
+            assert_eq!(runs[0]["tool"]["driver"]["rules"][idx]["id"], r["ruleId"]);
+        }
     }
 
     #[test]

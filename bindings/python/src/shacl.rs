@@ -233,6 +233,19 @@ impl PyValidationReport {
         let report = &self.inner;
         py.detach(|| report.to_ntriples())
     }
+
+    /// Serialize the report to a SARIF 2.1.0 JSON string (runs detached — GIL
+    /// released). The sibling of [`to_ntriples`](Self::to_ntriples): the RDF
+    /// report graph stays canonical N-Triples, while SARIF is the source-traced,
+    /// actionable surface for editors and CI. Logical locations are emitted here
+    /// (focus node, result path, constraint component, source shape); physical
+    /// source spans require a span-tracked parse.
+    fn to_sarif(&self, py: Python<'_>) -> String {
+        let report = &self.inner;
+        py.detach(|| {
+            purrdf_validate::report_to_sarif_string(report, &purrdf_validate::SarifOptions::default())
+        })
+    }
 }
 
 /// Register the `purrdf-shapes` surface on a Python module.

@@ -1140,6 +1140,7 @@ dependencies = [
  "purrdf-shex",
  "purrdf-slice",
  "purrdf-sparql-eval",
+ "purrdf-validate",
  "purrdf-xsd",
  "pyo3",
 ]

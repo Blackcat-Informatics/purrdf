@@ -1,0 +1,8 @@
+Vendored third-party test fixture: the OASIS "Static Analysis Results Format
+(SARIF) Version 2.1.0" JSON Schema, redistributed verbatim for schema-validating
+PurRDF's SARIF output in the binding test suite.
+
+Source: https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json
+Upstream: OASIS Static Analysis Results Interchange Format (SARIF) TC.
+
+This file is not part of PurRDF's own source; it is used only by the test lane.
