@@ -85,6 +85,12 @@ pub struct Run {
     /// Optional invocation records (only when the caller supplied timing).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub invocations: Vec<Invocation>,
+    /// Symbolic base-URI definitions (`uriBaseId` → base [`ArtifactLocation`])
+    /// that artifact locations in this run are resolved against. Backed by a
+    /// `BTreeMap` so keys serialize in sorted order (determinism), and skipped
+    /// entirely when empty (the default, no-base-URI behavior).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub original_uri_base_ids: BTreeMap<String, ArtifactLocation>,
 }
 
 /// The analysis tool wrapper.
@@ -382,6 +388,7 @@ mod tests {
                 properties,
             }],
             invocations: vec![],
+            original_uri_base_ids: BTreeMap::new(),
         })
     }
 

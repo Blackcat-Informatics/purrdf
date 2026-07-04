@@ -16,6 +16,8 @@
 //! produces the location-free spine and is where the ordering and rule table are
 //! established.
 
+use std::collections::BTreeMap;
+
 use purrdf_core::{RdfDiagnostic, RdfLocation, RdfSeverity, UnitInterner};
 use purrdf_rdf::SpanTable;
 use purrdf_shapes::report::{Severity, ValidationReport, ValidationResult};
@@ -29,6 +31,11 @@ use crate::path_syntax::render_path;
 
 /// The tool name emitted in `driver.name`.
 pub const TOOL_NAME: &str = "purrdf";
+
+/// The symbolic `uriBaseId` used for artifact locations resolved relative to
+/// [`SarifOptions::source_root_uri`]. It names the entry defined in
+/// `run.originalUriBaseIds` (SARIF's indirection for a shared base URI).
+pub const SRCROOT_BASE_ID: &str = "SRCROOT";
 
 /// A property-bag key carrying a custom (`sh:severity`) IRI verbatim, so an
 /// open-world SHACL severity is never lost when coerced to a SARIF `level`.
@@ -125,10 +132,11 @@ pub fn build_report_sarif_with(
     options: &SarifOptions,
     sources: &SarifSources<'_>,
 ) -> SarifLog {
+    let base_id = source_root_base_id(options);
     let mut results: Vec<SarifResult> = report
         .results
         .iter()
-        .map(|r| result_to_sarif(r, sources))
+        .map(|r| result_to_sarif(r, sources, base_id))
         .collect();
 
     sort_results(&mut results);
@@ -172,7 +180,11 @@ fn location_sort_key(result: &SarifResult) -> (String, u32, u32) {
 /// [`rdf_level`]; `message` (plus any `detail`) becomes the result message.
 #[must_use]
 pub fn build_diagnostics_sarif(diagnostics: &[RdfDiagnostic], options: &SarifOptions) -> SarifLog {
-    let mut results: Vec<SarifResult> = diagnostics.iter().map(diagnostic_to_sarif).collect();
+    let base_id = source_root_base_id(options);
+    let mut results: Vec<SarifResult> = diagnostics
+        .iter()
+        .map(|d| diagnostic_to_sarif(d, base_id))
+        .collect();
 
     sort_results(&mut results);
     let rules = register_rules(&mut results);
@@ -233,7 +245,11 @@ impl SarifReport for ValidationReport {
 
 // ── internal ────────────────────────────────────────────────────────────────
 
-fn result_to_sarif(result: &ValidationResult, sources: &SarifSources<'_>) -> SarifResult {
+fn result_to_sarif(
+    result: &ValidationResult,
+    sources: &SarifSources<'_>,
+    base_id: Option<&str>,
+) -> SarifResult {
     let mut properties = PropertyBag::new();
     if let Severity::Other(iri) = &result.severity {
         properties.insert(PROP_SHACL_SEVERITY, iri.as_str().to_owned());
@@ -274,7 +290,7 @@ fn result_to_sarif(result: &ValidationResult, sources: &SarifSources<'_>) -> Sar
         }
     }
 
-    let physical = focus_physical_location(result, sources);
+    let physical = focus_physical_location(result, sources, base_id);
     let primary = Location {
         physical_location: physical,
         logical_locations: logical,
@@ -309,6 +325,7 @@ fn result_to_sarif(result: &ValidationResult, sources: &SarifSources<'_>) -> Sar
 fn focus_physical_location(
     result: &ValidationResult,
     sources: &SarifSources<'_>,
+    base_id: Option<&str>,
 ) -> Option<PhysicalLocation> {
     let uri = sources.artifact_uri?;
     let spans = sources.spans?;
@@ -317,7 +334,7 @@ fn focus_physical_location(
     Some(PhysicalLocation {
         artifact_location: ArtifactLocation {
             uri: uri.to_owned(),
-            uri_base_id: None,
+            uri_base_id: base_id.map(ToOwned::to_owned),
         },
         region: Some(Region {
             start_line: Some(position.line),
@@ -338,7 +355,7 @@ fn focus_span_key(term: &Term) -> Option<String> {
     }
 }
 
-fn diagnostic_to_sarif(diagnostic: &RdfDiagnostic) -> SarifResult {
+fn diagnostic_to_sarif(diagnostic: &RdfDiagnostic, base_id: Option<&str>) -> SarifResult {
     let mut text = diagnostic.message.clone();
     if let Some(detail) = &diagnostic.detail {
         text.push_str(" (");
@@ -346,10 +363,10 @@ fn diagnostic_to_sarif(diagnostic: &RdfDiagnostic) -> SarifResult {
         text.push(')');
     }
 
-    let (locations, properties) = diagnostic
-        .location
-        .as_deref()
-        .map_or_else(|| (Vec::new(), PropertyBag::new()), diagnostic_location);
+    let (locations, properties) = diagnostic.location.as_deref().map_or_else(
+        || (Vec::new(), PropertyBag::new()),
+        |location| diagnostic_location(location, base_id),
+    );
 
     SarifResult {
         rule_id: diagnostic.code.clone(),
@@ -365,7 +382,10 @@ fn diagnostic_to_sarif(diagnostic: &RdfDiagnostic) -> SarifResult {
 /// Map an [`RdfLocation`] on a diagnostic to a SARIF location: a
 /// `physicalLocation` when a path/line is present, plus a property bag carrying
 /// the GTS index anchors (`gts_quad_index`, etc.) that have no physical span.
-fn diagnostic_location(location: &RdfLocation) -> (Vec<Location>, PropertyBag) {
+fn diagnostic_location(
+    location: &RdfLocation,
+    base_id: Option<&str>,
+) -> (Vec<Location>, PropertyBag) {
     let mut properties = PropertyBag::new();
     for (key, value) in [
         ("gtsTermId", location.gts_term_id),
@@ -391,7 +411,7 @@ fn diagnostic_location(location: &RdfLocation) -> (Vec<Location>, PropertyBag) {
     let physical = location.path.as_ref().map(|path| PhysicalLocation {
         artifact_location: ArtifactLocation {
             uri: path.clone(),
-            uri_base_id: None,
+            uri_base_id: base_id.map(ToOwned::to_owned),
         },
         region: (location.line.is_some()).then(|| Region {
             start_line: location.line,
@@ -452,11 +472,29 @@ fn register_rules(results: &mut [SarifResult]) -> Vec<ReportingDescriptor> {
         .collect()
 }
 
+/// The symbolic base id to stamp on source-relative artifact locations, if the
+/// caller pinned a `source_root_uri` (otherwise `None`, preserving the bare-URI
+/// default).
+fn source_root_base_id(options: &SarifOptions) -> Option<&'static str> {
+    options.source_root_uri.as_ref().map(|_| SRCROOT_BASE_ID)
+}
+
 fn assemble_run(
     rules: Vec<ReportingDescriptor>,
     results: Vec<SarifResult>,
     options: &SarifOptions,
 ) -> Run {
+    let mut original_uri_base_ids = BTreeMap::new();
+    if let Some(root) = &options.source_root_uri {
+        original_uri_base_ids.insert(
+            SRCROOT_BASE_ID.to_owned(),
+            ArtifactLocation {
+                uri: root.clone(),
+                uri_base_id: None,
+            },
+        );
+    }
+
     let invocations = options
         .invocation_times
         .as_ref()
@@ -480,6 +518,7 @@ fn assemble_run(
         },
         results,
         invocations,
+        original_uri_base_ids,
     }
 }
 
@@ -807,6 +846,139 @@ mod tests {
             Some("https://www.w3.org/TR/shacl/#DatatypeConstraintComponent")
         );
         assert!(rule.short_description.is_some());
+    }
+
+    #[test]
+    fn source_root_uri_wires_base_id_and_original_uri_base_ids() {
+        use purrdf_rdf::{parse_dataset_with, ParseOptions};
+        let data = "<http://example.org/alice> <http://example.org/age> \"x\" .\n";
+        let (_ds, spans) = parse_dataset_with(
+            data.as_bytes(),
+            "application/n-triples",
+            None,
+            &ParseOptions {
+                track_source_spans: true,
+            },
+        )
+        .expect("parse");
+        let spans = spans.expect("span table present when tracking");
+
+        let report = ValidationReport {
+            conforms: false,
+            results: vec![result(
+                "http://www.w3.org/ns/shacl#DatatypeConstraintComponent",
+                Severity::Violation,
+                Some("bad"),
+            )],
+        };
+        let sources = SarifSources {
+            artifact_uri: Some("alice.ttl"),
+            spans: Some(&spans),
+            units: None,
+        };
+        let options = SarifOptions {
+            source_root_uri: Some("file:///src/".into()),
+            ..SarifOptions::default()
+        };
+        let log = build_report_sarif_with(&report, &options, &sources);
+        let run = &log.runs[0];
+
+        // (a) the source-relative artifact location carries the SRCROOT base id.
+        let phys = run.results[0].locations[0]
+            .physical_location
+            .as_ref()
+            .expect("physical location present");
+        assert_eq!(
+            phys.artifact_location.uri_base_id.as_deref(),
+            Some("SRCROOT")
+        );
+
+        // (b) run.originalUriBaseIds["SRCROOT"].uri is the pinned source root.
+        let base = run
+            .original_uri_base_ids
+            .get("SRCROOT")
+            .expect("SRCROOT base defined");
+        assert_eq!(base.uri, "file:///src/");
+        assert_eq!(base.uri_base_id, None);
+    }
+
+    #[test]
+    fn default_emits_no_base_id_and_no_original_uri_base_ids() {
+        use purrdf_rdf::{parse_dataset_with, ParseOptions};
+        let data = "<http://example.org/alice> <http://example.org/age> \"x\" .\n";
+        let (_ds, spans) = parse_dataset_with(
+            data.as_bytes(),
+            "application/n-triples",
+            None,
+            &ParseOptions {
+                track_source_spans: true,
+            },
+        )
+        .expect("parse");
+        let spans = spans.expect("span table present when tracking");
+
+        let report = ValidationReport {
+            conforms: false,
+            results: vec![result(
+                "http://www.w3.org/ns/shacl#DatatypeConstraintComponent",
+                Severity::Violation,
+                Some("bad"),
+            )],
+        };
+        let sources = SarifSources {
+            artifact_uri: Some("alice.ttl"),
+            spans: Some(&spans),
+            units: None,
+        };
+        let log = build_report_sarif_with(&report, &SarifOptions::default(), &sources);
+        let run = &log.runs[0];
+
+        let phys = run.results[0].locations[0]
+            .physical_location
+            .as_ref()
+            .expect("physical location present");
+        assert_eq!(
+            phys.artifact_location.uri_base_id, None,
+            "no source_root_uri -> no uriBaseId"
+        );
+        assert!(
+            run.original_uri_base_ids.is_empty(),
+            "no source_root_uri -> no originalUriBaseIds"
+        );
+
+        // Absent from the serialized bytes entirely.
+        let json = crate::model::to_json_pretty(&log);
+        assert!(!json.contains("uriBaseId"), "uriBaseId must be omitted");
+        assert!(
+            !json.contains("originalUriBaseIds"),
+            "originalUriBaseIds must be omitted"
+        );
+    }
+
+    #[test]
+    fn diagnostic_source_root_uri_stamps_base_id() {
+        let diag = RdfDiagnostic::error("native-codec-parse", "unexpected token")
+            .with_location(RdfLocation::file("data.ttl").with_line(3).with_column(5));
+        let options = SarifOptions {
+            source_root_uri: Some("file:///src/".into()),
+            ..SarifOptions::default()
+        };
+        let log = build_diagnostics_sarif(&[diag], &options);
+        let run = &log.runs[0];
+        let phys = run.results[0].locations[0]
+            .physical_location
+            .as_ref()
+            .expect("physical location");
+        assert_eq!(
+            phys.artifact_location.uri_base_id.as_deref(),
+            Some("SRCROOT")
+        );
+        assert_eq!(
+            run.original_uri_base_ids
+                .get("SRCROOT")
+                .map(|b| b.uri.as_str()),
+            Some("file:///src/")
+        );
     }
 
     #[test]
