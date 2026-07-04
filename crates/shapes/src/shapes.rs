@@ -1282,7 +1282,16 @@ impl<'s> Parser<'s> {
             let mut bindings: Vec<(String, Term)> = Vec::new();
             let mut missing_required = false;
             for param in &component.parameters {
-                if let Some(value) = self.first_object_of(id, param.path.as_str()) {
+                let values = self.objects_of(id, param.path.as_str());
+                if values.len() > 1 {
+                    return Err(format!(
+                        "shape {id} declares {count} values for parameter <{path}> of component <{component}>, only one is allowed",
+                        count = values.len(),
+                        path = param.path,
+                        component = component.id
+                    ));
+                }
+                if let Some(value) = values.into_iter().next() {
                     bindings.push((param.name.clone(), value));
                 } else if !param.optional {
                     missing_required = true;
