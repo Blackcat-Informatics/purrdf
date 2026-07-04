@@ -260,9 +260,10 @@ pub(crate) fn eval_user_function(
         }
     };
 
-    if let Some(value) = &result {
-        func.return_constraint.check(iri, "return value", value)?;
-    }
+    // `sh:returnType` is informational (SHACL-AF §5.3): it documents/casts the
+    // return and MAY be a class IRI, not a literal datatype. Enforcing it as a
+    // runtime datatype constraint would spuriously reject IRI/blank-node returns,
+    // so it is retained on `UserFunction` for callers but NOT enforced here.
     Ok(result)
 }
 
@@ -489,27 +490,30 @@ mod tests {
         );
     }
 
-    /// A `sh:returnType` mismatch is a hard error.
+    /// `sh:returnType` is informational (SHACL-AF §5.3) and MAY be a class IRI, so
+    /// it is NOT enforced at runtime: a function returning an IRI is accepted even
+    /// when its declared return type is a class rather than a literal datatype.
+    /// (The pre-fix code enforced it as a datatype and wrongly hard-failed this.)
     #[test]
-    fn return_type_violation_is_a_hard_error() {
+    fn return_type_is_informational_not_enforced() {
         let mut registry = UserFunctionRegistry::new();
         registry.insert(
             EX_INC,
             UserFunction {
                 params: vec![int_param("n")],
                 required: 1,
-                // Body yields an xsd:integer, but the declared return type is xsd:string.
-                body: parse("SELECT ((?n + 1) AS ?result) WHERE {}"),
+                // Returns an IRI; declared return type is a class (rdfs:Resource).
+                body: parse("SELECT (<http://example.org/ns#thing> AS ?result) WHERE {}"),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint {
-                    datatype: Some("http://www.w3.org/2001/XMLSchema#string".to_owned()),
+                    datatype: Some("http://www.w3.org/2000/01/rdf-schema#Resource".to_owned()),
                     node_kind: None,
                 },
             },
         );
         let ds = empty_dataset();
         let query = format!("SELECT ((<{EX_INC}>(1)) AS ?v) WHERE {{}}");
-        let err = NativeSparqlEngine::new()
+        let result = NativeSparqlEngine::new()
             .query_with_user_functions(
                 &ds,
                 SparqlRequest {
@@ -519,10 +523,16 @@ mod tests {
                 },
                 &registry,
             )
-            .expect_err("return-type violation must fail");
-        assert!(
-            err.to_string().contains("datatype"),
-            "expected datatype error, got {err}"
-        );
+            .expect("class-typed return must be accepted, not rejected");
+        match result {
+            SparqlResult::Solutions { rows, .. } => {
+                assert!(
+                    rows[0][0].is_some(),
+                    "class-typed IRI return must be accepted and returned, got {:?}",
+                    rows[0][0]
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
     }
 }
