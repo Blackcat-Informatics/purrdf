@@ -32,10 +32,12 @@
 //! never accidentally share a join variable.
 
 use purrdf_core::{DatasetView, GraphMatch, QuadIds, QuadProbePlan, RdfDataset, TermId, TermRef};
-use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern, Variable};
+use purrdf_sparql_algebra::{
+    GraphPattern, Literal, NamedNodePattern, TermPattern, TriplePattern, Variable,
+};
 
 use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
-use crate::dataset_spec::GraphScope;
+use crate::dataset_spec::{ActiveDataset, GraphScope};
 use crate::error::EvalError;
 use crate::eval::{BgpOrderCache, EvalCtx};
 use crate::scratch::SolutionTerm;
@@ -122,7 +124,15 @@ pub(crate) fn eval_bgp(
     // commutative join: `Pos::Slot` is an absolute column index into `working`, so
     // reordering cannot change which columns bind — the multiset result is identical,
     // only the join shape (and so the cost) changes.
-    let order = plan_or_cached_order(&compiled, ctx.dataset, &scope, ctx.bgp_order_cache);
+    //
+    // The differential planner-correctness test can force the retired structural
+    // heuristic instead; because the reorder is still just a permutation, the result
+    // multiset must stay identical.
+    let order = if ctx.options.force_structural_bgp_order {
+        Arc::from(structural_order(&compiled))
+    } else {
+        plan_or_cached_order(&compiled, ctx.dataset, &scope, ctx.bgp_order_cache)
+    };
 
     // The interned id of `rdf:reifies`, resolved once. `None` ⇒ the dataset has no
     // reifier layer at all (the predicate was never interned), so no virtual reifier
@@ -205,6 +215,60 @@ pub(crate) fn eval_bgp(
     }
 
     Ok(project_out_blanks(&working, rows))
+}
+
+/// The retired most-constrained-first STRUCTURAL heuristic, reproduced here as
+/// the baseline the cost planner must beat and as the forced order used by the
+/// differential planner-correctness corpus test. Schedule greedily by the count
+/// of bound positions, keep the join connected, break ties on lowest index.
+///
+/// This is the S7 behaviour `cost_based_order` replaced; it is intentionally
+/// deterministic and never materialises a plan as triples.
+fn structural_order(compiled: &[CompiledPattern]) -> Vec<usize> {
+    fn constrained(pos: &Pos, bound: &[bool]) -> bool {
+        match pos {
+            Pos::Bound(_) => true,
+            Pos::Slot(c) => bound[*c],
+            Pos::Triple(t) => {
+                constrained(&t.s, bound) && constrained(&t.p, bound) && constrained(&t.o, bound)
+            }
+        }
+    }
+    let n = compiled.len();
+    let mut n_cols = 0usize;
+    for cp in compiled {
+        for pos in [&cp.s, &cp.p, &cp.o] {
+            for_each_slot(pos, &mut |c| n_cols = n_cols.max(c + 1));
+        }
+    }
+    let mut bound = vec![false; n_cols];
+    let mut scheduled = vec![false; n];
+    let mut order = Vec::with_capacity(n);
+    for _ in 0..n {
+        let any_connected =
+            (0..n).any(|i| !scheduled[i] && pattern_connected(&compiled[i], &bound));
+        let mut best: Option<usize> = None;
+        let mut best_score = 0usize;
+        for i in 0..n {
+            if scheduled[i] || (any_connected && !pattern_connected(&compiled[i], &bound)) {
+                continue;
+            }
+            let cp = &compiled[i];
+            let score = [&cp.s, &cp.p, &cp.o]
+                .into_iter()
+                .filter(|p| constrained(p, &bound))
+                .count();
+            if best.is_none() || score > best_score {
+                best = Some(i);
+                best_score = score;
+            }
+        }
+        let chosen = best.expect("an unscheduled pattern always remains");
+        scheduled[chosen] = true;
+        mark_bound(&compiled[chosen], &mut bound);
+        order.push(chosen);
+    }
+    order
 }
 
 /// The BGP-size ceiling for exhaustive join-order search. At or below this many
@@ -962,6 +1026,134 @@ fn object_can_be_triple_term(pos: &Pos, dataset: &RdfDataset) -> bool {
         // term; an IRI/literal/blank object can never match a reifier row.
         Pos::Bound(id) => matches!(dataset.resolve(*id), TermRef::Triple { .. }),
     }
+}
+
+// ---------------------------------------------------------------------------
+// EXPLAIN / plan introspection helpers
+// ---------------------------------------------------------------------------
+
+/// Format a triple pattern as a compact SPARQL-like string for plan-introspection
+/// output. The format is human-readable and stable; it is not a round-trippable
+/// serializer.
+fn triple_pattern_to_string(tp: &TriplePattern) -> String {
+    format!(
+        "{} {} {} .",
+        term_pattern_to_string(&tp.subject),
+        named_node_pattern_to_string(&tp.predicate),
+        term_pattern_to_string(&tp.object)
+    )
+}
+
+/// Format a term pattern as a compact SPARQL-like string.
+fn term_pattern_to_string(term: &TermPattern) -> String {
+    match term {
+        TermPattern::Variable(v) => format!("?{}", v.as_str()),
+        TermPattern::BlankNode(b) => format!("_:{}", b.as_str()),
+        TermPattern::NamedNode(n) => format!("<{}>", n.as_str()),
+        TermPattern::Literal(l) => literal_to_string(l),
+        TermPattern::Triple(t) => format!(
+            "<<({} {} {})>>",
+            term_pattern_to_string(&t.subject),
+            named_node_pattern_to_string(&t.predicate),
+            term_pattern_to_string(&t.object)
+        ),
+    }
+}
+
+/// Format a named-node pattern (IRI or variable) as a compact string.
+fn named_node_pattern_to_string(nn: &NamedNodePattern) -> String {
+    match nn {
+        NamedNodePattern::Variable(v) => format!("?{}", v.as_str()),
+        NamedNodePattern::NamedNode(n) => format!("<{}>", n.as_str()),
+    }
+}
+
+/// Format a literal as a compact SPARQL-like string.
+fn literal_to_string(l: &Literal) -> String {
+    let escaped = l.value().replace('"', "\\\"");
+    match (l.language(), l.direction()) {
+        (Some(lang), Some(dir)) => format!("\"{escaped}\"@{lang}--{dir:?}"),
+        (Some(lang), None) => format!("\"{escaped}\"@{lang}"),
+        (None, _) => format!("\"{escaped}\"^^<{}>", l.datatype().as_str()),
+    }
+}
+
+/// Recursively walk `pattern`, compute the cost-based order for every BGP with at
+/// least two triple patterns, and append human-readable triple-pattern strings to
+/// `out` in the order the planner chose. Scope changes from `GRAPH` blocks are
+/// tracked so cardinality estimates use the right graph filter.
+///
+/// This is a pure-introspection path: it does not evaluate the query, and it
+/// falls back to source order for BGPs whose constants are absent from the dataset
+/// (those BGPs are empty regardless of order).
+pub(crate) fn explain_pattern_orders(
+    dataset: &RdfDataset,
+    active_dataset: &ActiveDataset,
+    active_graph: GraphMatch,
+    pattern: &GraphPattern,
+    out: &mut Vec<String>,
+) -> Result<(), EvalError> {
+    match pattern {
+        GraphPattern::Bgp { patterns } => {
+            if patterns.len() >= 2 {
+                let scope = active_dataset.scope_for(active_graph);
+                let mut working = VarSchema::new();
+                for pattern in patterns {
+                    for key in slot_keys(pattern) {
+                        working.push(key);
+                    }
+                }
+                let mut compiled = Vec::with_capacity(patterns.len());
+                let mut any_absent = false;
+                for pattern in patterns {
+                    match compile_pattern(pattern, &working, dataset)? {
+                        Some(cp) => compiled.push(cp),
+                        None => {
+                            any_absent = true;
+                            break;
+                        }
+                    }
+                }
+                let order: Vec<usize> = if any_absent {
+                    (0..patterns.len()).collect()
+                } else {
+                    cost_based_order(&compiled, dataset, &scope)
+                };
+                for &i in &order {
+                    out.push(triple_pattern_to_string(&patterns[i]));
+                }
+            }
+        }
+        GraphPattern::Join { left, right }
+        | GraphPattern::Union { left, right }
+        | GraphPattern::LeftJoin { left, right, .. }
+        | GraphPattern::Minus { left, right }
+        | GraphPattern::Lateral { left, right } => {
+            explain_pattern_orders(dataset, active_dataset, active_graph, left, out)?;
+            explain_pattern_orders(dataset, active_dataset, active_graph, right, out)?;
+        }
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Extend { inner, .. }
+        | GraphPattern::Project { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Group { inner, .. } => {
+            explain_pattern_orders(dataset, active_dataset, active_graph, inner, out)?;
+        }
+        GraphPattern::Graph { name, inner } => {
+            let inner_graph = match name {
+                NamedNodePattern::NamedNode(n) => dataset
+                    .term_id_by_value(&named_node_to_value(n))
+                    .map_or(GraphMatch::Default, GraphMatch::Named),
+                NamedNodePattern::Variable(_) => GraphMatch::Any,
+            };
+            explain_pattern_orders(dataset, active_dataset, inner_graph, inner, out)?;
+        }
+        GraphPattern::Path { .. } | GraphPattern::Values { .. } | GraphPattern::Service { .. } => {}
+    }
+    Ok(())
 }
 
 /// An empty solution sequence over only the real (non-blank) variables of `working`.
@@ -1748,57 +1940,6 @@ mod tests {
     }
 
     // ---- measurable win vs the retired structural heuristic -------------------
-
-    /// The retired most-constrained-first STRUCTURAL heuristic, reproduced here ONLY as
-    /// the baseline the cost planner must beat: schedule greedily by the count of bound
-    /// positions, keep the join connected, break ties on lowest index. (This is the S7
-    /// behaviour `cost_based_order` replaced.)
-    fn structural_order(compiled: &[CompiledPattern]) -> Vec<usize> {
-        fn constrained(pos: &Pos, bound: &[bool]) -> bool {
-            match pos {
-                Pos::Bound(_) => true,
-                Pos::Slot(c) => bound[*c],
-                Pos::Triple(t) => {
-                    constrained(&t.s, bound) && constrained(&t.p, bound) && constrained(&t.o, bound)
-                }
-            }
-        }
-        let n = compiled.len();
-        let mut n_cols = 0usize;
-        for cp in compiled {
-            for pos in [&cp.s, &cp.p, &cp.o] {
-                for_each_slot(pos, &mut |c| n_cols = n_cols.max(c + 1));
-            }
-        }
-        let mut bound = vec![false; n_cols];
-        let mut scheduled = vec![false; n];
-        let mut order = Vec::with_capacity(n);
-        for _ in 0..n {
-            let any_connected =
-                (0..n).any(|i| !scheduled[i] && pattern_connected(&compiled[i], &bound));
-            let mut best: Option<usize> = None;
-            let mut best_score = 0usize;
-            for i in 0..n {
-                if scheduled[i] || (any_connected && !pattern_connected(&compiled[i], &bound)) {
-                    continue;
-                }
-                let cp = &compiled[i];
-                let score = [&cp.s, &cp.p, &cp.o]
-                    .into_iter()
-                    .filter(|p| constrained(p, &bound))
-                    .count();
-                if best.is_none() || score > best_score {
-                    best = Some(i);
-                    best_score = score;
-                }
-            }
-            let chosen = best.expect("an unscheduled pattern always remains");
-            scheduled[chosen] = true;
-            mark_bound(&compiled[chosen], &mut bound);
-            order.push(chosen);
-        }
-        order
-    }
 
     /// GROUND TRUTH: the total number of intermediate solution rows a left-deep
     /// execution in `order` materialises — the sum over each prefix of the REAL result

@@ -15,7 +15,7 @@ use purrdf_sparql_algebra::{
     TriplePattern,
 };
 use purrdf_sparql_eval::{
-    NativeSparqlEngine, ParserOptions, RemoteQuerySource, StandpointPredicates,
+    LossVocabulary, NativeSparqlEngine, ParserOptions, RemoteQuerySource, StandpointPredicates,
 };
 
 use crate::manifest::{SparqlTestCase, TestKind};
@@ -27,6 +27,10 @@ pub(crate) const BASE: &str = "http://purrdf.test/manifest/";
 /// configuration (a neutral example.org name), exactly as a real deployment
 /// supplies its own ontology namespace.
 const EXT_NS: &str = "https://example.org/ext/";
+
+/// The loss-declaration namespace used by the first-party loss-aware CONSTRUCT
+/// cases. Like `EXT_NS`, this is harness configuration, not an engine constant.
+const LOSS_NS: &str = "https://example.org/ext/loss/";
 
 /// The outcome of running a case (before comparison against the expected result).
 #[derive(Debug)]
@@ -277,6 +281,11 @@ pub fn run(
                 .with_standpoint_predicates(StandpointPredicates::new(
                     format!("{EXT_NS}accordingTo"),
                     format!("{EXT_NS}sharpens"),
+                ))
+                .with_loss_vocabulary(LossVocabulary::new(
+                    format!("{LOSS_NS}ProjectionLoss"),
+                    format!("{LOSS_NS}lossCode"),
+                    format!("{LOSS_NS}lostReifies"),
                 ));
             let request = SparqlRequest {
                 query: &query_text,

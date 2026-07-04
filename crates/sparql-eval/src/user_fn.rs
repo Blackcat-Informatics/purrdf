@@ -15,7 +15,7 @@
 //!
 //! The registry is pure data (parsed bodies + parameter metadata); executing a
 //! call binds the arguments to the parameter variables as a pre-binding rewrite
-//! (the same [`crate::substitute`] path `$this` injection uses) and evaluates the
+//! (the same `crate::substitute` path `$this` injection uses) and evaluates the
 //! body in a recursion-bounded child context. This keeps SPARQL execution inside
 //! the evaluator and the registry free of any engine coupling.
 

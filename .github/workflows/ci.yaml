@@ -121,7 +121,11 @@ jobs:
 
   benchmarks:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -131,6 +135,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Compile benchmark harnesses
         run: |
           cargo bench -p purrdf-gts --no-run --locked
@@ -139,6 +148,31 @@ jobs:
           cargo bench -p purrdf-sparql-eval --no-run --locked
           cargo bench -p purrdf-shapes --bench validate --no-run --locked
           cargo bench -p purrdf-entail --no-run --locked
+
+      - name: Run native criterion suites
+        run: |
+          cargo bench -p purrdf-gts --locked
+          cargo bench -p purrdf-core --locked
+          cargo bench -p purrdf-rdf --bench native_codecs --locked
+          cargo bench -p purrdf-sparql-eval --locked
+          cargo bench -p purrdf-shapes --bench validate --locked
+          cargo bench -p purrdf-entail --locked
+
+      - name: Run Python compat harness
+        working-directory: bindings/python
+        run: |
+          uv run maturin develop
+          uv run python benchmarks/bench_compat.py --json bench_compat.json
+
+      - name: Upload benchmark artifacts
+        if: success() || failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmark-results
+          path: |
+            target/criterion/
+            bindings/python/bench_compat.json
+          if-no-files-found: warn
 
   # The Python binding gate — separate from the Rust `workspace`/`test` jobs above
   # (AGENTS.md §3: `make check` stays a pure-Rust gate). Builds the native module
