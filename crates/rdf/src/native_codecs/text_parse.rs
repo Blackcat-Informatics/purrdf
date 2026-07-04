@@ -2178,6 +2178,76 @@ mod tests {
         );
     }
 
+    /// The parallel line-number prefix sum must be correct for a parse error on the
+    /// FINAL line when that line lacks a trailing newline — the arithmetic edge the
+    /// determinism tests never hit (their fixtures all end in `\n`, and the error line
+    /// is never the last). A large all-valid body crosses [`PARALLEL_MIN_BYTES`] so the
+    /// `Auto` path takes the chunk-parallel branch; the deliberately invalid final line
+    /// (a blank-node predicate) carries no `\n`, so `str::lines()` yields it as the last
+    /// item and the parallel per-chunk base-line prefix sum must still report its true
+    /// 1-based document line. The forced-sequential path parses the SAME input and must
+    /// agree — the parallel-vs-sequential equivalence for a newline-less final line.
+    #[test]
+    fn parallel_final_line_without_newline_reports_correct_line() {
+        use std::fmt::Write as _;
+        // Enough valid rows to comfortably exceed the 1 MiB parallel threshold; each row
+        // is ~72 bytes, so 20_000 rows is ~1.4 MiB.
+        const VALID_ROWS: usize = 20_000;
+        let mut text = String::with_capacity(VALID_ROWS * 80);
+        for i in 0..VALID_ROWS {
+            writeln!(
+                text,
+                "<http://example.org/s> <http://example.org/p> <http://example.org/o{i}> ."
+            )
+            .expect("write valid row");
+        }
+        // The final line is INVALID (a blank-node predicate) and has NO trailing newline.
+        // It is document line `VALID_ROWS + 1` (rows 1..=VALID_ROWS ended in `\n`).
+        text.push_str("<http://example.org/s> _:bad <http://example.org/o> .");
+        assert!(
+            !text.ends_with('\n'),
+            "the final line must lack a trailing newline"
+        );
+        let expected_line = u32::try_from(VALID_ROWS + 1).expect("line fits u32");
+
+        assert!(
+            text.len() >= PARALLEL_MIN_BYTES,
+            "fixture ({} bytes) must cross the {PARALLEL_MIN_BYTES}-byte parallel threshold",
+            text.len()
+        );
+
+        // Auto path over a >1 MiB input takes the chunk-parallel branch.
+        let par_err = parse_lines(&text, false, LineParseMode::Auto, &mut NoSpans)
+            .expect_err("parallel must reject the final line");
+        let par_line = par_err
+            .location
+            .as_ref()
+            .and_then(|l| l.line)
+            .expect("parallel diagnostic is located");
+        assert_eq!(
+            par_line, expected_line,
+            "parallel path must report the newline-less final line's true 1-based number"
+        );
+
+        // Forced-sequential path over the identical input must agree.
+        let seq_err = parse_lines_sequential(&text, false, 1, &mut NoSpans)
+            .expect_err("sequential must reject the final line");
+        let seq_line = seq_err
+            .location
+            .as_ref()
+            .and_then(|l| l.line)
+            .expect("sequential diagnostic is located");
+        assert_eq!(
+            seq_line, expected_line,
+            "sequential path must report the same final-line number"
+        );
+        assert_eq!(
+            par_err, seq_err,
+            "parallel and sequential diagnostics must be byte-identical for the final \
+             newline-less line"
+        );
+    }
+
     /// A rejected N-Quads line carries a 1-based `(line, column)` location and no
     /// longer embeds the raw line text in the message.
     #[test]
