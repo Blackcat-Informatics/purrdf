@@ -521,6 +521,27 @@ impl<'s> Parser<'s> {
                     format!("sh:SPARQLFunction <{id}> has a sh:parameter without an IRI sh:path/sh:predicate")
                 })?;
             let var = local_name(&predicate).to_owned();
+            if var.is_empty() {
+                return Err(format!(
+                    "sh:SPARQLFunction <{id}> has a sh:parameter whose predicate <{predicate}> has an empty local name and yields no usable variable"
+                ));
+            }
+            // A parameter must not shadow a SHACL/SHACL-AF pre-bound or reserved
+            // variable (SHACL §3.2.1, SHACL-AF §5.2) — e.g. `this` would clobber the
+            // injected focus-node binding during evaluation.
+            const RESERVED_VARS: [&str; 6] = [
+                "this",
+                "path",
+                "PATH",
+                "value",
+                "shapesGraph",
+                "currentShape",
+            ];
+            if RESERVED_VARS.contains(&var.as_str()) {
+                return Err(format!(
+                    "sh:SPARQLFunction <{id}> parameter variable ?{var} is a SHACL/SHACL-AF reserved name"
+                ));
+            }
             let order = self
                 .first_object_of(&p_node, sh::ORDER)
                 .and_then(|t| match t {
@@ -2296,6 +2317,21 @@ mod tests {
         );
         let err = from_store(&load_store(&ttl)).expect_err("both bodies must fail");
         assert!(err.contains("both sh:select and sh:ask"), "got: {err}");
+    }
+
+    #[test]
+    fn sparql_function_with_reserved_param_name_is_rejected() {
+        // A parameter whose derived variable name is the SHACL-reserved `this`
+        // would shadow the injected focus-node binding during evaluation.
+        let ttl = format!(
+            r#"{PREFIXES}
+            ex:bad a sh:SPARQLFunction ;
+                sh:parameter [ sh:path ex:this ; sh:order 1 ] ;
+                sh:select "SELECT (1 AS ?result) WHERE {{}}" .
+            "#
+        );
+        let err = from_store(&load_store(&ttl)).expect_err("reserved param name must fail");
+        assert!(err.contains("reserved"), "got: {err}");
     }
 
     #[test]
