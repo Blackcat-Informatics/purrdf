@@ -1,0 +1,152 @@
+<?xml version="1.0"?>
+
+
+<!DOCTYPE rdf:RDF [
+    <!ENTITY owl "http://www.w3.org/2002/07/owl#" >
+    <!ENTITY owl2 "http://www.w3.org/2006/12/owl2#" >
+    <!ENTITY xsd "http://www.w3.org/2001/XMLSchema#" >
+    <!ENTITY owl2xml "http://www.w3.org/2006/12/owl2-xml#" >
+    <!ENTITY testOntology "http://example.org/testOntology.owl#" >
+    <!ENTITY rdfs "http://www.w3.org/2000/01/rdf-schema#" >
+    <!ENTITY rdf "http://www.w3.org/1999/02/22-rdf-syntax-ns#" >
+]>
+
+
+<rdf:RDF xmlns="http://example.org/testOntology.owl#"
+     xml:base="http://example.org/testOntology.owl"
+     xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+     xmlns:owl2xml="http://www.w3.org/2006/12/owl2-xml#"
+     xmlns:testOntology="http://example.org/testOntology.owl#"
+     xmlns:owl="http://www.w3.org/2002/07/owl#"
+     xmlns:xsd="http://www.w3.org/2001/XMLSchema#"
+     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+     xmlns:owl2="http://www.w3.org/2006/12/owl2#">
+    <owl:Ontology rdf:about=""/>
+    
+
+
+    <!-- 
+    ///////////////////////////////////////////////////////////////////////////////////////
+    //
+    // Object Properties
+    //
+    ///////////////////////////////////////////////////////////////////////////////////////
+     -->
+
+    
+
+
+    <!-- http://example.org/testOntology.owl#isMAEBoundedBy -->
+
+    <owl:ObjectProperty rdf:about="#isMAEBoundedBy">
+        <rdfs:domain rdf:resource="#MaterialAnatomicalEntity"/>
+        <rdfs:range>
+            <owl:Class>
+                <owl:unionOf rdf:parseType="Collection">
+                    <rdf:Description rdf:about="#GyriConnection"/>
+                    <rdf:Description rdf:about="#SucalFold"/>
+                </owl:unionOf>
+            </owl:Class>
+        </rdfs:range>
+    </owl:ObjectProperty>
+    
+
+
+    <!-- http://example.org/testOntology.owl#isMAEConnectedTo -->
+
+    <owl:ObjectProperty rdf:about="#isMAEConnectedTo">
+        <rdf:type rdf:resource="&owl;SymmetricProperty"/>
+        <rdfs:range rdf:resource="#MaterialAnatomicalEntity"/>
+        <rdfs:domain rdf:resource="#MaterialAnatomicalEntity"/>
+    </owl:ObjectProperty>
+    
+
+
+    <!-- 
+    ///////////////////////////////////////////////////////////////////////////////////////
+    //
+    // Classes
+    //
+    ///////////////////////////////////////////////////////////////////////////////////////
+     -->
+
+    
+
+
+    <!-- http://example.org/testOntology.owl#AnatomicalEntity -->
+
+    <owl:Class rdf:about="#AnatomicalEntity"/>
+    
+
+
+    <!-- http://example.org/testOntology.owl#GyriConnection -->
+
+    <owl:Class rdf:about="#GyriConnection">
+        <rdfs:subClassOf rdf:resource="#NonMaterialAnatomicalEntity"/>
+    </owl:Class>
+    
+
+
+    <!-- http://example.org/testOntology.owl#Gyrus -->
+
+    <owl:Class rdf:about="#Gyrus">
+        <rdfs:subClassOf rdf:resource="#MaterialAnatomicalEntity"/>
+    </owl:Class>
+    
+
+
+    <!-- http://example.org/testOntology.owl#MaterialAnatomicalEntity -->
+
+    <owl:Class rdf:about="#MaterialAnatomicalEntity">
+        <rdfs:subClassOf rdf:resource="#AnatomicalEntity"/>
+    </owl:Class>
+    
+
+
+    <!-- http://example.org/testOntology.owl#NonMaterialAnatomicalEntity -->
+
+    <owl:Class rdf:about="#NonMaterialAnatomicalEntity">
+        <rdfs:subClassOf rdf:resource="#AnatomicalEntity"/>
+    </owl:Class>
+    
+
+
+    <!-- http://example.org/testOntology.owl#SucalFold -->
+
+    <owl:Class rdf:about="#SucalFold">
+        <rdfs:subClassOf rdf:resource="#NonMaterialAnatomicalEntity"/>
+    </owl:Class>
+    
+
+
+    <!-- 
+    ///////////////////////////////////////////////////////////////////////////////////////
+    //
+    // Individuals
+    //
+    ///////////////////////////////////////////////////////////////////////////////////////
+     -->
+
+    
+
+
+    <!-- http://example.org/testOntology.owl#g1 -->
+
+    <Gyrus rdf:about="#g1">
+        <isMAEBoundedBy rdf:resource="#op"/>
+    </Gyrus>
+    
+
+
+    <!-- http://example.org/testOntology.owl#op -->
+
+    <GyriConnection rdf:about="#op"/>
+    
+
+
+    <!-- http://example.org/testOntology.owl#pcg0 -->
+
+    <Gyrus rdf:about="#pcg0">
+        <isMAEBoundedBy rdf:resource="#op"/>
+    </Gyrus>
+</rdf:RDF>

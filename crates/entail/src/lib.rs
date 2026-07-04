@@ -27,9 +27,11 @@ use purrdf_core::RdfDataset;
 pub(crate) mod interner;
 pub(crate) mod owl_dl;
 pub(crate) mod rdfs;
+pub mod rif;
 pub(crate) mod vocab;
 
 pub use owl_dl::query::{materialize_dl, QNode, QTriple};
+pub use rif::{materialize_rif, Atom, Fact, RifTerm, Rule, RuleSet};
 
 /// A SPARQL entailment regime (`sparql:entailmentRegime`), by its W3C IRI's local
 /// name.

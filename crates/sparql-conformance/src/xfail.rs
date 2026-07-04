@@ -161,29 +161,15 @@ pub const XFAIL: &[Xfail] = &[
     // === W3C sparql11 entailment-regime group (commit 426c7df) ================
     //
     // The native reasoner (purrdf-entail) materializes RDF/RDFS + OWL-RL-shaped
-    // closure for the forward-materializable regimes, and answers the OWL-Direct
+    // closure for the forward-materializable regimes, answers the OWL-Direct
     // regime query-directed via `purrdf_entail::materialize_dl` (an ALCOIQ tableau
-    // over the query's class expressions), so every rdf*/rdfs*/lang/plainLit/bind*
-    // case, every `parent*`/`simple*`/`owlds*`, and the full `sparqldl-*` /
-    // `paper-sparqldl-Q*` OWL-DL query-answering set now pass. The only residual
-    // failures are RIF-rule entailment (`rif*`) — a distinct rule engine, wired
-    // separately — each ledgered `Entailment`:
-    Xfail {
-        iri_suffix: "entailment/manifest#rif01",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#rif03",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#rif04",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#rif06",
-        reason: XfailReason::Entailment,
-    },
+    // over the query's class expressions), and forward-chains the RIF-Core Horn
+    // rule sets via `purrdf_entail::materialize_rif` (the RIF-in-XML documents the
+    // `qt:data` graphs reference, plus their RDF imports). So every
+    // rdf*/rdfs*/lang/plainLit/bind* case, every `parent*`/`simple*`/`owlds*`, the
+    // full `sparqldl-*` / `paper-sparqldl-Q*` OWL-DL query-answering set, and all
+    // four `rif*` RIF-entailment cases now pass — this group has no residual
+    // `Entailment` failures.
     // === W3C SPARQL 1.2 / RDF-1.2 group (commit 426c7df) ====================
     //
     // SPARQL 1.2 (RDF-star: triple terms, reifiers, base-direction) is a complete

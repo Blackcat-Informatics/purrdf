@@ -259,8 +259,12 @@ fn load_entailment_regimes(
 /// Boundaries the native reasoner cannot materialize (D) yield `None` — the case runs
 /// unmaterialized and, if it needs those entailments, is a typed `Entailment` xfail.
 fn pick_regime(regimes: &[purrdf_entail::Regime]) -> Option<purrdf_entail::Regime> {
-    use purrdf_entail::Regime::{OwlDirect, OwlRl, Rdf, Rdfs, Simple};
-    [OwlDirect, Rdfs, OwlRl, Rdf, Simple]
+    use purrdf_entail::Regime::{OwlDirect, OwlRl, Rdf, Rdfs, Rif, Simple};
+    // RIF-declared cases run through the RIF rule engine (wired in `run.rs`), which
+    // needs the RAW dataset — so `Rif` is selected but `load_dataset` passes it
+    // through unmaterialized, exactly like `OwlDirect`. The relative order among the
+    // others is immaterial for the RIF cases (they declare only `ent:RIF`).
+    [OwlDirect, Rdfs, OwlRl, Rdf, Simple, Rif]
         .into_iter()
         .find(|pref| regimes.contains(pref))
 }

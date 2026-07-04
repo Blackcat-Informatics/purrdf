@@ -250,6 +250,15 @@ pub fn run(
                 dataset = purrdf_entail::materialize_dl(&dataset, &bgp)
                     .map_err(|e| format!("OWL-Direct entailment for {}: {e}", case.iri))?;
             }
+            // RIF entailment: the qt:data graph references one or more `.rif`
+            // documents via `rif:usedWithProfile`; parse each (plus its RDF
+            // imports) into a Horn rule set, forward-chain it over the RAW dataset,
+            // then hand the materialized dataset to the UNMODIFIED engine.
+            if case.regime == Some(purrdf_entail::Regime::Rif) {
+                let ruleset = build_rif_ruleset(case, &dataset)?;
+                dataset = purrdf_entail::materialize_rif(&dataset, &ruleset)
+                    .map_err(|e| format!("RIF entailment for {}: {e}", case.iri))?;
+            }
             // Both the extension-function namespace and the standpoint predicate
             // table are CALLER configuration (the engine has no defaults): the
             // purrdf-extend suite's standpoint cases exercise `ext:heldIn` and the
@@ -335,6 +344,63 @@ fn query_is_top_level_ordered(query_text: &str, options: &ParserOptions) -> bool
             _ => return false,
         }
     }
+}
+
+/// The RIF vocabulary predicate a `qt:data` graph uses to reference the `.rif`
+/// document(s) whose rules govern the case.
+const RIF_USED_WITH_PROFILE: &str = "http://www.w3.org/2007/rif#usedWithProfile";
+
+/// Build the combined RIF [`RuleSet`](purrdf_entail::RuleSet) for a `Rif`-regime
+/// case by scanning `dataset` for `?doc rif:usedWithProfile ?profile` triples,
+/// resolving each `?doc` to a local `.rif` fixture beside the case's `qt:data`
+/// file, and parsing it (with its RDF imports) into a rule set.
+///
+/// # Errors
+///
+/// Returns a message if the case has no `qt:data` file (so no fixture directory),
+/// if no `.rif` reference is found, or if any referenced `.rif` fails to parse.
+fn build_rif_ruleset(
+    case: &SparqlTestCase,
+    dataset: &RdfDataset,
+) -> Result<purrdf_entail::RuleSet, String> {
+    let dir = case
+        .data
+        .first()
+        .and_then(|p| p.parent())
+        .ok_or_else(|| format!("RIF case {} has no qt:data fixture directory", case.iri))?;
+
+    // Collect the referenced `.rif` basenames in first-seen dataset order (dedup),
+    // so the combined rule set is deterministic regardless of triple iteration.
+    let mut basenames: Vec<String> = Vec::new();
+    for q in dataset.quads() {
+        if q.g.is_some() {
+            continue;
+        }
+        if !matches!(dataset.term_value(q.p), TermValue::Iri(p) if p == RIF_USED_WITH_PROFILE) {
+            continue;
+        }
+        if let TermValue::Iri(doc) = dataset.term_value(q.s) {
+            if let Some(name) = doc.rsplit(['/', '#']).next().filter(|s| !s.is_empty()) {
+                let name = name.to_owned();
+                if !basenames.contains(&name) {
+                    basenames.push(name);
+                }
+            }
+        }
+    }
+    if basenames.is_empty() {
+        return Err(format!(
+            "RIF case {} references no rif:usedWithProfile document",
+            case.iri
+        ));
+    }
+
+    let mut ruleset = purrdf_entail::RuleSet::new();
+    for name in basenames {
+        let rif_path = dir.join(&name);
+        ruleset.extend(crate::rif_xml::load_ruleset(&rif_path)?);
+    }
+    Ok(ruleset)
 }
 
 /// Parse `query_text` and collect every basic-graph-pattern triple, translated into
