@@ -301,6 +301,10 @@ pub struct Shape {
 }
 
 /// The parsed shapes graph — a collection of top-level [`Shape`]s.
+#[allow(
+    clippy::struct_field_names,
+    reason = "field names mirror the public Shapes API contract (shapes_graph / shapes_dataset)"
+)]
 #[derive(Debug, Clone)]
 pub struct Shapes {
     /// Node shapes extracted from the shapes graph.
@@ -309,12 +313,25 @@ pub struct Shapes {
     /// carried into validation so data-graph role lookups use the same terms.
     /// `None` = the box-role feature is inactive.
     pub box_role_vocab: Option<BoxRoleVocab>,
-    /// The IRI of the named graph holding the shapes, threaded into SHACL-SPARQL
-    /// custom-component validator queries. `None` = the default graph.
+    /// The named-graph IRI under which the original shapes dataset is exposed
+    /// to SHACL-SPARQL queries, when known.
     pub shapes_graph: Option<String>,
-    /// The frozen dataset the shapes were parsed from, retained so SHACL-SPARQL
-    /// custom-component validators can query the shapes graph at validation time.
-    pub shapes_dataset: Arc<RdfDataset>,
+    /// The original frozen shapes dataset, retained so validation can expose it
+    /// as a named graph to SHACL-SPARQL paths.
+    pub(crate) shapes_dataset: Arc<RdfDataset>,
+}
+
+impl Default for Shapes {
+    fn default() -> Self {
+        Self {
+            node_shapes: Vec::new(),
+            box_role_vocab: None,
+            shapes_graph: None,
+            shapes_dataset: ::purrdf::RdfDatasetBuilder::new()
+                .freeze()
+                .expect("empty shapes dataset"),
+        }
+    }
 }
 
 // ── Public entry point ─────────────────────────────────────────────────────────
@@ -371,13 +388,26 @@ pub fn from_dataset_with_config(
     doc_prefixes: &[(String, String)],
     box_role_vocab: Option<BoxRoleVocab>,
 ) -> Result<Shapes, String> {
+    from_dataset_with_config_and_graph(dataset, doc_prefixes, box_role_vocab, None)
+}
+
+/// Parse shapes from a dataset with the full caller configuration plus an
+/// explicit shapes-graph IRI. The original `dataset` is retained as
+/// [`Shapes::shapes_dataset`] so the validation engine can expose it as a
+/// named graph to SHACL-SPARQL queries.
+pub fn from_dataset_with_config_and_graph(
+    dataset: &Arc<RdfDataset>,
+    doc_prefixes: &[(String, String)],
+    box_role_vocab: Option<BoxRoleVocab>,
+    shapes_graph: Option<String>,
+) -> Result<Shapes, String> {
     let data = IrDataGraph::new(Arc::clone(dataset));
     let mut parser = Parser::new(
         &data,
         doc_prefixes,
         box_role_vocab,
         Arc::clone(dataset),
-        None,
+        shapes_graph,
     );
     parser.parse()
 }
@@ -398,11 +428,10 @@ struct Parser<'s> {
     /// shapes graph. Populated before shape parsing so malformed components are
     /// rejected as hard failures.
     component_registry: ComponentRegistry,
-    /// The original frozen shapes dataset, used to build the SPARQL-visible
-    /// shapes-graph overlay.
+    /// The original frozen shapes dataset, retained so validation can expose it
+    /// as a named graph to SHACL-SPARQL paths.
     shapes_dataset: Arc<RdfDataset>,
-    /// The IRI of the named graph under which the shapes graph is exposed to
-    /// SHACL-SPARQL queries, or `None` if no shapes-graph overlay is configured.
+    /// The named-graph IRI under which the shapes dataset is exposed.
     shapes_graph: Option<String>,
 }
 
