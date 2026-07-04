@@ -417,12 +417,13 @@ impl<'a> TokenCursor<'a> {
     }
 
     fn expect_dot(&mut self) -> Result<(), RdfDiagnostic> {
+        let col = self.col();
         match self.bump() {
             Some(Token::Dot) | None => Ok(()),
             other => Err(err_at(
                 format!("expected '.' terminator, found {other:?}"),
                 self.lineno,
-                self.col(),
+                col,
             )),
         }
     }
@@ -434,10 +435,11 @@ impl<'a> TokenCursor<'a> {
         match self.peek() {
             Some(Token::TripleOpen) => self.quoted_triple(),
             Some(Token::Iri(_)) => {
+                let col = self.col();
                 let Some(Token::Iri(value)) = self.bump() else {
                     unreachable!()
                 };
-                validate_iri(&value, self.lineno, self.col())?;
+                validate_iri(&value, self.lineno, col)?;
                 Ok(Node::Iri(value))
             }
             Some(Token::BlankNodeLabel(_)) => {
@@ -478,25 +480,27 @@ impl<'a> TokenCursor<'a> {
         let mut datatype = None;
         match self.peek() {
             Some(Token::LangTag(_)) => {
+                let col = self.col();
                 let Some(Token::LangTag(raw)) = self.bump() else {
                     unreachable!()
                 };
-                let (base, dir) = split_lang_direction(&raw, self.lineno, self.col())?;
-                validate_language_tag(&base, self.lineno, self.col())?;
+                let (base, dir) = split_lang_direction(&raw, self.lineno, col)?;
+                validate_language_tag(&base, self.lineno, col)?;
                 lang = Some(base);
                 direction = dir;
             }
             Some(Token::HatHat) => {
                 self.bump();
+                let col = self.col();
                 let Some(Token::Iri(iri)) = self.bump() else {
-                    return Err(err_at("datatype must be an IRI", self.lineno, self.col()));
+                    return Err(err_at("datatype must be an IRI", self.lineno, col));
                 };
-                validate_iri(&iri, self.lineno, self.col())?;
+                validate_iri(&iri, self.lineno, col)?;
                 if matches!(iri.as_str(), RDF_LANG_STRING | RDF_DIR_LANG_STRING) {
                     return Err(err_at(
                         "literal cannot explicitly use the RDF language-string datatype",
                         self.lineno,
-                        self.col(),
+                        col,
                     ));
                 }
                 datatype = Some(iri);
@@ -2164,6 +2168,99 @@ mod tests {
             "message must not embed the raw line text, got: {}",
             e.message
         );
+    }
+
+    /// `expect_dot` must report the column of the OFFENDING token, not the token
+    /// after it. Constructed directly on the cursor because the sequential driver's
+    /// term loop otherwise consumes every parseable token before `expect_dot` runs.
+    #[test]
+    fn expect_dot_column_points_at_offending_token() {
+        // `<http://ex/b>` (the token where a `.` was expected) begins at column 15.
+        let raw = "<http://ex/a> <http://ex/b>";
+        let tokens = tokenize(raw).expect("tokenizes");
+        let mut cursor = TokenCursor::new(tokens, raw, 7);
+        cursor.bump().expect("consume subject IRI");
+        let e = cursor.expect_dot().expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(7));
+        assert_eq!(loc.column, Some(15));
+    }
+
+    /// `term()`'s IRI branch reports the column of the invalid IRI itself, not the
+    /// following token.
+    #[test]
+    fn term_iri_validation_column_points_at_iri() {
+        // The object `<relative>` (no scheme) begins at column 29.
+        let text = "<http://ex/s> <http://ex/p> <relative> .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(29));
+        assert!(e.message.contains("IRI must be absolute"));
+    }
+
+    /// A bad literal base direction reports the column of the language tag, not the
+    /// following token.
+    #[test]
+    fn langtag_direction_column_points_at_langtag() {
+        // The `@en--bad` tag begins at column 32.
+        let text = "<http://ex/s> <http://ex/p> \"x\"@en--bad .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(32));
+        assert!(e.message.contains("invalid literal base direction"));
+    }
+
+    /// A malformed language tag reports the column of the language tag itself.
+    #[test]
+    fn langtag_validation_column_points_at_langtag() {
+        // The `@toolongprimary` tag begins at column 32 (primary subtag > 8 chars).
+        let text = "<http://ex/s> <http://ex/p> \"x\"@toolongprimary .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(32));
+        assert!(e.message.contains("invalid language tag"));
+    }
+
+    /// A non-IRI datatype after `^^` reports the column of the datatype token, not
+    /// the token after it.
+    #[test]
+    fn datatype_non_iri_column_points_at_datatype() {
+        // The datatype string `"y"` begins at column 34 (right after `^^`).
+        let text = "<http://ex/s> <http://ex/p> \"x\"^^\"y\" .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(34));
+        assert!(e.message.contains("datatype must be an IRI"));
+    }
+
+    /// A relative datatype IRI after `^^` reports the column of the datatype IRI.
+    #[test]
+    fn datatype_iri_validation_column_points_at_datatype() {
+        // The datatype `<relative>` begins at column 34.
+        let text = "<http://ex/s> <http://ex/p> \"x\"^^<relative> .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(34));
+        assert!(e.message.contains("IRI must be absolute"));
+    }
+
+    /// An explicit `rdf:langString` datatype after `^^` reports the column of the
+    /// datatype IRI, not the token after it.
+    #[test]
+    fn datatype_rdf_lang_string_column_points_at_datatype() {
+        // The datatype IRI begins at column 34.
+        let text = "<http://ex/s> <http://ex/p> \"x\"^^\
+                    <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(34));
+        assert!(e.message.contains("RDF language-string datatype"));
     }
 
     /// A rejected Turtle document (DocParser path) carries a 1-based `(line, column)`
