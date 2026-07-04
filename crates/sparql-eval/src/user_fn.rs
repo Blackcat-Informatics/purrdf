@@ -463,6 +463,70 @@ mod tests {
         );
     }
 
+    /// Calling a function IRI that is neither a registered `sh:SPARQLFunction` nor
+    /// an XSD constructor is a hard error, not a silent unbound.
+    #[test]
+    fn undefined_function_call_is_a_hard_error() {
+        let registry = UserFunctionRegistry::new();
+        let ds = empty_dataset();
+        let query = "SELECT ((<http://example.org/ns#nope>(1)) AS ?v) WHERE {}".to_owned();
+        let err = NativeSparqlEngine::new()
+            .query_with_user_functions(
+                &ds,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                &registry,
+            )
+            .expect_err("undefined function must fail");
+        assert!(
+            err.to_string().contains("custom SPARQL function"),
+            "expected undefined-function error, got {err}"
+        );
+    }
+
+    /// An argument violating a parameter's `sh:datatype` is a hard error.
+    #[test]
+    fn parameter_datatype_violation_is_a_hard_error() {
+        let mut registry = UserFunctionRegistry::new();
+        registry.insert(
+            EX_INC,
+            UserFunction {
+                params: vec![UserFnParam {
+                    var: "n".to_owned(),
+                    constraint: TypeConstraint {
+                        datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),
+                        node_kind: None,
+                    },
+                }],
+                required: 1,
+                body: parse("SELECT ((?n) AS ?result) WHERE {}"),
+                kind: UserFnBody::Select,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        let ds = empty_dataset();
+        // The sole parameter requires xsd:integer; pass a string.
+        let query = format!("SELECT ((<{EX_INC}>(\"hello\")) AS ?v) WHERE {{}}");
+        let err = NativeSparqlEngine::new()
+            .query_with_user_functions(
+                &ds,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                &registry,
+            )
+            .expect_err("parameter datatype violation must fail");
+        assert!(
+            err.to_string().contains("datatype") || err.to_string().contains("parameter"),
+            "expected parameter type error, got {err}"
+        );
+    }
+
     /// A SELECT body projecting more than one variable has no well-defined return
     /// value and is a hard error.
     #[test]

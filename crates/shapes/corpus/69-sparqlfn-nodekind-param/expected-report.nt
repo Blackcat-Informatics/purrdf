@@ -1,0 +1,2 @@
+_:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationReport> .
+_:report <http://www.w3.org/ns/shacl#conforms> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
