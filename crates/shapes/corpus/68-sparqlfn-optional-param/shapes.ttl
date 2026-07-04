@@ -1,0 +1,19 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# A sh:SPARQLFunction with a trailing optional parameter: calling it with one
+# argument (omitting the optional second) leaves ?b unbound, which COALESCE
+# defaults to 0 — exercising both the [required, total] arity and unbound-param
+# binding.
+ex:aboveTen
+    a sh:SPARQLFunction ;
+    sh:parameter [ sh:path ex:a ; sh:order 1 ; sh:datatype xsd:integer ] ;
+    sh:parameter [ sh:path ex:b ; sh:order 2 ; sh:optional true ; sh:datatype xsd:integer ] ;
+    sh:returnType xsd:boolean ;
+    sh:select "SELECT (((?a + COALESCE(?b, 0)) > 10) AS ?result) WHERE {}" .
+
+ex:AboveTenShape
+    a sh:NodeShape ;
+    sh:targetClass ex:C ;
+    sh:expression [ ex:aboveTen ( [ sh:path ex:val ] ) ] .

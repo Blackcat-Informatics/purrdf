@@ -1,0 +1,21 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# A sh:SPARQLFunction called from a sh:sparql (SHACL-SPARQL) constraint query,
+# proving user functions resolve on the sh:sparql surface (not only sh:expression).
+# Full IRIs in the query avoid any prefix-header dependency.
+ex:tripled
+    a sh:SPARQLFunction ;
+    sh:parameter [ sh:path ex:x ; sh:datatype xsd:integer ] ;
+    sh:returnType xsd:integer ;
+    sh:select "SELECT ((?x * 3) AS ?result) WHERE {}" .
+
+ex:AmountShape
+    a sh:NodeShape ;
+    sh:targetClass ex:C ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:message "tripled amount must not exceed 100" ;
+        sh:select "SELECT $this WHERE { $this <http://example.org/ns#amount> ?a . FILTER(<http://example.org/ns#tripled>(?a) > 100) }" ;
+    ] .
