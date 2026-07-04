@@ -111,7 +111,8 @@ impl std::error::Error for EntailError {}
 /// dataset cannot be frozen.
 pub fn materialize(ds: &RdfDataset, regime: Regime) -> Result<Arc<RdfDataset>, EntailError> {
     match regime {
-        Regime::Simple | Regime::Rdf => rdfs::copy_of(ds),
+        Regime::Simple => rdfs::copy_of(ds),
+        Regime::Rdf => rdfs::close_rdf(ds),
         Regime::Rdfs => rdfs::close(ds, false),
         Regime::OwlRl => rdfs::close(ds, true),
         Regime::OwlDirect | Regime::Rif | Regime::D => Err(EntailError::Unsupported(regime)),
@@ -121,7 +122,9 @@ pub fn materialize(ds: &RdfDataset, regime: Regime) -> Result<Arc<RdfDataset>, E
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vocab::{OWL_SYMMETRICPROPERTY, OWL_TRANSITIVEPROPERTY, RDFS_SUBCLASSOF, RDF_TYPE};
+    use crate::vocab::{
+        OWL_SYMMETRICPROPERTY, OWL_TRANSITIVEPROPERTY, RDFS_SUBCLASSOF, RDF_PROPERTY, RDF_TYPE,
+    };
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermRef};
 
     fn iri(b: &mut RdfDatasetBuilder, s: &str) -> purrdf_core::TermId {
@@ -218,6 +221,26 @@ mod tests {
             materialize(&ds, Regime::D),
             Err(EntailError::Unsupported(Regime::D))
         ));
+    }
+
+    #[test]
+    fn rdf_regime_types_predicates_as_property() {
+        // Bare RDF entailment: the predicate of every triple is an rdf:Property
+        // (rule rdf1 / rdfs4a), even when the predicate is not otherwise typed.
+        let p = "http://example.org/ns#b";
+        let y = "http://example.org/ns#c";
+        let ds = dataset(&[(X, p, y)]);
+        let closed = materialize(&ds, Regime::Rdf).expect("rdf");
+        assert!(
+            has(&closed, p, RDF_TYPE, RDF_PROPERTY),
+            "predicate typed rdf:Property"
+        );
+        // Simple entailment must NOT derive it.
+        let simple = materialize(&ds, Regime::Simple).expect("simple");
+        assert!(
+            !has(&simple, p, RDF_TYPE, RDF_PROPERTY),
+            "no typing under Simple"
+        );
     }
 
     #[test]

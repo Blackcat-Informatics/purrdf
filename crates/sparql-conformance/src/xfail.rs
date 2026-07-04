@@ -177,8 +177,7 @@ pub const XFAIL: &[Xfail] = &[
     //     `[owl:intersectionOf (:A :B)]` must be read as the class (A ⊓ B) and
     //     instance-retrieved to {:a, :d}. That is OWL Direct Semantics reasoning,
     //     not bnode-aware subgraph/instance matching;
-    //   - RIF-rule entailment (`rif*`) — the RIF regime is out of scope;
-    //   - RDF axiomatic-triple entailment under the bare RDF regime (`rdf01`).
+    //   - RIF-rule entailment (`rif*`) — the RIF regime is out of scope.
     Xfail {
         iri_suffix: "entailment/manifest#parent3",
         reason: XfailReason::Entailment,
@@ -293,10 +292,6 @@ pub const XFAIL: &[Xfail] = &[
     },
     Xfail {
         iri_suffix: "entailment/manifest#rif06",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#rdf01",
         reason: XfailReason::Entailment,
     },
     // === W3C SPARQL 1.2 / RDF-1.2 group (commit 426c7df) ====================

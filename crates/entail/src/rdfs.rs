@@ -23,7 +23,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 
 use crate::interner::{intern_into, Interner};
 use crate::vocab::{
@@ -37,6 +37,35 @@ use crate::EntailError;
 pub(crate) fn copy_of(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
     let mut b = RdfDatasetBuilder::new();
     b.push_dataset(ds);
+    b.freeze().map_err(|e| EntailError::Build(e.to_string()))
+}
+
+/// The bare-`RDF` regime closure: the original graph plus the RDF axiomatic
+/// predicate-typing rule.
+///
+/// The RDF Semantics entail that any resource used in the predicate position of a
+/// triple is an `rdf:Property` (rule rdf1 / rdfs4a — `s p o ⇒ p rdf:type
+/// rdf:Property`). The full RDF axiomatic-triple schema is infinite and is *not*
+/// materialized; only this single, decidable rule is applied, which is all the bare
+/// RDF entailment regime requires for BGP query answering over a finite graph.
+pub(crate) fn close_rdf(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
+    let mut b = RdfDatasetBuilder::new();
+    b.push_dataset(ds);
+    // Emit `p rdf:type rdf:Property` once per distinct default-graph predicate, in
+    // first-seen order for deterministic output.
+    let mut seen: HashSet<TermValue> = HashSet::new();
+    for q in ds.quads() {
+        if q.g.is_some() {
+            continue; // entailment operates over the default graph
+        }
+        let pred = ds.term_value(q.p);
+        if seen.insert(pred.clone()) {
+            let pid = intern_into(&mut b, &pred);
+            let ty = b.intern_iri(RDF_TYPE);
+            let prop = b.intern_iri(RDF_PROPERTY);
+            b.push_quad(pid, ty, prop, None);
+        }
+    }
     b.freeze().map_err(|e| EntailError::Build(e.to_string()))
 }
 
