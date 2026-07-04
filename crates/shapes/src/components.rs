@@ -312,8 +312,7 @@ pub fn eval_select_validator(
         let value = value_index
             .and_then(|i| row.get(i))
             .and_then(Option::as_ref)
-            .map(term_value_to_native)
-            .or_else(|| Some(focus.clone()));
+            .map(term_value_to_native);
 
         let mut template_bindings = row_bindings;
         for (name, value) in bindings {
