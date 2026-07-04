@@ -35,11 +35,13 @@
 
 use std::collections::HashMap;
 
+use purrdf_iri::Position;
 use purrdf_sparql_algebra::lexer::{tokenize, tokenize_turtle, Spanned, Token};
 use rayon::prelude::*;
 
 use super::media_type::NativeRdfFormat;
 use super::ser_model::{SerGraph, SerTerm, SerTermKind, SerTriple3};
+use super::span::{NoSpans, SpanCollector};
 use crate::{RdfDiagnostic, RdfLocation};
 
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -121,17 +123,18 @@ pub(super) enum LineParseMode {
 /// on every earlier directive) and anonymous blank nodes / reifiers mint labels from a
 /// document-ordered counter, so a chunk cannot be parsed without the full prefix and
 /// counter state of everything before it.
-pub(super) fn parse_to_gts_graph_mode(
+pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
     format: NativeRdfFormat,
     text: &str,
     base_iri: Option<&str>,
     mode: LineParseMode,
+    collector: &mut S,
 ) -> Result<SerGraph, RdfDiagnostic> {
     let statements = match format {
-        NativeRdfFormat::NTriples => parse_lines(text, false, mode)?,
-        NativeRdfFormat::NQuads => parse_lines(text, true, mode)?,
-        NativeRdfFormat::Turtle => DocParser::new(text, base_iri, false).parse()?,
-        NativeRdfFormat::TriG => DocParser::new(text, base_iri, true).parse()?,
+        NativeRdfFormat::NTriples => parse_lines(text, false, mode, collector)?,
+        NativeRdfFormat::NQuads => parse_lines(text, true, mode, collector)?,
+        NativeRdfFormat::Turtle => DocParser::new(text, base_iri, false, collector).parse()?,
+        NativeRdfFormat::TriG => DocParser::new(text, base_iri, true, collector).parse()?,
         NativeRdfFormat::RdfXml => {
             return Err(err("RDF/XML is not a line/Turtle-family format"));
         }
@@ -148,6 +151,20 @@ pub(super) fn parse_to_gts_graph_mode(
 
 /// One statement: subject, predicate, object, and (N-Quads) an optional graph name.
 type Statement = Vec<Node>;
+
+/// The lexical span-table key for a statement subject, or `None` for a subject with no
+/// single lexical key (a quoted-triple subject). A named node keys by its BARE IRI
+/// string (no angle brackets, so a SHACL focus node joins directly); a blank node keys
+/// as `_:label`. See [`SpanTable`](super::span::SpanTable) for the convention.
+fn subject_key(node: &Node) -> Option<String> {
+    match node {
+        Node::Iri(iri) => Some(iri.clone()),
+        Node::Bnode(label) => Some(format!("_:{label}")),
+        // A literal is never a legal subject (validation rejects it) and a quoted-triple
+        // subject has no single lexical key — neither is recorded.
+        Node::Literal { .. } | Node::Triple(..) => None,
+    }
+}
 
 /// Inputs at or above this many bytes take the chunk-parallel phase-1 pipeline.
 ///
@@ -178,15 +195,19 @@ const PARALLEL_MAX_CHUNK_BYTES: usize = 4 << 20;
 /// the downstream [`build_gts_graph`] interner sees the same statements in the same
 /// order and assigns the same term ids (interning stays the sequential serialization
 /// point). The determinism-proof tests below assert this end to end.
-fn parse_lines(
+fn parse_lines<S: SpanCollector>(
     text: &str,
     allow_graph: bool,
     mode: LineParseMode,
+    collector: &mut S,
 ) -> Result<Vec<Statement>, RdfDiagnostic> {
     if mode == LineParseMode::Auto && text.len() >= PARALLEL_MIN_BYTES {
+        // The parallel path is `NoSpans`-only (each chunk gets its own ZST collector);
+        // span tracking forces sequential (see `parse_dataset_with`), so `S::ENABLED`
+        // is always false here. The parallel branch stays non-generic in the collector.
         return parse_lines_parallel(text, allow_graph);
     }
-    parse_lines_sequential(text, allow_graph, 1)
+    parse_lines_sequential(text, allow_graph, 1, collector)
 }
 
 /// Split `text` into line-aligned chunks of roughly `target_bytes` each: every chunk
@@ -256,7 +277,7 @@ fn parse_lines_parallel_with_chunk_size(
     let per_chunk: Vec<Result<Vec<Statement>, RdfDiagnostic>> = chunks
         .par_iter()
         .enumerate()
-        .map(|(i, chunk)| parse_lines_sequential(chunk, allow_graph, base_lines[i]))
+        .map(|(i, chunk)| parse_lines_sequential(chunk, allow_graph, base_lines[i], &mut NoSpans))
         .collect();
     // Phase 2: document order — first error wins, then in-order concatenation.
     let mut statements = Vec::with_capacity(
@@ -277,10 +298,11 @@ fn parse_lines_parallel_with_chunk_size(
 /// skipped, every other line is one statement of 3 (NT) or 3-or-4 (NQ) terms. The
 /// `<<( s p o )>>` quoted-triple TERM is admitted in subject (NQ only) and object
 /// position; IRIREFs are UCHAR-decoded (the test060 fix).
-fn parse_lines_sequential(
+fn parse_lines_sequential<S: SpanCollector>(
     text: &str,
     allow_graph: bool,
     base_line: u32,
+    collector: &mut S,
 ) -> Result<Vec<Statement>, RdfDiagnostic> {
     let mut statements = Vec::new();
     let mut lineno = base_line;
@@ -317,6 +339,20 @@ fn parse_lines_sequential(
             ));
         }
         validate_statement(&nodes, lineno, column_in_raw(raw, 0), allow_graph)?;
+        // Record the subject's source position when tracking is on. `S::ENABLED` is a
+        // const, so for `NoSpans` this whole block is dead code (no key is built).
+        if S::ENABLED {
+            if let Some(key) = subject_key(&nodes[0]) {
+                collector.record(
+                    &key,
+                    Position {
+                        line: lineno,
+                        column: column_in_raw(raw, 0),
+                        byte_offset: 0,
+                    },
+                );
+            }
+        }
         statements.push(nodes);
         lineno = lineno.saturating_add(1);
     }
@@ -675,7 +711,7 @@ fn validate_statement(
 /// emits the SAME flat statement list (subject/predicate/object[/graph] `Node`s) the
 /// purrdf-gts Turtle/TriG parser produced before lowering through `from_nquads`'s
 /// `build_gts`, so the resulting [`SerGraph`] is byte-identical.
-struct DocParser<'a> {
+struct DocParser<'a, 'c, S: SpanCollector> {
     tokens: Vec<Spanned>,
     pos: usize,
     prefixes: HashMap<String, String>,
@@ -684,10 +720,25 @@ struct DocParser<'a> {
     allow_named_graphs: bool,
     statements: Vec<Statement>,
     src: &'a str,
+    /// Opt-in subject-position sink. For `NoSpans` this is a ZST and every use is
+    /// dead code under monomorphization.
+    collector: &'c mut S,
+    /// Document byte offset of the current top-level statement subject's first token,
+    /// captured when the subject term is parsed and resolved at emit time. Only read
+    /// when `S::ENABLED`.
+    subject_off: usize,
+    /// Newline table over `src`, built lazily on the FIRST recorded subject and reused
+    /// for the rest of the parse. Never built when `S::ENABLED` is false.
+    line_index: Option<purrdf_iri::LineIndex>,
 }
 
-impl<'a> DocParser<'a> {
-    fn new(text: &'a str, base_iri: Option<&str>, allow_named_graphs: bool) -> Self {
+impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
+    fn new(
+        text: &'a str,
+        base_iri: Option<&str>,
+        allow_named_graphs: bool,
+        collector: &'c mut S,
+    ) -> Self {
         let mut prefixes = HashMap::new();
         prefixes.insert("rdf".to_owned(), RDF_NS.to_owned());
         Self {
@@ -699,7 +750,20 @@ impl<'a> DocParser<'a> {
             allow_named_graphs,
             statements: Vec::new(),
             src: text,
+            collector,
+            subject_off: 0,
+            line_index: None,
         }
+    }
+
+    /// Document byte offset of the current token (or the end of the last token past
+    /// end-of-stream). Only called on the span-tracking path.
+    fn cur_off(&self) -> usize {
+        self.tokens
+            .get(self.pos)
+            .map(|s| s.start)
+            .or_else(|| self.tokens.last().map(|s| s.end))
+            .unwrap_or(0)
     }
 
     fn parse(mut self) -> Result<Vec<Statement>, RdfDiagnostic> {
@@ -725,6 +789,9 @@ impl<'a> DocParser<'a> {
                 self.expect(&Token::LBrace)?;
                 self.graph_block(&graph)?;
                 continue;
+            }
+            if S::ENABLED {
+                self.subject_off = self.cur_off();
             }
             let first = self.term(None)?;
             if self.eat(&Token::LBrace) {
@@ -1145,6 +1212,9 @@ impl<'a> DocParser<'a> {
                 let (l, c) = self.loc();
                 return Err(err_at("unterminated graph block", l, c));
             }
+            if S::ENABLED {
+                self.subject_off = self.cur_off();
+            }
             let subject = self.term(Some(graph))?;
             self.statement_after_subject_in_graph(&subject, graph)?;
         }
@@ -1310,6 +1380,18 @@ impl<'a> DocParser<'a> {
         let mut nodes = vec![subject.clone(), predicate.clone(), object.clone()];
         if let Some(graph) = graph {
             nodes.push(graph.clone());
+        }
+        // Record the subject's source position when tracking is on. `S::ENABLED` is a
+        // const, so for `NoSpans` this block (and the lazy `LineIndex`) is dead code.
+        if S::ENABLED {
+            if let Some(key) = subject_key(&nodes[0]) {
+                let src = self.src;
+                let index = self
+                    .line_index
+                    .get_or_insert_with(|| purrdf_iri::LineIndex::new(src));
+                let position = index.locate(src, self.subject_off);
+                self.collector.record(&key, position);
+            }
         }
         self.statements.push(nodes);
     }
@@ -1877,8 +1959,8 @@ mod tests {
             text.len()
         );
 
-        let seq = parse_lines_sequential(&text, true, 1).expect("sequential parse");
-        let par = parse_lines(&text, true, LineParseMode::Auto).expect("parallel parse");
+        let seq = parse_lines_sequential(&text, true, 1, &mut NoSpans).expect("sequential parse");
+        let par = parse_lines(&text, true, LineParseMode::Auto, &mut NoSpans).expect("parallel parse");
         assert!(seq == par, "statement lists must be identical");
 
         let graph_seq = build_gts_graph(&seq).expect("sequential graph");
@@ -1939,7 +2021,7 @@ mod tests {
         let text = "# comment\n\n<https://e/s> <https://e/p> \"a\" .\r\n\
                     <https://e/s> <https://e/p> \"b\"@en <https://e/g> .\n\
                     _:b0 <https://e/p> <<( <https://e/x> <https://e/y> <https://e/z> )>> .\n";
-        let expected = parse_lines_sequential(text, true, 1).expect("sequential");
+        let expected = parse_lines_sequential(text, true, 1, &mut NoSpans).expect("sequential");
         for chunk_bytes in [1usize, 7, 16, 64, 4096] {
             let actual = parse_lines_parallel_with_chunk_size(text, true, chunk_bytes)
                 .expect("parallel parse");
@@ -1984,7 +2066,7 @@ mod tests {
         }
         text.push_str("this is not rdf\n");
 
-        let seq_err = parse_lines_sequential(&text, true, 1).expect_err("sequential must fail");
+        let seq_err = parse_lines_sequential(&text, true, 1, &mut NoSpans).expect_err("sequential must fail");
         // A tiny chunk target guarantees the two bad lines land in different chunks.
         let par_err =
             parse_lines_parallel_with_chunk_size(&text, true, 256).expect_err("parallel must fail");
@@ -2024,9 +2106,9 @@ mod tests {
             "fixture must cross the parallel threshold"
         );
 
-        let seq_err = parse_lines_sequential(&text, true, 1).expect_err("sequential must fail");
+        let seq_err = parse_lines_sequential(&text, true, 1, &mut NoSpans).expect_err("sequential must fail");
         let par_err =
-            parse_lines(&text, true, LineParseMode::Auto).expect_err("parallel must fail");
+            parse_lines(&text, true, LineParseMode::Auto, &mut NoSpans).expect_err("parallel must fail");
         assert_eq!(par_err, seq_err, "diagnostics must be byte-identical");
         // Resolve the located line back into the source to prove the earlier chunk's
         // error (early-error line) won, not the late garbage line.
@@ -2053,7 +2135,7 @@ mod tests {
         let text = "<http://ex/s> <http://ex/p> <http://ex/o> .\n\
                     <http://ex/s> <http://ex/p> <http://ex/o> .\n\
                     <http://ex/s> _:bad <http://ex/o> .\n";
-        let e = parse_lines_sequential(text, false, 1).expect_err("must fail");
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
         assert_eq!(loc.line, Some(3));
         assert!(loc.column.is_some(), "column must be attached");
@@ -2073,7 +2155,7 @@ mod tests {
         let text = "@prefix ex: <https://example.org/> .\n\
                     ex:s ex:p ex:o .\n\
                     ex:s ex:p nope:o .\n";
-        let e = DocParser::new(text, None, false)
+        let e = DocParser::new(text, None, false, &mut NoSpans)
             .parse()
             .expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
@@ -2094,7 +2176,7 @@ mod tests {
     fn turtle_prefixed_name_allows_bare_slash_in_local() {
         let text = "@prefix ex: <https://example.org/vocab/> .\n\
                     ex:report/shacl/sarif ex:projection/okf ex:report/shacl/sarif .";
-        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans).parse().expect("parses");
         assert_eq!(statements.len(), 1);
         let nodes = &statements[0];
         assert_eq!(
@@ -2122,7 +2204,7 @@ mod tests {
         let text = "@prefix : <https://example.org/> .\n\
                     :x :p _:y.\n\
                     _:y :q :z .\n";
-        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans).parse().expect("parses");
         assert_eq!(statements.len(), 2, "must yield exactly two triples");
 
         let first = &statements[0];
@@ -2153,7 +2235,7 @@ mod tests {
     fn turtle_doubled_semicolon_interior_emits_no_extra_triple() {
         let text = "<https://example.org/s> a <https://example.org/C> ; ; \
                      <https://example.org/p> <https://example.org/o> .";
-        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans).parse().expect("parses");
         assert_eq!(statements.len(), 2);
     }
 
@@ -2164,7 +2246,7 @@ mod tests {
         let text =
             "<https://example.org/s> <https://example.org/p1> <https://example.org/o1> ; ; ; \
                      <https://example.org/p2> <https://example.org/o2> .";
-        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans).parse().expect("parses");
         assert_eq!(statements.len(), 2);
     }
 
@@ -2173,7 +2255,7 @@ mod tests {
     #[test]
     fn turtle_trailing_doubled_semicolon_emits_no_extra_triple() {
         let text = "<https://example.org/s> <https://example.org/p> <https://example.org/o> ; ; .";
-        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans).parse().expect("parses");
         assert_eq!(statements.len(), 1);
     }
 
@@ -2188,10 +2270,10 @@ mod tests {
         let doubled = "<https://example.org/s> <https://example.org/p> \
                         [ <https://example.org/a> <https://example.org/b> ; ; \
                           <https://example.org/c> <https://example.org/d> ] .";
-        let expected = DocParser::new(collapsed, None, false)
+        let expected = DocParser::new(collapsed, None, false, &mut NoSpans)
             .parse()
             .expect("collapsed parses");
-        let actual = DocParser::new(doubled, None, false)
+        let actual = DocParser::new(doubled, None, false, &mut NoSpans)
             .parse()
             .expect("doubled parses");
         assert_eq!(actual, expected);
@@ -2209,10 +2291,10 @@ mod tests {
         let doubled = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                         {| <https://example.org/a> <https://example.org/b> ; ; \
                            <https://example.org/c> <https://example.org/d> |} .";
-        let expected = DocParser::new(collapsed, None, false)
+        let expected = DocParser::new(collapsed, None, false, &mut NoSpans)
             .parse()
             .expect("collapsed parses");
-        let actual = DocParser::new(doubled, None, false)
+        let actual = DocParser::new(doubled, None, false, &mut NoSpans)
             .parse()
             .expect("doubled parses");
         assert_eq!(actual, expected);
@@ -2228,10 +2310,10 @@ mod tests {
                             {| <https://example.org/a> <https://example.org/b> |} .";
         let trailing = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                          {| <https://example.org/a> <https://example.org/b> ; |} .";
-        let expected = DocParser::new(no_trailing, None, false)
+        let expected = DocParser::new(no_trailing, None, false, &mut NoSpans)
             .parse()
             .expect("no-trailing parses");
-        let actual = DocParser::new(trailing, None, false)
+        let actual = DocParser::new(trailing, None, false, &mut NoSpans)
             .parse()
             .expect("trailing parses");
         assert_eq!(actual, expected);
@@ -2243,7 +2325,7 @@ mod tests {
     #[test]
     fn turtle_leading_semicolon_before_any_predicate_is_an_error() {
         let text = "<https://example.org/s> ; <https://example.org/p> <https://example.org/o> .";
-        assert!(DocParser::new(text, None, false).parse().is_err());
+        assert!(DocParser::new(text, None, false, &mut NoSpans).parse().is_err());
     }
 
     /// A subject followed immediately by `;` and then `.` (no predicate-object pair at
@@ -2251,7 +2333,7 @@ mod tests {
     #[test]
     fn turtle_leading_semicolon_with_no_predicate_object_is_an_error() {
         let text = "<https://example.org/s> ; .";
-        assert!(DocParser::new(text, None, false).parse().is_err());
+        assert!(DocParser::new(text, None, false, &mut NoSpans).parse().is_err());
     }
 
     /// A LEADING `;` inside a blank-node property list `[ … ]` is also illegal:
@@ -2262,7 +2344,7 @@ mod tests {
     fn turtle_leading_semicolon_inside_blank_node_property_list_is_an_error() {
         let text = "<https://example.org/s> <https://example.org/p> \
                      [ ; <https://example.org/a> <https://example.org/b> ] .";
-        assert!(DocParser::new(text, None, false).parse().is_err());
+        assert!(DocParser::new(text, None, false, &mut NoSpans).parse().is_err());
     }
 
     /// A LEADING `;` inside an RDF 1.2 annotation block `{| … |}` is also illegal for
@@ -2271,7 +2353,7 @@ mod tests {
     fn turtle_leading_semicolon_inside_annotation_block_is_an_error() {
         let text = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                      {| ; <https://example.org/a> <https://example.org/b> |} .";
-        assert!(DocParser::new(text, None, false).parse().is_err());
+        assert!(DocParser::new(text, None, false, &mut NoSpans).parse().is_err());
     }
 
     /// A DOUBLED trailing `;` before the annotation-block `Pipe` (`{| a b ; ; |}`)
@@ -2285,10 +2367,10 @@ mod tests {
                             {| <https://example.org/a> <https://example.org/b> |} .";
         let doubled = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                         {| <https://example.org/a> <https://example.org/b> ; ; |} .";
-        let expected = DocParser::new(no_trailing, None, false)
+        let expected = DocParser::new(no_trailing, None, false, &mut NoSpans)
             .parse()
             .expect("no-trailing parses");
-        let actual = DocParser::new(doubled, None, false)
+        let actual = DocParser::new(doubled, None, false, &mut NoSpans)
             .parse()
             .expect("doubled parses");
         assert_eq!(actual, expected);

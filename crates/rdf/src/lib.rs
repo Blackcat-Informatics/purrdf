@@ -80,8 +80,9 @@ pub use dataset_io::dataset_from_bytes;
 pub use gts_import_graph::import_gts_graph;
 pub use gts_import_sink::import_gts_events;
 pub use native_codecs::{
-    classify, parse_dataset, serialize_dataset, serialize_dataset_base_only,
-    serialize_dataset_to_format, GtsCodecBackend, NativeRdfFormat, SerializeOutcome,
+    classify, parse_dataset, parse_dataset_with, serialize_dataset, serialize_dataset_base_only,
+    serialize_dataset_to_format, GtsCodecBackend, NativeRdfFormat, ParseOptions, SerializeOutcome,
+    SpanTable,
 };
 pub use native_quads::{
     canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quads, flat_dataset_from_quads,
