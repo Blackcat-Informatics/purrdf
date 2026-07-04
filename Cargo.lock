@@ -1273,6 +1273,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-validate"
+version = "0.2.1"
+dependencies = [
+ "pretty_assertions",
+ "purrdf-core",
+ "purrdf-iri",
+ "purrdf-rdf",
+ "purrdf-shapes",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "purrdf-wasm"
 version = "0.2.1"
 dependencies = [
