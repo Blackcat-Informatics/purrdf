@@ -12,7 +12,7 @@
 //! The substitution is applied to a **clone** of the cached (un-substituted) parse,
 //! so the plan cache is never poisoned by a focus-node-specific binding.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use purrdf_core::{RdfDiagnostic, RdfTextDirection, TermValue};
 use purrdf_sparql_algebra::{
@@ -66,14 +66,12 @@ pub(crate) fn apply_shacl_prebinding(
     let query = apply_substitutions(query, substitutions)?;
 
     let mut expr_subs: HashMap<String, Option<Expression>> = HashMap::new();
-    let mut prebound: HashSet<String> = HashSet::new();
     for (name, value) in substitutions {
-        prebound.insert(name.clone());
         expr_subs.insert(name.clone(), expression_from_term_value(value)?);
     }
 
     Ok(map_patterns_in_query(query, |pattern| {
-        substitute_in_graph_pattern(pattern, &expr_subs, &prebound)
+        substitute_in_graph_pattern(pattern, &expr_subs)
     }))
 }
 
@@ -139,7 +137,6 @@ fn map_patterns_in_query(query: Query, mut f: impl FnMut(GraphPattern) -> GraphP
 fn substitute_in_graph_pattern(
     pattern: GraphPattern,
     expr_subs: &HashMap<String, Option<Expression>>,
-    prebound: &HashSet<String>,
 ) -> GraphPattern {
     match pattern {
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp { patterns },
@@ -153,54 +150,54 @@ fn substitute_in_graph_pattern(
             object,
         },
         GraphPattern::Join { left, right } => GraphPattern::Join {
-            left: Box::new(substitute_in_graph_pattern(*left, expr_subs, prebound)),
-            right: Box::new(substitute_in_graph_pattern(*right, expr_subs, prebound)),
+            left: Box::new(substitute_in_graph_pattern(*left, expr_subs)),
+            right: Box::new(substitute_in_graph_pattern(*right, expr_subs)),
         },
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
         } => GraphPattern::LeftJoin {
-            left: Box::new(substitute_in_graph_pattern(*left, expr_subs, prebound)),
-            right: Box::new(substitute_in_graph_pattern(*right, expr_subs, prebound)),
-            expression: expression.map(|e| substitute_in_expression(e, expr_subs, prebound)),
+            left: Box::new(substitute_in_graph_pattern(*left, expr_subs)),
+            right: Box::new(substitute_in_graph_pattern(*right, expr_subs)),
+            expression: expression.map(|e| substitute_in_expression(e, expr_subs)),
         },
         GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
-            left: Box::new(substitute_in_graph_pattern(*left, expr_subs, prebound)),
-            right: Box::new(substitute_in_graph_pattern(*right, expr_subs, prebound)),
+            left: Box::new(substitute_in_graph_pattern(*left, expr_subs)),
+            right: Box::new(substitute_in_graph_pattern(*right, expr_subs)),
         },
         GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
-            expr: substitute_in_expression(expr, expr_subs, prebound),
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            expr: substitute_in_expression(expr, expr_subs),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
         },
         GraphPattern::Union { left, right } => GraphPattern::Union {
-            left: Box::new(substitute_in_graph_pattern(*left, expr_subs, prebound)),
-            right: Box::new(substitute_in_graph_pattern(*right, expr_subs, prebound)),
+            left: Box::new(substitute_in_graph_pattern(*left, expr_subs)),
+            right: Box::new(substitute_in_graph_pattern(*right, expr_subs)),
         },
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
-            name: substitute_in_named_node_pattern(name, expr_subs, prebound),
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            name: substitute_in_named_node_pattern(name, expr_subs),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
         },
         GraphPattern::Extend {
             inner,
             variable,
             expression,
         } => GraphPattern::Extend {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
             variable,
-            expression: substitute_in_expression(expression, expr_subs, prebound),
+            expression: substitute_in_expression(expression, expr_subs),
         },
         GraphPattern::Minus { left, right } => GraphPattern::Minus {
-            left: Box::new(substitute_in_graph_pattern(*left, expr_subs, prebound)),
-            right: Box::new(substitute_in_graph_pattern(*right, expr_subs, prebound)),
+            left: Box::new(substitute_in_graph_pattern(*left, expr_subs)),
+            right: Box::new(substitute_in_graph_pattern(*right, expr_subs)),
         },
         GraphPattern::Service {
             name,
             inner,
             silent,
         } => GraphPattern::Service {
-            name: substitute_in_named_node_pattern(name, expr_subs, prebound),
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            name: substitute_in_named_node_pattern(name, expr_subs),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
             silent,
         },
         GraphPattern::Values {
@@ -211,28 +208,28 @@ fn substitute_in_graph_pattern(
             bindings,
         },
         GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
             expression: expression
                 .into_iter()
-                .map(|e| substitute_in_order_expression(e, expr_subs, prebound))
+                .map(|e| substitute_in_order_expression(e, expr_subs))
                 .collect(),
         },
         GraphPattern::Project { inner, variables } => GraphPattern::Project {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
             variables,
         },
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
         },
         GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
         },
         GraphPattern::Slice {
             inner,
             start,
             length,
         } => GraphPattern::Slice {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
             start,
             length,
         },
@@ -241,11 +238,11 @@ fn substitute_in_graph_pattern(
             variables,
             aggregates,
         } => GraphPattern::Group {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
             variables,
             aggregates: aggregates
                 .into_iter()
-                .map(|(var, agg)| (var, substitute_in_aggregate(agg, expr_subs, prebound)))
+                .map(|(var, agg)| (var, substitute_in_aggregate(agg, expr_subs)))
                 .collect(),
         },
     }
@@ -255,12 +252,11 @@ fn substitute_in_graph_pattern(
 fn substitute_in_named_node_pattern(
     pattern: NamedNodePattern,
     expr_subs: &HashMap<String, Option<Expression>>,
-    prebound: &HashSet<String>,
 ) -> NamedNodePattern {
     match pattern {
         NamedNodePattern::Variable(var) => {
             let name = var.as_str();
-            if prebound.contains(name) {
+            if expr_subs.contains_key(name) {
                 if let Some(Some(Expression::NamedNode(node))) = expr_subs.get(name) {
                     return NamedNodePattern::NamedNode(node.clone());
                 }
@@ -275,7 +271,6 @@ fn substitute_in_named_node_pattern(
 fn substitute_in_expression(
     expr: Expression,
     expr_subs: &HashMap<String, Option<Expression>>,
-    prebound: &HashSet<String>,
 ) -> Expression {
     match expr {
         Expression::Variable(var) => {
@@ -288,7 +283,7 @@ fn substitute_in_expression(
         }
         Expression::Bound(var) => {
             let name = var.as_str();
-            if prebound.contains(name) {
+            if expr_subs.contains_key(name) {
                 true_literal()
             } else {
                 Expression::Bound(var)
@@ -297,87 +292,87 @@ fn substitute_in_expression(
         Expression::NamedNode(node) => Expression::NamedNode(node),
         Expression::Literal(lit) => Expression::Literal(lit),
         Expression::Or(left, right) => Expression::Or(
-            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*left, expr_subs)),
+            Box::new(substitute_in_expression(*right, expr_subs)),
         ),
         Expression::And(left, right) => Expression::And(
-            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*left, expr_subs)),
+            Box::new(substitute_in_expression(*right, expr_subs)),
         ),
         Expression::Equal(left, right) => Expression::Equal(
-            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*left, expr_subs)),
+            Box::new(substitute_in_expression(*right, expr_subs)),
         ),
         Expression::SameTerm(left, right) => Expression::SameTerm(
-            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*left, expr_subs)),
+            Box::new(substitute_in_expression(*right, expr_subs)),
         ),
         Expression::Greater(left, right) => Expression::Greater(
-            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*left, expr_subs)),
+            Box::new(substitute_in_expression(*right, expr_subs)),
         ),
         Expression::GreaterOrEqual(left, right) => Expression::GreaterOrEqual(
-            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*left, expr_subs)),
+            Box::new(substitute_in_expression(*right, expr_subs)),
         ),
         Expression::Less(left, right) => Expression::Less(
-            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*left, expr_subs)),
+            Box::new(substitute_in_expression(*right, expr_subs)),
         ),
         Expression::LessOrEqual(left, right) => Expression::LessOrEqual(
-            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*left, expr_subs)),
+            Box::new(substitute_in_expression(*right, expr_subs)),
         ),
         Expression::Add(left, right) => Expression::Add(
-            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*left, expr_subs)),
+            Box::new(substitute_in_expression(*right, expr_subs)),
         ),
         Expression::Subtract(left, right) => Expression::Subtract(
-            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*left, expr_subs)),
+            Box::new(substitute_in_expression(*right, expr_subs)),
         ),
         Expression::Multiply(left, right) => Expression::Multiply(
-            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*left, expr_subs)),
+            Box::new(substitute_in_expression(*right, expr_subs)),
         ),
         Expression::Divide(left, right) => Expression::Divide(
-            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*left, expr_subs)),
+            Box::new(substitute_in_expression(*right, expr_subs)),
         ),
-        Expression::UnaryPlus(inner) => Expression::UnaryPlus(Box::new(substitute_in_expression(
-            *inner, expr_subs, prebound,
-        ))),
-        Expression::UnaryMinus(inner) => Expression::UnaryMinus(Box::new(
-            substitute_in_expression(*inner, expr_subs, prebound),
-        )),
-        Expression::Not(inner) => Expression::Not(Box::new(substitute_in_expression(
-            *inner, expr_subs, prebound,
-        ))),
+        Expression::UnaryPlus(inner) => {
+            Expression::UnaryPlus(Box::new(substitute_in_expression(*inner, expr_subs)))
+        }
+        Expression::UnaryMinus(inner) => {
+            Expression::UnaryMinus(Box::new(substitute_in_expression(*inner, expr_subs)))
+        }
+        Expression::Not(inner) => {
+            Expression::Not(Box::new(substitute_in_expression(*inner, expr_subs)))
+        }
         Expression::In(target, list) => Expression::In(
-            Box::new(substitute_in_expression(*target, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*target, expr_subs)),
             list.into_iter()
-                .map(|e| substitute_in_expression(e, expr_subs, prebound))
+                .map(|e| substitute_in_expression(e, expr_subs))
                 .collect(),
         ),
         Expression::If(cond, then_expr, else_expr) => Expression::If(
-            Box::new(substitute_in_expression(*cond, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*then_expr, expr_subs, prebound)),
-            Box::new(substitute_in_expression(*else_expr, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*cond, expr_subs)),
+            Box::new(substitute_in_expression(*then_expr, expr_subs)),
+            Box::new(substitute_in_expression(*else_expr, expr_subs)),
         ),
         Expression::Coalesce(list) => Expression::Coalesce(
             list.into_iter()
-                .map(|e| substitute_in_expression(e, expr_subs, prebound))
+                .map(|e| substitute_in_expression(e, expr_subs))
                 .collect(),
         ),
         Expression::FunctionCall(function, args) => Expression::FunctionCall(
             function,
             args.into_iter()
-                .map(|e| substitute_in_expression(e, expr_subs, prebound))
+                .map(|e| substitute_in_expression(e, expr_subs))
                 .collect(),
         ),
-        Expression::Exists(inner) => Expression::Exists(Box::new(substitute_in_graph_pattern(
-            *inner, expr_subs, prebound,
-        ))),
+        Expression::Exists(inner) => {
+            Expression::Exists(Box::new(substitute_in_graph_pattern(*inner, expr_subs)))
+        }
     }
 }
 
@@ -385,14 +380,13 @@ fn substitute_in_expression(
 fn substitute_in_order_expression(
     order: OrderExpression,
     expr_subs: &HashMap<String, Option<Expression>>,
-    prebound: &HashSet<String>,
 ) -> OrderExpression {
     match order {
         OrderExpression::Asc(expr) => {
-            OrderExpression::Asc(substitute_in_expression(expr, expr_subs, prebound))
+            OrderExpression::Asc(substitute_in_expression(expr, expr_subs))
         }
         OrderExpression::Desc(expr) => {
-            OrderExpression::Desc(substitute_in_expression(expr, expr_subs, prebound))
+            OrderExpression::Desc(substitute_in_expression(expr, expr_subs))
         }
     }
 }
@@ -401,7 +395,6 @@ fn substitute_in_order_expression(
 fn substitute_in_aggregate(
     agg: AggregateExpression,
     expr_subs: &HashMap<String, Option<Expression>>,
-    prebound: &HashSet<String>,
 ) -> AggregateExpression {
     match agg {
         AggregateExpression::CountStar { distinct } => AggregateExpression::CountStar { distinct },
@@ -411,7 +404,7 @@ fn substitute_in_aggregate(
             distinct,
         } => AggregateExpression::FunctionCall {
             function,
-            expression: Box::new(substitute_in_expression(*expression, expr_subs, prebound)),
+            expression: Box::new(substitute_in_expression(*expression, expr_subs)),
             distinct,
         },
     }
