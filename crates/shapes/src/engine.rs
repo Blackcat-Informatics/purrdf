@@ -154,10 +154,11 @@ fn resolve_focus_nodes<G: ShaclDataGraph>(
             // SELECT-form is enforced at shape-load (shapes.rs rejects
             // non-SELECT); a residual evaluation failure is surfaced as a hard
             // validation error rather than a panic.
-            Target::Sparql { select, .. } => {
-                crate::sparql::eval_target(&data.sparql_dataset(), select)
-                    .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?
-            }
+            Target::Sparql {
+                select,
+                substitutions,
+            } => crate::sparql::eval_target(&data.sparql_dataset(), select, substitutions)
+                .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
         };
         for node in candidates {
             if seen.insert(node.clone()) {

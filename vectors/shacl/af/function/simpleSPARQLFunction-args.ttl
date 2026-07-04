@@ -1,0 +1,77 @@
+# Vendored from pySHACL DASH tests:
+#   test/resources/dash_tests/function/simpleSPARQLFunction.test.ttl
+# See vectors/shacl/af/README.md for provenance and license.
+# Original versionInfo: Created with TopBraid Composer
+#
+# Split from the original combined file so that this validation test only
+# exercises the argument-taking SELECT-based sh:SPARQLFunction; the boolean
+# variant lives in simpleSPARQLFunction-boolean.ttl.
+
+@prefix ex: <http://datashapes.org/sh/tests/sparql/function/simpleSPARQLFunction.test#> .
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix sht: <http://www.w3.org/ns/shacl-test#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<>
+  rdf:type mf:Manifest ;
+  mf:entries (
+      <simpleSPARQLFunction-args>
+    ) ;
+.
+
+<simpleSPARQLFunction-args>
+  rdf:type sht:Validate ;
+  rdfs:label "Test of a SPARQL function with arguments wrapped in sh:expression" ;
+  rdfs:comment "Vendored from pySHACL DASH test function/simpleSPARQLFunction.test.ttl (testWithArguments)" ;
+  rdfs:seeAlso <http://datashapes.org/sh/tests/sparql/function/simpleSPARQLFunction.test> ;
+  mf:action [
+      sht:dataGraph <> ;
+      sht:shapesGraph <> ;
+    ] ;
+  mf:result [
+      rdf:type sh:ValidationReport ;
+      sh:conforms "false"^^xsd:boolean ;
+      sh:result [
+          rdf:type sh:ValidationResult ;
+          sh:focusNode ex:TestNode ;
+          sh:resultSeverity sh:Violation ;
+          sh:sourceConstraintComponent sh:ExpressionConstraintComponent ;
+          sh:sourceShape ex:ArgumentsFunctionShape ;
+          sh:value ex:TestNode ;
+        ] ;
+    ] ;
+  mf:status sht:approved ;
+.
+
+ex:withArguments
+  rdf:type sh:SPARQLFunction ;
+  rdfs:label "with arguments" ;
+  sh:parameter [
+      sh:path ex:arg1 ;
+      sh:name "arg1" ;
+    ] ;
+  sh:parameter [
+      sh:path ex:arg2 ;
+      sh:name "arg2" ;
+    ] ;
+  sh:returnType xsd:string ;
+  sh:select """SELECT ?result
+WHERE {
+    BIND (CONCAT($arg1, "-", $arg2) AS ?result)
+}""" ;
+.
+
+ex:TestNode
+  rdf:type ex:TestClass ;
+.
+
+ex:ArgumentsFunctionShape
+  a sh:NodeShape ;
+  sh:targetNode ex:TestNode ;
+  sh:expression [
+      ex:withArguments ( "A" "B" )
+    ] ;
+.

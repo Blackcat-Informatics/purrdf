@@ -43,7 +43,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 | 0 | 0 | 0 | GREEN |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 250 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 797 | 5 | 5 | 0 | GREEN |
-| SHACL Core + SHACL-SPARQL | W3C data-shapes | 120 | 0 | 0 | 0 | GREEN |
+| SHACL Core + SHACL-SPARQL | W3C data-shapes | 126 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 69 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 | 0 | 0 | 0 | GREEN |
@@ -68,7 +68,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx schemas (ShExC ∥ ShExJ) | shexTest v2.1.0, `schemas/` | **425/425** ShExC parse · **420/420** ShExJ round-trip · 419/420 ShExC≡ShExJ AST (1 upstream corpus bug, documented) |
 | ShEx negative syntax | shexTest v2.1.0, `negativeSyntax/` | **99 / 99** rejected |
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
-| SHACL | W3C data-shapes, `core/` + `sparql/` | **120 / 120** · 0 ledgered |
+| SHACL | W3C data-shapes, `core/` + `sparql/` + `af/` | **126 / 126** · 0 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **69 / 69** frozen expected reports |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
 | SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **797** pass · 5 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 5 non-passes are upstream-errata fixtures with non-canonical XSD lexicals) |
@@ -84,7 +84,9 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   (upstream `main` has drifted to 2.2-alpha `EXTENDS` tests, out of scope for
   ShEx 2.1). See its README for provenance.
 - `vectors/shacl/` — the W3C SHACL test suite (`data-shapes-test-suite`),
-  `core/` and `sparql/` manifests. See its README for provenance.
+  `core/` and `sparql/` manifests, plus the validation-only SHACL-AF corpus
+  vendored from pySHACL's DASH tests under `vectors/shacl/af/`. See its README
+  for provenance.
 - `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 69 cases with
   byte-frozen expected reports, covering purrdf-specific behavior (reifier
   shapes, path forms, property pairs, qualified shapes, SHACL-AF
@@ -189,11 +191,14 @@ issue, so the matrix stays honest:
   **All 70 W3C entailment cases pass** — RDF/RDFS/OWL-RL, OWL-Direct(DL),
   RIF-rule, and RDF-axiomatic. Only `D`-datatype entailment remains a boundary,
   and no case in the vendored corpus exercises it alone.
-- **SHACL** — 0 W3C cases are ledgered (all `core/` + `sparql/` pass). SHACL-AF `sh:expression`
-  support is exercised by the first-party shapes corpus
-  (`crates/shapes/corpus`); a `vectors/shacl/af/` seam is wired for future
-  upstream AF manifests (empty at the pinned commit, so it discovers 0 tests
-  today).
+- **SHACL** — the W3C `core/` and `sparql/` suites now pass **126 / 126**
+  with **0 ledgered xfails**. A validation-only SHACL-AF corpus is vendored from
+  pySHACL's DASH tests under `vectors/shacl/af/` and is discovered and gated by
+  `crates/shapes/tests/w3c_conformance.rs`. `sh:expression`, custom SPARQL
+  constraint components, pre-binding semantics, and user-defined
+  `sh:SPARQLFunction` calls are implemented and exercised; `sh:SPARQLTargetType`
+  is implemented. SHACL Rules (inference / triple derivation) remain out of
+  scope.
 
 ### SHACL-AF node expressions: normative surface vs. owned extensions
 
@@ -208,10 +213,10 @@ The node-expression kinds split into two tiers:
   term, path (`sh:path`), filter-shape (`sh:filterShape` + `sh:nodes`),
   function-call, `sh:union`, `sh:intersection`. Function calls reach XSD
   constructor/cast IRIs, any purrdf-registered custom function (both via the
-  `<iri>(…)` call form), and the XPath/XQuery-functions-namespace
+  `<iri>(…)` call form), user-defined `sh:SPARQLFunction` calls, and the
+  XPath/XQuery-functions-namespace
   (`http://www.w3.org/2005/xpath-functions#…`) builtins lowered to their SPARQL
   1.1 keyword (e.g. `fn:string-length` → `STRLEN`, `fn:contains` → `CONTAINS`).
-  User-defined `sh:SPARQLFunction` calls are a hard capability error.
 - **PurRDF-owned extensions** — `sh:if`/`sh:then`/`sh:else`, the aggregations
   `sh:count`/`sh:distinct`/`sh:min`/`sh:max`/`sh:sum`, the paging/ordering
   wrappers `sh:orderby`/`sh:limit`/`sh:offset`, and `sh:exists`. These are
@@ -219,10 +224,9 @@ The node-expression kinds split into two tiers:
   layouts are PurRDF's adopted reading, not a normative surface. Notably
   `sh:orderby` names a per-element sort-**key** node expression (evaluated with
   each element as focus) and orders ascending by default; direction is the
-  separate boolean `sh:desc` flag. No authoritative upstream AF manifests exist
-  at the pinned commit to reconcile these against, which is why the
-  `vectors/shacl/af/` vendoring seam is wired but empty; the owned semantics are
-  pinned by the first-party corpus and unit tests instead.
+  separate boolean `sh:desc` flag. The owned semantics are pinned by the
+  first-party corpus and unit tests, while the vendored `vectors/shacl/af/`
+  suite provides additional coverage for the overlapping normative surface.
 - **rdflib drop-in residuals** — 23 rdflib-suite + 7 compat-parity strict
   xfails cover Graph-subclass identity through set operators, rdf:List /
   Collection mutation, `Result.bindings` / `SELECT *` subselect projection,

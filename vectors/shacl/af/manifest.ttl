@@ -1,14 +1,13 @@
-# First-party conformance seam for future upstream SHACL Advanced Features (AF)
-# manifests. The pinned W3C data-shapes commit ships no AF tests, so this
-# manifest is deliberately empty: no mf:include, no mf:entries. It declares
-# itself a manifest with zero entries, so the harness discovers 0 tests today
-# and TOTAL_TESTS stays unchanged. First-party AF coverage (e.g. sh:expression)
-# lives in the shapes corpus (crates/shapes/corpus). When upstream publishes AF
-# manifests they vendor in here and the harness picks them up automatically.
-@prefix mf:      <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
-@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+# SHACL Advanced Features (AF) vendored test manifest
+# See vectors/shacl/af/README.md for provenance and license.
+
+@prefix mf:   <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
 <>
-	a mf:Manifest ;
-	rdfs:label "First-party seam for future upstream SHACL Advanced Features tests (empty today)" ;
-	.
+  a mf:Manifest ;
+  rdfs:label "Vendored SHACL Advanced Features (AF) validation tests" ;
+  mf:include <expression/manifest.ttl> ;
+  mf:include <function/manifest.ttl> ;
+  mf:include <target/manifest.ttl> ;
+  .
