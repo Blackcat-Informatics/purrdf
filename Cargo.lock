@@ -1159,6 +1159,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-events",
  "purrdf-gts",
+ "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-xsd",
