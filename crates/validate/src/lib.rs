@@ -30,3 +30,7 @@
 //! [`ValidationReport`]: purrdf_shapes::report::ValidationReport
 
 #![forbid(unsafe_code)]
+
+pub mod model;
+
+pub use model::{to_json_pretty, Level, SarifLog, SARIF_SCHEMA, SARIF_VERSION};
