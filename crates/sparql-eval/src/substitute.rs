@@ -12,9 +12,12 @@
 //! The substitution is applied to a **clone** of the cached (un-substituted) parse,
 //! so the plan cache is never poisoned by a focus-node-specific binding.
 
+use std::collections::{HashMap, HashSet};
+
 use purrdf_core::{RdfDiagnostic, RdfTextDirection, TermValue};
 use purrdf_sparql_algebra::{
-    BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, Query, Variable,
+    AggregateExpression, BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm,
+    GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, Query, Variable,
 };
 
 /// Apply every `(name, value)` substitution to `query` as a pre-binding rewrite,
@@ -39,6 +42,387 @@ pub(crate) fn apply_substitutions(
         query = query.substitute_variable(&var, ground);
     }
     Ok(query)
+}
+
+/// Apply SHACL-SPARQL pre-binding to `query`.
+///
+/// First performs the ordinary VALUES-join rewrite via [`apply_substitutions`]
+/// (so triple-pattern positions and projectable variables work exactly like the
+/// generic pre-binding path). Then walks the algebra and, for every pre-bound
+/// variable whose value is an IRI or literal:
+///
+/// * replaces `Expression::Variable(v)` with the constant IRI/literal,
+/// * replaces `Expression::Bound(v)` with the `true` boolean literal,
+///
+/// recursing into nested graph patterns (`EXISTS`, `GRAPH`, sub-queries, etc.).
+/// Blank-node and quoted-triple values are deliberately left unsubstituted in
+/// expression positions; the VALUES-join binds them.
+///
+/// Returns a diagnostic on the same error conditions as [`apply_substitutions`].
+pub(crate) fn apply_shacl_prebinding(
+    query: Query,
+    substitutions: &[(String, TermValue)],
+) -> Result<Query, RdfDiagnostic> {
+    let query = apply_substitutions(query, substitutions)?;
+
+    let mut expr_subs: HashMap<String, Option<Expression>> = HashMap::new();
+    let mut prebound: HashSet<String> = HashSet::new();
+    for (name, value) in substitutions {
+        prebound.insert(name.clone());
+        expr_subs.insert(name.clone(), expression_from_term_value(value)?);
+    }
+
+    Ok(map_patterns_in_query(query, |pattern| {
+        substitute_in_graph_pattern(pattern, &expr_subs, &prebound)
+    }))
+}
+
+/// Convert a dataset-independent [`TermValue`] to an [`Expression`] when it is an
+/// IRI or literal; return `None` for blank nodes or quoted triples, which must be
+/// handled via the VALUES-join path.
+fn expression_from_term_value(value: &TermValue) -> Result<Option<Expression>, RdfDiagnostic> {
+    match ground_term_from_value(value)? {
+        GroundTerm::NamedNode(node) => Ok(Some(Expression::NamedNode(node))),
+        GroundTerm::Literal(lit) => Ok(Some(Expression::Literal(lit))),
+        GroundTerm::BlankNode(_) | GroundTerm::Triple(_) => Ok(None),
+    }
+}
+
+/// Walk and rebuild the whole [`Query`], applying `f` to every [`GraphPattern`]
+/// contained in it (including sub-queries).
+fn map_patterns_in_query(query: Query, mut f: impl FnMut(GraphPattern) -> GraphPattern) -> Query {
+    match query {
+        Query::Select {
+            pattern,
+            dataset,
+            base_iri,
+        } => Query::Select {
+            pattern: f(pattern),
+            dataset,
+            base_iri,
+        },
+        Query::Construct {
+            template,
+            pattern,
+            dataset,
+            base_iri,
+        } => Query::Construct {
+            template,
+            pattern: f(pattern),
+            dataset,
+            base_iri,
+        },
+        Query::Describe {
+            pattern,
+            targets,
+            dataset,
+            base_iri,
+        } => Query::Describe {
+            pattern: f(pattern),
+            targets,
+            dataset,
+            base_iri,
+        },
+        Query::Ask {
+            pattern,
+            dataset,
+            base_iri,
+        } => Query::Ask {
+            pattern: f(pattern),
+            dataset,
+            base_iri,
+        },
+    }
+}
+
+/// Recursively substitute pre-bound variables into a [`GraphPattern`].
+fn substitute_in_graph_pattern(
+    pattern: GraphPattern,
+    expr_subs: &HashMap<String, Option<Expression>>,
+    prebound: &HashSet<String>,
+) -> GraphPattern {
+    match pattern {
+        GraphPattern::Bgp { patterns } => GraphPattern::Bgp { patterns },
+        GraphPattern::Path {
+            subject,
+            path,
+            object,
+        } => GraphPattern::Path {
+            subject,
+            path,
+            object,
+        },
+        GraphPattern::Join { left, right } => GraphPattern::Join {
+            left: Box::new(substitute_in_graph_pattern(*left, expr_subs, prebound)),
+            right: Box::new(substitute_in_graph_pattern(*right, expr_subs, prebound)),
+        },
+        GraphPattern::LeftJoin {
+            left,
+            right,
+            expression,
+        } => GraphPattern::LeftJoin {
+            left: Box::new(substitute_in_graph_pattern(*left, expr_subs, prebound)),
+            right: Box::new(substitute_in_graph_pattern(*right, expr_subs, prebound)),
+            expression: expression.map(|e| substitute_in_expression(e, expr_subs, prebound)),
+        },
+        GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
+            left: Box::new(substitute_in_graph_pattern(*left, expr_subs, prebound)),
+            right: Box::new(substitute_in_graph_pattern(*right, expr_subs, prebound)),
+        },
+        GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
+            expr: substitute_in_expression(expr, expr_subs, prebound),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+        },
+        GraphPattern::Union { left, right } => GraphPattern::Union {
+            left: Box::new(substitute_in_graph_pattern(*left, expr_subs, prebound)),
+            right: Box::new(substitute_in_graph_pattern(*right, expr_subs, prebound)),
+        },
+        GraphPattern::Graph { name, inner } => GraphPattern::Graph {
+            name: substitute_in_named_node_pattern(name, expr_subs, prebound),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+        },
+        GraphPattern::Extend {
+            inner,
+            variable,
+            expression,
+        } => GraphPattern::Extend {
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            variable,
+            expression: substitute_in_expression(expression, expr_subs, prebound),
+        },
+        GraphPattern::Minus { left, right } => GraphPattern::Minus {
+            left: Box::new(substitute_in_graph_pattern(*left, expr_subs, prebound)),
+            right: Box::new(substitute_in_graph_pattern(*right, expr_subs, prebound)),
+        },
+        GraphPattern::Service {
+            name,
+            inner,
+            silent,
+        } => GraphPattern::Service {
+            name: substitute_in_named_node_pattern(name, expr_subs, prebound),
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            silent,
+        },
+        GraphPattern::Values {
+            variables,
+            bindings,
+        } => GraphPattern::Values {
+            variables,
+            bindings,
+        },
+        GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            expression: expression
+                .into_iter()
+                .map(|e| substitute_in_order_expression(e, expr_subs, prebound))
+                .collect(),
+        },
+        GraphPattern::Project { inner, variables } => GraphPattern::Project {
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            variables,
+        },
+        GraphPattern::Distinct { inner } => GraphPattern::Distinct {
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+        },
+        GraphPattern::Reduced { inner } => GraphPattern::Reduced {
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+        },
+        GraphPattern::Slice {
+            inner,
+            start,
+            length,
+        } => GraphPattern::Slice {
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            start,
+            length,
+        },
+        GraphPattern::Group {
+            inner,
+            variables,
+            aggregates,
+        } => GraphPattern::Group {
+            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs, prebound)),
+            variables,
+            aggregates: aggregates
+                .into_iter()
+                .map(|(var, agg)| (var, substitute_in_aggregate(agg, expr_subs, prebound)))
+                .collect(),
+        },
+    }
+}
+
+/// Replace a pre-bound variable in a `GRAPH`/`SERVICE` name with its IRI constant.
+fn substitute_in_named_node_pattern(
+    pattern: NamedNodePattern,
+    expr_subs: &HashMap<String, Option<Expression>>,
+    prebound: &HashSet<String>,
+) -> NamedNodePattern {
+    match pattern {
+        NamedNodePattern::Variable(var) => {
+            let name = var.as_str();
+            if prebound.contains(name) {
+                if let Some(Some(Expression::NamedNode(node))) = expr_subs.get(name) {
+                    return NamedNodePattern::NamedNode(node.clone());
+                }
+            }
+            NamedNodePattern::Variable(var)
+        }
+        named @ NamedNodePattern::NamedNode(_) => named,
+    }
+}
+
+/// Recursively substitute pre-bound variables into an [`Expression`].
+fn substitute_in_expression(
+    expr: Expression,
+    expr_subs: &HashMap<String, Option<Expression>>,
+    prebound: &HashSet<String>,
+) -> Expression {
+    match expr {
+        Expression::Variable(var) => {
+            let name = var.as_str();
+            if let Some(Some(subst)) = expr_subs.get(name) {
+                subst.clone()
+            } else {
+                Expression::Variable(var)
+            }
+        }
+        Expression::Bound(var) => {
+            let name = var.as_str();
+            if prebound.contains(name) {
+                true_literal()
+            } else {
+                Expression::Bound(var)
+            }
+        }
+        Expression::NamedNode(node) => Expression::NamedNode(node),
+        Expression::Literal(lit) => Expression::Literal(lit),
+        Expression::Or(left, right) => Expression::Or(
+            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+        ),
+        Expression::And(left, right) => Expression::And(
+            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+        ),
+        Expression::Equal(left, right) => Expression::Equal(
+            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+        ),
+        Expression::SameTerm(left, right) => Expression::SameTerm(
+            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+        ),
+        Expression::Greater(left, right) => Expression::Greater(
+            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+        ),
+        Expression::GreaterOrEqual(left, right) => Expression::GreaterOrEqual(
+            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+        ),
+        Expression::Less(left, right) => Expression::Less(
+            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+        ),
+        Expression::LessOrEqual(left, right) => Expression::LessOrEqual(
+            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+        ),
+        Expression::Add(left, right) => Expression::Add(
+            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+        ),
+        Expression::Subtract(left, right) => Expression::Subtract(
+            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+        ),
+        Expression::Multiply(left, right) => Expression::Multiply(
+            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+        ),
+        Expression::Divide(left, right) => Expression::Divide(
+            Box::new(substitute_in_expression(*left, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*right, expr_subs, prebound)),
+        ),
+        Expression::UnaryPlus(inner) => Expression::UnaryPlus(Box::new(substitute_in_expression(
+            *inner, expr_subs, prebound,
+        ))),
+        Expression::UnaryMinus(inner) => Expression::UnaryMinus(Box::new(
+            substitute_in_expression(*inner, expr_subs, prebound),
+        )),
+        Expression::Not(inner) => Expression::Not(Box::new(substitute_in_expression(
+            *inner, expr_subs, prebound,
+        ))),
+        Expression::In(target, list) => Expression::In(
+            Box::new(substitute_in_expression(*target, expr_subs, prebound)),
+            list.into_iter()
+                .map(|e| substitute_in_expression(e, expr_subs, prebound))
+                .collect(),
+        ),
+        Expression::If(cond, then_expr, else_expr) => Expression::If(
+            Box::new(substitute_in_expression(*cond, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*then_expr, expr_subs, prebound)),
+            Box::new(substitute_in_expression(*else_expr, expr_subs, prebound)),
+        ),
+        Expression::Coalesce(list) => Expression::Coalesce(
+            list.into_iter()
+                .map(|e| substitute_in_expression(e, expr_subs, prebound))
+                .collect(),
+        ),
+        Expression::FunctionCall(function, args) => Expression::FunctionCall(
+            function,
+            args.into_iter()
+                .map(|e| substitute_in_expression(e, expr_subs, prebound))
+                .collect(),
+        ),
+        Expression::Exists(inner) => Expression::Exists(Box::new(substitute_in_graph_pattern(
+            *inner, expr_subs, prebound,
+        ))),
+    }
+}
+
+/// Substitute inside an [`OrderExpression`] sort key.
+fn substitute_in_order_expression(
+    order: OrderExpression,
+    expr_subs: &HashMap<String, Option<Expression>>,
+    prebound: &HashSet<String>,
+) -> OrderExpression {
+    match order {
+        OrderExpression::Asc(expr) => {
+            OrderExpression::Asc(substitute_in_expression(expr, expr_subs, prebound))
+        }
+        OrderExpression::Desc(expr) => {
+            OrderExpression::Desc(substitute_in_expression(expr, expr_subs, prebound))
+        }
+    }
+}
+
+/// Substitute inside a [`GROUP BY`][`AggregateExpression`] aggregate.
+fn substitute_in_aggregate(
+    agg: AggregateExpression,
+    expr_subs: &HashMap<String, Option<Expression>>,
+    prebound: &HashSet<String>,
+) -> AggregateExpression {
+    match agg {
+        AggregateExpression::CountStar { distinct } => AggregateExpression::CountStar { distinct },
+        AggregateExpression::FunctionCall {
+            function,
+            expression,
+            distinct,
+        } => AggregateExpression::FunctionCall {
+            function,
+            expression: Box::new(substitute_in_expression(*expression, expr_subs, prebound)),
+            distinct,
+        },
+    }
+}
+
+/// The SPARQL `true` boolean literal (`"true"^^xsd:boolean`).
+fn true_literal() -> Expression {
+    Expression::Literal(Literal::new_typed(
+        "true",
+        NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean"),
+    ))
 }
 
 /// Convert a dataset-independent [`TermValue`] to the algebra's [`GroundTerm`].

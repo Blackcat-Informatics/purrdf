@@ -185,6 +185,33 @@ impl NativeSparqlEngine {
         ctx
     }
 
+    /// Evaluate a SPARQL query under SHACL-SPARQL pre-binding semantics.
+    ///
+    /// Pre-bound variables are substituted into FILTER/EXISTS expressions and
+    /// `BOUND($v)` is rewritten to `true` for pre-bound variables, while
+    /// triple-pattern positions still receive the VALUES-join rewrite. This is
+    /// the path used by the SHACL validator for `sh:select` / `sh:ask` bodies;
+    /// normal SPARQL evaluation uses [`SparqlEngine::query`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
+    pub fn query_with_shacl_prebinding(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        query: &str,
+        base_iri: Option<&str>,
+        substitutions: &[(String, TermValue)],
+    ) -> Result<SparqlResult, RdfDiagnostic> {
+        let prepared =
+            self.cache
+                .borrow_mut()
+                .prepare_with(query, base_iri, &self.parser_options)?;
+        let mut ctx = self.eval_ctx(dataset);
+        let outcome = evaluate_with_shacl_prebinding(&prepared, substitutions, &mut ctx)?;
+        Ok(materialize(outcome, &ctx))
+    }
+
     /// Like [`SparqlEngine::query`], but with a
     /// [`RemoteQuerySource`](crate::remote::RemoteQuerySource) injected so
     /// `SERVICE` clauses resolve through it. Without this, the default
@@ -231,6 +258,17 @@ fn evaluate_with_substitutions(
     let substituted =
         crate::substitute::apply_substitutions(prepared.query.clone(), substitutions)?;
     evaluate_query(&substituted, ctx).map_err(eval_err)
+}
+
+fn evaluate_with_shacl_prebinding(
+    prepared: &PreparedQuery,
+    substitutions: &[(String, TermValue)],
+    ctx: &mut EvalCtx<'_>,
+) -> Result<Outcome, RdfDiagnostic> {
+    let substituted =
+        crate::substitute::apply_shacl_prebinding(prepared.query.clone(), substitutions)?;
+    evaluate_query(&substituted, ctx)
+        .map_err(|e| RdfDiagnostic::error("native-sparql-query-eval", e.to_string()))
 }
 
 impl SparqlEngine for NativeSparqlEngine {
@@ -535,6 +573,77 @@ mod tests {
             )
             .expect("query");
         assert_eq!(col0(all).len(), 3, "the cached parse is unmodified");
+    }
+
+    // ── SHACL-SPARQL pre-binding (Stage 1, issue #13) ─────────────────────────
+
+    /// Run a SELECT query through the SHACL pre-binding path and return the
+    /// sorted first-column debug strings.
+    fn run_shacl_subst(query: &str, substitutions: &[(String, TermValue)]) -> Vec<String> {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let result = engine
+            .query_with_shacl_prebinding(&ds, query, None, substitutions)
+            .expect("shacl prebinding query");
+        col0(result)
+    }
+
+    #[test]
+    fn shacl_prebinding_bound_in_filter_only_group() {
+        // SHACL pre-binding-005 shape: a FILTER-only group that checks bound($this).
+        let got = run_shacl_subst(
+            "SELECT ?this WHERE { { FILTER(bound(?this)) } ?this <http://ex/p> ?o }",
+            &[("this".to_owned(), TermValue::Iri("http://ex/a".to_owned()))],
+        );
+        assert_eq!(
+            got.len(),
+            1,
+            "FILTER(bound($this)) must see the pre-bound focus"
+        );
+        assert!(got[0].contains("http://ex/a"), "{got:?}");
+    }
+
+    #[test]
+    fn shacl_prebinding_union_filter_only_branch() {
+        // SHACL pre-binding-002 shape: $this referenced only inside a FILTER-only
+        // UNION branch must be substituted, so the equality test succeeds.
+        let got = run_shacl_subst(
+            "SELECT ?this WHERE { \
+             { FILTER(false) } \
+             UNION \
+             { FILTER(?this = <http://ex/a>) } \
+             }",
+            &[("this".to_owned(), TermValue::Iri("http://ex/a".to_owned()))],
+        );
+        assert_eq!(
+            got.len(),
+            1,
+            "the UNION branch with FILTER($this = :a) must match"
+        );
+        assert!(got[0].contains("http://ex/a"), "{got:?}");
+    }
+
+    #[test]
+    fn shacl_prebinding_does_not_change_normal_query_path() {
+        // The same query on the generic `query` path with no substitutions must
+        // still evaluate normally (here it returns all three :p rows).
+        let q = "SELECT ?this ?o WHERE { ?this <http://ex/p> ?o }";
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let normal = engine
+            .query(
+                &ds,
+                SparqlRequest {
+                    query: q,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .expect("normal query");
+        let SparqlResult::Solutions { rows, .. } = normal else {
+            panic!("expected solutions");
+        };
+        assert_eq!(rows.len(), 3, "normal path must see all three subjects");
     }
 
     #[test]
