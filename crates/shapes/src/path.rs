@@ -17,7 +17,7 @@
 //! Constant), in which case non-reflexive steps yield nothing while a reflexive
 //! closure step still yields the focus itself.
 
-use ::purrdf::{FastSet, IdSet, RdfDataset, TermId};
+use ::purrdf::{smallvec, FastSet, IdSet, IdVec, RdfDataset, TermId};
 
 use crate::data::{quads_for_pattern_ids, resolve_id, GraphFilter};
 use crate::shapes::Path;
@@ -296,7 +296,7 @@ fn closure(ds: &RdfDataset, focus: &Term, inner: &Path, reflexive: bool) -> Vec<
 // traversal byte-for-byte; the caller ([`eval`]) resolves the result to terms.
 
 /// Id-native twin of [`eval_inner`], for an interned `focus`.
-fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> Vec<TermId> {
+fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> IdVec {
     match path {
         Path::Predicate(p) => match resolve_pred(ds, p) {
             Some(p_id) => {
@@ -304,7 +304,7 @@ fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> Vec<TermId> {
                     .map(|q| q.o)
                     .collect()
             }
-            None => Vec::new(),
+            None => IdVec::new(),
         },
         Path::Inverse(inner) => match inner.as_ref() {
             // Inverse of a predicate: collect subjects of (?, p, focus).
@@ -318,7 +318,7 @@ fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> Vec<TermId> {
                 )
                 .map(|q| q.s)
                 .collect(),
-                None => Vec::new(),
+                None => IdVec::new(),
             },
             // Inverse of a composite path: push the inversion inward and evaluate.
             composite => eval_inner_ids(ds, focus, &invert(composite)),
@@ -326,9 +326,9 @@ fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> Vec<TermId> {
         Path::Sequence(parts) => {
             // Fold the frontier through each step, deduplicating per step
             // (first-seen order) so diamond-shaped graphs stay linear.
-            let mut frontier = vec![focus];
+            let mut frontier: IdVec = smallvec![focus];
             for part in parts {
-                let mut next: Vec<TermId> = Vec::new();
+                let mut next: IdVec = IdVec::new();
                 let mut seen: IdSet = IdSet::default();
                 for &node in &frontier {
                     for value in eval_inner_ids(ds, node, part) {
@@ -348,7 +348,7 @@ fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> Vec<TermId> {
         Path::ZeroOrMore(inner) => closure_ids(ds, focus, inner, true),
         Path::OneOrMore(inner) => closure_ids(ds, focus, inner, false),
         Path::ZeroOrOne(inner) => {
-            let mut nodes = vec![focus];
+            let mut nodes: IdVec = smallvec![focus];
             nodes.extend(eval_inner_ids(ds, focus, inner));
             nodes
         }
@@ -357,10 +357,10 @@ fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> Vec<TermId> {
 
 /// Id-native twin of [`closure`], for an interned `focus`. The visited set is an
 /// [`IdSet`] over `Copy` [`TermId`]s; first-seen order is preserved.
-fn closure_ids(ds: &RdfDataset, focus: TermId, inner: &Path, reflexive: bool) -> Vec<TermId> {
+fn closure_ids(ds: &RdfDataset, focus: TermId, inner: &Path, reflexive: bool) -> IdVec {
     let mut seen: IdSet = IdSet::default();
-    let mut order: Vec<TermId> = Vec::new();
-    let mut worklist: Vec<TermId> = Vec::new();
+    let mut order: IdVec = IdVec::new();
+    let mut worklist: IdVec = IdVec::new();
 
     if reflexive {
         seen.insert(focus);
