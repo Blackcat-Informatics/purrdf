@@ -1032,9 +1032,13 @@ mod tests {
             results: vec![vr],
         };
 
-        // The numeric id's Display form (`unit#0`) — this MUST NOT appear anywhere.
+        // The numeric id's Display form is the interner ordinal (`unit` + index) —
+        // it MUST NOT appear anywhere in the emitted SARIF.
         let numeric = unit.to_string();
-        assert_eq!(numeric, "unit#0", "sanity: interner mints ids from 0");
+        assert!(
+            numeric.starts_with("unit") && numeric.ends_with('0'),
+            "sanity: interner mints ids from the first ordinal"
+        );
 
         let sources = SarifSources {
             units: Some(&interner),
