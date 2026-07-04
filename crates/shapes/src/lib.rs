@@ -10,6 +10,7 @@
 //! targets (`sh:SPARQLTarget`) are implemented in the [`sparql`] module,
 //! delegated to oxigraph's SPARQL 1.1 engine.
 
+pub(crate) mod components;
 pub mod constraints;
 pub mod data;
 pub mod engine;

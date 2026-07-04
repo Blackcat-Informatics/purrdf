@@ -40,7 +40,8 @@ use crate::term::{term_value_to_native, Literal, NamedNode, Term};
 /// (`Boolean` / `Graph` are rejected), or if any solution row has no `?this`
 /// binding.
 pub fn eval_target(dataset: &Arc<RdfDataset>, select: &str) -> Result<Vec<Term>, String> {
-    let solutions = run_select(dataset, select, &[]).map_err(|e| format!("SPARQLTarget {e}"))?;
+    let solutions = run_select_with_substitutions(dataset, select, &[])
+        .map_err(|e| format!("SPARQLTarget {e}"))?;
 
     let this_index = column_index(&solutions.0, "this");
 
@@ -99,8 +100,8 @@ pub fn eval_sparql_constraint(
     // is memoized by the thread-local engine's plan cache, so per-focus evaluation
     // re-runs the plan, not the parse.
     let subs = [("this".to_owned(), focus.to_term_value())];
-    let (variables, rows) =
-        run_select(dataset, select, &subs).map_err(|e| format!("SPARQLConstraint {e}"))?;
+    let (variables, rows) = run_select_with_substitutions(dataset, select, &subs)
+        .map_err(|e| format!("SPARQLConstraint {e}"))?;
     let path_index = column_index(&variables, "path");
     let value_index = column_index(&variables, "value");
 
@@ -166,8 +167,8 @@ pub fn eval_scalar_expr(
         .iter()
         .map(|(name, term)| (name.clone(), term.to_term_value()))
         .collect();
-    let (variables, rows) =
-        run_select(dataset, &select, &subs).map_err(|e| format!("scalar expression {e}"))?;
+    let (variables, rows) = run_select_with_substitutions(dataset, &select, &subs)
+        .map_err(|e| format!("scalar expression {e}"))?;
 
     if rows.len() > 1 {
         return Err(format!(
@@ -260,8 +261,8 @@ pub fn eval_aggregate(
     }
 
     let select = format!("SELECT ({agg}(?v) AS ?result) WHERE {{ VALUES (?v) {{ {rows}}} }}");
-    let (variables, result_rows) =
-        run_select(dataset, &select, &[]).map_err(|e| format!("aggregate {e}"))?;
+    let (variables, result_rows) = run_select_with_substitutions(dataset, &select, &[])
+        .map_err(|e| format!("aggregate {e}"))?;
 
     if result_rows.len() > 1 {
         return Err(format!(
@@ -332,8 +333,8 @@ pub fn eval_order(
 
     let order = if descending { "DESC(?v)" } else { "?v" };
     let select = format!("SELECT ?v WHERE {{ VALUES (?v) {{ {rows}}} }} ORDER BY {order}");
-    let (variables, result_rows) =
-        run_select(dataset, &select, &[]).map_err(|e| format!("order-by {e}"))?;
+    let (variables, result_rows) = run_select_with_substitutions(dataset, &select, &[])
+        .map_err(|e| format!("order-by {e}"))?;
 
     let v_index = column_index(&variables, "v");
     let mut out: Vec<Term> = Vec::with_capacity(result_rows.len());
@@ -364,10 +365,10 @@ thread_local! {
     static SPARQL_ENGINE: NativeSparqlEngine = NativeSparqlEngine::new();
 
     /// The SHACL-AF function registry (`sh:SPARQLFunction`) in scope for the current
-    /// validation, set by [`enter_function_scope`]. `run_select` reads it to decide
+    /// validation, set by [`enter_function_scope`]. `run_select_with_substitutions` reads it to decide
     /// whether a call-position IRI can resolve to a user function. Kept alongside the
     /// engine (this module's established thread-local pattern) because validation is
-    /// serial: a single guard on the validation thread covers every `run_select` on
+    /// serial: a single guard on the validation thread covers every `run_select_with_substitutions` on
     /// that thread. Parallel FILTER workers inside the engine do NOT read this — they
     /// receive the registry through `EvalCtx` (propagated in `fork_for_worker`).
     static CURRENT_FUNCTIONS: RefCell<Option<Arc<UserFunctionRegistry>>> = const { RefCell::new(None) };
@@ -400,7 +401,7 @@ pub fn enter_function_scope(registry: Arc<UserFunctionRegistry>) -> FunctionScop
 /// non-SELECT result forms. When a non-empty SHACL-AF function registry is in scope
 /// (see [`enter_function_scope`]), the query runs through the engine's user-function
 /// path so a call-position IRI can resolve to a declared `sh:SPARQLFunction`.
-fn run_select(
+pub(crate) fn run_select_with_substitutions(
     dataset: &Arc<RdfDataset>,
     select: &str,
     substitutions: &[(String, TermValue)],
@@ -429,6 +430,36 @@ fn run_select(
         }
         SparqlResult::Graph(_) => {
             Err("query must be a SELECT, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
+        }
+    }
+}
+
+/// Run an ASK query over the dataset with the given variable substitutions.
+/// Rejects non-boolean result forms.
+pub(crate) fn run_ask_with_substitutions(
+    dataset: &Arc<RdfDataset>,
+    ask: &str,
+    substitutions: &[(String, TermValue)],
+) -> Result<bool, String> {
+    let result = SPARQL_ENGINE
+        .with(|engine| {
+            engine.query(
+                dataset,
+                SparqlRequest {
+                    query: ask,
+                    base_iri: None,
+                    substitutions,
+                },
+            )
+        })
+        .map_err(|e| format!("query evaluation error: {e}"))?;
+    match result {
+        SparqlResult::Boolean(b) => Ok(b),
+        SparqlResult::Solutions { .. } => {
+            Err("query must be an ASK, got a SELECT result".to_owned())
+        }
+        SparqlResult::Graph(_) => {
+            Err("query must be an ASK, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
         }
     }
 }
