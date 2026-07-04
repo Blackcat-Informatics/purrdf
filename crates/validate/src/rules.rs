@@ -152,6 +152,34 @@ mod tests {
         assert!(d.short_description.is_some());
     }
 
+    /// The W3C SHACL Recommendation anchors every constraint-component section
+    /// uniformly at `#<LocalName>` — verified against the live spec across the
+    /// value-type (4.1), shape-based (4.7), and SPARQL-based (section 6)
+    /// sections. Lock a curated component from a section other than 4.1 so a
+    /// future edit to the anchor derivation cannot silently start emitting a
+    /// dead `helpUri`.
+    #[test]
+    fn curated_components_resolve_to_live_spec_anchors() {
+        for local in [
+            "NodeConstraintComponent",
+            "PropertyConstraintComponent",
+            "ClosedConstraintComponent",
+            "SPARQLConstraintComponent",
+        ] {
+            let d = descriptor_for(&format!("http://www.w3.org/ns/shacl#{local}"));
+            assert_eq!(d.name.as_deref(), Some(local));
+            assert_eq!(
+                d.help_uri.as_deref(),
+                Some(format!("https://www.w3.org/TR/shacl/#{local}").as_str())
+            );
+            // Curated components carry a real one-line summary, not the generic fallback.
+            assert_ne!(
+                d.short_description.as_ref().map(|m| m.text.as_str()),
+                Some(format!("SHACL {local}.").as_str())
+            );
+        }
+    }
+
     #[test]
     fn unknown_shacl_component_still_gets_a_help_uri() {
         let d = descriptor_for("http://www.w3.org/ns/shacl#SomeFutureConstraintComponent");
