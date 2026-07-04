@@ -105,7 +105,10 @@ impl ComponentRegistry {
     ///
     /// Returns `Err(String)` when a component, parameter, or validator is
     /// malformed or when a validator query violates the pre-binding restrictions.
-    pub(crate) fn parse(data: &IrDataGraph, doc_prefixes: &[(String, String)]) -> Result<Self, String> {
+    pub(crate) fn parse(
+        data: &IrDataGraph,
+        doc_prefixes: &[(String, String)],
+    ) -> Result<Self, String> {
         let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
         let mut component_iris: Vec<String> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
@@ -287,15 +290,10 @@ pub(crate) fn eval_select_validator(
         Vec::with_capacity(variables.len() + bindings.len());
     for row in &rows {
         row_bindings.clear();
-        row_bindings.extend(
-            variables
-                .iter()
-                .zip(row.iter())
-                .filter_map(|(var, cell)| {
-                    cell.as_ref()
-                        .map(|tv| (var.clone(), term_value_to_native(tv)))
-                }),
-        );
+        row_bindings.extend(variables.iter().zip(row.iter()).filter_map(|(var, cell)| {
+            cell.as_ref()
+                .map(|tv| (var.clone(), term_value_to_native(tv)))
+        }));
 
         let focus_node = this_index
             .and_then(|i| row.get(i))
@@ -641,20 +639,47 @@ fn parse_component(
     node_validator_nodes.sort_by_key(ToString::to_string);
     let node_validators = node_validator_nodes
         .into_iter()
-        .map(|v| parse_validator(data, doc_prefixes, component, &v, &param_names, subclass_memo))
+        .map(|v| {
+            parse_validator(
+                data,
+                doc_prefixes,
+                component,
+                &v,
+                &param_names,
+                subclass_memo,
+            )
+        })
         .collect::<Result<Vec<Validator>, _>>()?;
     let mut property_validator_nodes: Vec<Term> =
         objects_of(data, component, sh::PROPERTY_VALIDATOR);
     property_validator_nodes.sort_by_key(ToString::to_string);
     let property_validators = property_validator_nodes
         .into_iter()
-        .map(|v| parse_validator(data, doc_prefixes, component, &v, &param_names, subclass_memo))
+        .map(|v| {
+            parse_validator(
+                data,
+                doc_prefixes,
+                component,
+                &v,
+                &param_names,
+                subclass_memo,
+            )
+        })
         .collect::<Result<Vec<Validator>, _>>()?;
     let mut validator_nodes: Vec<Term> = objects_of(data, component, sh::VALIDATOR);
     validator_nodes.sort_by_key(ToString::to_string);
     let validators = validator_nodes
         .into_iter()
-        .map(|v| parse_validator(data, doc_prefixes, component, &v, &param_names, subclass_memo))
+        .map(|v| {
+            parse_validator(
+                data,
+                doc_prefixes,
+                component,
+                &v,
+                &param_names,
+                subclass_memo,
+            )
+        })
         .collect::<Result<Vec<Validator>, _>>()?;
 
     let mut component_messages: Vec<String> = objects_of(data, component, sh::MESSAGE)

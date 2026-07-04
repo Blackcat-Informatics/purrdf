@@ -215,7 +215,6 @@ pub enum Constraint {
         /// any sibling qualified shape are excluded before counting.
         disjoint: bool,
     },
-<<<<<<< HEAD
     /// `sh:expression <node expression>` — SHACL-AF §5.7 expression constraint.
     ///
     /// For each value node the expression is evaluated with that value node as
@@ -387,6 +386,12 @@ struct Parser<'s> {
     /// shapes graph. Populated before shape parsing so malformed components are
     /// rejected as hard failures.
     component_registry: ComponentRegistry,
+    /// The original frozen shapes dataset, used to build the SPARQL-visible
+    /// shapes-graph overlay.
+    shapes_dataset: Arc<RdfDataset>,
+    /// The IRI of the named graph under which the shapes graph is exposed to
+    /// SHACL-SPARQL queries, or `None` if no shapes-graph overlay is configured.
+    shapes_graph: Option<String>,
 }
 
 // ── Prefix-header helper (used by shapes and component registry) ───────────────
@@ -462,6 +467,8 @@ impl<'s> Parser<'s> {
         data: &'s IrDataGraph,
         doc_prefixes: &[(String, String)],
         box_role_vocab: Option<BoxRoleVocab>,
+        shapes_dataset: Arc<RdfDataset>,
+        shapes_graph: Option<String>,
     ) -> Self {
         Self {
             data,
@@ -469,6 +476,8 @@ impl<'s> Parser<'s> {
             doc_prefixes: doc_prefixes.to_vec(),
             box_role_vocab,
             component_registry: ComponentRegistry::default(),
+            shapes_dataset,
+            shapes_graph,
         }
     }
 
@@ -551,6 +560,8 @@ impl<'s> Parser<'s> {
         Ok(Shapes {
             node_shapes,
             box_role_vocab: self.box_role_vocab.clone(),
+            shapes_graph: self.shapes_graph.clone(),
+            shapes_dataset: Arc::clone(&self.shapes_dataset),
         })
     }
 

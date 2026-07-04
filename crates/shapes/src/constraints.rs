@@ -1409,7 +1409,6 @@ fn eval_constraint<G: ShaclDataGraph>(
             )
             .map_err(|e| format!("sh:sparql constraint on shape {source_shape}: {e}"))?
         }
-<<<<<<< HEAD
 
         // ── Expression (SHACL-AF §5.7) ─────────────────────────────────────────
         // Each value node is evaluated as the focus of the node expression; the

@@ -9,13 +9,12 @@
 
 use std::sync::Arc;
 
-use ::purrdf::RdfDataset;
-
-use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
+use crate::data::{GraphFilter, IrDataGraph, Quad, ShaclDataGraph};
 use crate::model::{rdf, rdfs};
 use crate::report::ValidationReport;
 use crate::shapes::{Shape, Shapes, Target};
 use crate::term::{NamedNode, Term};
+use ::purrdf::{RdfDataset, RdfDatasetBuilder, RdfTerm};
 
 // ── Target resolution helpers ─────────────────────────────────────────────────
 
