@@ -486,18 +486,20 @@ fn chase(
         chaser.idx.insert(t, c);
     }
     let mut delta: Vec<[u32; 3]> = base.to_vec();
+    let mut derived: Vec<[u32; 3]> = Vec::new();
+    let mut next: Vec<[u32; 3]> = Vec::new();
     while !delta.is_empty() {
-        let mut derived: Vec<[u32; 3]> = Vec::new();
+        derived.clear();
+        next.clear();
         for &[s, p, o] in &delta {
             chaser.fire(s, p, o, &mut derived);
         }
-        let mut next: Vec<[u32; 3]> = Vec::new();
-        for t in derived {
+        for &t in &derived {
             if facts.insert(t) {
                 chaser.idx.insert(t, c);
                 next.push(t);
             }
         }
-        delta = next;
+        std::mem::swap(&mut delta, &mut next);
     }
 }
