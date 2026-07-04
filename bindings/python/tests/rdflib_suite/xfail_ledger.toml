@@ -13,8 +13,8 @@
 # gate — so this ledger only ever SHRINKS, never drifts. Mirrors the Rust
 # conformance harnesses' XPASS discipline (AGENTS.md §2).
 #
-# Current scoreboard (reconciled to the live suite): 62 passed / 24 xfailed
-# (0 xpassed, 0 failed, 0 errors; ledger 24/24 applied, 0 stale). This ledger
+# Current scoreboard (reconciled to the live suite): 71 passed / 15 xfailed
+# (0 xpassed, 0 failed, 0 errors; ledger 15/15 applied, 0 stale). This ledger
 # only shrinks: as gaps close, keys are pruned here and the pass count rises.
 # Grouped by theme in the comments below.
 
@@ -26,7 +26,9 @@
 "test_collection.py::test_scenario" = "compat Collection is read/append-oriented and does not implement __delitem__, so 'del c[i]' raises TypeError"
 
 # --- Theme: BatchAddGraph quad/context semantics ---
-"test_batch_add.py::TestBatchAddGraph::test_add_quad_for_non_conjunctive_empty" = "compat BatchAddGraph.add on a non-conjunctive Graph does not drop the 4th (context) element the way rdflib does before an implicit flush, so a quad added to a plain Graph leaves one triple instead of none"
+# (resolved: Graph.addN now filters quads to the graph's identifier for plain
+#  Graphs, accepts all contexts for Datasets, and writes to the view slot for
+#  _DatasetGraph views.)
 
 # --- Theme: DefinedNamespace introspection ---
 # (resolved: RDF is now a DefinedNamespace and DefinedNamespaceMeta.__dir__
@@ -51,7 +53,6 @@
 # --- Theme: SPARQL aggregate / filter evaluation semantics ---
 "test_agg_distinct.py::test_count_distinct" = "COUNT(DISTINCT ?x) grouped aggregation yields an empty Result under the native engine instead of the two expected grouped counts"
 "test_nested_filters.py::test_nested_filter_outer_binding_propagation" = "FILTER bindings from an outer group are not propagated into a nested group as rdflib does, so the computed solution set diverges from the expected set"
-"test_conjunctive_graph.py::test_graph_ids[check-kws1]" = "ConjunctiveGraph.parse forwards a StringInputSource down a filesystem path in this keyword combination, raising FileNotFoundError instead of parsing the in-memory source"
 
 # --- Theme: purrdf is stricter than rdflib (SPARQL conformance, not a purrdf gap) ---
 # The upstream rdflib test source concatenates two adjacent Python string
@@ -64,6 +65,6 @@
 "test_having.py::test_group_by" = "upstream test typo 'SELECT ?p' 'WHERE ...' concatenates to 'SELECT ?pWHERE ...', projecting the non-group-key variable ?pWHERE under GROUP BY; purrdf correctly rejects per SPARQL 1.1 §11.3 while rdflib leniently returns it unbound"
 
 # --- Theme: ConjunctiveGraph legacy semantics ---
-"test_conjunctive_graph.py::test_bnode_publicid" = "ConjunctiveGraph.parse(data=..., publicID=BNode) does not retain triples under a blank-node context the way rdflib does, so the graph reports no triples"
-"test_conjunctive_graph.py::test_quad_contexts" = "iterating a ConjunctiveGraph yields 4-tuple quads, whereas rdflib's default-union iteration yields 3-tuple triples, so the flattened triple set does not match"
-"test_conjunctive_graph.py::test_deprecated" = "compat ConjunctiveGraph does not emit the DeprecationWarning rdflib 7.x raises on instantiation (rdflib deprecates ConjunctiveGraph in favor of Dataset); the compat facade keeps it as a quiet alias"
+# (resolved: ConjunctiveGraph now emits the rdflib 7.x deprecation warning,
+#  iterates triples (not quads) under default_union, returns Graph context
+#  objects from quads(), and parses StringInputSource in-memory sources.)

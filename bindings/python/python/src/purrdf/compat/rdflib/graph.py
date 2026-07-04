@@ -27,6 +27,7 @@ from urllib.parse import urljoin, urlparse
 import purrdf
 
 from .namespace import RDF, NamespaceManager
+from .parser import FileInputSource, StringInputSource
 from .query import Result, ResultRow
 from .term import (
     BNode,
@@ -412,10 +413,22 @@ class Graph:
         """Add a sequence of ``(s, p, o, context)`` quads (RDFLib ``addN``).
 
         The context is the graph the triple belongs to — either a ``Graph``
-        facade (its graph slot is used) or a graph-name identifier.
+        facade (its graph slot is used) or a graph-name identifier. A plain
+        :class:`Graph` only keeps quads whose context matches its identifier;
+        a :class:`_DatasetGraph` view writes every quad to its own graph slot;
+        a :class:`Dataset` accepts all contexts.
         """
-        for s, p, o, context in quads:
-            self._add_quad(s, p, o, _context_graph_name(context))
+        if isinstance(self, Dataset):
+            for s, p, o, context in quads:
+                self._add_quad(s, p, o, _context_graph_name(context))
+        elif self._graph_name is not None:
+            for s, p, o, _context in quads:
+                self._add_quad(s, p, o, self._graph_name)
+        else:
+            for s, p, o, context in quads:
+                ctx_id = context.identifier if isinstance(context, Graph) else context
+                if ctx_id == self.identifier:
+                    self._add_quad(s, p, o, self._graph_name)
 
     def remove(self, triple: _Pattern) -> None:
         """Remove every triple matching the (possibly wildcard) pattern."""
@@ -940,7 +953,13 @@ class Graph:
             if src is None:
                 raise ValueError("parse requires one of: source, data, location, file")
             reader = getattr(src, "read", None)
-            if callable(reader):
+            if isinstance(src, StringInputSource):
+                value = src.value
+                payload = value.encode("utf-8") if isinstance(value, str) else value
+            elif isinstance(src, FileInputSource):
+                raw = src.file.read()
+                payload = raw.encode("utf-8") if isinstance(raw, str) else raw
+            elif callable(reader):
                 raw = reader()
                 payload = raw.encode("utf-8") if isinstance(raw, str) else raw
             elif native_format is not None:
@@ -1331,6 +1350,34 @@ class _DatasetGraph(Graph):
         """Return the triple count within this graph slot alone."""
         return sum(1 for _ in self.triples((None, None, None)))
 
+    def parse(
+        self,
+        source: object | None = None,
+        publicID: str | None = None,  # noqa: N803 - RDFLib API name
+        format: str | None = None,
+        location: str | None = None,
+        file: IO[bytes] | None = None,
+        data: str | bytes | None = None,
+        **kwargs: object,
+    ) -> _DatasetGraph:
+        """Parse RDF into this named-graph slot (not the dataset default graph).
+
+        Quad formats are delegated to the parent :class:`Dataset` so their
+        embedded graph names are honored. Triple-only formats are loaded into a
+        temporary :class:`Graph` and then copied into this view's slot.
+        """
+        f = (format or "turtle").lower()
+        if f in {"nquads", "nq", "trig", "trix", "hextuples"}:
+            self._dataset.parse(
+                source, publicID, format, location, file, data, **kwargs
+            )
+            return self
+        tmp = Graph(namespace_manager=self._nsm)
+        tmp.parse(source, publicID, format, location, file, data, **kwargs)
+        for triple in tmp:
+            self.add(triple)
+        return self
+
 
 class Dataset(Graph):
     """A quad-capable graph facade (RDFLib ``Dataset``); defaults to N-Quads.
@@ -1524,7 +1571,42 @@ class Dataset(Graph):
 
 
 class ConjunctiveGraph(Dataset):
-    """RDFLib ``ConjunctiveGraph`` alias over the dataset facade."""
+    """RDFLib ``ConjunctiveGraph`` legacy facade (deprecated, default union)."""
+
+    def __init__(
+        self,
+        store: purrdf.Store | purrdf.MutableDataset | None = None,
+        default_union: bool = True,
+        **kwargs: object,
+    ) -> None:
+        """Create a dataset-backed conjunctive graph.
+
+        Mirrors rdflib 7.x: ``default_union`` defaults to ``True`` and
+        instantiation emits a deprecation warning advising ``Dataset``.
+        """
+        import warnings
+
+        warnings.warn(
+            "ConjunctiveGraph is deprecated, use Dataset instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(store, default_union=default_union, **kwargs)
+
+    def __iter__(self) -> Iterator[_Triple]:  # type: ignore[override]
+        """Iterate every unique triple (3-tuple) in the conjunctive graph."""
+        yield from self.triples((None, None, None))
+
+    def quads(  # type: ignore[override]
+        self, pattern: _QuadPattern | None = None
+    ) -> Iterator[tuple[Identifier, Identifier, Identifier, Graph]]:
+        """Yield ``(s, p, o, Graph)`` quads with a context object in slot 4."""
+        ps, pp, po, pg = pattern if pattern is not None else (None, None, None, None)
+        for s, p, o, gname in Dataset.quads(self, (ps, pp, po, pg)):
+            if gname is None or gname == DATASET_DEFAULT_GRAPH_ID:
+                yield (s, p, o, self.default_graph)
+            else:
+                yield (s, p, o, self.get_context(gname))
 
 
 class Seq:
