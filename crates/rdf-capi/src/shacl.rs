@@ -10,8 +10,7 @@
 
 use std::os::raw::c_char;
 
-use purrdf_shapes::engine;
-use purrdf_validate::{report_to_sarif_string, SarifOptions};
+use purrdf_validate::{validate_to_sarif_string, SarifOptions};
 
 use crate::buffer::PurrdfBuffer;
 use crate::cstr_to_str;
@@ -20,9 +19,11 @@ use crate::status::PurrdfStatus;
 
 /// Validate `data_nt` (N-Triples) against `shapes_ttl` (Turtle) and render the
 /// report to SARIF 2.1.0 bytes. Native-testable, pointer-free core.
+///
+/// The validate→SARIF sequence lives in [`validate_to_sarif_string`]; this only
+/// adds the C-ABI byte framing.
 fn validate_to_sarif_bytes(shapes_ttl: &str, data_nt: &str) -> Result<Vec<u8>, String> {
-    let report = engine::validate_graphs(data_nt, shapes_ttl)?;
-    Ok(report_to_sarif_string(&report, &SarifOptions::default()).into_bytes())
+    Ok(validate_to_sarif_string(shapes_ttl, data_nt, &SarifOptions::default())?.into_bytes())
 }
 
 /// Validate a data graph (N-Triples) against a shapes graph (Turtle) and write

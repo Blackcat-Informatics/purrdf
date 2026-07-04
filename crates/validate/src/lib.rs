@@ -35,9 +35,11 @@ pub mod build;
 pub mod model;
 pub mod path_syntax;
 pub mod rules;
+pub mod shacl;
 
 pub use build::{
     build_diagnostics_sarif, build_report_sarif, build_report_sarif_with,
     diagnostics_to_sarif_string, report_to_sarif_string, SarifOptions, SarifReport, SarifSources,
 };
 pub use model::{to_json_pretty, Level, SarifLog, SARIF_SCHEMA, SARIF_VERSION};
+pub use shacl::validate_to_sarif_string;

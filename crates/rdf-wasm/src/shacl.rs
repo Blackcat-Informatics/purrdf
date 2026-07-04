@@ -15,11 +15,11 @@ use wasm_bindgen::prelude::*;
 /// native build — constructing a `JsError` calls a wasm-only import that panics
 /// off wasm. The `#[wasm_bindgen]` wrapper maps the `String` to a `JsError`.
 pub(crate) fn validate_to_sarif_impl(shapes_ttl: &str, data_nt: &str) -> Result<String, String> {
-    let report = purrdf_shapes::engine::validate_graphs(data_nt, shapes_ttl)?;
-    Ok(purrdf_validate::report_to_sarif_string(
-        &report,
+    purrdf_validate::validate_to_sarif_string(
+        shapes_ttl,
+        data_nt,
         &purrdf_validate::SarifOptions::default(),
-    ))
+    )
 }
 
 /// `shaclValidateToSarif(shapesTtl, dataNt)` → a SARIF 2.1.0 JSON string.

@@ -1072,7 +1072,6 @@ version = "0.2.1"
 dependencies = [
  "purrdf",
  "purrdf-core",
- "purrdf-shapes",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "purrdf-validate",
@@ -1296,7 +1295,6 @@ dependencies = [
  "purrdf",
  "purrdf-core",
  "purrdf-events",
- "purrdf-shapes",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "purrdf-validate",
