@@ -38,6 +38,10 @@ purrdf-rs = { package = "purrdf", path = "../purrdf", version = "0.2.1" }
 # directly too so it can name MutableDataset/QuadValues/GraphMatchValue/DatasetMut
 # without leaning on re-export aliasing. Harmless to crate-check (acyclic).
 purrdf-core = { workspace = true }
+# The SHACL engine + its SARIF reporting boundary: the C-ABI surface validates a
+# shapes+data pair and returns a SARIF 2.1.0 report over the shared buffer type.
+purrdf-shapes = { workspace = true }
+purrdf-validate = { workspace = true }
 # The canonical SPARQL-Results serializer (purrdf S9, EPIC #906). Path-depends on
 # the SAME ../rdf-core, so SparqlResult/TermValue unify — this crate delegates its
 # SRJ emission here instead of carrying a second hand-written serializer.
