@@ -42,7 +42,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 19 | 0 | 0 | 0 | GREEN |
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 | 0 | 0 | 0 | GREEN |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 250 | 0 | 0 | 0 | GREEN |
-| SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 767 | 35 | 35 | 0 | GREEN |
+| SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 797 | 5 | 5 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 126 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 69 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
@@ -71,8 +71,8 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SHACL | W3C data-shapes, `core/` + `sparql/` + `af/` | **126 / 126** · 0 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **69 / 69** frozen expected reports |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
-| SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **767** pass · 35 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 35 non-passes are 30 spec-inherent entailment-regime cases + 5 upstream-errata fixtures) |
-| Entailment (RDFS / OWL-RL) | native `purrdf-entail` forward-materialization reasoner | RDFS + OWL-RL closure; **40/70** W3C entailment cases (OWL-Direct/DL/RIF/D ledgered) |
+| SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **797** pass · 5 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 5 non-passes are upstream-errata fixtures with non-canonical XSD lexicals) |
+| Entailment (RDFS / OWL-RL / OWL-Direct / RIF) | native `purrdf-entail` reasoners | RDFS + OWL-RL forward chase, open-world OWL-Direct via the ALCOIQ tableau, RIF-Core rule engine, and RDF-axiomatic predicate typing; **70/70** W3C entailment cases pass (only `D`-datatype entailment remains a boundary, unexercised by the corpus) |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **62** pass · 24 strict-xfail (ledgered) |
 | purrdf.compat parity | first-party differential vs rdflib 7.6 | **338** pass · 5 strict-xfail (ledgered) |
@@ -176,19 +176,21 @@ issue, so the matrix stays honest:
   grouping, EXISTS-over-GRAPH-var, and the SPARQL 1.2 triple-term / reifier /
   annotation surface (including graph-scoped reifiers) all pass. **All 7 W3C
   `service` federation cases pass** (via the lateral SERVICE seam). The only
-  remaining non-passes are the **35 ledgered xfails**: **30 spec-inherent
-  entailment-regime cases** (OWL-Direct/DL, RIF-rule, and RDF-axiomatic-triple
-  entailment that a forward-materialization reasoner cannot reach) and **5
-  upstream-errata fixtures** (three `cast-decimal`/`-double`/`-float` cases with
+  remaining non-passes are the **5 ledgered xfails**: **upstream-errata
+  fixtures** (three `cast-decimal`/`-double`/`-float` cases with
   internally-inconsistent non-canonical XSD lexicals, and `coalesce01` /
   `plus-1-corrected` whose expected whole-valued `xsd:decimal` uses the legacy
-  `X.0` form the engine's XSD-1.1 canonical serializer does not emit). Both
-  classes are value/datatype-correct where applicable; only a spec-inherent
-  regime or a vendored fixture's non-canonical lexical differs.
-- **Entailment** — the native `purrdf-entail` reasoner materializes RDFS +
-  OWL-RL closure; RDF/RDFS/OWL-RL cases pass, and OWL-Direct(DL)/RIF/D-entailment
-  cases are `entailment` xfails (spec-inherent boundaries of a
-  forward-materialization reasoner).
+  `X.0` form the engine's XSD-1.1 canonical serializer does not emit). Every
+  entailment-regime case now passes natively (see below); only these vendored
+  fixtures' non-canonical lexicals differ.
+- **Entailment** — the native `purrdf-entail` crate carries four reasoners: the
+  RDFS / OWL-RL forward-materialization chase; the bare-`RDF` axiomatic
+  predicate-typing rule; an open-world **OWL-Direct** Description-Logic reasoner
+  (an ALCOIQ tableau answering instance/subsumption queries via classification +
+  realization + query-directed materialization); and a **RIF-Core** rule engine.
+  **All 70 W3C entailment cases pass** — RDF/RDFS/OWL-RL, OWL-Direct(DL),
+  RIF-rule, and RDF-axiomatic. Only `D`-datatype entailment remains a boundary,
+  and no case in the vendored corpus exercises it alone.
 - **SHACL** — the W3C `core/` and `sparql/` suites now pass **126 / 126**
   with **0 ledgered xfails**. A validation-only SHACL-AF corpus is vendored from
   pySHACL's DASH tests under `vectors/shacl/af/` and is discovered and gated by
