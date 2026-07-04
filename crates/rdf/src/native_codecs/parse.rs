@@ -155,14 +155,16 @@ pub fn parse_dataset_with(
     }
 
     let format = classify(media_type)?;
-    let text = std::str::from_utf8(bytes)
-        .map_err(|e| RdfDiagnostic::error("native-codec-utf8", e.to_string()))?;
 
     match format {
         NativeRdfFormat::NTriples
         | NativeRdfFormat::NQuads
         | NativeRdfFormat::Turtle
         | NativeRdfFormat::TriG => {
+            // UTF-8 is only required by the text tokenizer; the byte-oriented formats
+            // below never touch `text`, so validate it lazily inside this arm.
+            let text = std::str::from_utf8(bytes)
+                .map_err(|e| RdfDiagnostic::error("native-codec-utf8", e.to_string()))?;
             // Force sequential so subject spans are captured (the parallel path is
             // `NoSpans`-only), then fold into the SAME frozen IR `parse_dataset` builds.
             let mut table = SpanTable::default();
