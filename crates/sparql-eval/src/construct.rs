@@ -87,6 +87,17 @@ pub(crate) fn eval_construct(
         })
         .unwrap_or_default();
 
+    // Pre-intern the caller-supplied loss vocabulary IRIs once, before the
+    // per-solution row loop, so the loss-node emission path does not repeat
+    // the lookup work for every row.
+    let loss_term_ids: Option<(TermId, TermId, TermId)> = loss_vocab.as_ref().map(|vocab| {
+        (
+            builder.intern_iri_value(&vocab.projection_loss),
+            builder.intern_iri_value(&vocab.loss_code),
+            builder.intern_iri_value(&vocab.lost_reifies),
+        )
+    });
+
     // Identify which template triple indices are reifier declarations
     // (predicate == rdf:reifies, object == TermPattern::Triple).  This scan is
     // done ONCE before the row loop so that per-row emit can fast-path to plain
@@ -168,9 +179,9 @@ pub(crate) fn eval_construct(
             }
         }
 
-        if let Some(vocab) = loss_vocab.as_ref() {
+        if let Some(ids) = loss_term_ids {
             if !dropped.is_empty() {
-                emit_dropped_losses(&dropped, row, &schema, &mut builder, ctx, vocab);
+                emit_dropped_losses(&dropped, row, &schema, &mut builder, ctx, ids);
             }
         }
     }
@@ -379,7 +390,7 @@ fn emit_dropped_losses(
     schema: &VarSchema,
     builder: &mut RdfDatasetBuilder,
     ctx: &mut EvalCtx<'_>,
-    vocab: &crate::eval::LossVocabulary,
+    (proj_loss_id, loss_code_id, lost_reifies_id): (TermId, TermId, TermId),
 ) {
     for d in dropped {
         // Materialize the concrete reified triple term for this row. An unbound
@@ -395,24 +406,32 @@ fn emit_dropped_losses(
         let loss_node = builder.intern_blank_value(&label, purrdf_core::BlankScope::DEFAULT);
 
         let rdf_type = builder.intern_iri_value(RDF_TYPE);
-        let projection_loss = builder.intern_iri_value(&vocab.projection_loss);
-        builder.push_quad(loss_node, rdf_type, projection_loss, None);
+        builder.push_quad(loss_node, rdf_type, proj_loss_id, None);
 
         // <lossCode> "reifier-layer-dropped"
-        push_loss_code(builder, loss_node, LOSS_REIFIER_LAYER_DROPPED, vocab);
+        push_loss_code(builder, loss_node, LOSS_REIFIER_LAYER_DROPPED, loss_code_id);
 
         // <lostReifies> <<( s p o )>>
-        let lost_reifies = builder.intern_iri_value(&vocab.lost_reifies);
         let triple_id = builder.intern_value(&inner_term);
-        builder.push_quad(loss_node, lost_reifies, triple_id, None);
+        builder.push_quad(loss_node, lost_reifies_id, triple_id, None);
 
         // Sub-codes on the SAME loss node (keyed deterministically by the same
         // content-derived label, so they coalesce across rows too).
         if d.has_annotation {
-            push_loss_code(builder, loss_node, LOSS_ANNOTATION_LAYER_DROPPED, vocab);
+            push_loss_code(
+                builder,
+                loss_node,
+                LOSS_ANNOTATION_LAYER_DROPPED,
+                loss_code_id,
+            );
         }
         if d.has_standpoint {
-            push_loss_code(builder, loss_node, LOSS_STANDPOINT_SCOPE_DROPPED, vocab);
+            push_loss_code(
+                builder,
+                loss_node,
+                LOSS_STANDPOINT_SCOPE_DROPPED,
+                loss_code_id,
+            );
         }
     }
 }
@@ -422,16 +441,15 @@ fn push_loss_code(
     builder: &mut RdfDatasetBuilder,
     loss_node: TermId,
     code: &str,
-    vocab: &crate::eval::LossVocabulary,
+    loss_code_id: TermId,
 ) {
-    let loss_code = builder.intern_iri_value(&vocab.loss_code);
     let code_lit = builder.intern_literal_value(RdfLiteral {
         lexical_form: code.to_owned(),
         datatype: Some(XSD_STRING.to_owned()),
         language: None,
         direction: None,
     });
-    builder.push_quad(loss_node, loss_code, code_lit, None);
+    builder.push_quad(loss_node, loss_code_id, code_lit, None);
 }
 
 /// A deterministic blank-node label for a loss node, derived PURELY from the loss
