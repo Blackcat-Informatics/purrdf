@@ -8,7 +8,7 @@
 
 use std::sync::OnceLock;
 
-use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset};
+use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, TermId};
 
 use crate::data::{native_quads, quads_for_pattern_ids, resolve_id, GraphFilter, ShaclData};
 use crate::model::{rdf, sh, BoxRoleVocab};
@@ -607,6 +607,13 @@ fn eval_constraint(
             // Hoist the BFS closure computation once, outside the per-value loop.
             // Previously called inside the loop: O(N×M) → now O(M) + O(N).
             let closure = crate::engine::subclass_closure(store.core(), class_iri);
+            // Resolve `rdf:type`'s interned id once, outside the per-value loop:
+            // it is loop-invariant, so doing it per value node needlessly rebuilt
+            // a `NamedNode`/`String` and hit the interner O(N) times.  `None` means
+            // `rdf:type` is not interned in this dataset, so no `rdf:type` edge can
+            // exist and every non-literal value violates.
+            let rdf_type_id =
+                resolve_id(store.core(), &Term::NamedNode(NamedNode::from(rdf::TYPE)));
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
@@ -615,7 +622,7 @@ fn eval_constraint(
             for value in value_nodes {
                 let violates = match value {
                     Term::Literal(_) => true,
-                    _ => !is_shacl_instance(store.core(), value, &closure),
+                    _ => !is_shacl_instance(store.core(), value, rdf_type_id, &closure),
                 };
                 if violates {
                     results.push(ValidationResult {
@@ -1516,16 +1523,24 @@ pub(crate) fn substitute_path_placeholder(select: &str, path: Option<&Path>) -> 
 /// derived from asserted `rdfs:subClassOf` edges (as returned by
 /// [`crate::engine::subclass_closure`]).  The caller hoists the closure
 /// computation once before the per-value-node loop to avoid O(N×M) BFS cost.
-fn is_shacl_instance(ds: &RdfDataset, value: &Term, closure: &IdSet) -> bool {
+///
+/// `rdf_type_id` is `rdf:type`'s pre-resolved interned [`TermId`], hoisted once by
+/// the caller (it is loop-invariant across value nodes).  `None` means `rdf:type`
+/// is not interned in this dataset, so no `rdf:type` edge can exist and the value
+/// is not an instance.  Only the *value's* own id is resolved here, since it
+/// varies per call.
+fn is_shacl_instance(
+    ds: &RdfDataset,
+    value: &Term,
+    rdf_type_id: Option<TermId>,
+    closure: &IdSet,
+) -> bool {
     if !matches!(value, Term::NamedNode(_) | Term::BlankNode(_)) {
         return false;
     }
     // Both the value node and `rdf:type` must be interned for any `rdf:type` edge
     // to exist; a non-interned value has no type triple, so it is no instance.
-    let (Some(value_id), Some(rdf_type)) = (
-        resolve_id(ds, value),
-        resolve_id(ds, &Term::NamedNode(NamedNode::from(rdf::TYPE))),
-    ) else {
+    let (Some(value_id), Some(rdf_type)) = (resolve_id(ds, value), rdf_type_id) else {
         return false;
     };
     quads_for_pattern_ids(
