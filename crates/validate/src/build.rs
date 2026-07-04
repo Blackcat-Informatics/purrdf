@@ -12,9 +12,9 @@
 //!   (never a bare IRI dump), → `message.text`,
 //! * a deterministic result ordering.
 //!
-//! Physical/logical locations are attached by [`crate::locate`]; this module
-//! produces the location-free spine and is where the ordering and rule table are
-//! established.
+//! Physical, logical, and related locations are attached inline here (see
+//! `focus_physical_location` and `diagnostic_location`), alongside the result
+//! spine where the ordering and rule table are established.
 
 use std::collections::BTreeMap;
 
