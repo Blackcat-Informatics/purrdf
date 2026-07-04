@@ -1,0 +1,131 @@
+# Vendored from pySHACL DASH tests:
+#   test/resources/dash_tests/expression/booleans-001.test.ttl
+# See vectors/shacl/af/README.md for provenance and license.
+# Original versionInfo: Created with TopBraid Composer
+
+@prefix ex: <http://datashapes.org/shasf/tests/expression/booleans-001.test#> .
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix sht: <http://www.w3.org/ns/shacl-test#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<>
+  rdf:type mf:Manifest ;
+  mf:entries (
+      <booleans-001>
+    ) ;
+.
+
+<booleans-001>
+  rdf:type sht:Validate ;
+  rdfs:label "Test of sh:expression with booleans and SPARQL functions" ;
+  rdfs:comment "Vendored from pySHACL DASH test expression/booleans-001.test.ttl" ;
+  rdfs:seeAlso <http://datashapes.org/shasf/tests/expression/booleans-001.test> ;
+  mf:action [
+      sht:dataGraph <> ;
+      sht:shapesGraph <> ;
+    ] ;
+  mf:result [
+      rdf:type sh:ValidationReport ;
+      sh:conforms "false"^^xsd:boolean ;
+      sh:result [
+          rdf:type sh:ValidationResult ;
+          sh:focusNode "false"^^xsd:boolean ;
+          sh:resultSeverity sh:Violation ;
+          sh:sourceConstraintComponent sh:ExpressionConstraintComponent ;
+          sh:sourceShape ex:TestShape ;
+          sh:value "false"^^xsd:boolean ;
+        ] ;
+    ] ;
+  mf:status sht:approved ;
+.
+
+ex:TestShape
+  rdf:type sh:NodeShape ;
+  sh:expression sh:this ;
+  sh:targetNode "false"^^xsd:boolean ;
+  sh:targetNode "true"^^xsd:boolean ;
+.
+
+ex:Kate
+  rdf:type ex:Person ;
+  ex:firstName "Kate" ;
+  ex:lastName "Jones" ;
+.
+
+ex:concat
+  a sh:SPARQLFunction ;
+  rdfs:comment "Concatenates strings $op1 and $op2." ;
+  sh:parameter [
+      sh:path ex:op1 ;
+      sh:datatype xsd:string ;
+      sh:description "The first string" ;
+    ] ;
+  sh:parameter [
+      sh:path ex:op2 ;
+      sh:datatype xsd:string ;
+      sh:description "The second string" ;
+    ] ;
+  sh:returnType xsd:string ;
+  sh:select """
+      SELECT ?result
+      WHERE {
+        BIND(CONCAT(STR(?op1),STR(?op2)) AS ?result) .
+      }
+      """ ;
+.
+
+ex:strlen
+  a sh:SPARQLFunction ;
+  rdfs:comment "Returns length of the given string." ;
+  sh:parameter [
+      sh:path ex:op1 ;
+      sh:datatype xsd:string ;
+      sh:description "The string" ;
+    ] ;
+  sh:returnType xsd:integer ;
+  sh:select """
+      SELECT ?result
+      WHERE {
+        BIND(STRLEN(?op1) AS ?result) .
+      }
+      """ ;
+.
+
+ex:lessThan
+  a sh:SPARQLFunction ;
+  rdfs:comment "Returns True if op1 < op2." ;
+  sh:parameter [
+      sh:path ex:op1 ;
+      sh:datatype xsd:integer ;
+      sh:description "The first int" ;
+    ] ;
+  sh:parameter [
+      sh:path ex:op2 ;
+      sh:datatype xsd:integer ;
+      sh:description "The second int" ;
+    ] ;
+  sh:returnType xsd:boolean ;
+  sh:select """
+      SELECT ?result
+      WHERE {
+        BIND(IF(?op1 < ?op2, true, false) AS ?result) .
+      }
+      """ ;
+.
+
+ex:FilterExampleShape
+  a sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:expression [
+      ex:lessThan (
+        [ ex:strlen (
+            [ ex:concat ( [ sh:path ex:firstName ] [ sh:path ex:lastName ] ) ]
+          )
+        ]
+        30
+      ) ;
+    ] ;
+.

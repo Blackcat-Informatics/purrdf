@@ -31,6 +31,9 @@ use crate::term::{term_value_to_native, Literal, NamedNode, Term};
 /// The query **must** be a SELECT that binds `?this` in every solution row; any
 /// other query form or a missing `?this` binding is a hard error.
 ///
+/// `substitutions` pre-binds SPARQL variables (used for `sh:SPARQLTargetType`
+/// parameter values). Each `(var_name, term)` pair is bound to `?var_name`.
+///
 /// The returned [`Vec<Term>`] is deduplicated and sorted by string representation
 /// so the focus-node set is deterministic across runs.
 ///
@@ -39,9 +42,17 @@ use crate::term::{term_value_to_native, Literal, NamedNode, Term};
 /// Returns `Err(String)` if execution fails, if the result is not a SELECT
 /// (`Boolean` / `Graph` are rejected), or if any solution row has no `?this`
 /// binding.
-pub fn eval_target(dataset: &Arc<RdfDataset>, select: &str) -> Result<Vec<Term>, String> {
+pub fn eval_target(
+    dataset: &Arc<RdfDataset>,
+    select: &str,
+    substitutions: &[(String, Term)],
+) -> Result<Vec<Term>, String> {
+    let subs: Vec<(String, TermValue)> = substitutions
+        .iter()
+        .map(|(name, term)| (name.clone(), term.to_term_value()))
+        .collect();
     let solutions =
-        run_select_generic(dataset, select, &[]).map_err(|e| format!("SPARQLTarget {e}"))?;
+        run_select_generic(dataset, select, &subs).map_err(|e| format!("SPARQLTarget {e}"))?;
 
     let this_index = column_index(&solutions.0, "this");
 
@@ -571,7 +582,7 @@ mod tests {
         ]);
 
         let select = "SELECT ?this WHERE { ?this <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Foo> }";
-        let nodes = eval_target(&dataset, select).expect("eval_target must succeed");
+        let nodes = eval_target(&dataset, select, &[]).expect("eval_target must succeed");
 
         assert_eq!(nodes.len(), 2, "exactly two Foo instances");
         assert!(nodes.contains(&named_term("http://example.org/a")));
@@ -591,7 +602,7 @@ mod tests {
         let dataset = dataset_from_ntriples(&[]);
         let select =
             "SELECT ?this WHERE { VALUES ?this { <http://example.org/x> <http://example.org/x> } }";
-        let nodes = eval_target(&dataset, select).expect("eval_target must succeed");
+        let nodes = eval_target(&dataset, select, &[]).expect("eval_target must succeed");
         assert_eq!(nodes.len(), 1, "duplicate binding must be deduped");
     }
 

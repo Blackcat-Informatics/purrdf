@@ -198,6 +198,8 @@ pub mod sh {
 
     pub const SPARQL_TARGET: &str = "http://www.w3.org/ns/shacl#SPARQLTarget";
 
+    pub const SPARQL_TARGET_TYPE: &str = "http://www.w3.org/ns/shacl#SPARQLTargetType";
+
     pub const SPARQL_CONSTRAINT_COMPONENT: &str =
         "http://www.w3.org/ns/shacl#SPARQLConstraintComponent";
 
