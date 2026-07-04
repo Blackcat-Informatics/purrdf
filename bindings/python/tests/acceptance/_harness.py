@@ -4,20 +4,21 @@
 
 Each ``driver_<package>.py`` next to this file is a standalone script executed in
 a CHILD interpreter whose ``PYTHONPATH`` prepends ``bindings/python-rdflib-shadow``
-so a plain ``import rdflib`` resolves to the purrdf shadow, *shadowing*
-the genuine rdflib that the acceptance dependency group also installed. The
-driver then imports a real third-party rdflib consumer and drives its core path.
+so a plain ``import rdflib`` resolves to the purrdf shadow, *shadowing* the
+genuine rdflib that the ``dev`` dependency group also installed. The driver then
+imports a real third-party rdflib consumer and drives its core path.
 
 A driver never raises to the shell uncaught: it prints exactly one machine-
 readable ``ACCEPT_RESULT <json>`` line and exits with a coded status the parent
 test (:mod:`tests.test_acceptance_matrix`) maps to a pytest outcome:
 
-* ``0`` / ``outcome="pass"``  — the consumer imported and ran its core path,
+* ``0`` / ``outcome="pass"``     — the consumer imported and ran its core path,
   and its rdflib / plugin lookups resolved to purrdf.
-* ``2`` / ``outcome="fail"``  — the consumer is installed but its core path did
-  not run green against the shim (a genuine, ledgered compat gap).
-* ``3`` / ``outcome="unavailable"`` — the consumer is not installed in this
-  environment; the parent SKIPS the row (explicit, never silent).
+* ``2`` / ``outcome="fail"``     — the consumer is installed but its core path
+  did not run green against the shim (a genuine, ledgered compat gap).
+* ``3`` / ``outcome="missing"``  — the consumer is not installed in this
+  environment; the parent FAILS the row because the acceptance dependencies are
+  mandatory in the test environment.
 * ``4`` / ``outcome="misconfigured"`` — ``import rdflib`` did NOT resolve to the
   purrdf shadow (the harness would otherwise be silently testing real rdflib);
   the parent treats this as a hard error.
@@ -41,9 +42,9 @@ def _emit(record: dict[str, Any]) -> None:
     print(f"{_PREFIX} {json.dumps(record, sort_keys=True)}")
 
 
-def unavailable(package: str, reason: str) -> NoReturn:
-    """Report that ``package`` is not installed; the parent skips the row."""
-    _emit({"package": package, "outcome": "unavailable", "reason": reason})
+def missing(package: str, reason: str) -> NoReturn:
+    """Report that ``package`` is not installed; the parent fails the row."""
+    _emit({"package": package, "outcome": "missing", "reason": reason})
     raise SystemExit(3)
 
 
@@ -74,17 +75,21 @@ def failed(package: str, stage: str, exc: BaseException) -> NoReturn:
 
 
 def require_installed(package: str) -> None:
-    """Skip (never silently pass) when the consumer package is absent.
+    """Fail the row when the consumer package is absent.
+
+    The acceptance dependencies are mandatory in the test environment (they live
+    in the ``dev`` dependency group). A missing distribution is therefore a
+    harness / environment error, not a silently tolerated skip.
 
     Uses :func:`importlib.util.find_spec` so a *missing* distribution is cleanly
     distinguished from a distribution that is present but fails to import against
     the shim — the former is "not evaluated", the latter a real acceptance result.
     """
     if importlib.util.find_spec(package) is None:
-        unavailable(
+        missing(
             package,
-            f"{package} is not installed in the acceptance environment "
-            "(sync the `acceptance` dependency group to evaluate this row)",
+            f"{package} is not installed in the test environment "
+            "(sync the `dev` dependency group to evaluate this row)",
         )
 
 
@@ -92,7 +97,7 @@ def require_shadow(package: str) -> None:
     """Assert ``import rdflib`` resolved to the purrdf shadow, not real rdflib.
 
     Guards the whole mechanism: without the shadow on ``PYTHONPATH`` the child
-    would import the genuine rdflib the acceptance group also installed, and the
+    would import the genuine rdflib the ``dev`` group also installed, and the
     row would prove nothing. A miss is a hard harness error, never a silent pass.
     """
     import rdflib

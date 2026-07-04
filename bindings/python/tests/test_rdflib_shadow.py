@@ -17,42 +17,12 @@ parent still sees the genuine rdflib, untouched.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-# bindings/python/tests/ -> bindings/ -> python-rdflib-shadow/
-_SHADOW_DIR = Path(__file__).resolve().parent.parent.parent / "python-rdflib-shadow"
-
-
-def _run_in_shadow(code: str) -> str:
-    """Run ``code`` in a child interpreter whose ``import rdflib`` is the shadow.
-
-    Prepends the shadow distribution's package root to ``PYTHONPATH`` so a plain
-    ``import rdflib`` in the child resolves to the purrdf shadow rather than the
-    real rdflib installed in this (parent) environment.
-    """
-    env = dict(os.environ)
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (
-        f"{_SHADOW_DIR}{os.pathsep}{existing}" if existing else str(_SHADOW_DIR)
-    )
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode == 0, (
-        f"shadow subprocess failed (rc={proc.returncode})\n"
-        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
-    )
-    return proc.stdout
+from _shadow_test_utils import _SHADOW_DIR, _run_in_shadow
 
 
 def test_shadow_dir_exists() -> None:
@@ -65,8 +35,7 @@ def test_shadow_dir_exists() -> None:
 def test_shadow_resolves_to_purrdf() -> None:
     """``import rdflib`` in the child loads the shadow (a purrdf-backed package)."""
     out = _run_in_shadow(
-        "import rdflib; print(rdflib.__file__); "
-        "print(rdflib.Graph.__module__)"
+        "import rdflib; print(rdflib.__file__); print(rdflib.Graph.__module__)"
     )
     lines = out.strip().splitlines()
     assert str(_SHADOW_DIR) in lines[0]
@@ -110,6 +79,30 @@ def test_shadow_plugins_sparql_importable() -> None:
         "import sys\n"
         "assert 'rdflib.plugins.sparql' in sys.modules\n"
         "assert 'rdflib.plugins' in sys.modules\n"
+        "print('OK')\n"
+    )
+    assert _run_in_shadow(code).strip() == "OK"
+
+
+def test_shadow_version_matches_rdflib_api(locked_rdflib_version: str) -> None:
+    """``rdflib.__version__`` exposes the rdflib API version the shim targets."""
+    code = (
+        "import rdflib\n"
+        f"assert rdflib.__version__ == {locked_rdflib_version!r}, rdflib.__version__\n"
+        "print('OK')\n"
+    )
+    assert _run_in_shadow(code).strip() == "OK"
+
+
+def test_shadow_plugins_serializers_turtle_importable() -> None:
+    """``rdflib.plugins.serializers.turtle`` resolves through the shadow."""
+    code = (
+        "from rdflib.plugins.serializers.turtle import TurtleSerializer\n"
+        "from purrdf.compat.rdflib.plugins.serializers import TurtleSerializer as PurrdfTS\n"
+        "assert TurtleSerializer is PurrdfTS, TurtleSerializer\n"
+        "import sys\n"
+        "assert 'rdflib.plugins.serializers.turtle' in sys.modules\n"
+        "assert 'rdflib.plugins.serializers' in sys.modules\n"
         "print('OK')\n"
     )
     assert _run_in_shadow(code).strip() == "OK"

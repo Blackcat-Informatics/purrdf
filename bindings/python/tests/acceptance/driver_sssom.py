@@ -7,16 +7,6 @@ mapping over ``example.org`` CURIEs) and serialize it to RDF via
 :func:`sssom.writers.to_rdf_graph`, which routes through linkml's
 ``rdflib_dumper`` and returns an rdflib ``Graph`` — the rdflib-backed path whose
 plugin lookups must resolve to purrdf.
-
-At the current shim revision this row is a ledgered strict-xfail, and the block
-is at ``import sssom`` — upstream of any purrdf code. sssom depends on linkml,
-whose package ``__init__`` does ``from rdflib.plugins.serializers.turtle import
-TurtleSerializer`` — reaching into rdflib's PRIVATE serializer implementation
-module. The purrdf shim provides the public rdflib surface plus native
-serializers, not rdflib's internal serializer class tree, so that deep import
-fails and sssom cannot be imported through the shadow. The driver still expresses
-the intended rdflib-backed core path so the row XPASSes (and forces a ledger
-shrink) if that internal coupling is ever bridged.
 """
 
 from __future__ import annotations

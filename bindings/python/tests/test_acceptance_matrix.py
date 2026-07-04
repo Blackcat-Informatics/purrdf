@@ -7,43 +7,41 @@ import and run their core paths against ``purrdf.compat.rdflib`` (the shim), wit
 their ``import rdflib`` / plugin lookups resolving to purrdf rather than the
 genuine rdflib.
 
-Mechanism (identical in spirit to the rdflib LSP conformance gate): the
-``acceptance`` dependency group installs each consumer, which drags in the *real*
-rdflib. To make a consumer run on purrdf WITHOUT mutating this parent process
-(whose in-process rdflib is the differential oracle), every row runs in a
-SUBPROCESS whose ``PYTHONPATH`` prepends ``bindings/python-rdflib-shadow``; the
-child's ``import rdflib`` then resolves to the purrdf shadow, shadowing the
-installed real rdflib for that child only. The parent's ``sys.modules`` /
-``sys.path`` are never touched.
+Mechanism (identical in spirit to the rdflib LSP conformance gate): the ``dev``
+dependency group installs each consumer, which drags in the *real* rdflib. To
+make a consumer run on purrdf WITHOUT mutating this parent process (whose
+in-process rdflib is the differential oracle), every row runs in a SUBPROCESS
+whose ``PYTHONPATH`` prepends ``bindings/python-rdflib-shadow``; the child's
+``import rdflib`` then resolves to the purrdf shadow, shadowing the installed
+real rdflib for that child only. The parent's ``sys.modules`` / ``sys.path`` are
+never touched.
 
 Each row's driver lives in ``tests/acceptance/driver_<package>.py`` and prints a
 single ``ACCEPT_RESULT <json>`` line this module parses. Outcomes:
 
 * ``pass``          — core path ran, lookups resolved  → the test passes.
 * ``fail``          — installed but a genuine compat gap → ledgered strict-xfail.
-* ``unavailable``   — package not installed             → the test SKIPS.
+* ``missing``       — package not installed             → hard environment error.
 * ``misconfigured`` — the shadow was not in force        → hard error (never silent).
 
-The ledgered rows (pyshacl, sssom) are strict xfails in ``xfail_ledger.toml``: if
-either starts passing, the XPASS fails the run and forces the ledger to shrink —
-the same XPASS discipline as the Rust conformance harnesses (AGENTS.md §2).
+Ledgered strict xfails are applied from ``xfail_ledger.toml``; if a ledgered row
+starts passing, the XPASS fails the run and forces the ledger to shrink — the
+same XPASS discipline as the Rust conformance harnesses (AGENTS.md §2).
 """
 
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from _shadow_test_utils import _SHADOW_DIR, _run_with_shadow
+
 _TESTS_DIR = Path(__file__).resolve().parent
 _ACCEPTANCE_DIR = _TESTS_DIR / "acceptance"
-# tests/ -> python/ -> bindings/ -> python-rdflib-shadow/
-_SHADOW_DIR = _TESTS_DIR.parent.parent / "python-rdflib-shadow"
 
 _RESULT_PREFIX = "ACCEPT_RESULT "
 
@@ -58,18 +56,7 @@ def _run_driver(package: str) -> tuple[int, dict[str, Any], str]:
     driver = _ACCEPTANCE_DIR / f"driver_{package}.py"
     assert driver.is_file(), f"missing acceptance driver: {driver}"
 
-    env = dict(os.environ)
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (
-        f"{_SHADOW_DIR}{os.pathsep}{existing}" if existing else str(_SHADOW_DIR)
-    )
-    proc = subprocess.run(
-        [sys.executable, str(driver)],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    proc = _run_with_shadow([sys.executable, driver])
     raw = f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
     record: dict[str, Any] = {}
     for line in proc.stdout.splitlines():
@@ -84,10 +71,12 @@ def _run_driver(package: str) -> tuple[int, dict[str, Any], str]:
 
 
 def _require_core_path(package: str) -> dict[str, Any]:
-    """Skip when the package is absent; otherwise require its core path to pass."""
+    """Fail hard when the package is absent; otherwise require its core path to pass."""
     _rc, record, raw = _run_driver(package)
-    if record["outcome"] == "unavailable":
-        pytest.skip(record.get("reason", f"{package} not installed"))
+    assert record["outcome"] != "missing", (
+        f"{package} is required in the test environment but is not installed; "
+        f"sync the `dev` dependency group:\n{raw}"
+    )
     assert record["outcome"] == "pass", (
         f"{package} acceptance core path did not run green "
         f"(stage={record.get('stage')}, error={record.get('error')}):\n{raw}"
@@ -114,10 +103,10 @@ def test_sparqlwrapper_result_conversion() -> None:
 def test_pyshacl_core_path() -> None:
     """pyshacl.validate runs its core path against a purrdf-backed graph.
 
-    Ledgered strict-xfail: pyshacl fails to import against the shim (first a
-    missing ``rdflib.term.IdentifiedNode`` base class, then version-gated
-    monkeypatching of rdflib's private ``rdflib.term`` / ``rdflib.plugins.sparql``
-    internals), all upstream of the public surface the shim exposes.
+    pyshacl's ``rdflib_bool_patch`` imports private ``rdflib.term`` internals
+    (``_XSD_PFX``, ``_toPythonMapping``, ``_parseBoolean``) and toggles
+    ``rdflib.NORMALIZE_LITERALS``. The shim exposes the minimal private surface
+    needed for that patch to run, so the public validate path proceeds.
     """
     _require_core_path("pyshacl")
 
@@ -125,9 +114,9 @@ def test_pyshacl_core_path() -> None:
 def test_sssom_core_path() -> None:
     """sssom serializes a mapping set to RDF via its rdflib-backed writer.
 
-    Ledgered strict-xfail: sssom's linkml dependency deep-imports rdflib's private
-    serializer module (``rdflib.plugins.serializers.turtle``), which the shim does
-    not provide, so ``import sssom`` fails before purrdf code is reached.
+    sssom's linkml dependency deep-imports rdflib's private serializer module
+    (``rdflib.plugins.serializers.turtle``); the shim now exposes that module so
+    sssom reaches its core path and produces a purrdf-backed graph.
     """
     _require_core_path("sssom")
 
@@ -148,7 +137,7 @@ def test_acceptance_matrix_summary() -> None:
     Not a pass/fail gate on the ledgered rows (those are owned by their own
     strict-xfail tests); this asserts every driver produced a parseable,
     known-outcome record under an in-force shadow, and that at least one consumer
-    was actually exercised (never a silently all-unavailable green).
+    was actually exercised (never a silently all-missing green).
     """
     packages = ("sparqlwrapper", "pyshacl", "sssom")
     rows: list[tuple[str, dict[str, Any]]] = []
@@ -163,11 +152,15 @@ def test_acceptance_matrix_summary() -> None:
         note = record.get("detail") or record.get("reason") or record.get("error", "")
         print(f"  {package:<16} {outcome:<12} v{version:<10} {note}")
 
-    known = {"pass", "fail", "unavailable"}
+    known = {"pass", "fail", "missing"}
     for package, record in rows:
+        assert record["outcome"] != "missing", (
+            f"{package} is required in the test environment but is not installed; "
+            "sync the `dev` dependency group"
+        )
         assert record["outcome"] in known, (package, record)
     exercised = [p for p, r in rows if r["outcome"] in {"pass", "fail"}]
     assert exercised, (
-        "no downstream consumer was exercised — the acceptance dependency group "
-        "is not installed; sync it to evaluate the matrix"
+        "no downstream consumer was exercised — the acceptance dependencies "
+        "are not installed; sync the `dev` dependency group to evaluate the matrix"
     )
