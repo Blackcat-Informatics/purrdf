@@ -37,11 +37,7 @@ fn grouped(path: &Path) -> String {
 }
 
 fn join(parts: &[Path], sep: &str) -> String {
-    parts
-        .iter()
-        .map(grouped)
-        .collect::<Vec<_>>()
-        .join(sep)
+    parts.iter().map(grouped).collect::<Vec<_>>().join(sep)
 }
 
 #[cfg(test)]
@@ -55,7 +51,10 @@ mod tests {
 
     #[test]
     fn plain_predicate() {
-        assert_eq!(render_path(&pred("http://example.org/p")), "<http://example.org/p>");
+        assert_eq!(
+            render_path(&pred("http://example.org/p")),
+            "<http://example.org/p>"
+        );
     }
 
     #[test]

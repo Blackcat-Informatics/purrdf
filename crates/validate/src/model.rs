@@ -345,8 +345,12 @@ mod tests {
                         short_description: Some(Message::text("Datatype constraint")),
                         full_description: None,
                         help: None,
-                        help_uri: Some("https://www.w3.org/TR/shacl/#DatatypeConstraintComponent".to_owned()),
-                        default_configuration: Some(ReportingConfiguration { level: Level::Error }),
+                        help_uri: Some(
+                            "https://www.w3.org/TR/shacl/#DatatypeConstraintComponent".to_owned(),
+                        ),
+                        default_configuration: Some(ReportingConfiguration {
+                            level: Level::Error,
+                        }),
                     }],
                 },
             },
@@ -394,8 +398,13 @@ mod tests {
         // Inserted in reverse order; must serialize sorted (focusNode < shaclSeverity).
         let json = to_json_pretty(&exemplar());
         let focus = json.find("\"focusNode\"").expect("focusNode present");
-        let sev = json.find("\"shaclSeverity\"").expect("shaclSeverity present");
-        assert!(focus < sev, "property bag keys must serialize in sorted order");
+        let sev = json
+            .find("\"shaclSeverity\"")
+            .expect("shaclSeverity present");
+        assert!(
+            focus < sev,
+            "property bag keys must serialize in sorted order"
+        );
     }
 
     #[test]

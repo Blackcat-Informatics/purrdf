@@ -122,9 +122,23 @@ mod tests {
     #[test]
     fn empty_source_is_line_one_column_one() {
         let idx = LineIndex::new("");
-        assert_eq!(idx.locate("", 0), Position { line: 1, column: 1, byte_offset: 0 });
+        assert_eq!(
+            idx.locate("", 0),
+            Position {
+                line: 1,
+                column: 1,
+                byte_offset: 0
+            }
+        );
         // An offset past the (empty) end clamps to EOF, still 1:1.
-        assert_eq!(idx.locate("", 99), Position { line: 1, column: 1, byte_offset: 0 });
+        assert_eq!(
+            idx.locate("", 99),
+            Position {
+                line: 1,
+                column: 1,
+                byte_offset: 0
+            }
+        );
     }
 
     #[test]
@@ -165,7 +179,14 @@ mod tests {
         let idx = LineIndex::new(src);
         // Byte 1 is mid-scalar; clamp down to the boundary at 0.
         let p = idx.locate(src, 1);
-        assert_eq!(p, Position { line: 1, column: 1, byte_offset: 0 });
+        assert_eq!(
+            p,
+            Position {
+                line: 1,
+                column: 1,
+                byte_offset: 0
+            }
+        );
     }
 
     proptest! {

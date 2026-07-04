@@ -269,8 +269,8 @@ fn parse_lines_parallel_with_chunk_size(
     let mut base = 1u32;
     for chunk in &chunks {
         base_lines.push(base);
-        let newlines = u32::try_from(chunk.bytes().filter(|&b| b == b'\n').count())
-            .unwrap_or(u32::MAX);
+        let newlines =
+            u32::try_from(chunk.bytes().filter(|&b| b == b'\n').count()).unwrap_or(u32::MAX);
         base = base.saturating_add(newlines);
     }
     // Phase 1: parallel per-chunk tokenize+parse (on wasm32 rayon runs this inline).
@@ -603,7 +603,11 @@ fn validate_language_tag(tag: &str, line_no: u32, column: u32) -> Result<(), Rdf
         || primary.len() > 8
         || !primary.bytes().all(|byte| byte.is_ascii_alphabetic())
     {
-        return Err(err_at(format!("invalid language tag {tag:?}"), line_no, column));
+        return Err(err_at(
+            format!("invalid language tag {tag:?}"),
+            line_no,
+            column,
+        ));
     }
     let mut private_use = primary.eq_ignore_ascii_case("x");
     for subtag in parts {
@@ -614,7 +618,11 @@ fn validate_language_tag(tag: &str, line_no: u32, column: u32) -> Result<(), Rdf
             alnum && subtag.len() <= 8
         };
         if !acceptable {
-            return Err(err_at(format!("invalid language tag {tag:?}"), line_no, column));
+            return Err(err_at(
+                format!("invalid language tag {tag:?}"),
+                line_no,
+                column,
+            ));
         }
         if subtag.eq_ignore_ascii_case("x") {
             private_use = true;
@@ -1209,7 +1217,11 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     fn graph_block(&mut self, graph: &Node) -> Result<(), RdfDiagnostic> {
         if !matches!(graph, Node::Iri(_) | Node::Bnode(_)) {
             let (l, c) = self.loc();
-            return Err(err_at("graph block name must be an IRI or blank node", l, c));
+            return Err(err_at(
+                "graph block name must be an IRI or blank node",
+                l,
+                c,
+            ));
         }
         while !self.eat(&Token::RBrace) {
             if self.peek().is_none() {
@@ -1964,7 +1976,8 @@ mod tests {
         );
 
         let seq = parse_lines_sequential(&text, true, 1, &mut NoSpans).expect("sequential parse");
-        let par = parse_lines(&text, true, LineParseMode::Auto, &mut NoSpans).expect("parallel parse");
+        let par =
+            parse_lines(&text, true, LineParseMode::Auto, &mut NoSpans).expect("parallel parse");
         assert!(seq == par, "statement lists must be identical");
 
         let graph_seq = build_gts_graph(&seq).expect("sequential graph");
@@ -2070,7 +2083,8 @@ mod tests {
         }
         text.push_str("this is not rdf\n");
 
-        let seq_err = parse_lines_sequential(&text, true, 1, &mut NoSpans).expect_err("sequential must fail");
+        let seq_err =
+            parse_lines_sequential(&text, true, 1, &mut NoSpans).expect_err("sequential must fail");
         // A tiny chunk target guarantees the two bad lines land in different chunks.
         let par_err =
             parse_lines_parallel_with_chunk_size(&text, true, 256).expect_err("parallel must fail");
@@ -2110,9 +2124,10 @@ mod tests {
             "fixture must cross the parallel threshold"
         );
 
-        let seq_err = parse_lines_sequential(&text, true, 1, &mut NoSpans).expect_err("sequential must fail");
-        let par_err =
-            parse_lines(&text, true, LineParseMode::Auto, &mut NoSpans).expect_err("parallel must fail");
+        let seq_err =
+            parse_lines_sequential(&text, true, 1, &mut NoSpans).expect_err("sequential must fail");
+        let par_err = parse_lines(&text, true, LineParseMode::Auto, &mut NoSpans)
+            .expect_err("parallel must fail");
         assert_eq!(par_err, seq_err, "diagnostics must be byte-identical");
         // Resolve the located line back into the source to prove the earlier chunk's
         // error (early-error line) won, not the late garbage line.
@@ -2180,7 +2195,9 @@ mod tests {
     fn turtle_prefixed_name_allows_bare_slash_in_local() {
         let text = "@prefix ex: <https://example.org/vocab/> .\n\
                     ex:report/shacl/sarif ex:projection/okf ex:report/shacl/sarif .";
-        let statements = DocParser::new(text, None, false, &mut NoSpans).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect("parses");
         assert_eq!(statements.len(), 1);
         let nodes = &statements[0];
         assert_eq!(
@@ -2208,7 +2225,9 @@ mod tests {
         let text = "@prefix : <https://example.org/> .\n\
                     :x :p _:y.\n\
                     _:y :q :z .\n";
-        let statements = DocParser::new(text, None, false, &mut NoSpans).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect("parses");
         assert_eq!(statements.len(), 2, "must yield exactly two triples");
 
         let first = &statements[0];
@@ -2239,7 +2258,9 @@ mod tests {
     fn turtle_doubled_semicolon_interior_emits_no_extra_triple() {
         let text = "<https://example.org/s> a <https://example.org/C> ; ; \
                      <https://example.org/p> <https://example.org/o> .";
-        let statements = DocParser::new(text, None, false, &mut NoSpans).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect("parses");
         assert_eq!(statements.len(), 2);
     }
 
@@ -2250,7 +2271,9 @@ mod tests {
         let text =
             "<https://example.org/s> <https://example.org/p1> <https://example.org/o1> ; ; ; \
                      <https://example.org/p2> <https://example.org/o2> .";
-        let statements = DocParser::new(text, None, false, &mut NoSpans).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect("parses");
         assert_eq!(statements.len(), 2);
     }
 
@@ -2259,7 +2282,9 @@ mod tests {
     #[test]
     fn turtle_trailing_doubled_semicolon_emits_no_extra_triple() {
         let text = "<https://example.org/s> <https://example.org/p> <https://example.org/o> ; ; .";
-        let statements = DocParser::new(text, None, false, &mut NoSpans).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect("parses");
         assert_eq!(statements.len(), 1);
     }
 
@@ -2329,7 +2354,9 @@ mod tests {
     #[test]
     fn turtle_leading_semicolon_before_any_predicate_is_an_error() {
         let text = "<https://example.org/s> ; <https://example.org/p> <https://example.org/o> .";
-        assert!(DocParser::new(text, None, false, &mut NoSpans).parse().is_err());
+        assert!(DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .is_err());
     }
 
     /// A subject followed immediately by `;` and then `.` (no predicate-object pair at
@@ -2337,7 +2364,9 @@ mod tests {
     #[test]
     fn turtle_leading_semicolon_with_no_predicate_object_is_an_error() {
         let text = "<https://example.org/s> ; .";
-        assert!(DocParser::new(text, None, false, &mut NoSpans).parse().is_err());
+        assert!(DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .is_err());
     }
 
     /// A LEADING `;` inside a blank-node property list `[ … ]` is also illegal:
@@ -2348,7 +2377,9 @@ mod tests {
     fn turtle_leading_semicolon_inside_blank_node_property_list_is_an_error() {
         let text = "<https://example.org/s> <https://example.org/p> \
                      [ ; <https://example.org/a> <https://example.org/b> ] .";
-        assert!(DocParser::new(text, None, false, &mut NoSpans).parse().is_err());
+        assert!(DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .is_err());
     }
 
     /// A LEADING `;` inside an RDF 1.2 annotation block `{| … |}` is also illegal for
@@ -2357,7 +2388,9 @@ mod tests {
     fn turtle_leading_semicolon_inside_annotation_block_is_an_error() {
         let text = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                      {| ; <https://example.org/a> <https://example.org/b> |} .";
-        assert!(DocParser::new(text, None, false, &mut NoSpans).parse().is_err());
+        assert!(DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .is_err());
     }
 
     /// A DOUBLED trailing `;` before the annotation-block `Pipe` (`{| a b ; ; |}`)

@@ -157,7 +157,9 @@ fn location_sort_key(result: &SarifResult) -> (String, u32, u32) {
         .locations
         .first()
         .and_then(|l| l.physical_location.as_ref());
-    let uri = phys.map(|p| p.artifact_location.uri.clone()).unwrap_or_default();
+    let uri = phys
+        .map(|p| p.artifact_location.uri.clone())
+        .unwrap_or_default();
     let region = phys.and_then(|p| p.region.as_ref());
     let line = region.and_then(|r| r.start_line).unwrap_or(0);
     let column = region.and_then(|r| r.start_column).unwrap_or(0);
@@ -186,7 +188,10 @@ pub fn report_to_sarif_string(report: &ValidationReport, options: &SarifOptions)
 
 /// Serialize [`build_diagnostics_sarif`] to deterministic pretty JSON.
 #[must_use]
-pub fn diagnostics_to_sarif_string(diagnostics: &[RdfDiagnostic], options: &SarifOptions) -> String {
+pub fn diagnostics_to_sarif_string(
+    diagnostics: &[RdfDiagnostic],
+    options: &SarifOptions,
+) -> String {
     crate::model::to_json_pretty(&build_diagnostics_sarif(diagnostics, options))
 }
 
@@ -442,7 +447,9 @@ fn register_rules(results: &mut [SarifResult]) -> Vec<ReportingDescriptor> {
         result.rule_index = ids.iter().position(|id| *id == result.rule_id);
     }
 
-    ids.iter().map(|id| crate::rules::descriptor_for(id)).collect()
+    ids.iter()
+        .map(|id| crate::rules::descriptor_for(id))
+        .collect()
 }
 
 fn assemble_run(
@@ -490,7 +497,9 @@ mod tests {
             path_structure: None,
             value: Some(Term::Literal(Literal::new_simple_literal("foo"))),
             source_constraint_component: NamedNode::new_unchecked(component),
-            source_shape: Term::NamedNode(NamedNode::new_unchecked("http://example.org/PersonShape")),
+            source_shape: Term::NamedNode(NamedNode::new_unchecked(
+                "http://example.org/PersonShape",
+            )),
             severity,
             message: message.map(ToOwned::to_owned),
             source_box_roles: vec![],
@@ -515,7 +524,10 @@ mod tests {
         let r = &log.runs[0].results[0];
         assert_eq!(r.level, Level::Note); // Other -> note
         assert_eq!(
-            r.properties.0.get(PROP_SHACL_SEVERITY).and_then(|v| v.as_str()),
+            r.properties
+                .0
+                .get(PROP_SHACL_SEVERITY)
+                .and_then(|v| v.as_str()),
             Some("http://example.org/Critical"),
             "custom severity IRI must be preserved verbatim"
         );
@@ -533,8 +545,14 @@ mod tests {
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let text = &log.runs[0].results[0].message.text;
-        assert!(text.contains("Value"), "message should name the value: {text}");
-        assert!(text.contains("on path"), "message should name the path: {text}");
+        assert!(
+            text.contains("Value"),
+            "message should name the value: {text}"
+        );
+        assert!(
+            text.contains("on path"),
+            "message should name the path: {text}"
+        );
         assert!(
             text.contains("focus node http://example.org/alice"),
             "message should name the focus node: {text}"
@@ -717,7 +735,10 @@ mod tests {
             assert!(r["ruleId"].is_string(), "ruleId must be a string");
             assert!(r["message"]["text"].is_string(), "message.text required");
             let level = r["level"].as_str().expect("level string");
-            assert!(allowed.contains(&level), "level {level} must be a SARIF level");
+            assert!(
+                allowed.contains(&level),
+                "level {level} must be a SARIF level"
+            );
             // Every result has a rule registered in the driver.
             let idx = r["ruleIndex"].as_u64().expect("ruleIndex") as usize;
             assert_eq!(runs[0]["tool"]["driver"]["rules"][idx]["id"], r["ruleId"]);
@@ -756,7 +777,10 @@ mod tests {
         let timed = build_report_sarif(
             &report,
             &SarifOptions {
-                invocation_times: Some(("2026-07-04T00:00:00Z".into(), "2026-07-04T00:00:01Z".into())),
+                invocation_times: Some((
+                    "2026-07-04T00:00:00Z".into(),
+                    "2026-07-04T00:00:01Z".into(),
+                )),
                 ..SarifOptions::default()
             },
         );

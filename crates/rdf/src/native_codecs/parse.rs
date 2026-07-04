@@ -226,8 +226,7 @@ fn parse_dataset_mode(
         | NativeRdfFormat::NQuads
         | NativeRdfFormat::Turtle
         | NativeRdfFormat::TriG => {
-            let graph =
-                text_parse_without_panicking(format, text, base_iri, mode, &mut NoSpans)?;
+            let graph = text_parse_without_panicking(format, text, base_iri, mode, &mut NoSpans)?;
             dataset_from_ser_graph(&graph)
         }
         // RDF/XML parses FIRST-PARTY through the in-repo `rdfxml` codec (W3C RDF/XML
@@ -759,9 +758,13 @@ mod tests {
         // With tracking off the side table is absent and the dataset is byte-for-byte
         // what `parse_dataset` produces (same canonical serialization).
         let nt = "<https://e/s> <https://e/p> <https://e/o> .\n";
-        let (with_ds, table) =
-            parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &ParseOptions::default())
-                .expect("parse");
+        let (with_ds, table) = parse_dataset_with(
+            nt.as_bytes(),
+            "application/n-triples",
+            None,
+            &ParseOptions::default(),
+        )
+        .expect("parse");
         assert!(table.is_none(), "tracking off yields no side table");
         let plain = parse_dataset(nt.as_bytes(), "application/n-triples", None).expect("parse");
         assert_eq!(with_ds.quad_count(), plain.quad_count());
@@ -777,7 +780,10 @@ mod tests {
             crate::SerializeGraph::Dataset,
         )
         .expect("serialize plain");
-        assert_eq!(a, b, "dataset is identical whether or not tracking is requested");
+        assert_eq!(
+            a, b,
+            "dataset is identical whether or not tracking is requested"
+        );
     }
 
     #[test]

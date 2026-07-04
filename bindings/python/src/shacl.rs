@@ -243,7 +243,10 @@ impl PyValidationReport {
     fn to_sarif(&self, py: Python<'_>) -> String {
         let report = &self.inner;
         py.detach(|| {
-            purrdf_validate::report_to_sarif_string(report, &purrdf_validate::SarifOptions::default())
+            purrdf_validate::report_to_sarif_string(
+                report,
+                &purrdf_validate::SarifOptions::default(),
+            )
         })
     }
 }

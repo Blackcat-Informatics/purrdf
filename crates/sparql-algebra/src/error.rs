@@ -142,7 +142,9 @@ mod tests {
         // Offset points at the 'x' on the third line.
         let src = "SELECT *\nWHERE {\n  x }";
         let at = src.find('x').unwrap();
-        let pos = ParseError::syntax("unexpected token", at).locate(src).unwrap();
+        let pos = ParseError::syntax("unexpected token", at)
+            .locate(src)
+            .unwrap();
         assert_eq!((pos.line, pos.column), (3, 3));
         assert_eq!(pos.byte_offset, at);
         assert!(ParseError::unsupported("SERVICE").locate(src).is_none());

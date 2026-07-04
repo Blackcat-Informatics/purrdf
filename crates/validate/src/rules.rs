@@ -40,8 +40,8 @@ pub fn descriptor_for(rule_id: &str) -> ReportingDescriptor {
 fn shacl_component_descriptor(rule_id: &str, local: &str) -> ReportingDescriptor {
     // The SHACL spec anchors a constraint component at `#<LocalName>`.
     let help_uri = format!("{SHACL_SPEC}#{local}");
-    let short = curated_shacl_summary(local)
-        .map_or_else(|| format!("SHACL {local}."), ToOwned::to_owned);
+    let short =
+        curated_shacl_summary(local).map_or_else(|| format!("SHACL {local}."), ToOwned::to_owned);
     ReportingDescriptor {
         id: rule_id.to_owned(),
         name: Some(local.to_owned()),
@@ -63,22 +63,40 @@ fn shacl_component_descriptor(rule_id: &str, local: &str) -> ReportingDescriptor
 fn curated_shacl_summary(local: &str) -> Option<&'static str> {
     let summary = match local {
         "DatatypeConstraintComponent" => "A value has the wrong datatype (sh:datatype).",
-        "ClassConstraintComponent" => "A value is not an instance of the required class (sh:class).",
+        "ClassConstraintComponent" => {
+            "A value is not an instance of the required class (sh:class)."
+        }
         "NodeKindConstraintComponent" => "A value has the wrong node kind (sh:nodeKind).",
         "MinCountConstraintComponent" => "Too few values for a property (sh:minCount).",
         "MaxCountConstraintComponent" => "Too many values for a property (sh:maxCount).",
-        "MinInclusiveConstraintComponent" => "A value is below the inclusive minimum (sh:minInclusive).",
-        "MaxInclusiveConstraintComponent" => "A value is above the inclusive maximum (sh:maxInclusive).",
-        "MinExclusiveConstraintComponent" => "A value is at or below the exclusive minimum (sh:minExclusive).",
-        "MaxExclusiveConstraintComponent" => "A value is at or above the exclusive maximum (sh:maxExclusive).",
-        "MinLengthConstraintComponent" => "A value is shorter than the minimum length (sh:minLength).",
-        "MaxLengthConstraintComponent" => "A value is longer than the maximum length (sh:maxLength).",
+        "MinInclusiveConstraintComponent" => {
+            "A value is below the inclusive minimum (sh:minInclusive)."
+        }
+        "MaxInclusiveConstraintComponent" => {
+            "A value is above the inclusive maximum (sh:maxInclusive)."
+        }
+        "MinExclusiveConstraintComponent" => {
+            "A value is at or below the exclusive minimum (sh:minExclusive)."
+        }
+        "MaxExclusiveConstraintComponent" => {
+            "A value is at or above the exclusive maximum (sh:maxExclusive)."
+        }
+        "MinLengthConstraintComponent" => {
+            "A value is shorter than the minimum length (sh:minLength)."
+        }
+        "MaxLengthConstraintComponent" => {
+            "A value is longer than the maximum length (sh:maxLength)."
+        }
         "PatternConstraintComponent" => "A value does not match the required pattern (sh:pattern).",
         "InConstraintComponent" => "A value is not in the allowed set (sh:in).",
-        "NodeConstraintComponent" => "A value does not conform to the required node shape (sh:node).",
+        "NodeConstraintComponent" => {
+            "A value does not conform to the required node shape (sh:node)."
+        }
         "PropertyConstraintComponent" => "A node violates a property shape (sh:property).",
         "HasValueConstraintComponent" => "A required value is missing (sh:hasValue).",
-        "LanguageInConstraintComponent" => "A literal has a disallowed language tag (sh:languageIn).",
+        "LanguageInConstraintComponent" => {
+            "A literal has a disallowed language tag (sh:languageIn)."
+        }
         "UniqueLangConstraintComponent" => "A language tag is used more than once (sh:uniqueLang).",
         "ClosedConstraintComponent" => "A node has properties outside a closed shape (sh:closed).",
         "SPARQLConstraintComponent" => "A SPARQL-based constraint was violated (sh:sparql).",
