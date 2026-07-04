@@ -25,7 +25,7 @@ impl Parser<'_> {
         let mut ids: Vec<Term> = self
             .quads_with(None, Some(rdf::TYPE), Some(sh::SPARQL_TARGET_TYPE))
             .into_iter()
-            .map(|q| q.subject)
+            .map(|(subject, _, _)| subject)
             .collect();
         ids.sort_by_key(ToString::to_string);
         ids.dedup();

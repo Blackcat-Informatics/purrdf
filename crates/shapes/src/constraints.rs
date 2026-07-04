@@ -6,10 +6,11 @@
 //! Evaluates all non-SPARQL SHACL Core constraint components plus the
 //! recursive shape evaluator.  PyO3-free.
 
-use std::collections::HashSet;
 use std::sync::OnceLock;
 
-use crate::data::{GraphFilter, ShaclDataGraph};
+use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset};
+
+use crate::data::{native_quads, quads_for_pattern_ids, resolve_id, GraphFilter, ShaclData};
 use crate::model::{rdf, sh, BoxRoleVocab};
 use crate::path;
 use crate::report::ValidationResult;
@@ -31,8 +32,8 @@ use crate::term::{NamedNode, Term, Triple};
 /// hard validation failure per SHACL-SPARQL — e.g. a query construct the
 /// native engine cannot execute). Ordinary constraint violations are `Ok`
 /// results, never errors.
-pub fn validate_shape<G: ShaclDataGraph>(
-    store: &G,
+pub fn validate_shape(
+    store: &ShaclData,
     focus: &Term,
     shape: &Shape,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -51,8 +52,8 @@ pub fn validate_shape<G: ShaclDataGraph>(
 ///
 /// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
 /// (see [`validate_shape`]).
-pub fn validate_shape_with<G: ShaclDataGraph>(
-    store: &G,
+pub fn validate_shape_with(
+    store: &ShaclData,
     focus: &Term,
     shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
@@ -65,8 +66,8 @@ pub fn validate_shape_with<G: ShaclDataGraph>(
 /// [`crate::expression::MAX_RECURSION_DEPTH`] is a hard error — a mutually
 /// recursive filter/exists cycle fails closed here rather than overflowing the
 /// native stack.
-fn validate_shape_with_depth<G: ShaclDataGraph>(
-    store: &G,
+fn validate_shape_with_depth(
+    store: &ShaclData,
     focus: &Term,
     shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
@@ -145,14 +146,14 @@ fn validate_shape_with_depth<G: ShaclDataGraph>(
 /// (`core/node/closed-002` does exactly that).
 ///
 /// One result per focus-node outgoing triple whose predicate is not permitted.
-fn eval_closed<G: ShaclDataGraph>(
-    store: &G,
+fn eval_closed(
+    store: &ShaclData,
     focus: &Term,
     shape: &Shape,
     ignored: &[NamedNode],
     box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Vec<ValidationResult> {
-    let mut permitted: HashSet<String> = HashSet::new();
+    let mut permitted: FastSet<String> = FastSet::default();
     for ps in &shape.property_shapes {
         if let Path::Predicate(predicate) = &ps.path {
             permitted.insert(predicate.as_str().to_owned());
@@ -163,9 +164,8 @@ fn eval_closed<G: ShaclDataGraph>(
     }
 
     let mut results = Vec::new();
-    let quads = store.quads_for_pattern(Some(focus), None, None, GraphFilter::AnyGraph);
-    for quad in quads {
-        let predicate = quad.predicate;
+    let quads = native_quads(store.core(), Some(focus), None, None, GraphFilter::AnyGraph);
+    for (_subject, predicate, object) in quads {
         if permitted.contains(predicate.as_str()) {
             continue;
         }
@@ -177,7 +177,7 @@ fn eval_closed<G: ShaclDataGraph>(
             focus_node: focus.clone(),
             result_path: Some(Term::NamedNode(predicate.clone())),
             path_structure: None,
-            value: Some(quad.object),
+            value: Some(object),
             source_constraint_component: NamedNode::from(sh::CLOSED_CONSTRAINT_COMPONENT),
             source_shape: shape.id.clone(),
             severity: shape.severity.clone(),
@@ -200,7 +200,7 @@ fn eval_closed<G: ShaclDataGraph>(
 ///
 /// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
 /// (see [`validate_shape`]).
-pub fn conforms<G: ShaclDataGraph>(store: &G, focus: &Term, shape: &Shape) -> Result<bool, String> {
+pub fn conforms(store: &ShaclData, focus: &Term, shape: &Shape) -> Result<bool, String> {
     conforms_with_depth(store, focus, shape, 0)
 }
 
@@ -217,8 +217,8 @@ pub fn conforms<G: ShaclDataGraph>(store: &G, focus: &Term, shape: &Shape) -> Re
 ///
 /// Returns `Err(String)` when a constraint fails to evaluate (see
 /// [`validate_shape`]) or when the filter/exists depth ceiling is exceeded.
-pub(crate) fn conforms_with_depth<G: ShaclDataGraph>(
-    store: &G,
+pub(crate) fn conforms_with_depth(
+    store: &ShaclData,
     focus: &Term,
     shape: &Shape,
     depth: u32,
@@ -228,8 +228,8 @@ pub(crate) fn conforms_with_depth<G: ShaclDataGraph>(
 
 // ── Property shape evaluator ───────────────────────────────────────────────────
 
-fn eval_property_shape<G: ShaclDataGraph>(
-    store: &G,
+fn eval_property_shape(
+    store: &ShaclData,
     focus: &Term,
     ps: &PropertyShape,
     parent_shape: &Shape,
@@ -240,7 +240,7 @@ fn eval_property_shape<G: ShaclDataGraph>(
     if ps.deactivated {
         return Ok(vec![]);
     }
-    let value_nodes = path::eval(store, focus, &ps.path);
+    let value_nodes = path::eval(store.core(), focus, &ps.path);
     let path_term = path::path_to_term(&ps.path);
     // The complex-path structure stamped onto results whose path comes from
     // this property shape (None for a plain predicate path).
@@ -325,8 +325,9 @@ fn eval_property_shape<G: ShaclDataGraph>(
     Ok(results)
 }
 
-struct ReifierEvalContext<'a, G: ShaclDataGraph> {
-    store: &'a G,
+#[derive(Clone, Copy)]
+struct ReifierEvalContext<'a> {
+    store: &'a ShaclData,
     focus: &'a Term,
     value_nodes: &'a [Term],
     ps: &'a PropertyShape,
@@ -338,19 +339,7 @@ struct ReifierEvalContext<'a, G: ShaclDataGraph> {
     depth: u32,
 }
 
-// Manual impls (not derives): a `derive(Copy)` would demand `G: Copy`, but the
-// context only holds `&G` — every field is a reference, so the struct is Copy
-// for ANY data-graph type.
-impl<G: ShaclDataGraph> Clone for ReifierEvalContext<'_, G> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-impl<G: ShaclDataGraph> Copy for ReifierEvalContext<'_, G> {}
-
-fn eval_reifier_shapes<G: ShaclDataGraph>(
-    ctx: ReifierEvalContext<'_, G>,
-) -> Result<Vec<ValidationResult>, String> {
+fn eval_reifier_shapes(ctx: ReifierEvalContext<'_>) -> Result<Vec<ValidationResult>, String> {
     let ReifierEvalContext {
         store,
         focus,
@@ -455,25 +444,25 @@ fn triple_term(focus: &Term, predicate: &NamedNode, value: &Term) -> Option<Term
     ))))
 }
 
-fn reifiers_for<G: ShaclDataGraph>(store: &G, triple_term: &Term) -> Vec<Term> {
+fn reifiers_for(store: &ShaclData, triple_term: &Term) -> Vec<Term> {
     let reifies = Term::NamedNode(NamedNode::from(rdf::REIFIES));
-    let reifiers_set: HashSet<Term> = store
-        .quads_for_pattern(
-            None,
-            Some(&reifies),
-            Some(triple_term),
-            GraphFilter::DefaultGraph,
-        )
-        .into_iter()
-        .map(|q| q.subject)
-        .collect();
+    let reifiers_set: FastSet<Term> = native_quads(
+        store.core(),
+        None,
+        Some(&reifies),
+        Some(triple_term),
+        GraphFilter::DefaultGraph,
+    )
+    .into_iter()
+    .map(|(subject, _, _)| subject)
+    .collect();
     let mut reifiers: Vec<Term> = reifiers_set.into_iter().collect();
     reifiers.sort_by_key(Term::to_string);
     reifiers
 }
 
-fn path_box_roles<G: ShaclDataGraph>(
-    store: &G,
+fn path_box_roles(
+    store: &ShaclData,
     path: &Path,
     box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Vec<NamedNode> {
@@ -488,19 +477,19 @@ fn path_box_roles<G: ShaclDataGraph>(
     };
     let predicate_term = Term::NamedNode(predicate.clone());
     let box_role = Term::NamedNode(NamedNode::from(vocab.graph_box_role.as_str()));
-    let mut roles: Vec<NamedNode> = store
-        .quads_for_pattern(
-            Some(&predicate_term),
-            Some(&box_role),
-            None,
-            GraphFilter::DefaultGraph,
-        )
-        .into_iter()
-        .filter_map(|q| match q.object {
-            Term::NamedNode(node) => Some(node),
-            _ => None,
-        })
-        .collect();
+    let mut roles: Vec<NamedNode> = native_quads(
+        store.core(),
+        Some(&predicate_term),
+        Some(&box_role),
+        None,
+        GraphFilter::DefaultGraph,
+    )
+    .into_iter()
+    .filter_map(|(_, _, object)| match object {
+        Term::NamedNode(node) => Some(node),
+        _ => None,
+    })
+    .collect();
     roles.sort_unstable();
     roles.dedup();
     roles
@@ -537,8 +526,8 @@ fn merge_box_roles(left: &[NamedNode], right: &[NamedNode]) -> Vec<NamedNode> {
 /// (SHACL-AF spec: `$this` = focus node, not value node).
 ///
 /// `path` is `None` for node-level constraints, `Some` for property shapes.
-fn eval_constraint<G: ShaclDataGraph>(
-    store: &G,
+fn eval_constraint(
+    store: &ShaclData,
     focus_node: &Term,
     value_nodes: &[Term],
     constraint: &Constraint,
@@ -617,7 +606,7 @@ fn eval_constraint<G: ShaclDataGraph>(
         Constraint::Class(class_iri) => {
             // Hoist the BFS closure computation once, outside the per-value loop.
             // Previously called inside the loop: O(N×M) → now O(M) + O(N).
-            let closure = crate::engine::subclass_closure(store, class_iri);
+            let closure = crate::engine::subclass_closure(store.core(), class_iri);
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
@@ -626,7 +615,7 @@ fn eval_constraint<G: ShaclDataGraph>(
             for value in value_nodes {
                 let violates = match value {
                     Term::Literal(_) => true,
-                    _ => !is_shacl_instance(store, value, &closure),
+                    _ => !is_shacl_instance(store.core(), value, &closure),
                 };
                 if violates {
                     results.push(ValidationResult {
@@ -954,8 +943,7 @@ fn eval_constraint<G: ShaclDataGraph>(
 
         // ── UniqueLang (on the SET) ────────────────────────────────────────────
         Constraint::UniqueLang(true) => {
-            let mut seen_langs: std::collections::HashMap<String, usize> =
-                std::collections::HashMap::new();
+            let mut seen_langs: FastMap<String, usize> = FastMap::default();
             for value in value_nodes {
                 if let Term::Literal(lit) = value {
                     if let Some(lang) = lit.language() {
@@ -1263,7 +1251,7 @@ fn eval_constraint<G: ShaclDataGraph>(
         Constraint::Equals(pred) => {
             let others = pair_values(store, focus_node, pred);
             let mut offending: Vec<Term> = Vec::new();
-            let mut seen: HashSet<Term> = HashSet::new();
+            let mut seen: FastSet<Term> = FastSet::default();
             // Value nodes missing from the predicate's objects…
             for v in value_nodes {
                 if !others.contains(v) && seen.insert(v.clone()) {
@@ -1528,15 +1516,26 @@ pub(crate) fn substitute_path_placeholder(select: &str, path: Option<&Path>) -> 
 /// derived from asserted `rdfs:subClassOf` edges (as returned by
 /// [`crate::engine::subclass_closure`]).  The caller hoists the closure
 /// computation once before the per-value-node loop to avoid O(N×M) BFS cost.
-fn is_shacl_instance<G: ShaclDataGraph>(store: &G, value: &Term, closure: &HashSet<Term>) -> bool {
+fn is_shacl_instance(ds: &RdfDataset, value: &Term, closure: &IdSet) -> bool {
     if !matches!(value, Term::NamedNode(_) | Term::BlankNode(_)) {
         return false;
     }
-    let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
-    store
-        .quads_for_pattern(Some(value), Some(&rdf_type), None, GraphFilter::AnyGraph)
-        .into_iter()
-        .any(|q| closure.contains(&q.object))
+    // Both the value node and `rdf:type` must be interned for any `rdf:type` edge
+    // to exist; a non-interned value has no type triple, so it is no instance.
+    let (Some(value_id), Some(rdf_type)) = (
+        resolve_id(ds, value),
+        resolve_id(ds, &Term::NamedNode(NamedNode::from(rdf::TYPE))),
+    ) else {
+        return false;
+    };
+    quads_for_pattern_ids(
+        ds,
+        Some(value_id),
+        Some(rdf_type),
+        None,
+        GraphFilter::AnyGraph,
+    )
+    .any(|q| closure.contains(&q.o))
 }
 
 /// `xsd:integer` lexical space: optional sign then one-or-more ASCII digits.
@@ -1816,18 +1815,19 @@ fn terms_equal(a: &Term, b: &Term) -> bool {
 
 /// The distinct objects of `(focus, pred, ?)` in the default graph, first-seen
 /// order — the "other" side of a property-pair constraint (§4.3).
-fn pair_values<G: ShaclDataGraph>(store: &G, focus: &Term, pred: &NamedNode) -> Vec<Term> {
+fn pair_values(store: &ShaclData, focus: &Term, pred: &NamedNode) -> Vec<Term> {
     let predicate = Term::NamedNode(pred.clone());
     let mut out: Vec<Term> = Vec::new();
-    let mut seen: HashSet<Term> = HashSet::new();
-    for quad in store.quads_for_pattern(
+    let mut seen: FastSet<Term> = FastSet::default();
+    for (_, _, object) in native_quads(
+        store.core(),
         Some(focus),
         Some(&predicate),
         None,
         GraphFilter::DefaultGraph,
     ) {
-        if seen.insert(quad.object.clone()) {
-            out.push(quad.object);
+        if seen.insert(object.clone()) {
+            out.push(object);
         }
     }
     out
@@ -1842,8 +1842,8 @@ fn pair_values<G: ShaclDataGraph>(store: &G, focus: &Term, pred: &NamedNode) -> 
 /// N comparands yields N results (duplicate tuples — the report is a
 /// multiset, matching the W3C suite's expectations). An incomparable pair
 /// (per SPARQL `<` semantics) is a violation.
-fn pair_order_offenders<G: ShaclDataGraph>(
-    store: &G,
+fn pair_order_offenders(
+    store: &ShaclData,
     focus: &Term,
     value_nodes: &[Term],
     pred: &NamedNode,
@@ -1968,10 +1968,17 @@ fn build_regex(pattern: &str, flags: Option<&str>) -> Result<regex::Regex, Strin
 mod tests {
     use std::sync::{Arc, OnceLock};
 
+    use ::purrdf::RdfDataset;
+
     use super::*;
-    use crate::data::IrDataGraph;
     use crate::report::Severity;
     use crate::term::{Literal, NamedNode};
+
+    /// Build a [`ShaclData`] holder over a projected test dataset: Core lookups and
+    /// the SPARQL dataset are the same frozen graph (no shapes-graph overlay).
+    fn shacl_data(store: &Arc<RdfDataset>) -> ShaclData {
+        ShaclData::new(Arc::clone(store), Arc::clone(store), None)
+    }
 
     const EX: &str = "http://example.org/ns#";
     const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -2077,12 +2084,13 @@ mod tests {
     /// tests exercise only infallible constraint paths, so a hard validation
     /// error is a test bug. (An explicitly-defined item shadows the glob
     /// import from `use super::*`.)
-    fn validate_shape<G: ShaclDataGraph>(
-        store: &G,
+    fn validate_shape(
+        store: &Arc<RdfDataset>,
         focus: &Term,
         shape: &Shape,
     ) -> Vec<ValidationResult> {
-        super::validate_shape(store, focus, shape).expect("constraint evaluation must not error")
+        super::validate_shape(&shacl_data(store), focus, shape)
+            .expect("constraint evaluation must not error")
     }
 
     /// The caller-supplied box-role vocabulary the box-role tests configure
@@ -2093,23 +2101,21 @@ mod tests {
 
     /// Result-unwrapping shim over [`super::validate_shape_with`], with the
     /// test box-role vocabulary configured.
-    fn validate_shape_with_roles<G: ShaclDataGraph>(
-        store: &G,
+    fn validate_shape_with_roles(
+        store: &Arc<RdfDataset>,
         focus: &Term,
         shape: &Shape,
     ) -> Vec<ValidationResult> {
-        validate_shape_with(store, focus, shape, Some(&meta_vocab()))
+        validate_shape_with(&shacl_data(store), focus, shape, Some(&meta_vocab()))
             .expect("constraint evaluation must not error")
     }
 
-    fn load_store(ttl: &str) -> IrDataGraph {
+    fn load_store(ttl: &str) -> Arc<RdfDataset> {
         let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl).expect("Turtle parse");
         // Apply the same SHACL projection `validate_dataset` uses, so RDF-1.2
         // reifier bindings are materialized as `rdf:reifies` quads the engine's
         // reifier-shape lookup can find (the IR keeps reifiers in a side table).
-        let projected =
-            crate::engine::shacl_dataset_from_dataset(&dataset).expect("SHACL projection");
-        IrDataGraph::new(projected)
+        crate::engine::shacl_dataset_from_dataset(&dataset).expect("SHACL projection")
     }
 
     fn component_iri(results: &[ValidationResult]) -> Vec<String> {
@@ -2701,9 +2707,7 @@ mod tests {
     fn unique_lang_fail() {
         // Load two English-tagged literals via N-Triples (Turtle deduplicates in the store).
         let nt = format!("<{EX}a> <{EX}label> \"Hello\"@en .\n<{EX}a> <{EX}label> \"Hi\"@en .\n");
-        let store = IrDataGraph::new(
-            crate::text_ingest::parse_ntriples_to_dataset(&nt).expect("N-Triples parse"),
-        );
+        let store = crate::text_ingest::parse_ntriples_to_dataset(&nt).expect("N-Triples parse");
         let shape = prop_shape(
             "S",
             &format!("{EX}label"),

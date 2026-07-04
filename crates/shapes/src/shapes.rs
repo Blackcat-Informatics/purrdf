@@ -19,7 +19,7 @@ use ::purrdf::RdfDataset;
 use purrdf_sparql_eval::UserFunctionRegistry;
 
 use crate::components::{severity_from_term, ComponentRegistry};
-use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
+use crate::data::{native_quads, GraphFilter};
 use crate::expression::NodeExpr;
 use crate::model::{rdf, rdfs, sh, BoxRoleVocab};
 use crate::report::Severity;
@@ -443,9 +443,8 @@ pub fn from_dataset_with_config_and_graph(
     box_role_vocab: Option<BoxRoleVocab>,
     shapes_graph: Option<String>,
 ) -> Result<Shapes, String> {
-    let data = IrDataGraph::new(Arc::clone(dataset));
     let mut parser = Parser::new(
-        &data,
+        dataset.as_ref(),
         doc_prefixes,
         box_role_vocab,
         Arc::clone(dataset),
@@ -457,7 +456,7 @@ pub fn from_dataset_with_config_and_graph(
 // ── Internal parser ────────────────────────────────────────────────────────────
 
 pub(crate) struct Parser<'s> {
-    data: &'s IrDataGraph,
+    data: &'s RdfDataset,
     /// Tracks shape nodes currently being parsed to prevent infinite recursion
     /// through `sh:node` or `sh:and/or/xone` cycles.
     in_flight: HashSet<String>,
@@ -484,19 +483,25 @@ pub(crate) struct Parser<'s> {
 // ── Prefix-header helper (used by shapes and component registry) ───────────────
 
 /// Return all objects for `(subject, predicate, ?)`.
-fn objects_of(data: &IrDataGraph, subject: &Term, predicate: &str) -> Vec<Term> {
+fn objects_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
     if !subject.is_subject() {
         return vec![];
     }
     let pred = Term::NamedNode(NamedNode::from(predicate));
-    data.quads_for_pattern(Some(subject), Some(&pred), None, GraphFilter::AnyGraph)
-        .into_iter()
-        .map(|q| q.object)
-        .collect()
+    native_quads(
+        data,
+        Some(subject),
+        Some(&pred),
+        None,
+        GraphFilter::AnyGraph,
+    )
+    .into_iter()
+    .map(|(_, _, object)| object)
+    .collect()
 }
 
 /// Return the first object for `(subject, predicate, ?)`, if any.
-fn first_object_of(data: &IrDataGraph, subject: &Term, predicate: &str) -> Option<Term> {
+fn first_object_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
     objects_of(data, subject, predicate).into_iter().next()
 }
 
@@ -512,7 +517,7 @@ fn first_object_of(data: &IrDataGraph, subject: &Term, predicate: &str) -> Optio
 /// Output is one `PREFIX p: <ns>` line per prefix, sorted (a `BTreeMap` keeps
 /// it deterministic and one-entry-per-prefix). Empty when nothing is declared.
 pub(crate) fn build_prefix_header(
-    data: &IrDataGraph,
+    data: &RdfDataset,
     doc_prefixes: &[(String, String)],
     owners: &[&Term],
 ) -> String {
@@ -551,7 +556,7 @@ pub(crate) fn build_prefix_header(
 
 impl<'s> Parser<'s> {
     fn new(
-        data: &'s IrDataGraph,
+        data: &'s RdfDataset,
         doc_prefixes: &[(String, String)],
         box_role_vocab: Option<BoxRoleVocab>,
         shapes_dataset: Arc<RdfDataset>,
@@ -577,13 +582,13 @@ impl<'s> Parser<'s> {
         let mut property_shape_nodes: HashSet<Term> = HashSet::new();
 
         // 1. Nodes typed sh:NodeShape
-        for quad in self.quads_with(None, Some(rdf::TYPE), Some(sh::NODE_SHAPE)) {
-            shape_ids.insert(quad.subject);
+        for (subject, _, _) in self.quads_with(None, Some(rdf::TYPE), Some(sh::NODE_SHAPE)) {
+            shape_ids.insert(subject);
         }
 
         // 2. Nodes typed sh:PropertyShape (collect to exclude from top-level)
-        for quad in self.quads_with(None, Some(rdf::TYPE), Some(sh::PROPERTY_SHAPE)) {
-            property_shape_nodes.insert(quad.subject);
+        for (subject, _, _) in self.quads_with(None, Some(rdf::TYPE), Some(sh::PROPERTY_SHAPE)) {
+            property_shape_nodes.insert(subject);
         }
 
         // 3. Subjects of sh:targetClass / sh:targetSubjectsOf / sh:targetObjectsOf / sh:targetNode
@@ -593,8 +598,8 @@ impl<'s> Parser<'s> {
             sh::TARGET_OBJECTS_OF,
             sh::TARGET_NODE,
         ] {
-            for quad in self.quads_with(None, Some(pred), None) {
-                shape_ids.insert(quad.subject);
+            for (subject, _, _) in self.quads_with(None, Some(pred), None) {
+                shape_ids.insert(subject);
             }
         }
 
@@ -602,16 +607,16 @@ impl<'s> Parser<'s> {
         //    and nodes that are rdfs:Class AND carry sh:targetClass or sh:NodeShape type
         //    (already caught above).  We also add any node that has sh:property
         //    and is thus acting as a shape container.
-        for quad in self.quads_with(None, Some(sh::PROPERTY), None) {
+        for (subject, _, _) in self.quads_with(None, Some(sh::PROPERTY), None) {
             // Only add if not exclusively a property shape itself
-            if !property_shape_nodes.contains(&quad.subject) {
-                shape_ids.insert(quad.subject);
+            if !property_shape_nodes.contains(&subject) {
+                shape_ids.insert(subject);
             }
         }
 
         // 5. Nodes that carry sh:property as objects → record as property-shape-only
-        for quad in self.quads_with(None, Some(sh::PROPERTY), None) {
-            property_shape_nodes.insert(quad.object);
+        for (_, _, object) in self.quads_with(None, Some(sh::PROPERTY), None) {
+            property_shape_nodes.insert(object);
         }
 
         // Remove property-shape nodes from the top-level set — UNLESS the node
@@ -723,12 +728,17 @@ impl<'s> Parser<'s> {
         subject: Option<&str>,
         predicate: Option<&str>,
         object: Option<&str>,
-    ) -> Vec<crate::data::Quad> {
+    ) -> Vec<(Term, NamedNode, Term)> {
         let s = subject.map(|iri| Term::NamedNode(NamedNode::from(iri)));
         let p = predicate.map(|iri| Term::NamedNode(NamedNode::from(iri)));
         let o = object.map(|iri| Term::NamedNode(NamedNode::from(iri)));
-        self.data
-            .quads_for_pattern(s.as_ref(), p.as_ref(), o.as_ref(), GraphFilter::AnyGraph)
+        native_quads(
+            self.data,
+            s.as_ref(),
+            p.as_ref(),
+            o.as_ref(),
+            GraphFilter::AnyGraph,
+        )
     }
 
     /// Whether `(subject, rdf:type, class_iri)` is asserted in any graph.
@@ -738,15 +748,14 @@ impl<'s> Parser<'s> {
         }
         let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
         let class = Term::NamedNode(NamedNode::from(class_iri));
-        !self
-            .data
-            .quads_for_pattern(
-                Some(subject),
-                Some(&rdf_type),
-                Some(&class),
-                GraphFilter::AnyGraph,
-            )
-            .is_empty()
+        !native_quads(
+            self.data,
+            Some(subject),
+            Some(&rdf_type),
+            Some(&class),
+            GraphFilter::AnyGraph,
+        )
+        .is_empty()
     }
 
     /// Return all objects for `(subject, predicate, ?)`.
@@ -755,11 +764,16 @@ impl<'s> Parser<'s> {
             return vec![];
         }
         let pred = Term::NamedNode(NamedNode::from(predicate));
-        self.data
-            .quads_for_pattern(Some(subject), Some(&pred), None, GraphFilter::AnyGraph)
-            .into_iter()
-            .map(|q| q.object)
-            .collect()
+        native_quads(
+            self.data,
+            Some(subject),
+            Some(&pred),
+            None,
+            GraphFilter::AnyGraph,
+        )
+        .into_iter()
+        .map(|(_, _, object)| object)
+        .collect()
     }
 
     /// Return the first object for `(subject, predicate, ?)`, if any.
@@ -2519,8 +2533,7 @@ mod tests {
     /// `ex:expr` object as a node expression.
     fn parse_expr(ttl: &str) -> Result<NodeExpr, String> {
         let dataset = load_store(ttl);
-        let data = IrDataGraph::new(Arc::clone(&dataset));
-        let mut parser = Parser::new(&data, &[], None, Arc::clone(&dataset), None);
+        let mut parser = Parser::new(dataset.as_ref(), &[], None, Arc::clone(&dataset), None);
         let root = Term::NamedNode(NamedNode::from("http://example.org/ns#root"));
         let expr_obj = parser
             .first_object_of(&root, "http://example.org/ns#expr")

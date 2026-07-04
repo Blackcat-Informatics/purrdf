@@ -33,7 +33,7 @@ impl Parser<'_> {
             .quads_with(None, Some(rdf::TYPE), Some(sh::SPARQL_FUNCTION))
             .into_iter()
             .chain(self.quads_with(None, Some(rdf::TYPE), Some(sh::FUNCTION)))
-            .map(|q| q.subject)
+            .map(|(subject, _, _)| subject)
             .collect();
         fn_ids.sort_by_key(ToString::to_string);
         fn_ids.dedup();

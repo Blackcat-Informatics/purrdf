@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 use purrdf_sparql_algebra::{Query, SparqlParser};
 
 use crate::components::{severity_from_term, Component, Validator, ValidatorKind};
-use crate::data::{GraphFilter, ShaclDataGraph};
+use crate::data::{native_quads, GraphFilter};
 use crate::expression::{FnCall, NodeExpr};
 use crate::model::{rdf, sh};
 use crate::term::{NamedNode, Term};
@@ -572,12 +572,16 @@ impl Parser<'_> {
         let mut sibling_nodes: Vec<Term> = Vec::new();
         let mut seen: HashSet<Term> = HashSet::new();
         // Parents: subjects of (?, sh:property, ps_id).
-        let mut parents: Vec<Term> = self
-            .data
-            .quads_for_pattern(None, Some(&property), Some(ps_id), GraphFilter::AnyGraph)
-            .into_iter()
-            .map(|q| q.subject)
-            .collect();
+        let mut parents: Vec<Term> = native_quads(
+            self.data,
+            None,
+            Some(&property),
+            Some(ps_id),
+            GraphFilter::AnyGraph,
+        )
+        .into_iter()
+        .map(|(subject, _, _)| subject)
+        .collect();
         parents.sort_by_key(Term::to_string);
         parents.dedup();
         for parent in &parents {
@@ -904,13 +908,14 @@ impl Parser<'_> {
         ];
         // Gather the candidate (function IRI, arg-list head) triples, ignoring
         // rdf:type (a classification triple) and every SHACL structural key.
-        let mut candidates: Vec<(NamedNode, Term)> = self
-            .data
-            .quads_for_pattern(Some(node), None, None, GraphFilter::AnyGraph)
-            .into_iter()
-            .filter(|q| q.predicate.as_str() != rdf::TYPE && !KNOWN.contains(&q.predicate.as_str()))
-            .map(|q| (q.predicate, q.object))
-            .collect();
+        let mut candidates: Vec<(NamedNode, Term)> =
+            native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph)
+                .into_iter()
+                .filter(|(_, predicate, _)| {
+                    predicate.as_str() != rdf::TYPE && !KNOWN.contains(&predicate.as_str())
+                })
+                .map(|(_, predicate, object)| (predicate, object))
+                .collect();
         candidates.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
         candidates.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
 

@@ -17,7 +17,7 @@ use std::sync::{Arc, OnceLock};
 use ::purrdf::RdfDataset;
 use ::purrdf::TermValue;
 
-use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
+use crate::data::{native_quads, GraphFilter};
 use crate::model::{rdf, rdfs, sh};
 use crate::path;
 use crate::report::{Severity, ValidationResult};
@@ -106,7 +106,7 @@ impl ComponentRegistry {
     /// Returns `Err(String)` when a component, parameter, or validator is
     /// malformed or when a validator query violates the pre-binding restrictions.
     pub(crate) fn parse(
-        data: &IrDataGraph,
+        data: &RdfDataset,
         doc_prefixes: &[(String, String)],
     ) -> Result<Self, String> {
         let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
@@ -114,8 +114,10 @@ impl ComponentRegistry {
         let mut seen: HashSet<String> = HashSet::new();
         let mut subclass_memo: HashMap<(String, String), bool> = HashMap::new();
 
-        for q in data.quads_for_pattern(None, Some(&rdf_type), None, GraphFilter::AnyGraph) {
-            let Term::NamedNode(class) = q.object else {
+        for (subject, _pred, object) in
+            native_quads(data, None, Some(&rdf_type), None, GraphFilter::AnyGraph)
+        {
+            let Term::NamedNode(class) = object else {
                 continue;
             };
             if !is_subclass_of(
@@ -126,7 +128,7 @@ impl ComponentRegistry {
             ) {
                 continue;
             }
-            let Term::NamedNode(component) = q.subject else {
+            let Term::NamedNode(component) = subject else {
                 continue;
             };
             if seen.insert(component.as_str().to_owned()) {
@@ -375,19 +377,25 @@ pub(crate) fn sparql_local_name(iri: &str) -> String {
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 /// Return all objects for `(subject, predicate, ?)`.
-fn objects_of(data: &IrDataGraph, subject: &Term, predicate: &str) -> Vec<Term> {
+fn objects_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
     if !subject.is_subject() {
         return vec![];
     }
     let pred = Term::NamedNode(NamedNode::from(predicate));
-    data.quads_for_pattern(Some(subject), Some(&pred), None, GraphFilter::AnyGraph)
-        .into_iter()
-        .map(|q| q.object)
-        .collect()
+    native_quads(
+        data,
+        Some(subject),
+        Some(&pred),
+        None,
+        GraphFilter::AnyGraph,
+    )
+    .into_iter()
+    .map(|(_, _, object)| object)
+    .collect()
 }
 
 /// Return the first object for `(subject, predicate, ?)`, if any.
-fn first_object_of(data: &IrDataGraph, subject: &Term, predicate: &str) -> Option<Term> {
+fn first_object_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
     objects_of(data, subject, predicate).into_iter().next()
 }
 
@@ -397,7 +405,7 @@ fn first_object_of(data: &IrDataGraph, subject: &Term, predicate: &str) -> Optio
 /// A memo table avoids repeated superclass walks; `false` is inserted before
 /// recursion to break `rdfs:subClassOf` cycles.
 fn is_subclass_of(
-    data: &IrDataGraph,
+    data: &RdfDataset,
     class_iri: &str,
     target_iri: &str,
     memo: &mut HashMap<(String, String), bool>,
@@ -413,13 +421,14 @@ fn is_subclass_of(
     let class_term = Term::NamedNode(NamedNode::from(class_iri));
     let sub_class_of = Term::NamedNode(NamedNode::from(rdfs::SUB_CLASS_OF));
     let mut result = false;
-    for q in data.quads_for_pattern(
+    for (_subject, _pred, object) in native_quads(
+        data,
         Some(&class_term),
         Some(&sub_class_of),
         None,
         GraphFilter::AnyGraph,
     ) {
-        let Term::NamedNode(super_class) = q.object else {
+        let Term::NamedNode(super_class) = object else {
             continue;
         };
         if is_subclass_of(data, super_class.as_str(), target_iri, memo) {
@@ -434,7 +443,7 @@ fn is_subclass_of(
 /// Determine the validator kind from its `rdf:type` declarations, respecting
 /// subclasses of `sh:SPARQLAskValidator` and `sh:SPARQLSelectValidator`.
 fn validator_kind(
-    data: &IrDataGraph,
+    data: &RdfDataset,
     validator: &Term,
     memo: &mut HashMap<(String, String), bool>,
 ) -> Result<ValidatorKind, String> {
@@ -487,7 +496,7 @@ fn is_valid_varname(name: &str) -> bool {
 
 /// Parse a single `sh:parameter` declaration for a component.
 fn parse_parameter(
-    data: &IrDataGraph,
+    data: &RdfDataset,
     param_node: &Term,
     component_iri: &str,
 ) -> Result<Parameter, String> {
@@ -524,7 +533,7 @@ fn parse_parameter(
 
 /// Parse a single SPARQL validator node attached to a component.
 fn parse_validator(
-    data: &IrDataGraph,
+    data: &RdfDataset,
     doc_prefixes: &[(String, String)],
     component: &Term,
     validator: &Term,
@@ -627,7 +636,7 @@ fn parse_validator(
 
 /// Parse a single constraint component node and its parameters / validators.
 fn parse_component(
-    data: &IrDataGraph,
+    data: &RdfDataset,
     doc_prefixes: &[(String, String)],
     component: &Term,
     component_iri: &str,
@@ -716,7 +725,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::data::IrDataGraph;
     use crate::term::Literal;
     use crate::text_ingest::extract_prefixes;
 
@@ -725,8 +733,7 @@ mod tests {
         let dataset: Arc<::purrdf::RdfDataset> =
             ::purrdf::parse_dataset(ttl.as_bytes(), "text/turtle", Some(base_iri))
                 .expect("fixture parses");
-        let data = IrDataGraph::new(dataset);
-        ComponentRegistry::parse(&data, &prefixes).expect("registry parses")
+        ComponentRegistry::parse(dataset.as_ref(), &prefixes).expect("registry parses")
     }
 
     #[test]

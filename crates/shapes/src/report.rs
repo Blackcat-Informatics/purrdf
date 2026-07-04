@@ -14,7 +14,9 @@ use ::purrdf::provenance::Attribution;
 use ::purrdf::RdfDatasetBuilder;
 use ::purrdf::{serialize_dataset, RdfQuad, RdfTerm, SerializeGraph};
 
-use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
+use ::purrdf::RdfDataset;
+
+use crate::data::{native_quads, GraphFilter};
 use crate::model::{rdf, sh, xsd};
 #[cfg(test)]
 use crate::term::Literal;
@@ -493,12 +495,11 @@ pub fn tuples_from_ntriples(nt: &str) -> Result<BTreeSet<ResultTuple>, String> {
     Ok(tuples_from_dataset(&data))
 }
 
-/// Parse a SHACL report N-Triples string into a query-able [`IrDataGraph`] via the
-/// native purrdf codec — no oxigraph.
-fn dataset_from_ntriples(nt: &str) -> Result<IrDataGraph, String> {
-    let dataset = ::purrdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
-        .map_err(|e| format!("N-Triples parse error: {e}"))?;
-    Ok(IrDataGraph::new(dataset))
+/// Parse a SHACL report N-Triples string into a query-able frozen [`RdfDataset`]
+/// via the native purrdf codec — no oxigraph.
+fn dataset_from_ntriples(nt: &str) -> Result<std::sync::Arc<RdfDataset>, String> {
+    ::purrdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
+        .map_err(|e| format!("N-Triples parse error: {e}"))
 }
 
 /// Walk a SHACL report dataset and extract result tuples.
@@ -506,7 +507,7 @@ fn dataset_from_ntriples(nt: &str) -> Result<IrDataGraph, String> {
 /// Finds all `?r rdf:type sh:ValidationResult` nodes and reads their mandatory and
 /// optional predicates, building the same tuple shape as
 /// [`ValidationReport::result_tuples`].
-pub fn tuples_from_dataset(data: &IrDataGraph) -> BTreeSet<ResultTuple> {
+pub fn tuples_from_dataset(data: &RdfDataset) -> BTreeSet<ResultTuple> {
     let result_nodes = subjects_typed(data, sh::VALIDATION_RESULT);
 
     let mut tuples = BTreeSet::new();
@@ -539,7 +540,7 @@ pub fn tuples_from_dataset(data: &IrDataGraph) -> BTreeSet<ResultTuple> {
 }
 
 /// Extract the `sh:conforms` boolean from a report dataset, if present.
-pub fn conforms_from_dataset(data: &IrDataGraph) -> Option<bool> {
+pub fn conforms_from_dataset(data: &RdfDataset) -> Option<bool> {
     let report_node = subjects_typed(data, sh::VALIDATION_REPORT)
         .into_iter()
         .next()?;
@@ -555,22 +556,34 @@ pub fn conforms_from_dataset(data: &IrDataGraph) -> Option<bool> {
 // ── Internal query helpers ────────────────────────────────────────────────────
 
 /// All subjects of `(?, rdf:type, class_iri)` in the report dataset.
-fn subjects_typed(data: &IrDataGraph, class_iri: &str) -> Vec<Term> {
+fn subjects_typed(data: &RdfDataset, class_iri: &str) -> Vec<Term> {
     let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
     let class = Term::NamedNode(NamedNode::from(class_iri));
-    data.quads_for_pattern(None, Some(&rdf_type), Some(&class), GraphFilter::AnyGraph)
-        .into_iter()
-        .map(|q| q.subject)
-        .collect()
+    native_quads(
+        data,
+        None,
+        Some(&rdf_type),
+        Some(&class),
+        GraphFilter::AnyGraph,
+    )
+    .into_iter()
+    .map(|(subject, _, _)| subject)
+    .collect()
 }
 
 /// Return the first object of `(subj, pred, ?)` as a `Term::to_string()` string.
-fn object_string(data: &IrDataGraph, subj: &Term, pred: &str) -> Option<String> {
+fn object_string(data: &RdfDataset, subj: &Term, pred: &str) -> Option<String> {
     let predicate = Term::NamedNode(NamedNode::from(pred));
-    data.quads_for_pattern(Some(subj), Some(&predicate), None, GraphFilter::AnyGraph)
-        .into_iter()
-        .next()
-        .map(|q| q.object.to_string())
+    native_quads(
+        data,
+        Some(subj),
+        Some(&predicate),
+        None,
+        GraphFilter::AnyGraph,
+    )
+    .into_iter()
+    .next()
+    .map(|(_, _, object)| object.to_string())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

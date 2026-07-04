@@ -45,9 +45,9 @@
 //! sorts the same set-shaped way via `sort_by_key`). The evaluator is
 //! wasm32-clean: no clocks, threads, RNG, or filesystem.
 
-use std::collections::HashSet;
+use ::purrdf::{FastMap, FastSet};
 
-use crate::data::ShaclDataGraph;
+use crate::data::ShaclData;
 use crate::model::xsd;
 use crate::path;
 use crate::shapes::{Path, Shape};
@@ -175,7 +175,7 @@ pub enum FnCall {
 /// fails closed instead of overflowing the stack.
 #[derive(Debug, Default)]
 pub struct RecursionGuard {
-    stack: HashSet<(String, String)>,
+    stack: FastSet<(String, String)>,
     depth: u32,
 }
 
@@ -198,7 +198,7 @@ impl RecursionGuard {
     #[must_use]
     pub fn with_depth(depth: u32) -> Self {
         Self {
-            stack: HashSet::new(),
+            stack: FastSet::default(),
             depth,
         }
     }
@@ -318,8 +318,8 @@ fn builtin_keyword(iri: &str) -> Option<&'static str> {
 /// Returns `Err(String)` on a recursion cycle or depth-limit breach, when a
 /// function argument does not collapse to exactly one value, or when a
 /// sub-expression errors.
-pub fn eval_node_expr<G: ShaclDataGraph>(
-    store: &G,
+pub fn eval_node_expr(
+    store: &ShaclData,
     focus: &Term,
     expr: &NodeExpr,
     guard: &mut RecursionGuard,
@@ -332,7 +332,7 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
             // sh:offset / sh:limit applied directly to a bare Path set are
             // deterministic. `path::eval`'s crate-wide first-seen iteration order
             // is left untouched (it is used elsewhere for path traversal).
-            let mut v = path::eval(store, focus, p);
+            let mut v = path::eval(store.core(), focus, p);
             v.sort_by_cached_key(Term::to_string);
             v.dedup();
             Ok(v)
@@ -351,12 +351,12 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
             let Some(first) = iter.next() else {
                 return Ok(Vec::new());
             };
-            let mut acc: HashSet<Term> = eval_node_expr(store, focus, first, guard)?
+            let mut acc: FastSet<Term> = eval_node_expr(store, focus, first, guard)?
                 .into_iter()
                 .collect();
             // Reuse a single scratch set across operands (clear + refill) rather
-            // than allocating a fresh `HashSet` per iteration.
-            let mut next: HashSet<Term> = HashSet::new();
+            // than allocating a fresh set per iteration.
+            let mut next: FastSet<Term> = FastSet::default();
             for sub in iter {
                 next.clear();
                 next.extend(eval_node_expr(store, focus, sub, guard)?);
@@ -502,8 +502,7 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
             distinct.sort_by_cached_key(Term::to_string);
             distinct.dedup();
             let ranked = crate::sparql::eval_order(&store.sparql_dataset(), &distinct, false)?;
-            let mut rank: std::collections::HashMap<String, usize> =
-                std::collections::HashMap::new();
+            let mut rank: FastMap<String, usize> = FastMap::default();
             for (i, k) in ranked.iter().enumerate() {
                 rank.insert(k.to_string(), i);
             }
@@ -593,8 +592,8 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
 /// numeric type-promotion and ordering match the engine exactly (there is no
 /// parallel Rust numeric fold). `SUM` of an empty set is `0`^^`xsd:integer`;
 /// `MIN`/`MAX` of an empty set is unbound → an empty node set.
-fn aggregate<G: ShaclDataGraph>(
-    store: &G,
+fn aggregate(
+    store: &ShaclData,
     focus: &Term,
     of: &NodeExpr,
     agg: &str,
@@ -616,13 +615,23 @@ mod tests {
     use ::purrdf::RdfDataset;
 
     use super::*;
-    use crate::data::IrDataGraph;
+
+    /// A frozen test data graph plus a [`ShaclData`] view over it.
+    struct TestData {
+        ds: Arc<RdfDataset>,
+    }
+
+    impl TestData {
+        fn data(&self) -> ShaclData {
+            ShaclData::new(Arc::clone(&self.ds), Arc::clone(&self.ds), None)
+        }
+    }
 
     /// Load a tiny data graph from Turtle.
-    fn load_data(ttl: &str) -> IrDataGraph {
-        let dataset: Arc<RdfDataset> =
+    fn load_data(ttl: &str) -> TestData {
+        let ds: Arc<RdfDataset> =
             crate::text_ingest::parse_turtle_to_dataset(ttl).expect("turtle parse");
-        IrDataGraph::new(dataset)
+        TestData { ds }
     }
 
     const DATA: &str = r"
@@ -651,7 +660,8 @@ mod tests {
         let data = load_data("");
         let mut guard = RecursionGuard::new();
         let expr = NodeExpr::Constant(ex("z"));
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("constant evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("constant evals");
         assert_eq!(result, vec![ex("z")]);
     }
 
@@ -659,8 +669,8 @@ mod tests {
     fn this_returns_the_focus() {
         let data = load_data("");
         let mut guard = RecursionGuard::new();
-        let result =
-            eval_node_expr(&data, &ex("a"), &NodeExpr::This, &mut guard).expect("this evals");
+        let result = eval_node_expr(&data.data(), &ex("a"), &NodeExpr::This, &mut guard)
+            .expect("this evals");
         assert_eq!(result, vec![ex("a")]);
     }
 
@@ -671,7 +681,7 @@ mod tests {
         let expr = NodeExpr::Path(pred("p"));
         // The Path arm canonicalizes (sort+dedup) locally, so the result is
         // returned already sorted — no manual sort needed.
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("path evals");
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("path evals");
         assert_eq!(result, vec![ex("b"), ex("c")]);
         let sorted = {
             let mut v = result.clone();
@@ -708,7 +718,8 @@ mod tests {
             ])),
             shape: Box::new(shape),
         };
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("filter evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("filter evals");
         assert_eq!(
             result,
             vec![ex("a"), ex("b"), ex("c")],
@@ -722,7 +733,8 @@ mod tests {
         let mut guard = RecursionGuard::new();
         // ex:a's ex:p reaches {b, c}; add ex:b explicitly → dedup keeps one b.
         let expr = NodeExpr::Union(vec![NodeExpr::Path(pred("p")), NodeExpr::Constant(ex("b"))]);
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("union evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("union evals");
         assert_eq!(result, vec![ex("b"), ex("c")]);
         // Explicitly assert deterministic (sorted) order.
         let sorted = {
@@ -746,7 +758,7 @@ mod tests {
             ]),
         ]);
         let result =
-            eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("intersection evals");
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("intersection evals");
         assert_eq!(result, vec![ex("b")]);
     }
 
@@ -755,8 +767,8 @@ mod tests {
         let data = load_data(DATA);
         let mut guard = RecursionGuard::new();
         let expr = NodeExpr::Intersection(vec![]);
-        let result =
-            eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("empty intersection evals");
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
+            .expect("empty intersection evals");
         assert!(result.is_empty());
     }
 
@@ -769,7 +781,7 @@ mod tests {
             then: Box::new(NodeExpr::Constant(ex("yes"))),
             els: Box::new(NodeExpr::Constant(ex("no"))),
         };
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("if evals");
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("if evals");
         assert_eq!(result, vec![ex("yes")]);
     }
 
@@ -782,7 +794,7 @@ mod tests {
             then: Box::new(NodeExpr::Constant(ex("yes"))),
             els: Box::new(NodeExpr::Constant(ex("no"))),
         };
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("if evals");
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("if evals");
         assert_eq!(result, vec![ex("no")]);
     }
 
@@ -796,7 +808,7 @@ mod tests {
             then: Box::new(NodeExpr::Constant(ex("yes"))),
             els: Box::new(NodeExpr::Constant(ex("no"))),
         };
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("if evals");
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("if evals");
         assert_eq!(result, vec![ex("no")]);
     }
 
@@ -814,7 +826,7 @@ mod tests {
             then: Box::new(NodeExpr::Constant(ex("yes"))),
             els: Box::new(NodeExpr::Constant(ex("no"))),
         };
-        let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
+        let err = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).unwrap_err();
         assert!(err.contains("myFn"), "got: {err}");
     }
 
@@ -824,7 +836,8 @@ mod tests {
         let mut guard = RecursionGuard::new();
         // ex:a has ex:p values → exists true.
         let expr = NodeExpr::Exists(Box::new(NodeExpr::Path(pred("p"))));
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("exists evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("exists evals");
         assert_eq!(result, vec![bool_literal(true)]);
     }
 
@@ -834,7 +847,8 @@ mod tests {
         let mut guard = RecursionGuard::new();
         // ex:a has no ex:missing edge → exists false.
         let expr = NodeExpr::Exists(Box::new(NodeExpr::Path(pred("missing"))));
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("exists evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("exists evals");
         assert_eq!(result, vec![bool_literal(false)]);
     }
 
@@ -893,7 +907,8 @@ mod tests {
                 Literal::new_simple_literal("true"),
             ))],
         });
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("builtin evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("builtin evals");
         assert_eq!(result, vec![bool_literal(true)]);
     }
 
@@ -909,7 +924,7 @@ mod tests {
                 Literal::new_simple_literal("x"),
             ))],
         });
-        let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
+        let err = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).unwrap_err();
         assert!(err.contains("custom SPARQL function"), "got: {err}");
     }
 
@@ -923,7 +938,7 @@ mod tests {
             iri: NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
             args: vec![NodeExpr::Path(pred("p"))],
         });
-        let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
+        let err = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).unwrap_err();
         assert!(
             err.contains("argument 0 must yield exactly one value, got 2"),
             "got: {err}"
@@ -942,7 +957,8 @@ mod tests {
                 Literal::new_simple_literal("hello"),
             ))],
         });
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("STRLEN evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("STRLEN evals");
         assert_eq!(result, vec![int_lit("5")]);
     }
 
@@ -960,10 +976,10 @@ mod tests {
                 ],
             })
         };
-        let yes = eval_node_expr(&data, &ex("a"), &call("banana", "a"), &mut guard)
+        let yes = eval_node_expr(&data.data(), &ex("a"), &call("banana", "a"), &mut guard)
             .expect("CONTAINS evals");
         assert_eq!(yes, vec![bool_literal(true)]);
-        let no = eval_node_expr(&data, &ex("a"), &call("banana", "z"), &mut guard)
+        let no = eval_node_expr(&data.data(), &ex("a"), &call("banana", "z"), &mut guard)
             .expect("CONTAINS evals");
         assert_eq!(no, vec![bool_literal(false)]);
     }
@@ -1015,7 +1031,7 @@ mod tests {
                 iri: fnn(local),
                 args,
             });
-            let out = eval_node_expr(&data, &ex("a"), &expr, &mut guard);
+            let out = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard);
             assert!(out.is_ok(), "fn:{local} must dispatch, got: {out:?}");
             assert_eq!(
                 out.unwrap().len(),
@@ -1063,7 +1079,8 @@ mod tests {
                 ),
             ))],
         });
-        let out = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("user fn dispatches");
+        let out =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("user fn dispatches");
         assert_eq!(
             out,
             vec![Term::Literal(Literal::new_typed_literal(
@@ -1083,7 +1100,7 @@ mod tests {
             iri: NamedNode::new_unchecked("http://example.org/ns#missing"),
             args: vec![],
         });
-        let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
+        let err = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).unwrap_err();
         assert!(err.contains("missing"), "got: {err}");
     }
 
@@ -1099,7 +1116,7 @@ mod tests {
             then: Box::new(NodeExpr::Constant(ex("yes"))),
             els: Box::new(NodeExpr::Constant(ex("no"))),
         };
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("if evals");
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("if evals");
         assert_eq!(result, vec![ex("yes")]);
     }
 
@@ -1115,7 +1132,7 @@ mod tests {
             then: Box::new(NodeExpr::Constant(ex("yes"))),
             els: Box::new(NodeExpr::Constant(ex("no"))),
         };
-        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("if evals");
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("if evals");
         assert_eq!(result, vec![ex("no")]);
     }
 
@@ -1129,7 +1146,7 @@ mod tests {
             then: Box::new(NodeExpr::Constant(ex("yes"))),
             els: Box::new(NodeExpr::Constant(ex("no"))),
         };
-        let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
+        let err = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).unwrap_err();
         assert!(err.contains("no effective boolean value"), "got: {err}");
     }
 
@@ -1156,7 +1173,8 @@ mod tests {
         // NOTE: no node-expression kind emits a multiset (Path/Union/… all dedup),
         // so Distinct's observable behaviour over real operands is "sorted set".
         let expr = NodeExpr::Distinct(Box::new(NodeExpr::Path(pred("e"))));
-        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("distinct evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("distinct evals");
         assert_eq!(result, vec![ex("a"), ex("b"), ex("c")]);
     }
 
@@ -1168,7 +1186,8 @@ mod tests {
             distinct: false,
             of: Box::new(NodeExpr::Path(pred("n"))),
         };
-        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("count evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("count evals");
         assert_eq!(result, vec![int_lit("3")]);
     }
 
@@ -1180,8 +1199,8 @@ mod tests {
             distinct: true,
             of: Box::new(NodeExpr::Path(pred("e"))),
         };
-        let result =
-            eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("distinct count evals");
+        let result = eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard)
+            .expect("distinct count evals");
         assert_eq!(result, vec![int_lit("3")]);
     }
 
@@ -1193,7 +1212,8 @@ mod tests {
             distinct: false,
             of: Box::new(NodeExpr::Path(pred("missing"))),
         };
-        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("count evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("count evals");
         assert_eq!(result, vec![int_lit("0")]);
     }
 
@@ -1203,14 +1223,14 @@ mod tests {
         let mut guard = RecursionGuard::new();
         let path = || Box::new(NodeExpr::Path(pred("n")));
 
-        let min =
-            eval_node_expr(&data, &ex("x"), &NodeExpr::Min(path()), &mut guard).expect("min evals");
+        let min = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Min(path()), &mut guard)
+            .expect("min evals");
         assert_eq!(min, vec![int_lit("1")]);
-        let max =
-            eval_node_expr(&data, &ex("x"), &NodeExpr::Max(path()), &mut guard).expect("max evals");
+        let max = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Max(path()), &mut guard)
+            .expect("max evals");
         assert_eq!(max, vec![int_lit("3")]);
-        let sum =
-            eval_node_expr(&data, &ex("x"), &NodeExpr::Sum(path()), &mut guard).expect("sum evals");
+        let sum = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Sum(path()), &mut guard)
+            .expect("sum evals");
         assert_eq!(sum, vec![int_lit("6")]);
     }
 
@@ -1220,13 +1240,13 @@ mod tests {
         let mut guard = RecursionGuard::new();
         let empty = || Box::new(NodeExpr::Path(pred("missing")));
 
-        let sum = eval_node_expr(&data, &ex("x"), &NodeExpr::Sum(empty()), &mut guard)
+        let sum = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Sum(empty()), &mut guard)
             .expect("sum evals");
         assert_eq!(sum, vec![int_lit("0")]);
-        let min = eval_node_expr(&data, &ex("x"), &NodeExpr::Min(empty()), &mut guard)
+        let min = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Min(empty()), &mut guard)
             .expect("min evals");
         assert!(min.is_empty(), "min of empty is unbound");
-        let max = eval_node_expr(&data, &ex("x"), &NodeExpr::Max(empty()), &mut guard)
+        let max = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Max(empty()), &mut guard)
             .expect("max evals");
         assert!(max.is_empty(), "max of empty is unbound");
     }
@@ -1242,7 +1262,7 @@ mod tests {
         );
         let mut guard = RecursionGuard::new();
         let expr = NodeExpr::Sum(Box::new(NodeExpr::Path(pred("v"))));
-        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("sum evals");
+        let result = eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("sum evals");
         // 1 (int) + 2.5 (decimal) promotes to xsd:decimal 3.5.
         assert_eq!(
             result,
@@ -1262,7 +1282,8 @@ mod tests {
             key: Box::new(NodeExpr::This),
             descending: false,
         };
-        let result = eval_node_expr(&data, &ex("x"), &asc, &mut guard).expect("orderby evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &asc, &mut guard).expect("orderby evals");
         assert_eq!(result, vec![ex("a"), ex("b"), ex("c")]);
 
         let desc = NodeExpr::OrderBy {
@@ -1270,7 +1291,8 @@ mod tests {
             key: Box::new(NodeExpr::This),
             descending: true,
         };
-        let result = eval_node_expr(&data, &ex("x"), &desc, &mut guard).expect("orderby evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &desc, &mut guard).expect("orderby evals");
         assert_eq!(result, vec![ex("c"), ex("b"), ex("a")]);
     }
 
@@ -1299,7 +1321,8 @@ mod tests {
             key: Box::new(NodeExpr::Path(pred("k"))),
             descending: false,
         };
-        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("orderby evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("orderby evals");
         assert_eq!(
             result,
             vec![ex("a"), ex("b")],
@@ -1316,7 +1339,7 @@ mod tests {
             descending: true,
         };
         let result =
-            eval_node_expr(&data, &ex("x"), &expr_desc, &mut guard).expect("orderby evals");
+            eval_node_expr(&data.data(), &ex("x"), &expr_desc, &mut guard).expect("orderby evals");
         assert_eq!(
             result,
             vec![ex("a"), ex("b")],
@@ -1337,7 +1360,8 @@ mod tests {
             }),
             n: 1,
         };
-        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("offset evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("offset evals");
         assert_eq!(result, vec![ex("b"), ex("c")]);
     }
 
@@ -1353,7 +1377,8 @@ mod tests {
             }),
             n: 2,
         };
-        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("limit evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("limit evals");
         assert_eq!(result, vec![ex("a"), ex("b")]);
     }
 
@@ -1375,7 +1400,8 @@ mod tests {
             n: 1,
         };
         // orderby → [a,b,c]; offset 1 → [b,c]; limit 1 → [b].
-        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("composed evals");
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("composed evals");
         assert_eq!(result, vec![ex("b")]);
     }
 
@@ -1384,7 +1410,7 @@ mod tests {
         let data = load_data("");
         let mut guard = RecursionGuard::new();
         let expr = NodeExpr::Min(Box::new(NodeExpr::Constant(Term::blank("b0"))));
-        let err = eval_node_expr(&data, &ex("x"), &expr, &mut guard).unwrap_err();
+        let err = eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).unwrap_err();
         assert!(
             err.contains("cannot appear in a SPARQL VALUES block"),
             "got: {err}"
@@ -1458,7 +1484,7 @@ mod tests {
                     );
                 }
 
-                crate::constraints::conforms(&data, &ex("a"), &shape)
+                crate::constraints::conforms(&data.data(), &ex("a"), &shape)
             })
             .expect("spawn deep-stack thread");
 

@@ -3,18 +3,25 @@
 
 //! SHACL property path evaluation.
 //!
-//! Evaluates a [`Path`] against a [`ShaclDataGraph`], returning the set of value
-//! nodes reachable from a given focus node. All six SHACL §2.3.1 path forms are
-//! supported: predicate, inverse, sequence, alternative, and the three closure
-//! paths (`zeroOrMore`, `oneOrMore`, `zeroOrOne`). Closure evaluation walks a
+//! Evaluates a [`Path`] against a frozen [`RdfDataset`], returning the set of
+//! value nodes reachable from a given focus node. All six SHACL §2.3.1 path forms
+//! are supported: predicate, inverse, sequence, alternative, and the three closure
+//! paths (`zeroOrMore`, `oneOrMore`, `zeroOrOne`). Pattern lookups are ID-native
+//! ([`quads_for_pattern_ids`]) — only the matched value nodes are resolved to the
+//! native [`Term`] model, no per-quad materialization. Closure evaluation walks a
 //! worklist with a visited set, so cyclic data graphs terminate; result order is
 //! deterministic (first-seen order over the deterministic pattern lookups).
+//!
+//! The focus stays a native [`Term`]: a SHACL-AF node expression may drive path
+//! evaluation from a term that is not interned in the data graph (a `sh:this`
+//! Constant), in which case non-reflexive steps yield nothing while a reflexive
+//! closure step still yields the focus itself.
 
-use std::collections::HashSet;
+use ::purrdf::{FastSet, IdSet, RdfDataset, TermId};
 
-use crate::data::{GraphFilter, ShaclDataGraph};
+use crate::data::{quads_for_pattern_ids, resolve_id, GraphFilter};
 use crate::shapes::Path;
-use crate::term::Term;
+use crate::term::{term_id_to_native, NamedNode, Term};
 
 /// Evaluate a SHACL property path from `focus`, returning all reachable value
 /// nodes in the default graph.
@@ -23,12 +30,70 @@ use crate::term::Term;
 /// specifies value nodes as a set.  If `focus` is a `Literal` or cannot serve
 /// as a subject, non-reflexive steps return no matches (a reflexive closure
 /// step may still yield the focus itself).
-pub fn eval<G: ShaclDataGraph>(store: &G, focus: &Term, path: &Path) -> Vec<Term> {
-    let mut nodes = eval_inner(store, focus, path);
-    // Dedup preserving first-occurrence order.
-    let mut seen = HashSet::new();
-    nodes.retain(|t| seen.insert(t.clone()));
+///
+/// # Traversal strategy
+///
+/// When `focus` is interned in `ds` (the common case — a data-graph node), the
+/// entire traversal runs in id space: every step maps matched [`QuadIds`] to
+/// `.o`/`.s` [`TermId`]s, frontiers/closures dedup on a `Copy` [`IdSet`], and only
+/// the deduped result set is resolved to the native [`Term`] model at the end. No
+/// owned term is allocated per intermediate step, and diamond/cycle dedup hashes
+/// interned ids rather than rendered strings.
+///
+/// When `focus` is NOT interned (a SHACL-AF node expression may drive evaluation
+/// from a `sh:this` Constant that never appears in the data), it has no id and
+/// therefore no outgoing/incoming quads: every STEP is empty, and the only value
+/// a path can yield is the focus itself via reflexive inclusion
+/// (`sh:zeroOrMore` / `sh:zeroOrOne`). That case keeps the native [`Term`]
+/// traversal so the reflexive focus term is returned verbatim.
+pub fn eval(ds: &RdfDataset, focus: &Term, path: &Path) -> Vec<Term> {
+    let Some(focus_id) = resolve_id(ds, focus) else {
+        // Non-interned focus: only reflexive inclusion can yield a value node, and
+        // that value is the focus term itself. The native traversal reproduces the
+        // reflexive-focus semantics exactly (every step is empty).
+        let mut nodes = eval_inner(ds, focus, path);
+        let mut seen: FastSet<Term> = FastSet::default();
+        nodes.retain(|t| seen.insert(t.clone()));
+        return nodes;
+    };
+    // Interned focus: id-native traversal, resolve only the deduped result set.
+    let ids = eval_inner_ids(ds, focus_id, path);
+    let mut seen: IdSet = IdSet::default();
+    let mut nodes: Vec<Term> = Vec::with_capacity(ids.len());
+    for id in ids {
+        if seen.insert(id) {
+            nodes.push(term_id_to_native(ds, id));
+        }
+    }
     nodes
+}
+
+/// The objects of `(focus, predicate, ?)` in the default graph, resolved to
+/// native terms. Empty when `focus` or `predicate` is not interned in `ds`.
+fn predicate_objects(ds: &RdfDataset, focus: &Term, predicate: &NamedNode) -> Vec<Term> {
+    let (Some(f_id), Some(p_id)) = (resolve_id(ds, focus), resolve_pred(ds, predicate)) else {
+        return Vec::new();
+    };
+    quads_for_pattern_ids(ds, Some(f_id), Some(p_id), None, GraphFilter::DefaultGraph)
+        .map(|q| term_id_to_native(ds, q.o))
+        .collect()
+}
+
+/// The subjects of `(?, predicate, focus)` in the default graph, resolved to
+/// native terms. Empty when `focus` or `predicate` is not interned in `ds`.
+fn predicate_subjects(ds: &RdfDataset, focus: &Term, predicate: &NamedNode) -> Vec<Term> {
+    let (Some(f_id), Some(p_id)) = (resolve_id(ds, focus), resolve_pred(ds, predicate)) else {
+        return Vec::new();
+    };
+    quads_for_pattern_ids(ds, None, Some(p_id), Some(f_id), GraphFilter::DefaultGraph)
+        .map(|q| term_id_to_native(ds, q.s))
+        .collect()
+}
+
+/// Resolve a predicate IRI to its interned id, if present in `ds`.
+#[inline]
+fn resolve_pred(ds: &RdfDataset, predicate: &NamedNode) -> Option<TermId> {
+    resolve_id(ds, &Term::NamedNode(predicate.clone()))
 }
 
 /// Convert a [`Path`] to its term representation for use in `result_path`.
@@ -103,7 +168,7 @@ fn path_label(path: &Path) -> String {
 ///
 /// Used for predicate-keyed metadata lookups (e.g. graph-box roles) where a
 /// single representative predicate suffices.
-pub fn primary_predicate(path: &Path) -> Option<&crate::term::NamedNode> {
+pub fn primary_predicate(path: &Path) -> Option<&NamedNode> {
     match path {
         Path::Predicate(p) => Some(p),
         Path::Inverse(inner)
@@ -118,42 +183,20 @@ pub fn primary_predicate(path: &Path) -> Option<&crate::term::NamedNode> {
 
 // ── Internal recursive evaluator ───────────────────────────────────────────────
 
-fn eval_inner<G: ShaclDataGraph>(store: &G, focus: &Term, path: &Path) -> Vec<Term> {
+fn eval_inner(ds: &RdfDataset, focus: &Term, path: &Path) -> Vec<Term> {
     match path {
         Path::Predicate(p) => {
             // A literal/triple focus cannot be a subject; the data graph returns no
             // matches for it (matching the historical empty-result behavior).
-            let predicate = Term::NamedNode(p.clone());
-            store
-                .quads_for_pattern(
-                    Some(focus),
-                    Some(&predicate),
-                    None,
-                    GraphFilter::DefaultGraph,
-                )
-                .into_iter()
-                .map(|q| q.object)
-                .collect()
+            predicate_objects(ds, focus, p)
         }
         Path::Inverse(inner) => match inner.as_ref() {
             // Inverse of a predicate: collect subjects of (?, p, focus).
-            Path::Predicate(p) => {
-                let predicate = Term::NamedNode(p.clone());
-                store
-                    .quads_for_pattern(
-                        None,
-                        Some(&predicate),
-                        Some(focus),
-                        GraphFilter::DefaultGraph,
-                    )
-                    .into_iter()
-                    .map(|q| q.subject)
-                    .collect()
-            }
+            Path::Predicate(p) => predicate_subjects(ds, focus, p),
             // Inverse of a composite path: push the inversion inward (SPARQL
             // property-path algebra) and evaluate the rewritten path. This keeps
             // inverse evaluation total for every nesting without graph scans.
-            composite => eval_inner(store, focus, &invert(composite)),
+            composite => eval_inner(ds, focus, &invert(composite)),
         },
         Path::Sequence(parts) => {
             // Fold the frontier through each sequence step, deduplicating per
@@ -161,9 +204,9 @@ fn eval_inner<G: ShaclDataGraph>(store: &G, focus: &Term, path: &Path) -> Vec<Te
             let mut frontier = vec![focus.clone()];
             for part in parts {
                 let mut next = Vec::new();
-                let mut seen = HashSet::new();
+                let mut seen: FastSet<Term> = FastSet::default();
                 for node in &frontier {
-                    for value in eval_inner(store, node, part) {
+                    for value in eval_inner(ds, node, part) {
                         if seen.insert(value.clone()) {
                             next.push(value);
                         }
@@ -177,14 +220,14 @@ fn eval_inner<G: ShaclDataGraph>(store: &G, focus: &Term, path: &Path) -> Vec<Te
             // Union of all alternatives (the caller deduplicates).
             parts
                 .iter()
-                .flat_map(|part| eval_inner(store, focus, part))
+                .flat_map(|part| eval_inner(ds, focus, part))
                 .collect()
         }
-        Path::ZeroOrMore(inner) => closure(store, focus, inner, true),
-        Path::OneOrMore(inner) => closure(store, focus, inner, false),
+        Path::ZeroOrMore(inner) => closure(ds, focus, inner, true),
+        Path::OneOrMore(inner) => closure(ds, focus, inner, false),
         Path::ZeroOrOne(inner) => {
             let mut nodes = vec![focus.clone()];
-            nodes.extend(eval_inner(store, focus, inner));
+            nodes.extend(eval_inner(ds, focus, inner));
             nodes
         }
     }
@@ -212,8 +255,8 @@ fn invert(path: &Path) -> Path {
 /// worklist walk with a visited set, so cyclic graphs terminate. `reflexive`
 /// includes the focus node itself (`zeroOrMore`); otherwise the walk starts from
 /// the focus's direct step values (`oneOrMore`). First-seen order is preserved.
-fn closure<G: ShaclDataGraph>(store: &G, focus: &Term, inner: &Path, reflexive: bool) -> Vec<Term> {
-    let mut seen: HashSet<Term> = HashSet::new();
+fn closure(ds: &RdfDataset, focus: &Term, inner: &Path, reflexive: bool) -> Vec<Term> {
+    let mut seen: FastSet<Term> = FastSet::default();
     let mut order: Vec<Term> = Vec::new();
     let mut worklist: Vec<Term> = Vec::new();
 
@@ -222,7 +265,7 @@ fn closure<G: ShaclDataGraph>(store: &G, focus: &Term, inner: &Path, reflexive: 
         order.push(focus.clone());
         worklist.push(focus.clone());
     } else {
-        for value in eval_inner(store, focus, inner) {
+        for value in eval_inner(ds, focus, inner) {
             if seen.insert(value.clone()) {
                 order.push(value.clone());
                 worklist.push(value);
@@ -234,9 +277,111 @@ fn closure<G: ShaclDataGraph>(store: &G, focus: &Term, inner: &Path, reflexive: 
     while cursor < worklist.len() {
         let node = worklist[cursor].clone();
         cursor += 1;
-        for value in eval_inner(store, &node, inner) {
+        for value in eval_inner(ds, &node, inner) {
             if seen.insert(value.clone()) {
                 order.push(value.clone());
+                worklist.push(value);
+            }
+        }
+    }
+    order
+}
+
+// ── Id-native traversal (interned focus) ───────────────────────────────────────
+//
+// Mirrors `eval_inner`/`closure` exactly, but every frontier, worklist, and
+// visited set is a `Copy` [`TermId`] rather than an owned [`Term`]. Every value a
+// step produces is the object/subject of a real quad, so it is always interned and
+// always has a `TermId`. First-seen order and per-step dedup match the native
+// traversal byte-for-byte; the caller ([`eval`]) resolves the result to terms.
+
+/// Id-native twin of [`eval_inner`], for an interned `focus`.
+fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> Vec<TermId> {
+    match path {
+        Path::Predicate(p) => match resolve_pred(ds, p) {
+            Some(p_id) => {
+                quads_for_pattern_ids(ds, Some(focus), Some(p_id), None, GraphFilter::DefaultGraph)
+                    .map(|q| q.o)
+                    .collect()
+            }
+            None => Vec::new(),
+        },
+        Path::Inverse(inner) => match inner.as_ref() {
+            // Inverse of a predicate: collect subjects of (?, p, focus).
+            Path::Predicate(p) => match resolve_pred(ds, p) {
+                Some(p_id) => quads_for_pattern_ids(
+                    ds,
+                    None,
+                    Some(p_id),
+                    Some(focus),
+                    GraphFilter::DefaultGraph,
+                )
+                .map(|q| q.s)
+                .collect(),
+                None => Vec::new(),
+            },
+            // Inverse of a composite path: push the inversion inward and evaluate.
+            composite => eval_inner_ids(ds, focus, &invert(composite)),
+        },
+        Path::Sequence(parts) => {
+            // Fold the frontier through each step, deduplicating per step
+            // (first-seen order) so diamond-shaped graphs stay linear.
+            let mut frontier = vec![focus];
+            for part in parts {
+                let mut next: Vec<TermId> = Vec::new();
+                let mut seen: IdSet = IdSet::default();
+                for &node in &frontier {
+                    for value in eval_inner_ids(ds, node, part) {
+                        if seen.insert(value) {
+                            next.push(value);
+                        }
+                    }
+                }
+                frontier = next;
+            }
+            frontier
+        }
+        Path::Alternative(parts) => parts
+            .iter()
+            .flat_map(|part| eval_inner_ids(ds, focus, part))
+            .collect(),
+        Path::ZeroOrMore(inner) => closure_ids(ds, focus, inner, true),
+        Path::OneOrMore(inner) => closure_ids(ds, focus, inner, false),
+        Path::ZeroOrOne(inner) => {
+            let mut nodes = vec![focus];
+            nodes.extend(eval_inner_ids(ds, focus, inner));
+            nodes
+        }
+    }
+}
+
+/// Id-native twin of [`closure`], for an interned `focus`. The visited set is an
+/// [`IdSet`] over `Copy` [`TermId`]s; first-seen order is preserved.
+fn closure_ids(ds: &RdfDataset, focus: TermId, inner: &Path, reflexive: bool) -> Vec<TermId> {
+    let mut seen: IdSet = IdSet::default();
+    let mut order: Vec<TermId> = Vec::new();
+    let mut worklist: Vec<TermId> = Vec::new();
+
+    if reflexive {
+        seen.insert(focus);
+        order.push(focus);
+        worklist.push(focus);
+    } else {
+        for value in eval_inner_ids(ds, focus, inner) {
+            if seen.insert(value) {
+                order.push(value);
+                worklist.push(value);
+            }
+        }
+    }
+
+    let mut cursor = 0;
+    while cursor < worklist.len() {
+        let node = worklist[cursor];
+        cursor += 1;
+        for value in eval_inner_ids(ds, node, inner) {
+            if seen.insert(value) {
+                order.push(value);
                 worklist.push(value);
             }
         }
@@ -253,13 +398,13 @@ mod tests {
     use ::purrdf::RdfDataset;
 
     use super::*;
-    use crate::data::IrDataGraph;
-    use crate::term::{Literal, NamedNode};
+    use crate::term::Literal;
 
-    fn load_data(ttl: &str) -> IrDataGraph {
-        let dataset: Arc<RdfDataset> =
-            crate::text_ingest::parse_turtle_to_dataset(ttl).expect("turtle parse");
-        IrDataGraph::new(dataset)
+    // `NamedNode` is referenced through `super::*` (re-exported into scope by the
+    // module's own `use`), so the test helpers below construct terms directly.
+
+    fn load_data(ttl: &str) -> Arc<RdfDataset> {
+        crate::text_ingest::parse_turtle_to_dataset(ttl).expect("turtle parse")
     }
 
     const DATA: &str = r"
