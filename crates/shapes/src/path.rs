@@ -68,6 +68,32 @@ pub fn eval(ds: &RdfDataset, focus: &Term, path: &Path) -> Vec<Term> {
     nodes
 }
 
+/// Id-native value-node producer: the deduped set of value nodes reachable from
+/// `focus` along `path`, in interned [`TermId`] space (first-seen order).
+///
+/// Returns `Some(ids)` for an **interned** focus — the common case, where every
+/// value node originates from a real quad and therefore has a `TermId`. The
+/// caller resolves an id to an owned [`Term`] only when it actually needs the
+/// term's content or records a violation, so a value node that participates only
+/// in identity/set operations is never materialized.
+///
+/// Returns `None` for a **non-interned** focus (a SHACL-AF node expression may
+/// drive evaluation from a `sh:this` Constant that never appears in the data). Its
+/// value nodes have no id and must be produced in the owned-[`Term`] model by
+/// [`eval`]; that owned-term fallback is a genuine necessity, not optionality.
+pub fn eval_ids(ds: &RdfDataset, focus: &Term, path: &Path) -> Option<IdVec> {
+    let focus_id = resolve_id(ds, focus)?;
+    let ids = eval_inner_ids(ds, focus_id, path);
+    let mut seen: IdSet = IdSet::default();
+    let mut out: IdVec = IdVec::with_capacity(ids.len());
+    for id in ids {
+        if seen.insert(id) {
+            out.push(id);
+        }
+    }
+    Some(out)
+}
+
 /// The objects of `(focus, predicate, ?)` in the default graph, resolved to
 /// native terms. Empty when `focus` or `predicate` is not interned in `ds`.
 fn predicate_objects(ds: &RdfDataset, focus: &Term, predicate: &NamedNode) -> Vec<Term> {

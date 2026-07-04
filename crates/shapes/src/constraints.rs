@@ -8,14 +8,56 @@
 
 use std::sync::OnceLock;
 
-use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, TermId};
+use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, TermId, TermRef};
 
 use crate::data::{native_quads, quads_for_pattern_ids, resolve_id, GraphFilter, ShaclData};
 use crate::model::{rdf, sh, BoxRoleVocab};
 use crate::path;
 use crate::report::ValidationResult;
 use crate::shapes::{ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape};
-use crate::term::{NamedNode, Term, Triple};
+use crate::term::{term_id_to_native, NamedNode, Term, Triple};
+
+/// Internal value-node currency for the constraint layer.
+///
+/// A property shape's value nodes carry their identity in `TermId` space for the
+/// common case (`Interned`, value nodes originating from interned data), and fall
+/// back to an owned [`Term`] only for non-interned SHACL-AF node-expression-produced
+/// terms that have no `TermId` (`Foreign`).
+///
+/// Identity/set/membership constraint arms compare `TermId`s directly (a `Copy`
+/// integer hash), so a value node that only participates in those operations is
+/// never materialized on the conforming path. Content-needing arms (datatype,
+/// pattern, length, node-kind, numeric/string comparisons) resolve to an owned
+/// [`Term`] on demand, and the report boundary always records an owned [`Term`].
+#[derive(Clone)]
+enum ValueNode {
+    /// An interned value node — carries its `TermId`, resolved to a [`Term`] only
+    /// when a constraint needs its content or a violation is recorded.
+    Interned(TermId),
+    /// A non-interned value node produced by a SHACL-AF node expression: it has no
+    /// `TermId`, so its owned [`Term`] is carried verbatim.
+    Foreign(Term),
+}
+
+impl ValueNode {
+    /// Resolve to an owned native [`Term`] (the report boundary and content-check
+    /// input): materialize an interned id, or clone the foreign term.
+    fn to_term(&self, ds: &RdfDataset) -> Term {
+        match self {
+            Self::Interned(id) => term_id_to_native(ds, *id),
+            Self::Foreign(term) => term.clone(),
+        }
+    }
+
+    /// The interned id of this value node, if it has one. A `Foreign` term is
+    /// resolved against `ds` in case it happens to be interned (usually it is not).
+    fn as_id(&self, ds: &RdfDataset) -> Option<TermId> {
+        match self {
+            Self::Interned(id) => Some(*id),
+            Self::Foreign(term) => resolve_id(ds, term),
+        }
+    }
+}
 
 // ── Public surface ─────────────────────────────────────────────────────────────
 
@@ -88,12 +130,14 @@ fn validate_shape_with_depth(
     let mut results: Vec<ValidationResult> = Vec::new();
 
     // --- Node-level constraints (value nodes = [focus], no path) ---
-    let node_value_nodes = std::slice::from_ref(focus);
+    // The single value node IS the focus term; a node shape has no path traversal
+    // to run in id space, so the focus travels as an owned `Foreign` value node.
+    let node_value_nodes = [ValueNode::Foreign(focus.clone())];
     for constraint in &shape.constraints {
         let mut rs = eval_constraint(
             store,
             focus,
-            node_value_nodes,
+            &node_value_nodes,
             constraint,
             None,
             shape,
@@ -240,7 +284,18 @@ fn eval_property_shape(
     if ps.deactivated {
         return Ok(vec![]);
     }
-    let value_nodes = path::eval(store.core(), focus, &ps.path);
+    // Carry the value nodes id-native for the common interned-focus case
+    // ([`path::eval_ids`]); a non-interned SHACL-AF focus falls back to the
+    // owned-`Term` producer. Identity/set constraint arms then compare `TermId`s
+    // without materializing, and only the value nodes a violation records — or a
+    // content constraint inspects — are resolved to owned terms.
+    let value_nodes: Vec<ValueNode> = match path::eval_ids(store.core(), focus, &ps.path) {
+        Some(ids) => ids.into_iter().map(ValueNode::Interned).collect(),
+        None => path::eval(store.core(), focus, &ps.path)
+            .into_iter()
+            .map(ValueNode::Foreign)
+            .collect(),
+    };
     let path_term = path::path_to_term(&ps.path);
     // The complex-path structure stamped onto results whose path comes from
     // this property shape (None for a plain predicate path).
@@ -299,9 +354,12 @@ fn eval_property_shape(
     // fires once per reach, so results are NOT deduplicated here).
     for nested in &ps.property_shapes {
         for value in &value_nodes {
+            // A value node becomes the focus of the nested shape: resolve it to an
+            // owned term at the recursion boundary (recursion is not the hot
+            // conforming path).
             results.extend(eval_property_shape(
                 store,
-                value,
+                &value.to_term(store.core()),
                 nested,
                 &ps_as_shape,
                 box_role_vocab,
@@ -310,18 +368,27 @@ fn eval_property_shape(
         }
     }
 
-    results.extend(eval_reifier_shapes(ReifierEvalContext {
-        store,
-        focus,
-        value_nodes: &value_nodes,
-        ps,
-        ps_as_shape: &ps_as_shape,
-        source_roles: &source_roles,
-        path_roles: &path_roles,
-        path_term: &path_term,
-        box_role_vocab,
-        depth,
-    })?);
+    // Reifier shapes need each value node as an owned term (to build the quoted
+    // triple term). Materialize only when there is reifier work to do; a property
+    // shape with no reifier shapes never pays for it.
+    if !ps.reifier_shapes.is_empty() || ps.reification_required {
+        let value_terms: Vec<Term> = value_nodes
+            .iter()
+            .map(|v| v.to_term(store.core()))
+            .collect();
+        results.extend(eval_reifier_shapes(ReifierEvalContext {
+            store,
+            focus,
+            value_nodes: &value_terms,
+            ps,
+            ps_as_shape: &ps_as_shape,
+            source_roles: &source_roles,
+            path_roles: &path_roles,
+            path_term: &path_term,
+            box_role_vocab,
+            depth,
+        })?);
+    }
     Ok(results)
 }
 
@@ -529,12 +596,13 @@ fn merge_box_roles(left: &[NamedNode], right: &[NamedNode]) -> Vec<NamedNode> {
 fn eval_constraint(
     store: &ShaclData,
     focus_node: &Term,
-    value_nodes: &[Term],
+    value_nodes: &[ValueNode],
     constraint: &Constraint,
     path: Option<&Path>,
     shape: &Shape,
     depth: u32,
 ) -> Result<Vec<ValidationResult>, String> {
+    let ds = store.core();
     let result_path = path.map(path::path_to_term);
     // The full SHACL path structure travels alongside a COMPLEX result path
     // (its result_path term is a deterministic blank node) so the report
@@ -550,8 +618,7 @@ fn eval_constraint(
             ValidationResult {
                 focus_node: value_nodes
                     .first()
-                    .cloned()
-                    .unwrap_or_else(|| source_shape.clone()),
+                    .map_or_else(|| source_shape.clone(), |v| v.to_term(ds)),
                 result_path: result_path.clone(),
                 path_structure: path_structure.clone(),
                 value: $value,
@@ -617,19 +684,22 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
-            for value in value_nodes {
-                let violates = match value {
-                    Term::Literal(_) => true,
-                    _ => !is_shacl_instance(store.core(), value, rdf_type_id, &closure),
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
+            for vn in value_nodes {
+                // Id-native instance test: an interned value node's class membership
+                // is decided entirely in `TermId` space (literal check + `rdf:type`
+                // edge walk), so a conforming value is never materialized. A
+                // non-interned value node has no `rdf:type` edge and is no instance.
+                let violates = match vn.as_id(ds) {
+                    Some(id) => !is_shacl_instance_id(ds, id, rdf_type_id, &closure),
+                    None => true,
                 };
                 if violates {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
                         path_structure: path_structure.clone(),
-                        value: Some(value.clone()),
+                        value: Some(vn.to_term(ds)),
                         source_constraint_component: NamedNode::from(
                             sh::CLASS_CONSTRAINT_COMPONENT,
                         ),
@@ -651,9 +721,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 if !check_datatype(value, dt_iri) {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
@@ -681,9 +756,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 if !check_node_kind(value, kind) {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
@@ -708,18 +788,28 @@ fn eval_constraint(
 
         // ── In (per value node) ────────────────────────────────────────────────
         Constraint::In(allowed) => {
+            // Membership is pure identity: resolve the allowed set to ids once, so an
+            // interned value node's check is a `TermId` set lookup with no
+            // materialization. The interner is injective, so an allowed term that is
+            // not interned can never equal an interned value node; a non-interned
+            // value node falls back to term equality.
+            let allowed_ids: FastSet<TermId> =
+                allowed.iter().filter_map(|a| resolve_id(ds, a)).collect();
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
-            for value in value_nodes {
-                if !allowed.iter().any(|a| terms_equal(a, value)) {
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
+            for vn in value_nodes {
+                let allowed_here = match vn.as_id(ds) {
+                    Some(id) => allowed_ids.contains(&id),
+                    None => allowed.iter().any(|a| terms_equal(a, &vn.to_term(ds))),
+                };
+                if !allowed_here {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
                         path_structure: path_structure.clone(),
-                        value: Some(value.clone()),
+                        value: Some(vn.to_term(ds)),
                         source_constraint_component: NamedNode::from(sh::IN_CONSTRAINT_COMPONENT),
                         source_shape: source_shape.clone(),
                         severity: severity.clone(),
@@ -736,12 +826,20 @@ fn eval_constraint(
 
         // ── HasValue (on the SET, one result if missing) ───────────────────────
         Constraint::HasValue(required) => {
-            let found = value_nodes.iter().any(|v| terms_equal(v, required));
+            // Identity check: if `required` is interned, membership is a `TermId`
+            // comparison and no value node is materialized. If it is not interned,
+            // no interned value node can equal it, so only the (rare) non-interned
+            // value nodes could match — fall back to term equality.
+            let found = match resolve_id(ds, required) {
+                Some(req_id) => value_nodes.iter().any(|v| v.as_id(ds) == Some(req_id)),
+                None => value_nodes
+                    .iter()
+                    .any(|v| terms_equal(&v.to_term(ds), required)),
+            };
             if !found {
                 let focus = value_nodes
                     .first()
-                    .cloned()
-                    .unwrap_or_else(|| source_shape.clone());
+                    .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
                 vec![ValidationResult {
                     focus_node: focus,
                     result_path,
@@ -777,9 +875,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let lexical = match value {
                     Term::Literal(lit) => Some(lit.value().to_owned()),
                     Term::NamedNode(nn) => Some(nn.as_str().to_owned()),
@@ -817,9 +920,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let len_opt = lexical_length(value);
                 let violates = match len_opt {
                     None => true, // blank node
@@ -852,9 +960,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let len_opt = lexical_length(value);
                 let violates = match len_opt {
                     None => true, // blank node
@@ -887,9 +1000,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 if !language_matches_any(value, tags) {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
@@ -917,9 +1035,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 // Violation iff the value node DOES conform to the negated shape.
                 if conforms_with_depth(store, value, inner_shape, depth)? {
                     results.push(ValidationResult {
@@ -952,6 +1075,12 @@ fn eval_constraint(
         Constraint::UniqueLang(true) => {
             let mut seen_langs: FastMap<String, usize> = FastMap::default();
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 if let Term::Literal(lit) = value {
                     if let Some(lang) = lit.language() {
                         *seen_langs.entry(lang.to_lowercase()).or_insert(0) += 1;
@@ -960,8 +1089,7 @@ fn eval_constraint(
             }
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             let mut results = Vec::new();
             for (lang, count) in &seen_langs {
                 if *count > 1 {
@@ -994,9 +1122,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let violates = !matches!(
                     range_facet_cmp(value, bound),
                     Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
@@ -1026,9 +1159,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let violates = !matches!(
                     range_facet_cmp(value, bound),
                     Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
@@ -1060,9 +1198,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let violates = !matches!(
                     range_facet_cmp(value, bound),
                     Some(std::cmp::Ordering::Greater)
@@ -1092,9 +1235,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let violates = !matches!(
                     range_facet_cmp(value, bound),
                     Some(std::cmp::Ordering::Less)
@@ -1126,9 +1274,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let mut all_conform = true;
                 for member in members {
                     if !conforms_with_depth(store, value, member, depth)? {
@@ -1161,9 +1314,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let mut any_conforms = false;
                 for member in members {
                     if conforms_with_depth(store, value, member, depth)? {
@@ -1196,9 +1354,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let mut count = 0usize;
                 for member in members {
                     if conforms_with_depth(store, value, member, depth)? {
@@ -1230,9 +1393,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 if !conforms_with_depth(store, value, inner_shape, depth)? {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
@@ -1257,17 +1425,39 @@ fn eval_constraint(
         //    the objects of the given predicate from the SAME focus node. ──────
         Constraint::Equals(pred) => {
             let others = pair_values(store, focus_node, pred);
+            // Membership is identity: compare in `TermId` space (the interner is
+            // injective, so an interned value equals a predicate object iff their ids
+            // match). Only offending value nodes are materialized on the conforming
+            // side. `others` come from the data graph and are always interned.
+            let other_ids: FastSet<TermId> =
+                others.iter().filter_map(|o| resolve_id(ds, o)).collect();
+            let value_ids: FastSet<TermId> =
+                value_nodes.iter().filter_map(|v| v.as_id(ds)).collect();
             let mut offending: Vec<Term> = Vec::new();
             let mut seen: FastSet<Term> = FastSet::default();
             // Value nodes missing from the predicate's objects…
             for v in value_nodes {
-                if !others.contains(v) && seen.insert(v.clone()) {
-                    offending.push(v.clone());
+                let present = match v.as_id(ds) {
+                    Some(id) => other_ids.contains(&id),
+                    None => {
+                        let term = v.to_term(ds);
+                        others.iter().any(|o| terms_equal(o, &term))
+                    }
+                };
+                if !present {
+                    let term = v.to_term(ds);
+                    if seen.insert(term.clone()) {
+                        offending.push(term);
+                    }
                 }
             }
             // …and predicate objects missing from the value nodes.
             for o in &others {
-                if !value_nodes.contains(o) && seen.insert(o.clone()) {
+                let present = match resolve_id(ds, o) {
+                    Some(oid) => value_ids.contains(&oid),
+                    None => value_nodes.iter().any(|v| terms_equal(&v.to_term(ds), o)),
+                };
+                if !present && seen.insert(o.clone()) {
                     offending.push(o.clone());
                 }
             }
@@ -1284,20 +1474,34 @@ fn eval_constraint(
         }
         Constraint::Disjoint(pred) => {
             let others = pair_values(store, focus_node, pred);
+            // Identity check in `TermId` space; only offending value nodes are
+            // materialized.
+            let other_ids: FastSet<TermId> =
+                others.iter().filter_map(|o| resolve_id(ds, o)).collect();
             let mut results = Vec::new();
             for v in value_nodes {
-                if others.contains(v) {
+                let violates = match v.as_id(ds) {
+                    Some(id) => other_ids.contains(&id),
+                    None => {
+                        let term = v.to_term(ds);
+                        others.iter().any(|o| terms_equal(o, &term))
+                    }
+                };
+                if violates {
                     results.push(result!(
                         sh::DISJOINT_CONSTRAINT_COMPONENT,
                         focus_node.clone(),
-                        Some(v.clone())
+                        Some(v.to_term(ds))
                     ));
                 }
             }
             results
         }
         Constraint::LessThan(pred) => {
-            pair_order_offenders(store, focus_node, value_nodes, pred, false)
+            // Order comparison needs each value node's term (numeric/string/temporal
+            // value space), so materialize the set for the pair walk.
+            let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
+            pair_order_offenders(store, focus_node, &value_terms, pred, false)
                 .into_iter()
                 .map(|value| {
                     result!(
@@ -1309,7 +1513,8 @@ fn eval_constraint(
                 .collect()
         }
         Constraint::LessThanOrEquals(pred) => {
-            pair_order_offenders(store, focus_node, value_nodes, pred, true)
+            let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
+            pair_order_offenders(store, focus_node, &value_terms, pred, true)
                 .into_iter()
                 .map(|value| {
                     result!(
@@ -1333,6 +1538,10 @@ fn eval_constraint(
             // under sibling disjointness — conforms to NO sibling qualified shape.
             let mut count = 0u64;
             for v in value_nodes {
+                // Each value node is a recursion focus for the qualified shape;
+                // resolve it to an owned term at the recursion boundary.
+                let v_term = v.to_term(ds);
+                let v = &v_term;
                 if !conforms_with_depth(store, v, qshape, depth)? {
                     continue;
                 }
@@ -1432,10 +1641,13 @@ fn eval_constraint(
             // loop-invariant — reusing it only avoids re-allocating the set.
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
             for value_node in value_nodes {
-                let out = crate::expression::eval_node_expr(store, value_node, expr, &mut guard)
+                // A node expression evaluates over the owned term model (it may
+                // produce non-interned terms), so resolve the value node here.
+                let value_node = value_node.to_term(ds);
+                let out = crate::expression::eval_node_expr(store, &value_node, expr, &mut guard)
                     .map_err(|e| {
-                        format!("sh:expression constraint on shape {source_shape}: {e}")
-                    })?;
+                    format!("sh:expression constraint on shape {source_shape}: {e}")
+                })?;
                 if !crate::expression::is_true(&out) {
                     let mut r = result!(
                         sh::EXPRESSION_CONSTRAINT_COMPONENT,
@@ -1461,11 +1673,14 @@ fn eval_constraint(
             let sev = csev.clone().unwrap_or_else(|| severity.clone());
             let msg = cmsg.clone().or_else(|| message.clone());
             let dataset = store.sparql_dataset();
+            // The custom-component validators run over the owned term model; resolve
+            // the value nodes for the ASK validator's per-value binding.
+            let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
             match validator {
                 ComponentValidator::Ask { .. } => crate::components::eval_ask_validator(
                     &dataset,
                     focus_node,
-                    value_nodes,
+                    &value_terms,
                     validator,
                     bindings,
                     component,
@@ -1527,20 +1742,24 @@ pub(crate) fn substitute_path_placeholder(select: &str, path: Option<&Path>) -> 
 /// `rdf_type_id` is `rdf:type`'s pre-resolved interned [`TermId`], hoisted once by
 /// the caller (it is loop-invariant across value nodes).  `None` means `rdf:type`
 /// is not interned in this dataset, so no `rdf:type` edge can exist and the value
-/// is not an instance.  Only the *value's* own id is resolved here, since it
-/// varies per call.
-fn is_shacl_instance(
+/// is not an instance.
+///
+/// `value_id` is the value node's interned [`TermId`]. The check is fully id-native
+/// — the value node is never materialized to an owned term: a literal (never a
+/// class instance) is recognized from its resolved [`TermRef`], and the `rdf:type`
+/// edge walk stays in id space.
+fn is_shacl_instance_id(
     ds: &RdfDataset,
-    value: &Term,
+    value_id: TermId,
     rdf_type_id: Option<TermId>,
     closure: &IdSet,
 ) -> bool {
-    if !matches!(value, Term::NamedNode(_) | Term::BlankNode(_)) {
+    // A literal is never a SHACL class instance; only IRIs / blank nodes can be.
+    if matches!(ds.resolve(value_id), TermRef::Literal { .. }) {
         return false;
     }
-    // Both the value node and `rdf:type` must be interned for any `rdf:type` edge
-    // to exist; a non-interned value has no type triple, so it is no instance.
-    let (Some(value_id), Some(rdf_type)) = (resolve_id(ds, value), rdf_type_id) else {
+    // `rdf:type` must be interned for any `rdf:type` edge to exist.
+    let Some(rdf_type) = rdf_type_id else {
         return false;
     };
     quads_for_pattern_ids(
