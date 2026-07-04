@@ -13,7 +13,7 @@ use crate::data::{GraphFilter, ShaclDataGraph};
 use crate::model::{rdf, sh, BoxRoleVocab};
 use crate::path;
 use crate::report::ValidationResult;
-use crate::shapes::{Constraint, NodeKindValue, Path, PropertyShape, Shape};
+use crate::shapes::{ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape};
 use crate::term::{NamedNode, Term, Triple};
 
 // ── Public surface ─────────────────────────────────────────────────────────────
@@ -1453,11 +1453,43 @@ fn eval_constraint<G: ShaclDataGraph>(
         }
 
         // ── Custom constraint components (SHACL-SPARQL) ─────────────────────────
-        // Task 4 will implement evaluation; the placeholder keeps the crate
-        // compiling and makes the new variant reachable for parsing tests.
-        Constraint::Component { .. } => {
-            // TODO(#12)
-            vec![]
+        Constraint::Component {
+            ref component,
+            ref source_shape,
+            ref bindings,
+            ref validator,
+            message: ref cmsg,
+            severity: ref csev,
+        } => {
+            let sev = csev.clone().unwrap_or_else(|| severity.clone());
+            let msg = cmsg.clone().or_else(|| message.clone());
+            let dataset = store.sparql_dataset();
+            match validator {
+                ComponentValidator::Ask { .. } => crate::components::eval_ask_validator(
+                    &dataset,
+                    focus_node,
+                    value_nodes,
+                    validator,
+                    bindings,
+                    component,
+                    source_shape,
+                    path,
+                    &sev,
+                    msg.as_ref(),
+                ),
+                ComponentValidator::Select { .. } => crate::components::eval_select_validator(
+                    &dataset,
+                    focus_node,
+                    validator,
+                    bindings,
+                    component,
+                    source_shape,
+                    path,
+                    &sev,
+                    msg.as_ref(),
+                ),
+            }
+            .map_err(|e| format!("component validator on shape {source_shape}: {e}"))?
         }
     })
 }
@@ -1466,7 +1498,7 @@ fn eval_constraint<G: ShaclDataGraph>(
 /// shape's path rendered in SPARQL property-path surface syntax. A node-shape
 /// constraint (`path == None`) and a query without the placeholder pass
 /// through unchanged.
-fn substitute_path_placeholder(select: &str, path: Option<&Path>) -> String {
+pub(crate) fn substitute_path_placeholder(select: &str, path: Option<&Path>) -> String {
     static PATH_PLACEHOLDER: OnceLock<regex::Regex> = OnceLock::new();
     let Some(path) = path else {
         return select.to_owned();

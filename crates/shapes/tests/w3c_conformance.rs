@@ -100,23 +100,6 @@ const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 const XFAIL: &[(&str, &str)] = &[
     // ── SHACL-SPARQL ──────────────────────────────────────────────────────────
     (
-        "sparql/component/optional-001",
-        "custom SPARQL constraint components (sh:ConstraintComponent with \
-         sh:parameter and a sh:SPARQLAskValidator sh:ask validator) are \
-         unsupported — only sh:sparql/sh:SPARQLConstraint SELECTs run",
-    ),
-    (
-        "sparql/component/propertyValidator-select-001",
-        "custom SPARQL constraint components (sh:ConstraintComponent with a \
-         sh:propertyValidator SELECT validator and $PATH substitution) are \
-         unsupported",
-    ),
-    (
-        "sparql/component/validator-001",
-        "custom SPARQL constraint components (sh:ConstraintComponent with a \
-         sh:SPARQLAskValidator sh:ask validator over $value) are unsupported",
-    ),
-    (
         "sparql/pre-binding/pre-binding-002",
         "$this pre-binding is not visible inside FILTER-only UNION branches \
          (SPARQL pre-binding semantics); the query yields no solutions so no \

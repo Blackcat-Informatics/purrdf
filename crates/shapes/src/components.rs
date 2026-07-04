@@ -15,12 +15,18 @@
 #![allow(dead_code, unreachable_pub)]
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, OnceLock};
+
+use ::purrdf::RdfDataset;
+use ::purrdf::TermValue;
 
 use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
 use crate::model::{rdf, rdfs, sh};
-use crate::report::Severity;
-use crate::shapes::build_prefix_header;
-use crate::term::{NamedNode, Term};
+use crate::path;
+use crate::report::{Severity, ValidationResult};
+use crate::shapes::{build_prefix_header, ComponentValidator, Path};
+use crate::sparql::{run_ask_with_substitutions, run_select_with_substitutions};
+use crate::term::{term_value_to_native, NamedNode, Term};
 
 /// Discriminator for a SPARQL validator's query form.
 #[derive(Debug, Clone)]
@@ -163,8 +169,174 @@ pub(crate) fn severity_from_term(t: &Term) -> Option<Severity> {
     }
 }
 
-/// Extract the SPARQL local name of an IRI: the longest suffix after the last
-/// `/`, `#`, or `:`.
+// ── Custom component validator evaluation ────────────────────────────────────
+
+/// Substitute SHACL message templates of the form `{?varName}` and `{$varName}`
+/// with the string rendering of the first matching binding. Unbound variables are
+/// left unchanged.
+fn substitute_message_templates(msg: &str, bindings: &[(String, Term)]) -> String {
+    static TEMPLATE_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = TEMPLATE_RE.get_or_init(|| {
+        regex::Regex::new(r"\{([$?])([A-Za-z_][A-Za-z0-9_]*)\}")
+            .expect("static template regex is valid")
+    });
+    re.replace_all(msg, |caps: &regex::Captures<'_>| {
+        let name = &caps[2];
+        match bindings.iter().find(|(n, _)| n == name) {
+            Some((_, term)) => term.to_string(),
+            None => caps[0].to_owned(),
+        }
+    })
+    .into_owned()
+}
+
+/// Evaluate an ASK validator for a custom constraint component.
+///
+/// Each value node is substituted as `$value` / `?value` alongside `$this` and the
+/// parameter bindings. A result of `true` means conforming; `false` emits one
+/// [`ValidationResult`].
+#[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
+pub fn eval_ask_validator(
+    dataset: &Arc<RdfDataset>,
+    focus: &Term,
+    value_nodes: &[Term],
+    validator: &ComponentValidator,
+    bindings: &[(String, Term)],
+    component: &NamedNode,
+    source_shape: &Term,
+    path: Option<&Path>,
+    severity: &Severity,
+    message: Option<&String>,
+) -> Result<Vec<ValidationResult>, String> {
+    let ComponentValidator::Ask { ask } = validator else {
+        return Err("expected ASK validator, got SELECT".to_owned());
+    };
+    let mut results = Vec::with_capacity(value_nodes.len());
+    for v in value_nodes {
+        let mut subs: Vec<(String, TermValue)> = Vec::with_capacity(2 + bindings.len());
+        subs.push(("this".to_owned(), focus.to_term_value()));
+        subs.push(("value".to_owned(), v.to_term_value()));
+        for (name, value) in bindings {
+            subs.push((name.clone(), value.to_term_value()));
+        }
+        let conforms = run_ask_with_substitutions(dataset, ask, &subs)?;
+        if !conforms {
+            let mut template_bindings: Vec<(String, Term)> = bindings.to_vec();
+            template_bindings.push(("value".to_owned(), v.clone()));
+            results.push(ValidationResult {
+                focus_node: focus.clone(),
+                result_path: path.map(path::path_to_term),
+                path_structure: path.filter(|p| !matches!(p, Path::Predicate(_))).cloned(),
+                value: Some(v.clone()),
+                source_constraint_component: component.clone(),
+                source_shape: source_shape.clone(),
+                severity: severity.clone(),
+                message: message.map(|m| substitute_message_templates(m, &template_bindings)),
+                source_box_roles: vec![],
+                path_box_roles: vec![],
+                result_box_roles: vec![],
+                attributions: vec![],
+            });
+        }
+    }
+    Ok(results)
+}
+
+/// Evaluate a SELECT validator for a custom constraint component.
+///
+/// `$this` and the parameter bindings are substituted before evaluation. Each
+/// result row maps to a [`ValidationResult`]; the `?this`, `?path`, and `?value`
+/// columns override the default focus node, path, and value when present and
+/// bound. Row bindings take precedence over parameter bindings for message
+/// template substitution.
+#[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
+pub fn eval_select_validator(
+    dataset: &Arc<RdfDataset>,
+    focus: &Term,
+    validator: &ComponentValidator,
+    bindings: &[(String, Term)],
+    component: &NamedNode,
+    source_shape: &Term,
+    path: Option<&Path>,
+    severity: &Severity,
+    message: Option<&String>,
+) -> Result<Vec<ValidationResult>, String> {
+    let ComponentValidator::Select { select } = validator else {
+        return Err("expected SELECT validator, got ASK".to_owned());
+    };
+    let mut subs: Vec<(String, TermValue)> = Vec::with_capacity(1 + bindings.len());
+    subs.push(("this".to_owned(), focus.to_term_value()));
+    for (name, value) in bindings {
+        subs.push((name.clone(), value.to_term_value()));
+    }
+    let query = crate::constraints::substitute_path_placeholder(select, path);
+    let (variables, rows) = run_select_with_substitutions(dataset, &query, &subs)?;
+
+    let this_index = variables.iter().position(|v| v == "this");
+    let path_index = variables.iter().position(|v| v == "path");
+    let value_index = variables.iter().position(|v| v == "value");
+
+    let path_term = path.map(path::path_to_term);
+    let path_structure = path.filter(|p| !matches!(p, Path::Predicate(_))).cloned();
+
+    let mut results = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let row_bindings: Vec<(String, Term)> = variables
+            .iter()
+            .zip(row.iter())
+            .filter_map(|(var, cell)| {
+                cell.as_ref()
+                    .map(|tv| (var.clone(), term_value_to_native(tv)))
+            })
+            .collect();
+
+        let focus_node = this_index
+            .and_then(|i| row.get(i))
+            .and_then(Option::as_ref)
+            .map_or_else(|| focus.clone(), term_value_to_native);
+
+        let (result_path, result_path_structure) = if let Some(i) = path_index {
+            if let Some(Some(tv)) = row.get(i) {
+                (Some(term_value_to_native(tv)), None)
+            } else {
+                (path_term.clone(), path_structure.clone())
+            }
+        } else {
+            (path_term.clone(), path_structure.clone())
+        };
+
+        let value = value_index
+            .and_then(|i| row.get(i))
+            .and_then(Option::as_ref)
+            .map(term_value_to_native)
+            .or_else(|| Some(focus.clone()));
+
+        let mut template_bindings = row_bindings;
+        for (name, value) in bindings {
+            if !template_bindings.iter().any(|(n, _)| n == name) {
+                template_bindings.push((name.clone(), value.clone()));
+            }
+        }
+
+        results.push(ValidationResult {
+            focus_node,
+            result_path,
+            path_structure: result_path_structure,
+            value,
+            source_constraint_component: component.clone(),
+            source_shape: source_shape.clone(),
+            severity: severity.clone(),
+            message: message.map(|m| substitute_message_templates(m, &template_bindings)),
+            source_box_roles: vec![],
+            path_box_roles: vec![],
+            result_box_roles: vec![],
+            attributions: vec![],
+        });
+    }
+    Ok(results)
+}
+
+// ── Internal helpers ─────────────────────────────────────────────────────────
 ///
 /// ```ignore
 /// use purrdf_shapes::components::sparql_local_name;
@@ -526,6 +698,7 @@ mod tests {
 
     use super::*;
     use crate::data::IrDataGraph;
+    use crate::term::Literal;
     use crate::text_ingest::extract_prefixes;
 
     fn load_registry(ttl: &str, base_iri: &str) -> ComponentRegistry {
@@ -655,5 +828,101 @@ mod tests {
         let validator = component.validator.as_ref().expect("validator present");
         assert!(matches!(validator.kind, ValidatorKind::Ask));
         assert!(validator.query_text.contains("CONCAT"));
+    }
+
+    // ── Component validator evaluation (W3C fixtures) ──────────────────────────
+
+    fn lit(s: &str) -> Term {
+        Term::Literal(Literal::new_simple_literal(s))
+    }
+
+    fn validate_fixture(ttl: &str, base_iri: &str) -> crate::report::ValidationReport {
+        let prefixes = extract_prefixes(ttl);
+        let dataset: Arc<::purrdf::RdfDataset> =
+            ::purrdf::parse_dataset(ttl.as_bytes(), "text/turtle", Some(base_iri))
+                .expect("fixture parses");
+        let shapes =
+            crate::shapes::from_dataset_with_prefixes(&dataset, &prefixes).expect("shapes parse");
+        crate::engine::validate_dataset(&dataset, &shapes).expect("validation evaluates")
+    }
+
+    #[test]
+    fn eval_ask_validator_001() {
+        let ttl = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../vectors/shacl/sparql/component/validator-001.ttl"
+        ))
+        .expect("fixture exists");
+        let report = validate_fixture(
+            &ttl,
+            "http://datashapes.org/sh/tests/sparql/component/validator-001.test",
+        );
+        assert!(!report.conforms);
+        assert_eq!(report.results.len(), 1, "exactly one non-conforming target");
+        assert_eq!(report.results[0].focus_node, lit("Hallo Welt"));
+        assert_eq!(report.results[0].value, Some(lit("Hallo Welt")));
+        assert_eq!(
+            report.results[0].source_constraint_component.as_str(),
+            "http://datashapes.org/sh/tests/sparql/component/validator-001.test#TestConstraintComponent"
+        );
+    }
+
+    #[test]
+    fn eval_ask_validator_optional_001() {
+        let ttl = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../vectors/shacl/sparql/component/optional-001.ttl"
+        ))
+        .expect("fixture exists");
+        let report = validate_fixture(
+            &ttl,
+            "http://datashapes.org/sh/tests/sparql/component/optional-001.test",
+        );
+        assert!(!report.conforms);
+        assert_eq!(report.results.len(), 4, "four violating focus/value pairs");
+        let focus_values: Vec<(Option<String>, Option<String>)> = report
+            .results
+            .iter()
+            .map(|r| (Some(r.focus_value()), r.value.as_ref().map(Term::to_string)))
+            .collect();
+        assert!(focus_values.contains(&(Some("One".to_owned()), Some("\"One\"".to_owned()))));
+        assert!(focus_values.contains(&(Some("Three".to_owned()), Some("\"Three\"".to_owned()))));
+        assert!(focus_values.contains(&(Some("Two".to_owned()), Some("\"Two\"".to_owned()))));
+    }
+
+    #[test]
+    fn eval_select_property_validator_001() {
+        let ttl = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../vectors/shacl/sparql/component/propertyValidator-select-001.ttl"
+        ))
+        .expect("fixture exists");
+        let report = validate_fixture(
+            &ttl,
+            "http://datashapes.org/sh/tests/sparql/component/propertyValidator-select-001.test",
+        );
+        assert!(!report.conforms);
+        assert_eq!(report.results.len(), 2, "two violating property values");
+        let paths: Vec<&str> = report
+            .results
+            .iter()
+            .map(|r| match r.result_path.as_ref().expect("path present") {
+                Term::NamedNode(n) => n.as_str(),
+                other => panic!("expected named-node path, got {other}"),
+            })
+            .collect();
+        assert!(paths.contains(
+            &"http://datashapes.org/sh/tests/sparql/component/propertyValidator-select-001.test#englishLabel"));
+        assert!(paths.contains(
+            &"http://datashapes.org/sh/tests/sparql/component/propertyValidator-select-001.test#germanLabel"));
+        for r in &report.results {
+            assert!(
+                r.message
+                    .as_ref()
+                    .expect("message present")
+                    .contains("Values are literals with language"),
+                "message template should be substituted"
+            );
+        }
     }
 }
