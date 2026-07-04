@@ -244,8 +244,16 @@ pub(crate) fn eval_user_function(
             "http://www.w3.org/2001/XMLSchema#boolean",
         )),
         (UserFnBody::Select, Outcome::Solutions(seq)) => {
-            let (_, rows) = materialize_solutions(&seq, &child);
-            // The first projected variable of the first solution row; an empty
+            let (variables, rows) = materialize_solutions(&seq, &child);
+            // A SHACL-AF function SELECT body yields a single result variable; a
+            // multi-projection body has no well-defined return value.
+            if variables.len() != 1 {
+                return Err(EvalError::function(format!(
+                    "SHACL-AF function <{iri}> SELECT body must project exactly one variable, got {}",
+                    variables.len()
+                )));
+            }
+            // The single projected value of the first solution row; an empty
             // result set is "no value".
             rows.into_iter()
                 .next()
@@ -452,6 +460,40 @@ mod tests {
         assert!(
             err.to_string().contains("expects"),
             "expected arity error, got {err}"
+        );
+    }
+
+    /// A SELECT body projecting more than one variable has no well-defined return
+    /// value and is a hard error.
+    #[test]
+    fn multi_projection_select_body_is_a_hard_error() {
+        let mut registry = UserFunctionRegistry::new();
+        registry.insert(
+            EX_INC,
+            UserFunction {
+                params: vec![int_param("n")],
+                required: 1,
+                body: parse("SELECT ((?n + 1) AS ?a) ((?n + 2) AS ?b) WHERE {}"),
+                kind: UserFnBody::Select,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        let ds = empty_dataset();
+        let query = format!("SELECT ((<{EX_INC}>(1)) AS ?v) WHERE {{}}");
+        let err = NativeSparqlEngine::new()
+            .query_with_user_functions(
+                &ds,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                &registry,
+            )
+            .expect_err("multi-projection body must fail");
+        assert!(
+            err.to_string().contains("exactly one variable"),
+            "expected projection-arity error, got {err}"
         );
     }
 

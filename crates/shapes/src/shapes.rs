@@ -542,20 +542,37 @@ impl<'s> Parser<'s> {
                     "sh:SPARQLFunction <{id}> parameter variable ?{var} is a SHACL/SHACL-AF reserved name"
                 ));
             }
-            let order = self
-                .first_object_of(&p_node, sh::ORDER)
-                .and_then(|t| match t {
-                    Term::Literal(lit) => lit.value().parse::<f64>().ok(),
-                    _ => None,
-                })
-                .unwrap_or(f64::INFINITY);
-            let optional = self
-                .first_object_of(&p_node, sh::OPTIONAL)
-                .and_then(|t| match t {
-                    Term::Literal(lit) => Some(lit.value() == "true"),
-                    _ => None,
-                })
-                .unwrap_or(false);
+            let order = match self.first_object_of(&p_node, sh::ORDER) {
+                None => f64::INFINITY,
+                Some(Term::Literal(lit)) => lit.value().parse::<f64>().map_err(|_| {
+                    format!(
+                        "sh:SPARQLFunction <{id}> parameter ?{var} has a non-numeric sh:order '{}'",
+                        lit.value()
+                    )
+                })?,
+                Some(other) => {
+                    return Err(format!(
+                        "sh:SPARQLFunction <{id}> parameter ?{var} has a non-literal sh:order {other}"
+                    ));
+                }
+            };
+            let optional = match self.first_object_of(&p_node, sh::OPTIONAL) {
+                None => false,
+                Some(Term::Literal(lit)) => match lit.value() {
+                    "true" | "1" => true,
+                    "false" | "0" => false,
+                    other => {
+                        return Err(format!(
+                            "sh:SPARQLFunction <{id}> parameter ?{var} has a non-boolean sh:optional '{other}'"
+                        ));
+                    }
+                },
+                Some(other) => {
+                    return Err(format!(
+                        "sh:SPARQLFunction <{id}> parameter ?{var} has a non-literal sh:optional {other}"
+                    ));
+                }
+            };
             let constraint = self.type_constraint_of(&p_node);
             raw.push(RawParam {
                 order,
@@ -2332,6 +2349,19 @@ mod tests {
         );
         let err = from_store(&load_store(&ttl)).expect_err("reserved param name must fail");
         assert!(err.contains("reserved"), "got: {err}");
+    }
+
+    #[test]
+    fn sparql_function_with_non_numeric_order_is_rejected() {
+        let ttl = format!(
+            r#"{PREFIXES}
+            ex:bad a sh:SPARQLFunction ;
+                sh:parameter [ sh:path ex:op1 ; sh:order "first" ] ;
+                sh:select "SELECT (1 AS ?result) WHERE {{}}" .
+            "#
+        );
+        let err = from_store(&load_store(&ttl)).expect_err("non-numeric sh:order must fail");
+        assert!(err.contains("sh:order"), "got: {err}");
     }
 
     #[test]
