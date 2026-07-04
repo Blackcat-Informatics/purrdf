@@ -44,11 +44,11 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 250 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 767 | 35 | 35 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 114 | 6 | 6 | 0 | GREEN |
-| SHACL (first-party corpus) | first-party frozen reports | 59 | 0 | 0 | 0 | GREEN |
+| SHACL (first-party corpus) | first-party frozen reports | 64 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 | 0 | 0 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 62 | 24 | 24 | 0 | GREEN |
-| purrdf.compat parity | first-party (differential vs rdflib) | 325 | 7 | 7 | 0 | GREEN |
+| purrdf.compat parity | first-party (differential vs rdflib) | 338 | 5 | 5 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
 
 The `Budget` column is the ledger ratchet's committed ceiling (see
@@ -69,13 +69,13 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative syntax | shexTest v2.1.0, `negativeSyntax/` | **99 / 99** rejected |
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes, `core/` + `sparql/` | **114 / 120** · 6 ledgered |
-| SHACL (first-party corpus) | `crates/shapes/corpus/` | **59 / 59** frozen expected reports |
+| SHACL (first-party corpus) | `crates/shapes/corpus/` | **64 / 64** frozen expected reports |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
 | SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **767** pass · 35 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 35 non-passes are 30 spec-inherent entailment-regime cases + 5 upstream-errata fixtures) |
 | Entailment (RDFS / OWL-RL) | native `purrdf-entail` forward-materialization reasoner | RDFS + OWL-RL closure; **40/70** W3C entailment cases (OWL-Direct/DL/RIF/D ledgered) |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **62** pass · 24 strict-xfail (ledgered) |
-| purrdf.compat parity | first-party differential vs rdflib 7.6 | **325** pass · 7 strict-xfail (ledgered) |
+| purrdf.compat parity | first-party differential vs rdflib 7.6 | **338** pass · 5 strict-xfail (ledgered) |
 | GTS transport | frozen cross-language vectors, `vectors/` | byte-exact |
 
 ## Where the suites live
@@ -85,7 +85,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   ShEx 2.1). See its README for provenance.
 - `vectors/shacl/` — the W3C SHACL test suite (`data-shapes-test-suite`),
   `core/` and `sparql/` manifests. See its README for provenance.
-- `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 59 cases with
+- `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 64 cases with
   byte-frozen expected reports, covering purrdf-specific behavior (reifier
   shapes, path forms, property pairs, qualified shapes, SHACL-AF
   `sh:expression`).
@@ -110,7 +110,7 @@ make conformance                                      # the single matrix (all o
 cargo test -p purrdf-iri                               # IRI + RFC 3986 resolution
 cargo test -p purrdf-shex                              # all four ShEx suites
 cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture   # W3C SHACL scoreboard
-cargo test -p purrdf-shapes --test conformance         # the 48-case frozen corpus
+cargo test -p purrdf-shapes --test conformance         # the 64-case frozen corpus
 cargo test -p purrdf-sparql-conformance                # W3C SPARQL
 cargo test -p purrdf-rdf                               # RDFC-1.0 + codec goldens
 cargo test -p purrdf-gts                               # GTS vectors

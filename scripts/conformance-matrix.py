@@ -254,7 +254,7 @@ def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
     log = ""
     if build:
         rc, bout = _run(
-            ["uv", "run", "--group", "acceptance", "maturin", "develop"], _PY_DIR
+            ["uv", "run", "--group", "dev", "maturin", "develop"], _PY_DIR
         )
         log += bout
         if rc != 0:
@@ -297,7 +297,7 @@ def _suite_py_compat(build: bool) -> SuiteResult:
     log = ""
     if build:
         rc, bout = _run(
-            ["uv", "run", "--group", "acceptance", "maturin", "develop"], _PY_DIR
+            ["uv", "run", "--group", "dev", "maturin", "develop"], _PY_DIR
         )
         log += bout
         if rc != 0:
@@ -306,7 +306,7 @@ def _suite_py_compat(build: bool) -> SuiteResult:
                 failed=-1, detail="maturin develop FAILED", ok=False, log=log,
             )
     rc, out = _run(
-        ["uv", "run", "--group", "acceptance", "pytest", "tests", "-q"], _PY_DIR
+        ["uv", "run", "--group", "dev", "pytest", "tests", "-q"], _PY_DIR
     )
     log += out
     passed = _int(re.search(r"(\d+) passed", out))
