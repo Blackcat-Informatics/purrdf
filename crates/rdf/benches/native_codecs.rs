@@ -8,7 +8,9 @@
 //! serializer exercise dataset-capable paths.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use purrdf_rdf::{parse_dataset, serialize_dataset, SerializeGraph};
+use purrdf_rdf::{
+    parse_dataset, parse_dataset_with, serialize_dataset, ParseOptions, SerializeGraph,
+};
 
 const ROWS: usize = 2_000;
 
@@ -93,6 +95,52 @@ fn nquads_fixture_escape_heavy(rows: usize) -> String {
     out
 }
 
+/// Span-tracking OFF vs ON over the SAME N-Quads fixture, REPORT-ONLY. The `off`
+/// arm is `parse_dataset_with(track_source_spans=false)`, which threads the
+/// zero-sized `NoSpans` collector — the same disabled-recording path
+/// `parse_dataset` compiles to; the `on` arm sets `track_source_spans=true`,
+/// forcing the sequential line pipeline and populating a `SpanTable`. This exists
+/// so the `off` path can be OBSERVED in the criterion report to be unchanged; it
+/// asserts NOTHING about relative timing (the machine is not quiet and numbers are
+/// indicative only) — the byte-identical dataset guarantee is proven by the
+/// `parse::tests` (`tracking_off_returns_no_table`, `dataset_is_identical_with_tracking`).
+fn bench_parse_nquads_span_tracking(c: &mut Criterion) {
+    let text = nquads_fixture(ROWS);
+    let mut group = c.benchmark_group("native_codecs_parse_span_tracking");
+    group.throughput(Throughput::Bytes(text.len() as u64));
+    group.bench_function("nquads_2k_spans_off", |bencher| {
+        bencher.iter(|| {
+            let options = ParseOptions {
+                track_source_spans: false,
+            };
+            let (dataset, table) = parse_dataset_with(
+                black_box(text.as_bytes()),
+                "application/n-quads",
+                None,
+                black_box(&options),
+            )
+            .expect("parse");
+            black_box((dataset, table));
+        });
+    });
+    group.bench_function("nquads_2k_spans_on", |bencher| {
+        bencher.iter(|| {
+            let options = ParseOptions {
+                track_source_spans: true,
+            };
+            let (dataset, table) = parse_dataset_with(
+                black_box(text.as_bytes()),
+                "application/n-quads",
+                None,
+                black_box(&options),
+            )
+            .expect("parse");
+            black_box((dataset, table));
+        });
+    });
+    group.finish();
+}
+
 fn bench_serialize_nquads(c: &mut Criterion) {
     let clean = nquads_fixture(ROWS);
     let clean_ds = parse_dataset(clean.as_bytes(), "application/n-quads", None).expect("parse");
@@ -133,6 +181,7 @@ criterion_group!(
     benches,
     bench_parse_nquads,
     bench_parse_nquads_parallel_vs_sequential,
+    bench_parse_nquads_span_tracking,
     bench_serialize_nquads
 );
 criterion_main!(benches);

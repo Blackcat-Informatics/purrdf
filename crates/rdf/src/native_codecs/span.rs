@@ -9,16 +9,24 @@
 //! subject X come from?", so this module adds a side table that records the first
 //! source [`Position`] of every statement's subject WITHOUT touching the frozen IR.
 //!
-//! ## True zero-cost when off
+//! ## Designed to be zero-cost when off
 //!
 //! Collection is gated by the [`SpanCollector`] associated const [`SpanCollector::ENABLED`].
 //! Every statement producer is generic over the collector and guards recording with
 //! `if S::ENABLED { … }`. The default [`NoSpans`] collector is a zero-sized type with
 //! `ENABLED = false`, so under monomorphization the guard becomes `if false` and the
-//! optimizer deletes the subject-key construction and the `record` call entirely — the
-//! pre-existing [`parse_dataset`](crate::parse_dataset) path (which threads `NoSpans`)
-//! is byte-identical to the code that existed before this feature. Recording is a
-//! RUNTIME option ([`ParseOptions::track_source_spans`]), never a Cargo feature.
+//! optimizer is expected to delete the subject-key construction and the `record` call
+//! entirely, leaving the pre-existing [`parse_dataset`](crate::parse_dataset) path (which
+//! threads `NoSpans`) the same as the code that existed before this feature. Recording is
+//! a RUNTIME option ([`ParseOptions::track_source_spans`]), never a Cargo feature.
+//!
+//! The `native_codecs_parse_span_tracking` group in the `native_codecs` criterion bench
+//! is the REPORT-ONLY reference for observing the off path: it runs the tracking-off and
+//! tracking-on parses side by side so the disabled path can be watched in the report. It
+//! asserts nothing about timing (benches are report-only here). The behavioural guarantee
+//! — that the frozen dataset is identical whether or not tracking is requested — is proven
+//! by the `parse::tests` (`tracking_off_returns_no_table`, `dataset_is_identical_with_tracking`),
+//! not by the bench.
 
 use std::collections::HashMap;
 
