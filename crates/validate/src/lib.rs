@@ -31,6 +31,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod build;
 pub mod model;
 
+pub use build::{
+    build_diagnostics_sarif, build_report_sarif, diagnostics_to_sarif_string, report_to_sarif_string,
+    SarifOptions,
+};
 pub use model::{to_json_pretty, Level, SarifLog, SARIF_SCHEMA, SARIF_VERSION};
