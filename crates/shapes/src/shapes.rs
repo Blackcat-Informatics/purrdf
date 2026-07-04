@@ -1260,6 +1260,20 @@ impl<'s> Parser<'s> {
         // order; parameter bindings follow the component's declared parameter
         // order. If no applicable validator exists for this shape scope the
         // component is skipped silently.
+        let shape_severity = self
+            .first_object_of(id, sh::SEVERITY)
+            .and_then(|t| severity_from_term(&t));
+        let mut shape_messages: Vec<String> = self
+            .objects_of(id, sh::MESSAGE)
+            .into_iter()
+            .filter_map(|t| match t {
+                Term::Literal(lit) => Some(lit.value().to_owned()),
+                _ => None,
+            })
+            .collect();
+        shape_messages.sort();
+        let shape_message = shape_messages.into_iter().next();
+
         let mut components: Vec<&crate::components::Component> =
             self.component_registry.components.values().collect();
         components.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
@@ -1302,24 +1316,12 @@ impl<'s> Parser<'s> {
                 },
             };
 
-            let shape_severity = self
-                .first_object_of(id, sh::SEVERITY)
-                .and_then(|t| severity_from_term(&t));
-            let mut shape_messages: Vec<String> = self
-                .objects_of(id, sh::MESSAGE)
-                .into_iter()
-                .filter_map(|t| match t {
-                    Term::Literal(lit) => Some(lit.value().to_owned()),
-                    _ => None,
-                })
-                .collect();
-            shape_messages.sort();
-            let shape_message = shape_messages.into_iter().next();
-
             let severity = shape_severity
+                .clone()
                 .or_else(|| validator.severity.clone())
                 .or_else(|| component.severity.clone());
             let message = shape_message
+                .clone()
                 .or_else(|| validator.message.clone())
                 .or_else(|| component.message.clone());
 
