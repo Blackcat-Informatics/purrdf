@@ -183,7 +183,11 @@ fn substitute_message_templates(msg: &str, bindings: &[(String, Term)]) -> Strin
     re.replace_all(msg, |caps: &regex::Captures<'_>| {
         let name = &caps[2];
         match bindings.iter().find(|(n, _)| n == name) {
-            Some((_, term)) => term.to_string(),
+            Some((_, term)) => match term {
+                Term::Literal(lit) => lit.value().to_owned(),
+                Term::NamedNode(n) => n.as_str().to_owned(),
+                other => other.to_string(),
+            },
             None => caps[0].to_owned(),
         }
     })
