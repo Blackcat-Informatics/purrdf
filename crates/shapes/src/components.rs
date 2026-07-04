@@ -1,18 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Data model for SHACL custom constraint components and their validator registry.
+//! SHACL-SPARQL custom constraint component registry, parsing, and evaluation.
 //!
-//! A [`ComponentRegistry`] holds constraint components declared in a shapes graph
-//! (instances of `sh:ConstraintComponent`) together with their `sh:Parameter`
-//! declarations and SPARQL-based validators. The registry is populated at shape
-//! parse time and consulted by the engine when it encounters a predicate that is
-//! a declared component parameter path.
-//!
-//! These types are scaffolding for the custom component parser/evaluator added in
-//! later tasks; they are exported from a `pub(crate)` module now and will be
-//! constructed by the component loader once it lands.
-#![allow(dead_code, unreachable_pub)]
+//! This module implements the machinery for user-declared constraint components
+//! (`sh:ConstraintComponent`): discovering them in a shapes graph, parsing their
+//! `sh:Parameter` declarations and SPARQL validators (`sh:nodeValidator`,
+//! `sh:propertyValidator`, `sh:validator`), and evaluating those validators at
+//! validation time. A [`ComponentRegistry`] is populated while the shapes graph is
+//! parsed and is later consulted by the engine to bind component parameters and
+//! run the matching ASK or SELECT query for each shape usage.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
@@ -30,7 +27,7 @@ use crate::term::{term_value_to_native, NamedNode, Term};
 
 /// Discriminator for a SPARQL validator's query form.
 #[derive(Debug, Clone)]
-pub enum ValidatorKind {
+pub(crate) enum ValidatorKind {
     /// An `ASK` query: a result of `true` means the focus node/value is valid.
     Ask,
     /// A `SELECT` query: each result row denotes a validation violation.
@@ -39,7 +36,7 @@ pub enum ValidatorKind {
 
 /// A SPARQL validator attached to a constraint component.
 #[derive(Debug, Clone)]
-pub struct Validator {
+pub(crate) struct Validator {
     /// Whether the validator is an ASK or SELECT query.
     pub kind: ValidatorKind,
     /// Full query text with any `PREFIX` header already prepended.
@@ -52,7 +49,7 @@ pub struct Validator {
 
 /// Declaration of a single `sh:Parameter` for a constraint component.
 #[derive(Debug, Clone)]
-pub struct Parameter {
+pub(crate) struct Parameter {
     /// The parameter predicate (`sh:path` of the parameter declaration).
     pub path: NamedNode,
     /// The SPARQL local name used to bind the parameter value in the validator.
@@ -63,7 +60,7 @@ pub struct Parameter {
 
 /// A SHACL custom constraint component.
 #[derive(Debug, Clone)]
-pub struct Component {
+pub(crate) struct Component {
     /// The component IRI (the `sh:ConstraintComponent` instance).
     pub id: NamedNode,
     /// Declared parameters, sorted by path IRI string for determinism.
@@ -83,12 +80,12 @@ pub struct Component {
 /// Registry of custom constraint components keyed by component IRI string.
 ///
 /// `by_parameter_path` maps a declared parameter predicate IRI string to the
-/// IRI string of the component it belongs to, allowing the engine to recognize
-/// custom constraint predicates while parsing shapes.
+/// owning component IRI (`NamedNode`), allowing the engine to recognize custom
+/// constraint predicates while parsing shapes.
 #[derive(Debug, Default, Clone)]
-pub struct ComponentRegistry {
-    /// Parameter predicate IRI string → owning component IRI string.
-    pub by_parameter_path: HashMap<String, String>,
+pub(crate) struct ComponentRegistry {
+    /// Parameter predicate IRI string → owning component IRI.
+    pub by_parameter_path: HashMap<String, NamedNode>,
     /// Component IRI string → component definition.
     pub components: HashMap<String, Component>,
 }
@@ -108,7 +105,7 @@ impl ComponentRegistry {
     ///
     /// Returns `Err(String)` when a component, parameter, or validator is
     /// malformed or when a validator query violates the pre-binding restrictions.
-    pub fn parse(data: &IrDataGraph, doc_prefixes: &[(String, String)]) -> Result<Self, String> {
+    pub(crate) fn parse(data: &IrDataGraph, doc_prefixes: &[(String, String)]) -> Result<Self, String> {
         let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
         let mut component_iris: Vec<String> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
@@ -145,12 +142,12 @@ impl ComponentRegistry {
                 &component_iri,
                 &mut subclass_memo,
             )?;
-            let id = component.id.as_str().to_owned();
             for param in &component.parameters {
                 registry
                     .by_parameter_path
-                    .insert(param.path.as_str().to_owned(), id.clone());
+                    .insert(param.path.as_str().to_owned(), component.id.clone());
             }
+            let id = component.id.as_str().to_owned();
             registry.components.insert(id, component);
         }
         Ok(registry)
@@ -200,7 +197,7 @@ fn substitute_message_templates(msg: &str, bindings: &[(String, Term)]) -> Strin
 /// parameter bindings. A result of `true` means conforming; `false` emits one
 /// [`ValidationResult`].
 #[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
-pub fn eval_ask_validator(
+pub(crate) fn eval_ask_validator(
     dataset: &Arc<RdfDataset>,
     focus: &Term,
     value_nodes: &[Term],
@@ -255,7 +252,7 @@ pub fn eval_ask_validator(
 /// bound. Row bindings take precedence over parameter bindings for message
 /// template substitution.
 #[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
-pub fn eval_select_validator(
+pub(crate) fn eval_select_validator(
     dataset: &Arc<RdfDataset>,
     focus: &Term,
     validator: &ComponentValidator,
@@ -342,15 +339,19 @@ pub fn eval_select_validator(
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 ///
+/// Extract the SPARQL local name for an IRI: the substring after the last `/`,
+/// `#`, or `:` delimiter. This is used to derive the variable name bound to a
+/// declared component parameter.
+///
 /// ```ignore
-/// use purrdf_shapes::components::sparql_local_name;
+/// use crate::components::sparql_local_name;
 ///
 /// assert_eq!(sparql_local_name("http://example.org/ns#requiredParam"), "requiredParam");
 /// assert_eq!(sparql_local_name("http://example.org/ns/requiredParam"), "requiredParam");
 /// assert_eq!(sparql_local_name("ex:requiredParam"), "requiredParam");
 /// ```
 #[must_use]
-pub fn sparql_local_name(iri: &str) -> String {
+pub(crate) fn sparql_local_name(iri: &str) -> String {
     let mut idx = iri.rfind('/').map_or(0, |i| i + 1);
     if let Some(i) = iri.rfind('#') {
         idx = idx.max(i + 1);
@@ -750,9 +751,10 @@ mod tests {
             severity: None,
         };
         let id = component.id.as_str().to_owned();
+        let component_iri = component.id.clone();
         let param_path = component.parameters[0].path.as_str().to_owned();
-        registry.components.insert(id.clone(), component);
-        registry.by_parameter_path.insert(param_path, id);
+        registry.components.insert(id, component);
+        registry.by_parameter_path.insert(param_path, component_iri);
         assert_eq!(registry.components.len(), 1);
         assert_eq!(registry.by_parameter_path.len(), 1);
     }
