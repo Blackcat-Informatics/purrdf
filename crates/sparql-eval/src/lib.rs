@@ -81,7 +81,9 @@ pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
 pub use scratch::{ScratchId, ScratchInterner, SolutionTerm};
 pub use solution::{compatible, Solution, SolutionSeq, VarSchema};
 pub use update::GraphResolver;
-pub use user_fn::{NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry};
+pub use user_fn::{
+    NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry,
+};
 
 /// A deterministic, seed-free hasher builder (`AHasher` with fixed keys).
 ///

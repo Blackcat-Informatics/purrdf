@@ -1630,7 +1630,8 @@ fn eval_function(
             // IRI never collides with a datatype IRI.
             if let Some(registry) = ctx.user_functions {
                 if let Some(func) = registry.resolve(iri.as_str()) {
-                    let result = crate::user_fn::eval_user_function(func, iri.as_str(), &vals, ctx)?;
+                    let result =
+                        crate::user_fn::eval_user_function(func, iri.as_str(), &vals, ctx)?;
                     return Ok(result.map(|value| intern(ctx, value)));
                 }
             }

@@ -430,13 +430,17 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
                 };
                 arg_terms.push((format!("a{idx}"), only.clone()));
             }
-            let placeholders: Vec<String> = (0..arg_terms.len()).map(|i| format!("?a{i}")).collect();
+            let placeholders: Vec<String> =
+                (0..arg_terms.len()).map(|i| format!("?a{i}")).collect();
             let expr_string = match builtin_keyword(iri.as_str()) {
                 Some(kw) => format!("{kw}({})", placeholders.join(", ")),
                 None => format!("<{}>({})", iri.as_str(), placeholders.join(", ")),
             };
-            match crate::sparql::eval_scalar_expr(&store.sparql_dataset(), &expr_string, &arg_terms)?
-            {
+            match crate::sparql::eval_scalar_expr(
+                &store.sparql_dataset(),
+                &expr_string,
+                &arg_terms,
+            )? {
                 // A SPARQL error/unbound result is the correct SHACL-AF "no
                 // value" signal — an empty node set, not a forced violation.
                 Some(term) => Ok(vec![term]),
@@ -462,7 +466,11 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
                 NamedNode::new_unchecked(xsd::INTEGER),
             ))])
         }
-        NodeExpr::OrderBy { of, key, descending } => {
+        NodeExpr::OrderBy {
+            of,
+            key,
+            descending,
+        } => {
             // Authority-grounded (W3C/DASH) semantics: `sh:orderby` names a
             // sort-key node expression, evaluated PER ELEMENT with that element
             // as focus. Elements are ordered by SPARQL ORDER BY *value* semantics
@@ -510,7 +518,11 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
                 })
                 .collect();
             out.sort_by(|a, b| {
-                let primary = if *descending { b.1.cmp(&a.1) } else { a.1.cmp(&b.1) };
+                let primary = if *descending {
+                    b.1.cmp(&a.1)
+                } else {
+                    a.1.cmp(&b.1)
+                };
                 // Total-order tie-break, always ascending by canonical term string.
                 primary.then_with(|| a.2.cmp(&b.2))
             });
@@ -518,7 +530,8 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
         }
         NodeExpr::Offset { of, n } => {
             let out = eval_node_expr(store, focus, of, guard)?;
-            let skip = usize::try_from(*n).map_err(|e| format!("sh:offset value too large: {e}"))?;
+            let skip =
+                usize::try_from(*n).map_err(|e| format!("sh:offset value too large: {e}"))?;
             // Ordering is the caller's responsibility (an OrderBy wrapper) — apply
             // the offset to the already-produced sequence. The parser nests these
             // as `Limit(Offset(OrderBy(core)))`, so evaluation composes naturally:
@@ -549,9 +562,8 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
                 guard.enter(&shape_id, &value_str)?;
                 // Capture the Result, exit the guard, THEN propagate — a clean
                 // exit before the `?` avoids leaving stale in-flight state.
-                let keep = crate::constraints::conforms_with_depth(
-                    store, &value, shape, next_depth,
-                );
+                let keep =
+                    crate::constraints::conforms_with_depth(store, &value, shape, next_depth);
                 guard.exit(&shape_id, &value_str);
                 if keep? {
                     kept.push(value);
@@ -1044,10 +1056,12 @@ mod tests {
         let mut guard = RecursionGuard::new();
         let expr = NodeExpr::Call(FnCall::UserDefined {
             iri: NamedNode::new_unchecked("http://example.org/ns#double"),
-            args: vec![NodeExpr::Constant(Term::Literal(Literal::new_typed_literal(
-                "21",
-                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
-            )))],
+            args: vec![NodeExpr::Constant(Term::Literal(
+                Literal::new_typed_literal(
+                    "21",
+                    NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+                ),
+            ))],
         });
         let out = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("user fn dispatches");
         assert_eq!(

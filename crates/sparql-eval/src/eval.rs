@@ -555,7 +555,10 @@ impl<'d> EvalCtx<'d> {
     /// without one leaves it `None` and a call-position IRI unknown to the closed
     /// `PurrdfFn` set is an XSD cast or an unsupported-function error.
     #[must_use]
-    pub fn with_user_functions(mut self, registry: &'d crate::user_fn::UserFunctionRegistry) -> Self {
+    pub fn with_user_functions(
+        mut self,
+        registry: &'d crate::user_fn::UserFunctionRegistry,
+    ) -> Self {
         self.user_functions = Some(registry);
         self
     }
