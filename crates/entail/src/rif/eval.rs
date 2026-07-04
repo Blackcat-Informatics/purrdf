@@ -99,11 +99,12 @@ pub fn materialize_rif(ds: &RdfDataset, rules: &RuleSet) -> Result<Arc<RdfDatase
     chase(&mut facts, seed, &compiled);
 
     // Emit: original quads (all graphs) + every seeded/derived fact that is not an
-    // original default-graph triple, in deterministic first-seen order.
+    // original default-graph triple, in a deterministic order.
     let mut b = RdfDatasetBuilder::new();
     b.push_dataset(ds);
-    // Re-walk in first-seen order for determinism: collect all facts, sorted by the
-    // order they were interned is not stable, so rebuild an ordered list.
+    // `HashSet` iteration order is not stable across runs, so sort the accumulated
+    // facts by their interned term ids to get a deterministic (not insertion-order)
+    // emission order.
     let mut ordered: Vec<[u32; 3]> = facts.iter().copied().collect();
     ordered.sort_unstable();
     for t in ordered {
