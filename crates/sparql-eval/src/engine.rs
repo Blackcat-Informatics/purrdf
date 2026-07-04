@@ -575,7 +575,7 @@ mod tests {
         assert_eq!(col0(all).len(), 3, "the cached parse is unmodified");
     }
 
-    // ── SHACL-SPARQL pre-binding (Stage 1, issue #13) ─────────────────────────
+    // ── SHACL-SPARQL pre-binding (Stage 1) ───────────────────────────────────
 
     /// Run a SELECT query through the SHACL pre-binding path and return the
     /// sorted first-column debug strings.
