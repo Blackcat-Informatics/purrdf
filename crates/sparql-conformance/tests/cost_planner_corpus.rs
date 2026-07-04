@@ -10,18 +10,21 @@
 //! reifiers, and GRAPH scopes.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult};
+use purrdf_core::{RdfDataset, SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 use purrdf_sparql_conformance::manifest::{SparqlTestCase, TestKind};
-use purrdf_sparql_eval::{EvalOptions, NativeSparqlEngine, ParserOptions, StandpointPredicates};
+use purrdf_sparql_eval::{
+    EvalOptions, LocalRemoteQuerySource, NativeSparqlEngine, ParserOptions, StandpointPredicates,
+};
 
 const BASE: &str = "http://purrdf.test/manifest/";
 const EXT_NS: &str = "https://example.org/ext/";
 
 /// Build an engine with the requested planner mode. Both engines share the same
 /// parse-time configuration the conformance harness uses.
-fn engine(cost: bool) -> NativeSparqlEngine {
+fn make_engine(cost: bool) -> NativeSparqlEngine {
     let options = EvalOptions {
         exists_memo: true,
         force_structural_bgp_order: !cost,
@@ -37,22 +40,24 @@ fn engine(cost: bool) -> NativeSparqlEngine {
         .with_eval_options(options)
 }
 
-/// Evaluate `case` with `cost` planner (`true`) or forced structural order
-/// (`false`). Mirrors the conformance harness's evaluation path, including the
-/// in-memory SERVICE source when the case is federated.
-fn eval_case(case: &SparqlTestCase, cost: bool) -> Result<SparqlResult, String> {
-    let dataset = purrdf_sparql_conformance::run::load_dataset(case)?;
-    let query_text = std::fs::read_to_string(&case.query)
-        .map_err(|e| format!("read query {}: {e}", case.query.display()))?;
+/// Evaluate `case` using a pre-built `engine`, a pre-loaded `dataset`, and the
+/// already-read `query_text`. The in-memory SERVICE `remote` source is reused when
+/// the case is federated, so fixture parsing is not repeated between planner runs.
+fn eval_case(
+    engine: &NativeSparqlEngine,
+    case: &SparqlTestCase,
+    dataset: &Arc<RdfDataset>,
+    query_text: &str,
+    remote: Option<&LocalRemoteQuerySource>,
+) -> Result<SparqlResult, String> {
     let request = SparqlRequest {
-        query: &query_text,
+        query: query_text,
         base_iri: Some(BASE),
         substitutions: &[],
     };
-    let remote = purrdf_sparql_conformance::service::build(case)?;
     let result = match remote {
-        Some(source) => engine(cost).query_with_source(&dataset, request, &source),
-        None => engine(cost).query(&dataset, request),
+        Some(source) => engine.query_with_source(dataset, request, source),
+        None => engine.query(dataset, request),
     }
     .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
     Ok(result)
@@ -103,6 +108,11 @@ fn cost_and_structural_planner_produce_identical_results() {
         manifests.len()
     );
 
+    // Build each planner variant once. Query plans are cached per engine, and both
+    // engines share the same parser/eval configuration the conformance harness uses.
+    let cost_engine = make_engine(true);
+    let structural_engine = make_engine(false);
+
     let mut cases = 0usize;
     let mut skipped = 0usize;
     let mut mismatches: Vec<(String, String)> = Vec::new();
@@ -119,22 +129,47 @@ fn cost_and_structural_planner_produce_identical_results() {
                 .unwrap_or_else(|e| panic!("read query {}: {e}", case.query.display()));
             let ordered = query_is_top_level_ordered(&query_text);
 
-            let cost_result = match eval_case(&case, true) {
-                Ok(r) => r,
-                Err(msg) => {
-                    // If both planners error, the case is not a planner-differential
-                    // failure (e.g. an unsupported feature). Record a skip.
-                    match eval_case(&case, false) {
-                        Ok(_) => mismatches.push((
-                            case.iri.clone(),
-                            format!("cost planner errored while structural succeeded: {msg}"),
-                        )),
-                        Err(_) => skipped += 1,
-                    }
-                    continue;
-                }
+            // Load the dataset and federated SERVICE source once per case and reuse
+            // them across both planner runs.
+            let Ok(dataset) = purrdf_sparql_conformance::run::load_dataset(&case) else {
+                // Both planners would fail with the same broken input.
+                skipped += 1;
+                continue;
             };
-            let structural_result = match eval_case(&case, false) {
+            let Ok(remote) = purrdf_sparql_conformance::service::build(&case) else {
+                skipped += 1;
+                continue;
+            };
+
+            let cost_result =
+                match eval_case(&cost_engine, &case, &dataset, &query_text, remote.as_ref()) {
+                    Ok(r) => r,
+                    Err(msg) => {
+                        // If both planners error, the case is not a planner-differential
+                        // failure (e.g. an unsupported feature). Record a skip.
+                        match eval_case(
+                            &structural_engine,
+                            &case,
+                            &dataset,
+                            &query_text,
+                            remote.as_ref(),
+                        ) {
+                            Ok(_) => mismatches.push((
+                                case.iri.clone(),
+                                format!("cost planner errored while structural succeeded: {msg}"),
+                            )),
+                            Err(_) => skipped += 1,
+                        }
+                        continue;
+                    }
+                };
+            let structural_result = match eval_case(
+                &structural_engine,
+                &case,
+                &dataset,
+                &query_text,
+                remote.as_ref(),
+            ) {
                 Ok(r) => r,
                 Err(msg) => {
                     mismatches.push((
@@ -150,7 +185,7 @@ fn cost_and_structural_planner_produce_identical_results() {
                 &structural_result,
                 ordered,
             ) {
-                mismatches.push((case.iri.clone(), msg));
+                mismatches.push((case.iri.clone(), format!("result mismatch: {msg}")));
             }
         }
     }
