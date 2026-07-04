@@ -105,11 +105,19 @@ pub enum NodeExpr {
         /// The number of leading values to drop.
         n: u64,
     },
-    /// `sh:orderby` — the operand's result sorted ascending or descending.
+    /// `sh:orderby` — the operand's result sorted by a per-element sort key.
+    ///
+    /// Authority-grounded (W3C/DASH) semantics: `sh:orderby` names a node
+    /// expression whose per-element values are the SORT KEY. The key is
+    /// evaluated once per input element WITH THAT ELEMENT AS FOCUS, and elements
+    /// are ordered by SPARQL value order over their keys. Ordering defaults to
+    /// ASCENDING; direction is a separate flag (`sh:desc`).
     OrderBy {
-        /// The operand expression.
+        /// The input sequence expression (the operand to sort).
         of: Box<Self>,
-        /// Whether to sort in descending order.
+        /// The sort-key node expression, evaluated per element (element-as-focus).
+        key: Box<Self>,
+        /// Whether to sort in descending order (default ascending).
         descending: bool,
     },
     /// `sh:exists` — true iff the inner node expression yields at least one node
@@ -396,14 +404,52 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
                 NamedNode::new_unchecked(xsd::INTEGER),
             ))])
         }
-        NodeExpr::OrderBy { of, descending } => {
-            // Ordering follows SPARQL ORDER BY *value* semantics via the engine
-            // (numeric/typed value order — e.g. "2"^^xsd:integer < "10"^^xsd:integer
-            // — NOT N-Triples lexical order), and PRESERVES duplicates (SPARQL
-            // sequence semantics — no dedup). Blank-node / quoted-triple operands
-            // cannot appear in a VALUES block and are a hard error.
-            let operands = eval_node_expr(store, focus, of, guard)?;
-            crate::sparql::eval_order(&store.sparql_dataset(), &operands, *descending)
+        NodeExpr::OrderBy { of, key, descending } => {
+            // Authority-grounded (W3C/DASH) semantics: `sh:orderby` names a
+            // sort-key node expression, evaluated PER ELEMENT with that element
+            // as focus. Elements are ordered by SPARQL ORDER BY *value* semantics
+            // over their keys (numeric/typed value order — e.g.
+            // "2"^^xsd:integer < "10"^^xsd:integer — NOT N-Triples lexical
+            // order). Direction defaults to ascending (`descending` flips it).
+            let elements = eval_node_expr(store, focus, of, guard)?;
+            if elements.is_empty() {
+                return Ok(Vec::new());
+            }
+            // Sort key per element, element-as-focus. Exactly one key term per
+            // element (0 or >1 is a hard error — no optionality).
+            let mut keyed: Vec<(Term, Term)> = Vec::with_capacity(elements.len());
+            for e in elements {
+                let ks = eval_node_expr(store, &e, key, guard)?;
+                let [k] = ks.as_slice() else {
+                    return Err(format!(
+                        "sh:orderby key must yield exactly one value per node, got {} for {e}",
+                        ks.len()
+                    ));
+                };
+                keyed.push((e, k.clone()));
+            }
+            // Value-order the DISTINCT keys via the SPARQL engine (reuse
+            // `eval_order`), build a rank map, then sort elements by (rank,
+            // canonical term string) so value-equal keys still yield a
+            // byte-stable total order (tie-break).
+            let mut distinct: Vec<Term> = keyed.iter().map(|(_, k)| k.clone()).collect();
+            distinct.sort_by_cached_key(Term::to_string);
+            distinct.dedup();
+            let ranked = crate::sparql::eval_order(&store.sparql_dataset(), &distinct, false)?;
+            let mut rank: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for (i, k) in ranked.iter().enumerate() {
+                rank.insert(k.to_string(), i);
+            }
+            let mut out = keyed;
+            out.sort_by(|a, b| {
+                let ra = rank.get(&a.1.to_string()).copied().unwrap_or(usize::MAX);
+                let rb = rank.get(&b.1.to_string()).copied().unwrap_or(usize::MAX);
+                let primary = if *descending { rb.cmp(&ra) } else { ra.cmp(&rb) };
+                // Total-order tie-break, always ascending by canonical term string.
+                primary.then_with(|| a.0.to_string().cmp(&b.0.to_string()))
+            });
+            Ok(out.into_iter().map(|(e, _)| e).collect())
         }
         NodeExpr::Offset { of, n } => {
             let out = eval_node_expr(store, focus, of, guard)?;
@@ -995,6 +1041,7 @@ mod tests {
         let mut guard = RecursionGuard::new();
         let asc = NodeExpr::OrderBy {
             of: Box::new(NodeExpr::Path(pred("e"))),
+            key: Box::new(NodeExpr::This),
             descending: false,
         };
         let result = eval_node_expr(&data, &ex("x"), &asc, &mut guard).expect("orderby evals");
@@ -1002,10 +1049,61 @@ mod tests {
 
         let desc = NodeExpr::OrderBy {
             of: Box::new(NodeExpr::Path(pred("e"))),
+            key: Box::new(NodeExpr::This),
             descending: true,
         };
         let result = eval_node_expr(&data, &ex("x"), &desc, &mut guard).expect("orderby evals");
         assert_eq!(result, vec![ex("c"), ex("b"), ex("a")]);
+    }
+
+    #[test]
+    fn orderby_ties_break_by_canonical_term_string() {
+        // Two DISTINCT elements (ex:a, ex:b) share the SAME sort-key value (1),
+        // so the value-order engine cannot distinguish them. The output must be
+        // deterministically tie-broken by canonical term string (ascending),
+        // independent of input order — proving byte-stability does not rely on
+        // the SPARQL engine's tie-break.
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:k 1 .
+            ex:b ex:k 1 .
+        ",
+        );
+        let mut guard = RecursionGuard::new();
+        // Feed the input in reversed order (ex:b before ex:a) via a Union so the
+        // engine's natural order can't accidentally produce the expected answer.
+        let expr = NodeExpr::OrderBy {
+            of: Box::new(NodeExpr::Union(vec![
+                NodeExpr::Constant(ex("b")),
+                NodeExpr::Constant(ex("a")),
+            ])),
+            key: Box::new(NodeExpr::Path(pred("k"))),
+            descending: false,
+        };
+        let result = eval_node_expr(&data, &ex("x"), &expr, &mut guard).expect("orderby evals");
+        assert_eq!(
+            result,
+            vec![ex("a"), ex("b")],
+            "ties break ascending by term"
+        );
+
+        // Descending flips the primary key, but the tie-break stays ascending.
+        let expr_desc = NodeExpr::OrderBy {
+            of: Box::new(NodeExpr::Union(vec![
+                NodeExpr::Constant(ex("b")),
+                NodeExpr::Constant(ex("a")),
+            ])),
+            key: Box::new(NodeExpr::Path(pred("k"))),
+            descending: true,
+        };
+        let result =
+            eval_node_expr(&data, &ex("x"), &expr_desc, &mut guard).expect("orderby evals");
+        assert_eq!(
+            result,
+            vec![ex("a"), ex("b")],
+            "tie-break is always ascending even when descending"
+        );
     }
 
     #[test]
@@ -1016,6 +1114,7 @@ mod tests {
         let expr = NodeExpr::Offset {
             of: Box::new(NodeExpr::OrderBy {
                 of: Box::new(NodeExpr::Path(pred("e"))),
+                key: Box::new(NodeExpr::This),
                 descending: false,
             }),
             n: 1,
@@ -1031,6 +1130,7 @@ mod tests {
         let expr = NodeExpr::Limit {
             of: Box::new(NodeExpr::OrderBy {
                 of: Box::new(NodeExpr::Path(pred("e"))),
+                key: Box::new(NodeExpr::This),
                 descending: false,
             }),
             n: 2,
@@ -1049,6 +1149,7 @@ mod tests {
             of: Box::new(NodeExpr::Offset {
                 of: Box::new(NodeExpr::OrderBy {
                     of: Box::new(NodeExpr::Path(pred("e"))),
+                    key: Box::new(NodeExpr::This),
                     descending: false,
                 }),
                 n: 1,

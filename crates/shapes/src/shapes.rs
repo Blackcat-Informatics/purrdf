@@ -1630,15 +1630,35 @@ impl<'s> Parser<'s> {
     fn parse_node_expr_wrapped(&mut self, node: &Term) -> Result<NodeExpr, String> {
         let mut expr = self.parse_node_expr_core(node)?;
 
-        // ORDER BY (innermost wrapper).
-        if let Some(dir) = self.first_object_of(node, sh::ORDERBY) {
-            // NOTE: the ordering DIRECTION surface is under-specified. Assumption:
-            // `sh:orderby` points at a direction marker read as the boolean literal
-            // `true` ⇒ descending; anything else (including a non-boolean object)
-            // ⇒ ascending. A later corpus task pins the real comparator shape.
-            let descending = matches!(&dir, Term::Literal(lit) if lit.value() == "true");
+        // ORDER BY (innermost wrapper). `sh:orderby` names the sort-key node
+        // expression (evaluated element-as-focus); direction is the separate
+        // `sh:desc` boolean flag (default ascending).
+        if let Some(key_node) = self.first_object_of(node, sh::ORDERBY) {
+            let key = self.parse_node_expr(&key_node)?;
+            let descending = match self.first_object_of(node, sh::DESC) {
+                None => false,
+                Some(term @ Term::Literal(_)) => {
+                    let Term::Literal(lit) = &term else {
+                        unreachable!()
+                    };
+                    match purrdf_xsd::parse_by_iri(lit.value(), lit.datatype_str()) {
+                        Ok(Some(purrdf_xsd::XsdValue::Boolean(b))) => b,
+                        _ => {
+                            return Err(format!(
+                                "sh:desc must be an xsd:boolean literal, got {term}"
+                            ));
+                        }
+                    }
+                }
+                Some(other) => {
+                    return Err(format!(
+                        "sh:desc must be an xsd:boolean literal, got {other}"
+                    ));
+                }
+            };
             expr = NodeExpr::OrderBy {
                 of: Box::new(expr),
+                key: Box::new(key),
                 descending,
             };
         }
@@ -3217,7 +3237,7 @@ mod tests {
     fn node_expr_limit_offset_orderby_wrap_core() {
         // Paging keys wrap the same node's core expression: LIMIT(OFFSET(ORDERBY(core))).
         let expr = parse_expr(&expr_ttl(
-            "ex:root ex:expr [ sh:path ex:v ; sh:orderby true ; sh:offset 2 ; sh:limit 5 ] .",
+            "ex:root ex:expr [ sh:path ex:v ; sh:orderby sh:this ; sh:desc true ; sh:offset 2 ; sh:limit 5 ] .",
         ))
         .expect("parse");
         let NodeExpr::Limit { of, n } = expr else {
@@ -3228,10 +3248,16 @@ mod tests {
             panic!("expected Offset under Limit, got {of:?}");
         };
         assert_eq!(n, 2);
-        let NodeExpr::OrderBy { of, descending } = *of else {
+        let NodeExpr::OrderBy {
+            of,
+            key,
+            descending,
+        } = *of
+        else {
             panic!("expected OrderBy under Offset, got {of:?}");
         };
-        assert!(descending, "sh:orderby true ⇒ descending");
+        assert!(descending, "sh:desc true ⇒ descending");
+        assert!(matches!(*key, NodeExpr::This), "sort key is sh:this");
         assert!(matches!(*of, NodeExpr::Path(_)), "core is the path");
     }
 }

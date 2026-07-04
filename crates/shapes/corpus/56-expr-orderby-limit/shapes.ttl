@@ -6,6 +6,7 @@ ex:OrderLimitShape
     sh:targetClass ex:C ;
     sh:expression [
         sh:path ex:p ;
-        sh:orderby true ;
+        sh:orderby sh:this ;
+        sh:desc true ;
         sh:limit 1
     ] .

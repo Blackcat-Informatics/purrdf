@@ -240,6 +240,10 @@ pub mod sh {
 
     pub const ORDERBY: &str = "http://www.w3.org/ns/shacl#orderby";
 
+    /// The adopted PurRDF DASH-extension direction flag for `sh:orderby`
+    /// (boolean; `true` ⇒ descending, default ascending).
+    pub const DESC: &str = "http://www.w3.org/ns/shacl#desc";
+
     pub const EXISTS: &str = "http://www.w3.org/ns/shacl#exists";
 
     pub const SPARQL_FUNCTION: &str = "http://www.w3.org/ns/shacl#SPARQLFunction";
