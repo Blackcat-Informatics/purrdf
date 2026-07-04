@@ -260,36 +260,32 @@ where
         }
     }
 
-    // Deterministic sort key: (focus_node, component, source_shape, path, value)
-    all_results.sort_by(|a, b| {
-        let ka = (
-            a.focus_node.to_string(),
-            a.source_constraint_component.to_string(),
-            a.source_shape.to_string(),
-            a.result_path
+    // Deterministic sort key: (focus_node, component, source_shape, path, value,
+    // message, severity). The message and severity tiebreakers make the ordering
+    // TOTAL: two results that agree on the first five components (e.g. several
+    // `sh:uniqueLang` violations on one focus, which differ only in their message
+    // text) would otherwise keep their push order, which is a `FastMap`/`FastSet`
+    // iteration order and thus not guaranteed stable across ahash versions or
+    // targets. Sorting on the full serialized identity closes that leak so report
+    // bytes are invariant under data-insertion order and platform.
+    let sort_key = |r: &crate::report::ValidationResult| {
+        (
+            r.focus_node.to_string(),
+            r.source_constraint_component.to_string(),
+            r.source_shape.to_string(),
+            r.result_path
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
-            a.value
+            r.value
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
-        );
-        let kb = (
-            b.focus_node.to_string(),
-            b.source_constraint_component.to_string(),
-            b.source_shape.to_string(),
-            b.result_path
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-            b.value
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-        );
-        ka.cmp(&kb)
-    });
+            r.message.clone().unwrap_or_default(),
+            r.severity.clone(),
+        )
+    };
+    all_results.sort_by_key(sort_key);
 
     let conforms = all_results.is_empty();
 
@@ -1041,5 +1037,89 @@ mod tests {
         );
         assert_eq!(report.results.len(), 1);
         assert_eq!(report.results[0].severity, Severity::Warning);
+    }
+
+    // Determinism under permuted DATA-INSERTION order.
+    //
+    // Interning assigns each term a TermId in first-appearance order, so
+    // permuting the N-Triples lines assigns different ids to the same terms and
+    // reorders every id-keyed FastSet/FastMap and path frontier. The report must
+    // still be byte-identical, proving no id/hash iteration order reaches output.
+    // The fixture deliberately includes TWO sh:uniqueLang violations on one focus
+    // (duplicate `@en` and `@fr`), which share every sort component except the
+    // message — the case the message/severity tiebreaker in the engine sort
+    // exists to make total.
+    #[test]
+    fn determinism_under_permuted_insertion_order() {
+        let shapes_ttl = format!(
+            r"{PREFIXES}
+            ex:PersonShape a sh:NodeShape ;
+                sh:targetClass ex:Person ;
+                sh:property [ sh:path ex:name ; sh:minCount 1 ; sh:uniqueLang true ; ] .
+            "
+        );
+        let ty = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
+        let name = "<http://example.org/ns#name>";
+        let person = "<http://example.org/ns#Person>";
+        // alice: two duplicated languages (@en, @fr) → two uniqueLang violations
+        // with identical sort keys differing only in message. bob/carol: plain
+        // members exercising focus ordering. dave: no name → minCount violation.
+        let lines = vec![
+            format!("<http://example.org/ns#alice> {ty} {person} .\n"),
+            format!("<http://example.org/ns#alice> {name} \"a\"@en .\n"),
+            format!("<http://example.org/ns#alice> {name} \"b\"@en .\n"),
+            format!("<http://example.org/ns#alice> {name} \"c\"@fr .\n"),
+            format!("<http://example.org/ns#alice> {name} \"d\"@fr .\n"),
+            format!("<http://example.org/ns#bob> {ty} {person} .\n"),
+            format!("<http://example.org/ns#bob> {name} \"Bob\" .\n"),
+            format!("<http://example.org/ns#carol> {ty} {person} .\n"),
+            format!("<http://example.org/ns#carol> {name} \"Carol\" .\n"),
+            format!("<http://example.org/ns#dave> {ty} {person} .\n"),
+        ];
+
+        let render = |ordered: &[String]| {
+            let data_nt: String = ordered.concat();
+            let data = load_data_nt(&data_nt);
+            let shapes = load_shapes_ttl(&shapes_ttl);
+            validate(&data, &shapes).to_ntriples()
+        };
+
+        let forward = render(&lines);
+
+        let mut reversed = lines.clone();
+        reversed.reverse();
+        assert_eq!(
+            forward,
+            render(&reversed),
+            "report must be byte-identical under reversed insertion order"
+        );
+
+        // A rotation (different id assignment again) must also match.
+        let mut rotated = lines.clone();
+        rotated.rotate_left(3);
+        assert_eq!(
+            forward,
+            render(&rotated),
+            "report must be byte-identical under rotated insertion order"
+        );
+
+        // Sanity: the fixture actually produced the equal-sort-key uniqueLang pair
+        // plus other violations, so the tiebreaker is genuinely exercised.
+        let data = load_data_nt(&lines.concat());
+        let shapes = load_shapes_ttl(&shapes_ttl);
+        let report = validate(&data, &shapes);
+        let unique_lang = report
+            .results
+            .iter()
+            .filter(|r| {
+                r.source_constraint_component
+                    .as_str()
+                    .contains("UniqueLang")
+            })
+            .count();
+        assert_eq!(
+            unique_lang, 2,
+            "fixture must yield two uniqueLang violations (dup @en and @fr)"
+        );
     }
 }
