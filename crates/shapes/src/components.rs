@@ -216,8 +216,9 @@ pub fn eval_ask_validator(
         return Err("expected ASK validator, got SELECT".to_owned());
     };
     let mut results = Vec::with_capacity(value_nodes.len());
+    let mut subs: Vec<(String, TermValue)> = Vec::with_capacity(2 + bindings.len());
     for v in value_nodes {
-        let mut subs: Vec<(String, TermValue)> = Vec::with_capacity(2 + bindings.len());
+        subs.clear();
         subs.push(("this".to_owned(), focus.to_term_value()));
         subs.push(("value".to_owned(), v.to_term_value()));
         for (name, value) in bindings {
