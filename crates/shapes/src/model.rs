@@ -242,8 +242,6 @@ pub mod sh {
 
     pub const EXISTS: &str = "http://www.w3.org/ns/shacl#exists";
 
-    pub const GROUP_CONCAT: &str = "http://www.w3.org/ns/shacl#groupConcat";
-
     pub const SPARQL_FUNCTION: &str = "http://www.w3.org/ns/shacl#SPARQLFunction";
 
     pub const FUNCTION: &str = "http://www.w3.org/ns/shacl#Function";
