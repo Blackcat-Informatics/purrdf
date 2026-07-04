@@ -192,6 +192,35 @@ issue, so the matrix stays honest:
   (`crates/shapes/corpus`); a `vectors/shacl/af/` seam is wired for future
   upstream AF manifests (empty at the pinned commit, so it discovers 0 tests
   today).
+
+### SHACL-AF node expressions: normative surface vs. owned extensions
+
+An `sh:ExpressionConstraintComponent` passes for a value node iff the node
+expression evaluates that node to exactly `{ true }` (the `"true"^^xsd:boolean`
+value — a *value* check, not effective-boolean-value; a non-boolean result such
+as `"5"^^xsd:integer` is a violation).
+
+The node-expression kinds split into two tiers:
+
+- **W3C-normative** (SHACL-AF Working Group Note): focus (`sh:this`), constant
+  term, path (`sh:path`), filter-shape (`sh:filterShape` + `sh:nodes`),
+  function-call, `sh:union`, `sh:intersection`. Function calls reach XSD
+  constructor/cast IRIs, any purrdf-registered custom function (both via the
+  `<iri>(…)` call form), and the XPath/XQuery-functions-namespace
+  (`http://www.w3.org/2005/xpath-functions#…`) builtins lowered to their SPARQL
+  1.1 keyword (e.g. `fn:string-length` → `STRLEN`, `fn:contains` → `CONTAINS`).
+  User-defined `sh:SPARQLFunction` calls are a hard capability error.
+- **PurRDF-owned extensions** — `sh:if`/`sh:then`/`sh:else`, the aggregations
+  `sh:count`/`sh:distinct`/`sh:min`/`sh:max`/`sh:sum`, the paging/ordering
+  wrappers `sh:orderby`/`sh:limit`/`sh:offset`, and `sh:exists`. These are
+  DASH/TopBraid conventions with no stable public RDF definition, so their triple
+  layouts are PurRDF's adopted reading, not a normative surface. Notably
+  `sh:orderby` names a per-element sort-**key** node expression (evaluated with
+  each element as focus) and orders ascending by default; direction is the
+  separate boolean `sh:desc` flag. No authoritative upstream AF manifests exist
+  at the pinned commit to reconcile these against, which is why the
+  `vectors/shacl/af/` vendoring seam is wired but empty; the owned semantics are
+  pinned by the first-party corpus and unit tests instead.
 - **rdflib drop-in residuals** — 23 rdflib-suite + 7 compat-parity strict
   xfails cover Graph-subclass identity through set operators, rdf:List /
   Collection mutation, `Result.bindings` / `SELECT *` subselect projection,
