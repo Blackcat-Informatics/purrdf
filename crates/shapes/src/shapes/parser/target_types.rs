@@ -3,7 +3,9 @@
 
 //! Parsing for SHACL-AF `sh:SPARQLTargetType` declarations.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
+
+use ::purrdf::FastSet;
 
 use purrdf_sparql_algebra::{Query, SparqlParser};
 
@@ -108,7 +110,7 @@ impl Parser<'_> {
         });
 
         // Reject colliding derived variable names.
-        let mut seen: HashSet<&str> = HashSet::new();
+        let mut seen: FastSet<&str> = FastSet::default();
         for (_, _, var) in &raw {
             if !seen.insert(var.as_str()) {
                 return Err(format!(

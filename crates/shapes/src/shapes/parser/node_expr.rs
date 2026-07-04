@@ -3,7 +3,7 @@
 
 //! SHACL Core constraint parsing and SHACL-AF node-expression parsing.
 
-use std::collections::HashSet;
+use ::purrdf::FastSet;
 use std::sync::{Arc, OnceLock};
 
 use purrdf_sparql_algebra::{Query, SparqlParser};
@@ -570,7 +570,7 @@ impl Parser<'_> {
     ) -> Result<Vec<Shape>, String> {
         let property = Term::NamedNode(NamedNode::from(sh::PROPERTY));
         let mut sibling_nodes: Vec<Term> = Vec::new();
-        let mut seen: HashSet<Term> = HashSet::new();
+        let mut seen: FastSet<Term> = FastSet::default();
         // Parents: subjects of (?, sh:property, ps_id).
         let mut parents: Vec<Term> = native_quads(
             self.data,
@@ -755,7 +755,7 @@ impl Parser<'_> {
                 let path_node = self
                     .first_object_of(node, sh::PATH)
                     .ok_or_else(|| format!("sh:path node expression on {node} lost its object"))?;
-                let path = self.parse_path(&path_node, node, &mut HashSet::new())?;
+                let path = self.parse_path(&path_node, node, &mut FastSet::default())?;
                 Ok(NodeExpr::Path(path))
             }
             sh::FILTER_SHAPE => {

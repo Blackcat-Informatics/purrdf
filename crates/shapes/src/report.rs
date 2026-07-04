@@ -11,6 +11,7 @@
 use std::collections::BTreeSet;
 
 use ::purrdf::provenance::Attribution;
+use ::purrdf::FastSet;
 use ::purrdf::RdfDatasetBuilder;
 use ::purrdf::{serialize_dataset, RdfQuad, RdfTerm, SerializeGraph};
 
@@ -180,7 +181,7 @@ impl ValidationReport {
     pub fn to_ntriples(&self) -> String {
         let mut builder = RdfDatasetBuilder::new();
         // Complex-path structure roots already emitted (keyed by root label).
-        let mut emitted_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut emitted_paths: FastSet<String> = FastSet::default();
 
         let report_subj = RdfTerm::blank_node("report");
 

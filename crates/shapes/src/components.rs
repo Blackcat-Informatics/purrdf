@@ -11,11 +11,11 @@
 //! parsed and is later consulted by the engine to bind component parameters and
 //! run the matching ASK or SELECT query for each shape usage.
 
-use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use ::purrdf::RdfDataset;
 use ::purrdf::TermValue;
+use ::purrdf::{FastMap, FastSet};
 
 use crate::data::{native_quads, GraphFilter};
 use crate::model::{rdf, rdfs, sh};
@@ -85,9 +85,9 @@ pub(crate) struct Component {
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ComponentRegistry {
     /// Parameter predicate IRI string → owning component IRI.
-    pub by_parameter_path: HashMap<String, NamedNode>,
+    pub by_parameter_path: FastMap<String, NamedNode>,
     /// Component IRI string → component definition.
-    pub components: HashMap<String, Component>,
+    pub components: FastMap<String, Component>,
 }
 
 impl ComponentRegistry {
@@ -111,8 +111,8 @@ impl ComponentRegistry {
     ) -> Result<Self, String> {
         let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
         let mut component_iris: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut subclass_memo: HashMap<(String, String), bool> = HashMap::new();
+        let mut seen: FastSet<String> = FastSet::default();
+        let mut subclass_memo: FastMap<(String, String), bool> = FastMap::default();
 
         for (subject, _pred, object) in
             native_quads(data, None, Some(&rdf_type), None, GraphFilter::AnyGraph)
@@ -408,7 +408,7 @@ fn is_subclass_of(
     data: &RdfDataset,
     class_iri: &str,
     target_iri: &str,
-    memo: &mut HashMap<(String, String), bool>,
+    memo: &mut FastMap<(String, String), bool>,
 ) -> bool {
     if class_iri == target_iri {
         return true;
@@ -445,7 +445,7 @@ fn is_subclass_of(
 fn validator_kind(
     data: &RdfDataset,
     validator: &Term,
-    memo: &mut HashMap<(String, String), bool>,
+    memo: &mut FastMap<(String, String), bool>,
 ) -> Result<ValidatorKind, String> {
     let mut is_ask = false;
     let mut is_select = false;
@@ -538,7 +538,7 @@ fn parse_validator(
     component: &Term,
     validator: &Term,
     param_names: &[String],
-    subclass_memo: &mut HashMap<(String, String), bool>,
+    subclass_memo: &mut FastMap<(String, String), bool>,
 ) -> Result<Validator, String> {
     let component_iri = match component {
         Term::NamedNode(n) => n.as_str(),
@@ -640,7 +640,7 @@ fn parse_component(
     doc_prefixes: &[(String, String)],
     component: &Term,
     component_iri: &str,
-    subclass_memo: &mut HashMap<(String, String), bool>,
+    subclass_memo: &mut FastMap<(String, String), bool>,
 ) -> Result<Component, String> {
     let param_nodes: Vec<Term> = objects_of(data, component, sh::PARAMETER_PROPERTY);
     let mut parameters = Vec::with_capacity(param_nodes.len());

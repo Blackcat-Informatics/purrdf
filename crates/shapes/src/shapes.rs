@@ -11,9 +11,9 @@
 //! `sh:equals` object, a one-member sequence path) cause a hard `Err` rather
 //! than a silent skip.
 
-use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
+use ::purrdf::FastSet;
 use ::purrdf::RdfDataset;
 
 use purrdf_sparql_eval::UserFunctionRegistry;
@@ -459,7 +459,7 @@ pub(crate) struct Parser<'s> {
     data: &'s RdfDataset,
     /// Tracks shape nodes currently being parsed to prevent infinite recursion
     /// through `sh:node` or `sh:and/or/xone` cycles.
-    in_flight: HashSet<String>,
+    in_flight: FastSet<String>,
     /// The shapes document's `@prefix` map (prefix → namespace), used as the
     /// fallback PREFIX header for SHACL-AF `sh:select` queries.
     doc_prefixes: Vec<(String, String)>,
@@ -564,7 +564,7 @@ impl<'s> Parser<'s> {
     ) -> Self {
         Self {
             data,
-            in_flight: HashSet::new(),
+            in_flight: FastSet::default(),
             doc_prefixes: doc_prefixes.to_vec(),
             box_role_vocab,
             component_registry: ComponentRegistry::default(),
@@ -576,10 +576,10 @@ impl<'s> Parser<'s> {
 
     fn parse(&mut self) -> Result<Shapes, String> {
         // --- collect all top-level shape node terms ---
-        let mut shape_ids: HashSet<Term> = HashSet::new();
+        let mut shape_ids: FastSet<Term> = FastSet::default();
         // Track which nodes are property-shape-only (reachable only via sh:property)
         // so we don't list them as top-level node shapes.
-        let mut property_shape_nodes: HashSet<Term> = HashSet::new();
+        let mut property_shape_nodes: FastSet<Term> = FastSet::default();
 
         // 1. Nodes typed sh:NodeShape
         for (subject, _, _) in self.quads_with(None, Some(rdf::TYPE), Some(sh::NODE_SHAPE)) {
@@ -1083,7 +1083,7 @@ impl<'s> Parser<'s> {
             .first_object_of(ps_node, sh::PATH)
             .ok_or_else(|| format!("property shape {ps_str} missing sh:path"))?;
 
-        let path = self.parse_path(&path_node, ps_node, &mut HashSet::new())?;
+        let path = self.parse_path(&path_node, ps_node, &mut FastSet::default())?;
 
         // severity
         let severity = self
@@ -1178,7 +1178,7 @@ impl<'s> Parser<'s> {
         &self,
         path_node: &Term,
         shape_id: &Term,
-        in_flight: &mut HashSet<String>,
+        in_flight: &mut FastSet<String>,
     ) -> Result<Path, String> {
         match path_node {
             Term::NamedNode(nn) => Ok(Path::Predicate(nn.clone())),
@@ -1202,7 +1202,7 @@ impl<'s> Parser<'s> {
         &self,
         path_node: &Term,
         shape_id: &Term,
-        in_flight: &mut HashSet<String>,
+        in_flight: &mut FastSet<String>,
     ) -> Result<Path, String> {
         // RDF list in path position = sequence path (at least two members).
         if self.first_object_of(path_node, rdf::FIRST).is_some() {
@@ -1269,7 +1269,7 @@ impl<'s> Parser<'s> {
         let nil = Term::NamedNode(NamedNode::from(rdf::NIL));
         let mut items = Vec::new();
         let mut current = head.clone();
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut seen: FastSet<String> = FastSet::default();
 
         loop {
             if current == nil {
