@@ -34,6 +34,7 @@
 pub mod build;
 pub mod model;
 pub mod path_syntax;
+pub mod rules;
 
 pub use build::{
     build_diagnostics_sarif, build_report_sarif, build_report_sarif_with,

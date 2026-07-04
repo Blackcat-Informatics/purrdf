@@ -583,7 +583,11 @@ fn has_iri_scheme(value: &str) -> bool {
 /// `<urn:ex: >` (W3C test060), whose canonical form keeps the decoded character.
 fn validate_iri(value: &str, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
     if value.is_empty() || value.starts_with("//") || !has_iri_scheme(value) {
-        return Err(err_at("IRI must be absolute", line_no, column));
+        return Err(err_at(
+            format!("IRI must be absolute (needs a scheme), found <{value}>"),
+            line_no,
+            column,
+        ));
     }
     Ok(())
 }

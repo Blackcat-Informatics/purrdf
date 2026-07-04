@@ -442,17 +442,7 @@ fn register_rules(results: &mut [SarifResult]) -> Vec<ReportingDescriptor> {
         result.rule_index = ids.iter().position(|id| *id == result.rule_id);
     }
 
-    ids.into_iter()
-        .map(|id| ReportingDescriptor {
-            id,
-            name: None,
-            short_description: None,
-            full_description: None,
-            help: None,
-            help_uri: None,
-            default_configuration: None,
-        })
-        .collect()
+    ids.iter().map(|id| crate::rules::descriptor_for(id)).collect()
 }
 
 fn assemble_run(
@@ -732,6 +722,26 @@ mod tests {
             let idx = r["ruleIndex"].as_u64().expect("ruleIndex") as usize;
             assert_eq!(runs[0]["tool"]["driver"]["rules"][idx]["id"], r["ruleId"]);
         }
+    }
+
+    #[test]
+    fn registered_rules_carry_spec_metadata() {
+        let report = ValidationReport {
+            conforms: false,
+            results: vec![result(
+                "http://www.w3.org/ns/shacl#DatatypeConstraintComponent",
+                Severity::Violation,
+                Some("bad"),
+            )],
+        };
+        let log = build_report_sarif(&report, &SarifOptions::default());
+        let rule = &log.runs[0].tool.driver.rules[0];
+        assert_eq!(rule.name.as_deref(), Some("DatatypeConstraintComponent"));
+        assert_eq!(
+            rule.help_uri.as_deref(),
+            Some("https://www.w3.org/TR/shacl/#DatatypeConstraintComponent")
+        );
+        assert!(rule.short_description.is_some());
     }
 
     #[test]
