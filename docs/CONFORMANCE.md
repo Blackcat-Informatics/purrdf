@@ -69,7 +69,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative syntax | shexTest v2.1.0, `negativeSyntax/` | **99 / 99** rejected |
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes, `core/` + `sparql/` | **120 / 120** · 0 ledgered |
-| SHACL (first-party corpus) | `crates/shapes/corpus/` | **64 / 64** frozen expected reports |
+| SHACL (first-party corpus) | `crates/shapes/corpus/` | **69 / 69** frozen expected reports |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
 | SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **797** pass · 5 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 5 non-passes are upstream-errata fixtures with non-canonical XSD lexicals) |
 | Entailment (RDFS / OWL-RL / OWL-Direct / RIF) | native `purrdf-entail` reasoners | RDFS + OWL-RL forward chase, open-world OWL-Direct via the ALCOIQ tableau, RIF-Core rule engine, and RDF-axiomatic predicate typing; **70/70** W3C entailment cases pass (only `D`-datatype entailment remains a boundary, unexercised by the corpus) |
@@ -85,7 +85,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   ShEx 2.1). See its README for provenance.
 - `vectors/shacl/` — the W3C SHACL test suite (`data-shapes-test-suite`),
   `core/` and `sparql/` manifests. See its README for provenance.
-- `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 64 cases with
+- `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 69 cases with
   byte-frozen expected reports, covering purrdf-specific behavior (reifier
   shapes, path forms, property pairs, qualified shapes, SHACL-AF
   `sh:expression`).
@@ -110,7 +110,7 @@ make conformance                                      # the single matrix (all o
 cargo test -p purrdf-iri                               # IRI + RFC 3986 resolution
 cargo test -p purrdf-shex                              # all four ShEx suites
 cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture   # W3C SHACL scoreboard
-cargo test -p purrdf-shapes --test conformance         # the 64-case frozen corpus
+cargo test -p purrdf-shapes --test conformance         # the 69-case frozen corpus
 cargo test -p purrdf-sparql-conformance                # W3C SPARQL
 cargo test -p purrdf-rdf                               # RDFC-1.0 + codec goldens
 cargo test -p purrdf-gts                               # GTS vectors
