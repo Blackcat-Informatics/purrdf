@@ -1,0 +1,11 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:MinShape
+    a sh:NodeShape ;
+    sh:targetClass ex:C ;
+    sh:expression [
+        sh:if [ sh:min [ sh:path ex:p ] ] ;
+        sh:then true ;
+        sh:else false
+    ] .

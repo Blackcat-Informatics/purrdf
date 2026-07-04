@@ -1,0 +1,4 @@
+<http://example.org/ns#s> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#C> .
+<http://example.org/ns#s> <http://example.org/ns#p> <http://example.org/ns#iri> .
+<http://example.org/ns#t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#C> .
+<http://example.org/ns#t> <http://example.org/ns#p> "lit" .

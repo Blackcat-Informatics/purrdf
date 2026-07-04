@@ -714,6 +714,17 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                         .to_owned(),
                 );
             }
+            Constraint::Expression { .. } => {
+                ctx.record(
+                    "sh:expression",
+                    &shape_iri,
+                    "SHACL-AF expression constraint has no JSON Schema equivalent",
+                );
+                comments.push(
+                    "a node-level sh:expression constraint was dropped (no JSON Schema equivalent)"
+                        .to_owned(),
+                );
+            }
             // Node-level value constraints (sh:class, sh:nodeKind, …) shape the
             // node identity rather than an object's JSON properties; for the
             // object-schema projection they are not expressed here.
@@ -888,6 +899,16 @@ fn compile_property(
                 );
                 comments.push(format!(
                     "a sh:sparql constraint on property {key} was dropped (no JSON Schema equivalent)"
+                ));
+            }
+            Constraint::Expression { .. } => {
+                ctx.record(
+                    "sh:expression",
+                    shape_iri,
+                    "SHACL-AF expression constraint has no JSON Schema equivalent",
+                );
+                comments.push(format!(
+                    "a sh:expression constraint on property {key} was dropped (no JSON Schema equivalent)"
                 ));
             }
             // Counts handled above; node-shape-only constraints (Closed/And/…)

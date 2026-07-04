@@ -1,0 +1,4 @@
+<http://example.org/ns#yes> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#C> .
+<http://example.org/ns#yes> <http://example.org/ns#name> "banana" .
+<http://example.org/ns#no> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#C> .
+<http://example.org/ns#no> <http://example.org/ns#name> "hello" .

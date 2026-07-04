@@ -1,0 +1,5 @@
+<http://example.org/ns#good> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#C> .
+<http://example.org/ns#good> <http://example.org/ns#p> "0"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://example.org/ns#good> <http://example.org/ns#p> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<http://example.org/ns#bad> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#C> .
+<http://example.org/ns#bad> <http://example.org/ns#p> "0"^^<http://www.w3.org/2001/XMLSchema#integer> .

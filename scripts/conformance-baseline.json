@@ -38,7 +38,7 @@
       "note": "rdflib-suite strict xfails: Graph-subclass set-operator identity, rdf:List/Collection mutation, Result.bindings/SELECT* subselect projection, graph-prefix forwarding, aggregate/nested-FILTER evaluation, and ConjunctiveGraph legacy semantics"
     },
     "purrdf.compat parity": {
-      "ledgered": 7,
+      "ledgered": 5,
       "note": "purrdf.compat differential strict xfails vs rdflib 7.6"
     }
   }

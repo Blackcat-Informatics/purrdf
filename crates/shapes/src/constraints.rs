@@ -57,6 +57,29 @@ pub fn validate_shape_with<G: ShaclDataGraph>(
     shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Result<Vec<ValidationResult>, String> {
+    validate_shape_with_depth(store, focus, shape, box_role_vocab, 0)
+}
+
+/// [`validate_shape_with`] carrying the ambient `sh:filterShape` / `sh:exists`
+/// re-entry depth (see [`conforms_with_depth`]). A depth past
+/// [`crate::expression::MAX_RECURSION_DEPTH`] is a hard error — a mutually
+/// recursive filter/exists cycle fails closed here rather than overflowing the
+/// native stack.
+fn validate_shape_with_depth<G: ShaclDataGraph>(
+    store: &G,
+    focus: &Term,
+    shape: &Shape,
+    box_role_vocab: Option<&BoxRoleVocab>,
+    depth: u32,
+) -> Result<Vec<ValidationResult>, String> {
+    if depth > crate::expression::MAX_RECURSION_DEPTH {
+        return Err(format!(
+            "SHACL validation recursion depth exceeded ({} > {}) at shape {}: a cyclic sh:filterShape / sh:exists reference",
+            depth,
+            crate::expression::MAX_RECURSION_DEPTH,
+            shape.id
+        ));
+    }
     if shape.deactivated {
         return Ok(vec![]);
     }
@@ -66,7 +89,15 @@ pub fn validate_shape_with<G: ShaclDataGraph>(
     // --- Node-level constraints (value nodes = [focus], no path) ---
     let node_value_nodes = std::slice::from_ref(focus);
     for constraint in &shape.constraints {
-        let mut rs = eval_constraint(store, focus, node_value_nodes, constraint, None, shape)?;
+        let mut rs = eval_constraint(
+            store,
+            focus,
+            node_value_nodes,
+            constraint,
+            None,
+            shape,
+            depth,
+        )?;
         for r in &mut rs {
             r.apply_box_roles(&shape.box_roles, &[]);
         }
@@ -81,6 +112,7 @@ pub fn validate_shape_with<G: ShaclDataGraph>(
             ps,
             shape,
             box_role_vocab,
+            depth,
         )?);
     }
 
@@ -169,7 +201,29 @@ fn eval_closed<G: ShaclDataGraph>(
 /// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
 /// (see [`validate_shape`]).
 pub fn conforms<G: ShaclDataGraph>(store: &G, focus: &Term, shape: &Shape) -> Result<bool, String> {
-    Ok(validate_shape(store, focus, shape)?.is_empty())
+    conforms_with_depth(store, focus, shape, 0)
+}
+
+/// [`conforms`] carrying the ambient `sh:filterShape` / `sh:exists` re-entry
+/// depth, so a cyclic filter reference fails closed at
+/// [`crate::expression::MAX_RECURSION_DEPTH`] instead of overflowing the stack.
+///
+/// `depth` is the number of filter/exists boundaries already crossed to reach
+/// this call. [`crate::expression::eval_node_expr`]'s `Filter` arm increments it
+/// on each re-entry; the ordinary logical constraints (`sh:and`, `sh:or`,
+/// `sh:not`, `sh:node`, …) preserve it unchanged.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when a constraint fails to evaluate (see
+/// [`validate_shape`]) or when the filter/exists depth ceiling is exceeded.
+pub(crate) fn conforms_with_depth<G: ShaclDataGraph>(
+    store: &G,
+    focus: &Term,
+    shape: &Shape,
+    depth: u32,
+) -> Result<bool, String> {
+    Ok(validate_shape_with_depth(store, focus, shape, None, depth)?.is_empty())
 }
 
 // ── Property shape evaluator ───────────────────────────────────────────────────
@@ -180,6 +234,7 @@ fn eval_property_shape<G: ShaclDataGraph>(
     ps: &PropertyShape,
     parent_shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
+    depth: u32,
 ) -> Result<Vec<ValidationResult>, String> {
     // A deactivated property shape validates nothing (SHACL §2.1.3.3).
     if ps.deactivated {
@@ -219,6 +274,7 @@ fn eval_property_shape<G: ShaclDataGraph>(
             constraint,
             Some(&ps.path),
             &ps_as_shape,
+            depth,
         )?;
         // Stamp the property-shape path and focus onto every result, but PRESERVE
         // a path the constraint itself bound — a `sh:sparql` query may project
@@ -249,6 +305,7 @@ fn eval_property_shape<G: ShaclDataGraph>(
                 nested,
                 &ps_as_shape,
                 box_role_vocab,
+                depth,
             )?);
         }
     }
@@ -263,6 +320,7 @@ fn eval_property_shape<G: ShaclDataGraph>(
         path_roles: &path_roles,
         path_term: &path_term,
         box_role_vocab,
+        depth,
     })?);
     Ok(results)
 }
@@ -277,6 +335,7 @@ struct ReifierEvalContext<'a, G: ShaclDataGraph> {
     path_roles: &'a [NamedNode],
     path_term: &'a Term,
     box_role_vocab: Option<&'a BoxRoleVocab>,
+    depth: u32,
 }
 
 // Manual impls (not derives): a `derive(Copy)` would demand `G: Copy`, but the
@@ -302,6 +361,7 @@ fn eval_reifier_shapes<G: ShaclDataGraph>(
         path_roles,
         path_term,
         box_role_vocab,
+        depth,
     } = ctx;
     if ps.reifier_shapes.is_empty() && !ps.reification_required {
         return Ok(vec![]);
@@ -341,8 +401,13 @@ fn eval_reifier_shapes<G: ShaclDataGraph>(
 
         for reifier in &reifiers {
             for reifier_shape in &ps.reifier_shapes {
-                let inner_results =
-                    validate_shape_with(store, reifier, reifier_shape, box_role_vocab)?;
+                let inner_results = validate_shape_with_depth(
+                    store,
+                    reifier,
+                    reifier_shape,
+                    box_role_vocab,
+                    depth,
+                )?;
                 if inner_results.is_empty() {
                     continue;
                 }
@@ -479,6 +544,7 @@ fn eval_constraint<G: ShaclDataGraph>(
     constraint: &Constraint,
     path: Option<&Path>,
     shape: &Shape,
+    depth: u32,
 ) -> Result<Vec<ValidationResult>, String> {
     let result_path = path.map(path::path_to_term);
     // The full SHACL path structure travels alongside a COMPLEX result path
@@ -858,7 +924,7 @@ fn eval_constraint<G: ShaclDataGraph>(
                 .unwrap_or_else(|| source_shape.clone());
             for value in value_nodes {
                 // Violation iff the value node DOES conform to the negated shape.
-                if conforms(store, value, inner_shape)? {
+                if conforms_with_depth(store, value, inner_shape, depth)? {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
@@ -1069,7 +1135,7 @@ fn eval_constraint<G: ShaclDataGraph>(
             for value in value_nodes {
                 let mut all_conform = true;
                 for member in members {
-                    if !conforms(store, value, member)? {
+                    if !conforms_with_depth(store, value, member, depth)? {
                         all_conform = false;
                         break;
                     }
@@ -1104,7 +1170,7 @@ fn eval_constraint<G: ShaclDataGraph>(
             for value in value_nodes {
                 let mut any_conforms = false;
                 for member in members {
-                    if conforms(store, value, member)? {
+                    if conforms_with_depth(store, value, member, depth)? {
                         any_conforms = true;
                         break;
                     }
@@ -1139,7 +1205,7 @@ fn eval_constraint<G: ShaclDataGraph>(
             for value in value_nodes {
                 let mut count = 0usize;
                 for member in members {
-                    if conforms(store, value, member)? {
+                    if conforms_with_depth(store, value, member, depth)? {
                         count += 1;
                     }
                 }
@@ -1171,7 +1237,7 @@ fn eval_constraint<G: ShaclDataGraph>(
                 .cloned()
                 .unwrap_or_else(|| source_shape.clone());
             for value in value_nodes {
-                if !conforms(store, value, inner_shape)? {
+                if !conforms_with_depth(store, value, inner_shape, depth)? {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
@@ -1271,13 +1337,13 @@ fn eval_constraint<G: ShaclDataGraph>(
             // under sibling disjointness — conforms to NO sibling qualified shape.
             let mut count = 0u64;
             for v in value_nodes {
-                if !conforms(store, v, qshape)? {
+                if !conforms_with_depth(store, v, qshape, depth)? {
                     continue;
                 }
                 let mut sibling_conforms = false;
                 if *disjoint {
                     for sibling in siblings {
-                        if conforms(store, v, sibling)? {
+                        if conforms_with_depth(store, v, sibling, depth)? {
                             sibling_conforms = true;
                             break;
                         }
@@ -1342,6 +1408,47 @@ fn eval_constraint<G: ShaclDataGraph>(
                 msg.as_ref(),
             )
             .map_err(|e| format!("sh:sparql constraint on shape {source_shape}: {e}"))?
+        }
+
+        // ── Expression (SHACL-AF §5.7) ─────────────────────────────────────────
+        // Each value node is evaluated as the focus of the node expression; the
+        // constraint is satisfied iff the result is exactly the canonical
+        // `"true"^^xsd:boolean` term (`is_true`). A sub-expression evaluation
+        // failure is a hard validation error (mirroring sh:sparql). The
+        // expression node may carry its own sh:message / sh:severity overriding
+        // the shape defaults.
+        Constraint::Expression {
+            expr,
+            message: cmsg,
+            severity: csev,
+        } => {
+            let sev = csev.clone().unwrap_or_else(|| severity.clone());
+            let msg = cmsg.clone().or_else(|| message.clone());
+            let mut results = Vec::new();
+            // Seed the guard with the ambient filter/exists depth so a
+            // `sh:filterShape` re-entry through this expression keeps the
+            // cross-shape recursion count monotone (fail-closed at the depth
+            // ceiling) rather than resetting it per constraint. The guard is
+            // hoisted above the loop: `enter`/`exit` are balanced on every path,
+            // so its in-flight set is empty between value nodes, and `depth` is
+            // loop-invariant — reusing it only avoids re-allocating the set.
+            let mut guard = crate::expression::RecursionGuard::with_depth(depth);
+            for value_node in value_nodes {
+                let out = crate::expression::eval_node_expr(store, value_node, expr, &mut guard)
+                    .map_err(|e| {
+                        format!("sh:expression constraint on shape {source_shape}: {e}")
+                    })?;
+                if !crate::expression::is_true(&out) {
+                    let mut r = result!(
+                        sh::EXPRESSION_CONSTRAINT_COMPONENT,
+                        Some(value_node.clone())
+                    );
+                    r.severity.clone_from(&sev);
+                    r.message.clone_from(&msg);
+                    results.push(r);
+                }
+            }
+            results
         }
     })
 }

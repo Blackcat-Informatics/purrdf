@@ -201,6 +201,55 @@ pub mod sh {
     pub const SPARQL_CONSTRAINT_COMPONENT: &str =
         "http://www.w3.org/ns/shacl#SPARQLConstraintComponent";
 
+    // ── SHACL-AF node expressions (§node expressions) ─────────────────────────
+
+    pub const EXPRESSION: &str = "http://www.w3.org/ns/shacl#expression";
+
+    pub const EXPRESSION_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#ExpressionConstraintComponent";
+
+    pub const THIS: &str = "http://www.w3.org/ns/shacl#this";
+
+    pub const FILTER_SHAPE: &str = "http://www.w3.org/ns/shacl#filterShape";
+
+    pub const NODES: &str = "http://www.w3.org/ns/shacl#nodes";
+
+    pub const UNION: &str = "http://www.w3.org/ns/shacl#union";
+
+    pub const INTERSECTION: &str = "http://www.w3.org/ns/shacl#intersection";
+
+    pub const IF: &str = "http://www.w3.org/ns/shacl#if";
+
+    pub const THEN: &str = "http://www.w3.org/ns/shacl#then";
+
+    pub const ELSE: &str = "http://www.w3.org/ns/shacl#else";
+
+    pub const COUNT: &str = "http://www.w3.org/ns/shacl#count";
+
+    pub const DISTINCT: &str = "http://www.w3.org/ns/shacl#distinct";
+
+    pub const MIN: &str = "http://www.w3.org/ns/shacl#min";
+
+    pub const MAX: &str = "http://www.w3.org/ns/shacl#max";
+
+    pub const SUM: &str = "http://www.w3.org/ns/shacl#sum";
+
+    pub const LIMIT: &str = "http://www.w3.org/ns/shacl#limit";
+
+    pub const OFFSET: &str = "http://www.w3.org/ns/shacl#offset";
+
+    pub const ORDERBY: &str = "http://www.w3.org/ns/shacl#orderby";
+
+    /// The adopted PurRDF DASH-extension direction flag for `sh:orderby`
+    /// (boolean; `true` ⇒ descending, default ascending).
+    pub const DESC: &str = "http://www.w3.org/ns/shacl#desc";
+
+    pub const EXISTS: &str = "http://www.w3.org/ns/shacl#exists";
+
+    pub const SPARQL_FUNCTION: &str = "http://www.w3.org/ns/shacl#SPARQLFunction";
+
+    pub const FUNCTION: &str = "http://www.w3.org/ns/shacl#Function";
+
     // ── Constraint component IRIs (sh:*ConstraintComponent) ──────────────────
 
     pub const MIN_COUNT_CONSTRAINT_COMPONENT: &str =

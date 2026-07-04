@@ -1,0 +1,7 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:ExistsShape
+    a sh:NodeShape ;
+    sh:targetClass ex:C ;
+    sh:expression [ sh:exists [ sh:path ex:p ] ] .

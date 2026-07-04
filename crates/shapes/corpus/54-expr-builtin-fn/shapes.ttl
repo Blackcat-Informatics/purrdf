@@ -1,0 +1,8 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:BuiltinFnShape
+    a sh:NodeShape ;
+    sh:targetClass ex:C ;
+    sh:expression [ xsd:boolean ( [ sh:path ex:flag ] ) ] .

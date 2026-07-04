@@ -13,6 +13,7 @@
 pub mod constraints;
 pub mod data;
 pub mod engine;
+pub mod expression;
 pub mod instance;
 pub mod json_schema;
 pub mod model;

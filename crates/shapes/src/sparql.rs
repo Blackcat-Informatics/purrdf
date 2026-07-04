@@ -19,8 +19,9 @@ use ::purrdf::RdfDataset;
 use ::purrdf::{SparqlEngine, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::NativeSparqlEngine;
 
+use crate::model::xsd;
 use crate::report::{Severity, ValidationResult};
-use crate::term::{term_value_to_native, NamedNode, Term};
+use crate::term::{term_value_to_native, Literal, NamedNode, Term};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -129,6 +130,219 @@ pub fn eval_sparql_constraint(
             result_box_roles: vec![],
             attributions: vec![],
         });
+    }
+    Ok(out)
+}
+
+/// Evaluate a single SPARQL scalar expression against `dataset`, with `args`
+/// pre-bound as query variables.
+///
+/// The expression is wrapped in `SELECT ((<sparql_expr>) AS ?result) WHERE {}`
+/// so it is evaluated exactly once (the empty `WHERE` yields a single solution
+/// row). Each `(var_name, term)` in `args` is pre-bound to the query variable
+/// `var_name` via the SAME substitution mechanism [`eval_sparql_constraint`]
+/// uses for `$this`, so the expression may reference `?var_name`.
+///
+/// Returns:
+/// - `Ok(Some(term))` when the single row bound `?result` (the expression
+///   produced a value);
+/// - `Ok(None)` when `?result` is unbound or no row was produced (a SPARQL
+///   error/undef result — the correct SHACL-AF "no value" signal);
+/// - `Err(String)` on an engine error, a non-SELECT result, or the impossible
+///   case of more than one solution row.
+///
+/// # Errors
+///
+/// Returns `Err(String)` if execution fails, the result is not a SELECT, or the
+/// query somehow yields more than one row.
+pub fn eval_scalar_expr(
+    dataset: &Arc<RdfDataset>,
+    sparql_expr: &str,
+    args: &[(String, Term)],
+) -> Result<Option<Term>, String> {
+    let select = format!("SELECT (({sparql_expr}) AS ?result) WHERE {{}}");
+    let subs: Vec<(String, TermValue)> = args
+        .iter()
+        .map(|(name, term)| (name.clone(), term.to_term_value()))
+        .collect();
+    let (variables, rows) =
+        run_select(dataset, &select, &subs).map_err(|e| format!("scalar expression {e}"))?;
+
+    if rows.len() > 1 {
+        return Err(format!(
+            "scalar expression produced {} solution rows (expected exactly one)",
+            rows.len()
+        ));
+    }
+    let Some(row) = rows.first() else {
+        // No row at all is a degenerate/undef result → no value.
+        return Ok(None);
+    };
+    let result_index = column_index(&variables, "result");
+    let value = result_index
+        .and_then(|i| row.get(i))
+        .and_then(Option::as_ref)
+        .map(term_value_to_native);
+    Ok(value)
+}
+
+/// Evaluate a SPARQL set aggregate (`"MIN"` / `"MAX"` / `"SUM"`) over an explicit
+/// list of operand `values`, on the native engine.
+///
+/// This keeps *all* SHACL-AF aggregation on the single SPARQL path so numeric
+/// type-promotion and ordering match the engine exactly — there is no parallel
+/// Rust numeric fold. The operands are inlined into a one-column `VALUES` block:
+///
+/// ```sparql
+/// SELECT (MIN(?v) AS ?result) WHERE { VALUES (?v) { (t0) (t1) ... } }
+/// ```
+///
+/// Each `ti` is rendered through the workspace [`Term`] serializer
+/// ([`Term`]'s `Display`, i.e. N-Triples term syntax — `<iri>`, `"lex"^^<dt>`,
+/// `"lex"@lang`), which is valid inside a SPARQL `VALUES` block for IRIs and
+/// literals. Blank nodes and quoted triples cannot appear in `VALUES` (and are
+/// not comparable/numeric aggregation operands), so an operand of either kind is
+/// a hard type error.
+///
+/// The empty operand set is special-cased *before* building the query (an empty
+/// `VALUES` block is awkward and the algebra is unambiguous): `SUM` of nothing is
+/// `0`^^`xsd:integer`; `MIN`/`MAX` of nothing is unbound (`Ok(None)`).
+///
+/// Returns `Ok(Some(term))` when the aggregate bound `?result`, `Ok(None)` when
+/// it is unbound (e.g. `MIN`/`MAX` of an empty set), or `Err` on an engine error
+/// or an un-renderable operand.
+///
+/// # Errors
+///
+/// Returns `Err(String)` if `agg` is not one of `"MIN"`/`"MAX"`/`"SUM"`, an
+/// operand is a blank node or quoted triple, execution fails, the result is not a
+/// SELECT, or the query yields more than one row.
+pub fn eval_aggregate(
+    dataset: &Arc<RdfDataset>,
+    agg: &str,
+    values: &[Term],
+) -> Result<Option<Term>, String> {
+    if !matches!(agg, "MIN" | "MAX" | "SUM") {
+        return Err(format!(
+            "unsupported aggregate {agg} (expected MIN/MAX/SUM)"
+        ));
+    }
+
+    // Empty operand set: special-case before building the query.
+    if values.is_empty() {
+        return Ok(match agg {
+            "SUM" => Some(Term::Literal(Literal::new_typed_literal(
+                "0",
+                NamedNode::new_unchecked(xsd::INTEGER),
+            ))),
+            // MIN/MAX of an empty set is unbound.
+            _ => None,
+        });
+    }
+
+    // Inline each operand into the VALUES block via the workspace Term serializer.
+    let mut rows = String::new();
+    for term in values {
+        match term {
+            Term::NamedNode(_) | Term::Literal(_) => {
+                // `Term`'s Display renders N-Triples term syntax, valid in VALUES.
+                rows.push('(');
+                rows.push_str(&term.to_string());
+                rows.push_str(") ");
+            }
+            Term::BlankNode(_) | Term::Triple(_) => {
+                return Err(format!(
+                    "aggregate {agg} operand {term} cannot appear in a SPARQL VALUES block (not a comparable/numeric value)"
+                ));
+            }
+        }
+    }
+
+    let select = format!("SELECT ({agg}(?v) AS ?result) WHERE {{ VALUES (?v) {{ {rows}}} }}");
+    let (variables, result_rows) =
+        run_select(dataset, &select, &[]).map_err(|e| format!("aggregate {e}"))?;
+
+    if result_rows.len() > 1 {
+        return Err(format!(
+            "aggregate {agg} produced {} solution rows (expected exactly one)",
+            result_rows.len()
+        ));
+    }
+    let Some(row) = result_rows.first() else {
+        return Ok(None);
+    };
+    let result_index = column_index(&variables, "result");
+    let value = result_index
+        .and_then(|i| row.get(i))
+        .and_then(Option::as_ref)
+        .map(term_value_to_native);
+    Ok(value)
+}
+
+/// Order an explicit list of operand `values` by SPARQL `ORDER BY` *value*
+/// semantics, on the native engine.
+///
+/// This keeps SHACL-AF `sh:orderby` on the single SPARQL path so typed/numeric
+/// ordering matches the engine exactly — e.g. `"2"^^xsd:integer` sorts BEFORE
+/// `"10"^^xsd:integer` (value order), unlike a lexical `Term::to_string` sort.
+/// The operands are inlined into a one-column `VALUES` block and ordered:
+///
+/// ```sparql
+/// SELECT ?v WHERE { VALUES (?v) { (t0) (t1) ... } } ORDER BY ?v
+/// ```
+///
+/// (`ORDER BY DESC(?v)` when `descending`). `ORDER BY` over `VALUES` returns one
+/// row per input row in order, so DUPLICATES are PRESERVED (no `DISTINCT`).
+///
+/// Each `ti` is rendered through the workspace [`Term`] serializer (N-Triples
+/// term syntax), exactly as [`eval_aggregate`]. Blank nodes and quoted triples
+/// cannot appear in a `VALUES` block, so an operand of either kind is a hard
+/// error. The empty operand set is `Ok(vec![])`.
+///
+/// # Errors
+///
+/// Returns `Err(String)` if an operand is a blank node or quoted triple,
+/// execution fails, or the result is not a SELECT.
+pub fn eval_order(
+    dataset: &Arc<RdfDataset>,
+    values: &[Term],
+    descending: bool,
+) -> Result<Vec<Term>, String> {
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Inline each operand into the VALUES block via the workspace Term serializer.
+    let mut rows = String::new();
+    for term in values {
+        match term {
+            Term::NamedNode(_) | Term::Literal(_) => {
+                rows.push('(');
+                rows.push_str(&term.to_string());
+                rows.push_str(") ");
+            }
+            Term::BlankNode(_) | Term::Triple(_) => {
+                return Err(format!(
+                    "order-by operand {term} cannot appear in a SPARQL VALUES block (not orderable in VALUES)"
+                ));
+            }
+        }
+    }
+
+    let order = if descending { "DESC(?v)" } else { "?v" };
+    let select = format!("SELECT ?v WHERE {{ VALUES (?v) {{ {rows}}} }} ORDER BY {order}");
+    let (variables, result_rows) =
+        run_select(dataset, &select, &[]).map_err(|e| format!("order-by {e}"))?;
+
+    let v_index = column_index(&variables, "v");
+    let mut out: Vec<Term> = Vec::with_capacity(result_rows.len());
+    for row in &result_rows {
+        match v_index.and_then(|i| row.get(i)).and_then(Option::as_ref) {
+            Some(value) => out.push(term_value_to_native(value)),
+            None => {
+                return Err("order-by query produced a solution row with no ?v binding".to_owned());
+            }
+        }
     }
     Ok(out)
 }
@@ -297,5 +511,177 @@ mod tests {
         )
         .expect("eval must succeed for non-matching focus");
         assert_eq!(results_other.len(), 0);
+    }
+
+    // ── eval_scalar_expr ──────────────────────────────────────────────────────
+
+    #[test]
+    fn eval_scalar_expr_strlen() {
+        let dataset = dataset_from_ntriples(&[]);
+        let result = eval_scalar_expr(&dataset, "STRLEN(\"abc\")", &[])
+            .expect("scalar eval must succeed")
+            .expect("bound result");
+        assert_eq!(
+            result,
+            Term::Literal(Literal::new_typed_literal(
+                "3",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+            ))
+        );
+    }
+
+    #[test]
+    fn eval_scalar_expr_with_arg_substitution() {
+        let dataset = dataset_from_ntriples(&[]);
+        let arg = Term::Literal(Literal::new_typed_literal(
+            "abcd",
+            NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
+        ));
+        let result = eval_scalar_expr(&dataset, "STRLEN(?a0)", &[("a0".to_owned(), arg)])
+            .expect("scalar eval must succeed")
+            .expect("bound result");
+        assert_eq!(
+            result,
+            Term::Literal(Literal::new_typed_literal(
+                "4",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+            ))
+        );
+    }
+
+    // ── eval_aggregate ────────────────────────────────────────────────────────
+
+    fn int_lit(n: &str) -> Term {
+        Term::Literal(Literal::new_typed_literal(
+            n,
+            NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+        ))
+    }
+
+    #[test]
+    fn eval_aggregate_min_max_sum_over_integers() {
+        let dataset = dataset_from_ntriples(&[]);
+        let vals = [int_lit("1"), int_lit("2"), int_lit("3")];
+        assert_eq!(
+            eval_aggregate(&dataset, "MIN", &vals).expect("min"),
+            Some(int_lit("1"))
+        );
+        assert_eq!(
+            eval_aggregate(&dataset, "MAX", &vals).expect("max"),
+            Some(int_lit("3"))
+        );
+        assert_eq!(
+            eval_aggregate(&dataset, "SUM", &vals).expect("sum"),
+            Some(int_lit("6"))
+        );
+    }
+
+    #[test]
+    fn eval_aggregate_empty_set() {
+        let dataset = dataset_from_ntriples(&[]);
+        // SUM of empty = xsd:integer 0; MIN/MAX of empty = unbound.
+        assert_eq!(
+            eval_aggregate(&dataset, "SUM", &[]).expect("sum empty"),
+            Some(int_lit("0"))
+        );
+        assert_eq!(
+            eval_aggregate(&dataset, "MIN", &[]).expect("min empty"),
+            None
+        );
+        assert_eq!(
+            eval_aggregate(&dataset, "MAX", &[]).expect("max empty"),
+            None
+        );
+    }
+
+    #[test]
+    fn eval_aggregate_promotes_int_and_decimal() {
+        let dataset = dataset_from_ntriples(&[]);
+        let decimal = Term::Literal(Literal::new_typed_literal(
+            "2.5",
+            NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#decimal"),
+        ));
+        let vals = [int_lit("1"), decimal];
+        // 1 (int) + 2.5 (decimal) promotes to xsd:decimal 3.5.
+        assert_eq!(
+            eval_aggregate(&dataset, "SUM", &vals).expect("sum"),
+            Some(Term::Literal(Literal::new_typed_literal(
+                "3.5",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#decimal"),
+            )))
+        );
+    }
+
+    #[test]
+    fn eval_aggregate_blank_node_operand_is_error() {
+        let dataset = dataset_from_ntriples(&[]);
+        let err = eval_aggregate(&dataset, "SUM", &[Term::blank("b0")]).unwrap_err();
+        assert!(
+            err.contains("cannot appear in a SPARQL VALUES block"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn eval_aggregate_rejects_unknown_agg() {
+        let dataset = dataset_from_ntriples(&[]);
+        let err = eval_aggregate(&dataset, "AVG", &[int_lit("1")]).unwrap_err();
+        assert!(err.contains("unsupported aggregate"), "got: {err}");
+    }
+
+    // ── eval_order ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn eval_order_integers_by_value_not_lexical() {
+        let dataset = dataset_from_ntriples(&[]);
+        // Lexically "10" < "2", but by VALUE 2 < 10 — the engine must order by value.
+        let vals = [int_lit("2"), int_lit("10")];
+        assert_eq!(
+            eval_order(&dataset, &vals, false).expect("asc order"),
+            vec![int_lit("2"), int_lit("10")]
+        );
+        assert_eq!(
+            eval_order(&dataset, &vals, true).expect("desc order"),
+            vec![int_lit("10"), int_lit("2")]
+        );
+    }
+
+    #[test]
+    fn eval_order_preserves_duplicates() {
+        let dataset = dataset_from_ntriples(&[]);
+        let vals = [int_lit("2"), int_lit("2"), int_lit("10")];
+        assert_eq!(
+            eval_order(&dataset, &vals, false).expect("asc order"),
+            vec![int_lit("2"), int_lit("2"), int_lit("10")],
+            "ORDER BY over VALUES preserves one row per input (no DISTINCT)"
+        );
+    }
+
+    #[test]
+    fn eval_order_empty_is_empty() {
+        let dataset = dataset_from_ntriples(&[]);
+        assert!(eval_order(&dataset, &[], false)
+            .expect("empty order")
+            .is_empty());
+    }
+
+    #[test]
+    fn eval_order_blank_node_operand_is_error() {
+        let dataset = dataset_from_ntriples(&[]);
+        let err = eval_order(&dataset, &[Term::blank("b0")], false).unwrap_err();
+        assert!(
+            err.contains("cannot appear in a SPARQL VALUES block"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn eval_scalar_expr_type_error_is_none() {
+        let dataset = dataset_from_ntriples(&[]);
+        // STRLEN of an integer is a type error → the projection expression is
+        // an error → ?result is unbound → Ok(None).
+        let result = eval_scalar_expr(&dataset, "STRLEN(1 + 2)", &[])
+            .expect("scalar eval must succeed despite the SPARQL type error");
+        assert_eq!(result, None);
     }
 }

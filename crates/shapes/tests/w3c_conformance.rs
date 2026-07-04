@@ -479,6 +479,16 @@ fn w3c_shacl_conformance() {
     let mut tests: Vec<TestCase> = Vec::new();
     collect_manifest(&root.join("manifest.ttl"), &root, &mut tests);
 
+    // First-party AF (Advanced Features) seam: the vendored root manifest stays
+    // pristine (no mf:include is added to it), so future upstream AF manifests
+    // slot in at `af/manifest.ttl` and are discovered here without re-vendoring.
+    // The placeholder ships zero entries today, so this discovers 0 tests and
+    // TOTAL_TESTS stays 120.
+    let af = root.join("af/manifest.ttl");
+    if af.exists() {
+        collect_manifest(&af, &root, &mut tests);
+    }
+
     assert_eq!(
         tests.len(),
         TOTAL_TESTS,
