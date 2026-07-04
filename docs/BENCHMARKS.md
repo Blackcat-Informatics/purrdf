@@ -80,8 +80,11 @@ Additional benches are run package-by-package, e.g.
 
 `bindings/python/benchmarks/bench_compat.py` times the shim and the genuine
 `rdflib` **in one process** and prints a side-by-side table with the
-purrdf/rdflib ratio. It is deliberately kept out of `make pytest` and CI: it is
-slow and timing-sensitive, so it is never collected as a test.
+purrdf/rdflib ratio. It is deliberately kept out of `make pytest` because it is
+slow and timing-sensitive, but it is run in the separate, report-only
+`benchmarks` CI job. That job produces `bench_compat.json` and uploads it
+alongside the Criterion artifacts. The job uses `continue-on-error: true`, so it
+never fails the main gate.
 
 ### Methodology
 
