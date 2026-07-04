@@ -210,6 +210,31 @@ impl NativeSparqlEngine {
         let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
         Ok(materialize(outcome, &ctx))
     }
+
+    /// Like [`SparqlEngine::query`], but with a caller-supplied SHACL-AF function
+    /// registry (`sh:SPARQLFunction`) injected so a call-position IRI resolving to a
+    /// declared function evaluates its body at eval time. This is the entry the
+    /// shapes validator uses; the registry is built once per shapes graph and
+    /// borrowed for the call. An empty registry behaves exactly like [`Self::query`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
+    pub fn query_with_user_functions(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        request: SparqlRequest<'_>,
+        registry: &crate::user_fn::UserFunctionRegistry,
+    ) -> Result<SparqlResult, RdfDiagnostic> {
+        let prepared = self.cache.borrow_mut().prepare_with(
+            request.query,
+            request.base_iri,
+            &self.parser_options,
+        )?;
+        let mut ctx = self.eval_ctx(dataset).with_user_functions(registry);
+        let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
+        Ok(materialize(outcome, &ctx))
+    }
 }
 
 /// Evaluate `prepared`, applying any pre-binding `substitutions` first (GAP-A).

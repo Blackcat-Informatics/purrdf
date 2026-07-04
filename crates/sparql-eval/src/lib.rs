@@ -67,6 +67,7 @@ pub mod solution;
 mod substitute;
 mod template;
 pub mod update;
+pub mod user_fn;
 
 pub use engine::{NativeSparqlEngine, PlanCache, PreparedQuery};
 pub use error::EvalError;
@@ -80,6 +81,7 @@ pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
 pub use scratch::{ScratchId, ScratchInterner, SolutionTerm};
 pub use solution::{compatible, Solution, SolutionSeq, VarSchema};
 pub use update::GraphResolver;
+pub use user_fn::{NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry};
 
 /// A deterministic, seed-free hasher builder (`AHasher` with fixed keys).
 ///

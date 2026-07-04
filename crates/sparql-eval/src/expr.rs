@@ -1622,6 +1622,18 @@ fn eval_function(
         // lexical form (an IRI argument casts to `xsd:string`). A lexical form that is
         // not valid for the target type is a SPARQL expression error (`Ok(None)`).
         Function::Custom(iri) => {
+            // A caller-injected SHACL-AF function (`sh:SPARQLFunction`) resolved at
+            // eval time — the open counterpart of the closed, parse-time `PurrdfFn`
+            // set. `ctx.user_functions` is a `Copy` borrow tied to the dataset
+            // lifetime, so reading it out does not borrow `ctx`, leaving `&mut ctx`
+            // free for the executor. Checked before the XSD-cast path so a function
+            // IRI never collides with a datatype IRI.
+            if let Some(registry) = ctx.user_functions {
+                if let Some(func) = registry.resolve(iri.as_str()) {
+                    let result = crate::user_fn::eval_user_function(func, iri.as_str(), &vals, ctx)?;
+                    return Ok(result.map(|value| intern(ctx, value)));
+                }
+            }
             if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {
                 return Ok(eval_xsd_cast(ctx, target, arg(&vals, 0)));
             }
