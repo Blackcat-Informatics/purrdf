@@ -1,0 +1,7 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:BuiltinKeywordShape
+    a sh:NodeShape ;
+    sh:targetClass ex:C ;
+    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains> ( [ sh:path ex:name ] "a" ) ] .

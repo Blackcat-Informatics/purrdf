@@ -15,10 +15,18 @@
 //! [`NodeExpr::Min`] / [`NodeExpr::Max`] / [`NodeExpr::Sum`] delegate to the
 //! SPARQL engine ([`crate::sparql::eval_order`] /
 //! [`crate::sparql::eval_aggregate`]) so value/numeric ordering and
-//! type-promotion match the engine exactly. Builtin function calls ([`FnCall::Builtin`]) and
-//! the `sh:if` effective-boolean-value route through the SPARQL seam
-//! ([`crate::sparql::eval_scalar_expr`]); user-defined functions
-//! ([`FnCall::UserDefined`]) are a hard capability error. The shape-bearing kind
+//! type-promotion match the engine exactly. Builtin function calls
+//! ([`FnCall::Builtin`]) and the `sh:if` effective-boolean-value route through the
+//! SPARQL seam ([`crate::sparql::eval_scalar_expr`]). The reachable builtin set is:
+//! XSD constructor/cast IRIs (e.g. `xsd:boolean`, `xsd:integer`) and any purrdf
+//! custom function IRI the SPARQL engine registers, both dispatched via the
+//! `<iri>(…)` call form; PLUS the XPath/XQuery-functions-namespace
+//! (`http://www.w3.org/2005/xpath-functions#…`) IRIs that [`builtin_keyword`]
+//! lowers to their SPARQL 1.1 keyword (e.g. `fn:string-length` → `STRLEN`,
+//! `fn:contains` → `CONTAINS`, `fn:numeric-abs` → `ABS`, `fn:matches` → `REGEX`),
+//! rendered in keyword form because those builtins are keyword-only in SPARQL and
+//! have no IRI call form. Only user-defined `sh:SPARQLFunction` calls
+//! ([`FnCall::UserDefined`]) remain a hard capability error. The shape-bearing kind
 //! [`NodeExpr::Filter`] (`sh:filterShape` / `sh:nodes`) re-enters the constraint
 //! engine ([`crate::constraints::conforms`]) under a depth-bounded
 //! [`RecursionGuard`] so a cyclic filter reference fails closed with a hard
@@ -253,6 +261,47 @@ pub fn is_true(terms: &[Term]) -> bool {
     )
 }
 
+/// Lower a known XPath/XQuery-functions-namespace function IRI to its SPARQL 1.1
+/// keyword.
+///
+/// Several SPARQL 1.1 builtins (STRLEN, CONTAINS, ABS, REGEX, …) are keyword-only:
+/// they have NO IRI call form, so the `<iri>(…)` call position never resolves them
+/// and a SHACL-AF `sh:expression` naming the XPath IRI would silently fall out of
+/// reach. This table maps the `http://www.w3.org/2005/xpath-functions#…` IRIs to
+/// the keyword the engine dispatches. Returns `None` for anything else (XSD casts
+/// and purrdf custom functions keep the `<iri>(…)` form).
+///
+/// A static `match` over `&'static str` — wasm-clean, no runtime allocation.
+fn builtin_keyword(iri: &str) -> Option<&'static str> {
+    const FN: &str = "http://www.w3.org/2005/xpath-functions#";
+    let local = iri.strip_prefix(FN)?;
+    Some(match local {
+        "string-length" => "STRLEN",
+        "contains" => "CONTAINS",
+        "starts-with" => "STRSTARTS",
+        "ends-with" => "STRENDS",
+        "substring" => "SUBSTR",
+        "upper-case" => "UCASE",
+        "lower-case" => "LCASE",
+        // `fn:concat` and `fn:string-join` both map to SPARQL CONCAT; CONCAT is
+        // variadic, so the differing arity is not a mismatch here.
+        "concat" | "string-join" => "CONCAT",
+        "matches" => "REGEX",
+        "replace" => "REPLACE",
+        "numeric-abs" => "ABS",
+        "numeric-ceil" => "CEIL",
+        "numeric-floor" => "FLOOR",
+        "numeric-round" => "ROUND",
+        "year-from-dateTime" => "YEAR",
+        "month-from-dateTime" => "MONTH",
+        "day-from-dateTime" => "DAY",
+        "hours-from-dateTime" => "HOURS",
+        "minutes-from-dateTime" => "MINUTES",
+        "seconds-from-dateTime" => "SECONDS",
+        _ => return None,
+    })
+}
+
 // ── Evaluator ───────────────────────────────────────────────────────────────────
 
 /// Evaluate a node expression against `store`, from `focus`.
@@ -370,9 +419,16 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
                 };
                 arg_terms.push((format!("a{idx}"), only.clone()));
             }
-            // Render `<iri>(?a0, ?a1, ...)` and route through the SPARQL seam.
+            // Render the call and route through the SPARQL seam. Keyword-only
+            // SPARQL builtins (STRLEN, CONTAINS, ABS, REGEX, …) have no IRI call
+            // form, so a known XPath-functions-namespace IRI is lowered to its
+            // keyword; everything else (XSD casts, purrdf custom functions) keeps
+            // the `<iri>(…)` call form the engine resolves as a function.
             let placeholders: Vec<String> = (0..arg_terms.len()).map(|i| format!("?a{i}")).collect();
-            let expr_string = format!("<{}>({})", iri.as_str(), placeholders.join(", "));
+            let expr_string = match builtin_keyword(iri.as_str()) {
+                Some(kw) => format!("{kw}({})", placeholders.join(", ")),
+                None => format!("<{}>({})", iri.as_str(), placeholders.join(", ")),
+            };
             match crate::sparql::eval_scalar_expr(&store.sparql_dataset(), &expr_string, &arg_terms)?
             {
                 // A SPARQL error/unbound result is the correct SHACL-AF "no
@@ -850,6 +906,101 @@ mod tests {
             err.contains("argument 0 must yield exactly one value, got 2"),
             "got: {err}"
         );
+    }
+
+    /// A keyword-only SPARQL builtin named by its XPath-functions-namespace IRI
+    /// must now dispatch end-to-end: `fn:string-length("hello")` → `5`^^xsd:integer.
+    #[test]
+    fn builtin_keyword_string_length_dispatches() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::new();
+        let expr = NodeExpr::Call(FnCall::Builtin {
+            iri: NamedNode::new_unchecked("http://www.w3.org/2005/xpath-functions#string-length"),
+            args: vec![NodeExpr::Constant(Term::Literal(
+                Literal::new_simple_literal("hello"),
+            ))],
+        });
+        let result = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("STRLEN evals");
+        assert_eq!(result, vec![int_lit("5")]);
+    }
+
+    /// `fn:contains(str, substr)` lowers to SPARQL CONTAINS and yields a boolean.
+    #[test]
+    fn builtin_keyword_contains_dispatches() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::new();
+        let call = |s: &str, sub: &str| {
+            NodeExpr::Call(FnCall::Builtin {
+                iri: NamedNode::new_unchecked("http://www.w3.org/2005/xpath-functions#contains"),
+                args: vec![
+                    NodeExpr::Constant(Term::Literal(Literal::new_simple_literal(s))),
+                    NodeExpr::Constant(Term::Literal(Literal::new_simple_literal(sub))),
+                ],
+            })
+        };
+        let yes = eval_node_expr(&data, &ex("a"), &call("banana", "a"), &mut guard)
+            .expect("CONTAINS evals");
+        assert_eq!(yes, vec![bool_literal(true)]);
+        let no = eval_node_expr(&data, &ex("a"), &call("banana", "z"), &mut guard)
+            .expect("CONTAINS evals");
+        assert_eq!(no, vec![bool_literal(false)]);
+    }
+
+    /// Every mapped keyword must lower to a form the SPARQL engine accepts (no
+    /// hard seam error). Each is exercised with well-typed arguments; the guard is
+    /// that `eval_node_expr` returns `Ok` (a value or an empty set), never `Err`.
+    #[test]
+    fn builtin_keyword_table_all_dispatch() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::new();
+        let s = |v: &str| NodeExpr::Constant(Term::Literal(Literal::new_simple_literal(v)));
+        let i = |v: &str| NodeExpr::Constant(int_lit(v));
+        let dt = |v: &str| {
+            NodeExpr::Constant(Term::Literal(Literal::new_typed_literal(
+                v,
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#dateTime"),
+            )))
+        };
+        let fnn = |local: &str| {
+            NamedNode::new_unchecked(format!("http://www.w3.org/2005/xpath-functions#{local}"))
+        };
+        let dtv = "2026-07-03T12:34:56";
+        let cases: Vec<(&str, Vec<NodeExpr>)> = vec![
+            ("string-length", vec![s("hello")]),
+            ("contains", vec![s("banana"), s("a")]),
+            ("starts-with", vec![s("banana"), s("ba")]),
+            ("ends-with", vec![s("banana"), s("na")]),
+            ("substring", vec![s("banana"), i("2")]),
+            ("upper-case", vec![s("abc")]),
+            ("lower-case", vec![s("ABC")]),
+            ("concat", vec![s("a"), s("b")]),
+            ("string-join", vec![s("a"), s("b")]),
+            ("matches", vec![s("banana"), s("an+")]),
+            ("replace", vec![s("banana"), s("a"), s("o")]),
+            ("numeric-abs", vec![i("-5")]),
+            ("numeric-ceil", vec![i("5")]),
+            ("numeric-floor", vec![i("5")]),
+            ("numeric-round", vec![i("5")]),
+            ("year-from-dateTime", vec![dt(dtv)]),
+            ("month-from-dateTime", vec![dt(dtv)]),
+            ("day-from-dateTime", vec![dt(dtv)]),
+            ("hours-from-dateTime", vec![dt(dtv)]),
+            ("minutes-from-dateTime", vec![dt(dtv)]),
+            ("seconds-from-dateTime", vec![dt(dtv)]),
+        ];
+        for (local, args) in cases {
+            let expr = NodeExpr::Call(FnCall::Builtin {
+                iri: fnn(local),
+                args,
+            });
+            let out = eval_node_expr(&data, &ex("a"), &expr, &mut guard);
+            assert!(out.is_ok(), "fn:{local} must dispatch, got: {out:?}");
+            assert_eq!(
+                out.unwrap().len(),
+                1,
+                "fn:{local} must yield exactly one value"
+            );
+        }
     }
 
     #[test]

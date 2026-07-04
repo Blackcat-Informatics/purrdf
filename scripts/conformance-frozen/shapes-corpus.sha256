@@ -175,3 +175,6 @@ ebac356a0bbfb4272ce76e21c07170c8c0804347e5949ae4f0eda5a6d43f075e  57-expr-sum/sh
 065aefaf2781291b4ec9d206e720ca7c75460ac0cb069041498715172633fc66  59-expr-exists/data.nt
 94cbd1ab7543d52b0290467d4b495024b18d5dffc66a81883498ce0883ca80f5  59-expr-exists/expected-report.nt
 be261c037eafae864a85b7155fea9f007d47591dce972d4b694242a3097d92db  59-expr-exists/shapes.ttl
+fc1bf466fc993aed0c7420ce895222782d09c02b3401d617188e85ebea3d9f57  60-expr-builtin-keyword/data.nt
+44d67967df42c2a0702b5057f14aa1af15e3faf158bd806cbad1afb13e13c097  60-expr-builtin-keyword/expected-report.nt
+117d5ffb15525b9dd3ef309f662608f63af799cfd083f8f31c30a8261687e910  60-expr-builtin-keyword/shapes.ttl
