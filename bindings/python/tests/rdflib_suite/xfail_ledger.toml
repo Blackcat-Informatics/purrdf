@@ -29,7 +29,8 @@
 "test_batch_add.py::TestBatchAddGraph::test_add_quad_for_non_conjunctive_empty" = "compat BatchAddGraph.add on a non-conjunctive Graph does not drop the 4th (context) element the way rdflib does before an implicit flush, so a quad added to a plain Graph leaves one triple instead of none"
 
 # --- Theme: DefinedNamespace introspection ---
-"test_definednamespace_dir.py::test_definednamespace_dir" = "compat DefinedNamespaceMeta does not override __dir__ to enumerate the namespace's defined term IRIs, so dir() returns ordinary object attributes rather than the term set"
+# (resolved: RDF is now a DefinedNamespace and DefinedNamespaceMeta.__dir__
+#  returns the full term URI set.)
 
 # --- Theme: SPARQL Result public API — .bindings / SELECT * projection ---
 "test_evaluate_bind.py::test_bind[check-bind(\"thing\" as ?name)-name-thing]" = "compat Result exposes no .bindings attribute (rdflib's list-of-dict view of SELECT solutions), so r.bindings[0][var] raises AttributeError"
