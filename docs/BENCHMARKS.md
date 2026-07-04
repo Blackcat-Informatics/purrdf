@@ -28,20 +28,63 @@ They live under `crates/*/benches/`:
 - `crates/rdf-core/benches/ir_layout.rs` — AoS vs. SoA vs. predicate-adjacency
   IR layouts (allocation counts, high-water mark, end-to-end latency).
 - `crates/rdf-core/benches/mutable.rs` — copy-on-write mutation paths.
+- `crates/rdf-core/benches/intern_content_id.rs` — content-addressing
+  recognition cost for ordinary vs. genuine content-id IRIs.
 - `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput.
-- `crates/sparql-eval/benches/{query_eval,cost_based_bgp_planner,exists_decorrelation}.rs`
-  — SPARQL evaluation and planner costs.
+- `crates/sparql-algebra/benches/tokenize.rs` — SPARQL/Turtle lexer hot path
+  (`IRIREF`, string literals, comments).
+- `crates/sparql-eval/benches/query_eval.rs` — end-to-end SPARQL SELECT
+  evaluation over synthetic datasets.
+- `crates/sparql-eval/benches/cost_based_bgp_planner.rs` — regression watch on
+  the cost-based BGP join planner; the deterministic win over the retired
+  structural heuristic is gated by the `bgp` unit tests (which count real
+  intermediate rows) and by the differential corpus test in
+  `crates/sparql-conformance/tests/cost_planner_corpus.rs`.
+- `crates/sparql-eval/benches/exists_decorrelation.rs` — `FILTER NOT EXISTS`
+  anti-join cost with and without the `exists_memo` decorrelation path.
+- `crates/sparql-eval/benches/lateral_service.rs` — variable-endpoint
+  `SERVICE ?g` evaluated as a LATERAL join vs. a fixed-IRI `SERVICE <ep>`.
 - `crates/shapes/benches/validate.rs` — SHACL validation.
+- `crates/entail/benches/chase.rs` — RDFS forward-materialization chase scaling.
 - `crates/gts/benches/authoring.rs` — GTS container authoring.
+- `crates/iri/benches/parse.rs` — IRI parse/validate hot path over a mixed
+  character-class corpus.
 
-Run them all with `make bench` (report-only; never part of `make check`).
+`NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
+list of triple-pattern strings, so callers can audit planner decisions without
+running the query.
+
+Run the default set with `make bench` (report-only; never part of `make check`).
+Additional benches are run package-by-package, e.g.
+`cargo bench -p purrdf-iri --bench parse`.
+
+### Native criterion benchmark inventory
+
+| Bench | What it measures |
+| --- | --- |
+| `crates/rdf-core/benches/ir_layout.rs` | AoS / SoA / predicate-adjacency IR layout trade-offs (latency, allocations, peak RSS). |
+| `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR. |
+| `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
+| `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers. |
+| `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
+| `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
+| `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | Planner regression watch: cost-based BGP ordering vs. the retired structural heuristic. |
+| `crates/sparql-eval/benches/exists_decorrelation.rs` | `FILTER NOT EXISTS` inner-pattern re-evaluation and index-rebuild cost with/without memoization. |
+| `crates/sparql-eval/benches/lateral_service.rs` | `SERVICE ?g` LATERAL substitute-and-forward cost as the number of distinct endpoint bindings grows. |
+| `crates/shapes/benches/validate.rs` | SHACL Core validation latency on synthetic shapes/graphs. |
+| `crates/entail/benches/chase.rs` | RDFS semi-naive materialization scaling on subclass chains. |
+| `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
+| `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
 
 ## Python compat harness (`bench_compat.py`)
 
 `bindings/python/benchmarks/bench_compat.py` times the shim and the genuine
 `rdflib` **in one process** and prints a side-by-side table with the
-purrdf/rdflib ratio. It is deliberately kept out of `make pytest` and CI: it is
-slow and timing-sensitive, so it is never collected as a test.
+purrdf/rdflib ratio. It is deliberately kept out of `make pytest` because it is
+slow and timing-sensitive, but it is run in the separate, report-only
+`benchmarks` CI job. That job produces `bench_compat.json` and uploads it
+alongside the Criterion artifacts. The job uses `continue-on-error: true`, so it
+never fails the main gate.
 
 ### Methodology
 
@@ -86,32 +129,32 @@ guarantee** — your numbers will differ. Reproduce with `make bench-python`.
 
 | size | operation | purrdf ms | rdflib ms | ratio (p/r) |
 | ---: | --- | ---: | ---: | ---: |
-| 1,000 | parse_nt | 9.9 | 6.7 | 1.48 |
-| 1,000 | parse_ttl | 8.9 | 12.2 | 0.73 |
-| 1,000 | serialize_nt | 5.3 | 1.3 | 4.10 |
-| 1,000 | serialize_ttl | 18.7 | 11.8 | 1.59 |
-| 1,000 | query_bgp | 3.0 | 1.0 | 2.99 |
-| 1,000 | query_agg | 3.0 | 3.6 | 0.84 |
-| 1,000 | triples_scan | 2.2 | 0.3 | 6.42 |
-| 10,000 | parse_nt | 95.3 | 71.9 | 1.33 |
-| 10,000 | parse_ttl | 87.3 | 125.6 | 0.70 |
-| 10,000 | serialize_nt | 55.8 | 13.6 | 4.11 |
-| 10,000 | serialize_ttl | 196.4 | 127.4 | 1.54 |
-| 10,000 | query_bgp | 31.2 | 2.4 | 13.14 |
-| 10,000 | query_agg | 30.8 | 10.2 | 3.01 |
-| 10,000 | triples_scan | 22.7 | 3.6 | 6.28 |
-| 100,000 | parse_nt | 777.9 | 1863.5 | 0.42 |
-| 100,000 | parse_ttl | 1110.0 | 2894.3 | 0.38 |
-| 100,000 | serialize_nt | 746.4 | 202.0 | 3.69 |
-| 100,000 | serialize_ttl | 2550.6 | 1693.3 | 1.51 |
-| 100,000 | query_bgp | 432.5 | 17.1 | 25.34 |
-| 100,000 | query_agg | 426.7 | 76.9 | 5.55 |
-| 100,000 | triples_scan | 303.3 | 59.3 | 5.11 |
+| 1,000 | parse_nt | 16.8 | 13.8 | 1.22 |
+| 1,000 | parse_ttl | 17.5 | 30.4 | 0.58 |
+| 1,000 | serialize_nt | 9.5 | 2.7 | 3.53 |
+| 1,000 | serialize_ttl | 32.5 | 24.9 | 1.31 |
+| 1,000 | query_bgp | 6.7 | 2.2 | 3.13 |
+| 1,000 | query_agg | 7.1 | 8.4 | 0.85 |
+| 1,000 | triples_scan | 5.5 | 0.7 | 8.20 |
+| 10,000 | parse_nt | 178.6 | 93.5 | 1.91 |
+| 10,000 | parse_ttl | 187.1 | 244.8 | 0.76 |
+| 10,000 | serialize_nt | 64.9 | 34.3 | 1.89 |
+| 10,000 | serialize_ttl | 214.3 | 195.6 | 1.10 |
+| 10,000 | query_bgp | 41.7 | 4.9 | 8.47 |
+| 10,000 | query_agg | 40.0 | 15.2 | 2.63 |
+| 10,000 | triples_scan | 41.8 | 7.9 | 5.29 |
+| 100,000 | parse_nt | 964.1 | 2081.3 | 0.46 |
+| 100,000 | parse_ttl | 1429.9 | 3033.4 | 0.47 |
+| 100,000 | serialize_nt | 825.0 | 210.2 | 3.93 |
+| 100,000 | serialize_ttl | 2869.9 | 1947.1 | 1.47 |
+| 100,000 | query_bgp | 488.1 | 36.4 | 13.42 |
+| 100,000 | query_agg | 494.0 | 98.6 | 5.01 |
+| 100,000 | triples_scan | 358.6 | 77.6 | 4.62 |
 
 Reading this honestly, on this host and this run:
 
 - **Bulk N-Triples/Turtle parsing** scales better in the shim — at 100k triples
-  it parsed both formats roughly 2.4–2.6× faster than real `rdflib`, and it was
+  it parsed both formats roughly 2.1–2.2× faster than real `rdflib`, and it was
   already ahead on Turtle at every size.
 - **Per-item operations that cross the Python↔native boundary once per result or
   per triple** — `serialize`, `triples()` iteration, and the SELECT queries —

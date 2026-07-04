@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! SPARQL `SERVICE` federation: the [`RemoteQuerySource`] seam and the
-//! [`eval_service`] handler.
+//! SPARQL `SERVICE` federation: the `eval_service` handler and the
+//! [`RemoteQuerySource`] seam.
 //!
 //! `SERVICE [SILENT] <endpoint> { pattern }` evaluates `pattern` at a remote
 //! endpoint and joins the result into the surrounding query. The evaluator stays
@@ -49,7 +49,7 @@ pub struct ResolvedBindings {
 }
 
 /// A failure while resolving a `SERVICE` step. Whether it aborts the query or is
-/// swallowed is decided by [`eval_service`] from the `SILENT` flag, not here.
+/// swallowed is decided by `eval_service` from the `SILENT` flag, not here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteError {
     /// The endpoint was unreachable / the request failed at the transport layer.
@@ -230,6 +230,7 @@ mod tests {
     use super::*;
     use crate::NativeSparqlEngine;
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// `:a :knows :x`, `:a :knows :y` (the local graph).
     fn local() -> Arc<RdfDataset> {
@@ -376,5 +377,108 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, EvalError::Remote(_)), "got {err:?}");
+    }
+
+    // ── LATERAL variable-endpoint SERVICE forwarding counts ───────────────────
+
+    /// `:row{i} :endpoint <http://ex/ep{i}>` for `i` in `0..n`.
+    fn multi_endpoint_local(n: usize) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let endpoint = b.intern_iri("http://ex/endpoint");
+        for i in 0..n {
+            let row = b.intern_iri(&format!("http://ex/row{i}"));
+            let ep = b.intern_iri(&format!("http://ex/ep{i}"));
+            b.push_quad(row, endpoint, ep, None);
+        }
+        b.freeze().expect("freeze")
+    }
+
+    /// Endpoint `i` contains `:s :name "ep{i}"`.
+    fn multi_endpoint(i: usize) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let name = b.intern_iri("http://ex/name");
+        let s = b.intern_iri("http://ex/s");
+        let lit = b.intern_literal(RdfLiteral::simple(format!("ep{i}")));
+        b.push_quad(s, name, lit, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// Register `n` distinct in-memory endpoints.
+    fn multi_source(n: usize) -> LocalRemoteQuerySource {
+        let mut src = LocalRemoteQuerySource::new();
+        for i in 0..n {
+            src = src.with_endpoint(format!("http://ex/ep{i}"), multi_endpoint(i));
+        }
+        src
+    }
+
+    /// A `RemoteQuerySource` wrapper that counts `query()` calls.
+    struct CountingSource<'a> {
+        inner: &'a (dyn RemoteQuerySource + Sync),
+        count: AtomicUsize,
+    }
+
+    impl<'a> CountingSource<'a> {
+        fn new(inner: &'a (dyn RemoteQuerySource + Sync)) -> Self {
+            Self {
+                inner,
+                count: AtomicUsize::new(0),
+            }
+        }
+        fn count(&self) -> usize {
+            self.count.load(Ordering::Relaxed)
+        }
+    }
+
+    impl RemoteQuerySource for CountingSource<'_> {
+        fn query(&self, endpoint: &str, query_text: &str) -> Result<ResolvedBindings, RemoteError> {
+            self.count.fetch_add(1, Ordering::Relaxed);
+            self.inner.query(endpoint, query_text)
+        }
+    }
+
+    #[test]
+    fn variable_service_forwards_once_per_distinct_endpoint_binding() {
+        // Four left rows, each binding `?g` to a distinct endpoint → the LATERAL
+        // path must forward once for every distinct endpoint (four forwards).
+        let n = 4;
+        let ds = multi_endpoint_local(n);
+        let source = multi_source(n);
+        let counting = CountingSource::new(&source);
+        let result = run_with_source(
+            &ds,
+            &counting,
+            "SELECT * WHERE { ?x <http://ex/endpoint> ?g \
+             SERVICE ?g { ?s <http://ex/name> ?name } }",
+        )
+        .expect("query");
+        assert_eq!(
+            counting.count(),
+            n,
+            "variable SERVICE should forward once per distinct endpoint"
+        );
+        assert_eq!(row_strings(&result).len(), n);
+    }
+
+    #[test]
+    fn fixed_service_forwards_exactly_once_regardless_of_left_rows() {
+        // Four left rows, but the endpoint is fixed → one forward total.
+        let n = 4;
+        let ds = multi_endpoint_local(n);
+        let source = multi_source(n);
+        let counting = CountingSource::new(&source);
+        let result = run_with_source(
+            &ds,
+            &counting,
+            "SELECT * WHERE { ?x <http://ex/endpoint> ?g \
+             SERVICE <http://ex/ep0> { ?s <http://ex/name> ?name } }",
+        )
+        .expect("query");
+        assert_eq!(
+            counting.count(),
+            1,
+            "fixed SERVICE should forward exactly once"
+        );
+        assert_eq!(row_strings(&result).len(), n);
     }
 }

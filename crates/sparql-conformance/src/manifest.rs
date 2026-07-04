@@ -252,13 +252,19 @@ fn load_entailment_regimes(
     Ok(())
 }
 
-/// Choose the regime to materialize: prefer the weakest that still entails (RDFS),
-/// then OWL-RL, then the identity regimes. Boundaries the native reasoner cannot
-/// materialize (OWL-Direct / D) yield `None` — the case runs unmaterialized and,
-/// if it needs those entailments, is recorded as a typed `Entailment` xfail.
+/// Choose the regime to materialize. `OWL-Direct` is preferred when declared: the
+/// native DL reasoner answers it query-directed (`purrdf_entail::materialize_dl`), which
+/// is the strongest regime and subsumes the RDFS / OWL-RL answers for these cases. Else
+/// prefer the weakest that still entails (RDFS), then OWL-RL, then the identity regimes.
+/// Boundaries the native reasoner cannot materialize (D) yield `None` — the case runs
+/// unmaterialized and, if it needs those entailments, is a typed `Entailment` xfail.
 fn pick_regime(regimes: &[purrdf_entail::Regime]) -> Option<purrdf_entail::Regime> {
-    use purrdf_entail::Regime::{OwlRl, Rdf, Rdfs, Simple};
-    [Rdfs, OwlRl, Rdf, Simple]
+    use purrdf_entail::Regime::{OwlDirect, OwlRl, Rdf, Rdfs, Rif, Simple};
+    // RIF-declared cases run through the RIF rule engine (wired in `run.rs`), which
+    // needs the RAW dataset — so `Rif` is selected but `load_dataset` passes it
+    // through unmaterialized, exactly like `OwlDirect`. The relative order among the
+    // others is immaterial for the RIF cases (they declare only `ent:RIF`).
+    [OwlDirect, Rdfs, OwlRl, Rdf, Simple, Rif]
         .into_iter()
         .find(|pref| regimes.contains(pref))
 }

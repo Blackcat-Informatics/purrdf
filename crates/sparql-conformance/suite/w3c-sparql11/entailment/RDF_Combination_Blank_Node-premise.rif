@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!DOCTYPE Document [
+  <!ENTITY rif  "http://www.w3.org/2007/rif#">
+  <!ENTITY xs   "http://www.w3.org/2001/XMLSchema#">
+  <!ENTITY rdf  "http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+]>
+
+<Document xmlns="&rif;">
+  <directive>
+    <Import>
+      <location>http://www.w3.org/2005/rules/test/repository/tc/RDF_Combination_Blank_Node/RDF_Combination_Blank_Node-import001</location>
+      <profile>http://www.w3.org/ns/entailment/RDF</profile>
+    </Import>
+  </directive>
+  <payload>
+    <Group>
+      <sentence>
+        <Forall>
+          <declare>
+            <Var>x</Var>
+          </declare>
+          <declare>
+            <Var>y</Var>
+          </declare>
+          <formula>
+            <Implies>
+              <if>
+                <Frame>
+                  <object>
+                    <Var>x</Var>
+                  </object>
+                  <slot ordered="yes">
+                    <Const type="&rif;iri">http://example.org/example#hasName</Const>
+                    <Var>y</Var>
+                  </slot>
+                </Frame>
+              </if>
+              <then>
+                <Frame>
+                  <object>
+                    <Var>x</Var>
+                  </object>
+                  <slot ordered="yes">
+                    <Const type="&rif;iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const>
+                    <Const type="&rif;iri">http://example.org/example#named</Const>
+                  </slot>
+                </Frame>
+              </then>
+            </Implies>
+          </formula>
+        </Forall>
+      </sentence>
+    </Group>
+  </payload>
+</Document>
+<!--XML document generated on Sun Nov 07 10:36:18 EST 2010-->

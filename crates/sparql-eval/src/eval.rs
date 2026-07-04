@@ -27,8 +27,9 @@ use crate::solution::SolutionSeq;
 use crate::DetHashMap;
 
 /// Tunable evaluation behavior. Every flag defaults to the production-optimal
-/// value; the criterion benches flip individual flags to measure their effect
-/// (the flags are a measurement seam, never a degraded production mode).
+/// value; the criterion benches and differential tests flip individual flags to
+/// measure their effect (the flags are a measurement seam, never a degraded
+/// production mode).
 #[derive(Debug, Clone, Copy)]
 pub struct EvalOptions {
     /// Memoize each `EXISTS`/`NOT EXISTS` inner-pattern evaluation. The inner
@@ -36,11 +37,19 @@ pub struct EvalOptions {
     /// seed, so its result is **independent of the outer row**: a `FILTER` over N
     /// rows can evaluate it once instead of N times. Always `true` in production.
     pub exists_memo: bool,
+    /// Evaluate BGPs in the retired structural (most-constrained-first) order
+    /// instead of the cost-based order. Used only by the differential planner-
+    /// correctness corpus test to prove that reordering does not change the
+    /// result multiset. Always `false` in production.
+    pub force_structural_bgp_order: bool,
 }
 
 impl Default for EvalOptions {
     fn default() -> Self {
-        Self { exists_memo: true }
+        Self {
+            exists_memo: true,
+            force_structural_bgp_order: false,
+        }
     }
 }
 
@@ -54,8 +63,8 @@ impl Default for EvalOptions {
 /// default**, and evaluating `heldIn` without a configured table is a hard
 /// [`crate::EvalError`] (never a silently-wrong answer against fabricated IRIs).
 ///
-/// Callers supply their own vocabulary, e.g. the gmeow ontology's
-/// (`https://blackcatinformatics.ca/gmeow/accordingTo` / `…/sharpens`), via
+/// Callers supply their own vocabulary, e.g. a deployment namespace such as
+/// `http://example.org/ns/gmeow/accordingTo` / `…/sharpens`, via
 /// [`crate::NativeSparqlEngine::with_standpoint_predicates`] (engine-level) or
 /// [`EvalCtx::with_standpoint_predicates`] (a directly-built context).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +83,41 @@ impl StandpointPredicates {
         Self {
             according_to: according_to.into(),
             sharpens: sharpens.into(),
+        }
+    }
+}
+
+/// The caller-supplied **loss-declaration vocabulary** used by loss-aware
+/// `CONSTRUCT`.
+///
+/// When a `CONSTRUCT` template drops an RDF-1.2 reifier that was bound in the
+/// `WHERE`, the engine emits in-band loss declarations. The IRIs for the loss
+/// node type (`projection_loss`), the code predicate (`loss_code`), and the
+/// dropped-reifier pointer (`lost_reifies`) are caller-supplied configuration:
+/// PurRDF mints no vocabulary IRIs. If no vocabulary is configured, loss
+/// declarations stay inactive and the query behaves like a plain `CONSTRUCT`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LossVocabulary {
+    /// `rdf:type` of an in-band loss node (e.g. `…/ProjectionLoss`).
+    pub projection_loss: String,
+    /// Predicate carrying the machine loss code (e.g. `…/lossCode`).
+    pub loss_code: String,
+    /// Predicate pointing from the loss node to the dropped triple term
+    /// (e.g. `…/lostReifies`).
+    pub lost_reifies: String,
+}
+
+impl LossVocabulary {
+    /// A vocabulary from the caller's three predicate IRIs.
+    pub fn new(
+        projection_loss: impl Into<String>,
+        loss_code: impl Into<String>,
+        lost_reifies: impl Into<String>,
+    ) -> Self {
+        Self {
+            projection_loss: projection_loss.into(),
+            loss_code: loss_code.into(),
+            lost_reifies: lost_reifies.into(),
         }
     }
 }
@@ -166,12 +210,11 @@ pub struct EvalCtx<'d> {
     /// never revisits an earlier row's ordinal within the same `Extend` chain.
     pub(crate) bnode_memo: DetHashMap<(u64, String), SolutionTerm>,
     /// The evaluation-time value of NOW() — an xsd:dateTime, captured once at
-    /// context construction (from the host platform's real wall clock, see
-    /// [`crate::clock::wall_clock_now`]) so all NOW() calls in a query return the
-    /// same instant (SPARQL 1.1 §17.4.5.1).
+    /// context construction from the host platform's real wall clock so all NOW()
+    /// calls in a query return the same instant (SPARQL 1.1 §17.4.5.1).
     pub now: purrdf_xsd::XsdValue,
     /// Splitmix64 PRNG state for RAND()/UUID()/STRUUID(), seeded once at context
-    /// construction from real OS/platform entropy (see [`crate::clock::entropy_seed`]).
+    /// construction from real OS/platform entropy.
     pub rng_state: u64,
     /// Tunable evaluation behavior (see [`EvalOptions`]). Production default.
     pub options: EvalOptions,
@@ -182,6 +225,11 @@ pub struct EvalCtx<'d> {
     /// annotation to a standpoint scope — deliberately, since these are domain
     /// predicates from the caller's ontology, never engine defaults.
     pub standpoint_predicates: Option<StandpointPredicates>,
+    /// The caller-supplied loss-declaration vocabulary (see [`LossVocabulary`])
+    /// used by loss-aware `CONSTRUCT`. `None` (the default) means loss
+    /// declarations are inactive: a dropped reifier is projected silently, like
+    /// a plain `CONSTRUCT`.
+    pub loss_vocabulary: Option<LossVocabulary>,
     /// Memoized `EXISTS`/`NOT EXISTS` inner patterns **and their probe index**
     /// ([`ExistsInner`]), keyed by [`ExistsCacheKey`]. The inner eval and the index
     /// over it are outer-row-independent, so this turns `expr::exists`'s per-row
@@ -317,6 +365,7 @@ impl core::fmt::Debug for EvalCtx<'_> {
             .field("rng_state", &self.rng_state)
             .field("options", &self.options)
             .field("standpoint_predicates", &self.standpoint_predicates)
+            .field("loss_vocabulary", &self.loss_vocabulary)
             .finish_non_exhaustive()
     }
 }
@@ -339,6 +388,7 @@ impl<'d> EvalCtx<'d> {
             rng_state: rng_seed,
             options: EvalOptions::default(),
             standpoint_predicates: None,
+            loss_vocabulary: None,
             exists_inner_cache: DetHashMap::default(),
             exists_expr_vars_cache: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
@@ -379,6 +429,16 @@ impl<'d> EvalCtx<'d> {
     #[must_use]
     pub fn with_standpoint_predicates(mut self, predicates: StandpointPredicates) -> Self {
         self.standpoint_predicates = Some(predicates);
+        self
+    }
+
+    /// Supply the caller's loss-declaration vocabulary (see [`LossVocabulary`])
+    /// so loss-aware `CONSTRUCT` can emit in-band `ProjectionLoss` declarations
+    /// when a reifier is dropped by the template. Without it, loss declarations
+    /// stay inactive.
+    #[must_use]
+    pub fn with_loss_vocabulary(mut self, vocab: LossVocabulary) -> Self {
+        self.loss_vocabulary = Some(vocab);
         self
     }
 
@@ -451,6 +511,15 @@ impl<'d> EvalCtx<'d> {
     #[must_use]
     pub fn with_order_cache(mut self, cache: &'d BgpOrderCache) -> Self {
         self.bgp_order_cache = Some(cache);
+        self
+    }
+
+    /// Replace the evaluation options for this context. Used by the engine to thread
+    /// its configured options into each per-query context, and by tests that need to
+    /// flip a measurement seam.
+    #[must_use]
+    pub fn with_eval_options(mut self, options: EvalOptions) -> Self {
+        self.options = options;
         self
     }
 
@@ -528,6 +597,7 @@ impl<'d> EvalCtx<'d> {
             rng_state: self.rng_state,
             options: self.options,
             standpoint_predicates: self.standpoint_predicates.clone(),
+            loss_vocabulary: self.loss_vocabulary.clone(),
             exists_inner_cache: self.exists_inner_cache.clone(),
             exists_expr_vars_cache: self.exists_expr_vars_cache.clone(),
             regex_cache: DetHashMap::default(),
@@ -564,9 +634,9 @@ impl<'d> EvalCtx<'d> {
     }
 
     /// Build a child context for evaluating a SHACL-AF function body: it shares the
-    /// dataset, clock/entropy, order cache, standpoint table, remote source and
-    /// function registry, but starts fresh mutable evaluation state (the body is an
-    /// independent query) and increments the call depth.
+    /// dataset, clock/entropy, order cache, standpoint table, loss vocabulary,
+    /// remote source and function registry, but starts fresh mutable evaluation state
+    /// (the body is an independent query) and increments the call depth.
     ///
     /// # Errors
     ///
@@ -598,6 +668,7 @@ impl<'d> EvalCtx<'d> {
             rng_state: self.rng_state,
             options: self.options,
             standpoint_predicates: self.standpoint_predicates.clone(),
+            loss_vocabulary: self.loss_vocabulary.clone(),
             exists_inner_cache: DetHashMap::default(),
             exists_expr_vars_cache: DetHashMap::default(),
             regex_cache: DetHashMap::default(),

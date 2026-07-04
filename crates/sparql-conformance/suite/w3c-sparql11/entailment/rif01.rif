@@ -1,0 +1,71 @@
+<!DOCTYPE Document [
+        <!ENTITY rif  "http://www.w3.org/2007/rif#">
+        <!ENTITY ex   "http://example.org/ns#">
+        ]>
+<Document xmlns="&rif;">
+    <!--
+    Document(
+       Prefix(ex <http://example.org/ns#>)
+       Prefix(rel <http://purl.org/vocab/relationship/>)
+
+       Group (
+             Forall ?x ?y ?z (
+                 ?x [ ex:uncle ?z ] :- And (?x [ ex:parent  ?y ]
+                                            ?y [ ex:brother ?z ]  )
+             )
+       )
+    )
+      -->
+    <payload>
+        <Group>
+            <sentence>
+                <Forall>
+                    <declare><Var>x</Var></declare>
+                    <declare><Var>y</Var></declare>
+                    <declare><Var>z</Var></declare>
+                    <formula>
+                        <Implies>
+                            <if>
+                                <And>
+                                    <formula>
+                                        <Frame>
+                                            <object>
+                                                <Var>x</Var>
+                                            </object>
+                                            <slot ordered="yes">
+                                                <Const type="&rif;iri">&ex;parent</Const>
+                                                <Var>y</Var>
+                                            </slot>
+                                        </Frame>
+                                    </formula>
+                                    <formula>
+                                        <Frame>
+                                            <object>
+                                                <Var>y</Var>
+                                            </object>
+                                            <slot ordered="yes">
+                                                <Const type="&rif;iri">&ex;brother</Const>
+                                                <Var>z</Var>
+                                            </slot>
+                                        </Frame>
+                                    </formula>
+                                </And>
+                            </if>
+                            <then>
+                                <Frame>
+                                    <object>
+                                        <Var>x</Var>
+                                    </object>
+                                    <slot ordered="yes">
+                                        <Const type="&rif;iri">http://example.org/ns#uncle</Const>
+                                        <Var>z</Var>
+                                    </slot>
+                                </Frame>
+                            </then>
+                        </Implies>
+                    </formula>
+                </Forall>
+            </sentence>
+        </Group>
+    </payload>
+</Document>

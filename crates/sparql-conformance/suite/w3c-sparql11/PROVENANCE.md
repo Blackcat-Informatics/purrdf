@@ -109,6 +109,27 @@ is not a materialize-and-match affair; RIF-rule entailment (`rif*`); and RDF
 axiomatic-triple entailment under the bare RDF regime (`rdf01`). These are
 spec-inherent boundaries of a forward-materialization reasoner, not silent skips.
 
+### RIF rule-document sub-corpus (distinct upstream)
+
+The `rif*` entailment cases' `.ttl` fixtures reference RIF rule documents
+(`<rif01.rif>`, `<Frames-premise.rif>`, `<Modeling_Brain_Anatomy-premise.rif>`,
+`<RDF_Combination_Blank_Node-premise.rif>`) that are **absent from `w3c/rdf-tests`
+at commit `426c7df`** — the upstream SPARQL suite ships only the `.ttl`/`.rq`/`.srx`
+sides. Those referenced documents are the W3C **RIF Working Group** test-case files,
+vendored here verbatim so the `rif*` cases are runnable end-to-end:
+
+| File | Upstream source |
+|------|-----------------|
+| `rif01.rif` | `www.w3.org/2009/sparql/docs/tests/data-sparql11/entailment/rif01.rif` |
+| `Frames-premise.rif` | `www.w3.org/2005/rules/test/repository/tc/Frames/` |
+| `Modeling_Brain_Anatomy-premise.rif` (+ `-import001.rdf`) | `www.w3.org/2005/rules/test/repository/tc/Modeling_Brain_Anatomy/` |
+| `RDF_Combination_Blank_Node-premise.rif` (+ `-import001`) | `www.w3.org/2005/rules/test/repository/tc/RDF_Combination_Blank_Node/` |
+
+The two `-import001*` files are the RDF data pulled in by each premise's
+`<directive><Import>` element (RDF/XML and N-Triples respectively). Each file
+carries its own `LicenseRef-W3C-Test-Suite` `.license` sidecar recording its exact
+source URL.
+
 ## License
 
 The W3C test files are published under the **W3C Test Suite License** / **W3C
