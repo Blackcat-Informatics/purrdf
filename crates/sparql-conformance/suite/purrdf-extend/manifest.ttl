@@ -10,7 +10,7 @@
 #   3. annotation querying   — bind a reifier's annotation value
 #   4. standpoint poset      — ext:heldIn is poset-aware (held / not-held controls)
 #   5. loss-aware CONSTRUCT   — dropping the reifier layer emits an in-band
-#                               logic:ProjectionLoss declaration (+ no-loss control)
+#                               ext:ProjectionLoss declaration (+ no-loss control)
 #   6. world × standpoint     — a named-graph world triple joins a standpoint-held
 #                               reifier, proving both scoping axes in one query
 #
@@ -64,12 +64,12 @@
     mf:result <standpoint-not-held.srx> .
 
 :lossAwareConstruct a mf:QueryEvaluationTest ;
-    mf:name "loss-aware CONSTRUCT emits in-band logic:ProjectionLoss when the reifier layer is dropped" ;
+    mf:name "loss-aware CONSTRUCT emits in-band ext:ProjectionLoss when the reifier layer is dropped" ;
     mf:action [ qt:query <loss-lossy.rq> ; qt:data <reified.ttl> ] ;
     mf:result <loss-lossy.ttl> .
 
 :lossControlConstruct a mf:QueryEvaluationTest ;
-    mf:name "no-loss control: carrying the reifier emits no logic:ProjectionLoss" ;
+    mf:name "no-loss control: carrying the reifier emits no ext:ProjectionLoss" ;
     mf:action [ qt:query <loss-control.rq> ; qt:data <reified.ttl> ] ;
     mf:result <loss-control.ttl> .
 

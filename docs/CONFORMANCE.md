@@ -152,7 +152,7 @@ The ledgers themselves (each entry = one node id + a concrete, self-describing
 reason):
 
 - `bindings/python/tests/xfail_ledger.toml` — the first-party
-  `purrdf.compat` parity ledger (7 strict xfails).
+  `purrdf.compat` parity ledger (5 strict xfails).
 - `bindings/python/tests/rdflib_suite/xfail_ledger.toml` — the rdflib
   drop-in (LSP) gate ledger governing rdflib's own vendored tests (24 strict
   xfails). Both are applied as **strict** xfails, so an XPASS or a stale key
@@ -225,7 +225,7 @@ The node-expression kinds split into two tiers:
   separate boolean `sh:desc` flag. The owned semantics are pinned by the
   first-party corpus and unit tests, while the vendored `vectors/shacl/af/`
   suite provides additional coverage for the overlapping normative surface.
-- **rdflib drop-in residuals** — 23 rdflib-suite + 7 compat-parity strict
+- **rdflib drop-in residuals** — 24 rdflib-suite + 5 compat-parity strict
   xfails cover Graph-subclass identity through set operators, rdf:List /
   Collection mutation, `Result.bindings` / `SELECT *` subselect projection,
   graph-prefix forwarding, aggregate/nested-FILTER evaluation, and

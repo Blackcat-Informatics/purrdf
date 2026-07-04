@@ -41,28 +41,21 @@ use crate::DetHashMap;
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// `rdf:type`.
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-/// `xsd:string` — the datatype of an emitted `logic:lossCode` literal.
+/// `xsd:string` — the datatype of an emitted loss-code literal.
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-
-/// The canonical in-band loss-declaration vocabulary IRIs. These are declared in the
-/// `logic` slice (projection loss is a logic-domain concept); the strings here MUST
-/// match the ontology exactly.
-/// `logic:ProjectionLoss` — `rdf:type` of an in-band loss node.
-const LOGIC_PROJECTION_LOSS: &str = "https://blackcatinformatics.ca/logic/ProjectionLoss";
-/// `logic:lossCode` — the machine code (an `xsd:string`).
-const LOGIC_LOSS_CODE: &str = "https://blackcatinformatics.ca/logic/lossCode";
-/// `logic:lostReifies` — object is the triple term whose reification was dropped.
-const LOGIC_LOST_REIFIES: &str = "https://blackcatinformatics.ca/logic/lostReifies";
 
 /// Evaluate a `CONSTRUCT` query to a frozen IR dataset.
 ///
 /// **Loss-aware projection:** when the `WHERE` bound an RDF-1.2 reifier (via
 /// an `rdf:reifies` triple pattern) and the template drops it, the dropped
-/// reification layer is declared **in-band** as `logic:ProjectionLoss` triples on
-/// the SAME output graph — GTS is lossless, so loss is declared at the projection,
-/// never silently swallowed. When the `WHERE` has no `rdf:reifies` pattern at all
-/// the detection does zero extra work and the output is byte-identical to a plain
-/// `CONSTRUCT`.
+/// reification layer can be declared **in-band** as `ProjectionLoss` triples on
+/// the SAME output graph — but only when a caller-supplied
+/// [`LossVocabulary`](crate::eval::LossVocabulary) is configured. GTS is lossless,
+/// so a configured loss vocabulary lets projection loss be declared at the
+/// projection rather than silently swallowed; without a vocabulary the query
+/// behaves like a plain `CONSTRUCT`. When the `WHERE` has no `rdf:reifies`
+/// pattern at all the detection does zero extra work and the output is
+/// byte-identical to a plain `CONSTRUCT`.
 pub(crate) fn eval_construct(
     template: &[TriplePattern],
     pattern: &GraphPattern,
@@ -72,21 +65,27 @@ pub(crate) fn eval_construct(
     let schema = seq.schema.clone();
     let mut builder = RdfDatasetBuilder::new();
 
-    // Loss detection. FAST NO-OP PATH: collect the dropped reifies-patterns
-    // ONCE, before the row loop. With no `rdf:reifies` pattern in the WHERE the set
-    // is empty and the per-row emission below is skipped entirely — the output is
-    // byte-identical to today's plain CONSTRUCT.
+    // Loss detection. Only run when a caller-supplied loss vocabulary is configured;
+    // otherwise loss declarations stay inactive and the output behaves like a plain
+    // `CONSTRUCT`. With no `rdf:reifies` pattern in the WHERE the set is empty and
+    // the per-row emission below is skipped entirely.
     //
     // Standpoint attribution reads the SAME caller-supplied predicate table as
     // `heldIn` (see [`crate::eval::StandpointPredicates`]): with no table
     // configured, a dropped annotation cannot be attributed to a standpoint scope
     // and only the generic annotation-layer loss code is emitted — the engine never
     // fabricates a default domain predicate.
-    let standpoint_according_to: Option<String> = ctx
-        .standpoint_predicates
+    let loss_vocab = ctx.loss_vocabulary.clone();
+    let dropped: Vec<DroppedReifier> = loss_vocab
         .as_ref()
-        .map(|p| p.according_to.clone());
-    let dropped = collect_dropped_reifiers(template, pattern, standpoint_according_to.as_deref());
+        .map(|_| {
+            let standpoint_according_to: Option<String> = ctx
+                .standpoint_predicates
+                .as_ref()
+                .map(|p| p.according_to.clone());
+            collect_dropped_reifiers(template, pattern, standpoint_according_to.as_deref())
+        })
+        .unwrap_or_default();
 
     // Identify which template triple indices are reifier declarations
     // (predicate == rdf:reifies, object == TermPattern::Triple).  This scan is
@@ -169,8 +168,10 @@ pub(crate) fn eval_construct(
             }
         }
 
-        if !dropped.is_empty() {
-            emit_dropped_losses(&dropped, row, &schema, &mut builder, ctx);
+        if let Some(vocab) = loss_vocab.as_ref() {
+            if !dropped.is_empty() {
+                emit_dropped_losses(&dropped, row, &schema, &mut builder, ctx, vocab);
+            }
         }
     }
 
@@ -361,9 +362,9 @@ fn collect_term_pattern_vars(term: &TermPattern, out: &mut BTreeSet<String>) {
 /// from the row's bindings and emits, into the SAME builder:
 ///
 /// ```text
-/// <lossNode> rdf:type        logic:ProjectionLoss .
-/// <lossNode> logic:lossCode  "reifier-layer-dropped"^^xsd:string .
-/// <lossNode> logic:lostReifies <<( s p o )>> .
+/// <lossNode> rdf:type        <projectionLoss> .
+/// <lossNode> <lossCode>      "reifier-layer-dropped"^^xsd:string .
+/// <lossNode> <lostReifies>   <<( s p o )>> .
 /// ```
 ///
 /// plus the `annotation-layer-dropped` / `standpoint-scope-dropped` sub-codes when
@@ -378,6 +379,7 @@ fn emit_dropped_losses(
     schema: &VarSchema,
     builder: &mut RdfDatasetBuilder,
     ctx: &mut EvalCtx<'_>,
+    vocab: &crate::eval::LossVocabulary,
 ) {
     for d in dropped {
         // Materialize the concrete reified triple term for this row. An unbound
@@ -393,31 +395,36 @@ fn emit_dropped_losses(
         let loss_node = builder.intern_blank_value(&label, purrdf_core::BlankScope::DEFAULT);
 
         let rdf_type = builder.intern_iri_value(RDF_TYPE);
-        let projection_loss = builder.intern_iri_value(LOGIC_PROJECTION_LOSS);
+        let projection_loss = builder.intern_iri_value(&vocab.projection_loss);
         builder.push_quad(loss_node, rdf_type, projection_loss, None);
 
-        // logic:lossCode "reifier-layer-dropped"
-        push_loss_code(builder, loss_node, LOSS_REIFIER_LAYER_DROPPED);
+        // <lossCode> "reifier-layer-dropped"
+        push_loss_code(builder, loss_node, LOSS_REIFIER_LAYER_DROPPED, vocab);
 
-        // logic:lostReifies <<( s p o )>>
-        let lost_reifies = builder.intern_iri_value(LOGIC_LOST_REIFIES);
+        // <lostReifies> <<( s p o )>>
+        let lost_reifies = builder.intern_iri_value(&vocab.lost_reifies);
         let triple_id = builder.intern_value(&inner_term);
         builder.push_quad(loss_node, lost_reifies, triple_id, None);
 
         // Sub-codes on the SAME loss node (keyed deterministically by the same
         // content-derived label, so they coalesce across rows too).
         if d.has_annotation {
-            push_loss_code(builder, loss_node, LOSS_ANNOTATION_LAYER_DROPPED);
+            push_loss_code(builder, loss_node, LOSS_ANNOTATION_LAYER_DROPPED, vocab);
         }
         if d.has_standpoint {
-            push_loss_code(builder, loss_node, LOSS_STANDPOINT_SCOPE_DROPPED);
+            push_loss_code(builder, loss_node, LOSS_STANDPOINT_SCOPE_DROPPED, vocab);
         }
     }
 }
 
-/// Push `<loss_node> logic:lossCode "<code>"^^xsd:string .` into `builder`.
-fn push_loss_code(builder: &mut RdfDatasetBuilder, loss_node: TermId, code: &str) {
-    let loss_code = builder.intern_iri_value(LOGIC_LOSS_CODE);
+/// Push `<loss_node> <lossCode> "<code>"^^xsd:string .` into `builder`.
+fn push_loss_code(
+    builder: &mut RdfDatasetBuilder,
+    loss_node: TermId,
+    code: &str,
+    vocab: &crate::eval::LossVocabulary,
+) {
+    let loss_code = builder.intern_iri_value(&vocab.loss_code);
     let code_lit = builder.intern_literal_value(RdfLiteral {
         lexical_form: code.to_owned(),
         datatype: Some(XSD_STRING.to_owned()),
@@ -602,6 +609,17 @@ mod tests {
         crate::eval::StandpointPredicates::new(ACCORDING_TO, SHARPENS)
     }
 
+    /// A pure-fixture (example.org) loss-declaration vocabulary. These IRIs are
+    /// caller-supplied configuration, not engine constants.
+    const PROJECTION_LOSS: &str = "http://example.org/loss/ProjectionLoss";
+    const LOSS_CODE: &str = "http://example.org/loss/lossCode";
+    const LOST_REIFIES: &str = "http://example.org/loss/lostReifies";
+
+    /// The fixture's caller-supplied loss vocabulary.
+    fn ex_loss_vocab() -> crate::eval::LossVocabulary {
+        crate::eval::LossVocabulary::new(PROJECTION_LOSS, LOSS_CODE, LOST_REIFIES)
+    }
+
     /// A dataset with one reifier `:r rdf:reifies <<( :alice :age 42 )>>`, with two
     /// annotations on `:r` (confidence + accordingTo). The reifier query layer comes
     /// from the BGP virtual-candidate machinery (Task 1).
@@ -616,7 +634,7 @@ mod tests {
         let triple = b.intern_triple(alice, age, forty_two);
         let r = b.intern_iri("http://ex/r");
         b.push_reifier(r, triple);
-        // Annotation: :r :confidence "0.9" ; :r purrdf:accordingTo :sourceX .
+        // Annotation: :r :confidence "0.9" ; :r example:accordingTo :sourceX .
         let confidence = b.intern_iri("http://ex/confidence");
         let conf_val = b.intern_literal(RdfLiteral::simple("0.9"));
         b.push_annotation(r, confidence, conf_val);
@@ -641,11 +659,11 @@ mod tests {
         }
     }
 
-    /// Count quads whose predicate is `logic:lossCode` and object the given code.
+    /// Count quads whose predicate is the fixture's `lossCode` and object the given code.
     fn count_loss_code(out: &RdfDataset, code: &str) -> usize {
         out.quads()
             .filter(|q| {
-                matches!(out.resolve(q.p), TermRef::Iri(p) if p == LOGIC_LOSS_CODE)
+                matches!(out.resolve(q.p), TermRef::Iri(p) if p == LOSS_CODE)
                     && matches!(out.resolve(q.o), TermRef::Literal { lexical, .. } if lexical == code)
             })
             .count()
@@ -656,7 +674,7 @@ mod tests {
         // CONSTRUCT { ?s ?p ?o } WHERE { ?r rdf:reifies <<( ?s ?p ?o )>> } — the
         // reifier ?r is dropped, so the reification layer loss is declared in-band.
         let ds = reified_graph();
-        let mut ctx = EvalCtx::new(&ds);
+        let mut ctx = EvalCtx::new(&ds).with_loss_vocabulary(ex_loss_vocab());
         let template = vec![TriplePattern {
             subject: var("s"),
             predicate: NamedNodePattern::Variable(Variable::new("p")),
@@ -674,7 +692,7 @@ mod tests {
         // A logic:ProjectionLoss declaration of type with the reifier-layer code.
         let has_loss_type = out.quads().any(|q| {
             matches!(out.resolve(q.p), TermRef::Iri(p) if p == RDF_TYPE_IRI)
-                && matches!(out.resolve(q.o), TermRef::Iri(o) if o == LOGIC_PROJECTION_LOSS)
+                && matches!(out.resolve(q.o), TermRef::Iri(o) if o == PROJECTION_LOSS)
         });
         assert!(has_loss_type, "a logic:ProjectionLoss node is declared");
         assert_eq!(
@@ -685,7 +703,7 @@ mod tests {
 
         // logic:lostReifies points at the concrete triple term <<( :alice :age 42 )>>.
         let lost = out.quads().any(|q| {
-            matches!(out.resolve(q.p), TermRef::Iri(p) if p == LOGIC_LOST_REIFIES)
+            matches!(out.resolve(q.p), TermRef::Iri(p) if p == LOST_REIFIES)
                 && matches!(out.resolve(q.o), TermRef::Triple { .. })
         });
         assert!(lost, "logic:lostReifies carries the dropped triple term");
@@ -698,7 +716,9 @@ mod tests {
         // standpoint attribution reads the CONFIGURED predicate table (example.org
         // here), proving the vocabulary flows through configuration, not a const.
         let ds = reified_graph();
-        let mut ctx = EvalCtx::new(&ds).with_standpoint_predicates(ex_standpoints());
+        let mut ctx = EvalCtx::new(&ds)
+            .with_standpoint_predicates(ex_standpoints())
+            .with_loss_vocabulary(ex_loss_vocab());
         let where_pat = GraphPattern::Bgp {
             patterns: vec![
                 TriplePattern {
@@ -716,7 +736,7 @@ mod tests {
                     predicate: pred("http://ex/confidence"),
                     object: var("c"),
                 },
-                // ?r purrdf:accordingTo ?stand  (the standpoint annotation)
+                // ?r example:accordingTo ?stand  (the standpoint annotation)
                 TriplePattern {
                     subject: var("r"),
                     predicate: pred(ACCORDING_TO),
@@ -743,7 +763,7 @@ mod tests {
         // configured: the engine cannot (and must not) guess a domain predicate, so
         // the generic annotation-layer code is emitted WITHOUT the standpoint sub-code.
         let ds = reified_graph();
-        let mut ctx = EvalCtx::new(&ds); // no table configured
+        let mut ctx = EvalCtx::new(&ds).with_loss_vocabulary(ex_loss_vocab()); // no standpoint table
         let where_pat = GraphPattern::Bgp {
             patterns: vec![
                 TriplePattern {
@@ -801,7 +821,7 @@ mod tests {
         );
         let any_loss = out
             .quads()
-            .any(|q| matches!(out.resolve(q.o), TermRef::Iri(o) if o == LOGIC_PROJECTION_LOSS));
+            .any(|q| matches!(out.resolve(q.o), TermRef::Iri(o) if o == PROJECTION_LOSS));
         assert!(
             !any_loss,
             "no ProjectionLoss node when the reifier is carried"
@@ -823,8 +843,8 @@ mod tests {
         let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
         // No loss triples at all.
         let any_loss = out.quads().any(|q| {
-            matches!(out.resolve(q.p), TermRef::Iri(p) if p == LOGIC_LOSS_CODE)
-                || matches!(out.resolve(q.o), TermRef::Iri(o) if o == LOGIC_PROJECTION_LOSS)
+            matches!(out.resolve(q.p), TermRef::Iri(p) if p == LOSS_CODE)
+                || matches!(out.resolve(q.o), TermRef::Iri(o) if o == PROJECTION_LOSS)
         });
         assert!(
             !any_loss,
@@ -937,9 +957,9 @@ mod tests {
             object: var("o"),
         }];
 
-        let mut ctx1 = EvalCtx::new(&ds);
+        let mut ctx1 = EvalCtx::new(&ds).with_loss_vocabulary(ex_loss_vocab());
         let out1 = eval_construct(&template, &where_reifies(), &mut ctx1).expect("construct");
-        let mut ctx2 = EvalCtx::new(&ds);
+        let mut ctx2 = EvalCtx::new(&ds).with_loss_vocabulary(ex_loss_vocab());
         let out2 = eval_construct(&template, &where_reifies(), &mut ctx2).expect("construct");
 
         // Identical canonical N-Quads across two runs.

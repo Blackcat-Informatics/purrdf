@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! SPARQL `SERVICE` federation: the [`RemoteQuerySource`] seam and the
-//! [`eval_service`] handler.
+//! SPARQL `SERVICE` federation: the `eval_service` handler and the
+//! [`RemoteQuerySource`] seam.
 //!
 //! `SERVICE [SILENT] <endpoint> { pattern }` evaluates `pattern` at a remote
 //! endpoint and joins the result into the surrounding query. The evaluator stays
@@ -49,7 +49,7 @@ pub struct ResolvedBindings {
 }
 
 /// A failure while resolving a `SERVICE` step. Whether it aborts the query or is
-/// swallowed is decided by [`eval_service`] from the `SILENT` flag, not here.
+/// swallowed is decided by `eval_service` from the `SILENT` flag, not here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteError {
     /// The endpoint was unreachable / the request failed at the transport layer.

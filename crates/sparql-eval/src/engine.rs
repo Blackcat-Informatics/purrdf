@@ -24,7 +24,8 @@ use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
 
 use crate::dataset_spec::ActiveDataset;
 use crate::eval::{
-    evaluate_query, BgpOrderCache, EvalCtx, EvalOptions, Outcome, StandpointPredicates,
+    evaluate_query, BgpOrderCache, EvalCtx, EvalOptions, LossVocabulary, Outcome,
+    StandpointPredicates,
 };
 use crate::update::{eval_update, GraphResolver};
 use crate::DetHashMap;
@@ -98,12 +99,16 @@ impl PlanCache {
 ///
 /// - [`Self::with_parser_options`] configures the extension-function namespace
 ///   set (default: EMPTY — extension functions are off and a call-position IRI
-///   is an ordinary custom function). A gmeow deployment supplies its
-///   `https://blackcatinformatics.ca/gmeow/` namespace here so
-///   `gmeow:heldIn(...)` queries parse as extension calls.
+///   is an ordinary custom function). A deployment whose queries spell the closed
+///   function set under its own namespace (e.g. `http://example.org/ns/gmeow/`)
+///   supplies that namespace here so that prefix's function calls parse as
+///   extension calls.
 /// - [`Self::with_standpoint_predicates`] supplies the `accordingTo`/`sharpens`
 ///   predicate table that `heldIn` and loss-aware `CONSTRUCT` read from
 ///   the caller's data. Without it, `heldIn` is a hard evaluation error.
+/// - [`Self::with_loss_vocabulary`] supplies the `ProjectionLoss` vocabulary IRIs
+///   emitted by loss-aware `CONSTRUCT` when a reifier is dropped. Without it,
+///   loss declarations stay inactive.
 #[derive(Default)]
 pub struct NativeSparqlEngine {
     cache: RefCell<PlanCache>,
@@ -119,6 +124,10 @@ pub struct NativeSparqlEngine {
     /// evaluation context. `None` (the default) means `heldIn` hard-errors
     /// and `CONSTRUCT` emits no standpoint-scope loss attribution.
     standpoint_predicates: Option<StandpointPredicates>,
+    /// The caller-supplied loss-declaration vocabulary threaded into every
+    /// evaluation context. `None` (the default) means loss-aware `CONSTRUCT`
+    /// emits no in-band loss declarations.
+    loss_vocabulary: Option<LossVocabulary>,
     /// Evaluation-time options threaded into every per-query context. Defaults to
     /// production settings; tests and benches override individual flags through
     /// [`Self::with_eval_options`].
@@ -141,6 +150,7 @@ impl std::fmt::Debug for NativeSparqlEngine {
             )
             .field("parser_options", &self.parser_options)
             .field("standpoint_predicates", &self.standpoint_predicates)
+            .field("loss_vocabulary", &self.loss_vocabulary)
             .field("eval_options", &self.eval_options)
             .finish()
     }
@@ -182,6 +192,17 @@ impl NativeSparqlEngine {
         self
     }
 
+    /// Supply the caller's loss-declaration vocabulary (see [`LossVocabulary`]):
+    /// the `ProjectionLoss`/`lossCode`/`lostReifies` IRIs emitted by loss-aware
+    /// `CONSTRUCT` when a reifier is dropped by the template. There is **no
+    /// built-in default** — without this configuration loss declarations stay
+    /// inactive and a dropped reifier is projected like a plain `CONSTRUCT`.
+    #[must_use]
+    pub fn with_loss_vocabulary(mut self, vocab: LossVocabulary) -> Self {
+        self.loss_vocabulary = Some(vocab);
+        self
+    }
+
     /// Set the evaluation-time options threaded into every per-query context.
     /// Production callers should leave the defaults; tests and benchmarks use
     /// this to flip individual measurement seams (e.g. the differential planner-
@@ -193,16 +214,19 @@ impl NativeSparqlEngine {
     }
 
     /// Build the per-query evaluation context, threading the engine-level
-    /// configuration (order cache + standpoint predicate table + eval options)
-    /// into it. `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already correct by
-    /// construction: [`EvalCtx::new`] samples the real host wall clock and OS
-    /// entropy itself.
+    /// configuration (order cache + standpoint predicate table + loss vocabulary +
+    /// eval options) into it. `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already
+    /// correct by construction: [`EvalCtx::new`] samples the real host wall clock
+    /// and OS entropy itself.
     fn eval_ctx<'d>(&'d self, dataset: &'d RdfDataset) -> EvalCtx<'d> {
         let mut ctx = EvalCtx::new(dataset)
             .with_order_cache(&self.order_cache)
             .with_eval_options(self.eval_options);
         if let Some(predicates) = &self.standpoint_predicates {
             ctx = ctx.with_standpoint_predicates(predicates.clone());
+        }
+        if let Some(vocab) = &self.loss_vocabulary {
+            ctx = ctx.with_loss_vocabulary(vocab.clone());
         }
         ctx
     }
@@ -1341,7 +1365,7 @@ mod tests {
 
     /// The gmeow ontology namespace — a deployment alias for the same closed
     /// extension-function set, with its own domain standpoint predicates.
-    const GMEOW_NS: &str = "https://blackcatinformatics.ca/gmeow/";
+    const GMEOW_NS: &str = "http://example.org/ns/gmeow/";
 
     /// A standpoint dataset in the GMEOW vocabulary: reifier `:r` held in `:T1`
     /// (via `gmeow:accordingTo`), and `:T1 gmeow:sharpens :T2`.

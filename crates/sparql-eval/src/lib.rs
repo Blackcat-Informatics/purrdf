@@ -71,7 +71,9 @@ pub mod user_fn;
 
 pub use engine::{NativeSparqlEngine, PlanCache, PreparedQuery};
 pub use error::EvalError;
-pub use eval::{eval, evaluate_query, EvalCtx, EvalOptions, Outcome, StandpointPredicates};
+pub use eval::{
+    eval, evaluate_query, EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates,
+};
 // Re-exported so engine hosts can configure the extension-function namespace set
 // (see [`NativeSparqlEngine::with_parser_options`]) without depending on the
 // front-end crate directly.
