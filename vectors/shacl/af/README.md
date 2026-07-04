@@ -50,7 +50,7 @@ as Turtle comments in the converted files where present.
 
 **Explicitly excluded:**
 - SHACL Rules (`sh:rule`, `sh:TripleRule`, `sh:SPARQLRule`) — out of scope for
-  the validation-only AF coverage tracked by issue #30.
+  the validation-only AF coverage.
 
 ## Regeneration
 
