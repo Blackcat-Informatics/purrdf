@@ -306,9 +306,28 @@ fn parse_lines_sequential<S: SpanCollector>(
 ) -> Result<Vec<Statement>, RdfDiagnostic> {
     let mut statements = Vec::new();
     let mut lineno = base_line;
+    // Running document-global byte offset of the current line's first byte. Only
+    // maintained when span tracking is on (`S::ENABLED`); span tracking forces the
+    // sequential path (see `parse_dataset_with`), so `text` here is the whole
+    // document and this offset is document-global. For `NoSpans` the compiler proves
+    // `S::ENABLED == false` and deletes every touch of `line_offset`, leaving the hot
+    // path byte-identical. `advance_line_offset` steps it past a line plus its `\n`
+    // or `\r\n` terminator (`str::lines` strips both).
+    let mut line_offset = 0usize;
+    let advance_line_offset = |offset: &mut usize, raw: &str| {
+        *offset += raw.len();
+        match text.as_bytes().get(*offset) {
+            Some(b'\r') => *offset += 2,
+            Some(b'\n') => *offset += 1,
+            _ => {}
+        }
+    };
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
+            if S::ENABLED {
+                advance_line_offset(&mut line_offset, raw);
+            }
             lineno = lineno.saturating_add(1);
             continue;
         }
@@ -348,10 +367,11 @@ fn parse_lines_sequential<S: SpanCollector>(
                     Position {
                         line: lineno,
                         column: column_in_raw(raw, 0),
-                        byte_offset: 0,
+                        byte_offset: line_offset,
                     },
                 );
             }
+            advance_line_offset(&mut line_offset, raw);
         }
         statements.push(nodes);
         lineno = lineno.saturating_add(1);

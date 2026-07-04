@@ -322,7 +322,7 @@ fn focus_physical_location(
         region: Some(Region {
             start_line: Some(position.line),
             start_column: Some(position.column),
-            byte_offset: (position.byte_offset > 0).then_some(position.byte_offset),
+            byte_offset: Some(position.byte_offset),
             ..Region::default()
         }),
     })
@@ -633,6 +633,50 @@ mod tests {
             .expect("physical location present");
         assert_eq!(phys.artifact_location.uri, "data.ttl");
         assert_eq!(phys.region.as_ref().and_then(|r| r.start_line), Some(2));
+    }
+
+    #[test]
+    fn physical_location_emits_zero_byte_offset() {
+        use purrdf_rdf::{parse_dataset_with, ParseOptions};
+        // alice is asserted on the FIRST line, so its subject starts at document
+        // byte offset 0. That 0 must be emitted as `byteOffset: 0`, not dropped.
+        let data = "<http://example.org/alice> <http://example.org/age> \"x\" .\n";
+        let (_ds, spans) = parse_dataset_with(
+            data.as_bytes(),
+            "application/n-triples",
+            None,
+            &ParseOptions {
+                track_source_spans: true,
+            },
+        )
+        .expect("parse");
+        let spans = spans.expect("span table present when tracking");
+
+        let report = ValidationReport {
+            conforms: false,
+            results: vec![result(
+                "http://www.w3.org/ns/shacl#DatatypeConstraintComponent",
+                Severity::Violation,
+                Some("bad"),
+            )],
+        };
+        let sources = SarifSources {
+            artifact_uri: Some("data.ttl"),
+            spans: Some(&spans),
+            units: None,
+        };
+        let log = build_report_sarif_with(&report, &SarifOptions::default(), &sources);
+        let region = log.runs[0].results[0].locations[0]
+            .physical_location
+            .as_ref()
+            .and_then(|p| p.region.as_ref())
+            .expect("physical region present");
+        assert_eq!(region.start_line, Some(1), "alice is on the first line");
+        assert_eq!(
+            region.byte_offset,
+            Some(0),
+            "a start-of-file byte offset of 0 must be emitted, not omitted"
+        );
     }
 
     #[test]

@@ -826,6 +826,50 @@ mod tests {
     }
 
     #[test]
+    fn nt_tracking_records_document_global_byte_offset() {
+        // The recorded byte_offset for a subject must be the document-global byte
+        // offset of the line it starts on: 0 for the first line (a real, emitted
+        // value — not a dropped sentinel) and the running sum of prior line lengths
+        // (payload plus each `\n`) for later lines.
+        let line1 = "<http://example.org/alice> <http://example.org/p> \"a\" .\n";
+        let line2 = "<http://example.org/bob> <http://example.org/p> \"b\" .\n";
+        let line3 = "<http://example.org/carol> <http://example.org/p> \"c\" .\n";
+        let nt = format!("{line1}{line2}{line3}");
+        let options = ParseOptions {
+            track_source_spans: true,
+        };
+        let (_ds, table) =
+            parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
+                .expect("parse");
+        let table = table.expect("tracking on yields a table");
+        // First line: offset 0 must be recorded, not dropped.
+        assert_eq!(
+            table
+                .position_for_subject("http://example.org/alice")
+                .expect("alice tracked")
+                .byte_offset,
+            0,
+            "first-line subject starts at document byte offset 0"
+        );
+        assert_eq!(
+            table
+                .position_for_subject("http://example.org/bob")
+                .expect("bob tracked")
+                .byte_offset,
+            line1.len(),
+            "second-line subject starts just past line 1"
+        );
+        assert_eq!(
+            table
+                .position_for_subject("http://example.org/carol")
+                .expect("carol tracked")
+                .byte_offset,
+            line1.len() + line2.len(),
+            "third-line subject starts just past lines 1 and 2"
+        );
+    }
+
+    #[test]
     fn turtle_tracking_records_subject_line() {
         // The subject `ex:s` appears on line 3 (after two directive lines).
         let ttl = concat!(
