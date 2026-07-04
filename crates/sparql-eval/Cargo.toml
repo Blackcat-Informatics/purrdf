@@ -60,6 +60,10 @@ purrdf-iri = { workspace = true }
 # rayon compiles cleanly on wasm32-unknown-unknown and degrades to inline-sequential
 # execution there (same pattern as purrdf-rdf's chunk-parallel text parse).
 rayon = { workspace = true }
+# Inline small-vector primitive for hot, short-lived id rows / solution columns
+# (default features only — no `union`/`serde`; wasm-clean, `unsafe`-free). Version
+# is pinned once in the root `[workspace.dependencies]`.
+smallvec = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # OS entropy for the RAND()/UUID()/STRUUID() seed on native targets. Target-gated

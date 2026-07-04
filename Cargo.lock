@@ -1088,6 +1088,7 @@ dependencies = [
  "proptest",
  "purrdf-events",
  "sha2",
+ "smallvec",
 ]
 
 [[package]]
@@ -1182,6 +1183,7 @@ dependencies = [
  "purrdf-xsd",
  "regex",
  "serde_json",
+ "smallvec",
 ]
 
 [[package]]
@@ -1225,6 +1227,7 @@ dependencies = [
  "proptest",
  "purrdf-iri",
  "purrdf-xsd",
+ "smallvec",
 ]
 
 [[package]]
@@ -1260,6 +1263,7 @@ dependencies = [
  "regex",
  "sha1",
  "sha2",
+ "smallvec",
 ]
 
 [[package]]
@@ -1649,6 +1653,12 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "smallvec"
+version = "1.15.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "spki"
