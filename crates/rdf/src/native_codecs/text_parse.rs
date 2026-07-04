@@ -876,9 +876,9 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     }
 
     fn base_directive(&mut self, require_dot: bool) -> Result<(), RdfDiagnostic> {
+        let (l, c) = self.loc();
         let iri = self.expect_iri_raw()?;
         if !has_iri_scheme(&iri) {
-            let (l, c) = self.loc();
             return Err(err_at(format!("base IRI must be absolute: {iri:?}"), l, c));
         }
         self.base_iri = Some(iri);
@@ -961,10 +961,11 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 Ok(Node::Iri(self.resolve_iri(&raw)))
             }
             Some(Token::PrefixedName(_, _)) => {
+                let (l, c) = self.loc();
                 let Some(Token::PrefixedName(prefix, local)) = self.bump() else {
                     unreachable!()
                 };
-                self.resolve_prefixed(&prefix, &local)
+                self.resolve_prefixed(&prefix, &local, l, c)
             }
             Some(Token::BlankNodeLabel(_)) => {
                 let Some(Token::BlankNodeLabel(label)) = self.bump() else {
@@ -1160,6 +1161,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         let mut datatype = None;
         match self.peek() {
             Some(Token::LangTag(_)) => {
+                let (l, c) = self.loc();
                 let Some(Token::LangTag(raw)) = self.bump() else {
                     unreachable!()
                 };
@@ -1167,7 +1169,6 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 // `--dir`) on the literal `lang` field and lowers it to an N-Quads
                 // `@lang` token, so the direction is re-parsed at the `from_nquads`
                 // stage. To match that exactly, split here into lang + direction.
-                let (l, c) = self.loc();
                 let (base, dir) = split_lang_direction(&raw, l, c)?;
                 lang = Some(base);
                 direction = dir;
@@ -1191,7 +1192,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         match self.bump() {
             Some(Token::Iri(raw)) => Ok(self.resolve_iri(&raw)),
             Some(Token::PrefixedName(prefix, local)) => {
-                match self.resolve_prefixed(&prefix, &local)? {
+                match self.resolve_prefixed(&prefix, &local, l, c)? {
                     Node::Iri(iri) => Ok(iri),
                     _ => unreachable!("resolve_prefixed yields an IRI node"),
                 }
@@ -1432,13 +1433,20 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         }
     }
 
-    fn resolve_prefixed(&self, prefix: &str, local: &str) -> Result<Node, RdfDiagnostic> {
+    /// Resolve a `PrefixedName` against the declared prefixes. The `(line, col)`
+    /// is the position of the prefixed-name token itself, captured by the caller
+    /// BEFORE it consumed the token (the token cursor has already advanced by the
+    /// time we get here, so `self.loc()` would report the following token).
+    fn resolve_prefixed(
+        &self,
+        prefix: &str,
+        local: &str,
+        line: u32,
+        col: u32,
+    ) -> Result<Node, RdfDiagnostic> {
         match self.prefixes.get(prefix) {
             Some(base) => Ok(Node::Iri(format!("{base}{local}"))),
-            None => {
-                let (l, c) = self.loc();
-                Err(err_at(format!("unknown prefix {prefix:?}"), l, c))
-            }
+            None => Err(err_at(format!("unknown prefix {prefix:?}"), line, col)),
         }
     }
 
@@ -2282,6 +2290,51 @@ mod tests {
             "message keeps the informative reason, got: {}",
             e.message
         );
+    }
+
+    /// A `@base` with a non-absolute IRI (DocParser path) reports the column of the
+    /// base-IRI token, not the token consumed after it.
+    #[test]
+    fn base_directive_column_points_at_relative_iri() {
+        // The relative IRI `<relative>` begins at column 7 (right after `@base `).
+        let text = "@base <relative> .\n";
+        let e = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(7));
+        assert!(e.message.contains("base IRI must be absolute"));
+    }
+
+    /// A malformed language tag on a Turtle literal (DocParser path) reports the
+    /// column of the language tag, not the following token.
+    #[test]
+    fn doc_langtag_column_points_at_langtag() {
+        // The `@bad--bad` tag begins at column 32.
+        let text = "<http://ex/s> <http://ex/p> \"x\"@bad--bad .\n";
+        let e = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(32));
+        assert!(e.message.contains("invalid literal base direction"));
+    }
+
+    /// An undeclared prefix in the object position (DocParser path) reports the
+    /// column of the prefixed name itself, not the following token.
+    #[test]
+    fn doc_unknown_prefix_column_points_at_prefixed_name() {
+        // The undeclared `ex:o` begins at column 29.
+        let text = "<http://ex/s> <http://ex/p> ex:o .\n";
+        let e = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(29));
+        assert!(e.message.contains("unknown prefix"));
     }
 
     /// A bare `/` in a prefixed-name local part (e.g. `ex:report/shacl/sarif`)
