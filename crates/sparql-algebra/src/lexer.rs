@@ -17,42 +17,52 @@
 //! Every token carries its source byte span so the parser can report
 //! [`crate::error::ParseError::Syntax`] at a precise offset.
 
+use std::borrow::Cow;
+
 use crate::error::{ParseError, Result};
 
 /// A lexical token. Payload-bearing variants keep the *lexical* form (the AST
 /// owns value-space concerns); keyword recognition is left to the parser, which
 /// matches [`Token::Word`] case-insensitively (except the rdf:type `a` and the
 /// boolean literals, which SPARQL treats case-sensitively).
+///
+/// Tokens are **zero-copy** over the source `str`: the verbatim variants borrow a
+/// sub-slice of the input directly (`&'a str`), and the variants that may rewrite
+/// bytes (unescaping) carry a [`Cow<'a, str>`] — `Cow::Borrowed` on the common
+/// no-escape path and `Cow::Owned` only when an escape actually forced a rewrite.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Token {
-    /// An `IRIREF`: the resolved content between `<` and `>` (UCHAR-unescaped).
-    Iri(String),
-    /// A prefixed name `prefix:local`. `local` is empty for a bare `prefix:`.
-    PrefixedName(String, String),
+pub enum Token<'a> {
+    /// An `IRIREF`: the resolved content between `<` and `>`. `Cow::Borrowed` when
+    /// the body has no `UCHAR` escape; `Cow::Owned` when one was decoded.
+    Iri(Cow<'a, str>),
+    /// A prefixed name `prefix:local`. `local` is empty for a bare `prefix:`. The
+    /// prefix is a verbatim slice; the local part is a [`Cow`] because a
+    /// `PN_LOCAL_ESC` (`\X`) rewrites it (`Cow::Borrowed` otherwise).
+    PrefixedName(&'a str, Cow<'a, str>),
     /// A `?var` / `$var` query variable (name without the sigil).
-    Variable(String),
+    Variable(&'a str),
     /// A `_:label` blank node (label without `_:`).
-    BlankNodeLabel(String),
+    BlankNodeLabel(&'a str),
     /// An anonymous blank node `[]` (with only whitespace inside).
     Anon,
     /// A short string literal's unescaped content (`'...'` / `"..."`; quote
-    /// style is not retained).
-    StringLit(String),
+    /// style is not retained). `Cow::Borrowed` when the body has no escape.
+    StringLit(Cow<'a, str>),
     /// A long (triple-quoted) string literal's unescaped content
     /// (`'''...'''` / `"""..."""`). Kept distinct from [`Token::StringLit`] so
     /// grammar productions that admit only short strings — e.g. the SPARQL 1.2
     /// `VersionSpecifier` — can reject the long form.
-    LongStringLit(String),
+    LongStringLit(Cow<'a, str>),
     /// An integer literal (lexical form).
-    Integer(String),
+    Integer(&'a str),
     /// A decimal literal (lexical form).
-    Decimal(String),
+    Decimal(&'a str),
     /// A double literal (lexical form).
-    Double(String),
+    Double(&'a str),
     /// A `@langtag` (raw text after `@`, e.g. `en` or `en--ltr`).
-    LangTag(String),
+    LangTag(&'a str),
     /// An alphabetic word: a keyword, the rdf:type `a`, or a boolean literal.
-    Word(String),
+    Word(&'a str),
 
     /// `{`
     LBrace,
@@ -120,9 +130,9 @@ pub enum Token {
 
 /// A token plus its half-open source byte span `[start, end)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Spanned {
+pub struct Spanned<'a> {
     /// The token.
-    pub token: Token,
+    pub token: Token<'a>,
     /// Start byte offset (inclusive).
     pub start: usize,
     /// End byte offset (exclusive).
@@ -145,7 +155,7 @@ pub struct LexerOptions {
 ///
 /// Whitespace and `#`-comments are dropped. Returns
 /// [`ParseError::Lex`] on the first malformed token.
-pub fn tokenize(input: &str) -> Result<Vec<Spanned>> {
+pub fn tokenize(input: &str) -> Result<Vec<Spanned<'_>>> {
     Lexer::new(input).run()
 }
 
@@ -153,7 +163,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Spanned>> {
 /// `purrdf:report/shacl/sarif`). Turtle has no `/` operator, so this is
 /// unambiguous in term position; it differs from [`tokenize`] (SPARQL) ONLY by
 /// the [`LexerOptions::pn_local_allows_slash`] flag.
-pub fn tokenize_turtle(input: &str) -> Result<Vec<Spanned>> {
+pub fn tokenize_turtle(input: &str) -> Result<Vec<Spanned<'_>>> {
     tokenize_with(
         input,
         LexerOptions {
@@ -164,7 +174,7 @@ pub fn tokenize_turtle(input: &str) -> Result<Vec<Spanned>> {
 
 /// Tokenize with explicit [`LexerOptions`]. [`tokenize`] is exactly
 /// `tokenize_with(input, LexerOptions::default())`.
-pub fn tokenize_with(input: &str, options: LexerOptions) -> Result<Vec<Spanned>> {
+pub fn tokenize_with(input: &str, options: LexerOptions) -> Result<Vec<Spanned<'_>>> {
     Lexer::with_options(input, options).run()
 }
 
@@ -207,7 +217,7 @@ impl<'a> Lexer<'a> {
         self.src[self.pos..].chars().next()
     }
 
-    fn run(mut self) -> Result<Vec<Spanned>> {
+    fn run(mut self) -> Result<Vec<Spanned<'a>>> {
         let mut out = Vec::new();
         loop {
             self.skip_trivia();
@@ -237,7 +247,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn lex_one(&mut self, c: char, start: usize) -> Result<Token> {
+    fn lex_one(&mut self, c: char, start: usize) -> Result<Token<'a>> {
         match c {
             '<' => self.lex_lt_or_iri(),
             '>' => Ok(self.two_or_one('>', Token::TripleClose, '=', Token::GtEq, Token::Gt)),
@@ -288,7 +298,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn single(&mut self, t: Token) -> Result<Token> {
+    fn single(&mut self, t: Token<'a>) -> Result<Token<'a>> {
         self.pos += 1;
         Ok(t)
     }
@@ -302,11 +312,11 @@ impl<'a> Lexer<'a> {
     fn two_or_one(
         &mut self,
         two_ch: char,
-        two: Token,
+        two: Token<'a>,
         alt_ch: char,
-        alt: Token,
-        one: Token,
-    ) -> Token {
+        alt: Token<'a>,
+        one: Token<'a>,
+    ) -> Token<'a> {
         self.pos += 1; // consume the lead char
         match self.cur() {
             Some(c) if c == two_ch => {
@@ -321,7 +331,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn lex_and(&mut self, start: usize) -> Result<Token> {
+    fn lex_and(&mut self, start: usize) -> Result<Token<'a>> {
         self.pos += 1;
         if self.cur() == Some('&') {
             self.pos += 1;
@@ -338,7 +348,7 @@ impl<'a> Lexer<'a> {
     /// body has no backslash (every ordinary IRI), it is emitted VERBATIM as a single
     /// slice after a delimiter-free check — no per-char `String` build. Only a body
     /// carrying a `\` UCHAR escape (or no closing `>`) falls to the decoding scan.
-    fn lex_lt_or_iri(&mut self) -> Result<Token> {
+    fn lex_lt_or_iri(&mut self) -> Result<Token<'a>> {
         let body_start = self.pos + 1;
         if let Some(rel) = memchr::memchr(b'>', &self.bytes[body_start..]) {
             let end = body_start + rel;
@@ -349,7 +359,7 @@ impl<'a> Lexer<'a> {
                     !c.is_whitespace() && !matches!(c, '<' | '"' | '{' | '}' | '|' | '^' | '`')
                 }) {
                     self.pos = end + 1; // consume through '>'
-                    return Ok(Token::Iri(body.to_owned()));
+                    return Ok(Token::Iri(Cow::Borrowed(body)));
                 }
                 // A disallowed char precedes the '>' → not an IRIREF.
                 return Ok(self.two_or_one('<', Token::TripleOpen, '=', Token::LtEq, Token::Lt));
@@ -361,7 +371,7 @@ impl<'a> Lexer<'a> {
 
     /// The `IRIREF` slow path: a byte-cursor scan that decodes `\uXXXX`/`\UXXXXXXXX`
     /// UCHAR escapes into the resolved content, mirroring the prior char-cursor scan.
-    fn lex_iri_escaped(&mut self) -> Result<Token> {
+    fn lex_iri_escaped(&mut self) -> Result<Token<'a>> {
         let mut i = self.pos + 1; // byte offset just past '<'
         let mut content = String::new();
         let mut ok = false;
@@ -388,7 +398,7 @@ impl<'a> Lexer<'a> {
         }
         if ok {
             self.pos = i;
-            return Ok(Token::Iri(content));
+            return Ok(Token::Iri(Cow::Owned(content)));
         }
         // Not an IRIREF: fall back to `<<` / `<=` / `<`.
         Ok(self.two_or_one('<', Token::TripleOpen, '=', Token::LtEq, Token::Lt))
@@ -411,12 +421,24 @@ impl<'a> Lexer<'a> {
         Some((2 + width, decoded))
     }
 
-    fn lex_string(&mut self, quote: char, start: usize) -> Result<Token> {
+    fn lex_string(&mut self, quote: char, start: usize) -> Result<Token<'a>> {
         // `quote` is `"` or `'` — ASCII, so its byte is the delimiter to scan for.
         let quote_byte = quote as u8;
         // Long form `"""` / `'''` vs short form.
         let long = self.peek(1) == Some(quote) && self.peek(2) == Some(quote);
         self.pos += if long { 3 } else { 1 };
+        // Fast path: when the body carries no escape and closes cleanly, borrow the
+        // literal slice VERBATIM (no per-char `String` build). Anything else — an
+        // escape, a raw newline, or an unterminated body — falls to the owned scan
+        // below, which builds the `Cow::Owned` value and produces the error messages.
+        if let Some((slice, end)) = self.try_borrow_string(quote_byte, long) {
+            self.pos = end;
+            return Ok(if long {
+                Token::LongStringLit(Cow::Borrowed(slice))
+            } else {
+                Token::StringLit(Cow::Borrowed(slice))
+            });
+        }
         let mut value = String::new();
         loop {
             // memchr-forward over the clean run to the next interesting byte: the
@@ -475,7 +497,7 @@ impl<'a> Lexer<'a> {
                 if long {
                     if self.peek(1) == Some(quote) && self.peek(2) == Some(quote) {
                         self.pos += 3;
-                        return Ok(Token::LongStringLit(value));
+                        return Ok(Token::LongStringLit(Cow::Owned(value)));
                     }
                     // a lone quote inside a long string is literal
                     value.push(c);
@@ -483,7 +505,7 @@ impl<'a> Lexer<'a> {
                     continue;
                 }
                 self.pos += 1;
-                return Ok(Token::StringLit(value));
+                return Ok(Token::StringLit(Cow::Owned(value)));
             }
             // Short form only: `stop` landed on a raw CR/LF. SPARQL STRING_LITERAL1/2
             // forbid raw line breaks (only `'''`/`"""` admit them) — reject.
@@ -494,7 +516,50 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn lex_variable(&mut self, _sigil: char, start: usize) -> Result<Token> {
+    /// The string-literal borrow fast path: from the already-past-open cursor
+    /// (`self.pos` at the body start), return `Some((body_slice, end_pos))` when the
+    /// body has NO `\` escape and closes cleanly, so the token can borrow the source
+    /// slice verbatim. Returns `None` — leaving `self.pos` untouched — when an escape
+    /// is present, a short literal hits a raw CR/LF, or the body is unterminated; the
+    /// owned scan in [`lex_string`](Self::lex_string) then handles those cases (and
+    /// their error messages) identically to before.
+    fn try_borrow_string(&self, quote_byte: u8, long: bool) -> Option<(&'a str, usize)> {
+        let body_start = self.pos;
+        let mut p = body_start;
+        loop {
+            let tail = &self.bytes[p..];
+            if long {
+                // Long form: scan to the next quote or `\`. A `\` forces the owned
+                // path; a quote closes only when it is a `"""` / `'''` triple —
+                // a lone quote is literal content, so scanning continues past it.
+                let rel = memchr::memchr2(quote_byte, b'\\', tail)?;
+                let at = p + rel;
+                if self.bytes[at] == b'\\' {
+                    return None;
+                }
+                if self.bytes.get(at + 1) == Some(&quote_byte)
+                    && self.bytes.get(at + 2) == Some(&quote_byte)
+                {
+                    return Some((&self.src[body_start..at], at + 3));
+                }
+                p = at + 1;
+            } else {
+                // Short form: stop at the quote, a `\`, or a raw CR/LF (forbidden).
+                let stop = min_opt(
+                    memchr::memchr2(quote_byte, b'\\', tail),
+                    memchr::memchr2(b'\n', b'\r', tail),
+                )?;
+                let at = p + stop;
+                if self.bytes[at] == quote_byte {
+                    return Some((&self.src[body_start..at], at + 1));
+                }
+                // A `\` escape or a raw newline — defer to the owned scan.
+                return None;
+            }
+        }
+    }
+
+    fn lex_variable(&mut self, _sigil: char, start: usize) -> Result<Token<'a>> {
         self.pos += 1; // sigil
         let name = self.take_while(is_varname_char);
         if name.is_empty() {
@@ -503,7 +568,7 @@ impl<'a> Lexer<'a> {
         Ok(Token::Variable(name))
     }
 
-    fn lex_blank_label(&mut self, start: usize) -> Result<Token> {
+    fn lex_blank_label(&mut self, start: usize) -> Result<Token<'a>> {
         self.pos += 2; // `_:`
         let raw = self.take_while(|c| is_pn_chars(c) || c == '.');
         let label = raw.trim_end_matches('.');
@@ -514,10 +579,10 @@ impl<'a> Lexer<'a> {
         if label.is_empty() {
             return Err(ParseError::lex("empty blank node label after `_:`", start));
         }
-        Ok(Token::BlankNodeLabel(label.to_string()))
+        Ok(Token::BlankNodeLabel(label))
     }
 
-    fn lex_bracket_or_anon(&mut self) -> Result<Token> {
+    fn lex_bracket_or_anon(&mut self) -> Result<Token<'a>> {
         // `[` optionally `]` (with only whitespace between) → anonymous blank.
         let mut j = self.pos + 1; // byte offset past '['
         while let Some(c) = self.src[j..].chars().next() {
@@ -536,7 +601,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn lex_lang_tag(&mut self, start: usize) -> Result<Token> {
+    fn lex_lang_tag(&mut self, start: usize) -> Result<Token<'a>> {
         self.pos += 1; // `@`
         let tag = self.take_while(|c| c.is_ascii_alphanumeric() || c == '-');
         if tag.is_empty() {
@@ -546,15 +611,15 @@ impl<'a> Lexer<'a> {
     }
 
     /// A bare `:local` or `:` prefixed name (empty prefix).
-    fn lex_prefixed_name(&mut self, _start: usize) -> Result<Token> {
+    fn lex_prefixed_name(&mut self, _start: usize) -> Result<Token<'a>> {
         self.pos += 1; // `:`
         let local = self.take_local();
-        Ok(Token::PrefixedName(String::new(), local))
+        Ok(Token::PrefixedName("", local))
     }
 
     /// A word that may be a keyword (`SELECT`, `a`, `true`) or the prefix part of
     /// a prefixed name (`purrdf:` / `rdf:type`).
-    fn lex_word_or_prefixed(&mut self, _start: usize) -> Result<Token> {
+    fn lex_word_or_prefixed(&mut self, _start: usize) -> Result<Token<'a>> {
         let word = self.take_pn_prefix();
         if self.cur() == Some(':') {
             self.pos += 1; // `:`
@@ -576,7 +641,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn lex_number(&mut self) -> Token {
+    fn lex_number(&mut self) -> Token<'a> {
         let begin = self.pos;
         let mut seen_dot = false;
         let mut seen_exp = false;
@@ -598,7 +663,7 @@ impl<'a> Lexer<'a> {
             }
         }
         // Numbers are ASCII, so the byte span is the lexical form verbatim.
-        let lexical = self.src[begin..self.pos].to_owned();
+        let lexical = &self.src[begin..self.pos];
         if seen_exp {
             Token::Double(lexical)
         } else if seen_dot {
@@ -608,7 +673,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn take_while(&mut self, pred: impl Fn(char) -> bool) -> String {
+    fn take_while(&mut self, pred: impl Fn(char) -> bool) -> &'a str {
         let begin = self.pos;
         while let Some(c) = self.cur() {
             if pred(c) {
@@ -617,18 +682,18 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        self.src[begin..self.pos].to_owned()
+        &self.src[begin..self.pos]
     }
 
     /// `PN_PREFIX`: starts with a base char, may contain `.`/`-`/digits, must not
     /// end with `.`.
-    fn take_pn_prefix(&mut self) -> String {
+    fn take_pn_prefix(&mut self) -> &'a str {
         let raw = self.take_while(|c| is_pn_chars(c) || c == '.');
         let trimmed = raw.trim_end_matches('.');
         // Push `pos` (a byte offset) back over the over-consumed trailing dots. `.`
         // is ASCII (1 byte), so the trimmed byte-length delta equals that dot run.
         self.pos -= raw.len() - trimmed.len();
-        trimmed.to_owned()
+        trimmed
     }
 
     /// `PN_LOCAL`: like a prefix but may also start with a digit or `_`/`:`; must
@@ -642,7 +707,49 @@ impl<'a> Lexer<'a> {
     /// expansion uses — and never terminates the scan even when it is a delimiter.
     /// A trailing UNescaped `.` is the statement terminator and is pushed back; an
     /// escaped `\.` is a literal dot in PN_LOCAL and is kept.
-    fn take_local(&mut self) -> String {
+    fn take_local(&mut self) -> Cow<'a, str> {
+        // Fast path: scan the local name assuming no `PN_LOCAL_ESC`. When no `\`
+        // escape is present the local part is a contiguous source slice (borrowed);
+        // hitting a valid escape rewinds and defers to the owned builder below.
+        let begin = self.pos;
+        let mut trailing_dots = 0usize;
+        while let Some(c) = self.cur() {
+            if c == '\\' {
+                if self.peek(1).is_some_and(is_pn_local_esc) {
+                    // An escape rewrites bytes — restart with the owned builder.
+                    self.pos = begin;
+                    return Cow::Owned(self.take_local_owned());
+                }
+                break; // a non-PN_LOCAL_ESC backslash does not belong to the local name
+            }
+            if c == '.' {
+                trailing_dots += 1;
+                self.pos += 1;
+                continue;
+            }
+            if c == '/' && self.options.pn_local_allows_slash {
+                trailing_dots = 0;
+                self.pos += 1;
+                continue;
+            }
+            if is_pn_chars(c) || c == ':' || c == '%' {
+                trailing_dots = 0;
+                self.pos += c.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if trailing_dots > 0 {
+            // Push back the trailing-dot run: it is the statement terminator.
+            self.pos -= trailing_dots;
+        }
+        Cow::Borrowed(&self.src[begin..self.pos])
+    }
+
+    /// The `take_local` owned path: identical scan but decoding `PN_LOCAL_ESC`
+    /// (`\X`) into the returned local name. Only reached when the fast path saw a
+    /// `\` escape, so building a fresh `String` here is the rare case.
+    fn take_local_owned(&mut self) -> String {
         let mut out = String::new();
         let mut trailing_dots = 0usize;
         while let Some(c) = self.cur() {
@@ -743,11 +850,11 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    fn toks(s: &str) -> Vec<Token> {
+    fn toks(s: &str) -> Vec<Token<'_>> {
         tokenize(s).unwrap().into_iter().map(|s| s.token).collect()
     }
 
-    fn toks_turtle(s: &str) -> Vec<Token> {
+    fn toks_turtle(s: &str) -> Vec<Token<'_>> {
         tokenize_turtle(s)
             .unwrap()
             .into_iter()
@@ -785,16 +892,16 @@ mod tests {
             toks("?x a rdf:type ."),
             vec![
                 var("x"),
-                Token::Word("a".into()),
-                Token::PrefixedName("rdf".into(), "type".into()),
+                Token::Word("a"),
+                Token::PrefixedName("rdf", "type".into()),
                 Token::Dot,
             ]
         );
         assert_eq!(
             toks("PREFIX purrdf: <u:>"),
             vec![
-                Token::Word("PREFIX".into()),
-                Token::PrefixedName("purrdf".into(), String::new()),
+                Token::Word("PREFIX"),
+                Token::PrefixedName("purrdf", "".into()),
                 Token::Iri("u:".into()),
             ]
         );
@@ -805,12 +912,12 @@ mod tests {
         assert_eq!(
             toks("owl:members/rdf:rest*/rdf:first"),
             vec![
-                Token::PrefixedName("owl".into(), "members".into()),
+                Token::PrefixedName("owl", "members".into()),
                 Token::Slash,
-                Token::PrefixedName("rdf".into(), "rest".into()),
+                Token::PrefixedName("rdf", "rest".into()),
                 Token::Star,
                 Token::Slash,
-                Token::PrefixedName("rdf".into(), "first".into()),
+                Token::PrefixedName("rdf", "first".into()),
             ]
         );
     }
@@ -819,19 +926,19 @@ mod tests {
     fn literals_and_lang() {
         assert_eq!(
             toks("\"hi\"@en"),
-            vec![Token::StringLit("hi".into()), Token::LangTag("en".into())]
+            vec![Token::StringLit("hi".into()), Token::LangTag("en")]
         );
         assert_eq!(
             toks("\"x\"^^xsd:string"),
             vec![
                 Token::StringLit("x".into()),
                 Token::HatHat,
-                Token::PrefixedName("xsd".into(), "string".into()),
+                Token::PrefixedName("xsd", "string".into()),
             ]
         );
-        assert_eq!(toks("3"), vec![Token::Integer("3".into())]);
-        assert_eq!(toks("3.5"), vec![Token::Decimal("3.5".into())]);
-        assert_eq!(toks("1e9"), vec![Token::Double("1e9".into())]);
+        assert_eq!(toks("3"), vec![Token::Integer("3")]);
+        assert_eq!(toks("3.5"), vec![Token::Decimal("3.5")]);
+        assert_eq!(toks("1e9"), vec![Token::Double("1e9")]);
     }
 
     #[test]
@@ -844,14 +951,14 @@ mod tests {
     fn comments_skipped() {
         assert_eq!(
             toks("# a comment\nSELECT ?x"),
-            vec![Token::Word("SELECT".into()), var("x")]
+            vec![Token::Word("SELECT"), var("x")]
         );
     }
 
     #[test]
     fn anon_and_blank() {
         assert_eq!(toks("[]"), vec![Token::Anon]);
-        assert_eq!(toks("_:b1"), vec![Token::BlankNodeLabel("b1".into())]);
+        assert_eq!(toks("_:b1"), vec![Token::BlankNodeLabel("b1")]);
     }
 
     #[test]
@@ -862,9 +969,9 @@ mod tests {
         assert_eq!(
             toks_turtle(":x :p _:y."),
             vec![
-                Token::PrefixedName(String::new(), "x".into()),
-                Token::PrefixedName(String::new(), "p".into()),
-                Token::BlankNodeLabel("y".into()),
+                Token::PrefixedName("", "x".into()),
+                Token::PrefixedName("", "p".into()),
+                Token::BlankNodeLabel("y"),
                 Token::Dot,
             ]
         );
@@ -872,7 +979,7 @@ mod tests {
         // over-consumed trailing dot is pushed back as the terminator.
         assert_eq!(
             toks_turtle("_:a.b."),
-            vec![Token::BlankNodeLabel("a.b".into()), Token::Dot]
+            vec![Token::BlankNodeLabel("a.b"), Token::Dot]
         );
     }
 
@@ -890,7 +997,7 @@ mod tests {
         assert_eq!(
             toks("purrdf:p? ?y"),
             vec![
-                Token::PrefixedName("purrdf".into(), "p".into()),
+                Token::PrefixedName("purrdf", "p".into()),
                 Token::Question,
                 var("y"),
             ]
@@ -911,7 +1018,7 @@ mod tests {
     #[test]
     fn trailing_dot_is_separator_not_decimal() {
         // `3 .` — the dot is a statement separator, not part of the literal.
-        assert_eq!(toks("3 ."), vec![Token::Integer("3".into()), Token::Dot]);
+        assert_eq!(toks("3 ."), vec![Token::Integer("3"), Token::Dot]);
     }
 
     #[test]
@@ -919,14 +1026,14 @@ mod tests {
         // Simulates `?o 3 .` — `3` must come out as Integer, not Decimal("3.").
         assert_eq!(
             toks("?o 3 ."),
-            vec![var("o"), Token::Integer("3".into()), Token::Dot]
+            vec![var("o"), Token::Integer("3"), Token::Dot]
         );
     }
 
     #[test]
     fn decimal_with_digit_after_dot_still_works() {
         // Smoke-test: `1.5` must remain Decimal.
-        assert_eq!(toks("1.5"), vec![Token::Decimal("1.5".into())]);
+        assert_eq!(toks("1.5"), vec![Token::Decimal("1.5")]);
     }
 
     // ── G2 regression: exponent requires at least one digit after e/E ────────
@@ -934,46 +1041,40 @@ mod tests {
     #[test]
     fn double_exponent_no_digit_yields_integer_then_word() {
         // `1e` — no digit follows `e`, so `1` is Integer and `e` is a Word.
-        assert_eq!(
-            toks("1e"),
-            vec![Token::Integer("1".into()), Token::Word("e".into())]
-        );
+        assert_eq!(toks("1e"), vec![Token::Integer("1"), Token::Word("e")]);
     }
 
     #[test]
     fn exponent_followed_by_non_digit_word() {
         // `1err` — `e` has no digit after it, so `1` is Integer; `err` is a Word.
-        assert_eq!(
-            toks("1err"),
-            vec![Token::Integer("1".into()), Token::Word("err".into())]
-        );
+        assert_eq!(toks("1err"), vec![Token::Integer("1"), Token::Word("err")]);
     }
 
     #[test]
     fn double_exponent_still_works() {
         // Smoke-test: `1e9` must still be Double.
-        assert_eq!(toks("1e9"), vec![Token::Double("1e9".into())]);
+        assert_eq!(toks("1e9"), vec![Token::Double("1e9")]);
     }
 
     #[test]
     fn double_exponent_with_sign_still_works() {
         // Smoke-test: `1.5e-3` must still be Double.
-        assert_eq!(toks("1.5e-3"), vec![Token::Double("1.5e-3".into())]);
+        assert_eq!(toks("1.5e-3"), vec![Token::Double("1.5e-3")]);
     }
 
     #[test]
     fn double_exponent_with_plus_sign_still_works() {
         // `2E+10` must still be Double.
-        assert_eq!(toks("2E+10"), vec![Token::Double("2E+10".into())]);
+        assert_eq!(toks("2E+10"), vec![Token::Double("2E+10")]);
     }
 
-    fn var(n: &str) -> Token {
-        Token::Variable(n.into())
+    fn var(n: &str) -> Token<'_> {
+        Token::Variable(n)
     }
 
     // ── Turtle-only PN_LOCAL slash leniency (default OFF for SPARQL) ─────────
 
-    fn turtle_toks(s: &str) -> Vec<Token> {
+    fn turtle_toks(s: &str) -> Vec<Token<'_>> {
         tokenize_turtle(s)
             .unwrap()
             .into_iter()
@@ -986,17 +1087,11 @@ mod tests {
         // `purrdf:report/shacl/sarif` is ONE prefixed name in Turtle mode.
         assert_eq!(
             turtle_toks("purrdf:report/shacl/sarif"),
-            vec![Token::PrefixedName(
-                "purrdf".into(),
-                "report/shacl/sarif".into()
-            )]
+            vec![Token::PrefixedName("purrdf", "report/shacl/sarif".into())]
         );
         assert_eq!(
             turtle_toks("purrdf:projection/okf"),
-            vec![Token::PrefixedName(
-                "purrdf".into(),
-                "projection/okf".into()
-            )]
+            vec![Token::PrefixedName("purrdf", "projection/okf".into())]
         );
     }
 
@@ -1007,11 +1102,11 @@ mod tests {
         assert_eq!(
             toks("purrdf:report/shacl/sarif"),
             vec![
-                Token::PrefixedName("purrdf".into(), "report".into()),
+                Token::PrefixedName("purrdf", "report".into()),
                 Token::Slash,
-                Token::Word("shacl".into()),
+                Token::Word("shacl"),
                 Token::Slash,
-                Token::Word("sarif".into()),
+                Token::Word("sarif"),
             ]
         );
     }
