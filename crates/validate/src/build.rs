@@ -1006,4 +1006,71 @@ mod tests {
             Some("2026-07-04T00:00:00Z")
         );
     }
+
+    #[test]
+    fn attribution_resolves_unit_id_to_slice_iri_and_never_leaks_numeric_id() {
+        use purrdf_core::{Attribution, AttributionRole};
+
+        // Mint a UnitId for a public slice IRI via the interner (the sole minter).
+        const SLICE_IRI: &str = "http://example.org/slice/1";
+        let mut interner = UnitInterner::new();
+        let unit = interner.intern(SLICE_IRI);
+
+        // A result carrying a structured attribution referencing that unit.
+        let mut vr = result(
+            "http://www.w3.org/ns/shacl#DatatypeConstraintComponent",
+            Severity::Violation,
+            Some("bad value"),
+        );
+        vr.attributions = vec![Attribution {
+            unit,
+            role: AttributionRole::ShapeOwner,
+            evidence: None,
+        }];
+        let report = ValidationReport {
+            conforms: false,
+            results: vec![vr],
+        };
+
+        // The numeric id's Display form (`unit#0`) — this MUST NOT appear anywhere.
+        let numeric = unit.to_string();
+        assert_eq!(numeric, "unit#0", "sanity: interner mints ids from 0");
+
+        let sources = SarifSources {
+            units: Some(&interner),
+            ..SarifSources::default()
+        };
+        let log = build_report_sarif_with(&report, &SarifOptions::default(), &sources);
+
+        // The attribution must surface as a resolved logical location.
+        let logical = &log.runs[0].results[0].locations[0].logical_locations;
+        let attribution_loc = logical
+            .iter()
+            .find(|l| l.kind.as_deref() == Some(AttributionRole::ShapeOwner.as_str()))
+            .expect("attribution logical location present");
+        assert_eq!(
+            attribution_loc.name, SLICE_IRI,
+            "attribution name must resolve to the public slice IRI, not the numeric UnitId"
+        );
+        assert_eq!(
+            attribution_loc.kind.as_deref(),
+            Some("shape-owner"),
+            "attribution kind must be the AttributionRole::as_str() value"
+        );
+
+        // S0.5: the numeric UnitId must appear NOWHERE in the serialized SARIF.
+        let serialized = report.to_sarif_with(&SarifOptions::default(), &sources);
+        assert!(
+            serialized.contains(SLICE_IRI),
+            "serialized SARIF must carry the resolved slice IRI"
+        );
+        assert!(
+            !serialized.contains(&numeric),
+            "numeric UnitId ({numeric}) must never leak into serialized SARIF"
+        );
+        assert!(
+            !serialized.contains("unit#"),
+            "no numeric UnitId Display form may leak into serialized SARIF"
+        );
+    }
 }
