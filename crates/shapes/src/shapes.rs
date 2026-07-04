@@ -301,7 +301,7 @@ pub struct Shape {
 }
 
 /// The parsed shapes graph — a collection of top-level [`Shape`]s.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Shapes {
     /// Node shapes extracted from the shapes graph.
     pub node_shapes: Vec<Shape>,
@@ -309,6 +309,12 @@ pub struct Shapes {
     /// carried into validation so data-graph role lookups use the same terms.
     /// `None` = the box-role feature is inactive.
     pub box_role_vocab: Option<BoxRoleVocab>,
+    /// The IRI of the named graph holding the shapes, threaded into SHACL-SPARQL
+    /// custom-component validator queries. `None` = the default graph.
+    pub shapes_graph: Option<String>,
+    /// The frozen dataset the shapes were parsed from, retained so SHACL-SPARQL
+    /// custom-component validators can query the shapes graph at validation time.
+    pub shapes_dataset: Arc<RdfDataset>,
 }
 
 // ── Public entry point ─────────────────────────────────────────────────────────
@@ -366,7 +372,13 @@ pub fn from_dataset_with_config(
     box_role_vocab: Option<BoxRoleVocab>,
 ) -> Result<Shapes, String> {
     let data = IrDataGraph::new(Arc::clone(dataset));
-    let mut parser = Parser::new(&data, doc_prefixes, box_role_vocab);
+    let mut parser = Parser::new(
+        &data,
+        doc_prefixes,
+        box_role_vocab,
+        Arc::clone(dataset),
+        None,
+    );
     parser.parse()
 }
 
@@ -3196,7 +3208,7 @@ mod tests {
     fn parse_expr(ttl: &str) -> Result<NodeExpr, String> {
         let dataset = load_store(ttl);
         let data = IrDataGraph::new(Arc::clone(&dataset));
-        let mut parser = Parser::new(&data, &[], None);
+        let mut parser = Parser::new(&data, &[], None, Arc::clone(&dataset), None);
         let root = Term::NamedNode(NamedNode::from("http://example.org/ns#root"));
         let expr_obj = parser
             .first_object_of(&root, "http://example.org/ns#expr")

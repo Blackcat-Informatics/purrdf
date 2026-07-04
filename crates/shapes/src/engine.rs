@@ -9,12 +9,12 @@
 
 use std::sync::Arc;
 
-use crate::data::{GraphFilter, IrDataGraph, Quad, ShaclDataGraph};
+use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
 use crate::model::{rdf, rdfs};
 use crate::report::ValidationReport;
 use crate::shapes::{Shape, Shapes, Target};
 use crate::term::{NamedNode, Term};
-use ::purrdf::{RdfDataset, RdfDatasetBuilder, RdfTerm};
+use ::purrdf::RdfDataset;
 
 // ── Target resolution helpers ─────────────────────────────────────────────────
 
@@ -614,7 +614,7 @@ mod tests {
     #[test]
     fn validate_stub_always_conforms() {
         let data = load_data_nt("");
-        let shapes = Shapes::default();
+        let shapes = crate::shapes::from_dataset(&data).expect("empty shapes graph parses");
         let report = validate(&data, &shapes);
         assert!(report.conforms);
         assert!(report.results.is_empty());
