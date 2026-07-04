@@ -568,7 +568,13 @@ fn reconstruct(
             }
         }
     }
-    rename[&root]
+    // A blank root is renamed to its fresh scaffold node; a non-blank root (an IRI
+    // class expression, e.g. a named class carrying restriction triples) keeps its
+    // own identity rather than being renamed away.
+    rename
+        .get(&root)
+        .copied()
+        .unwrap_or_else(|| intern_into(b, interner.value(root)))
 }
 
 /// A union-find over individuals, seeded by `owl:sameAs` pairs, exposing each
