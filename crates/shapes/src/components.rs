@@ -22,7 +22,7 @@ use crate::model::{rdf, rdfs, sh};
 use crate::path;
 use crate::report::{Severity, ValidationResult};
 use crate::shapes::{build_prefix_header, ComponentValidator, Path};
-use crate::sparql::{run_ask_with_substitutions, run_select_with_substitutions};
+use crate::sparql::{run_ask_with_shacl_prebinding, run_select_with_shacl_prebinding};
 use crate::term::{term_value_to_native, NamedNode, Term};
 
 /// Discriminator for a SPARQL validator's query form.
@@ -211,6 +211,8 @@ pub(crate) fn eval_ask_validator(
     path: Option<&Path>,
     severity: &Severity,
     message: Option<&String>,
+    shapes_graph_iri: Option<&str>,
+    current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
     let ComponentValidator::Ask { ask } = validator else {
         return Err("expected ASK validator, got SELECT".to_owned());
@@ -224,7 +226,8 @@ pub(crate) fn eval_ask_validator(
         for (name, value) in bindings {
             subs.push((name.clone(), value.to_term_value()));
         }
-        let conforms = run_ask_with_substitutions(dataset, ask, &subs)?;
+        let conforms =
+            run_ask_with_shacl_prebinding(dataset, ask, &subs, shapes_graph_iri, current_shape)?;
         if !conforms {
             let mut template_bindings: Vec<(String, Term)> = bindings.to_vec();
             template_bindings.push(("value".to_owned(), v.clone()));
@@ -265,6 +268,8 @@ pub(crate) fn eval_select_validator(
     path: Option<&Path>,
     severity: &Severity,
     message: Option<&String>,
+    shapes_graph_iri: Option<&str>,
+    current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
     let ComponentValidator::Select { select } = validator else {
         return Err("expected SELECT validator, got ASK".to_owned());
@@ -275,7 +280,8 @@ pub(crate) fn eval_select_validator(
         subs.push((name.clone(), value.to_term_value()));
     }
     let query = crate::constraints::substitute_path_placeholder(select, path);
-    let (variables, rows) = run_select_with_substitutions(dataset, &query, &subs)?;
+    let (variables, rows) =
+        run_select_with_shacl_prebinding(dataset, &query, &subs, shapes_graph_iri, current_shape)?;
 
     let this_index = variables.iter().position(|v| v == "this");
     let path_index = variables.iter().position(|v| v == "path");

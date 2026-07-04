@@ -100,17 +100,6 @@ const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 const XFAIL: &[(&str, &str)] = &[
     // ── SHACL-SPARQL ──────────────────────────────────────────────────────────
     (
-        "sparql/pre-binding/pre-binding-002",
-        "$this pre-binding is not visible inside FILTER-only UNION branches \
-         (SPARQL pre-binding semantics); the query yields no solutions so no \
-         violation is produced",
-    ),
-    (
-        "sparql/pre-binding/pre-binding-005",
-        "$this pre-binding is not visible inside a FILTER-only group \
-         ({ FILTER(bound($this)) }); the query yields no solutions",
-    ),
-    (
         "sparql/pre-binding/shapesGraph-001",
         "$shapesGraph/$currentShape pre-bound variables are unsupported (the \
          SPARQL dataset carries no shapes graph), so the constraint never fires",

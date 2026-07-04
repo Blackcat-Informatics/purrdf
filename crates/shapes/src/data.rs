@@ -83,6 +83,12 @@ pub trait ShaclDataGraph: Send + Sync {
 
     /// The borrowed frozen dataset, for native SHACL-SPARQL evaluation.
     fn sparql_dataset(&self) -> Arc<RdfDataset>;
+
+    /// The IRI of the named graph under which the shapes graph is exposed to
+    /// SHACL-SPARQL queries, if any.
+    fn shapes_graph_iri(&self) -> Option<&str> {
+        None
+    }
 }
 
 // ── &RdfDataset backend (the IR-native path) ───────────────────────────────────

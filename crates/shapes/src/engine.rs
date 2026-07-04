@@ -350,6 +350,8 @@ struct IrDataGraphWithShapes {
     /// The combined dataset handed to the native SPARQL engine: data in the
     /// default graph, shapes in a named graph when a shapes-graph IRI is known.
     sparql_dataset: Arc<RdfDataset>,
+    /// The named-graph IRI under which the shapes dataset is exposed, when known.
+    shapes_graph_iri: Option<String>,
 }
 
 impl ShaclDataGraph for IrDataGraphWithShapes {
@@ -360,11 +362,16 @@ impl ShaclDataGraph for IrDataGraphWithShapes {
         object: Option<&Term>,
         graph: GraphFilter,
     ) -> Vec<Quad> {
-        self.data.quads_for_pattern(subject, predicate, object, graph)
+        self.data
+            .quads_for_pattern(subject, predicate, object, graph)
     }
 
     fn sparql_dataset(&self) -> Arc<RdfDataset> {
         Arc::clone(&self.sparql_dataset)
+    }
+
+    fn shapes_graph_iri(&self) -> Option<&str> {
+        self.shapes_graph_iri.as_deref()
     }
 }
 
@@ -373,17 +380,21 @@ impl ShaclDataGraph for IrDataGraphWithShapes {
 /// Data quads stay in their original graphs (the projected default graph). When
 /// a shapes-graph IRI is known, every quad from [`Shapes::shapes_dataset`] is
 /// placed into a named graph with that IRI.
+///
+/// Returns the combined dataset and the shapes-graph IRI actually used, if any.
 fn build_sparql_dataset(
     data: Arc<RdfDataset>,
     shapes: &Shapes,
     override_graph: Option<&str>,
-) -> Result<Arc<RdfDataset>, String> {
-    let graph_iri = override_graph.or(shapes.shapes_graph.as_deref());
-    let Some(graph_iri) = graph_iri else {
-        return Ok(data);
+) -> Result<(Arc<RdfDataset>, Option<String>), String> {
+    let graph_iri = override_graph
+        .map(ToOwned::to_owned)
+        .or_else(|| shapes.shapes_graph.clone());
+    let Some(ref graph_iri) = graph_iri else {
+        return Ok((data, None));
     };
     if shapes.shapes_dataset.quad_count() == 0 {
-        return Ok(data);
+        return Ok((data, None));
     }
 
     let mut builder = RdfDatasetBuilder::new();
@@ -395,7 +406,10 @@ fn build_sparql_dataset(
         builder.push_owned_quad(&quad);
     }
 
-    builder.freeze().map_err(|e| e.to_string())
+    builder
+        .freeze()
+        .map_err(|e| e.to_string())
+        .map(|ds| (ds, Some(graph_iri.clone())))
 }
 
 /// Validate a frozen [`RdfDataset`] against parsed SHACL shapes, exposing the
@@ -418,10 +432,12 @@ pub fn validate_projected_dataset_with_shapes_graph(
     shapes_graph_iri: Option<&str>,
 ) -> Result<ValidationReport, String> {
     let data_graph = IrDataGraph::new(Arc::clone(&projected));
-    let sparql_dataset = build_sparql_dataset(projected, shapes, shapes_graph_iri)?;
+    let (sparql_dataset, shapes_graph_iri) =
+        build_sparql_dataset(projected, shapes, shapes_graph_iri)?;
     let graph = IrDataGraphWithShapes {
         data: data_graph,
         sparql_dataset,
+        shapes_graph_iri,
     };
     validate_with(&graph, shapes)
 }

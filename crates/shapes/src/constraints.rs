@@ -554,6 +554,7 @@ fn eval_constraint<G: ShaclDataGraph>(
     let severity = shape.severity.clone();
     let message = shape.message.clone();
     let source_shape = shape.id.clone();
+    let shapes_graph_iri = store.shapes_graph_iri();
 
     macro_rules! result {
         ($component:expr, $value:expr) => {
@@ -1406,6 +1407,8 @@ fn eval_constraint<G: ShaclDataGraph>(
                 &source_shape,
                 &sev,
                 msg.as_ref(),
+                shapes_graph_iri,
+                Some(&source_shape),
             )
             .map_err(|e| format!("sh:sparql constraint on shape {source_shape}: {e}"))?
         }
@@ -1475,6 +1478,8 @@ fn eval_constraint<G: ShaclDataGraph>(
                     path,
                     &sev,
                     msg.as_ref(),
+                    shapes_graph_iri,
+                    Some(source_shape),
                 ),
                 ComponentValidator::Select { .. } => crate::components::eval_select_validator(
                     &dataset,
@@ -1486,6 +1491,8 @@ fn eval_constraint<G: ShaclDataGraph>(
                     path,
                     &sev,
                     msg.as_ref(),
+                    shapes_graph_iri,
+                    Some(source_shape),
                 ),
             }
             .map_err(|e| format!("component validator on shape {source_shape}: {e}"))?
