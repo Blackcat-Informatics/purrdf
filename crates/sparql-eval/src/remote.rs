@@ -426,13 +426,13 @@ mod tests {
             }
         }
         fn count(&self) -> usize {
-            self.count.load(Ordering::SeqCst)
+            self.count.load(Ordering::Relaxed)
         }
     }
 
     impl RemoteQuerySource for CountingSource<'_> {
         fn query(&self, endpoint: &str, query_text: &str) -> Result<ResolvedBindings, RemoteError> {
-            self.count.fetch_add(1, Ordering::SeqCst);
+            self.count.fetch_add(1, Ordering::Relaxed);
             self.inner.query(endpoint, query_text)
         }
     }
