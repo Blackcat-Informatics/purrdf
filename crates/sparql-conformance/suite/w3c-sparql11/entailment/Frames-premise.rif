@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!DOCTYPE Document [
+  <!ENTITY rif  "http://www.w3.org/2007/rif#">
+  <!ENTITY xs   "http://www.w3.org/2001/XMLSchema#">
+  <!ENTITY rdf  "http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+]>
+
+<Document xmlns="&rif;">
+  <payload>
+    <Group>
+      <sentence>
+        <Forall>
+          <declare>
+            <Var>Customer</Var>
+          </declare>
+          <formula>
+            <Implies>
+              <if>
+                <Frame>
+                  <object>
+                    <Var>Customer</Var>
+                  </object>
+                  <slot ordered="yes">
+                    <Const type="&rif;iri">http://example.org/example#status</Const>
+                    <Const type="&xs;string">gold</Const>
+                  </slot>
+                </Frame>
+              </if>
+              <then>
+                <Frame>
+                  <object>
+                    <Var>Customer</Var>
+                  </object>
+                  <slot ordered="yes">
+                    <Const type="&rif;iri">http://example.org/example#discount</Const>
+                    <Const type="&xs;integer">10</Const>
+                  </slot>
+                </Frame>
+              </then>
+            </Implies>
+          </formula>
+        </Forall>
+      </sentence>
+      <sentence>
+        <Forall>
+          <declare>
+            <Var>Customer</Var>
+          </declare>
+          <formula>
+            <Implies>
+              <if>
+                <Frame>
+                  <object>
+                    <Var>Customer</Var>
+                  </object>
+                  <slot ordered="yes">
+                    <Const type="&rif;iri">http://example.org/example#status</Const>
+                    <Const type="&xs;string">silver</Const>
+                  </slot>
+                </Frame>
+              </if>
+              <then>
+                <Frame>
+                  <object>
+                    <Var>Customer</Var>
+                  </object>
+                  <slot ordered="yes">
+                    <Const type="&rif;iri">http://example.org/example#discount</Const>
+                    <Const type="&xs;integer">5</Const>
+                  </slot>
+                </Frame>
+              </then>
+            </Implies>
+          </formula>
+        </Forall>
+      </sentence>
+      <sentence>
+        <Frame>
+          <object>
+            <Const type="&rif;iri">http://example.org/example#customer017</Const>
+          </object>
+          <slot ordered="yes">
+            <Const type="&rif;iri">http://example.org/example#status</Const>
+            <Const type="&xs;string">gold</Const>
+          </slot>
+          <slot ordered="yes">
+            <Const type="&rif;iri">http://example.org/example#name</Const>
+            <Const type="&xs;string">John Doe</Const>
+          </slot>
+        </Frame>
+      </sentence>
+    </Group>
+  </payload>
+</Document>
+<!--XML document generated on Sun Nov 07 10:36:00 EST 2010-->

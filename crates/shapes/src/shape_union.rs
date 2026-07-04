@@ -190,14 +190,14 @@ mod tests {
     /// Build a tiny mock repo tree under a temp dir and assert ordering +
     /// exclusion + fail-closed behavior.
     fn mock_repo() -> PathBuf {
+        // A process-wide monotonic counter guarantees a distinct path per call:
+        // wall-clock salts collide when two threads run within one clock tick,
+        // which let one test's `remove_dir_all`/writes clobber another's fixture.
+        static SALT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let base = std::env::temp_dir().join(format!(
             "purrdf-shape-union-{}-{}",
             std::process::id(),
-            // a per-call salt so parallel tests do not collide
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            SALT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("shapes")).unwrap();

@@ -14,8 +14,8 @@
       "note": "no ledgered gaps"
     },
     "SPARQL 1.1/1.2 evaluation (full corpus)": {
-      "ledgered": 35,
-      "note": "30 spec-inherent entailment-regime cases (OWL-Direct/DL, RIF-rule, and RDF-axiomatic-triple entailment beyond a forward-materialization reasoner) + 5 upstream-errata fixtures with non-canonical XSD lexicals"
+      "ledgered": 5,
+      "note": "5 upstream-errata fixtures with non-canonical XSD lexicals (cast-decimal/double/float, coalesce01, plus-1-corrected); the entailment-regime cases (OWL-Direct/DL via the ALCOIQ tableau, RIF-rule, RDF-axiomatic-triple) are all native now"
     },
     "SHACL Core + SHACL-SPARQL": {
       "ledgered": 0,

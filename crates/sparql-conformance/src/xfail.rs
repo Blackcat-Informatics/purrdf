@@ -161,144 +161,15 @@ pub const XFAIL: &[Xfail] = &[
     // === W3C sparql11 entailment-regime group (commit 426c7df) ================
     //
     // The native reasoner (purrdf-entail) materializes RDF/RDFS + OWL-RL-shaped
-    // closure, so all rdf*/rdfs*/lang/plainLit/bind* cases and many OWL cases
-    // pass. The residual failures require regimes a forward-materialization
-    // reasoner cannot reach — spec-inherent boundaries, each ledgered `Entailment`:
-    //   - OWL-Direct-only tests (`parent*`, `simple*`) and OWL-DL query answering
-    //     (`sparqldl-*`, `paper-sparqldl-Q*`) — full DL is not a
-    //     materialize-and-match affair. NB: despite their name, `simple*` are NOT
-    //     simple-entailment-regime tests — the manifest declares each with
-    //     `sd:entailmentRegime ent:OWL-Direct` and `sd:EntailmentProfile pr:DL`
-    //     (the "simple" refers to small class-expression queries, not the regime).
-    //     Their data (`simple.ttl`) carries zero class-expression triples
-    //     (no owl:intersectionOf/unionOf/Restriction/some|allValuesFrom), so
-    //     simple-entailment BGP matching answers every one with the empty set,
-    //     whereas the expected results are non-empty — e.g. simple1's anonymous
-    //     `[owl:intersectionOf (:A :B)]` must be read as the class (A ⊓ B) and
-    //     instance-retrieved to {:a, :d}. That is OWL Direct Semantics reasoning,
-    //     not bnode-aware subgraph/instance matching;
-    //   - RIF-rule entailment (`rif*`) — the RIF regime is out of scope;
-    //   - RDF axiomatic-triple entailment under the bare RDF regime (`rdf01`).
-    Xfail {
-        iri_suffix: "entailment/manifest#parent3",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#parent4",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#parent5",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#parent6",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#parent7",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#parent8",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#parent9",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#parent10",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#simple1",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#simple2",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#simple3",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#simple4",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#simple5",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#simple6",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#simple7",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#simple8",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#sparqldl-02",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#sparqldl-03",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#sparqldl-10",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#sparqldl-11",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#sparqldl-12",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#sparqldl-13",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#paper-sparqldl-Q1",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#paper-sparqldl-Q2",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#paper-sparqldl-Q3",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#rif01",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#rif03",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#rif04",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#rif06",
-        reason: XfailReason::Entailment,
-    },
-    Xfail {
-        iri_suffix: "entailment/manifest#rdf01",
-        reason: XfailReason::Entailment,
-    },
+    // closure for the forward-materializable regimes, answers the OWL-Direct
+    // regime query-directed via `purrdf_entail::materialize_dl` (an ALCOIQ tableau
+    // over the query's class expressions), and forward-chains the RIF-Core Horn
+    // rule sets via `purrdf_entail::materialize_rif` (the RIF-in-XML documents the
+    // `qt:data` graphs reference, plus their RDF imports). So every
+    // rdf*/rdfs*/lang/plainLit/bind* case, every `parent*`/`simple*`/`owlds*`, the
+    // full `sparqldl-*` / `paper-sparqldl-Q*` OWL-DL query-answering set, and all
+    // four `rif*` RIF-entailment cases now pass — this group has no residual
+    // `Entailment` failures.
     // === W3C SPARQL 1.2 / RDF-1.2 group (commit 426c7df) ====================
     //
     // SPARQL 1.2 (RDF-star: triple terms, reifiers, base-direction) is a complete

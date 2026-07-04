@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!DOCTYPE Document [
+  <!ENTITY rif  "http://www.w3.org/2007/rif#">
+  <!ENTITY xs   "http://www.w3.org/2001/XMLSchema#">
+  <!ENTITY rdf  "http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+]>
+
+<Document xmlns="&rif;">
+  <directive>
+    <Import>
+      <location>http://www.w3.org/2005/rules/test/repository/tc/Modeling_Brain_Anatomy/Modeling_Brain_Anatomy-import001.rdf</location>
+      <profile>http://www.w3.org/ns/entailment/OWL-Direct</profile>
+    </Import>
+  </directive>
+  <payload>
+    <Group>
+      <sentence>
+        <Forall>
+              <meta>
+                <Frame>
+                  <object>
+                    <Const type="&rif;local">rule1</Const>
+                  </object>
+                  <slot ordered="yes">
+                    <Const type="&rif;iri">http://purl.org/dc/elements/1.1/description</Const>
+                    <Const type="&xs;string">entities that are bounded by a common gyri connection are connected to each other</Const>
+                  </slot>
+                </Frame>
+              </meta>
+          <declare>
+            <Var>X</Var>
+          </declare>
+          <declare>
+            <Var>Y</Var>
+          </declare>
+          <declare>
+            <Var>Z</Var>
+          </declare>
+          <formula>
+            <Implies>
+              <if>
+                <And>
+                  <formula>
+                    <Frame>
+                      <object>
+                        <Var>X</Var>
+                      </object>
+                      <slot ordered="yes">
+                        <Const type="&rif;iri">http://example.org/testOntology.owl#isMAEBoundedBy</Const>
+                        <Var>Z</Var>
+                      </slot>
+                    </Frame>
+                  </formula>
+                  <formula>
+                    <Frame>
+                      <object>
+                        <Var>Y</Var>
+                      </object>
+                      <slot ordered="yes">
+                        <Const type="&rif;iri">http://example.org/testOntology.owl#isMAEBoundedBy</Const>
+                        <Var>Z</Var>
+                      </slot>
+                    </Frame>
+                  </formula>
+                  <formula>
+                    <Frame>
+                      <object>
+                        <Var>X</Var>
+                      </object>
+                      <slot ordered="yes">
+                        <Const type="&rif;iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const>
+                        <Const type="&rif;iri">http://example.org/testOntology.owl#MaterialAnatomicalEntity</Const>
+                      </slot>
+                    </Frame>
+                  </formula>
+                  <formula>
+                    <Frame>
+                      <object>
+                        <Var>Y</Var>
+                      </object>
+                      <slot ordered="yes">
+                        <Const type="&rif;iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const>
+                        <Const type="&rif;iri">http://example.org/testOntology.owl#MaterialAnatomicalEntity</Const>
+                      </slot>
+                    </Frame>
+                  </formula>
+                  <formula>
+                    <Frame>
+                      <object>
+                        <Var>Z</Var>
+                      </object>
+                      <slot ordered="yes">
+                        <Const type="&rif;iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const>
+                        <Const type="&rif;iri">http://example.org/testOntology.owl#GyriConnection</Const>
+                      </slot>
+                    </Frame>
+                  </formula>
+                </And>
+              </if>
+              <then>
+                <Frame>
+                  <object>
+                    <Var>X</Var>
+                  </object>
+                  <slot ordered="yes">
+                    <Const type="&rif;iri">http://example.org/testOntology.owl#isMAEConnectedTo</Const>
+                    <Var>Y</Var>
+                  </slot>
+                </Frame>
+              </then>
+            </Implies>
+          </formula>
+        </Forall>
+      </sentence>
+    </Group>
+  </payload>
+</Document>
+<!--XML document generated on Sun Nov 07 10:36:06 EST 2010-->
