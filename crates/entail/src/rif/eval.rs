@@ -94,7 +94,7 @@ pub fn materialize_rif(ds: &RdfDataset, rules: &RuleSet) -> Result<Arc<RdfDatase
         .rules
         .iter()
         .map(|r| compile_rule(r, &mut interner))
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     chase(&mut facts, seed, &compiled);
 
@@ -127,7 +127,29 @@ fn push_fact(facts: &mut HashSet<[u32; 3]>, order: &mut Vec<[u32; 3]>, t: [u32; 
 
 /// Compile one rule: intern each atom's ground slots and assign each variable a
 /// dense local index (assigned in first-seen order across body then head).
-fn compile_rule(rule: &crate::rif::model::Rule, interner: &mut Interner) -> CompiledRule {
+///
+/// # Errors
+///
+/// [`EntailError::Parse`] if the rule is not range-restricted (datalog safety):
+/// a head variable that never appears in the body has no binding source, so the
+/// rule is malformed rather than silently deriving an unbound term.
+fn compile_rule(
+    rule: &crate::rif::model::Rule,
+    interner: &mut Interner,
+) -> Result<CompiledRule, EntailError> {
+    // Range-restriction (safety) check up front: every head variable must be
+    // bound by some body atom. Walk the model terms directly so that valid-rule
+    // compilation below is byte-identical (same interned ids, same var indices).
+    let body_vars: HashSet<&str> = rule.body.iter().flat_map(atom_var_names).collect();
+    for name in rule.head.iter().flat_map(atom_var_names) {
+        if !body_vars.contains(name) {
+            return Err(EntailError::Parse(format!(
+                "RIF rule head variable ?{name} is not range-restricted \
+                 (not bound by the rule body)"
+            )));
+        }
+    }
+
     let mut vars: Vec<String> = Vec::new();
     let body: Vec<PatternAtom> = rule
         .body
@@ -139,11 +161,21 @@ fn compile_rule(rule: &crate::rif::model::Rule, interner: &mut Interner) -> Comp
         .iter()
         .map(|a| compile_atom(a, interner, &mut vars))
         .collect();
-    CompiledRule {
+    Ok(CompiledRule {
         body,
         head,
         num_vars: vars.len(),
-    }
+    })
+}
+
+/// The variable names appearing in an atom's three slots, in slot order.
+fn atom_var_names(atom: &Atom) -> impl Iterator<Item = &str> {
+    [&atom.s, &atom.p, &atom.o]
+        .into_iter()
+        .filter_map(|t| match t {
+            RifTerm::Var(name) => Some(name.as_str()),
+            RifTerm::Const(_) => None,
+        })
 }
 
 /// Compile one atom, interning constants and mapping variables to local indices.
@@ -259,12 +291,15 @@ fn bind_slot(slot: Slot, value: u32, b: &mut Binding) -> bool {
 }
 
 /// Instantiate a head atom under a complete binding. Head variables are
-/// range-restricted (they appear in the body), so every variable is bound.
+/// range-restricted — `compile_rule` rejects any head variable not bound by the
+/// body — so by construction every head variable is bound here.
 fn instantiate(atom: &PatternAtom, b: &Binding) -> [u32; 3] {
     [resolve(atom.s, b), resolve(atom.p, b), resolve(atom.o, b)]
 }
 
-/// Resolve a head slot to a concrete term id under `b`.
+/// Resolve a head slot to a concrete term id under `b`. The `.expect(...)` is
+/// unreachable: `compile_rule`'s range-restriction check guarantees every head
+/// variable is body-bound, so its slot is set before the head is instantiated.
 fn resolve(slot: Slot, b: &Binding) -> u32 {
     match slot {
         Slot::Const(c) => c,
@@ -364,5 +399,30 @@ mod tests {
             !has(&out, &iri("customer017"), &iri("discount"), &five),
             "silver rule must not fire"
         );
+    }
+
+    #[test]
+    fn unbound_head_variable_is_rejected() {
+        // parent(x,y) ⇒ uncle(x,z): ?z is in the head but never bound by the body,
+        // so the rule is not range-restricted and must be a typed Parse error — not
+        // a panic — when materialized over untrusted input.
+        let rule = Rule {
+            body: vec![atom(var("x"), con(iri("parent")), var("y"))],
+            head: vec![atom(var("x"), con(iri("uncle")), var("z"))],
+        };
+        let rules = RuleSet {
+            facts: vec![(iri("Emeka"), iri("parent"), iri("Okechukwu"))],
+            rules: vec![rule],
+        };
+        let err = materialize_rif(&empty_ds(), &rules).expect_err("unbound head variable");
+        match err {
+            EntailError::Parse(msg) => {
+                assert!(
+                    msg.contains("?z"),
+                    "message names the offending variable: {msg}"
+                );
+            }
+            other => panic!("expected Parse error, got {other:?}"),
+        }
     }
 }
