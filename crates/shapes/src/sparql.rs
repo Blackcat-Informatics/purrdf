@@ -39,7 +39,8 @@ use crate::term::{term_value_to_native, Literal, NamedNode, Term};
 /// (`Boolean` / `Graph` are rejected), or if any solution row has no `?this`
 /// binding.
 pub fn eval_target(dataset: &Arc<RdfDataset>, select: &str) -> Result<Vec<Term>, String> {
-    let solutions = run_select(dataset, select, &[]).map_err(|e| format!("SPARQLTarget {e}"))?;
+    let solutions = run_select_with_substitutions(dataset, select, &[])
+        .map_err(|e| format!("SPARQLTarget {e}"))?;
 
     let this_index = column_index(&solutions.0, "this");
 
@@ -98,8 +99,8 @@ pub fn eval_sparql_constraint(
     // is memoized by the thread-local engine's plan cache, so per-focus evaluation
     // re-runs the plan, not the parse.
     let subs = [("this".to_owned(), focus.to_term_value())];
-    let (variables, rows) =
-        run_select(dataset, select, &subs).map_err(|e| format!("SPARQLConstraint {e}"))?;
+    let (variables, rows) = run_select_with_substitutions(dataset, select, &subs)
+        .map_err(|e| format!("SPARQLConstraint {e}"))?;
     let path_index = column_index(&variables, "path");
     let value_index = column_index(&variables, "value");
 
@@ -365,7 +366,7 @@ thread_local! {
 
 /// Run a SELECT query over the dataset, returning `(variables, rows)`. Rejects
 /// non-SELECT result forms.
-fn run_select(
+pub(crate) fn run_select_with_substitutions(
     dataset: &Arc<RdfDataset>,
     select: &str,
     substitutions: &[(String, TermValue)],
@@ -391,6 +392,36 @@ fn run_select(
         }
         SparqlResult::Graph(_) => {
             Err("query must be a SELECT, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
+        }
+    }
+}
+
+/// Run an ASK query over the dataset with the given variable substitutions.
+/// Rejects non-boolean result forms.
+pub(crate) fn run_ask_with_substitutions(
+    dataset: &Arc<RdfDataset>,
+    ask: &str,
+    substitutions: &[(String, TermValue)],
+) -> Result<bool, String> {
+    let result = SPARQL_ENGINE
+        .with(|engine| {
+            engine.query(
+                dataset,
+                SparqlRequest {
+                    query: ask,
+                    base_iri: None,
+                    substitutions,
+                },
+            )
+        })
+        .map_err(|e| format!("query evaluation error: {e}"))?;
+    match result {
+        SparqlResult::Boolean(b) => Ok(b),
+        SparqlResult::Solutions { .. } => {
+            Err("query must be an ASK, got a SELECT result".to_owned())
+        }
+        SparqlResult::Graph(_) => {
+            Err("query must be an ASK, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
         }
     }
 }

@@ -16,6 +16,7 @@ use std::sync::{Arc, OnceLock};
 
 use ::purrdf::RdfDataset;
 
+use crate::components::{severity_from_term, ComponentRegistry, Validator, ValidatorKind};
 use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
 use crate::expression::{FnCall, NodeExpr};
 use crate::model::{rdf, rdfs, sh, BoxRoleVocab};
@@ -84,6 +85,15 @@ pub enum Target {
         /// The SPARQL SELECT query text (with any injected PREFIX header).
         select: String,
     },
+}
+
+/// The SPARQL validator form carried by a custom constraint component constraint.
+#[derive(Debug, Clone)]
+pub enum ComponentValidator {
+    /// An `ASK` query validator (`sh:SPARQLAskValidator`).
+    Ask { ask: String },
+    /// A `SELECT` query validator (`sh:SPARQLSelectValidator`).
+    Select { select: String },
 }
 
 /// A single SHACL constraint on a shape or property shape.
@@ -205,6 +215,7 @@ pub enum Constraint {
         /// any sibling qualified shape are excluded before counting.
         disjoint: bool,
     },
+<<<<<<< HEAD
     /// `sh:expression <node expression>` — SHACL-AF §5.7 expression constraint.
     ///
     /// For each value node the expression is evaluated with that value node as
@@ -218,6 +229,25 @@ pub enum Constraint {
         message: Option<String>,
         /// Optional per-constraint severity override (from `sh:severity` on the
         /// expression node).
+        severity: Option<Severity>,
+    },
+    /// A SHACL-SPARQL custom constraint component usage.
+    ///
+    /// Emitted when a shape node carries values for all required parameters of a
+    /// declared `sh:ConstraintComponent`. The validator query text already has
+    /// any needed `PREFIX` header prepended.
+    Component {
+        /// The component IRI (`sh:ConstraintComponent` instance).
+        component: NamedNode,
+        /// The shape node that sourced this component usage.
+        source_shape: Term,
+        /// Parameter bindings: SPARQL variable local name → value term.
+        bindings: Vec<(String, Term)>,
+        /// The selected validator (ASK or SELECT).
+        validator: ComponentValidator,
+        /// Optional message override (shape → validator → component).
+        message: Option<String>,
+        /// Optional severity override (shape → validator → component).
         severity: Option<Severity>,
     },
 }
@@ -353,6 +383,78 @@ struct Parser<'s> {
     doc_prefixes: Vec<(String, String)>,
     /// The caller-supplied box-role vocabulary; `None` = feature inactive.
     box_role_vocab: Option<BoxRoleVocab>,
+    /// Registry of SHACL-SPARQL custom constraint components declared in the
+    /// shapes graph. Populated before shape parsing so malformed components are
+    /// rejected as hard failures.
+    component_registry: ComponentRegistry,
+}
+
+// ── Prefix-header helper (used by shapes and component registry) ───────────────
+
+/// Return all objects for `(subject, predicate, ?)`.
+fn objects_of(data: &IrDataGraph, subject: &Term, predicate: &str) -> Vec<Term> {
+    if !subject.is_subject() {
+        return vec![];
+    }
+    let pred = Term::NamedNode(NamedNode::from(predicate));
+    data.quads_for_pattern(Some(subject), Some(&pred), None, GraphFilter::AnyGraph)
+        .into_iter()
+        .map(|q| q.object)
+        .collect()
+}
+
+/// Return the first object for `(subject, predicate, ?)`, if any.
+fn first_object_of(data: &IrDataGraph, subject: &Term, predicate: &str) -> Option<Term> {
+    objects_of(data, subject, predicate).into_iter().next()
+}
+
+/// Build the SPARQL `PREFIX` header prepended to a SHACL-SPARQL query.
+///
+/// Two sources contribute, lowest precedence first:
+///
+/// 1. The shapes **document's** `@prefix` declarations (the pySHACL-compatible
+///    fallback — real shapes rely on these without `sh:prefixes`).
+/// 2. SHACL-AF `sh:prefixes` → `sh:declare` on the `owners` (spec §5.2.1), which
+///    **override** the document fallback for any colliding prefix.
+///
+/// Output is one `PREFIX p: <ns>` line per prefix, sorted (a `BTreeMap` keeps
+/// it deterministic and one-entry-per-prefix). Empty when nothing is declared.
+pub(crate) fn build_prefix_header(
+    data: &IrDataGraph,
+    doc_prefixes: &[(String, String)],
+    owners: &[&Term],
+) -> String {
+    let mut map: std::collections::BTreeMap<String, String> = doc_prefixes
+        .iter()
+        .map(|(p, ns)| (p.clone(), ns.clone()))
+        .collect();
+    // `sh:prefix` is a string literal; `sh:namespace` is typically an
+    // `xsd:anyURI` literal but the SHACL spec also permits a bare IRI
+    // (NamedNode). Accept both lexical forms so an IRI-valued namespace is
+    // not silently dropped (which would omit a PREFIX line and break the
+    // dependent SHACL-AF query — a silent under-validation, P11/§11).
+    let term_value = |t: Term| match t {
+        Term::Literal(lit) => Some(lit.value().to_owned()),
+        Term::NamedNode(node) => Some(node.as_str().to_owned()),
+        _ => None, // blank node / quoted triple: not a prefix or namespace value
+    };
+    for owner in owners {
+        for prefixes_node in objects_of(data, owner, sh::PREFIXES) {
+            for declare in objects_of(data, &prefixes_node, sh::DECLARE) {
+                let prefix = first_object_of(data, &declare, sh::PREFIX).and_then(term_value);
+                let namespace = first_object_of(data, &declare, sh::NAMESPACE).and_then(term_value);
+                if let (Some(p), Some(ns)) = (prefix, namespace) {
+                    map.insert(p, ns); // sh:prefixes overrides the document fallback
+                }
+            }
+        }
+    }
+    use std::fmt::Write as _;
+    let mut header = String::new();
+    for (prefix, namespace) in map {
+        let _ = writeln!(header, "PREFIX {prefix}: <{namespace}>");
+    }
+    header
 }
 
 impl<'s> Parser<'s> {
@@ -366,6 +468,7 @@ impl<'s> Parser<'s> {
             in_flight: HashSet::new(),
             doc_prefixes: doc_prefixes.to_vec(),
             box_role_vocab,
+            component_registry: ComponentRegistry::default(),
         }
     }
 
@@ -426,10 +529,9 @@ impl<'s> Parser<'s> {
             }
         }
 
-        // The pre-binding restrictions gate every SHACL-SPARQL ASK validator in
-        // the graph (custom constraint components are otherwise unsupported,
-        // but a restricted query must still hard-fail per SHACL-SPARQL §5.2.1).
-        self.check_ask_validators()?;
+        // Custom SHACL-SPARQL constraint components are parsed up-front; any
+        // malformed component, parameter, or validator query is a hard failure.
+        self.component_registry = ComponentRegistry::parse(self.data, &self.doc_prefixes)?;
 
         // Parse each top-level shape in stable (sorted) order. A node with
         // sh:path is a (standalone) PROPERTY shape: its path-scoped constraints
@@ -575,42 +677,7 @@ impl<'s> Parser<'s> {
     /// Output is one `PREFIX p: <ns>` line per prefix, sorted (a `BTreeMap` keeps
     /// it deterministic and one-entry-per-prefix). Empty when nothing is declared.
     fn prefix_header(&self, owners: &[&Term]) -> String {
-        let mut map: std::collections::BTreeMap<String, String> = self
-            .doc_prefixes
-            .iter()
-            .map(|(p, ns)| (p.clone(), ns.clone()))
-            .collect();
-        // `sh:prefix` is a string literal; `sh:namespace` is typically an
-        // `xsd:anyURI` literal but the SHACL spec also permits a bare IRI
-        // (NamedNode). Accept both lexical forms so an IRI-valued namespace is
-        // not silently dropped (which would omit a PREFIX line and break the
-        // dependent SHACL-AF query — a silent under-validation, P11/§11).
-        let term_value = |t: Term| match t {
-            Term::Literal(lit) => Some(lit.value().to_owned()),
-            Term::NamedNode(node) => Some(node.as_str().to_owned()),
-            _ => None, // blank node / quoted triple: not a prefix or namespace value
-        };
-        for owner in owners {
-            for prefixes_node in self.objects_of(owner, sh::PREFIXES) {
-                for declare in self.objects_of(&prefixes_node, sh::DECLARE) {
-                    let prefix = self
-                        .first_object_of(&declare, sh::PREFIX)
-                        .and_then(term_value);
-                    let namespace = self
-                        .first_object_of(&declare, sh::NAMESPACE)
-                        .and_then(term_value);
-                    if let (Some(p), Some(ns)) = (prefix, namespace) {
-                        map.insert(p, ns); // sh:prefixes overrides the document fallback
-                    }
-                }
-            }
-        }
-        use std::fmt::Write as _;
-        let mut header = String::new();
-        for (prefix, namespace) in map {
-            let _ = writeln!(header, "PREFIX {prefix}: <{namespace}>");
-        }
-        header
+        build_prefix_header(self.data, &self.doc_prefixes, owners)
     }
 
     /// Parse a top-level node shape.
@@ -678,7 +745,7 @@ impl<'s> Parser<'s> {
         }
 
         // -- Node-level constraints --
-        let constraints = self.parse_constraints(id)?;
+        let constraints = self.parse_constraints(id, false)?;
         let box_roles = self.box_roles_of(id);
 
         Ok(Shape {
@@ -803,10 +870,17 @@ impl<'s> Parser<'s> {
         Ok(targets)
     }
 
-    /// Parse node-level (non-path-scoped) constraints from a shape node.
+    /// Parse all constraints declared directly on a shape node.
     ///
     /// Does NOT include `sh:property` sub-shapes (handled separately).
-    fn parse_constraints(&mut self, id: &Term) -> Result<Vec<Constraint>, String> {
+    /// `is_property_shape` selects the right custom-component validator
+    /// (`sh:propertyValidator` vs `sh:nodeValidator`) and is passed down from
+    /// both node shapes and property shapes.
+    fn parse_constraints(
+        &mut self,
+        id: &Term,
+        is_property_shape: bool,
+    ) -> Result<Vec<Constraint>, String> {
         let mut constraints: Vec<Constraint> = Vec::new();
 
         // sh:class — sorted for determinism
@@ -1180,6 +1254,101 @@ impl<'s> Parser<'s> {
         // dangling half of the pair is malformed and hard-fails.
         constraints.extend(self.parse_qualified_value_shapes(id)?);
 
+        // Custom SHACL-SPARQL constraint components. A shape that carries values
+        // for all required parameters of a declared component is treated as a
+        // usage of that component. Components are processed in deterministic
+        // order; parameter bindings follow the component's declared parameter
+        // order. All validators applicable to the current shape scope are
+        // emitted as separate constraints; if none apply, the component is
+        // skipped silently.
+        let shape_severity = self
+            .first_object_of(id, sh::SEVERITY)
+            .and_then(|t| severity_from_term(&t));
+        let mut shape_messages: Vec<String> = self
+            .objects_of(id, sh::MESSAGE)
+            .into_iter()
+            .filter_map(|t| match t {
+                Term::Literal(lit) => Some(lit.value().to_owned()),
+                _ => None,
+            })
+            .collect();
+        shape_messages.sort();
+        let shape_message = shape_messages.into_iter().next();
+
+        let mut components: Vec<&crate::components::Component> =
+            self.component_registry.components.values().collect();
+        components.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+        for component in components {
+            let mut bindings: Vec<(String, Term)> = Vec::new();
+            let mut missing_required = false;
+            for param in &component.parameters {
+                let values = self.objects_of(id, param.path.as_str());
+                if values.len() > 1 {
+                    return Err(format!(
+                        "shape {id} declares {count} values for parameter <{path}> of component <{component}>, only one is allowed",
+                        count = values.len(),
+                        path = param.path,
+                        component = component.id
+                    ));
+                }
+                if let Some(value) = values.into_iter().next() {
+                    bindings.push((param.name.clone(), value));
+                } else if !param.optional {
+                    missing_required = true;
+                    break;
+                }
+            }
+            if missing_required {
+                continue;
+            }
+
+            let matching: Vec<&Validator> = if is_property_shape {
+                component
+                    .property_validators
+                    .iter()
+                    .chain(component.validators.iter())
+                    .collect()
+            } else {
+                component
+                    .node_validators
+                    .iter()
+                    .chain(component.validators.iter())
+                    .collect()
+            };
+            if matching.is_empty() {
+                continue;
+            }
+
+            for validator in matching {
+                let component_validator = match &validator.kind {
+                    ValidatorKind::Ask => ComponentValidator::Ask {
+                        ask: validator.query_text.clone(),
+                    },
+                    ValidatorKind::Select => ComponentValidator::Select {
+                        select: validator.query_text.clone(),
+                    },
+                };
+
+                let severity = shape_severity
+                    .clone()
+                    .or_else(|| validator.severity.clone())
+                    .or_else(|| component.severity.clone());
+                let message = shape_message
+                    .clone()
+                    .or_else(|| validator.message.clone())
+                    .or_else(|| component.message.clone());
+
+                constraints.push(Constraint::Component {
+                    component: component.id.clone(),
+                    source_shape: id.clone(),
+                    bindings: bindings.clone(),
+                    validator: component_validator,
+                    message,
+                    severity,
+                });
+            }
+        }
+
         Ok(constraints)
     }
 
@@ -1285,37 +1454,6 @@ impl<'s> Parser<'s> {
         Ok(siblings)
     }
 
-    /// Enforce the SHACL-SPARQL §5.2.1 pre-binding restrictions on every
-    /// `sh:ask` validator in the shapes graph.
-    ///
-    /// Custom SPARQL constraint components are otherwise unsupported by this
-    /// engine, but a validator whose ASK query is ILLEGAL under pre-binding
-    /// (its `$this`/`$value` variables are pre-bound at execution) must still
-    /// be rejected as a hard failure (W3C `unsupported-sparql-006`). An
-    /// UNPARSABLE ask query is skipped — the component never executes here, so
-    /// only well-formed-but-restricted queries hard-fail.
-    fn check_ask_validators(&self) -> Result<(), String> {
-        let mut asks: Vec<(Term, String)> = self
-            .quads_with(None, Some(sh::ASK), None)
-            .into_iter()
-            .filter_map(|q| match q.object {
-                Term::Literal(lit) => Some((q.subject, lit.value().to_owned())),
-                _ => None,
-            })
-            .collect();
-        asks.sort_by(|a, b| (a.0.to_string(), &a.1).cmp(&(b.0.to_string(), &b.1)));
-        for (validator, raw_ask) in asks {
-            let query_text = format!("{}{raw_ask}", self.prefix_header(&[&validator]));
-            let Ok(query) = purrdf_sparql_algebra::SparqlParser::new().parse_query(&query_text)
-            else {
-                continue; // unsupported component — never executed by this engine
-            };
-            crate::prebinding::check_ask(&query, &["this", "value"])
-                .map_err(|e| format!("sh:ask validator {validator}: {e}"))?;
-        }
-        Ok(())
-    }
-
     /// Parse a property shape node.
     fn parse_property_shape(&mut self, ps_node: &Term) -> Result<PropertyShape, String> {
         let ps_str = ps_node.to_string();
@@ -1351,7 +1489,7 @@ impl<'s> Parser<'s> {
             .is_some_and(|t| matches!(&t, Term::Literal(lit) if lit.value() == "true"));
 
         // constraints on the property shape
-        let constraints = self.parse_constraints(ps_node)?;
+        let constraints = self.parse_constraints(ps_node, true)?;
 
         // Nested sh:property on a property shape (spec §2.1: sh:property may
         // appear on ANY shape) — each nested property shape applies to THIS
@@ -1955,19 +2093,6 @@ impl<'s> Parser<'s> {
 
 // ── Helper functions ───────────────────────────────────────────────────────────
 
-/// Map an `sh:severity` object term to a [`Severity`]: the three built-in
-/// `sh:` severities map to their variants, any OTHER IRI is preserved verbatim
-/// (SHACL allows custom severity IRIs — W3C core/misc/severity-002), and a
-/// non-IRI object yields `None` (caller falls back to `sh:Violation`).
-fn severity_from_term(t: &Term) -> Option<Severity> {
-    match t {
-        Term::NamedNode(n) => {
-            Some(Severity::from_iri(n.as_str()).unwrap_or_else(|| Severity::Other(n.clone())))
-        }
-        _ => None,
-    }
-}
-
 /// Parse `sh:nodeKind` object IRI into a [`NodeKindValue`].
 fn parse_node_kind(iri: &str) -> Option<NodeKindValue> {
     match iri {
@@ -2528,6 +2653,58 @@ mod tests {
         assert_eq!(shape.severity, Severity::Warning);
         assert_eq!(shape.message.as_deref(), Some("This is a warning"));
         assert!(shape.deactivated);
+    }
+
+    // ── Test 6b: custom SHACL-SPARQL constraint component detection ────────────
+
+    #[test]
+    fn test_custom_component_constraint_detected() {
+        let ttl = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../vectors/shacl/sparql/component/optional-001.ttl"
+        ))
+        .expect("fixture exists");
+        let dataset: Arc<RdfDataset> = ::purrdf::parse_dataset(
+            ttl.as_bytes(),
+            "text/turtle",
+            Some("http://datashapes.org/sh/tests/sparql/component/optional-001.test"),
+        )
+        .expect("fixture parses");
+        let shapes = from_dataset(&dataset).expect("shapes with custom component must parse");
+
+        let test_shape1 = shapes
+            .node_shapes
+            .iter()
+            .find(|s| s.id.to_string().contains("TestShape1"))
+            .expect("TestShape1 present");
+        let (component, bindings, validator) = test_shape1
+            .constraints
+            .iter()
+            .find_map(|c| match c {
+                Constraint::Component {
+                    component,
+                    bindings,
+                    validator,
+                    ..
+                } => Some((component, bindings, validator)),
+                _ => None,
+            })
+            .expect("TestShape1 should have a Constraint::Component");
+
+        assert_eq!(
+            component.as_str(),
+            "http://datashapes.org/sh/tests/sparql/component/optional-001.test#TestConstraintComponent"
+        );
+        assert_eq!(bindings.len(), 1, "only requiredParam is bound");
+        assert_eq!(bindings[0].0, "requiredParam");
+        assert!(
+            matches!(bindings[0].1, Term::Literal(_)),
+            "binding value should be a literal"
+        );
+        assert!(
+            matches!(validator, ComponentValidator::Ask { .. }),
+            "optional-001 validator is ASK"
+        );
     }
 
     // ── Test 7: sh:in list ─────────────────────────────────────────────────────

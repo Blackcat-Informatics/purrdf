@@ -250,6 +250,26 @@ pub mod sh {
 
     pub const FUNCTION: &str = "http://www.w3.org/ns/shacl#Function";
 
+    // ── Custom constraint-component vocabulary ───────────────────────────────
+
+    pub const CONSTRAINT_COMPONENT: &str = "http://www.w3.org/ns/shacl#ConstraintComponent";
+
+    pub const PARAMETER: &str = "http://www.w3.org/ns/shacl#Parameter";
+
+    pub const PARAMETER_PROPERTY: &str = "http://www.w3.org/ns/shacl#parameter";
+
+    pub const NODE_VALIDATOR: &str = "http://www.w3.org/ns/shacl#nodeValidator";
+
+    pub const PROPERTY_VALIDATOR: &str = "http://www.w3.org/ns/shacl#propertyValidator";
+
+    pub const VALIDATOR: &str = "http://www.w3.org/ns/shacl#validator";
+
+    pub const OPTIONAL: &str = "http://www.w3.org/ns/shacl#optional";
+
+    pub const SPARQL_ASK_VALIDATOR: &str = "http://www.w3.org/ns/shacl#SPARQLAskValidator";
+
+    pub const SPARQL_SELECT_VALIDATOR: &str = "http://www.w3.org/ns/shacl#SPARQLSelectValidator";
+
     // ── Constraint component IRIs (sh:*ConstraintComponent) ──────────────────
 
     pub const MIN_COUNT_CONSTRAINT_COMPONENT: &str =
