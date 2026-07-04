@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-validate"
+description = "PurRDF SARIF 2.1.0 reporting boundary: renders RDF diagnostics and SHACL/ShEx validation reports to source-traced, byte-deterministic SARIF — the boundary crate that keeps purrdf-core structured but SARIF-free"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["sarif", "shacl", "rdf", "diagnostics", "validation"]
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only, wasm-clean boundary crate: consumes the report/diagnostic types and
+# emits SARIF JSON. NO PyO3, NO oxigraph-family edge, NO ambient I/O — so it stays
+# wasm32-unknown-unknown-clean like every release crate.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_validate"
+
+[dependencies]
+# SHACL validation report types (ValidationReport / ValidationResult / Severity /
+# Path) — the primary input rendered to SARIF.
+purrdf-shapes = { workspace = true }
+# The structured, SARIF-free diagnostic + location + provenance types
+# (RdfDiagnostic / RdfLocation / RdfSeverity / Attribution / UnitInterner). This
+# crate is their SARIF serialization boundary (S0.5: numeric ids resolve to public
+# slice IRIs here, never leak into output).
+purrdf-core = { workspace = true }
+# The native codec surface: the opt-in SpanTable that maps a data-graph subject to
+# its source position, joined here into SARIF physicalLocations.
+purrdf-rdf = { workspace = true }
+# The shared source-position primitive (Position / LineIndex).
+purrdf-iri = { workspace = true }
+# Hand-rolled SARIF serde model (no heavyweight SARIF crate). serde_json's default
+# BTreeMap-backed object keeps key order stable for byte-deterministic output.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# Colored line-diffs on assert_eq! failure (repo convention).
+pretty_assertions = { workspace = true }
