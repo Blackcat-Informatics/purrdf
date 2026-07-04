@@ -20,14 +20,6 @@
 
 [xfail]
 
-# --- Theme: Graph subclass identity not preserved through set operators ---
-# rdflib's Graph.__add__/__sub__/__mul__ return an instance of the caller's
-# subclass; the compat facade returns a base purrdf Graph, dropping subclass
-# methods.
-"test_graph_operator.py::test_subclass_add_operator" = "compat Graph.__add__ returns a base purrdf Graph, not an instance of the caller's Graph subclass, so subclass methods are lost after '+'"
-"test_graph_operator.py::test_subclass_sub_operator" = "compat Graph.__sub__ returns a base purrdf Graph, not an instance of the caller's Graph subclass, so subclass methods are lost after '-'"
-"test_graph_operator.py::test_subclass_mul_operator" = "compat Graph.__mul__ (intersection) returns a base purrdf Graph, not an instance of the caller's Graph subclass, so subclass methods are lost after '*'"
-
 # --- Theme: RDF collection (rdf:List) parse + Collection mutation ---
 "test_graph_items.py::test_items" = "parsing Turtle collection syntax '( ... )' through the native codec raises native-codec-iri-missing-value, so rdf:first/rdf:rest list items are never materialized for Seq iteration"
 "test_graph_items.py::test_recursive_list_detection" = "parsing Turtle collection syntax '( ... )' through the native codec raises native-codec-iri-missing-value, so nested rdf:List recursion is never reached"

@@ -1181,9 +1181,20 @@ class Graph:
             self.remove(triple)
         return self
 
+    def _new_graph_like(self) -> Graph:
+        """Return a fresh graph of the same runtime class as ``self``.
+
+        Dataset-backed graph views cannot be constructed standalone, so they fall
+        back to a plain :class:`Graph`.
+        """
+        cls = type(self)
+        if cls is _DatasetGraph:
+            return Graph()
+        return cls()
+
     def __add__(self, other: Iterable[_Triple]) -> Graph:
         """Return a new graph = the union of this graph and ``other``."""
-        result = Graph()
+        result = self._new_graph_like()
         for triple in self:
             result.add(triple)
         for triple in other:
@@ -1192,7 +1203,7 @@ class Graph:
 
     def __sub__(self, other: Iterable[_Triple]) -> Graph:
         """Return a new graph = this graph minus the triples in ``other``."""
-        result = Graph()
+        result = self._new_graph_like()
         removed = set(other)
         for triple in self:
             if triple not in removed:
@@ -1201,7 +1212,7 @@ class Graph:
 
     def __mul__(self, other: Iterable[_Triple]) -> Graph:
         """Return a new graph = intersection of this graph and ``other``."""
-        result = Graph()
+        result = self._new_graph_like()
         other_set = set(other)
         for triple in self:
             if triple in other_set:
@@ -1210,7 +1221,7 @@ class Graph:
 
     def __xor__(self, other: Iterable[_Triple]) -> Graph:
         """Return a new graph = symmetric difference of this graph and ``other``."""
-        result = Graph()
+        result = self._new_graph_like()
         self_set = set(self)
         other_set = set(other)
         for triple in self_set ^ other_set:
