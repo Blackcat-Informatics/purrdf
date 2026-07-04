@@ -589,7 +589,9 @@ impl<'d> EvalCtx<'d> {
             // body's own FROM/base, so seed the default graph here.
             active_graph: GraphMatch::Default,
             active_dataset: ActiveDataset::store_default(),
-            bnode_counter: 0,
+            // Inherit the parent counter so body-minted blanks continue the
+            // parent's sequence; the advanced value is merged back after the call.
+            bnode_counter: self.bnode_counter,
             current_row: 0,
             bnode_memo: DetHashMap::default(),
             now: self.now.clone(),

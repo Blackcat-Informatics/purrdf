@@ -203,7 +203,7 @@ pub(crate) fn eval_user_function(
     func: &UserFunction,
     iri: &str,
     args: &[Option<TermValue>],
-    ctx: &EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_>,
 ) -> Result<Option<TermValue>, EvalError> {
     if args.len() < func.required || args.len() > func.params.len() {
         return Err(EvalError::function(format!(
@@ -267,6 +267,15 @@ pub(crate) fn eval_user_function(
             )));
         }
     };
+
+    // Merge the child's minted identity / entropy / constructed state back into
+    // the parent so it survives the return boundary: body-minted blanks stay
+    // globally unique across calls, RAND()/UUID()/STRUUID() advance the stream
+    // rather than replay it, and rdf:List quads constructed by listSlice/
+    // listConcat remain reachable in the enclosing query's results.
+    ctx.bnode_counter = child.bnode_counter;
+    ctx.rng_state = child.rng_state;
+    ctx.constructed.append(&mut child.constructed);
 
     // `sh:returnType` is informational (SHACL-AF §5.3): it documents/casts the
     // return and MAY be a class IRI, not a literal datatype. Enforcing it as a
@@ -461,6 +470,49 @@ mod tests {
             err.to_string().contains("expects"),
             "expected arity error, got {err}"
         );
+    }
+
+    /// State minted in a function body is merged back into the parent context. Two
+    /// calls of a RAND()-bodied function within ONE expression share the same
+    /// `&mut EvalCtx` sequentially, so the merged-back rng_state advances and the
+    /// two results differ (`= ` is false); without the merge-back they would
+    /// replay the identical value and compare equal.
+    #[test]
+    fn function_body_state_is_merged_back() {
+        let mut registry = UserFunctionRegistry::new();
+        registry.insert(
+            EX_INC,
+            UserFunction {
+                params: vec![],
+                required: 0,
+                body: parse("SELECT (RAND() AS ?result) WHERE {}"),
+                kind: UserFnBody::Select,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        let ds = empty_dataset();
+        let query = format!("SELECT ((<{EX_INC}>() = <{EX_INC}>()) AS ?eq) WHERE {{}}");
+        let result = NativeSparqlEngine::new()
+            .query_with_user_functions(
+                &ds,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                &registry,
+            )
+            .expect("query");
+        match result {
+            SparqlResult::Solutions { rows, .. } => {
+                let eq = rows[0][0].as_ref().expect("eq bound");
+                assert!(
+                    matches!(eq, TermValue::Literal { lexical_form, .. } if lexical_form == "false"),
+                    "two RAND() calls sharing a merged context must differ (eq=false), got {eq:?}"
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
     }
 
     /// Calling a function IRI that is neither a registered `sh:SPARQLFunction` nor
