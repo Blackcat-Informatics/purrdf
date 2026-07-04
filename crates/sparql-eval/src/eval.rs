@@ -274,7 +274,25 @@ pub struct EvalCtx<'d> {
     /// ever supplied (an explicit `BASE` decl nor a caller document base), so a
     /// relative argument cannot be resolved and the call is a type error.
     pub(crate) base_iri: Option<String>,
+    /// The caller-injected SHACL-AF function table (`sh:SPARQLFunction`), if any.
+    /// `None` (the default) means no user functions are declared: a call-position
+    /// IRI unknown to the closed `PurrdfFn` set then falls through to the XSD-cast /
+    /// unsupported path exactly as before. Borrowed for the dataset lifetime (like
+    /// [`Self::remote`]/[`Self::bgp_order_cache`]), so carrying it is a `Copy`
+    /// pointer, never a clone.
+    pub(crate) user_functions: Option<&'d crate::user_fn::UserFunctionRegistry>,
+    /// The current SHACL-AF function call depth, incremented by
+    /// [`Self::child_for_user_fn`] and bounded by [`MAX_UDF_DEPTH`] so
+    /// mutually-recursive functions fail closed rather than overflow the stack.
+    pub(crate) udf_depth: u32,
 }
+
+/// The maximum SHACL-AF function call depth. A function body that calls another
+/// function (directly or in a cycle) is bounded here and fails closed on overflow —
+/// the evaluator's counterpart of the shapes engine's `MAX_RECURSION_DEPTH`. The two
+/// counters are independent: this bounds function→function chains inside SPARQL
+/// evaluation, while the shapes guard bounds shape re-entry.
+pub(crate) const MAX_UDF_DEPTH: u32 = 32;
 
 /// Compile-time proof that [`EvalCtx`] is `Send + Sync`, so a future parallel
 /// worker can hold `&EvalCtx`/build its own from a shared `&'d RdfDataset`
@@ -332,6 +350,8 @@ impl<'d> EvalCtx<'d> {
             constructed: Vec::new(),
             in_substituted_exists: false,
             base_iri: None,
+            user_functions: None,
+            udf_depth: 0,
         }
     }
 
@@ -522,7 +542,76 @@ impl<'d> EvalCtx<'d> {
             // `IRI()`/`URI()` (parallel-safe, so reachable in a parallel `Extend`)
             // resolve relative references against it, so every worker must see it.
             base_iri: self.base_iri.clone(),
+            // Read-only shared registry (a `Copy` pointer) and the current call
+            // depth: a worker that evaluates a `Function::Custom` user-function call
+            // must see the same table and depth bound as its parent.
+            user_functions: self.user_functions,
+            udf_depth: self.udf_depth,
         }
+    }
+
+    /// Attach a caller-injected SHACL-AF function registry (`sh:SPARQLFunction`) for
+    /// this evaluation. The borrow shares the dataset lifetime `'d`; a context
+    /// without one leaves it `None` and a call-position IRI unknown to the closed
+    /// `PurrdfFn` set is an XSD cast or an unsupported-function error.
+    #[must_use]
+    pub fn with_user_functions(
+        mut self,
+        registry: &'d crate::user_fn::UserFunctionRegistry,
+    ) -> Self {
+        self.user_functions = Some(registry);
+        self
+    }
+
+    /// Build a child context for evaluating a SHACL-AF function body: it shares the
+    /// dataset, clock/entropy, order cache, standpoint table, remote source and
+    /// function registry, but starts fresh mutable evaluation state (the body is an
+    /// independent query) and increments the call depth.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Function`] if the call depth would exceed [`MAX_UDF_DEPTH`] —
+    /// mutually-recursive functions fail closed rather than overflow the stack.
+    pub(crate) fn child_for_user_fn(&self) -> Result<Self, EvalError> {
+        let next_depth = self.udf_depth + 1;
+        if next_depth > MAX_UDF_DEPTH {
+            return Err(EvalError::function(format!(
+                "SHACL-AF function recursion exceeded the depth bound of {MAX_UDF_DEPTH}"
+            )));
+        }
+        Ok(Self {
+            dataset: self.dataset,
+            // Fresh: the body is an independent query that mints its own computed
+            // terms; its parameter inputs ride in as ground substitutions, not
+            // scratch ids, so no parent scratch state is needed.
+            scratch: ScratchInterner::new(),
+            // The body evaluates as a root query; `evaluate_query` re-installs the
+            // body's own FROM/base, so seed the default graph here.
+            active_graph: GraphMatch::Default,
+            active_dataset: ActiveDataset::store_default(),
+            // Inherit the parent counter so body-minted blanks continue the
+            // parent's sequence; the advanced value is merged back after the call.
+            bnode_counter: self.bnode_counter,
+            current_row: 0,
+            bnode_memo: DetHashMap::default(),
+            now: self.now.clone(),
+            rng_state: self.rng_state,
+            options: self.options,
+            standpoint_predicates: self.standpoint_predicates.clone(),
+            exists_inner_cache: DetHashMap::default(),
+            exists_expr_vars_cache: DetHashMap::default(),
+            regex_cache: DetHashMap::default(),
+            cached_bool_terms: [None, None],
+            const_atom_cache: DetHashMap::default(),
+            xsd_parse_cache: DetHashMap::default(),
+            remote: self.remote,
+            bgp_order_cache: self.bgp_order_cache,
+            constructed: Vec::new(),
+            in_substituted_exists: false,
+            base_iri: None,
+            user_functions: self.user_functions,
+            udf_depth: next_depth,
+        })
     }
 
     /// A compact hashable encoding of the active graph, for [`ExistsCacheKey`].

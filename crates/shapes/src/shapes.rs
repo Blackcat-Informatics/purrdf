@@ -16,6 +16,11 @@ use std::sync::{Arc, OnceLock};
 
 use ::purrdf::RdfDataset;
 
+use purrdf_sparql_eval::{
+    NodeKind as EvalNodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction,
+    UserFunctionRegistry,
+};
+
 use crate::components::{severity_from_term, ComponentRegistry, Validator, ValidatorKind};
 use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
 use crate::expression::{FnCall, NodeExpr};
@@ -313,6 +318,11 @@ pub struct Shapes {
     /// carried into validation so data-graph role lookups use the same terms.
     /// `None` = the box-role feature is inactive.
     pub box_role_vocab: Option<BoxRoleVocab>,
+    /// SHACL-AF SPARQL-based functions (`sh:SPARQLFunction`) declared in the shapes
+    /// graph, built once here and threaded into the SPARQL evaluator so calls in
+    /// `sh:sparql`/`sh:SPARQLTarget` queries and `sh:expression` node expressions
+    /// resolve. Empty when the graph declares no functions.
+    pub functions: Arc<UserFunctionRegistry>,
     /// The named-graph IRI under which the original shapes dataset is exposed
     /// to SHACL-SPARQL queries, when known.
     pub shapes_graph: Option<String>,
@@ -326,6 +336,7 @@ impl Default for Shapes {
         Self {
             node_shapes: Vec::new(),
             box_role_vocab: None,
+            functions: Arc::new(UserFunctionRegistry::new()),
             shapes_graph: None,
             shapes_dataset: ::purrdf::RdfDatasetBuilder::new()
                 .freeze()
@@ -598,12 +609,253 @@ impl<'s> Parser<'s> {
             node_shapes.push(shape);
         }
 
+        let functions = self.parse_sparql_functions()?;
+
         Ok(Shapes {
             node_shapes,
             box_role_vocab: self.box_role_vocab.clone(),
+            functions: Arc::new(functions),
             shapes_graph: self.shapes_graph.clone(),
             shapes_dataset: Arc::clone(&self.shapes_dataset),
         })
+    }
+
+    /// Parse every `sh:SPARQLFunction` (or `sh:Function`) declaration in the shapes
+    /// graph into a [`UserFunctionRegistry`]: ordered `sh:parameter`s (pre-bound
+    /// variable = the parameter predicate's local name), the required-arity count,
+    /// the `sh:select`/`sh:ask` body, and the `sh:returnType` constraint.
+    ///
+    /// # Errors
+    ///
+    /// Hard-fails on a malformed declaration — a parameter without a predicate,
+    /// two parameters whose derived variable names collide, a missing/ambiguous
+    /// body, or an unparsable body query.
+    fn parse_sparql_functions(&self) -> Result<UserFunctionRegistry, String> {
+        let mut fn_ids: Vec<Term> = self
+            .quads_with(None, Some(rdf::TYPE), Some(sh::SPARQL_FUNCTION))
+            .into_iter()
+            .chain(self.quads_with(None, Some(rdf::TYPE), Some(sh::FUNCTION)))
+            .map(|q| q.subject)
+            .collect();
+        fn_ids.sort_by_key(ToString::to_string);
+        fn_ids.dedup();
+
+        let mut registry = UserFunctionRegistry::new();
+        for id in fn_ids {
+            // Only IRI-named functions are callable (the call site is an IRI).
+            let Term::NamedNode(iri) = &id else {
+                continue;
+            };
+            let func = self.parse_one_sparql_function(&id)?;
+            registry.insert(iri.as_str().to_owned(), func);
+        }
+        Ok(registry)
+    }
+
+    /// Parse a single `sh:SPARQLFunction` declaration node into a [`UserFunction`].
+    fn parse_one_sparql_function(&self, id: &Term) -> Result<UserFunction, String> {
+        // ── Parameters, ordered by (sh:order, predicate IRI) ──────────────────
+        struct RawParam {
+            order: f64,
+            predicate: String,
+            var: String,
+            optional: bool,
+            constraint: TypeConstraint,
+        }
+        let mut raw: Vec<RawParam> = Vec::new();
+        for p_node in self.objects_of(id, sh::PARAMETER_PROPERTY) {
+            // The parameter predicate: sh:path (a predicate IRI) or sh:predicate.
+            let predicate = self
+                .first_object_of(&p_node, sh::PATH)
+                .or_else(|| self.first_object_of(&p_node, sh::PREDICATE))
+                .and_then(|t| match t {
+                    Term::NamedNode(n) => Some(n.as_str().to_owned()),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    format!("sh:SPARQLFunction <{id}> has a sh:parameter without an IRI sh:path/sh:predicate")
+                })?;
+            let var = local_name(&predicate).to_owned();
+            if var.is_empty() {
+                return Err(format!(
+                    "sh:SPARQLFunction <{id}> has a sh:parameter whose predicate <{predicate}> has an empty local name and yields no usable variable"
+                ));
+            }
+            // A parameter must not shadow a SHACL/SHACL-AF pre-bound or reserved
+            // variable (SHACL §3.2.1, SHACL-AF §5.2) — e.g. `this` would clobber the
+            // injected focus-node binding during evaluation.
+            const RESERVED_VARS: [&str; 6] = [
+                "this",
+                "path",
+                "PATH",
+                "value",
+                "shapesGraph",
+                "currentShape",
+            ];
+            if RESERVED_VARS.contains(&var.as_str()) {
+                return Err(format!(
+                    "sh:SPARQLFunction <{id}> parameter variable ?{var} is a SHACL/SHACL-AF reserved name"
+                ));
+            }
+            let order = match self.first_object_of(&p_node, sh::ORDER) {
+                None => f64::INFINITY,
+                Some(Term::Literal(lit)) => lit.value().parse::<f64>().map_err(|_| {
+                    format!(
+                        "sh:SPARQLFunction <{id}> parameter ?{var} has a non-numeric sh:order '{}'",
+                        lit.value()
+                    )
+                })?,
+                Some(other) => {
+                    return Err(format!(
+                        "sh:SPARQLFunction <{id}> parameter ?{var} has a non-literal sh:order {other}"
+                    ));
+                }
+            };
+            let optional = match self.first_object_of(&p_node, sh::OPTIONAL) {
+                None => false,
+                Some(Term::Literal(lit)) => match lit.value() {
+                    "true" | "1" => true,
+                    "false" | "0" => false,
+                    other => {
+                        return Err(format!(
+                            "sh:SPARQLFunction <{id}> parameter ?{var} has a non-boolean sh:optional '{other}'"
+                        ));
+                    }
+                },
+                Some(other) => {
+                    return Err(format!(
+                        "sh:SPARQLFunction <{id}> parameter ?{var} has a non-literal sh:optional {other}"
+                    ));
+                }
+            };
+            let constraint = self.type_constraint_of(&p_node);
+            raw.push(RawParam {
+                order,
+                predicate,
+                var,
+                optional,
+                constraint,
+            });
+        }
+        // Deterministic order: ascending sh:order, IRI as tiebreak (unspecified
+        // orders — INFINITY — sort last, still by IRI).
+        raw.sort_by(|a, b| {
+            a.order
+                .partial_cmp(&b.order)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.predicate.cmp(&b.predicate))
+        });
+
+        // Reject colliding derived variable names — silent shadowing would bind the
+        // wrong argument.
+        let mut seen: HashSet<&str> = HashSet::new();
+        for p in &raw {
+            if !seen.insert(p.var.as_str()) {
+                return Err(format!(
+                    "sh:SPARQLFunction <{id}> has two parameters whose variable name ?{} collides",
+                    p.var
+                ));
+            }
+        }
+
+        // A required parameter after an optional one is ill-formed (arity would be
+        // ambiguous). Enforce the "optionals are trailing" rule.
+        let mut seen_optional = false;
+        for p in &raw {
+            if p.optional {
+                seen_optional = true;
+            } else if seen_optional {
+                return Err(format!(
+                    "sh:SPARQLFunction <{id}> declares a required parameter ?{} after an optional one",
+                    p.var
+                ));
+            }
+        }
+        let required = raw.iter().filter(|p| !p.optional).count();
+        let params: Vec<UserFnParam> = raw
+            .into_iter()
+            .map(|p| UserFnParam {
+                var: p.var,
+                constraint: p.constraint,
+            })
+            .collect();
+
+        // ── Body: exactly one of sh:select / sh:ask ───────────────────────────
+        let select = self.first_string_object(id, sh::SELECT);
+        let ask = self.first_string_object(id, sh::ASK);
+        let (raw_body, kind) = match (select, ask) {
+            (Some(s), None) => (s, UserFnBody::Select),
+            (None, Some(a)) => (a, UserFnBody::Ask),
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "sh:SPARQLFunction <{id}> declares both sh:select and sh:ask (exactly one is required)"
+                ));
+            }
+            (None, None) => {
+                return Err(format!(
+                    "sh:SPARQLFunction <{id}> is missing its sh:select/sh:ask body"
+                ));
+            }
+        };
+        let body_text = format!("{}{raw_body}", self.prefix_header(&[id]));
+        let query = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(&body_text)
+            .map_err(|e| format!("sh:SPARQLFunction <{id}> has an unparsable body query: {e}"))?;
+        match (&query, kind) {
+            (purrdf_sparql_algebra::Query::Select { .. }, UserFnBody::Select)
+            | (purrdf_sparql_algebra::Query::Ask { .. }, UserFnBody::Ask) => {}
+            _ => {
+                return Err(format!(
+                    "sh:SPARQLFunction <{id}> body form does not match its sh:select/sh:ask declaration"
+                ));
+            }
+        }
+
+        let return_constraint = TypeConstraint {
+            datatype: self.first_iri_object(id, sh::RETURN_TYPE),
+            node_kind: None,
+        };
+
+        Ok(UserFunction {
+            params,
+            required,
+            body: Arc::new(query),
+            kind,
+            return_constraint,
+        })
+    }
+
+    /// The `sh:datatype`/`sh:nodeKind` type constraint declared on a parameter node.
+    fn type_constraint_of(&self, p_node: &Term) -> TypeConstraint {
+        let datatype = self.first_iri_object(p_node, sh::DATATYPE);
+        let node_kind = self
+            .first_object_of(p_node, sh::NODE_KIND)
+            .and_then(|t| match t {
+                Term::NamedNode(n) => node_kind_from_iri(n.as_str()),
+                _ => None,
+            });
+        TypeConstraint {
+            datatype,
+            node_kind,
+        }
+    }
+
+    /// The first object of `(subject, predicate, ?)` as a string literal value.
+    fn first_string_object(&self, subject: &Term, predicate: &str) -> Option<String> {
+        self.first_object_of(subject, predicate)
+            .and_then(|t| match t {
+                Term::Literal(lit) => Some(lit.value().to_owned()),
+                _ => None,
+            })
+    }
+
+    /// The first object of `(subject, predicate, ?)` as an IRI string.
+    fn first_iri_object(&self, subject: &Term, predicate: &str) -> Option<String> {
+        self.first_object_of(subject, predicate)
+            .and_then(|t| match t {
+                Term::NamedNode(n) => Some(n.as_str().to_owned()),
+                _ => None,
+            })
     }
 
     /// Whether `id` declares any SHACL target of its own (`sh:targetClass`,
@@ -2145,6 +2397,28 @@ impl<'s> Parser<'s> {
 
 // ── Helper functions ───────────────────────────────────────────────────────────
 
+/// The local name of an IRI: the substring after the last `#` or `/`. Used to
+/// derive a `sh:SPARQLFunction` parameter's pre-bound SPARQL variable name from its
+/// predicate IRI (SHACL-AF §5.1).
+fn local_name(iri: &str) -> &str {
+    let cut = iri.rfind(['#', '/']).map_or(0, |i| i + 1);
+    &iri[cut..]
+}
+
+/// Map a `sh:nodeKind` object IRI to the evaluator's [`EvalNodeKind`] for a
+/// function parameter/return type constraint.
+fn node_kind_from_iri(iri: &str) -> Option<EvalNodeKind> {
+    match iri {
+        sh::IRI => Some(EvalNodeKind::Iri),
+        sh::BLANK_NODE => Some(EvalNodeKind::BlankNode),
+        sh::LITERAL => Some(EvalNodeKind::Literal),
+        sh::BLANK_NODE_OR_IRI => Some(EvalNodeKind::BlankNodeOrIri),
+        sh::BLANK_NODE_OR_LITERAL => Some(EvalNodeKind::BlankNodeOrLiteral),
+        sh::IRI_OR_LITERAL => Some(EvalNodeKind::IriOrLiteral),
+        _ => None,
+    }
+}
+
 /// Parse `sh:nodeKind` object IRI into a [`NodeKindValue`].
 fn parse_node_kind(iri: &str) -> Option<NodeKindValue> {
     match iri {
@@ -2191,6 +2465,98 @@ mod tests {
         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
         @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
     ";
+
+    // ── SHACL-AF sh:SPARQLFunction declaration parsing ────────────────────────
+
+    #[test]
+    fn sparql_function_declaration_parsed_into_registry() {
+        let ttl = format!(
+            r#"{PREFIXES}
+            ex:multiply a sh:SPARQLFunction ;
+                sh:parameter [ sh:path ex:op1 ; sh:order 1 ; sh:datatype xsd:integer ] ;
+                sh:parameter [ sh:path ex:op2 ; sh:order 2 ; sh:optional true ] ;
+                sh:returnType xsd:integer ;
+                sh:select "SELECT ((?op1 * ?op2) AS ?result) WHERE {{}}" .
+            "#
+        );
+        let shapes = from_store(&load_store(&ttl)).expect("parse");
+        assert_eq!(shapes.functions.len(), 1);
+        let func = shapes
+            .functions
+            .resolve("http://example.org/ns#multiply")
+            .expect("multiply registered");
+        // Parameters ordered by sh:order; op2 is optional so required == 1.
+        assert_eq!(func.params.len(), 2);
+        assert_eq!(func.params[0].var, "op1");
+        assert_eq!(func.params[1].var, "op2");
+        assert_eq!(func.required, 1);
+        assert_eq!(func.kind, UserFnBody::Select);
+        assert_eq!(
+            func.params[0].constraint.datatype.as_deref(),
+            Some("http://www.w3.org/2001/XMLSchema#integer")
+        );
+        assert_eq!(
+            func.return_constraint.datatype.as_deref(),
+            Some("http://www.w3.org/2001/XMLSchema#integer")
+        );
+    }
+
+    #[test]
+    fn sparql_function_with_both_select_and_ask_is_rejected() {
+        let ttl = format!(
+            r#"{PREFIXES}
+            ex:bad a sh:SPARQLFunction ;
+                sh:select "SELECT ?result WHERE {{}}" ;
+                sh:ask "ASK {{}}" .
+            "#
+        );
+        let err = from_store(&load_store(&ttl)).expect_err("both bodies must fail");
+        assert!(err.contains("both sh:select and sh:ask"), "got: {err}");
+    }
+
+    #[test]
+    fn sparql_function_with_reserved_param_name_is_rejected() {
+        // A parameter whose derived variable name is the SHACL-reserved `this`
+        // would shadow the injected focus-node binding during evaluation.
+        let ttl = format!(
+            r#"{PREFIXES}
+            ex:bad a sh:SPARQLFunction ;
+                sh:parameter [ sh:path ex:this ; sh:order 1 ] ;
+                sh:select "SELECT (1 AS ?result) WHERE {{}}" .
+            "#
+        );
+        let err = from_store(&load_store(&ttl)).expect_err("reserved param name must fail");
+        assert!(err.contains("reserved"), "got: {err}");
+    }
+
+    #[test]
+    fn sparql_function_with_non_numeric_order_is_rejected() {
+        let ttl = format!(
+            r#"{PREFIXES}
+            ex:bad a sh:SPARQLFunction ;
+                sh:parameter [ sh:path ex:op1 ; sh:order "first" ] ;
+                sh:select "SELECT (1 AS ?result) WHERE {{}}" .
+            "#
+        );
+        let err = from_store(&load_store(&ttl)).expect_err("non-numeric sh:order must fail");
+        assert!(err.contains("sh:order"), "got: {err}");
+    }
+
+    #[test]
+    fn sparql_function_with_colliding_param_names_is_rejected() {
+        // Two parameters whose predicate local names both resolve to "arg".
+        let ttl = format!(
+            r#"{PREFIXES}
+            @prefix other: <http://other.example/ns#> .
+            ex:clash a sh:SPARQLFunction ;
+                sh:parameter [ sh:path ex:arg ; sh:order 1 ] ;
+                sh:parameter [ sh:path other:arg ; sh:order 2 ] ;
+                sh:select "SELECT ?result WHERE {{}}" .
+            "#
+        );
+        let err = from_store(&load_store(&ttl)).expect_err("collision must fail");
+        assert!(err.contains("collides"), "got: {err}");
+    }
 
     // ── Test 1: targetClass + sh:property with minCount/maxCount ──────────────
 

@@ -25,8 +25,11 @@
 //! lowers to their SPARQL 1.1 keyword (e.g. `fn:string-length` → `STRLEN`,
 //! `fn:contains` → `CONTAINS`, `fn:numeric-abs` → `ABS`, `fn:matches` → `REGEX`),
 //! rendered in keyword form because those builtins are keyword-only in SPARQL and
-//! have no IRI call form. Only user-defined `sh:SPARQLFunction` calls
-//! ([`FnCall::UserDefined`]) remain a hard capability error. The shape-bearing kind
+//! have no IRI call form. User-defined `sh:SPARQLFunction` calls
+//! ([`FnCall::UserDefined`]) lower the same way (an `<iri>(…)` call) and resolve
+//! against the shapes graph's function registry installed for the validation (see
+//! [`crate::sparql::enter_function_scope`]); an unresolved call IRI is a hard error,
+//! never a silent empty result. The shape-bearing kind
 //! [`NodeExpr::Filter`] (`sh:filterShape` / `sh:nodes`) re-enters the constraint
 //! engine ([`crate::constraints::conforms`]) under a depth-bounded
 //! [`RecursionGuard`] so a cyclic filter reference fails closed with a hard
@@ -312,8 +315,9 @@ fn builtin_keyword(iri: &str) -> Option<&'static str> {
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` for an unsupported (user-defined function) kind, on a
-/// recursion cycle or depth-limit breach, or when a sub-expression errors.
+/// Returns `Err(String)` on a recursion cycle or depth-limit breach, when a
+/// function argument does not collapse to exactly one value, or when a
+/// sub-expression errors.
 pub fn eval_node_expr<G: ShaclDataGraph>(
     store: &G,
     focus: &Term,
@@ -404,7 +408,14 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
             };
             eval_node_expr(store, focus, branch, guard)
         }
-        NodeExpr::Call(FnCall::Builtin { iri, args }) => {
+        // Builtin and user-defined (`sh:SPARQLFunction`) calls lower identically:
+        // both render an `<iri>(…)` call and route through the SPARQL seam. The only
+        // difference is resolution inside the engine — a builtin IRI resolves to its
+        // SPARQL function, a user-defined IRI resolves against the in-scope function
+        // registry (`enter_function_scope`). A builtin whose IRI is a keyword-only
+        // SPARQL 1.1 function (STRLEN, CONTAINS, ABS, REGEX, …) is lowered to that
+        // keyword; a user function's IRI is never a keyword, so it keeps the call form.
+        NodeExpr::Call(FnCall::Builtin { iri, args } | FnCall::UserDefined { iri, args }) => {
             // Each argument must collapse to exactly one scalar term (SHACL-AF
             // function-call arg semantics).
             let mut arg_terms: Vec<(String, Term)> = Vec::with_capacity(args.len());
@@ -412,35 +423,30 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
                 let values = eval_node_expr(store, focus, arg, guard)?;
                 let [only] = values.as_slice() else {
                     return Err(format!(
-                        "builtin function <{}> argument {idx} must yield exactly one value, got {}",
+                        "function <{}> argument {idx} must yield exactly one value, got {}",
                         iri.as_str(),
                         values.len()
                     ));
                 };
                 arg_terms.push((format!("a{idx}"), only.clone()));
             }
-            // Render the call and route through the SPARQL seam. Keyword-only
-            // SPARQL builtins (STRLEN, CONTAINS, ABS, REGEX, …) have no IRI call
-            // form, so a known XPath-functions-namespace IRI is lowered to its
-            // keyword; everything else (XSD casts, purrdf custom functions) keeps
-            // the `<iri>(…)` call form the engine resolves as a function.
-            let placeholders: Vec<String> = (0..arg_terms.len()).map(|i| format!("?a{i}")).collect();
+            let placeholders: Vec<String> =
+                (0..arg_terms.len()).map(|i| format!("?a{i}")).collect();
             let expr_string = match builtin_keyword(iri.as_str()) {
                 Some(kw) => format!("{kw}({})", placeholders.join(", ")),
                 None => format!("<{}>({})", iri.as_str(), placeholders.join(", ")),
             };
-            match crate::sparql::eval_scalar_expr(&store.sparql_dataset(), &expr_string, &arg_terms)?
-            {
+            match crate::sparql::eval_scalar_expr(
+                &store.sparql_dataset(),
+                &expr_string,
+                &arg_terms,
+            )? {
                 // A SPARQL error/unbound result is the correct SHACL-AF "no
                 // value" signal — an empty node set, not a forced violation.
                 Some(term) => Ok(vec![term]),
                 None => Ok(Vec::new()),
             }
         }
-        NodeExpr::Call(FnCall::UserDefined { iri, .. }) => Err(format!(
-            "SHACL-AF user-defined function <{iri}> requires the dynamic SPARQL function registry capability, which is not yet available",
-            iri = iri.as_str()
-        )),
         NodeExpr::Distinct(of) => {
             let mut out = eval_node_expr(store, focus, of, guard)?;
             out.sort_by_cached_key(Term::to_string);
@@ -460,7 +466,11 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
                 NamedNode::new_unchecked(xsd::INTEGER),
             ))])
         }
-        NodeExpr::OrderBy { of, key, descending } => {
+        NodeExpr::OrderBy {
+            of,
+            key,
+            descending,
+        } => {
             // Authority-grounded (W3C/DASH) semantics: `sh:orderby` names a
             // sort-key node expression, evaluated PER ELEMENT with that element
             // as focus. Elements are ordered by SPARQL ORDER BY *value* semantics
@@ -508,7 +518,11 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
                 })
                 .collect();
             out.sort_by(|a, b| {
-                let primary = if *descending { b.1.cmp(&a.1) } else { a.1.cmp(&b.1) };
+                let primary = if *descending {
+                    b.1.cmp(&a.1)
+                } else {
+                    a.1.cmp(&b.1)
+                };
                 // Total-order tie-break, always ascending by canonical term string.
                 primary.then_with(|| a.2.cmp(&b.2))
             });
@@ -516,7 +530,8 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
         }
         NodeExpr::Offset { of, n } => {
             let out = eval_node_expr(store, focus, of, guard)?;
-            let skip = usize::try_from(*n).map_err(|e| format!("sh:offset value too large: {e}"))?;
+            let skip =
+                usize::try_from(*n).map_err(|e| format!("sh:offset value too large: {e}"))?;
             // Ordering is the caller's responsibility (an OrderBy wrapper) — apply
             // the offset to the already-produced sequence. The parser nests these
             // as `Limit(Offset(OrderBy(core)))`, so evaluation composes naturally:
@@ -547,9 +562,8 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
                 guard.enter(&shape_id, &value_str)?;
                 // Capture the Result, exit the guard, THEN propagate — a clean
                 // exit before the `?` avoids leaving stale in-flight state.
-                let keep = crate::constraints::conforms_with_depth(
-                    store, &value, shape, next_depth,
-                );
+                let keep =
+                    crate::constraints::conforms_with_depth(store, &value, shape, next_depth);
                 guard.exit(&shape_id, &value_str);
                 if keep? {
                     kept.push(value);
@@ -790,7 +804,8 @@ mod tests {
     fn if_propagates_condition_error() {
         let data = load_data("");
         let mut guard = RecursionGuard::new();
-        // A hard-erroring kind as the condition must surface its error.
+        // A hard-erroring condition (an unresolved user-defined function, with no
+        // registry in scope) must surface its error rather than being swallowed.
         let expr = NodeExpr::If {
             cond: Box::new(NodeExpr::Call(FnCall::UserDefined {
                 iri: NamedNode::new_unchecked("http://example.org/ns#myFn"),
@@ -800,7 +815,7 @@ mod tests {
             els: Box::new(NodeExpr::Constant(ex("no"))),
         };
         let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
-        assert!(err.contains("user-defined function"), "got: {err}");
+        assert!(err.contains("myFn"), "got: {err}");
     }
 
     #[test]
@@ -1011,20 +1026,65 @@ mod tests {
     }
 
     #[test]
-    fn user_defined_call_is_capability_error() {
+    fn user_defined_call_dispatches_against_the_registry() {
+        use purrdf_sparql_eval::{
+            TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry,
+        };
+
+        // A `double(?x) = ?x * 2` SPARQL function declared in the (in-scope) registry.
+        let mut registry = UserFunctionRegistry::new();
+        registry.insert(
+            "http://example.org/ns#double",
+            UserFunction {
+                params: vec![UserFnParam {
+                    var: "x".to_owned(),
+                    constraint: TypeConstraint::default(),
+                }],
+                required: 1,
+                body: Arc::new(
+                    purrdf_sparql_algebra::SparqlParser::new()
+                        .parse_query("SELECT ((?x * 2) AS ?result) WHERE {}")
+                        .expect("body parses"),
+                ),
+                kind: UserFnBody::Select,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        let _scope = crate::sparql::enter_function_scope(Arc::new(registry));
+
         let data = load_data("");
         let mut guard = RecursionGuard::new();
         let expr = NodeExpr::Call(FnCall::UserDefined {
-            iri: NamedNode::new_unchecked("http://example.org/ns#myFn"),
+            iri: NamedNode::new_unchecked("http://example.org/ns#double"),
+            args: vec![NodeExpr::Constant(Term::Literal(
+                Literal::new_typed_literal(
+                    "21",
+                    NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+                ),
+            ))],
+        });
+        let out = eval_node_expr(&data, &ex("a"), &expr, &mut guard).expect("user fn dispatches");
+        assert_eq!(
+            out,
+            vec![Term::Literal(Literal::new_typed_literal(
+                "42",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+            ))]
+        );
+    }
+
+    #[test]
+    fn user_defined_call_to_unknown_function_errors() {
+        // No function scope installed → an unknown call-position IRI is a hard error,
+        // not a silent empty result.
+        let data = load_data("");
+        let mut guard = RecursionGuard::new();
+        let expr = NodeExpr::Call(FnCall::UserDefined {
+            iri: NamedNode::new_unchecked("http://example.org/ns#missing"),
             args: vec![],
         });
         let err = eval_node_expr(&data, &ex("a"), &expr, &mut guard).unwrap_err();
-        assert!(
-            err.contains(
-                "requires the dynamic SPARQL function registry capability, which is not yet available"
-            ),
-            "got: {err}"
-        );
+        assert!(err.contains("missing"), "got: {err}");
     }
 
     #[test]

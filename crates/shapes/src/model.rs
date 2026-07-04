@@ -250,6 +250,13 @@ pub mod sh {
 
     pub const FUNCTION: &str = "http://www.w3.org/ns/shacl#Function";
 
+    /// `sh:returnType` — the declared datatype/class of a function's return value.
+    pub const RETURN_TYPE: &str = "http://www.w3.org/ns/shacl#returnType";
+
+    /// `sh:predicate` — an alternative to `sh:path` naming a parameter's predicate
+    /// (its local name is the pre-bound SPARQL variable).
+    pub const PREDICATE: &str = "http://www.w3.org/ns/shacl#predicate";
+
     // ── Custom constraint-component vocabulary ───────────────────────────────
 
     pub const CONSTRAINT_COMPONENT: &str = "http://www.w3.org/ns/shacl#ConstraintComponent";

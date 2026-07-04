@@ -1,0 +1,18 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# A SHACL-AF sh:SPARQLFunction whose parameter requires an IRI (sh:nodeKind sh:IRI),
+# called from sh:expression with an IRI-valued argument. The ASK body always holds,
+# so a focus node whose ex:ref value is an IRI conforms (the nodeKind parameter
+# constraint is satisfied end-to-end).
+ex:alwaysOk
+    a sh:SPARQLFunction ;
+    sh:parameter [ sh:path ex:x ; sh:nodeKind sh:IRI ] ;
+    sh:returnType xsd:boolean ;
+    sh:ask "ASK {}" .
+
+ex:RefShape
+    a sh:NodeShape ;
+    sh:targetClass ex:C ;
+    sh:expression [ ex:alwaysOk ( [ sh:path ex:ref ] ) ] .

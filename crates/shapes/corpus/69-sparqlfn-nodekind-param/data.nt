@@ -1,0 +1,2 @@
+<http://example.org/ns#node> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#C> .
+<http://example.org/ns#node> <http://example.org/ns#ref> <http://example.org/ns#thing> .

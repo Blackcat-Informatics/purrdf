@@ -13,11 +13,12 @@
 //! uses [`SparqlRequest::substitutions`] (the native replacement for oxigraph's
 //! `PreparedSparqlQuery::substitute_variable`,  GAP-A).
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use ::purrdf::RdfDataset;
 use ::purrdf::{SparqlEngine, SparqlRequest, SparqlResult, TermValue};
-use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_sparql_eval::{NativeSparqlEngine, UserFunctionRegistry};
 
 use crate::model::xsd;
 use crate::report::{Severity, ValidationResult};
@@ -368,6 +369,38 @@ thread_local! {
     /// per-focus blowup on the whole-ontology conformance shapes). Validation is
     /// serial, and the cache is keyed on `(base, query text)`, so reuse is sound.
     static SPARQL_ENGINE: NativeSparqlEngine = NativeSparqlEngine::new();
+
+    /// The SHACL-AF function registry (`sh:SPARQLFunction`) in scope for the current
+    /// validation, set by [`enter_function_scope`]. `run_select_generic` reads it to decide
+    /// whether a call-position IRI can resolve to a user function. Kept alongside the
+    /// engine (this module's established thread-local pattern) because validation is
+    /// serial: a single guard on the validation thread covers every `run_select_generic` on
+    /// that thread. Parallel FILTER workers inside the engine do NOT read this — they
+    /// receive the registry through `EvalCtx` (propagated in `fork_for_worker`).
+    static CURRENT_FUNCTIONS: RefCell<Option<Arc<UserFunctionRegistry>>> = const { RefCell::new(None) };
+}
+
+/// An RAII scope that installs `registry` as the current SHACL-AF function table for
+/// the duration of a validation, restoring the previous value on drop (so nested
+/// validations compose). The engine holds this for the whole validation pass.
+#[must_use]
+#[derive(Debug)]
+pub struct FunctionScope {
+    previous: Option<Arc<UserFunctionRegistry>>,
+}
+
+impl Drop for FunctionScope {
+    fn drop(&mut self) {
+        let restore = self.previous.take();
+        CURRENT_FUNCTIONS.with(|slot| *slot.borrow_mut() = restore);
+    }
+}
+
+/// Install `registry` as the current SHACL-AF function table, returning a guard that
+/// restores the previous table when dropped.
+pub fn enter_function_scope(registry: Arc<UserFunctionRegistry>) -> FunctionScope {
+    let previous = CURRENT_FUNCTIONS.with(|slot| slot.borrow_mut().replace(registry));
+    FunctionScope { previous }
 }
 
 /// Run a SELECT query over the dataset using the generic SPARQL `query` path
@@ -381,16 +414,19 @@ pub(crate) fn run_select_generic(
     select: &str,
     substitutions: &[(String, TermValue)],
 ) -> Result<SelectRows, String> {
+    let request = SparqlRequest {
+        query: select,
+        base_iri: None,
+        substitutions,
+    };
     let result = SPARQL_ENGINE
         .with(|engine| {
-            engine.query(
-                dataset,
-                SparqlRequest {
-                    query: select,
-                    base_iri: None,
-                    substitutions,
-                },
-            )
+            CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
+                Some(registry) if !registry.is_empty() => {
+                    engine.query_with_user_functions(dataset, request, registry)
+                }
+                _ => engine.query(dataset, request),
+            })
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match result {
@@ -427,7 +463,15 @@ pub(crate) fn run_select_with_shacl_prebinding(
     }
 
     let result = SPARQL_ENGINE
-        .with(|engine| engine.query_with_shacl_prebinding(dataset, select, None, &subs))
+        .with(|engine| {
+            CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
+                Some(registry) if !registry.is_empty() => engine
+                    .query_with_shacl_prebinding_and_functions(
+                        dataset, select, None, &subs, registry,
+                    ),
+                _ => engine.query_with_shacl_prebinding(dataset, select, None, &subs),
+            })
+        })
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match result {
         SparqlResult::Solutions {
@@ -459,7 +503,13 @@ pub(crate) fn run_ask_with_shacl_prebinding(
     }
 
     let result = SPARQL_ENGINE
-        .with(|engine| engine.query_with_shacl_prebinding(dataset, ask, None, &subs))
+        .with(|engine| {
+            CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
+                Some(registry) if !registry.is_empty() => engine
+                    .query_with_shacl_prebinding_and_functions(dataset, ask, None, &subs, registry),
+                _ => engine.query_with_shacl_prebinding(dataset, ask, None, &subs),
+            })
+        })
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match result {
         SparqlResult::Boolean(b) => Ok(b),

@@ -212,6 +212,29 @@ impl NativeSparqlEngine {
         Ok(materialize(outcome, &ctx))
     }
 
+    /// Like [`NativeSparqlEngine::query_with_shacl_prebinding`], but with a SHACL-AF
+    /// function registry in scope so `sh:sparql` bodies can call declared functions.
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
+    pub fn query_with_shacl_prebinding_and_functions(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        query: &str,
+        base_iri: Option<&str>,
+        substitutions: &[(String, TermValue)],
+        registry: &crate::user_fn::UserFunctionRegistry,
+    ) -> Result<SparqlResult, RdfDiagnostic> {
+        let prepared =
+            self.cache
+                .borrow_mut()
+                .prepare_with(query, base_iri, &self.parser_options)?;
+        let mut ctx = self.eval_ctx(dataset).with_user_functions(registry);
+        let outcome = evaluate_with_shacl_prebinding(&prepared, substitutions, &mut ctx)?;
+        Ok(materialize(outcome, &ctx))
+    }
+
     /// Like [`SparqlEngine::query`], but with a
     /// [`RemoteQuerySource`](crate::remote::RemoteQuerySource) injected so
     /// `SERVICE` clauses resolve through it. Without this, the default
@@ -234,6 +257,31 @@ impl NativeSparqlEngine {
             &self.parser_options,
         )?;
         let mut ctx = self.eval_ctx(dataset).with_remote(source);
+        let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
+        Ok(materialize(outcome, &ctx))
+    }
+
+    /// Like [`SparqlEngine::query`], but with a caller-supplied SHACL-AF function
+    /// registry (`sh:SPARQLFunction`) injected so a call-position IRI resolving to a
+    /// declared function evaluates its body at eval time. This is the entry the
+    /// shapes validator uses; the registry is built once per shapes graph and
+    /// borrowed for the call. An empty registry behaves exactly like [`Self::query`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
+    pub fn query_with_user_functions(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        request: SparqlRequest<'_>,
+        registry: &crate::user_fn::UserFunctionRegistry,
+    ) -> Result<SparqlResult, RdfDiagnostic> {
+        let prepared = self.cache.borrow_mut().prepare_with(
+            request.query,
+            request.base_iri,
+            &self.parser_options,
+        )?;
+        let mut ctx = self.eval_ctx(dataset).with_user_functions(registry);
         let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
         Ok(materialize(outcome, &ctx))
     }

@@ -1,0 +1,15 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# A SHACL-AF sh:SPARQLFunction with a sh:select body, called from sh:expression.
+ex:gtTen
+    a sh:SPARQLFunction ;
+    sh:parameter [ sh:path ex:n ; sh:datatype xsd:integer ] ;
+    sh:returnType xsd:boolean ;
+    sh:select "SELECT ((?n > 10) AS ?result) WHERE {}" .
+
+ex:GtTenShape
+    a sh:NodeShape ;
+    sh:targetClass ex:C ;
+    sh:expression [ ex:gtTen ( [ sh:path ex:val ] ) ] .

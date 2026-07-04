@@ -1,0 +1,15 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# A sh:SPARQLFunction with a sh:ask body returns an xsd:boolean.
+ex:isPos
+    a sh:SPARQLFunction ;
+    sh:parameter [ sh:path ex:p ; sh:datatype xsd:integer ] ;
+    sh:returnType xsd:boolean ;
+    sh:ask "ASK { FILTER(?p > 0) }" .
+
+ex:PosShape
+    a sh:NodeShape ;
+    sh:targetClass ex:C ;
+    sh:expression [ ex:isPos ( [ sh:path ex:val ] ) ] .
