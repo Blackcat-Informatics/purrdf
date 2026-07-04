@@ -1,0 +1,12 @@
+# SHACL Advanced Features function tests
+# See vectors/shacl/af/README.md for provenance and license.
+
+@prefix mf:   <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<>
+  a mf:Manifest ;
+  rdfs:label "SHACL-AF SPARQL function tests" ;
+  mf:include <callSPARQLFunction.ttl> ;
+  mf:include <simpleSPARQLFunction.ttl> ;
+  .

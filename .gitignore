@@ -3,6 +3,8 @@
 
 /target/
 **/target/
+!vectors/shacl/af/target/
+!vectors/shacl/af/target/**
 /.venv/
 **/.venv/
 /.mypy_cache/
