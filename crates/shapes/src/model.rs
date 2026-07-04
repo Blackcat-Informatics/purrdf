@@ -250,6 +250,20 @@ pub mod sh {
 
     pub const FUNCTION: &str = "http://www.w3.org/ns/shacl#Function";
 
+    /// `sh:parameter` — a parameter declaration of a `sh:SPARQLFunction`.
+    pub const PARAMETER: &str = "http://www.w3.org/ns/shacl#parameter";
+
+    /// `sh:optional` — marks a `sh:parameter` as optional (a trailing optional
+    /// parameter lowers the function's minimum arity).
+    pub const OPTIONAL: &str = "http://www.w3.org/ns/shacl#optional";
+
+    /// `sh:returnType` — the declared datatype/class of a function's return value.
+    pub const RETURN_TYPE: &str = "http://www.w3.org/ns/shacl#returnType";
+
+    /// `sh:predicate` — an alternative to `sh:path` naming a parameter's predicate
+    /// (its local name is the pre-bound SPARQL variable).
+    pub const PREDICATE: &str = "http://www.w3.org/ns/shacl#predicate";
+
     // ── Constraint component IRIs (sh:*ConstraintComponent) ──────────────────
 
     pub const MIN_COUNT_CONSTRAINT_COMPONENT: &str =
