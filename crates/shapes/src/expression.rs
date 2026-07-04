@@ -497,15 +497,22 @@ pub fn eval_node_expr<G: ShaclDataGraph>(
             for (i, k) in ranked.iter().enumerate() {
                 rank.insert(k.to_string(), i);
             }
-            let mut out = keyed;
+            // Precompute the sort keys once per element (rank + canonical element
+            // string) so the comparator does no per-comparison allocation/lookup.
+            let mut out: Vec<(Term, usize, String)> = keyed
+                .into_iter()
+                .map(|(e, k)| {
+                    let r = rank.get(&k.to_string()).copied().unwrap_or(usize::MAX);
+                    let es = e.to_string();
+                    (e, r, es)
+                })
+                .collect();
             out.sort_by(|a, b| {
-                let ra = rank.get(&a.1.to_string()).copied().unwrap_or(usize::MAX);
-                let rb = rank.get(&b.1.to_string()).copied().unwrap_or(usize::MAX);
-                let primary = if *descending { rb.cmp(&ra) } else { ra.cmp(&rb) };
+                let primary = if *descending { b.1.cmp(&a.1) } else { a.1.cmp(&b.1) };
                 // Total-order tie-break, always ascending by canonical term string.
-                primary.then_with(|| a.0.to_string().cmp(&b.0.to_string()))
+                primary.then_with(|| a.2.cmp(&b.2))
             });
-            Ok(out.into_iter().map(|(e, _)| e).collect())
+            Ok(out.into_iter().map(|(e, _, _)| e).collect())
         }
         NodeExpr::Offset { of, n } => {
             let out = eval_node_expr(store, focus, of, guard)?;

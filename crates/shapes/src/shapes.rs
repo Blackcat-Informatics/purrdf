@@ -1865,6 +1865,13 @@ impl<'s> Parser<'s> {
     /// Parse a node carrying no structural key: a function call or a plain
     /// constant IRI (a blank node with neither hard-fails).
     fn parse_call_or_constant(&mut self, node: &Term) -> Result<NodeExpr, String> {
+        // A function-call node expression is always a blank node `[ <fn> ( … ) ]`.
+        // A NamedNode reaching here (not a literal, not sh:this, no structural key)
+        // is therefore a plain constant IRI — even when it bears unrelated outgoing
+        // triples in the shapes graph (e.g. an `rdfs:label`).
+        if matches!(node, Term::NamedNode(_)) {
+            return Ok(NodeExpr::Constant(node.clone()));
+        }
         // The SHACL-AF vocabulary terms that structure a node expression — none of
         // them can be the predicate of a function-call expression.
         const KNOWN: &[&str] = &[
@@ -1884,6 +1891,7 @@ impl<'s> Parser<'s> {
             sh::LIMIT,
             sh::OFFSET,
             sh::ORDERBY,
+            sh::DESC,
             sh::EXISTS,
         ];
         // Gather the candidate (function IRI, arg-list head) triples, ignoring
@@ -1899,11 +1907,9 @@ impl<'s> Parser<'s> {
         candidates.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
 
         if candidates.is_empty() {
-            // No structural key and no function predicate: an IRI is a plain
-            // constant term expression; a blank node is malformed.
-            if matches!(node, Term::NamedNode(_)) {
-                return Ok(NodeExpr::Constant(node.clone()));
-            }
+            // No structural key and no function predicate: only blank nodes reach
+            // here (NamedNodes returned early as constants above), and a blank
+            // node with neither is malformed.
             return Err(format!(
                 "unrecognised node expression on {node}: no SHACL-AF key and no function call"
             ));
@@ -3259,5 +3265,55 @@ mod tests {
         assert!(descending, "sh:desc true ⇒ descending");
         assert!(matches!(*key, NodeExpr::This), "sort key is sh:this");
         assert!(matches!(*of, NodeExpr::Path(_)), "core is the path");
+    }
+
+    #[test]
+    fn node_expr_function_call_with_orderby_and_desc() {
+        // A blank-node function-call core that ALSO carries the paging keys
+        // `sh:orderby` + `sh:desc` must parse cleanly: `sh:desc` is a wrapper
+        // predicate, NOT an extra function-call candidate (regression: without
+        // excluding it from the KNOWN scan the node reads as ambiguous).
+        let expr = parse_expr(&expr_ttl(
+            "ex:root ex:expr [ <http://www.w3.org/2005/xpath-functions#numeric-abs> ( ex:x ) ; \
+             sh:orderby sh:this ; sh:desc true ] .",
+        ))
+        .expect("function call + orderby + desc must parse, not report ambiguous");
+        let NodeExpr::OrderBy { of, descending, .. } = expr else {
+            panic!("expected OrderBy wrapping the call, got {expr:?}");
+        };
+        assert!(descending, "sh:desc true ⇒ descending");
+        match *of {
+            NodeExpr::Call(FnCall::Builtin { iri, args }) => {
+                assert_eq!(
+                    iri.as_str(),
+                    "http://www.w3.org/2005/xpath-functions#numeric-abs"
+                );
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("expected Call(Builtin) core, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_expr_described_constant_iri_is_constant_not_call() {
+        // A constant IRI referenced as a node expression that also bears an
+        // UNRELATED outgoing triple (`rdfs:label`) in the shapes graph must parse
+        // as `Constant`, not be misread as a function call (regression: a
+        // NamedNode reaching the call scan with any other triple was ambiguous).
+        let expr = parse_expr(&expr_ttl(
+            "ex:someConst rdfs:label \"x\" .\n\
+             ex:root ex:expr [ sh:union ( ex:someConst ) ] .",
+        ))
+        .expect("described constant IRI in a union must parse");
+        let NodeExpr::Union(members) = expr else {
+            panic!("expected Union, got {expr:?}");
+        };
+        assert_eq!(members.len(), 1);
+        match &members[0] {
+            NodeExpr::Constant(Term::NamedNode(n)) => {
+                assert_eq!(n.as_str(), "http://example.org/ns#someConst");
+            }
+            other => panic!("expected Constant(NamedNode), got {other:?}"),
+        }
     }
 }
