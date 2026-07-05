@@ -44,7 +44,8 @@ changelog: ## Regenerate the deterministic CHANGELOG.md from conventional-commit
 		echo "  cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked --no-default-features"; \
 		exit 1; \
 	}
-	git-cliff --config cliff.toml --output CHANGELOG.md
+	@VERSION=$$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])"); \
+		git-cliff --config cliff.toml --tag "rust-v$$VERSION" --output CHANGELOG.md
 	python3 scripts/check-issue-refs.py
 
 bump: ## Set the crates.io/PyPI/npm version in lockstep (make bump VERSION=x.y.z).

@@ -112,17 +112,24 @@ Install the pinned version once:
 cargo install git-cliff --version 2.13.1 --locked --no-default-features
 ```
 
-Regenerate `CHANGELOG.md` as part of the release commit:
+Regenerate `CHANGELOG.md` as part of the release commit. Run `make bump` **first**:
+`make changelog` reads the just-bumped workspace version out of `Cargo.toml` and
+passes it to git-cliff as `--tag rust-v<version>`, so the pending (still untagged)
+commits are stamped under a real `## [<version>]` header instead of landing in
+`## [Unreleased]`. That is the header the release workflow later slices out of the
+committed `CHANGELOG.md` verbatim, so the version being cut must already be the tree
+version when you regenerate:
 
 ```sh
-make changelog   # runs git-cliff, then re-checks that no #NNN tokens leaked
+make changelog   # stamps the bumped version as the changelog release header,
+                 # then re-checks that no #NNN tokens leaked
 ```
 
 `cliff.toml` groups entries by conventional-commit type, treats the `rust-v*`
 tags as the release boundaries, and strips every `#NNN` issue/PR token so the
 committed changelog stays clean under the repository's issue-reference lint.
 The generation is offline and order-stable: running `make changelog` twice on
-the same history yields byte-identical output.
+the same history (at the same tree version) yields byte-identical output.
 
 The GitHub Release notes are **not** regenerated at tag time. The
 `release-cargo.yaml` workflow slices the section for the tagged version straight
