@@ -113,3 +113,11 @@ harness = false
 # lane only — excluded from `make check`.
 name = "lateral_service"
 harness = false
+
+[[bench]]
+# `Solution` row machinery in isolation: constructing, cloning/extending, binding,
+# compatibility-probing, and join-merging synthetic rows in both the inline (≤4
+# col) and spilled (>4 col) SmallVec regimes. Report-only; `make bench` lane only
+# — excluded from `make check`.
+name = "solution_row"
+harness = false
