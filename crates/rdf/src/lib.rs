@@ -85,7 +85,8 @@ pub use native_codecs::{
     SpanTable,
 };
 pub use native_quads::{
-    canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quads, flat_dataset_from_quads,
+    canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quad_sources,
+    dataset_from_quads, flat_dataset_from_quad_sources, flat_dataset_from_quads,
     flat_rdf_quads_from_dataset,
 };
 pub use purrdf_core::{
