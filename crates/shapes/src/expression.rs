@@ -440,27 +440,37 @@ pub fn eval_node_expr(
             // any empty set collapses it to zero (no invocations).
             let combinations = arg_values.iter().map(Vec::len).product::<usize>();
             let mut out: Vec<Term> = Vec::new();
-            for k in 0..combinations {
-                // Decode the linear index `k` into a mixed-radix tuple: the digit
-                // for argument `i` is `(k / stride) % len`, iterating the last
-                // argument fastest (row-major over the value-sets).
-                let mut rem = k;
-                let bindings: Vec<(String, Term)> = arg_values
+            if combinations > 0 {
+                // A non-zero product guarantees every value-set is non-empty. The
+                // argument keys — and their (reverse) positions in `bindings` — are
+                // invariant across combinations, so the buffer is built once and only
+                // the bound `Term` is overwritten each pass: no per-combination key
+                // formatting and no per-combination `Vec` allocation.
+                let mut bindings: Vec<(String, Term)> = arg_values
                     .iter()
                     .enumerate()
                     .rev()
-                    .map(|(i, values)| {
+                    .map(|(i, values)| (format!("a{i}"), values[0].clone()))
+                    .collect();
+                for k in 0..combinations {
+                    // Decode the linear index `k` into a mixed-radix tuple: the digit
+                    // for argument `i` is `(k / stride) % len`, iterating the last
+                    // argument fastest (row-major over the value-sets). `bindings` and
+                    // `arg_values.iter().rev()` share the same last-argument-first
+                    // order, so the slots line up with the reversed value-sets.
+                    let mut rem = k;
+                    for (slot, values) in bindings.iter_mut().zip(arg_values.iter().rev()) {
                         let digit = rem % values.len();
                         rem /= values.len();
-                        (format!("a{i}"), values[digit].clone())
-                    })
-                    .collect();
-                // A SPARQL error/unbound result is the correct SHACL-AF "no value"
-                // signal for that tuple — it contributes nothing, not a violation.
-                if let Some(term) =
-                    crate::sparql::eval_scalar_expr(store.sparql(), &expr_string, &bindings)?
-                {
-                    out.push(term);
+                        slot.1 = values[digit].clone();
+                    }
+                    // A SPARQL error/unbound result is the correct SHACL-AF "no value"
+                    // signal for that tuple — it contributes nothing, not a violation.
+                    if let Some(term) =
+                        crate::sparql::eval_scalar_expr(store.sparql(), &expr_string, &bindings)?
+                    {
+                        out.push(term);
+                    }
                 }
             }
             // Canonicalize the unioned result (sort+dedup) like every other
