@@ -13,19 +13,22 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "rdf-12", "ir", "diagnostics", "linked-data"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
 [lib]
 # rlib-only oxigraph-free / PyO3-free kernel. Python bindings live under
 # `bindings/python`; this crate is the ring-fenced core that MUST NOT pull
-# oxigraph or PyO3 into its dependency tree (#885 / purrdf P2b).
+# oxigraph or PyO3 into its dependency tree.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_core"
 
 [dependencies]
-# The permissive RDF 1.2 ingestion protocol (purrdf P6 #840): this crate provides
+# The permissive RDF 1.2 ingestion protocol: this crate provides
 # the `DatasetSink` adapter that folds an `RdfEventSink` event stream into a frozen
 # `RdfDataset`, plus the frozen-IR-replay `FrozenDatasetSource`. The protocol crate
 # is dependency-free and uses the same `MIT OR Apache-2.0` license as this crate.
@@ -34,39 +37,39 @@ purrdf-events = { workspace = true }
 # never persist hash values and equality still resolves collisions; this replaces
 # SipHash on hot value-index paths without introducing runtime randomness.
 ahash = { workspace = true }
-# Raw `HashTable` for the store-once builder interner/dedup (#880 P3c): each term/
+# Raw `HashTable` for the store-once builder interner/dedup: each term/
 # row is owned ONCE by its `Vec`, the table holds only indices. (`HashTable` was
 # introduced in hashbrown 0.14.2; the workspace tracks 0.15.)
 hashbrown = { workspace = true }
-# Tab-separated body parser for the native SSSOM codec (#848): handles quoting,
+# Tab-separated body parser for the native SSSOM codec: handles quoting,
 # flexible column counts, and by-name column access. The SSSOM `#`-prefixed YAML
 # header is parsed bespoke (PURRDF owns the format); `csv` only parses the body.
 csv = { workspace = true }
-# Content-addressed blob digest for the content store (#820). Same version as the
+# Content-addressed blob digest for the content store. Same version as the
 # sibling kernel crates (logic/validate/slice). Default features (std) re-enabled;
 # the workspace-level entry is default-features = false for the wasm-clean eval path.
 sha2 = { workspace = true, default-features = true }
 
 [dev-dependencies]
-# Rich colored line-diffs on assert_eq! failure (#871). Drop-in: a shadowing
+# Rich colored line-diffs on assert_eq! failure. Drop-in: a shadowing
 # `use pretty_assertions::assert_eq;` per test file; identical on pass.
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
-# Acceleration-program baselines (#630/#819 C1 Task 7); light feature set matching
+# Acceleration-program baselines; light feature set matching
 # the sibling crates (logic/shacl/validate): criterion's plotters/rayon defaults are
 # off so `make bench` builds fast and the cargo-bench stdout summary is all we need.
 criterion = { workspace = true }
 
 [[bench]]
 # IR layout / operational-metrics harness: AoS-vs-SoA(-vs-predicate-adjacency)
-# iteration + allocated-bytes/count/peak reporting. Satisfies the #819 RFC gate
+# iteration + allocated-bytes/count/peak reporting. Satisfies the RFC gate
 # "Layout is chosen by benchmark, not asserted". `make bench` lane only — excluded
 # from `make check`.
 name = "ir_layout"
 harness = false
 
 [[bench]]
-# COW `MutableDataset` measured-hypothesis harness (#839 P5): the shipped copy-on-
+# COW `MutableDataset` measured-hypothesis harness: the shipped copy-on-
 # write suppression-delta dataset benched head-to-head against a simple hash-indexed
 # value-quad store, on a build/mutate/query workload. Reports both; asserts no winner.
 # `make bench` lane only — excluded from `make check`.

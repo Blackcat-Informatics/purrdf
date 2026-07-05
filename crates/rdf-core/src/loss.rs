@@ -163,7 +163,7 @@ pub const PROJECTION_CODECS: &[&str] = &[
 
 /// Map a codec name to its `&'static str` literal.
 ///
-/// Panics on any name not found in [`SYNTAX_CODECS`] or [`PROJECTION_CODECS`].
+/// Panics on any name not found in `SYNTAX_CODECS` or [`PROJECTION_CODECS`].
 /// Hard-fail per the no-optionality doctrine.
 pub fn canonical_codec_name(name: &str) -> &'static str {
     for s in SYNTAX_CODECS.iter().chain(PROJECTION_CODECS.iter()) {
@@ -376,7 +376,7 @@ fn render_entries_sorted_by_pair(entries: &[LossEntry]) -> String {
 /// Iterates all `(from ∈ SYNTAX_CODECS) × (to ∈ SYNTAX_CODECS ∪
 /// PROJECTION_CODECS)` pairs, skips identity pairs, collects every non-empty
 /// [`LossEntry`], sorts by `(from, to, code)`, and renders via
-/// [`render_entries_sorted_by_pair`].
+/// `render_entries_sorted_by_pair`.
 ///
 /// The rendered output is committed at `generated/transcode-loss-matrix.json`.
 pub fn transcode_loss_matrix_json() -> String {

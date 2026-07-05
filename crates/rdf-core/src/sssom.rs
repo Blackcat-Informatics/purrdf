@@ -127,7 +127,7 @@ pub struct SssomMeta {
 
 /// A single SSSOM mapping (one TSV data row).
 ///
-/// The named columns cover PurRDF's [`SSSOM_ORDER`]; any other column is preserved
+/// The named columns cover PurRDF's `SSSOM_ORDER`; any other column is preserved
 /// verbatim in [`extras`](SssomMapping::extras) so a non-PurRDF SSSOM file still
 /// round-trips losslessly.
 #[derive(Debug, Clone, PartialEq, Default)]

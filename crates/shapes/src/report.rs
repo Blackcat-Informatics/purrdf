@@ -169,8 +169,8 @@ pub type ResultTuple = (
 impl ValidationReport {
     /// Emit the report as N-Triples text using the native purrdf codec.
     ///
-    /// The report is built into an in-memory [`Store`] as quads in the default
-    /// graph, folded back to the IR ([`dataset_from_store`]), then serialised via
+    /// The report is built into an in-memory `Store` as quads in the default
+    /// graph, folded back to the IR (`dataset_from_store`), then serialised via
     /// the native codec. This avoids hand-rolling literal escaping and carries no
     /// oxigraph `io` dependency. The `DefaultGraph` selection on the
     /// `application/n-quads` codec emits graphless rows (i.e. N-Triples) and is

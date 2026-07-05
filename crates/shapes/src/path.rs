@@ -34,7 +34,7 @@ pub fn eval<G: ShaclDataGraph>(store: &G, focus: &Term, path: &Path) -> Vec<Term
 /// Convert a [`Path`] to its term representation for use in `result_path`.
 ///
 /// - `Predicate(p)` → `Term::NamedNode(p)` (a simple path IS its IRI);
-/// - every other form → a deterministic blank node ([`path_label`]) standing
+/// - every other form → a deterministic blank node (`path_label`) standing
 ///   for the SHACL path structure, matching the spec's `sh:resultPath`
 ///   rendering (`[ sh:inversePath … ]`, sequence lists, …). The structure
 ///   itself travels in `ValidationResult::path_structure` and is emitted into
@@ -51,7 +51,7 @@ pub fn path_to_term(path: &Path) -> Term {
 ///
 /// Used for SHACL-SPARQL `$PATH` substitution (a property-shape `sh:sparql`
 /// validator's `$PATH` placeholder is replaced with the shape's path in SPARQL
-/// syntax) and as the seed for [`path_label`]. Composite sub-paths are always
+/// syntax) and as the seed for `path_label`. Composite sub-paths are always
 /// parenthesised, so the rendering is unambiguous in any embedding position.
 pub fn path_to_sparql(path: &Path) -> String {
     fn grouped(path: &Path) -> String {

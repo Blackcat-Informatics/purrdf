@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-sparql-eval"
-description = "Native, RDF-1.2-first multiset SPARQL evaluator over the DatasetView read trait in interned TermId space — the runtime that consumes purrdf-sparql-algebra (S5) and replaces the oxigraph-family spareval on the query path (purrdf S6, EPIC #906)"
+description = "Native, RDF-1.2-first multiset SPARQL evaluator over the DatasetView read trait in interned TermId space — the runtime that consumes purrdf-sparql-algebra (S5) and replaces the oxigraph-family spareval on the query path"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -13,16 +13,19 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["sparql", "rdf", "rdf-12", "evaluator", "query"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
 [lib]
 # rlib-only, wasm-clean: the SPARQL evaluation runtime of the native query stack.
 # It must NOT pull any oxigraph-family crate (it replaces the oxigraph-family
-# `spareval`). It consumes the wasm-clean `purrdf-sparql-algebra` (#911) front-end,
-# evaluates over the `purrdf-core` (#885) IR `DatasetView` in interned `TermId`
+# `spareval`). It consumes the wasm-clean `purrdf-sparql-algebra` front-end,
+# evaluates over the `purrdf-core` IR `DatasetView` in interned `TermId`
 # space and uses
-# `purrdf-xsd` (#907) for FILTER/BIND/ORDER value-space semantics.
+# `purrdf-xsd` for FILTER/BIND/ORDER value-space semantics.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_sparql_eval"

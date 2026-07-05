@@ -14,6 +14,9 @@ misleading, so we do not allow new ones. This lint scans:
 * ``.md`` files under ``crates/``, ``bindings/``, ``docs/``, and root ``*.md``
   files — markdown header anchors (``#101-...``), hex color codes, inline code,
   and fenced code blocks are excluded.
+* ``.toml`` files under ``crates/``, ``bindings/``, ``docs/``, and root
+  ``*.toml`` files — manifest ``description`` fields and dependency comments are
+  scanned line by line; hex colors are excluded by the token pattern itself.
 
 The issue token pattern is ``#`` followed by 1–5 decimal digits that is not
 followed by another digit, a hex letter, a hyphen, or a decimal fraction
@@ -38,7 +41,7 @@ def repo_root() -> Path:
 
 
 def iter_scan_paths(root: Path) -> Iterator[Path]:
-    """Yield every tracked ``.rs`` and ``.md`` file the lint enforces.
+    """Yield every tracked ``.rs``, ``.md``, and ``.toml`` file the lint enforces.
 
     Enumeration is driven by ``git ls-files`` rather than a filesystem walk so
     the scan covers exactly the committed first-party source. Untracked build
@@ -53,12 +56,14 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
         text=True,
     ).stdout
     for rel in sorted(part for part in out.split("\0") if part):
-        if Path(rel).suffix not in (".rs", ".md"):
+        if Path(rel).suffix not in (".rs", ".md", ".toml"):
             continue
         segments = rel.split("/")
         in_scan_dir = segments[0] in SCAN_DIRS
-        root_md = len(segments) == 1 and rel.endswith(".md")
-        if not (in_scan_dir or root_md):
+        root_file = len(segments) == 1 and (
+            rel.endswith(".md") or rel.endswith(".toml")
+        )
+        if not (in_scan_dir or root_file):
             continue
         path = root / rel
         if path.is_file():
@@ -287,6 +292,33 @@ def scan_markdown(path: Path) -> list[tuple[int, int, str, str]]:
     return violations
 
 
+def scan_toml(path: Path) -> list[tuple[int, int, str, str]]:
+    """Return violations found in a TOML file.
+
+    TOML has no comment/string-lexer subtlety worth modelling here: manifest
+    ``description`` strings and ``#`` dependency comments are both plain prose,
+    so every ``ISSUE_RE`` match is a real issue reference. Hex color codes are
+    already excluded by the token pattern, and after the cleanup there are no
+    legitimate ``#NNN`` tokens in these files.
+    """
+    src = path.read_text(encoding="utf-8")
+    violations: list[tuple[int, int, str, str]] = []
+
+    for line_no, line in enumerate(src.splitlines(), start=1):
+        for match in ISSUE_RE.finditer(line):
+            start = match.start()
+            violations.append(
+                (
+                    line_no,
+                    start + 1,
+                    match.group(),
+                    snippet(line, start, match.end()),
+                )
+            )
+
+    return violations
+
+
 def main() -> int:
     root = repo_root()
     violations: list[tuple[Path, int, int, str, str]] = []
@@ -297,6 +329,9 @@ def main() -> int:
                 violations.append((path, line, col, token, text))
         elif path.suffix == ".md":
             for line, col, token, text in scan_markdown(path):
+                violations.append((path, line, col, token, text))
+        elif path.suffix == ".toml":
+            for line, col, token, text in scan_toml(path):
                 violations.append((path, line, col, token, text))
 
     if violations:

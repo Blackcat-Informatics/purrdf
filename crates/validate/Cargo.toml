@@ -12,6 +12,9 @@ homepage.workspace = true
 rust-version.workspace = true
 keywords = ["sarif", "shacl", "rdf", "diagnostics", "validation"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 

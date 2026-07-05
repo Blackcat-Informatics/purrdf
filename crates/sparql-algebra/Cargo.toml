@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-sparql-algebra"
-description = "Native, wasm-clean SPARQL 1.1/1.2 parser → RDF 1.2-native query algebra AST (quoted triple terms, property paths, FILTER/BIND/VALUES, solution modifiers, GROUP BY) for the RDF 1.2 query stack — replaces the direct oxigraph-family SPARQL-parser dependency (purrdf S5, EPIC #906)"
+description = "Native, wasm-clean SPARQL 1.1/1.2 parser → RDF 1.2-native query algebra AST (quoted triple terms, property paths, FILTER/BIND/VALUES, solution modifiers, GROUP BY) for the RDF 1.2 query stack — replaces the direct oxigraph-family SPARQL-parser dependency"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -12,6 +12,9 @@ homepage.workspace = true
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["sparql", "rdf", "rdf-12", "algebra", "parser"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints]
 workspace = true

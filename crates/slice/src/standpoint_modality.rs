@@ -23,7 +23,7 @@
 //!
 //! # Single source of truth
 //!
-//! [`DECOMPOSITIONS`] is the one canonical table. It is cross-checked against the
+//! `DECOMPOSITIONS` is the one canonical table. It is cross-checked against the
 //! committed `purrdf:decomposesToAxis` bundles in
 //! `slices/core/standpoint/module.ttl` by `rust_table_matches_committed_turtle_bundle`,
 //! so the Rust table and the Turtle declaration cannot silently diverge.
@@ -236,7 +236,7 @@ impl ProjectionVerdict {
 /// Project a six-axis tuple DOWN to the one legacy `purrdf:StandpointModality`
 /// value it represents, or a HARD [`ProjectionVerdict::Unsupported`].
 ///
-/// EXACT match against [`DECOMPOSITIONS`]; any tuple with no legacy twin (e.g.
+/// EXACT match against `DECOMPOSITIONS`; any tuple with no legacy twin (e.g.
 /// `supportBoth`, `modalForceCounterfactual`, `assertoricRetract`,
 /// `truthStrategic`) returns `Unsupported` — it is never silently approximated to
 /// a nearby legacy value (`logic-compile`'s `compat.rs` hard-verdict doctrine, Principle 9).

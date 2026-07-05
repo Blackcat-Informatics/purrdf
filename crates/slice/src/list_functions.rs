@@ -168,7 +168,7 @@ const BANNER: &str =
      and surfaces them in CONSTRUCT output or the SELECT auxiliary graph.";
 
 /// Build the FnO catalog of the six primitive list functions from the
-/// [`FUNCTIONS`]/[`PARAMS`] consts (the single source of truth), minting every
+/// `FUNCTIONS`/`PARAMS` consts (the single source of truth), minting every
 /// function/param/output IRI under the caller's [`SliceVocab`](crate::vocab::SliceVocab)
 /// namespace.
 ///

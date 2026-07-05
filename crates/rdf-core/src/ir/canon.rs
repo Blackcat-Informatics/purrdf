@@ -43,7 +43,7 @@
 //!
 //! The n-degree search is NP-hard in the worst case (pathologically symmetric
 //! blank graphs). Per the project no-optionality / hard-fail rule there is no
-//! knob: a fixed [`RDFC_CALL_LIMIT`] bounds recursion and the routine `panic!`s
+//! knob: a fixed `RDFC_CALL_LIMIT` bounds recursion and the routine `panic!`s
 //! with a diagnostic on exhaustion rather than degrading.
 
 use std::cmp::Ordering;
@@ -177,7 +177,7 @@ pub struct Canonicalized {
 /// overlay).
 ///
 /// Deterministic and oxigraph-free. Hard-`panic!`s only if the n-degree search
-/// exceeds [`RDFC_CALL_LIMIT`] on a pathologically symmetric blank graph.
+/// exceeds `RDFC_CALL_LIMIT` on a pathologically symmetric blank graph.
 #[must_use]
 pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
     canonicalize_with(ds, CanonHash::Sha256)

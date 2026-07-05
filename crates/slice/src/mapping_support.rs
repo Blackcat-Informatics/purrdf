@@ -9,12 +9,12 @@
 //! several still-live emitters and lints share a small kernel of infrastructure that
 //! the alignment renderers used to host:
 //!
-//! * the curated [`PREFIX_REGISTRY`] (the single CURIE / prefix authority);
-//! * the [`GENERATED_BANNER`] generated-artifact comment;
-//! * the [`prefix_block`] SPARQL `PREFIX` emitter;
-//! * the merged DSL dataset collector [`collect_dsl_store`] and the generic
-//!   dataset helpers (`subjects_of_type`, [`object_literal`]);
-//! * the language-retag helper [`retag_quad`].
+//! * the curated `PREFIX_REGISTRY` (the single CURIE / prefix authority);
+//! * the `GENERATED_BANNER` generated-artifact comment;
+//! * the `prefix_block` SPARQL `PREFIX` emitter;
+//! * the merged DSL dataset collector `collect_dsl_store` and the generic
+//!   dataset helpers (`subjects_of_type`, `object_literal`);
+//! * the language-retag helper `retag_quad`.
 //!
 //! These are extracted verbatim so every surviving byte output is unchanged.
 
