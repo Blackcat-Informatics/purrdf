@@ -31,15 +31,19 @@ const RDF_MEMBER_PREFIX: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#_";
 
 /// Parse the numeric suffix of an `rdf:_<n>` container-membership property IRI.
 ///
-/// Returns `Some(n)` iff `iri` is exactly `rdf:_<n>` with `<n>` a non-empty run of
-/// ASCII digits parsing into a `u64` (the ordinal sort key). Any other IRI — the
-/// bare `rdf:_`, a non-numeric or overflowing suffix, or an unrelated IRI — yields
-/// `None`.
+/// Returns `Some(n)` iff `iri` is exactly `rdf:_<n>` with `<n>` a decimal for a
+/// **positive** integer with **no leading zeros** (the W3C container-membership
+/// contract): `rdf:_1`, `rdf:_12`, … parse; `rdf:_0`, `rdf:_01`, the bare
+/// `rdf:_`, a non-numeric or overflowing suffix, or an unrelated IRI yield `None`.
 pub(crate) fn container_member_index(iri: &str) -> Option<u64> {
     let suffix = iri.strip_prefix(RDF_MEMBER_PREFIX)?;
-    // `u64::parse` already rejects the empty string, a sign, and any non-digit
-    // byte, so it is exactly the `rdf:_<n>` acceptance test.
-    suffix.parse::<u64>().ok()
+    // A leading zero (`_0`, `_01`, …) is not a well-formed membership ordinal, and
+    // the empty suffix (`rdf:_`) does not start with '0' but fails to parse below.
+    if suffix.starts_with('0') {
+        return None;
+    }
+    let n = suffix.parse::<u64>().ok()?;
+    (n >= 1).then_some(n)
 }
 
 /// A malformed RDF Collection encountered while walking `rdf:first`/`rdf:rest`.
@@ -99,6 +103,11 @@ mod tests {
         assert_eq!(container_member_index(&format!("{RDF_NS}_")), None);
         assert_eq!(container_member_index(&format!("{RDF_NS}_x")), None);
         assert_eq!(container_member_index("http://example.org/_1"), None);
+        // W3C: the ordinal is a positive integer with no leading zeros.
+        assert_eq!(container_member_index(&format!("{RDF_NS}_12")), Some(12));
+        assert_eq!(container_member_index(&format!("{RDF_NS}_0")), None);
+        assert_eq!(container_member_index(&format!("{RDF_NS}_01")), None);
+        assert_eq!(container_member_index(&format!("{RDF_NS}_007")), None);
     }
 
     #[test]
