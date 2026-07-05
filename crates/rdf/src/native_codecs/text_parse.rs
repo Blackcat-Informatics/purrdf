@@ -761,9 +761,12 @@ struct DocParser<'a, 'c, S: SpanCollector> {
     /// captured when the subject term is parsed and resolved at emit time. Only read
     /// when `S::ENABLED`.
     subject_off: usize,
-    /// Newline table over `src`, built lazily on the FIRST recorded subject and reused
-    /// for the rest of the parse. Never built when `S::ENABLED` is false.
-    line_index: Option<purrdf_iri::LineIndex>,
+    /// Newline table over `src`, built lazily on the FIRST position lookup (a recorded
+    /// subject under `S::ENABLED`, or any `loc()` diagnostic) and reused for the rest of
+    /// the parse. A `OnceCell` so the `&self` `loc()` path can memoize it too — otherwise
+    /// a document with many diagnostics-adjacent lookups rebuilds the whole-buffer scan
+    /// per call, which is quadratic in the source length.
+    line_index: std::cell::OnceCell<purrdf_iri::LineIndex>,
 }
 
 impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
@@ -786,7 +789,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             src: text,
             collector,
             subject_off: 0,
-            line_index: None,
+            line_index: std::cell::OnceCell::new(),
         }
     }
 
@@ -1428,7 +1431,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             let src = self.src;
             let index = self
                 .line_index
-                .get_or_insert_with(|| purrdf_iri::LineIndex::new(src));
+                .get_or_init(|| purrdf_iri::LineIndex::new(src));
             let position = index.locate(src, self.subject_off);
             self.collector.record(&key, position);
         }
@@ -1476,9 +1479,10 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     // token cursor helpers
 
     /// Resolve the current token's document-global 1-based `(line, column)` by
-    /// scanning the full source with the shared [`purrdf_iri::LineIndex`]. Built
-    /// lazily on the error path only (the tokens carry document-global byte spans),
-    /// so the happy path never pays for it.
+    /// scanning the full source with the shared [`purrdf_iri::LineIndex`]. The index is
+    /// memoized in `self.line_index` (a `OnceCell`), so the FIRST lookup pays one
+    /// whole-buffer scan and every subsequent lookup is an `O(log lines)` locate — a
+    /// document with many lookups is linear, not quadratic, in the source length.
     fn loc(&self) -> (u32, u32) {
         let off = self
             .tokens
@@ -1486,7 +1490,10 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             .map(|s| s.start)
             .or_else(|| self.tokens.last().map(|s| s.end))
             .unwrap_or(0);
-        let p = purrdf_iri::LineIndex::new(self.src).locate(self.src, off);
+        let p = self
+            .line_index
+            .get_or_init(|| purrdf_iri::LineIndex::new(self.src))
+            .locate(self.src, off);
         (p.line, p.column)
     }
 
