@@ -81,6 +81,7 @@ jobs:
             -p purrdf-xsd \
             -p purrdf-gts \
             -p purrdf-core \
+            -p purrdf-entail \
             -p purrdf-sparql-algebra \
             -p purrdf-sparql-results \
             -p purrdf-sparql-eval \
@@ -88,6 +89,7 @@ jobs:
             -p purrdf-slice \
             -p purrdf-shapes \
             -p purrdf-shex \
+            -p purrdf-validate \
             -p purrdf \
             -p purrdf-wasm
           cargo build --locked --release --target wasm32-unknown-unknown \
@@ -151,6 +153,7 @@ jobs:
             purrdf-xsd
             purrdf-gts
             purrdf-core
+            purrdf-entail
             purrdf-sparql-algebra
             purrdf-sparql-results
             purrdf-sparql-eval
@@ -158,6 +161,7 @@ jobs:
             purrdf-slice
             purrdf-shapes
             purrdf-shex
+            purrdf-validate
             purrdf
             purrdf-wasm
           )

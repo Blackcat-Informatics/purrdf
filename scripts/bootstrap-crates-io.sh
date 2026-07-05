@@ -39,6 +39,7 @@ crates=(
   purrdf-xsd
   purrdf-gts
   purrdf-core
+  purrdf-entail
   purrdf-sparql-algebra
   purrdf-sparql-results
   purrdf-sparql-eval
@@ -46,6 +47,7 @@ crates=(
   purrdf-slice
   purrdf-shapes
   purrdf-shex
+  purrdf-validate
   purrdf
   purrdf-wasm
 )
