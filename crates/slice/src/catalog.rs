@@ -286,10 +286,10 @@ fn find_slice_iri(ds: &Dataset, vocab: &SliceVocab) -> Result<String, SliceError
 /// rendered the way rdflib/oxigraph surfaced them through `.value()`).
 fn literal_value(term: &Object) -> String {
     match term {
-        Object::Literal { value } => value.clone(),
+        Object::Literal { value, .. } => value.clone(),
         Object::Named(nn) => nn.clone(),
         Object::Blank(label) => format!("_:{label}"),
-        Object::Triple => "<triple>".to_string(),
+        Object::Triple(_) => "<triple>".to_string(),
     }
 }
 
