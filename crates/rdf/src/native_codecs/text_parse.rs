@@ -2467,7 +2467,7 @@ mod tests {
     fn turtle_empty_namespace_prefixed_name_resolves_against_base() {
         let text = "@prefix : <> .\n\
                     <#a> :knows <#b> .";
-        let statements = DocParser::new(text, Some("http://example.org/"), false)
+        let statements = DocParser::new(text, Some("http://example.org/"), false, &mut NoSpans)
             .parse()
             .expect("parses");
         assert_eq!(statements.len(), 1);
