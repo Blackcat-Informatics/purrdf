@@ -17,7 +17,7 @@
 //! Constant), in which case non-reflexive steps yield nothing while a reflexive
 //! closure step still yields the focus itself.
 
-use ::purrdf::{smallvec, FastSet, IdSet, IdVec, RdfDataset, TermId};
+use ::purrdf::{smallvec, IdSet, IdVec, RdfDataset, TermId};
 
 use crate::data::{quads_for_pattern_ids, resolve_id, GraphFilter};
 use crate::shapes::Path;
@@ -48,13 +48,16 @@ use crate::term::{term_id_to_native, NamedNode, Term};
 /// traversal so the reflexive focus term is returned verbatim.
 pub fn eval(ds: &RdfDataset, focus: &Term, path: &Path) -> Vec<Term> {
     let Some(focus_id) = resolve_id(ds, focus) else {
-        // Non-interned focus: only reflexive inclusion can yield a value node, and
-        // that value is the focus term itself. The native traversal reproduces the
-        // reflexive-focus semantics exactly (every step is empty).
-        let mut nodes = eval_inner(ds, focus, path);
-        let mut seen: FastSet<Term> = FastSet::default();
-        nodes.retain(|t| seen.insert(t.clone()));
-        return nodes;
+        // Non-interned focus: it has no id and therefore no incoming/outgoing
+        // quads, so every predicate/inverse STEP is empty. The only value a path
+        // can yield is the focus term itself, via reflexive (zero-length)
+        // inclusion. So the whole traversal collapses to a single predicate:
+        // return `{focus}` iff the path admits the empty path, else `{}`. A single
+        // focus term needs no dedup.
+        if admits_empty_path(path) {
+            return vec![focus.clone()];
+        }
+        return Vec::new();
     };
     // Interned focus: id-native traversal, resolve only the deduped result set.
     let ids = eval_inner_ids(ds, focus_id, path);
@@ -94,26 +97,24 @@ pub fn eval_ids(ds: &RdfDataset, focus: &Term, path: &Path) -> Option<IdVec> {
     Some(out)
 }
 
-/// The objects of `(focus, predicate, ?)` in the default graph, resolved to
-/// native terms. Empty when `focus` or `predicate` is not interned in `ds`.
-fn predicate_objects(ds: &RdfDataset, focus: &Term, predicate: &NamedNode) -> Vec<Term> {
-    let (Some(f_id), Some(p_id)) = (resolve_id(ds, focus), resolve_pred(ds, predicate)) else {
-        return Vec::new();
-    };
-    quads_for_pattern_ids(ds, Some(f_id), Some(p_id), None, GraphFilter::DefaultGraph)
-        .map(|q| term_id_to_native(ds, q.o))
-        .collect()
-}
-
-/// The subjects of `(?, predicate, focus)` in the default graph, resolved to
-/// native terms. Empty when `focus` or `predicate` is not interned in `ds`.
-fn predicate_subjects(ds: &RdfDataset, focus: &Term, predicate: &NamedNode) -> Vec<Term> {
-    let (Some(f_id), Some(p_id)) = (resolve_id(ds, focus), resolve_pred(ds, predicate)) else {
-        return Vec::new();
-    };
-    quads_for_pattern_ids(ds, None, Some(p_id), Some(f_id), GraphFilter::DefaultGraph)
-        .map(|q| term_id_to_native(ds, q.s))
-        .collect()
+/// Whether a SHACL property path matches the zero-length (reflexive) path — i.e.
+/// whether it can relate a node to itself in zero steps. This is the sole thing
+/// that governs a non-interned focus's result: with no incoming/outgoing quads,
+/// every predicate/inverse step is empty, so the path can yield the focus itself
+/// only when it admits the empty path.
+fn admits_empty_path(path: &Path) -> bool {
+    match path {
+        // A predicate step is never zero-length.
+        Path::Predicate(_) => false,
+        // Inversion does not change reflexivity: `^p` admits empty iff `p` does.
+        Path::Inverse(inner) | Path::OneOrMore(inner) => admits_empty_path(inner),
+        // A sequence admits empty only if EVERY step can be taken in zero steps.
+        Path::Sequence(parts) => parts.iter().all(admits_empty_path),
+        // An alternative admits empty if ANY branch does.
+        Path::Alternative(parts) => parts.iter().any(admits_empty_path),
+        // The reflexive closures always admit the zero-length path.
+        Path::ZeroOrMore(_) | Path::ZeroOrOne(_) => true,
+    }
 }
 
 /// Resolve a predicate IRI to its interned id, if present in `ds`.
@@ -207,57 +208,7 @@ pub fn primary_predicate(path: &Path) -> Option<&NamedNode> {
     }
 }
 
-// ── Internal recursive evaluator ───────────────────────────────────────────────
-
-fn eval_inner(ds: &RdfDataset, focus: &Term, path: &Path) -> Vec<Term> {
-    match path {
-        Path::Predicate(p) => {
-            // A literal/triple focus cannot be a subject; the data graph returns no
-            // matches for it (matching the historical empty-result behavior).
-            predicate_objects(ds, focus, p)
-        }
-        Path::Inverse(inner) => match inner.as_ref() {
-            // Inverse of a predicate: collect subjects of (?, p, focus).
-            Path::Predicate(p) => predicate_subjects(ds, focus, p),
-            // Inverse of a composite path: push the inversion inward (SPARQL
-            // property-path algebra) and evaluate the rewritten path. This keeps
-            // inverse evaluation total for every nesting without graph scans.
-            composite => eval_inner(ds, focus, &invert(composite)),
-        },
-        Path::Sequence(parts) => {
-            // Fold the frontier through each sequence step, deduplicating per
-            // step (first-seen order) so diamond-shaped graphs stay linear.
-            let mut frontier = vec![focus.clone()];
-            for part in parts {
-                let mut next = Vec::new();
-                let mut seen: FastSet<Term> = FastSet::default();
-                for node in &frontier {
-                    for value in eval_inner(ds, node, part) {
-                        if seen.insert(value.clone()) {
-                            next.push(value);
-                        }
-                    }
-                }
-                frontier = next;
-            }
-            frontier
-        }
-        Path::Alternative(parts) => {
-            // Union of all alternatives (the caller deduplicates).
-            parts
-                .iter()
-                .flat_map(|part| eval_inner(ds, focus, part))
-                .collect()
-        }
-        Path::ZeroOrMore(inner) => closure(ds, focus, inner, true),
-        Path::OneOrMore(inner) => closure(ds, focus, inner, false),
-        Path::ZeroOrOne(inner) => {
-            let mut nodes = vec![focus.clone()];
-            nodes.extend(eval_inner(ds, focus, inner));
-            nodes
-        }
-    }
-}
+// ── Inverse rewrite ─────────────────────────────────────────────────────────────
 
 /// Rewrite the inverse of a composite path by pushing the inversion inward:
 ///
@@ -277,51 +228,15 @@ fn invert(path: &Path) -> Path {
     }
 }
 
-/// The (reflexive-)transitive closure of `inner` from `focus`: a breadth-first
-/// worklist walk with a visited set, so cyclic graphs terminate. `reflexive`
-/// includes the focus node itself (`zeroOrMore`); otherwise the walk starts from
-/// the focus's direct step values (`oneOrMore`). First-seen order is preserved.
-fn closure(ds: &RdfDataset, focus: &Term, inner: &Path, reflexive: bool) -> Vec<Term> {
-    let mut seen: FastSet<Term> = FastSet::default();
-    let mut order: Vec<Term> = Vec::new();
-    let mut worklist: Vec<Term> = Vec::new();
-
-    if reflexive {
-        seen.insert(focus.clone());
-        order.push(focus.clone());
-        worklist.push(focus.clone());
-    } else {
-        for value in eval_inner(ds, focus, inner) {
-            if seen.insert(value.clone()) {
-                order.push(value.clone());
-                worklist.push(value);
-            }
-        }
-    }
-
-    let mut cursor = 0;
-    while cursor < worklist.len() {
-        let node = worklist[cursor].clone();
-        cursor += 1;
-        for value in eval_inner(ds, &node, inner) {
-            if seen.insert(value.clone()) {
-                order.push(value.clone());
-                worklist.push(value);
-            }
-        }
-    }
-    order
-}
-
 // ── Id-native traversal (interned focus) ───────────────────────────────────────
 //
-// Mirrors `eval_inner`/`closure` exactly, but every frontier, worklist, and
-// visited set is a `Copy` [`TermId`] rather than an owned [`Term`]. Every value a
-// step produces is the object/subject of a real quad, so it is always interned and
-// always has a `TermId`. First-seen order and per-step dedup match the native
-// traversal byte-for-byte; the caller ([`eval`]) resolves the result to terms.
+// Every frontier, worklist, and visited set is a `Copy` [`TermId`] rather than an
+// owned [`Term`]. Every value a step produces is the object/subject of a real
+// quad, so it is always interned and always has a `TermId`. First-seen order and
+// per-step dedup are deterministic; the caller ([`eval`]) resolves the result to
+// terms.
 
-/// Id-native twin of [`eval_inner`], for an interned `focus`.
+/// The recursive id-native path evaluator, for an interned `focus`.
 fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> IdVec {
     match path {
         Path::Predicate(p) => match resolve_pred(ds, p) {
@@ -351,11 +266,15 @@ fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> IdVec {
         },
         Path::Sequence(parts) => {
             // Fold the frontier through each step, deduplicating per step
-            // (first-seen order) so diamond-shaped graphs stay linear.
+            // (first-seen order) so diamond-shaped graphs stay linear. The
+            // scratch `next`/`seen` are hoisted out of the loop and cleared each
+            // iteration so their capacity is reused across steps.
             let mut frontier: IdVec = smallvec![focus];
+            let mut next: IdVec = IdVec::new();
+            let mut seen: IdSet = IdSet::default();
             for part in parts {
-                let mut next: IdVec = IdVec::new();
-                let mut seen: IdSet = IdSet::default();
+                next.clear();
+                seen.clear();
                 for &node in &frontier {
                     for value in eval_inner_ids(ds, node, part) {
                         if seen.insert(value) {
@@ -363,7 +282,7 @@ fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> IdVec {
                         }
                     }
                 }
-                frontier = next;
+                std::mem::swap(&mut frontier, &mut next);
             }
             frontier
         }
@@ -381,7 +300,10 @@ fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> IdVec {
     }
 }
 
-/// Id-native twin of [`closure`], for an interned `focus`. The visited set is an
+/// The (reflexive-)transitive closure of `inner` from an interned `focus`: a
+/// breadth-first worklist walk with a visited set, so cyclic graphs terminate.
+/// `reflexive` includes the focus node itself (`zeroOrMore`); otherwise the walk
+/// starts from the focus's direct step values (`oneOrMore`). The visited set is an
 /// [`IdSet`] over `Copy` [`TermId`]s; first-seen order is preserved.
 fn closure_ids(ds: &RdfDataset, focus: TermId, inner: &Path, reflexive: bool) -> IdVec {
     let mut seen: IdSet = IdSet::default();
@@ -693,6 +615,50 @@ mod tests {
             result,
             vec![nn("http://example.org/ns#a"), nn("http://example.org/ns#b")]
         );
+    }
+
+    // ── Non-interned focus: reflexive inclusion only ───────────────────────────
+
+    #[test]
+    fn non_interned_focus_yields_focus_only_for_reflexive_paths() {
+        let data = load_data(DATA);
+        // A focus term that never appears in the data graph, so it has no
+        // interned id and no incoming/outgoing quads: every step is empty.
+        let focus = nn("http://example.org/ns#not-in-graph");
+
+        // Reflexive paths (admit the zero-length path) return exactly {focus}.
+        let reflexive: Vec<Path> = vec![
+            Path::ZeroOrMore(Box::new(pred("p"))),
+            Path::ZeroOrOne(Box::new(pred("p"))),
+            // Sequence where every part is reflexive.
+            Path::Sequence(vec![
+                Path::ZeroOrMore(Box::new(pred("p"))),
+                Path::ZeroOrOne(Box::new(pred("q"))),
+            ]),
+            // Alternative with a reflexive branch (the other branch is not).
+            Path::Alternative(vec![pred("p"), Path::ZeroOrMore(Box::new(pred("q")))]),
+        ];
+        for path in &reflexive {
+            assert_eq!(
+                eval(&data, &focus, path),
+                vec![focus.clone()],
+                "reflexive path must yield the focus itself: {path:?}"
+            );
+        }
+
+        // Non-reflexive paths (no zero-length match) return {}.
+        let non_reflexive: Vec<Path> = vec![
+            pred("p"),
+            Path::OneOrMore(Box::new(pred("p"))),
+            // Sequence with a non-reflexive part cannot be taken in zero steps.
+            Path::Sequence(vec![Path::ZeroOrMore(Box::new(pred("p"))), pred("q")]),
+        ];
+        for path in &non_reflexive {
+            assert!(
+                eval(&data, &focus, path).is_empty(),
+                "non-reflexive path must yield nothing: {path:?}"
+            );
+        }
     }
 
     // ── path_to_term / primary_predicate approximations ────────────────────────
