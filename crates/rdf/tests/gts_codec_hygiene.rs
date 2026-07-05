@@ -106,7 +106,10 @@ fn workspace_root() -> PathBuf {
         if dir.join("crates").is_dir() && dir.join("Cargo.toml").is_file() {
             return dir;
         }
-        assert!(dir.pop(), "gts-codec-hygiene: could not locate the workspace root (no ancestor with a `crates/` dir)");
+        assert!(
+            dir.pop(),
+            "gts-codec-hygiene: could not locate the workspace root (no ancestor with a `crates/` dir)"
+        );
     }
 }
 

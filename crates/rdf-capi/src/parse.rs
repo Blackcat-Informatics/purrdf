@@ -30,7 +30,7 @@ fn parse_status(diagnostic: &RdfDiagnostic) -> PurrdfStatus {
 /// # Safety
 /// `bytes` must be valid for `len` bytes; the `c_char` pointers must be null or
 /// NUL-terminated; the out-params must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_parse(
     bytes: *const u8,
     len: usize,

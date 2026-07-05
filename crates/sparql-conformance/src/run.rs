@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use purrdf::{serialize_dataset, SerializeGraph};
+use purrdf::{SerializeGraph, serialize_dataset};
 use purrdf_core::{
     RdfDataset, RdfTextDirection, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
 };
@@ -388,12 +388,12 @@ fn build_rif_ruleset(
         if !matches!(dataset.term_value(q.p), TermValue::Iri(p) if p == RIF_USED_WITH_PROFILE) {
             continue;
         }
-        if let TermValue::Iri(doc) = dataset.term_value(q.s) {
-            if let Some(name) = doc.rsplit(['/', '#']).next().filter(|s| !s.is_empty()) {
-                let name = name.to_owned();
-                if !basenames.contains(&name) {
-                    basenames.push(name);
-                }
+        if let TermValue::Iri(doc) = dataset.term_value(q.s)
+            && let Some(name) = doc.rsplit(['/', '#']).next().filter(|s| !s.is_empty())
+        {
+            let name = name.to_owned();
+            if !basenames.contains(&name) {
+                basenames.push(name);
             }
         }
     }

@@ -5,7 +5,7 @@
 //! per-datatype lexical → value → canonical round-trips, the parse-by-IRI contract,
 //! the zero-dep numeric bounds, and the partial-order edge cases.
 
-use purrdf_xsd::{parse, parse_by_iri, value_cmp, XsdDatatype as D, XsdError, XsdValue};
+use purrdf_xsd::{XsdDatatype as D, XsdError, XsdValue, parse, parse_by_iri, value_cmp};
 use std::cmp::Ordering;
 
 /// (lexical, datatype, expected canonical lexical).
@@ -101,12 +101,14 @@ fn parse_by_iri_contract() {
     assert!(matches!(v, Some(XsdValue::Integer { value: 42, .. })));
     // A non-XSD datatype IRI is Ok(None) — caller treats as a plain term.
     // (XsdValue has no PartialEq by design, so assert on `is_none`.)
-    assert!(parse_by_iri(
-        "hi",
-        "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString"
-    )
-    .unwrap()
-    .is_none());
+    assert!(
+        parse_by_iri(
+            "hi",
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString"
+        )
+        .unwrap()
+        .is_none()
+    );
     // An XSD datatype with a malformed lexical is Err (NOT None).
     assert!(parse_by_iri("nope", "http://www.w3.org/2001/XMLSchema#integer").is_err());
 }

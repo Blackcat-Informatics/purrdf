@@ -298,8 +298,8 @@ fn diag(code: &str, message: impl Into<String>) -> RdfDiagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::RdfDatasetBuilder;
     use crate::RdfLiteral;
+    use crate::ir::RdfDatasetBuilder;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
         b.intern_iri(&format!("http://example.org/{n}"))

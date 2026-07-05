@@ -10,10 +10,10 @@
 //! SPARQL conformance gate replays against the frozen goldens.
 
 pub use crate::gts_core::*;
-pub use crate::gts_verify::{verify_content_chain, ContentChainVerification};
+pub use crate::gts_verify::{ContentChainVerification, verify_content_chain};
 
-use crate::native_codecs::ser_model::{SerGraph, SerTerm, SerTermKind};
 use crate::RdfDiagnostic;
+use crate::native_codecs::ser_model::{SerGraph, SerTerm, SerTermKind};
 
 /// Copy a real `purrdf_gts::model::Graph` (read from a GTS bundle) into the first-party
 /// [`SerGraph`] the native statement-layer fold consumes. The two shapes mirror each

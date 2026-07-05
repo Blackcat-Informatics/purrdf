@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermRef};
 use purrdf_sparql_algebra::SparqlParser;
-use purrdf_sparql_eval::{evaluate_query, EvalCtx, Outcome, SolutionTerm};
+use purrdf_sparql_eval::{EvalCtx, Outcome, SolutionTerm, evaluate_query};
 
 const RDFS_SUBCLASS: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 const EX: &str = "https://example.org/";

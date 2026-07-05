@@ -58,7 +58,7 @@ pub(crate) fn ground_triple_pattern_to_value(
         purrdf_sparql_algebra::NamedNodePattern::Variable(_) => {
             return Err(EvalError::unsupported(
                 "variable predicate inside a quoted triple term in a BGP",
-            ))
+            ));
         }
     };
     let o = ground_term_pattern_to_value(&pattern.object)?;

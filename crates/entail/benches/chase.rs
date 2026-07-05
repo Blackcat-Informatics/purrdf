@@ -10,10 +10,10 @@
 
 use std::sync::Arc;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder};
-use purrdf_entail::{materialize, Regime};
+use purrdf_entail::{Regime, materialize};
 
 const SUBCLASSOF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 const TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";

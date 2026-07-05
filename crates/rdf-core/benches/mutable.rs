@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_core::{
     DatasetMut, GraphMatchValue, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder,
     TermValue,

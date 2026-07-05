@@ -14,7 +14,7 @@ use core::cell::Cell;
 use purrdf::{RdfLiteral, RdfTriple};
 use wasm_bindgen::prelude::*;
 
-use crate::term::{parse_direction, Quad, Term, TermInner};
+use crate::term::{Quad, Term, TermInner, parse_direction};
 
 /// An RDF/JS `DataFactory`. Stateless except for the auto-generated blank-node
 /// counter (`blankNode()` with no argument mints a fresh label).
@@ -150,7 +150,7 @@ impl DataFactory {
             _ => {
                 return Err(JsError::new(
                     "a quoted triple predicate must be a NamedNode",
-                ))
+                ));
             }
         };
         let triple = RdfTriple::new(

@@ -21,8 +21,8 @@
 //! `"+1.5"^^xsd:decimal`, `"0.50"^^xsd:decimal`.
 
 use purrdf_rdf::{
-    parse_dataset, serialize_dataset, NativeRdfFormat, RdfDatasetBuilder, RdfLiteral, RdfQuad,
-    RdfTerm, SerializeGraph, TermValue,
+    NativeRdfFormat, RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfTerm, SerializeGraph, TermValue,
+    parse_dataset, serialize_dataset,
 };
 
 const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
@@ -191,7 +191,7 @@ fn jsonld_preserves_literal_value_space() {
 #[test]
 fn jsonld_statement_metadata_downcast_requires_caller_vocab() {
     use purrdf_rdf::native_codecs::jsonld::{
-        jsonld_to_statement_metadata_nquads, StatementMetadataVocab,
+        StatementMetadataVocab, jsonld_to_statement_metadata_nquads,
     };
 
     // Star-bearing JSON-LD: an `@annotation` reifier on the base triple.

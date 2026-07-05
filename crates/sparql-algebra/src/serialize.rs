@@ -31,8 +31,8 @@ use core::fmt::Write as _;
 
 use crate::algebra::{AggregateExpression, Expression, Function, GraphPattern, OrderExpression};
 use crate::ast::{
-    BaseDirection, GroundTerm, GroundTriple, Literal, NamedNodePattern, TermPattern, TriplePattern,
-    Variable, RDF_LANG_STRING, XSD_STRING,
+    BaseDirection, GroundTerm, GroundTriple, Literal, NamedNodePattern, RDF_LANG_STRING,
+    TermPattern, TriplePattern, Variable, XSD_STRING,
 };
 
 /// A `GROUP BY` key + its `(output var, aggregate)` pairs, borrowed from a
@@ -756,8 +756,8 @@ fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::SparqlParser;
     use crate::Query;
+    use crate::parser::SparqlParser;
 
     /// Parse a full query and return its root pattern.
     fn pattern_of(query: &str) -> GraphPattern {

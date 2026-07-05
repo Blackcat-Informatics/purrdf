@@ -11,7 +11,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_shapes::engine::validate_graphs;
 
 /// Read every `corpus/<case>/{data.nt, shapes.ttl}` pair, sorted by case name.

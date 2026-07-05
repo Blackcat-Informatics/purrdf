@@ -441,13 +441,7 @@ mod tests {
             EdgeKind::Ontology,
             ReconciliationStatus::Matched,
         )];
-        let term_count = |iri: &SliceIri| -> usize {
-            if iri.ends_with("sliceA") {
-                7
-            } else {
-                3
-            }
-        };
+        let term_count = |iri: &SliceIri| -> usize { if iri.ends_with("sliceA") { 7 } else { 3 } };
         let result =
             emit_analysis_graph(&vocab(), &edges, "", &[], &tc(), |_| 2, term_count).unwrap();
         assert!(result.turtle_body.contains(&vocab().term_coverage()));

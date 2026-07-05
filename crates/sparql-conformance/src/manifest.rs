@@ -174,10 +174,10 @@ pub fn load(manifest_path: &Path) -> Result<Vec<SparqlTestCase>, String> {
         // The query file: qt:query for eval tests, else mf:action itself (syntax).
         if let Some(q) = iri_of(row, "query") {
             entry.query = local_path(&dir, &q);
-        } else if entry.query.as_os_str().is_empty() {
-            if let Some(act) = iri_of(row, "act") {
-                entry.query = local_path(&dir, &act);
-            }
+        } else if entry.query.as_os_str().is_empty()
+            && let Some(act) = iri_of(row, "act")
+        {
+            entry.query = local_path(&dir, &act);
         }
         push_unique_path(
             &mut entry.data,
@@ -238,10 +238,10 @@ fn load_entailment_regimes(
     }
     let mut by_test: BTreeMap<String, Vec<purrdf_entail::Regime>> = BTreeMap::new();
     for row in &rows {
-        if let (Some(test), Some(reg)) = (iri_of(row, "test"), iri_of(row, "regime")) {
-            if let Some(r) = purrdf_entail::Regime::from_iri(&reg) {
-                by_test.entry(test).or_default().push(r);
-            }
+        if let (Some(test), Some(reg)) = (iri_of(row, "test"), iri_of(row, "regime"))
+            && let Some(r) = purrdf_entail::Regime::from_iri(&reg)
+        {
+            by_test.entry(test).or_default().push(r);
         }
     }
     for case in cases.iter_mut() {
@@ -418,10 +418,10 @@ fn local_path(dir: &Path, iri: &str) -> PathBuf {
 
 /// Push `path` into `dst` if present and not already there.
 fn push_unique_path(dst: &mut Vec<PathBuf>, path: Option<PathBuf>) {
-    if let Some(p) = path {
-        if !dst.contains(&p) {
-            dst.push(p);
-        }
+    if let Some(p) = path
+        && !dst.contains(&p)
+    {
+        dst.push(p);
     }
 }
 

@@ -9,7 +9,7 @@
 //! subsumes from the SSSOM serializer (`sssom::curie_prefix`/`resolve_iri`).
 
 use pretty_assertions::assert_eq;
-use purrdf_iri::{contract, curie_prefix, expand_curie, parse, parse_uri, resolve, PrefixMap};
+use purrdf_iri::{PrefixMap, contract, curie_prefix, expand_curie, parse, parse_uri, resolve};
 
 #[test]
 fn parses_valid_iris_and_splits_components() {

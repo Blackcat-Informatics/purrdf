@@ -421,11 +421,7 @@ fn parse_row(
 
 /// `None` for an empty string, `Some(value)` otherwise.
 fn non_empty(value: String) -> Option<String> {
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_empty() { None } else { Some(value) }
 }
 
 // --------------------------------------------------------------------------- //
@@ -784,11 +780,11 @@ pub fn to_rdf(set: &SssomMappingSet) -> Vec<RdfQuad> {
 /// serializer's — `to_rdf` emits the best-effort IRI regardless so a partially
 /// valid set still produces inspectable RDF.
 fn resolve_iri(entity: &str, meta: &SssomMeta) -> RdfTerm {
-    if let Some(prefix) = curie_prefix(entity) {
-        if let Some(namespace) = meta.curie_map.get(prefix) {
-            let reference = &entity[prefix.len() + 1..];
-            return RdfTerm::iri(format!("{namespace}{reference}"));
-        }
+    if let Some(prefix) = curie_prefix(entity)
+        && let Some(namespace) = meta.curie_map.get(prefix)
+    {
+        let reference = &entity[prefix.len() + 1..];
+        return RdfTerm::iri(format!("{namespace}{reference}"));
     }
     RdfTerm::iri(entity.to_owned())
 }

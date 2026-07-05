@@ -12,7 +12,7 @@
 //! `String` per token, so this bench measures exactly the allocation the change
 //! removes on the common no-escape path.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_sparql_algebra::lexer::tokenize;
 
 const ROWS: usize = 4_000;

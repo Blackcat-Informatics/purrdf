@@ -7,7 +7,7 @@
 //! they fail. The caller reads `purrdf_error_code` / `purrdf_error_message` and
 //! must release it with `purrdf_error_free`.
 
-use std::ffi::{c_char, CString};
+use std::ffi::{CString, c_char};
 
 use purrdf_core::RdfDiagnostic;
 
@@ -59,7 +59,7 @@ pub(crate) fn store_error(out: *mut *mut PurrdfError, err: PurrdfError) {
 /// # Safety
 /// `err` must be null or a pointer returned by a libpurrdf entry point and not
 /// yet freed.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_error_code(err: *const PurrdfError) -> i32 {
     unsafe {
         ffi_guard!(PurrdfStatus::Panic as i32, {
@@ -76,7 +76,7 @@ pub unsafe extern "C" fn purrdf_error_code(err: *const PurrdfError) -> i32 {
 ///
 /// # Safety
 /// Same contract as [`purrdf_error_code`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_error_message(err: *const PurrdfError) -> *const c_char {
     unsafe {
         ffi_guard!(std::ptr::null(), {
@@ -94,7 +94,7 @@ pub unsafe extern "C" fn purrdf_error_message(err: *const PurrdfError) -> *const
 /// # Safety
 /// `err` must be null or a pointer returned by a libpurrdf entry point and not
 /// already freed.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_error_free(err: *mut PurrdfError) {
     unsafe {
         ffi_guard!((), {

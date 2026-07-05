@@ -24,7 +24,7 @@ impl PurrdfBuffer {
 ///
 /// # Safety
 /// `buf` must be a live buffer handle; `out_ptr`/`out_len` must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_buffer_data(
     buf: *const PurrdfBuffer,
     out_ptr: *mut *const u8,
@@ -47,7 +47,7 @@ pub unsafe extern "C" fn purrdf_buffer_data(
 ///
 /// # Safety
 /// `buf` must be null or a live buffer handle not already freed.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_buffer_free(buf: *mut PurrdfBuffer) {
     unsafe {
         ffi_guard!((), {

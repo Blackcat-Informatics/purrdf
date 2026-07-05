@@ -220,12 +220,11 @@ fn extract_vocab_prefix(text: &str, vocab: &SliceVocab) -> String {
         let trimmed = line.trim_start();
         if let Some(rest) = trimmed.strip_prefix("@prefix") {
             let rest = rest.trim_start();
-            if let Some(after) = rest.strip_prefix(needle.as_str()) {
-                if let Some(open) = after.find('<') {
-                    if let Some(close) = after[open + 1..].find('>') {
-                        return after[open + 1..open + 1 + close].to_string();
-                    }
-                }
+            if let Some(after) = rest.strip_prefix(needle.as_str())
+                && let Some(open) = after.find('<')
+                && let Some(close) = after[open + 1..].find('>')
+            {
+                return after[open + 1..open + 1 + close].to_string();
             }
         }
     }
@@ -610,11 +609,13 @@ mod tests {
         let add_line_count = patched.matches("slices/sliceA").count();
         assert_eq!(add_line_count, 1, "no duplicate sliceDependsOn lines");
         // Slice subject still typed.
-        assert!(store
-            .subjects_of_type("https://example.org/vocab/Slice")
-            .unwrap()
-            .iter()
-            .any(|s| s == &subject));
+        assert!(
+            store
+                .subjects_of_type("https://example.org/vocab/Slice")
+                .unwrap()
+                .iter()
+                .any(|s| s == &subject)
+        );
     }
 
     /// Adding a dependency already declared is a no-op (idempotent, no dupes).

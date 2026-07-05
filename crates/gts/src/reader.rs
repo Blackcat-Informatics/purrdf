@@ -16,19 +16,19 @@ use std::io::Read;
 
 use ciborium::value::Value;
 
-use crate::codec::{decode_chain, decode_chain_with_decrypt, Codec, CodecError};
+use crate::codec::{Codec, CodecError, decode_chain, decode_chain_with_decrypt};
 use crate::model::{
     AnnotationRow, Diagnostic, Graph, OpaqueNode, Quad, ReifierRow, Signature, StreamableInfo,
     Suppression, Term, TermKind, Triple3,
 };
-use crate::reader_layout::{check_index_mmr, layout_check, IndexRecord};
+use crate::reader_layout::{IndexRecord, check_index_mmr, layout_check};
 use crate::reader_rows::{
-    check_quad_positions, decode_annotation_row, decode_reifier_row, RowDecode,
+    RowDecode, check_quad_positions, decode_annotation_row, decode_reifier_row,
 };
 use crate::reader_union::union_segments;
 use crate::stream::DIGEST as STREAM_DIGEST;
 use crate::wire::{
-    content_id, digest_str, header_id, hex, iter_items, map_get, unwrap_header, MAGIC, VERSION,
+    MAGIC, VERSION, content_id, digest_str, header_id, hex, iter_items, map_get, unwrap_header,
 };
 
 pub(crate) fn as_i128(v: &Value) -> Option<i128> {
@@ -361,7 +361,7 @@ impl Folder<'_, '_, '_> {
                     return Err(PayloadError::Unavailable {
                         reason: "unknown-codec",
                         detail: format!("codec id {cid:?} not in catalog"),
-                    })
+                    });
                 }
             }
         }
@@ -371,27 +371,26 @@ impl Folder<'_, '_, '_> {
     /// Resolve a frame's logical payload (§6.1); error on missing capability.
     fn payload(&self, frame: &[(Value, Value)], blob: bool) -> Result<Value, PayloadError> {
         let d = map_get(frame, "d");
-        if let Some(Value::Array(ids)) = map_get(frame, "x") {
-            if !ids.is_empty() {
-                let Some(Value::Bytes(db)) = d else {
-                    return Err(PayloadError::Damaged(
-                        "transformed frame 'd' must be a byte string".to_string(),
-                    ));
-                };
-                let chain = self.resolve_codecs(ids)?;
-                let decoded = if let Some(content_key) = self.content_key {
-                    let decrypt =
-                        |codec: &Codec, data: &[u8]| decrypt_codec(codec, data, content_key);
-                    decode_chain_with_decrypt(&chain, db, Some(&decrypt))?
-                } else {
-                    decode_chain(&chain, db)?
-                };
-                if blob {
-                    return Ok(Value::Bytes(decoded));
-                }
-                return ciborium::de::from_reader(&decoded[..])
-                    .map_err(|e| PayloadError::Damaged(e.to_string()));
+        if let Some(Value::Array(ids)) = map_get(frame, "x")
+            && !ids.is_empty()
+        {
+            let Some(Value::Bytes(db)) = d else {
+                return Err(PayloadError::Damaged(
+                    "transformed frame 'd' must be a byte string".to_string(),
+                ));
+            };
+            let chain = self.resolve_codecs(ids)?;
+            let decoded = if let Some(content_key) = self.content_key {
+                let decrypt = |codec: &Codec, data: &[u8]| decrypt_codec(codec, data, content_key);
+                decode_chain_with_decrypt(&chain, db, Some(&decrypt))?
+            } else {
+                decode_chain(&chain, db)?
+            };
+            if blob {
+                return Ok(Value::Bytes(decoded));
             }
+            return ciborium::de::from_reader(&decoded[..])
+                .map_err(|e| PayloadError::Damaged(e.to_string()));
         }
         Ok(d.cloned().unwrap_or(Value::Null))
     }
@@ -532,10 +531,10 @@ impl Folder<'_, '_, '_> {
             }
             // Layout bookkeeping (§3.3): a stream:digest quad describes an
             // upcoming manifestation — record the IOU for the blob check.
-            if self.g.terms[p].value.as_deref() == Some(STREAM_DIGEST) {
-                if let Some(obj) = &self.g.terms[o].value {
-                    self.described.insert(obj.clone());
-                }
+            if self.g.terms[p].value.as_deref() == Some(STREAM_DIGEST)
+                && let Some(obj) = &self.g.terms[o].value
+            {
+                self.described.insert(obj.clone());
             }
         }
     }
@@ -562,15 +561,15 @@ impl Folder<'_, '_, '_> {
                     continue;
                 }
             };
-            if let Some(existing) = self.g.reifier(rid) {
-                if existing != triple {
-                    self.diag(
-                        "ConflictingReifier",
-                        format!("reifier {rid} rebound"),
-                        Some(index),
-                    );
-                    continue; // keep the first binding
-                }
+            if let Some(existing) = self.g.reifier(rid)
+                && existing != triple
+            {
+                self.diag(
+                    "ConflictingReifier",
+                    format!("reifier {rid} rebound"),
+                    Some(index),
+                );
+                continue; // keep the first binding
             }
             if reifier_binding_is_recursive(self.g, rid, triple) {
                 self.diag(
@@ -672,13 +671,13 @@ impl Folder<'_, '_, '_> {
             if let Some(meta) = pub_meta {
                 self.g.set_blob_meta(digest.clone(), meta);
             }
-            if let Some(Value::Bytes(raw)) = d {
-                if self.materialize {
-                    if chain.is_empty() {
-                        self.g.set_blob(digest.clone(), raw.clone());
-                    } else {
-                        self.g.set_lazy_blob(digest.clone(), raw.clone(), chain);
-                    }
+            if let Some(Value::Bytes(raw)) = d
+                && self.materialize
+            {
+                if chain.is_empty() {
+                    self.g.set_blob(digest.clone(), raw.clone());
+                } else {
+                    self.g.set_lazy_blob(digest.clone(), raw.clone(), chain);
                 }
             }
             self.blob_events
@@ -1297,10 +1296,10 @@ impl ActiveStreamingSegment {
                 &mut sink_slot,
             );
             self.g.segment_streamable.push(info);
-            if let Some(sink) = sink_slot {
-                if let Some(info) = self.g.segment_streamable.last() {
-                    sink.streamable_layout(self.segment_index, info);
-                }
+            if let Some(sink) = sink_slot
+                && let Some(info) = self.g.segment_streamable.last()
+            {
+                sink.streamable_layout(self.segment_index, info);
             }
         }
         absorb_segment_result(result, &self.g);

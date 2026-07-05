@@ -17,10 +17,10 @@
 //! Likewise the per-literal SPARQL 1.2 `"dir"` key is emitted only for
 //! directional literals, so non-directional output is unchanged.
 
+use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::graph::dataset_to_ntriples;
 use crate::model::ResultProvenance;
-use crate::SerializeOutcome;
 use purrdf_core::{SparqlResult, TermValue};
 
 /// Serialize a [`SparqlResult`] to SPARQL Results JSON, appending the additive

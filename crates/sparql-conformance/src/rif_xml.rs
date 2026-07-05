@@ -409,7 +409,9 @@ fn scan_entities(subset: &str) -> Vec<(String, String)> {
 // --- roxmltree helpers -----------------------------------------------------
 
 /// The element children of `node` (skipping text, comments, PIs).
-fn elements<'a, 'input>(node: &Node<'a, 'input>) -> impl Iterator<Item = Node<'a, 'input>> {
+fn elements<'a, 'input>(
+    node: &Node<'a, 'input>,
+) -> impl Iterator<Item = Node<'a, 'input>> + use<'a, 'input> {
     node.children().filter(Node::is_element)
 }
 

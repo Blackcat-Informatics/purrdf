@@ -22,8 +22,8 @@ use pyo3::types::{PyBytes, PyList, PyTuple};
 use super::query::term_value_to_rdf;
 use super::term::{extract_term, term_to_py};
 use crate::sparql::{
-    from_json, from_json_boolean, from_xml, from_xml_boolean, serialize as serialize_results,
-    ParsedSolutions, ResultProvenance, SparqlResultsFormat,
+    ParsedSolutions, ResultProvenance, SparqlResultsFormat, from_json, from_json_boolean, from_xml,
+    from_xml_boolean, serialize as serialize_results,
 };
 use crate::{BlankScope, RdfDatasetBuilder, RdfTerm, SparqlResult, TermValue};
 

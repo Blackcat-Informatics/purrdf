@@ -18,7 +18,7 @@
 //! `TermRef`/id → view for outputs) so the mapping lives in exactly one place.
 
 use purrdf_core::model::{RdfLiteral, RdfTerm, RdfTextDirection};
-use purrdf_core::{emit_term, BlankScope, RdfDataset, TermId, TermRef, TermValue};
+use purrdf_core::{BlankScope, RdfDataset, TermId, TermRef, TermValue, emit_term};
 
 use crate::buffer::PurrdfBuffer;
 use crate::error::PurrdfError;
@@ -446,7 +446,7 @@ unsafe fn view_to_rdf_term(view: &PurrdfTermView) -> Result<RdfTerm, PurrdfError
 /// # Safety
 /// `dataset` must be the live handle the view's `term_id` came from (when
 /// non-zero); `view` and the out-params must be valid.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_term_to_ntriples(
     dataset: *const PurrdfDataset,
     view: *const PurrdfTermView,
@@ -466,9 +466,9 @@ pub unsafe extern "C" fn purrdf_term_to_ntriples(
                 Some(id) => {
                     if dataset.is_null() {
                         return Err(PurrdfError::new(
-                        PurrdfStatus::NullPointer,
-                        "a view with a dataset term_id requires its dataset to render N-Triples",
-                    ));
+                            PurrdfStatus::NullPointer,
+                            "a view with a dataset term_id requires its dataset to render N-Triples",
+                        ));
                     }
                     emit_term(&PurrdfDataset::dataset(dataset).to_owned_term(id))
                 }

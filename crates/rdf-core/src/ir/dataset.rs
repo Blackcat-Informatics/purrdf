@@ -35,7 +35,7 @@ use crate::{
     RdfTextDirection, RdfTriple,
 };
 
-use super::term::{arena_str, BlankScope, InternedTerm, TermId, TermValue};
+use super::term::{BlankScope, InternedTerm, TermId, TermValue, arena_str};
 
 /// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification
 /// layer (`reifier rdf:reifies <<( s p o )>>`). Used to expose the reifier side-table
@@ -942,7 +942,7 @@ impl RdfDataset {
         p: Option<TermId>,
         o: Option<TermId>,
         g: GraphMatch,
-    ) -> impl Iterator<Item = QuadIds> + '_ {
+    ) -> impl Iterator<Item = QuadIds> + '_ + use<'_> {
         let (best, lo, hi) = self.candidate_run(plan, s, p, o, g);
         let candidates = match best {
             // For SPOG the run is a sub-slice of the freeze-sorted table (sequential).
@@ -1631,8 +1631,8 @@ const _: fn() = || {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::RdfDatasetBuilder;
     use crate::RdfLiteral;
+    use crate::ir::RdfDatasetBuilder;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
         b.intern_iri(&format!("http://example.org/{n}"))
@@ -1937,9 +1937,10 @@ mod tests {
         );
         // The o0 quad (which sorts first) carries no location.
         let frozen_o0 = ds.quads().position(|q| q.o == o0).unwrap();
-        assert!(ds
-            .location_of(QuadHandle::from_index(frozen_o0 as u32))
-            .is_none());
+        assert!(
+            ds.location_of(QuadHandle::from_index(frozen_o0 as u32))
+                .is_none()
+        );
     }
 
     #[test]
@@ -2143,8 +2144,8 @@ mod tests {
 
     // ── union ──────────────────────────────────────────────────────────────
 
-    use crate::ir::canon::canonicalize;
     use crate::RdfTextDirection;
+    use crate::ir::canon::canonicalize;
 
     /// Two independent datasets with the same predicate but different objects merge
     /// to a dataset holding BOTH quads, and the merge is commutative up to RDF

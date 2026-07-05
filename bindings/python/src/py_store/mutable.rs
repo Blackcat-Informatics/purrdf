@@ -12,13 +12,13 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
-use super::io::{dataset_from_quads_verbatim, parse_quads, read_input, PyRdfFormat};
+use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads, read_input};
 use super::query::{build_engine, materialize_results};
 use super::store::PyQuadIter;
-use super::term::{extract_graph_name, extract_term, PyQuad, PyVariable};
+use super::term::{PyQuad, PyVariable, extract_graph_name, extract_term};
 use crate::{
-    serialize_dataset, BlankScope, DatasetMut, GraphMatchValue, RdfDatasetBuilder, RdfLiteral,
-    RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SparqlEngine, SparqlRequest, TermValue,
+    BlankScope, DatasetMut, GraphMatchValue, RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfTerm,
+    RdfTriple, SerializeGraph, SparqlEngine, SparqlRequest, TermValue, serialize_dataset,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -393,17 +393,15 @@ fn blank_value_scoped(label: &str, scope: BlankScope) -> TermValue {
 /// the form `"{inner}.s{n}"` (non-empty `inner`, `n > 0`) decodes to
 /// `Blank{inner, scope: n}`; any other label is a DEFAULT-scope blank verbatim.
 fn blank_value_from_external_label(label: &str) -> TermValue {
-    if let Some((inner, raw_scope)) = label.rsplit_once(".s") {
-        if !inner.is_empty() {
-            if let Ok(scope) = raw_scope.parse::<u32>() {
-                if scope > 0 {
-                    return TermValue::Blank {
-                        label: inner.to_owned(),
-                        scope: BlankScope(scope),
-                    };
-                }
-            }
-        }
+    if let Some((inner, raw_scope)) = label.rsplit_once(".s")
+        && !inner.is_empty()
+        && let Ok(scope) = raw_scope.parse::<u32>()
+        && scope > 0
+    {
+        return TermValue::Blank {
+            label: inner.to_owned(),
+            scope: BlankScope(scope),
+        };
     }
     TermValue::Blank {
         label: label.to_owned(),

@@ -36,12 +36,12 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermId, TermValue};
 
-use crate::interner::{intern_into, Interner};
-use crate::owl_dl::concept::{Concept, Role};
-use crate::owl_dl::parser::{index_insert, CeExtractor, TripleIndex, Vocab};
-use crate::owl_dl::Kb;
-use crate::vocab::{OWL_SAMEAS, RDFS_DOMAIN, RDFS_RANGE, RDFS_SUBCLASSOF, RDF_TYPE};
 use crate::EntailError;
+use crate::interner::{Interner, intern_into};
+use crate::owl_dl::Kb;
+use crate::owl_dl::concept::{Concept, Role};
+use crate::owl_dl::parser::{CeExtractor, TripleIndex, Vocab, index_insert};
+use crate::vocab::{OWL_SAMEAS, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE, RDFS_SUBCLASSOF};
 
 /// A node of a query basic-graph-pattern triple: a variable (by name) or a concrete
 /// RDF term. Blank nodes in the query are concrete terms ([`QNode::Term`] wrapping a
@@ -251,44 +251,46 @@ fn extract_tasks(
     let mut seen: BTreeSet<(u8, u32)> = BTreeSet::new();
     for &(s, p, o) in resolved {
         if p == Some(v.ty) {
-            if let Some(oid) = o {
-                if ce.is_class_expression(oid) && seen.insert((0, oid)) {
-                    tasks.push(RawTask::TypeCe {
-                        ce_node: oid,
-                        concept: ce.expr(oid)?,
-                    });
-                }
+            if let Some(oid) = o
+                && ce.is_class_expression(oid)
+                && seen.insert((0, oid))
+            {
+                tasks.push(RawTask::TypeCe {
+                    ce_node: oid,
+                    concept: ce.expr(oid)?,
+                });
             }
         } else if p == Some(v.sub_class) {
-            if let Some(oid) = o {
-                if ce.is_class_expression(oid) && seen.insert((1, oid)) {
-                    tasks.push(RawTask::SubOfCe {
-                        ce_node: oid,
-                        concept: ce.expr(oid)?,
-                    });
-                    continue;
-                }
+            if let Some(oid) = o
+                && ce.is_class_expression(oid)
+                && seen.insert((1, oid))
+            {
+                tasks.push(RawTask::SubOfCe {
+                    ce_node: oid,
+                    concept: ce.expr(oid)?,
+                });
+                continue;
             }
-            if let Some(sid) = s {
-                if ce.is_class_expression(sid) && seen.insert((2, sid)) {
-                    tasks.push(RawTask::SuperOfCe {
-                        ce_node: sid,
-                        concept: ce.expr(sid)?,
-                    });
-                }
+            if let Some(sid) = s
+                && ce.is_class_expression(sid)
+                && seen.insert((2, sid))
+            {
+                tasks.push(RawTask::SuperOfCe {
+                    ce_node: sid,
+                    concept: ce.expr(sid)?,
+                });
             }
         } else if p == Some(v.domain) {
-            if let (Some(sid), None) = (s, o) {
-                if seen.insert((3, sid)) {
-                    tasks.push(RawTask::Domain { prop: sid });
-                }
+            if let (Some(sid), None) = (s, o)
+                && seen.insert((3, sid))
+            {
+                tasks.push(RawTask::Domain { prop: sid });
             }
-        } else if p == Some(v.range) {
-            if let (Some(sid), None) = (s, o) {
-                if seen.insert((4, sid)) {
-                    tasks.push(RawTask::Range { prop: sid });
-                }
-            }
+        } else if p == Some(v.range)
+            && let (Some(sid), None) = (s, o)
+            && seen.insert((4, sid))
+        {
+            tasks.push(RawTask::Range { prop: sid });
         }
     }
     Ok(tasks)

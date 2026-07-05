@@ -4,7 +4,7 @@
 //! Keeps the root `README.md` Rust quickstart honest: this test is the same
 //! code, verbatim. If it stops compiling or passing, fix the README too.
 
-use purrdf::{parse_dataset, serialize_dataset, RdfDatasetBuilder, RdfLiteral, SerializeGraph};
+use purrdf::{RdfDatasetBuilder, RdfLiteral, SerializeGraph, parse_dataset, serialize_dataset};
 
 #[test]
 fn readme_quickstart_round_trips() {

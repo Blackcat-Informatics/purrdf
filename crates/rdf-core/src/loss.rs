@@ -625,26 +625,34 @@ mod tests {
     #[test]
     fn pair_loss_known_lossy_pairs() {
         let trig_to_turtle = pair_loss_ledger("trig", "turtle");
-        assert!(trig_to_turtle
-            .entries()
-            .iter()
-            .any(|e| e.code == "named-graph-dropped"));
+        assert!(
+            trig_to_turtle
+                .entries()
+                .iter()
+                .any(|e| e.code == "named-graph-dropped")
+        );
 
         let nquads_to_rdfxml = pair_loss_ledger("nquads", "rdfxml");
-        assert!(nquads_to_rdfxml
-            .entries()
-            .iter()
-            .any(|e| e.code == "named-graph-dropped"));
-        assert!(nquads_to_rdfxml
-            .entries()
-            .iter()
-            .any(|e| e.code == "rdf12-star-unrepresentable"));
+        assert!(
+            nquads_to_rdfxml
+                .entries()
+                .iter()
+                .any(|e| e.code == "named-graph-dropped")
+        );
+        assert!(
+            nquads_to_rdfxml
+                .entries()
+                .iter()
+                .any(|e| e.code == "rdf12-star-unrepresentable")
+        );
 
         let turtle_to_jsonld = pair_loss_ledger("turtle", "jsonld");
-        assert!(turtle_to_jsonld
-            .entries()
-            .iter()
-            .any(|e| e.code == "rdf12-star-jsonld-rejected"));
+        assert!(
+            turtle_to_jsonld
+                .entries()
+                .iter()
+                .any(|e| e.code == "rdf12-star-jsonld-rejected")
+        );
     }
 
     #[test]

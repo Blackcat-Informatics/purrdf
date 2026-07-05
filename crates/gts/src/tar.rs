@@ -8,7 +8,7 @@ use std::fmt;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use crate::codec::encode_chain;
-use crate::files::{read_entries, FileEntry, FileEntryKind, FilePaxRecord};
+use crate::files::{FileEntry, FileEntryKind, FilePaxRecord, read_entries};
 use crate::model::{BlobEntry, Graph};
 
 const BLOCK: usize = 512;
@@ -246,21 +246,21 @@ fn append_pax_header<W: Write>(
     if !fits_tar_path(&metadata.path) {
         records.insert("path".to_string(), metadata.path.clone());
     }
-    if let Some(link_target) = &metadata.link_target {
-        if !fits_tar_field(link_target, 100) {
-            records.insert("linkpath".to_string(), link_target.clone());
-        }
+    if let Some(link_target) = &metadata.link_target
+        && !fits_tar_field(link_target, 100)
+    {
+        records.insert("linkpath".to_string(), link_target.clone());
     }
     if !options.numeric_owner {
-        if let Some(user_name) = &metadata.user_name {
-            if !fits_tar_field(user_name, 32) {
-                records.insert("uname".to_string(), user_name.clone());
-            }
+        if let Some(user_name) = &metadata.user_name
+            && !fits_tar_field(user_name, 32)
+        {
+            records.insert("uname".to_string(), user_name.clone());
         }
-        if let Some(group_name) = &metadata.group_name {
-            if !fits_tar_field(group_name, 32) {
-                records.insert("gname".to_string(), group_name.clone());
-            }
+        if let Some(group_name) = &metadata.group_name
+            && !fits_tar_field(group_name, 32)
+        {
+            records.insert("gname".to_string(), group_name.clone());
         }
     }
     for record in &entry.pax_records {

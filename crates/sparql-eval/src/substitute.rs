@@ -256,10 +256,10 @@ fn substitute_in_named_node_pattern(
     match pattern {
         NamedNodePattern::Variable(var) => {
             let name = var.as_str();
-            if expr_subs.contains_key(name) {
-                if let Some(Some(Expression::NamedNode(node))) = expr_subs.get(name) {
-                    return NamedNodePattern::NamedNode(node.clone());
-                }
+            if expr_subs.contains_key(name)
+                && let Some(Some(Expression::NamedNode(node))) = expr_subs.get(name)
+            {
+                return NamedNodePattern::NamedNode(node.clone());
             }
             NamedNodePattern::Variable(var)
         }

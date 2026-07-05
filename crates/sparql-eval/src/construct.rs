@@ -31,11 +31,11 @@ use purrdf_core::{
 };
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern, TermPattern, TriplePattern};
 
+use crate::DetHashMap;
 use crate::error::EvalError;
-use crate::eval::{eval, EvalCtx};
+use crate::eval::{EvalCtx, eval};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{instantiate_predicate, instantiate_term, positionally_ill_formed};
-use crate::DetHashMap;
 
 /// The `rdf:reifies` predicate IRI — the reification-layer indirection edge.
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
@@ -179,10 +179,10 @@ pub(crate) fn eval_construct(
             }
         }
 
-        if let Some(ids) = loss_term_ids {
-            if !dropped.is_empty() {
-                emit_dropped_losses(&dropped, row, &schema, &mut builder, ctx, ids);
-            }
+        if let Some(ids) = loss_term_ids
+            && !dropped.is_empty()
+        {
+            emit_dropped_losses(&dropped, row, &schema, &mut builder, ctx, ids);
         }
     }
 
@@ -252,12 +252,11 @@ fn collect_dropped_reifiers(
     // as a cloned `TermPattern::Triple(...)` so no per-row Box::new is needed later.
     let mut reifiers: Vec<(String, TermPattern)> = Vec::new();
     for tp in &where_triples {
-        if is_reifies(tp) {
-            if let (TermPattern::Variable(v), obj @ TermPattern::Triple(_)) =
+        if is_reifies(tp)
+            && let (TermPattern::Variable(v), obj @ TermPattern::Triple(_)) =
                 (&tp.subject, &tp.object)
-            {
-                reifiers.push((v.as_str().to_owned(), obj.clone()));
-            }
+        {
+            reifiers.push((v.as_str().to_owned(), obj.clone()));
         }
     }
 
@@ -289,14 +288,14 @@ fn collect_dropped_reifiers(
             if is_reifies(tp) {
                 continue;
             }
-            if let TermPattern::Variable(s) = &tp.subject {
-                if s.as_str() == reifier_var {
-                    has_annotation = true;
-                    if let NamedNodePattern::NamedNode(n) = &tp.predicate {
-                        if standpoint_according_to.is_some_and(|at| n.as_str() == at) {
-                            has_standpoint = true;
-                        }
-                    }
+            if let TermPattern::Variable(s) = &tp.subject
+                && s.as_str() == reifier_var
+            {
+                has_annotation = true;
+                if let NamedNodePattern::NamedNode(n) = &tp.predicate
+                    && standpoint_according_to.is_some_and(|at| n.as_str() == at)
+                {
+                    has_standpoint = true;
                 }
             }
         }

@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_shex::{
-    parse_shape_map, parse_shexc, resolve_shape_map, validate, ConformanceStatus, NodeSelector,
-    ShapeSelector,
+    ConformanceStatus, NodeSelector, ShapeSelector, parse_shape_map, parse_shexc,
+    resolve_shape_map, validate,
 };
 
 const P1: &str = "http://a.example/p1";
@@ -218,8 +218,10 @@ fn resolve_then_validate() {
     assert_eq!(associations.len(), 2);
     let result = validate(&schema, &data, &associations);
     assert!(result.all_conformant());
-    assert!(result
-        .entries
-        .iter()
-        .all(|e| e.status == ConformanceStatus::Conformant));
+    assert!(
+        result
+            .entries
+            .iter()
+            .all(|e| e.status == ConformanceStatus::Conformant)
+    );
 }

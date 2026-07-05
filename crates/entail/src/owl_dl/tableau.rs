@@ -33,9 +33,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::owl_dl::concept::{Decomp, Role};
-use crate::owl_dl::Kb;
 use crate::EntailError;
+use crate::owl_dl::Kb;
+use crate::owl_dl::concept::{Decomp, Role};
 
 /// A single completion-graph node.
 #[derive(Clone)]
@@ -344,19 +344,19 @@ impl<'a> Tableau<'a> {
                 }
                 match self.kb.table.decomp(cid) {
                     Decomp::NegNominal(w) => {
-                        if let Some(a) = nominal {
-                            if w.binary_search(&a).is_ok() {
-                                st.clash = true;
-                                return;
-                            }
+                        if let Some(a) = nominal
+                            && w.binary_search(&a).is_ok()
+                        {
+                            st.clash = true;
+                            return;
                         }
                     }
                     Decomp::Nominal(v) => {
-                        if let Some(a) = nominal {
-                            if v.binary_search(&a).is_err() {
-                                st.clash = true;
-                                return;
-                            }
+                        if let Some(a) = nominal
+                            && v.binary_search(&a).is_err()
+                        {
+                            st.clash = true;
+                            return;
                         }
                     }
                     _ => {}
@@ -674,15 +674,15 @@ impl<'a> Tableau<'a> {
         let incoming_x = st.nodes[x].incoming;
         let mut y = px;
         loop {
-            if !st.nodes[y].root {
-                if let Some(py) = st.nodes[y].parent {
-                    let py = find(st, py);
-                    if st.nodes[x].label == st.nodes[y].label
-                        && st.nodes[px].label == st.nodes[py].label
-                        && incoming_x == st.nodes[y].incoming
-                    {
-                        return true;
-                    }
+            if !st.nodes[y].root
+                && let Some(py) = st.nodes[y].parent
+            {
+                let py = find(st, py);
+                if st.nodes[x].label == st.nodes[y].label
+                    && st.nodes[px].label == st.nodes[py].label
+                    && incoming_x == st.nodes[y].incoming
+                {
+                    return true;
                 }
             }
             if st.nodes[y].root {

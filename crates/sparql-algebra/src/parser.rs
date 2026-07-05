@@ -24,7 +24,7 @@ use crate::ast::{
     QuadPattern, TermPattern, TriplePattern, Variable,
 };
 use crate::error::{ParseError, Result};
-use crate::lexer::{tokenize, Spanned, Token};
+use crate::lexer::{Spanned, Token, tokenize};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
@@ -281,7 +281,7 @@ impl<'a> Parser<'a, '_> {
                         return Err(ParseError::syntax(
                             format!("expected a version string after VERSION, found {other:?}"),
                             self.span(),
-                        ))
+                        ));
                     }
                 }
             } else {
@@ -1802,17 +1802,17 @@ impl<'a> Parser<'a, '_> {
                     return Err(ParseError::syntax(
                         "empty path range {} is not allowed",
                         self.span(),
-                    ))
+                    ));
                 }
             }
         };
-        if let Some(m) = max {
-            if min > m {
-                return Err(ParseError::syntax(
-                    format!("path range lower bound {min} exceeds upper bound {m}"),
-                    self.span(),
-                ));
-            }
+        if let Some(m) = max
+            && min > m
+        {
+            return Err(ParseError::syntax(
+                format!("path range lower bound {min} exceeds upper bound {m}"),
+                self.span(),
+            ));
         }
         Ok(PropertyPathExpression::Range {
             inner: Box::new(primary),

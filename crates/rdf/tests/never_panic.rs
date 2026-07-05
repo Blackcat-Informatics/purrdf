@@ -20,7 +20,7 @@
 //! across every text format it accepts (N-Quads / Turtle / TriG / N-Triples).
 
 use proptest::prelude::*;
-use purrdf_rdf::{parse_dataset, NativeRdfFormat};
+use purrdf_rdf::{NativeRdfFormat, parse_dataset};
 
 /// Raw arbitrary bytes, bounded to keep parsing cheap.
 fn arbitrary_bytes() -> impl Strategy<Value = Vec<u8>> {

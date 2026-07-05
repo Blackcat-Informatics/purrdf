@@ -24,9 +24,9 @@ use std::sync::Arc;
 use purrdf_core::TermValue;
 use purrdf_sparql_algebra::Query;
 
-use crate::error::EvalError;
-use crate::eval::{evaluate_query, materialize_solutions, EvalCtx, Outcome};
 use crate::DetHashMap;
+use crate::error::EvalError;
+use crate::eval::{EvalCtx, Outcome, evaluate_query, materialize_solutions};
 
 /// The result form of a function body: a `sh:select` returns the first projected
 /// value of the first solution; a `sh:ask` returns an `xsd:boolean`.
@@ -78,12 +78,12 @@ impl TypeConstraint {
         if self.is_any() {
             return Ok(());
         }
-        if let Some(nk) = self.node_kind {
-            if !matches_node_kind(value, nk) {
-                return Err(EvalError::function(format!(
-                    "SHACL-AF function <{iri}> {role} violates its sh:nodeKind constraint"
-                )));
-            }
+        if let Some(nk) = self.node_kind
+            && !matches_node_kind(value, nk)
+        {
+            return Err(EvalError::function(format!(
+                "SHACL-AF function <{iri}> {role} violates its sh:nodeKind constraint"
+            )));
         }
         if let Some(dt) = &self.datatype {
             let ok = matches!(value, TermValue::Literal { datatype, .. } if datatype == dt);

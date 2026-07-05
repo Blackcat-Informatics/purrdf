@@ -24,15 +24,15 @@
 //! - CONSTRUCT / DESCRIBE → **Turtle** via the `native_codecs` serializer (the one
 //!   serialization seam; never `oxigraph::io`, never the `purrdf-gts` crate).
 
-use purrdf::{serialize_dataset, SerializeGraph};
+use purrdf::{SerializeGraph, serialize_dataset};
 use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::NativeSparqlEngine;
 use purrdf_sparql_results::{
-    serialize as serialize_results, ResultProvenance, SparqlResultsFormat,
+    ResultProvenance, SparqlResultsFormat, serialize as serialize_results,
 };
 use wasm_bindgen::prelude::*;
 
-use crate::dataset::{diag_to_err, Dataset};
+use crate::dataset::{Dataset, diag_to_err};
 
 #[wasm_bindgen]
 impl Dataset {

@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 
 use crate::error::SliceError;
-use crate::mapping_support::{prefix_block, rename_template_prefix, GENERATED_BANNER};
+use crate::mapping_support::{GENERATED_BANNER, prefix_block, rename_template_prefix};
 use crate::vocab::SliceVocab;
 
 /// The committed file names for the seven standpoint projections (six peer-model
@@ -88,8 +88,7 @@ fn assemble(header: &str, body: &str, vocab: &SliceVocab) -> String {
 fn emit_owl2(vocab: &SliceVocab) -> String {
     let label_iri = format!("{}#standpointLabel", vocab.ontology_iri());
     let label_concat = "    BIND(CONCAT(\"<standpointAxiom><\", ?op, \"><Standpoint name=\\\"\", ?spName, \"\\\"/></\", ?op, \"></standpointAxiom>\") AS ?label)\n";
-    let sp_name =
-        "    BIND(IF(!BOUND(?sp) || ?sp = purrdf:universalStandpoint, \"*\", STR(?sp)) AS ?spName)\n";
+    let sp_name = "    BIND(IF(!BOUND(?sp) || ?sp = purrdf:universalStandpoint, \"*\", STR(?sp)) AS ?spName)\n";
     let modality = "    BIND(IF(BOUND(?mod) && (?mod = purrdf:conceivable || ?mod = purrdf:probable), \"Diamond\", \"Box\") AS ?op)\n";
     let refuted_filter = "    FILTER(!BOUND(?mod) || ?mod != purrdf:refuted)\n";
     let body = format!(

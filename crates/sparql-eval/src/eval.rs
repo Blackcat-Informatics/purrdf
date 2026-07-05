@@ -20,11 +20,11 @@ use std::sync::Arc;
 use purrdf_core::{GraphMatch, RdfDataset, TermFactory, TermValue};
 use purrdf_sparql_algebra::{GraphPattern, Query, Variable};
 
+use crate::DetHashMap;
 use crate::dataset_spec::ActiveDataset;
 use crate::error::EvalError;
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::SolutionSeq;
-use crate::DetHashMap;
 
 /// Tunable evaluation behavior. Every flag defaults to the production-optimal
 /// value; the criterion benches and differential tests flip individual flags to

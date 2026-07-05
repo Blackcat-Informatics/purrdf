@@ -36,7 +36,7 @@ use purrdf_slice::analysis::emit_analysis_graph;
 use purrdf_slice::artifact::{ArtifactRecord, ArtifactRole};
 use purrdf_slice::cache::ToolchainContext;
 use purrdf_slice::catalog::{ManifestView, SliceCatalog, SliceRecord, SliceTier};
-use purrdf_slice::fix_deps::{compute_fix_deps, ManifestPatch};
+use purrdf_slice::fix_deps::{ManifestPatch, compute_fix_deps};
 use purrdf_slice::ownership::{
     DependencyEdge, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipReport, OwnershipStatus,
     ReconciliationStatus, SliceIri,

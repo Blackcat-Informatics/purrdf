@@ -17,11 +17,11 @@
 //! Constant), in which case non-reflexive steps yield nothing while a reflexive
 //! closure step still yields the focus itself.
 
-use ::purrdf::{smallvec, IdSet, IdVec, RdfDataset, TermId};
+use ::purrdf::{IdSet, IdVec, RdfDataset, TermId, smallvec};
 
-use crate::data::{quads_for_pattern_ids, resolve_id, GraphFilter};
+use crate::data::{GraphFilter, quads_for_pattern_ids, resolve_id};
 use crate::shapes::Path;
-use crate::term::{term_id_to_native, NamedNode, Term};
+use crate::term::{NamedNode, Term, term_id_to_native};
 
 /// Evaluate a SHACL property path from `focus`, returning all reachable value
 /// nodes in the default graph.

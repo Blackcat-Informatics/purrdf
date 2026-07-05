@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use crate::{parse_dataset, NativeRdfFormat, RdfDataset};
+use crate::{NativeRdfFormat, RdfDataset, parse_dataset};
 
 /// Parse RDF bytes and freeze them into a validated [`RdfDataset`] via the native
 /// codec path.

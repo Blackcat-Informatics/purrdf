@@ -9,7 +9,7 @@
 //! bodies (memchr2 `"`/`\`), and `#` comment tails (memchr `\n`) — plus the removal
 //! of the former `char_indices().collect()` full-input materialization.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_sparql_algebra::lexer::{tokenize, tokenize_turtle};
 
 const ROWS: usize = 4_000;

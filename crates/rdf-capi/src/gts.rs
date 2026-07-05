@@ -36,7 +36,7 @@ use crate::status::PurrdfStatus;
 ///
 /// # Safety
 /// `bytes` must be valid for `len` bytes; the out-params must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_from_gts(
     bytes: *const u8,
     len: usize,
@@ -75,7 +75,7 @@ pub unsafe extern "C" fn purrdf_from_gts(
 /// # Safety
 /// `dataset` must be a live handle; `profile` must be a NUL-terminated C string;
 /// the out-params must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_to_gts(
     dataset: *const PurrdfDataset,
     profile: *const c_char,

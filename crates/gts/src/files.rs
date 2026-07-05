@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use ciborium::value::Value;
 
 use crate::model::{Graph, Quad, Term, TermKind};
-use crate::writer::{digest_string, Writer, WriterOptions};
+use crate::writer::{Writer, WriterOptions, digest_string};
 
 const FILES_NS: &str = "https://w3id.org/gts/files#";
 const FILE_ENTRY: &str = "https://w3id.org/gts/files#FileEntry";
@@ -1414,10 +1414,10 @@ fn suppressed_blob_digests(graph: &Graph) -> HashSet<String> {
                     }
                 }
             }
-            if kind == "blob" {
-                if let Some(d) = digest {
-                    out.insert(d);
-                }
+            if kind == "blob"
+                && let Some(d) = digest
+            {
+                out.insert(d);
             }
         }
     }

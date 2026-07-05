@@ -25,7 +25,7 @@ use purrdf_core::{RdfDataset, TermValue};
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern};
 
 use crate::error::EvalError;
-use crate::eval::{eval, materialize_solutions, EvalCtx};
+use crate::eval::{EvalCtx, eval, materialize_solutions};
 
 /// Evaluate a `DESCRIBE` query to a frozen IR dataset: the union Symmetric CBD of its
 /// resolved subject IRIs.

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_shex::{
-    parse_shexc, resolve_imports, validate, ConformanceStatus, ShapeSelector, ShexError,
+    ConformanceStatus, ShapeSelector, ShexError, parse_shexc, resolve_imports, validate,
 };
 
 /// Parse `src` as ShExC with a fixed base.

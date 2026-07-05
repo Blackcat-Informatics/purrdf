@@ -24,7 +24,7 @@ use crate::{cstr_to_str, opt_cstr_to_str};
 /// # Safety
 /// `dataset` must be a live handle; the `c_char` pointers must be null or
 /// NUL-terminated; the out-params must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_serialize(
     dataset: *const PurrdfDataset,
     media_type: *const c_char,

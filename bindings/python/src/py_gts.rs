@@ -34,11 +34,11 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 use crate::bundle::{RdfBundle, UnitMetadata};
 // The byte-emitting compose core now lives in the pyo3-free `gts_compose` module
 // (P6); this surface is the thin pyo3 wrapper that delegates to it.
-use crate::gts_compose::{emit_gts, BlobRow, SnapshotBuilder, DEFAULT_RSYNCABLE_THRESHOLD};
+use crate::gts_compose::{BlobRow, DEFAULT_RSYNCABLE_THRESHOLD, SnapshotBuilder, emit_gts};
 use crate::ir::RdfDataset;
 use crate::provenance::{DatasetProvenance, OriginKind};
-use crate::py_store::{parse_quads, PyRdfFormat};
-use crate::{flat_dataset_from_quads, NativeRdfFormat, RdfQuad};
+use crate::py_store::{PyRdfFormat, parse_quads};
+use crate::{NativeRdfFormat, RdfQuad, flat_dataset_from_quads};
 
 /// The `rep`-label prefix every S3 slice-artifact blob carries (S3). A blob
 /// authored from the slice catalog rides ahead of the snapshot with

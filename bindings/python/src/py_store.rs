@@ -56,7 +56,7 @@ mod store;
 mod term;
 mod xsd;
 
-pub(crate) use io::{parse_quads, PyRdfFormat};
+pub(crate) use io::{PyRdfFormat, parse_quads};
 
 use pyo3::prelude::*;
 

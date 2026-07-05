@@ -36,13 +36,13 @@ use purrdf_sparql_algebra::{
     GraphPattern, Literal, NamedNodePattern, TermPattern, TriplePattern, Variable,
 };
 
+use crate::DetHashSet;
 use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
 use crate::dataset_spec::{ActiveDataset, GraphScope};
 use crate::error::EvalError;
 use crate::eval::{BgpOrderCache, EvalCtx};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
-use crate::DetHashSet;
 use std::sync::Arc;
 
 /// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification

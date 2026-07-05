@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_shex::{
-    parse_shexc, validate, validate_with, ConformanceStatus, SemActRegistry, ShapeSelector,
-    ValidationOptions,
+    ConformanceStatus, SemActRegistry, ShapeSelector, ValidationOptions, parse_shexc, validate,
+    validate_with,
 };
 
 fn data() -> Arc<RdfDataset> {

@@ -10,7 +10,7 @@
 
 use std::os::raw::c_char;
 
-use purrdf_validate::{validate_to_sarif_string, SarifOptions};
+use purrdf_validate::{SarifOptions, validate_to_sarif_string};
 
 use crate::buffer::PurrdfBuffer;
 use crate::cstr_to_str;
@@ -32,7 +32,7 @@ fn validate_to_sarif_bytes(shapes_ttl: &str, data_nt: &str) -> Result<Vec<u8>, S
 /// # Safety
 /// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
 /// `out_buffer` must be a writable pointer; `out_error` must be null or writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
     shapes_ttl: *const c_char,
     data_nt: *const c_char,

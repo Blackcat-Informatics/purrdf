@@ -12,7 +12,7 @@ use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
 use crate::status::PurrdfStatus;
 use crate::term::{
-    render_term, view_to_value, PurrdfGraphMatch, PurrdfGraphMatchKind, PurrdfTermView,
+    PurrdfGraphMatch, PurrdfGraphMatchKind, PurrdfTermView, render_term, view_to_value,
 };
 
 /// A pattern-quad cursor. It holds an `Arc<RdfDataset>` clone (`pin`) so the
@@ -103,7 +103,7 @@ unsafe fn resolve_graph(
 /// # Safety
 /// `dataset` must be a live handle; the view/match pointers must be valid where
 /// non-null; the out-params must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_quads_for_pattern(
     dataset: *const PurrdfDataset,
     s: *const PurrdfTermView,
@@ -162,7 +162,7 @@ pub unsafe extern "C" fn purrdf_quads_for_pattern(
 ///
 /// # Safety
 /// `cursor` must be a live cursor; the out-params must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_cursor_next(
     cursor: *mut PurrdfCursor,
     out_s: *mut PurrdfTermView,
@@ -211,7 +211,7 @@ pub unsafe extern "C" fn purrdf_cursor_next(
 ///
 /// # Safety
 /// `cursor` must be null or a live cursor not already freed.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_cursor_free(cursor: *mut PurrdfCursor) {
     unsafe {
         ffi_guard!((), {

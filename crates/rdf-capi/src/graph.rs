@@ -9,7 +9,7 @@ use purrdf_core::{DatasetMut, MutableDataset, QuadValues};
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
 use crate::status::PurrdfStatus;
-use crate::term::{view_to_value, PurrdfTermView};
+use crate::term::{PurrdfTermView, view_to_value};
 
 /// A copy-on-write mutable graph: a suppression-delta over a frozen base
 /// dataset. Single-threaded mutable — NOT `Sync`; do not touch one from two
@@ -44,7 +44,7 @@ unsafe fn quad_from_views(
 ///
 /// # Safety
 /// `dataset` must be a live handle; `out_graph` must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_graph_from_dataset(
     dataset: *const PurrdfDataset,
     out_graph: *mut *mut PurrdfGraph,
@@ -69,7 +69,7 @@ pub unsafe extern "C" fn purrdf_graph_from_dataset(
 /// # Safety
 /// `graph` must be a live handle; the view pointers must be valid where
 /// non-null; the out-params must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_graph_insert(
     graph: *mut PurrdfGraph,
     s: *const PurrdfTermView,
@@ -103,7 +103,7 @@ pub unsafe extern "C" fn purrdf_graph_insert(
 ///
 /// # Safety
 /// Same contract as [`purrdf_graph_insert`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_graph_remove(
     graph: *mut PurrdfGraph,
     s: *const PurrdfTermView,
@@ -137,7 +137,7 @@ pub unsafe extern "C" fn purrdf_graph_remove(
 ///
 /// # Safety
 /// `graph` must be a live handle; `out_dataset` must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_graph_freeze(
     graph: *const PurrdfGraph,
     out_dataset: *mut *mut PurrdfDataset,
@@ -164,7 +164,7 @@ pub unsafe extern "C" fn purrdf_graph_freeze(
 ///
 /// # Safety
 /// `graph` must be null or a live graph handle not already freed.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_graph_free(graph: *mut PurrdfGraph) {
     unsafe {
         ffi_guard!((), {

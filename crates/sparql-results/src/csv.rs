@@ -15,10 +15,10 @@
 //! [`ResultProvenance`] is trimmed and the drop is signalled via
 //! [`SerializeOutcome::provenance_dropped`] (the no-silent-cap contract).
 
+use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::model::ResultProvenance;
 use crate::term::ntriples_token;
-use crate::SerializeOutcome;
 use purrdf_core::{SparqlResult, TermValue};
 
 /// Serialize a [`SparqlResult`] to W3C SPARQL Results CSV.

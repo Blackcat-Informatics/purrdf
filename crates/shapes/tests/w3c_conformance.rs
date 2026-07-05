@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use purrdf::RdfDataset;
-use purrdf_shapes::data::{native_quads, GraphFilter};
+use purrdf_shapes::data::{GraphFilter, native_quads};
 use purrdf_shapes::model::{rdf, sh};
 use purrdf_shapes::term::{NamedNode, Term};
 

@@ -18,10 +18,10 @@ use ::purrdf::RdfDataset;
 
 use purrdf_sparql_eval::UserFunctionRegistry;
 
-use crate::components::{severity_from_term, ComponentRegistry};
-use crate::data::{native_quads, GraphFilter};
+use crate::components::{ComponentRegistry, severity_from_term};
+use crate::data::{GraphFilter, native_quads};
 use crate::expression::NodeExpr;
-use crate::model::{rdf, rdfs, sh, BoxRoleVocab};
+use crate::model::{BoxRoleVocab, rdf, rdfs, sh};
 use crate::report::Severity;
 use crate::term::{NamedNode, Term};
 
@@ -953,10 +953,10 @@ impl<'s> Parser<'s> {
         }
 
         // Implicit class target: shape node is itself typed rdfs:Class
-        if let Term::NamedNode(_) = id {
-            if self.has_type(id, rdfs::CLASS) {
-                targets.push(Target::ImplicitClass(id.clone()));
-            }
+        if let Term::NamedNode(_) = id
+            && self.has_type(id, rdfs::CLASS)
+        {
+            targets.push(Target::ImplicitClass(id.clone()));
         }
 
         // sh:target — SHACL-AF extension targets. Supports plain sh:SPARQLTarget
@@ -1010,11 +1010,11 @@ impl<'s> Parser<'s> {
             let type_terms: Vec<Term> = self.objects_of(&t_node, rdf::TYPE);
             let mut matched: Option<(NamedNode, SparqlTargetType)> = None;
             for t in type_terms {
-                if let Term::NamedNode(n) = &t {
-                    if let Some(target_type) = self.target_types.get(n.as_str()) {
-                        matched = Some((n.clone(), target_type.clone()));
-                        break;
-                    }
+                if let Term::NamedNode(n) = &t
+                    && let Some(target_type) = self.target_types.get(n.as_str())
+                {
+                    matched = Some((n.clone(), target_type.clone()));
+                    break;
                 }
             }
             let Some((type_iri, target_type)) = matched else {
@@ -1951,18 +1951,23 @@ mod tests {
             .iter()
             .flat_map(|ps| ps.constraints.iter())
             .collect();
-        assert!(all
-            .iter()
-            .any(|c| matches!(c, Constraint::LessThan(n) if n.as_str().ends_with("end"))));
-        assert!(all
-            .iter()
-            .any(|c| matches!(c, Constraint::LessThanOrEquals(n) if n.as_str().ends_with("last"))));
-        assert!(all
-            .iter()
-            .any(|c| matches!(c, Constraint::Equals(n) if n.as_str().ends_with('b'))));
-        assert!(all
-            .iter()
-            .any(|c| matches!(c, Constraint::Disjoint(n) if n.as_str().ends_with('d'))));
+        assert!(
+            all.iter()
+                .any(|c| matches!(c, Constraint::LessThan(n) if n.as_str().ends_with("end")))
+        );
+        assert!(
+            all.iter().any(
+                |c| matches!(c, Constraint::LessThanOrEquals(n) if n.as_str().ends_with("last"))
+            )
+        );
+        assert!(
+            all.iter()
+                .any(|c| matches!(c, Constraint::Equals(n) if n.as_str().ends_with('b')))
+        );
+        assert!(
+            all.iter()
+                .any(|c| matches!(c, Constraint::Disjoint(n) if n.as_str().ends_with('d')))
+        );
     }
 
     #[test]
@@ -2703,10 +2708,12 @@ mod tests {
         match expr {
             NodeExpr::Filter { nodes, shape } => {
                 assert!(matches!(*nodes, NodeExpr::This));
-                assert!(shape
-                    .constraints
-                    .iter()
-                    .any(|c| matches!(c, Constraint::NodeKind(NodeKindValue::Iri))));
+                assert!(
+                    shape
+                        .constraints
+                        .iter()
+                        .any(|c| matches!(c, Constraint::NodeKind(NodeKindValue::Iri)))
+                );
             }
             other => panic!("expected Filter, got {other:?}"),
         }

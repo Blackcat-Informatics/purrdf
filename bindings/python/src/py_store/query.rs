@@ -15,8 +15,8 @@ use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
-use super::io::{serialize_triples, PyRdfFormat};
-use super::term::{term_to_py, PyTriple, PyVariable};
+use super::io::{PyRdfFormat, serialize_triples};
+use super::term::{PyTriple, PyVariable, term_to_py};
 use crate::{RdfDataset, RdfTerm, RdfTriple, SparqlResult, TermValue};
 
 /// Build the [`NativeSparqlEngine`] for one query/update call from the optional
@@ -300,7 +300,7 @@ fn term_value_predicate(value: TermValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_dataset, SparqlEngine, SparqlRequest};
+    use crate::{SparqlEngine, SparqlRequest, parse_dataset};
 
     /// An `ASK` whose filter calls an IRI in call position under a would-be
     /// extension namespace.

@@ -28,11 +28,11 @@
 
 use std::sync::Arc;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder};
 use purrdf_sparql_algebra::SparqlParser;
-use purrdf_sparql_eval::{evaluate_query, EvalCtx};
+use purrdf_sparql_eval::{EvalCtx, evaluate_query};
 
 /// `:s{i} :knows :o{i}` for i in 0..n, plus `:o0 :member :club` so exactly one
 /// subject survives the anti-join. N subjects → N outer rows for the EXISTS, and a
@@ -92,8 +92,7 @@ const LARGE_INNER_QUERY: &str = "SELECT ?s WHERE { ?s <http://ex/knows> ?o \
 
 /// A UNION whose `:likes` branch leaves `?o` unbound, so half the outer rows probe
 /// the inner with an unbound shared column (the per-row compatibility scan branch).
-const UNBOUND_SCAN_QUERY: &str =
-    "SELECT ?s WHERE { { ?s <http://ex/knows> ?o } UNION { ?s <http://ex/likes> ?z } \
+const UNBOUND_SCAN_QUERY: &str = "SELECT ?s WHERE { { ?s <http://ex/knows> ?o } UNION { ?s <http://ex/likes> ?z } \
      FILTER NOT EXISTS { ?o <http://ex/member> ?m } }";
 
 fn run(ds: &RdfDataset, query: &str, memo: bool) {

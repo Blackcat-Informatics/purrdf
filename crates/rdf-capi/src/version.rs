@@ -21,7 +21,7 @@ pub const PURRDF_ABI_PATCH: u32 = 0;
 ///
 /// # Safety
 /// `out` must be null-checked-writable for one `PurrdfAbiVersion`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_abi_version(out: *mut PurrdfAbiVersion) -> i32 {
     unsafe {
         ffi_guard!(PurrdfStatus::Panic as i32, {
@@ -55,7 +55,7 @@ fn capabilities_to_c(caps: RdfStoreCapabilities) -> PurrdfCapabilities {
 ///
 /// # Safety
 /// `dataset` must be a live handle; `out` must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_capabilities(
     dataset: *const PurrdfDataset,
     out: *mut PurrdfCapabilities,

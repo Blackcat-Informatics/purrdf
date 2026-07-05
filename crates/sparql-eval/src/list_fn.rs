@@ -30,11 +30,11 @@ use purrdf_core::{BlankScope, TermId, TermValue};
 use purrdf_sparql_algebra::PurrdfFn;
 use purrdf_xsd::XsdValue;
 
+use crate::DetHashSet;
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
 use crate::expr::xsd_of;
-use crate::scratch::{term_id_to_value, SolutionTerm};
-use crate::DetHashSet;
+use crate::scratch::{SolutionTerm, term_id_to_value};
 
 const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
 const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
@@ -448,7 +448,7 @@ mod tests {
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 
     use crate::error::EvalError;
-    use crate::eval::{evaluate_query, EvalCtx, Outcome};
+    use crate::eval::{EvalCtx, Outcome, evaluate_query};
 
     /// The three-element list `(x y z)` rooted at `ex:l0`, plus an anchor triple
     /// `ex:q ex:list ex:l0` so a BGP can bind the head.

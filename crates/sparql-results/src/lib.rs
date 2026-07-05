@@ -34,7 +34,7 @@ mod xml_read;
 pub use csv::to_csv;
 pub use error::Error;
 pub use json::to_json;
-pub use json_read::{from_json, from_json_boolean, ParsedSolutions};
+pub use json_read::{ParsedSolutions, from_json, from_json_boolean};
 pub use model::{ResultProvenance, SolutionProvenance};
 pub use tsv::to_tsv;
 pub use xml::to_xml;
@@ -114,14 +114,18 @@ mod tests {
         let prov = ResultProvenance::default();
 
         let json = serialize(&result, SparqlResultsFormat::Json, &prov).expect("json");
-        assert!(String::from_utf8(json.bytes)
-            .expect("utf8")
-            .starts_with('{'));
+        assert!(
+            String::from_utf8(json.bytes)
+                .expect("utf8")
+                .starts_with('{')
+        );
 
         let xml = serialize(&result, SparqlResultsFormat::Xml, &prov).expect("xml");
-        assert!(String::from_utf8(xml.bytes)
-            .expect("utf8")
-            .starts_with("<?xml"));
+        assert!(
+            String::from_utf8(xml.bytes)
+                .expect("utf8")
+                .starts_with("<?xml")
+        );
 
         let csv = serialize(&result, SparqlResultsFormat::Csv, &prov).expect("csv");
         assert_eq!(

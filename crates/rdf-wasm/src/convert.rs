@@ -12,7 +12,7 @@
 use purrdf::ir::QuadValues;
 use purrdf::{BlankScope, RdfLiteral, RdfTerm, RdfTriple, TermValue};
 
-use crate::term::{canonicalize_literal, Quad, Term, TermInner};
+use crate::term::{Quad, Term, TermInner, canonicalize_literal};
 
 /// Lower an owned [`RdfTerm`] to its dataset-independent [`TermValue`]. Owned terms
 /// have no blank-node scope, so blanks take the default scope (matching the engine's

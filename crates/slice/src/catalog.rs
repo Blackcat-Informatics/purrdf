@@ -222,10 +222,10 @@ fn extract_manifest_view(ds: &Dataset, vocab: &SliceVocab) -> Result<ManifestVie
                 }
             }
             p if p == slice_tier => {
-                if tier.is_none() {
-                    if let Object::Named(nn) = &object {
-                        tier = Some(SliceTier::from_iri(nn, vocab));
-                    }
+                if tier.is_none()
+                    && let Object::Named(nn) = &object
+                {
+                    tier = Some(SliceTier::from_iri(nn, vocab));
                 }
             }
             p if p == slice_consumer => {

@@ -175,10 +175,10 @@ impl<'a> Renderer<'a> {
     fn find_iri(&self, iri: &str) -> Option<TermId> {
         for i in 0..self.dataset.term_count() {
             let id = TermId::from_index(i as u32);
-            if let TermRef::Iri(v) = self.dataset.resolve(id) {
-                if v == iri {
-                    return Some(id);
-                }
+            if let TermRef::Iri(v) = self.dataset.resolve(id)
+                && v == iri
+            {
+                return Some(id);
             }
         }
         None
@@ -256,11 +256,7 @@ impl<'a> Renderer<'a> {
                 let obj_depth = if oi == 0 { depth } else { depth + 1 };
                 let rendered = self.render_object(obj.id, obj_depth);
                 let terminator = if pi == last_pred && oi == last_obj {
-                    if top {
-                        " ."
-                    } else {
-                        " ;"
-                    }
+                    if top { " ." } else { " ;" }
                 } else if oi == last_obj {
                     " ;"
                 } else {
@@ -402,11 +398,11 @@ impl<'a> Renderer<'a> {
 
     fn iri(&self, iri: &str) -> String {
         for (prefix, ns) in &self.prefixes {
-            if let Some(local) = iri.strip_prefix(ns.as_str()) {
-                if is_valid_pn_local(local) {
-                    self.used_prefixes.borrow_mut().insert(prefix.clone());
-                    return format!("{prefix}:{local}");
-                }
+            if let Some(local) = iri.strip_prefix(ns.as_str())
+                && is_valid_pn_local(local)
+            {
+                self.used_prefixes.borrow_mut().insert(prefix.clone());
+                return format!("{prefix}:{local}");
             }
         }
         format!("<{}>", escape_iri(iri))
@@ -457,10 +453,10 @@ impl<'a> Renderer<'a> {
     /// Abbreviation used only for ORDERING (does not record prefix usage).
     fn abbrev_for_sort(&self, iri: &str) -> String {
         for (prefix, ns) in &self.prefixes {
-            if let Some(local) = iri.strip_prefix(ns.as_str()) {
-                if is_valid_pn_local(local) {
-                    return format!("{prefix}:{local}");
-                }
+            if let Some(local) = iri.strip_prefix(ns.as_str())
+                && is_valid_pn_local(local)
+            {
+                return format!("{prefix}:{local}");
             }
         }
         iri.to_owned()

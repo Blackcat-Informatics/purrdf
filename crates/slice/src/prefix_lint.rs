@@ -124,12 +124,12 @@ pub fn lint_prefix_consistency(
             let prefix = caps[1].to_owned();
             let namespace = caps[2].to_owned();
             // Only registry prefixes are policed; only a NON-registry namespace is a shadow.
-            if let Some(&canonical) = registry.get(prefix.as_str()) {
-                if namespace != canonical {
-                    shadows
-                        .entry((prefix, namespace))
-                        .or_insert_with(|| rel.clone());
-                }
+            if let Some(&canonical) = registry.get(prefix.as_str())
+                && namespace != canonical
+            {
+                shadows
+                    .entry((prefix, namespace))
+                    .or_insert_with(|| rel.clone());
             }
         }
     }

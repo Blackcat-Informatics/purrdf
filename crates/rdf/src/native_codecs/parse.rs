@@ -20,10 +20,10 @@
 //! absolute IRIs and ignore the base (N/A by syntax).
 
 use std::collections::HashSet;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
-use super::media_type::{classify, NativeRdfFormat};
+use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerGraph, SerTermKind};
 use super::span::{ParseOptions, SpanCollector, SpanTable};
 use super::text_parse::LineParseMode;
@@ -85,16 +85,14 @@ where
             object,
             graph,
         } = row;
-        if is_reifies {
-            if let FoldNode::Triple { s, p, o } = object {
-                let triple_term = builder.intern_triple(s, p, o);
-                // Capture the reifier declaration's OWN graph (TriG `GRAPH g { … }`),
-                // so `GRAPH ?g { << … >> … }` binds `?g` to it. Turtle / the default
-                // graph carry `graph == None`, byte-identical to the old fold.
-                builder.push_reifier_in_graph(subject, triple_term, graph);
-                reifier_ids.insert(subject);
-                continue;
-            }
+        if is_reifies && let FoldNode::Triple { s, p, o } = object {
+            let triple_term = builder.intern_triple(s, p, o);
+            // Capture the reifier declaration's OWN graph (TriG `GRAPH g { … }`),
+            // so `GRAPH ?g { << … >> … }` binds `?g` to it. Turtle / the default
+            // graph carry `graph == None`, byte-identical to the old fold.
+            builder.push_reifier_in_graph(subject, triple_term, graph);
+            reifier_ids.insert(subject);
+            continue;
         }
         let object_id = match object {
             FoldNode::Term(id) => id,
@@ -584,7 +582,7 @@ fn parse_gts_direction(
             return Err(RdfDiagnostic::error(
                 "native-codec-invalid-direction",
                 format!("unrecognized GTS literal base direction {other:?}"),
-            ))
+            ));
         }
     };
     if language.is_none_or(str::is_empty) {

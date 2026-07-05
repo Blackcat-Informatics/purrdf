@@ -67,6 +67,7 @@ Use that same publisher configuration for these crates:
 - `purrdf-xsd`
 - `purrdf-gts`
 - `purrdf-core`
+- `purrdf-entail`
 - `purrdf-sparql-algebra`
 - `purrdf-sparql-results`
 - `purrdf-sparql-eval`

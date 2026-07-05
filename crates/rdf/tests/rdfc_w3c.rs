@@ -35,7 +35,7 @@
 
 use std::path::{Path, PathBuf};
 
-use purrdf_rdf::{canonicalize_with, parse_dataset, CanonHash, NativeRdfFormat};
+use purrdf_rdf::{CanonHash, NativeRdfFormat, canonicalize_with, parse_dataset};
 
 /// Tests that specify `rdfc:hashAlgorithm "SHA384"` in the W3C manifest (the rest
 /// use the SHA-256 default). As of the vendored suite this is exactly `test075`

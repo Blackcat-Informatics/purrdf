@@ -8,8 +8,8 @@ use std::sync::{Arc, OnceLock};
 
 use purrdf_sparql_algebra::{Query, SparqlParser};
 
-use crate::components::{severity_from_term, Component, Validator, ValidatorKind};
-use crate::data::{native_quads, GraphFilter};
+use crate::components::{Component, Validator, ValidatorKind, severity_from_term};
+use crate::data::{GraphFilter, native_quads};
 use crate::expression::{FnCall, NodeExpr};
 use crate::model::{rdf, sh};
 use crate::term::{NamedNode, Term};
@@ -710,10 +710,10 @@ impl Parser<'_> {
             return Ok(NodeExpr::Constant(node.clone()));
         }
         // The focus-node expression `sh:this`.
-        if let Term::NamedNode(n) = node {
-            if n.as_str() == sh::THIS {
-                return Ok(NodeExpr::This);
-            }
+        if let Term::NamedNode(n) = node
+            && n.as_str() == sh::THIS
+        {
+            return Ok(NodeExpr::This);
         }
 
         // Which mutually-exclusive structural key does the node carry?

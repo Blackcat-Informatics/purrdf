@@ -36,7 +36,7 @@
 use std::collections::HashMap;
 
 use purrdf_iri::Position;
-use purrdf_sparql_algebra::lexer::{tokenize, tokenize_turtle, Spanned, Token};
+use purrdf_sparql_algebra::lexer::{Spanned, Token, tokenize, tokenize_turtle};
 use rayon::prelude::*;
 
 use super::media_type::NativeRdfFormat;
@@ -678,10 +678,8 @@ fn validate_subject(
     if node_is(node, &[is_iri, is_bnode]) {
         return Ok(());
     }
-    if allow_triple_subject {
-        if let Node::Triple(s, p, o) = node {
-            return validate_triple(s, p, o, line_no, column, allow_triple_subject);
-        }
+    if allow_triple_subject && let Node::Triple(s, p, o) = node {
+        return validate_triple(s, p, o, line_no, column, allow_triple_subject);
     }
     Err(err_at("invalid subject term", line_no, column))
 }
@@ -731,10 +729,10 @@ fn validate_statement(
     validate_subject(&nodes[0], line_no, column, allow_graph)?;
     validate_predicate(&nodes[1], line_no, column)?;
     validate_object(&nodes[2], line_no, column, allow_graph)?;
-    if let Some(graph_name) = nodes.get(3) {
-        if !node_is(graph_name, &[is_iri, is_bnode]) {
-            return Err(err_at("invalid graph name term", line_no, column));
-        }
+    if let Some(graph_name) = nodes.get(3)
+        && !node_is(graph_name, &[is_iri, is_bnode])
+    {
+        return Err(err_at("invalid graph name term", line_no, column));
     }
     Ok(())
 }
@@ -1424,15 +1422,15 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         }
         // Record the subject's source position when tracking is on. `S::ENABLED` is a
         // const, so for `NoSpans` this block (and the lazy `LineIndex`) is dead code.
-        if S::ENABLED {
-            if let Some(key) = subject_key(&nodes[0]) {
-                let src = self.src;
-                let index = self
-                    .line_index
-                    .get_or_insert_with(|| purrdf_iri::LineIndex::new(src));
-                let position = index.locate(src, self.subject_off);
-                self.collector.record(&key, position);
-            }
+        if S::ENABLED
+            && let Some(key) = subject_key(&nodes[0])
+        {
+            let src = self.src;
+            let index = self
+                .line_index
+                .get_or_insert_with(|| purrdf_iri::LineIndex::new(src));
+            let position = index.locate(src, self.subject_off);
+            self.collector.record(&key, position);
         }
         self.statements.push(nodes);
     }
@@ -1861,21 +1859,16 @@ fn build_gts_graph(statements: &[Statement]) -> Result<SerGraph, RdfDiagnostic> 
 
         // `<subject> rdf:reifies <<( s p o )>> .` in the DEFAULT graph is the
         // statement-layer reifier shorthand: bind the reifier, do NOT emit a base quad.
-        if let (
-            Node::Iri(_) | Node::Bnode(_),
-            Node::Iri(pred_iri),
-            Node::Triple(ts, tp, to),
-            None,
-        ) = (s, p, o, gname)
+        if let (Node::Iri(_) | Node::Bnode(_), Node::Iri(pred_iri), Node::Triple(ts, tp, to), None) =
+            (s, p, o, gname)
+            && pred_iri == RDF_REIFIES
         {
-            if pred_iri == RDF_REIFIES {
-                let rid = interner.atom(s);
-                let ss = interner.node(ts, &mut reifiers);
-                let pp = interner.node(tp, &mut reifiers);
-                let oo = interner.node(to, &mut reifiers);
-                set_reifier(&mut reifiers, rid, (ss, pp, oo))?;
-                continue;
-            }
+            let rid = interner.atom(s);
+            let ss = interner.node(ts, &mut reifiers);
+            let pp = interner.node(tp, &mut reifiers);
+            let oo = interner.node(to, &mut reifiers);
+            set_reifier(&mut reifiers, rid, (ss, pp, oo))?;
+            continue;
         }
 
         let sid = interner.node(s, &mut reifiers);
@@ -2531,8 +2524,7 @@ mod tests {
     /// extra `;` past the first is just another empty item, never an extra triple.
     #[test]
     fn turtle_semicolon_run_of_three_emits_no_extra_triples() {
-        let text =
-            "<https://example.org/s> <https://example.org/p1> <https://example.org/o1> ; ; ; \
+        let text = "<https://example.org/s> <https://example.org/p1> <https://example.org/o1> ; ; ; \
                      <https://example.org/p2> <https://example.org/o2> .";
         let statements = DocParser::new(text, None, false, &mut NoSpans)
             .parse()
@@ -2597,8 +2589,7 @@ mod tests {
     /// exercises the `Pipe` branch of the terminator check after the `;` run is drained.
     #[test]
     fn turtle_trailing_semicolon_inside_annotation_block_before_pipe() {
-        let no_trailing =
-            "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+        let no_trailing = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                             {| <https://example.org/a> <https://example.org/b> |} .";
         let trailing = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                          {| <https://example.org/a> <https://example.org/b> ; |} .";
@@ -2617,9 +2608,11 @@ mod tests {
     #[test]
     fn turtle_leading_semicolon_before_any_predicate_is_an_error() {
         let text = "<https://example.org/s> ; <https://example.org/p> <https://example.org/o> .";
-        assert!(DocParser::new(text, None, false, &mut NoSpans)
-            .parse()
-            .is_err());
+        assert!(
+            DocParser::new(text, None, false, &mut NoSpans)
+                .parse()
+                .is_err()
+        );
     }
 
     /// A subject followed immediately by `;` and then `.` (no predicate-object pair at
@@ -2627,9 +2620,11 @@ mod tests {
     #[test]
     fn turtle_leading_semicolon_with_no_predicate_object_is_an_error() {
         let text = "<https://example.org/s> ; .";
-        assert!(DocParser::new(text, None, false, &mut NoSpans)
-            .parse()
-            .is_err());
+        assert!(
+            DocParser::new(text, None, false, &mut NoSpans)
+                .parse()
+                .is_err()
+        );
     }
 
     /// A LEADING `;` inside a blank-node property list `[ … ]` is also illegal:
@@ -2640,9 +2635,11 @@ mod tests {
     fn turtle_leading_semicolon_inside_blank_node_property_list_is_an_error() {
         let text = "<https://example.org/s> <https://example.org/p> \
                      [ ; <https://example.org/a> <https://example.org/b> ] .";
-        assert!(DocParser::new(text, None, false, &mut NoSpans)
-            .parse()
-            .is_err());
+        assert!(
+            DocParser::new(text, None, false, &mut NoSpans)
+                .parse()
+                .is_err()
+        );
     }
 
     /// A LEADING `;` inside an RDF 1.2 annotation block `{| … |}` is also illegal for
@@ -2651,9 +2648,11 @@ mod tests {
     fn turtle_leading_semicolon_inside_annotation_block_is_an_error() {
         let text = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                      {| ; <https://example.org/a> <https://example.org/b> |} .";
-        assert!(DocParser::new(text, None, false, &mut NoSpans)
-            .parse()
-            .is_err());
+        assert!(
+            DocParser::new(text, None, false, &mut NoSpans)
+                .parse()
+                .is_err()
+        );
     }
 
     /// A DOUBLED trailing `;` before the annotation-block `Pipe` (`{| a b ; ; |}`)
@@ -2662,8 +2661,7 @@ mod tests {
     /// drain with the `Pipe` terminator, distinct from the single-`;` trailing case.
     #[test]
     fn turtle_doubled_trailing_semicolon_inside_annotation_block_before_pipe() {
-        let no_trailing =
-            "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
+        let no_trailing = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                             {| <https://example.org/a> <https://example.org/b> |} .";
         let doubled = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                         {| <https://example.org/a> <https://example.org/b> ; ; |} .";

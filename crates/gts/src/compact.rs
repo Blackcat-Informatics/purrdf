@@ -49,10 +49,10 @@ fn refuse<T>(msg: String) -> Result<T, CompactRefusedError> {
 }
 
 fn target_text<'a>(target: &'a Value, key: &str) -> Option<&'a str> {
-    if let Value::Map(entries) = target {
-        if let Some(Value::Text(t)) = map_get(entries, key) {
-            return Some(t);
-        }
+    if let Value::Map(entries) = target
+        && let Some(Value::Text(t)) = map_get(entries, key)
+    {
+        return Some(t);
     }
     None
 }
@@ -195,10 +195,10 @@ fn blob_meta_text(g: &Graph, digest: &str, key: &str) -> Option<String> {
         .iter()
         .find(|(d, _)| d == digest)
         .and_then(|(_, meta)| {
-            if let Value::Map(entries) = meta {
-                if let Some(Value::Text(t)) = map_get(entries, key) {
-                    return Some(t.clone());
-                }
+            if let Value::Map(entries) = meta
+                && let Some(Value::Text(t)) = map_get(entries, key)
+            {
+                return Some(t.clone());
             }
             None
         })
@@ -352,17 +352,18 @@ fn shifted_suppressions(g: &Graph, base: usize) -> Vec<Suppression> {
                         if let Some(tid) = value_idx(v) {
                             return (k.clone(), Value::from((tid + base) as u64));
                         }
-                    } else if kind == "quad" && key == "q" {
-                        if let Value::Array(ids) = v {
-                            let remapped: Vec<Value> = ids
-                                .iter()
-                                .map(|x| match value_idx(x) {
-                                    Some(tid) => Value::from((tid + base) as u64),
-                                    None => x.clone(),
-                                })
-                                .collect();
-                            return (k.clone(), Value::Array(remapped));
-                        }
+                    } else if kind == "quad"
+                        && key == "q"
+                        && let Value::Array(ids) = v
+                    {
+                        let remapped: Vec<Value> = ids
+                            .iter()
+                            .map(|x| match value_idx(x) {
+                                Some(tid) => Value::from((tid + base) as u64),
+                                None => x.clone(),
+                            })
+                            .collect();
+                        return (k.clone(), Value::Array(remapped));
                     }
                     (k.clone(), v.clone())
                 })

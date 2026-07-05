@@ -73,11 +73,17 @@ pub(crate) const PREFIX_REGISTRY: &[(&str, &str)] = &[
     ("fno", "https://w3id.org/function/ontology#"),
     ("fnom", "https://w3id.org/function/vocabulary/mapping#"),
     ("edoal", "http://ns.inria.org/edoal/1.0/#"),
-    ("align", "http://knowledgeweb.semanticweb.org/heterogeneity/alignment#"),
+    (
+        "align",
+        "http://knowledgeweb.semanticweb.org/heterogeneity/alignment#",
+    ),
     ("gufo", "http://purl.org/nemo/gufo#"),
     ("umbel", "http://umbel.org/umbel#"),
     ("umbelrc", "http://umbel.org/umbel/rc/"),
-    ("dul", "http://www.ontologydesignpatterns.org/ont/dul/DUL.owl#"),
+    (
+        "dul",
+        "http://www.ontologydesignpatterns.org/ont/dul/DUL.owl#",
+    ),
     ("bfo", "http://purl.obolibrary.org/obo/"),
     ("sumo", "https://www.ontologyportal.org/SUMO.owl#"),
     ("cyc", "http://sw.opencyc.org/2012/05/10/concept/en/"),
@@ -94,7 +100,10 @@ pub(crate) const PREFIX_REGISTRY: &[(&str, &str)] = &[
     ("mf", "http://www.opengis.net/ont/movingfeatures#"),
     ("sta", "http://www.opengis.net/def/ont/sensorthings/1.1/"),
     ("iso19156", "http://www.isotc211.org/iso19156/"),
-    ("oboe", "http://ecoinformatics.org/oboe/oboe.1.2/oboe-core.owl#"),
+    (
+        "oboe",
+        "http://ecoinformatics.org/oboe/oboe.1.2/oboe-core.owl#",
+    ),
     ("obi", "http://purl.obolibrary.org/obo/OBI_"),
     ("iao", "http://purl.obolibrary.org/obo/IAO_"),
     ("pato", "http://purl.obolibrary.org/obo/PATO_"),
@@ -129,7 +138,10 @@ pub(crate) const PREFIX_REGISTRY: &[(&str, &str)] = &[
     ("unit", "http://qudt.org/vocab/unit/"),
     ("edtf", "http://id.loc.gov/datatypes/edtf/"),
     ("periodo", "http://n2t.net/ark:/99152/"),
-    ("gts", "http://resource.geosciml.org/ontology/timescale/gts#"),
+    (
+        "gts",
+        "http://resource.geosciml.org/ontology/timescale/gts#",
+    ),
     ("ivoa", "http://www.ivoa.net/rdf/"),
     ("crmgeo", "http://www.ics.forth.gr/isl/CRMgeo/"),
     ("lode", "http://linkedevents.org/ontology/"),
@@ -179,7 +191,10 @@ pub(crate) const PREFIX_REGISTRY: &[(&str, &str)] = &[
     ("ceterms", "https://purl.org/ctdl/terms/"),
     ("ctdlasn", "https://credreg.net/ctdlasn/terms/"),
     ("onet", "https://www.onetcenter.org/"),
-    ("nmo", "http://www.semanticdesktop.org/ontologies/2007/03/22/nmo#"),
+    (
+        "nmo",
+        "http://www.semanticdesktop.org/ontologies/2007/03/22/nmo#",
+    ),
     ("wot", "http://xmlns.com/wot/0.1/"),
     ("vc", "https://www.w3.org/2018/credentials#"),
     ("did", "https://www.w3.org/ns/did#"),
@@ -212,12 +227,30 @@ pub(crate) const PREFIX_REGISTRY: &[(&str, &str)] = &[
     ("glottolog", "https://glottolog.org/resource/languoid/id/"),
     ("ontolex", "http://www.w3.org/ns/lemon/ontolex#"),
     ("lime", "http://www.w3.org/ns/lemon/lime#"),
-    ("fibo-fnd-acc-cur", "https://spec.edmcouncil.org/fibo/ontology/FND/Accounting/CurrencyAmount/"),
-    ("fibo-iso4217", "https://spec.edmcouncil.org/fibo/ontology/FND/Accounting/ISO4217-CurrencyCodes/"),
-    ("fibo-fnd-acc-ae", "https://spec.edmcouncil.org/fibo/ontology/FND/Accounting/AccountingEquity/"),
-    ("fibo-fnd-pas-ps", "https://spec.edmcouncil.org/fibo/ontology/FND/ProductsAndServices/ProductsAndServices/"),
-    ("fibo-fbc-fi-fi", "https://spec.edmcouncil.org/fibo/ontology/FBC/FinancialInstruments/FinancialInstruments/"),
-    ("fibo-fbc-pas-fpas", "https://spec.edmcouncil.org/fibo/ontology/FBC/ProductsAndServices/FinancialProductsAndServices/"),
+    (
+        "fibo-fnd-acc-cur",
+        "https://spec.edmcouncil.org/fibo/ontology/FND/Accounting/CurrencyAmount/",
+    ),
+    (
+        "fibo-iso4217",
+        "https://spec.edmcouncil.org/fibo/ontology/FND/Accounting/ISO4217-CurrencyCodes/",
+    ),
+    (
+        "fibo-fnd-acc-ae",
+        "https://spec.edmcouncil.org/fibo/ontology/FND/Accounting/AccountingEquity/",
+    ),
+    (
+        "fibo-fnd-pas-ps",
+        "https://spec.edmcouncil.org/fibo/ontology/FND/ProductsAndServices/ProductsAndServices/",
+    ),
+    (
+        "fibo-fbc-fi-fi",
+        "https://spec.edmcouncil.org/fibo/ontology/FBC/FinancialInstruments/FinancialInstruments/",
+    ),
+    (
+        "fibo-fbc-pas-fpas",
+        "https://spec.edmcouncil.org/fibo/ontology/FBC/ProductsAndServices/FinancialProductsAndServices/",
+    ),
     ("mls", "http://www.w3.org/ns/mls#"),
     ("faldo", "http://biohackathon.org/resource/faldo#"),
     ("so", "http://purl.obolibrary.org/obo/SO_"),
@@ -445,12 +478,11 @@ pub(crate) fn object_literal(
 /// no `x-purrdf-` mapping — passes through unchanged). Only the object can carry a
 /// localizable literal in the FnO catalog.
 pub(crate) fn retag_quad(mut quad: RdfQuad, tag_map: &BTreeMap<String, String>) -> RdfQuad {
-    if let RdfTerm::Literal(lit) = &mut quad.object {
-        if let Some(lang) = &lit.language {
-            if let Some(ext) = tag_map.get(lang) {
-                lit.language = Some(ext.clone());
-            }
-        }
+    if let RdfTerm::Literal(lit) = &mut quad.object
+        && let Some(lang) = &lit.language
+        && let Some(ext) = tag_map.get(lang)
+    {
+        lit.language = Some(ext.clone());
     }
     quad
 }

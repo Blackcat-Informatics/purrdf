@@ -27,7 +27,7 @@ use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
 
 use crate::ast::Schema;
 use crate::error::{Result, ShexError};
-use crate::validate::{validate_with, ResultShapeMap, ShapeSelector, ValidationOptions};
+use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions, validate_with};
 
 /// `rdf:type`, the expansion of the `a` predicate keyword.
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -518,10 +518,10 @@ impl MapParser<'_> {
         if !self.chars[self.pos..end].iter().copied().eq(kw.chars()) {
             return false;
         }
-        if let Some(next) = self.chars.get(end) {
-            if next.is_alphanumeric() || *next == '_' {
-                return false;
-            }
+        if let Some(next) = self.chars.get(end)
+            && (next.is_alphanumeric() || *next == '_')
+        {
+            return false;
         }
         self.pos = end;
         true

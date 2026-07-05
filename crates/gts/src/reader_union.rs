@@ -137,25 +137,26 @@ impl Unioner {
                 .map(|(k, v)| {
                     let key = as_text(k);
                     if (kind == "term" || kind == "reifier") && key == Some("id") {
-                        if let Some(tid) = as_idx(v) {
-                            if tid < n {
-                                let new = self.map_term(seg, seg_idx, tid);
-                                return (k.clone(), Value::from(new as u64));
-                            }
+                        if let Some(tid) = as_idx(v)
+                            && tid < n
+                        {
+                            let new = self.map_term(seg, seg_idx, tid);
+                            return (k.clone(), Value::from(new as u64));
                         }
-                    } else if kind == "quad" && key == Some("q") {
-                        if let Value::Array(ids) = v {
-                            let remapped: Vec<Value> = ids
-                                .iter()
-                                .map(|x| match as_idx(x) {
-                                    Some(tid) if tid < n => {
-                                        Value::from(self.map_term(seg, seg_idx, tid) as u64)
-                                    }
-                                    _ => x.clone(),
-                                })
-                                .collect();
-                            return (k.clone(), Value::Array(remapped));
-                        }
+                    } else if kind == "quad"
+                        && key == Some("q")
+                        && let Value::Array(ids) = v
+                    {
+                        let remapped: Vec<Value> = ids
+                            .iter()
+                            .map(|x| match as_idx(x) {
+                                Some(tid) if tid < n => {
+                                    Value::from(self.map_term(seg, seg_idx, tid) as u64)
+                                }
+                                _ => x.clone(),
+                            })
+                            .collect();
+                        return (k.clone(), Value::Array(remapped));
                     }
                     (k.clone(), v.clone())
                 })
