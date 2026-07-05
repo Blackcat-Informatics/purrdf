@@ -37,7 +37,7 @@
 
 use std::sync::Arc;
 
-use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, RdfDatasetBuilder, RdfQuad};
+use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
 
 use crate::constraints::conforms;
 use crate::data::{quads_for_pattern_ids, GraphFilter, ShaclData};
@@ -160,6 +160,22 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
 
     let base = data.core_arc();
 
+    // Mirror the validation path (`build_sparql_dataset`): expose the shapes graph
+    // as a named graph under its IRI so a `sh:SPARQLRule` CONSTRUCT can pre-bind and
+    // dereference `$shapesGraph`. The IRI comes from the holder (an explicit
+    // override) or the shapes document's own graph IRI — never fabricated — and only
+    // when the shapes dataset actually carries quads to expose.
+    let shapes_graph_iri = data
+        .shapes_graph_iri()
+        .map(ToOwned::to_owned)
+        .or_else(|| shapes.shapes_graph.clone())
+        .filter(|_| shapes.shapes_dataset.quad_count() > 0);
+
+    // The per-round data handed to producers: the base default graph plus the shapes
+    // graph as a named graph (when known). The FINAL entailed dataset is still built
+    // from `base` alone below, so the shapes graph never leaks into the output.
+    let round_base = build_round_base(&base, shapes, shapes_graph_iri.as_deref())?;
+
     // A top-level-shape index for `sh:condition` resolution (id string → shape).
     let mut shape_index: FastMap<String, &Shape> = FastMap::default();
     for shape in &shapes.node_shapes {
@@ -184,7 +200,12 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
             if rule.deactivated {
                 continue;
             }
-            prepared.push(prepare_rule(shape, rule, &shape_index));
+            prepared.push(prepare_rule(
+                shape,
+                rule,
+                &shape_index,
+                shapes_graph_iri.as_deref(),
+            ));
         }
     }
 
@@ -197,7 +218,7 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
 
     // No rules → the base graph unchanged (still a fresh frozen projection).
     let mut facts = original.clone();
-    let mut current = Arc::clone(&base);
+    let mut current = Arc::clone(&round_base);
 
     // Deterministic, input-derived divergence bound: the number of distinct base∪
     // rules terms plus the rule count. Value-preserving rounds never touch it (they
@@ -239,7 +260,7 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
             }
         }
 
-        current = rebuild_dataset(&base, &facts, &original)?;
+        current = rebuild_dataset(&round_base, &facts, &original)?;
     }
 
     // Materialize base ⊎ inferred, emitting inferred triples in a stable sorted
@@ -283,6 +304,7 @@ fn prepare_rule<'a>(
     shape: &'a Shape,
     rule: &'a Rule,
     shape_index: &'a FastMap<String, &'a Shape>,
+    shapes_graph_iri: Option<&'a str>,
 ) -> PreparedRule<'a> {
     let rule_id = rule.id.to_string();
     let conditions = rule.conditions.as_slice();
@@ -304,13 +326,22 @@ fn prepare_rule<'a>(
                     conditions,
                     shape_index,
                     &rule_id,
+                    shapes_graph_iri,
                 )
             })
         }
         RuleBody::Sparql { construct } => {
             let rule_id = rule_id.clone();
             Box::new(move |ds: &Arc<RdfDataset>| {
-                sparql_rule_producer(ds, shape, construct, conditions, shape_index, &rule_id)
+                sparql_rule_producer(
+                    ds,
+                    shape,
+                    construct,
+                    conditions,
+                    shape_index,
+                    &rule_id,
+                    shapes_graph_iri,
+                )
             })
         }
     };
@@ -335,8 +366,13 @@ fn triple_rule_producer(
     conditions: &[Term],
     shape_index: &FastMap<String, &Shape>,
     rule_id: &str,
+    shapes_graph_iri: Option<&str>,
 ) -> Result<Vec<[Term; 3]>, String> {
-    let data = ShaclData::new(Arc::clone(ds), Arc::clone(ds), None);
+    let data = ShaclData::new(
+        Arc::clone(ds),
+        Arc::clone(ds),
+        shapes_graph_iri.map(ToOwned::to_owned),
+    );
     let focus_nodes = focus_nodes(&data, shape)?;
     let mut out: Vec<[Term; 3]> = Vec::new();
     for focus in &focus_nodes {
@@ -379,8 +415,13 @@ fn sparql_rule_producer(
     conditions: &[Term],
     shape_index: &FastMap<String, &Shape>,
     rule_id: &str,
+    shapes_graph_iri: Option<&str>,
 ) -> Result<Vec<[Term; 3]>, String> {
-    let data = ShaclData::new(Arc::clone(ds), Arc::clone(ds), None);
+    let data = ShaclData::new(
+        Arc::clone(ds),
+        Arc::clone(ds),
+        shapes_graph_iri.map(ToOwned::to_owned),
+    );
     let focus_nodes = focus_nodes(&data, shape)?;
     let mut out: Vec<[Term; 3]> = Vec::new();
     for focus in &focus_nodes {
@@ -388,11 +429,13 @@ fn sparql_rule_producer(
             continue;
         }
         let subs = [("this".to_owned(), focus.to_term_value())];
+        // SHACL-AF pre-binds `$this`, `$shapesGraph`, and `$currentShape` for a
+        // `sh:SPARQLRule` CONSTRUCT, mirroring the SHACL-SPARQL constraint path.
         let graph = crate::sparql::run_construct_with_shacl_prebinding(
             ds,
             construct,
             &subs,
-            None,
+            shapes_graph_iri,
             Some(&shape.id),
         )?;
         // A CONSTRUCT template blank is minted `_:c{n}` from a per-evaluation
@@ -523,6 +566,33 @@ fn push_fact(builder: &mut RdfDatasetBuilder, triple: &[Term; 3]) -> Result<(), 
         o.to_rdf_term(),
     ));
     Ok(())
+}
+
+/// Build the per-round base dataset: the projected data (default graph) plus the
+/// shapes graph exposed as a named graph under `graph_iri`, when known.
+///
+/// This mirrors the validation path's `build_sparql_dataset` so a `sh:SPARQLRule`
+/// CONSTRUCT sees the shapes graph under `$shapesGraph`. When no shapes-graph IRI
+/// is known (or the shapes dataset is empty) the base is returned unchanged.
+fn build_round_base(
+    base: &Arc<RdfDataset>,
+    shapes: &Shapes,
+    graph_iri: Option<&str>,
+) -> Result<Arc<RdfDataset>, String> {
+    let Some(graph_iri) = graph_iri else {
+        return Ok(Arc::clone(base));
+    };
+
+    let mut builder = RdfDatasetBuilder::new();
+    builder.push_dataset(base.as_ref());
+
+    let graph_term = RdfTerm::iri(graph_iri);
+    for mut quad in shapes.shapes_dataset.owned_quads() {
+        quad.graph_name = Some(graph_term.clone());
+        builder.push_owned_quad(&quad);
+    }
+
+    builder.freeze().map_err(|e| e.to_string())
 }
 
 /// Rebuild the round dataset: the base projection plus every inferred triple so
@@ -860,6 +930,57 @@ mod tests {
                 "CONSTRUCT { $this ex:adult ex:yes } WHERE { $this a ex:Person }" ] ."#,
         );
         assert!(has_iri(&out, "alice", "adult", "yes"));
+    }
+
+    #[test]
+    fn sparql_rule_prebinds_shapes_graph() {
+        // A sh:SPARQLRule CONSTRUCT that derives its head ONLY when `$shapesGraph`
+        // is pre-bound to the RIGHT graph IRI: it reads a marker triple attached to
+        // `$currentShape` (living exclusively in the shapes graph) and then requires
+        // the enclosing graph name to EQUAL `$shapesGraph`. If `$shapesGraph` is left
+        // unbound (the bug), the `?g = $shapesGraph` filter compares against an
+        // unbound value, yields no solution, and the head is never derived — so a
+        // stray single named graph cannot mask the missing binding.
+        let shapes_ttl = format!(
+            "{PREFIXES}\n{}",
+            r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+              ex:marker ex:secret ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct
+                "CONSTRUCT { $this ex:marked ?m } WHERE { GRAPH ?g { $currentShape ex:marker ?m } FILTER(?g = $shapesGraph) }" ] .
+            "#
+        );
+        let shapes_dataset =
+            crate::text_ingest::parse_turtle_to_dataset(&shapes_ttl).expect("shapes must parse");
+        let prefixes = crate::text_ingest::extract_prefixes(&shapes_ttl);
+        let shapes = crate::shapes::from_dataset_with_config_and_graph(
+            &shapes_dataset,
+            &prefixes,
+            None,
+            Some("http://example.org/shapes-graph".to_owned()),
+        )
+        .expect("shapes must parse");
+
+        let data = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}\n ex:alice a ex:Person ."
+        ))
+        .expect("data must parse");
+        let projected = crate::engine::project_dataset(data.as_ref()).expect("project");
+        let holder = ShaclData::new(Arc::clone(&projected), Arc::clone(&projected), None);
+        let out = apply_rules(&holder, &shapes).expect("entailment must succeed");
+
+        // The head is derived — proving `$shapesGraph` (and `$currentShape`) were
+        // pre-bound so the CONSTRUCT could reach `ex:S ex:marker ex:secret`.
+        assert!(
+            has_iri(&out, "alice", "marked", "secret"),
+            "sh:SPARQLRule must derive ex:alice ex:marked ex:secret via $shapesGraph; got {:?}",
+            triples(&out)
+        );
+        // The shapes graph must NOT leak into the entailed default graph.
+        assert!(
+            !has_iri(&out, "S", "marker", "secret"),
+            "the shapes graph must stay a named graph, never leaking into the data graph"
+        );
     }
 
     // ── Driver: fixpoint / conditions / order / deactivation ─────────────────────
