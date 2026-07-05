@@ -1376,6 +1376,114 @@ mod tests {
     }
 
     #[test]
+    fn blank_focus_blank_minting_is_distinct_and_stable() {
+        // Two DISTINCT blank nodes are the objects of ex:hasContact; a shape
+        // targeting those blanks (sh:targetObjectsOf) runs a sh:SPARQLRule whose
+        // CONSTRUCT mints a fresh blank per focus and links it. `relabel_blanks` tags
+        // the minted blank with `focus.to_string()` — for a BLANK focus that tag is a
+        // `_:...`-style label, a corner the IRI-focus minting test never exercises.
+        // We prove: (i) it works at all with a blank focus; (ii) the two blank foci
+        // do NOT conflate (distinct minted blanks); (iii) re-derivation in a later
+        // fixpoint round produces the identical label so the fixpoint converges and
+        // output is byte-stable across independent runs.
+        let data = "\
+            ex:alice ex:hasContact [ a ex:Contact ] .\n\
+            ex:bob   ex:hasContact [ a ex:Contact ] .";
+        let shapes = r#"
+            ex:S a sh:NodeShape ; sh:targetObjectsOf ex:hasContact ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct
+                "CONSTRUCT { $this ex:addr _:a . _:a ex:city ex:Metropolis } WHERE { $this a ex:Contact }" ] ."#;
+
+        // (iii) Byte-stable across two INDEPENDENT entailment runs. A blank focus that
+        // re-minted a different label each round would diverge (never converge) or
+        // differ run-to-run; identical canonical N-Quads proves stable re-derivation.
+        let first = entail(data, shapes);
+        let second = entail(data, shapes);
+        assert_eq!(
+            canon(&first),
+            canon(&second),
+            "blank-focus blank-minting must be byte-identical across runs"
+        );
+
+        // (ii) Two distinct blank foci → two ex:addr edges to two DISTINCT minted
+        // blanks. If the per-focus tag failed to disambiguate (both foci minting the
+        // same `_:c1`), the two edges would point at the SAME blank and these labels
+        // would be equal — so `assert_ne!` genuinely catches conflation.
+        let addr_objects: Vec<String> = triples(&first)
+            .into_iter()
+            .filter(|(_, p, _)| *p == ex("addr"))
+            .map(|(_, _, o)| o)
+            .collect();
+        assert_eq!(
+            addr_objects.len(),
+            2,
+            "two blank foci → two minted blanks; got {addr_objects:?}"
+        );
+        assert_ne!(
+            addr_objects[0], addr_objects[1],
+            "distinct blank foci must mint distinct blanks (no conflation)"
+        );
+
+        // (i) Each minted blank carries its ex:city structure — the CONSTRUCT head is
+        // fully materialized per focus, not just the linking edge.
+        let city_count = triples(&first)
+            .into_iter()
+            .filter(|(_, p, o)| *p == ex("city") && *o == ex("Metropolis"))
+            .count();
+        assert_eq!(
+            city_count, 2,
+            "each per-focus minted blank must carry its ex:city ex:Metropolis edge"
+        );
+    }
+
+    #[test]
+    fn value_preserving_chain_converges_over_many_rounds_without_false_divergence() {
+        // A transitive-closure chain over a path n0→n1→…→n(N-1) (via ex:next), seeding
+        // ex:reaches on every DIRECT edge so ex:reaches is part of the base∪rules term
+        // universe. The rule is therefore strictly VALUE-PRESERVING: every produced
+        // term already exists, so it never touches the fresh-term divergence counter.
+        // The extend-by-one-hop rule advances the reachability frontier by a single
+        // ex:next step each round, so the closure legitimately needs ~N fixpoint rounds
+        // — a genuine multi-round chain that must converge WITHOUT false-tripping the
+        // divergence guard (bound = |universe| + rule_count + 1).
+        use std::fmt::Write as _;
+        const N: usize = 8; // n0..n7 → 7 edges → ~6 rounds; closure = C(8,2) = 28 pairs.
+        let mut data = String::new();
+        for i in 0..N - 1 {
+            let j = i + 1;
+            writeln!(data, "ex:n{i} ex:next ex:n{j} .").expect("write to String");
+            writeln!(data, "ex:n{i} ex:reaches ex:n{j} .").expect("write to String");
+        }
+        let shapes = r#"
+            ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:next ;
+              sh:rule [ a sh:SPARQLRule ; sh:construct
+                "CONSTRUCT { $this ex:reaches ?z } WHERE { $this ex:next ?y . ?y ex:reaches ?z }" ] ."#;
+
+        // `entail` unwraps the `Ok`, so a completed call is itself the assertion that
+        // NO divergence error was raised for this multi-round value-preserving chain.
+        let out = entail(&data, shapes);
+
+        // The closure must be EXACT: ex:reaches holds for every ordered pair i<j and
+        // for nothing else.
+        let reaches: std::collections::BTreeSet<(String, String)> = triples(&out)
+            .into_iter()
+            .filter(|(_, p, _)| *p == ex("reaches"))
+            .map(|(s, _, o)| (s, o))
+            .collect();
+        let mut expected: std::collections::BTreeSet<(String, String)> =
+            std::collections::BTreeSet::new();
+        for i in 0..N {
+            for j in i + 1..N {
+                expected.insert((ex(&format!("n{i}")), ex(&format!("n{j}"))));
+            }
+        }
+        assert_eq!(
+            reaches, expected,
+            "transitive closure of ex:reaches must be exactly the i<j pairs"
+        );
+    }
+
+    #[test]
     fn entailment_is_stable_under_isomorphic_input_relabeling() {
         let shapes = r"
             ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
