@@ -31,6 +31,26 @@ pub fn shacl_validate_to_sarif(shapes_ttl: &str, data_nt: &str) -> Result<String
     validate_to_sarif_impl(shapes_ttl, data_nt).map_err(|e| JsError::new(&e))
 }
 
+/// Entail `data_nt` under `shapes_ttl` and render the MATERIALIZED dataset (base
+/// graph plus every SHACL-AF `sh:rule` inference) to canonical N-Triples.
+///
+/// The entailment twin of [`validate_to_sarif_impl`]: returns a plain `String`
+/// error (NOT a `JsError`) so it is unit-testable on the native build; the
+/// `#[wasm_bindgen]` wrapper maps the `String` to a `JsError`.
+pub(crate) fn entail_to_ntriples_impl(shapes_ttl: &str, data_nt: &str) -> Result<String, String> {
+    purrdf_validate::entail_to_ntriples_string(shapes_ttl, data_nt)
+}
+
+/// `shaclEntail(shapesTtl, dataNt)` → the materialized dataset as an N-Triples
+/// string (the base graph plus every inferred triple).
+///
+/// `shapesTtl` is a Turtle shapes graph; `dataNt` is an N-Triples data graph.
+/// Throws (rejects) if either graph fails to parse or if rule application fails.
+#[wasm_bindgen(js_name = shaclEntail)]
+pub fn shacl_entail(shapes_ttl: &str, data_nt: &str) -> Result<String, JsError> {
+    entail_to_ntriples_impl(shapes_ttl, data_nt).map_err(|e| JsError::new(&e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,5 +75,35 @@ mod tests {
     #[test]
     fn malformed_shapes_is_an_error() {
         assert!(validate_to_sarif_impl("@@@ not turtle", DATA).is_err());
+    }
+
+    // A shapes graph with a `sh:TripleRule` that types every `ex:Person` as an
+    // `ex:adult` — the entailment analogue of the SARIF validation fixtures.
+    const RULE_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+        @prefix ex: <http://example.org/> .\n\
+        ex:PersonRule a sh:NodeShape ;\n\
+          sh:targetClass ex:Person ;\n\
+          sh:rule [ a sh:TripleRule ;\n\
+            sh:subject sh:this ; sh:predicate ex:adult ; sh:object ex:yes ] .\n";
+
+    const RULE_DATA: &str = "<http://example.org/alice> \
+        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
+
+    #[test]
+    fn entail_materializes_inferred_triple() {
+        let nt = entail_to_ntriples_impl(RULE_SHAPES, RULE_DATA).expect("entailment produced");
+        assert!(nt.contains(
+            "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
+        ));
+        // The base fact survives into the materialized dataset.
+        assert!(nt.contains(
+            "<http://example.org/alice> \
+             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> ."
+        ));
+    }
+
+    #[test]
+    fn entail_malformed_shapes_is_an_error() {
+        assert!(entail_to_ntriples_impl("@@@ not turtle", RULE_DATA).is_err());
     }
 }

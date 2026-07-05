@@ -10,7 +10,7 @@
 
 use std::os::raw::c_char;
 
-use purrdf_validate::{validate_to_sarif_string, SarifOptions};
+use purrdf_validate::{entail_to_ntriples_string, validate_to_sarif_string, SarifOptions};
 
 use crate::buffer::PurrdfBuffer;
 use crate::cstr_to_str;
@@ -57,6 +57,48 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
     }
 }
 
+/// Entail `data_nt` (N-Triples) under `shapes_ttl` (Turtle) and serialize the
+/// materialized dataset (base graph plus every SHACL-AF rule inference) to
+/// canonical N-Triples bytes. Native-testable, pointer-free core.
+///
+/// The parse→entail→serialize sequence lives in [`entail_to_ntriples_string`];
+/// this only adds the C-ABI byte framing.
+fn entail_to_ntriples_bytes(shapes_ttl: &str, data_nt: &str) -> Result<Vec<u8>, String> {
+    Ok(entail_to_ntriples_string(shapes_ttl, data_nt)?.into_bytes())
+}
+
+/// Entail a data graph (N-Triples) under a shapes graph (Turtle) and write the
+/// materialized dataset (base graph plus every inferred triple) as canonical
+/// N-Triples bytes to `*out_buffer` (free with `purrdf_buffer_free`).
+///
+/// # Safety
+/// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
+/// `out_buffer` must be a writable pointer; `out_error` must be null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
+    shapes_ttl: *const c_char,
+    data_nt: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if shapes_ttl.is_null() || data_nt.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_shacl_entail_to_ntriples",
+                ));
+            }
+            let shapes = cstr_to_str(shapes_ttl)?;
+            let data = cstr_to_str(data_nt)?;
+            let bytes = entail_to_ntriples_bytes(shapes, data)
+                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            *out_buffer = PurrdfBuffer::into_raw(bytes);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +124,32 @@ mod tests {
     #[test]
     fn malformed_shapes_is_an_error() {
         assert!(validate_to_sarif_bytes("@@@ not turtle", DATA).is_err());
+    }
+
+    // A shapes graph with a `sh:TripleRule` typing every `ex:Person` an `ex:adult`.
+    const RULE_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+        @prefix ex: <http://example.org/> .\n\
+        ex:PersonRule a sh:NodeShape ;\n\
+          sh:targetClass ex:Person ;\n\
+          sh:rule [ a sh:TripleRule ;\n\
+            sh:subject sh:this ; sh:predicate ex:adult ; sh:object ex:yes ] .\n";
+
+    const RULE_DATA: &str = "<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
+
+    #[test]
+    fn entail_emits_materialized_ntriples() {
+        let bytes = entail_to_ntriples_bytes(RULE_SHAPES, RULE_DATA).expect("entailment produced");
+        let text = String::from_utf8(bytes).expect("utf8");
+        assert!(text.contains(
+            "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
+        ));
+        assert!(text.contains(
+            "<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> ."
+        ));
+    }
+
+    #[test]
+    fn entail_malformed_shapes_is_an_error() {
+        assert!(entail_to_ntriples_bytes("@@@ not turtle", RULE_DATA).is_err());
     }
 }

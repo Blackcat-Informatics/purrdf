@@ -557,6 +557,28 @@ pub fn validate_dataset_graphs(
     validate_dataset(data, &shapes)
 }
 
+/// Entail data (N-Triples) under shapes (Turtle), returning the materialized
+/// dataset (the base graph plus every SHACL-AF `sh:rule` inference, run to a
+/// fixpoint).
+///
+/// The text-in twin of [`crate::entail_dataset`], mirroring [`validate_graphs`]:
+/// it parses the data graph (lenient N-Triples, one pass reporting every
+/// malformed line) and the shapes graph (Turtle), then applies every active rule.
+/// The returned [`Arc<RdfDataset>`] is a NEW frozen dataset of base ⊎ inferred
+/// triples the caller serializes however its surface emits RDF.
+///
+/// # Errors
+///
+/// Returns an error string if either graph fails to parse or if rule application
+/// fails (an illegal head term, an unresolvable `sh:condition`, or a rule set that
+/// does not reach a fixpoint — see [`crate::apply_rules`]).
+pub fn entail_graphs(data_nt: &str, shapes_ttl: &str) -> Result<Arc<RdfDataset>, String> {
+    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
+        .map_err(|errors| errors.join("\n"))?;
+    let shapes = parse_shapes(shapes_ttl)?;
+    crate::rules::entail_dataset(data.as_ref(), &shapes)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
