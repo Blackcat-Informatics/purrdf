@@ -44,9 +44,25 @@ make wasm-pkg   # build the ESM/wasm package
 make capi-build # build libpurrdf via cargo-c
 ```
 
-The workspace pins **stable** in `rust-toolchain.toml` and is nightly-free by
-policy; the supported floor is `rust-version` in `Cargo.toml`, which CI
-enforces with a dedicated MSRV job.
+## Versioning & releases
+
+**Pre-1.0 semver.** While the version is `0.x`, a **minor** bump may carry breaking
+API changes; a **patch** bump is bugfix-only and API-compatible. The crates.io crate
+suite, the PyPI `purrdf` package, and the npm `@blackcatinformatics/purrdf` package
+share **one** workspace version and ship in lockstep — CI runs a version-coherence
+check that fails if the three sources disagree.
+
+**MSRV.** The workspace pins **stable** in `rust-toolchain.toml` and is nightly-free
+by policy; the supported floor is `rust-version` in `Cargo.toml` (currently **1.96**),
+which CI enforces with a dedicated MSRV job. Raising the MSRV is a notable, changelog-
+recorded change that, pre-1.0, rides a minor bump.
+
+**Changelog.** Write **conventional-commit messages** (`type(scope): summary`, e.g.
+`feat(sparql): ...`, `fix(gts): ...`) — they feed the generated changelog, so their
+wording becomes the release notes.
+
+Release mechanics (tag-driven trusted publishing, provenance, SBOMs) live in
+[`docs/RELEASE.md`](./docs/RELEASE.md).
 
 ## Before you open a pull request
 

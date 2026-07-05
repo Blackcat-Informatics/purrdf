@@ -172,7 +172,7 @@ impl Namespaces {
     /// never collide; an undeclared-namespace IRI is returned verbatim (and
     /// rejected by [`compile`]'s keying guard). A primary local name never
     /// contains a `:`, while a CURIE always does — the discriminator
-    /// ([`node_def`]) relies on that to rebuild each `@type` const.
+    /// (`node_def`) relies on that to rebuild each `@type` const.
     #[must_use]
     pub fn def_key(&self, iri: &str) -> String {
         if self.is_primary(iri) {

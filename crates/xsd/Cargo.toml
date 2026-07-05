@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-xsd"
-description = "Native, zero-dependency XSD value space (parse, value-space equality/ordering, canonical lexical mapping, SPARQL numeric promotion) for the RDF 1.2 query stack — replaces oxsdatatypes (purrdf S1, EPIC #906)"
+description = "Native, zero-dependency XSD value space (parse, value-space equality/ordering, canonical lexical mapping, SPARQL numeric promotion) for the RDF 1.2 query stack — replaces oxsdatatypes"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -12,6 +12,9 @@ homepage.workspace = true
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["xsd", "rdf", "rdf-12", "value-space", "sparql"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints]
 workspace = true

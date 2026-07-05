@@ -10,6 +10,10 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
+publish = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints]
 workspace = true

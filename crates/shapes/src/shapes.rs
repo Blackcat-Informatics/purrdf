@@ -3,7 +3,7 @@
 
 //! SHACL shapes graph parser.
 //!
-//! Parses a SHACL Core shapes graph (loaded into an oxigraph [`Store`]) into a
+//! Parses a SHACL Core shapes graph (loaded into an oxigraph `Store`) into a
 //! fully typed [`Shapes`] structure.  No evaluation logic lives here — that is
 //! Task 3.  Covers full SHACL Core: all six property-path forms (§2.3.1),
 //! property-pair constraints (§4.3), qualified value shapes (§4.5.4–4.5.5), and
@@ -435,7 +435,7 @@ pub fn from_dataset_with_config(
 
 /// Parse shapes from a dataset with the full caller configuration plus an
 /// explicit shapes-graph IRI. The original `dataset` is retained as
-/// [`Shapes::shapes_dataset`] so the validation engine can expose it as a
+/// `Shapes::shapes_dataset` so the validation engine can expose it as a
 /// named graph to SHACL-SPARQL queries.
 pub fn from_dataset_with_config_and_graph(
     dataset: &Arc<RdfDataset>,

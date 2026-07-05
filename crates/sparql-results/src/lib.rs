@@ -12,8 +12,8 @@
 //!
 //! It depends **only** on `purrdf-core` (with `default-features = false`) so
 //! it stays oxigraph-free and wasm-clean. Term and N-Triples syntax are produced
-//! exclusively by the rdf-core kernel `emit_*` primitives (see [`term`],
-//! [`graph`]); this crate adds no term-syntax of its own.
+//! exclusively by the rdf-core kernel `emit_*` primitives (see `term`,
+//! `graph`); this crate adds no term-syntax of its own.
 //!
 //! Scope: the shared infrastructure (error type, provenance carrier, term
 //! lexicalization bridge, CONSTRUCT-graph N-Triples writer), the four per-format

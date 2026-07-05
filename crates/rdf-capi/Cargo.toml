@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-capi"
-description = "PurRDF purrdf C-ABI: libpurrdf cdylib/staticlib over the purrdf semantic kernel (purrdf P8)"
+description = "PurRDF purrdf C-ABI: libpurrdf cdylib/staticlib over the purrdf semantic kernel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -29,7 +29,7 @@ path = "src/lib.rs"
 # `gts` provides the oxigraph-free GTS read/write core (gts_write +
 # import_gts_events) — the spec's "libpurrdf statically reuses purrdf-gts so a
 # language shim links one .so" clause. SPARQL is served by the native engine
-# (`purrdf-sparql-eval`, below), so NO `oxigraph` feature is pulled (#906 cutover).
+# (`purrdf-sparql-eval`, below), so NO `oxigraph` feature is pulled.
 # The `python` feature stays OFF: this is a C-ABI, not a PyO3 extension.
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.
@@ -43,13 +43,13 @@ purrdf-core = { workspace = true }
 # The SHACL engine is reached through `purrdf-validate::validate_to_sarif_string`,
 # the shared validate→SARIF helper every language binding routes through.
 purrdf-validate = { workspace = true }
-# The canonical SPARQL-Results serializer (purrdf S9, EPIC #906). Path-depends on
+# The canonical SPARQL-Results serializer. Path-depends on
 # the SAME ../rdf-core, so SparqlResult/TermValue unify — this crate delegates its
 # SRJ emission here instead of carrying a second hand-written serializer.
 purrdf-sparql-results = { workspace = true }
-# The native SPARQL engine (purrdf S6, #912): the single `SparqlEngine` impl
+# The native SPARQL engine: the single `SparqlEngine` impl
 # (`NativeSparqlEngine`) evaluates `purrdf_query` over the frozen `Arc<RdfDataset>`
-# directly — the oxigraph-free query path (#906). Path-depends on the SAME
+# directly — the oxigraph-free query path. Path-depends on the SAME
 # ../rdf-core so `SparqlRequest`/`SparqlResult` unify.
 purrdf-sparql-eval = { workspace = true }
 

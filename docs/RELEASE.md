@@ -16,6 +16,38 @@ The release lane follows the `gmeow-gts` cargo release pattern:
 - crates.io publication uses Trusted Publishing through GitHub Actions OIDC,
   not a long-lived repository secret.
 
+## Cutting a release
+
+The suite ships **one** version to crates.io, PyPI, and npm. Cutting a release
+is a single coherent flow from `main`, using the version-coherence gate and the
+`make` helpers so the three lanes can never drift:
+
+```sh
+# 1. Bump all three version sources in lockstep (fails unless they end up equal).
+make bump VERSION=0.2.2
+
+# 2. Regenerate the changelog from the conventional-commit history.
+make changelog
+
+# 3. Review, then commit the release bump + changelog.
+git add -A && git commit -m "chore(release): 0.2.2"
+
+# 4. Gate: fmt, clippy, tests, hygiene, and the version-coherence + wasm checks.
+make check
+
+# 5. From an up-to-date main, cut and push all three tags in one command.
+make release-tags VERSION=0.2.2
+```
+
+`make release-tags` refuses to run unless the working tree is clean, the branch
+is `main`, `scripts/check-versions.py` passes, and `VERSION` matches the tree —
+then it creates and pushes `rust-v0.2.2`, `py-v0.2.2`, and `npm-v0.2.2`
+together. Each tag triggers its own lane (below); the cargo lane additionally
+publishes a GitHub Release built from the committed `CHANGELOG.md`.
+
+The per-lane tag commands in the sections below remain valid for a single-lane
+re-release, but the coherent path above is the default.
+
 ## Trusted Publisher Setup
 
 Configure one crates.io Trusted Publisher entry per crate:
@@ -42,6 +74,7 @@ Use that same publisher configuration for these crates:
 - `purrdf-slice`
 - `purrdf-shapes`
 - `purrdf-shex`
+- `purrdf-validate`
 - `purrdf`
 - `purrdf-wasm`
 
@@ -50,11 +83,13 @@ be configured. Bootstrap publishes for new crate records therefore use an
 explicit token. After those crate records exist, enable the Trusted Publisher
 entries above and use the GitHub release workflow for future releases.
 
-`purrdf-python`, `purrdf-sparql-conformance`, and `purrdf-capi` remain workspace
-crates, but they are not in this crates.io release lane. `purrdf-python` is the
-PyPI extension package under `bindings/python`, the conformance harness is an
-internal W3C fixture runner, and the C ABI is a native artifact that should get a
-separate release lane if/when it is shipped.
+`purrdf-python`, `purrdf-sparql-conformance`, `purrdf-entail`, and `purrdf-capi`
+remain workspace crates, but they are not in this crates.io release lane.
+`purrdf-python` is the PyPI extension package under `bindings/python`, the
+conformance harness is an internal W3C fixture runner, `purrdf-entail` is an
+internal PurRDF entailment/reasoning crate with no publishable dependents, and
+the C ABI is a native artifact that should get a separate release lane if/when it
+is shipped.
 
 For the bootstrap publish from a clean local checkout:
 
@@ -67,6 +102,42 @@ crate versions that already exist, and publishes crates in dependency order.
 It also verifies the published crate set with `cargo check --target
 wasm32-unknown-unknown --lib`; if the target is not installed and `rustup` is
 available, the script installs it before checking.
+
+## Changelog and release notes
+
+The changelog is generated deterministically from the conventional-commit
+history by [git-cliff](https://git-cliff.org/), configured in `cliff.toml`.
+Install the pinned version once:
+
+```sh
+cargo install git-cliff --version 2.13.1 --locked --no-default-features
+```
+
+Regenerate `CHANGELOG.md` as part of the release commit. Run `make bump` **first**:
+`make changelog` reads the just-bumped workspace version out of `Cargo.toml` and
+passes it to git-cliff as `--tag rust-v<version>`, so the pending (still untagged)
+commits are stamped under a real `## [<version>]` header instead of landing in
+`## [Unreleased]`. That is the header the release workflow later slices out of the
+committed `CHANGELOG.md` verbatim, so the version being cut must already be the tree
+version when you regenerate:
+
+```sh
+make changelog   # stamps the bumped version as the changelog release header,
+                 # then re-checks that no #NNN tokens leaked
+```
+
+`cliff.toml` groups entries by conventional-commit type, treats the `rust-v*`
+tags as the release boundaries, and strips every `#NNN` issue/PR token so the
+committed changelog stays clean under the repository's issue-reference lint.
+The generation is offline and order-stable: running `make changelog` twice on
+the same history (at the same tree version) yields byte-identical output.
+
+The GitHub Release notes are **not** regenerated at tag time. The
+`release-cargo.yaml` workflow slices the section for the tagged version straight
+out of the committed `CHANGELOG.md` and attaches it to a GitHub Release named
+for the `rust-v*` tag — so the release notes and the committed changelog can
+never drift, and the workflow makes no repository commits. Always run
+`make changelog` and commit the result **before** pushing the release tag.
 
 ## Tag Release
 

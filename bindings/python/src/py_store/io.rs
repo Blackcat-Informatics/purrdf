@@ -77,7 +77,7 @@ pub(crate) fn parse(
     // The native parse runs detached (GIL released); the Quad objects are
     // built after reacquiring.
     let quads = py
-        .detach(|| parse_quads(&data, format.to_native()))
+        .detach(|| parse_quads(&data, format.to_native(), None))
         .map_err(|e| PyValueError::new_err(format!("parse error: {e}")))?;
     quads
         .into_iter()
@@ -120,8 +120,12 @@ pub(crate) fn serialize(
 /// rows of the RDF 1.2 statement layer reappear in the quad stream exactly as a flat
 /// parse would yield them. Private-use language tags such as `@x-purrdf-*` are valid
 /// BCP-47 `x-…` privateuse tags and survive the native parse.
-pub(crate) fn parse_quads(data: &[u8], format: NativeRdfFormat) -> Result<Vec<RdfQuad>, String> {
-    let dataset = parse_dataset(data, format.media_type(), None).map_err(|e| e.to_string())?;
+pub(crate) fn parse_quads(
+    data: &[u8],
+    format: NativeRdfFormat,
+    base: Option<&str>,
+) -> Result<Vec<RdfQuad>, String> {
+    let dataset = parse_dataset(data, format.media_type(), base).map_err(|e| e.to_string())?;
     Ok(flat_rdf_quads_from_dataset(&dataset))
 }
 
@@ -185,7 +189,7 @@ mod tests {
         // The project's private-use language tags (`@x-purrdf-*`) must survive the
         // parse. The native N-Quads codec (purrdf-gts's own lenient tokenizer) accepts
         // them, including the >8-char subtag `afrikaans` that strict BCP-47 rejects.
-        let quads = parse_quads(NQUADS_LANG.as_bytes(), NativeRdfFormat::NQuads)
+        let quads = parse_quads(NQUADS_LANG.as_bytes(), NativeRdfFormat::NQuads, None)
             .expect("private-use language tags must parse via N-Quads");
         assert_eq!(quads.len(), 1);
         match &quads[0].object {
@@ -208,7 +212,7 @@ mod tests {
             "\"hallo\"@x-purrdf-afrikaans ."
         );
         for format in [NativeRdfFormat::Turtle, NativeRdfFormat::NTriples] {
-            let quads = parse_quads(ttl.as_bytes(), format)
+            let quads = parse_quads(ttl.as_bytes(), format, None)
                 .unwrap_or_else(|e| panic!("{format:?} must accept the private-use tag: {e}"));
             assert_eq!(quads.len(), 1);
             match &quads[0].object {
@@ -229,7 +233,7 @@ mod tests {
             "<https://example.org/s> <https://example.org/p> ",
             "\"2026-06-19T00:00:00+00:00\"^^<http://www.w3.org/2001/XMLSchema#dateTime> ."
         );
-        let quads = parse_quads(ttl.as_bytes(), NativeRdfFormat::Turtle).expect("parse");
+        let quads = parse_quads(ttl.as_bytes(), NativeRdfFormat::Turtle, None).expect("parse");
         match &quads[0].object {
             RdfTerm::Literal(lit) => assert_eq!(lit.lexical_form, "2026-06-19T00:00:00+00:00"),
             other => panic!("expected a literal, got {other:?}"),
@@ -245,7 +249,7 @@ mod tests {
             "<<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> ."
         );
         let quads =
-            parse_quads(ttl.as_bytes(), NativeRdfFormat::Turtle).expect("RDF 1.2 must parse");
+            parse_quads(ttl.as_bytes(), NativeRdfFormat::Turtle, None).expect("RDF 1.2 must parse");
         assert_eq!(quads.len(), 1);
         assert!(
             matches!(&quads[0].object, RdfTerm::Triple(_)),
@@ -262,7 +266,7 @@ mod tests {
         );
         let bytes =
             serialize_triples(std::slice::from_ref(&triple), NativeRdfFormat::NTriples).unwrap();
-        let reparsed = parse_quads(&bytes, NativeRdfFormat::NTriples).unwrap();
+        let reparsed = parse_quads(&bytes, NativeRdfFormat::NTriples, None).unwrap();
         assert_eq!(reparsed.len(), 1);
         assert_eq!(reparsed[0].subject.to_string(), "<https://example.org/s>");
     }

@@ -66,7 +66,7 @@ pub struct ContentChainVerification {
 /// Fully verify that `dataset`'s content-addressed terms are backed by the signed
 /// GTS file `gts_bytes` whose expected last-segment head is `expected_head`.
 ///
-/// See the [module docs](self) for the exact checks. Hard-fails on the first
+/// See the module docs for the exact checks. Hard-fails on the first
 /// problem — a bad signature, a fold diagnostic, an expected-head mismatch, or a
 /// content-addressed term whose digest is not included in the file.
 ///

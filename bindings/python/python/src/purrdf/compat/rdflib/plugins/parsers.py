@@ -17,11 +17,14 @@ quad formats.
 
 from __future__ import annotations
 
+import json
+import re
 from typing import TYPE_CHECKING, Any
 
 import purrdf
 
 from ..parser import Parser
+from ..term import URIRef
 
 if TYPE_CHECKING:
     from ..graph import Graph
@@ -52,6 +55,24 @@ def _as_text(source: Any) -> str:
     raise TypeError(f"unsupported parse source: {source!r}")
 
 
+#: An XML namespace declaration: ``xmlns:prefix="uri"`` (default ``xmlns`` is
+#: intentionally excluded; the reserved ``xml`` prefix is skipped by the caller).
+_XMLNS_PREFIX_RE = re.compile(
+    r"""\sxmlns:([A-Za-z_][\w.\-]*)\s*=\s*(["'])(.*?)\2""",
+    re.DOTALL,
+)
+
+
+def _scan_xml_prefixes(text: str) -> list[tuple[str, str]]:
+    """Extract ``(prefix, iri)`` declarations from XML ``xmlns:`` attributes.
+
+    A lightweight lexical scan (no full parse): RDF/XML records document prefixes
+    on the graph's ``NamespaceManager`` during parsing, but the native codec does
+    not surface them, so we recover them from the source text.
+    """
+    return [(match.group(1), match.group(3)) for match in _XMLNS_PREFIX_RE.finditer(text)]
+
+
 class _NativeParser(Parser):
     """Load a native-format payload into the sink store (deterministic)."""
 
@@ -64,7 +85,7 @@ class _NativeParser(Parser):
         payload = _as_bytes(source)
         if self.prefix_bearing:
             sink._bind_source_prefixes(payload)
-        sink._store.load(payload, format=self.rdf_format)
+        sink._store.load(payload, format=self.rdf_format, base=kwargs.get("base"))
 
 
 class TurtleParser(_NativeParser):
@@ -96,9 +117,56 @@ class TriGParser(_NativeParser):
 class JsonLDParser(Parser):
     """JSON-LD (with RDF-star support) parser via the purrdf-gts codec."""
 
+    #: Reserved JSON-LD keywords that are never prefix mappings.
+    _RESERVED_CONTEXT_KEYS: frozenset[str] = frozenset(
+        (
+            "@vocab",
+            "@language",
+            "@base",
+            "@version",
+            "@propagate",
+            "@protected",
+            "@import",
+            "@scope",
+        )
+    )
+
     def parse(self, source: Any, sink: Graph, **kwargs: Any) -> None:
         """Load JSON-LD text (``from_json_ld`` → N-Quads → store)."""
-        sink._store.load(purrdf.from_json_ld(_as_text(source)), format=_NQ)
+        text = _as_text(source)
+        sink._store.load(purrdf.from_json_ld(text), format=_NQ)
+        self._bind_jsonld_context_prefixes(text, sink)
+
+    def _bind_jsonld_context_prefixes(self, text: str, sink: Graph) -> None:
+        """Extract prefix → namespace mappings from a JSON-LD ``@context``."""
+        try:
+            doc = json.loads(text)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(doc, dict):
+            return
+        context = doc.get("@context")
+        if context is None:
+            return
+        if isinstance(context, str):
+            # Remote context URL; cannot recover prefixes from this document.
+            return
+        if isinstance(context, dict):
+            contexts = [context]
+        elif isinstance(context, list):
+            contexts = context
+        else:
+            return
+        for ctx in contexts:
+            if not isinstance(ctx, dict):
+                continue
+            for prefix, value in ctx.items():
+                if prefix in self._RESERVED_CONTEXT_KEYS:
+                    continue
+                if not isinstance(value, str):
+                    continue
+                if value.endswith(("/", "#", ":")):
+                    sink.bind(prefix, URIRef(value))
 
 
 class RDFXMLParser(Parser):
@@ -106,7 +174,12 @@ class RDFXMLParser(Parser):
 
     def parse(self, source: Any, sink: Graph, **kwargs: Any) -> None:
         """Load RDF/XML text (``from_rdf_xml`` → N-Quads → store)."""
-        sink._store.load(purrdf.from_rdf_xml(_as_text(source)), format=_NQ)
+        text = _as_text(source)
+        sink._store.load(purrdf.from_rdf_xml(text), format=_NQ)
+        for prefix, namespace in _scan_xml_prefixes(text):
+            if prefix == "xml":
+                continue
+            sink.bind(prefix, URIRef(namespace))
 
 
 class TriXParser(_NativeParser):

@@ -1465,7 +1465,12 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         col: u32,
     ) -> Result<Node, RdfDiagnostic> {
         match self.prefixes.get(prefix) {
-            Some(base) => Ok(Node::Iri(format!("{base}{local}"))),
+            Some(base) => {
+                // Prefixed-name expansion can yield a relative IRI reference when the
+                // namespace is empty (e.g. `@prefix : <> . :knows` → `knows`). Resolve
+                // that against the document base, just like a bare IRIREF.
+                Ok(Node::Iri(self.resolve_iri(&format!("{base}{local}"))))
+            }
             None => Err(err_at(format!("unknown prefix {prefix:?}"), line, col)),
         }
     }
@@ -2452,6 +2457,24 @@ mod tests {
             nodes[2],
             Node::Iri("https://example.org/vocab/report/shacl/sarif".to_owned())
         );
+    }
+
+    /// A prefixed name whose namespace is empty (`@prefix : <> .`) expands to a
+    /// relative IRI reference that must be resolved against the document base, just like
+    /// a bare IRIREF. This ensures `@prefix : <> . :knows` and `PREFIX : <base> :knows`
+    /// name the same absolute IRI.
+    #[test]
+    fn turtle_empty_namespace_prefixed_name_resolves_against_base() {
+        let text = "@prefix : <> .\n\
+                    <#a> :knows <#b> .";
+        let statements = DocParser::new(text, Some("http://example.org/"), false, &mut NoSpans)
+            .parse()
+            .expect("parses");
+        assert_eq!(statements.len(), 1);
+        let nodes = &statements[0];
+        assert_eq!(nodes[0], Node::Iri("http://example.org/#a".to_owned()));
+        assert_eq!(nodes[1], Node::Iri("http://example.org/knows".to_owned()));
+        assert_eq!(nodes[2], Node::Iri("http://example.org/#b".to_owned()));
     }
 
     /// Regression for the lexer trailing-dot bug: `_:y.` at end of statement must

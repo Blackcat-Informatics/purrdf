@@ -13,6 +13,9 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "shacl", "validation", "knowledge-graph", "rdf-12"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
@@ -23,14 +26,14 @@ crate-type = ["rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-# Native SPARQL parser (purrdf S5, #911). Used at shape-load to reject non-SELECT
+# Native SPARQL parser. Used at shape-load to reject non-SELECT
 # SHACL-SPARQL queries (ASK/CONSTRUCT/DESCRIBE) — they parse but cannot bind ?this
 # and would panic at eval. Use SparqlParser to parse and match Query::Select.
 # Replaces the oxigraph-family SPARQL parser.
 purrdf-sparql-algebra = { workspace = true }
 # Native SPARQL engine (crates/sparql-eval): the single SparqlEngine impl over the
 # frozen IR. Replaces oxigraph's SPARQL 1.1 engine for SHACL-AF sh:sparql /
-# sh:SPARQLTarget evaluation (EPIC #906).
+# sh:SPARQLTarget evaluation.
 purrdf-sparql-eval = { workspace = true }
 # sh:pattern regex constraint.
 regex = { workspace = true }
@@ -39,11 +42,11 @@ regex = { workspace = true }
 # facets (W3C core/node/minInclusive-002/-003 — timezone-aware partial order;
 # indeterminate comparisons are violations).
 purrdf-xsd = { workspace = true }
-# JSON Schema / OpenAPI emitter (#700). NO `preserve_order` feature: we rely on
+# JSON Schema / OpenAPI emitter. NO `preserve_order` feature: we rely on
 # serde_json's default BTreeMap-backed Map so object keys serialize sorted for
 # deterministic, byte-stable output.
 serde_json = { workspace = true }
-# Shared PyO3-free RDF 1.2 kernel and native GTS/text-codec boundary (#648).
+# Shared PyO3-free RDF 1.2 kernel and native GTS/text-codec boundary.
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.
 purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.2.1" }
@@ -56,7 +59,7 @@ smallvec = { workspace = true }
 purrdf-gts = { workspace = true }
 purrdf-slice = { workspace = true }
 proptest = { workspace = true }
-# Acceleration-program baselines (#630, Phase 0); light feature set, see crates/logic.
+# Acceleration-program baselines; light feature set, see crates/logic.
 criterion = { workspace = true }
 
 [[bench]]

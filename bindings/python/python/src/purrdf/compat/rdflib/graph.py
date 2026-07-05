@@ -27,12 +27,14 @@ from urllib.parse import urljoin, urlparse
 import purrdf
 
 from .namespace import RDF, NamespaceManager
+from .parser import FileInputSource, StringInputSource
 from .query import Result, ResultRow
 from .term import (
     BNode,
     Identifier,
     Literal,
     URIRef,
+    Variable,
     from_native,
     to_native,
 )
@@ -101,11 +103,12 @@ _PREFIX_DECL_RE = re.compile(r"@?prefix\s+([^\s:]*)\s*:\s*<([^>\s]*)>", re.IGNOR
 def _scan_prefixes(text: str) -> list[tuple[str, str]]:
     """Extract ``(prefix, iri)`` declarations from Turtle/TriG/N3/SPARQL source text.
 
-    A lightweight lexical scan (no full parse): rdflib records document prefixes on
-    the graph's ``NamespaceManager`` during parsing; the native parser does not yet
-    surface them, so we recover them from the source. Non-textual/binary sources and
-    JSON-LD/RDF/XML documents are handled by the caller (see the strict-xfail
-    ledger for the residual prefix-wiring gap).
+    A lightweight lexical scan (no full parse). rdflib records document prefixes on
+    the graph's ``NamespaceManager`` during parsing; the native parser does not
+    surface them directly, so we recover them from the source for the Turtle-family
+    formats. JSON-LD ``@context`` prefixes are extracted after the parse by walking
+    the parsed JSON context, and RDF/XML ``xmlns:`` prefixes are recovered by the
+    RDF/XML parser. There are no remaining prefix-wiring divergences.
     """
     return [(m.group(1), m.group(2)) for m in _PREFIX_DECL_RE.finditer(text)]
 
@@ -412,10 +415,22 @@ class Graph:
         """Add a sequence of ``(s, p, o, context)`` quads (RDFLib ``addN``).
 
         The context is the graph the triple belongs to — either a ``Graph``
-        facade (its graph slot is used) or a graph-name identifier.
+        facade (its graph slot is used) or a graph-name identifier. A plain
+        :class:`Graph` only keeps quads whose context matches its identifier;
+        a :class:`_DatasetGraph` view writes every quad to its own graph slot;
+        a :class:`Dataset` accepts all contexts.
         """
-        for s, p, o, context in quads:
-            self._add_quad(s, p, o, _context_graph_name(context))
+        if isinstance(self, Dataset):
+            for s, p, o, context in quads:
+                self._add_quad(s, p, o, _context_graph_name(context))
+        elif self._graph_name is not None:
+            for s, p, o, _context in quads:
+                self._add_quad(s, p, o, self._graph_name)
+        else:
+            for s, p, o, context in quads:
+                ctx_id = context.identifier if isinstance(context, Graph) else context
+                if ctx_id == self.identifier:
+                    self._add_quad(s, p, o, self._graph_name)
 
     def remove(self, triple: _Pattern) -> None:
         """Remove every triple matching the (possibly wildcard) pattern."""
@@ -658,9 +673,16 @@ class Graph:
             yield (p, o)
 
     def items(self, list_node: Identifier) -> Iterator[Identifier]:
-        """Yield the members of the ``rdf:List`` anchored at ``list_node``."""
+        """Yield the members of the ``rdf:List`` anchored at ``list_node``.
+
+        Raises ``ValueError`` if the list contains a cycle.
+        """
         node: Identifier | None = list_node
+        visited: builtins.set[Identifier] = set()
         while node is not None and node != RDF.nil:
+            if node in visited:
+                raise ValueError(f"rdf:List contains a cycle at node {node!r}")
+            visited.add(node)
             first = self.value(node, RDF.first)
             if first is not None:
                 yield first
@@ -919,6 +941,10 @@ class Graph:
         name → implementation. Native formats read from a filesystem path keep the
         direct-load fast-path (via the parser's ``rdf_format`` marker); every other
         source is read to a ``bytes`` payload and handed to the resolved parser.
+
+        A base IRI for resolving relative IRIs is derived from ``publicID``,
+        then ``location``/``source`` if they are a path or URL, and falls back to
+        the current working directory as a ``file:`` URI.
         """
         from . import plugin
         from .parser import Parser
@@ -931,6 +957,7 @@ class Graph:
         native_format = getattr(parser_cls, "rdf_format", None)
         prefix_bearing = getattr(parser_cls, "prefix_bearing", False)
         payload: bytes
+        base = self._derive_parse_base(publicID, location, source, file, data)
         if data is not None:
             payload = data.encode("utf-8") if isinstance(data, str) else data
         else:
@@ -940,7 +967,13 @@ class Graph:
             if src is None:
                 raise ValueError("parse requires one of: source, data, location, file")
             reader = getattr(src, "read", None)
-            if callable(reader):
+            if isinstance(src, StringInputSource):
+                value = src.value
+                payload = value.encode("utf-8") if isinstance(value, str) else value
+            elif isinstance(src, FileInputSource):
+                raw = src.file.read()
+                payload = raw.encode("utf-8") if isinstance(raw, str) else raw
+            elif callable(reader):
                 raw = reader()
                 payload = raw.encode("utf-8") if isinstance(raw, str) else raw
             elif native_format is not None:
@@ -949,12 +982,41 @@ class Graph:
                 # qname see them, since the native loader does not surface them.
                 if prefix_bearing:
                     self._bind_source_prefixes(Path(str(src)).read_bytes())
-                self._store.load(path=str(src), format=native_format)
+                self._store.load(path=str(src), format=native_format, base=base)
                 return self
             else:
                 payload = Path(str(src)).read_bytes()
-        parser_cls().parse(payload, self)
+        parser_cls().parse(payload, self, base=base)
         return self
+
+    def _derive_parse_base(
+        self,
+        publicID: str | None,
+        location: object | None,
+        source: object | None,
+        file: object | None,
+        data: object | None,
+    ) -> str:
+        """Return the base IRI for resolving relative IRIs during parsing.
+
+        Precedence: ``publicID``, then ``location``/``source`` when it denotes a
+        path or URL, otherwise ``Path.cwd().as_uri()``.
+        """
+        if publicID is not None and not isinstance(publicID, BNode):
+            return str(publicID)
+        src: object | None = source if source is not None else location
+        if src is None and file is not None and data is None:
+            src = file
+        if src is None or isinstance(src, StringInputSource | FileInputSource):
+            return Path.cwd().as_uri()
+        reader = getattr(src, "read", None)
+        if callable(reader):
+            return Path.cwd().as_uri()
+        src_str = str(src)
+        parsed = urlparse(src_str)
+        if parsed.scheme:
+            return src_str
+        return Path(src_str).absolute().as_uri()
 
     def _dump_bytes(self, fmt: str | None) -> bytes:
         """Serialize the store to bytes in the requested format.
@@ -1031,6 +1093,31 @@ class Graph:
 
     # ── query ─────────────────────────────────────────────────────────────────────
 
+    def _build_prefix_block(
+        self, query_text: str, initNs: dict[str, object] | None
+    ) -> str:
+        """Return a deterministic ``PREFIX`` prologue block for ``query_text``.
+
+        Graph namespace-manager bindings are merged with ``initNs`` and prepended
+        to the query/update body. Prefixes already declared in the text (either
+        SPARQL ``PREFIX`` or Turtle ``@prefix`` form) are skipped so the prologue
+        stays duplicate-free. ``initNs`` takes precedence over graph bindings:
+        a prefix supplied in ``initNs`` overrides the graph's binding for that
+        prefix name, and graph bindings never shadow an in-text declaration.
+        """
+        seen = {m.group(1) for m in _PREFIX_DECL_RE.finditer(query_text)}
+        merged: dict[str, object] = {
+            prefix: ns for prefix, ns in self._nsm.namespaces() if prefix
+        }
+        if initNs:
+            merged.update(initNs)
+        lines = [
+            f"PREFIX {prefix}: <{ns}>"
+            for prefix, ns in sorted(merged.items(), key=lambda x: x[0])
+            if prefix and prefix not in seen
+        ]
+        return "\n".join(lines) + "\n" if lines else ""
+
     def query(
         self,
         query_object: str,
@@ -1060,14 +1147,11 @@ class Graph:
             raise TypeError(
                 f"Graph.query() got unsupported keyword argument(s): {sorted(kwargs)}"
             )
+        prefix_block = self._build_prefix_block(query_object, initNs)
+        if prefix_block:
+            query_object = prefix_block + query_object
         if base:
             query_object = f"BASE <{base}>\n" + query_object
-        if initNs:
-            prefixes = "".join(
-                f"PREFIX {prefix}: <{namespace}>\n"
-                for prefix, namespace in initNs.items()
-            )
-            query_object = prefixes + query_object
         substitutions = _native_substitutions(initBindings) if initBindings else None
         res = self._store.query(
             query_object,
@@ -1087,7 +1171,7 @@ class Graph:
             )
             return Result(form, graph=constructed)
         variables = list(res.variables)
-        var_names = tuple(v.value for v in variables)
+        var_names = tuple(Variable(v.value) for v in variables)
         rows = [
             ResultRow(tuple(from_native(sol[v]) for v in variables), var_names)
             for sol in res
@@ -1119,12 +1203,9 @@ class Graph:
             raise TypeError(
                 f"Graph.update() got unsupported keyword argument(s): {sorted(kwargs)}"
             )
-        if initNs:
-            prefixes = "".join(
-                f"PREFIX {prefix}: <{namespace}>\n"
-                for prefix, namespace in initNs.items()
-            )
-            update_object = prefixes + update_object
+        prefix_block = self._build_prefix_block(update_object, initNs)
+        if prefix_block:
+            update_object = prefix_block + update_object
         if initBindings:
             update_object = _inline_bound_variables(update_object, initBindings)
         self._store.update(
@@ -1181,9 +1262,20 @@ class Graph:
             self.remove(triple)
         return self
 
+    def _new_graph_like(self) -> Graph:
+        """Return a fresh graph of the same runtime class as ``self``.
+
+        Dataset-backed graph views cannot be constructed standalone, so they fall
+        back to a plain :class:`Graph`.
+        """
+        cls = type(self)
+        if cls is _DatasetGraph:
+            return Graph()
+        return cls()
+
     def __add__(self, other: Iterable[_Triple]) -> Graph:
         """Return a new graph = the union of this graph and ``other``."""
-        result = Graph()
+        result = self._new_graph_like()
         for triple in self:
             result.add(triple)
         for triple in other:
@@ -1192,7 +1284,7 @@ class Graph:
 
     def __sub__(self, other: Iterable[_Triple]) -> Graph:
         """Return a new graph = this graph minus the triples in ``other``."""
-        result = Graph()
+        result = self._new_graph_like()
         removed = set(other)
         for triple in self:
             if triple not in removed:
@@ -1201,7 +1293,7 @@ class Graph:
 
     def __mul__(self, other: Iterable[_Triple]) -> Graph:
         """Return a new graph = intersection of this graph and ``other``."""
-        result = Graph()
+        result = self._new_graph_like()
         other_set = set(other)
         for triple in self:
             if triple in other_set:
@@ -1210,7 +1302,7 @@ class Graph:
 
     def __xor__(self, other: Iterable[_Triple]) -> Graph:
         """Return a new graph = symmetric difference of this graph and ``other``."""
-        result = Graph()
+        result = self._new_graph_like()
         self_set = set(self)
         other_set = set(other)
         for triple in self_set ^ other_set:
@@ -1319,6 +1411,34 @@ class _DatasetGraph(Graph):
     def __len__(self) -> int:
         """Return the triple count within this graph slot alone."""
         return sum(1 for _ in self.triples((None, None, None)))
+
+    def parse(
+        self,
+        source: object | None = None,
+        publicID: str | None = None,  # noqa: N803 - RDFLib API name
+        format: str | None = None,
+        location: str | None = None,
+        file: IO[bytes] | None = None,
+        data: str | bytes | None = None,
+        **kwargs: object,
+    ) -> _DatasetGraph:
+        """Parse RDF into this named-graph slot (not the dataset default graph).
+
+        Quad formats are delegated to the parent :class:`Dataset` so their
+        embedded graph names are honored. Triple-only formats are loaded into a
+        temporary :class:`Graph` and then copied into this view's slot.
+        """
+        f = (format or "turtle").lower()
+        if f in {"nquads", "nq", "trig", "trix", "hextuples"}:
+            self._dataset.parse(
+                source, publicID, format, location, file, data, **kwargs
+            )
+            return self
+        tmp = Graph(namespace_manager=self._nsm)
+        tmp.parse(source, publicID, format, location, file, data, **kwargs)
+        for triple in tmp:
+            self.add(triple)
+        return self
 
 
 class Dataset(Graph):
@@ -1513,7 +1633,42 @@ class Dataset(Graph):
 
 
 class ConjunctiveGraph(Dataset):
-    """RDFLib ``ConjunctiveGraph`` alias over the dataset facade."""
+    """RDFLib ``ConjunctiveGraph`` legacy facade (deprecated, default union)."""
+
+    def __init__(
+        self,
+        store: purrdf.Store | purrdf.MutableDataset | None = None,
+        default_union: bool = True,
+        **kwargs: object,
+    ) -> None:
+        """Create a dataset-backed conjunctive graph.
+
+        Mirrors rdflib 7.x: ``default_union`` defaults to ``True`` and
+        instantiation emits a deprecation warning advising ``Dataset``.
+        """
+        import warnings
+
+        warnings.warn(
+            "ConjunctiveGraph is deprecated, use Dataset instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(store, default_union=default_union, **kwargs)
+
+    def __iter__(self) -> Iterator[_Triple]:  # type: ignore[override]
+        """Iterate every unique triple (3-tuple) in the conjunctive graph."""
+        yield from self.triples((None, None, None))
+
+    def quads(  # type: ignore[override]
+        self, pattern: _QuadPattern | None = None
+    ) -> Iterator[tuple[Identifier, Identifier, Identifier, Graph]]:
+        """Yield ``(s, p, o, Graph)`` quads with a context object in slot 4."""
+        ps, pp, po, pg = pattern if pattern is not None else (None, None, None, None)
+        for s, p, o, gname in Dataset.quads(self, (ps, pp, po, pg)):
+            if gname is None or gname == DATASET_DEFAULT_GRAPH_ID:
+                yield (s, p, o, self.default_graph)
+            else:
+                yield (s, p, o, self.get_context(gname))
 
 
 class Seq:

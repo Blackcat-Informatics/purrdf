@@ -8,7 +8,7 @@
 //! other emitter loads (the shared
 //! `dsl/mappings/**/*.ttl` tree + the slice [`crate::artifact::ArtifactRole::Mapping`]
 //! artifacts). The counted classes derive from the caller's
-//! [`SliceVocab`](crate::vocab::SliceVocab):
+//! [`SliceVocab`] configuration:
 //!   * `equivalences` — every `<vocab>TermEquivalence` cell.
 //!   * `functions` — every `<vocab>ProjectionFunction`.
 //!   * `mapping_sets` — every `<vocab>MappingSet`.
@@ -29,10 +29,8 @@ use crate::vocab::SliceVocab;
 /// Emit the DSL surface-count summary as committed JSON text.
 ///
 /// All inputs are sourced natively from `root` (the shared mapping-DSL tree + the
-/// slice mapping artifacts — the same merged store [`collect_dsl_store`] parses).
+/// slice mapping artifacts — the same merged store `collect_dsl_store` parses).
 /// The text is byte-identical to the historical Python DSL stats emitter.
-///
-/// [`collect_dsl_store`]: crate::mapping_support::collect_dsl_store
 ///
 /// # Errors
 ///

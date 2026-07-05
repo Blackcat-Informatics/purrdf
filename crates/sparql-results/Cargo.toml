@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-sparql-results"
-description = "Native, wasm-clean serializer for the SPARQL result model (SELECT/ASK/CONSTRUCT) to SPARQL Results JSON/XML/CSV/TSV plus a provenance-carrying purrdf extension — the canonical results-serialization authority replacing the oxigraph-family `sparesults` (purrdf S9, EPIC #906)"
+description = "Native, wasm-clean serializer for the SPARQL result model (SELECT/ASK/CONSTRUCT) to SPARQL Results JSON/XML/CSV/TSV plus a provenance-carrying purrdf extension — the canonical results-serialization authority replacing the oxigraph-family `sparesults`"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -12,6 +12,9 @@ homepage.workspace = true
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["sparql", "rdf", "rdf-12", "results", "serialization"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints]
 workspace = true

@@ -3,7 +3,7 @@
 
 //! Pre-freeze structural validation for the immutable `RdfDataset` (C1).
 //!
-//! [`validate`] is invoked by [`RdfDatasetBuilder::freeze`] BEFORE any dataset is
+//! `validate` is invoked by [`RdfDatasetBuilder::freeze`] BEFORE any dataset is
 //! materialized; on any failure it returns a precise [`RdfDiagnostic`] and freeze
 //! HARD-fails (no degraded fallback, per the no-optionality doctrine). It enforces,
 //! per the normative C0 contract (`docs/design/819-rdf-ir-dataflow.md`):
@@ -15,7 +15,7 @@
 //! - **ID-reference validity:** every `TermId` referenced by any quad / reifier /
 //!   annotation is `< term_count()`.
 //! - **Triple-term acyclicity (C0.3):** the `Triple{s,p,o}` nesting graph is acyclic
-//!   and bounded by [`MAX_TERM_NESTING_DEPTH`]; a triple term MUST NOT (transitively)
+//!   and bounded by `MAX_TERM_NESTING_DEPTH`; a triple term MUST NOT (transitively)
 //!   contain itself.
 //!
 //! [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze

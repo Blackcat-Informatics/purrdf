@@ -10,10 +10,10 @@
 //!
 //! # Rendering contract (behavior-preserving)
 //!
-//! [`Term::to_string`] reproduces oxigraph's `Term::to_string()` **byte-for-byte**,
+//! `Term::to_string` reproduces oxigraph's `Term::to_string()` **byte-for-byte**,
 //! because the engine uses the string rendering as its deterministic sort key
 //! ([`crate::engine`]) and the report serialization / Python surface
-//! ([`crate::report`], [`crate::py`]) compare on it. The contract verified against
+//! ([`crate::report`]) compare on it. The contract verified against
 //! oxigraph 0.5 is:
 //!
 //! - IRI → `<iri>`
@@ -219,7 +219,7 @@ impl Term {
         matches!(self, Self::NamedNode(_) | Self::BlankNode(_))
     }
 
-    /// Convert this native term into the owned [`RdfTerm`] model — used when
+    /// Convert this native term into the owned [`RdfTerm`](purrdf::RdfTerm) model — used when
     /// building a report dataset for serialization.
     pub fn to_rdf_term(&self) -> ::purrdf::RdfTerm {
         use purrdf::{RdfLiteral, RdfTerm, RdfTriple};

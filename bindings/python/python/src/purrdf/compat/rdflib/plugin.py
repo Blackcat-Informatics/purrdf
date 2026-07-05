@@ -207,7 +207,8 @@ register("sparql", UpdateProcessor, _SPARQL, "SPARQLUpdateProcessor")
 
 # ── SPARQL result serializers / parsers (native codecs) ──────────────────────────
 # JSON/XML/CSV/TSV serializers and JSON/XML parsers route through the native
-# purrdf-sparql-results crate; CSV/TSV parsing and the txt table are deferred.
+# purrdf-sparql-results crate; CSV/TSV parsing and the txt table are implemented
+# in purrdf.compat.rdflib.plugins.sparqlresults.
 _RESULTS = "purrdf.compat.rdflib.plugins.sparqlresults"
 for _name in ("json", "application/sparql-results+json"):
     register(_name, ResultSerializer, _RESULTS, "JSONResultSerializer")

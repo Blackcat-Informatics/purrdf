@@ -4,7 +4,7 @@
 //! Prefix-set projections (§2): the importable named prefix set
 //! (`<vocab>CorePrefixes`) and the JSON-LD `@context` document — both *projections*
 //! of the single prefix authority (the caller's [`SliceVocab`] entry plus
-//! [`crate::mapping_support::PREFIX_REGISTRY`]).
+//! `crate::mapping_support::PREFIX_REGISTRY`).
 //!
 //! The article's §2 win is "generalize `sh:declare`": instead of every SHACL
 //! shape / `.rq` author redeclaring the same prefixes, publish ONE named set,
