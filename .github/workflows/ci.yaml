@@ -78,10 +78,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
-      # Document exactly the 16 published crates with rustdoc lints promoted to
-      # errors. The three publish=false crates are excluded because purrdf-capi's
-      # `[lib] name = "purrdf"` collides with the umbrella crate's output filename
-      # in a single --workspace doc run.
+      # Document exactly the 16 documented crates: the 15 publishable crates
+      # plus the internal purrdf-entail (publish = false), with rustdoc lints
+      # promoted to errors. The other three publish=false crates are excluded
+      # because purrdf-capi's `[lib] name = "purrdf"` collides with the umbrella
+      # crate's output filename in a single --workspace doc run.
       - name: Doc (deny warnings)
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance
 

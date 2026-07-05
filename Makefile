@@ -84,7 +84,7 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 test: ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-doc: ## Build docs for the 15 published crates with rustdoc warnings denied.
+doc: ## Build docs for the 16 documented crates (15 publishable + internal purrdf-entail) with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
