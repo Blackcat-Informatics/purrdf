@@ -4,16 +4,36 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.3.3] - 2026-07-05
+
+### Performance
+
+- **rdf:** Memoize the line index so parser diagnostics stay linear
 ## [0.3.2] - 2026-07-05
+
+### Bug Fixes
+
+- **shapes:** Reconcile SHACL-AF work with the merged 0.3.1 baseline
+
+### Features
+
+- **shapes:** SHACL Rules — 100% SHACL-AF coverage
+## [0.3.1] - 2026-07-05
 
 ### Bug Fixes
 
 - **shapes:** Pre-bind $shapesGraph in sh:SPARQLRule CONSTRUCT execution
 - **build:** Optimize parse-hot workspace crates in dev/test profile to remove ~300x regression
 
+### CI & Build
+
+- **release:** Edition 2024, publish purrdf-entail, expose entail+validate, bump 0.3.1
+- **release:** Edition 2024, publish purrdf-entail, expose entail+validate, bump 0.3.1
+
 ### Documentation
 
 - **conformance:** Add SHACL Rules scoreboard row; SHACL-AF is 100% complete
+- **release:** Changelog for 0.3.1
 
 ### Features
 
@@ -31,11 +51,6 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **shapes:** SHACL Rules conformance corpus + inferred-graph harness
 - **shapes:** Audit every node-expression kind in sh:TripleRule subject/predicate/object positions
 - **shapes:** Cover blank-focus blank minting and multi-round fixpoint convergence
-## [0.3.1] - 2026-07-05
-
-### CI & Build
-
-- **release:** Edition 2024, publish purrdf-entail, expose entail+validate, bump 0.3.1
 ## [0.3.0] - 2026-07-05
 
 ### Benchmarks
