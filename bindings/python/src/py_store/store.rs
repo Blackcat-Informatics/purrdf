@@ -14,8 +14,8 @@
 //! `_store_capsule` hands `purrdf_shapes` / `purrdf_validate` a stable
 //! `Arc<RdfDataset>` snapshot under the `c"purrdf-validation-dataset"` capsule name.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf_core::ir::{MutableDataset, QuadValues};
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -23,13 +23,12 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule, PyDict};
 
 use super::canon::PyCanonicalizationAlgorithm;
-use super::io::{dataset_from_quads_verbatim, parse_quads, read_input, PyRdfFormat};
+use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads, read_input};
 use super::query::{build_engine, materialize_results};
-use super::term::{extract_graph_name, extract_term, PyQuad, PyVariable};
+use super::term::{PyQuad, PyVariable, extract_graph_name, extract_term};
 use crate::{
-    serialize_dataset, BlankScope, DatasetMut, GraphMatchValue, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SparqlEngine, SparqlRequest,
-    TermValue,
+    BlankScope, DatasetMut, GraphMatchValue, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfQuad,
+    RdfTerm, RdfTriple, SerializeGraph, SparqlEngine, SparqlRequest, TermValue, serialize_dataset,
 };
 
 /// An in-memory RDF 1.2 quad store with SPARQL. Mirrors the oxigraph Python `Store`.
@@ -519,17 +518,15 @@ fn blank_value_scoped(label: &str, scope: BlankScope) -> TermValue {
 /// the form `"{inner}.s{n}"` (with non-empty `inner` and `n > 0`) decodes to
 /// `Blank{inner, scope: n}`; any other label is a DEFAULT-scope blank verbatim.
 fn blank_value_from_external_label(label: &str) -> TermValue {
-    if let Some((inner, raw_scope)) = label.rsplit_once(".s") {
-        if !inner.is_empty() {
-            if let Ok(scope) = raw_scope.parse::<u32>() {
-                if scope > 0 {
-                    return TermValue::Blank {
-                        label: inner.to_owned(),
-                        scope: BlankScope(scope),
-                    };
-                }
-            }
-        }
+    if let Some((inner, raw_scope)) = label.rsplit_once(".s")
+        && !inner.is_empty()
+        && let Ok(scope) = raw_scope.parse::<u32>()
+        && scope > 0
+    {
+        return TermValue::Blank {
+            label: inner.to_owned(),
+            scope: BlankScope(scope),
+        };
     }
     TermValue::Blank {
         label: label.to_owned(),

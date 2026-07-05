@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_shex::{
-    parse_shape_map, parse_shexc, validate, ConformanceStatus, NodeSelector, ResultEntry,
-    ResultShapeMap, ShapeSelector,
+    ConformanceStatus, NodeSelector, ResultEntry, ResultShapeMap, ShapeSelector, parse_shape_map,
+    parse_shexc, validate,
 };
 
 const S: &str = "http://a.example/S";

@@ -19,8 +19,8 @@
 
 use std::fmt;
 
-use crate::content_store::decode_hex_32;
 use crate::RdfDiagnostic;
+use crate::content_store::decode_hex_32;
 
 /// A content id in the BLAKE3 GTS domain (`blake3:<hex>` term references).
 ///

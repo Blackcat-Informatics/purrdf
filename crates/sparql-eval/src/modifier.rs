@@ -13,18 +13,18 @@ use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, NamedNodePattern,
     OrderExpression, Variable,
 };
-use purrdf_xsd::{numeric_add, numeric_div, parse_by_iri, value_cmp, XsdDatatype, XsdValue};
+use purrdf_xsd::{XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_cmp};
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 
+use crate::DetHashSet;
 use crate::convert::{ground_term_to_value, named_node_to_value};
 use crate::error::EvalError;
-use crate::eval::{eval, EvalCtx};
+use crate::eval::{EvalCtx, eval};
 use crate::expr::{eval_expr, xsd_of, xsd_to_term};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
-use crate::DetHashSet;
 
 /// Inline `VALUES`: one solution per binding row, each cell an interned ground term
 /// (or unbound for `UNDEF`).
@@ -376,10 +376,10 @@ fn compare_sort_keys(a: &SortKey, b: &SortKey) -> Ordering {
         ) => {
             // Value space where both parse AND compare; else the deterministic
             // (datatype, language, lexical) fallback — exactly `literal_order`.
-            if let (Some(av), Some(bv)) = (ax, bx) {
-                if let Some(ord) = value_cmp(av, bv) {
-                    return ord;
-                }
+            if let (Some(av), Some(bv)) = (ax, bx)
+                && let Some(ord) = value_cmp(av, bv)
+            {
+                return ord;
             }
             (dx, gx, lx).cmp(&(dy, gy, ly))
         }
@@ -456,10 +456,10 @@ fn term_value_order(a: &TermValue, b: &TermValue) -> Ordering {
 fn literal_order(a: (&str, &str, &Option<String>), b: (&str, &str, &Option<String>)) -> Ordering {
     let (lx, dx, gx) = a;
     let (ly, dy, gy) = b;
-    if let (Ok(Some(ax)), Ok(Some(bx))) = (parse_by_iri(lx, dx), parse_by_iri(ly, dy)) {
-        if let Some(ord) = value_cmp(&ax, &bx) {
-            return ord;
-        }
+    if let (Ok(Some(ax)), Ok(Some(bx))) = (parse_by_iri(lx, dx), parse_by_iri(ly, dy))
+        && let Some(ord) = value_cmp(&ax, &bx)
+    {
+        return ord;
     }
     (dx, gx, lx).cmp(&(dy, gy, ly))
 }

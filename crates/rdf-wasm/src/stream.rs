@@ -24,7 +24,7 @@ use purrdf_events::{
 use wasm_bindgen::prelude::*;
 
 use crate::dataset::Dataset;
-use crate::term::{canonicalize_literal, Quad, TermInner, XSD_STRING};
+use crate::term::{Quad, TermInner, XSD_STRING, canonicalize_literal};
 
 fn to_event_direction(direction: RdfTextDirection) -> TextDirection {
     match direction {
@@ -148,7 +148,7 @@ impl Sink {
             _ => {
                 return Err(
                     "a quad graph must be a NamedNode, BlankNode, or DefaultGraph".to_owned(),
-                )
+                );
             }
         };
 
@@ -271,8 +271,9 @@ mod tests {
             .unwrap();
         let _ = sink.finish().unwrap();
         // After finish, the protocol sink is consumed.
-        assert!(sink
-            .push_inner(&triple_quad("https://e/s", "https://e/p", "https://e/o"))
-            .is_err());
+        assert!(
+            sink.push_inner(&triple_quad("https://e/s", "https://e/p", "https://e/o"))
+                .is_err()
+        );
     }
 }

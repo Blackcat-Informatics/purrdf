@@ -52,7 +52,7 @@ impl PurrdfDataset {
 ///
 /// # Safety
 /// `dataset` must be null or a live dataset handle not already freed.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_dataset_free(dataset: *mut PurrdfDataset) {
     unsafe {
         ffi_guard!((), {
@@ -67,7 +67,7 @@ pub unsafe extern "C" fn purrdf_dataset_free(dataset: *mut PurrdfDataset) {
 ///
 /// # Safety
 /// `dataset` must be a live handle; `out` must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_dataset_quad_count(
     dataset: *const PurrdfDataset,
     out: *mut usize,
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn purrdf_dataset_quad_count(
 ///
 /// # Safety
 /// `dataset` must be a live handle; `out` must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_dataset_term_count(
     dataset: *const PurrdfDataset,
     out: *mut usize,

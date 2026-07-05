@@ -70,15 +70,15 @@ pub(crate) fn decode_annotation_row(row: &Value, graph: &Graph) -> RowDecode<Ann
     if graph.terms[predicate].kind != TermKind::Iri {
         return RowDecode::Position(format!("annot predicate {predicate} not an IRI"));
     }
-    if let Some(graph_name) = graph_slot {
-        if matches!(
+    if let Some(graph_name) = graph_slot
+        && matches!(
             graph.terms[graph_name].kind,
             TermKind::Literal | TermKind::Triple
-        ) {
-            return RowDecode::Position(format!(
-                "annot graph name {graph_name} is not an IRI or blank node"
-            ));
-        }
+        )
+    {
+        return RowDecode::Position(format!(
+            "annot graph name {graph_name} is not an IRI or blank node"
+        ));
     }
     RowDecode::Row((reifier, predicate, value, graph_slot))
 }
@@ -107,15 +107,16 @@ fn check_statement_positions(
         ));
     }
 
-    let mut ok = graph.terms[p].kind == TermKind::Iri && graph.terms[s].kind != TermKind::Literal;
-    if let Some(graph_name) = graph_slot {
-        if matches!(
-            graph.terms[graph_name].kind,
-            TermKind::Literal | TermKind::Triple
-        ) {
-            ok = false;
-        }
-    }
+    // A well-formed quad: predicate is an IRI, subject is not a literal, and any
+    // graph name is neither a literal nor a quoted triple.
+    let ok = graph.terms[p].kind == TermKind::Iri
+        && graph.terms[s].kind != TermKind::Literal
+        && graph_slot.is_none_or(|graph_name| {
+            !matches!(
+                graph.terms[graph_name].kind,
+                TermKind::Literal | TermKind::Triple
+            )
+        });
     if ok {
         Ok(())
     } else {

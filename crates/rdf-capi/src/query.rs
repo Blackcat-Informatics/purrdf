@@ -65,7 +65,7 @@ unsafe fn run_query(
 /// # Safety
 /// `dataset` must be a live handle; `query` must be a NUL-terminated C string;
 /// the out-params must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_query(
     dataset: *const PurrdfDataset,
     query: *const c_char,
@@ -127,7 +127,7 @@ pub unsafe extern "C" fn purrdf_query(
 /// # Safety
 /// `dataset` must be a live handle; `query` must be a NUL-terminated C string;
 /// the out-params must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_query_json(
     dataset: *const PurrdfDataset,
     query: *const c_char,

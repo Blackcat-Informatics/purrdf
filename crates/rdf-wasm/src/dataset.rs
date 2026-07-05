@@ -13,7 +13,7 @@
 use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
 use purrdf::ir::MutableDataset;
 use purrdf::{
-    parse_dataset, serialize_dataset, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, TermValue,
+    RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, TermValue, parse_dataset, serialize_dataset,
 };
 use wasm_bindgen::prelude::*;
 

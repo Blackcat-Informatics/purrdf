@@ -87,8 +87,8 @@ impl RdfDataset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::RdfDatasetBuilder;
     use crate::RdfLiteral;
+    use crate::ir::RdfDatasetBuilder;
     use std::collections::HashSet;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {

@@ -34,8 +34,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use purrdf_rdf::{
-    datasets_isomorphic, parse_dataset, serialize_dataset, RdfDataset, SerializeGraph, TermRef,
-    TermValue,
+    RdfDataset, SerializeGraph, TermRef, TermValue, datasets_isomorphic, parse_dataset,
+    serialize_dataset,
 };
 
 /// Allowlist of W3C tests the native `purrdf-gts` codecs do not handle the same way the
@@ -146,12 +146,11 @@ fn media_type_for_ext(path: &Path) -> &'static str {
 /// Read a manifest's `mf:assumedTestBase` IRI.
 fn assumed_test_base(ds: &RdfDataset) -> String {
     for q in ds.quad_refs() {
-        if let TermRef::Iri(p) = q.p {
-            if p == format!("{MF}assumedTestBase") {
-                if let TermRef::Iri(base) = q.o {
-                    return base.to_owned();
-                }
-            }
+        if let TermRef::Iri(p) = q.p
+            && p == format!("{MF}assumedTestBase")
+            && let TermRef::Iri(base) = q.o
+        {
+            return base.to_owned();
         }
     }
     panic!("manifest has no mf:assumedTestBase");
@@ -195,10 +194,10 @@ fn enumerate(suite: &Suite, submanifest: &str) -> Vec<Case> {
             if let TermRef::Iri(a) = q.o {
                 row.action = Some(a.to_owned());
             }
-        } else if pred == format!("{MF}result") {
-            if let TermRef::Iri(r) = q.o {
-                row.result = Some(r.to_owned());
-            }
+        } else if pred == format!("{MF}result")
+            && let TermRef::Iri(r) = q.o
+        {
+            row.result = Some(r.to_owned());
         }
     }
 

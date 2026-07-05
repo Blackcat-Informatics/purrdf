@@ -27,9 +27,9 @@
 use std::collections::BTreeMap;
 
 use ::purrdf::RdfDataset;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use crate::data::{native_quads, GraphFilter};
+use crate::data::{GraphFilter, native_quads};
 use crate::json_schema::Namespaces;
 use crate::model::rdf;
 use crate::term::Term;

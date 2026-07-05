@@ -16,7 +16,7 @@ use crate::emojihash::{emojihash, emojihash_labels, randomart};
 use crate::model::{Diagnostic, Graph};
 use crate::openpgp::parse_transport_key;
 use crate::policy::{
-    evaluate_profile_policy, signature_trust, ProfileFinding, Severity, TrustPolicy,
+    ProfileFinding, Severity, TrustPolicy, evaluate_profile_policy, signature_trust,
 };
 use crate::reader::read;
 

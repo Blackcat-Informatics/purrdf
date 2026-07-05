@@ -420,12 +420,11 @@ impl GtsFoldView {
         let mut ranked = candidates.clone();
         ranked.sort_by_key(|&tid| rank_language(self.lang(tid).unwrap_or("")));
         for tid in ranked {
-            if let Some(lang) = self.lang(tid) {
-                if is_internal_tag(lang) {
-                    if let Some(public) = self.tag_map.get(lang) {
-                        return (self.lex(tid).to_string(), Some(public.clone()));
-                    }
-                }
+            if let Some(lang) = self.lang(tid)
+                && is_internal_tag(lang)
+                && let Some(public) = self.tag_map.get(lang)
+            {
+                return (self.lex(tid).to_string(), Some(public.clone()));
             }
         }
         let first = candidates[0];
@@ -470,10 +469,10 @@ impl GtsFoldView {
 
     fn build_iri_index(&mut self) {
         for (tid, term) in self.graph.terms.iter().enumerate() {
-            if term.kind == TermKind::Iri {
-                if let Some(value) = &term.value {
-                    self.iri_index.entry(value.clone()).or_insert(tid);
-                }
+            if term.kind == TermKind::Iri
+                && let Some(value) = &term.value
+            {
+                self.iri_index.entry(value.clone()).or_insert(tid);
             }
         }
     }
@@ -706,7 +705,7 @@ fn best_tagged(by_bcp: &BTreeMap<String, Vec<LitRow>>) -> Option<(&str, &LitRow)
         .iter()
         .filter(|(tag, rows)| !tag.is_empty() && !rows.is_empty())
         .map(|(tag, rows)| (tag.as_str(), &rows[0]))
-        .min_by(|a, b| rank_language(&a.1 .2).cmp(&rank_language(&b.1 .2)))
+        .min_by(|a, b| rank_language(&a.1.2).cmp(&rank_language(&b.1.2)))
 }
 
 fn render_term(graph: &Graph, tid: usize) -> String {

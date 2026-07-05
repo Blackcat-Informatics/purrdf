@@ -526,12 +526,16 @@ mod tests {
 
     #[test]
     fn variable_and_default_graph_are_not_rdf_terms() {
-        assert!(Term::from_inner(TermInner::Variable("x".to_owned()))
-            .to_rdf_term()
-            .is_err());
-        assert!(Term::from_inner(TermInner::DefaultGraph)
-            .to_rdf_term()
-            .is_err());
+        assert!(
+            Term::from_inner(TermInner::Variable("x".to_owned()))
+                .to_rdf_term()
+                .is_err()
+        );
+        assert!(
+            Term::from_inner(TermInner::DefaultGraph)
+                .to_rdf_term()
+                .is_err()
+        );
     }
 
     #[test]

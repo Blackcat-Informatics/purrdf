@@ -17,13 +17,13 @@ const PREFIXES: &str = "PREFIX purrdf: <https://x/>\n\
      PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
      PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n";
 
-fn parse(body: &str) -> impl std::fmt::Debug {
+fn parse(body: &str) -> impl std::fmt::Debug + use<> {
     SparqlParser::new()
         .parse_query(&format!("{PREFIXES}{body}"))
         .expect("snapshot fixture must parse")
 }
 
-fn parse_update(body: &str) -> impl std::fmt::Debug {
+fn parse_update(body: &str) -> impl std::fmt::Debug + use<> {
     SparqlParser::new()
         .parse_update(&format!("{PREFIXES}{body}"))
         .expect("snapshot update fixture must parse")

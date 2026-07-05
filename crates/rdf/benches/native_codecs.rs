@@ -7,9 +7,9 @@
 //! deterministic N-Quads with default and named graph rows so both parser and
 //! serializer exercise dataset-capable paths.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_rdf::{
-    parse_dataset, parse_dataset_with, serialize_dataset, ParseOptions, SerializeGraph,
+    ParseOptions, SerializeGraph, parse_dataset, parse_dataset_with, serialize_dataset,
 };
 
 const ROWS: usize = 2_000;

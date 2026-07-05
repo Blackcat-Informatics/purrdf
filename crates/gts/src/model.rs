@@ -18,7 +18,7 @@ use std::vec;
 
 use ciborium::value::Value;
 
-use crate::codec::{decode_chain, Codec, CodecError};
+use crate::codec::{Codec, CodecError, decode_chain};
 
 /// Well-known datatype IRIs used by the literal-defaulting rule (§7.1).
 pub const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";

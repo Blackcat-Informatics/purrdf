@@ -28,17 +28,17 @@ use std::sync::Arc;
 use purrdf_core::{BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermRef, TermValue};
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
 use purrdf_xsd::{
-    effective_boolean_value, numeric_abs, numeric_add, numeric_ceil, numeric_div, numeric_floor,
-    numeric_mul, numeric_round, numeric_sub, numeric_unary_minus, numeric_unary_plus, parse_by_iri,
-    parse_xsd10, value_cmp, XsdDatatype, XsdValue,
+    XsdDatatype, XsdValue, effective_boolean_value, numeric_abs, numeric_add, numeric_ceil,
+    numeric_div, numeric_floor, numeric_mul, numeric_round, numeric_sub, numeric_unary_minus,
+    numeric_unary_plus, parse_by_iri, parse_xsd10, value_cmp,
 };
 use sha2::Digest; // brings the Digest trait in scope for all RustCrypto hash calls
 
+use crate::DetHashSet;
 use crate::error::EvalError;
-use crate::eval::{eval, EvalCtx};
+use crate::eval::{EvalCtx, eval};
 use crate::scratch::SolutionTerm;
 use crate::solution::{SolutionSeq, VarSchema};
-use crate::DetHashSet;
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
@@ -1126,13 +1126,13 @@ fn substitute_triple_pattern(
     let subst_term = |term: &TermPattern| -> TermPattern {
         if let TermPattern::Variable(v) = term {
             for (bv, expr) in bindings {
-                if bv == v {
-                    if let Expression::NamedNode(n) = expr {
-                        return TermPattern::NamedNode(n.clone());
-                    }
-                    // Literal or other: leave as variable (the expr substitution
-                    // in FILTER will handle value comparison).
+                if bv == v
+                    && let Expression::NamedNode(n) = expr
+                {
+                    return TermPattern::NamedNode(n.clone());
                 }
+                // Literal or other: leave as variable (the expr substitution
+                // in FILTER will handle value comparison).
             }
         }
         term.clone()
@@ -1628,12 +1628,11 @@ fn eval_function(
             // lifetime, so reading it out does not borrow `ctx`, leaving `&mut ctx`
             // free for the executor. Checked before the XSD-cast path so a function
             // IRI never collides with a datatype IRI.
-            if let Some(registry) = ctx.user_functions {
-                if let Some(func) = registry.resolve(iri.as_str()) {
-                    let result =
-                        crate::user_fn::eval_user_function(func, iri.as_str(), &vals, ctx)?;
-                    return Ok(result.map(|value| intern(ctx, value)));
-                }
+            if let Some(registry) = ctx.user_functions
+                && let Some(func) = registry.resolve(iri.as_str())
+            {
+                let result = crate::user_fn::eval_user_function(func, iri.as_str(), &vals, ctx)?;
+                return Ok(result.map(|value| intern(ctx, value)));
             }
             if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {
                 return Ok(eval_xsd_cast(ctx, target, arg(&vals, 0)));
@@ -3576,8 +3575,8 @@ mod tests {
     /// Run `query` against `ds` with the EXISTS memo on/off, returning sorted
     /// stringified rows for a multiset comparison.
     fn run_rows(ds: &RdfDataset, query: &str, memo: bool) -> Vec<Vec<String>> {
-        use crate::eval::evaluate_query;
         use crate::eval::Outcome;
+        use crate::eval::evaluate_query;
         use purrdf_sparql_algebra::SparqlParser;
 
         let parsed = SparqlParser::new().parse_query(query).expect("parse");

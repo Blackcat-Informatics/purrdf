@@ -24,8 +24,8 @@ use purrdf_core::{
     RdfTextDirection, RdfTriple, TermValue,
 };
 use purrdf_sparql_results::{
-    serialize, to_csv, to_tsv, ResultProvenance, SolutionProvenance, SparqlResult,
-    SparqlResultsFormat,
+    ResultProvenance, SolutionProvenance, SparqlResult, SparqlResultsFormat, serialize, to_csv,
+    to_tsv,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";

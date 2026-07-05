@@ -11,11 +11,11 @@ use std::sync::Arc;
 
 use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, RdfDatasetBuilder, RdfTerm, TermId};
 
-use crate::data::{quads_for_pattern_ids, resolve_id, GraphFilter, ShaclData};
+use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
 use crate::model::{rdf, rdfs};
 use crate::report::ValidationReport;
 use crate::shapes::{Shape, Shapes, Target};
-use crate::term::{term_id_to_native, NamedNode, Term};
+use crate::term::{NamedNode, Term, term_id_to_native};
 
 // ── Target resolution helpers ─────────────────────────────────────────────────
 

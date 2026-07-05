@@ -86,6 +86,7 @@ jobs:
             -p purrdf-xsd \
             -p purrdf-gts \
             -p purrdf-core \
+            -p purrdf-entail \
             -p purrdf-sparql-algebra \
             -p purrdf-sparql-results \
             -p purrdf-sparql-eval \
@@ -157,6 +158,7 @@ jobs:
             purrdf-xsd
             purrdf-gts
             purrdf-core
+            purrdf-entail
             purrdf-sparql-algebra
             purrdf-sparql-results
             purrdf-sparql-eval

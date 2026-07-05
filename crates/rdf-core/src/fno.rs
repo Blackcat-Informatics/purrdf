@@ -30,7 +30,7 @@
 //! subjects reuse the slice-emitter-computed labels purely so the model is
 //! self-documenting.
 
-use crate::{turtle, RdfLiteral, RdfQuad, RdfTerm};
+use crate::{RdfLiteral, RdfQuad, RdfTerm, turtle};
 
 // --------------------------------------------------------------------------- //
 // Vocabulary
@@ -705,9 +705,11 @@ mod tests {
             .expect("fno:returns head");
         let out = RdfTerm::iri("https://example.org/vocab/outDemo");
         // head rdf:first out ; head rdf:rest rdf:nil.
-        assert!(quads
-            .iter()
-            .any(|q| q.subject == head && q.predicate == RDF_FIRST && q.object == out));
+        assert!(
+            quads
+                .iter()
+                .any(|q| q.subject == head && q.predicate == RDF_FIRST && q.object == out)
+        );
         assert!(quads.iter().any(|q| q.subject == head
             && q.predicate == RDF_REST
             && q.object == RdfTerm::iri(RDF_NIL)));

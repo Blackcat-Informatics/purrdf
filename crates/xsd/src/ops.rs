@@ -103,10 +103,10 @@ pub fn effective_boolean_value(v: &XsdValue) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::value::parse;
     use crate::XsdDatatype::{
         Boolean, Byte, Decimal, Double, Float, Int, Integer, Long, Short, String, UnsignedByte,
     };
+    use crate::value::parse;
 
     fn v(lex: &str, dt: crate::XsdDatatype) -> XsdValue {
         parse(lex, dt).unwrap()

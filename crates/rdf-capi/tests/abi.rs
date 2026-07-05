@@ -8,33 +8,33 @@
 
 use std::ffi::CString;
 
-use purrdf::buffer::{purrdf_buffer_data, purrdf_buffer_free, PurrdfBuffer};
+use purrdf::buffer::{PurrdfBuffer, purrdf_buffer_data, purrdf_buffer_free};
 use purrdf::cursor::{
-    purrdf_cursor_free, purrdf_cursor_next, purrdf_quads_for_pattern, PurrdfCursor,
+    PurrdfCursor, purrdf_cursor_free, purrdf_cursor_next, purrdf_quads_for_pattern,
 };
-use purrdf::error::{purrdf_error_code, purrdf_error_free, purrdf_error_message, PurrdfError};
+use purrdf::error::{PurrdfError, purrdf_error_code, purrdf_error_free, purrdf_error_message};
 use purrdf::graph::{
-    purrdf_graph_free, purrdf_graph_freeze, purrdf_graph_from_dataset, purrdf_graph_insert,
-    purrdf_graph_remove, PurrdfGraph,
+    PurrdfGraph, purrdf_graph_free, purrdf_graph_freeze, purrdf_graph_from_dataset,
+    purrdf_graph_insert, purrdf_graph_remove,
 };
 use purrdf::gts::{purrdf_from_gts, purrdf_to_gts};
 use purrdf::handles::{
-    purrdf_dataset_free, purrdf_dataset_quad_count, purrdf_dataset_term_count, PurrdfDataset,
+    PurrdfDataset, purrdf_dataset_free, purrdf_dataset_quad_count, purrdf_dataset_term_count,
 };
 use purrdf::parse::purrdf_parse;
 use purrdf::query::{purrdf_query, purrdf_query_json};
 use purrdf::rowcursor::{
-    purrdf_rowcursor_free, purrdf_rowcursor_next, purrdf_rowcursor_term,
-    purrdf_rowcursor_variable_count, purrdf_rowcursor_variable_name, PurrdfRowCursor,
+    PurrdfRowCursor, purrdf_rowcursor_free, purrdf_rowcursor_next, purrdf_rowcursor_term,
+    purrdf_rowcursor_variable_count, purrdf_rowcursor_variable_name,
 };
 use purrdf::serialize::purrdf_serialize;
 use purrdf::status::{PurrdfAbiVersion, PurrdfCapabilities, PurrdfStatus};
 use purrdf::term::{
-    purrdf_term_to_ntriples, PurrdfGraphMatch, PurrdfGraphMatchKind, PurrdfStr, PurrdfTermKind,
-    PurrdfTermView,
+    PurrdfGraphMatch, PurrdfGraphMatchKind, PurrdfStr, PurrdfTermKind, PurrdfTermView,
+    purrdf_term_to_ntriples,
 };
 use purrdf::version::{
-    purrdf_abi_version, purrdf_capabilities, PURRDF_ABI_MAJOR, PURRDF_ABI_MINOR, PURRDF_ABI_PATCH,
+    PURRDF_ABI_MAJOR, PURRDF_ABI_MINOR, PURRDF_ABI_PATCH, purrdf_abi_version, purrdf_capabilities,
 };
 
 /// A zeroed output term view the cursor fills.
@@ -307,9 +307,10 @@ fn cursor_iterates_all_quads() {
         let rows = drain(cursor);
         assert_eq!(rows.len(), 3);
         assert!(rows.iter().all(|(_, p, _, _)| p == "http://p"));
-        assert!(rows
-            .iter()
-            .any(|(s, _, o, _)| s == "http://s1" && o == "http://o1"));
+        assert!(
+            rows.iter()
+                .any(|(s, _, o, _)| s == "http://s1" && o == "http://o1")
+        );
         purrdf_cursor_free(cursor);
         purrdf_dataset_free(dataset);
     }

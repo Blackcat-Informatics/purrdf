@@ -654,10 +654,10 @@ mod tests {
     /// post-resolution assertions (the public `import_gts_events` does both phases
     /// from bytes; this exercises the hand-ordered direct-sink path).
     fn finish_direct(mut importer: SinkImporter) -> SinkImporter {
-        if importer.error.is_none() {
-            if let Err(diagnostic) = importer.finish() {
-                importer.fail(diagnostic);
-            }
+        if importer.error.is_none()
+            && let Err(diagnostic) = importer.finish()
+        {
+            importer.fail(diagnostic);
         }
         importer
     }
@@ -893,8 +893,8 @@ mod tests {
             reifier: Some(3),
         }); // 4 quoted triple <<ex:s ex:p ex:o>>
         graph.terms.push(iri("http://example.org/asserts")); // 5
-                                                             // Outer quad: (ex:s ex:asserts <<ex:s ex:p ex:o>>) — the quoted triple
-                                                             // sits in OBJECT position.
+        // Outer quad: (ex:s ex:asserts <<ex:s ex:p ex:o>>) — the quoted triple
+        // sits in OBJECT position.
         graph.quads.push((0, 5, 4, None));
 
         let bytes = Writer::deterministic(&graph, "purrdf-test")
@@ -962,8 +962,8 @@ mod tests {
         graph.terms.push(iri("http://example.org/p")); // 5
         graph.terms.push(iri("http://example.org/o")); // 6
         graph.terms.push(iri("http://example.org/r1")); // 7 outer reifier resource
-                                                        // Outer triple: << <<ex:a ex:b ex:c>> ex:p ex:o >> — inner triple (id 4) is
-                                                        // the SUBJECT of the outer triple.
+        // Outer triple: << <<ex:a ex:b ex:c>> ex:p ex:o >> — inner triple (id 4) is
+        // the SUBJECT of the outer triple.
         graph.reifiers.push((7, (4, 5, 6), None));
         graph.terms.push(GtsTerm {
             kind: GtsKind::Triple,

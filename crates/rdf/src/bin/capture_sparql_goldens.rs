@@ -29,8 +29,8 @@ use purrdf_rdf::capture_support::{
     is_nondeterministic, row_key,
 };
 use purrdf_rdf::{
-    canonicalize, dataset_from_bytes, BlankScope, NativeRdfFormat, RdfDataset, SparqlRequest,
-    SparqlResult, TermRef, TermValue,
+    BlankScope, NativeRdfFormat, RdfDataset, SparqlRequest, SparqlResult, TermRef, TermValue,
+    canonicalize, dataset_from_bytes,
 };
 use purrdf_sparql_eval::NativeSparqlEngine;
 

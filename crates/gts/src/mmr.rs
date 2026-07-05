@@ -9,8 +9,8 @@
 use ciborium::value::Value;
 
 use crate::wire::{
-    blake3_256, canonical, content_id, header_id, hex, iter_items, map_get, unwrap_header, MAGIC,
-    VERSION,
+    MAGIC, VERSION, blake3_256, canonical, content_id, header_id, hex, iter_items, map_get,
+    unwrap_header,
 };
 
 /// Stable detached proof schema tag emitted by [`Proof::to_json`].

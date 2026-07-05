@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use crate::native_codecs::parse::{fold_statement_layer, FoldNode, FoldRow};
+use crate::native_codecs::parse::{FoldNode, FoldRow, fold_statement_layer};
 use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
 
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";

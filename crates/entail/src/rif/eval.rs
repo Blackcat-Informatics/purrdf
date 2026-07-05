@@ -19,9 +19,9 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder};
 
-use crate::interner::{intern_into, Interner};
-use crate::rif::model::{Atom, RifTerm, RuleSet};
 use crate::EntailError;
+use crate::interner::{Interner, intern_into};
+use crate::rif::model::{Atom, RifTerm, RuleSet};
 
 /// One triple-pattern slot compiled against a rule's local variable table: a
 /// bound term id, or a variable's dense local index.

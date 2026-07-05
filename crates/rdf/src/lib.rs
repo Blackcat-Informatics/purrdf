@@ -80,9 +80,9 @@ pub use dataset_io::dataset_from_bytes;
 pub use gts_import_graph::import_gts_graph;
 pub use gts_import_sink::import_gts_events;
 pub use native_codecs::{
-    classify, parse_dataset, parse_dataset_with, serialize_dataset, serialize_dataset_base_only,
-    serialize_dataset_to_format, GtsCodecBackend, NativeRdfFormat, ParseOptions, SerializeOutcome,
-    SpanTable,
+    GtsCodecBackend, NativeRdfFormat, ParseOptions, SerializeOutcome, SpanTable, classify,
+    parse_dataset, parse_dataset_with, serialize_dataset, serialize_dataset_base_only,
+    serialize_dataset_to_format,
 };
 pub use native_quads::{
     canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quad_sources,
@@ -90,27 +90,27 @@ pub use native_quads::{
     flat_rdf_quads_from_dataset,
 };
 pub use purrdf_core::{
-    canonicalize, canonicalize_with, check_provenance, dataset_diff, datasets_isomorphic,
-    emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, fno_to_ntriples,
-    fno_to_quads, gts_to_rdf_loss_ledger, loss_matrix_json, pair_loss_ledger,
-    rdf_to_gts_loss_ledger, rule_iri, smallvec, transcode_loss_matrix_json, ArtifactId,
-    ArtifactIndex, ArtifactInterner, ArtifactRecord, AssertionOccurrence, Attribution,
+    ArtifactId, ArtifactIndex, ArtifactInterner, ArtifactRecord, AssertionOccurrence, Attribution,
     AttributionRole, BlankScope, BundleError, Bytes, CanonHash, Canonicalized, ContentDigest,
     ContentStore, ContentStoreError, DatasetDiff, DatasetMut, DatasetProvenance, DatasetSink,
     DatasetView, FastHasher, FastMap, FastSet, FnFunction, FnImpl, FnMapping, FnOutput, FnParam,
     FnParamMapping, FnReturnMapping, FnoCatalog, FrozenDatasetSource, GraphMatch, GraphMatchValue,
     GtsBundle, HandleEntry, HandleKey, IdSet, IdVec, LossEntry, LossLedger, MutableDataset,
-    OriginKind, OriginSetId, OriginSetInterner, PipelineBundle, PipelineBundleError,
-    ProvenanceError, QuadHandle, QuadIds, QuadRef, QuadValues, RdfAnnotation, RdfBlobOrigin,
-    RdfBlobRecord, RdfBundle, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfDiagnostic,
-    RdfEnvelope, RdfListError, RdfLiteral, RdfLocation, RdfLookaside, RdfLookasideKind,
-    RdfLookasideResource, RdfLoss, RdfMetadataEntry, RdfMetadataValue, RdfOpaqueNodeRecord,
-    RdfParseRequest, RdfParserBackend, RdfQuad, RdfReifier, RdfSegmentRecord, RdfSerializeRequest,
-    RdfSerializer, RdfSeverity, RdfSignatureRecord, RdfStoreCapabilities, RdfSuppressionRecord,
-    RdfTerm, RdfTermKind, RdfTextDirection, RdfTriple, SegmentUnitMap, SerializeGraph, SmallVec,
-    SparqlEngine, SparqlRequest, SparqlResult, SssomDiagnostic, SssomMapping, SssomMappingSet,
-    SssomMeta, TermFactory, TermId, TermRef, TermValue, UnitCatalog, UnitId, UnitInterner,
-    UnitMetadata, PROJECTION_CODECS, SSSOM_DEFAULT_VALIDATION_TYPES,
+    OriginKind, OriginSetId, OriginSetInterner, PROJECTION_CODECS, PipelineBundle,
+    PipelineBundleError, ProvenanceError, QuadHandle, QuadIds, QuadRef, QuadValues, RdfAnnotation,
+    RdfBlobOrigin, RdfBlobRecord, RdfBundle, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
+    RdfDiagnostic, RdfEnvelope, RdfListError, RdfLiteral, RdfLocation, RdfLookaside,
+    RdfLookasideKind, RdfLookasideResource, RdfLoss, RdfMetadataEntry, RdfMetadataValue,
+    RdfOpaqueNodeRecord, RdfParseRequest, RdfParserBackend, RdfQuad, RdfReifier, RdfSegmentRecord,
+    RdfSerializeRequest, RdfSerializer, RdfSeverity, RdfSignatureRecord, RdfStoreCapabilities,
+    RdfSuppressionRecord, RdfTerm, RdfTermKind, RdfTextDirection, RdfTriple,
+    SSSOM_DEFAULT_VALIDATION_TYPES, SegmentUnitMap, SerializeGraph, SmallVec, SparqlEngine,
+    SparqlRequest, SparqlResult, SssomDiagnostic, SssomMapping, SssomMappingSet, SssomMeta,
+    TermFactory, TermId, TermRef, TermValue, UnitCatalog, UnitId, UnitInterner, UnitMetadata,
+    canonicalize, canonicalize_with, check_provenance, dataset_diff, datasets_isomorphic,
+    emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, fno_to_ntriples,
+    fno_to_quads, gts_to_rdf_loss_ledger, loss_matrix_json, pair_loss_ledger,
+    rdf_to_gts_loss_ledger, rule_iri, smallvec, transcode_loss_matrix_json,
 };
 
 // Shared USTAR (tar) codec: byte-deterministic writer + reader used by both the

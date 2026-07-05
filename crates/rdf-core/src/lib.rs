@@ -83,19 +83,19 @@ pub use collections::RdfListError;
 pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{DatasetMut, DatasetView, GraphMatch, GraphMatchValue};
-pub use describe::{describe, Describer};
+pub use describe::{Describer, describe};
 pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfLoss, RdfSeverity};
 pub use fno::{
-    to_ntriples as fno_to_ntriples, to_quads as fno_to_quads, FnFunction, FnImpl, FnMapping,
-    FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog,
+    FnFunction, FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog,
+    to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
 };
 pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 pub use ir::{
-    canonicalize, canonicalize_with, dataset_diff, datasets_isomorphic, BlankScope, CanonHash,
-    Canonicalized, DatasetDiff, DatasetSink, FrozenDatasetSource, GtsBundle, HandleEntry,
-    HandleKey, MutableDataset, PipelineBundle, PipelineBundleError, QuadHandle, QuadIds,
-    QuadProbePlan, QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
-    RdfEnvelope, TermId, TermRef, TermValue, ValidatedRdfDatasetBuilder,
+    BlankScope, CanonHash, Canonicalized, DatasetDiff, DatasetSink, FrozenDatasetSource, GtsBundle,
+    HandleEntry, HandleKey, MutableDataset, PipelineBundle, PipelineBundleError, QuadHandle,
+    QuadIds, QuadProbePlan, QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
+    RdfEnvelope, TermId, TermRef, TermValue, ValidatedRdfDatasetBuilder, canonicalize,
+    canonicalize_with, dataset_diff, datasets_isomorphic,
 };
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,
@@ -103,21 +103,21 @@ pub use lookaside::{
     RdfSuppressionRecord,
 };
 pub use loss::{
-    gts_to_rdf_loss_ledger, loss_matrix_json, pair_loss_ledger, rdf_to_gts_loss_ledger,
-    transcode_loss_matrix_json, LossEntry, LossLedger, PROJECTION_CODECS,
+    LossEntry, LossLedger, PROJECTION_CODECS, gts_to_rdf_loss_ledger, loss_matrix_json,
+    pair_loss_ledger, rdf_to_gts_loss_ledger, transcode_loss_matrix_json,
 };
 pub use model::{
     RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTermKind, RdfTextDirection,
     RdfTriple,
 };
 pub use provenance::{
-    check_provenance, ArtifactId, ArtifactInterner, AssertionOccurrence, Attribution,
-    AttributionRole, DatasetProvenance, OriginKind, OriginSetId, OriginSetInterner,
-    ProvenanceError, UnitId, UnitInterner,
+    ArtifactId, ArtifactInterner, AssertionOccurrence, Attribution, AttributionRole,
+    DatasetProvenance, OriginKind, OriginSetId, OriginSetInterner, ProvenanceError, UnitId,
+    UnitInterner, check_provenance,
 };
-pub use small::{smallvec, IdVec, SmallVec};
+pub use small::{IdVec, SmallVec, smallvec};
 pub use sssom::{
-    SssomDiagnostic, SssomMapping, SssomMappingSet, SssomMeta, SSSOM_DEFAULT_VALIDATION_TYPES,
+    SSSOM_DEFAULT_VALIDATION_TYPES, SssomDiagnostic, SssomMapping, SssomMappingSet, SssomMeta,
 };
 pub use store::RdfStoreCapabilities;
 pub use turtle::{emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri};

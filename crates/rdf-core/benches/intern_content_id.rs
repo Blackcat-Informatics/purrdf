@@ -32,7 +32,7 @@
 //! content-ids are built by tiling a hex encoding of `i` out to exactly 64
 //! lowercase hex characters.
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use purrdf_core::{ContentIdScheme, RdfDatasetBuilder};
 
 /// Number of IRIs interned per measured iteration.

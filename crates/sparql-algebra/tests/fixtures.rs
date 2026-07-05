@@ -55,7 +55,9 @@ fn positive_in_scope_features() {
 
     // Aggregation + modifiers.
     ok("SELECT ?m (COUNT(?c) AS ?n) WHERE { ?c purrdf:v ?m } GROUP BY ?m");
-    ok("SELECT ?m (COUNT(DISTINCT ?c) AS ?n) WHERE { ?c purrdf:v ?m } GROUP BY ?m HAVING (COUNT(?c) >= 3)");
+    ok(
+        "SELECT ?m (COUNT(DISTINCT ?c) AS ?n) WHERE { ?c purrdf:v ?m } GROUP BY ?m HAVING (COUNT(?c) >= 3)",
+    );
     ok("SELECT (SUM(?x) AS ?s) WHERE { ?a purrdf:x ?x }");
     ok("SELECT (COUNT(DISTINCT *) AS ?n) WHERE { ?a purrdf:x ?x }");
     ok("SELECT DISTINCT ?a WHERE { ?a a purrdf:T } ORDER BY DESC(?a) LIMIT 5 OFFSET 2");

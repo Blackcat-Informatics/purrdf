@@ -31,7 +31,7 @@
 
 use std::collections::BTreeSet;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::shapes::{Constraint, NodeKindValue, Path, Shape, Shapes, Target};
 use crate::term::Term;
@@ -971,10 +971,10 @@ fn compile_property(
         let mut arr: Map<String, Value> = Map::new();
         arr.insert("type".to_owned(), json!("array"));
         arr.insert("items".to_owned(), single.clone());
-        if let Some(n) = min_count {
-            if n > 0 {
-                arr.insert("minItems".to_owned(), json!(n));
-            }
+        if let Some(n) = min_count
+            && n > 0
+        {
+            arr.insert("minItems".to_owned(), json!(n));
         }
         if let Some(n) = max_count {
             arr.insert("maxItems".to_owned(), json!(n));
@@ -1002,11 +1002,11 @@ fn insert_numeric(
     comments: &mut Vec<String>,
 ) {
     let lex = term_lexical(term);
-    if let Ok(n) = lex.parse::<f64>() {
-        if let Some(num) = serde_json::Number::from_f64(n) {
-            value.insert(key.to_owned(), Value::Number(num));
-            return;
-        }
+    if let Ok(n) = lex.parse::<f64>()
+        && let Some(num) = serde_json::Number::from_f64(n)
+    {
+        value.insert(key.to_owned(), Value::Number(num));
+        return;
     }
     comments.push(format!(
         "{key} bound on non-numeric value {lex:?} was skipped"
@@ -1419,9 +1419,11 @@ mod tests {
         // dateTime → anyOf containing {type:string, format:date-time}
         let at = &event["properties"]["meta:at"];
         let at_alts = at["anyOf"].as_array().expect("anyOf");
-        assert!(at_alts
-            .iter()
-            .any(|alt| alt["format"] == json!("date-time")));
+        assert!(
+            at_alts
+                .iter()
+                .any(|alt| alt["format"] == json!("date-time"))
+        );
         // integer → anyOf containing {type:integer}
         let count = &event["properties"]["meta:count"];
         let count_alts = count["anyOf"].as_array().expect("anyOf");
@@ -1609,10 +1611,10 @@ mod tests {
     fn collect_def_refs(v: &Value, out: &mut Vec<String>) {
         match v {
             Value::Object(map) => {
-                if let Some(Value::String(r)) = map.get("$ref") {
-                    if let Some(name) = r.strip_prefix("#/$defs/") {
-                        out.push(name.to_owned());
-                    }
+                if let Some(Value::String(r)) = map.get("$ref")
+                    && let Some(name) = r.strip_prefix("#/$defs/")
+                {
+                    out.push(name.to_owned());
                 }
                 for child in map.values() {
                     collect_def_refs(child, out);

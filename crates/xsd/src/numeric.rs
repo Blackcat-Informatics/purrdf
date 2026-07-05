@@ -224,14 +224,14 @@ pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128,
     })?;
 
     // Now range-check against the datatype's inclusive bounds.
-    if let Some((min, max)) = datatype.integer_range() {
-        if value < min || value > max {
-            return Err(XsdError::OutOfRange {
-                datatype,
-                lexical: lexical.to_string(),
-                reason: "value outside datatype range",
-            });
-        }
+    if let Some((min, max)) = datatype.integer_range()
+        && (value < min || value > max)
+    {
+        return Err(XsdError::OutOfRange {
+            datatype,
+            lexical: lexical.to_string(),
+            reason: "value outside datatype range",
+        });
     }
     Ok(value)
 }

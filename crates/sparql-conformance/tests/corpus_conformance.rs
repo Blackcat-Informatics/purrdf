@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use purrdf::{canonicalize, parse_dataset, NativeRdfFormat};
+use purrdf::{NativeRdfFormat, canonicalize, parse_dataset};
 use purrdf_core::{BlankScope, SparqlEngine, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::NativeSparqlEngine;
 

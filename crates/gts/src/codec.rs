@@ -12,8 +12,8 @@ use std::borrow::Cow;
 use std::fmt;
 use std::io::{Read, Write};
 
-use structured_zstd::decoding::{errors::FrameDecoderError, FrameDecoder};
-use structured_zstd::encoding::{compress_to_vec, CompressionLevel};
+use structured_zstd::decoding::{FrameDecoder, errors::FrameDecoderError};
+use structured_zstd::encoding::{CompressionLevel, compress_to_vec};
 
 /// A catalog entry (§5, §8.5).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,7 +198,7 @@ pub fn decode_chain_with_decrypt(
                     return Err(CodecError::Unavailable {
                         reason: "missing-key",
                         detail: format!("no key for encrypt codec '{}'", codec.name),
-                    })
+                    });
                 }
             });
         } else {

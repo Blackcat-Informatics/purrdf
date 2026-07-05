@@ -13,12 +13,12 @@ use std::fmt;
 
 use ciborium::value::Value;
 
-use crate::codec::{encode_chain_with_options, Codec, CodecError, EncodeOptions};
+use crate::codec::{Codec, CodecError, EncodeOptions, encode_chain_with_options};
 use crate::model::{
-    is_literal_direction, AnnotationRow, Graph, Quad, ReifierRow, Suppression, Term, TermKind,
+    AnnotationRow, Graph, Quad, ReifierRow, Suppression, Term, TermKind, is_literal_direction,
 };
 use crate::wire::{
-    append_canonical, canonical, content_id, digest_str, header_id, SELF_DESCRIBE_TAG,
+    SELF_DESCRIBE_TAG, append_canonical, canonical, content_id, digest_str, header_id,
 };
 
 /// Payloads larger than this select `zstd-rsyncable` over `zstd` in snapshot helpers.
@@ -1162,19 +1162,20 @@ fn remap_suppression_target(target: &Value, old_to_new: &[usize]) -> Value {
                 if let Some(tid) = value_idx(value) {
                     return (key.clone(), Value::from(remap_id(old_to_new, tid) as u64));
                 }
-            } else if kind == "quad" && key_text == "q" {
-                if let Value::Array(ids) = value {
-                    let remapped = ids
-                        .iter()
-                        .map(|id| {
-                            value_idx(id).map_or_else(
-                                || id.clone(),
-                                |tid| Value::from(remap_id(old_to_new, tid) as u64),
-                            )
-                        })
-                        .collect();
-                    return (key.clone(), Value::Array(remapped));
-                }
+            } else if kind == "quad"
+                && key_text == "q"
+                && let Value::Array(ids) = value
+            {
+                let remapped = ids
+                    .iter()
+                    .map(|id| {
+                        value_idx(id).map_or_else(
+                            || id.clone(),
+                            |tid| Value::from(remap_id(old_to_new, tid) as u64),
+                        )
+                    })
+                    .collect();
+                return (key.clone(), Value::Array(remapped));
             }
             (key.clone(), value.clone())
         })

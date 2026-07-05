@@ -17,7 +17,7 @@
 //! (`purrdf:wasAssociatedWith`). The output is byte-identical to the committed
 //! `observation-claim-view.rq` (the parity gate).
 
-use crate::mapping_support::{prefix_block, rename_template_prefix, GENERATED_BANNER};
+use crate::mapping_support::{GENERATED_BANNER, prefix_block, rename_template_prefix};
 use crate::vocab::SliceVocab;
 
 /// The committed file name of the internal observation union view.

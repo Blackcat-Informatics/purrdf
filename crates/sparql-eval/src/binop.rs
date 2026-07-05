@@ -21,9 +21,9 @@ use std::sync::Arc;
 use purrdf_sparql_algebra::{Expression, GraphPattern};
 
 use crate::error::EvalError;
-use crate::eval::{eval, EvalCtx};
+use crate::eval::{EvalCtx, eval};
 use crate::scratch::SolutionTerm;
-use crate::solution::{compatible, Solution, SolutionSeq, VarSchema};
+use crate::solution::{Solution, SolutionSeq, VarSchema, compatible};
 use crate::{DetHashMap, DetHasher};
 
 /// A hash-join key over the shared columns of two solutions.

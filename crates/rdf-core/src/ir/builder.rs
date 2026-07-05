@@ -30,8 +30,8 @@ use crate::{
 
 use super::dataset::{FastHasher, QuadHandle, QuadIds, QuadRow, RdfDataset, TermRef};
 use super::term::{
-    arena_str, BlankScope, InternedLiteral, InternedTerm, StrRange, TermId, RDF_LANG_STRING,
-    XSD_STRING,
+    BlankScope, InternedLiteral, InternedTerm, RDF_LANG_STRING, StrRange, TermId, XSD_STRING,
+    arena_str,
 };
 use crate::RdfLocation;
 

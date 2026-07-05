@@ -72,7 +72,7 @@ pub mod user_fn;
 pub use engine::{NativeSparqlEngine, PlanCache, PreparedQuery};
 pub use error::EvalError;
 pub use eval::{
-    eval, evaluate_query, EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates,
+    EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,
 };
 // Re-exported so engine hosts can configure the extension-function namespace set
 // (see [`NativeSparqlEngine::with_parser_options`]) without depending on the
@@ -81,7 +81,7 @@ pub use purrdf_sparql_algebra::ParserOptions;
 pub use remote::{LocalRemoteQuerySource, RemoteError, RemoteQuerySource, ResolvedBindings};
 pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
 pub use scratch::{ScratchId, ScratchInterner, SolutionTerm};
-pub use solution::{compatible, Solution, SolutionSeq, VarSchema};
+pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
 pub use update::GraphResolver;
 pub use user_fn::{
     NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry,

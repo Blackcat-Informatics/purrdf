@@ -24,10 +24,10 @@
 use purrdf_core::{BlankScope, TermValue};
 use purrdf_sparql_algebra::{NamedNodePattern, TermPattern};
 
+use crate::DetHashMap;
 use crate::convert::{literal_to_value, named_node_to_value};
 use crate::eval::EvalCtx;
 use crate::solution::{Solution, VarSchema};
-use crate::DetHashMap;
 
 /// SPARQL §16.2 positional validity: an instantiated triple is **ill-formed** (and
 /// the caller skips it) when its subject is a literal or its predicate is not an IRI.

@@ -25,7 +25,7 @@ pub(crate) fn resolve_media_type(format: &str) -> Result<&'static str, String> {
             return Err(format!(
                 "unsupported RDF format {other:?} \
                  (use turtle/ntriples/nquads/trig/rdfxml or their media types)"
-            ))
+            ));
         }
     })
 }

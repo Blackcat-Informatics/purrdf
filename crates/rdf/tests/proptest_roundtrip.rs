@@ -40,9 +40,9 @@
 
 use proptest::prelude::*;
 use purrdf_rdf::{
-    canonical_flat_nquads, flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset,
     NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfLookaside, RdfQuad, RdfTerm,
-    RdfTriple, SerializeGraph,
+    RdfTriple, SerializeGraph, canonical_flat_nquads, flat_rdf_quads_from_dataset, parse_dataset,
+    serialize_dataset,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";

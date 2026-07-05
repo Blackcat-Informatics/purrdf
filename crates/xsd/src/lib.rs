@@ -90,13 +90,13 @@ pub mod temporal;
 pub mod value;
 
 pub use binary::{canonical_base64, canonical_hex, parse_base64, parse_binary, parse_hex};
-pub use datatype::{XsdDatatype, XSD_NS};
+pub use datatype::{XSD_NS, XsdDatatype};
 pub use numeric::{
-    numeric_abs, numeric_add, numeric_ceil, numeric_div, numeric_floor, numeric_mul, numeric_round,
-    numeric_sub, numeric_unary_minus, numeric_unary_plus, parse_double_xsd10, parse_float_xsd10,
-    Decimal,
+    Decimal, numeric_abs, numeric_add, numeric_ceil, numeric_div, numeric_floor, numeric_mul,
+    numeric_round, numeric_sub, numeric_unary_minus, numeric_unary_plus, parse_double_xsd10,
+    parse_float_xsd10,
 };
 pub use ops::{effective_boolean_value, value_cmp, value_eq};
 pub use simple::{normalize_whitespace_collapse, normalize_whitespace_replace};
 pub use temporal::{datetime_epoch, datetime_from_unix_seconds};
-pub use value::{parse, parse_by_iri, parse_xsd10, XsdError, XsdValue};
+pub use value::{XsdError, XsdValue, parse, parse_by_iri, parse_xsd10};

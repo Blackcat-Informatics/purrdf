@@ -25,7 +25,7 @@ use std::fmt::Write as _;
 
 use crate::native_quads::flat_rdf_quads_from_dataset;
 use crate::{
-    parse_dataset, NativeRdfFormat, RdfDiagnostic, RdfLiteral, RdfQuad, RdfTerm, RdfTriple,
+    NativeRdfFormat, RdfDiagnostic, RdfLiteral, RdfQuad, RdfTerm, RdfTriple, parse_dataset,
 };
 
 const OWL_AXIOM: &str = "http://www.w3.org/2002/07/owl#Axiom";

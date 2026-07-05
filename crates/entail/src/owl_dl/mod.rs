@@ -23,11 +23,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::RdfDataset;
 
+use crate::EntailError;
 use crate::interner::Interner;
 #[cfg(test)]
 use crate::owl_dl::concept::Concept;
 use crate::owl_dl::concept::ConceptTable;
-use crate::EntailError;
 
 pub(crate) mod concept;
 pub(crate) mod parser;

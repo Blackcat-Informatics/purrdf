@@ -37,3 +37,5 @@ purrdf-sparql-results = { workspace = true }
 purrdf-xsd = { workspace = true }
 purrdf-iri = { workspace = true }
 purrdf-events = { workspace = true }
+purrdf-entail = { workspace = true }
+purrdf-validate = { workspace = true }

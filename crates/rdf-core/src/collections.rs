@@ -290,14 +290,16 @@ mod tests {
         b.push_quad(some_cell, first, plain, None);
         let ds = b.freeze().expect("freeze");
         assert!(ds.rdf_list(nil, GraphMatch::Any).expect("nil").is_empty());
-        assert!(ds
-            .rdf_list(plain, GraphMatch::Any)
-            .expect("plain")
-            .is_empty());
-        assert!(ds
-            .rdf_list(lit, GraphMatch::Any)
-            .expect("literal")
-            .is_empty());
+        assert!(
+            ds.rdf_list(plain, GraphMatch::Any)
+                .expect("plain")
+                .is_empty()
+        );
+        assert!(
+            ds.rdf_list(lit, GraphMatch::Any)
+                .expect("literal")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -351,10 +353,11 @@ mod tests {
             ds.members(container, GraphMatch::Any).expect("container"),
             vec![x]
         );
-        assert!(ds
-            .members(plain, GraphMatch::Any)
-            .expect("neither")
-            .is_empty());
+        assert!(
+            ds.members(plain, GraphMatch::Any)
+                .expect("neither")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -371,9 +374,10 @@ mod tests {
             vec![a]
         );
         assert_eq!(ds.rdf_list(head, GraphMatch::Any).expect("any"), vec![a]);
-        assert!(ds
-            .rdf_list(head, GraphMatch::Default)
-            .expect("default empty")
-            .is_empty());
+        assert!(
+            ds.rdf_list(head, GraphMatch::Default)
+                .expect("default empty")
+                .is_empty()
+        );
     }
 }

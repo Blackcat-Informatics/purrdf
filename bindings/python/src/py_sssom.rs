@@ -18,7 +18,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use crate::{sssom, RdfDiagnostic, RdfSeverity};
+use crate::{RdfDiagnostic, RdfSeverity, sssom};
 
 /// The uppercase severity string the SSSOM validation golden uses (`"ERROR"`),
 /// matching `tests/fixtures/lint-golden/sssom_validation.json`. The Python caller

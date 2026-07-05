@@ -189,13 +189,13 @@ impl<'a> Describer<'a> {
                     // Harvest the reifier's annotations ONCE — they are keyed by the
                     // reifier, not by the individual binding, so only this needs the
                     // visited-guard.
-                    if visited_reifiers.insert(reifier) {
-                        if let Some(annos) = self.annotations_by_reifier.get(&reifier) {
-                            for &(p, o) in annos {
-                                annotations.push((reifier, p, o));
-                                expand_blank!(frontier, anchors, p);
-                                expand_blank!(frontier, anchors, o);
-                            }
+                    if visited_reifiers.insert(reifier)
+                        && let Some(annos) = self.annotations_by_reifier.get(&reifier)
+                    {
+                        for &(p, o) in annos {
+                            annotations.push((reifier, p, o));
+                            expand_blank!(frontier, anchors, p);
+                            expand_blank!(frontier, anchors, o);
                         }
                     }
                 }
@@ -308,10 +308,11 @@ mod tests {
                 TermRef::Iri(i) => i.to_string(),
                 _ => continue,
             };
-            if s == subject && p == predicate {
-                if let TermRef::Iri(o) = q.o {
-                    out.push(o.to_string());
-                }
+            if s == subject
+                && p == predicate
+                && let TermRef::Iri(o) = q.o
+            {
+                out.push(o.to_string());
             }
         }
         out.sort();

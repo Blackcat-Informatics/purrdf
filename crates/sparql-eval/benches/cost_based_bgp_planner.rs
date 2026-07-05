@@ -18,11 +18,11 @@
 
 use std::sync::Arc;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder};
 use purrdf_sparql_algebra::SparqlParser;
-use purrdf_sparql_eval::{evaluate_query, EvalCtx};
+use purrdf_sparql_eval::{EvalCtx, evaluate_query};
 
 /// A skewed star: `:hub --pred--> N leaves` for each `(name, N)` pair.
 fn skewed_star(spec: &[(&str, usize)]) -> Arc<RdfDataset> {

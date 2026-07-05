@@ -7,12 +7,12 @@
 //! the core container work measurable: rsyncable zstd block compression and
 //! deterministic snapshot emission over a representative folded graph.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 
 use purrdf_gts::codec::encode_chain;
 use purrdf_gts::model::{Graph, Term, TermKind};
 use purrdf_gts::reader::read;
-use purrdf_gts::writer::{snapshot_from_graph, SnapshotOptions, Writer};
+use purrdf_gts::writer::{SnapshotOptions, Writer, snapshot_from_graph};
 
 const PAYLOAD_LEN: usize = 512 * 1024;
 const ROWS: usize = 2_000;

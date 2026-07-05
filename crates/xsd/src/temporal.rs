@@ -15,7 +15,7 @@
 use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
-use crate::numeric::{parse_decimal, Decimal};
+use crate::numeric::{Decimal, parse_decimal};
 use crate::value::XsdError;
 
 /// Maximum timezone offset magnitude in minutes (±14:00).
@@ -214,11 +214,7 @@ fn days_in_month(year: i64, month: u8) -> u8 {
         4 | 6 | 9 | 11 => 30,
         2 => {
             let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-            if is_leap {
-                29
-            } else {
-                28
-            }
+            if is_leap { 29 } else { 28 }
         }
         _ => 0, // invalid month — caught by caller before reaching here
     }
@@ -1099,7 +1095,7 @@ mod tests {
         let p1y = parse_duration(XsdDatatype::Duration, "P1Y").unwrap();
         let p13m = parse_duration(XsdDatatype::Duration, "P13M").unwrap();
         assert_eq!(cmp_duration(&p1y, &p13m), Some(Ordering::Less)); // 12mo < 13mo
-                                                                     // P1M vs P30D: months differ one way, seconds the other → indeterminate.
+        // P1M vs P30D: months differ one way, seconds the other → indeterminate.
         let p1m = parse_duration(XsdDatatype::Duration, "P1M").unwrap();
         let p30d = parse_duration(XsdDatatype::Duration, "P30D").unwrap();
         assert_eq!(cmp_duration(&p1m, &p30d), None);

@@ -16,6 +16,8 @@
 //! | [`sparql`] | [`purrdf_sparql_eval`] + [`purrdf_sparql_algebra`] + [`purrdf_sparql_results`] |
 //! | [`shapes`] | [`purrdf_shapes`] (SHACL) |
 //! | [`shex`] | [`purrdf_shex`] (ShEx 2.1) |
+//! | [`entail`] | [`purrdf_entail`] (RDFS / OWL-RL / OWL-Direct / RIF entailment) |
+//! | [`validate`](mod@validate) | [`purrdf_validate`] (SARIF 2.1.0 reporting boundary) |
 //! | [`slice`](mod@slice) | [`purrdf_slice`] |
 //! | [`xsd`] | [`purrdf_xsd`] |
 //! | [`iri`] | [`purrdf_iri`] |
@@ -124,6 +126,18 @@ pub mod shex {
     pub use purrdf_shex::*;
 }
 
+/// Native, wasm-clean entailment ([`purrdf_entail`]): RDFS / OWL-RL forward
+/// materialization plus the OWL-Direct and RIF entry points, over the frozen IR.
+pub mod entail {
+    pub use purrdf_entail::*;
+}
+
+/// The SARIF 2.1.0 reporting boundary ([`purrdf_validate`]): validate a
+/// shapes+data pair to a source-traced, byte-deterministic SARIF log.
+pub mod validate {
+    pub use purrdf_validate::*;
+}
+
 /// The common umbrella surface, for `use purrdf::prelude::*;`.
 pub mod prelude {
     pub use purrdf_rdf::prelude::*;
@@ -162,6 +176,15 @@ mod tests {
         // foundations.
         assert!(iri::parse("https://example.org/x").is_ok());
         assert!(!format!("{:?}", events::TextDirection::Ltr).is_empty());
+
+        // entail: the entailment regimes are reachable through the facade.
+        assert_eq!(
+            entail::Regime::from_iri("http://www.w3.org/ns/entailment/RDFS"),
+            Some(entail::Regime::Rdfs)
+        );
+
+        // validate: the SARIF reporting boundary is reachable through the facade.
+        assert_eq!(validate::SARIF_VERSION, "2.1.0");
     }
 
     #[test]

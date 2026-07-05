@@ -17,10 +17,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::collections::{container_member_index, RdfListError};
-use crate::collections::{RDF_ALT, RDF_BAG, RDF_FIRST, RDF_NIL, RDF_REST, RDF_SEQ, RDF_TYPE};
-use crate::ir::{QuadIds, QuadRef, RdfDataset, TermId, TermRef, TermValue};
 use crate::RdfStoreCapabilities;
+use crate::collections::{RDF_ALT, RDF_BAG, RDF_FIRST, RDF_NIL, RDF_REST, RDF_SEQ, RDF_TYPE};
+use crate::collections::{RdfListError, container_member_index};
+use crate::ir::{QuadIds, QuadRef, RdfDataset, TermId, TermRef, TermValue};
 
 mod sealed {
     pub trait Sealed {}
@@ -222,10 +222,10 @@ pub trait DatasetView: sealed::Sealed {
     fn rdf_container_members(&self, head: TermId, graph: GraphMatch) -> Vec<TermId> {
         let mut indexed: Vec<(u64, TermId)> = Vec::new();
         for q in self.quads_for_pattern(Some(head), None, None, graph) {
-            if let TermRef::Iri(iri) = self.resolve(q.p) {
-                if let Some(n) = container_member_index(iri) {
-                    indexed.push((n, q.o));
-                }
+            if let TermRef::Iri(iri) = self.resolve(q.p)
+                && let Some(n) = container_member_index(iri)
+            {
+                indexed.push((n, q.o));
             }
         }
         // Order by the numeric suffix (`_2` before `_10`), tolerating gaps.
@@ -240,14 +240,13 @@ pub trait DatasetView: sealed::Sealed {
     /// neither yields an empty `Vec`.
     fn members(&self, head: TermId, graph: GraphMatch) -> Result<Vec<TermId>, RdfListError> {
         // Collection shape wins: an `rdf:first` edge marks a cons cell.
-        if let Some(first_p) = self.term_id_by_value(&TermValue::iri(RDF_FIRST)) {
-            if self
+        if let Some(first_p) = self.term_id_by_value(&TermValue::iri(RDF_FIRST))
+            && self
                 .quads_for_pattern(Some(head), Some(first_p), None, graph)
                 .next()
                 .is_some()
-            {
-                return self.rdf_list(head, graph);
-            }
+        {
+            return self.rdf_list(head, graph);
         }
         // Container shape: any `rdf:_n` membership property present.
         let members = self.rdf_container_members(head, graph);

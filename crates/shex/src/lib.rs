@@ -62,17 +62,17 @@ pub use ast::{
     ShapeLabel, StemValue, TripleConstraint, TripleExpr, TripleExprGroup, ValueSetValue,
 };
 pub use error::{Result, ShexError};
-pub use imports::{resolve_imports, ImportResolver};
+pub use imports::{ImportResolver, resolve_imports};
 pub use parser::parse_shexc;
 pub use semact::{SemActContext, SemActExtension, SemActRegistry, TEST_EXTENSION};
 pub use shapemap::{
-    parse_shape_map, resolve_shape_map, validate_shape_map, NodeSelector, ShapeAssociation,
-    ShapeMap,
+    NodeSelector, ShapeAssociation, ShapeMap, parse_shape_map, resolve_shape_map,
+    validate_shape_map,
 };
 pub use shexc::to_shexc;
 pub use shexj::{parse_shexj, to_shexj};
-pub use structure::{check_structure, StructureError};
+pub use structure::{StructureError, check_structure};
 pub use validate::{
-    validate, validate_with, ConformanceStatus, ExternalResolver, ResultEntry, ResultShapeMap,
-    ShapeSelector, ValidationOptions,
+    ConformanceStatus, ExternalResolver, ResultEntry, ResultShapeMap, ShapeSelector,
+    ValidationOptions, validate, validate_with,
 };

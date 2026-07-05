@@ -59,7 +59,7 @@ pub(crate) fn parse_gts_direction(
             return Err(RdfDiagnostic::error(
                 "gts-invalid-direction",
                 format!("unrecognized GTS literal base direction {other:?}"),
-            ))
+            ));
         }
     };
     if language.is_none_or(str::is_empty) {

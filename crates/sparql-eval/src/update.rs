@@ -48,14 +48,14 @@ use purrdf_sparql_algebra::{
     GraphTarget, GraphUpdateOperation, NamedNodePattern, QuadPattern, Update, UsingClause,
 };
 
+use crate::DetHashMap;
 use crate::convert::named_node_to_value;
 use crate::dataset_spec::ActiveDataset;
-use crate::eval::{eval, BgpOrderCache, EvalCtx, StandpointPredicates};
+use crate::eval::{BgpOrderCache, EvalCtx, StandpointPredicates, eval};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
     instantiate_ground_term, instantiate_predicate, instantiate_term, positionally_ill_formed,
 };
-use crate::DetHashMap;
 
 /// The engine-level WHERE-evaluation config threaded into UPDATE, mirroring the
 /// query path's `EvalCtx` build (order cache + standpoint predicate table) so a
