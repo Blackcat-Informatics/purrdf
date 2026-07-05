@@ -29,7 +29,7 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// Routes through the SAME `fold_statement_layer` helper the text codecs use (a
 /// `rdf:reifies` triple-term object becomes a reifier binding and a reifier subject's
 /// other triples become annotations), mapping each native [`RdfQuad`] into the
-/// source-agnostic [`FoldRow`] form. Blanks nested inside quoted triples are scoped too
+/// source-agnostic `FoldRow` form. Blanks nested inside quoted triples are scoped too
 /// (the builder's scoped interner recurses).
 ///
 /// # Errors

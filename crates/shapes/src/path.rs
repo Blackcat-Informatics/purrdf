@@ -34,7 +34,7 @@ use crate::term::{term_id_to_native, NamedNode, Term};
 /// # Traversal strategy
 ///
 /// When `focus` is interned in `ds` (the common case — a data-graph node), the
-/// entire traversal runs in id space: every step maps matched [`QuadIds`] to
+/// entire traversal runs in id space: every step maps matched `QuadIds` to
 /// `.o`/`.s` [`TermId`]s, frontiers/closures dedup on a `Copy` [`IdSet`], and only
 /// the deduped result set is resolved to the native [`Term`] model at the end. No
 /// owned term is allocated per intermediate step, and diamond/cycle dedup hashes
