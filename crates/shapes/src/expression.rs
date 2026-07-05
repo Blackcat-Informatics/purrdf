@@ -315,9 +315,10 @@ fn builtin_keyword(iri: &str) -> Option<&'static str> {
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` on a recursion cycle or depth-limit breach, when a
-/// function argument does not collapse to exactly one value, or when a
-/// sub-expression errors.
+/// Returns `Err(String)` on a recursion cycle or depth-limit breach, or when a
+/// sub-expression errors (e.g. an unresolved function IRI). A function call over
+/// multi-valued arguments is the cartesian product of the argument value-sets,
+/// not an error.
 pub fn eval_node_expr(
     store: &ShaclData,
     focus: &Term,
@@ -416,32 +417,57 @@ pub fn eval_node_expr(
         // SPARQL 1.1 function (STRLEN, CONTAINS, ABS, REGEX, …) is lowered to that
         // keyword; a user function's IRI is never a keyword, so it keeps the call form.
         NodeExpr::Call(FnCall::Builtin { iri, args } | FnCall::UserDefined { iri, args }) => {
-            // Each argument must collapse to exactly one scalar term (SHACL-AF
-            // function-call arg semantics).
-            let mut arg_terms: Vec<(String, Term)> = Vec::with_capacity(args.len());
-            for (idx, arg) in args.iter().enumerate() {
-                let values = eval_node_expr(store, focus, arg, guard)?;
-                let [only] = values.as_slice() else {
-                    return Err(format!(
-                        "function <{}> argument {idx} must yield exactly one value, got {}",
-                        iri.as_str(),
-                        values.len()
-                    ));
-                };
-                arg_terms.push((format!("a{idx}"), only.clone()));
-            }
+            // Each argument is a node expression yielding a SET of values. Per the
+            // reference implementations (TopBraid / DASH / pySHACL) the function is
+            // invoked once for every tuple in the CARTESIAN PRODUCT of the argument
+            // value-sets, and the results are unioned. A single-valued argument is
+            // the 1-element special case, so existing sh:expression validation (one
+            // value per argument) is a 1×1×…×1 product — exactly one invocation,
+            // unchanged. An empty argument value-set makes the product empty
+            // (SHACL/SPARQL set semantics): no invocations, empty result. A zero-arg
+            // call is a single empty tuple → one invocation.
+            let arg_values: Vec<Vec<Term>> = args
+                .iter()
+                .map(|arg| eval_node_expr(store, focus, arg, guard))
+                .collect::<Result<_, _>>()?;
             let placeholders: Vec<String> =
-                (0..arg_terms.len()).map(|i| format!("?a{i}")).collect();
+                (0..arg_values.len()).map(|i| format!("?a{i}")).collect();
             let expr_string = match builtin_keyword(iri.as_str()) {
                 Some(kw) => format!("{kw}({})", placeholders.join(", ")),
                 None => format!("<{}>({})", iri.as_str(), placeholders.join(", ")),
             };
-            match crate::sparql::eval_scalar_expr(store.sparql(), &expr_string, &arg_terms)? {
-                // A SPARQL error/unbound result is the correct SHACL-AF "no
-                // value" signal — an empty node set, not a forced violation.
-                Some(term) => Ok(vec![term]),
-                None => Ok(Vec::new()),
+            // The product size is the product of the per-argument value-set sizes;
+            // any empty set collapses it to zero (no invocations).
+            let combinations = arg_values.iter().map(Vec::len).product::<usize>();
+            let mut out: Vec<Term> = Vec::new();
+            for k in 0..combinations {
+                // Decode the linear index `k` into a mixed-radix tuple: the digit
+                // for argument `i` is `(k / stride) % len`, iterating the last
+                // argument fastest (row-major over the value-sets).
+                let mut rem = k;
+                let bindings: Vec<(String, Term)> = arg_values
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .map(|(i, values)| {
+                        let digit = rem % values.len();
+                        rem /= values.len();
+                        (format!("a{i}"), values[digit].clone())
+                    })
+                    .collect();
+                // A SPARQL error/unbound result is the correct SHACL-AF "no value"
+                // signal for that tuple — it contributes nothing, not a violation.
+                if let Some(term) =
+                    crate::sparql::eval_scalar_expr(store.sparql(), &expr_string, &bindings)?
+                {
+                    out.push(term);
+                }
             }
+            // Canonicalize the unioned result (sort+dedup) like every other
+            // set-shaped node-expression output.
+            out.sort_by_cached_key(Term::to_string);
+            out.dedup();
+            Ok(out)
         }
         NodeExpr::Distinct(of) => {
             let mut out = eval_node_expr(store, focus, of, guard)?;
@@ -925,21 +951,72 @@ mod tests {
         assert!(err.contains("custom SPARQL function"), "got: {err}");
     }
 
+    /// A multi-valued function-call argument is the CARTESIAN PRODUCT of the
+    /// argument value-sets (TopBraid / DASH / pySHACL semantics), not an error:
+    /// `xsd:string(?x)` over `?x ∈ {ex:b, ex:c}` yields both string casts, unioned.
     #[test]
-    fn builtin_call_arg_arity_error() {
+    fn builtin_call_multi_valued_arg_is_cartesian_product() {
         let data = load_data(DATA);
         let mut guard = RecursionGuard::new();
-        // ex:a ex:p reaches {b, c} — two terms — so the single-arg builtin must
-        // reject the >1-term argument.
+        // ex:a ex:p reaches {b, c} — two terms — so the single-arg cast is invoked
+        // once per value and the results are unioned (sorted, deduped).
         let expr = NodeExpr::Call(FnCall::Builtin {
             iri: NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
             args: vec![NodeExpr::Path(pred("p"))],
         });
-        let err = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).unwrap_err();
-        assert!(
-            err.contains("argument 0 must yield exactly one value, got 2"),
-            "got: {err}"
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
+            .expect("multi-valued arg yields a product");
+        let str_lit = |v: &str| {
+            Term::Literal(Literal::new_typed_literal(
+                v,
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
+            ))
+        };
+        assert_eq!(
+            result,
+            vec![
+                str_lit("http://example.org/ns#b"),
+                str_lit("http://example.org/ns#c"),
+            ]
         );
+    }
+
+    /// Two multi-valued arguments produce the full |A|×|B| product of invocations,
+    /// unioned: `CONCAT` over {"1","2"} × {"a","b"} yields all four combinations.
+    #[test]
+    fn builtin_call_two_multi_valued_args_product() {
+        let data = load_data(
+            r#"
+            @prefix ex: <http://example.org/ns#> .
+            ex:x ex:l "1", "2" .
+            ex:x ex:r "a", "b" .
+        "#,
+        );
+        let mut guard = RecursionGuard::new();
+        let expr = NodeExpr::Call(FnCall::Builtin {
+            iri: NamedNode::new_unchecked("http://www.w3.org/2005/xpath-functions#concat"),
+            args: vec![NodeExpr::Path(pred("l")), NodeExpr::Path(pred("r"))],
+        });
+        let result = eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard)
+            .expect("two-arg product evals");
+        let s = |v: &str| Term::Literal(Literal::new_simple_literal(v));
+        assert_eq!(result, vec![s("1a"), s("1b"), s("2a"), s("2b")]);
+    }
+
+    /// An empty argument value-set collapses the product to empty (SHACL/SPARQL
+    /// set semantics): no invocations, empty result — never an error.
+    #[test]
+    fn builtin_call_empty_arg_yields_empty_product() {
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::new();
+        // ex:a has no ex:missing edge → empty value-set → empty product.
+        let expr = NodeExpr::Call(FnCall::Builtin {
+            iri: NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
+            args: vec![NodeExpr::Path(pred("missing"))],
+        });
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("empty product evals");
+        assert!(result.is_empty(), "empty arg ⇒ empty product");
     }
 
     /// A keyword-only SPARQL builtin named by its XPath-functions-namespace IRI

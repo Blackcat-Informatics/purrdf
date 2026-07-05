@@ -67,23 +67,7 @@ const TOTAL_CASES: usize = 17;
 /// Cases the harness expects to fail, with a precise reason. An entry here MUST
 /// document an upstream spec ambiguity, never a papered-over engine bug; a case
 /// that unexpectedly passes is an error (`XPASS`).
-const XFAIL: &[(&str, &str)] = &[
-    // SHACL-AF §5 (node expressions) does not define the semantics of a
-    // function-call argument node expression that evaluates to MORE THAN ONE
-    // value. TopBraid/DASH (and pySHACL) interpret multi-valued arguments as a
-    // cartesian product over the argument value-sets — the whole point of this
-    // "permutations" test. PurRDF's expression evaluator makes the opposite,
-    // equally spec-compatible choice: each function-call argument must collapse
-    // to exactly one value, else `apply_rules` errors. This is a documented
-    // divergence on genuinely-underspecified spec territory, not an engine bug;
-    // resolving it means the SHACL-AF WG pinning multi-valued call semantics.
-    (
-        "functions-permutations",
-        "SHACL-AF §5 leaves multi-valued function-call argument semantics \
-         undefined; PurRDF requires single-valued arguments, DASH assumes a \
-         cartesian product",
-    ),
-];
+const XFAIL: &[(&str, &str)] = &[];
 
 // ── IRI / parse helpers ────────────────────────────────────────────────────────
 
