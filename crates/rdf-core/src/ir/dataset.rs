@@ -22,11 +22,14 @@
 //!
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
 use crate::content_id::Blake3ContentId;
 use crate::dataset_view::GraphMatch;
+// Re-exported `pub(crate)` so the sibling `super::dataset::FastHasher` path used by
+// `builder.rs` keeps resolving; the single definition lives in `crate::hash`.
+pub(crate) use crate::hash::FastHasher;
 use crate::{
     RdfAnnotation, RdfLiteral, RdfLocation, RdfQuad, RdfReifier, RdfStoreCapabilities, RdfTerm,
     RdfTextDirection, RdfTriple,
@@ -39,7 +42,6 @@ use super::term::{arena_str, BlankScope, InternedTerm, TermId, TermValue};
 /// as virtual triples in [`RdfDataset::reifier_quads`].
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
-pub(crate) type FastHasher = BuildHasherDefault<ahash::AHasher>;
 type ValueIndex = HashMap<u64, Vec<TermId>, FastHasher>;
 /// Lazy successor→predecessors reverse index for
 /// [`RdfDataset::predecessors`]: each successor `TermId` maps to its

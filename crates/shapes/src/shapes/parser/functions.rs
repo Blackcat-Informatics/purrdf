@@ -3,7 +3,7 @@
 
 //! Parsing for SHACL-AF `sh:SPARQLFunction` declarations.
 
-use std::collections::HashSet;
+use ::purrdf::FastSet;
 use std::sync::Arc;
 
 use purrdf_sparql_algebra::{Query, SparqlParser};
@@ -33,7 +33,7 @@ impl Parser<'_> {
             .quads_with(None, Some(rdf::TYPE), Some(sh::SPARQL_FUNCTION))
             .into_iter()
             .chain(self.quads_with(None, Some(rdf::TYPE), Some(sh::FUNCTION)))
-            .map(|q| q.subject)
+            .map(|(subject, _, _)| subject)
             .collect();
         fn_ids.sort_by_key(ToString::to_string);
         fn_ids.dedup();
@@ -146,7 +146,7 @@ impl Parser<'_> {
 
         // Reject colliding derived variable names — silent shadowing would bind the
         // wrong argument.
-        let mut seen: HashSet<&str> = HashSet::new();
+        let mut seen: FastSet<&str> = FastSet::default();
         for p in &raw {
             if !seen.insert(p.var.as_str()) {
                 return Err(format!(

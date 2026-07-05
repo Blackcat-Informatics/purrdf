@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use ::purrdf::RdfDataset;
 use serde_json::{json, Map, Value};
 
-use crate::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
+use crate::data::{native_quads, GraphFilter};
 use crate::json_schema::Namespaces;
 use crate::model::rdf;
 use crate::term::Term;
@@ -49,23 +49,24 @@ const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langSt
 /// let doc = project_graph(&dataset, &ns);
 /// ```
 pub fn project_graph(dataset: &std::sync::Arc<RdfDataset>, ns: &Namespaces) -> Value {
-    let data = IrDataGraph::new(std::sync::Arc::clone(dataset));
-    project_graph_data(&data, ns)
+    project_graph_data(dataset.as_ref(), ns)
 }
 
-/// Project the default graph of a [`ShaclDataGraph`] into a JSON-LD `@graph` document.
-fn project_graph_data<G: ShaclDataGraph>(data: &G, ns: &Namespaces) -> Value {
+/// Project the default graph of a frozen [`RdfDataset`] into a JSON-LD `@graph`
+/// document.
+fn project_graph_data(data: &RdfDataset, ns: &Namespaces) -> Value {
     // Collect distinct named-node / blank-node subjects of the default graph.
     let mut subjects: Vec<Term> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen: ::purrdf::FastSet<String> = ::purrdf::FastSet::default();
     // Scope to the DEFAULT graph only: an AnyGraph filter would match named graphs
     // too, leaking named-graph subjects into the projected `@graph`.
-    for quad in data.quads_for_pattern(None, None, None, GraphFilter::DefaultGraph) {
+    for (subject, _pred, _object) in native_quads(data, None, None, None, GraphFilter::DefaultGraph)
+    {
         // Only IRI / blank-node subjects become @graph nodes (always true here).
-        if quad.subject.is_subject() {
-            let key = quad.subject.to_string();
+        if subject.is_subject() {
+            let key = subject.to_string();
             if seen.insert(key) {
-                subjects.push(quad.subject);
+                subjects.push(subject);
             }
         }
     }
@@ -89,11 +90,10 @@ pub fn project_subject(
     ns: &Namespaces,
     subject: &Term,
 ) -> Value {
-    let data = IrDataGraph::new(std::sync::Arc::clone(dataset));
-    project_subject_data(&data, ns, subject)
+    project_subject_data(dataset.as_ref(), ns, subject)
 }
 
-fn project_subject_data<G: ShaclDataGraph>(data: &G, ns: &Namespaces, subject: &Term) -> Value {
+fn project_subject_data(data: &RdfDataset, ns: &Namespaces, subject: &Term) -> Value {
     if !subject.is_subject() {
         // Literals (and quoted triples) are never node subjects.
         return Value::Object(Map::new());
@@ -103,10 +103,11 @@ fn project_subject_data<G: ShaclDataGraph>(data: &G, ns: &Namespaces, subject: &
     let mut by_pred: BTreeMap<String, Vec<Term>> = BTreeMap::new();
     let mut types: Vec<String> = Vec::new();
 
-    for quad in data.quads_for_pattern(Some(subject), None, None, GraphFilter::DefaultGraph) {
-        let pred = quad.predicate;
+    for (_subject, pred, object) in
+        native_quads(data, Some(subject), None, None, GraphFilter::DefaultGraph)
+    {
         if pred.as_str() == rdf::TYPE {
-            if let Term::NamedNode(n) = &quad.object {
+            if let Term::NamedNode(n) = &object {
                 types.push(ns.compact_iri(n.as_str()));
             }
             continue;
@@ -114,7 +115,7 @@ fn project_subject_data<G: ShaclDataGraph>(data: &G, ns: &Namespaces, subject: &
         by_pred
             .entry(ns.compact_iri(pred.as_str()))
             .or_default()
-            .push(quad.object);
+            .push(object);
     }
 
     let mut obj: Map<String, Value> = Map::new();

@@ -49,6 +49,10 @@ csv = { workspace = true }
 # sibling kernel crates (logic/validate/slice). Default features (std) re-enabled;
 # the workspace-level entry is default-features = false for the wasm-clean eval path.
 sha2 = { workspace = true, default-features = true }
+# Inline small-vector primitive shared workspace-wide (`crate::small`): the
+# generic `IdVec` and re-exported `SmallVec`/`smallvec!`. Default features only
+# (no `union`/`serde`) — wasm-clean, `unsafe`-free.
+smallvec = { workspace = true }
 
 [dev-dependencies]
 # Rich colored line-diffs on assert_eq! failure. Drop-in: a shadowing

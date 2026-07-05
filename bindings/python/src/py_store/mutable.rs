@@ -43,13 +43,14 @@ impl PyMutableDataset {
     }
 
     /// Load RDF into the mutable dataset.
-    #[pyo3(signature = (input=None, format=None, *, path=None))]
+    #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
     fn load(
         &mut self,
         py: Python<'_>,
         input: Option<&Bound<'_, PyAny>>,
         format: Option<PyRdfFormat>,
         path: Option<String>,
+        base: Option<String>,
     ) -> PyResult<()> {
         let format = format.ok_or_else(|| PyValueError::new_err("load: format is required"))?;
         let data = read_input(input, path)?;
@@ -57,7 +58,8 @@ impl PyMutableDataset {
         let inner = &mut self.inner;
         // Parse + insert run detached (GIL released); only plain Rust data is touched.
         py.detach(move || {
-            for quad in parse_quads(&data, format.to_native())
+            let base_ref = base.as_deref();
+            for quad in parse_quads(&data, format.to_native(), base_ref)
                 .map_err(|e| PyValueError::new_err(format!("load parse error: {e}")))?
             {
                 inner.insert(rdf_quad_to_values_scoped(&quad, blank_scope));

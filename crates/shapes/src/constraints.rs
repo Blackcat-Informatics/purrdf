@@ -6,15 +6,58 @@
 //! Evaluates all non-SPARQL SHACL Core constraint components plus the
 //! recursive shape evaluator.  PyO3-free.
 
-use std::collections::HashSet;
 use std::sync::OnceLock;
 
-use crate::data::{GraphFilter, ShaclDataGraph};
+use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, TermId, TermRef};
+
+use crate::data::{native_quads, quads_for_pattern_ids, resolve_id, GraphFilter, ShaclData};
 use crate::model::{rdf, sh, BoxRoleVocab};
 use crate::path;
 use crate::report::ValidationResult;
 use crate::shapes::{ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape};
-use crate::term::{NamedNode, Term, Triple};
+use crate::term::{term_id_to_native, NamedNode, Term, Triple};
+
+/// Internal value-node currency for the constraint layer.
+///
+/// A property shape's value nodes carry their identity in `TermId` space for the
+/// common case (`Interned`, value nodes originating from interned data), and fall
+/// back to an owned [`Term`] only for non-interned SHACL-AF node-expression-produced
+/// terms that have no `TermId` (`Foreign`).
+///
+/// Identity/set/membership constraint arms compare `TermId`s directly (a `Copy`
+/// integer hash), so a value node that only participates in those operations is
+/// never materialized on the conforming path. Content-needing arms (datatype,
+/// pattern, length, node-kind, numeric/string comparisons) resolve to an owned
+/// [`Term`] on demand, and the report boundary always records an owned [`Term`].
+#[derive(Clone)]
+enum ValueNode {
+    /// An interned value node — carries its `TermId`, resolved to a [`Term`] only
+    /// when a constraint needs its content or a violation is recorded.
+    Interned(TermId),
+    /// A non-interned value node produced by a SHACL-AF node expression: it has no
+    /// `TermId`, so its owned [`Term`] is carried verbatim.
+    Foreign(Term),
+}
+
+impl ValueNode {
+    /// Resolve to an owned native [`Term`] (the report boundary and content-check
+    /// input): materialize an interned id, or clone the foreign term.
+    fn to_term(&self, ds: &RdfDataset) -> Term {
+        match self {
+            Self::Interned(id) => term_id_to_native(ds, *id),
+            Self::Foreign(term) => term.clone(),
+        }
+    }
+
+    /// The interned id of this value node, if it has one. A `Foreign` term is
+    /// resolved against `ds` in case it happens to be interned (usually it is not).
+    fn as_id(&self, ds: &RdfDataset) -> Option<TermId> {
+        match self {
+            Self::Interned(id) => Some(*id),
+            Self::Foreign(term) => resolve_id(ds, term),
+        }
+    }
+}
 
 // ── Public surface ─────────────────────────────────────────────────────────────
 
@@ -31,8 +74,8 @@ use crate::term::{NamedNode, Term, Triple};
 /// hard validation failure per SHACL-SPARQL — e.g. a query construct the
 /// native engine cannot execute). Ordinary constraint violations are `Ok`
 /// results, never errors.
-pub fn validate_shape<G: ShaclDataGraph>(
-    store: &G,
+pub fn validate_shape(
+    store: &ShaclData,
     focus: &Term,
     shape: &Shape,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -51,8 +94,8 @@ pub fn validate_shape<G: ShaclDataGraph>(
 ///
 /// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
 /// (see [`validate_shape`]).
-pub fn validate_shape_with<G: ShaclDataGraph>(
-    store: &G,
+pub fn validate_shape_with(
+    store: &ShaclData,
     focus: &Term,
     shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
@@ -65,8 +108,8 @@ pub fn validate_shape_with<G: ShaclDataGraph>(
 /// [`crate::expression::MAX_RECURSION_DEPTH`] is a hard error — a mutually
 /// recursive filter/exists cycle fails closed here rather than overflowing the
 /// native stack.
-fn validate_shape_with_depth<G: ShaclDataGraph>(
-    store: &G,
+fn validate_shape_with_depth(
+    store: &ShaclData,
     focus: &Term,
     shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
@@ -87,12 +130,14 @@ fn validate_shape_with_depth<G: ShaclDataGraph>(
     let mut results: Vec<ValidationResult> = Vec::new();
 
     // --- Node-level constraints (value nodes = [focus], no path) ---
-    let node_value_nodes = std::slice::from_ref(focus);
+    // The single value node IS the focus term; a node shape has no path traversal
+    // to run in id space, so the focus travels as an owned `Foreign` value node.
+    let node_value_nodes = [ValueNode::Foreign(focus.clone())];
     for constraint in &shape.constraints {
         let mut rs = eval_constraint(
             store,
             focus,
-            node_value_nodes,
+            &node_value_nodes,
             constraint,
             None,
             shape,
@@ -145,14 +190,14 @@ fn validate_shape_with_depth<G: ShaclDataGraph>(
 /// (`core/node/closed-002` does exactly that).
 ///
 /// One result per focus-node outgoing triple whose predicate is not permitted.
-fn eval_closed<G: ShaclDataGraph>(
-    store: &G,
+fn eval_closed(
+    store: &ShaclData,
     focus: &Term,
     shape: &Shape,
     ignored: &[NamedNode],
     box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Vec<ValidationResult> {
-    let mut permitted: HashSet<String> = HashSet::new();
+    let mut permitted: FastSet<String> = FastSet::default();
     for ps in &shape.property_shapes {
         if let Path::Predicate(predicate) = &ps.path {
             permitted.insert(predicate.as_str().to_owned());
@@ -163,9 +208,8 @@ fn eval_closed<G: ShaclDataGraph>(
     }
 
     let mut results = Vec::new();
-    let quads = store.quads_for_pattern(Some(focus), None, None, GraphFilter::AnyGraph);
-    for quad in quads {
-        let predicate = quad.predicate;
+    let quads = native_quads(store.core(), Some(focus), None, None, GraphFilter::AnyGraph);
+    for (_subject, predicate, object) in quads {
         if permitted.contains(predicate.as_str()) {
             continue;
         }
@@ -177,7 +221,7 @@ fn eval_closed<G: ShaclDataGraph>(
             focus_node: focus.clone(),
             result_path: Some(Term::NamedNode(predicate.clone())),
             path_structure: None,
-            value: Some(quad.object),
+            value: Some(object),
             source_constraint_component: NamedNode::from(sh::CLOSED_CONSTRAINT_COMPONENT),
             source_shape: shape.id.clone(),
             severity: shape.severity.clone(),
@@ -200,7 +244,7 @@ fn eval_closed<G: ShaclDataGraph>(
 ///
 /// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
 /// (see [`validate_shape`]).
-pub fn conforms<G: ShaclDataGraph>(store: &G, focus: &Term, shape: &Shape) -> Result<bool, String> {
+pub fn conforms(store: &ShaclData, focus: &Term, shape: &Shape) -> Result<bool, String> {
     conforms_with_depth(store, focus, shape, 0)
 }
 
@@ -217,8 +261,8 @@ pub fn conforms<G: ShaclDataGraph>(store: &G, focus: &Term, shape: &Shape) -> Re
 ///
 /// Returns `Err(String)` when a constraint fails to evaluate (see
 /// [`validate_shape`]) or when the filter/exists depth ceiling is exceeded.
-pub(crate) fn conforms_with_depth<G: ShaclDataGraph>(
-    store: &G,
+pub(crate) fn conforms_with_depth(
+    store: &ShaclData,
     focus: &Term,
     shape: &Shape,
     depth: u32,
@@ -228,8 +272,8 @@ pub(crate) fn conforms_with_depth<G: ShaclDataGraph>(
 
 // ── Property shape evaluator ───────────────────────────────────────────────────
 
-fn eval_property_shape<G: ShaclDataGraph>(
-    store: &G,
+fn eval_property_shape(
+    store: &ShaclData,
     focus: &Term,
     ps: &PropertyShape,
     parent_shape: &Shape,
@@ -240,7 +284,18 @@ fn eval_property_shape<G: ShaclDataGraph>(
     if ps.deactivated {
         return Ok(vec![]);
     }
-    let value_nodes = path::eval(store, focus, &ps.path);
+    // Carry the value nodes id-native for the common interned-focus case
+    // ([`path::eval_ids`]); a non-interned SHACL-AF focus falls back to the
+    // owned-`Term` producer. Identity/set constraint arms then compare `TermId`s
+    // without materializing, and only the value nodes a violation records — or a
+    // content constraint inspects — are resolved to owned terms.
+    let value_nodes: Vec<ValueNode> = match path::eval_ids(store.core(), focus, &ps.path) {
+        Some(ids) => ids.into_iter().map(ValueNode::Interned).collect(),
+        None => path::eval(store.core(), focus, &ps.path)
+            .into_iter()
+            .map(ValueNode::Foreign)
+            .collect(),
+    };
     let path_term = path::path_to_term(&ps.path);
     // The complex-path structure stamped onto results whose path comes from
     // this property shape (None for a plain predicate path).
@@ -299,9 +354,12 @@ fn eval_property_shape<G: ShaclDataGraph>(
     // fires once per reach, so results are NOT deduplicated here).
     for nested in &ps.property_shapes {
         for value in &value_nodes {
+            // A value node becomes the focus of the nested shape: resolve it to an
+            // owned term at the recursion boundary (recursion is not the hot
+            // conforming path).
             results.extend(eval_property_shape(
                 store,
-                value,
+                &value.to_term(store.core()),
                 nested,
                 &ps_as_shape,
                 box_role_vocab,
@@ -310,23 +368,33 @@ fn eval_property_shape<G: ShaclDataGraph>(
         }
     }
 
-    results.extend(eval_reifier_shapes(ReifierEvalContext {
-        store,
-        focus,
-        value_nodes: &value_nodes,
-        ps,
-        ps_as_shape: &ps_as_shape,
-        source_roles: &source_roles,
-        path_roles: &path_roles,
-        path_term: &path_term,
-        box_role_vocab,
-        depth,
-    })?);
+    // Reifier shapes need each value node as an owned term (to build the quoted
+    // triple term). Materialize only when there is reifier work to do; a property
+    // shape with no reifier shapes never pays for it.
+    if !ps.reifier_shapes.is_empty() || ps.reification_required {
+        let value_terms: Vec<Term> = value_nodes
+            .iter()
+            .map(|v| v.to_term(store.core()))
+            .collect();
+        results.extend(eval_reifier_shapes(ReifierEvalContext {
+            store,
+            focus,
+            value_nodes: &value_terms,
+            ps,
+            ps_as_shape: &ps_as_shape,
+            source_roles: &source_roles,
+            path_roles: &path_roles,
+            path_term: &path_term,
+            box_role_vocab,
+            depth,
+        })?);
+    }
     Ok(results)
 }
 
-struct ReifierEvalContext<'a, G: ShaclDataGraph> {
-    store: &'a G,
+#[derive(Clone, Copy)]
+struct ReifierEvalContext<'a> {
+    store: &'a ShaclData,
     focus: &'a Term,
     value_nodes: &'a [Term],
     ps: &'a PropertyShape,
@@ -338,19 +406,7 @@ struct ReifierEvalContext<'a, G: ShaclDataGraph> {
     depth: u32,
 }
 
-// Manual impls (not derives): a `derive(Copy)` would demand `G: Copy`, but the
-// context only holds `&G` — every field is a reference, so the struct is Copy
-// for ANY data-graph type.
-impl<G: ShaclDataGraph> Clone for ReifierEvalContext<'_, G> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-impl<G: ShaclDataGraph> Copy for ReifierEvalContext<'_, G> {}
-
-fn eval_reifier_shapes<G: ShaclDataGraph>(
-    ctx: ReifierEvalContext<'_, G>,
-) -> Result<Vec<ValidationResult>, String> {
+fn eval_reifier_shapes(ctx: ReifierEvalContext<'_>) -> Result<Vec<ValidationResult>, String> {
     let ReifierEvalContext {
         store,
         focus,
@@ -455,25 +511,25 @@ fn triple_term(focus: &Term, predicate: &NamedNode, value: &Term) -> Option<Term
     ))))
 }
 
-fn reifiers_for<G: ShaclDataGraph>(store: &G, triple_term: &Term) -> Vec<Term> {
+fn reifiers_for(store: &ShaclData, triple_term: &Term) -> Vec<Term> {
     let reifies = Term::NamedNode(NamedNode::from(rdf::REIFIES));
-    let reifiers_set: HashSet<Term> = store
-        .quads_for_pattern(
-            None,
-            Some(&reifies),
-            Some(triple_term),
-            GraphFilter::DefaultGraph,
-        )
-        .into_iter()
-        .map(|q| q.subject)
-        .collect();
+    let reifiers_set: FastSet<Term> = native_quads(
+        store.core(),
+        None,
+        Some(&reifies),
+        Some(triple_term),
+        GraphFilter::DefaultGraph,
+    )
+    .into_iter()
+    .map(|(subject, _, _)| subject)
+    .collect();
     let mut reifiers: Vec<Term> = reifiers_set.into_iter().collect();
     reifiers.sort_by_key(Term::to_string);
     reifiers
 }
 
-fn path_box_roles<G: ShaclDataGraph>(
-    store: &G,
+fn path_box_roles(
+    store: &ShaclData,
     path: &Path,
     box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Vec<NamedNode> {
@@ -488,19 +544,19 @@ fn path_box_roles<G: ShaclDataGraph>(
     };
     let predicate_term = Term::NamedNode(predicate.clone());
     let box_role = Term::NamedNode(NamedNode::from(vocab.graph_box_role.as_str()));
-    let mut roles: Vec<NamedNode> = store
-        .quads_for_pattern(
-            Some(&predicate_term),
-            Some(&box_role),
-            None,
-            GraphFilter::DefaultGraph,
-        )
-        .into_iter()
-        .filter_map(|q| match q.object {
-            Term::NamedNode(node) => Some(node),
-            _ => None,
-        })
-        .collect();
+    let mut roles: Vec<NamedNode> = native_quads(
+        store.core(),
+        Some(&predicate_term),
+        Some(&box_role),
+        None,
+        GraphFilter::DefaultGraph,
+    )
+    .into_iter()
+    .filter_map(|(_, _, object)| match object {
+        Term::NamedNode(node) => Some(node),
+        _ => None,
+    })
+    .collect();
     roles.sort_unstable();
     roles.dedup();
     roles
@@ -537,15 +593,16 @@ fn merge_box_roles(left: &[NamedNode], right: &[NamedNode]) -> Vec<NamedNode> {
 /// (SHACL-AF spec: `$this` = focus node, not value node).
 ///
 /// `path` is `None` for node-level constraints, `Some` for property shapes.
-fn eval_constraint<G: ShaclDataGraph>(
-    store: &G,
+fn eval_constraint(
+    store: &ShaclData,
     focus_node: &Term,
-    value_nodes: &[Term],
+    value_nodes: &[ValueNode],
     constraint: &Constraint,
     path: Option<&Path>,
     shape: &Shape,
     depth: u32,
 ) -> Result<Vec<ValidationResult>, String> {
+    let ds = store.core();
     let result_path = path.map(path::path_to_term);
     // The full SHACL path structure travels alongside a COMPLEX result path
     // (its result_path term is a deterministic blank node) so the report
@@ -561,8 +618,7 @@ fn eval_constraint<G: ShaclDataGraph>(
             ValidationResult {
                 focus_node: value_nodes
                     .first()
-                    .cloned()
-                    .unwrap_or_else(|| source_shape.clone()),
+                    .map_or_else(|| source_shape.clone(), |v| v.to_term(ds)),
                 result_path: result_path.clone(),
                 path_structure: path_structure.clone(),
                 value: $value,
@@ -617,23 +673,33 @@ fn eval_constraint<G: ShaclDataGraph>(
         Constraint::Class(class_iri) => {
             // Hoist the BFS closure computation once, outside the per-value loop.
             // Previously called inside the loop: O(N×M) → now O(M) + O(N).
-            let closure = crate::engine::subclass_closure(store, class_iri);
+            let closure = crate::engine::subclass_closure(store.core(), class_iri);
+            // Resolve `rdf:type`'s interned id once, outside the per-value loop:
+            // it is loop-invariant, so doing it per value node needlessly rebuilt
+            // a `NamedNode`/`String` and hit the interner O(N) times.  `None` means
+            // `rdf:type` is not interned in this dataset, so no `rdf:type` edge can
+            // exist and every non-literal value violates.
+            let rdf_type_id =
+                resolve_id(store.core(), &Term::NamedNode(NamedNode::from(rdf::TYPE)));
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
-            for value in value_nodes {
-                let violates = match value {
-                    Term::Literal(_) => true,
-                    _ => !is_shacl_instance(store, value, &closure),
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
+            for vn in value_nodes {
+                // Id-native instance test: an interned value node's class membership
+                // is decided entirely in `TermId` space (literal check + `rdf:type`
+                // edge walk), so a conforming value is never materialized. A
+                // non-interned value node has no `rdf:type` edge and is no instance.
+                let violates = match vn.as_id(ds) {
+                    Some(id) => !is_shacl_instance_id(ds, id, rdf_type_id, &closure),
+                    None => true,
                 };
                 if violates {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
                         path_structure: path_structure.clone(),
-                        value: Some(value.clone()),
+                        value: Some(vn.to_term(ds)),
                         source_constraint_component: NamedNode::from(
                             sh::CLASS_CONSTRAINT_COMPONENT,
                         ),
@@ -655,9 +721,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 if !check_datatype(value, dt_iri) {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
@@ -685,9 +756,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 if !check_node_kind(value, kind) {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
@@ -712,18 +788,28 @@ fn eval_constraint<G: ShaclDataGraph>(
 
         // ── In (per value node) ────────────────────────────────────────────────
         Constraint::In(allowed) => {
+            // Membership is pure identity: resolve the allowed set to ids once, so an
+            // interned value node's check is a `TermId` set lookup with no
+            // materialization. The interner is injective, so an allowed term that is
+            // not interned can never equal an interned value node; a non-interned
+            // value node falls back to term equality.
+            let allowed_ids: FastSet<TermId> =
+                allowed.iter().filter_map(|a| resolve_id(ds, a)).collect();
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
-            for value in value_nodes {
-                if !allowed.iter().any(|a| terms_equal(a, value)) {
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
+            for vn in value_nodes {
+                let allowed_here = match vn.as_id(ds) {
+                    Some(id) => allowed_ids.contains(&id),
+                    None => allowed.iter().any(|a| terms_equal(a, &vn.to_term(ds))),
+                };
+                if !allowed_here {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path.clone(),
                         path_structure: path_structure.clone(),
-                        value: Some(value.clone()),
+                        value: Some(vn.to_term(ds)),
                         source_constraint_component: NamedNode::from(sh::IN_CONSTRAINT_COMPONENT),
                         source_shape: source_shape.clone(),
                         severity: severity.clone(),
@@ -740,12 +826,20 @@ fn eval_constraint<G: ShaclDataGraph>(
 
         // ── HasValue (on the SET, one result if missing) ───────────────────────
         Constraint::HasValue(required) => {
-            let found = value_nodes.iter().any(|v| terms_equal(v, required));
+            // Identity check: if `required` is interned, membership is a `TermId`
+            // comparison and no value node is materialized. If it is not interned,
+            // no interned value node can equal it, so only the (rare) non-interned
+            // value nodes could match — fall back to term equality.
+            let found = match resolve_id(ds, required) {
+                Some(req_id) => value_nodes.iter().any(|v| v.as_id(ds) == Some(req_id)),
+                None => value_nodes
+                    .iter()
+                    .any(|v| terms_equal(&v.to_term(ds), required)),
+            };
             if !found {
                 let focus = value_nodes
                     .first()
-                    .cloned()
-                    .unwrap_or_else(|| source_shape.clone());
+                    .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
                 vec![ValidationResult {
                     focus_node: focus,
                     result_path,
@@ -781,9 +875,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let lexical = match value {
                     Term::Literal(lit) => Some(lit.value().to_owned()),
                     Term::NamedNode(nn) => Some(nn.as_str().to_owned()),
@@ -821,9 +920,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let len_opt = lexical_length(value);
                 let violates = match len_opt {
                     None => true, // blank node
@@ -856,9 +960,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let len_opt = lexical_length(value);
                 let violates = match len_opt {
                     None => true, // blank node
@@ -891,9 +1000,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 if !language_matches_any(value, tags) {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
@@ -921,9 +1035,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 // Violation iff the value node DOES conform to the negated shape.
                 if conforms_with_depth(store, value, inner_shape, depth)? {
                     results.push(ValidationResult {
@@ -954,9 +1073,14 @@ fn eval_constraint<G: ShaclDataGraph>(
 
         // ── UniqueLang (on the SET) ────────────────────────────────────────────
         Constraint::UniqueLang(true) => {
-            let mut seen_langs: std::collections::HashMap<String, usize> =
-                std::collections::HashMap::new();
+            let mut seen_langs: FastMap<String, usize> = FastMap::default();
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 if let Term::Literal(lit) = value {
                     if let Some(lang) = lit.language() {
                         *seen_langs.entry(lang.to_lowercase()).or_insert(0) += 1;
@@ -965,8 +1089,7 @@ fn eval_constraint<G: ShaclDataGraph>(
             }
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             let mut results = Vec::new();
             for (lang, count) in &seen_langs {
                 if *count > 1 {
@@ -999,9 +1122,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let violates = !matches!(
                     range_facet_cmp(value, bound),
                     Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
@@ -1031,9 +1159,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let violates = !matches!(
                     range_facet_cmp(value, bound),
                     Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
@@ -1065,9 +1198,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let violates = !matches!(
                     range_facet_cmp(value, bound),
                     Some(std::cmp::Ordering::Greater)
@@ -1097,9 +1235,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let violates = !matches!(
                     range_facet_cmp(value, bound),
                     Some(std::cmp::Ordering::Less)
@@ -1131,9 +1274,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let mut all_conform = true;
                 for member in members {
                     if !conforms_with_depth(store, value, member, depth)? {
@@ -1166,9 +1314,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let mut any_conforms = false;
                 for member in members {
                     if conforms_with_depth(store, value, member, depth)? {
@@ -1201,9 +1354,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 let mut count = 0usize;
                 for member in members {
                     if conforms_with_depth(store, value, member, depth)? {
@@ -1235,9 +1393,14 @@ fn eval_constraint<G: ShaclDataGraph>(
             let mut results = Vec::new();
             let focus = value_nodes
                 .first()
-                .cloned()
-                .unwrap_or_else(|| source_shape.clone());
+                .map_or_else(|| source_shape.clone(), |v| v.to_term(ds));
             for value in value_nodes {
+                // Content/recursion arm: this constraint needs the value node's term
+                // (its lexical form, datatype, node kind, or a recursion focus), so
+                // resolve it here. `value` borrows the owned term for the rest of the
+                // arm exactly as before.
+                let value_term = value.to_term(ds);
+                let value = &value_term;
                 if !conforms_with_depth(store, value, inner_shape, depth)? {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
@@ -1262,17 +1425,39 @@ fn eval_constraint<G: ShaclDataGraph>(
         //    the objects of the given predicate from the SAME focus node. ──────
         Constraint::Equals(pred) => {
             let others = pair_values(store, focus_node, pred);
+            // Membership is identity: compare in `TermId` space (the interner is
+            // injective, so an interned value equals a predicate object iff their ids
+            // match). Only offending value nodes are materialized on the conforming
+            // side. `others` come from the data graph and are always interned.
+            let other_ids: FastSet<TermId> =
+                others.iter().filter_map(|o| resolve_id(ds, o)).collect();
+            let value_ids: FastSet<TermId> =
+                value_nodes.iter().filter_map(|v| v.as_id(ds)).collect();
             let mut offending: Vec<Term> = Vec::new();
-            let mut seen: HashSet<Term> = HashSet::new();
+            let mut seen: FastSet<Term> = FastSet::default();
             // Value nodes missing from the predicate's objects…
             for v in value_nodes {
-                if !others.contains(v) && seen.insert(v.clone()) {
-                    offending.push(v.clone());
+                let present = match v.as_id(ds) {
+                    Some(id) => other_ids.contains(&id),
+                    None => {
+                        let term = v.to_term(ds);
+                        others.iter().any(|o| terms_equal(o, &term))
+                    }
+                };
+                if !present {
+                    let term = v.to_term(ds);
+                    if seen.insert(term.clone()) {
+                        offending.push(term);
+                    }
                 }
             }
             // …and predicate objects missing from the value nodes.
             for o in &others {
-                if !value_nodes.contains(o) && seen.insert(o.clone()) {
+                let present = match resolve_id(ds, o) {
+                    Some(oid) => value_ids.contains(&oid),
+                    None => value_nodes.iter().any(|v| terms_equal(&v.to_term(ds), o)),
+                };
+                if !present && seen.insert(o.clone()) {
                     offending.push(o.clone());
                 }
             }
@@ -1289,20 +1474,34 @@ fn eval_constraint<G: ShaclDataGraph>(
         }
         Constraint::Disjoint(pred) => {
             let others = pair_values(store, focus_node, pred);
+            // Identity check in `TermId` space; only offending value nodes are
+            // materialized.
+            let other_ids: FastSet<TermId> =
+                others.iter().filter_map(|o| resolve_id(ds, o)).collect();
             let mut results = Vec::new();
             for v in value_nodes {
-                if others.contains(v) {
+                let violates = match v.as_id(ds) {
+                    Some(id) => other_ids.contains(&id),
+                    None => {
+                        let term = v.to_term(ds);
+                        others.iter().any(|o| terms_equal(o, &term))
+                    }
+                };
+                if violates {
                     results.push(result!(
                         sh::DISJOINT_CONSTRAINT_COMPONENT,
                         focus_node.clone(),
-                        Some(v.clone())
+                        Some(v.to_term(ds))
                     ));
                 }
             }
             results
         }
         Constraint::LessThan(pred) => {
-            pair_order_offenders(store, focus_node, value_nodes, pred, false)
+            // Order comparison needs each value node's term (numeric/string/temporal
+            // value space), so materialize the set for the pair walk.
+            let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
+            pair_order_offenders(store, focus_node, &value_terms, pred, false)
                 .into_iter()
                 .map(|value| {
                     result!(
@@ -1314,7 +1513,8 @@ fn eval_constraint<G: ShaclDataGraph>(
                 .collect()
         }
         Constraint::LessThanOrEquals(pred) => {
-            pair_order_offenders(store, focus_node, value_nodes, pred, true)
+            let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
+            pair_order_offenders(store, focus_node, &value_terms, pred, true)
                 .into_iter()
                 .map(|value| {
                     result!(
@@ -1338,6 +1538,10 @@ fn eval_constraint<G: ShaclDataGraph>(
             // under sibling disjointness — conforms to NO sibling qualified shape.
             let mut count = 0u64;
             for v in value_nodes {
+                // Each value node is a recursion focus for the qualified shape;
+                // resolve it to an owned term at the recursion boundary.
+                let v_term = v.to_term(ds);
+                let v = &v_term;
                 if !conforms_with_depth(store, v, qshape, depth)? {
                     continue;
                 }
@@ -1400,7 +1604,7 @@ fn eval_constraint<G: ShaclDataGraph>(
             // stands for the shape's path in SPARQL surface syntax.
             let query = substitute_path_placeholder(select, path);
             crate::sparql::eval_sparql_constraint(
-                &store.sparql_dataset(),
+                store.sparql(),
                 focus_node,
                 &query,
                 &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
@@ -1437,10 +1641,13 @@ fn eval_constraint<G: ShaclDataGraph>(
             // loop-invariant — reusing it only avoids re-allocating the set.
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
             for value_node in value_nodes {
-                let out = crate::expression::eval_node_expr(store, value_node, expr, &mut guard)
+                // A node expression evaluates over the owned term model (it may
+                // produce non-interned terms), so resolve the value node here.
+                let value_node = value_node.to_term(ds);
+                let out = crate::expression::eval_node_expr(store, &value_node, expr, &mut guard)
                     .map_err(|e| {
-                        format!("sh:expression constraint on shape {source_shape}: {e}")
-                    })?;
+                    format!("sh:expression constraint on shape {source_shape}: {e}")
+                })?;
                 if !crate::expression::is_true(&out) {
                     let mut r = result!(
                         sh::EXPRESSION_CONSTRAINT_COMPONENT,
@@ -1465,12 +1672,15 @@ fn eval_constraint<G: ShaclDataGraph>(
         } => {
             let sev = csev.clone().unwrap_or_else(|| severity.clone());
             let msg = cmsg.clone().or_else(|| message.clone());
-            let dataset = store.sparql_dataset();
+            let dataset = store.sparql();
+            // The custom-component validators run over the owned term model; resolve
+            // the value nodes for the ASK validator's per-value binding.
+            let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
             match validator {
                 ComponentValidator::Ask { .. } => crate::components::eval_ask_validator(
-                    &dataset,
+                    dataset,
                     focus_node,
-                    value_nodes,
+                    &value_terms,
                     validator,
                     bindings,
                     component,
@@ -1482,7 +1692,7 @@ fn eval_constraint<G: ShaclDataGraph>(
                     Some(source_shape),
                 ),
                 ComponentValidator::Select { .. } => crate::components::eval_select_validator(
-                    &dataset,
+                    dataset,
                     focus_node,
                     validator,
                     bindings,
@@ -1528,15 +1738,38 @@ pub(crate) fn substitute_path_placeholder(select: &str, path: Option<&Path>) -> 
 /// derived from asserted `rdfs:subClassOf` edges (as returned by
 /// [`crate::engine::subclass_closure`]).  The caller hoists the closure
 /// computation once before the per-value-node loop to avoid O(N×M) BFS cost.
-fn is_shacl_instance<G: ShaclDataGraph>(store: &G, value: &Term, closure: &HashSet<Term>) -> bool {
-    if !matches!(value, Term::NamedNode(_) | Term::BlankNode(_)) {
+///
+/// `rdf_type_id` is `rdf:type`'s pre-resolved interned [`TermId`], hoisted once by
+/// the caller (it is loop-invariant across value nodes).  `None` means `rdf:type`
+/// is not interned in this dataset, so no `rdf:type` edge can exist and the value
+/// is not an instance.
+///
+/// `value_id` is the value node's interned [`TermId`]. The check is fully id-native
+/// — the value node is never materialized to an owned term: a literal (never a
+/// class instance) is recognized from its resolved [`TermRef`], and the `rdf:type`
+/// edge walk stays in id space.
+fn is_shacl_instance_id(
+    ds: &RdfDataset,
+    value_id: TermId,
+    rdf_type_id: Option<TermId>,
+    closure: &IdSet,
+) -> bool {
+    // A literal is never a SHACL class instance; only IRIs / blank nodes can be.
+    if matches!(ds.resolve(value_id), TermRef::Literal { .. }) {
         return false;
     }
-    let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
-    store
-        .quads_for_pattern(Some(value), Some(&rdf_type), None, GraphFilter::AnyGraph)
-        .into_iter()
-        .any(|q| closure.contains(&q.object))
+    // `rdf:type` must be interned for any `rdf:type` edge to exist.
+    let Some(rdf_type) = rdf_type_id else {
+        return false;
+    };
+    quads_for_pattern_ids(
+        ds,
+        Some(value_id),
+        Some(rdf_type),
+        None,
+        GraphFilter::AnyGraph,
+    )
+    .any(|q| closure.contains(&q.o))
 }
 
 /// `xsd:integer` lexical space: optional sign then one-or-more ASCII digits.
@@ -1816,18 +2049,19 @@ fn terms_equal(a: &Term, b: &Term) -> bool {
 
 /// The distinct objects of `(focus, pred, ?)` in the default graph, first-seen
 /// order — the "other" side of a property-pair constraint (§4.3).
-fn pair_values<G: ShaclDataGraph>(store: &G, focus: &Term, pred: &NamedNode) -> Vec<Term> {
+fn pair_values(store: &ShaclData, focus: &Term, pred: &NamedNode) -> Vec<Term> {
     let predicate = Term::NamedNode(pred.clone());
     let mut out: Vec<Term> = Vec::new();
-    let mut seen: HashSet<Term> = HashSet::new();
-    for quad in store.quads_for_pattern(
+    let mut seen: FastSet<Term> = FastSet::default();
+    for (_, _, object) in native_quads(
+        store.core(),
         Some(focus),
         Some(&predicate),
         None,
         GraphFilter::DefaultGraph,
     ) {
-        if seen.insert(quad.object.clone()) {
-            out.push(quad.object);
+        if seen.insert(object.clone()) {
+            out.push(object);
         }
     }
     out
@@ -1842,8 +2076,8 @@ fn pair_values<G: ShaclDataGraph>(store: &G, focus: &Term, pred: &NamedNode) -> 
 /// N comparands yields N results (duplicate tuples — the report is a
 /// multiset, matching the W3C suite's expectations). An incomparable pair
 /// (per SPARQL `<` semantics) is a violation.
-fn pair_order_offenders<G: ShaclDataGraph>(
-    store: &G,
+fn pair_order_offenders(
+    store: &ShaclData,
     focus: &Term,
     value_nodes: &[Term],
     pred: &NamedNode,
@@ -1968,10 +2202,17 @@ fn build_regex(pattern: &str, flags: Option<&str>) -> Result<regex::Regex, Strin
 mod tests {
     use std::sync::{Arc, OnceLock};
 
+    use ::purrdf::RdfDataset;
+
     use super::*;
-    use crate::data::IrDataGraph;
     use crate::report::Severity;
     use crate::term::{Literal, NamedNode};
+
+    /// Build a [`ShaclData`] holder over a projected test dataset: Core lookups and
+    /// the SPARQL dataset are the same frozen graph (no shapes-graph overlay).
+    fn shacl_data(store: &Arc<RdfDataset>) -> ShaclData {
+        ShaclData::new(Arc::clone(store), Arc::clone(store), None)
+    }
 
     const EX: &str = "http://example.org/ns#";
     const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -2077,12 +2318,13 @@ mod tests {
     /// tests exercise only infallible constraint paths, so a hard validation
     /// error is a test bug. (An explicitly-defined item shadows the glob
     /// import from `use super::*`.)
-    fn validate_shape<G: ShaclDataGraph>(
-        store: &G,
+    fn validate_shape(
+        store: &Arc<RdfDataset>,
         focus: &Term,
         shape: &Shape,
     ) -> Vec<ValidationResult> {
-        super::validate_shape(store, focus, shape).expect("constraint evaluation must not error")
+        super::validate_shape(&shacl_data(store), focus, shape)
+            .expect("constraint evaluation must not error")
     }
 
     /// The caller-supplied box-role vocabulary the box-role tests configure
@@ -2093,23 +2335,21 @@ mod tests {
 
     /// Result-unwrapping shim over [`super::validate_shape_with`], with the
     /// test box-role vocabulary configured.
-    fn validate_shape_with_roles<G: ShaclDataGraph>(
-        store: &G,
+    fn validate_shape_with_roles(
+        store: &Arc<RdfDataset>,
         focus: &Term,
         shape: &Shape,
     ) -> Vec<ValidationResult> {
-        validate_shape_with(store, focus, shape, Some(&meta_vocab()))
+        validate_shape_with(&shacl_data(store), focus, shape, Some(&meta_vocab()))
             .expect("constraint evaluation must not error")
     }
 
-    fn load_store(ttl: &str) -> IrDataGraph {
+    fn load_store(ttl: &str) -> Arc<RdfDataset> {
         let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl).expect("Turtle parse");
         // Apply the same SHACL projection `validate_dataset` uses, so RDF-1.2
         // reifier bindings are materialized as `rdf:reifies` quads the engine's
         // reifier-shape lookup can find (the IR keeps reifiers in a side table).
-        let projected =
-            crate::engine::shacl_dataset_from_dataset(&dataset).expect("SHACL projection");
-        IrDataGraph::new(projected)
+        crate::engine::shacl_dataset_from_dataset(&dataset).expect("SHACL projection")
     }
 
     fn component_iri(results: &[ValidationResult]) -> Vec<String> {
@@ -2701,9 +2941,7 @@ mod tests {
     fn unique_lang_fail() {
         // Load two English-tagged literals via N-Triples (Turtle deduplicates in the store).
         let nt = format!("<{EX}a> <{EX}label> \"Hello\"@en .\n<{EX}a> <{EX}label> \"Hi\"@en .\n");
-        let store = IrDataGraph::new(
-            crate::text_ingest::parse_ntriples_to_dataset(&nt).expect("N-Triples parse"),
-        );
+        let store = crate::text_ingest::parse_ntriples_to_dataset(&nt).expect("N-Triples parse");
         let shape = prop_shape(
             "S",
             &format!("{EX}label"),

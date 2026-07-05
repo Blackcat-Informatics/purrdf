@@ -146,7 +146,7 @@ fn silent_or_err(silent: bool, msg: impl FnOnce() -> String) -> Result<SolutionS
 fn identity_seq() -> SolutionSeq {
     SolutionSeq {
         schema: Arc::new(VarSchema::new()),
-        rows: vec![vec![]],
+        rows: vec![smallvec::smallvec![]],
     }
 }
 
@@ -159,7 +159,7 @@ fn ingest(resolved: ResolvedBindings, ctx: &mut EvalCtx<'_>) -> SolutionSeq {
     let width = schema.len();
     let mut rows = Vec::with_capacity(resolved.rows.len());
     for binding in resolved.rows {
-        let mut row = vec![None; width];
+        let mut row = smallvec::smallvec![None; width];
         for (i, cell) in binding.into_iter().enumerate().take(width) {
             if let Some(value) = cell {
                 row[i] = Some(ctx.scratch.intern(ctx.dataset, value));

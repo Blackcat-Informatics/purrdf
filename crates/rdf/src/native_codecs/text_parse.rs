@@ -385,14 +385,14 @@ fn parse_lines_sequential<S: SpanCollector>(
 /// [`bump`](Self::bump) can MOVE each consumed token out instead of deep-cloning
 /// its `String` payload.
 struct TokenCursor<'a> {
-    tokens: Vec<Spanned>,
+    tokens: Vec<Spanned<'a>>,
     pos: usize,
     raw: &'a str,
     lineno: u32,
 }
 
 impl<'a> TokenCursor<'a> {
-    fn new(tokens: Vec<Spanned>, raw: &'a str, lineno: u32) -> Self {
+    fn new(tokens: Vec<Spanned<'a>>, raw: &'a str, lineno: u32) -> Self {
         Self {
             tokens,
             pos: 0,
@@ -413,14 +413,14 @@ impl<'a> TokenCursor<'a> {
         column_in_raw(self.raw, off)
     }
 
-    fn peek(&self) -> Option<&Token> {
+    fn peek(&self) -> Option<&Token<'a>> {
         self.tokens.get(self.pos).map(|s| &s.token)
     }
 
     /// Consume the current token, MOVING it out of the owned buffer (a cheap
     /// `Token::Dot` placeholder is left behind; the cursor never re-reads a
     /// consumed position — `peek` looks only at `pos`, which has advanced).
-    fn bump(&mut self) -> Option<Token> {
+    fn bump(&mut self) -> Option<Token<'a>> {
         let t = self
             .tokens
             .get_mut(self.pos)
@@ -460,13 +460,13 @@ impl<'a> TokenCursor<'a> {
                     unreachable!()
                 };
                 validate_iri(&value, self.lineno, col)?;
-                Ok(Node::Iri(value))
+                Ok(Node::Iri(value.into_owned()))
             }
             Some(Token::BlankNodeLabel(_)) => {
                 let Some(Token::BlankNodeLabel(label)) = self.bump() else {
                     unreachable!()
                 };
-                Ok(Node::Bnode(label))
+                Ok(Node::Bnode(label.to_owned()))
             }
             Some(Token::StringLit(_) | Token::LongStringLit(_)) => self.literal(),
             other => Err(err_at(
@@ -504,7 +504,7 @@ impl<'a> TokenCursor<'a> {
                 let Some(Token::LangTag(raw)) = self.bump() else {
                     unreachable!()
                 };
-                let (base, dir) = split_lang_direction(&raw, self.lineno, col)?;
+                let (base, dir) = split_lang_direction(raw, self.lineno, col)?;
                 validate_language_tag(&base, self.lineno, col)?;
                 lang = Some(base);
                 direction = dir;
@@ -516,26 +516,26 @@ impl<'a> TokenCursor<'a> {
                     return Err(err_at("datatype must be an IRI", self.lineno, col));
                 };
                 validate_iri(&iri, self.lineno, col)?;
-                if matches!(iri.as_str(), RDF_LANG_STRING | RDF_DIR_LANG_STRING) {
+                if matches!(iri.as_ref(), RDF_LANG_STRING | RDF_DIR_LANG_STRING) {
                     return Err(err_at(
                         "literal cannot explicitly use the RDF language-string datatype",
                         self.lineno,
                         col,
                     ));
                 }
-                datatype = Some(iri);
+                datatype = Some(iri.into_owned());
             }
             _ => {}
         }
         Ok(Node::Literal {
-            value,
+            value: value.into_owned(),
             lang,
             direction,
             datatype,
         })
     }
 
-    fn expect(&mut self, token: &Token) -> Result<(), RdfDiagnostic> {
+    fn expect(&mut self, token: &Token<'a>) -> Result<(), RdfDiagnostic> {
         if self.peek() == Some(token) {
             self.pos += 1;
             Ok(())
@@ -748,7 +748,7 @@ fn validate_statement(
 /// purrdf-gts Turtle/TriG parser produced before lowering through `from_nquads`'s
 /// `build_gts`, so the resulting [`SerGraph`] is byte-identical.
 struct DocParser<'a, 'c, S: SpanCollector> {
-    tokens: Vec<Spanned>,
+    tokens: Vec<Spanned<'a>>,
     pos: usize,
     prefixes: HashMap<String, String>,
     base_iri: Option<String>,
@@ -848,7 +848,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     fn try_directive(&mut self) -> Result<bool, RdfDiagnostic> {
         // `@prefix` / `@base` / `@version` lex as a `LangTag` (the `@` form).
         if let Some(Token::LangTag(tag)) = self.peek() {
-            match tag.as_str() {
+            match *tag {
                 "prefix" => {
                     self.pos += 1;
                     self.prefix_directive(true)?;
@@ -944,7 +944,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     fn expect_prefix_ns(&mut self) -> Result<(String, String), RdfDiagnostic> {
         let (line, col) = self.loc();
         match self.bump() {
-            Some(Token::PrefixedName(p, l)) if l.is_empty() => Ok((p, l)),
+            Some(Token::PrefixedName(p, l)) if l.is_empty() => Ok((p.to_owned(), l.into_owned())),
             other => Err(err_at(
                 format!("expected a prefix namespace, found {other:?}"),
                 line,
@@ -958,7 +958,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     fn expect_iri_raw(&mut self) -> Result<String, RdfDiagnostic> {
         let (l, c) = self.loc();
         match self.bump() {
-            Some(Token::Iri(s)) => Ok(s),
+            Some(Token::Iri(s)) => Ok(s.into_owned()),
             other => Err(err_at(format!("expected an IRIREF, found {other:?}"), l, c)),
         }
     }
@@ -985,13 +985,13 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 let Some(Token::PrefixedName(prefix, local)) = self.bump() else {
                     unreachable!()
                 };
-                self.resolve_prefixed(&prefix, &local, l, c)
+                self.resolve_prefixed(prefix, &local, l, c)
             }
             Some(Token::BlankNodeLabel(_)) => {
                 let Some(Token::BlankNodeLabel(label)) = self.bump() else {
                     unreachable!()
                 };
-                Ok(Node::Bnode(label))
+                Ok(Node::Bnode(label.to_owned()))
             }
             Some(Token::Anon) => {
                 self.pos += 1;
@@ -1020,12 +1020,12 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 };
                 self.numeric_literal(sign)
             }
-            Some(Token::Word(w)) if w == "true" || w == "false" => {
+            Some(Token::Word(w)) if *w == "true" || *w == "false" => {
                 let Some(Token::Word(value)) = self.bump() else {
                     unreachable!()
                 };
                 Ok(Node::Literal {
-                    value,
+                    value: value.to_owned(),
                     lang: None,
                     direction: None,
                     datatype: Some(XSD_BOOLEAN.to_owned()),
@@ -1072,7 +1072,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     }
 
     fn predicate(&mut self) -> Result<Node, RdfDiagnostic> {
-        if matches!(self.peek(), Some(Token::Word(w)) if w == "a") {
+        if matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
             self.pos += 1;
             return Ok(Node::Iri(RDF_TYPE.to_owned()));
         }
@@ -1189,7 +1189,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 // `--dir`) on the literal `lang` field and lowers it to an N-Quads
                 // `@lang` token, so the direction is re-parsed at the `from_nquads`
                 // stage. To match that exactly, split here into lang + direction.
-                let (base, dir) = split_lang_direction(&raw, l, c)?;
+                let (base, dir) = split_lang_direction(raw, l, c)?;
                 lang = Some(base);
                 direction = dir;
             }
@@ -1200,7 +1200,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             _ => {}
         }
         Ok(Node::Literal {
-            value,
+            value: value.into_owned(),
             lang,
             direction,
             datatype,
@@ -1212,7 +1212,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         match self.bump() {
             Some(Token::Iri(raw)) => Ok(self.resolve_iri(&raw)),
             Some(Token::PrefixedName(prefix, local)) => {
-                match self.resolve_prefixed(&prefix, &local, l, c)? {
+                match self.resolve_prefixed(prefix, &local, l, c)? {
                     Node::Iri(iri) => Ok(iri),
                     _ => unreachable!("resolve_prefixed yields an IRI node"),
                 }
@@ -1465,7 +1465,12 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         col: u32,
     ) -> Result<Node, RdfDiagnostic> {
         match self.prefixes.get(prefix) {
-            Some(base) => Ok(Node::Iri(format!("{base}{local}"))),
+            Some(base) => {
+                // Prefixed-name expansion can yield a relative IRI reference when the
+                // namespace is empty (e.g. `@prefix : <> . :knows` → `knows`). Resolve
+                // that against the document base, just like a bare IRIREF.
+                Ok(Node::Iri(self.resolve_iri(&format!("{base}{local}"))))
+            }
             None => Err(err_at(format!("unknown prefix {prefix:?}"), line, col)),
         }
     }
@@ -1487,11 +1492,11 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         (p.line, p.column)
     }
 
-    fn peek(&self) -> Option<&Token> {
+    fn peek(&self) -> Option<&Token<'a>> {
         self.tokens.get(self.pos).map(|s| &s.token)
     }
 
-    fn peek2(&self) -> Option<&Token> {
+    fn peek2(&self) -> Option<&Token<'a>> {
         self.tokens.get(self.pos + 1).map(|s| &s.token)
     }
 
@@ -1499,7 +1504,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// `Token::Dot` placeholder is left behind; nothing re-reads a consumed
     /// position — `peek`/`peek2` look only at `pos` and beyond, which advance
     /// monotonically).
-    fn bump(&mut self) -> Option<Token> {
+    fn bump(&mut self) -> Option<Token<'a>> {
         let t = self
             .tokens
             .get_mut(self.pos)
@@ -1510,11 +1515,11 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         t
     }
 
-    fn at(&self, token: &Token) -> bool {
+    fn at(&self, token: &Token<'a>) -> bool {
         self.peek() == Some(token)
     }
 
-    fn eat(&mut self, token: &Token) -> bool {
+    fn eat(&mut self, token: &Token<'a>) -> bool {
         if self.at(token) {
             self.pos += 1;
             true
@@ -1532,7 +1537,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         }
     }
 
-    fn expect(&mut self, token: &Token) -> Result<(), RdfDiagnostic> {
+    fn expect(&mut self, token: &Token<'a>) -> Result<(), RdfDiagnostic> {
         if self.eat(token) {
             Ok(())
         } else {
@@ -2452,6 +2457,24 @@ mod tests {
             nodes[2],
             Node::Iri("https://example.org/vocab/report/shacl/sarif".to_owned())
         );
+    }
+
+    /// A prefixed name whose namespace is empty (`@prefix : <> .`) expands to a
+    /// relative IRI reference that must be resolved against the document base, just like
+    /// a bare IRIREF. This ensures `@prefix : <> . :knows` and `PREFIX : <base> :knows`
+    /// name the same absolute IRI.
+    #[test]
+    fn turtle_empty_namespace_prefixed_name_resolves_against_base() {
+        let text = "@prefix : <> .\n\
+                    <#a> :knows <#b> .";
+        let statements = DocParser::new(text, Some("http://example.org/"), false)
+            .parse()
+            .expect("parses");
+        assert_eq!(statements.len(), 1);
+        let nodes = &statements[0];
+        assert_eq!(nodes[0], Node::Iri("http://example.org/#a".to_owned()));
+        assert_eq!(nodes[1], Node::Iri("http://example.org/knows".to_owned()));
+        assert_eq!(nodes[2], Node::Iri("http://example.org/#b".to_owned()));
     }
 
     /// Regression for the lexer trailing-dot bug: `_:y.` at end of statement must
