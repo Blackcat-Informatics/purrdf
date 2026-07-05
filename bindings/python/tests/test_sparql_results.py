@@ -178,7 +178,7 @@ def test_registry_serializer_slots_emit(compat: ModuleType) -> None:
     assert parsed.type == "SELECT"
 
 
-# ── registered-but-deferred plugin implementations ────────────────────────────────
+# ── registered plugin implementations ─────────────────────────────────────────────
 
 
 def test_csv_result_parser_variables_and_bindings(compat: ModuleType) -> None:
