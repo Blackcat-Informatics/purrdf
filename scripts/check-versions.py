@@ -31,6 +31,14 @@ lint closes both gaps as a hard, no-optionality gate:
    three-file byte check while publishing at the wrong version; this assertion
    catches that drift and names every offending crate.
 
+4. **Internal dependency-requirement pins.** Every intra-workspace dependency
+   requirement (each ``{ path, version }`` pin, resolved via ``cargo metadata``)
+   must be pinned exactly to the canonical version (semver floor-equality). A
+   partial bump that leaves ``purrdf 0.3.0`` requiring ``purrdf-core ^0.2.1``
+   passes the three-file byte check AND per-crate coherence AND a local build
+   (path deps win locally), then publishes a crate wired to the OLD registry
+   crate — an irreversible break this gate catches before the tag is cut.
+
 The gate is deterministic and offline: it reads in-tree files plus
 ``cargo metadata`` and never touches the network.
 """
@@ -70,7 +78,24 @@ def npm_version(root: Path) -> str:
     return data["version"]
 
 
-def publishable_crates(root: Path) -> dict[str, str]:
+def workspace_metadata(root: Path) -> dict:
+    """The ``cargo metadata --no-deps`` document for the workspace.
+
+    ``--no-deps`` omits the resolved transitive graph but STILL carries each
+    member's declared ``dependencies`` (with their ``req``/``path``/``rename``),
+    which the internal-pin gate needs. Deterministic and offline.
+    """
+    out = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version=1"],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=root,
+    ).stdout
+    return json.loads(out)
+
+
+def publishable_crates(meta: dict) -> dict[str, str]:
     """Map every publishable workspace member to its resolved version.
 
     In ``cargo metadata`` a member with no publish restriction has ``publish:
@@ -80,19 +105,46 @@ def publishable_crates(root: Path) -> dict[str, str]:
     caller can assert per-crate version coherence against the canonical
     workspace version.
     """
-    out = subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version=1"],
-        check=True,
-        capture_output=True,
-        text=True,
-        cwd=root,
-    ).stdout
-    meta = json.loads(out)
     publishable: dict[str, str] = {}
     for pkg in meta["packages"]:
         if pkg.get("publish") != []:
             publishable[pkg["name"]] = pkg["version"]
     return publishable
+
+
+def internal_pin_violations(meta: dict, version: str) -> list[str]:
+    """Every intra-workspace dependency whose version requirement is not pinned
+    exactly to ``version`` (semver **floor-equality**).
+
+    The trap: ``set-version.py`` (or a hand edit) bumps a crate's own version but
+    leaves an internal dependency requirement at the previous release
+    (``purrdf 0.3.0`` still requiring ``purrdf-core ^0.2.1``). ``make check`` and
+    local builds pass (path deps win locally), then the PUBLISHED crate wires to
+    the old registry crate — irreversible. This gate compares every intra-
+    workspace path dependency's ``req`` floor against the canonical version: a
+    caret/exact pin at ``version`` passes; a stale pin OR a loose ``>=``/``*``
+    that merely *satisfies* the version FAILS (low-optionality: pins are exact).
+
+    Scope: only path dependencies (intra-workspace) in the PUBLISHED graph
+    (normal + build deps; dev-dependencies are stripped from published crates and
+    legitimately carry no version). Renamed deps are handled via ``rename``.
+    """
+    members = {pkg["name"] for pkg in meta["packages"]}
+    violations: list[str] = []
+    for pkg in sorted(meta["packages"], key=lambda p: p["name"]):
+        for dep in pkg["dependencies"]:
+            if dep.get("path") is None or dep["name"] not in members:
+                continue
+            if dep.get("kind") not in (None, "build"):  # skip dev-dependencies
+                continue
+            floor = dep["req"].lstrip("^=~> ")
+            if floor != version:
+                alias = dep.get("rename") or dep["name"]
+                violations.append(
+                    f"    {pkg['name']} -> {alias} (package {dep['name']}): "
+                    f"req {dep['req']!r} (expected pin {version})"
+                )
+    return violations
 
 
 _CRATES_ARRAY_RE = re.compile(r"crates=\(\s*(.*?)\s*\)", re.DOTALL)
@@ -139,7 +191,8 @@ def main() -> int:
     version = next(iter(versions.values()))
 
     # 2. Publish-list completeness against the publishable set.
-    publishable_versions = publishable_crates(root)
+    meta = workspace_metadata(root)
+    publishable_versions = publishable_crates(meta)
     publishable = set(publishable_versions)
     lists = {
         ".github/workflows/release-cargo.yaml": root
@@ -179,6 +232,15 @@ def main() -> int:
         )
         for name, crate_version in mismatched:
             failures.append(f"    {name}: {crate_version} (expected {version})")
+
+    # 4. Internal dependency-requirement pins (the partial-bump publish trap).
+    pin_violations = internal_pin_violations(meta, version)
+    if pin_violations:
+        failures.append(
+            f"internal dependency requirement(s) not pinned to {version!r} "
+            "(a partial bump would publish a stale dependency graph):"
+        )
+        failures.extend(pin_violations)
 
     if failures:
         print("FAIL: release coherence check found problems:", file=sys.stderr)

@@ -75,6 +75,11 @@ jobs:
           cargo check --workspace --lib --tests --locked
           python3 scripts/check-no-features.py
           bash scripts/check-generated.sh
+          # Release-coherence gate at the point of no return: the tag-verify step
+          # above checks each crate's OWN version, but not its internal dependency
+          # requirements. This catches a partial bump (a stale ^x.y.z internal pin)
+          # before any crate is irreversibly published.
+          python3 scripts/check-versions.py
           cargo check --locked --target wasm32-unknown-unknown --lib \
             -p purrdf-events \
             -p purrdf-iri \
