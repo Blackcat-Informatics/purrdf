@@ -1092,6 +1092,31 @@ class Graph:
 
     # ── query ─────────────────────────────────────────────────────────────────────
 
+    def _build_prefix_block(
+        self, query_text: str, initNs: dict[str, object] | None
+    ) -> str:
+        """Return a deterministic ``PREFIX`` prologue block for ``query_text``.
+
+        Graph namespace-manager bindings are merged with ``initNs`` and prepended
+        to the query/update body. Prefixes already declared in the text (either
+        SPARQL ``PREFIX`` or Turtle ``@prefix`` form) are skipped so the prologue
+        stays duplicate-free. ``initNs`` takes precedence over graph bindings:
+        a prefix supplied in ``initNs`` overrides the graph's binding for that
+        prefix name, and graph bindings never shadow an in-text declaration.
+        """
+        seen = {m.group(1) for m in _PREFIX_DECL_RE.finditer(query_text)}
+        lines: list[str] = []
+        for prefix, ns in sorted(self._nsm.namespaces(), key=lambda x: x[0]):
+            if prefix and prefix not in seen:
+                seen.add(prefix)
+                lines.append(f"PREFIX {prefix}: <{ns}>")
+        if initNs:
+            for prefix, ns in sorted(initNs.items(), key=lambda x: x[0]):
+                if prefix and prefix not in seen:
+                    seen.add(prefix)
+                    lines.append(f"PREFIX {prefix}: <{ns}>")
+        return "\n".join(lines) + "\n" if lines else ""
+
     def query(
         self,
         query_object: str,
@@ -1121,14 +1146,11 @@ class Graph:
             raise TypeError(
                 f"Graph.query() got unsupported keyword argument(s): {sorted(kwargs)}"
             )
+        prefix_block = self._build_prefix_block(query_object, initNs)
+        if prefix_block:
+            query_object = prefix_block + query_object
         if base:
             query_object = f"BASE <{base}>\n" + query_object
-        if initNs:
-            prefixes = "".join(
-                f"PREFIX {prefix}: <{namespace}>\n"
-                for prefix, namespace in initNs.items()
-            )
-            query_object = prefixes + query_object
         substitutions = _native_substitutions(initBindings) if initBindings else None
         res = self._store.query(
             query_object,
@@ -1180,12 +1202,9 @@ class Graph:
             raise TypeError(
                 f"Graph.update() got unsupported keyword argument(s): {sorted(kwargs)}"
             )
-        if initNs:
-            prefixes = "".join(
-                f"PREFIX {prefix}: <{namespace}>\n"
-                for prefix, namespace in initNs.items()
-            )
-            update_object = prefixes + update_object
+        prefix_block = self._build_prefix_block(update_object, initNs)
+        if prefix_block:
+            update_object = prefix_block + update_object
         if initBindings:
             update_object = _inline_bound_variables(update_object, initBindings)
         self._store.update(

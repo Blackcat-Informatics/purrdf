@@ -13,8 +13,8 @@
 # gate — so this ledger only ever SHRINKS, never drifts. Mirrors the Rust
 # conformance harnesses' XPASS discipline (AGENTS.md §2).
 #
-# Current scoreboard (reconciled to the live suite): 82 passed / 4 xfailed
-# (0 xpassed, 0 failed, 0 errors; ledger 4/4 applied, 0 stale). This ledger
+# Current scoreboard (reconciled to the live suite): 84 passed / 2 xfailed
+# (0 xpassed, 0 failed, 0 errors; ledger 2/2 applied, 0 stale). This ledger
 # only shrinks: as gaps close, keys are pruned here and the pass count rises.
 # Grouped by theme in the comments below.
 
@@ -34,14 +34,12 @@
 # --- Theme: SPARQL Result public API — .bindings / SELECT * projection ---
 
 # --- Theme: SPARQL query prefix/namespace forwarding ---
-# The compat facade does not forward the graph's bound namespaces into the
-# native SPARQL parser as PREFIX declarations, so queries that rely on
-# graph-level prefix bindings (rather than in-query PREFIX) hard-error.
-"test_agg_distinct.py::test_count_optional_values" = "graph-bound prefix 'ex' is not forwarded to the native SPARQL parser, so the query fails with 'undeclared prefix ex' rather than being evaluated"
+# (resolved: Graph.query/update now prepend the graph's namespace-manager
+#  bindings as PREFIX declarations, merging with initNs and skipping prefixes
+#  already declared in the query text.)
 
 # --- Theme: SPARQL aggregate / filter evaluation semantics ---
 "test_agg_distinct.py::test_count_distinct" = "COUNT(DISTINCT ?x) grouped aggregation yields an empty Result under the native engine instead of the two expected grouped counts"
-"test_nested_filters.py::test_nested_filter_outer_binding_propagation" = "FILTER bindings from an outer group are not propagated into a nested group as rdflib does, so the computed solution set diverges from the expected set"
 
 # --- Theme: purrdf is stricter than rdflib (SPARQL conformance, not a purrdf gap) ---
 # The upstream rdflib test source concatenates two adjacent Python string
