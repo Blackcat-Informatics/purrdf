@@ -67,3 +67,22 @@ def test_del_first_matches_rdflib(compat: ModuleType, oracle: ModuleType) -> Non
 
     assert list(cc) == list(oc)
     assert len(cc) == len(oc) == 2
+
+
+def test_getitem_negative_index(compat: ModuleType) -> None:
+    """c[-1] and c[-2] return the expected tail items for lists of length >= 2."""
+    _, cc = _collection(compat, "a", "b", "c")
+
+    assert cc[-1] == compat.URIRef(f"{EX}c")
+    assert cc[-2] == compat.URIRef(f"{EX}b")
+
+
+def test_setitem_negative_index(compat: ModuleType) -> None:
+    """c[-1] = x replaces the last item for lists of length >= 2."""
+    _, cc = _collection(compat, "a", "b", "c")
+    new_c = compat.URIRef(f"{EX}new-c")
+
+    cc[-1] = new_c
+
+    assert list(cc) == _items(compat, "a", "b", "new-c")
+    assert cc[-1] == new_c

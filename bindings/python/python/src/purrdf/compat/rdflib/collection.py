@@ -123,7 +123,15 @@ class Collection:
         self.graph.set((prior, RDF.rest, nxt))
 
     def _get_container(self, index: int) -> Identifier | None:
-        """Return the list cell at ``index`` (the node holding its rdf:first)."""
+        """Return the list cell at ``index`` (the node holding its rdf:first).
+
+        Supports negative indices following Python sequence semantics; returns
+        ``None`` when the normalized index is out of bounds.
+        """
+        if index < 0:
+            index = len(self) + index
+        if index < 0:
+            return None
         container: Identifier | None = self.uri
         i = 0
         while i < index:
