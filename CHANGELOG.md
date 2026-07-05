@@ -4,10 +4,11 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
-## [Unreleased]
+## [0.3.0] - 2026-07-05
 
 ### Benchmarks
 
+- **sparql-eval:** Isolate Solution row construction and join
 - **rdf:** Add report-only span-tracking arm for the NoSpans zero-cost claim
 
 ### Bug Fixes
@@ -44,12 +45,23 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **shacl-af:** Merge sh:SPARQLFunction body state back into the caller
 - **shapes:** Repair broken merge — stray conflict markers and missed run_select rename
 - **shapes:** Repair non-compiling SHACL-SPARQL component merge
+- **shapes:** Make the validation-report sort total for byte determinism
+- **entail:** Reject non-range-restricted RIF rules instead of panicking
+- **entail:** Deterministic RDFS/OWL inferred-triple emission order
 - **rdf:** Report located diagnostics at the offending token, not the next one
 - **rdf:** Report Turtle/TriG located diagnostics at the offending token
 - **rdf,validate:** Emit real byteOffset for N-Triples/N-Quads source spans
 - **validate:** Wire SarifOptions::source_root_uri into the emitted SARIF
-- **entail:** Reject non-range-restricted RIF rules instead of panicking
-- **entail:** Deterministic RDFS/OWL inferred-triple emission order
+- **rdf:** Standardize blanks apart on native quad merge to stop cross-source collapse
+- **release:** Stamp the pending version in the generated changelog
+- **release:** Treat registry-restricted crates as publishable
+- **release:** Anchor the package.json version bump to the top-level key
+- **release:** Ignore commented-out crates in the publish-list parser
+- **release:** Guard release-tags against a missing CHANGELOG section before tagging
+- **release:** Assert per-crate version coherence in check-versions.py
+- **hygiene:** Purge issue refs from python shim docstring and lint docstrings
+- **rdf:** Pass the span collector in the empty-namespace turtle test
+- **rdf-core:** Reject rdf:_0 and leading-zero container membership ordinals
 
 ### CI & Build
 
@@ -57,6 +69,9 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **wasm-pkg:** Hard-fail the build if the artifact carries no SIMD opcodes
 - **wasm-pkg:** Append to RUSTFLAGS instead of overwriting it
 - **release:** Enforce cross-registry version coherence and complete the publish list
+- **release:** Pin the git-cliff version in the changelog target
+- **release:** Make set-version.py rewrite every version location
+- **release:** Gate internal dependency pins, at commit AND publish time
 
 ### Documentation
 
@@ -79,11 +94,14 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **sparql:** Finalize W3C SPARQL 1.1 syntax-suite provenance
 - **conformance:** Reconcile the ledger and drift-guard the published matrix
 - **conformance:** Distinguish normative SHACL-AF node expressions from owned extensions
-- **validate:** Fix stale intra-doc link to a non-existent locate module
 - **conformance:** Correct stale SHACL first-party corpus count (64 to 69)
 - **entail:** Fix misleading comment in the RIF emit path
+- **validate:** Fix stale intra-doc link to a non-existent locate module
 - **release:** Document MSRV and pre-1.0 semver policy
 - **release:** Docs.rs metadata, front-page example, and workspace doc gate
+- **ci:** Reconcile doc-target crate count to 16 (15 publishable + purrdf-entail)
+- **rdf,shapes:** Fix private/broken intra-doc links failing the doc gate
+- **conformance:** Regenerate matrix block for the added SPARQL fixtures
 
 ### Features
 
@@ -147,6 +165,15 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **shacl-sparql:** Pre-binding substitution semantics and shapes-graph variables
 - **shacl-af:** Sh:SPARQLFunction user-defined SPARQL functions
 - **shapes:** Complete SHACL-AF validation coverage
+- **core:** Expose shared FastHasher/FastMap/FastSet + smallvec primitives
+- **shapes:** Id-native SHACL engine over interned TermIds
+- **sparql-algebra:** Zero-copy lexer tokens borrowing the source
+- **entail:** Bare-RDF axiomatic predicate-typing entailment (rdf01)
+- **entail:** ALCOIQ OWL-Direct tableau reasoner core (concept, parser, tableau)
+- **entail:** Query-directed OWL-Direct DL materialization clears 25 conformance cases
+- **entail:** RIF-Core rule engine clears rif01/03/04/06 (zero entailment xfails)
+- **entail:** Native OWL-DL tableau + RIF-Core engine + bare-RDF axiomatic entailment
+- Close public-maturity epic
 - **iri:** Add shared source-position primitive (LineIndex/Position)
 - **diagnostics:** Resolve lexer byte offsets to line/column
 - **codec:** Attach line/column locations to RDF text parse errors
@@ -158,13 +185,16 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **validate:** To_sarif surface + Python binding + schema validation
 - **bindings:** SARIF surfaces for WASM and C-ABI
 - **validate:** SARIF rule metadata with W3C SHACL help links
-- **entail:** Bare-RDF axiomatic predicate-typing entailment (rdf01)
-- **entail:** ALCOIQ OWL-Direct tableau reasoner core (concept, parser, tableau)
-- **entail:** Query-directed OWL-Direct DL materialization clears 25 conformance cases
-- **entail:** RIF-Core rule engine clears rif01/03/04/06 (zero entailment xfails)
-- **entail:** Native OWL-DL tableau + RIF-Core engine + bare-RDF axiomatic entailment
-- Close public-maturity epic
 - **validate:** SARIF 2.1.0 source-traced reporting
+- **perf:** Id-native SHACL engine, zero-copy lexer tokens, workspace small-vec + hasher sweep
+- **rdf-core:** Graph-scoped rdf:first/rest/nil + container traversal on DatasetView
+- **slice:** Graph-scoped nav cursor, RDF-1.2 triple-term interiors, list/container materializer
+- **release:** Generate the changelog and GitHub Release notes with git-cliff
+- **release:** Single-command version bump and coherent tag cut
+- **hygiene:** Extend issue-ref lint to workflow yaml and python comments
+- **python:** Complete rdflib drop-in epic
+- **release:** Docs.rs polish, MSRV/semver docs, version-coherence gate + changelog
+- **rdf-query:** Graph-scoped nav cursor, list/container materializer, one-path blank-safe merge, FILTER/UNION regressions
 
 ### Other
 
@@ -246,9 +276,15 @@ Verification:
 - **entail:** Genuine semi-naive delta chase with new-vertex reflexive derivation
 - **sparql:** Reuse blank-label set across update-operation iterations
 - **shacl-af:** Hoist recursion guard, reuse intersection set, cache sort keys
-- **rdf:** Validate UTF-8 lazily in the text-format span-tracking arm
+- **sparql-eval,shapes:** Adopt small-vectors for hot per-row/per-node collections
 - **entail:** Reuse frontier buffers in the RDFS chase loop
 - **entail:** Reuse frontier buffers in the RIF chase loop
+- **shapes:** Pre-resolve rdf:type id once per Class constraint
+- **shapes:** Carry id-native value nodes through the constraint layer
+- **shapes:** Adopt fixed-key ahash for the remaining membership sets
+- **shapes:** Cache report sort key and borrow the sparql dataset
+- **rdf:** Validate UTF-8 lazily in the text-format span-tracking arm
+- **rdf-core:** Resolve container type once in is_typed_container
 
 ### Refactor
 
@@ -257,8 +293,11 @@ Verification:
 - **rdf:** Reuse purrdf_gts::wire::hex in the verify bridge
 - **shex:** Route datatype checks through parse_xsd10
 - **shapes:** Fold double/float lexical check into purrdf-xsd
-- **validate:** Hoist shared validate-to-SARIF helper into purrdf-validate
 - **entail:** Split reasoner into vocab/interner/rdfs modules + Regime::Rif scaffolding
+- **shapes:** Collapse the non-interned path walker to reflexive inclusion
+- **validate:** Hoist shared validate-to-SARIF helper into purrdf-validate
+- **rdf:** Centralize native-codec format dispatch behind an RdfCodec trait
+- **rdf:** Centralize native-codec format dispatch behind an RdfCodec trait
 
 ### Testing
 
@@ -279,11 +318,13 @@ Verification:
 - **shacl-af:** End-to-end goldens for sh:min/max/distinct/offset
 - **shapes:** First-party sh:SPARQLFunction conformance corpus cases
 - **shacl-af:** Negative-path coverage for sh:SPARQLFunction
+- **bench:** Add SHACL pattern-lookup and value-token lexer micro-benches
+- **entail:** Lock in deterministic inferred-triple emission order
 - **validate:** Cover attribution UnitId -> slice IRI resolution (S0.5)
 - **rdf:** Lock parallel line numbering for a newline-less final line
 - **validate:** Lock SHACL helpUri anchors against the live spec format
 - **validate:** Avoid a literal #N token in the S0.5 test
-- **entail:** Lock in deterministic inferred-triple emission order
+- **sparql:** Regression-cover FILTER-NOT-EXISTS arithmetic and all-FILTER UNION branch
 ## [0.2.1] - 2026-07-02
 
 ### Benchmarks
