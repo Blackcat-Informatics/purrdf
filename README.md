@@ -255,6 +255,22 @@ make bench      # criterion benchmarks
 Releases are tag-driven with OIDC trusted publishing (crates.io and PyPI), with
 build-provenance attestations and SPDX SBOMs — see [`docs/RELEASE.md`](./docs/RELEASE.md).
 
+## Versioning & MSRV
+
+**Pre-1.0 semver policy.** While the version is `0.x`, a **minor** bump
+(`0.x` → `0.(x+1)`) may include breaking API changes; a **patch** bump
+(`0.x.y` → `0.x.(y+1)`) is bugfix-only and API-compatible. All three published
+surfaces — the crates.io crate suite, the PyPI `purrdf` package, and the npm
+`@blackcatinformatics/purrdf` package — share **one** workspace version and are
+released in lockstep. That coherence is enforced in CI: a version-coherence check
+fails the build if the three version sources disagree.
+
+**MSRV policy.** The supported minimum Rust is `rust-version` in the root
+`Cargo.toml` (currently **1.96**), pinned to the **stable** toolchain (nightly-free)
+and enforced by a dedicated CI MSRV job. Raising the MSRV is a notable change
+recorded in the changelog and, pre-1.0, rides a minor bump. The README MSRV badge
+is maintained by hand and must be bumped together with `rust-version`.
+
 ## The GMEOW family
 
 PurRDF is the library layer of a small family of linked-data projects:
