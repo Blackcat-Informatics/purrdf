@@ -116,3 +116,15 @@ def test_del_positive_step_slice(compat: ModuleType) -> None:
 
     assert list(cc) == _items(compat, "a", "d")
     assert len(cc) == 2
+
+
+def test_empty_collection_wires_anchor_to_nil(compat: ModuleType) -> None:
+    """An empty Collection explicitly wires its anchor to rdf:nil."""
+    g = compat.Graph()
+    anchor = compat.URIRef(f"{EX}list")
+    c = _collection_module(compat).Collection(g, anchor, [])
+
+    assert list(c) == []
+    assert len(c) == 0
+    assert (anchor, compat.RDF.rest, compat.RDF.nil) in g
+    assert (anchor, compat.RDF.first, None) not in g

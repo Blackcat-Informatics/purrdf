@@ -181,6 +181,10 @@ class Collection:
     def _set(self, items: list[Identifier]) -> None:
         """Materialize ``items`` as ``rdf:first``/``rest`` triples from ``self.uri``."""
         self.clear()
+        if not items:
+            # Empty collections still anchor the list head to rdf:nil explicitly.
+            self.graph.add((self.uri, RDF.rest, RDF.nil))
+            return
         node: Identifier = self.uri
         for i, item in enumerate(items):
             self.graph.add((node, RDF.first, item))
@@ -190,4 +194,3 @@ class Collection:
                 nxt: Identifier = BNode()
                 self.graph.add((node, RDF.rest, nxt))
                 node = nxt
-        # An empty collection is rdf:nil; nothing to attach beyond the anchor.
