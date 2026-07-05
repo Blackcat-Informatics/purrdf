@@ -52,8 +52,16 @@ def set_toml_version(path: Path, section: str, version: str) -> None:
 def set_json_version(path: Path, version: str) -> None:
     """Replace the first top-level ``"version": "…"`` in a package.json."""
     text = path.read_text(encoding="utf-8")
+    # Anchor to a top-level key: exactly two spaces of indent at the start of a
+    # line. In standard 2-space-indented package.json the file's own top-level
+    # "version" sits at this depth, while any nested (dependency/metadata)
+    # "version" is indented deeper, so it can never be matched first.
     new_text, n = re.subn(
-        r'("version"\s*:\s*")[^"]*(")', rf"\g<1>{version}\g<2>", text, count=1
+        r'^(  "version"\s*:\s*")[^"]*(")',
+        rf"\g<1>{version}\g<2>",
+        text,
+        count=1,
+        flags=re.MULTILINE,
     )
     if n == 0:
         raise SystemExit(f'FAIL: no "version" key found in {path}')
