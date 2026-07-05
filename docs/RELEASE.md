@@ -70,6 +70,35 @@ It also verifies the published crate set with `cargo check --target
 wasm32-unknown-unknown --lib`; if the target is not installed and `rustup` is
 available, the script installs it before checking.
 
+## Changelog and release notes
+
+The changelog is generated deterministically from the conventional-commit
+history by [git-cliff](https://git-cliff.org/), configured in `cliff.toml`.
+Install the pinned version once:
+
+```sh
+cargo install git-cliff --version 2.13.1 --locked --no-default-features
+```
+
+Regenerate `CHANGELOG.md` as part of the release commit:
+
+```sh
+make changelog   # runs git-cliff, then re-checks that no #NNN tokens leaked
+```
+
+`cliff.toml` groups entries by conventional-commit type, treats the `rust-v*`
+tags as the release boundaries, and strips every `#NNN` issue/PR token so the
+committed changelog stays clean under the repository's issue-reference lint.
+The generation is offline and order-stable: running `make changelog` twice on
+the same history yields byte-identical output.
+
+The GitHub Release notes are **not** regenerated at tag time. The
+`release-cargo.yaml` workflow slices the section for the tagged version straight
+out of the committed `CHANGELOG.md` and attaches it to a GitHub Release named
+for the `rust-v*` tag — so the release notes and the committed changelog can
+never drift, and the workflow makes no repository commits. Always run
+`make changelog` and commit the result **before** pushing the release tag.
+
 ## Tag Release
 
 After the release commit is on `main` and all Trusted Publisher entries exist,

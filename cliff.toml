@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# git-cliff configuration for the PurRDF release changelog.
+#
+# Deterministic and offline: releases are grouped by the canonical `rust-v*`
+# tags, entries come purely from conventional-commit subjects (no GitHub API,
+# no author/PR links), and the preprocessors strip every `#NNN` issue/PR token
+# so the committed CHANGELOG.md stays clean under the repo's issue-reference
+# lint (scripts/check-issue-refs.py, which scans root *.md).
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to the PurRDF crate suite are recorded here. The suite
+ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
+bump may carry breaking changes and a patch bump is bugfix-only.
+
+"""
+body = """
+{% if version -%}
+## [{{ version | trim_start_matches(pat="rust-v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## [Unreleased]
+{% endif -%}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first | trim }}
+{%- endfor %}
+{% endfor %}
+"""
+footer = ""
+trim = true
+postprocessors = [
+  # Collapse any run of 3+ blank lines the templating can leave behind.
+  { pattern = '\n{3,}', replace = "\n\n" },
+]
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+
+# Strip issue/PR references before parsing so no `#NNN` reaches the changelog.
+commit_preprocessors = [
+  { pattern = '\((?:closes?|fixes?|resolves?)\s+#\d+\)', replace = "" },
+  { pattern = '\(#\d+\)', replace = "" },
+  { pattern = '#\d+', replace = "" },
+  { pattern = '\(\s*\)', replace = "" },
+  { pattern = ' {2,}', replace = " " },
+  { pattern = '\s+$', replace = "" },
+]
+
+commit_parsers = [
+  { message = "^Merge", skip = true },
+  { message = "^chore", skip = true },
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactor" },
+  { message = "^doc", group = "Documentation" },
+  { message = "^test", group = "Testing" },
+  { message = "^bench", group = "Benchmarks" },
+  { message = "^ci", group = "CI & Build" },
+  { message = "^build", group = "CI & Build" },
+  { message = ".*", group = "Other" },
+]
+
+protect_breaking_commits = false
+filter_commits = false
+# Only the canonical crates.io release tags mark releases; the parallel
+# `py-v*` / `npm-v*` tags carry the same version and are not release boundaries.
+tag_pattern = "rust-v[0-9]*"
+topo_order = false
+sort_commits = "oldest"

@@ -4,8 +4,12 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check check-issue-refs test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
+.PHONY: help metadata fmt check check-issue-refs changelog test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
 	capi-build capi-header capi-check capi-install
+
+# The changelog generator is pinned so the committed CHANGELOG.md and the notes
+# the release workflow slices out of it stay byte-reproducible across machines.
+GIT_CLIFF_VERSION := 2.13.1
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -32,6 +36,15 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	$(MAKE) wasm
 
 check-issue-refs: ## Reject #NNN issue-reference tokens in comments and docs.
+	python3 scripts/check-issue-refs.py
+
+changelog: ## Regenerate the deterministic CHANGELOG.md from conventional-commit history.
+	@command -v git-cliff >/dev/null 2>&1 || { \
+		echo "ERROR: git-cliff not found — install the pinned version:"; \
+		echo "  cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked --no-default-features"; \
+		exit 1; \
+	}
+	git-cliff --config cliff.toml --output CHANGELOG.md
 	python3 scripts/check-issue-refs.py
 
 test: ## Run the workspace test suite.
