@@ -168,3 +168,21 @@ strip = "none"
 # the proptest/conformance test loop stays fast; workspace members are excluded.
 [profile.dev.package."*"]
 opt-level = 2
+
+# The `"*"` glob above matches DEPENDENCIES ONLY — Cargo excludes workspace
+# member crates from it. Left at the dev default (opt-level = 0, no inlining),
+# the zero-copy SPARQL lexer and the id-native string interners pay full
+# un-inlined call overhead on every byte, making the compute-bound parse/proptest
+# test suite roughly 300x slower than release (~3 s vs ~10 ms for a ~4350-triple
+# parse) and blowing test timeouts. Raise just these parse-hot crates to
+# opt-level = 2 in dev/test. Overflow-checks and debug-assertions stay at their
+# dev defaults (ON) — these paths have no debug_assert!, so inlining is the
+# dominant lever and the safety checks still catch real bugs under test.
+[profile.dev.package.purrdf-sparql-algebra]
+opt-level = 2
+
+[profile.dev.package.purrdf-rdf]
+opt-level = 2
+
+[profile.dev.package.purrdf-core]
+opt-level = 2
