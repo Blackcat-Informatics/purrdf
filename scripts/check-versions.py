@@ -80,7 +80,7 @@ def publishable_crates(root: Path) -> set[str]:
     meta = json.loads(out)
     publishable: set[str] = set()
     for pkg in meta["packages"]:
-        if pkg.get("publish") is None:
+        if pkg.get("publish") != []:
             publishable.add(pkg["name"])
     return publishable
 
