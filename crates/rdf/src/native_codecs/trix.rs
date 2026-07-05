@@ -22,9 +22,40 @@ use std::sync::Arc;
 
 use roxmltree::{Document, Node};
 
+use super::codec::RdfCodec;
+use super::media_type::NativeRdfFormat;
 use super::parse::{fold_statement_layer, FoldNode, FoldRow, RDF_REIFIES};
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
+use super::text_parse::LineParseMode;
 use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
+
+/// The TriX codec: a standalone (non-line-family) [`RdfCodec`] over the "Triples in XML"
+/// quads syntax. A classic quad syntax with no RDF-1.2 triple-term surface, so it is
+/// star-INcapable, and its XML-DOM parser carries no span-recording tokenizer.
+pub(super) struct TriXCodec;
+
+impl RdfCodec for TriXCodec {
+    fn carries_star(&self) -> bool {
+        false
+    }
+
+    fn tokenizer_carries_spans(&self) -> bool {
+        false
+    }
+
+    fn parse(
+        &self,
+        text: &str,
+        _base_iri: Option<&str>,
+        _mode: LineParseMode,
+    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        super::parse::catch_codec_panic(NativeRdfFormat::TriX, || parse_trix_to_dataset(text))
+    }
+
+    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+        serialize_ser_graph_to_trix(graph)
+    }
+}
 
 /// The TriX namespace (W3C member submission `trix-1`).
 const TRIX_NS: &str = "http://www.w3.org/2004/03/trix/trix-1/";

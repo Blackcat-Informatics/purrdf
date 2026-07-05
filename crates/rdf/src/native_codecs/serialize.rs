@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use super::media_type::{classify, NativeRdfFormat};
-use super::ser_model::{self, SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
+use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
 use crate::ir::TermRef;
 use crate::{RdfDataset, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermId, TermValue};
 
@@ -70,19 +70,11 @@ fn serialize_dataset_inner(
 ) -> Result<Vec<u8>, RdfDiagnostic> {
     let format = classify(media_type)?;
     let graph = build_ser_graph(dataset, format, selection, include_statement_layer)?;
-    let text = match format {
-        NativeRdfFormat::Turtle => ser_model::to_turtle(&graph)?,
-        NativeRdfFormat::TriG => ser_model::to_trig(&graph),
-        NativeRdfFormat::NTriples => ser_model::to_ntriples(&graph)?,
-        NativeRdfFormat::NQuads => ser_model::to_nquads(&graph),
-        // RDF/XML serializes FIRST-PARTY from the same `SerGraph`, walking its base
-        // quads (the star layer is declared loss for the star-incapable target).
-        NativeRdfFormat::RdfXml => super::rdfxml::serialize_ser_graph_to_rdfxml(&graph)?,
-        // TriX / HexTuples serialize FIRST-PARTY from the same `SerGraph`, walking its
-        // quads (with named-graph slots) through their in-repo emitters.
-        NativeRdfFormat::TriX => super::trix::serialize_ser_graph_to_trix(&graph)?,
-        NativeRdfFormat::HexTuples => super::hextuples::serialize_ser_graph_to_hextuples(&graph)?,
-    };
+    // Dispatch to the format's codec (the single `codec_for` chokepoint): the line/Turtle
+    // family walks the shared `ser_model` writers, and RDF/XML, TriX and HexTuples walk
+    // the SAME `SerGraph` through their in-repo emitters (the star layer is declared loss
+    // for the star-incapable XML/NDJSON targets).
+    let text = super::codec::codec_for(format).serialize(&graph)?;
     Ok(text.into_bytes())
 }
 
@@ -111,26 +103,6 @@ pub struct SerializeOutcome {
     pub statement_rows_dropped: usize,
 }
 
-/// Whether a [`NativeRdfFormat`] carries the RDF-1.2 statement layer (quoted-triple
-/// reifiers + annotations) under the transcode loss contract.
-///
-/// Turtle, N-Triples, N-Quads and TriG are star-capable. RDF/XML is treated as
-/// star-INcapable here even though the native serializer *can* emit classic
-/// `rdf:Statement` reification: the loss ledger
-/// (`crates/rdf-core/src/loss.rs`) declares `*→rdfxml` as `rdf12-star-unrepresentable`
-/// because classic reification is a lossy projection, not faithful RDF-1.2 star.
-/// Keeping the predicate aligned with the ledger keeps the realized-loss accounting
-/// honest.
-fn is_star_capable(format: NativeRdfFormat) -> bool {
-    matches!(
-        format,
-        NativeRdfFormat::Turtle
-            | NativeRdfFormat::NTriples
-            | NativeRdfFormat::NQuads
-            | NativeRdfFormat::TriG
-    )
-}
-
 /// Serialize the frozen IR to a concrete [`NativeRdfFormat`], returning the bytes and
 /// the count of RDF-1.2 statement-layer rows dropped because the target format does
 /// not carry the star layer (the projection doctrine).
@@ -152,7 +124,7 @@ pub fn serialize_dataset_to_format(
     _base_iri: Option<&str>,
 ) -> Result<SerializeOutcome, RdfDiagnostic> {
     let media_type = format.media_type();
-    if is_star_capable(format) {
+    if super::codec::codec_for(format).carries_star() {
         let bytes = serialize_dataset(dataset, media_type, SerializeGraph::Dataset)?;
         Ok(SerializeOutcome {
             bytes,
