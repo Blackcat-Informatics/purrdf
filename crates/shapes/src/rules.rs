@@ -228,7 +228,7 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
 
     loop {
         let mut round_new: Vec<[Term; 3]> = Vec::new();
-        let mut fresh_offender: Option<(String, String)> = None;
+        let mut fresh_offender: Option<(String, Term)> = None;
 
         for prep in &prepared {
             for triple in (prep.producer)(&current)? {
@@ -237,7 +237,7 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
                 }
                 if fresh_offender.is_none() {
                     if let Some(term) = fresh_term(&triple, &base_universe) {
-                        fresh_offender = Some((prep.rule_id.clone(), term));
+                        fresh_offender = Some((prep.rule_id.clone(), term.clone()));
                     }
                 }
                 facts.insert(triple.clone());
@@ -519,27 +519,26 @@ fn base_triples(base: &RdfDataset) -> FastSet<[Term; 3]> {
     set
 }
 
-/// The set of every term string appearing in `base` (all graphs) or in the shapes
-/// graph `shapes_ds` — the value-preserving universe used for divergence detection.
-fn build_term_universe(base: &RdfDataset, shapes_ds: &RdfDataset) -> FastSet<String> {
-    let mut universe: FastSet<String> = FastSet::default();
+/// The set of every term appearing in `base` (all graphs) or in the shapes graph
+/// `shapes_ds` — the value-preserving universe used for divergence detection.
+/// Terms are stored directly (`Term: Eq + Hash`), avoiding a per-term `String`.
+fn build_term_universe(base: &RdfDataset, shapes_ds: &RdfDataset) -> FastSet<Term> {
+    let mut universe: FastSet<Term> = FastSet::default();
     for ds in [base, shapes_ds] {
         for quad in quads_for_pattern_ids(ds, None, None, None, GraphFilter::AnyGraph) {
             for id in [quad.s, quad.p, quad.o] {
-                universe.insert(term_id_to_native(ds, id).to_string());
+                universe.insert(term_id_to_native(ds, id));
             }
         }
     }
     universe
 }
 
-/// The first term of `triple` whose string is absent from the value-preserving
-/// `universe` — a freshly minted term, if any.
-fn fresh_term(triple: &[Term; 3], universe: &FastSet<String>) -> Option<String> {
-    triple.iter().find_map(|term| {
-        let key = term.to_string();
-        (!universe.contains(&key)).then_some(key)
-    })
+/// The first term of `triple` absent from the value-preserving `universe` — a
+/// freshly minted term, if any. Membership is tested on the `Term` directly; the
+/// offending term is only stringified by the caller on the actual divergence path.
+fn fresh_term<'a>(triple: &'a [Term; 3], universe: &FastSet<Term>) -> Option<&'a Term> {
+    triple.iter().find(|term| !universe.contains(*term))
 }
 
 /// The deterministic total-order sort key for an inferred triple.
