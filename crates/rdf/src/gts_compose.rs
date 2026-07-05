@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use ciborium::value::Value;
 use purrdf_gts::model::{Term, TermKind};
 use purrdf_gts::wire::{blake3_256, canonical, hex};
-use purrdf_gts::writer::{term_to_wire, Writer};
+use purrdf_gts::writer::{Writer, term_to_wire};
 
 /// The `rdf:reifies` predicate IRI (RDF 1.2 statement layer).
 pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
@@ -494,7 +494,7 @@ pub fn emit_gts(
                 "signing requires signer_secret, signer_kid, and public_key_armor together \
                  (all three or none)"
                     .to_string(),
-            )
+            );
         }
     };
 
@@ -850,10 +850,10 @@ mod tests {
             .iter()
             .filter_map(|(_, meta)| match meta {
                 Value::Map(items) => items.iter().find_map(|(key, value)| {
-                    if matches!(key, Value::Text(k) if k == "rep") {
-                        if let Value::Text(rep) = value {
-                            return Some(rep.clone());
-                        }
+                    if matches!(key, Value::Text(k) if k == "rep")
+                        && let Value::Text(rep) = value
+                    {
+                        return Some(rep.clone());
                     }
                     None
                 }),

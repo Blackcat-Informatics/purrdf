@@ -3,12 +3,12 @@
 
 //! The column-addressed SELECT row cursor returned by `purrdf_query`.
 
-use std::ffi::{c_char, CString};
+use std::ffi::{CString, c_char};
 
 use purrdf_core::TermValue;
 
 use crate::status::PurrdfStatus;
-use crate::term::{render_value, PurrdfTermView};
+use crate::term::{PurrdfTermView, render_value};
 
 /// A SPARQL SELECT result cursor. Owns its variable names and solution rows
 /// (dataset-independent `TermValue`s).
@@ -59,7 +59,7 @@ impl PurrdfRowCursor {
 ///
 /// # Safety
 /// `rc` must be a live row cursor; `out` must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_rowcursor_variable_count(
     rc: *const PurrdfRowCursor,
     out: *mut usize,
@@ -81,7 +81,7 @@ pub unsafe extern "C" fn purrdf_rowcursor_variable_count(
 ///
 /// # Safety
 /// `rc` must be a live row cursor; `out` must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_rowcursor_variable_name(
     rc: *const PurrdfRowCursor,
     i: usize,
@@ -109,7 +109,7 @@ pub unsafe extern "C" fn purrdf_rowcursor_variable_name(
 ///
 /// # Safety
 /// `rc` must be a live row cursor.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_rowcursor_next(rc: *mut PurrdfRowCursor) -> i32 {
     unsafe {
         ffi_guard!(PurrdfStatus::Panic as i32, {
@@ -135,7 +135,7 @@ pub unsafe extern "C" fn purrdf_rowcursor_next(rc: *mut PurrdfRowCursor) -> i32 
 ///
 /// # Safety
 /// `rc` must be a live row cursor; the out-params must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_rowcursor_term(
     rc: *const PurrdfRowCursor,
     column: usize,
@@ -174,7 +174,7 @@ pub unsafe extern "C" fn purrdf_rowcursor_term(
 ///
 /// # Safety
 /// `rc` must be null or a live row cursor not already freed.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_rowcursor_free(rc: *mut PurrdfRowCursor) {
     unsafe {
         ffi_guard!((), {

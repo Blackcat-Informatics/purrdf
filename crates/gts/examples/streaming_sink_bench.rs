@@ -10,7 +10,7 @@ use purrdf_gts::model::{
     AnnotationRow, Diagnostic, OpaqueNode, Quad, ReifierRow, Signature, StreamableInfo,
     Suppression, Term,
 };
-use purrdf_gts::reader::{read_to_sink_from_reader, ReadOptions, StreamingSink};
+use purrdf_gts::reader::{ReadOptions, StreamingSink, read_to_sink_from_reader};
 
 #[derive(Default)]
 struct CountingSink {

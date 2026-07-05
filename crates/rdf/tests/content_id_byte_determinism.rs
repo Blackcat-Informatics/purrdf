@@ -18,7 +18,7 @@
 //! actually recognized its `blake3:<64hex>` terms.
 
 use purrdf_core::ContentIdScheme;
-use purrdf_rdf::{canonical_flat_nquads, RdfDatasetBuilder, RdfLiteral, TermId};
+use purrdf_rdf::{RdfDatasetBuilder, RdfLiteral, TermId, canonical_flat_nquads};
 
 /// The caller-supplied derivation-predicate IRI (no fabricated vocabulary: this is
 /// configuration, spelled under `example.org` per the test-fixture rule).

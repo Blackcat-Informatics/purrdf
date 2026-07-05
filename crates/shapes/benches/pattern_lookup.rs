@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use purrdf::{RdfDataset, RdfDatasetBuilder};
 use purrdf_shapes::path::eval;
 use purrdf_shapes::shapes::Path;

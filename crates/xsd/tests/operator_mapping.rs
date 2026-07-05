@@ -8,7 +8,7 @@
 //! maps the incomparable `None` to a type error). Covers the numeric promotion tower
 //! (`integer ⊂ decimal ⊂ float ⊂ double`), string, boolean, and the temporal families.
 
-use purrdf_xsd::{parse, value_cmp, value_eq, XsdDatatype as D};
+use purrdf_xsd::{XsdDatatype as D, parse, value_cmp, value_eq};
 use std::cmp::Ordering;
 
 const EQ: Option<Ordering> = Some(Ordering::Equal);

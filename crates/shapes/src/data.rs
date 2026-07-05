@@ -22,7 +22,7 @@ use std::sync::Arc;
 use ::purrdf::{DatasetView, GraphMatch, QuadIds};
 use ::purrdf::{RdfDataset, TermId};
 
-use crate::term::{term_id_to_native, NamedNode, Term};
+use crate::term::{NamedNode, Term, term_id_to_native};
 
 /// Resolve a pattern term to its interned id, trying each candidate lookup key
 /// ([`Term::lookup_term_values`]) until one resolves. Returns `None` if the term is

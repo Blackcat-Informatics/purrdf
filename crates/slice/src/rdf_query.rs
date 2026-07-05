@@ -24,8 +24,8 @@
 use std::path::Path;
 
 use purrdf::{
-    parse_dataset, DatasetView, GraphMatch, NativeRdfFormat, RdfDataset, RdfDatasetBuilder,
-    RdfQuad, RdfTerm, RdfTextDirection, TermId, TermRef, TermValue,
+    DatasetView, GraphMatch, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm,
+    RdfTextDirection, TermId, TermRef, TermValue, parse_dataset,
 };
 
 use crate::error::SliceError;
@@ -905,13 +905,15 @@ mod tests {
 
         // The default graph does NOT see the named-graph annotation.
         let default = ds.graph(GraphSel::Default);
-        assert!(default
-            .objects(
-                "https://example.org/ax",
-                "http://www.w3.org/2002/07/owl#annotatedSource",
-            )
-            .unwrap()
-            .is_empty());
+        assert!(
+            default
+                .objects(
+                    "https://example.org/ax",
+                    "http://www.w3.org/2002/07/owl#annotatedSource",
+                )
+                .unwrap()
+                .is_empty()
+        );
         // …but it does see the default-graph triple.
         assert_eq!(
             default
@@ -959,10 +961,12 @@ mod tests {
         let ds =
             Dataset::parse(trig.as_bytes(), NativeRdfFormat::TriG.media_type(), "test").unwrap();
         let missing = ds.graph(GraphSel::Named("https://example.org/does-not-exist"));
-        assert!(missing
-            .objects("https://example.org/s", "https://example.org/p")
-            .unwrap()
-            .is_empty());
+        assert!(
+            missing
+                .objects("https://example.org/s", "https://example.org/p")
+                .unwrap()
+                .is_empty()
+        );
         let mut hit = false;
         missing.for_each_quad(|_, _, _, _| hit = true);
         assert!(!hit, "an unresolved named graph enumerates nothing");
@@ -1339,10 +1343,12 @@ mod tests {
 
         // The default graph sees neither the head edge nor the list itself.
         let default = ds.graph(GraphSel::Default);
-        assert!(default
-            .first_object("https://example.org/s", "https://example.org/list")
-            .unwrap()
-            .is_none());
+        assert!(
+            default
+                .first_object("https://example.org/s", "https://example.org/list")
+                .unwrap()
+                .is_none()
+        );
         assert!(
             default.rdf_list(&head).unwrap().is_empty(),
             "the named-graph list is invisible from the default graph"

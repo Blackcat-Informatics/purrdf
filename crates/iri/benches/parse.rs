@@ -9,7 +9,7 @@
 //! corpus — an http URL with path/query/fragment, an IPv6 IP-literal authority, a
 //! long percent-encoded path, a non-ASCII `ucschar` IRI, and a scheme-heavy set.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_iri::parse;
 
 /// The representative corpus. Each entry is parsed+validated per iteration; the mix

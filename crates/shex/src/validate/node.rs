@@ -5,7 +5,7 @@
 //! with lexical-validity checking, string/numeric XML-Schema facets, and
 //! value sets with stems, ranges and exclusions.
 
-use purrdf_xsd::{value_cmp, XsdDatatype, XsdValue};
+use purrdf_xsd::{XsdDatatype, XsdValue, value_cmp};
 
 use super::pattern::compile_pattern;
 use crate::ast::{
@@ -140,14 +140,14 @@ fn check_datatype(datatype: &str, facts: &NodeFacts<'_>) -> Result<(), String> {
     if actual != datatype {
         return Err(format!("expected datatype <{datatype}>, got <{actual}>"));
     }
-    if let Some(xsd) = XsdDatatype::from_iri(datatype) {
-        if is_checked_datatype(xsd) {
-            // shexTest v2.1.0 pins the XSD 1.0 float/double lexical space
-            // (INF/-INF, not the XSD 1.1 "+INF" spelling), so validate with the
-            // XSD-1.0-restricted parser rather than the 1.1 kernel default.
-            purrdf_xsd::parse_xsd10(facts.lexical, xsd)
-                .map_err(|e| format!("ill-formed <{datatype}> literal {:?}: {e}", facts.lexical))?;
-        }
+    if let Some(xsd) = XsdDatatype::from_iri(datatype)
+        && is_checked_datatype(xsd)
+    {
+        // shexTest v2.1.0 pins the XSD 1.0 float/double lexical space
+        // (INF/-INF, not the XSD 1.1 "+INF" spelling), so validate with the
+        // XSD-1.0-restricted parser rather than the 1.1 kernel default.
+        purrdf_xsd::parse_xsd10(facts.lexical, xsd)
+            .map_err(|e| format!("ill-formed <{datatype}> literal {:?}: {e}", facts.lexical))?;
     }
     Ok(())
 }
@@ -167,29 +167,29 @@ fn check_string_facets(nc: &NodeConstraint, facts: &NodeFacts<'_>) -> Result<(),
     }
     // Facets count Unicode scalar values, not bytes (spec §5.4.5).
     let len = facts.lexical.chars().count() as u64;
-    if let Some(length) = nc.length {
-        if len != length {
-            return Err(format!(
-                "LENGTH {length} violated: {} has length {len}",
-                facts.describe()
-            ));
-        }
+    if let Some(length) = nc.length
+        && len != length
+    {
+        return Err(format!(
+            "LENGTH {length} violated: {} has length {len}",
+            facts.describe()
+        ));
     }
-    if let Some(minlength) = nc.minlength {
-        if len < minlength {
-            return Err(format!(
-                "MINLENGTH {minlength} violated: {} has length {len}",
-                facts.describe()
-            ));
-        }
+    if let Some(minlength) = nc.minlength
+        && len < minlength
+    {
+        return Err(format!(
+            "MINLENGTH {minlength} violated: {} has length {len}",
+            facts.describe()
+        ));
     }
-    if let Some(maxlength) = nc.maxlength {
-        if len > maxlength {
-            return Err(format!(
-                "MAXLENGTH {maxlength} violated: {} has length {len}",
-                facts.describe()
-            ));
-        }
+    if let Some(maxlength) = nc.maxlength
+        && len > maxlength
+    {
+        return Err(format!(
+            "MAXLENGTH {maxlength} violated: {} has length {len}",
+            facts.describe()
+        ));
     }
     if let Some(pattern) = &nc.pattern {
         let re = compile_pattern(pattern, nc.flags.as_deref())?;
@@ -304,21 +304,21 @@ fn check_numeric_facets(nc: &NodeConstraint, facts: &NodeFacts<'_>) -> Result<()
                 facts.describe()
             )
         })?;
-        if let Some(limit) = nc.totaldigits {
-            if total > limit {
-                return Err(format!(
-                    "TOTALDIGITS {limit} violated: {} has {total} digits",
-                    facts.describe()
-                ));
-            }
+        if let Some(limit) = nc.totaldigits
+            && total > limit
+        {
+            return Err(format!(
+                "TOTALDIGITS {limit} violated: {} has {total} digits",
+                facts.describe()
+            ));
         }
-        if let Some(limit) = nc.fractiondigits {
-            if fraction > limit {
-                return Err(format!(
-                    "FRACTIONDIGITS {limit} violated: {} has {fraction} fraction digits",
-                    facts.describe()
-                ));
-            }
+        if let Some(limit) = nc.fractiondigits
+            && fraction > limit
+        {
+            return Err(format!(
+                "FRACTIONDIGITS {limit} violated: {} has {fraction} fraction digits",
+                facts.describe()
+            ));
         }
     }
     Ok(())

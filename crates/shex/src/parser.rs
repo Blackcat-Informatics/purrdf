@@ -31,7 +31,7 @@ use crate::ast::{
 };
 use crate::ast::{IriExclusion, LanguageExclusion, LiteralExclusion, StemValue};
 use crate::error::{Result, ShexError};
-use crate::lexer::{tokenize, CodeName, Spanned, Token};
+use crate::lexer::{CodeName, Spanned, Token, tokenize};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
@@ -643,10 +643,10 @@ impl Parser {
         if !has_numeric_facet {
             return Ok(());
         }
-        if let Some(dt) = &nc.datatype {
-            if !is_numeric_datatype(dt) {
-                return Err(self.err(format!("numeric facet on non-numeric datatype <{dt}>")));
-            }
+        if let Some(dt) = &nc.datatype
+            && !is_numeric_datatype(dt)
+        {
+            return Err(self.err(format!("numeric facet on non-numeric datatype <{dt}>")));
         }
         Ok(())
     }

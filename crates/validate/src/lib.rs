@@ -39,9 +39,9 @@ pub mod rules;
 pub mod shacl;
 
 pub use build::{
-    build_diagnostics_sarif, build_report_sarif, build_report_sarif_with,
-    diagnostics_to_sarif_string, report_to_sarif_string, SarifOptions, SarifReport, SarifSources,
+    SarifOptions, SarifReport, SarifSources, build_diagnostics_sarif, build_report_sarif,
+    build_report_sarif_with, diagnostics_to_sarif_string, report_to_sarif_string,
 };
 pub use entail::entail_to_ntriples_string;
-pub use model::{to_json_pretty, Level, SarifLog, SARIF_SCHEMA, SARIF_VERSION};
+pub use model::{Level, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
 pub use shacl::validate_to_sarif_string;

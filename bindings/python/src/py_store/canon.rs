@@ -13,9 +13,9 @@ use std::collections::HashMap;
 
 use pyo3::prelude::*;
 
-use purrdf_core::{canonicalize as core_canonicalize, Canonicalized, TermRef};
+use purrdf_core::{Canonicalized, TermRef, canonicalize as core_canonicalize};
 
-use crate::{flat_dataset_from_quads, RdfDataset, RdfQuad, RdfTerm, RdfTriple};
+use crate::{RdfDataset, RdfQuad, RdfTerm, RdfTriple, flat_dataset_from_quads};
 
 /// The graph canonicalization algorithms. Mirrors the oxigraph Python
 /// `CanonicalizationAlgorithm` so the Python surface is unchanged.

@@ -7,10 +7,10 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use crate::files::{digest_blob_range, pack_entries_v2_with_blob_ranges, FileBlobRange};
-use crate::files::{pack_entries_v2_with_blob_bytes, FileBlobBytes, FileEntry, FileEntryKind};
+use crate::files::{FileBlobBytes, FileEntry, FileEntryKind, pack_entries_v2_with_blob_bytes};
+use crate::files::{FileBlobRange, digest_blob_range, pack_entries_v2_with_blob_ranges};
 use crate::tar::{
-    index_uncompressed_tar, read_uncompressed_tar, RawTarEntry, SeekTarEntry, TarError,
+    RawTarEntry, SeekTarEntry, TarError, index_uncompressed_tar, read_uncompressed_tar,
 };
 use crate::writer::digest_string;
 

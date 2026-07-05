@@ -22,13 +22,13 @@ use purrdf_core::{
 };
 use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
 
+use crate::DetHashMap;
 use crate::dataset_spec::ActiveDataset;
 use crate::eval::{
-    evaluate_query, BgpOrderCache, EvalCtx, EvalOptions, LossVocabulary, Outcome,
-    StandpointPredicates,
+    BgpOrderCache, EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates,
+    evaluate_query,
 };
-use crate::update::{eval_update, GraphResolver};
-use crate::DetHashMap;
+use crate::update::{GraphResolver, eval_update};
 
 /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
 #[derive(Debug)]
@@ -1091,9 +1091,10 @@ mod tests {
             "INSERT DATA { <http://ex/a> <http://ex/p> <http://ex/b> }",
         );
         assert_eq!(ds.quad_count(), 1);
-        assert!(ds
-            .term_id_by_value(&TermValue::Iri("http://ex/a".to_owned()))
-            .is_some());
+        assert!(
+            ds.term_id_by_value(&TermValue::Iri("http://ex/a".to_owned()))
+                .is_some()
+        );
     }
 
     #[test]
@@ -1107,9 +1108,10 @@ mod tests {
         );
         // The :knows quad is gone; the :name quad survives.
         assert_eq!(ds.quad_count(), 1);
-        assert!(ds
-            .term_id_by_value(&TermValue::Iri("http://ex/knows".to_owned()))
-            .is_none());
+        assert!(
+            ds.term_id_by_value(&TermValue::Iri("http://ex/knows".to_owned()))
+                .is_none()
+        );
     }
 
     #[test]
@@ -1123,12 +1125,14 @@ mod tests {
              WHERE { ?s <http://ex/knows> ?o }",
         );
         // :knows replaced by :met; :name untouched.
-        assert!(ds
-            .term_id_by_value(&TermValue::Iri("http://ex/knows".to_owned()))
-            .is_none());
-        assert!(ds
-            .term_id_by_value(&TermValue::Iri("http://ex/met".to_owned()))
-            .is_some());
+        assert!(
+            ds.term_id_by_value(&TermValue::Iri("http://ex/knows".to_owned()))
+                .is_none()
+        );
+        assert!(
+            ds.term_id_by_value(&TermValue::Iri("http://ex/met".to_owned()))
+                .is_some()
+        );
         assert_eq!(ds.quad_count(), 2);
     }
 
@@ -1147,9 +1151,10 @@ mod tests {
         let mut ds = empty();
         update(&engine, &mut ds, "LOAD <http://ex/doc>");
         assert_eq!(ds.quad_count(), 1);
-        assert!(ds
-            .term_id_by_value(&TermValue::Iri("http://ex/loaded".to_owned()))
-            .is_some());
+        assert!(
+            ds.term_id_by_value(&TermValue::Iri("http://ex/loaded".to_owned()))
+                .is_some()
+        );
     }
 
     #[test]

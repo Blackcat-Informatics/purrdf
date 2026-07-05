@@ -24,7 +24,7 @@ use roxmltree::{Document, Node};
 
 use super::codec::RdfCodec;
 use super::media_type::NativeRdfFormat;
-use super::parse::{fold_statement_layer, FoldNode, FoldRow, RDF_REIFIES};
+use super::parse::{FoldNode, FoldRow, RDF_REIFIES, fold_statement_layer};
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::text_parse::LineParseMode;
 use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
@@ -467,7 +467,7 @@ fn escape_attr(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use crate::native_codecs::{parse_dataset, serialize_dataset};
-    use crate::{datasets_isomorphic, SerializeGraph};
+    use crate::{SerializeGraph, datasets_isomorphic};
 
     fn round_trip_isomorphic(nq: &str) {
         let ds = parse_dataset(nq.as_bytes(), "application/n-quads", None).expect("parse nq");

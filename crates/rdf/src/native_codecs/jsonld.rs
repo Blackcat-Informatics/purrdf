@@ -19,9 +19,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use super::NativeRdfFormat;
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::serialize::build_ser_graph;
-use super::NativeRdfFormat;
 use crate::{
     RdfDataset, RdfDiagnostic, RdfLiteral, RdfQuad, RdfTerm, RdfTextDirection, RdfTriple,
     SerializeGraph,
@@ -681,10 +681,10 @@ pub fn parse_jsonld(json_bytes: &[u8]) -> Result<Arc<RdfDataset>, RdfDiagnostic>
         if curie_or_iri.starts_with("http://") || curie_or_iri.starts_with("https://") {
             return curie_or_iri.to_string();
         }
-        if let Some((p, local)) = curie_or_iri.split_once(':') {
-            if let Some(ns) = prefixes.get(p) {
-                return format!("{ns}{local}");
-            }
+        if let Some((p, local)) = curie_or_iri.split_once(':')
+            && let Some(ns) = prefixes.get(p)
+        {
+            return format!("{ns}{local}");
         }
         if !vocab.is_empty() && !curie_or_iri.contains(':') {
             return format!("{vocab}{curie_or_iri}");
@@ -1000,17 +1000,17 @@ pub fn jsonld_to_statement_metadata_nquads(
     let mut reifier_quotes: std::collections::HashMap<RdfTerm, (RdfTerm, String, RdfTerm)> =
         std::collections::HashMap::new();
     for quad in &quads {
-        if quad.predicate == RDF_REIFIES {
-            if let RdfTerm::Triple(triple) = &quad.object {
-                reifier_quotes.insert(
-                    quad.subject.clone(),
-                    (
-                        triple.subject.clone(),
-                        triple.predicate.clone(),
-                        triple.object.clone(),
-                    ),
-                );
-            }
+        if quad.predicate == RDF_REIFIES
+            && let RdfTerm::Triple(triple) = &quad.object
+        {
+            reifier_quotes.insert(
+                quad.subject.clone(),
+                (
+                    triple.subject.clone(),
+                    triple.predicate.clone(),
+                    triple.object.clone(),
+                ),
+            );
         }
     }
 

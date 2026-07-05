@@ -4,9 +4,9 @@
 //! Acceptance tests for SliceCatalog: path-independence, lossless round-trip,
 //! and recoverability.
 
+use purrdf_slice::SliceVocab;
 use purrdf_slice::artifact::ArtifactRole;
 use purrdf_slice::catalog::SliceCatalog;
-use purrdf_slice::SliceVocab;
 
 /// Pure fixtures use a caller-supplied example.org vocabulary.
 fn test_vocab() -> SliceVocab {

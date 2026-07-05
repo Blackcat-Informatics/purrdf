@@ -13,7 +13,7 @@
 //! rows, path frontiers, …) belong to the downstream crate that owns the
 //! concept, not to this shared kernel module.
 
-pub use smallvec::{smallvec, SmallVec};
+pub use smallvec::{SmallVec, smallvec};
 
 /// A small-vector of interned [`TermId`](crate::TermId)s, inline up to 4 ids.
 ///

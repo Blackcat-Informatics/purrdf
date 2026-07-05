@@ -407,7 +407,7 @@ fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
             None => {
                 return Err(IriError::BadAuthority(
                     "unterminated IP-literal '['".to_owned(),
-                ))
+                ));
             }
         }
     } else {

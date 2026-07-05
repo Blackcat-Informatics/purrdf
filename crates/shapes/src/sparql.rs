@@ -22,7 +22,7 @@ use purrdf_sparql_eval::{NativeSparqlEngine, UserFunctionRegistry};
 
 use crate::model::xsd;
 use crate::report::{Severity, ValidationResult};
-use crate::term::{term_value_to_native, Literal, NamedNode, Term};
+use crate::term::{Literal, NamedNode, Term, term_value_to_native};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -852,9 +852,11 @@ mod tests {
     #[test]
     fn eval_order_empty_is_empty() {
         let dataset = dataset_from_ntriples(&[]);
-        assert!(eval_order(&dataset, &[], false)
-            .expect("empty order")
-            .is_empty());
+        assert!(
+            eval_order(&dataset, &[], false)
+                .expect("empty order")
+                .is_empty()
+        );
     }
 
     #[test]

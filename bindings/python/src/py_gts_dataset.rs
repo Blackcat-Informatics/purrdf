@@ -21,7 +21,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
 use crate::py_store::PyRdfFormat;
-use crate::{dataset_from_bytes, gts_write, NativeRdfFormat, RdfDataset, RdfLookaside};
+use crate::{NativeRdfFormat, RdfDataset, RdfLookaside, dataset_from_bytes, gts_write};
 
 /// A Python handle to a frozen [`RdfDataset`].
 #[pyclass(name = "RdfDataset", frozen)]

@@ -15,7 +15,7 @@
 //!
 //! Normalization is idempotent: `n.normalize() == n.normalize().normalize()`.
 
-use crate::parse::{parse, Iri};
+use crate::parse::{Iri, parse};
 use crate::resolve::remove_dot_segments;
 
 impl Iri {

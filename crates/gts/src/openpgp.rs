@@ -310,7 +310,7 @@ fn parse_ed25519_public_material(body: &[u8]) -> Result<([u8; 32], usize)> {
         n => {
             return Err(OpenPgpError(format!(
                 "unexpected Ed25519 public MPI length {n}"
-            )))
+            )));
         }
     };
     Ok((raw, end))
@@ -538,7 +538,9 @@ mod tests {
             wrapped.push_str(std::str::from_utf8(line).unwrap());
             wrapped.push('\n');
         }
-        format!("-----BEGIN PGP PRIVATE KEY BLOCK-----\n\n{wrapped}-----END PGP PRIVATE KEY BLOCK-----\n")
+        format!(
+            "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\n{wrapped}-----END PGP PRIVATE KEY BLOCK-----\n"
+        )
     }
 
     fn secret_packet_body() -> Vec<u8> {

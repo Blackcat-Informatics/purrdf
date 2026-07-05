@@ -36,9 +36,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use purrdf_shex::{parse_shexc, parse_shexj, to_shexj, ConformanceStatus, Schema, ShapeSelector};
+use purrdf_shex::{ConformanceStatus, Schema, ShapeSelector, parse_shexc, parse_shexj, to_shexj};
 
-use crate::{parse_dataset, DatasetView, GraphMatch, NativeRdfFormat, TermValue};
+use crate::{DatasetView, GraphMatch, NativeRdfFormat, TermValue, parse_dataset};
 
 /// The shape-map spelling that selects the schema's `start` shape expression.
 const START_SELECTOR: &str = "START";

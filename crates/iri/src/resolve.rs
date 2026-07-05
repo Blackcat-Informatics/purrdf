@@ -8,7 +8,7 @@
 //! absolute (§5.2.1) — a relative base is a hard [`IriError::NonAbsoluteBase`].
 
 use crate::error::{IriError, Result};
-use crate::parse::{parse, Iri};
+use crate::parse::{Iri, parse};
 
 /// Owned component view used by the resolution algorithm. `None` = "undefined" in
 /// RFC terms (distinct from an empty string, which is "defined but empty").

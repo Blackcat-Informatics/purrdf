@@ -26,9 +26,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::{RdfDataset, TermValue};
 
+use crate::EntailError;
 use crate::interner::Interner;
-use crate::owl_dl::concept::{Concept, ConceptTable, Role};
 use crate::owl_dl::Kb;
+use crate::owl_dl::concept::{Concept, ConceptTable, Role};
 use crate::vocab::{
     OWL_ALLVALUESFROM, OWL_CARDINALITY, OWL_CLASS, OWL_COMPLEMENTOF, OWL_DATATYPEPROPERTY,
     OWL_DISJOINTWITH, OWL_EQUIVALENTCLASS, OWL_EQUIVALENTPROPERTY, OWL_FUNCTIONALPROPERTY,
@@ -36,11 +37,10 @@ use crate::vocab::{
     OWL_MAXQUALIFIEDCARDINALITY, OWL_MINCARDINALITY, OWL_MINQUALIFIEDCARDINALITY,
     OWL_NAMEDINDIVIDUAL, OWL_NOTHING, OWL_OBJECTPROPERTY, OWL_ONCLASS, OWL_ONEOF, OWL_ONPROPERTY,
     OWL_ONTOLOGY, OWL_QUALIFIEDCARDINALITY, OWL_RESTRICTION, OWL_SAMEAS, OWL_SOMEVALUESFROM,
-    OWL_SYMMETRICPROPERTY, OWL_THING, OWL_TRANSITIVEPROPERTY, OWL_UNIONOF, RDFS_CLASS, RDFS_DOMAIN,
-    RDFS_RANGE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF, RDF_FIRST, RDF_NIL, RDF_PROPERTY, RDF_REST,
-    RDF_TYPE,
+    OWL_SYMMETRICPROPERTY, OWL_THING, OWL_TRANSITIVEPROPERTY, OWL_UNIONOF, RDF_FIRST, RDF_NIL,
+    RDF_PROPERTY, RDF_REST, RDF_TYPE, RDFS_CLASS, RDFS_DOMAIN, RDFS_RANGE, RDFS_SUBCLASSOF,
+    RDFS_SUBPROPERTYOF,
 };
-use crate::EntailError;
 
 /// The interned vocabulary term ids the reverse mapping keys on. Fields are
 /// `pub(crate)` so the query-answering layer can build the same class-expression
@@ -380,10 +380,10 @@ impl<'a> CeExtractor<'a> {
 
     /// The role denoted by property node `r` (`Inv` for an anonymous inverse).
     fn role_of(&self, r: u32) -> Role {
-        if matches!(self.interner.value(r), TermValue::Blank { .. }) {
-            if let Some(inv) = self.get(r, self.v.inverse_of) {
-                return Role::Inv(inv);
-            }
+        if matches!(self.interner.value(r), TermValue::Blank { .. })
+            && let Some(inv) = self.get(r, self.v.inverse_of)
+        {
+            return Role::Inv(inv);
         }
         Role::Named(r)
     }

@@ -28,8 +28,8 @@
 
 use std::sync::Arc;
 
-use ::purrdf::parse_dataset;
 use ::purrdf::RdfDataset;
+use ::purrdf::parse_dataset;
 
 /// Recover the document `(prefix, namespace)` map from Turtle/TriG source text.
 ///
@@ -214,10 +214,10 @@ fn ntriples_line_errors(data_nt: &str) -> Vec<String> {
             errors.push(format!("N-Triples parse error: {e}"));
         }
     }
-    if errors.is_empty() {
-        if let Err(e) = parse_dataset(data_nt.as_bytes(), "application/n-triples", None) {
-            errors.push(format!("N-Triples parse error: {e}"));
-        }
+    if errors.is_empty()
+        && let Err(e) = parse_dataset(data_nt.as_bytes(), "application/n-triples", None)
+    {
+        errors.push(format!("N-Triples parse error: {e}"));
     }
     errors
 }

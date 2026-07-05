@@ -258,11 +258,9 @@ impl EventError {
 impl core::fmt::Display for EventError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::RedeclaredId { id, scope } => write!(
-                f,
-                "event term id {} redeclared in scope {}",
-                id.0, scope.0
-            ),
+            Self::RedeclaredId { id, scope } => {
+                write!(f, "event term id {} redeclared in scope {}", id.0, scope.0)
+            }
             Self::ClosedScope { scope } => {
                 write!(f, "reference to closed scope {}", scope.0)
             }
@@ -311,7 +309,7 @@ pub trait RdfEventSink {
     /// currently open (→ [`EventError::ClosedScope`] otherwise). Declarations MAY
     /// arrive after the quads that reference them (forward references).
     fn term(&mut self, id: EventTermId, term: EventTerm<'_>)
-        -> Result<ControlFlow<()>, EventError>;
+    -> Result<ControlFlow<()>, EventError>;
 
     /// A quad row. Any of its positions MAY be a not-yet-declared [`EventTermId`]
     /// (resolved at [`finish`](Self::finish)).
@@ -449,10 +447,10 @@ mod tests {
 
         fn quad(&mut self, _q: EventQuad) -> Result<ControlFlow<()>, EventError> {
             self.quads += 1;
-            if let Some(limit) = self.break_after_quads {
-                if self.quads >= limit {
-                    return Ok(ControlFlow::Break(()));
-                }
+            if let Some(limit) = self.break_after_quads
+                && self.quads >= limit
+            {
+                return Ok(ControlFlow::Break(()));
             }
             Ok(ControlFlow::Continue(()))
         }

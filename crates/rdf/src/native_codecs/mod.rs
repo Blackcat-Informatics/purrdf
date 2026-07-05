@@ -60,7 +60,7 @@ mod span;
 // scattered match-on-format arms). `pub(super)`, never part of the public API.
 mod codec;
 
-pub use media_type::{classify, NativeRdfFormat};
+pub use media_type::{NativeRdfFormat, classify};
 pub use parse::{parse_dataset, parse_dataset_with};
 pub use span::{ParseOptions, SpanTable};
 // Bench/test-only sequential baseline for the chunk-parallel N-Triples/N-Quads path;
@@ -68,7 +68,7 @@ pub use span::{ParseOptions, SpanTable};
 #[doc(hidden)]
 pub use parse::parse_dataset_forced_sequential;
 pub use serialize::{
-    serialize_dataset, serialize_dataset_base_only, serialize_dataset_to_format, SerializeOutcome,
+    SerializeOutcome, serialize_dataset, serialize_dataset_base_only, serialize_dataset_to_format,
 };
 
 use std::io::Write;
@@ -283,9 +283,11 @@ mod tests {
             .expect("parse into sink");
         let dataset = sink.into_dataset().expect("sink finished");
         assert_eq!(dataset.quad_count(), 1);
-        assert!(dataset
-            .term_id_by_value(&TermValue::Iri("https://example.org/rel".to_owned()))
-            .is_some());
+        assert!(
+            dataset
+                .term_id_by_value(&TermValue::Iri("https://example.org/rel".to_owned()))
+                .is_some()
+        );
     }
 
     #[test]

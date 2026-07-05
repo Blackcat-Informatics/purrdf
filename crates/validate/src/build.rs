@@ -638,7 +638,7 @@ mod tests {
 
     #[test]
     fn physical_location_traces_focus_to_source_line() {
-        use purrdf_rdf::{parse_dataset_with, ParseOptions};
+        use purrdf_rdf::{ParseOptions, parse_dataset_with};
         // alice is asserted on line 2 (leading blank line).
         let data = "\n<http://example.org/alice> <http://example.org/age> \"x\" .\n";
         let (_ds, spans) = parse_dataset_with(
@@ -676,7 +676,7 @@ mod tests {
 
     #[test]
     fn physical_location_emits_zero_byte_offset() {
-        use purrdf_rdf::{parse_dataset_with, ParseOptions};
+        use purrdf_rdf::{ParseOptions, parse_dataset_with};
         // alice is asserted on the FIRST line, so its subject starts at document
         // byte offset 0. That 0 must be emitted as `byteOffset: 0`, not dropped.
         let data = "<http://example.org/alice> <http://example.org/age> \"x\" .\n";
@@ -850,7 +850,7 @@ mod tests {
 
     #[test]
     fn source_root_uri_wires_base_id_and_original_uri_base_ids() {
-        use purrdf_rdf::{parse_dataset_with, ParseOptions};
+        use purrdf_rdf::{ParseOptions, parse_dataset_with};
         let data = "<http://example.org/alice> <http://example.org/age> \"x\" .\n";
         let (_ds, spans) = parse_dataset_with(
             data.as_bytes(),
@@ -904,7 +904,7 @@ mod tests {
 
     #[test]
     fn default_emits_no_base_id_and_no_original_uri_base_ids() {
-        use purrdf_rdf::{parse_dataset_with, ParseOptions};
+        use purrdf_rdf::{ParseOptions, parse_dataset_with};
         let data = "<http://example.org/alice> <http://example.org/age> \"x\" .\n";
         let (_ds, spans) = parse_dataset_with(
             data.as_bytes(),

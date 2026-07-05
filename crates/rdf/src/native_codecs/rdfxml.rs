@@ -42,8 +42,8 @@ use std::sync::Arc;
 use roxmltree::{Document, Node};
 
 use super::codec::RdfCodec;
-use super::parse::{fold_statement_layer, FoldNode, FoldRow, RDF_REIFIES as RDF_REIFIES_IRI};
-use super::ser_model::{deterministic_blank_label_with_prefix, SerGraph, SerTerm, SerTermKind};
+use super::parse::{FoldNode, FoldRow, RDF_REIFIES as RDF_REIFIES_IRI, fold_statement_layer};
+use super::ser_model::{SerGraph, SerTerm, SerTermKind, deterministic_blank_label_with_prefix};
 use super::text_parse::LineParseMode;
 use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,

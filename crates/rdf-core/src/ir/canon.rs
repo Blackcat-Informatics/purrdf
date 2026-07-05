@@ -573,11 +573,12 @@ impl<'a> CanonState<'a> {
                         path.push_str(issuer_copy.issue(*related));
                     }
                     // 5.4.4.3: prune if this partial path can no longer win.
-                    if let Some(best) = &chosen_path {
-                        if path.len() >= best.len() && path.as_str() > best.as_str() {
-                            pruned = true;
-                            break;
-                        }
+                    if let Some(best) = &chosen_path
+                        && path.len() >= best.len()
+                        && path.as_str() > best.as_str()
+                    {
+                        pruned = true;
+                        break;
                     }
                 }
                 if pruned {
@@ -594,11 +595,12 @@ impl<'a> CanonState<'a> {
                     path.push_str(rec_hash.as_str());
                     path.push('>');
                     issuer_copy = rec_issuer;
-                    if let Some(best) = &chosen_path {
-                        if path.len() >= best.len() && path.as_str() > best.as_str() {
-                            pruned = true;
-                            break;
-                        }
+                    if let Some(best) = &chosen_path
+                        && path.len() >= best.len()
+                        && path.as_str() > best.as_str()
+                    {
+                        pruned = true;
+                        break;
                     }
                 }
                 if pruned {

@@ -18,7 +18,7 @@
 
 use purrdf_shapes::engine;
 
-use crate::{report_to_sarif_string, SarifOptions};
+use crate::{SarifOptions, report_to_sarif_string};
 
 /// Validate `data_nt` (N-Triples) against `shapes_ttl` (Turtle) and render the
 /// resulting SHACL report to a SARIF 2.1.0 JSON string.

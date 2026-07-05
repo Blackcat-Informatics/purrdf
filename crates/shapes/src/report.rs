@@ -10,14 +10,14 @@
 
 use std::collections::BTreeSet;
 
-use ::purrdf::provenance::Attribution;
 use ::purrdf::FastSet;
 use ::purrdf::RdfDatasetBuilder;
-use ::purrdf::{serialize_dataset, RdfQuad, RdfTerm, SerializeGraph};
+use ::purrdf::provenance::Attribution;
+use ::purrdf::{RdfQuad, RdfTerm, SerializeGraph, serialize_dataset};
 
 use ::purrdf::RdfDataset;
 
-use crate::data::{native_quads, GraphFilter};
+use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, sh, xsd};
 #[cfg(test)]
 use crate::term::Literal;
@@ -265,10 +265,10 @@ impl ValidationReport {
                     sh::RESULT_PATH,
                     path.to_rdf_term(),
                 );
-                if let (Term::BlankNode(label), Some(structure)) = (path, &r.path_structure) {
-                    if emitted_paths.insert(label.clone()) {
-                        emit_path_structure(&mut builder, label, structure);
-                    }
+                if let (Term::BlankNode(label), Some(structure)) = (path, &r.path_structure)
+                    && emitted_paths.insert(label.clone())
+                {
+                    emit_path_structure(&mut builder, label, structure);
                 }
             }
 

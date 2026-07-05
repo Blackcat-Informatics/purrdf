@@ -10,12 +10,12 @@ use std::sync::OnceLock;
 
 use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, TermId, TermRef};
 
-use crate::data::{native_quads, quads_for_pattern_ids, resolve_id, GraphFilter, ShaclData};
-use crate::model::{rdf, sh, BoxRoleVocab};
+use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, resolve_id};
+use crate::model::{BoxRoleVocab, rdf, sh};
 use crate::path;
 use crate::report::ValidationResult;
 use crate::shapes::{ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape};
-use crate::term::{term_id_to_native, NamedNode, Term, Triple};
+use crate::term::{NamedNode, Term, Triple, term_id_to_native};
 
 /// Internal value-node currency for the constraint layer.
 ///
@@ -1082,10 +1082,10 @@ fn eval_constraint(
                 // arm exactly as before.
                 let value_term = value.to_term(ds);
                 let value = &value_term;
-                if let Term::Literal(lit) = value {
-                    if let Some(lang) = lit.language() {
-                        *seen_langs.entry(lang.to_lowercase()).or_insert(0) += 1;
-                    }
+                if let Term::Literal(lit) = value
+                    && let Some(lang) = lit.language()
+                {
+                    *seen_langs.entry(lang.to_lowercase()).or_insert(0) += 1;
                 }
             }
             let focus = value_nodes
@@ -1560,23 +1560,23 @@ fn eval_constraint(
                 }
             }
             let mut results = Vec::new();
-            if let Some(min) = min_count {
-                if count < *min {
-                    results.push(result!(
-                        sh::QUALIFIED_MIN_COUNT_CONSTRAINT_COMPONENT,
-                        focus_node.clone(),
-                        None
-                    ));
-                }
+            if let Some(min) = min_count
+                && count < *min
+            {
+                results.push(result!(
+                    sh::QUALIFIED_MIN_COUNT_CONSTRAINT_COMPONENT,
+                    focus_node.clone(),
+                    None
+                ));
             }
-            if let Some(max) = max_count {
-                if count > *max {
-                    results.push(result!(
-                        sh::QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT,
-                        focus_node.clone(),
-                        None
-                    ));
-                }
+            if let Some(max) = max_count
+                && count > *max
+            {
+                results.push(result!(
+                    sh::QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT,
+                    focus_node.clone(),
+                    None
+                ));
             }
             results
         }
@@ -1664,12 +1664,12 @@ fn eval_constraint(
 
         // ── Custom constraint components (SHACL-SPARQL) ─────────────────────────
         Constraint::Component {
-            ref component,
-            ref source_shape,
-            ref bindings,
-            ref validator,
-            message: ref cmsg,
-            severity: ref csev,
+            component,
+            source_shape,
+            bindings,
+            validator,
+            message: cmsg,
+            severity: csev,
         } => {
             let sev = csev.clone().unwrap_or_else(|| severity.clone());
             let msg = cmsg.clone().or_else(|| message.clone());
@@ -3710,9 +3710,11 @@ mod tests {
         );
         let results = validate_shape(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 2, "one result per asymmetric value");
-        assert!(component_iri(&results)
-            .iter()
-            .all(|c| c.contains("EqualsConstraintComponent")));
+        assert!(
+            component_iri(&results)
+                .iter()
+                .all(|c| c.contains("EqualsConstraintComponent"))
+        );
         let values: Vec<String> = results
             .iter()
             .map(|r| r.value.as_ref().unwrap().to_string())

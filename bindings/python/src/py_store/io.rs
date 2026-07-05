@@ -19,8 +19,8 @@ use pyo3::types::{PyBytes, PyString};
 use super::query::PyQueryTriples;
 use super::term::PyQuad;
 use crate::{
-    flat_dataset_from_quads, flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset,
-    NativeRdfFormat, RdfDataset, RdfQuad, RdfTriple, SerializeGraph,
+    NativeRdfFormat, RdfDataset, RdfQuad, RdfTriple, SerializeGraph, flat_dataset_from_quads,
+    flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset,
 };
 
 // ── RDF serialization format enum ───────────────────────────────────────────────

@@ -19,8 +19,8 @@
 
 use std::sync::Arc;
 
-use ::purrdf::parse_dataset;
 use ::purrdf::RdfDataset;
+use ::purrdf::parse_dataset;
 use purrdf_shapes::engine::{validate_dataset_graphs, validate_graphs};
 
 const PREFIXES: &str = r"

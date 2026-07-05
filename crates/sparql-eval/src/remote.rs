@@ -35,7 +35,7 @@ use purrdf_core::{RdfDataset, TermValue};
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern, Variable};
 
 use crate::error::EvalError;
-use crate::eval::{materialize_solutions, EvalCtx};
+use crate::eval::{EvalCtx, materialize_solutions};
 use crate::solution::{SolutionSeq, VarSchema};
 
 /// One remote `SELECT` result set, dataset-independent (egress [`TermValue`]

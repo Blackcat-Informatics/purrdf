@@ -179,7 +179,7 @@ mod tests {
     use purrdf_gts::wire::digest_str;
     use purrdf_gts::writer::Writer;
 
-    use super::{verify_content_chain, RdfDataset};
+    use super::{RdfDataset, verify_content_chain};
 
     const KID: &str = "did:example:test";
     const BLOB_PAYLOAD: &[u8] = b"content-addressed payload for the GTS verify bridge";

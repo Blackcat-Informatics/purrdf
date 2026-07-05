@@ -25,13 +25,13 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 
-use crate::interner::{intern_into, Interner};
+use crate::EntailError;
+use crate::interner::{Interner, intern_into};
 use crate::vocab::{
     OWL_EQUIVALENTCLASS, OWL_EQUIVALENTPROPERTY, OWL_INVERSEOF, OWL_SYMMETRICPROPERTY,
-    OWL_TRANSITIVEPROPERTY, RDFS_CLASS, RDFS_DOMAIN, RDFS_RANGE, RDFS_RESOURCE, RDFS_SUBCLASSOF,
-    RDFS_SUBPROPERTYOF, RDF_PROPERTY, RDF_TYPE,
+    OWL_TRANSITIVEPROPERTY, RDF_PROPERTY, RDF_TYPE, RDFS_CLASS, RDFS_DOMAIN, RDFS_RANGE,
+    RDFS_RESOURCE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF,
 };
-use crate::EntailError;
 
 /// A faithful copy of `ds` (the identity closure for `Simple`).
 pub(crate) fn copy_of(ds: &RdfDataset) -> Result<Arc<RdfDataset>, EntailError> {
@@ -343,24 +343,24 @@ impl<'a> Chaser<'a> {
             }
             if self.owl {
                 // prp-symp, first premise type(s, Symmetric): mirror every s-triple.
-                if o == c.symmetric {
-                    if let Some(pairs) = self.idx.by_pred.get(&s) {
-                        for &(x, y) in pairs {
-                            if interner.is_subject(y) {
-                                derived.push([y, s, x]);
-                            }
+                if o == c.symmetric
+                    && let Some(pairs) = self.idx.by_pred.get(&s)
+                {
+                    for &(x, y) in pairs {
+                        if interner.is_subject(y) {
+                            derived.push([y, s, x]);
                         }
                     }
                 }
                 // prp-trp, first premise type(s, Transitive): one-step join over all
                 // s-edges (the fixpoint composes longer chains across rounds).
-                if o == c.transitive {
-                    if let Some(pairs) = self.idx.by_pred.get(&s) {
-                        for &(x, y) in pairs {
-                            if let Some(zs) = self.idx.by_pred_so.get(&s).and_then(|m| m.get(&y)) {
-                                for &z in zs {
-                                    derived.push([x, s, z]);
-                                }
+                if o == c.transitive
+                    && let Some(pairs) = self.idx.by_pred.get(&s)
+                {
+                    for &(x, y) in pairs {
+                        if let Some(zs) = self.idx.by_pred_so.get(&s).and_then(|m| m.get(&y)) {
+                            for &z in zs {
+                                derived.push([x, s, z]);
                             }
                         }
                     }
@@ -426,11 +426,11 @@ impl<'a> Chaser<'a> {
             }
         }
         // rdfs3 / prp-rng, second premise (s p o): (p range cc) ⇒ (o a cc).
-        if interner.is_subject(o) {
-            if let Some(cs) = self.idx.rng_by_prop.get(&p) {
-                for &cc in cs {
-                    derived.push([o, c.ty, cc]);
-                }
+        if interner.is_subject(o)
+            && let Some(cs) = self.idx.rng_by_prop.get(&p)
+        {
+            for &cc in cs {
+                derived.push([o, c.ty, cc]);
             }
         }
         // Every predicate is reflexively a subProperty of itself (new-vertex only).
@@ -455,11 +455,11 @@ impl<'a> Chaser<'a> {
                 }
             }
             // prp-inv, data side (s p o) with (p inverseOf q) ⇒ (o q s).
-            if interner.is_subject(o) {
-                if let Some(partners) = self.idx.inv_map.get(&p) {
-                    for &q in partners {
-                        derived.push([o, q, s]);
-                    }
+            if interner.is_subject(o)
+                && let Some(partners) = self.idx.inv_map.get(&p)
+            {
+                for &q in partners {
+                    derived.push([o, q, s]);
                 }
             }
         }

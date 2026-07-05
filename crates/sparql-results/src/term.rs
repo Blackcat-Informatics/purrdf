@@ -10,7 +10,7 @@
 //! TSV lexicalization. The four W3C result-document writers (JSON/XML/CSV/TSV)
 //! all consume these helpers so term syntax has exactly one source of truth.
 
-use purrdf_core::{emit_term, RdfLiteral, RdfTerm, RdfTriple, TermValue};
+use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, emit_term};
 
 /// The IRI of `xsd:string`, the implicit datatype of a plain (untyped,
 /// non-language) literal. The egress model always populates `datatype`, so a

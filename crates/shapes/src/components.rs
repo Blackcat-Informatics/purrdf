@@ -17,13 +17,13 @@ use ::purrdf::RdfDataset;
 use ::purrdf::TermValue;
 use ::purrdf::{FastMap, FastSet};
 
-use crate::data::{native_quads, GraphFilter};
+use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs, sh};
 use crate::path;
 use crate::report::{Severity, ValidationResult};
-use crate::shapes::{build_prefix_header, ComponentValidator, Path};
+use crate::shapes::{ComponentValidator, Path, build_prefix_header};
 use crate::sparql::{run_ask_with_shacl_prebinding, run_select_with_shacl_prebinding};
-use crate::term::{term_value_to_native, NamedNode, Term};
+use crate::term::{NamedNode, Term, term_value_to_native};
 
 /// Discriminator for a SPARQL validator's query form.
 #[derive(Debug, Clone)]
@@ -578,7 +578,7 @@ fn parse_validator(
         Err(e) => {
             return Err(format!(
                 "component {component_iri} validator {validator} has an unparsable query: {e}"
-            ))
+            ));
         }
     };
 

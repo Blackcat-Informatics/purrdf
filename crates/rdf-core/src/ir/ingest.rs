@@ -29,8 +29,8 @@ use std::sync::Arc;
 use core::ops::ControlFlow;
 
 use purrdf_events::{
-    EventError, EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, RdfEventSource,
-    ScopeId, TextDirection, MAX_TERM_NESTING_DEPTH,
+    EventError, EventQuad, EventTerm, EventTermId, EventTriple, MAX_TERM_NESTING_DEPTH,
+    RdfEventSink, RdfEventSource, ScopeId, TextDirection,
 };
 
 use super::builder::RdfDatasetBuilder;
@@ -580,8 +580,8 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::compare::datasets_isomorphic;
     use crate::RdfLiteral;
+    use crate::ir::compare::datasets_isomorphic;
     use std::collections::HashSet;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {

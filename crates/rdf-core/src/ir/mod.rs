@@ -38,8 +38,8 @@ pub mod validate;
 
 pub use builder::{RdfDatasetBuilder, ValidatedRdfDatasetBuilder};
 pub use bundle::{GtsBundle, RdfEnvelope};
-pub use canon::{canonicalize, canonicalize_with, CanonHash, Canonicalized};
-pub use compare::{dataset_diff, datasets_isomorphic, DatasetDiff};
+pub use canon::{CanonHash, Canonicalized, canonicalize, canonicalize_with};
+pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{
     QuadHandle, QuadIds, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetIter, TermRef,
 };

@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::ir::{RdfDataset, RdfDatasetBuilder, TermId};
 use crate::native_quads::flat_rdf_quads_from_dataset;
-use crate::{parse_dataset, BlankScope, NativeRdfFormat, RdfTerm};
+use crate::{BlankScope, NativeRdfFormat, RdfTerm, parse_dataset};
 
 /// The canonical, review-friendly Turtle renderer — the oxigraph-free half, now in
 /// the wasm-clean kernel. Re-exported so `purrdf::turtle_normalize::render`

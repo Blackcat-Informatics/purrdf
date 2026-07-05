@@ -29,7 +29,7 @@ pub mod nested;
 pub mod openpgp;
 pub mod policy;
 pub use policy::{
-    evaluate_profile_policy, signature_trust, ProfileFinding, Severity, SignatureTrust, TrustPolicy,
+    ProfileFinding, Severity, SignatureTrust, TrustPolicy, evaluate_profile_policy, signature_trust,
 };
 pub mod reader;
 mod reader_layout;

@@ -16,13 +16,13 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use ciborium::value::Value;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::model::{Graph, Term, TermKind};
 use crate::reader::read;
 use crate::wire::map_get;
-use crate::writer::{digest_string, Writer};
+use crate::writer::{Writer, digest_string};
 
 const RDF_VALUE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#value";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -172,10 +172,10 @@ impl Memory {
         if text.trim().is_empty() {
             return Err(MemoryError::EmptyClaim);
         }
-        if let Some(confidence) = options.confidence {
-            if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
-                return Err(MemoryError::InvalidConfidence);
-            }
+        if let Some(confidence) = options.confidence
+            && (!confidence.is_finite() || !(0.0..=1.0).contains(&confidence))
+        {
+            return Err(MemoryError::InvalidConfidence);
         }
 
         let created = now_rfc3339();

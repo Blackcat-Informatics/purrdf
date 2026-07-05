@@ -11,7 +11,7 @@
 //! dropped. The kernel `emit_*` primitives are the single source of term/line
 //! syntax.
 
-use purrdf_core::{emit_annotation, emit_quad, emit_reifier, RdfDataset};
+use purrdf_core::{RdfDataset, emit_annotation, emit_quad, emit_reifier};
 
 /// Serialize a CONSTRUCT-result dataset to N-Triples (plus RDF-1.2-star
 /// annotations and reifiers). Each kernel `emit_*` call already terminates its

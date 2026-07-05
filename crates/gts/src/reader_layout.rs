@@ -5,7 +5,7 @@ use ciborium::value::Value;
 
 use crate::mmr;
 use crate::model::{Diagnostic, Graph, StreamableInfo};
-use crate::reader::{push_diagnostic, StreamingSink};
+use crate::reader::{StreamingSink, push_diagnostic};
 use crate::wire::map_get;
 
 #[derive(Clone, Debug)]

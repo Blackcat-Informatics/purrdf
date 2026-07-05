@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 
-use super::media_type::{classify, NativeRdfFormat};
+use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
 use crate::ir::TermRef;
 use crate::{RdfDataset, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermId, TermValue};
@@ -444,7 +444,7 @@ mod serialize_to_format_tests {
     //! variant — so the JSON-LD drop accounting is exercised in
     //! `crates/pipeline/src/transcode.rs` via the native `yaml_ld` serializer.)
     use super::*;
-    use crate::{parse_dataset, RdfDatasetBuilder, TermFactory};
+    use crate::{RdfDatasetBuilder, TermFactory, parse_dataset};
     use std::sync::Arc;
 
     /// A star-free dataset: 1 default-graph quad + 1 named-graph quad.

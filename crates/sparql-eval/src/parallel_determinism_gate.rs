@@ -28,12 +28,12 @@
 use std::sync::Arc;
 
 use purrdf_core::{
-    canonicalize, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest,
-    SparqlResult,
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult,
+    canonicalize,
 };
 
 use crate::engine::NativeSparqlEngine;
-use crate::parallel::{force_parallel_for_test, PARALLEL_MIN_ROWS};
+use crate::parallel::{PARALLEL_MIN_ROWS, force_parallel_for_test};
 
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";

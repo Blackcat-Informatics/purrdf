@@ -8,7 +8,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyList};
 
-use crate::gts_view::{GtsFoldView, PublicValue, RelationalRows, ALL_SCOPE};
+use crate::gts_view::{ALL_SCOPE, GtsFoldView, PublicValue, RelationalRows};
 
 type PyTermRow = (
     u8,

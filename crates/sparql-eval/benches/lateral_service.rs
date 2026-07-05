@@ -16,11 +16,11 @@
 
 use std::sync::Arc;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use purrdf_sparql_algebra::SparqlParser;
-use purrdf_sparql_eval::{evaluate_query, EvalCtx, LocalRemoteQuerySource, RemoteQuerySource};
+use purrdf_sparql_eval::{EvalCtx, LocalRemoteQuerySource, RemoteQuerySource, evaluate_query};
 
 const ENDPOINT_BASE: &str = "http://ex/ep";
 

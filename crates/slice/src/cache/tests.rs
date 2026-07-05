@@ -11,7 +11,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 use crate::cache::{
-    dependency_closure, link_units, product_unit, source_unit_key, Phase, ToolchainContext,
+    Phase, ToolchainContext, dependency_closure, link_units, product_unit, source_unit_key,
 };
 use crate::catalog::SliceCatalog;
 use crate::ownership::OwnershipAnalyzer;

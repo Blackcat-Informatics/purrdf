@@ -24,19 +24,19 @@ pub mod standpoint_modality;
 pub mod vocab;
 
 pub use analysis::{
-    bundle_content_id, emit_analysis_graph, is_forbidden_edge, AnalysisError, AnalysisGraph,
+    AnalysisError, AnalysisGraph, bundle_content_id, emit_analysis_graph, is_forbidden_edge,
 };
 pub use artifact::{ArtifactRecord, ArtifactRole};
 pub use cache::{
-    dependency_closure, link_unit_key, link_units, product_unit, product_unit_key, source_unit_key,
-    CacheKey, LinkUnit, Phase, ProductUnit, ToolchainContext,
+    CacheKey, LinkUnit, Phase, ProductUnit, ToolchainContext, dependency_closure, link_unit_key,
+    link_units, product_unit, product_unit_key, source_unit_key,
 };
 pub use catalog::{ManifestView, SliceCatalog, SliceRecord, SliceTier};
-pub use claim_view::{emit_claim_view, CLAIM_VIEW_FILE};
+pub use claim_view::{CLAIM_VIEW_FILE, emit_claim_view};
 pub use diagnostics::ProjectionDiagnostic;
 pub use dsl_stats_emit::emit_dsl_stats;
 pub use error::SliceError;
-pub use fix_deps::{compute_fix_deps, ManifestPatch};
+pub use fix_deps::{ManifestPatch, compute_fix_deps};
 pub use list_functions::emit_list_functions;
 pub use ownership::{
     ArtifactEvidence, DependencyEdge, EdgeEvidence, EdgeKind, OwnershipAnalyzer,

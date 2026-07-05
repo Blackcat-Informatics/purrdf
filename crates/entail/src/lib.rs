@@ -30,8 +30,8 @@ pub(crate) mod rdfs;
 pub mod rif;
 pub(crate) mod vocab;
 
-pub use owl_dl::query::{materialize_dl, QNode, QTriple};
-pub use rif::{materialize_rif, Atom, Fact, RifTerm, Rule, RuleSet};
+pub use owl_dl::query::{QNode, QTriple, materialize_dl};
+pub use rif::{Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif};
 
 /// A SPARQL entailment regime (`sparql:entailmentRegime`), by its W3C IRI's local
 /// name.
@@ -128,7 +128,7 @@ pub fn materialize(ds: &RdfDataset, regime: Regime) -> Result<Arc<RdfDataset>, E
 mod tests {
     use super::*;
     use crate::vocab::{
-        OWL_SYMMETRICPROPERTY, OWL_TRANSITIVEPROPERTY, RDFS_SUBCLASSOF, RDF_PROPERTY, RDF_TYPE,
+        OWL_SYMMETRICPROPERTY, OWL_TRANSITIVEPROPERTY, RDF_PROPERTY, RDF_TYPE, RDFS_SUBCLASSOF,
     };
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermRef};
 

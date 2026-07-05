@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_shex::{
-    parse_shexc, validate, validate_with, ConformanceStatus, ShapeSelector, ValidationOptions,
+    ConformanceStatus, ShapeSelector, ValidationOptions, parse_shexc, validate, validate_with,
 };
 
 /// A term spec for the tiny triple builder below.
@@ -129,27 +129,33 @@ fn string_facets_count_scalar_values() {
         "http://a.example/p1",
         T::L(RdfLiteral::simple("né")),
     )]);
-    assert!(check(
-        "<S1> { <p1> LITERAL LENGTH 2 }",
-        &data,
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_ok());
-    assert!(check(
-        "<S1> { <p1> LITERAL LENGTH 3 }",
-        &data,
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_err());
-    assert!(check(
-        "<S1> { <p1> LITERAL MINLENGTH 2 MAXLENGTH 2 }",
-        &data,
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_ok());
+    assert!(
+        check(
+            "<S1> { <p1> LITERAL LENGTH 2 }",
+            &data,
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
+    assert!(
+        check(
+            "<S1> { <p1> LITERAL LENGTH 3 }",
+            &data,
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_err()
+    );
+    assert!(
+        check(
+            "<S1> { <p1> LITERAL MINLENGTH 2 MAXLENGTH 2 }",
+            &data,
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -159,27 +165,33 @@ fn pattern_facet_is_partial_match() {
         "http://a.example/p1",
         T::L(RdfLiteral::simple("abcd")),
     )]);
-    assert!(check(
-        "<S1> { <p1> LITERAL /bc/ }",
-        &data,
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_ok());
-    assert!(check(
-        "<S1> { <p1> LITERAL /^bc$/ }",
-        &data,
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_err());
-    assert!(check(
-        "<S1> { <p1> LITERAL /^ABCD$/i }",
-        &data,
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_ok());
+    assert!(
+        check(
+            "<S1> { <p1> LITERAL /bc/ }",
+            &data,
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
+    assert!(
+        check(
+            "<S1> { <p1> LITERAL /^bc$/ }",
+            &data,
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_err()
+    );
+    assert!(
+        check(
+            "<S1> { <p1> LITERAL /^ABCD$/i }",
+            &data,
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -190,41 +202,51 @@ fn numeric_facets_promote_across_types() {
         "http://a.example/p1",
         T::L(RdfLiteral::typed("4.5", xsd_dec)),
     )]);
-    assert!(check(
-        "<S1> { <p1> MININCLUSIVE 4 }",
-        &data,
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_ok());
-    assert!(check(
-        "<S1> { <p1> MINEXCLUSIVE 4.5 }",
-        &data,
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_err());
-    assert!(check(
-        "<S1> { <p1> MAXINCLUSIVE 4.5 }",
-        &data,
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_ok());
-    assert!(check(
-        "<S1> { <p1> TOTALDIGITS 2 }",
-        &data,
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_ok());
-    assert!(check(
-        "<S1> { <p1> FRACTIONDIGITS 0 }",
-        &data,
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_err());
+    assert!(
+        check(
+            "<S1> { <p1> MININCLUSIVE 4 }",
+            &data,
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
+    assert!(
+        check(
+            "<S1> { <p1> MINEXCLUSIVE 4.5 }",
+            &data,
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_err()
+    );
+    assert!(
+        check(
+            "<S1> { <p1> MAXINCLUSIVE 4.5 }",
+            &data,
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
+    assert!(
+        check(
+            "<S1> { <p1> TOTALDIGITS 2 }",
+            &data,
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
+    assert!(
+        check(
+            "<S1> { <p1> FRACTIONDIGITS 0 }",
+            &data,
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -242,28 +264,34 @@ fn facets_apply_to_iri_and_bnode_lexical_forms() {
         ),
     ]);
     // The IRI string is 19 scalar values.
-    assert!(check(
-        "<S1> { <p1> LENGTH 19 }",
-        &data,
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_ok());
+    assert!(
+        check(
+            "<S1> { <p1> LENGTH 19 }",
+            &data,
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
     // The blank-node label is 5.
-    assert!(check(
-        "<S1> { <p1> LENGTH 5 }",
-        &data,
-        iri("http://a.example/s2"),
-        S1
-    )
-    .is_ok());
-    assert!(check(
-        "<S1> { <p1> LENGTH 4 }",
-        &data,
-        iri("http://a.example/s2"),
-        S1
-    )
-    .is_err());
+    assert!(
+        check(
+            "<S1> { <p1> LENGTH 5 }",
+            &data,
+            iri("http://a.example/s2"),
+            S1
+        )
+        .is_ok()
+    );
+    assert!(
+        check(
+            "<S1> { <p1> LENGTH 4 }",
+            &data,
+            iri("http://a.example/s2"),
+            S1
+        )
+        .is_err()
+    );
 }
 
 // ── value sets, stems and exclusions ────────────────────────────────────────
@@ -272,43 +300,53 @@ fn facets_apply_to_iri_and_bnode_lexical_forms() {
 fn value_set_stems_and_exclusions() {
     let data = |o: &str| dataset(&[(T::I("http://a.example/s1"), "http://a.example/p1", T::I(o))]);
     let schema = "<S1> { <p1> [ <http://a.example/v>~ ] }";
-    assert!(check(
-        schema,
-        &data("http://a.example/v1"),
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_ok());
-    assert!(check(
-        schema,
-        &data("http://b.example/v1"),
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_err());
+    assert!(
+        check(
+            schema,
+            &data("http://a.example/v1"),
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
+    assert!(
+        check(
+            schema,
+            &data("http://b.example/v1"),
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_err()
+    );
     // Wildcard with exclusions: matching an exclusion fails even under `.`.
     let schema = "<S1> { <p1> [ . - <http://a.example/v1> - <http://a.example/w>~ ] }";
-    assert!(check(
-        schema,
-        &data("http://a.example/v2"),
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_ok());
-    assert!(check(
-        schema,
-        &data("http://a.example/v1"),
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_err());
-    assert!(check(
-        schema,
-        &data("http://a.example/w9"),
-        iri("http://a.example/s1"),
-        S1
-    )
-    .is_err());
+    assert!(
+        check(
+            schema,
+            &data("http://a.example/v2"),
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_ok()
+    );
+    assert!(
+        check(
+            schema,
+            &data("http://a.example/v1"),
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_err()
+    );
+    assert!(
+        check(
+            schema,
+            &data("http://a.example/w9"),
+            iri("http://a.example/s1"),
+            S1
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -414,13 +452,15 @@ fn recursion_over_a_linked_list() {
             cell("http://a.example/nil"),
         ),
     ]);
-    assert!(check(
-        schema,
-        &data,
-        iri("http://a.example/l1"),
-        "http://a.example/List"
-    )
-    .is_ok());
+    assert!(
+        check(
+            schema,
+            &data,
+            iri("http://a.example/l1"),
+            "http://a.example/List"
+        )
+        .is_ok()
+    );
     // A broken tail (missing <first>) refutes the whole list.
     let broken = dataset(&[
         (
@@ -439,13 +479,15 @@ fn recursion_over_a_linked_list() {
             cell("http://a.example/nil"),
         ),
     ]);
-    assert!(check(
-        schema,
-        &broken,
-        iri("http://a.example/l1"),
-        "http://a.example/List"
-    )
-    .is_err());
+    assert!(
+        check(
+            schema,
+            &broken,
+            iri("http://a.example/l1"),
+            "http://a.example/List"
+        )
+        .is_err()
+    );
 }
 
 #[test]

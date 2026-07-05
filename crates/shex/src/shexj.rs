@@ -26,7 +26,7 @@
 
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::{json, Map, Number, Value};
+use serde_json::{Map, Number, Value, json};
 
 use crate::ast::{
     Annotation, IriExclusion, LanguageExclusion, LiteralExclusion, NodeConstraint, NodeKind,

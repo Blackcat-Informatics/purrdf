@@ -27,10 +27,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf_rdf::{parse_dataset, DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
+use purrdf_rdf::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue, parse_dataset};
 use purrdf_shex::{
-    parse_shexc, parse_shexj, resolve_imports, validate_with, ConformanceStatus, ResultShapeMap,
-    Schema, SemAct, SemActRegistry, ShapeExpr, ShapeSelector, ShexError, ValidationOptions,
+    ConformanceStatus, ResultShapeMap, Schema, SemAct, SemActRegistry, ShapeExpr, ShapeSelector,
+    ShexError, ValidationOptions, parse_shexc, parse_shexj, resolve_imports, validate_with,
 };
 
 /// The corpus is byte-frozen; drift in the entry count means the vectors

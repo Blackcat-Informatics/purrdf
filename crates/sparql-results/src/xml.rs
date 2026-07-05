@@ -17,9 +17,9 @@
 //! inline the `xmlns:purrdf="https://purrdf.dev/ns/results#"` declaration so the
 //! document needs no fixed prologue namespace.
 
+use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::model::ResultProvenance;
-use crate::SerializeOutcome;
 use purrdf_core::{SparqlResult, TermValue};
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes

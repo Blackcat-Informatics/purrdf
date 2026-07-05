@@ -17,10 +17,10 @@
 //! [`ResultProvenance`] is trimmed and signalled via
 //! [`SerializeOutcome::provenance_dropped`].
 
+use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::model::ResultProvenance;
 use crate::term::ntriples_token;
-use crate::SerializeOutcome;
 use purrdf_core::SparqlResult;
 
 /// Serialize a [`SparqlResult`] to W3C SPARQL Results TSV.

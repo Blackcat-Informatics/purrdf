@@ -8,7 +8,7 @@
 use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
 use purrdf_rdf::describe::describe;
 use purrdf_rdf::native_codecs::jsonld::serialize_dataset_to_jsonld;
-use purrdf_rdf::{parse_dataset, serialize_dataset, SerializeGraph};
+use purrdf_rdf::{SerializeGraph, parse_dataset, serialize_dataset};
 
 const S: &str = "https://e/s";
 

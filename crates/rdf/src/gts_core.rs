@@ -322,8 +322,8 @@ pub(crate) fn diagnostics_to_error(graph: &Graph) -> RdfDiagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gts_resolve::term_from_id;
     use crate::RdfTerm;
+    use crate::gts_resolve::term_from_id;
     use purrdf_gts::model::{Term, TermKind};
 
     fn private_lang_named_graph() -> Graph {

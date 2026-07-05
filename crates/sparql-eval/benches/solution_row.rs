@@ -25,10 +25,10 @@
 //! `make bench` lane) — excluded from `make check`. It asserts no threshold: the
 //! machine is not quiet, so the numbers are evidence, never a pass/fail gate.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 use purrdf_core::TermId;
-use purrdf_sparql_eval::{compatible, Solution, SolutionTerm};
+use purrdf_sparql_eval::{Solution, SolutionTerm, compatible};
 
 /// Batch size: rows per timed iteration, so the row machinery (not the closure
 /// call) dominates each sample.

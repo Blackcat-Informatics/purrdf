@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use purrdf_sparql_algebra::Variable;
 
-use crate::scratch::SolutionTerm;
 use crate::DetHashMap;
+use crate::scratch::SolutionTerm;
 
 /// The ordered, shared variable schema of a [`SolutionSeq`].
 ///
