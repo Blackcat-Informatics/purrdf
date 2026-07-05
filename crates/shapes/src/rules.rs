@@ -864,56 +864,292 @@ mod tests {
         assert!(err.contains("illegal predicate"), "got: {err}");
     }
 
-    /// Every W3C-normative node-expression kind works in rule (object) position —
-    /// they all route through the shared `eval_node_expr`.
-    #[test]
-    fn node_expr_kinds_work_in_rule_position() {
-        let data = "ex:a a ex:Root ; ex:p ex:b, ex:c ; ex:n 1, 2 .";
-        // (object node-expression Turtle, expected object N-Triples string).
-        let cases: Vec<(&str, String)> = vec![
-            ("sh:this", ex("a")),
-            ("ex:z", ex("z")),
-            ("[ sh:path ex:p ]", ex("b")), // one of {b,c}
-            (
-                "[ sh:count [ sh:path ex:n ] ]",
-                "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned(),
+    // ── Node-expression audit (every normative kind × rule head position) ────────
+    //
+    // A *confirmed audit* that EVERY normative SHACL node-expression kind works in
+    // the `sh:subject` / `sh:predicate` / `sh:object` positions of a
+    // `sh:TripleRule` (issue #64 gap G2). All kinds route through the shared
+    // `eval_node_expr`; the audit proves each one end-to-end in a rule head:
+    //
+    //   NodeExpr variant  object   subject   predicate  legality (subj/pred)
+    //   Constant(IRI)       ✓        ✓          ✓
+    //   Constant(literal)   ✓                              hard-fail (existing)
+    //   This                ✓        ✓          ✓
+    //   Path                ✓        ✓          ✓
+    //   Filter              ✓        ✓          ✓
+    //   Union               ✓        ✓          ✓
+    //   Intersection        ✓        ✓          ✓
+    //   If                  ✓        ✓          ✓
+    //   Count               ✓                              hard-fail
+    //   Count(distinct)     ✓
+    //   Distinct            ✓        ✓          ✓
+    //   Min                 ✓        ✓ (IRI)    ✓ (IRI)
+    //   Max                 ✓        ✓ (IRI)    ✓ (IRI)
+    //   Sum                 ✓                              hard-fail
+    //   Limit               ✓        ✓          ✓
+    //   Offset              ✓        ✓          ✓
+    //   OrderBy             ✓        ✓          ✓
+    //   Exists              ✓                              hard-fail
+    //   Call::Builtin       ✓                              hard-fail (literal cast)
+    //   Call::UserDefined   ✓        ✓          ✓ (IRI-returning fn)
+
+    /// Focus `ex:a` (class `ex:Root`) with IRI-valued edges (`ex:p → {ex:b, ex:c}`),
+    /// numeric edges (`ex:n → {1, 2}`), and `ex:b` marked so a filter shape can
+    /// select it.
+    const AUDIT_DATA: &str = "ex:a a ex:Root ; ex:p ex:b, ex:c ; ex:n 1, 2 . ex:b a ex:Keep .";
+
+    /// A `sh:SPARQLFunction` returning a fixed IRI (`ex:derived`) regardless of its
+    /// single argument — the IRI-yielding surface used to exercise a user-defined
+    /// function call (`FnCall::UserDefined`) in subject/predicate position, where
+    /// the head term must be an IRI.
+    const MK_IRI_FN: &str = r#"
+        ex:mkIri a sh:SPARQLFunction ;
+          sh:parameter [ sh:path ex:arg ] ;
+          sh:select "SELECT (IRI(\"http://example.org/ns#derived\") AS ?out) WHERE {}" .
+    "#;
+
+    fn int(n: &str) -> String {
+        format!("\"{n}\"^^<http://www.w3.org/2001/XMLSchema#integer>")
+    }
+
+    fn boolean(b: bool) -> String {
+        format!("\"{b}\"^^<http://www.w3.org/2001/XMLSchema#boolean>")
+    }
+
+    /// Entail [`AUDIT_DATA`] under a single `sh:TripleRule` whose head is
+    /// (`subject`, `predicate`, `object`), returning every derived default-graph
+    /// triple. `extra` injects auxiliary shapes-graph declarations (e.g. a
+    /// `sh:SPARQLFunction`).
+    fn entail_rule(
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        extra: &str,
+    ) -> Vec<(String, String, String)> {
+        let out = entail(
+            AUDIT_DATA,
+            &format!(
+                "{extra}
+                 ex:S a sh:NodeShape ; sh:targetClass ex:Root ;
+                   sh:rule [ a sh:TripleRule ;
+                             sh:subject {subject} ; sh:predicate {predicate} ;
+                             sh:object {object} ] ."
             ),
-            ("[ sh:union ( [ sh:path ex:p ] ex:z ) ]", ex("z")),
+        );
+        triples(&out)
+    }
+
+    /// As [`entail_rule`], but the entailment must hard-fail (an illegal
+    /// subject/predicate legality breach); returns the error text.
+    fn entail_rule_err(subject: &str, predicate: &str, object: &str, extra: &str) -> String {
+        entail_err(
+            AUDIT_DATA,
+            &format!(
+                "{extra}
+                 ex:S a sh:NodeShape ; sh:targetClass ex:Root ;
+                   sh:rule [ a sh:TripleRule ;
+                             sh:subject {subject} ; sh:predicate {predicate} ;
+                             sh:object {object} ] ."
+            ),
+        )
+    }
+
+    /// The IRI-yielding kinds (usable in subject/predicate position): `(label,
+    /// node-expression Turtle, expected head IRI N-Triples, extra shapes)`.
+    fn iri_yielding_cases() -> Vec<(&'static str, &'static str, String, &'static str)> {
+        vec![
+            ("This", "sh:this", ex("a"), ""),
+            ("Constant(IRI)", "ex:z", ex("z"), ""),
+            ("Path", "[ sh:path ex:p ]", ex("b"), ""),
             (
+                "Filter",
+                "[ sh:filterShape [ sh:in ( ex:b ) ] ; sh:nodes [ sh:path ex:p ] ]",
+                ex("b"),
+                "",
+            ),
+            (
+                "Union",
+                "[ sh:union ( [ sh:path ex:p ] ex:z ) ]",
+                ex("z"),
+                "",
+            ),
+            (
+                "Intersection",
                 "[ sh:intersection ( [ sh:path ex:p ] [ sh:path ex:p ] ) ]",
                 ex("b"),
+                "",
             ),
             (
-                "[ sh:exists [ sh:path ex:p ] ]",
-                "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>".to_owned(),
-            ),
-            ("[ sh:distinct [ sh:path ex:p ] ]", ex("b")),
-            (
-                "[ sh:max [ sh:path ex:n ] ]",
-                "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned(),
-            ),
-            (
+                "If",
                 "[ sh:if [ sh:exists [ sh:path ex:p ] ] ; sh:then ex:yes ; sh:else ex:no ]",
                 ex("yes"),
+                "",
+            ),
+            ("Distinct", "[ sh:distinct [ sh:path ex:p ] ]", ex("b"), ""),
+            ("Min(IRI)", "[ sh:min [ sh:path ex:p ] ]", ex("b"), ""),
+            ("Max(IRI)", "[ sh:max [ sh:path ex:p ] ]", ex("c"), ""),
+            ("Limit", "[ sh:path ex:p ; sh:limit 1 ]", ex("b"), ""),
+            ("Offset", "[ sh:path ex:p ; sh:offset 1 ]", ex("c"), ""),
+            (
+                "OrderBy",
+                "[ sh:path ex:p ; sh:orderby sh:this ]",
+                ex("b"),
+                "",
+            ),
+            (
+                "Call(user-defined)",
+                "[ ex:mkIri ( sh:this ) ]",
+                ex("derived"),
+                MK_IRI_FN,
+            ),
+        ]
+    }
+
+    /// Every normative node-expression kind works positively in **object**
+    /// position of a `sh:TripleRule` head — including the function-call kinds
+    /// (`FnCall::Builtin` and `FnCall::UserDefined`) and the filter-shape kind.
+    #[test]
+    fn audit_object_position_every_node_expr_kind() {
+        // (label, object node-expression, expected object N-Triples, extra shapes).
+        let cases: Vec<(&str, &str, String, &str)> = vec![
+            ("Constant(IRI)", "ex:z", ex("z"), ""),
+            ("Constant(literal)", "\"lit\"", "\"lit\"".to_owned(), ""),
+            ("This", "sh:this", ex("a"), ""),
+            ("Path", "[ sh:path ex:p ]", ex("b"), ""),
+            (
+                "Filter",
+                "[ sh:filterShape [ sh:in ( ex:b ) ] ; sh:nodes [ sh:path ex:p ] ]",
+                ex("b"),
+                "",
+            ),
+            (
+                "Union",
+                "[ sh:union ( [ sh:path ex:p ] ex:z ) ]",
+                ex("z"),
+                "",
+            ),
+            (
+                "Intersection",
+                "[ sh:intersection ( [ sh:path ex:p ] [ sh:path ex:p ] ) ]",
+                ex("b"),
+                "",
+            ),
+            (
+                "If",
+                "[ sh:if [ sh:exists [ sh:path ex:p ] ] ; sh:then ex:yes ; sh:else ex:no ]",
+                ex("yes"),
+                "",
+            ),
+            ("Count", "[ sh:count [ sh:path ex:n ] ]", int("2"), ""),
+            (
+                "Count(distinct)",
+                "[ sh:count [ sh:distinct [ sh:path ex:n ] ] ]",
+                int("2"),
+                "",
+            ),
+            ("Distinct", "[ sh:distinct [ sh:path ex:p ] ]", ex("b"), ""),
+            ("Min", "[ sh:min [ sh:path ex:n ] ]", int("1"), ""),
+            ("Max", "[ sh:max [ sh:path ex:n ] ]", int("2"), ""),
+            ("Sum", "[ sh:sum [ sh:path ex:n ] ]", int("3"), ""),
+            ("Limit", "[ sh:path ex:p ; sh:limit 1 ]", ex("b"), ""),
+            ("Offset", "[ sh:path ex:p ; sh:offset 1 ]", ex("c"), ""),
+            (
+                "OrderBy",
+                "[ sh:path ex:p ; sh:orderby sh:this ]",
+                ex("b"),
+                "",
+            ),
+            (
+                "Exists",
+                "[ sh:exists [ sh:path ex:p ] ]",
+                boolean(true),
+                "",
+            ),
+            (
+                // `xsd:string(<iri>)` casts to a simple literal (rendered without an
+                // explicit `^^xsd:string` datatype in N-Triples).
+                "Call(builtin)",
+                "[ xsd:string ( [ sh:path ex:p ] ) ]",
+                "\"http://example.org/ns#b\"".to_owned(),
+                "",
+            ),
+            (
+                "Call(user-defined)",
+                "[ ex:mkIri ( sh:this ) ]",
+                ex("derived"),
+                MK_IRI_FN,
             ),
         ];
-        for (obj, expected) in cases {
-            let out = entail(
-                data,
-                &format!(
-                    "ex:S a sh:NodeShape ; sh:targetClass ex:Root ;
-                       sh:rule [ a sh:TripleRule ;
-                                 sh:subject sh:this ; sh:predicate ex:out ; sh:object {obj} ] ."
-                ),
-            );
-            let objects: Vec<String> = triples(&out)
+        for (label, obj, expected, extra) in cases {
+            let objects: Vec<String> = entail_rule("sh:this", "ex:out", obj, extra)
                 .into_iter()
                 .filter(|(s, p, _)| *s == ex("a") && *p == ex("out"))
                 .map(|(_, _, o)| o)
                 .collect();
             assert!(
                 objects.contains(&expected),
-                "object expr {obj} must derive {expected}; got {objects:?}"
+                "object kind {label} ({obj}) must derive {expected}; got {objects:?}"
+            );
+        }
+    }
+
+    /// Every IRI-yielding node-expression kind works positively in **subject**
+    /// position of a `sh:TripleRule` head (the head subject must be an IRI/blank).
+    #[test]
+    fn audit_subject_position_iri_yielding_kinds() {
+        for (label, expr, expected, extra) in iri_yielding_cases() {
+            let subjects: Vec<String> = entail_rule(expr, "ex:out", "ex:marker", extra)
+                .into_iter()
+                .filter(|(_, p, o)| *p == ex("out") && *o == ex("marker"))
+                .map(|(s, _, _)| s)
+                .collect();
+            assert!(
+                subjects.contains(&expected),
+                "subject kind {label} ({expr}) must derive subject {expected}; got {subjects:?}"
+            );
+        }
+    }
+
+    /// Every IRI-yielding node-expression kind works positively in **predicate**
+    /// position of a `sh:TripleRule` head (the head predicate must be an IRI).
+    #[test]
+    fn audit_predicate_position_iri_yielding_kinds() {
+        for (label, expr, expected, extra) in iri_yielding_cases() {
+            let predicates: Vec<String> = entail_rule("sh:this", expr, "ex:marker", extra)
+                .into_iter()
+                .filter(|(s, _, o)| *s == ex("a") && *o == ex("marker"))
+                .map(|(_, p, _)| p)
+                .collect();
+            assert!(
+                predicates.contains(&expected),
+                "predicate kind {label} ({expr}) must derive predicate {expected}; got {predicates:?}"
+            );
+        }
+    }
+
+    /// A node-expression kind whose result is a literal is legal only in **object**
+    /// position: placing it in subject or predicate position is a head-legality
+    /// hard error. Completes the audit for the literal-yielding kinds (`Count`,
+    /// `Sum`, `Exists`, and a literal-casting `Call::Builtin`).
+    #[test]
+    fn audit_literal_only_kinds_hard_fail_in_subject_and_predicate() {
+        // (label, node-expression yielding a literal, extra shapes).
+        let literal_kinds: Vec<(&str, &str, &str)> = vec![
+            ("Count", "[ sh:count [ sh:path ex:n ] ]", ""),
+            ("Sum", "[ sh:sum [ sh:path ex:n ] ]", ""),
+            ("Exists", "[ sh:exists [ sh:path ex:p ] ]", ""),
+            ("Call(builtin literal)", "[ xsd:string ( sh:this ) ]", ""),
+        ];
+        for (label, expr, extra) in &literal_kinds {
+            let subj_err = entail_rule_err(expr, "ex:out", "ex:marker", extra);
+            assert!(
+                subj_err.contains("illegal subject"),
+                "literal kind {label} in subject position must hard-fail; got {subj_err}"
+            );
+            let pred_err = entail_rule_err("sh:this", expr, "ex:marker", extra);
+            assert!(
+                pred_err.contains("illegal predicate"),
+                "literal kind {label} in predicate position must hard-fail; got {pred_err}"
             );
         }
     }
