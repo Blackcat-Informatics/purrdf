@@ -897,12 +897,16 @@ mod tests {
             patterns: vec![
                 TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
-                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/type")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                        "http://ex/type",
+                    )),
                     object: TermPattern::Variable(Variable::new("t")),
                 },
                 TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
-                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/age")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                        "http://ex/age",
+                    )),
                     object: TermPattern::Variable(Variable::new("n")),
                 },
             ],

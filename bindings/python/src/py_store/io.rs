@@ -125,8 +125,7 @@ pub(crate) fn parse_quads(
     format: NativeRdfFormat,
     base: Option<&str>,
 ) -> Result<Vec<RdfQuad>, String> {
-    let dataset = parse_dataset(data, format.media_type(), base)
-        .map_err(|e| e.to_string())?;
+    let dataset = parse_dataset(data, format.media_type(), base).map_err(|e| e.to_string())?;
     Ok(flat_rdf_quads_from_dataset(&dataset))
 }
 

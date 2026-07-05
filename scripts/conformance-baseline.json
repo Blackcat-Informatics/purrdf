@@ -34,11 +34,11 @@
       "note": "no ledgered gaps"
     },
     "rdflib LSP drop-in gate": {
-      "ledgered": 24,
+      "ledgered": 1,
       "note": "rdflib-suite strict xfails: Graph-subclass set-operator identity, rdf:List/Collection mutation, Result.bindings/SELECT* subselect projection, graph-prefix forwarding, aggregate/nested-FILTER evaluation, and ConjunctiveGraph legacy semantics"
     },
     "purrdf.compat parity": {
-      "ledgered": 5,
+      "ledgered": 4,
       "note": "purrdf.compat differential strict xfails vs rdflib 7.6"
     }
   }
