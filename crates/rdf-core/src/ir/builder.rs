@@ -572,8 +572,14 @@ impl RdfDatasetBuilder {
 
     /// Like [`intern_owned_term`](Self::intern_owned_term) but overrides the scope
     /// used for every blank node (including blanks nested inside quoted triples).
-    /// Private: callers outside this module use the public `push_dataset` path.
-    fn intern_owned_term_scoped(&mut self, term: &RdfTerm, scope: BlankScope) -> TermId {
+    ///
+    /// This is the scoped standardize-apart primitive (C0.2): callers merging
+    /// several native sources into one builder assign each source a FRESH
+    /// [`BlankScope`] so same-labelled blanks from different sources never collide
+    /// — exactly the discipline [`push_dataset`](Self::push_dataset) applies
+    /// internally. Direct `push_owned_*`/`intern_owned_term` pushes use
+    /// [`BlankScope::DEFAULT`] (scope 0).
+    pub fn intern_owned_term_scoped(&mut self, term: &RdfTerm, scope: BlankScope) -> TermId {
         match term {
             RdfTerm::Iri(iri) => self.intern_iri(iri),
             RdfTerm::BlankNode(label) => self.intern_blank(label, scope),
@@ -597,8 +603,14 @@ impl RdfDatasetBuilder {
     }
 
     /// Like [`push_owned_quad`](Self::push_owned_quad) but routes blank interning
-    /// through `scope` (standardize-apart support for `push_dataset`).
-    fn push_owned_quad_scoped(&mut self, quad: &RdfQuad, scope: BlankScope) {
+    /// through `scope`.
+    ///
+    /// The scoped standardize-apart primitive (C0.2) for the quad path: a caller
+    /// merging several native sources assigns each source a fresh [`BlankScope`] so
+    /// same-labelled blanks from different sources never collide, the same
+    /// discipline [`push_dataset`](Self::push_dataset) applies internally. Direct
+    /// [`push_owned_quad`](Self::push_owned_quad) uses [`BlankScope::DEFAULT`].
+    pub fn push_owned_quad_scoped(&mut self, quad: &RdfQuad, scope: BlankScope) {
         let handle = self.next_quad_handle();
         let s = self.intern_owned_term_scoped(&quad.subject, scope);
         let p = self.intern_iri(&quad.predicate);
@@ -622,7 +634,13 @@ impl RdfDatasetBuilder {
 
     /// Like [`push_owned_reifier`](Self::push_owned_reifier) but routes blank
     /// interning through `scope`.
-    fn push_owned_reifier_scoped(&mut self, reifier: &RdfReifier, scope: BlankScope) {
+    ///
+    /// The scoped standardize-apart primitive (C0.2) for the reifier side-table: a
+    /// caller merging several native sources assigns each source a fresh
+    /// [`BlankScope`] so same-labelled blanks from different sources never collide,
+    /// as [`push_dataset`](Self::push_dataset) does internally. Direct
+    /// [`push_owned_reifier`](Self::push_owned_reifier) uses [`BlankScope::DEFAULT`].
+    pub fn push_owned_reifier_scoped(&mut self, reifier: &RdfReifier, scope: BlankScope) {
         let s = self.intern_owned_term_scoped(&reifier.statement.subject, scope);
         let p = self.intern_iri(&reifier.statement.predicate);
         let o = self.intern_owned_term_scoped(&reifier.statement.object, scope);
@@ -643,7 +661,14 @@ impl RdfDatasetBuilder {
 
     /// Like [`push_owned_annotation`](Self::push_owned_annotation) but routes blank
     /// interning through `scope`.
-    fn push_owned_annotation_scoped(&mut self, annotation: &RdfAnnotation, scope: BlankScope) {
+    ///
+    /// The scoped standardize-apart primitive (C0.2) for the annotation
+    /// side-table: a caller merging several native sources assigns each source a
+    /// fresh [`BlankScope`] so same-labelled blanks from different sources never
+    /// collide, as [`push_dataset`](Self::push_dataset) does internally. Direct
+    /// [`push_owned_annotation`](Self::push_owned_annotation) uses
+    /// [`BlankScope::DEFAULT`].
+    pub fn push_owned_annotation_scoped(&mut self, annotation: &RdfAnnotation, scope: BlankScope) {
         let reifier_id = self.intern_owned_term_scoped(&annotation.reifier, scope);
         let p = self.intern_iri(&annotation.predicate);
         let o = self.intern_owned_term_scoped(&annotation.object, scope);
