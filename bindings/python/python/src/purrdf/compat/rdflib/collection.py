@@ -70,8 +70,9 @@ class Collection:
         if isinstance(key, slice):
             indices = list(range(*key.indices(length)))
             # Delete from the back so indices remain stable.
-            for idx in reversed(indices):
+            for idx in sorted(indices, reverse=True):
                 self._del_index(idx, length)
+                length -= 1
             return
 
         if not isinstance(key, int):

@@ -86,3 +86,33 @@ def test_setitem_negative_index(compat: ModuleType) -> None:
 
     assert list(cc) == _items(compat, "a", "b", "new-c")
     assert cc[-1] == new_c
+
+
+def test_del_negative_step_slice_all(compat: ModuleType) -> None:
+    """del c[::-1] deletes every item without index instability."""
+    _, cc = _collection(compat, "a", "b", "c")
+
+    del cc[::-1]
+
+    assert list(cc) == []
+    assert len(cc) == 0
+
+
+def test_del_negative_step_slice_stride_two(compat: ModuleType) -> None:
+    """del c[::-2] removes indices 2, 0 for a length-3 list."""
+    _, cc = _collection(compat, "a", "b", "c")
+
+    del cc[::-2]
+
+    assert list(cc) == _items(compat, "b")
+    assert len(cc) == 1
+
+
+def test_del_positive_step_slice(compat: ModuleType) -> None:
+    """del c[1:3] removes the middle two items of a length-4 list."""
+    _, cc = _collection(compat, "a", "b", "c", "d")
+
+    del cc[1:3]
+
+    assert list(cc) == _items(compat, "a", "d")
+    assert len(cc) == 2
