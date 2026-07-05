@@ -1105,16 +1105,16 @@ class Graph:
         prefix name, and graph bindings never shadow an in-text declaration.
         """
         seen = {m.group(1) for m in _PREFIX_DECL_RE.finditer(query_text)}
-        lines: list[str] = []
-        for prefix, ns in sorted(self._nsm.namespaces(), key=lambda x: x[0]):
-            if prefix and prefix not in seen:
-                seen.add(prefix)
-                lines.append(f"PREFIX {prefix}: <{ns}>")
+        merged: dict[str, object] = {
+            prefix: ns for prefix, ns in self._nsm.namespaces() if prefix
+        }
         if initNs:
-            for prefix, ns in sorted(initNs.items(), key=lambda x: x[0]):
-                if prefix and prefix not in seen:
-                    seen.add(prefix)
-                    lines.append(f"PREFIX {prefix}: <{ns}>")
+            merged.update(initNs)
+        lines = [
+            f"PREFIX {prefix}: <{ns}>"
+            for prefix, ns in sorted(merged.items(), key=lambda x: x[0])
+            if prefix and prefix not in seen
+        ]
         return "\n".join(lines) + "\n" if lines else ""
 
     def query(
