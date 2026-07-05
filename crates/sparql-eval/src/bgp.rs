@@ -142,7 +142,7 @@ pub(crate) fn eval_bgp(
         .term_id_by_value(&purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
 
     // Index-nested-loop evaluation. Rows start as a single all-unbound solution.
-    let mut rows: Vec<Solution> = vec![vec![None; working.len()]];
+    let mut rows: Vec<Solution> = vec![smallvec::smallvec![None; working.len()]];
     for &i in order.iter() {
         let cp = &compiled[i];
         // The probe's bound-axis shape is fixed across this slot's rows (a variable is

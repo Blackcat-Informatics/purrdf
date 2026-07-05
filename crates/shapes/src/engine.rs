@@ -9,78 +9,84 @@
 
 use std::sync::Arc;
 
-use ::purrdf::{RdfDataset, RdfDatasetBuilder, RdfTerm};
+use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, RdfDatasetBuilder, RdfTerm, TermId};
 
-use crate::data::{GraphFilter, IrDataGraph, Quad, ShaclDataGraph};
+use crate::data::{quads_for_pattern_ids, resolve_id, GraphFilter, ShaclData};
 use crate::model::{rdf, rdfs};
 use crate::report::ValidationReport;
 use crate::shapes::{Shape, Shapes, Target};
-use crate::term::{NamedNode, Term};
+use crate::term::{term_id_to_native, NamedNode, Term};
 
 // ── Target resolution helpers ─────────────────────────────────────────────────
 
-/// Build the native `Term` pattern for a predicate IRI.
-fn predicate_pattern(pred: &NamedNode) -> Term {
-    Term::NamedNode(pred.clone())
+/// Resolve a predicate IRI to its interned id in the Core dataset, if present.
+#[inline]
+fn resolve_pred(ds: &RdfDataset, pred: &NamedNode) -> Option<TermId> {
+    resolve_id(ds, &Term::NamedNode(pred.clone()))
 }
 
-/// Collect distinct subjects of `(?, pred, ?)` across all graphs.
-fn subjects_of<G: ShaclDataGraph>(data: &G, pred: &NamedNode) -> Vec<Term> {
-    let pred_term = predicate_pattern(pred);
-    let mut seen = std::collections::HashSet::new();
+/// Collect distinct subjects of `(?, pred, ?)` across all graphs. Dedup is on the
+/// interned [`TermId`] (`Copy`); only distinct subjects are resolved to a term.
+fn subjects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<Term> {
+    let Some(pid) = resolve_pred(ds, pred) else {
+        return Vec::new();
+    };
+    let mut seen: IdSet = IdSet::default();
     let mut result = Vec::new();
-    for quad in data.quads_for_pattern(None, Some(&pred_term), None, GraphFilter::AnyGraph) {
-        let t = quad.subject;
-        if seen.insert(t.clone()) {
-            result.push(t);
+    for q in quads_for_pattern_ids(ds, None, Some(pid), None, GraphFilter::AnyGraph) {
+        if seen.insert(q.s) {
+            result.push(term_id_to_native(ds, q.s));
         }
     }
     result
 }
 
-/// Collect distinct objects of `(?, pred, ?)` across all graphs.
-fn objects_of<G: ShaclDataGraph>(data: &G, pred: &NamedNode) -> Vec<Term> {
-    let pred_term = predicate_pattern(pred);
-    let mut seen = std::collections::HashSet::new();
+/// Collect distinct objects of `(?, pred, ?)` across all graphs. Dedup is on the
+/// interned [`TermId`] (`Copy`); only distinct objects are resolved to a term.
+fn objects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<Term> {
+    let Some(pid) = resolve_pred(ds, pred) else {
+        return Vec::new();
+    };
+    let mut seen: IdSet = IdSet::default();
     let mut result = Vec::new();
-    for quad in data.quads_for_pattern(None, Some(&pred_term), None, GraphFilter::AnyGraph) {
-        let t = quad.object;
-        if seen.insert(t.clone()) {
-            result.push(t);
+    for q in quads_for_pattern_ids(ds, None, Some(pid), None, GraphFilter::AnyGraph) {
+        if seen.insert(q.o) {
+            result.push(term_id_to_native(ds, q.o));
         }
     }
     result
 }
 
-/// The transitive closure of asserted `rdfs:subClassOf` at or below `class_iri`:
-/// the set containing `class_iri` itself plus every class that is a (transitive)
-/// subclass of it via `rdfs:subClassOf` triples **asserted in the data graph**.
+/// The transitive closure of asserted `rdfs:subClassOf` at or below `class_iri`,
+/// as interned [`TermId`]s: the set containing `class_iri` itself plus every class
+/// that is a (transitive) subclass of it via `rdfs:subClassOf` triples **asserted
+/// in the data graph**.
 ///
 /// This implements SHACL class-membership semantics (§4.2.5), which honor the
 /// subclass relationships present in the data. It is NOT OWL/RDFS inference: we
 /// read `rdfs:subClassOf` triples that exist and materialize nothing. (The
 /// "no-inference contract" means no reasoner is run, not that asserted subclass
 /// edges are ignored.) See the issue tracker.
-pub(crate) fn subclass_closure<G: ShaclDataGraph>(
-    data: &G,
-    class_iri: &NamedNode,
-) -> std::collections::HashSet<Term> {
-    let sub_class_of = Term::NamedNode(NamedNode::from(rdfs::SUB_CLASS_OF));
-    let mut closure = std::collections::HashSet::new();
-    let start = Term::NamedNode(class_iri.clone());
-    closure.insert(start.clone());
+///
+/// A class IRI not interned in `ds` (mentioned by no triple) yields an empty set:
+/// nothing can be typed to it, so it has no SHACL instances.
+pub(crate) fn subclass_closure(ds: &RdfDataset, class_iri: &NamedNode) -> IdSet {
+    let mut closure: IdSet = IdSet::default();
+    let Some(start) = resolve_id(ds, &Term::NamedNode(class_iri.clone())) else {
+        return closure;
+    };
+    closure.insert(start);
+    let Some(sco) = resolve_id(ds, &Term::NamedNode(NamedNode::from(rdfs::SUB_CLASS_OF))) else {
+        // No `rdfs:subClassOf` edges in the data: the closure is just the class.
+        return closure;
+    };
     let mut frontier = vec![start];
     while let Some(superclass) = frontier.pop() {
         // Any X with `X rdfs:subClassOf superclass` is a subclass to descend into.
-        for quad in data.quads_for_pattern(
-            None,
-            Some(&sub_class_of),
-            Some(&superclass),
-            GraphFilter::AnyGraph,
-        ) {
-            let sub = quad.subject;
-            if closure.insert(sub.clone()) {
-                frontier.push(sub);
+        for q in quads_for_pattern_ids(ds, None, Some(sco), Some(superclass), GraphFilter::AnyGraph)
+        {
+            if closure.insert(q.s) {
+                frontier.push(q.s);
             }
         }
     }
@@ -92,29 +98,29 @@ pub(crate) fn subclass_closure<G: ShaclDataGraph>(
 ///
 /// `closure_memo` is a per-`validate_with` call cache keyed by class IRI; the
 /// subclass BFS is performed at most once per distinct class across all shapes.
-fn instances_of_class<G: ShaclDataGraph>(
-    data: &G,
+fn instances_of_class(
+    ds: &RdfDataset,
     class_iri: &NamedNode,
-    closure_memo: &mut std::collections::HashMap<NamedNode, std::collections::HashSet<Term>>,
+    closure_memo: &mut FastMap<NamedNode, IdSet>,
 ) -> Vec<Term> {
-    let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
+    let Some(rdf_type) = resolve_id(ds, &Term::NamedNode(NamedNode::from(rdf::TYPE))) else {
+        return Vec::new();
+    };
     // Compute the subclass closure at most once per class IRI; clone the key only
     // on a memo miss (insert requires ownership), never on a hit.
     if !closure_memo.contains_key(class_iri) {
-        let closure = subclass_closure(data, class_iri);
+        let closure = subclass_closure(ds, class_iri);
         closure_memo.insert(class_iri.clone(), closure);
     }
     let classes = &closure_memo[class_iri];
-    let mut seen = std::collections::HashSet::new();
+    let mut seen: IdSet = IdSet::default();
     let mut result = Vec::new();
-    // Iterate the memoized set by reference — never clone the whole HashSet per call.
-    for class in classes {
-        for quad in
-            data.quads_for_pattern(None, Some(&rdf_type), Some(class), GraphFilter::AnyGraph)
+    // Iterate the memoized id set by reference — never clone the whole set per call.
+    for &class in classes {
+        for q in quads_for_pattern_ids(ds, None, Some(rdf_type), Some(class), GraphFilter::AnyGraph)
         {
-            let t = quad.subject;
-            if seen.insert(t.clone()) {
-                result.push(t);
+            if seen.insert(q.s) {
+                result.push(term_id_to_native(ds, q.s));
             }
         }
     }
@@ -127,24 +133,25 @@ fn instances_of_class<G: ShaclDataGraph>(
 ///
 /// `closure_memo` is threaded through to [`instances_of_class`] so the subclass
 /// BFS is performed at most once per class IRI per `validate_with` call.
-fn resolve_focus_nodes<G: ShaclDataGraph>(
-    data: &G,
+fn resolve_focus_nodes(
+    data: &ShaclData,
     targets: &[Target],
-    closure_memo: &mut std::collections::HashMap<NamedNode, std::collections::HashSet<Term>>,
+    closure_memo: &mut FastMap<NamedNode, IdSet>,
 ) -> Result<Vec<Term>, String> {
-    let mut seen = std::collections::HashSet::new();
+    let ds = data.core();
+    let mut seen: FastSet<Term> = FastSet::default();
     let mut nodes: Vec<Term> = Vec::new();
 
     for target in targets {
         let candidates: Vec<Term> = match target {
-            Target::Class(class_iri) => instances_of_class(data, class_iri, closure_memo),
-            Target::SubjectsOf(pred) => subjects_of(data, pred),
-            Target::ObjectsOf(pred) => objects_of(data, pred),
+            Target::Class(class_iri) => instances_of_class(ds, class_iri, closure_memo),
+            Target::SubjectsOf(pred) => subjects_of(ds, pred),
+            Target::ObjectsOf(pred) => objects_of(ds, pred),
             Target::Node(t) => vec![t.clone()],
             Target::ImplicitClass(t) => {
                 // Same semantics as Class: subjects of (?, rdf:type, t)
                 if let Term::NamedNode(nn) = t {
-                    instances_of_class(data, nn, closure_memo)
+                    instances_of_class(ds, nn, closure_memo)
                 } else {
                     vec![]
                 }
@@ -157,7 +164,7 @@ fn resolve_focus_nodes<G: ShaclDataGraph>(
             Target::Sparql {
                 select,
                 substitutions,
-            } => crate::sparql::eval_target(&data.sparql_dataset(), select, substitutions)
+            } => crate::sparql::eval_target(data.sparql(), select, substitutions)
                 .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
         };
         for node in candidates {
@@ -168,16 +175,16 @@ fn resolve_focus_nodes<G: ShaclDataGraph>(
     }
 
     // Sort for a stable, deterministic ordering across iterations.
-    nodes.sort_by_key(ToString::to_string);
+    nodes.sort_by_cached_key(ToString::to_string);
     Ok(nodes)
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// Validate any [`ShaclDataGraph`] backend against `shapes`.
+/// Validate a [`ShaclData`] holder against `shapes`.
 ///
-/// This is the single, backend-generic engine core; [`validate_dataset`] (the IR
-/// backend) bottoms out here.
+/// This is the single engine core; [`validate_dataset`] (the IR entry point)
+/// bottoms out here.
 ///
 /// For every non-deactivated node shape, the focus node set is resolved from the
 /// shape's target declarations and each focus node is validated against the shape
@@ -189,10 +196,7 @@ fn resolve_focus_nodes<G: ShaclDataGraph>(
 ///
 /// Returns `Err(String)` on a hard validation failure: a SHACL-SPARQL target
 /// or constraint query the engine cannot evaluate.
-pub fn validate_with<G: ShaclDataGraph>(
-    data: &G,
-    shapes: &Shapes,
-) -> Result<ValidationReport, String> {
+pub fn validate_with(data: &ShaclData, shapes: &Shapes) -> Result<ValidationReport, String> {
     validate_with_focus_filter(data, shapes, |_, _| true)
 }
 
@@ -206,13 +210,12 @@ pub fn validate_with<G: ShaclDataGraph>(
 /// # Errors
 ///
 /// Returns `Err(String)` on a hard validation failure (see [`validate_with`]).
-pub fn validate_with_focus_filter<G, F>(
-    data: &G,
+pub fn validate_with_focus_filter<F>(
+    data: &ShaclData,
     shapes: &Shapes,
     mut include_focus: F,
 ) -> Result<ValidationReport, String>
 where
-    G: ShaclDataGraph,
     F: FnMut(&Shape, &Term) -> bool,
 {
     // Install the shapes graph's SHACL-AF function table (`sh:SPARQLFunction`) for
@@ -223,11 +226,10 @@ where
 
     let mut all_results = Vec::new();
     // Per-call subclass-closure memo: keyed by class IRI, value is the full
-    // transitive closure of asserted rdfs:subClassOf edges below that class.
-    // Shared across all shapes in this validation run; each distinct class IRI
-    // is BFS-walked AT MOST ONCE regardless of how many shapes target it.
-    let mut closure_memo: std::collections::HashMap<NamedNode, std::collections::HashSet<Term>> =
-        std::collections::HashMap::new();
+    // transitive closure (interned ids) of asserted rdfs:subClassOf edges below
+    // that class. Shared across all shapes in this validation run; each distinct
+    // class IRI is BFS-walked AT MOST ONCE regardless of how many shapes target it.
+    let mut closure_memo: FastMap<NamedNode, IdSet> = FastMap::default();
 
     for shape in &shapes.node_shapes {
         if shape.deactivated {
@@ -241,7 +243,7 @@ where
         // nodes) and REGRESSED ~9% (15.71 ms → 16.43 ms), confirming that per-focus
         // work (~5 µs: an rdfs:subClassOf BFS-backed lookup + a `sh:pattern` regex)
         // is dwarfed by thread-pool dispatch and shared-`Store` read contention. The
-        // `ShaclDataGraph: Send + Sync` bound (data.rs) keeps the seam ready, but the
+        // frozen `RdfDataset` is `Sync`, so the seam stays ready, but the
         // parallel path waits on the re-entry condition: per-focus cost >50–100 µs,
         // i.e. once SHACL-SPARQL constraints are common or the IR-native backend runs
         // end-to-end (dropping the shared-`Store` contention). See the issue tracker (item 2).
@@ -258,36 +260,32 @@ where
         }
     }
 
-    // Deterministic sort key: (focus_node, component, source_shape, path, value)
-    all_results.sort_by(|a, b| {
-        let ka = (
-            a.focus_node.to_string(),
-            a.source_constraint_component.to_string(),
-            a.source_shape.to_string(),
-            a.result_path
+    // Deterministic sort key: (focus_node, component, source_shape, path, value,
+    // message, severity). The message and severity tiebreakers make the ordering
+    // TOTAL: two results that agree on the first five components (e.g. several
+    // `sh:uniqueLang` violations on one focus, which differ only in their message
+    // text) would otherwise keep their push order, which is a `FastMap`/`FastSet`
+    // iteration order and thus not guaranteed stable across ahash versions or
+    // targets. Sorting on the full serialized identity closes that leak so report
+    // bytes are invariant under data-insertion order and platform.
+    let sort_key = |r: &crate::report::ValidationResult| {
+        (
+            r.focus_node.to_string(),
+            r.source_constraint_component.to_string(),
+            r.source_shape.to_string(),
+            r.result_path
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
-            a.value
+            r.value
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
-        );
-        let kb = (
-            b.focus_node.to_string(),
-            b.source_constraint_component.to_string(),
-            b.source_shape.to_string(),
-            b.result_path
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-            b.value
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-        );
-        ka.cmp(&kb)
-    });
+            r.message.clone().unwrap_or_default(),
+            r.severity.clone(),
+        )
+    };
+    all_results.sort_by_cached_key(sort_key);
 
     let conforms = all_results.is_empty();
 
@@ -328,8 +326,9 @@ pub fn validate_projected_dataset(
     projected: Arc<RdfDataset>,
     shapes: &Shapes,
 ) -> Result<ValidationReport, String> {
-    let reference = IrDataGraph::new(projected);
-    validate_with(&reference, shapes)
+    // Core lookups and the SHACL-SPARQL paths run over the same `Arc<RdfDataset>`.
+    let data = ShaclData::new(Arc::clone(&projected), projected, None);
+    validate_with(&data, shapes)
 }
 
 /// Validate an already-SHACL-projected dataset with a focus-node filter.
@@ -345,41 +344,8 @@ pub fn validate_projected_dataset_with_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
-    let reference = IrDataGraph::new(projected);
-    validate_with_focus_filter(&reference, shapes, include_focus)
-}
-
-/// A [`ShaclDataGraph`] that evaluates SHACL Core constraints over a projected
-/// data graph while exposing a combined data+shapes dataset to SHACL-SPARQL.
-struct IrDataGraphWithShapes {
-    /// The data graph used for Core pattern lookups.
-    data: IrDataGraph,
-    /// The combined dataset handed to the native SPARQL engine: data in the
-    /// default graph, shapes in a named graph when a shapes-graph IRI is known.
-    sparql_dataset: Arc<RdfDataset>,
-    /// The named-graph IRI under which the shapes dataset is exposed, when known.
-    shapes_graph_iri: Option<String>,
-}
-
-impl ShaclDataGraph for IrDataGraphWithShapes {
-    fn quads_for_pattern(
-        &self,
-        subject: Option<&Term>,
-        predicate: Option<&Term>,
-        object: Option<&Term>,
-        graph: GraphFilter,
-    ) -> Vec<Quad> {
-        self.data
-            .quads_for_pattern(subject, predicate, object, graph)
-    }
-
-    fn sparql_dataset(&self) -> Arc<RdfDataset> {
-        Arc::clone(&self.sparql_dataset)
-    }
-
-    fn shapes_graph_iri(&self) -> Option<&str> {
-        self.shapes_graph_iri.as_deref()
-    }
+    let data = ShaclData::new(Arc::clone(&projected), projected, None);
+    validate_with_focus_filter(&data, shapes, include_focus)
 }
 
 /// Build the dataset exposed to SHACL-SPARQL paths.
@@ -438,15 +404,12 @@ pub fn validate_projected_dataset_with_shapes_graph(
     shapes: &Shapes,
     shapes_graph_iri: Option<&str>,
 ) -> Result<ValidationReport, String> {
-    let data_graph = IrDataGraph::new(Arc::clone(&projected));
     let (sparql_dataset, shapes_graph_iri) =
-        build_sparql_dataset(projected, shapes, shapes_graph_iri)?;
-    let graph = IrDataGraphWithShapes {
-        data: data_graph,
-        sparql_dataset,
-        shapes_graph_iri,
-    };
-    validate_with(&graph, shapes)
+        build_sparql_dataset(Arc::clone(&projected), shapes, shapes_graph_iri)?;
+    // Core lookups read the projected data graph (default graph only); the SPARQL
+    // paths see the combined data(+shapes) dataset under `shapes_graph_iri`.
+    let data = ShaclData::new(projected, sparql_dataset, shapes_graph_iri);
+    validate_with(&data, shapes)
 }
 
 /// Build a SHACL-projection dataset from the source [`RdfDataset`], flattening
@@ -1074,5 +1037,89 @@ mod tests {
         );
         assert_eq!(report.results.len(), 1);
         assert_eq!(report.results[0].severity, Severity::Warning);
+    }
+
+    // Determinism under permuted DATA-INSERTION order.
+    //
+    // Interning assigns each term a TermId in first-appearance order, so
+    // permuting the N-Triples lines assigns different ids to the same terms and
+    // reorders every id-keyed FastSet/FastMap and path frontier. The report must
+    // still be byte-identical, proving no id/hash iteration order reaches output.
+    // The fixture deliberately includes TWO sh:uniqueLang violations on one focus
+    // (duplicate `@en` and `@fr`), which share every sort component except the
+    // message — the case the message/severity tiebreaker in the engine sort
+    // exists to make total.
+    #[test]
+    fn determinism_under_permuted_insertion_order() {
+        let shapes_ttl = format!(
+            r"{PREFIXES}
+            ex:PersonShape a sh:NodeShape ;
+                sh:targetClass ex:Person ;
+                sh:property [ sh:path ex:name ; sh:minCount 1 ; sh:uniqueLang true ; ] .
+            "
+        );
+        let ty = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
+        let name = "<http://example.org/ns#name>";
+        let person = "<http://example.org/ns#Person>";
+        // alice: two duplicated languages (@en, @fr) → two uniqueLang violations
+        // with identical sort keys differing only in message. bob/carol: plain
+        // members exercising focus ordering. dave: no name → minCount violation.
+        let lines = vec![
+            format!("<http://example.org/ns#alice> {ty} {person} .\n"),
+            format!("<http://example.org/ns#alice> {name} \"a\"@en .\n"),
+            format!("<http://example.org/ns#alice> {name} \"b\"@en .\n"),
+            format!("<http://example.org/ns#alice> {name} \"c\"@fr .\n"),
+            format!("<http://example.org/ns#alice> {name} \"d\"@fr .\n"),
+            format!("<http://example.org/ns#bob> {ty} {person} .\n"),
+            format!("<http://example.org/ns#bob> {name} \"Bob\" .\n"),
+            format!("<http://example.org/ns#carol> {ty} {person} .\n"),
+            format!("<http://example.org/ns#carol> {name} \"Carol\" .\n"),
+            format!("<http://example.org/ns#dave> {ty} {person} .\n"),
+        ];
+
+        let render = |ordered: &[String]| {
+            let data_nt: String = ordered.concat();
+            let data = load_data_nt(&data_nt);
+            let shapes = load_shapes_ttl(&shapes_ttl);
+            validate(&data, &shapes).to_ntriples()
+        };
+
+        let forward = render(&lines);
+
+        let mut reversed = lines.clone();
+        reversed.reverse();
+        assert_eq!(
+            forward,
+            render(&reversed),
+            "report must be byte-identical under reversed insertion order"
+        );
+
+        // A rotation (different id assignment again) must also match.
+        let mut rotated = lines.clone();
+        rotated.rotate_left(3);
+        assert_eq!(
+            forward,
+            render(&rotated),
+            "report must be byte-identical under rotated insertion order"
+        );
+
+        // Sanity: the fixture actually produced the equal-sort-key uniqueLang pair
+        // plus other violations, so the tiebreaker is genuinely exercised.
+        let data = load_data_nt(&lines.concat());
+        let shapes = load_shapes_ttl(&shapes_ttl);
+        let report = validate(&data, &shapes);
+        let unique_lang = report
+            .results
+            .iter()
+            .filter(|r| {
+                r.source_constraint_component
+                    .as_str()
+                    .contains("UniqueLang")
+            })
+            .count();
+        assert_eq!(
+            unique_lang, 2,
+            "fixture must yield two uniqueLang violations (dup @en and @fr)"
+        );
     }
 }

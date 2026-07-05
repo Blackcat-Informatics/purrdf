@@ -40,6 +40,10 @@ pub mod diagnostic;
 // PyO3-free; the `purrdf-slice` FnO emitter builds a `FnoCatalog` from the slice
 // framework and serializes it here, replacing rdflib `emit_fno`/`_emit_fnom`.
 pub mod fno;
+// The workspace's single fixed-key ahash determinism policy: FastHasher and the
+// FastMap/FastSet/IdSet lookup-table aliases (determinism comes from id-sorting,
+// never hash order).
+pub mod hash;
 // The immutable, value-interned RDF 1.2 dataset IR (C1).
 pub mod ir;
 // Generic provenance sidecar for the immutable RDF 1.2 dataset (S2):
@@ -53,6 +57,8 @@ pub mod model;
 // Native SSSOM (Simple Standard for Sharing Ontology Mappings) TSV codec +
 // validator + RDF serializer. PyO3-free; replaces the `sssom` PyPI
 // package's parse+validate behaviour for the PurRDF mapping artifacts.
+// Shared small-vector primitives (SmallVec / IdVec) for hot, short-lived id rows.
+pub mod small;
 pub mod sssom;
 pub mod store;
 pub mod turtle;
@@ -78,6 +84,7 @@ pub use fno::{
     to_ntriples as fno_to_ntriples, to_quads as fno_to_quads, FnFunction, FnImpl, FnMapping,
     FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog,
 };
+pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 pub use ir::{
     canonicalize, canonicalize_with, dataset_diff, datasets_isomorphic, BlankScope, CanonHash,
     Canonicalized, DatasetDiff, DatasetSink, FrozenDatasetSource, GtsBundle, HandleEntry,
@@ -103,6 +110,7 @@ pub use provenance::{
     AttributionRole, DatasetProvenance, OriginKind, OriginSetId, OriginSetInterner,
     ProvenanceError, UnitId, UnitInterner,
 };
+pub use small::{smallvec, IdVec, SmallVec};
 pub use sssom::{
     SssomDiagnostic, SssomMapping, SssomMappingSet, SssomMeta, SSSOM_DEFAULT_VALIDATION_TYPES,
 };

@@ -123,7 +123,11 @@ impl SparqlParser {
     }
 
     /// Tokenize `text` and assemble the internal recursive-descent parser state.
-    fn parser_for<'o>(&self, text: &str, options: &'o ParserOptions) -> Result<Parser<'o>> {
+    fn parser_for<'a, 'o>(
+        &self,
+        text: &'a str,
+        options: &'o ParserOptions,
+    ) -> Result<Parser<'a, 'o>> {
         let tokens = tokenize(text)?;
         Ok(Parser {
             tokens,
@@ -138,8 +142,8 @@ impl SparqlParser {
     }
 }
 
-struct Parser<'o> {
-    tokens: Vec<Spanned>,
+struct Parser<'a, 'o> {
+    tokens: Vec<Spanned<'a>>,
     pos: usize,
     prefixes: HashMap<String, String>,
     base: Option<String>,
@@ -149,14 +153,14 @@ struct Parser<'o> {
     options: &'o ParserOptions,
 }
 
-impl Parser<'_> {
+impl<'a> Parser<'a, '_> {
     // ── token cursor ─────────────────────────────────────────────────────────
 
-    fn peek(&self) -> Option<&Token> {
+    fn peek(&self) -> Option<&Token<'a>> {
         self.tokens.get(self.pos).map(|s| &s.token)
     }
 
-    fn peek2(&self) -> Option<&Token> {
+    fn peek2(&self) -> Option<&Token<'a>> {
         self.tokens.get(self.pos + 1).map(|s| &s.token)
     }
 
@@ -166,7 +170,7 @@ impl Parser<'_> {
             .map_or_else(|| self.tokens.last().map_or(0, |s| s.end), |s| s.start)
     }
 
-    fn bump(&mut self) -> Option<Token> {
+    fn bump(&mut self) -> Option<Token<'a>> {
         let t = self.tokens.get(self.pos).map(|s| s.token.clone());
         if t.is_some() {
             self.pos += 1;
@@ -174,11 +178,11 @@ impl Parser<'_> {
         t
     }
 
-    fn at(&self, t: &Token) -> bool {
+    fn at(&self, t: &Token<'a>) -> bool {
         self.peek() == Some(t)
     }
 
-    fn eat(&mut self, t: &Token) -> bool {
+    fn eat(&mut self, t: &Token<'a>) -> bool {
         if self.at(t) {
             self.pos += 1;
             true
@@ -187,7 +191,7 @@ impl Parser<'_> {
         }
     }
 
-    fn expect(&mut self, t: &Token) -> Result<()> {
+    fn expect(&mut self, t: &Token<'a>) -> Result<()> {
         if self.eat(t) {
             Ok(())
         } else {
@@ -300,7 +304,7 @@ impl Parser<'_> {
     /// Expect a `prefix:` namespace token (PNAME_NS), i.e. an empty local part.
     fn expect_pname_ns(&mut self) -> Result<(String, String)> {
         match self.bump() {
-            Some(Token::PrefixedName(p, l)) if l.is_empty() => Ok((p, l)),
+            Some(Token::PrefixedName(p, l)) if l.is_empty() => Ok((p.to_string(), l.into_owned())),
             // `PREFIX ex:local <...>` is malformed — a prologue prefix must be a
             // bare PNAME_NS (`ex:`). Reject rather than silently dropping `local`.
             Some(Token::PrefixedName(p, l)) => Err(ParseError::syntax(
@@ -1824,7 +1828,7 @@ impl Parser<'_> {
         let Some(Token::Integer(lex)) = self.peek() else {
             return Ok(None);
         };
-        let lex = lex.clone();
+        let lex = *lex;
         match lex.parse::<u32>() {
             Ok(n) => {
                 self.pos += 1;
@@ -1838,7 +1842,7 @@ impl Parser<'_> {
     }
 
     fn parse_path_primary(&mut self) -> Result<PropertyPathExpression> {
-        if self.peek_kw("a") && matches!(self.peek(), Some(Token::Word(w)) if w == "a") {
+        if self.peek_kw("a") && matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
             self.pos += 1;
             return Ok(PropertyPathExpression::NamedNode(NamedNode::new_unchecked(
                 RDF_TYPE,
@@ -1887,7 +1891,7 @@ impl Parser<'_> {
         // forward one; see `NegatedPathElement` and the evaluator's decomposition
         // into a forward/reverse `Alternative`.
         let inverse = self.eat(&Token::Caret);
-        if matches!(self.peek(), Some(Token::Word(w)) if w == "a") {
+        if matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
             self.pos += 1;
             return Ok(NegatedPathElement {
                 predicate: NamedNode::new_unchecked(RDF_TYPE),
@@ -1923,7 +1927,7 @@ impl Parser<'_> {
                 | Token::Decimal(_)
                 | Token::Double(_),
             ) => Ok(TermPattern::Literal(self.parse_literal()?)),
-            Some(Token::Word(w)) if w == "true" || w == "false" => {
+            Some(Token::Word(w)) if *w == "true" || *w == "false" => {
                 let b = matches!(self.bump(), Some(Token::Word(w)) if w == "true");
                 Ok(TermPattern::Literal(Literal::new_typed(
                     if b { "true" } else { "false" },
@@ -1961,7 +1965,7 @@ impl Parser<'_> {
 
     /// A predicate in a triple position: an IRI, `a`, or a variable.
     fn parse_predicate_name(&mut self) -> Result<NamedNodePattern> {
-        if matches!(self.peek(), Some(Token::Word(w)) if w == "a") {
+        if matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
             self.pos += 1;
             return Ok(NamedNodePattern::NamedNode(NamedNode::new_unchecked(
                 RDF_TYPE,
@@ -1996,7 +2000,7 @@ impl Parser<'_> {
                     let Some(Token::LangTag(tag)) = self.bump() else {
                         unreachable!()
                     };
-                    let (lang, dir) = split_lang_dir(&tag);
+                    let (lang, dir) = split_lang_dir(tag);
                     Ok(Literal::new_lang(s, lang, dir))
                 } else if self.eat(&Token::HatHat) {
                     let dt = self.expect_iri_node()?;
@@ -2025,7 +2029,7 @@ impl Parser<'_> {
     fn expect_iri_node(&mut self) -> Result<NamedNode> {
         match self.bump() {
             Some(Token::Iri(s)) => NamedNode::new(self.resolve_iri(&s)?),
-            Some(Token::PrefixedName(p, l)) => self.resolve_prefixed(&p, &l),
+            Some(Token::PrefixedName(p, l)) => self.resolve_prefixed(p, l.as_ref()),
             other => Err(ParseError::syntax(
                 format!("expected an IRI, found {other:?}"),
                 self.span(),
@@ -2103,7 +2107,7 @@ impl Parser<'_> {
                 let t = self.parse_ground_triple()?;
                 Ok(GroundTerm::Triple(Box::new(t)))
             }
-            Some(Token::Word(w)) if w == "true" || w == "false" => {
+            Some(Token::Word(w)) if *w == "true" || *w == "false" => {
                 let b = matches!(self.bump(), Some(Token::Word(w)) if w == "true");
                 Ok(GroundTerm::Literal(Literal::new_typed(
                     if b { "true" } else { "false" },
@@ -2127,7 +2131,7 @@ impl Parser<'_> {
             ));
         }
         // The predicate is an IRI or the `a` keyword (rdf:type).
-        let predicate = if matches!(self.peek(), Some(Token::Word(w)) if w == "a") {
+        let predicate = if matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
             self.pos += 1;
             NamedNode::new_unchecked("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
         } else {
@@ -2493,7 +2497,7 @@ impl Parser<'_> {
             ) => Ok(Expression::Literal(self.parse_literal()?)),
             Some(Token::TripleOpen) => self.parse_triple_term_expr(aggs),
             Some(Token::Word(w)) => {
-                let w = w.clone();
+                let w = *w;
                 if w == "true" || w == "false" {
                     self.pos += 1;
                     Ok(Expression::Literal(Literal::new_typed(
@@ -2501,7 +2505,7 @@ impl Parser<'_> {
                         NamedNode::new_unchecked(XSD_BOOLEAN),
                     )))
                 } else {
-                    self.parse_builtin_or_aggregate(&w, aggs)
+                    self.parse_builtin_or_aggregate(w, aggs)
                 }
             }
             other => Err(ParseError::syntax(
@@ -2667,7 +2671,7 @@ impl Parser<'_> {
             self.expect_kw("SEPARATOR")?;
             self.expect(&Token::Eq)?;
             match self.bump() {
-                Some(Token::StringLit(s) | Token::LongStringLit(s)) => Ok(Some(s)),
+                Some(Token::StringLit(s) | Token::LongStringLit(s)) => Ok(Some(s.into_owned())),
                 other => Err(ParseError::syntax(
                     format!("expected SEPARATOR string, found {other:?}"),
                     self.span(),

@@ -35,6 +35,10 @@ purrdf-xsd = { workspace = true }
 # comment/EOL). SIMD on x86/aarch64, portable SWAR fallback — wasm-clean, no feature
 # gate. NOT an oxigraph-family crate, so the front-end stays a clean native leaf.
 memchr = { workspace = true }
+# Inline small-vector primitive for hot, short-lived id rows in the algebra AST
+# (default features only — no `union`/`serde`; wasm-clean, `unsafe`-free). Version
+# is pinned once in the root `[workspace.dependencies]`.
+smallvec = { workspace = true }
 
 [dev-dependencies]
 # Colored line-diffs on assert_eq! failure (repo convention).
@@ -48,4 +52,8 @@ criterion = { workspace = true }
 
 [[bench]]
 name = "tokenize"
+harness = false
+
+[[bench]]
+name = "tokenize_values"
 harness = false
