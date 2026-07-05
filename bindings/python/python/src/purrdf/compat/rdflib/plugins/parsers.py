@@ -17,11 +17,13 @@ quad formats.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 import purrdf
 
 from ..parser import Parser
+from ..term import URIRef
 
 if TYPE_CHECKING:
     from ..graph import Graph
@@ -96,9 +98,56 @@ class TriGParser(_NativeParser):
 class JsonLDParser(Parser):
     """JSON-LD (with RDF-star support) parser via the purrdf-gts codec."""
 
+    #: Reserved JSON-LD keywords that are never prefix mappings.
+    _RESERVED_CONTEXT_KEYS: frozenset[str] = frozenset(
+        (
+            "@vocab",
+            "@language",
+            "@base",
+            "@version",
+            "@propagate",
+            "@protected",
+            "@import",
+            "@scope",
+        )
+    )
+
     def parse(self, source: Any, sink: Graph, **kwargs: Any) -> None:
         """Load JSON-LD text (``from_json_ld`` → N-Quads → store)."""
-        sink._store.load(purrdf.from_json_ld(_as_text(source)), format=_NQ)
+        text = _as_text(source)
+        sink._store.load(purrdf.from_json_ld(text), format=_NQ)
+        self._bind_jsonld_context_prefixes(text, sink)
+
+    def _bind_jsonld_context_prefixes(self, text: str, sink: Graph) -> None:
+        """Extract prefix → namespace mappings from a JSON-LD ``@context``."""
+        try:
+            doc = json.loads(text)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(doc, dict):
+            return
+        context = doc.get("@context")
+        if context is None:
+            return
+        if isinstance(context, str):
+            # Remote context URL; cannot recover prefixes from this document.
+            return
+        if isinstance(context, dict):
+            contexts = [context]
+        elif isinstance(context, list):
+            contexts = context
+        else:
+            return
+        for ctx in contexts:
+            if not isinstance(ctx, dict):
+                continue
+            for prefix, value in ctx.items():
+                if prefix in self._RESERVED_CONTEXT_KEYS:
+                    continue
+                if not isinstance(value, str):
+                    continue
+                if value.endswith(("/", "#", ":")):
+                    sink.bind(prefix, URIRef(value))
 
 
 class RDFXMLParser(Parser):
