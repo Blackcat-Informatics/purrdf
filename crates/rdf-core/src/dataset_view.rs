@@ -294,15 +294,12 @@ pub trait DatasetView: sealed::Sealed {
         let Some(type_p) = self.term_id_by_value(&TermValue::iri(RDF_TYPE)) else {
             return false;
         };
-        let seq = self.term_id_by_value(&TermValue::iri(RDF_SEQ));
-        let bag = self.term_id_by_value(&TermValue::iri(RDF_BAG));
-        let alt = self.term_id_by_value(&TermValue::iri(RDF_ALT));
-        // No container class interned ⇒ nothing can be typed as one.
-        if seq.is_none() && bag.is_none() && alt.is_none() {
-            return false;
-        }
+        // One reverse lookup (`rdf:type`); the container classes are matched by
+        // resolving each type object's IRI, not by three extra id probes.
         self.quads_for_pattern(Some(head), Some(type_p), None, graph)
-            .any(|q| Some(q.o) == seq || Some(q.o) == bag || Some(q.o) == alt)
+            .any(|q| {
+                matches!(self.resolve(q.o), TermRef::Iri(iri) if iri == RDF_SEQ || iri == RDF_BAG || iri == RDF_ALT)
+            })
     }
 }
 
