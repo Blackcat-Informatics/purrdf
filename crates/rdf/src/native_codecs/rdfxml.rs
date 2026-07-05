@@ -41,11 +41,42 @@ use std::sync::Arc;
 
 use roxmltree::{Document, Node};
 
+use super::codec::RdfCodec;
 use super::parse::{fold_statement_layer, FoldNode, FoldRow, RDF_REIFIES as RDF_REIFIES_IRI};
 use super::ser_model::{deterministic_blank_label_with_prefix, SerGraph, SerTerm, SerTermKind};
+use super::text_parse::LineParseMode;
 use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
 };
+
+/// The RDF/XML codec: a standalone (non-line-family) [`RdfCodec`] over the in-repo W3C
+/// RDF/XML grammar. RDF/XML is treated as star-INcapable under the transcode loss
+/// contract (`*→rdfxml` is `rdf12-star-unrepresentable`), and its parser carries no
+/// span-recording tokenizer.
+pub(super) struct RdfXmlCodec;
+
+impl RdfCodec for RdfXmlCodec {
+    fn carries_star(&self) -> bool {
+        false
+    }
+
+    fn tokenizer_carries_spans(&self) -> bool {
+        false
+    }
+
+    fn parse(
+        &self,
+        text: &str,
+        base_iri: Option<&str>,
+        _mode: LineParseMode,
+    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        super::parse::parse_rdfxml_without_panicking(text, base_iri)
+    }
+
+    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+        serialize_ser_graph_to_rdfxml(graph)
+    }
+}
 
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";

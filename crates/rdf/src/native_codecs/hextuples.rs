@@ -22,9 +22,43 @@
 
 use std::sync::Arc;
 
+use super::codec::RdfCodec;
+use super::media_type::NativeRdfFormat;
 use super::parse::{fold_statement_layer, FoldNode, FoldRow, RDF_REIFIES};
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
+use super::text_parse::LineParseMode;
 use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
+
+/// The HexTuples codec: a standalone (non-line-family) [`RdfCodec`] over the
+/// line-oriented NDJSON quads syntax. A classic quad syntax with no RDF-1.2 triple-term
+/// surface, so it is star-INcapable, and its NDJSON parser carries no span-recording
+/// tokenizer.
+pub(super) struct HexTuplesCodec;
+
+impl RdfCodec for HexTuplesCodec {
+    fn carries_star(&self) -> bool {
+        false
+    }
+
+    fn tokenizer_carries_spans(&self) -> bool {
+        false
+    }
+
+    fn parse(
+        &self,
+        text: &str,
+        _base_iri: Option<&str>,
+        _mode: LineParseMode,
+    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        super::parse::catch_codec_panic(NativeRdfFormat::HexTuples, || {
+            parse_hextuples_to_dataset(text)
+        })
+    }
+
+    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+        serialize_ser_graph_to_hextuples(graph)
+    }
+}
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";

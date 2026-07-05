@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use super::media_type::{classify, NativeRdfFormat};
 use super::ser_model::{SerGraph, SerTermKind};
-use super::span::{NoSpans, ParseOptions, SpanCollector, SpanTable};
+use super::span::{ParseOptions, SpanCollector, SpanTable};
 use super::text_parse::LineParseMode;
 use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
@@ -156,34 +156,30 @@ pub fn parse_dataset_with(
 
     let format = classify(media_type)?;
 
-    match format {
-        NativeRdfFormat::NTriples
-        | NativeRdfFormat::NQuads
-        | NativeRdfFormat::Turtle
-        | NativeRdfFormat::TriG => {
-            // UTF-8 is only required by the text tokenizer; the byte-oriented formats
-            // below never touch `text`, so validate it lazily inside this arm.
-            let text = std::str::from_utf8(bytes)
-                .map_err(|e| RdfDiagnostic::error("native-codec-utf8", e.to_string()))?;
-            // Force sequential so subject spans are captured (the parallel path is
-            // `NoSpans`-only), then fold into the SAME frozen IR `parse_dataset` builds.
-            let mut table = SpanTable::default();
-            let graph = text_parse_without_panicking(
-                format,
-                text,
-                base_iri,
-                LineParseMode::ForceSequential,
-                &mut table,
-            )?;
-            let dataset = dataset_from_ser_graph(&graph)?;
-            Ok((dataset, Some(table)))
-        }
+    if super::codec::codec_for(format).tokenizer_carries_spans() {
+        // Line/Turtle family: UTF-8 is only required by the text tokenizer, so validate
+        // it here where the span-carrying pipeline consumes it.
+        let text = std::str::from_utf8(bytes)
+            .map_err(|e| RdfDiagnostic::error("native-codec-utf8", e.to_string()))?;
+        // Force sequential so subject spans are captured (the parallel path is
+        // `NoSpans`-only), then fold into the SAME frozen IR `parse_dataset` builds. This
+        // is a distinct `SpanTable` monomorphization of `text_parse_without_panicking`,
+        // so the hot `NoSpans` path the codec's `parse` drives stays zero-cost.
+        let mut table = SpanTable::default();
+        let graph = text_parse_without_panicking(
+            format,
+            text,
+            base_iri,
+            LineParseMode::ForceSequential,
+            &mut table,
+        )?;
+        let dataset = dataset_from_ser_graph(&graph)?;
+        Ok((dataset, Some(table)))
+    } else {
         // RDF/XML, TriX, HexTuples: no span-carrying text tokenizer, so return an empty
         // table alongside the identical dataset (physical-location fallback by design).
-        NativeRdfFormat::RdfXml | NativeRdfFormat::TriX | NativeRdfFormat::HexTuples => {
-            let dataset = parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)?;
-            Ok((dataset, Some(SpanTable::default())))
-        }
+        let dataset = parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)?;
+        Ok((dataset, Some(SpanTable::default())))
     }
 }
 
@@ -213,43 +209,24 @@ fn parse_dataset_mode(
     let text = std::str::from_utf8(bytes)
         .map_err(|e| RdfDiagnostic::error("native-codec-utf8", e.to_string()))?;
 
-    match format {
-        // The line/Turtle family parses FIRST-PARTY straight into the first-party
-        // in-memory SerGraph the statement-layer fold consumes — no purrdf-gts text
-        // codec, no text→bytes→reader indirection. This also decodes `\uXXXX` UCHAR
-        // escapes inside IRIREFs (W3C test060), which the purrdf-gts IRIREF readers
-        // rejected. N-Triples/N-Quads above the `text_parse` size threshold tokenize
-        // their line-aligned chunks in PARALLEL (phase 1) and re-join in document
-        // order before interning (phase 2), so the frozen IR — term ids, quad order,
-        // diagnostics — is byte-identical to the sequential pipeline. Turtle/TriG stay
-        // sequential (stateful `@prefix`/`@base` + document-ordered bnode minting; see
-        // `text_parse::parse_to_gts_graph_mode`).
-        NativeRdfFormat::NTriples
-        | NativeRdfFormat::NQuads
-        | NativeRdfFormat::Turtle
-        | NativeRdfFormat::TriG => {
-            let graph = text_parse_without_panicking(format, text, base_iri, mode, &mut NoSpans)?;
-            dataset_from_ser_graph(&graph)
-        }
-        // RDF/XML parses FIRST-PARTY through the in-repo `rdfxml` codec (W3C RDF/XML
-        // grammar over a pure-Rust XML DOM), which interns straight into the frozen IR
-        // through the SAME shared statement-layer fold — no intermediate GTS graph.
-        NativeRdfFormat::RdfXml => parse_rdfxml_without_panicking(text, base_iri),
-        // TriX / HexTuples parse FIRST-PARTY through their in-repo codecs (XML DOM /
-        // NDJSON), interning straight into the frozen IR through the SAME shared
-        // statement-layer fold.
-        NativeRdfFormat::TriX => catch_codec_panic(NativeRdfFormat::TriX, || {
-            super::trix::parse_trix_to_dataset(text)
-        }),
-        NativeRdfFormat::HexTuples => catch_codec_panic(NativeRdfFormat::HexTuples, || {
-            super::hextuples::parse_hextuples_to_dataset(text)
-        }),
-    }
+    // Dispatch to the format's codec (the single `codec_for` chokepoint). Each codec is
+    // FIRST-PARTY and panic-guarded: the line/Turtle family parses into the in-memory
+    // SerGraph the statement-layer fold consumes (N-Triples/N-Quads above the
+    // `text_parse` size threshold tokenize line-aligned chunks in PARALLEL and re-join
+    // in document order, so the frozen IR is byte-identical to the sequential pipeline;
+    // Turtle/TriG stay sequential for stateful `@prefix`/`@base` + document-ordered
+    // bnode minting — see `text_parse::parse_to_gts_graph_mode`); RDF/XML, TriX and
+    // HexTuples intern straight into the frozen IR through the SAME shared fold, no
+    // intermediate GTS graph. `mode` is honored only by the line/Turtle family.
+    super::codec::codec_for(format).parse(text, base_iri, mode)
 }
 
 /// Run a first-party codec parse under a panic guard, converting any unwind into a
 /// structured `native-codec-panic` diagnostic (mirrors the RDF/XML guard).
-fn catch_codec_panic<F>(format: NativeRdfFormat, parse: F) -> Result<Arc<RdfDataset>, RdfDiagnostic>
+pub(super) fn catch_codec_panic<F>(
+    format: NativeRdfFormat,
+    parse: F,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic>
 where
     F: FnOnce() -> Result<Arc<RdfDataset>, RdfDiagnostic>,
 {
@@ -266,7 +243,7 @@ where
     }
 }
 
-fn text_parse_without_panicking<S: SpanCollector>(
+pub(super) fn text_parse_without_panicking<S: SpanCollector>(
     format: NativeRdfFormat,
     text: &str,
     base_iri: Option<&str>,
@@ -289,7 +266,7 @@ fn text_parse_without_panicking<S: SpanCollector>(
     }
 }
 
-fn parse_rdfxml_without_panicking(
+pub(super) fn parse_rdfxml_without_panicking(
     text: &str,
     base_iri: Option<&str>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
