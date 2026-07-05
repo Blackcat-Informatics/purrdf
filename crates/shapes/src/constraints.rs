@@ -1604,7 +1604,7 @@ fn eval_constraint(
             // stands for the shape's path in SPARQL surface syntax.
             let query = substitute_path_placeholder(select, path);
             crate::sparql::eval_sparql_constraint(
-                &store.sparql_dataset(),
+                store.sparql(),
                 focus_node,
                 &query,
                 &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
@@ -1672,13 +1672,13 @@ fn eval_constraint(
         } => {
             let sev = csev.clone().unwrap_or_else(|| severity.clone());
             let msg = cmsg.clone().or_else(|| message.clone());
-            let dataset = store.sparql_dataset();
+            let dataset = store.sparql();
             // The custom-component validators run over the owned term model; resolve
             // the value nodes for the ASK validator's per-value binding.
             let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
             match validator {
                 ComponentValidator::Ask { .. } => crate::components::eval_ask_validator(
-                    &dataset,
+                    dataset,
                     focus_node,
                     &value_terms,
                     validator,
@@ -1692,7 +1692,7 @@ fn eval_constraint(
                     Some(source_shape),
                 ),
                 ComponentValidator::Select { .. } => crate::components::eval_select_validator(
-                    &dataset,
+                    dataset,
                     focus_node,
                     validator,
                     bindings,

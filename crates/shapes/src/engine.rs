@@ -164,7 +164,7 @@ fn resolve_focus_nodes(
             Target::Sparql {
                 select,
                 substitutions,
-            } => crate::sparql::eval_target(&data.sparql_dataset(), select, substitutions)
+            } => crate::sparql::eval_target(data.sparql(), select, substitutions)
                 .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
         };
         for node in candidates {
@@ -175,7 +175,7 @@ fn resolve_focus_nodes(
     }
 
     // Sort for a stable, deterministic ordering across iterations.
-    nodes.sort_by_key(ToString::to_string);
+    nodes.sort_by_cached_key(ToString::to_string);
     Ok(nodes)
 }
 
@@ -285,7 +285,7 @@ where
             r.severity.clone(),
         )
     };
-    all_results.sort_by_key(sort_key);
+    all_results.sort_by_cached_key(sort_key);
 
     let conforms = all_results.is_empty();
 

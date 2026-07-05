@@ -98,9 +98,13 @@ impl ShaclData {
     }
 
     /// The combined dataset for native SHACL-SPARQL evaluation.
+    ///
+    /// Borrows the held `Arc` rather than cloning it: the native SPARQL engine
+    /// entry points take `&Arc<RdfDataset>` and never take ownership, so a
+    /// read-only caller needs no per-call refcount bump.
     #[inline]
-    pub fn sparql_dataset(&self) -> Arc<RdfDataset> {
-        Arc::clone(&self.sparql)
+    pub fn sparql(&self) -> &Arc<RdfDataset> {
+        &self.sparql
     }
 
     /// The IRI of the named graph under which the shapes graph is exposed to

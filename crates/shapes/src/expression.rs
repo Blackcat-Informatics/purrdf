@@ -385,7 +385,7 @@ pub fn eval_node_expr(
                 [] => els,
                 [t] => {
                     let ebv = crate::sparql::eval_scalar_expr(
-                        &store.sparql_dataset(),
+                        store.sparql(),
                         "IF(?c, true, false)",
                         &[("c".to_owned(), t.clone())],
                     )?;
@@ -436,11 +436,7 @@ pub fn eval_node_expr(
                 Some(kw) => format!("{kw}({})", placeholders.join(", ")),
                 None => format!("<{}>({})", iri.as_str(), placeholders.join(", ")),
             };
-            match crate::sparql::eval_scalar_expr(
-                &store.sparql_dataset(),
-                &expr_string,
-                &arg_terms,
-            )? {
+            match crate::sparql::eval_scalar_expr(store.sparql(), &expr_string, &arg_terms)? {
                 // A SPARQL error/unbound result is the correct SHACL-AF "no
                 // value" signal — an empty node set, not a forced violation.
                 Some(term) => Ok(vec![term]),
@@ -501,7 +497,7 @@ pub fn eval_node_expr(
             let mut distinct: Vec<Term> = keyed.iter().map(|(_, k)| k.clone()).collect();
             distinct.sort_by_cached_key(Term::to_string);
             distinct.dedup();
-            let ranked = crate::sparql::eval_order(&store.sparql_dataset(), &distinct, false)?;
+            let ranked = crate::sparql::eval_order(store.sparql(), &distinct, false)?;
             let mut rank: FastMap<String, usize> = FastMap::default();
             for (i, k) in ranked.iter().enumerate() {
                 rank.insert(k.to_string(), i);
@@ -600,7 +596,7 @@ fn aggregate(
     guard: &mut RecursionGuard,
 ) -> Result<Vec<Term>, String> {
     let operands = eval_node_expr(store, focus, of, guard)?;
-    match crate::sparql::eval_aggregate(&store.sparql_dataset(), agg, &operands)? {
+    match crate::sparql::eval_aggregate(store.sparql(), agg, &operands)? {
         Some(term) => Ok(vec![term]),
         None => Ok(Vec::new()),
     }
