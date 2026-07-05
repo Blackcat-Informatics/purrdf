@@ -4,6 +4,33 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.3.2] - 2026-07-05
+
+### Bug Fixes
+
+- **shapes:** Pre-bind $shapesGraph in sh:SPARQLRule CONSTRUCT execution
+- **build:** Optimize parse-hot workspace crates in dev/test profile to remove ~300x regression
+
+### Documentation
+
+- **conformance:** Add SHACL Rules scoreboard row; SHACL-AF is 100% complete
+
+### Features
+
+- **shapes:** SHACL Rules engine — sh:TripleRule, sh:SPARQLRule, fixpoint entailment
+- **shapes:** Cartesian-product multi-valued function-call node-expression args
+- **bindings:** Expose SHACL rule entailment on Python, wasm, and C-API surfaces
+
+### Performance
+
+- **shapes:** Key the rules fixpoint divergence universe on Term, not String
+- **shapes:** Reuse bindings buffer and hoist arg keys in function-call cartesian product
+
+### Testing
+
+- **shapes:** SHACL Rules conformance corpus + inferred-graph harness
+- **shapes:** Audit every node-expression kind in sh:TripleRule subject/predicate/object positions
+- **shapes:** Cover blank-focus blank minting and multi-round fixpoint convergence
 ## [0.3.1] - 2026-07-05
 
 ### CI & Build

@@ -1,6 +1,6 @@
 {
   "name": "@blackcatinformatics/purrdf",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "A wasm32, in-memory RDF 1.2 engine with an idiomatic RDF/JS (DataFactory/Dataset/Stream) API. Quoted-triple terms and directional literals included.",
   "type": "module",
   "license": "MIT OR Apache-2.0",
