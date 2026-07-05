@@ -220,7 +220,7 @@ fn secret_array(secret: Option<&Bound<'_, PyBytes>>) -> PyResult<Option<[u8; 32]
 /// Takes plain `&[u8]` so callers can run it inside [`Python::detach`] (GIL
 /// released); the error is a lazily-materialized `ValueError`.
 fn parse_rdf(data: &[u8], format: PyRdfFormat) -> PyResult<Vec<RdfQuad>> {
-    parse_quads(data, rdf_format(format))
+    parse_quads(data, rdf_format(format), None)
         .map_err(|e| PyValueError::new_err(format!("parse error: {e}")))
 }
 

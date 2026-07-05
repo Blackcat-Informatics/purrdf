@@ -167,6 +167,23 @@ class DefinedNamespaceMeta(type):
             if isinstance(c, DefinedNamespaceMeta)
         )
 
+    def __dir__(cls) -> list[str]:  # type: ignore[override]
+        """Return the full member URIRefs (RDFLib parity for ``dir(ns)``)."""
+        try:
+            this_ns = cls._NS
+        except AttributeError:
+            return []
+        members: set[str] = set()
+        for c in cls.mro():
+            if not isinstance(c, DefinedNamespaceMeta):
+                continue
+            members.update(getattr(c, "__annotations__", {}))
+            members.update(c._extras)
+        if cls._underscore_num:
+            members = {name for name in members if not (name[:1] == "_" and name[1:].isdigit())}
+        members -= _DFNS_RESERVED_ATTRS
+        return sorted(str(this_ns[name]) for name in members)
+
 
 class DefinedNamespace(metaclass=DefinedNamespaceMeta):
     """A namespace with an enumerated list of members (RDFLib parity)."""
@@ -620,7 +637,38 @@ class NamespaceManager:
 # layer with rdflib's exact base IRIs. This is drop-in parity, NOT purrdf minting
 # its own ontology — every IRI below is a well-known external vocabulary.
 
-RDF = Namespace("http://www.w3.org/1999/02/22-rdf-syntax-ns#")
+class _RDF(DefinedNamespace):
+    """The RDF 1.1 / 1.2 vocabulary."""
+
+    _NS = Namespace("http://www.w3.org/1999/02/22-rdf-syntax-ns#")
+    _fail = True
+    _underscore_num = True
+
+    nil: URIRef
+    direction: URIRef
+    first: URIRef
+    language: URIRef
+    object: URIRef
+    predicate: URIRef
+    rest: URIRef
+    subject: URIRef
+    type: URIRef
+    value: URIRef
+    Alt: URIRef
+    Bag: URIRef
+    CompoundLiteral: URIRef
+    List: URIRef
+    Property: URIRef
+    Seq: URIRef
+    Statement: URIRef
+    HTML: URIRef
+    JSON: URIRef
+    PlainLiteral: URIRef
+    XMLLiteral: URIRef
+    langString: URIRef
+
+
+RDF = _RDF
 RDFS = Namespace("http://www.w3.org/2000/01/rdf-schema#")
 OWL = Namespace("http://www.w3.org/2002/07/owl#")
 XSD = Namespace("http://www.w3.org/2001/XMLSchema#")

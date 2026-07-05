@@ -16,7 +16,7 @@ from typing import IO, TYPE_CHECKING, Any
 
 import purrdf
 
-from .term import Identifier, from_native, to_native
+from .term import Identifier, Variable, from_native, to_native
 
 if TYPE_CHECKING:
     from .graph import Graph
@@ -66,7 +66,7 @@ def _serialize_result_bytes(result: Result, fmt_id: str) -> bytes:
             [None if cell is None else to_native(cell) for cell in row]
             for row in result._rows
         ]
-        out = purrdf.serialize_sparql_solutions(fmt_id, list(result.vars), rows)
+        out = purrdf.serialize_sparql_solutions(fmt_id, [str(v) for v in result.vars], rows)
         assert isinstance(out, bytes)
         return out
     raise ResultException(
@@ -102,11 +102,13 @@ class ResultRow(tuple[Identifier | None, ...]):
     _vars: tuple[str, ...]
 
     def __new__(
-        cls, values: tuple[Identifier | None, ...], variables: tuple[str, ...]
+        cls,
+        values: tuple[Identifier | None, ...],
+        variables: tuple[str | Variable, ...],
     ) -> ResultRow:
         """Construct from the projected values and their variable names."""
         self = super().__new__(cls, values)
-        self._vars = variables
+        self._vars = tuple(str(v) for v in variables)
         return self
 
     @property
@@ -114,9 +116,20 @@ class ResultRow(tuple[Identifier | None, ...]):
         """Map each variable name to its positional index (RDFLib parity)."""
         return {name: idx for idx, name in enumerate(self._vars)}
 
-    def __getitem__(self, key: int | str | slice) -> Any:  # type: ignore[override]
-        """Index by position (``int``/``slice``) or by variable name (``str``)."""
-        if isinstance(key, str):
+    def asdict(self) -> dict[str, Identifier]:
+        """Return bound variable names mapped to their values (RDFLib parity).
+
+        Unbound positions are omitted, matching RDFLib's ``ResultRow.asdict``.
+        """
+        return {
+            name: value
+            for name, value in zip(self._vars, self)
+            if value is not None
+        }
+
+    def __getitem__(self, key: int | str | Variable | slice) -> Any:  # type: ignore[override]
+        """Index by position (``int``/``slice``) or by variable name (``str`` / ``Variable``)."""
+        if isinstance(key, (str, Variable)):
             try:
                 idx = self._vars.index(key)
             except ValueError as exc:
@@ -134,7 +147,9 @@ class ResultRow(tuple[Identifier | None, ...]):
             raise AttributeError(name) from exc
         return tuple.__getitem__(self, idx)
 
-    def get(self, name: str, default: Identifier | None = None) -> Identifier | None:
+    def get(
+        self, name: str | Variable, default: Identifier | None = None
+    ) -> Identifier | None:
         """Return the binding for ``name`` or ``default`` if absent/unbound."""
         try:
             idx = self._vars.index(name)
@@ -152,16 +167,30 @@ class Result:
         type_: str,
         *,
         rows: list[ResultRow] | None = None,
-        variables: tuple[str, ...] | None = None,
+        variables: tuple[str | Variable, ...] | None = None,
         graph: Graph | None = None,
         ask: bool | None = None,
     ) -> None:
         """Build a SELECT (``rows``), CONSTRUCT/DESCRIBE (``graph``), or ASK result."""
         self.type = type_
         self._rows = rows or []
-        self.vars = list(variables) if variables is not None else []
+        self.vars = [
+            v if isinstance(v, Variable) else Variable(v)
+            for v in (variables or ())
+        ]
         self.graph = graph
         self.askAnswer = ask
+
+    @property
+    def bindings(self) -> list[dict[Variable, Identifier | None]]:
+        """Return each SELECT row as a Variable → value mapping (RDFLib parity).
+
+        Each dict contains every projected variable; unbound positions map to
+        ``None``. Non-SELECT results return an empty list.
+        """
+        if self.type != "SELECT":
+            return []
+        return [{var: row[var] for var in self.vars} for row in self._rows]
 
     def __iter__(self) -> Iterator[Any]:
         """Iterate SELECT rows, CONSTRUCT triples, or yield the ASK boolean once.

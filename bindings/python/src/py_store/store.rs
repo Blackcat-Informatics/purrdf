@@ -54,13 +54,14 @@ impl PyStore {
 
     /// Load RDF into the store. Either `input` (bytes/str data) or the keyword
     /// `path` (a file to read) must be given, together with `format`.
-    #[pyo3(signature = (input=None, format=None, *, path=None))]
+    #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
     fn load(
         &mut self,
         py: Python<'_>,
         input: Option<&Bound<'_, PyAny>>,
         format: Option<PyRdfFormat>,
         path: Option<String>,
+        base: Option<String>,
     ) -> PyResult<()> {
         let format = format.ok_or_else(|| PyValueError::new_err("load: format is required"))?;
         let data = read_input(input, path)?;
@@ -79,7 +80,8 @@ impl PyStore {
         // Parse + insert run detached (GIL released); the closure only touches
         // plain Rust data.
         py.detach(move || {
-            for quad in parse_quads(&data, format.to_native())
+            let base_ref = base.as_deref();
+            for quad in parse_quads(&data, format.to_native(), base_ref)
                 .map_err(|e| PyValueError::new_err(format!("load error: {e}")))?
             {
                 inner.insert(rdf_quad_to_values_scoped(&quad, scope));
@@ -90,15 +92,16 @@ impl PyStore {
 
     /// Alias of [`load`] — oxigraph's bulk loader is a throughput optimization,
     /// not a different semantics, so the in-memory store path is identical.
-    #[pyo3(signature = (input=None, format=None, *, path=None))]
+    #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
     fn bulk_load(
         &mut self,
         py: Python<'_>,
         input: Option<&Bound<'_, PyAny>>,
         format: Option<PyRdfFormat>,
         path: Option<String>,
+        base: Option<String>,
     ) -> PyResult<()> {
-        self.load(py, input, format, path)
+        self.load(py, input, format, path, base)
     }
 
     /// Add a single quad.

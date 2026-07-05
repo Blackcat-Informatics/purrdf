@@ -231,13 +231,7 @@ def test_parse_sparql_style_prefix(compat: ModuleType) -> None:
 
 
 def test_parse_binds_jsonld_context_prefixes(compat: ModuleType) -> None:
-    """JSON-LD ``@context`` prefixes are recorded on the graph (rdflib parity).
-
-    LEDGERED: the compat prefix recovery is a lightweight text scan for
-    Turtle-family ``@prefix``/``PREFIX`` declarations only. JSON-LD ``@context``
-    (and RDF/XML ``xmlns``) prefix extraction would need to walk the codec's
-    parsed context, which the native JSON-LD codec does not yet surface.
-    """
+    """JSON-LD ``@context`` prefixes are extracted after parse by walking the JSON context."""
     jsonld = (
         '{"@context": {"ex": "http://example.org/"}, '
         '"@id": "http://example.org/s", '
@@ -246,6 +240,25 @@ def test_parse_binds_jsonld_context_prefixes(compat: ModuleType) -> None:
     g = compat.Graph()
     g.parse(data=jsonld, format="json-ld")
     assert ("ex", "http://example.org/") in {(p, str(n)) for p, n in g.namespaces()}
+
+
+def test_parse_binds_rdfxml_xmlns_prefixes(compat: ModuleType) -> None:
+    """RDF/XML ``xmlns:`` prefixes are recorded on the graph (rdflib parity)."""
+    rdfxml = (
+        '<?xml version="1.0"?>\n'
+        '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+        'xmlns:ex="http://example.org/">\n'
+        '  <ex:Thing rdf:about="http://example.org/s">\n'
+        '    <ex:p>o</ex:p>\n'
+        '  </ex:Thing>\n'
+        '</rdf:RDF>'
+    )
+    g = compat.Graph()
+    g.parse(data=rdfxml, format="xml")
+    namespaces = {(p, str(n)) for p, n in g.namespaces()}
+    assert ("ex", "http://example.org/") in namespaces
+    # The reserved xml/xmlns prefixes must not be re-bound by the scan.
+    assert ("xml", "http://www.w3.org/XML/1998/namespace") in namespaces
 
 
 # ── the closed/defined namespace machinery ──────────────────────────────────────
