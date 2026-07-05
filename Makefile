@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check check-issue-refs changelog test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
+.PHONY: help metadata fmt check check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -46,6 +46,23 @@ changelog: ## Regenerate the deterministic CHANGELOG.md from conventional-commit
 	}
 	git-cliff --config cliff.toml --output CHANGELOG.md
 	python3 scripts/check-issue-refs.py
+
+bump: ## Set the crates.io/PyPI/npm version in lockstep (make bump VERSION=x.y.z).
+	@test -n "$(VERSION)" || { echo "usage: make bump VERSION=x.y.z"; exit 1; }
+	python3 scripts/set-version.py "$(VERSION)"
+
+release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence checks (make release-tags VERSION=x.y.z).
+	@test -n "$(VERSION)" || { echo "usage: make release-tags VERSION=x.y.z"; exit 1; }
+	@test -z "$$(git status --porcelain)" || { echo "ERROR: working tree is dirty — commit the release bump + changelog first"; exit 1; }
+	@branch=$$(git branch --show-current); test "$$branch" = "main" || { echo "ERROR: release tags must be cut from main (currently on $$branch)"; exit 1; }
+	@python3 scripts/check-versions.py
+	@tree_version=$$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])"); \
+		test "$$tree_version" = "$(VERSION)" || { echo "ERROR: VERSION=$(VERSION) does not match the tree version $$tree_version — run 'make bump VERSION=$(VERSION)' first"; exit 1; }
+	git tag "rust-v$(VERSION)"
+	git tag "py-v$(VERSION)"
+	git tag "npm-v$(VERSION)"
+	git push origin "rust-v$(VERSION)" "py-v$(VERSION)" "npm-v$(VERSION)"
+	@echo "OK: pushed rust-v$(VERSION), py-v$(VERSION), npm-v$(VERSION)"
 
 test: ## Run the workspace test suite.
 	cargo test --workspace --locked
