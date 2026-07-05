@@ -94,15 +94,20 @@ def parse_publish_list(path: Path) -> list[str]:
 
     The anchor is the literal ``crates=(`` assignment, so the ``-p purrdf-…``
     wasm cross-check flags elsewhere in the same file are never picked up.
+    Shell ``#`` line-comments inside the array are stripped before tokenizing,
+    so a commented-out crate (``# purrdf-validate`` or ``purrdf-foo  # note``)
+    is not miscounted as listed.
     """
     text = path.read_text(encoding="utf-8")
     match = _CRATES_ARRAY_RE.search(text)
     if match is None:
         raise ValueError(f"{path}: no crates=( … ) array found")
     crates: list[str] = []
-    for token in match.group(1).split():
-        if _CRATE_TOKEN_RE.match(token):
-            crates.append(token)
+    for line in match.group(1).splitlines():
+        code = line.split("#", 1)[0]
+        for token in code.split():
+            if _CRATE_TOKEN_RE.match(token):
+                crates.append(token)
     return crates
 
 
