@@ -1074,6 +1074,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-validate",
 ]
 
 [[package]]
@@ -1088,6 +1089,7 @@ dependencies = [
  "proptest",
  "purrdf-events",
  "sha2",
+ "smallvec",
 ]
 
 [[package]]
@@ -1140,6 +1142,7 @@ dependencies = [
  "purrdf-shex",
  "purrdf-slice",
  "purrdf-sparql-eval",
+ "purrdf-validate",
  "purrdf-xsd",
  "pyo3",
 ]
@@ -1159,6 +1162,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-events",
  "purrdf-gts",
+ "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-xsd",
@@ -1182,6 +1186,7 @@ dependencies = [
  "purrdf-xsd",
  "regex",
  "serde_json",
+ "smallvec",
 ]
 
 [[package]]
@@ -1225,6 +1230,7 @@ dependencies = [
  "proptest",
  "purrdf-iri",
  "purrdf-xsd",
+ "smallvec",
 ]
 
 [[package]]
@@ -1261,6 +1267,7 @@ dependencies = [
  "regex",
  "sha1",
  "sha2",
+ "smallvec",
 ]
 
 [[package]]
@@ -1273,6 +1280,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-validate"
+version = "0.2.1"
+dependencies = [
+ "pretty_assertions",
+ "purrdf-core",
+ "purrdf-iri",
+ "purrdf-rdf",
+ "purrdf-shapes",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "purrdf-wasm"
 version = "0.2.1"
 dependencies = [
@@ -1282,6 +1302,7 @@ dependencies = [
  "purrdf-events",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-validate",
  "wasm-bindgen",
 ]
 
@@ -1650,6 +1671,12 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "smallvec"
+version = "1.15.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "spki"

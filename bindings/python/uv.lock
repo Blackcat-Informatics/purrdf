@@ -964,6 +964,7 @@ rdflib = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "jsonschema" },
     { name = "maturin" },
     { name = "mypy" },
     { name = "pyshacl" },
@@ -979,6 +980,7 @@ provides-extras = ["rdflib"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "jsonschema", specifier = ">=4,<5" },
     { name = "maturin", specifier = ">=1.7,<2" },
     { name = "mypy", specifier = ">=1.10" },
     { name = "pyshacl" },

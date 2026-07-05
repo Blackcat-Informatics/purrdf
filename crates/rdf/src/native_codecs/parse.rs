@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use super::media_type::{classify, NativeRdfFormat};
 use super::ser_model::{SerGraph, SerTermKind};
+use super::span::{NoSpans, ParseOptions, SpanCollector, SpanTable};
 use super::text_parse::LineParseMode;
 use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
@@ -129,6 +130,63 @@ pub fn parse_dataset(
     parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)
 }
 
+/// [`parse_dataset`] with a runtime option to also return a source-position side table.
+///
+/// The frozen [`RdfDataset`] is IDENTICAL to what [`parse_dataset`] returns — the same
+/// triples, term ids, and order. When [`ParseOptions::track_source_spans`] is set, the
+/// second element is a populated [`SpanTable`] mapping each statement subject (by its
+/// bare-IRI / `_:label` lexical key) to the source [`Position`](purrdf_iri::Position)
+/// where it was first asserted; otherwise it is `None`.
+///
+/// Span tracking is OPT-IN: it costs memory and pins the sequential line pipeline
+/// (the chunk-parallel N-Triples/N-Quads path never records spans), so
+/// [`parse_dataset`] — the hot path — is left untouched. Formats without a text
+/// tokenizer that carries source spans (RDF/XML, TriX, HexTuples) return an EMPTY
+/// [`SpanTable`] under tracking (physical-location fallback is by design).
+pub fn parse_dataset_with(
+    bytes: &[u8],
+    media_type: &str,
+    base_iri: Option<&str>,
+    options: &ParseOptions,
+) -> Result<(Arc<RdfDataset>, Option<SpanTable>), RdfDiagnostic> {
+    if !options.track_source_spans {
+        let dataset = parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)?;
+        return Ok((dataset, None));
+    }
+
+    let format = classify(media_type)?;
+
+    match format {
+        NativeRdfFormat::NTriples
+        | NativeRdfFormat::NQuads
+        | NativeRdfFormat::Turtle
+        | NativeRdfFormat::TriG => {
+            // UTF-8 is only required by the text tokenizer; the byte-oriented formats
+            // below never touch `text`, so validate it lazily inside this arm.
+            let text = std::str::from_utf8(bytes)
+                .map_err(|e| RdfDiagnostic::error("native-codec-utf8", e.to_string()))?;
+            // Force sequential so subject spans are captured (the parallel path is
+            // `NoSpans`-only), then fold into the SAME frozen IR `parse_dataset` builds.
+            let mut table = SpanTable::default();
+            let graph = text_parse_without_panicking(
+                format,
+                text,
+                base_iri,
+                LineParseMode::ForceSequential,
+                &mut table,
+            )?;
+            let dataset = dataset_from_ser_graph(&graph)?;
+            Ok((dataset, Some(table)))
+        }
+        // RDF/XML, TriX, HexTuples: no span-carrying text tokenizer, so return an empty
+        // table alongside the identical dataset (physical-location fallback by design).
+        NativeRdfFormat::RdfXml | NativeRdfFormat::TriX | NativeRdfFormat::HexTuples => {
+            let dataset = parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)?;
+            Ok((dataset, Some(SpanTable::default())))
+        }
+    }
+}
+
 /// [`parse_dataset`] forcing the single-threaded N-Triples/N-Quads line pipeline
 /// regardless of input size (Turtle/TriG/RDF-XML are always sequential, so the mode
 /// is a no-op there).
@@ -170,7 +228,7 @@ fn parse_dataset_mode(
         | NativeRdfFormat::NQuads
         | NativeRdfFormat::Turtle
         | NativeRdfFormat::TriG => {
-            let graph = text_parse_without_panicking(format, text, base_iri, mode)?;
+            let graph = text_parse_without_panicking(format, text, base_iri, mode, &mut NoSpans)?;
             dataset_from_ser_graph(&graph)
         }
         // RDF/XML parses FIRST-PARTY through the in-repo `rdfxml` codec (W3C RDF/XML
@@ -208,14 +266,15 @@ where
     }
 }
 
-fn text_parse_without_panicking(
+fn text_parse_without_panicking<S: SpanCollector>(
     format: NativeRdfFormat,
     text: &str,
     base_iri: Option<&str>,
     mode: LineParseMode,
+    collector: &mut S,
 ) -> Result<SerGraph, RdfDiagnostic> {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        super::text_parse::parse_to_gts_graph_mode(format, text, base_iri, mode)
+        super::text_parse::parse_to_gts_graph_mode(format, text, base_iri, mode, collector)
     }));
     match outcome {
         Ok(result) => result,
@@ -694,5 +753,162 @@ mod tests {
         let err =
             parse_dataset(b"", "application/json", None).expect_err("unknown media type must fail");
         assert_eq!(err.code, "native-codec-unsupported-format");
+    }
+
+    #[test]
+    fn tracking_off_returns_no_table() {
+        // With tracking off the side table is absent and the dataset is byte-for-byte
+        // what `parse_dataset` produces (same canonical serialization).
+        let nt = "<https://e/s> <https://e/p> <https://e/o> .\n";
+        let (with_ds, table) = parse_dataset_with(
+            nt.as_bytes(),
+            "application/n-triples",
+            None,
+            &ParseOptions::default(),
+        )
+        .expect("parse");
+        assert!(table.is_none(), "tracking off yields no side table");
+        let plain = parse_dataset(nt.as_bytes(), "application/n-triples", None).expect("parse");
+        assert_eq!(with_ds.quad_count(), plain.quad_count());
+        let a = crate::native_codecs::serialize_dataset(
+            &with_ds,
+            "application/n-quads",
+            crate::SerializeGraph::Dataset,
+        )
+        .expect("serialize with");
+        let b = crate::native_codecs::serialize_dataset(
+            &plain,
+            "application/n-quads",
+            crate::SerializeGraph::Dataset,
+        )
+        .expect("serialize plain");
+        assert_eq!(
+            a, b,
+            "dataset is identical whether or not tracking is requested"
+        );
+    }
+
+    #[test]
+    fn nt_tracking_records_subject_line() {
+        // A focus NamedNode renders as a bare IRI string, so the subject key is the
+        // bare IRI (no angle brackets). Line 1/2/3 map to their subjects.
+        let nt = concat!(
+            "<http://example.org/alice> <http://example.org/p> \"a\" .\n",
+            "<http://example.org/bob> <http://example.org/p> \"b\" .\n",
+            "<http://example.org/carol> <http://example.org/p> \"c\" .\n",
+        );
+        let options = ParseOptions {
+            track_source_spans: true,
+        };
+        let (_ds, table) =
+            parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
+                .expect("parse");
+        let table = table.expect("tracking on yields a table");
+        assert_eq!(
+            table
+                .position_for_subject("http://example.org/alice")
+                .expect("alice tracked")
+                .line,
+            1
+        );
+        assert_eq!(
+            table
+                .position_for_subject("http://example.org/bob")
+                .expect("bob tracked")
+                .line,
+            2
+        );
+        assert_eq!(
+            table
+                .position_for_subject("http://example.org/carol")
+                .expect("carol tracked")
+                .line,
+            3
+        );
+    }
+
+    #[test]
+    fn nt_tracking_records_document_global_byte_offset() {
+        // The recorded byte_offset for a subject must be the document-global byte
+        // offset of the line it starts on: 0 for the first line (a real, emitted
+        // value — not a dropped sentinel) and the running sum of prior line lengths
+        // (payload plus each `\n`) for later lines.
+        let line1 = "<http://example.org/alice> <http://example.org/p> \"a\" .\n";
+        let line2 = "<http://example.org/bob> <http://example.org/p> \"b\" .\n";
+        let line3 = "<http://example.org/carol> <http://example.org/p> \"c\" .\n";
+        let nt = format!("{line1}{line2}{line3}");
+        let options = ParseOptions {
+            track_source_spans: true,
+        };
+        let (_ds, table) =
+            parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
+                .expect("parse");
+        let table = table.expect("tracking on yields a table");
+        // First line: offset 0 must be recorded, not dropped.
+        assert_eq!(
+            table
+                .position_for_subject("http://example.org/alice")
+                .expect("alice tracked")
+                .byte_offset,
+            0,
+            "first-line subject starts at document byte offset 0"
+        );
+        assert_eq!(
+            table
+                .position_for_subject("http://example.org/bob")
+                .expect("bob tracked")
+                .byte_offset,
+            line1.len(),
+            "second-line subject starts just past line 1"
+        );
+        assert_eq!(
+            table
+                .position_for_subject("http://example.org/carol")
+                .expect("carol tracked")
+                .byte_offset,
+            line1.len() + line2.len(),
+            "third-line subject starts just past lines 1 and 2"
+        );
+    }
+
+    #[test]
+    fn turtle_tracking_records_subject_line() {
+        // The subject `ex:s` appears on line 3 (after two directive lines).
+        let ttl = concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "\n",
+            "ex:s ex:p ex:o .\n",
+        );
+        let options = ParseOptions {
+            track_source_spans: true,
+        };
+        let (_ds, table) =
+            parse_dataset_with(ttl.as_bytes(), "text/turtle", None, &options).expect("parse");
+        let table = table.expect("tracking on yields a table");
+        let position = table
+            .position_for_subject("http://example.org/s")
+            .expect("subject tracked");
+        assert_eq!(position.line, 3, "subject ex:s is asserted on line 3");
+    }
+
+    #[test]
+    fn dataset_is_identical_with_tracking() {
+        // The dataset from a tracking parse has the same triples as `parse_dataset`.
+        let nt = concat!(
+            "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
+            "<http://example.org/s> <http://example.org/p2> \"lit\" .\n",
+        );
+        let options = ParseOptions {
+            track_source_spans: true,
+        };
+        let (tracked, _table) =
+            parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
+                .expect("tracked parse");
+        let plain = parse_dataset(nt.as_bytes(), "application/n-triples", None).expect("plain");
+        assert_eq!(tracked.quad_count(), plain.quad_count());
+        assert!(
+            tracked.quads().collect::<Vec<_>>() == plain.quads().collect::<Vec<_>>(),
+            "tracked dataset has identical quads"
+        );
     }
 }

@@ -119,7 +119,12 @@ impl VarSchema {
 
 /// One solution mapping: a dense row indexed by [`VarSchema`] column ordinal.
 /// `None` = the variable is unbound in this row.
-pub type Solution = Vec<Option<SolutionTerm>>;
+///
+/// A small-vector with inline capacity 4: most queries bind ≤4-8 variables, so
+/// the common row lives inline with no heap allocation and spills to the heap
+/// only for wider schemas. Derefs to `&[Option<SolutionTerm>]`, so indexing,
+/// iteration, slicing, and `&[Option<SolutionTerm>]` parameters are unchanged.
+pub type Solution = smallvec::SmallVec<[Option<SolutionTerm>; 4]>;
 
 /// A multiset (bag) of [`Solution`]s over a shared [`VarSchema`].
 ///
@@ -148,7 +153,7 @@ impl SolutionSeq {
     pub fn unit() -> Self {
         Self {
             schema: Arc::new(VarSchema::new()),
-            rows: vec![Vec::new()],
+            rows: vec![Solution::new()],
         }
     }
 

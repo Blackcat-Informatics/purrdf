@@ -203,7 +203,7 @@ pub(crate) fn eval_path(
     let mut rows: Vec<Solution> = Vec::new();
     let push_pair =
         |rows: &mut Vec<Solution>, s_id: Option<SolutionTerm>, o_id: Option<SolutionTerm>| {
-            let mut row = vec![None; width];
+            let mut row = smallvec::smallvec![None; width];
             if let (Some(c), Some(id)) = (s_col, s_id) {
                 row[c] = Some(id);
             }
@@ -220,7 +220,7 @@ pub(crate) fn eval_path(
         (Endpoint::Bound(sid), Endpoint::Bound(oid)) => {
             let count = node_reach(sid, true).iter().filter(|&&y| y == oid).count();
             for _ in 0..count {
-                rows.push(vec![None; width]);
+                rows.push(smallvec::smallvec![None; width]);
             }
         }
         // Both ground but absent from the dataset entirely: the only way they can
@@ -228,7 +228,7 @@ pub(crate) fn eval_path(
         // SAME term (an absent node has no edges to traverse for anything else).
         (Endpoint::BoundAbsent(sval), Endpoint::BoundAbsent(oval)) => {
             if sval == oval && path_is_reflexive(path) {
-                rows.push(vec![None; width]);
+                rows.push(smallvec::smallvec![None; width]);
             }
         }
         // One side present in the dataset, the other absent: they cannot be the

@@ -3,7 +3,9 @@
 
 //! Parsing for SHACL-AF `sh:SPARQLTargetType` declarations.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
+
+use ::purrdf::FastSet;
 
 use purrdf_sparql_algebra::{Query, SparqlParser};
 
@@ -25,7 +27,7 @@ impl Parser<'_> {
         let mut ids: Vec<Term> = self
             .quads_with(None, Some(rdf::TYPE), Some(sh::SPARQL_TARGET_TYPE))
             .into_iter()
-            .map(|q| q.subject)
+            .map(|(subject, _, _)| subject)
             .collect();
         ids.sort_by_key(ToString::to_string);
         ids.dedup();
@@ -108,7 +110,7 @@ impl Parser<'_> {
         });
 
         // Reject colliding derived variable names.
-        let mut seen: HashSet<&str> = HashSet::new();
+        let mut seen: FastSet<&str> = FastSet::default();
         for (_, _, var) in &raw {
             if !seen.insert(var.as_str()) {
                 return Err(format!(

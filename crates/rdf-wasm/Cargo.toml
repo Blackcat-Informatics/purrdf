@@ -44,6 +44,11 @@ purrdf-sparql-eval = { workspace = true }
 # Serializes the SELECT/ASK result model to W3C SPARQL Results JSON. wasm-clean leaf
 # (replaces the oxigraph-family `sparesults`).
 purrdf-sparql-results = { workspace = true }
+# The wasm-clean SHACL engine + its SARIF reporting boundary: the browser/JS
+# surface validates a shapes+data pair and returns a SARIF 2.1.0 report. The
+# SHACL engine is reached through `purrdf-validate::validate_to_sarif_string`,
+# the shared validate→SARIF helper every language binding routes through.
+purrdf-validate = { workspace = true }
 # EXACT pin (in the workspace table): the `wasm-bindgen` CLI that generates the JS
 # bindings must match the library version byte-for-byte or it refuses to run.
 # `make wasm-pkg` and the CI Node lane install `wasm-bindgen-cli@0.2.125` to match.

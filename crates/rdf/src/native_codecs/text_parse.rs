@@ -35,12 +35,14 @@
 
 use std::collections::HashMap;
 
+use purrdf_iri::Position;
 use purrdf_sparql_algebra::lexer::{tokenize, tokenize_turtle, Spanned, Token};
 use rayon::prelude::*;
 
 use super::media_type::NativeRdfFormat;
 use super::ser_model::{SerGraph, SerTerm, SerTermKind, SerTriple3};
-use crate::RdfDiagnostic;
+use super::span::{NoSpans, SpanCollector};
+use crate::{RdfDiagnostic, RdfLocation};
 
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -58,6 +60,28 @@ const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
 fn err(detail: impl Into<String>) -> RdfDiagnostic {
     RdfDiagnostic::error("native-codec-parse", detail.into())
+}
+
+/// Build a located parse diagnostic (1-based line/column).
+fn err_at(detail: impl Into<String>, line: u32, column: u32) -> RdfDiagnostic {
+    RdfDiagnostic::error("native-codec-parse", detail.into()).with_location(RdfLocation {
+        line: Some(line),
+        column: Some(column),
+        ..RdfLocation::default()
+    })
+}
+
+/// 1-based column (counted in Unicode scalar values) of a byte offset that lies
+/// within the TRIMMED content of `raw`. `trimmed_off` is a byte offset into
+/// `raw.trim()` (i.e. token spans from tokenizing the trimmed line); it is
+/// rebased onto `raw` by adding the leading-whitespace width.
+fn column_in_raw(raw: &str, trimmed_off: usize) -> u32 {
+    let lead = raw.len() - raw.trim_start().len();
+    let mut byte = (lead + trimmed_off).min(raw.len());
+    while byte > 0 && !raw.is_char_boundary(byte) {
+        byte -= 1;
+    }
+    u32::try_from(raw[..byte].chars().count() + 1).unwrap_or(u32::MAX)
 }
 
 /// A parsed RDF term node, mirroring the `from_nquads` `Node` so the
@@ -99,17 +123,18 @@ pub(super) enum LineParseMode {
 /// on every earlier directive) and anonymous blank nodes / reifiers mint labels from a
 /// document-ordered counter, so a chunk cannot be parsed without the full prefix and
 /// counter state of everything before it.
-pub(super) fn parse_to_gts_graph_mode(
+pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
     format: NativeRdfFormat,
     text: &str,
     base_iri: Option<&str>,
     mode: LineParseMode,
+    collector: &mut S,
 ) -> Result<SerGraph, RdfDiagnostic> {
     let statements = match format {
-        NativeRdfFormat::NTriples => parse_lines(text, false, mode)?,
-        NativeRdfFormat::NQuads => parse_lines(text, true, mode)?,
-        NativeRdfFormat::Turtle => DocParser::new(text, base_iri, false).parse()?,
-        NativeRdfFormat::TriG => DocParser::new(text, base_iri, true).parse()?,
+        NativeRdfFormat::NTriples => parse_lines(text, false, mode, collector)?,
+        NativeRdfFormat::NQuads => parse_lines(text, true, mode, collector)?,
+        NativeRdfFormat::Turtle => DocParser::new(text, base_iri, false, collector).parse()?,
+        NativeRdfFormat::TriG => DocParser::new(text, base_iri, true, collector).parse()?,
         NativeRdfFormat::RdfXml => {
             return Err(err("RDF/XML is not a line/Turtle-family format"));
         }
@@ -126,6 +151,20 @@ pub(super) fn parse_to_gts_graph_mode(
 
 /// One statement: subject, predicate, object, and (N-Quads) an optional graph name.
 type Statement = Vec<Node>;
+
+/// The lexical span-table key for a statement subject, or `None` for a subject with no
+/// single lexical key (a quoted-triple subject). A named node keys by its BARE IRI
+/// string (no angle brackets, so a SHACL focus node joins directly); a blank node keys
+/// as `_:label`. See [`SpanTable`](super::span::SpanTable) for the convention.
+fn subject_key(node: &Node) -> Option<String> {
+    match node {
+        Node::Iri(iri) => Some(iri.clone()),
+        Node::Bnode(label) => Some(format!("_:{label}")),
+        // A literal is never a legal subject (validation rejects it) and a quoted-triple
+        // subject has no single lexical key — neither is recorded.
+        Node::Literal { .. } | Node::Triple(..) => None,
+    }
+}
 
 /// Inputs at or above this many bytes take the chunk-parallel phase-1 pipeline.
 ///
@@ -156,15 +195,19 @@ const PARALLEL_MAX_CHUNK_BYTES: usize = 4 << 20;
 /// the downstream [`build_gts_graph`] interner sees the same statements in the same
 /// order and assigns the same term ids (interning stays the sequential serialization
 /// point). The determinism-proof tests below assert this end to end.
-fn parse_lines(
+fn parse_lines<S: SpanCollector>(
     text: &str,
     allow_graph: bool,
     mode: LineParseMode,
+    collector: &mut S,
 ) -> Result<Vec<Statement>, RdfDiagnostic> {
     if mode == LineParseMode::Auto && text.len() >= PARALLEL_MIN_BYTES {
+        // The parallel path is `NoSpans`-only (each chunk gets its own ZST collector);
+        // span tracking forces sequential (see `parse_dataset_with`), so `S::ENABLED`
+        // is always false here. The parallel branch stays non-generic in the collector.
         return parse_lines_parallel(text, allow_graph);
     }
-    parse_lines_sequential(text, allow_graph)
+    parse_lines_sequential(text, allow_graph, 1, collector)
 }
 
 /// Split `text` into line-aligned chunks of roughly `target_bytes` each: every chunk
@@ -217,10 +260,24 @@ fn parse_lines_parallel_with_chunk_size(
     target_bytes: usize,
 ) -> Result<Vec<Statement>, RdfDiagnostic> {
     let chunks = split_line_chunks(text, target_bytes);
+    // Each chunk is a contiguous line-aligned slice; chunk 0 begins at document
+    // line 1 and chunk k begins at `1 + (total '\n' in chunks[0..k])`. Precompute
+    // those 1-based base lines (a sequential prefix sum) so every per-chunk
+    // diagnostic reports the SAME document-global line the sequential path would,
+    // keeping the parallel path byte-identical (line numbers included).
+    let mut base_lines = Vec::with_capacity(chunks.len());
+    let mut base = 1u32;
+    for chunk in &chunks {
+        base_lines.push(base);
+        let newlines =
+            u32::try_from(chunk.bytes().filter(|&b| b == b'\n').count()).unwrap_or(u32::MAX);
+        base = base.saturating_add(newlines);
+    }
     // Phase 1: parallel per-chunk tokenize+parse (on wasm32 rayon runs this inline).
     let per_chunk: Vec<Result<Vec<Statement>, RdfDiagnostic>> = chunks
         .par_iter()
-        .map(|chunk| parse_lines_sequential(chunk, allow_graph))
+        .enumerate()
+        .map(|(i, chunk)| parse_lines_sequential(chunk, allow_graph, base_lines[i], &mut NoSpans))
         .collect();
     // Phase 2: document order — first error wins, then in-order concatenation.
     let mut statements = Vec::with_capacity(
@@ -241,15 +298,44 @@ fn parse_lines_parallel_with_chunk_size(
 /// skipped, every other line is one statement of 3 (NT) or 3-or-4 (NQ) terms. The
 /// `<<( s p o )>>` quoted-triple TERM is admitted in subject (NQ only) and object
 /// position; IRIREFs are UCHAR-decoded (the test060 fix).
-fn parse_lines_sequential(text: &str, allow_graph: bool) -> Result<Vec<Statement>, RdfDiagnostic> {
+fn parse_lines_sequential<S: SpanCollector>(
+    text: &str,
+    allow_graph: bool,
+    base_line: u32,
+    collector: &mut S,
+) -> Result<Vec<Statement>, RdfDiagnostic> {
     let mut statements = Vec::new();
+    let mut lineno = base_line;
+    // Running document-global byte offset of the current line's first byte. Only
+    // maintained when span tracking is on (`S::ENABLED`); span tracking forces the
+    // sequential path (see `parse_dataset_with`), so `text` here is the whole
+    // document and this offset is document-global. For `NoSpans` the compiler proves
+    // `S::ENABLED == false` and deletes every touch of `line_offset`, leaving the hot
+    // path byte-identical. `advance_line_offset` steps it past a line plus its `\n`
+    // or `\r\n` terminator (`str::lines` strips both).
+    let mut line_offset = 0usize;
+    let advance_line_offset = |offset: &mut usize, raw: &str| {
+        *offset += raw.len();
+        match text.as_bytes().get(*offset) {
+            Some(b'\r') => *offset += 2,
+            Some(b'\n') => *offset += 1,
+            _ => {}
+        }
+    };
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
+            if S::ENABLED {
+                advance_line_offset(&mut line_offset, raw);
+            }
+            lineno = lineno.saturating_add(1);
             continue;
         }
-        let tokens = tokenize(line).map_err(|e| err(format!("{e} in {line:?}")))?;
-        let mut cursor = TokenCursor::new(tokens, line);
+        let tokens = tokenize(line).map_err(|e| {
+            let col = e.byte_offset().map_or(1, |at| column_in_raw(raw, at));
+            err_at(e.to_string(), lineno, col)
+        })?;
+        let mut cursor = TokenCursor::new(tokens, raw, lineno);
         let mut nodes = Vec::new();
         while !cursor.at_statement_end() {
             nodes.push(cursor.term(allow_graph)?);
@@ -261,14 +347,34 @@ fn parse_lines_sequential(text: &str, allow_graph: bool) -> Result<Vec<Statement
             nodes.len() == 3
         };
         if !valid_len {
-            return Err(err(format!(
-                "expected {} terms, got {}: {line:?}",
-                if allow_graph { "3 or 4" } else { "3" },
-                nodes.len(),
-            )));
+            return Err(err_at(
+                format!(
+                    "expected {} terms, got {}",
+                    if allow_graph { "3 or 4" } else { "3" },
+                    nodes.len(),
+                ),
+                lineno,
+                column_in_raw(raw, 0),
+            ));
         }
-        validate_statement(&nodes, line, allow_graph)?;
+        validate_statement(&nodes, lineno, column_in_raw(raw, 0), allow_graph)?;
+        // Record the subject's source position when tracking is on. `S::ENABLED` is a
+        // const, so for `NoSpans` this whole block is dead code (no key is built).
+        if S::ENABLED {
+            if let Some(key) = subject_key(&nodes[0]) {
+                collector.record(
+                    &key,
+                    Position {
+                        line: lineno,
+                        column: column_in_raw(raw, 0),
+                        byte_offset: line_offset,
+                    },
+                );
+            }
+            advance_line_offset(&mut line_offset, raw);
+        }
         statements.push(nodes);
+        lineno = lineno.saturating_add(1);
     }
     Ok(statements)
 }
@@ -279,28 +385,42 @@ fn parse_lines_sequential(text: &str, allow_graph: bool) -> Result<Vec<Statement
 /// [`bump`](Self::bump) can MOVE each consumed token out instead of deep-cloning
 /// its `String` payload.
 struct TokenCursor<'a> {
-    tokens: Vec<Spanned>,
+    tokens: Vec<Spanned<'a>>,
     pos: usize,
-    line: &'a str,
+    raw: &'a str,
+    lineno: u32,
 }
 
 impl<'a> TokenCursor<'a> {
-    fn new(tokens: Vec<Spanned>, line: &'a str) -> Self {
+    fn new(tokens: Vec<Spanned<'a>>, raw: &'a str, lineno: u32) -> Self {
         Self {
             tokens,
             pos: 0,
-            line,
+            raw,
+            lineno,
         }
     }
 
-    fn peek(&self) -> Option<&Token> {
+    /// 1-based column of the current token (or, past the end, just after the last
+    /// token), rebased onto the untrimmed source line.
+    fn col(&self) -> u32 {
+        let off = self
+            .tokens
+            .get(self.pos)
+            .map(|s| s.start)
+            .or_else(|| self.tokens.last().map(|s| s.end))
+            .unwrap_or(0);
+        column_in_raw(self.raw, off)
+    }
+
+    fn peek(&self) -> Option<&Token<'a>> {
         self.tokens.get(self.pos).map(|s| &s.token)
     }
 
     /// Consume the current token, MOVING it out of the owned buffer (a cheap
     /// `Token::Dot` placeholder is left behind; the cursor never re-reads a
     /// consumed position — `peek` looks only at `pos`, which has advanced).
-    fn bump(&mut self) -> Option<Token> {
+    fn bump(&mut self) -> Option<Token<'a>> {
         let t = self
             .tokens
             .get_mut(self.pos)
@@ -317,12 +437,14 @@ impl<'a> TokenCursor<'a> {
     }
 
     fn expect_dot(&mut self) -> Result<(), RdfDiagnostic> {
+        let col = self.col();
         match self.bump() {
             Some(Token::Dot) | None => Ok(()),
-            other => Err(err(format!(
-                "expected '.' terminator, found {other:?} in {:?}",
-                self.line
-            ))),
+            other => Err(err_at(
+                format!("expected '.' terminator, found {other:?}"),
+                self.lineno,
+                col,
+            )),
         }
     }
 
@@ -333,23 +455,25 @@ impl<'a> TokenCursor<'a> {
         match self.peek() {
             Some(Token::TripleOpen) => self.quoted_triple(),
             Some(Token::Iri(_)) => {
+                let col = self.col();
                 let Some(Token::Iri(value)) = self.bump() else {
                     unreachable!()
                 };
-                validate_iri(&value, self.line)?;
-                Ok(Node::Iri(value))
+                validate_iri(&value, self.lineno, col)?;
+                Ok(Node::Iri(value.into_owned()))
             }
             Some(Token::BlankNodeLabel(_)) => {
                 let Some(Token::BlankNodeLabel(label)) = self.bump() else {
                     unreachable!()
                 };
-                Ok(Node::Bnode(label))
+                Ok(Node::Bnode(label.to_owned()))
             }
             Some(Token::StringLit(_) | Token::LongStringLit(_)) => self.literal(),
-            other => Err(err(format!(
-                "unexpected token {other:?} in {:?}",
-                self.line
-            ))),
+            other => Err(err_at(
+                format!("unexpected token {other:?}"),
+                self.lineno,
+                self.col(),
+            )),
         }
     }
 
@@ -376,48 +500,51 @@ impl<'a> TokenCursor<'a> {
         let mut datatype = None;
         match self.peek() {
             Some(Token::LangTag(_)) => {
+                let col = self.col();
                 let Some(Token::LangTag(raw)) = self.bump() else {
                     unreachable!()
                 };
-                let (base, dir) = split_lang_direction(&raw, self.line)?;
-                validate_language_tag(&base, self.line)?;
+                let (base, dir) = split_lang_direction(raw, self.lineno, col)?;
+                validate_language_tag(&base, self.lineno, col)?;
                 lang = Some(base);
                 direction = dir;
             }
             Some(Token::HatHat) => {
                 self.bump();
+                let col = self.col();
                 let Some(Token::Iri(iri)) = self.bump() else {
-                    return Err(err(format!("datatype must be an IRI in {:?}", self.line)));
+                    return Err(err_at("datatype must be an IRI", self.lineno, col));
                 };
-                validate_iri(&iri, self.line)?;
-                if matches!(iri.as_str(), RDF_LANG_STRING | RDF_DIR_LANG_STRING) {
-                    return Err(err(format!(
-                        "literal cannot explicitly use the RDF language-string datatype in {:?}",
-                        self.line
-                    )));
+                validate_iri(&iri, self.lineno, col)?;
+                if matches!(iri.as_ref(), RDF_LANG_STRING | RDF_DIR_LANG_STRING) {
+                    return Err(err_at(
+                        "literal cannot explicitly use the RDF language-string datatype",
+                        self.lineno,
+                        col,
+                    ));
                 }
-                datatype = Some(iri);
+                datatype = Some(iri.into_owned());
             }
             _ => {}
         }
         Ok(Node::Literal {
-            value,
+            value: value.into_owned(),
             lang,
             direction,
             datatype,
         })
     }
 
-    fn expect(&mut self, token: &Token) -> Result<(), RdfDiagnostic> {
+    fn expect(&mut self, token: &Token<'a>) -> Result<(), RdfDiagnostic> {
         if self.peek() == Some(token) {
             self.pos += 1;
             Ok(())
         } else {
-            Err(err(format!(
-                "expected {token:?}, found {:?} in {:?}",
-                self.peek(),
-                self.line
-            )))
+            Err(err_at(
+                format!("expected {token:?}, found {:?}", self.peek()),
+                self.lineno,
+                self.col(),
+            ))
         }
     }
 }
@@ -426,12 +553,16 @@ impl<'a> TokenCursor<'a> {
 /// `("ar", Some("rtl"))`; a plain `en` → `("en", None)`. A `--ltr`/`--rtl` suffix is
 /// the RDF 1.2 base-direction marker; any other `--`-suffix is rejected, mirroring
 /// purrdf-gts.
-fn split_lang_direction(raw: &str, line: &str) -> Result<(String, Option<String>), RdfDiagnostic> {
+fn split_lang_direction(
+    raw: &str,
+    line_no: u32,
+    column: u32,
+) -> Result<(String, Option<String>), RdfDiagnostic> {
     if let Some((base, dir)) = raw.rsplit_once("--") {
         if matches!(dir, "ltr" | "rtl") && !base.is_empty() {
             Ok((base.to_owned(), Some(dir.to_owned())))
         } else {
-            Err(err(format!("invalid literal base direction in {line:?}")))
+            Err(err_at("invalid literal base direction", line_no, column))
         }
     } else {
         Ok((raw.to_owned(), None))
@@ -474,25 +605,33 @@ fn has_iri_scheme(value: &str) -> bool {
 /// absolute-IRI requirement (N-Triples/N-Quads admit no relative IRIs); rejecting the
 /// decoded special characters would wrongly fail legal UCHAR IRIs such as
 /// `<urn:ex: >` (W3C test060), whose canonical form keeps the decoded character.
-fn validate_iri(value: &str, line: &str) -> Result<(), RdfDiagnostic> {
+fn validate_iri(value: &str, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
     if value.is_empty() || value.starts_with("//") || !has_iri_scheme(value) {
-        return Err(err(format!("IRI must be absolute: {line:?}")));
+        return Err(err_at(
+            format!("IRI must be absolute (needs a scheme), found <{value}>"),
+            line_no,
+            column,
+        ));
     }
     Ok(())
 }
 
 /// Validate a BCP-47 language tag, including the long private-use subtag relaxation
 /// (`x-purrdf-…`) purrdf-gts applies.
-fn validate_language_tag(tag: &str, line: &str) -> Result<(), RdfDiagnostic> {
+fn validate_language_tag(tag: &str, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
     let mut parts = tag.split('-');
     let Some(primary) = parts.next() else {
-        return Err(err(format!("empty language tag in {line:?}")));
+        return Err(err_at("empty language tag", line_no, column));
     };
     if primary.is_empty()
         || primary.len() > 8
         || !primary.bytes().all(|byte| byte.is_ascii_alphabetic())
     {
-        return Err(err(format!("invalid language tag {tag:?} in {line:?}")));
+        return Err(err_at(
+            format!("invalid language tag {tag:?}"),
+            line_no,
+            column,
+        ));
     }
     let mut private_use = primary.eq_ignore_ascii_case("x");
     for subtag in parts {
@@ -503,7 +642,11 @@ fn validate_language_tag(tag: &str, line: &str) -> Result<(), RdfDiagnostic> {
             alnum && subtag.len() <= 8
         };
         if !acceptable {
-            return Err(err(format!("invalid language tag {tag:?} in {line:?}")));
+            return Err(err_at(
+                format!("invalid language tag {tag:?}"),
+                line_no,
+                column,
+            ));
         }
         if subtag.eq_ignore_ascii_case("x") {
             private_use = true;
@@ -528,7 +671,8 @@ fn is_literal(node: &Node) -> bool {
 
 fn validate_subject(
     node: &Node,
-    line: &str,
+    line_no: u32,
+    column: u32,
     allow_triple_subject: bool,
 ) -> Result<(), RdfDiagnostic> {
     if node_is(node, &[is_iri, is_bnode]) {
@@ -536,53 +680,60 @@ fn validate_subject(
     }
     if allow_triple_subject {
         if let Node::Triple(s, p, o) = node {
-            return validate_triple(s, p, o, line, allow_triple_subject);
+            return validate_triple(s, p, o, line_no, column, allow_triple_subject);
         }
     }
-    Err(err(format!("invalid subject term: {line:?}")))
+    Err(err_at("invalid subject term", line_no, column))
 }
 
-fn validate_predicate(node: &Node, line: &str) -> Result<(), RdfDiagnostic> {
+fn validate_predicate(node: &Node, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
     if is_iri(node) {
         Ok(())
     } else {
-        Err(err(format!("predicate must be IRI: {line:?}")))
+        Err(err_at("predicate must be IRI", line_no, column))
     }
 }
 
 fn validate_object(
     node: &Node,
-    line: &str,
+    line_no: u32,
+    column: u32,
     allow_triple_subject: bool,
 ) -> Result<(), RdfDiagnostic> {
     if node_is(node, &[is_iri, is_bnode, is_literal]) {
         return Ok(());
     }
     if let Node::Triple(s, p, o) = node {
-        return validate_triple(s, p, o, line, allow_triple_subject);
+        return validate_triple(s, p, o, line_no, column, allow_triple_subject);
     }
-    Err(err(format!("invalid object term: {line:?}")))
+    Err(err_at("invalid object term", line_no, column))
 }
 
 fn validate_triple(
     s: &Node,
     p: &Node,
     o: &Node,
-    line: &str,
+    line_no: u32,
+    column: u32,
     allow_triple_subject: bool,
 ) -> Result<(), RdfDiagnostic> {
-    validate_subject(s, line, allow_triple_subject)?;
-    validate_predicate(p, line)?;
-    validate_object(o, line, allow_triple_subject)
+    validate_subject(s, line_no, column, allow_triple_subject)?;
+    validate_predicate(p, line_no, column)?;
+    validate_object(o, line_no, column, allow_triple_subject)
 }
 
-fn validate_statement(nodes: &[Node], line: &str, allow_graph: bool) -> Result<(), RdfDiagnostic> {
-    validate_subject(&nodes[0], line, allow_graph)?;
-    validate_predicate(&nodes[1], line)?;
-    validate_object(&nodes[2], line, allow_graph)?;
+fn validate_statement(
+    nodes: &[Node],
+    line_no: u32,
+    column: u32,
+    allow_graph: bool,
+) -> Result<(), RdfDiagnostic> {
+    validate_subject(&nodes[0], line_no, column, allow_graph)?;
+    validate_predicate(&nodes[1], line_no, column)?;
+    validate_object(&nodes[2], line_no, column, allow_graph)?;
     if let Some(graph_name) = nodes.get(3) {
         if !node_is(graph_name, &[is_iri, is_bnode]) {
-            return Err(err(format!("invalid graph name term: {line:?}")));
+            return Err(err_at("invalid graph name term", line_no, column));
         }
     }
     Ok(())
@@ -596,8 +747,8 @@ fn validate_statement(nodes: &[Node], line: &str, allow_graph: bool) -> Result<(
 /// emits the SAME flat statement list (subject/predicate/object[/graph] `Node`s) the
 /// purrdf-gts Turtle/TriG parser produced before lowering through `from_nquads`'s
 /// `build_gts`, so the resulting [`SerGraph`] is byte-identical.
-struct DocParser<'a> {
-    tokens: Vec<Spanned>,
+struct DocParser<'a, 'c, S: SpanCollector> {
+    tokens: Vec<Spanned<'a>>,
     pos: usize,
     prefixes: HashMap<String, String>,
     base_iri: Option<String>,
@@ -605,10 +756,25 @@ struct DocParser<'a> {
     allow_named_graphs: bool,
     statements: Vec<Statement>,
     src: &'a str,
+    /// Opt-in subject-position sink. For `NoSpans` this is a ZST and every use is
+    /// dead code under monomorphization.
+    collector: &'c mut S,
+    /// Document byte offset of the current top-level statement subject's first token,
+    /// captured when the subject term is parsed and resolved at emit time. Only read
+    /// when `S::ENABLED`.
+    subject_off: usize,
+    /// Newline table over `src`, built lazily on the FIRST recorded subject and reused
+    /// for the rest of the parse. Never built when `S::ENABLED` is false.
+    line_index: Option<purrdf_iri::LineIndex>,
 }
 
-impl<'a> DocParser<'a> {
-    fn new(text: &'a str, base_iri: Option<&str>, allow_named_graphs: bool) -> Self {
+impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
+    fn new(
+        text: &'a str,
+        base_iri: Option<&str>,
+        allow_named_graphs: bool,
+        collector: &'c mut S,
+    ) -> Self {
         let mut prefixes = HashMap::new();
         prefixes.insert("rdf".to_owned(), RDF_NS.to_owned());
         Self {
@@ -620,7 +786,20 @@ impl<'a> DocParser<'a> {
             allow_named_graphs,
             statements: Vec::new(),
             src: text,
+            collector,
+            subject_off: 0,
+            line_index: None,
         }
+    }
+
+    /// Document byte offset of the current token (or the end of the last token past
+    /// end-of-stream). Only called on the span-tracking path.
+    fn cur_off(&self) -> usize {
+        self.tokens
+            .get(self.pos)
+            .map(|s| s.start)
+            .or_else(|| self.tokens.last().map(|s| s.end))
+            .unwrap_or(0)
     }
 
     fn parse(mut self) -> Result<Vec<Statement>, RdfDiagnostic> {
@@ -628,24 +807,33 @@ impl<'a> DocParser<'a> {
         // `purrdf:report/shacl/sarif`), matching oxigraph/purrdf-gts leniency.
         // Turtle has no `/` operator, so this is unambiguous in term position;
         // the SPARQL `tokenize` keeps `/` as the property-path operator.
-        self.tokens = tokenize_turtle(self.src).map_err(|e| err(e.to_string()))?;
+        self.tokens = tokenize_turtle(self.src).map_err(|e| {
+            let off = e.byte_offset().unwrap_or(0);
+            let p = purrdf_iri::LineIndex::new(self.src).locate(self.src, off);
+            err_at(e.to_string(), p.line, p.column)
+        })?;
         while self.peek().is_some() {
             if self.try_directive()? {
                 continue;
             }
             if self.eat_kw("GRAPH") {
                 if !self.allow_named_graphs {
-                    return Err(err("Turtle input cannot contain GRAPH blocks"));
+                    let (l, c) = self.loc();
+                    return Err(err_at("Turtle input cannot contain GRAPH blocks", l, c));
                 }
                 let graph = self.term(None)?;
                 self.expect(&Token::LBrace)?;
                 self.graph_block(&graph)?;
                 continue;
             }
+            if S::ENABLED {
+                self.subject_off = self.cur_off();
+            }
             let first = self.term(None)?;
             if self.eat(&Token::LBrace) {
                 if !self.allow_named_graphs {
-                    return Err(err("Turtle input cannot contain graph blocks"));
+                    let (l, c) = self.loc();
+                    return Err(err_at("Turtle input cannot contain graph blocks", l, c));
                 }
                 self.graph_block(&first)?;
             } else {
@@ -660,7 +848,7 @@ impl<'a> DocParser<'a> {
     fn try_directive(&mut self) -> Result<bool, RdfDiagnostic> {
         // `@prefix` / `@base` / `@version` lex as a `LangTag` (the `@` form).
         if let Some(Token::LangTag(tag)) = self.peek() {
-            match tag.as_str() {
+            match *tag {
                 "prefix" => {
                     self.pos += 1;
                     self.prefix_directive(true)?;
@@ -708,9 +896,10 @@ impl<'a> DocParser<'a> {
     }
 
     fn base_directive(&mut self, require_dot: bool) -> Result<(), RdfDiagnostic> {
+        let (l, c) = self.loc();
         let iri = self.expect_iri_raw()?;
         if !has_iri_scheme(&iri) {
-            return Err(err(format!("base IRI must be absolute: {iri:?}")));
+            return Err(err_at(format!("base IRI must be absolute: {iri:?}"), l, c));
         }
         self.base_iri = Some(iri);
         if require_dot {
@@ -728,38 +917,49 @@ impl<'a> DocParser<'a> {
     /// place the distinction survives).
     fn version_string(&mut self) -> Result<(), RdfDiagnostic> {
         let span = self.tokens.get(self.pos).map(|s| (s.start, s.end));
+        let (l, c) = self.loc();
         match self.bump() {
             Some(Token::StringLit(_)) => {
                 if let Some((start, _)) = span {
                     let raw = &self.src[start..];
                     if raw.starts_with("\"\"\"") || raw.starts_with("'''") {
-                        return Err(err(
+                        return Err(err_at(
                             "version directive needs a single-line string, found a triple-quoted string",
+                            l,
+                            c,
                         ));
                     }
                 }
                 Ok(())
             }
-            other => Err(err(format!(
-                "version directive needs a string, found {other:?}"
-            ))),
+            other => Err(err_at(
+                format!("version directive needs a string, found {other:?}"),
+                l,
+                c,
+            )),
         }
     }
 
     /// A bare `prefix:` namespace (PNAME_NS); the local part must be empty.
     fn expect_prefix_ns(&mut self) -> Result<(String, String), RdfDiagnostic> {
+        let (line, col) = self.loc();
         match self.bump() {
-            Some(Token::PrefixedName(p, l)) if l.is_empty() => Ok((p, l)),
-            other => Err(err(format!("expected a prefix namespace, found {other:?}"))),
+            Some(Token::PrefixedName(p, l)) if l.is_empty() => Ok((p.to_owned(), l.into_owned())),
+            other => Err(err_at(
+                format!("expected a prefix namespace, found {other:?}"),
+                line,
+                col,
+            )),
         }
     }
 
     /// An IRIREF, returned UNRESOLVED (for `@prefix`/`@base` targets). The lexer has
     /// already UCHAR-decoded it.
     fn expect_iri_raw(&mut self) -> Result<String, RdfDiagnostic> {
+        let (l, c) = self.loc();
         match self.bump() {
-            Some(Token::Iri(s)) => Ok(s),
-            other => Err(err(format!("expected an IRIREF, found {other:?}"))),
+            Some(Token::Iri(s)) => Ok(s.into_owned()),
+            other => Err(err_at(format!("expected an IRIREF, found {other:?}"), l, c)),
         }
     }
 
@@ -781,16 +981,17 @@ impl<'a> DocParser<'a> {
                 Ok(Node::Iri(self.resolve_iri(&raw)))
             }
             Some(Token::PrefixedName(_, _)) => {
+                let (l, c) = self.loc();
                 let Some(Token::PrefixedName(prefix, local)) = self.bump() else {
                     unreachable!()
                 };
-                self.resolve_prefixed(&prefix, &local)
+                self.resolve_prefixed(prefix, &local, l, c)
             }
             Some(Token::BlankNodeLabel(_)) => {
                 let Some(Token::BlankNodeLabel(label)) = self.bump() else {
                     unreachable!()
                 };
-                Ok(Node::Bnode(label))
+                Ok(Node::Bnode(label.to_owned()))
             }
             Some(Token::Anon) => {
                 self.pos += 1;
@@ -819,20 +1020,25 @@ impl<'a> DocParser<'a> {
                 };
                 self.numeric_literal(sign)
             }
-            Some(Token::Word(w)) if w == "true" || w == "false" => {
+            Some(Token::Word(w)) if *w == "true" || *w == "false" => {
                 let Some(Token::Word(value)) = self.bump() else {
                     unreachable!()
                 };
                 Ok(Node::Literal {
-                    value,
+                    value: value.to_owned(),
                     lang: None,
                     direction: None,
                     datatype: Some(XSD_BOOLEAN.to_owned()),
                 })
             }
-            other => Err(err(format!(
-                "unexpected token {other:?} in Turtle/TriG term"
-            ))),
+            _ => {
+                let (l, c) = self.loc();
+                Err(err_at(
+                    format!("unexpected token {:?} in Turtle/TriG term", self.peek()),
+                    l,
+                    c,
+                ))
+            }
         }
     }
 
@@ -841,14 +1047,24 @@ impl<'a> DocParser<'a> {
     /// (W3C-conformant); an empty `[]` / `()` is a plain term and is allowed.
     fn quoted_component(&mut self, graph: Option<&Node>) -> Result<Node, RdfDiagnostic> {
         match self.peek() {
-            Some(Token::LBracket) => Err(err(
-                "blank-node property list is not allowed inside a quoted triple",
-            )),
+            Some(Token::LBracket) => {
+                let (l, c) = self.loc();
+                Err(err_at(
+                    "blank-node property list is not allowed inside a quoted triple",
+                    l,
+                    c,
+                ))
+            }
             Some(Token::LParen) => {
                 if self.peek2() == Some(&Token::RParen) {
                     self.term(graph)
                 } else {
-                    Err(err("RDF collection is not allowed inside a quoted triple"))
+                    let (l, c) = self.loc();
+                    Err(err_at(
+                        "RDF collection is not allowed inside a quoted triple",
+                        l,
+                        c,
+                    ))
                 }
             }
             _ => self.term(graph),
@@ -856,7 +1072,7 @@ impl<'a> DocParser<'a> {
     }
 
     fn predicate(&mut self) -> Result<Node, RdfDiagnostic> {
-        if matches!(self.peek(), Some(Token::Word(w)) if w == "a") {
+        if matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
             self.pos += 1;
             return Ok(Node::Iri(RDF_TYPE.to_owned()));
         }
@@ -934,7 +1150,8 @@ impl<'a> DocParser<'a> {
         let mut items = Vec::new();
         while !self.eat(&Token::RParen) {
             if self.peek().is_none() {
-                return Err(err("unterminated RDF collection"));
+                let (l, c) = self.loc();
+                return Err(err_at("unterminated RDF collection", l, c));
             }
             items.push(self.term(graph)?);
         }
@@ -964,6 +1181,7 @@ impl<'a> DocParser<'a> {
         let mut datatype = None;
         match self.peek() {
             Some(Token::LangTag(_)) => {
+                let (l, c) = self.loc();
                 let Some(Token::LangTag(raw)) = self.bump() else {
                     unreachable!()
                 };
@@ -971,7 +1189,7 @@ impl<'a> DocParser<'a> {
                 // `--dir`) on the literal `lang` field and lowers it to an N-Quads
                 // `@lang` token, so the direction is re-parsed at the `from_nquads`
                 // stage. To match that exactly, split here into lang + direction.
-                let (base, dir) = split_lang_direction(&raw, "<turtle>")?;
+                let (base, dir) = split_lang_direction(raw, l, c)?;
                 lang = Some(base);
                 direction = dir;
             }
@@ -982,7 +1200,7 @@ impl<'a> DocParser<'a> {
             _ => {}
         }
         Ok(Node::Literal {
-            value,
+            value: value.into_owned(),
             lang,
             direction,
             datatype,
@@ -990,34 +1208,53 @@ impl<'a> DocParser<'a> {
     }
 
     fn datatype_iri(&mut self) -> Result<String, RdfDiagnostic> {
+        let (l, c) = self.loc();
         match self.bump() {
             Some(Token::Iri(raw)) => Ok(self.resolve_iri(&raw)),
             Some(Token::PrefixedName(prefix, local)) => {
-                match self.resolve_prefixed(&prefix, &local)? {
+                match self.resolve_prefixed(prefix, &local, l, c)? {
                     Node::Iri(iri) => Ok(iri),
                     _ => unreachable!("resolve_prefixed yields an IRI node"),
                 }
             }
-            other => Err(err(format!("expected a datatype IRI, found {other:?}"))),
+            other => Err(err_at(
+                format!("expected a datatype IRI, found {other:?}"),
+                l,
+                c,
+            )),
         }
     }
 
     fn numeric_literal(&mut self, sign: &str) -> Result<Node, RdfDiagnostic> {
+        let (l, c) = self.loc();
         match self.bump() {
             Some(Token::Integer(lexical)) => Ok(numeric(format!("{sign}{lexical}"), XSD_INTEGER)),
             Some(Token::Decimal(lexical)) => Ok(numeric(format!("{sign}{lexical}"), XSD_DECIMAL)),
             Some(Token::Double(lexical)) => Ok(numeric(format!("{sign}{lexical}"), XSD_DOUBLE)),
-            other => Err(err(format!("expected a numeric literal, found {other:?}"))),
+            other => Err(err_at(
+                format!("expected a numeric literal, found {other:?}"),
+                l,
+                c,
+            )),
         }
     }
 
     fn graph_block(&mut self, graph: &Node) -> Result<(), RdfDiagnostic> {
         if !matches!(graph, Node::Iri(_) | Node::Bnode(_)) {
-            return Err(err("graph block name must be an IRI or blank node"));
+            let (l, c) = self.loc();
+            return Err(err_at(
+                "graph block name must be an IRI or blank node",
+                l,
+                c,
+            ));
         }
         while !self.eat(&Token::RBrace) {
             if self.peek().is_none() {
-                return Err(err("unterminated graph block"));
+                let (l, c) = self.loc();
+                return Err(err_at("unterminated graph block", l, c));
+            }
+            if S::ENABLED {
+                self.subject_off = self.cur_off();
             }
             let subject = self.term(Some(graph))?;
             self.statement_after_subject_in_graph(&subject, graph)?;
@@ -1050,7 +1287,12 @@ impl<'a> DocParser<'a> {
         if self.eat(&Token::Dot) || self.at(&Token::RBrace) {
             Ok(())
         } else {
-            Err(err("expected '.' to terminate statement in graph block"))
+            let (l, c) = self.loc();
+            Err(err_at(
+                "expected '.' to terminate statement in graph block",
+                l,
+                c,
+            ))
         }
     }
 
@@ -1180,6 +1422,18 @@ impl<'a> DocParser<'a> {
         if let Some(graph) = graph {
             nodes.push(graph.clone());
         }
+        // Record the subject's source position when tracking is on. `S::ENABLED` is a
+        // const, so for `NoSpans` this block (and the lazy `LineIndex`) is dead code.
+        if S::ENABLED {
+            if let Some(key) = subject_key(&nodes[0]) {
+                let src = self.src;
+                let index = self
+                    .line_index
+                    .get_or_insert_with(|| purrdf_iri::LineIndex::new(src));
+                let position = index.locate(src, self.subject_off);
+                self.collector.record(&key, position);
+            }
+        }
         self.statements.push(nodes);
     }
 
@@ -1199,7 +1453,17 @@ impl<'a> DocParser<'a> {
         }
     }
 
-    fn resolve_prefixed(&self, prefix: &str, local: &str) -> Result<Node, RdfDiagnostic> {
+    /// Resolve a `PrefixedName` against the declared prefixes. The `(line, col)`
+    /// is the position of the prefixed-name token itself, captured by the caller
+    /// BEFORE it consumed the token (the token cursor has already advanced by the
+    /// time we get here, so `self.loc()` would report the following token).
+    fn resolve_prefixed(
+        &self,
+        prefix: &str,
+        local: &str,
+        line: u32,
+        col: u32,
+    ) -> Result<Node, RdfDiagnostic> {
         match self.prefixes.get(prefix) {
             Some(base) => {
                 // Prefixed-name expansion can yield a relative IRI reference when the
@@ -1207,17 +1471,32 @@ impl<'a> DocParser<'a> {
                 // that against the document base, just like a bare IRIREF.
                 Ok(Node::Iri(self.resolve_iri(&format!("{base}{local}"))))
             }
-            None => Err(err(format!("unknown prefix {prefix:?}"))),
+            None => Err(err_at(format!("unknown prefix {prefix:?}"), line, col)),
         }
     }
 
     // token cursor helpers
 
-    fn peek(&self) -> Option<&Token> {
+    /// Resolve the current token's document-global 1-based `(line, column)` by
+    /// scanning the full source with the shared [`purrdf_iri::LineIndex`]. Built
+    /// lazily on the error path only (the tokens carry document-global byte spans),
+    /// so the happy path never pays for it.
+    fn loc(&self) -> (u32, u32) {
+        let off = self
+            .tokens
+            .get(self.pos)
+            .map(|s| s.start)
+            .or_else(|| self.tokens.last().map(|s| s.end))
+            .unwrap_or(0);
+        let p = purrdf_iri::LineIndex::new(self.src).locate(self.src, off);
+        (p.line, p.column)
+    }
+
+    fn peek(&self) -> Option<&Token<'a>> {
         self.tokens.get(self.pos).map(|s| &s.token)
     }
 
-    fn peek2(&self) -> Option<&Token> {
+    fn peek2(&self) -> Option<&Token<'a>> {
         self.tokens.get(self.pos + 1).map(|s| &s.token)
     }
 
@@ -1225,7 +1504,7 @@ impl<'a> DocParser<'a> {
     /// `Token::Dot` placeholder is left behind; nothing re-reads a consumed
     /// position — `peek`/`peek2` look only at `pos` and beyond, which advance
     /// monotonically).
-    fn bump(&mut self) -> Option<Token> {
+    fn bump(&mut self) -> Option<Token<'a>> {
         let t = self
             .tokens
             .get_mut(self.pos)
@@ -1236,11 +1515,11 @@ impl<'a> DocParser<'a> {
         t
     }
 
-    fn at(&self, token: &Token) -> bool {
+    fn at(&self, token: &Token<'a>) -> bool {
         self.peek() == Some(token)
     }
 
-    fn eat(&mut self, token: &Token) -> bool {
+    fn eat(&mut self, token: &Token<'a>) -> bool {
         if self.at(token) {
             self.pos += 1;
             true
@@ -1258,11 +1537,16 @@ impl<'a> DocParser<'a> {
         }
     }
 
-    fn expect(&mut self, token: &Token) -> Result<(), RdfDiagnostic> {
+    fn expect(&mut self, token: &Token<'a>) -> Result<(), RdfDiagnostic> {
         if self.eat(token) {
             Ok(())
         } else {
-            Err(err(format!("expected {token:?}, found {:?}", self.peek())))
+            let (l, c) = self.loc();
+            Err(err_at(
+                format!("expected {token:?}, found {:?}", self.peek()),
+                l,
+                c,
+            ))
         }
     }
 }
@@ -1728,8 +2012,9 @@ mod tests {
             text.len()
         );
 
-        let seq = parse_lines_sequential(&text, true).expect("sequential parse");
-        let par = parse_lines(&text, true, LineParseMode::Auto).expect("parallel parse");
+        let seq = parse_lines_sequential(&text, true, 1, &mut NoSpans).expect("sequential parse");
+        let par =
+            parse_lines(&text, true, LineParseMode::Auto, &mut NoSpans).expect("parallel parse");
         assert!(seq == par, "statement lists must be identical");
 
         let graph_seq = build_gts_graph(&seq).expect("sequential graph");
@@ -1790,7 +2075,7 @@ mod tests {
         let text = "# comment\n\n<https://e/s> <https://e/p> \"a\" .\r\n\
                     <https://e/s> <https://e/p> \"b\"@en <https://e/g> .\n\
                     _:b0 <https://e/p> <<( <https://e/x> <https://e/y> <https://e/z> )>> .\n";
-        let expected = parse_lines_sequential(text, true).expect("sequential");
+        let expected = parse_lines_sequential(text, true, 1, &mut NoSpans).expect("sequential");
         for chunk_bytes in [1usize, 7, 16, 64, 4096] {
             let actual = parse_lines_parallel_with_chunk_size(text, true, chunk_bytes)
                 .expect("parallel parse");
@@ -1835,7 +2120,8 @@ mod tests {
         }
         text.push_str("this is not rdf\n");
 
-        let seq_err = parse_lines_sequential(&text, true).expect_err("sequential must fail");
+        let seq_err =
+            parse_lines_sequential(&text, true, 1, &mut NoSpans).expect_err("sequential must fail");
         // A tiny chunk target guarantees the two bad lines land in different chunks.
         let par_err =
             parse_lines_parallel_with_chunk_size(&text, true, 256).expect_err("parallel must fail");
@@ -1843,10 +2129,21 @@ mod tests {
             par_err, seq_err,
             "parallel must report the sequential (earliest) diagnostic byte-identically"
         );
+        // The diagnostic no longer embeds the raw line text; instead it carries a
+        // 1-based location. Resolve that line back into the source to prove the
+        // EARLIER (early-error) line's diagnostic won, not the late garbage line.
+        let line = par_err
+            .location
+            .as_ref()
+            .and_then(|l| l.line)
+            .expect("located diagnostic");
+        let offending = text
+            .lines()
+            .nth((line - 1) as usize)
+            .expect("line in source");
         assert!(
-            par_err.message.contains("early-error"),
-            "the EARLIER line's diagnostic must win, got: {}",
-            par_err.message
+            offending.contains("early-error"),
+            "the EARLIER line's diagnostic must win, got line {line}: {offending}"
         );
     }
 
@@ -1864,15 +2161,275 @@ mod tests {
             "fixture must cross the parallel threshold"
         );
 
-        let seq_err = parse_lines_sequential(&text, true).expect_err("sequential must fail");
-        let par_err =
-            parse_lines(&text, true, LineParseMode::Auto).expect_err("parallel must fail");
+        let seq_err =
+            parse_lines_sequential(&text, true, 1, &mut NoSpans).expect_err("sequential must fail");
+        let par_err = parse_lines(&text, true, LineParseMode::Auto, &mut NoSpans)
+            .expect_err("parallel must fail");
         assert_eq!(par_err, seq_err, "diagnostics must be byte-identical");
+        // Resolve the located line back into the source to prove the earlier chunk's
+        // error (early-error line) won, not the late garbage line.
+        let line = par_err
+            .location
+            .as_ref()
+            .and_then(|l| l.line)
+            .expect("located diagnostic");
+        let offending = text
+            .lines()
+            .nth((line - 1) as usize)
+            .expect("line in source");
         assert!(
-            par_err.message.contains("early-error"),
-            "the earlier chunk's error must win, got: {}",
-            par_err.message
+            offending.contains("early-error"),
+            "the earlier chunk's error must win, got line {line}: {offending}"
         );
+    }
+
+    /// The parallel line-number prefix sum must be correct for a parse error on the
+    /// FINAL line when that line lacks a trailing newline — the arithmetic edge the
+    /// determinism tests never hit (their fixtures all end in `\n`, and the error line
+    /// is never the last). A large all-valid body crosses [`PARALLEL_MIN_BYTES`] so the
+    /// `Auto` path takes the chunk-parallel branch; the deliberately invalid final line
+    /// (a blank-node predicate) carries no `\n`, so `str::lines()` yields it as the last
+    /// item and the parallel per-chunk base-line prefix sum must still report its true
+    /// 1-based document line. The forced-sequential path parses the SAME input and must
+    /// agree — the parallel-vs-sequential equivalence for a newline-less final line.
+    #[test]
+    fn parallel_final_line_without_newline_reports_correct_line() {
+        use std::fmt::Write as _;
+        // Enough valid rows to comfortably exceed the 1 MiB parallel threshold; each row
+        // is ~72 bytes, so 20_000 rows is ~1.4 MiB.
+        const VALID_ROWS: usize = 20_000;
+        let mut text = String::with_capacity(VALID_ROWS * 80);
+        for i in 0..VALID_ROWS {
+            writeln!(
+                text,
+                "<http://example.org/s> <http://example.org/p> <http://example.org/o{i}> ."
+            )
+            .expect("write valid row");
+        }
+        // The final line is INVALID (a blank-node predicate) and has NO trailing newline.
+        // It is document line `VALID_ROWS + 1` (rows 1..=VALID_ROWS ended in `\n`).
+        text.push_str("<http://example.org/s> _:bad <http://example.org/o> .");
+        assert!(
+            !text.ends_with('\n'),
+            "the final line must lack a trailing newline"
+        );
+        let expected_line = u32::try_from(VALID_ROWS + 1).expect("line fits u32");
+
+        assert!(
+            text.len() >= PARALLEL_MIN_BYTES,
+            "fixture ({} bytes) must cross the {PARALLEL_MIN_BYTES}-byte parallel threshold",
+            text.len()
+        );
+
+        // Auto path over a >1 MiB input takes the chunk-parallel branch.
+        let par_err = parse_lines(&text, false, LineParseMode::Auto, &mut NoSpans)
+            .expect_err("parallel must reject the final line");
+        let par_line = par_err
+            .location
+            .as_ref()
+            .and_then(|l| l.line)
+            .expect("parallel diagnostic is located");
+        assert_eq!(
+            par_line, expected_line,
+            "parallel path must report the newline-less final line's true 1-based number"
+        );
+
+        // Forced-sequential path over the identical input must agree.
+        let seq_err = parse_lines_sequential(&text, false, 1, &mut NoSpans)
+            .expect_err("sequential must reject the final line");
+        let seq_line = seq_err
+            .location
+            .as_ref()
+            .and_then(|l| l.line)
+            .expect("sequential diagnostic is located");
+        assert_eq!(
+            seq_line, expected_line,
+            "sequential path must report the same final-line number"
+        );
+        assert_eq!(
+            par_err, seq_err,
+            "parallel and sequential diagnostics must be byte-identical for the final \
+             newline-less line"
+        );
+    }
+
+    /// A rejected N-Quads line carries a 1-based `(line, column)` location and no
+    /// longer embeds the raw line text in the message.
+    #[test]
+    fn nquads_error_carries_line_and_column() {
+        // The third line has a blank-node predicate, which is invalid.
+        let text = "<http://ex/s> <http://ex/p> <http://ex/o> .\n\
+                    <http://ex/s> <http://ex/p> <http://ex/o> .\n\
+                    <http://ex/s> _:bad <http://ex/o> .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(3));
+        assert!(loc.column.is_some(), "column must be attached");
+        // The message no longer embeds the offending raw line text.
+        assert!(
+            !e.message.contains("_:bad <http://ex/o>"),
+            "message must not embed the raw line text, got: {}",
+            e.message
+        );
+    }
+
+    /// `expect_dot` must report the column of the OFFENDING token, not the token
+    /// after it. Constructed directly on the cursor because the sequential driver's
+    /// term loop otherwise consumes every parseable token before `expect_dot` runs.
+    #[test]
+    fn expect_dot_column_points_at_offending_token() {
+        // `<http://ex/b>` (the token where a `.` was expected) begins at column 15.
+        let raw = "<http://ex/a> <http://ex/b>";
+        let tokens = tokenize(raw).expect("tokenizes");
+        let mut cursor = TokenCursor::new(tokens, raw, 7);
+        cursor.bump().expect("consume subject IRI");
+        let e = cursor.expect_dot().expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(7));
+        assert_eq!(loc.column, Some(15));
+    }
+
+    /// `term()`'s IRI branch reports the column of the invalid IRI itself, not the
+    /// following token.
+    #[test]
+    fn term_iri_validation_column_points_at_iri() {
+        // The object `<relative>` (no scheme) begins at column 29.
+        let text = "<http://ex/s> <http://ex/p> <relative> .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(29));
+        assert!(e.message.contains("IRI must be absolute"));
+    }
+
+    /// A bad literal base direction reports the column of the language tag, not the
+    /// following token.
+    #[test]
+    fn langtag_direction_column_points_at_langtag() {
+        // The `@en--bad` tag begins at column 32.
+        let text = "<http://ex/s> <http://ex/p> \"x\"@en--bad .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(32));
+        assert!(e.message.contains("invalid literal base direction"));
+    }
+
+    /// A malformed language tag reports the column of the language tag itself.
+    #[test]
+    fn langtag_validation_column_points_at_langtag() {
+        // The `@toolongprimary` tag begins at column 32 (primary subtag > 8 chars).
+        let text = "<http://ex/s> <http://ex/p> \"x\"@toolongprimary .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(32));
+        assert!(e.message.contains("invalid language tag"));
+    }
+
+    /// A non-IRI datatype after `^^` reports the column of the datatype token, not
+    /// the token after it.
+    #[test]
+    fn datatype_non_iri_column_points_at_datatype() {
+        // The datatype string `"y"` begins at column 34 (right after `^^`).
+        let text = "<http://ex/s> <http://ex/p> \"x\"^^\"y\" .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(34));
+        assert!(e.message.contains("datatype must be an IRI"));
+    }
+
+    /// A relative datatype IRI after `^^` reports the column of the datatype IRI.
+    #[test]
+    fn datatype_iri_validation_column_points_at_datatype() {
+        // The datatype `<relative>` begins at column 34.
+        let text = "<http://ex/s> <http://ex/p> \"x\"^^<relative> .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(34));
+        assert!(e.message.contains("IRI must be absolute"));
+    }
+
+    /// An explicit `rdf:langString` datatype after `^^` reports the column of the
+    /// datatype IRI, not the token after it.
+    #[test]
+    fn datatype_rdf_lang_string_column_points_at_datatype() {
+        // The datatype IRI begins at column 34.
+        let text = "<http://ex/s> <http://ex/p> \"x\"^^\
+                    <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> .\n";
+        let e = parse_lines_sequential(text, false, 1, &mut NoSpans).expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(34));
+        assert!(e.message.contains("RDF language-string datatype"));
+    }
+
+    /// A rejected Turtle document (DocParser path) carries a 1-based `(line, column)`
+    /// resolved via the shared `LineIndex` over the full source.
+    #[test]
+    fn turtle_error_carries_line_and_column() {
+        // The unknown prefix `nope:` on the third line must fail with a located error.
+        let text = "@prefix ex: <https://example.org/> .\n\
+                    ex:s ex:p ex:o .\n\
+                    ex:s ex:p nope:o .\n";
+        let e = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(3));
+        assert!(loc.column.is_some(), "column must be attached");
+        assert!(
+            e.message.contains("unknown prefix"),
+            "message keeps the informative reason, got: {}",
+            e.message
+        );
+    }
+
+    /// A `@base` with a non-absolute IRI (DocParser path) reports the column of the
+    /// base-IRI token, not the token consumed after it.
+    #[test]
+    fn base_directive_column_points_at_relative_iri() {
+        // The relative IRI `<relative>` begins at column 7 (right after `@base `).
+        let text = "@base <relative> .\n";
+        let e = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(7));
+        assert!(e.message.contains("base IRI must be absolute"));
+    }
+
+    /// A malformed language tag on a Turtle literal (DocParser path) reports the
+    /// column of the language tag, not the following token.
+    #[test]
+    fn doc_langtag_column_points_at_langtag() {
+        // The `@bad--bad` tag begins at column 32.
+        let text = "<http://ex/s> <http://ex/p> \"x\"@bad--bad .\n";
+        let e = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(32));
+        assert!(e.message.contains("invalid literal base direction"));
+    }
+
+    /// An undeclared prefix in the object position (DocParser path) reports the
+    /// column of the prefixed name itself, not the following token.
+    #[test]
+    fn doc_unknown_prefix_column_points_at_prefixed_name() {
+        // The undeclared `ex:o` begins at column 29.
+        let text = "<http://ex/s> <http://ex/p> ex:o .\n";
+        let e = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect_err("must fail");
+        let loc = e.location.as_ref().expect("has location");
+        assert_eq!(loc.line, Some(1));
+        assert_eq!(loc.column, Some(29));
+        assert!(e.message.contains("unknown prefix"));
     }
 
     /// A bare `/` in a prefixed-name local part (e.g. `ex:report/shacl/sarif`)
@@ -1883,7 +2440,9 @@ mod tests {
     fn turtle_prefixed_name_allows_bare_slash_in_local() {
         let text = "@prefix ex: <https://example.org/vocab/> .\n\
                     ex:report/shacl/sarif ex:projection/okf ex:report/shacl/sarif .";
-        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect("parses");
         assert_eq!(statements.len(), 1);
         let nodes = &statements[0];
         assert_eq!(
@@ -1929,7 +2488,9 @@ mod tests {
         let text = "@prefix : <https://example.org/> .\n\
                     :x :p _:y.\n\
                     _:y :q :z .\n";
-        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect("parses");
         assert_eq!(statements.len(), 2, "must yield exactly two triples");
 
         let first = &statements[0];
@@ -1960,7 +2521,9 @@ mod tests {
     fn turtle_doubled_semicolon_interior_emits_no_extra_triple() {
         let text = "<https://example.org/s> a <https://example.org/C> ; ; \
                      <https://example.org/p> <https://example.org/o> .";
-        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect("parses");
         assert_eq!(statements.len(), 2);
     }
 
@@ -1971,7 +2534,9 @@ mod tests {
         let text =
             "<https://example.org/s> <https://example.org/p1> <https://example.org/o1> ; ; ; \
                      <https://example.org/p2> <https://example.org/o2> .";
-        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect("parses");
         assert_eq!(statements.len(), 2);
     }
 
@@ -1980,7 +2545,9 @@ mod tests {
     #[test]
     fn turtle_trailing_doubled_semicolon_emits_no_extra_triple() {
         let text = "<https://example.org/s> <https://example.org/p> <https://example.org/o> ; ; .";
-        let statements = DocParser::new(text, None, false).parse().expect("parses");
+        let statements = DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .expect("parses");
         assert_eq!(statements.len(), 1);
     }
 
@@ -1995,10 +2562,10 @@ mod tests {
         let doubled = "<https://example.org/s> <https://example.org/p> \
                         [ <https://example.org/a> <https://example.org/b> ; ; \
                           <https://example.org/c> <https://example.org/d> ] .";
-        let expected = DocParser::new(collapsed, None, false)
+        let expected = DocParser::new(collapsed, None, false, &mut NoSpans)
             .parse()
             .expect("collapsed parses");
-        let actual = DocParser::new(doubled, None, false)
+        let actual = DocParser::new(doubled, None, false, &mut NoSpans)
             .parse()
             .expect("doubled parses");
         assert_eq!(actual, expected);
@@ -2016,10 +2583,10 @@ mod tests {
         let doubled = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                         {| <https://example.org/a> <https://example.org/b> ; ; \
                            <https://example.org/c> <https://example.org/d> |} .";
-        let expected = DocParser::new(collapsed, None, false)
+        let expected = DocParser::new(collapsed, None, false, &mut NoSpans)
             .parse()
             .expect("collapsed parses");
-        let actual = DocParser::new(doubled, None, false)
+        let actual = DocParser::new(doubled, None, false, &mut NoSpans)
             .parse()
             .expect("doubled parses");
         assert_eq!(actual, expected);
@@ -2035,10 +2602,10 @@ mod tests {
                             {| <https://example.org/a> <https://example.org/b> |} .";
         let trailing = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                          {| <https://example.org/a> <https://example.org/b> ; |} .";
-        let expected = DocParser::new(no_trailing, None, false)
+        let expected = DocParser::new(no_trailing, None, false, &mut NoSpans)
             .parse()
             .expect("no-trailing parses");
-        let actual = DocParser::new(trailing, None, false)
+        let actual = DocParser::new(trailing, None, false, &mut NoSpans)
             .parse()
             .expect("trailing parses");
         assert_eq!(actual, expected);
@@ -2050,7 +2617,9 @@ mod tests {
     #[test]
     fn turtle_leading_semicolon_before_any_predicate_is_an_error() {
         let text = "<https://example.org/s> ; <https://example.org/p> <https://example.org/o> .";
-        assert!(DocParser::new(text, None, false).parse().is_err());
+        assert!(DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .is_err());
     }
 
     /// A subject followed immediately by `;` and then `.` (no predicate-object pair at
@@ -2058,7 +2627,9 @@ mod tests {
     #[test]
     fn turtle_leading_semicolon_with_no_predicate_object_is_an_error() {
         let text = "<https://example.org/s> ; .";
-        assert!(DocParser::new(text, None, false).parse().is_err());
+        assert!(DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .is_err());
     }
 
     /// A LEADING `;` inside a blank-node property list `[ … ]` is also illegal:
@@ -2069,7 +2640,9 @@ mod tests {
     fn turtle_leading_semicolon_inside_blank_node_property_list_is_an_error() {
         let text = "<https://example.org/s> <https://example.org/p> \
                      [ ; <https://example.org/a> <https://example.org/b> ] .";
-        assert!(DocParser::new(text, None, false).parse().is_err());
+        assert!(DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .is_err());
     }
 
     /// A LEADING `;` inside an RDF 1.2 annotation block `{| … |}` is also illegal for
@@ -2078,7 +2651,9 @@ mod tests {
     fn turtle_leading_semicolon_inside_annotation_block_is_an_error() {
         let text = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                      {| ; <https://example.org/a> <https://example.org/b> |} .";
-        assert!(DocParser::new(text, None, false).parse().is_err());
+        assert!(DocParser::new(text, None, false, &mut NoSpans)
+            .parse()
+            .is_err());
     }
 
     /// A DOUBLED trailing `;` before the annotation-block `Pipe` (`{| a b ; ; |}`)
@@ -2092,10 +2667,10 @@ mod tests {
                             {| <https://example.org/a> <https://example.org/b> |} .";
         let doubled = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                         {| <https://example.org/a> <https://example.org/b> ; ; |} .";
-        let expected = DocParser::new(no_trailing, None, false)
+        let expected = DocParser::new(no_trailing, None, false, &mut NoSpans)
             .parse()
             .expect("no-trailing parses");
-        let actual = DocParser::new(doubled, None, false)
+        let actual = DocParser::new(doubled, None, false, &mut NoSpans)
             .parse()
             .expect("doubled parses");
         assert_eq!(actual, expected);

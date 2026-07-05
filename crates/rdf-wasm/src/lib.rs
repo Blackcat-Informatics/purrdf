@@ -60,6 +60,7 @@ mod convert;
 mod dataset;
 mod factory;
 mod query;
+pub mod shacl;
 mod stream;
 mod term;
 

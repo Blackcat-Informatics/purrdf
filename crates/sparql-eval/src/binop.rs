@@ -100,7 +100,7 @@ pub(crate) fn eval_lateral(
         let right_to_out = right_to_out_map(&r.schema, &out);
         for nu in &r.rows {
             // Start from μ: left columns are out[0..left_len] in the same order.
-            let mut row = vec![None; out_len];
+            let mut row = smallvec::smallvec![None; out_len];
             row[..left_len].copy_from_slice(mu);
             // Overlay ν, requiring compatibility on any column μ already bound
             // (disjoint for SERVICE, so this never rejects there).
@@ -186,7 +186,7 @@ pub(crate) fn eval_union(
 
     let mut rows = Vec::with_capacity(l_minted.len() + r_minted.len());
     for minted in l_minted {
-        let mut row = vec![None; out_len];
+        let mut row = smallvec::smallvec![None; out_len];
         let reinterned =
             crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
         row[..left_len].copy_from_slice(&reinterned);
@@ -195,7 +195,7 @@ pub(crate) fn eval_union(
     for minted in r_minted {
         let reinterned =
             crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
-        let mut row = vec![None; out_len];
+        let mut row = smallvec::smallvec![None; out_len];
         for (j, &cell) in reinterned.iter().enumerate() {
             row[right_to_out[j]] = cell;
         }
@@ -221,12 +221,12 @@ fn concat_union(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
     let mut rows = Vec::with_capacity(l.rows.len() + r.rows.len());
     for lrow in &l.rows {
         // Left columns are out[0..left_len] in order; pad the rest with None.
-        let mut row = vec![None; out_len];
+        let mut row = smallvec::smallvec![None; out_len];
         row[..left_len].copy_from_slice(lrow);
         rows.push(row);
     }
     for rrow in &r.rows {
-        let mut row = vec![None; out_len];
+        let mut row = smallvec::smallvec![None; out_len];
         for (j, &cell) in rrow.iter().enumerate() {
             row[right_to_out[j]] = cell;
         }
@@ -415,7 +415,7 @@ fn merge(
     debug_assert_eq!(left_row.len(), left_len);
     // One exact-size allocation, initialized from the left row directly (no
     // write-None-then-overwrite pass over the left prefix).
-    let mut merged = Vec::with_capacity(out_len);
+    let mut merged = Solution::with_capacity(out_len);
     merged.extend_from_slice(left_row);
     merged.resize(out_len, None);
     for (j, &cell) in right_row.iter().enumerate() {
@@ -485,7 +485,7 @@ fn left_outer_join_filtered(
                     }
                 }
                 if acc.len() == before {
-                    let mut row = vec![None; out_len];
+                    let mut row = smallvec::smallvec![None; out_len];
                     row[..left_len].copy_from_slice(lrow);
                     acc.push(row);
                 }
@@ -507,7 +507,7 @@ fn left_outer_join_filtered(
                 }
             }
             if !matched {
-                let mut row = vec![None; out_len];
+                let mut row = smallvec::smallvec![None; out_len];
                 row[..left_len].copy_from_slice(lrow);
                 rows.push(row);
             }
@@ -559,7 +559,7 @@ fn left_outer_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
         // No compatible right solution → keep the left solution alone (the OPTIONAL
         // contributed nothing, its variables stay unbound).
         if acc.len() == before {
-            let mut row = vec![None; out_len];
+            let mut row = smallvec::smallvec![None; out_len];
             row[..left_len].copy_from_slice(lrow);
             acc.push(row);
         }
@@ -823,7 +823,11 @@ mod tests {
         // Inner over schema [x]: x=1, x=2, and one wild row (x unbound).
         let inner = SolutionSeq {
             schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
-            rows: vec![vec![t(1)], vec![t(2)], vec![None]],
+            rows: vec![
+                smallvec::smallvec![t(1)],
+                smallvec::smallvec![t(2)],
+                smallvec::smallvec![None],
+            ],
         };
         // Probe layout is the FULL outer schema [x, y]; shared = {x} → [(0, 0)].
         let outer = VarSchema::from_vars([Variable::new("x"), Variable::new("y")]);
@@ -860,7 +864,7 @@ mod tests {
         // Same shape but NO wild inner row, so a keyed miss is a true non-match.
         let inner2 = SolutionSeq {
             schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
-            rows: vec![vec![t(1)], vec![t(2)]],
+            rows: vec![smallvec::smallvec![t(1)], smallvec::smallvec![t(2)]],
         };
         let (keyed2, wild2) = build_index(&inner2, &shared);
         assert!(wild2.is_empty());

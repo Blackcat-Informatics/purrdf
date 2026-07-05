@@ -37,7 +37,7 @@ pub(crate) fn eval_values(
     let width = schema.len();
     let mut rows = Vec::with_capacity(bindings.len());
     for binding in bindings {
-        let mut row = vec![None; width];
+        let mut row = smallvec::smallvec![None; width];
         for (i, cell) in binding.iter().enumerate() {
             if let Some(ground) = cell {
                 row[i] = Some(
@@ -529,7 +529,7 @@ pub(crate) fn eval_group(
             || ctx.fork_for_worker(),
             |child, acc, key| {
                 let idxs = &groups[key];
-                let mut row = vec![None; out_width];
+                let mut row = smallvec::smallvec![None; out_width];
                 for (i, _) in variables.iter().enumerate() {
                     row[i] = key[i];
                 }
@@ -548,7 +548,7 @@ pub(crate) fn eval_group(
         let mut rows = Vec::with_capacity(order.len());
         for key in &order {
             let idxs = &groups[key];
-            let mut row = vec![None; out_width];
+            let mut row = smallvec::smallvec![None; out_width];
             for (i, _) in variables.iter().enumerate() {
                 row[i] = key[i];
             }

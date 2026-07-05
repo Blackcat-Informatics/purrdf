@@ -47,6 +47,10 @@ serde_json = { workspace = true }
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.
 purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.2.1" }
+# Inline small-vector primitive for hot, short-lived id rows (default features
+# only — no `union`/`serde`; wasm-clean, `unsafe`-free). Version is pinned once
+# in the root `[workspace.dependencies]`.
+smallvec = { workspace = true }
 
 [dev-dependencies]
 purrdf-gts = { workspace = true }
@@ -57,4 +61,8 @@ criterion = { workspace = true }
 
 [[bench]]
 name = "validate"
+harness = false
+
+[[bench]]
+name = "pattern_lookup"
 harness = false

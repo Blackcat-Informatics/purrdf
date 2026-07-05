@@ -36,6 +36,35 @@ pub enum IriError {
     NonAbsoluteBase(String),
 }
 
+impl IriError {
+    /// The byte offset the failure was reported at, for the offset-bearing
+    /// variants ([`BadPercentEncoding`](Self::BadPercentEncoding)/
+    /// [`DisallowedChar`](Self::DisallowedChar)). `None` for the whole-string
+    /// variants that are not tied to a single byte position.
+    #[must_use]
+    pub fn byte_offset(&self) -> Option<usize> {
+        match self {
+            Self::BadPercentEncoding(at) | Self::DisallowedChar(_, at) => Some(*at),
+            Self::Empty
+            | Self::MissingScheme
+            | Self::BadScheme(_)
+            | Self::BadAuthority(_)
+            | Self::NonAbsoluteBase(_) => None,
+        }
+    }
+
+    /// Resolve this error's byte offset to a 1-based source [`Position`] against
+    /// the lexical form the error came from. `None` for variants without a
+    /// single offset.
+    ///
+    /// [`Position`]: crate::Position
+    #[must_use]
+    pub fn locate(&self, src: &str) -> Option<crate::Position> {
+        self.byte_offset()
+            .map(|at| crate::LineIndex::new(src).locate(src, at))
+    }
+}
+
 impl fmt::Display for IriError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -68,3 +97,25 @@ impl std::error::Error for IriError {}
 
 /// Convenience alias for fallible IRI operations.
 pub type Result<T> = core::result::Result<T, IriError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_offset_only_for_offset_variants() {
+        assert_eq!(IriError::BadPercentEncoding(4).byte_offset(), Some(4));
+        assert_eq!(IriError::DisallowedChar(' ', 6).byte_offset(), Some(6));
+        assert_eq!(IriError::Empty.byte_offset(), None);
+        assert_eq!(IriError::MissingScheme.byte_offset(), None);
+    }
+
+    #[test]
+    fn locate_resolves_offset() {
+        let src = "http://example.org/a b";
+        let at = src.find(' ').unwrap();
+        let pos = IriError::DisallowedChar(' ', at).locate(src).unwrap();
+        assert_eq!((pos.line, pos.column), (1, at as u32 + 1));
+        assert!(IriError::Empty.locate(src).is_none());
+    }
+}

@@ -979,7 +979,7 @@ mod tests {
         // `portable_row` must classify this as `Fresh` (sid >= base).
         let fresh_value = lit("hello parallel");
         let fresh_term = child.scratch.intern(&ds, fresh_value.clone());
-        let row: Solution = vec![None, Some(pre_fork_term), Some(fresh_term)];
+        let row: Solution = smallvec::smallvec![None, Some(pre_fork_term), Some(fresh_term)];
 
         let prow = portable_row(&child.scratch, base, &row);
         assert_eq!(prow[0], None);
@@ -1015,8 +1015,8 @@ mod tests {
         let term_a = child_a.scratch.intern(&ds, shared_value.clone());
         let term_b = child_b.scratch.intern(&ds, shared_value);
 
-        let row_a: Solution = vec![Some(term_a)];
-        let row_b: Solution = vec![Some(term_b)];
+        let row_a: Solution = smallvec::smallvec![Some(term_a)];
+        let row_b: Solution = smallvec::smallvec![Some(term_b)];
         let prow_a = portable_row(&child_a.scratch, base, &row_a);
         let prow_b = portable_row(&child_b.scratch, base, &row_b);
 

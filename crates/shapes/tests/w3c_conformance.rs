@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use purrdf::RdfDataset;
-use purrdf_shapes::data::{GraphFilter, IrDataGraph, ShaclDataGraph};
+use purrdf_shapes::data::{native_quads, GraphFilter};
 use purrdf_shapes::model::{rdf, sh};
 use purrdf_shapes::term::{NamedNode, Term};
 
@@ -139,25 +139,26 @@ fn named(iri: &str) -> Term {
 }
 
 /// All objects of `(subject, predicate, ?)`.
-fn objects(g: &IrDataGraph, subject: &Term, predicate: &str) -> Vec<Term> {
-    g.quads_for_pattern(
+fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
+    native_quads(
+        g,
         Some(subject),
         Some(&named(predicate)),
         None,
         GraphFilter::AnyGraph,
     )
     .into_iter()
-    .map(|q| q.object)
+    .map(|(_, _, object)| object)
     .collect()
 }
 
 /// The first object of `(subject, predicate, ?)`, if any.
-fn object(g: &IrDataGraph, subject: &Term, predicate: &str) -> Option<Term> {
+fn object(g: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
     objects(g, subject, predicate).into_iter().next()
 }
 
 /// Walk an RDF collection (`rdf:first`/`rdf:rest`) into a vec, in list order.
-fn list_items(g: &IrDataGraph, head: &Term) -> Vec<Term> {
+fn list_items(g: &RdfDataset, head: &Term) -> Vec<Term> {
     let mut items = Vec::new();
     let mut node = head.clone();
     loop {
@@ -202,31 +203,41 @@ fn parse_turtle_file(path: &Path) -> Result<Arc<RdfDataset>, String> {
 fn collect_manifest(manifest_path: &Path, root: &Path, tests: &mut Vec<TestCase>) {
     let dataset =
         parse_turtle_file(manifest_path).unwrap_or_else(|e| panic!("manifest walk failed: {e}"));
-    let g = IrDataGraph::new(dataset);
+    let g = dataset;
 
     // Sub-manifests: recurse in sorted order for a deterministic scoreboard.
-    let mut includes: Vec<PathBuf> = g
-        .quads_for_pattern(None, Some(&named(mf::INCLUDE)), None, GraphFilter::AnyGraph)
-        .into_iter()
-        .map(|q| match q.object {
-            Term::NamedNode(n) => iri_to_path(n.as_str()),
-            other => panic!(
-                "{}: mf:include object must be an IRI, got {other}",
-                manifest_path.display()
-            ),
-        })
-        .collect();
+    let mut includes: Vec<PathBuf> = native_quads(
+        &g,
+        None,
+        Some(&named(mf::INCLUDE)),
+        None,
+        GraphFilter::AnyGraph,
+    )
+    .into_iter()
+    .map(|(_, _, object)| match object {
+        Term::NamedNode(n) => iri_to_path(n.as_str()),
+        other => panic!(
+            "{}: mf:include object must be an IRI, got {other}",
+            manifest_path.display()
+        ),
+    })
+    .collect();
     includes.sort();
     for include in includes {
         collect_manifest(&include, root, tests);
     }
 
     // Entries: an RDF list, in list (document) order.
-    let entry_heads: Vec<Term> = g
-        .quads_for_pattern(None, Some(&named(mf::ENTRIES)), None, GraphFilter::AnyGraph)
-        .into_iter()
-        .map(|q| q.object)
-        .collect();
+    let entry_heads: Vec<Term> = native_quads(
+        &g,
+        None,
+        Some(&named(mf::ENTRIES)),
+        None,
+        GraphFilter::AnyGraph,
+    )
+    .into_iter()
+    .map(|(_, _, object)| object)
+    .collect();
     for head in entry_heads {
         for entry in list_items(&g, &head) {
             if let Some(tc) = parse_entry(&g, &entry, manifest_path, root) {
@@ -238,7 +249,7 @@ fn collect_manifest(manifest_path: &Path, root: &Path, tests: &mut Vec<TestCase>
 
 /// Parse one manifest entry into a [`TestCase`] (skipping non-`sht:Validate`).
 fn parse_entry(
-    g: &IrDataGraph,
+    g: &RdfDataset,
     entry: &Term,
     manifest_path: &Path,
     root: &Path,
@@ -303,7 +314,7 @@ fn parse_entry(
 }
 
 /// Read the expected `sh:conforms` boolean off the expected-report node.
-fn expected_conforms(g: &IrDataGraph, report_node: &Term, id: &str) -> bool {
+fn expected_conforms(g: &RdfDataset, report_node: &Term, id: &str) -> bool {
     match object(g, report_node, sh::CONFORMS) {
         Some(Term::Literal(l)) => match l.value() {
             "true" => true,
@@ -315,7 +326,7 @@ fn expected_conforms(g: &IrDataGraph, report_node: &Term, id: &str) -> bool {
 }
 
 /// Build the expected result multiset from the expected-report node.
-fn expected_multiset(g: &IrDataGraph, report_node: &Term) -> Multiset {
+fn expected_multiset(g: &RdfDataset, report_node: &Term) -> Multiset {
     let mut multiset = Multiset::new();
     for result in objects(g, report_node, sh::RESULT) {
         let focus = object(g, &result, sh::FOCUS_NODE).map_or_else(String::new, |t| norm(&t));

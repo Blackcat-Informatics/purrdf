@@ -60,7 +60,7 @@ fn bench_validate(c: &mut Criterion) {
 /// The engine validates focus nodes SERIALLY: a rayon `par_iter` over this 3000-
 /// node workload was measured here and regressed ~9% (per-focus work is too cheap
 /// — ~5 µs — to amortize thread-pool dispatch and shared-`Store` read contention),
-/// confirming. The `ShaclDataGraph: Send + Sync` bound keeps the seam ready;
+/// confirming. The frozen `RdfDataset` is `Sync`, so the seam stays ready;
 /// the parallel path re-enters once per-focus cost exceeds ~50–100 µs.
 fn large_hierarchy_inputs() -> (String, String) {
     // Shape: one NodeShape targeting ex:C0 with sh:pattern + sh:minCount constraints.
