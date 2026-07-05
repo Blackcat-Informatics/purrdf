@@ -42,13 +42,13 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 19 | 0 | 0 | 0 | GREEN |
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 | 0 | 0 | 0 | GREEN |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 250 | 0 | 0 | 0 | GREEN |
-| SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 797 | 5 | 5 | 0 | GREEN |
+| SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 800 | 5 | 5 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 126 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 69 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 | 0 | 0 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 85 | 1 | 1 | 0 | GREEN |
-| purrdf.compat parity | first-party (differential vs rdflib) | 362 | 4 | 4 | 0 | GREEN |
+| purrdf.compat parity | first-party (differential vs rdflib) | 365 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
 
 The `Budget` column is the ledger ratchet's committed ceiling (see
