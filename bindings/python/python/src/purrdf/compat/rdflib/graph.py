@@ -1001,7 +1001,7 @@ class Graph:
         Precedence: ``publicID``, then ``location``/``source`` when it denotes a
         path or URL, otherwise ``Path.cwd().as_uri()``.
         """
-        if publicID is not None:
+        if publicID is not None and not isinstance(publicID, BNode):
             return str(publicID)
         src: object | None = source if source is not None else location
         if src is None and file is not None and data is None:
