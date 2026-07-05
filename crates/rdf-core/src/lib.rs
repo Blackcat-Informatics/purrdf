@@ -29,6 +29,10 @@ pub mod bundle;
 // SPARQL execution, and serializer egress. PyO3-free, oxigraph-free — pure
 // contract only; concrete adapters live in `purrdf`.
 pub mod backend;
+// RDF Collection (rdf:first/rest/nil) and Container (rdf:Seq/Bag/Alt) traversal:
+// the malformed-list taxonomy and standard-`rdf:` const set backing the
+// `DatasetView` walker methods.
+pub mod collections;
 pub mod content_id;
 pub mod content_store;
 // The static, allocation-free read view over an RDF dataset (purrdf P2):
@@ -75,6 +79,7 @@ pub use bundle::{
     ArtifactIndex, ArtifactRecord, BundleError, RdfBundle, SegmentUnitMap, UnitCatalog,
     UnitMetadata,
 };
+pub use collections::RdfListError;
 pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{DatasetMut, DatasetView, GraphMatch, GraphMatchValue};

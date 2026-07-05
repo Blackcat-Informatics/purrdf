@@ -85,7 +85,8 @@ pub use native_codecs::{
     SpanTable,
 };
 pub use native_quads::{
-    canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quads, flat_dataset_from_quads,
+    canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quad_sources,
+    dataset_from_quads, flat_dataset_from_quad_sources, flat_dataset_from_quads,
     flat_rdf_quads_from_dataset,
 };
 pub use purrdf_core::{
@@ -102,11 +103,11 @@ pub use purrdf_core::{
     OriginKind, OriginSetId, OriginSetInterner, PipelineBundle, PipelineBundleError,
     ProvenanceError, QuadHandle, QuadIds, QuadRef, QuadValues, RdfAnnotation, RdfBlobOrigin,
     RdfBlobRecord, RdfBundle, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfDiagnostic,
-    RdfEnvelope, RdfLiteral, RdfLocation, RdfLookaside, RdfLookasideKind, RdfLookasideResource,
-    RdfLoss, RdfMetadataEntry, RdfMetadataValue, RdfOpaqueNodeRecord, RdfParseRequest,
-    RdfParserBackend, RdfQuad, RdfReifier, RdfSegmentRecord, RdfSerializeRequest, RdfSerializer,
-    RdfSeverity, RdfSignatureRecord, RdfStoreCapabilities, RdfSuppressionRecord, RdfTerm,
-    RdfTermKind, RdfTextDirection, RdfTriple, SegmentUnitMap, SerializeGraph, SmallVec,
+    RdfEnvelope, RdfListError, RdfLiteral, RdfLocation, RdfLookaside, RdfLookasideKind,
+    RdfLookasideResource, RdfLoss, RdfMetadataEntry, RdfMetadataValue, RdfOpaqueNodeRecord,
+    RdfParseRequest, RdfParserBackend, RdfQuad, RdfReifier, RdfSegmentRecord, RdfSerializeRequest,
+    RdfSerializer, RdfSeverity, RdfSignatureRecord, RdfStoreCapabilities, RdfSuppressionRecord,
+    RdfTerm, RdfTermKind, RdfTextDirection, RdfTriple, SegmentUnitMap, SerializeGraph, SmallVec,
     SparqlEngine, SparqlRequest, SparqlResult, SssomDiagnostic, SssomMapping, SssomMappingSet,
     SssomMeta, TermFactory, TermId, TermRef, TermValue, UnitCatalog, UnitId, UnitInterner,
     UnitMetadata, PROJECTION_CODECS, SSSOM_DEFAULT_VALIDATION_TYPES,

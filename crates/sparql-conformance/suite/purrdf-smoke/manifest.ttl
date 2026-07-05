@@ -10,7 +10,9 @@
 @prefix :    <http://purrdf.test/smoke#> .
 
 :manifest a mf:Manifest ;
-    mf:entries ( :groupCount :askTrue :exprGroup :serviceJoin :goodSyntax :badSyntax ) .
+    mf:entries ( :groupCount :askTrue :exprGroup :serviceJoin
+                 :arithNotExists :unionFilterTrue :unionFilterUnbound
+                 :goodSyntax :badSyntax ) .
 
 :groupCount a mf:QueryEvaluationTest ;
     mf:name "GROUP BY ?v with COUNT(*)" ;
@@ -32,6 +34,21 @@
     mf:action [ qt:query <service.rq> ; qt:data <data.ttl> ;
                 qt:serviceData [ qt:endpoint <http://purrdf.test/ep> ; qt:data <endpoint.ttl> ] ] ;
     mf:result <service.srx> .
+
+:arithNotExists a mf:QueryEvaluationTest ;
+    mf:name "arithmetic FILTER NOT EXISTS: row with empty inner group survives" ;
+    mf:action [ qt:query <arith-not-exists.rq> ; qt:data <arith-not-exists.ttl> ] ;
+    mf:result <arith-not-exists.srx> .
+
+:unionFilterTrue a mf:QueryEvaluationTest ;
+    mf:name "UNION branch { FILTER(true) } contributes the unit solution" ;
+    mf:action [ qt:query <union-filter-true.rq> ; qt:data <union-filter.ttl> ] ;
+    mf:result <union-filter-true.srx> .
+
+:unionFilterUnbound a mf:QueryEvaluationTest ;
+    mf:name "UNION branch { FILTER(?a > 0) } with ?a unbound yields only the other branch" ;
+    mf:action [ qt:query <union-filter-unbound.rq> ; qt:data <union-filter.ttl> ] ;
+    mf:result <union-filter-unbound.srx> .
 
 :goodSyntax a mf:PositiveSyntaxTest11 ;
     mf:name "well-formed aggregate query parses" ;

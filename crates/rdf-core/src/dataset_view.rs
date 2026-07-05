@@ -15,6 +15,10 @@
 //! and single, so the erased `&mut dyn` layer is deferred; this trait carries no
 //! object-safety obligation.
 
+use std::collections::BTreeSet;
+
+use crate::collections::{container_member_index, RdfListError};
+use crate::collections::{RDF_ALT, RDF_BAG, RDF_FIRST, RDF_NIL, RDF_REST, RDF_SEQ, RDF_TYPE};
 use crate::ir::{QuadIds, QuadRef, RdfDataset, TermId, TermRef, TermValue};
 use crate::RdfStoreCapabilities;
 
@@ -114,12 +118,188 @@ pub trait DatasetView: sealed::Sealed {
         })
     }
 
+    /// Resolve a term **value** to its dataset-local [`TermId`], without minting.
+    ///
+    /// A value interned nowhere in this view yields `None` (it names no term), so a
+    /// structural walk keyed on a not-present IRI simply finds nothing — absence is
+    /// an empty match, never an error. Backends with a reverse value index (P4) use
+    /// it; others may scan.
+    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId>;
+
     /// The capabilities this view's backing data exposes (C7).
     fn capabilities(&self) -> RdfStoreCapabilities;
 
     /// A size hint for the number of quads, if known.
     fn len_hint(&self) -> Option<usize> {
         None
+    }
+
+    /// Materialize an `rdf:first`/`rdf:rest`/`rdf:nil` Collection whose head is
+    /// `head`, scoped to `graph`. Returns members in list order.
+    ///
+    /// Cycle-guarded: a revisited cell terminates the walk gracefully (`Ok`,
+    /// truncated at the cycle), matching the reference GTS walker. A MALFORMED cell
+    /// — a cons cell with no `rdf:first`, more than one `rdf:first`, or an
+    /// `rdf:rest` to a term that is neither `rdf:nil` nor a cons cell — is a hard
+    /// error ([`RdfListError`]): this walker is also a validator. A head that is
+    /// `rdf:nil` or is not a list (carries neither `rdf:first` nor `rdf:rest`)
+    /// yields an empty `Vec`.
+    ///
+    /// If the `rdf:first` IRI is not interned in this view at all, no Collection can
+    /// exist, so the result is an empty `Vec` (`Ok`), not an error.
+    fn rdf_list(&self, head: TermId, graph: GraphMatch) -> Result<Vec<TermId>, RdfListError> {
+        // No `rdf:first` in the term table ⇒ no cons cell can exist here.
+        let Some(first_p) = self.term_id_by_value(&TermValue::iri(RDF_FIRST)) else {
+            return Ok(Vec::new());
+        };
+        // `rdf:rest`/`rdf:nil` may be absent; the walk handles that inline (a
+        // missing `rdf:rest` edge simply ends the list, absent `rdf:nil` matches no
+        // terminator).
+        let rest_p = self.term_id_by_value(&TermValue::iri(RDF_REST));
+        let nil = self.term_id_by_value(&TermValue::iri(RDF_NIL));
+
+        let mut out = Vec::new();
+        // Cycle guard: revisited cell terminates the walk (mirrors the reference
+        // GTS `rdf_list` seen-set).
+        let mut seen: BTreeSet<TermId> = BTreeSet::new();
+        let mut current = head;
+        loop {
+            if Some(current) == nil {
+                break;
+            }
+            if !seen.insert(current) {
+                break;
+            }
+
+            // Gather this cell's `rdf:first` objects: zero or many is malformed
+            // (the defensive multi-edge detection of the reference list walker).
+            let mut first_obj = None;
+            let mut first_count = 0usize;
+            for q in self.quads_for_pattern(Some(current), Some(first_p), None, graph) {
+                first_obj = Some(q.o);
+                first_count += 1;
+            }
+            // The single `rdf:rest` object, if any.
+            let mut rest_obj = None;
+            if let Some(rest_p) = rest_p {
+                for q in self.quads_for_pattern(Some(current), Some(rest_p), None, graph) {
+                    rest_obj = Some(q.o);
+                }
+            }
+
+            // Neither edge ⇒ not a cons cell. Only `head` can reach this branch
+            // (interior cells are only entered through a rest edge validated to
+            // point at `rdf:nil` or a cons cell); it means `head` is simply not a
+            // list ⇒ an empty Vec.
+            if first_count == 0 && rest_obj.is_none() {
+                break;
+            }
+            if first_count == 0 {
+                return Err(RdfListError::MissingFirst);
+            }
+            if first_count > 1 {
+                return Err(RdfListError::MultipleFirst);
+            }
+            out.push(first_obj.expect("first_count == 1 implies a first object"));
+
+            // A cons cell with no `rdf:rest` edge ends the list (a truncated, but
+            // not malformed, tail). Otherwise validate the rest target before
+            // following it.
+            let Some(next) = rest_obj else {
+                break;
+            };
+            if Some(next) != nil && !self.is_cons_cell(next, first_p, rest_p, graph) {
+                return Err(RdfListError::DanglingRest);
+            }
+            current = next;
+        }
+        Ok(out)
+    }
+
+    /// RDF Container members `rdf:_1`..`rdf:_n` of `head` in numeric order, scoped
+    /// to `graph`. Gaps are skipped; ordering is by the numeric suffix, NOT dataset
+    /// order.
+    fn rdf_container_members(&self, head: TermId, graph: GraphMatch) -> Vec<TermId> {
+        let mut indexed: Vec<(u64, TermId)> = Vec::new();
+        for q in self.quads_for_pattern(Some(head), None, None, graph) {
+            if let TermRef::Iri(iri) = self.resolve(q.p) {
+                if let Some(n) = container_member_index(iri) {
+                    indexed.push((n, q.o));
+                }
+            }
+        }
+        // Order by the numeric suffix (`_2` before `_10`), tolerating gaps.
+        indexed.sort_by_key(|&(n, _)| n);
+        indexed.into_iter().map(|(_, o)| o).collect()
+    }
+
+    /// Dispatch by shape: a `head` carrying an `rdf:first` is walked as a Collection
+    /// ([`rdf_list`](Self::rdf_list)); a `head` typed `rdf:Seq`/`rdf:Bag`/`rdf:Alt`
+    /// or carrying any `rdf:_n` property is walked as a Container
+    /// ([`rdf_container_members`](Self::rdf_container_members)). A head matching
+    /// neither yields an empty `Vec`.
+    fn members(&self, head: TermId, graph: GraphMatch) -> Result<Vec<TermId>, RdfListError> {
+        // Collection shape wins: an `rdf:first` edge marks a cons cell.
+        if let Some(first_p) = self.term_id_by_value(&TermValue::iri(RDF_FIRST)) {
+            if self
+                .quads_for_pattern(Some(head), Some(first_p), None, graph)
+                .next()
+                .is_some()
+            {
+                return self.rdf_list(head, graph);
+            }
+        }
+        // Container shape: any `rdf:_n` membership property present.
+        let members = self.rdf_container_members(head, graph);
+        if !members.is_empty() {
+            return Ok(members);
+        }
+        // A head explicitly typed as a container is a container even with no member
+        // properties yet — walking it yields the (empty) member set.
+        if self.is_typed_container(head, graph) {
+            return Ok(members);
+        }
+        Ok(Vec::new())
+    }
+
+    /// Whether `id` is an RDF Collection cons cell in `graph`: it carries an
+    /// `rdf:first` or an `rdf:rest` edge. Internal helper for the list walker's
+    /// dangling-rest validation.
+    #[doc(hidden)]
+    fn is_cons_cell(
+        &self,
+        id: TermId,
+        first_p: TermId,
+        rest_p: Option<TermId>,
+        graph: GraphMatch,
+    ) -> bool {
+        if self
+            .quads_for_pattern(Some(id), Some(first_p), None, graph)
+            .next()
+            .is_some()
+        {
+            return true;
+        }
+        rest_p.is_some_and(|rest_p| {
+            self.quads_for_pattern(Some(id), Some(rest_p), None, graph)
+                .next()
+                .is_some()
+        })
+    }
+
+    /// Whether `head` is typed `rdf:Seq`/`rdf:Bag`/`rdf:Alt` in `graph`. Internal
+    /// helper for [`members`](Self::members) container dispatch.
+    #[doc(hidden)]
+    fn is_typed_container(&self, head: TermId, graph: GraphMatch) -> bool {
+        let Some(type_p) = self.term_id_by_value(&TermValue::iri(RDF_TYPE)) else {
+            return false;
+        };
+        // One reverse lookup (`rdf:type`); the container classes are matched by
+        // resolving each type object's IRI, not by three extra id probes.
+        self.quads_for_pattern(Some(head), Some(type_p), None, graph)
+            .any(|q| {
+                matches!(self.resolve(q.o), TermRef::Iri(iri) if iri == RDF_SEQ || iri == RDF_BAG || iri == RDF_ALT)
+            })
     }
 }
 
@@ -201,6 +381,12 @@ impl DatasetView for RdfDataset {
         // permutation -> partition_point dispatch, byte-identical to the trait's
         // default linear scan (differential proptest in `ir/dataset.rs`).
         Self::quads_for_pattern_indexed(self, s, p, o, g)
+    }
+
+    #[inline]
+    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
+        // Delegate to the inherent lazy reverse value index (no minting).
+        Self::term_id_by_value(self, value)
     }
 
     #[inline]

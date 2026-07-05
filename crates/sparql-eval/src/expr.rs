@@ -3896,6 +3896,110 @@ mod tests {
         );
     }
 
+    // ── Arithmetic inside FILTER NOT EXISTS ────────────────────────────────────
+    //
+    // SPARQL 1.1 §18.6/§17.4.1.5: an outer row whose inner EXISTS group finds NO
+    // matching solution SURVIVES `FILTER NOT EXISTS`. The inner group carries an
+    // arithmetic FILTER — in (1a) over the inner's own re-bound value, in (1b) over
+    // an OUTER-bound variable substituted into the inner. A row is removed only when
+    // the arithmetic makes the inner group non-empty; a row whose inner FILTER kills
+    // the only candidate has an empty inner group and must survive. These lock the
+    // regression where these shapes returned an empty solution set.
+
+    /// `ex:x :v 5 ; :w 3` (v-value 5 ≤ 10) and `ex:y :v 15` (v-value 15 > 10, no
+    /// `:w`) — the (1a) fixture.
+    fn arith_not_exists_1a_ds() -> Arc<RdfDataset> {
+        use purrdf_core::RdfLiteral;
+        let int = |lex: &str| RdfLiteral {
+            lexical_form: lex.to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        };
+        let mut b = RdfDatasetBuilder::new();
+        let v = b.intern_iri("http://example.org/v");
+        let w = b.intern_iri("http://example.org/w");
+        let x = b.intern_iri("http://example.org/x");
+        let y = b.intern_iri("http://example.org/y");
+        let i5 = b.intern_literal(int("5"));
+        let i15 = b.intern_literal(int("15"));
+        let i3 = b.intern_literal(int("3"));
+        b.push_quad(x, v, i5, None);
+        b.push_quad(x, w, i3, None);
+        b.push_quad(y, v, i15, None);
+        b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn arithmetic_filter_not_exists_survives_empty_inner_group() {
+        // ?s=x: ?a=5, inner FILTER(5 > 10) is false ⇒ inner group empty ⇒ NOT EXISTS
+        //        holds ⇒ x SURVIVES.
+        // ?s=y: ?a=15, inner FILTER(15 > 10) is true ⇒ inner group non-empty ⇒ y drops.
+        let ds = arith_not_exists_1a_ds();
+        let q = "SELECT ?s WHERE { \
+                   ?s <http://example.org/v> ?a . \
+                   OPTIONAL { ?s <http://example.org/w> ?b } \
+                   FILTER NOT EXISTS { ?s <http://example.org/v> ?a . FILTER(?a > 10) } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            vec![vec!["<http://example.org/x>".to_owned()]],
+            "the row whose inner arithmetic FILTER kills its only candidate must survive"
+        );
+        assert_eq!(rows, run_rows(&ds, q, false), "memo must be transparent");
+    }
+
+    /// `ex:x :v 10 ; :w 3` (inner 3-10 = -7, not > 0) and `ex:y :v 1 ; :w 5`
+    /// (inner 5-1 = 4 > 0) — the (1b) correlated fixture.
+    fn arith_not_exists_1b_ds() -> Arc<RdfDataset> {
+        use purrdf_core::RdfLiteral;
+        let int = |lex: &str| RdfLiteral {
+            lexical_form: lex.to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        };
+        let mut b = RdfDatasetBuilder::new();
+        let v = b.intern_iri("http://example.org/v");
+        let w = b.intern_iri("http://example.org/w");
+        let x = b.intern_iri("http://example.org/x");
+        let y = b.intern_iri("http://example.org/y");
+        let i10 = b.intern_literal(int("10"));
+        let i3 = b.intern_literal(int("3"));
+        let i1 = b.intern_literal(int("1"));
+        let i5 = b.intern_literal(int("5"));
+        b.push_quad(x, v, i10, None);
+        b.push_quad(x, w, i3, None);
+        b.push_quad(y, v, i1, None);
+        b.push_quad(y, w, i5, None);
+        b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn correlated_arithmetic_filter_not_exists_uses_outer_binding() {
+        // The inner FILTER references the OUTER-bound ?a in an arithmetic term, so the
+        // expression-correlated substitution path must make ?a visible inside:
+        //   ?s=x: ?a=10, inner FILTER(3 - 10 > 0) is false ⇒ inner empty ⇒ x SURVIVES.
+        //   ?s=y: ?a=1,  inner FILTER(5 - 1  > 0) is true  ⇒ inner non-empty ⇒ y drops.
+        // If the outer ?a were NOT visible inside (unbound), the arithmetic would
+        // error for BOTH rows, every inner group would be empty, and both rows would
+        // wrongly survive — so this exact singleton set only holds with §18.6
+        // substitution correct.
+        let ds = arith_not_exists_1b_ds();
+        let q = "SELECT ?s WHERE { \
+                   ?s <http://example.org/v> ?a . \
+                   FILTER NOT EXISTS { ?s <http://example.org/w> ?b . FILTER(?b - ?a > 0) } \
+                 }";
+        let rows = run_rows(&ds, q, true);
+        assert_eq!(
+            rows,
+            vec![vec!["<http://example.org/x>".to_owned()]],
+            "the correlated outer ?a must be visible in the inner arithmetic FILTER"
+        );
+        assert_eq!(rows, run_rows(&ds, q, false), "memo must be transparent");
+    }
+
     // ── heldIn extension function ──────────────────────────────────────────────
 
     /// The `heldIn` extension call node as parsed under a caller-configured

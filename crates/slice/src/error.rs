@@ -17,6 +17,9 @@ pub enum SliceError {
     InvalidPath(String),
     /// A digest computed at discovery time does not match a stored expectation.
     DigestMismatch { expected: String, actual: String },
+    /// A structurally malformed RDF Collection encountered while walking an
+    /// `rdf:first`/`rdf:rest` chain.
+    RdfList(purrdf::RdfListError),
 }
 
 impl std::fmt::Display for SliceError {
@@ -29,6 +32,7 @@ impl std::fmt::Display for SliceError {
             Self::DigestMismatch { expected, actual } => {
                 write!(f, "digest mismatch: expected {expected}, got {actual}")
             }
+            Self::RdfList(e) => write!(f, "malformed RDF collection: {e}"),
         }
     }
 }
@@ -37,6 +41,7 @@ impl std::error::Error for SliceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(e) => Some(e),
+            Self::RdfList(e) => Some(e),
             _ => None,
         }
     }

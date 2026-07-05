@@ -610,7 +610,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
     use purrdf_sparql_algebra::{
-        NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
     };
 
     fn graph() -> Arc<RdfDataset> {
@@ -894,6 +894,147 @@ mod tests {
         ));
     }
 
+    // ── UNION branch that is only a FILTER (no BGP) ────────────────────────────
+    //
+    // A branch `{ FILTER(expr) }` is `Filter { expr, inner: <empty BGP> }` over the
+    // unit solution (one row, empty schema). Per SPARQL 1.1:
+    //   * `{ FILTER(true) }` keeps that unit solution — one empty binding — which,
+    //     after the enclosing join, joins with EVERY outer row (its unbound shared
+    //     column matches anything).
+    //   * `{ FILTER(?a > 0) }` sees ?a UNBOUND inside that group (it has no BGP that
+    //     binds ?a), so `?a > 0` is a type error ⇒ EBV false ⇒ the branch yields ZERO
+    //     rows. The whole query must NOT collapse to empty — only the OTHER UNION
+    //     branch contributes.
+    // These two shapes have DIFFERENT correct results; the tests encode the split.
+
+    const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    const XBOOL: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+
+    /// `ex:x :v 5`, `ex:y :v 7`, `ex:x :flag true` — only x carries the flag.
+    fn union_filter_branch_ds() -> Arc<RdfDataset> {
+        use purrdf_core::RdfLiteral;
+        let int = |lex: &str| RdfLiteral {
+            lexical_form: lex.to_owned(),
+            datatype: Some(XINT.to_owned()),
+            language: None,
+            direction: None,
+        };
+        let mut b = RdfDatasetBuilder::new();
+        let v = b.intern_iri("http://example.org/v");
+        let flag = b.intern_iri("http://example.org/flag");
+        let x = b.intern_iri("http://example.org/x");
+        let y = b.intern_iri("http://example.org/y");
+        let i5 = b.intern_literal(int("5"));
+        let i7 = b.intern_literal(int("7"));
+        let tru = b.intern_literal(RdfLiteral {
+            lexical_form: "true".to_owned(),
+            datatype: Some(XBOOL.to_owned()),
+            language: None,
+            direction: None,
+        });
+        b.push_quad(x, v, i5, None);
+        b.push_quad(y, v, i7, None);
+        b.push_quad(x, flag, tru, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// `{ ?s :v ?a . { FILTER(cond) } UNION { ?s :flag true } }` — the left UNION
+    /// branch is a lone FILTER over the empty BGP (the unit solution).
+    fn union_filter_branch_pattern(cond: Expression) -> GraphPattern {
+        let scan = bgp(vp("s"), pred("http://example.org/v"), vp("a"));
+        let filter_branch = GraphPattern::Filter {
+            expr: cond,
+            inner: Box::new(GraphPattern::Bgp { patterns: vec![] }),
+        };
+        let flag_branch = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: vp("s"),
+                predicate: pred("http://example.org/flag"),
+                object: TermPattern::Literal(Literal::new_typed(
+                    "true",
+                    NamedNode::new_unchecked(XBOOL),
+                )),
+            }],
+        };
+        GraphPattern::Join {
+            left: Box::new(scan),
+            right: Box::new(GraphPattern::Union {
+                left: Box::new(filter_branch),
+                right: Box::new(flag_branch),
+            }),
+        }
+    }
+
+    /// Render `(?s, ?a)` rows as `(iri, lexical)` string pairs, sorted for a
+    /// multiset comparison.
+    fn s_a_rows(ds: &RdfDataset, seq: &SolutionSeq) -> Vec<(String, String)> {
+        let scratch = crate::scratch::ScratchInterner::new();
+        let s_col = seq.schema.index_of(&Variable::new("s")).expect("s");
+        let a_col = seq.schema.index_of(&Variable::new("a")).expect("a");
+        let render_cell = |t: SolutionTerm| match scratch.value_of(ds, t) {
+            TermValue::Iri(s) => s,
+            TermValue::Literal { lexical_form, .. } => lexical_form,
+            other => format!("{other:?}"),
+        };
+        let mut out: Vec<(String, String)> = seq
+            .rows
+            .iter()
+            .map(|row| {
+                (
+                    render_cell(row[s_col].expect("s bound")),
+                    render_cell(row[a_col].expect("a bound")),
+                )
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn union_filter_true_branch_contributes_unit_solution() {
+        // { FILTER(true) } keeps the unit solution, which joins with EVERY ?s :v ?a
+        // row; the { ?s :flag true } branch additionally re-contributes x. So x
+        // appears twice (once per branch) and y once — three rows total.
+        let ds = union_filter_branch_ds();
+        let mut ctx = EvalCtx::new(&ds);
+        let pattern = union_filter_branch_pattern(Expression::Literal(Literal::new_typed(
+            "true",
+            NamedNode::new_unchecked(XBOOL),
+        )));
+        let seq = eval(&pattern, &mut ctx).expect("eval");
+        assert_eq!(
+            s_a_rows(&ds, &seq),
+            vec![
+                ("http://example.org/x".to_owned(), "5".to_owned()),
+                ("http://example.org/x".to_owned(), "5".to_owned()),
+                ("http://example.org/y".to_owned(), "7".to_owned()),
+            ],
+            "FILTER(true) branch contributes the unit solution joined with every row"
+        );
+    }
+
+    #[test]
+    fn union_filter_unbound_branch_yields_zero_but_query_not_empty() {
+        // { FILTER(?a > 0) } sees ?a UNBOUND inside the group ⇒ type error ⇒ EBV
+        // false ⇒ zero rows from the left branch. ONLY the { ?s :flag true } branch
+        // contributes: exactly x. The query must NOT be empty (the 0.2.0 defect).
+        let ds = union_filter_branch_ds();
+        let mut ctx = EvalCtx::new(&ds);
+        let pattern = union_filter_branch_pattern(Expression::Greater(
+            Box::new(Expression::Variable(Variable::new("a"))),
+            Box::new(Expression::Literal(Literal::new_typed(
+                "0",
+                NamedNode::new_unchecked(XINT),
+            ))),
+        ));
+        let seq = eval(&pattern, &mut ctx).expect("eval");
+        assert_eq!(
+            s_a_rows(&ds, &seq),
+            vec![("http://example.org/x".to_owned(), "5".to_owned())],
+            "only the ?s :flag true branch contributes; the query is not empty"
+        );
+    }
+
     #[test]
     fn minus_with_disjoint_domains_removes_nothing() {
         let ds = graph();
@@ -942,24 +1083,9 @@ mod tests {
         b.push_quad(c, p3, ten, None);
         let ds = b.freeze().expect("freeze");
 
-        let one = || {
-            Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
-                "1",
-                NamedNode::new_unchecked(XINT),
-            ))
-        };
-        let nine = || {
-            Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
-                "9",
-                NamedNode::new_unchecked(XINT),
-            ))
-        };
-        let two = || {
-            Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
-                "2",
-                NamedNode::new_unchecked(XINT),
-            ))
-        };
+        let one = || Expression::Literal(Literal::new_typed("1", NamedNode::new_unchecked(XINT)));
+        let nine = || Expression::Literal(Literal::new_typed("9", NamedNode::new_unchecked(XINT)));
+        let two = || Expression::Literal(Literal::new_typed("2", NamedNode::new_unchecked(XINT)));
 
         // branch1: {?s :p1 ?o} BIND(?o + 1 AS ?sum)  -> s=a, o=10, sum=11
         let branch1 = GraphPattern::Extend {

@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+@prefix ex:  <http://example.org/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# x's v-value (5) is <= 10, so the inner FILTER(?a > 10) kills its only candidate,
+# leaving the inner group empty -> NOT EXISTS holds -> x survives.
+ex:x ex:v "5"^^xsd:integer ;
+     ex:w "3"^^xsd:integer .
+
+# y's v-value (15) is > 10, so the inner group is non-empty -> y is removed.
+ex:y ex:v "15"^^xsd:integer .

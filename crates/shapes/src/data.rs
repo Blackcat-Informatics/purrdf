@@ -119,7 +119,7 @@ impl ShaclData {
 /// interned [`TermId`]s. A `None` position is a wildcard.
 ///
 /// The caller is responsible for resolving any BOUND pattern term to its id via
-/// [`resolve_id`] first, and for short-circuiting to an empty match when a bound
+/// `resolve_id` first, and for short-circuiting to an empty match when a bound
 /// position does not resolve (a term not interned in `ds` matches nothing).
 #[inline]
 pub fn quads_for_pattern_ids(
