@@ -103,11 +103,12 @@ _PREFIX_DECL_RE = re.compile(r"@?prefix\s+([^\s:]*)\s*:\s*<([^>\s]*)>", re.IGNOR
 def _scan_prefixes(text: str) -> list[tuple[str, str]]:
     """Extract ``(prefix, iri)`` declarations from Turtle/TriG/N3/SPARQL source text.
 
-    A lightweight lexical scan (no full parse): rdflib records document prefixes on
-    the graph's ``NamespaceManager`` during parsing; the native parser does not yet
-    surface them, so we recover them from the source. Non-textual/binary sources and
-    JSON-LD documents are handled by their respective parsers; this helper covers
-    the Turtle-family formats only.
+    A lightweight lexical scan (no full parse). rdflib records document prefixes on
+    the graph's ``NamespaceManager`` during parsing; the native parser does not
+    surface them directly, so we recover them from the source for the Turtle-family
+    formats. JSON-LD ``@context`` prefixes are extracted after the parse by walking
+    the parsed JSON context, and RDF/XML ``xmlns:`` prefixes are recovered by the
+    RDF/XML parser. There are no remaining prefix-wiring divergences.
     """
     return [(m.group(1), m.group(2)) for m in _PREFIX_DECL_RE.finditer(text)]
 

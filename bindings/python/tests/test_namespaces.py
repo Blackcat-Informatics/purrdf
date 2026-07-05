@@ -231,7 +231,7 @@ def test_parse_sparql_style_prefix(compat: ModuleType) -> None:
 
 
 def test_parse_binds_jsonld_context_prefixes(compat: ModuleType) -> None:
-    """JSON-LD ``@context`` prefixes are recorded on the graph (rdflib parity)."""
+    """JSON-LD ``@context`` prefixes are extracted after parse by walking the JSON context."""
     jsonld = (
         '{"@context": {"ex": "http://example.org/"}, '
         '"@id": "http://example.org/s", '
