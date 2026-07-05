@@ -24,6 +24,13 @@ lint closes both gaps as a hard, no-optionality gate:
    latent release break — e.g. a listed crate depending on an unlisted one makes
    ``cargo publish`` fail on a missing dependency.
 
+3. **Per-crate version coherence.** Every publishable workspace crate must
+   resolve (via ``cargo metadata``) to exactly the canonical workspace version.
+   A crate that hardcodes ``version = "0.1.0"`` instead of
+   ``version.workspace = true`` would otherwise sail through the top-level
+   three-file byte check while publishing at the wrong version; this assertion
+   catches that drift and names every offending crate.
+
 The gate is deterministic and offline: it reads in-tree files plus
 ``cargo metadata`` and never touches the network.
 """
@@ -63,12 +70,15 @@ def npm_version(root: Path) -> str:
     return data["version"]
 
 
-def publishable_crates(root: Path) -> set[str]:
-    """Return every workspace member whose ``publish`` is not ``false``.
+def publishable_crates(root: Path) -> dict[str, str]:
+    """Map every publishable workspace member to its resolved version.
 
     In ``cargo metadata`` a member with no publish restriction has ``publish:
     null``; a ``publish = false`` member has ``publish: []``. Treating a
     non-``null`` empty list as unpublishable matches the crates.io semantics.
+    The returned mapping preserves each package's resolved ``version`` so the
+    caller can assert per-crate version coherence against the canonical
+    workspace version.
     """
     out = subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version=1"],
@@ -78,10 +88,10 @@ def publishable_crates(root: Path) -> set[str]:
         cwd=root,
     ).stdout
     meta = json.loads(out)
-    publishable: set[str] = set()
+    publishable: dict[str, str] = {}
     for pkg in meta["packages"]:
         if pkg.get("publish") != []:
-            publishable.add(pkg["name"])
+            publishable[pkg["name"]] = pkg["version"]
     return publishable
 
 
@@ -129,7 +139,8 @@ def main() -> int:
     version = next(iter(versions.values()))
 
     # 2. Publish-list completeness against the publishable set.
-    publishable = publishable_crates(root)
+    publishable_versions = publishable_crates(root)
+    publishable = set(publishable_versions)
     lists = {
         ".github/workflows/release-cargo.yaml": root
         / ".github"
@@ -155,6 +166,19 @@ def main() -> int:
                 f"{label}: release lane lists non-publishable crate(s): "
                 f"{sorted(extra)}"
             )
+
+    # 3. Per-crate version coherence against the canonical workspace version.
+    mismatched = sorted(
+        (name, crate_version)
+        for name, crate_version in publishable_versions.items()
+        if crate_version != version
+    )
+    if mismatched:
+        failures.append(
+            f"publishable crate(s) not at the canonical workspace version {version!r}:"
+        )
+        for name, crate_version in mismatched:
+            failures.append(f"    {name}: {crate_version} (expected {version})")
 
     if failures:
         print("FAIL: release coherence check found problems:", file=sys.stderr)
