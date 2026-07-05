@@ -102,6 +102,19 @@ class Collection:
             self.graph.remove((current, None, None))
             return
 
+        if key == 0:
+            # Removing the head: copy the second cell into the anchor, then
+            # drop the now-redundant second cell.
+            second = self._get_container(1)
+            assert second is not None
+            second_first = self.graph.value(second, RDF.first)
+            second_rest = self.graph.value(second, RDF.rest)
+            assert second_first is not None and second_rest is not None
+            self.graph.set((self.uri, RDF.first, second_first))
+            self.graph.set((self.uri, RDF.rest, second_rest))
+            self.graph.remove((second, None, None))
+            return
+
         # Splice out the middle cell.
         nxt = self._get_container(key + 1)
         prior = self._get_container(key - 1)
