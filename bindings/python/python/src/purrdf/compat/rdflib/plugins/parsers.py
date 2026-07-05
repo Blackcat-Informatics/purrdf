@@ -18,6 +18,7 @@ quad formats.
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING, Any
 
 import purrdf
@@ -52,6 +53,24 @@ def _as_text(source: Any) -> str:
     if isinstance(source, bytes):
         return source.decode("utf-8")
     raise TypeError(f"unsupported parse source: {source!r}")
+
+
+#: An XML namespace declaration: ``xmlns:prefix="uri"`` (default ``xmlns`` is
+#: intentionally excluded; the reserved ``xml`` prefix is skipped by the caller).
+_XMLNS_PREFIX_RE = re.compile(
+    r"""\sxmlns:([A-Za-z_][\w.\-]*)\s*=\s*(["'])(.*?)\2""",
+    re.DOTALL,
+)
+
+
+def _scan_xml_prefixes(text: str) -> list[tuple[str, str]]:
+    """Extract ``(prefix, iri)`` declarations from XML ``xmlns:`` attributes.
+
+    A lightweight lexical scan (no full parse): RDF/XML records document prefixes
+    on the graph's ``NamespaceManager`` during parsing, but the native codec does
+    not surface them, so we recover them from the source text.
+    """
+    return [(match.group(1), match.group(3)) for match in _XMLNS_PREFIX_RE.finditer(text)]
 
 
 class _NativeParser(Parser):
@@ -155,7 +174,12 @@ class RDFXMLParser(Parser):
 
     def parse(self, source: Any, sink: Graph, **kwargs: Any) -> None:
         """Load RDF/XML text (``from_rdf_xml`` → N-Quads → store)."""
-        sink._store.load(purrdf.from_rdf_xml(_as_text(source)), format=_NQ)
+        text = _as_text(source)
+        sink._store.load(purrdf.from_rdf_xml(text), format=_NQ)
+        for prefix, namespace in _scan_xml_prefixes(text):
+            if prefix == "xml":
+                continue
+            sink.bind(prefix, URIRef(namespace))
 
 
 class TriXParser(_NativeParser):
