@@ -65,6 +65,16 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 	@python3 scripts/check-versions.py
 	@tree_version=$$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])"); \
 		test "$$tree_version" = "$(VERSION)" || { echo "ERROR: VERSION=$(VERSION) does not match the tree version $$tree_version — run 'make bump VERSION=$(VERSION)' first"; exit 1; }
+	@# Pre-tag guard: the CHANGELOG.md section is the release notes the cargo
+	@# workflow slices out AFTER publishing — verify it exists BEFORE we push the
+	@# irreversible rust-v tag. This awk slice is byte-identical to the one in
+	@# .github/workflows/release-cargo.yaml so the local and CI guards never diverge.
+	@notes=$$(awk -v v="$(VERSION)" ' \
+		$$0 == "## [" v "]" || index($$0, "## [" v "] ") == 1 { flag = 1; next } \
+		/^## \[/ { flag = 0 } \
+		flag { print } \
+	' CHANGELOG.md); \
+		test -n "$$(printf '%s' "$$notes" | tr -d '[:space:]')" || { echo "ERROR: CHANGELOG.md has no release-notes section for [$(VERSION)] — run 'make changelog' and commit it before tagging"; exit 1; }
 	git tag "rust-v$(VERSION)"
 	git tag "py-v$(VERSION)"
 	git tag "npm-v$(VERSION)"
