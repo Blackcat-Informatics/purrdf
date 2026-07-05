@@ -191,6 +191,28 @@ def _suite_shapes_corpus() -> SuiteResult:
     )
 
 
+def _suite_shacl_rules() -> SuiteResult:
+    """SHACL Rules (`sh:rule` inference): scrape the harness's per-fixture
+    scoreboard so the matrix reports the inferred-graph fixture count rather than
+    the single test-function tally that ``_suite_cargo`` would yield."""
+    cmd = [
+        "cargo", "test", "-p", "purrdf-shapes", "--locked",
+        "--test", "rules_conformance", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(r"RULES: passed (\d+) total (\d+)", out)
+    if m:
+        passed, total = int(m.group(1)), int(m.group(2))
+        detail = f"{passed}/{total} inferred-graph fixtures"
+        return SuiteResult(
+            "SHACL Rules", "DASH + first-party",
+            passed=passed, xskip=(total - passed), failed=0,
+            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
+        )
+    return _suite_cargo("SHACL Rules", "DASH + first-party", cmd)
+
+
 def _suite_shex_validation() -> SuiteResult:
     cmd = [
         "cargo", "test", "-p", "purrdf-shex", "--locked",
@@ -404,6 +426,7 @@ def native_suites() -> list[SuiteResult]:
         _suite_sparql(),
         _suite_shacl_w3c(),
         _suite_shapes_corpus(),
+        _suite_shacl_rules(),
         _suite_shex_validation(),
         _suite_cargo(
             "ShEx syntax + ShExC/ShExJ round-trip", "shexTest v2.1.0",

@@ -45,6 +45,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 800 | 5 | 5 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 126 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 69 | 0 | 0 | 0 | GREEN |
+| SHACL Rules | DASH + first-party | 17 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 | 0 | 0 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 85 | 1 | 1 | 0 | GREEN |
@@ -84,9 +85,11 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   (upstream `main` has drifted to 2.2-alpha `EXTENDS` tests, out of scope for
   ShEx 2.1). See its README for provenance.
 - `vectors/shacl/` — the W3C SHACL test suite (`data-shapes-test-suite`),
-  `core/` and `sparql/` manifests, plus the validation-only SHACL-AF corpus
-  vendored from pySHACL's DASH tests under `vectors/shacl/af/`. See its README
-  for provenance.
+  `core/` and `sparql/` manifests, plus the SHACL-AF corpus vendored from
+  pySHACL's DASH tests under `vectors/shacl/af/`: `af/` validation cases and the
+  `af/rules/` inferred-graph fixtures (DASH `dash:InferencingTestCase` rules plus
+  first-party cases) driving the SHACL Rules harness. See its README for
+  provenance.
 - `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 69 cases with
   byte-frozen expected reports, covering purrdf-specific behavior (reifier
   shapes, path forms, property pairs, qualified shapes, SHACL-AF
@@ -197,8 +200,22 @@ issue, so the matrix stays honest:
   `crates/shapes/tests/w3c_conformance.rs`. `sh:expression`, custom SPARQL
   constraint components, pre-binding semantics, and user-defined
   `sh:SPARQLFunction` calls are implemented and exercised; `sh:SPARQLTargetType`
-  is implemented. SHACL Rules (inference / triple derivation) remain out of
-  scope.
+  is implemented. **SHACL Rules** (`sh:rule` — both `sh:TripleRule` and
+  `sh:SPARQLRule`, with `sh:condition`, `sh:order`, and `sh:deactivated`) are now
+  implemented: rules fire in an iterative fixpoint and the derivation is
+  materialized as a new dataset (`base ⊎ derived`), leaving the input graph
+  untouched. They are gated by a vendored pySHACL DASH rules corpus plus
+  first-party fixtures under `vectors/shacl/af/rules/`, discovered by
+  `crates/shapes/tests/rules_conformance.rs`, with the derived graph compared to
+  the expected inferred graph by RDFC-1.0 isomorphism.
+
+  **SHACL-AF completeness sign-off.** Every SHACL-AF component is now
+  implemented, with nothing remaining out of scope: SPARQL-based constraints and
+  constraint components, user-defined functions (`sh:SPARQLFunction`), custom
+  target types (`sh:SPARQLTargetType`), node expressions (including
+  cartesian-product function-call argument evaluation), expression constraints
+  (`sh:ExpressionConstraintComponent`), and SHACL Rules (`sh:TripleRule` /
+  `sh:SPARQLRule`, AND rule sets).
 
 ### SHACL-AF node expressions: normative surface vs. owned extensions
 
