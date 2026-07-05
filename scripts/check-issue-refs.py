@@ -17,11 +17,15 @@ misleading, so we do not allow new ones. This lint scans:
 * ``.toml`` files under ``crates/``, ``bindings/``, ``docs/``, and root
   ``*.toml`` files — manifest ``description`` fields and dependency comments are
   scanned line by line; hex colors are excluded by the token pattern itself.
-* ``.py`` files under ``scripts/``, ``crates/``, and ``bindings/`` — only ``#``
-  line comments are examined. A small Python-aware lexer skips string and
-  docstring literals (including ``r``/``b``/``u``/``f`` prefixes and
-  triple-quoted strings), exactly as the Rust scan skips string literals, so an
-  issue-shaped token inside a string or docstring is never flagged.
+* ``.py`` files under ``scripts/``, ``crates/``, and ``bindings/`` — both ``#``
+  line comments and documentation strings are examined. A small Python-aware
+  lexer skips string and docstring literals (including ``r``/``b``/``u``/``f``
+  prefixes and triple-quoted strings) for the ``#``-comment pass, exactly as the
+  Rust scan skips string literals; an ``ast`` walk then scans every
+  module/class/function docstring as prose (mirroring the ``.md``/``.toml``
+  scans), so an issue reference hiding in a docstring is caught while an
+  issue-shaped token inside an ordinary string literal is not flagged. The
+  checker's own file is excluded so its detection examples are not matched.
 * ``.yaml``/``.yml`` workflow files under ``.github/`` — only ``#`` comments are
   examined. A ``#`` is a comment only at line start or after whitespace and only
   when outside a quoted scalar (matching YAML's own comment rule), so a ``#``
@@ -35,6 +39,7 @@ and markdown anchors while still catching references like ``#16`` or ``#123``.
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 from collections.abc import Iterator
@@ -52,6 +57,13 @@ PY_SCAN_DIRS = (*SCAN_DIRS, "scripts")
 # Valid Python string-literal prefixes (case-insensitive) that may precede an
 # opening quote. ``u`` never combines; ``r`` combines with ``b``/``f``.
 PY_STRING_PREFIXES = frozenset({"r", "b", "u", "f", "rb", "br", "rf", "fr"})
+
+# This checker's own path. Its module/function docstrings and strings carry
+# issue-number-shaped *example* tokens (e.g. ``#16``, ``#123``) that document
+# what the lint detects; scanning them would flag the documentation of the lint
+# itself. Exclude the checker from the scan so its self-documentation examples
+# are never matched, without weakening detection anywhere else.
+SELF_PATH = Path(__file__).resolve()
 
 
 def repo_root() -> Path:
@@ -97,6 +109,8 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
             if top != ".github":
                 continue
         path = root / rel
+        if path.resolve() == SELF_PATH:
+            continue
         if path.is_file():
             yield path
 
@@ -352,10 +366,66 @@ def python_comments(src: str) -> list[tuple[int, int, str]]:
     return comments
 
 
+def python_docstrings(src: str) -> list[tuple[int, int, str]]:
+    """Extract module/class/function docstrings as ``(line, col, text)``.
+
+    The Python ``#``-comment lexer deliberately skips string and docstring
+    literals, so docstring *prose* (module/class/function documentation) was an
+    uncovered surface. Docstrings are documentation just like ``.md``/``.toml``
+    prose and must be scanned the same way: an issue reference buried in a
+    module docstring is exactly the stale-TODO debt this lint rejects.
+
+    An ``ast`` walk locates every docstring — the first statement of a module,
+    class, or (async) function body when it is a bare string literal — and the
+    original source segment (quotes included) is returned so ``scan_comments``
+    reports precise file coordinates. Only genuine documentation strings are
+    returned; ordinary string expressions elsewhere in the code are not, so a
+    ``#NNN``-shaped token inside a real string literal (e.g. a URL fragment) is
+    still not treated as an issue reference.
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        # A file that does not parse cannot carry a docstring we can trust;
+        # the ``#``-comment lexer still covers it. Do not swallow other errors.
+        return []
+
+    docstrings: list[tuple[int, int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(
+            node,
+            (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef),
+        ):
+            continue
+        body = node.body
+        if not body:
+            continue
+        first = body[0]
+        if not (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            continue
+        segment = ast.get_source_segment(src, first.value)
+        if segment is None:
+            continue
+        docstrings.append((first.value.lineno, first.value.col_offset + 1, segment))
+
+    return docstrings
+
+
 def scan_python(path: Path) -> list[tuple[int, int, str, str]]:
-    """Return violations found in a Python source file."""
+    """Return violations found in a Python source file.
+
+    Both ``#`` line comments and documentation strings (module/class/function
+    docstrings) are scanned; the docstring pass closes the prose gap that let
+    an issue reference hide inside a module docstring.
+    """
     src = path.read_text(encoding="utf-8")
-    return scan_comments(python_comments(src))
+    return scan_comments(python_comments(src)) + scan_comments(
+        python_docstrings(src)
+    )
 
 
 def yaml_comments(src: str) -> list[tuple[int, int, str]]:
