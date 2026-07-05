@@ -863,6 +863,52 @@ mod tests {
         assert_eq!(seq.len(), 3);
     }
 
+    fn typed_ages() -> Arc<RdfDataset> {
+        // :a :type :T ; :age 30
+        // :b :type :T ; :age 30
+        // :c :type :T ; :age 17
+        // :d :type :U ; :age 42
+        let mut b = RdfDatasetBuilder::new();
+        let age = b.intern_iri("http://ex/age");
+        let ty = b.intern_iri("http://ex/type");
+        let t = b.intern_iri("http://ex/T");
+        let u = b.intern_iri("http://ex/U");
+        for (s, n, g) in [
+            ("a", "30", t),
+            ("b", "30", t),
+            ("c", "17", t),
+            ("d", "42", u),
+        ] {
+            let subj = b.intern_iri(&format!("http://ex/{s}"));
+            let val = b.intern_literal(RdfLiteral {
+                lexical_form: n.to_owned(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            });
+            b.push_quad(subj, ty, g, None);
+            b.push_quad(subj, age, val, None);
+        }
+        b.freeze().expect("freeze")
+    }
+
+    fn typed_age_bgp() -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: vec![
+                TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/type")),
+                    object: TermPattern::Variable(Variable::new("t")),
+                },
+                TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/age")),
+                    object: TermPattern::Variable(Variable::new("n")),
+                },
+            ],
+        }
+    }
+
     #[test]
     fn group_by_with_count() {
         let ds = ages();
@@ -903,6 +949,54 @@ mod tests {
             vec![
                 ("17".to_owned(), "1".to_owned()),
                 ("30".to_owned(), "2".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn group_by_with_count_distinct() {
+        // GROUP BY ?t COUNT(DISTINCT ?n) — T has ages {30,30,17} → 2 distinct,
+        // U has ages {42} → 1.
+        let ds = typed_ages();
+        let mut ctx = EvalCtx::new(&ds);
+        let group = GraphPattern::Group {
+            inner: Box::new(typed_age_bgp()),
+            variables: vec![Variable::new("t")],
+            aggregates: vec![(
+                Variable::new("c"),
+                AggregateExpression::FunctionCall {
+                    function: AggregateFunction::Count,
+                    expression: Box::new(Expression::Variable(Variable::new("n"))),
+                    distinct: true,
+                },
+            )],
+        };
+        let seq = eval(&group, &mut ctx).expect("group");
+        assert_eq!(seq.len(), 2);
+        let tcol = seq.schema.index_of(&Variable::new("t")).unwrap();
+        let ccol = seq.schema.index_of(&Variable::new("c")).unwrap();
+        let scratch = crate::scratch::ScratchInterner::new();
+        let mut pairs: Vec<(String, String)> = seq
+            .rows
+            .iter()
+            .map(|r| {
+                let t = match scratch.value_of(&ds, r[tcol].unwrap()) {
+                    TermValue::Iri(iri) => iri,
+                    o => format!("{o:?}"),
+                };
+                let c = match ctx.scratch.value_of(&ds, r[ccol].unwrap()) {
+                    TermValue::Literal { lexical_form, .. } => lexical_form,
+                    o => format!("{o:?}"),
+                };
+                (t, c)
+            })
+            .collect();
+        pairs.sort();
+        assert_eq!(
+            pairs,
+            vec![
+                ("http://ex/T".to_owned(), "2".to_owned()),
+                ("http://ex/U".to_owned(), "1".to_owned())
             ]
         );
     }

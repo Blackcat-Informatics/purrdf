@@ -13,8 +13,8 @@
 # gate — so this ledger only ever SHRINKS, never drifts. Mirrors the Rust
 # conformance harnesses' XPASS discipline (AGENTS.md §2).
 #
-# Current scoreboard (reconciled to the live suite): 84 passed / 2 xfailed
-# (0 xpassed, 0 failed, 0 errors; ledger 2/2 applied, 0 stale). This ledger
+# Current scoreboard (reconciled to the live suite): 85 passed / 1 xfailed
+# (0 xpassed, 0 failed, 0 errors; ledger 1/1 applied, 0 stale). This ledger
 # only shrinks: as gaps close, keys are pruned here and the pass count rises.
 # Grouped by theme in the comments below.
 
@@ -39,7 +39,9 @@
 #  already declared in the query text.)
 
 # --- Theme: SPARQL aggregate / filter evaluation semantics ---
-"test_agg_distinct.py::test_count_distinct" = "COUNT(DISTINCT ?x) grouped aggregation yields an empty Result under the native engine instead of the two expected grouped counts"
+# (resolved: prefixed names with an empty namespace are now resolved against
+#  the document base IRI, so `@prefix : <> . :p` expands to the same absolute
+#  IRI as `PREFIX : <base>` in a query.)
 
 # --- Theme: purrdf is stricter than rdflib (SPARQL conformance, not a purrdf gap) ---
 # The upstream rdflib test source concatenates two adjacent Python string
