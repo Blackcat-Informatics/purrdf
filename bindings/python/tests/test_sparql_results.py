@@ -176,3 +176,161 @@ def test_registry_serializer_slots_emit(compat: ModuleType) -> None:
         io.BytesIO(_select(compat).serialize(format="xml", encoding="utf-8"))
     )
     assert parsed.type == "SELECT"
+
+
+# ── registered-but-deferred plugin implementations ────────────────────────────────
+
+
+def test_csv_result_parser_variables_and_bindings(compat: ModuleType) -> None:
+    """CSV parsing reconstructs variable names, IRIs, literals, and unbound slots."""
+    from purrdf.compat.rdflib import plugin
+    from purrdf.compat.rdflib.query import ResultParser
+
+    data = (
+        "s,o\n"
+        "http://example.org/s1,alpha\n"
+        "http://example.org/s2,42\n"
+        ",unbound\n"
+    )
+    cls = plugin.get("csv", ResultParser)
+    result = cls().parse(io.BytesIO(data.encode("utf-8")))
+    assert result.type == "SELECT"
+    assert [str(v) for v in result.vars] == ["s", "o"]
+    rows = list(result)
+    assert len(rows) == 3
+    assert rows[0][0] == compat.URIRef("http://example.org/s1")
+    assert rows[0][1] == compat.Literal("alpha")
+    assert rows[1][0] == compat.URIRef("http://example.org/s2")
+    assert rows[1][1] == compat.Literal("42")
+    assert rows[1][1].datatype is None
+    assert rows[2][0] is None
+    assert rows[2][1] == compat.Literal("unbound")
+
+
+def test_tsv_result_parser_preserves_terms(compat: ModuleType) -> None:
+    """TSV parsing preserves IRIs, typed literals, language tags, blank nodes, and unbound."""
+    from purrdf.compat.rdflib import plugin
+    from purrdf.compat.rdflib.query import ResultParser
+
+    data = (
+        "?s\t?o\n"
+        "<http://example.org/s1>\t\"alpha\"\n"
+        "<http://example.org/s2>\t\"42\"^^<http://www.w3.org/2001/XMLSchema#integer>\n"
+        "<http://example.org/s3>\t\"bonjour\"@fr\n"
+        "_:b0\t\n"
+    )
+    cls = plugin.get("tsv", ResultParser)
+    result = cls().parse(io.BytesIO(data.encode("utf-8")))
+    assert result.type == "SELECT"
+    assert [str(v) for v in result.vars] == ["s", "o"]
+    rows = {str(row[0]): row[1] for row in result}
+    assert rows["http://example.org/s1"] == compat.Literal("alpha")
+    assert rows["http://example.org/s2"].datatype == compat.URIRef(
+        "http://www.w3.org/2001/XMLSchema#integer"
+    )
+    assert rows["http://example.org/s3"].language == "fr"
+    # The blank-node row has an unbound object.
+    blank_row = [row for row in result if isinstance(row[0], compat.BNode)][0]
+    assert blank_row[1] is None
+
+
+def test_txt_result_serializer_emits_table(compat: ModuleType) -> None:
+    """The txt serializer emits a non-empty text table with headers and rows."""
+    from purrdf.compat.rdflib import plugin
+    from purrdf.compat.rdflib.query import ResultSerializer
+
+    result = _select(compat)
+    cls = plugin.get("txt", ResultSerializer)
+    buf = io.BytesIO()
+    cls(result).serialize(buf)
+    text = buf.getvalue().decode("utf-8")
+    assert "?s" in text
+    assert "?o" in text
+    assert "alpha" in text
+    assert "42" in text
+    assert "\n" in text
+
+
+def test_graph_result_parser_parses_turtle(compat: ModuleType) -> None:
+    """A graph parser registered as a ResultParser loads a CONSTRUCT graph."""
+    from purrdf.compat.rdflib import plugin
+    from purrdf.compat.rdflib.query import ResultParser
+
+    turtle = (
+        "@prefix ex: <http://example.org/> .\n"
+        "ex:s ex:p ex:o .\n"
+    )
+    cls = plugin.get("turtle", ResultParser)
+    result = cls().parse(
+        io.BytesIO(turtle.encode("utf-8")), content_type="turtle"
+    )
+    assert result.type == "CONSTRUCT"
+    assert (
+        compat.URIRef("http://example.org/s"),
+        compat.URIRef("http://example.org/p"),
+        compat.URIRef("http://example.org/o"),
+    ) in result
+
+
+def test_graph_result_parser_accepts_positional_content_type(
+    compat: ModuleType,
+) -> None:
+    """``GraphResultParser.parse`` accepts ``content_type`` positionally (rdflib parity)."""
+    from purrdf.compat.rdflib import plugin
+    from purrdf.compat.rdflib.query import ResultParser
+
+    nt = "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n"
+    cls = plugin.get("nt", ResultParser)
+    result = cls().parse(io.BytesIO(nt.encode("utf-8")), "nt")
+    assert result.type == "CONSTRUCT"
+    assert len(result) == 1
+
+
+# ── differential interop for the newly implemented codecs ─────────────────────────
+
+
+def test_oracle_parses_purrdf_csv_output(
+    compat: ModuleType, oracle: ModuleType
+) -> None:
+    """The real rdflib parses a purrdf-emitted SPARQL Results CSV document."""
+    data = _select(compat).serialize(format="csv", encoding="utf-8")
+    oracle_result = oracle.query.Result.parse(io.BytesIO(data), format="csv")
+    rows = sorted((str(row[0]), str(row[1])) for row in oracle_result)
+    assert rows == [
+        (f"{EX}s1", "alpha"),
+        (f"{EX}s2", "42"),
+        (f"{EX}s3", "bonjour"),
+    ]
+
+
+def test_purrdf_parses_oracle_csv_output(
+    compat: ModuleType, oracle: ModuleType
+) -> None:
+    """purrdf's CSV plugin parses a real-rdflib-emitted CSV result document."""
+    from purrdf.compat.rdflib import plugin
+    from purrdf.compat.rdflib.query import ResultParser
+
+    oracle_result = _select(oracle)
+    data = oracle_result.serialize(format="csv", encoding="utf-8")
+    cls = plugin.get("csv", ResultParser)
+    parsed = cls().parse(io.BytesIO(data))
+    rows = sorted((str(row[0]), str(row[1])) for row in parsed)
+    assert rows == [
+        (f"{EX}s1", "alpha"),
+        (f"{EX}s2", "42"),
+        (f"{EX}s3", "bonjour"),
+    ]
+
+
+def test_oracle_parses_purrdf_tsv_output(
+    compat: ModuleType, oracle: ModuleType
+) -> None:
+    """The real rdflib parses a purrdf-emitted SPARQL Results TSV document."""
+    data = _select(compat).serialize(format="tsv", encoding="utf-8")
+    oracle_result = oracle.query.Result.parse(io.BytesIO(data), format="tsv")
+    rows = sorted((str(row[0]), str(row[1])) for row in oracle_result)
+    assert rows == [
+        (f"{EX}s1", "alpha"),
+        (f"{EX}s2", "42"),
+        (f"{EX}s3", "bonjour"),
+    ]
