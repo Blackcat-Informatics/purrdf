@@ -44,6 +44,12 @@ changelog: ## Regenerate the deterministic CHANGELOG.md from conventional-commit
 		echo "  cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked --no-default-features"; \
 		exit 1; \
 	}
+	@FOUND=$$(git-cliff --version | awk '{print $$2}'); \
+		test "$$FOUND" = "$(GIT_CLIFF_VERSION)" || { \
+			echo "ERROR: git-cliff version mismatch — found $$FOUND, expected $(GIT_CLIFF_VERSION):"; \
+			echo "  cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked --no-default-features"; \
+			exit 1; \
+		}
 	@VERSION=$$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])"); \
 		git-cliff --config cliff.toml --tag "rust-v$$VERSION" --output CHANGELOG.md
 	python3 scripts/check-issue-refs.py
