@@ -89,6 +89,7 @@ pub mod parse;
 pub mod query;
 pub mod rowcursor;
 pub mod serialize;
+pub mod shacl;
 pub mod status;
 pub mod term;
 pub mod version;

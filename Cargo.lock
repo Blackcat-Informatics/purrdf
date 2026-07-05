@@ -1074,6 +1074,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-validate",
 ]
 
 [[package]]
@@ -1141,6 +1142,7 @@ dependencies = [
  "purrdf-shex",
  "purrdf-slice",
  "purrdf-sparql-eval",
+ "purrdf-validate",
  "purrdf-xsd",
  "pyo3",
 ]
@@ -1160,6 +1162,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-events",
  "purrdf-gts",
+ "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-xsd",
@@ -1277,6 +1280,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-validate"
+version = "0.2.1"
+dependencies = [
+ "pretty_assertions",
+ "purrdf-core",
+ "purrdf-iri",
+ "purrdf-rdf",
+ "purrdf-shapes",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "purrdf-wasm"
 version = "0.2.1"
 dependencies = [
@@ -1286,6 +1302,7 @@ dependencies = [
  "purrdf-events",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-validate",
  "wasm-bindgen",
 ]
 

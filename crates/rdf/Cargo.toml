@@ -61,6 +61,11 @@ purrdf-sparql-eval = { workspace = true }
 # (EPIC #906). NO oxigraph-family edge (only purrdf-iri + purrdf-xsd) — gated by
 # `make rdf-core-hygiene`.
 purrdf-sparql-algebra = { workspace = true }
+# The zero-dependency IRI/position leaf: its `LineIndex` primitive resolves a
+# byte offset to a 1-based line/column on the diagnostic path (Turtle/TriG source
+# tracing). Already present transitively via sparql-algebra, so this adds no new
+# tree-wide dependency and stays wasm-clean.
+purrdf-iri = { workspace = true }
 # The XML DOM front-end for the FIRST-PARTY RDF/XML codec (EPIC #906): supplies a
 # namespace-resolved, document-order element tree, on top of which `native_codecs::
 # rdfxml` implements the W3C RDF/XML grammar in-repo (replacing the external

@@ -35,8 +35,10 @@ mod curie;
 mod error;
 mod normalize;
 mod parse;
+pub mod pos;
 mod resolve;
 
 pub use curie::{contract, curie_prefix, expand_curie, resolve, PrefixMap};
 pub use error::{IriError, Result};
 pub use parse::{parse, parse_uri, Iri};
+pub use pos::{LineIndex, Position};
