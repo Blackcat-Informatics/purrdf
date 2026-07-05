@@ -1,0 +1,4 @@
+# Derived triples only: only the active rule on the active shape fires.
+@prefix ex: <http://example.org/ns#> .
+
+ex:alice ex:live ex:yes .

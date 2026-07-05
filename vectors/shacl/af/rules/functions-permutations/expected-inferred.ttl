@@ -1,0 +1,9 @@
+# Derived triples only. DASH dash:expectedResult (the 2 x 1 x 3 permutations):
+@prefix ex: <http://datashapes.org/shasf/tests/rules/triple/functions-permutations.test#> .
+
+ex:TestInstance ex:target "1a 2a 3a " .
+ex:TestInstance ex:target "1a 2a 3b " .
+ex:TestInstance ex:target "1a 2a 3c " .
+ex:TestInstance ex:target "1b 2a 3a " .
+ex:TestInstance ex:target "1b 2a 3b " .
+ex:TestInstance ex:target "1b 2a 3c " .

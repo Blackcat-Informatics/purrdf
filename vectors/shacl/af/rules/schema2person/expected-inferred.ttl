@@ -1,0 +1,9 @@
+# Derived triples only. DASH dash:expectedResult (4 triples).
+@prefix person: <http://datashapes.org/shasf/tests/rules/triple/person#> .
+@prefix ex:     <http://datashapes.org/shasf/tests/rules/triple/schema2person.test#> .
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+ex:JohnDoe rdf:type person:Person .
+ex:JohnDoe person:lastName "Doe" .
+ex:JohnDoe person:firstName "John" .
+ex:JohnDoe person:zipCode "12345" .

@@ -1,0 +1,20 @@
+# First-party SHACL Rules ERROR case: a non-terminating rule.
+# The SPARQLRule mints a FRESH blank ex:Counter every round, which becomes a new
+# focus node that mints another, and so on — unbounded fresh-term introduction.
+# `apply_rules` detects the divergence (fresh-term-minting rounds exceed the
+# deterministic, input-derived bound) and returns Err rather than looping forever.
+# This directory has NO expected-inferred.ttl; the harness asserts the error.
+
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+
+ex:c0 rdf:type ex:Counter .
+
+ex:CounterRule
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Counter ;
+  sh:rule [
+      rdf:type sh:SPARQLRule ;
+      sh:construct """CONSTRUCT { $this ex:next _:n . _:n a ex:Counter . }
+                      WHERE { $this a ex:Counter }""" ] .

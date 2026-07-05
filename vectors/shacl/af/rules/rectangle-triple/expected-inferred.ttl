@@ -1,0 +1,6 @@
+# Derived triples only. DASH dash:expectedResult:
+#   ex:ExampleRectangle ex:area 56 .
+@prefix ex:  <http://datashapes.org/shasf/tests/rules/triple/rectangle.test#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:ExampleRectangle ex:area 56 .

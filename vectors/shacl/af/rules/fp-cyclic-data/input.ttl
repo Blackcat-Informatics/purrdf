@@ -1,0 +1,20 @@
+# First-party SHACL Rules case: cyclic data with a self-feeding symmetric rule.
+# The data is a directed 3-cycle (alice -> bob -> carol -> alice) on ex:knows.
+# The rule derives the reverse edge for every ex:knows edge. The closure is
+# value-preserving over the finite node set {alice, bob, carol}, so the fixpoint
+# terminates despite the cycle; it adds the three reverse edges.
+
+@prefix ex: <http://example.org/ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+ex:alice ex:knows ex:bob .
+ex:bob   ex:knows ex:carol .
+ex:carol ex:knows ex:alice .
+
+ex:SymmetricKnows
+  a sh:NodeShape ;
+  sh:targetSubjectsOf ex:knows ;
+  sh:rule [ a sh:TripleRule ;
+            sh:subject [ sh:path ex:knows ] ;
+            sh:predicate ex:knows ;
+            sh:object sh:this ] .

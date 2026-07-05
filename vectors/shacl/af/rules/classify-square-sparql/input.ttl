@@ -1,0 +1,42 @@
+# DASH-vendored SHACL Rules case: SPARQLRule gated by a sh:condition.
+# Source: pySHACL test/resources/dash_tests/rules/sparql/classify-square.test.ttl
+# Original namespaces preserved (see ../README.md). DASH metadata, owl:imports,
+# and sh:prefixes/sh:declare removed; SPARQL prefixes resolve from @prefix here.
+#
+# ex:Rectangle is both an rdfs:Class (implicit-class target: every instance is a
+# focus node) and a sh:NodeShape. The SPARQLRule fires only for focus nodes that
+# satisfy the inline width==height condition, so only ex:SquareRectangle is
+# classified ex:Square.
+
+@prefix ex:   <http://datashapes.org/shasf/tests/rules/sparql/classify-square.test#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+ex:InvalidRectangle
+  rdf:type ex:Rectangle ;
+  ex:height 4 .
+
+ex:NonSquareRectangle
+  rdf:type ex:Rectangle ;
+  ex:height 2 ;
+  ex:width 3 .
+
+ex:SquareRectangle
+  rdf:type ex:Rectangle ;
+  ex:height 4 ;
+  ex:width 4 .
+
+ex:Square rdf:type rdfs:Class .
+
+ex:Rectangle
+  rdf:type rdfs:Class ;
+  rdf:type sh:NodeShape ;
+  rdfs:subClassOf rdfs:Resource ;
+  sh:property [ sh:path ex:height ; sh:datatype xsd:integer ; sh:maxCount 1 ; sh:minCount 1 ] ;
+  sh:property [ sh:path ex:width ; sh:datatype xsd:integer ; sh:maxCount 1 ; sh:minCount 1 ] ;
+  sh:rule [
+      rdf:type sh:SPARQLRule ;
+      sh:condition [ sh:property [ sh:path ex:width ; sh:equals ex:height ] ] ;
+      sh:construct """CONSTRUCT { $this a ex:Square . } WHERE { $this ?p ?o . }""" ] .

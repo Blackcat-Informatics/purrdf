@@ -1,0 +1,18 @@
+# First-party SHACL Rules case: blank-minting SPARQLRule.
+# The CONSTRUCT mints a FRESH blank node per focus node for the address resource.
+# The derived graph is compared by RDF isomorphism (RDFC-1.0), so the minted
+# blank's label is irrelevant — only its structure matters.
+
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+
+ex:alice rdf:type ex:Person .
+
+ex:AddrRule
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:rule [
+      rdf:type sh:SPARQLRule ;
+      sh:construct """CONSTRUCT { $this ex:addr _:a . _:a ex:city ex:Metropolis . }
+                      WHERE { $this a ex:Person }""" ] .

@@ -1,0 +1,6 @@
+# Derived triples only: the three reverse edges completing the symmetric closure.
+@prefix ex: <http://example.org/ns#> .
+
+ex:bob   ex:knows ex:alice .
+ex:carol ex:knows ex:bob .
+ex:alice ex:knows ex:carol .

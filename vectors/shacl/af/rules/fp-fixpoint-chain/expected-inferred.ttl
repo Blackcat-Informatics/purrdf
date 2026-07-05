@@ -1,0 +1,6 @@
+# Derived triples only (second-round chain closure).
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+ex:alice rdf:type ex:Adult .
+ex:alice ex:status ex:verified .

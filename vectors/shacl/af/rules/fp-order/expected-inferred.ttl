@@ -1,0 +1,5 @@
+# Derived triples only: both ordered rules contribute to the closure.
+@prefix ex: <http://example.org/ns#> .
+
+ex:alice ex:a ex:x .
+ex:alice ex:b ex:y .

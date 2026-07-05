@@ -1,0 +1,20 @@
+# First-party SHACL Rules case: multi-round fixpoint chain.
+# Rule A types every ex:Person as ex:Adult; rule B (targeting ex:Adult) can only
+# fire once A has produced that typing — i.e. in a later fixpoint round. The
+# closure therefore requires at least two rounds.
+
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+
+ex:alice rdf:type ex:Person .
+
+ex:PersonRule
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:rule [ rdf:type sh:TripleRule ; sh:subject sh:this ; sh:predicate rdf:type ; sh:object ex:Adult ] .
+
+ex:AdultRule
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Adult ;
+  sh:rule [ rdf:type sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:status ; sh:object ex:verified ] .
