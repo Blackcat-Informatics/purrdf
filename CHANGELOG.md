@@ -4,6 +4,11 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.3.1] - 2026-07-05
+
+### CI & Build
+
+- **release:** Edition 2024, publish purrdf-entail, expose entail+validate, bump 0.3.1
 ## [0.3.0] - 2026-07-05
 
 ### Benchmarks
@@ -102,6 +107,7 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **ci:** Reconcile doc-target crate count to 16 (15 publishable + purrdf-entail)
 - **rdf,shapes:** Fix private/broken intra-doc links failing the doc gate
 - **conformance:** Regenerate matrix block for the added SPARQL fixtures
+- **release:** Changelog for 0.3.0 and correct the published-crate count
 
 ### Features
 
