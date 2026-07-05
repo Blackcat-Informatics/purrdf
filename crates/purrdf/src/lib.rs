@@ -16,7 +16,7 @@
 //! | [`sparql`] | [`purrdf_sparql_eval`] + [`purrdf_sparql_algebra`] + [`purrdf_sparql_results`] |
 //! | [`shapes`] | [`purrdf_shapes`] (SHACL) |
 //! | [`shex`] | [`purrdf_shex`] (ShEx 2.1) |
-//! | [`slice`] | [`purrdf_slice`] |
+//! | [`slice`](mod@slice) | [`purrdf_slice`] |
 //! | [`xsd`] | [`purrdf_xsd`] |
 //! | [`iri`] | [`purrdf_iri`] |
 //! | [`events`] | [`purrdf_events`] |
@@ -24,6 +24,39 @@
 //! Consumer-config types are surfaced at the root ([`SliceVocab`],
 //! [`Namespaces`], [`StatementMetadataVocab`]) and unified behind a single
 //! [`OntologyProfile`] a downstream builds once (see [`profile`]).
+//!
+//! # Example
+//!
+//! Every step below goes through the `purrdf` facade alone — a downstream never
+//! reaches into a sub-crate:
+//!
+//! ```rust
+//! use purrdf::prelude::*;
+//!
+//! // Parse RDF 1.2 Turtle into a frozen dataset through the umbrella facade.
+//! let turtle = r#"
+//!     @prefix ex: <https://example.org/> .
+//!     ex:cat ex:says "meow" .
+//! "#;
+//! let dataset = purrdf::parse_dataset(turtle.as_bytes(), "text/turtle", None)
+//!     .expect("valid Turtle");
+//! let view: &RdfDataset = &dataset;
+//! assert_eq!(view.quad_count(), 1);
+//!
+//! // The zero-dependency IRI leaf is reachable under a stable module.
+//! let iri = purrdf::iri::parse("https://example.org/cat").expect("valid IRI");
+//! assert_eq!(iri.as_str(), "https://example.org/cat");
+//!
+//! // Parse a ShEx 2.1 schema and name a SPARQL results serialization — both
+//! // from the same facade.
+//! let schema = purrdf::shex::parse_shexc(
+//!     "PREFIX ex: <https://example.org/>\nex:Cat { ex:says . }",
+//!     None,
+//! )
+//! .expect("valid ShExC");
+//! assert!(!format!("{:?}", purrdf::sparql::SparqlResultsFormat::Json).is_empty());
+//! let _ = schema;
+//! ```
 
 pub use purrdf_rdf::*;
 

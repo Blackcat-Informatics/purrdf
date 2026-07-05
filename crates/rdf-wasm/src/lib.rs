@@ -4,7 +4,7 @@
 //! # purrdf — a wasm32, in-memory RDF 1.2 engine with an idiomatic RDF/JS API
 //!
 //! Parcel **P10** of the purrdf program (`docs/design/PurRDF-PLAN.md`).
-//! This crate compiles the oxigraph-free, PyO3-free [`purrdf`](purrdf) kernel to
+//! This crate compiles the oxigraph-free, PyO3-free [`purrdf`] kernel to
 //! `wasm32-unknown-unknown` and exposes it to JavaScript/TypeScript through the
 //! [RDF/JS](https://rdf.js.org/) community spec — `DataFactory`, `DatasetCore`, and
 //! `Stream`/`Sink` — packaged for npm/ESM as **`purrdf`**.

@@ -46,6 +46,7 @@ crates=(
   purrdf-slice
   purrdf-shapes
   purrdf-shex
+  purrdf-validate
   purrdf
   purrdf-wasm
 )

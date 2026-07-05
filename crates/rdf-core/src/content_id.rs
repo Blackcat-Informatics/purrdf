@@ -13,7 +13,7 @@
 //! bytes must hash elsewhere and hand the crate the resulting hex or raw bytes.
 //!
 //! The hex-decode loop is shared with `ContentDigest::from_hex` via
-//! [`decode_hex_32`](crate::content_store::decode_hex_32) so the two domains
+//! `decode_hex_32` so the two domains
 //! never drift apart on parsing behavior; only the case-sensitivity policy
 //! differs (this domain requires canonical lowercase hex).
 

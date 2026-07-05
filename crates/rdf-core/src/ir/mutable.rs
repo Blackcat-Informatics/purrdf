@@ -20,7 +20,7 @@
 //!
 //! A plain two-tier numeric `TermId` would break the load-bearing invariant that a
 //! [`TermId`] belongs to exactly ONE frozen dataset (C0.8). So the mutable layer
-//! never widens `TermId`; instead it works in [`MutTermId`], a tagged enum of
+//! never widens `TermId`; instead it works in `MutTermId`, a tagged enum of
 //! `Base(TermId)` (an id into the frozen base) and `Delta(DeltaTermId)` (an index
 //! into the delta's own small interner). When a quad mentions a term, the layer asks
 //! the base `term_id_by_value(&TermValue)`: a hit binds `Base`, a miss mints a
@@ -634,7 +634,7 @@ fn intern_value(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
 /// id because a `MutableDataset`'s caller does not hold dataset-local ids for
 /// brand-new terms (those don't exist until minted), and a value is the only
 /// identity that is well-defined across the base/delta boundary (C0.8). The mutable
-/// layer resolves each value to a [`MutTermId`] (base hit, or a freshly-minted delta
+/// layer resolves each value to a `MutTermId` (base hit, or a freshly-minted delta
 /// id) internally.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct QuadValues {

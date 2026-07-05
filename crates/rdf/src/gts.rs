@@ -52,8 +52,8 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> SerGraph {
 /// Load a real `purrdf_gts::model::Graph` (read from a GTS bundle) into a frozen
 /// [`RdfDataset`](crate::RdfDataset), **preserving** every named graph on its base
 /// quads. This is the lossless container→dataset bridge for the release fold:
-/// `purrdf_gts::model::Graph` → [`gts_to_ser`] → the native statement-layer fold
-/// ([`dataset_from_ser_graph`](crate::native_codecs::parse::dataset_from_ser_graph)),
+/// `purrdf_gts::model::Graph` → `gts_to_ser` → the native statement-layer fold
+/// (`dataset_from_ser_graph`),
 /// which re-binds the `rdf:reifies` reifier/annotation side-tables and keeps each base
 /// quad's graph component. It is the native inverse of the old `to_nquads(&graph)` +
 /// `parse_dataset(nquads, …)` round-trip — the SAME dataset content, with no codec text
@@ -70,7 +70,7 @@ pub fn dataset_from_gts_graph(
 /// conformance gate (`crates/sparql-conformance`) replays against the frozen goldens,
 /// which were captured over the same flatten-to-default-graph view. Implemented
 /// entirely on the oxigraph-free `gts` reader path: `read_all_segments` (re-exported
-/// from the `purrdf-core` kernel) → [`gts_to_ser`] → the native statement-layer
+/// from the `purrdf-core` kernel) → `gts_to_ser` → the native statement-layer
 /// fold (`flattened_dataset_from_ser_graph`), which re-homes each base quad's graph
 /// component to the default graph (`None`) before `freeze()`.
 pub fn flattened_dataset_from_gts_graph(

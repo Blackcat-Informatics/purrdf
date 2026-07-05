@@ -21,7 +21,7 @@
 //! XSD constructor/cast IRIs (e.g. `xsd:boolean`, `xsd:integer`) and any purrdf
 //! custom function IRI the SPARQL engine registers, both dispatched via the
 //! `<iri>(…)` call form; PLUS the XPath/XQuery-functions-namespace
-//! (`http://www.w3.org/2005/xpath-functions#…`) IRIs that [`builtin_keyword`]
+//! (`http://www.w3.org/2005/xpath-functions#…`) IRIs that `builtin_keyword`
 //! lowers to their SPARQL 1.1 keyword (e.g. `fn:string-length` → `STRLEN`,
 //! `fn:contains` → `CONTAINS`, `fn:numeric-abs` → `ABS`, `fn:matches` → `REGEX`),
 //! rendered in keyword form because those builtins are keyword-only in SPARQL and

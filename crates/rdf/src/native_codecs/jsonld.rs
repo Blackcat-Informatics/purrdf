@@ -5,9 +5,9 @@
 //!
 //! Serializes the frozen [`RdfDataset`] to the PurRDF JSON-LD-star lead artifact and a
 //! deterministic YAML-LD-star derivative, and parses both back into the native carrier.
-//! The serializer walks the first-party [`SerGraph`] (the same shape the Turtle / TriG /
+//! The serializer walks the first-party `SerGraph` (the same shape the Turtle / TriG /
 //! N-Triples / N-Quads serializers walk), built from the frozen IR via
-//! [`build_ser_graph`](super::serialize::build_ser_graph) — so it shares one lowering
+//! `build_ser_graph` — so it shares one lowering
 //! and never touches the external `purrdf-gts` codecs. GTS is exit-only.
 //!
 //! The JSON output is byte-deterministic: every map is a [`BTreeMap`] and every array is

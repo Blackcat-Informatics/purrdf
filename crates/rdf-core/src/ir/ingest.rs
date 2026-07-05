@@ -8,7 +8,7 @@
 //!
 //! * [`DatasetSink`] — an [`RdfEventSink`] that folds
 //!   an external event stream into a frozen [`RdfDataset`]. It is **two-phase**, the
-//!   same shape as the proven [`super::import_sink`] GTS importer: the streaming
+//!   same shape as the proven `import_sink` GTS importer: the streaming
 //!   phase buffers raw [`EventTermId`] → term
 //!   declarations and raw quad / reifier / annotation rows verbatim (resolving
 //!   nothing, so a forward reference is fine), and [`finish`](DatasetSink::finish)

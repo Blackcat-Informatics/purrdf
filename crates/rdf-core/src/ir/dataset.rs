@@ -119,7 +119,7 @@ impl From<QuadRow> for QuadIds {
     }
 }
 
-/// A borrowed, resolved view of a term — mirrors [`InternedTerm`] but exposes
+/// A borrowed, resolved view of a term — mirrors `InternedTerm` but exposes
 /// `&str` slices borrowed from the dataset, so resolving a term performs **no
 /// allocation and no clone**. Triple components are returned as ids; resolve them
 /// recursively with [`RdfDataset::resolve`] if their values are needed.
@@ -367,7 +367,7 @@ impl QuadPermutation {
 /// A loop-invariant probe plan: the permutation and prefix length chosen purely from
 /// *which* axes a pattern binds (not their bound values) plus the graph constraint.
 ///
-/// The permutation choice in [`RdfDataset::pattern_candidate_run`] depends only on the
+/// The permutation choice in `RdfDataset::pattern_candidate_run` depends only on the
 /// bound-axis shape, which is constant across the rows of one index-nested-loop join
 /// slot (a variable bound by an earlier BGP pattern is bound for every row; an unbound
 /// one for none). So the join computes this **once** per slot via
@@ -796,7 +796,7 @@ impl RdfDataset {
 
     /// Select the [`QuadProbePlan`] — permutation + prefix length — for a pattern's
     /// bound-axis shape (which of s/p/o are bound, plus the graph constraint). This is
-    /// the **value-independent** half of [`Self::pattern_candidate_run`]: it reads only
+    /// the **value-independent** half of `Self::pattern_candidate_run`: it reads only
     /// the boundness of each axis, so an index-nested-loop join whose probe slot has a
     /// fixed shape across rows computes it once and reuses it (see [`QuadProbePlan`]).
     ///
@@ -892,7 +892,7 @@ impl RdfDataset {
     /// graph constraint) form an index prefix; otherwise an upper bound — the
     /// candidate run before the residual `(s, p, o, g)` filter narrows it. Read
     /// straight from the index bounds, **independent of the read-path selectivity
-    /// guard** in [`Self::quads_for_pattern_indexed`] (that guard trades a permuted
+    /// guard** in `Self::quads_for_pattern_indexed` (that guard trades a permuted
     /// run for a sequential scan to cut *iteration* cost — a read concern, not a
     /// cardinality one; folding it in here would report the whole-table size for any
     /// low-selectivity prefix and blind a cost planner exactly where skew matters).
@@ -929,7 +929,7 @@ impl RdfDataset {
         self.quads_for_pattern_with_plan(&plan, s, p, o, g)
     }
 
-    /// Like [`Self::quads_for_pattern_indexed`], but with a caller-precomputed
+    /// Like `Self::quads_for_pattern_indexed`, but with a caller-precomputed
     /// [`QuadProbePlan`] (see [`Self::probe_plan`]) so the per-call permutation
     /// selection — loop-invariant across an index-nested-loop join slot — is skipped.
     /// Behaviour is otherwise identical: the same selectivity guard and the same
@@ -1106,7 +1106,7 @@ impl RdfDataset {
     }
 
     /// Iterate quads as ID-native [`QuadIds`]. **Zero allocations, infallible, no
-    /// clone**: each frozen [`QuadRow`] is mapped to a `Copy` [`QuadIds`] in place;
+    /// clone**: each frozen `QuadRow` is mapped to a `Copy` [`QuadIds`] in place;
     /// the iterator is not boxed and yields no `Result`.
     #[inline]
     pub fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
@@ -1534,7 +1534,7 @@ impl RdfDataset {
     /// The full set of `successor`'s transitive ancestors, walking
     /// [`predecessors`](Self::predecessors) repeatedly. `start` itself is never
     /// included in the result. Traversal is depth-first: each node's direct
-    /// predecessors (already sorted by [`predecessors`]) are pushed in order and
+    /// predecessors (already sorted by [`predecessors`](Self::predecessors)) are pushed in order and
     /// fully explored before moving to the next sibling, giving a deterministic,
     /// reproducible visiting order. A `HashSet` of already-visited term ids
     /// guards against a derivation cycle (`A` derived from `B` derived from

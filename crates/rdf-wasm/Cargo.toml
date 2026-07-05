@@ -13,6 +13,9 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "rdf-12", "wasm", "rdfjs", "purrdf"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
@@ -31,7 +34,7 @@ path = "src/lib.rs"
 # codecs (crates/rdf/src/native_codecs/, roxmltree-backed) — no purrdf-gts codec, no
 # Store, no RocksDB, no rayon.
 purrdf = { workspace = true }
-# The permissive zero-dep RDF 1.2 ingestion protocol (purrdf P6 #840): the seam
+# The permissive zero-dep RDF 1.2 ingestion protocol: the seam
 # the RDF/JS Sink maps onto.
 purrdf-events = { workspace = true }
 # The IR kernel + `SparqlEngine` seam (SparqlRequest / SparqlResult), in interned

@@ -14,7 +14,7 @@
 //! claim-modality axes down to the legacy five-value `purrdf:claimModality`.
 //!
 //! Each emitter assembles a fixed `header` + `body` and threads the body through
-//! the shared [`crate::mapping_support::prefix_block`] (registry-ordered `PREFIX`
+//! the shared `crate::mapping_support::prefix_block` (registry-ordered `PREFIX`
 //! emission) so the declared prefixes track the body exactly as Python's
 //! `_prefix_block` did. The output is **byte-identical** to the committed
 //! `standpoint-*.rq` (the parity gate).

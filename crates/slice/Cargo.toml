@@ -12,6 +12,9 @@ homepage.workspace = true
 rust-version.workspace = true
 readme = "README.md"
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
@@ -20,12 +23,12 @@ crate-type = ["rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-# Oxigraph-free (EPIC #906): the slice catalog/emitters/linters parse via the native
+# Oxigraph-free: the slice catalog/emitters/linters parse via the native
 # `gts` text codecs (`parse_dataset`) into the `RdfDataset` IR and query it directly.
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.
 purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.2.1" }
-# Native SPARQL parser (purrdf S5, #911) — competency/verify queries are PARSED
+# Native SPARQL parser — competency/verify queries are PARSED
 # (RFC §10), never text-searched, to extract referenced term IRIs. Replaces the
 # oxigraph-family SPARQL parser; RDF-1.2 quoted triple terms are first-class.
 purrdf-sparql-algebra = { workspace = true }

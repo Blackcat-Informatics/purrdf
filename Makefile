@@ -4,8 +4,12 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check check-issue-refs test bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
+.PHONY: help metadata fmt check check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
 	capi-build capi-header capi-check capi-install
+
+# The changelog generator is pinned so the committed CHANGELOG.md and the notes
+# the release workflow slices out of it stay byte-reproducible across machines.
+GIT_CLIFF_VERSION := 2.13.1
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -26,6 +30,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	python3 scripts/check-corpus-frozen.py
 	bash scripts/check-generated.sh
 	python3 scripts/check-issue-refs.py
+	python3 scripts/check-versions.py
 	cargo test --workspace --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm
@@ -33,8 +38,54 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 check-issue-refs: ## Reject #NNN issue-reference tokens in comments and docs.
 	python3 scripts/check-issue-refs.py
 
+changelog: ## Regenerate the deterministic CHANGELOG.md from conventional-commit history.
+	@command -v git-cliff >/dev/null 2>&1 || { \
+		echo "ERROR: git-cliff not found — install the pinned version:"; \
+		echo "  cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked --no-default-features"; \
+		exit 1; \
+	}
+	@FOUND=$$(git-cliff --version | awk '{print $$2}'); \
+		test "$$FOUND" = "$(GIT_CLIFF_VERSION)" || { \
+			echo "ERROR: git-cliff version mismatch — found $$FOUND, expected $(GIT_CLIFF_VERSION):"; \
+			echo "  cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked --no-default-features"; \
+			exit 1; \
+		}
+	@VERSION=$$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])"); \
+		git-cliff --config cliff.toml --tag "rust-v$$VERSION" --output CHANGELOG.md
+	python3 scripts/check-issue-refs.py
+
+bump: ## Set the crates.io/PyPI/npm version in lockstep (make bump VERSION=x.y.z).
+	@test -n "$(VERSION)" || { echo "usage: make bump VERSION=x.y.z"; exit 1; }
+	python3 scripts/set-version.py "$(VERSION)"
+
+release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence checks (make release-tags VERSION=x.y.z).
+	@test -n "$(VERSION)" || { echo "usage: make release-tags VERSION=x.y.z"; exit 1; }
+	@test -z "$$(git status --porcelain)" || { echo "ERROR: working tree is dirty — commit the release bump + changelog first"; exit 1; }
+	@branch=$$(git branch --show-current); test "$$branch" = "main" || { echo "ERROR: release tags must be cut from main (currently on $$branch)"; exit 1; }
+	@python3 scripts/check-versions.py
+	@tree_version=$$(python3 -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])"); \
+		test "$$tree_version" = "$(VERSION)" || { echo "ERROR: VERSION=$(VERSION) does not match the tree version $$tree_version — run 'make bump VERSION=$(VERSION)' first"; exit 1; }
+	@# Pre-tag guard: the CHANGELOG.md section is the release notes the cargo
+	@# workflow slices out AFTER publishing — verify it exists BEFORE we push the
+	@# irreversible rust-v tag. This awk slice is byte-identical to the one in
+	@# .github/workflows/release-cargo.yaml so the local and CI guards never diverge.
+	@notes=$$(awk -v v="$(VERSION)" ' \
+		$$0 == "## [" v "]" || index($$0, "## [" v "] ") == 1 { flag = 1; next } \
+		/^## \[/ { flag = 0 } \
+		flag { print } \
+	' CHANGELOG.md); \
+		test -n "$$(printf '%s' "$$notes" | tr -d '[:space:]')" || { echo "ERROR: CHANGELOG.md has no release-notes section for [$(VERSION)] — run 'make changelog' and commit it before tagging"; exit 1; }
+	git tag "rust-v$(VERSION)"
+	git tag "py-v$(VERSION)"
+	git tag "npm-v$(VERSION)"
+	git push origin "rust-v$(VERSION)" "py-v$(VERSION)" "npm-v$(VERSION)"
+	@echo "OK: pushed rust-v$(VERSION), py-v$(VERSION), npm-v$(VERSION)"
+
 test: ## Run the workspace test suite.
 	cargo test --workspace --locked
+
+doc: ## Build docs for the 16 documented crates (15 publishable + internal purrdf-entail) with rustdoc warnings denied.
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
 	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes

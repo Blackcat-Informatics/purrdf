@@ -461,7 +461,7 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 ///
 /// Creates an in-memory store, loads the shapes graph with prefix extraction,
 /// and parses it into a reusable [`Shapes`] model. The parsed model can be
-/// shared across multiple data graphs via [`validate`], eliminating the cost of
+/// shared across multiple data graphs via `validate`, eliminating the cost of
 /// re-parsing shapes for every validation phase.
 ///
 /// # Errors
@@ -472,7 +472,7 @@ pub fn parse_shapes(shapes_ttl: &str) -> Result<Shapes, String> {
     parse_shapes_with_config(shapes_ttl, None)
 }
 
-/// [`parse_shapes`] with the caller-supplied [`BoxRoleVocab`]
+/// [`parse_shapes`] with the caller-supplied [`BoxRoleVocab`](crate::model::BoxRoleVocab)
 /// (`crate::model::BoxRoleVocab`) threaded through.
 ///
 /// PurRDF mints no vocabulary IRIs, so the box-role annotation feature has no
@@ -504,7 +504,7 @@ pub fn parse_shapes_with_config(
 /// Validate data (N-Triples) against shapes (Turtle), returning a [`ValidationReport`].
 ///
 /// Creates an in-memory data store, loads the data graph, parses shapes once
-/// via [`parse_shapes`], and delegates to [`validate`].
+/// via [`parse_shapes`], and delegates to `validate`.
 ///
 /// The data graph is loaded with the **lenient** RDF parser. A validator must be
 /// able to ingest the data graph before it can validate any shapes against it,
@@ -521,7 +521,7 @@ pub fn validate_graphs(data_nt: &str, shapes_ttl: &str) -> Result<ValidationRepo
     validate_graphs_with_config(data_nt, shapes_ttl, None)
 }
 
-/// [`validate_graphs`] with the caller-supplied [`BoxRoleVocab`]
+/// [`validate_graphs`] with the caller-supplied [`BoxRoleVocab`](crate::model::BoxRoleVocab)
 /// (`crate::model::BoxRoleVocab`) threaded through to shape parsing and
 /// validation. `None` leaves the box-role feature inactive.
 ///

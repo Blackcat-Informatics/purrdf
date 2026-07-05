@@ -118,10 +118,10 @@ where
 /// Parse RDF text bytes of `media_type` into a frozen [`RdfDataset`].
 ///
 /// Steps: UTF-8 validate (hard-fail `native-codec-utf8`); parse the line/Turtle family
-/// (N-Triples, N-Quads, Turtle, TriG) FIRST-PARTY into an in-memory [`SerGraph`] via
-/// [`text_parse`](super::text_parse), and RDF/XML through the FIRST-PARTY
-/// [`rdfxml`](super::rdfxml) codec (no external purrdf-gts text / RDF-XML codec); then
-/// walk that graph through [`fold_statement_layer`] and freeze.
+/// (N-Triples, N-Quads, Turtle, TriG) FIRST-PARTY into an in-memory `SerGraph` via
+/// `text_parse`, and RDF/XML through the FIRST-PARTY
+/// `rdfxml` codec (no external purrdf-gts text / RDF-XML codec); then
+/// walk that graph through `fold_statement_layer` and freeze.
 pub fn parse_dataset(
     bytes: &[u8],
     media_type: &str,

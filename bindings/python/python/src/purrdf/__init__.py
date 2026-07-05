@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """Compatibility shim: purrdf → purrdf_native.rdf.
 
-Single-cdylib unification (#630): all five native extensions now live in one
+Single-cdylib unification: all five native extensions now live in one
 `purrdf_native` cdylib. This shim swaps itself for the real submodule so the
 legacy `import purrdf` returns the exact submodule object — same pyclasses.
 
@@ -15,7 +15,7 @@ attribute (`purrdf.shapes.validate(...)`) and registered in `sys.modules` (so
 
 The hand-written `__init__.pyi` stub + PEP 561 `py.typed` marker beside this file
 keep mypy type-checking every `purrdf` call site (the native oxigraph
-Store/SPARQL/parse/canonicalize surface, #667).
+Store/SPARQL/parse/canonicalize surface).
 """
 
 import sys

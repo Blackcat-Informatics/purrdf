@@ -71,7 +71,7 @@ struct TermRow {
 /// An accumulating snapshot builder mirroring `gts_producer._Builder`.
 ///
 /// Term ids are append-order during ingestion (process-unstable), then re-id'd
-/// by content in [`Self::canonical_tables`] so the emitted bytes are a pure
+/// by content in `Self::canonical_tables` so the emitted bytes are a pure
 /// function of the inputs.
 #[derive(Debug, Default)]
 pub struct SnapshotBuilder {

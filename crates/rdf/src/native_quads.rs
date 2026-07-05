@@ -5,7 +5,7 @@
 //!
 //! A consumer that already holds (or wants) a flat owned-[`RdfQuad`] stream can fold it
 //! into the frozen IR (or un-fold the IR back into the source-faithful quad stream).
-//! The fold routes through the SAME shared [`fold_statement_layer`] the text codecs use,
+//! The fold routes through the SAME shared `fold_statement_layer` the text codecs use,
 //! so the RDF 1.2 statement layer (`rdf:reifies` reifiers + annotations) is reconstructed
 //! identically and the two paths can never drift.
 
@@ -19,10 +19,10 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// Freeze already-built native [`RdfQuad`]s into a validated [`RdfDataset`], folding the
 /// RDF 1.2 statement layer.
 ///
-/// Routes through the SAME [`fold_statement_layer`] helper the text codecs use (a
+/// Routes through the SAME `fold_statement_layer` helper the text codecs use (a
 /// `rdf:reifies` triple-term object becomes a reifier binding and a reifier subject's
 /// other triples become annotations), mapping each native [`RdfQuad`] into the
-/// source-agnostic [`FoldRow`] form.
+/// source-agnostic `FoldRow` form.
 /// Every term is interned under the default blank scope (already-scope-qualified labels,
 /// the same contract the oxigraph-quads twin assumed).
 ///
