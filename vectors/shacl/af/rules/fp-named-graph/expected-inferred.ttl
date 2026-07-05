@@ -1,0 +1,4 @@
+# Derived triples only: the rule sees the flattened named-graph data and fires.
+@prefix ex: <http://example.org/ns#> .
+
+ex:alice ex:adult ex:yes .

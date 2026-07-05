@@ -566,6 +566,11 @@ class shapes:
     # Validate a data graph (N-Triples) against a shapes graph (Turtle).
     @staticmethod
     def validate(shapes_ttl: str, data_nt: str) -> dict[str, builtins.object]: ...
+    # Entail a data graph (N-Triples) under a shapes graph (Turtle): apply every
+    # SHACL-AF sh:rule to a fixpoint, returning the materialized dataset (base
+    # graph plus every inferred triple) as a canonical N-Triples string.
+    @staticmethod
+    def entail(shapes_ttl: str, data_nt: str) -> str: ...
 
 # Back-compat alias for the native submodule's own name.
 shacl = shapes

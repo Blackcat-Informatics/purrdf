@@ -1,0 +1,39 @@
+# DASH-vendored SHACL Rules case: TripleRule whose object is a SPARQLFunction
+# call over three multi-valued path arguments — the cartesian product yields one
+# derived triple per (p1, p2, p3) combination.
+# Source: pySHACL test/resources/dash_tests/rules/triple/functions-permutations.test.ttl
+# Original namespaces preserved (see ../README.md). DASH metadata / owl:imports
+# removed. Note: the string values carry a trailing space (preserved from DASH).
+
+@prefix ex:   <http://datashapes.org/shasf/tests/rules/triple/functions-permutations.test#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+ex:TestInstance
+  rdf:type ex:TestShapeClass ;
+  ex:p1 "1a " ;
+  ex:p1 "1b " ;
+  ex:p2 "2a " ;
+  ex:p3 "3a " ;
+  ex:p3 "3b " ;
+  ex:p3 "3c " .
+
+ex:TestShapeClass
+  rdf:type rdfs:Class ;
+  rdf:type sh:NodeShape ;
+  rdfs:subClassOf rdfs:Resource ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject sh:this ;
+      sh:predicate ex:target ;
+      sh:object [ ex:testFunction ( [ sh:path ex:p1 ] [ sh:path ex:p2 ] [ sh:path ex:p3 ] ) ] ] .
+
+ex:testFunction
+  rdf:type sh:SPARQLFunction ;
+  sh:parameter [ sh:path ex:arg1 ] ;
+  sh:parameter [ sh:path ex:arg2 ] ;
+  sh:parameter [ sh:path ex:arg3 ] ;
+  sh:returnType xsd:string ;
+  sh:select """SELECT ?result WHERE { BIND (CONCAT($arg1, $arg2, $arg3) AS ?result) . }""" .

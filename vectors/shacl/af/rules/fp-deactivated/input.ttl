@@ -1,0 +1,26 @@
+# First-party SHACL Rules case: sh:deactivated rule AND deactivated shape.
+# Three would-be derivations; only the ACTIVE rule on the ACTIVE shape fires:
+#   - ex:ActiveShape / active rule      -> fires (ex:alice ex:live ex:yes)
+#   - ex:ActiveShape / deactivated rule -> skipped (sh:deactivated true on rule)
+#   - ex:DeadShape (sh:deactivated)     -> its rule is skipped (shape inactive)
+
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+
+ex:alice rdf:type ex:Person .
+
+ex:ActiveShape
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:rule [ rdf:type sh:TripleRule ;
+            sh:subject sh:this ; sh:predicate ex:live ; sh:object ex:yes ] ;
+  sh:rule [ rdf:type sh:TripleRule ; sh:deactivated true ;
+            sh:subject sh:this ; sh:predicate ex:dormant ; sh:object ex:yes ] .
+
+ex:DeadShape
+  rdf:type sh:NodeShape ;
+  sh:deactivated true ;
+  sh:targetClass ex:Person ;
+  sh:rule [ rdf:type sh:TripleRule ;
+            sh:subject sh:this ; sh:predicate ex:dead ; sh:object ex:yes ] .

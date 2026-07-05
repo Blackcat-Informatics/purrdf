@@ -1,0 +1,24 @@
+# First-party SHACL Rules case: sh:condition gating (a fires, b does not).
+# The rule fires only for focus nodes conforming to ex:HasName (ex:name minCount
+# 1). ex:alice has a name and fires; ex:bob has none and is skipped.
+
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+
+ex:alice rdf:type ex:Person ; ex:name "Alice" .
+ex:bob   rdf:type ex:Person .
+
+ex:HasName
+  rdf:type sh:NodeShape ;
+  sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+
+ex:GreetRule
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:condition ex:HasName ;
+      sh:subject sh:this ;
+      sh:predicate ex:greeted ;
+      sh:object ex:yes ] .

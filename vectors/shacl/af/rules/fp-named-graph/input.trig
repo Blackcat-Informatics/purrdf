@@ -1,0 +1,18 @@
+# First-party SHACL Rules case: data in a NAMED graph.
+# The shape/rule live in the default graph; the data (ex:alice a ex:Person) lives
+# in the named graph ex:g. apply_rules operates over the FLATTENED default-graph
+# projection (project_dataset), exactly like the validator, so the named-graph
+# data is visible to the rule's targetClass and the rule fires.
+
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+
+ex:S
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:rule [ rdf:type sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:adult ; sh:object ex:yes ] .
+
+ex:g {
+  ex:alice rdf:type ex:Person .
+}

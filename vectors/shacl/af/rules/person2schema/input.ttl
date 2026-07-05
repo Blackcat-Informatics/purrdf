@@ -1,0 +1,62 @@
+# DASH-vendored SHACL Rules case: TripleRules mapping a domain "person" model to
+# schema.org, including a URI-minting SPARQLFunction (ex:deriveURI).
+# Source: pySHACL test/resources/dash_tests/rules/triple/person2schema.test.ttl
+# The upstream test owl:imports the `person` graph; since PurRDF does not resolve
+# owl:imports, that data (person:JohnDoe) is INLINED here. Original namespaces
+# preserved (see ../README.md). DASH metadata / owl:imports removed.
+
+@prefix ex:     <http://datashapes.org/shasf/tests/rules/triple/person2schema.test#> .
+@prefix person: <http://datashapes.org/shasf/tests/rules/triple/person#> .
+@prefix schema: <http://schema.org/> .
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh:     <http://www.w3.org/ns/shacl#> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
+
+# Inlined `person` graph data.
+person:JohnDoe
+  rdf:type person:Person ;
+  person:firstName "John" ;
+  person:lastName "Doe" ;
+  person:zipCode 12345 .
+
+ex:Person2SchemaMappingShape
+  rdf:type sh:NodeShape ;
+  sh:targetClass person:Person ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject sh:this ;
+      sh:predicate rdf:type ;
+      sh:object schema:Person ] ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject [ ex:deriveURI ( sh:this "-Address" ) ] ;
+      sh:predicate rdf:type ;
+      sh:object schema:PostalAddress ] ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject sh:this ;
+      sh:predicate schema:givenName ;
+      sh:object [ sh:path person:firstName ] ] ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject sh:this ;
+      sh:predicate schema:familyName ;
+      sh:object [ sh:path person:lastName ] ] ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject [ ex:deriveURI ( sh:this "-Address" ) ] ;
+      sh:predicate schema:postalCode ;
+      sh:object [ sh:path person:zipCode ] ] ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject sh:this ;
+      sh:predicate schema:address ;
+      sh:object [ ex:deriveURI ( sh:this "-Address" ) ] ] .
+
+ex:deriveURI
+  rdf:type sh:SPARQLFunction ;
+  sh:parameter [ sh:path ex:base ; sh:nodeKind sh:IRI ] ;
+  sh:parameter [ sh:path ex:concat ; sh:datatype xsd:string ] ;
+  sh:returnType rdfs:Resource ;
+  sh:select """SELECT ?result WHERE { BIND (IRI(CONCAT(str($base), $concat)) AS ?result) }""" .

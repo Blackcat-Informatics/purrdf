@@ -329,6 +329,11 @@ pub struct Shape {
     /// Optional graph-box role annotations on this shape, read via the
     /// caller-supplied [`BoxRoleVocab`] (empty when no vocab is configured).
     pub box_roles: Vec<NamedNode>,
+    /// SHACL-AF rules (`sh:rule`) attached to this shape. Empty for shapes that
+    /// declare no rules (the common case); populated only on top-level shapes,
+    /// which are the only shapes the rules engine drives (rules fire against a
+    /// shape's target focus nodes).
+    pub rules: Vec<crate::rules::Rule>,
 }
 
 /// The parsed shapes graph — a collection of top-level [`Shape`]s.
@@ -707,6 +712,7 @@ impl<'s> Parser<'s> {
     /// path-scoped constraints in its single `property_shapes` entry.
     fn parse_standalone_property_shape(&mut self, id: Term) -> Result<Shape, String> {
         let targets = self.parse_targets(&id)?;
+        let rules = self.parse_rules(&id)?;
         let ps = self.parse_property_shape(&id)?;
         let deactivated = ps.deactivated;
         Ok(Shape {
@@ -718,6 +724,7 @@ impl<'s> Parser<'s> {
             message: None,
             deactivated,
             box_roles: vec![],
+            rules,
         })
     }
 
@@ -836,6 +843,7 @@ impl<'s> Parser<'s> {
                 message: None,
                 deactivated: false,
                 box_roles: vec![],
+                rules: vec![],
             });
         }
         self.in_flight.insert(id_str.clone());
@@ -886,6 +894,8 @@ impl<'s> Parser<'s> {
         // -- Node-level constraints --
         let constraints = self.parse_constraints(id, false)?;
         let box_roles = self.box_roles_of(id);
+        // -- SHACL-AF rules (sh:rule) --
+        let rules = self.parse_rules(id)?;
 
         Ok(Shape {
             id: id.clone(),
@@ -896,6 +906,7 @@ impl<'s> Parser<'s> {
             message,
             deactivated,
             box_roles,
+            rules,
         })
     }
 
@@ -1326,6 +1337,7 @@ impl<'s> Parser<'s> {
                 message: None,
                 deactivated: false,
                 box_roles: vec![],
+                rules: vec![],
             });
         }
 
@@ -1344,6 +1356,7 @@ impl<'s> Parser<'s> {
                 message: None,
                 deactivated: false,
                 box_roles: vec![],
+                rules: vec![],
             })
         } else {
             self.parse_node_shape(id)

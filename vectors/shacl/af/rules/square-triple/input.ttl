@@ -1,0 +1,43 @@
+# DASH-vendored SHACL Rules case: TripleRule with two sh:condition shapes.
+# Source: pySHACL test/resources/dash_tests/rules/triple/square.test.ttl
+# Original namespaces preserved (see ../README.md). DASH metadata / owl:imports
+# removed.
+#
+# The rule fires for a focus node only if it conforms to BOTH conditions:
+# ex:Rectangle (a class-shape requiring height+width) and the inline
+# width==height shape. Only ex:SquareRectangle satisfies both.
+
+@prefix ex:   <http://datashapes.org/shasf/tests/rules/triple/square.test#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+ex:InvalidRectangle
+  rdf:type ex:Rectangle .
+
+ex:NonSquareRectangle
+  rdf:type ex:Rectangle ;
+  ex:height 2 ;
+  ex:width 3 .
+
+ex:SquareRectangle
+  rdf:type ex:Rectangle ;
+  ex:height 4 ;
+  ex:width 4 .
+
+ex:Square rdf:type rdfs:Class .
+
+ex:Rectangle
+  rdf:type rdfs:Class ;
+  rdf:type sh:NodeShape ;
+  rdfs:subClassOf rdfs:Resource ;
+  sh:property [ sh:path ex:height ; sh:datatype xsd:integer ; sh:maxCount 1 ; sh:minCount 1 ] ;
+  sh:property [ sh:path ex:width ; sh:datatype xsd:integer ; sh:maxCount 1 ; sh:minCount 1 ] ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:condition ex:Rectangle ;
+      sh:condition [ sh:property [ sh:path ex:width ; sh:equals ex:height ] ] ;
+      sh:subject sh:this ;
+      sh:predicate rdf:type ;
+      sh:object ex:Square ] .

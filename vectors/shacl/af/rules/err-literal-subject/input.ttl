@@ -1,0 +1,19 @@
+# First-party SHACL Rules ERROR case: a rule that produces a literal in subject
+# position. `apply_rules` must return Err at firing time (a triple subject must be
+# an IRI or blank node). This directory has NO expected-inferred.ttl; the harness
+# asserts the error.
+
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+
+ex:alice rdf:type ex:Person .
+
+ex:BadRule
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject "notasubject" ;
+      sh:predicate ex:p ;
+      sh:object ex:o ] .

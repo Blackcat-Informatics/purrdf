@@ -40,8 +40,29 @@ pub(crate) fn check_select(query: &Query, prebound: &[&str]) -> Result<(), Strin
         // Non-SELECT forms are rejected elsewhere (shape-load SELECT-form check).
         return Ok(());
     };
-    // Strip the outer solution modifiers down to the outermost Project and
-    // check its BODY — nested Projects inside the body are subqueries.
+    check_query_body(pattern, prebound)
+}
+
+/// Check a SHACL-AF `sh:construct` CONSTRUCT query (a `sh:SPARQLRule` head)
+/// against the pre-binding restrictions. The CONSTRUCT `WHERE` algebra is a
+/// solution-producing body exactly like a SELECT's, so the same rules apply; the
+/// outermost projection (if any) is exempt.
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the offending construct.
+pub(crate) fn check_construct(query: &Query, prebound: &[&str]) -> Result<(), String> {
+    let Query::Construct { pattern, .. } = query else {
+        // Non-CONSTRUCT forms are rejected elsewhere (rule-load CONSTRUCT check).
+        return Ok(());
+    };
+    check_query_body(pattern, prebound)
+}
+
+/// Strip the outer solution modifiers down to the outermost `Project` and check
+/// its BODY — nested `Project`s inside the body are subqueries. Shared by
+/// [`check_select`] and [`check_construct`].
+fn check_query_body(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String> {
     let mut node = pattern;
     loop {
         match node {

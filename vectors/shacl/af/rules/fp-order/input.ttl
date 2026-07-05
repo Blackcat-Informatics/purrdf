@@ -1,0 +1,17 @@
+# First-party SHACL Rules case: sh:order effect and order-independence.
+# Two rules carry explicit sh:order. A monotonic fixpoint is order-independent,
+# so the FINAL closure is the same regardless of order; the companion Rust test
+# `sh_order_is_order_independent_over_the_closure` proves that swapping the orders
+# yields a byte-identical entailment.
+
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+
+ex:alice rdf:type ex:Person .
+
+ex:S
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:rule [ rdf:type sh:TripleRule ; sh:order 1 ; sh:subject sh:this ; sh:predicate ex:a ; sh:object ex:x ] ;
+  sh:rule [ rdf:type sh:TripleRule ; sh:order 2 ; sh:subject sh:this ; sh:predicate ex:b ; sh:object ex:y ] .

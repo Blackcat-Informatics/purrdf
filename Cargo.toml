@@ -29,7 +29,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
@@ -43,21 +43,21 @@ homepage = "https://blackcatinformatics.ca/purrdf/"
 # re-enabled per crate with `default-features = true` where required.
 [workspace.dependencies]
 # --- internal crates (paths are relative to the WORKSPACE ROOT) ---
-purrdf = { path = "crates/purrdf", version = "0.3.1" }
-purrdf-core = { path = "crates/rdf-core", version = "0.3.1" }
-purrdf-entail = { path = "crates/entail", version = "0.3.1" }
-purrdf-events = { path = "crates/rdf-events", version = "0.3.1" }
-purrdf-gts = { path = "crates/gts", version = "0.3.1" }
-purrdf-iri = { path = "crates/iri", version = "0.3.1" }
-purrdf-rdf = { path = "crates/rdf", version = "0.3.1" }
-purrdf-shapes = { path = "crates/shapes", version = "0.3.1" }
-purrdf-shex = { path = "crates/shex", version = "0.3.1" }
-purrdf-slice = { path = "crates/slice", version = "0.3.1" }
-purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "0.3.1" }
-purrdf-sparql-eval = { path = "crates/sparql-eval", version = "0.3.1" }
-purrdf-sparql-results = { path = "crates/sparql-results", version = "0.3.1" }
-purrdf-validate = { path = "crates/validate", version = "0.3.1" }
-purrdf-xsd = { path = "crates/xsd", version = "0.3.1" }
+purrdf = { path = "crates/purrdf", version = "0.3.2" }
+purrdf-core = { path = "crates/rdf-core", version = "0.3.2" }
+purrdf-entail = { path = "crates/entail", version = "0.3.2" }
+purrdf-events = { path = "crates/rdf-events", version = "0.3.2" }
+purrdf-gts = { path = "crates/gts", version = "0.3.2" }
+purrdf-iri = { path = "crates/iri", version = "0.3.2" }
+purrdf-rdf = { path = "crates/rdf", version = "0.3.2" }
+purrdf-shapes = { path = "crates/shapes", version = "0.3.2" }
+purrdf-shex = { path = "crates/shex", version = "0.3.2" }
+purrdf-slice = { path = "crates/slice", version = "0.3.2" }
+purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "0.3.2" }
+purrdf-sparql-eval = { path = "crates/sparql-eval", version = "0.3.2" }
+purrdf-sparql-results = { path = "crates/sparql-results", version = "0.3.2" }
+purrdf-validate = { path = "crates/validate", version = "0.3.2" }
+purrdf-xsd = { path = "crates/xsd", version = "0.3.2" }
 
 # --- external crates ---
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
@@ -167,4 +167,22 @@ strip = "none"
 # Optimize third-party deps (crypto, compression, regex) even in dev builds so
 # the proptest/conformance test loop stays fast; workspace members are excluded.
 [profile.dev.package."*"]
+opt-level = 2
+
+# The `"*"` glob above matches DEPENDENCIES ONLY — Cargo excludes workspace
+# member crates from it. Left at the dev default (opt-level = 0, no inlining),
+# the zero-copy SPARQL lexer and the id-native string interners pay full
+# un-inlined call overhead on every byte, making the compute-bound parse/proptest
+# test suite roughly 300x slower than release (~3 s vs ~10 ms for a ~4350-triple
+# parse) and blowing test timeouts. Raise just these parse-hot crates to
+# opt-level = 2 in dev/test. Overflow-checks and debug-assertions stay at their
+# dev defaults (ON) — these paths have no debug_assert!, so inlining is the
+# dominant lever and the safety checks still catch real bugs under test.
+[profile.dev.package.purrdf-sparql-algebra]
+opt-level = 2
+
+[profile.dev.package.purrdf-rdf]
+opt-level = 2
+
+[profile.dev.package.purrdf-core]
 opt-level = 2

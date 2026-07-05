@@ -84,6 +84,26 @@ fn validate(py: Python<'_>, shapes_ttl: &str, data_nt: &str) -> PyResult<Py<PyAn
     Ok(out.into_any().unbind())
 }
 
+/// Entail a data graph (N-Triples) under a shapes graph (Turtle), returning the
+/// materialized dataset as a canonical N-Triples string.
+///
+/// The entailment twin of [`validate`]: it applies every active SHACL-AF
+/// `sh:rule` (`sh:TripleRule` / `sh:SPARQLRule`) to a fixpoint and returns the
+/// base graph plus every inferred triple, serialized as deterministic N-Triples.
+///
+/// Raises `ValueError` if either graph fails to parse or if rule application
+/// fails (an illegal head term, an unresolvable `sh:condition`, or a rule set that
+/// does not reach a fixpoint).
+#[pyfunction]
+fn entail(py: Python<'_>, shapes_ttl: &str, data_nt: &str) -> PyResult<String> {
+    // Parse + entailment + serialization run detached (GIL released).
+    py.detach(|| {
+        let dataset = engine::entail_graphs(data_nt, shapes_ttl)?;
+        ::purrdf::canonical_flat_nquads(dataset.as_ref())
+    })
+    .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 /// Parsed SHACL shapes that can be reused to validate multiple data graphs.
 ///
 /// Construct from a Turtle shapes graph with `PyShapes(shapes_ttl)`, then call
@@ -253,12 +273,14 @@ impl PyValidationReport {
 
 /// Register the `purrdf-shapes` surface on a Python module.
 ///
-/// Exposes the legacy `validate(shapes_ttl, data_nt)` function and the reusable
+/// Exposes the legacy `validate(shapes_ttl, data_nt)` function, the SHACL-AF
+/// `entail(shapes_ttl, data_nt)` rule-entailment function, and the reusable
 /// `Shapes` / `ValidationReport` wrappers used by the Rust-native orchestration
 /// in `purrdf-validate`. Called by the unified `purrdf_native` cdylib to
 /// populate the `purrdf_native.shacl` submodule.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate, m)?)?;
+    m.add_function(wrap_pyfunction!(entail, m)?)?;
     m.add_class::<PyShapes>()?;
     m.add_class::<PyValidationReport>()?;
     Ok(())

@@ -21,6 +21,7 @@ pub mod model;
 pub mod path;
 pub(crate) mod prebinding;
 pub mod report;
+pub mod rules;
 pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
@@ -28,6 +29,7 @@ pub mod term;
 pub mod text_ingest;
 
 pub use json_schema::Namespaces;
+pub use rules::{apply_rules, entail_dataset};
 
 /// Crate version string for cache/toolchain salt parity with Python package
 /// versions (`metadata.version("purrdf-shapes")`).

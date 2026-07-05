@@ -223,8 +223,8 @@ fn arb_dataset_star() -> impl Strategy<Value = std::sync::Arc<RdfDataset>> {
 // ── Config ──────────────────────────────────────────────────────────────────────
 
 fn config() -> ProptestConfig {
-    // Bounded case count keeps each property well under the nextest 60s
-    // slow-timeout; raise locally with PROPTEST_CASES to deepen the search.
+    // Bounded case count keeps each property fast under `cargo test` (and the
+    // CI job timeout); raise locally with PROPTEST_CASES to deepen the search.
     let cases = std::env::var("PROPTEST_CASES")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())

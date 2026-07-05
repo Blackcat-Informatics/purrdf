@@ -1,0 +1,6 @@
+# Derived triples only, using a blank node for the minted address resource. The
+# comparison is by RDF isomorphism, so this label need not match the engine's.
+@prefix ex: <http://example.org/ns#> .
+
+ex:alice ex:addr _:addr .
+_:addr ex:city ex:Metropolis .

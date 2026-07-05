@@ -24,7 +24,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-core` (`crates/rdf-core`) | Interned IR kernel, diagnostics, store traits, provenance, RDFC-1.0 |
 | `purrdf-gts` (`crates/gts`) | GTS container engine (CBOR log, BLAKE3, COSE) |
 | `purrdf-sparql-{algebra,eval,results}` | SPARQL 1.1/1.2 parser, evaluator, results |
-| `purrdf-shapes` (`crates/shapes`) | SHACL validation (full Core + SHACL-SPARQL) |
+| `purrdf-shapes` (`crates/shapes`) | SHACL validation (full Core + SHACL-SPARQL + SHACL-AF) and SHACL Rules (`sh:rule` inference) |
 | `purrdf-shex` (`crates/shex`) | ShEx 2.1 schemas + validation |
 | `purrdf-slice` (`crates/slice`) | Slice catalog, artifacts, ownership analysis |
 | `purrdf-iri`, `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |

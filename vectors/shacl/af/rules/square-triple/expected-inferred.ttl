@@ -1,0 +1,6 @@
+# Derived triples only. DASH dash:expectedResult:
+#   ex:SquareRectangle rdf:type ex:Square .
+@prefix ex:  <http://datashapes.org/shasf/tests/rules/triple/square.test#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+ex:SquareRectangle rdf:type ex:Square .

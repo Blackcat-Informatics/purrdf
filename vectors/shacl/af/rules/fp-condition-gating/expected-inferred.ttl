@@ -1,0 +1,4 @@
+# Derived triples only: only ex:alice (who has ex:name) is greeted.
+@prefix ex: <http://example.org/ns#> .
+
+ex:alice ex:greeted ex:yes .

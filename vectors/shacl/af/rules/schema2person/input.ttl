@@ -1,0 +1,48 @@
+# DASH-vendored SHACL Rules case: TripleRules mapping schema.org back to a domain
+# "person" model, exercising a sequence path (schema:address / schema:postalCode).
+# Source: pySHACL test/resources/dash_tests/rules/triple/schema2person.test.ttl
+# Original namespaces preserved (see ../README.md). DASH metadata / owl:imports
+# removed; ex:JohnDoe is typed schema:Person directly, so the targetClass matches
+# without the schema ontology.
+
+@prefix ex:     <http://datashapes.org/shasf/tests/rules/triple/schema2person.test#> .
+@prefix person: <http://datashapes.org/shasf/tests/rules/triple/person#> .
+@prefix schema: <http://schema.org/> .
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh:     <http://www.w3.org/ns/shacl#> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
+
+ex:JohnDoe
+  rdf:type schema:Person ;
+  schema:address ex:JohnDoeAddress ;
+  schema:familyName "Doe" ;
+  schema:givenName "John" .
+
+ex:JohnDoeAddress
+  rdf:type schema:PostalAddress ;
+  schema:postalCode "12345" .
+
+ex:schema2personMappingShape
+  rdf:type sh:NodeShape ;
+  sh:targetClass schema:Person ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject sh:this ;
+      sh:predicate rdf:type ;
+      sh:object person:Person ] ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject sh:this ;
+      sh:predicate person:lastName ;
+      sh:object [ sh:path schema:familyName ] ] ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject sh:this ;
+      sh:predicate person:firstName ;
+      sh:object [ sh:path schema:givenName ] ] ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject sh:this ;
+      sh:predicate person:zipCode ;
+      sh:object [ sh:path ( schema:address schema:postalCode ) ] ] .

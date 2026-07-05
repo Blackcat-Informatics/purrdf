@@ -1,0 +1,5 @@
+# Derived triples only: the rule fires once (fire-at-check-time) and the derived
+# tag is never retracted. Exactly one triple.
+@prefix ex: <http://example.org/ns#> .
+
+ex:alice ex:tag ex:seen .
