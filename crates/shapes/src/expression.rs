@@ -704,6 +704,7 @@ mod tests {
             message: None,
             deactivated: false,
             box_roles: vec![],
+            rules: vec![],
         };
         // Candidates supplied out of sorted order (c, a, b) to prove ordering.
         let expr = NodeExpr::Filter {
@@ -1459,6 +1460,7 @@ mod tests {
                     message: None,
                     deactivated: false,
                     box_roles: vec![],
+                    rules: vec![],
                 };
 
                 // Innermost shape: no constraints ⇒ every node trivially conforms.

@@ -133,7 +133,7 @@ fn instances_of_class(
 ///
 /// `closure_memo` is threaded through to [`instances_of_class`] so the subclass
 /// BFS is performed at most once per class IRI per `validate_with` call.
-fn resolve_focus_nodes(
+pub(crate) fn resolve_focus_nodes(
     data: &ShaclData,
     targets: &[Target],
     closure_memo: &mut FastMap<NamedNode, IdSet>,

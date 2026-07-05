@@ -97,6 +97,16 @@ impl ShaclData {
         &self.core
     }
 
+    /// A cloned handle to the projected Core dataset `Arc`.
+    ///
+    /// Used by the SHACL-AF rules engine, which iterates a fixpoint over ever-larger
+    /// projections of the base graph and needs an owned `Arc` to seed each round's
+    /// rebuilt dataset (the round driver freezes a fresh graph per round).
+    #[inline]
+    pub fn core_arc(&self) -> Arc<RdfDataset> {
+        Arc::clone(&self.core)
+    }
+
     /// The combined dataset for native SHACL-SPARQL evaluation.
     ///
     /// Borrows the held `Arc` rather than cloning it: the native SPARQL engine

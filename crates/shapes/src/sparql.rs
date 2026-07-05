@@ -497,6 +497,56 @@ pub(crate) fn run_select_with_shacl_prebinding(
     }
 }
 
+/// Run a CONSTRUCT query using SHACL-SPARQL pre-binding semantics, returning the
+/// frozen graph of derived triples.
+///
+/// This is the SHACL-AF `sh:SPARQLRule` execution path: `$this` (and, when known,
+/// `$shapesGraph` / `$currentShape`) are pre-bound, then the CONSTRUCT template is
+/// instantiated over the WHERE solutions. CONSTRUCT already yields a frozen
+/// `Arc<RdfDataset>`, so this is the sibling of
+/// [`run_select_with_shacl_prebinding`] that returns the `Graph` arm.
+///
+/// # Errors
+///
+/// Returns `Err(String)` if execution fails or if the result is not a CONSTRUCT
+/// (`Solutions` / `Boolean` are rejected).
+pub(crate) fn run_construct_with_shacl_prebinding(
+    dataset: &Arc<RdfDataset>,
+    construct: &str,
+    substitutions: &[(String, TermValue)],
+    shapes_graph_iri: Option<&str>,
+    current_shape: Option<&Term>,
+) -> Result<Arc<RdfDataset>, String> {
+    let mut subs: Vec<(String, TermValue)> = substitutions.to_vec();
+    if let Some(iri) = shapes_graph_iri {
+        subs.push(("shapesGraph".to_owned(), TermValue::Iri(iri.to_owned())));
+    }
+    if let Some(shape) = current_shape {
+        subs.push(("currentShape".to_owned(), shape.to_term_value()));
+    }
+
+    let result = SPARQL_ENGINE
+        .with(|engine| {
+            CURRENT_FUNCTIONS.with(|functions| match functions.borrow().as_ref() {
+                Some(registry) if !registry.is_empty() => engine
+                    .query_with_shacl_prebinding_and_functions(
+                        dataset, construct, None, &subs, registry,
+                    ),
+                _ => engine.query_with_shacl_prebinding(dataset, construct, None, &subs),
+            })
+        })
+        .map_err(|e| format!("query evaluation error: {e}"))?;
+    match result {
+        SparqlResult::Graph(graph) => Ok(graph),
+        SparqlResult::Solutions { .. } => {
+            Err("query must be a CONSTRUCT, got a SELECT result".to_owned())
+        }
+        SparqlResult::Boolean(_) => {
+            Err("query must be a CONSTRUCT, got a boolean (ASK) result".to_owned())
+        }
+    }
+}
+
 /// Run an ASK query using SHACL-SPARQL pre-binding semantics.
 pub(crate) fn run_ask_with_shacl_prebinding(
     dataset: &Arc<RdfDataset>,

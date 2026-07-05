@@ -259,6 +259,30 @@ pub mod sh {
     /// (its local name is the pre-bound SPARQL variable).
     pub const PREDICATE: &str = "http://www.w3.org/ns/shacl#predicate";
 
+    // ── SHACL-AF rules (§rules) ───────────────────────────────────────────────
+
+    /// `sh:rule` — attaches a rule to a shape.
+    pub const RULE: &str = "http://www.w3.org/ns/shacl#rule";
+
+    /// `sh:TripleRule` — the rule type whose head is a single `sh:subject` /
+    /// `sh:predicate` / `sh:object` node-expression triple.
+    pub const TRIPLE_RULE: &str = "http://www.w3.org/ns/shacl#TripleRule";
+
+    /// `sh:SPARQLRule` — the rule type whose head is a SPARQL `sh:construct` query.
+    pub const SPARQL_RULE: &str = "http://www.w3.org/ns/shacl#SPARQLRule";
+
+    /// `sh:subject` — the subject node expression of a `sh:TripleRule`.
+    pub const SUBJECT: &str = "http://www.w3.org/ns/shacl#subject";
+
+    /// `sh:object` — the object node expression of a `sh:TripleRule`.
+    pub const OBJECT: &str = "http://www.w3.org/ns/shacl#object";
+
+    /// `sh:construct` — the SPARQL CONSTRUCT query text of a `sh:SPARQLRule`.
+    pub const CONSTRUCT: &str = "http://www.w3.org/ns/shacl#construct";
+
+    /// `sh:condition` — a shape a focus node must conform to for a rule to fire.
+    pub const CONDITION: &str = "http://www.w3.org/ns/shacl#condition";
+
     // ── Custom constraint-component vocabulary ───────────────────────────────
 
     pub const CONSTRAINT_COMPONENT: &str = "http://www.w3.org/ns/shacl#ConstraintComponent";

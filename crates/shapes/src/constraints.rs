@@ -318,6 +318,7 @@ fn eval_property_shape(
         message: ps.message.clone(),
         deactivated: false,
         box_roles: source_roles.clone(),
+        rules: vec![],
     };
 
     let mut results = Vec::new();
@@ -2287,6 +2288,7 @@ mod tests {
             message: None,
             deactivated: false,
             box_roles: vec![],
+            rules: vec![],
         }
     }
 
@@ -2311,6 +2313,7 @@ mod tests {
             message: None,
             deactivated: false,
             box_roles: vec![],
+            rules: vec![],
         }
     }
 
@@ -2419,6 +2422,7 @@ mod tests {
             message: None,
             deactivated: false,
             box_roles: vec![named_role(&vocab.box_tbox)],
+            rules: vec![],
         };
 
         let results = validate_shape_with_roles(&store, &ex("a"), &shape);
@@ -2468,6 +2472,7 @@ mod tests {
             message: None,
             deactivated: false,
             box_roles: vec![],
+            rules: vec![],
         };
 
         let results = validate_shape(&store, &ex("a"), &shape);
@@ -2499,6 +2504,7 @@ mod tests {
             message: None,
             deactivated: false,
             box_roles: vec![named_role(&vocab.box_config_box)],
+            rules: vec![],
         };
         let shape = Shape {
             id: ex("S"),
@@ -2519,6 +2525,7 @@ mod tests {
             message: None,
             deactivated: false,
             box_roles: vec![named_role(&vocab.box_tbox)],
+            rules: vec![],
         };
 
         let results = validate_shape_with_roles(&store, &ex("a"), &shape);
@@ -3256,6 +3263,7 @@ mod tests {
             message: None,
             deactivated: false,
             box_roles: vec![],
+            rules: vec![],
         };
         // ex:parent_node has 1 inverse-parent (ex:child) → passes minCount(1).
         let results = validate_shape(&store, &ex("parent_node"), &shape);
@@ -3289,6 +3297,7 @@ mod tests {
             message: None,
             deactivated: false,
             box_roles: vec![],
+            rules: vec![],
         };
         // ex:orphan has no inverse-parent triples → fails minCount(1).
         let results = validate_shape(&store, &ex("orphan"), &shape);
@@ -3450,6 +3459,7 @@ mod tests {
             message: None,
             deactivated: true,
             box_roles: vec![],
+            rules: vec![],
         };
         // Focus node is a literal — would fail, but shape is deactivated.
         let literal_focus = Term::Literal(Literal::new_simple_literal("anything"));
@@ -3573,6 +3583,7 @@ mod tests {
             message: None,
             deactivated: false,
             box_roles: vec![],
+            rules: vec![],
         }
     }
 
@@ -3977,6 +3988,7 @@ mod tests {
             message: None,
             deactivated: false,
             box_roles: vec![],
+            rules: vec![],
         };
         assert!(
             validate_shape(&store, &ex("a"), &shape).is_empty(),
@@ -4006,6 +4018,7 @@ mod tests {
             message: None,
             deactivated: false,
             box_roles: vec![],
+            rules: vec![],
         };
         let results = validate_shape(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1);
