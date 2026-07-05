@@ -13,8 +13,8 @@
 # gate — so this ledger only ever SHRINKS, never drifts. Mirrors the Rust
 # conformance harnesses' XPASS discipline (AGENTS.md §2).
 #
-# Current scoreboard (reconciled to the live suite): 74 passed / 12 xfailed
-# (0 xpassed, 0 failed, 0 errors; ledger 12/12 applied, 0 stale). This ledger
+# Current scoreboard (reconciled to the live suite): 82 passed / 4 xfailed
+# (0 xpassed, 0 failed, 0 errors; ledger 4/4 applied, 0 stale). This ledger
 # only shrinks: as gaps close, keys are pruned here and the pass count rises.
 # Grouped by theme in the comments below.
 
@@ -32,14 +32,6 @@
 #  returns the full term URI set.)
 
 # --- Theme: SPARQL Result public API — .bindings / SELECT * projection ---
-"test_evaluate_bind.py::test_bind[check-bind(\"thing\" as ?name)-name-thing]" = "compat Result exposes no .bindings attribute (rdflib's list-of-dict view of SELECT solutions), so r.bindings[0][var] raises AttributeError"
-"test_evaluate_bind.py::test_bind[check-bind(<http://example.org/other> as ?other)-other-http://example.org/other]" = "compat Result exposes no .bindings attribute (rdflib's list-of-dict view of SELECT solutions), so r.bindings[0][var] raises AttributeError"
-"test_evaluate_bind.py::test_bind[check-bind(:Thing as ?type)-type-http://example.org/ns#Thing]" = "compat Result exposes no .bindings attribute (rdflib's list-of-dict view of SELECT solutions), so r.bindings[0][var] raises AttributeError"
-"test_optional.py::test_binding_with_optional_clause" = "compat Result exposes no .bindings attribute, so len(result.bindings) raises AttributeError on an OPTIONAL-with-subselect query"
-"test_subselect.py::test_select_star_sub_select" = "'SELECT *' inside a sub-SELECT does not propagate the projected variables to the outer ResultRow, so row var lookup / asdict() raises"
-"test_subselect.py::test_select_star_multiple_sub_select_star" = "'SELECT *' across multiple nested sub-SELECTs does not propagate projected variables to the outer ResultRow, so asdict() raises"
-"test_subselect.py::test_select_star_multiple_sub_select_mixed_projections" = "'SELECT *' mixed with explicit projections across sub-SELECTs does not propagate all projected variables to the outer ResultRow, so asdict() raises"
-"test_subselect.py::test_select_star_multiple_sub_select_defined_projections" = "explicit projections across nested sub-SELECTs are not surfaced on the outer ResultRow, so asdict() raises"
 
 # --- Theme: SPARQL query prefix/namespace forwarding ---
 # The compat facade does not forward the graph's bound namespaces into the

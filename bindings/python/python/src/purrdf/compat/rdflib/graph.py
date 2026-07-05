@@ -34,6 +34,7 @@ from .term import (
     Identifier,
     Literal,
     URIRef,
+    Variable,
     from_native,
     to_native,
 )
@@ -1147,7 +1148,7 @@ class Graph:
             )
             return Result(form, graph=constructed)
         variables = list(res.variables)
-        var_names = tuple(v.value for v in variables)
+        var_names = tuple(Variable(v.value) for v in variables)
         rows = [
             ResultRow(tuple(from_native(sol[v]) for v in variables), var_names)
             for sol in res
