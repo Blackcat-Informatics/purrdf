@@ -53,7 +53,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf::{canonicalize, RdfDataset, RdfDatasetBuilder};
+use purrdf::{RdfDataset, RdfDatasetBuilder, canonicalize};
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::shapes::from_dataset_with_prefixes;
 use purrdf_shapes::{apply_rules, engine, text_ingest};

@@ -40,11 +40,11 @@ use std::sync::Arc;
 use ::purrdf::{FastMap, FastSet, IdSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
 
 use crate::constraints::conforms;
-use crate::data::{quads_for_pattern_ids, GraphFilter, ShaclData};
+use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
 use crate::engine::resolve_focus_nodes;
-use crate::expression::{eval_node_expr, NodeExpr, RecursionGuard};
+use crate::expression::{NodeExpr, RecursionGuard, eval_node_expr};
 use crate::shapes::{Shape, Shapes};
-use crate::term::{term_id_to_native, NamedNode, Term, Triple};
+use crate::term::{NamedNode, Term, Triple, term_id_to_native};
 
 // ── Model ───────────────────────────────────────────────────────────────────────
 
@@ -235,10 +235,10 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
                 if facts.contains(&triple) {
                     continue;
                 }
-                if fresh_offender.is_none() {
-                    if let Some(term) = fresh_term(&triple, &base_universe) {
-                        fresh_offender = Some((prep.rule_id.clone(), term.clone()));
-                    }
+                if fresh_offender.is_none()
+                    && let Some(term) = fresh_term(&triple, &base_universe)
+                {
+                    fresh_offender = Some((prep.rule_id.clone(), term.clone()));
                 }
                 facts.insert(triple.clone());
                 round_new.push(triple);
@@ -867,8 +867,8 @@ mod tests {
     //
     // A *confirmed audit* that EVERY normative SHACL node-expression kind works in
     // the `sh:subject` / `sh:predicate` / `sh:object` positions of a
-    // `sh:TripleRule` (issue #64 gap G2). All kinds route through the shared
-    // `eval_node_expr`; the audit proves each one end-to-end in a rule head:
+    // `sh:TripleRule`. All kinds route through the shared `eval_node_expr`; the
+    // audit proves each one end-to-end in a rule head:
     //
     //   NodeExpr variant  object   subject   predicate  legality (subj/pred)
     //   Constant(IRI)       ✓        ✓          ✓
