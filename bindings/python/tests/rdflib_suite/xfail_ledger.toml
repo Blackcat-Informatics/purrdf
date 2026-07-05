@@ -13,17 +13,14 @@
 # gate — so this ledger only ever SHRINKS, never drifts. Mirrors the Rust
 # conformance harnesses' XPASS discipline (AGENTS.md §2).
 #
-# Current scoreboard (reconciled to the live suite): 71 passed / 15 xfailed
-# (0 xpassed, 0 failed, 0 errors; ledger 15/15 applied, 0 stale). This ledger
+# Current scoreboard (reconciled to the live suite): 74 passed / 12 xfailed
+# (0 xpassed, 0 failed, 0 errors; ledger 12/12 applied, 0 stale). This ledger
 # only shrinks: as gaps close, keys are pruned here and the pass count rises.
 # Grouped by theme in the comments below.
 
 [xfail]
 
 # --- Theme: RDF collection (rdf:List) parse + Collection mutation ---
-"test_graph_items.py::test_items" = "parsing Turtle collection syntax '( ... )' through the native codec raises native-codec-iri-missing-value, so rdf:first/rdf:rest list items are never materialized for Seq iteration"
-"test_graph_items.py::test_recursive_list_detection" = "parsing Turtle collection syntax '( ... )' through the native codec raises native-codec-iri-missing-value, so nested rdf:List recursion is never reached"
-"test_collection.py::test_scenario" = "compat Collection is read/append-oriented and does not implement __delitem__, so 'del c[i]' raises TypeError"
 
 # --- Theme: BatchAddGraph quad/context semantics ---
 # (resolved: Graph.addN now filters quads to the graph's identifier for plain

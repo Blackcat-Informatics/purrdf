@@ -64,7 +64,7 @@ class _NativeParser(Parser):
         payload = _as_bytes(source)
         if self.prefix_bearing:
             sink._bind_source_prefixes(payload)
-        sink._store.load(payload, format=self.rdf_format)
+        sink._store.load(payload, format=self.rdf_format, base=kwargs.get("base"))
 
 
 class TurtleParser(_NativeParser):

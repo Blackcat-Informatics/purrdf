@@ -671,9 +671,16 @@ class Graph:
             yield (p, o)
 
     def items(self, list_node: Identifier) -> Iterator[Identifier]:
-        """Yield the members of the ``rdf:List`` anchored at ``list_node``."""
+        """Yield the members of the ``rdf:List`` anchored at ``list_node``.
+
+        Raises ``ValueError`` if the list contains a cycle.
+        """
         node: Identifier | None = list_node
+        visited: builtins.set[Identifier] = set()
         while node is not None and node != RDF.nil:
+            if node in visited:
+                raise ValueError(f"rdf:List contains a cycle at node {node!r}")
+            visited.add(node)
             first = self.value(node, RDF.first)
             if first is not None:
                 yield first
@@ -932,6 +939,10 @@ class Graph:
         name → implementation. Native formats read from a filesystem path keep the
         direct-load fast-path (via the parser's ``rdf_format`` marker); every other
         source is read to a ``bytes`` payload and handed to the resolved parser.
+
+        A base IRI for resolving relative IRIs is derived from ``publicID``,
+        then ``location``/``source`` if they are a path or URL, and falls back to
+        the current working directory as a ``file:`` URI.
         """
         from . import plugin
         from .parser import Parser
@@ -944,6 +955,7 @@ class Graph:
         native_format = getattr(parser_cls, "rdf_format", None)
         prefix_bearing = getattr(parser_cls, "prefix_bearing", False)
         payload: bytes
+        base = self._derive_parse_base(publicID, location, source, file, data)
         if data is not None:
             payload = data.encode("utf-8") if isinstance(data, str) else data
         else:
@@ -968,12 +980,41 @@ class Graph:
                 # qname see them, since the native loader does not surface them.
                 if prefix_bearing:
                     self._bind_source_prefixes(Path(str(src)).read_bytes())
-                self._store.load(path=str(src), format=native_format)
+                self._store.load(path=str(src), format=native_format, base=base)
                 return self
             else:
                 payload = Path(str(src)).read_bytes()
-        parser_cls().parse(payload, self)
+        parser_cls().parse(payload, self, base=base)
         return self
+
+    def _derive_parse_base(
+        self,
+        publicID: str | None,
+        location: object | None,
+        source: object | None,
+        file: object | None,
+        data: object | None,
+    ) -> str:
+        """Return the base IRI for resolving relative IRIs during parsing.
+
+        Precedence: ``publicID``, then ``location``/``source`` when it denotes a
+        path or URL, otherwise ``Path.cwd().as_uri()``.
+        """
+        if publicID is not None:
+            return str(publicID)
+        src: object | None = source if source is not None else location
+        if src is None and file is not None and data is None:
+            src = file
+        if src is None or isinstance(src, StringInputSource | FileInputSource):
+            return Path.cwd().as_uri()
+        reader = getattr(src, "read", None)
+        if callable(reader):
+            return Path.cwd().as_uri()
+        src_str = str(src)
+        parsed = urlparse(src_str)
+        if parsed.scheme:
+            return src_str
+        return Path(src_str).absolute().as_uri()
 
     def _dump_bytes(self, fmt: str | None) -> bytes:
         """Serialize the store to bytes in the requested format.
