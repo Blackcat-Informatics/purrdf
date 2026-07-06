@@ -254,21 +254,37 @@ def rust_comments(src: str) -> list[tuple[int, int, str]]:
 
 def scan_comments(
     comments: list[tuple[int, int, str]],
+    *,
+    exclude_inline_code: bool = False,
 ) -> list[tuple[int, int, str, str]]:
     """Scan extracted ``(start_line, start_col, text)`` comments for tokens.
 
     Shared by every comment-based scanner (Rust, Python, YAML): each comment
     carries the 1-based line/column of its first character, and match positions
     are translated back into absolute file coordinates.
+
+    When ``exclude_inline_code`` is set, matches inside a Markdown inline-code
+    span (backtick-delimited) are skipped, mirroring ``scan_markdown``. Rust doc
+    comments (``///``/``//!``) render as Markdown, so an issue-shaped token
+    inside a code span like ```term#3``` is a code literal — the exact
+    output ``RdfLocation::display`` emits — not a stale issue reference. Without
+    this, the Rust scan flagged what the Markdown scan already (correctly)
+    excludes.
     """
     violations: list[tuple[int, int, str, str]] = []
 
     for start_line, start_col, text in comments:
+        text_lines = text.split("\n")
         for match in ISSUE_RE.finditer(text):
             offset = match.start()
             rel_line = text.count("\n", 0, offset) + 1
             last_nl = text.rfind("\n", 0, offset)
             rel_col = offset - last_nl
+            if exclude_inline_code:
+                col0 = rel_col - 1
+                spans = find_inline_code_spans(text_lines[rel_line - 1])
+                if any(s <= col0 < e for s, e in spans):
+                    continue
             line = start_line + rel_line - 1
             col = start_col + rel_col - 1 if rel_line == 1 else rel_col
             violations.append(
@@ -279,9 +295,14 @@ def scan_comments(
 
 
 def scan_rust(path: Path) -> list[tuple[int, int, str, str]]:
-    """Return violations found in a Rust source file."""
+    """Return violations found in a Rust source file.
+
+    Rust doc comments are rendered as Markdown, so inline-code spans are excluded
+    exactly as ``scan_markdown`` excludes them — an issue-shaped token inside
+    backticks is a code literal, not a stale issue reference.
+    """
     src = path.read_text(encoding="utf-8")
-    return scan_comments(rust_comments(src))
+    return scan_comments(rust_comments(src), exclude_inline_code=True)
 
 
 def skip_py_string(src: str, i: int, n: int) -> int:
