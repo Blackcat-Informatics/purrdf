@@ -55,7 +55,14 @@ const reparsed = Dataset.parse(nq, "nquads");
 - **`Dataset`** (RDF/JS `DatasetCore`) — `Dataset.parse(input, format, base?)`,
   `serialize(format)`, `add`/`delete`/`has`/`match`/`quads`/`size`, and iteration
   (`for (const quad of dataset)`). Formats: `turtle`, `ntriples`, `nquads`, `trig`,
-  `rdfxml` (or their media types).
+  `rdfxml` (or their media types); `serialize` additionally accepts `jsonld`.
+- **Graph identity** — `Dataset.canonicalize()` returns the RDFC-1.0 canonical, flat
+  N-Quads for the graph; `Dataset.isomorphic(other)` decides RDF graph equality under
+  blank-node relabeling (an exact oracle backed by full RDFC-1.0 canonicalization).
+- **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples data
+  graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
+  `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
+  N-Triples.
 - **`Sink`** — a streaming consumer (`push(quad)` / `finish() → Dataset`) over the
   `purrdf-events` ingestion protocol; **`datasetToStream`** / **`streamToDataset`**
   are the async RDF/JS Stream/Sink helpers.

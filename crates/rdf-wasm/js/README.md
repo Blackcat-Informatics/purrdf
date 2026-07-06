@@ -73,7 +73,11 @@ const reparsed = Dataset.parse(nq, "nquads");
   `fromTerm`, `fromQuad`.
 - `Dataset` — `Dataset.parse(input, format, base?)`, `serialize(format)`,
   `add` / `delete` / `has` / `match` / `quads` / `size`, iteration.
-  Formats: `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml`.
+  Formats: `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml` (`serialize` also `jsonld`).
+- `Dataset.canonicalize()` / `Dataset.isomorphic(other)` — RDFC-1.0 canonical N-Quads
+  and RDF graph-identity (isomorphism under blank-node relabeling).
+- `shaclValidateToSarif(shapesTtl, dataNt)` / `shaclEntail(shapesTtl, dataNt)` — SHACL
+  validation to a SARIF 2.1.0 report and SHACL-AF `sh:rule` entailment to N-Triples.
 - `Sink`, `datasetToStream`, `streamToDataset` — the async RDF/JS
   Stream/Sink primitives over the synchronous engine surface.
 - SPARQL evaluation over the in-memory dataset (no server required).
@@ -83,8 +87,8 @@ Full typings ship in `index.d.ts`.
 ## Scope
 
 In-memory only, by design: no persistent store and no network I/O inside the
-wasm module. For the container transport (GTS), SHACL validation, SPARQL
-result serializers, and the rest of the toolkit, see the
+wasm module. For the container transport (GTS), SPARQL result serializers, and the
+rest of the toolkit, see the
 [main repository](https://github.com/Blackcat-Informatics/purrdf).
 
 ## Supply chain
