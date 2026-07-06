@@ -1,0 +1,17 @@
+ghprsq PR head backlink metadata
+
+parent_hashes: 75086a2fddbaafe5e9736a4a5d38ea081b149f99
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 70
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/70
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 16c2216be4df17e1804b6427b50c4609665d61a3
+GhpRsq-Head-Ref: paudley/wasm-size-budget-gate
+GhpRsq-Head-OID: 75086a2fddbaafe5e9736a4a5d38ea081b149f99
+GhpRsq-Result-Tree: d517c9cc15e5ff47151533e609ff028a25f04173
+GhpRsq-Result-Commit: faef47fbfe47cb65eb0667b515e0d60d59950f05
+GhpRsq-Parent-Hashes: 75086a2fddbaafe5e9736a4a5d38ea081b149f99
+GhpRsq-Squash-Notes-SHA256: 8993c034970f49450cd97ac4ad80dae0c979923cc5fccf3d54a1f587e6377e79
