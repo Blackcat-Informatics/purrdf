@@ -4,12 +4,37 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
+.PHONY: help metadata fmt check book check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
 # the release workflow slices out of it stay byte-reproducible across machines.
 GIT_CLIFF_VERSION := 2.13.1
+
+# binaryen (wasm-opt / wasm-dis) is pinned so the optimized npm artifact's byte
+# size is reproducible: `wasm-opt -Oz` output — and therefore the size budget
+# below — depends on the binaryen version. `wasm-pkg` hard-fails if the local
+# wasm-opt does not report this version, exactly like the git-cliff pin above.
+# The CI wasm-toolchain composite action reads this same value, so the pin lives
+# in one place. Bump it deliberately (it can move the artifact size — see the
+# WASM_SIZE_BUDGET_BYTES raise procedure).
+BINARYEN_VERSION := 130
+
+# HARD size ceiling (bytes) for the optimized npm artifact
+# crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm (release +simd128 build, wasm-opt
+# -Oz). `make wasm-pkg-size` (and both CI and the npm release) fail if the built
+# artifact exceeds this. 3 MiB = 3145728; the measured baseline is 2_989_759
+# bytes, so this is ~5% headroom. The artifact's size is a joint function of
+# rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
+# (pinned via BINARYEN_VERSION), so a moved number is attributable.
+#
+# TO RAISE DELIBERATELY: rebuild `make wasm-pkg`, read the size printed by
+# `make wasm-pkg-size`, and set this to that size rounded up with a few percent
+# of headroom. A raise is a reviewed decision — the commit MUST state WHY the
+# artifact grew: a new capability or dependency, or a routine rustc-stable /
+# binaryen bump (a valid, must-be-explained reason). Never raise it merely to
+# turn a red gate green.
+WASM_SIZE_BUDGET_BYTES := 3145728
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -150,7 +175,14 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	@# for wasm32-unknown-unknown; older binaryen builds (e.g. Ubuntu's apt
 	@# package) reject the module without them. --enable-simd is REQUIRED for the
 	@# +simd128 build above (binaryen rejects the SIMD-carrying module without it).
-	@command -v wasm-opt >/dev/null 2>&1 || { echo "ERROR: wasm-opt (binaryen) not found — it is a REQUIRED wasm build dependency"; exit 1; }
+	@command -v wasm-opt >/dev/null 2>&1 || { echo "ERROR: wasm-opt (binaryen) not found — it is a REQUIRED wasm build dependency:"; echo "  install binaryen version $(BINARYEN_VERSION)"; exit 1; }
+	@# Pin binaryen so the optimized artifact — and the size budget — is byte-reproducible.
+	@FOUND=$$(wasm-opt --version | grep -oE '[0-9]+' | head -1); \
+		test "$$FOUND" = "$(BINARYEN_VERSION)" || { \
+			echo "ERROR: binaryen (wasm-opt) version mismatch — found $$FOUND, expected $(BINARYEN_VERSION)."; \
+			echo "  wasm-opt output feeds WASM_SIZE_BUDGET_BYTES; install binaryen $(BINARYEN_VERSION) so the artifact size is reproducible."; \
+			exit 1; \
+		}
 	wasm-opt -Oz \
 		--enable-bulk-memory --enable-nontrapping-float-to-int \
 		--enable-sign-ext --enable-mutable-globals --enable-simd \
@@ -165,6 +197,39 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 		[ "$$count" -gt 0 ] || { echo "ERROR: wasm-pkg produced NO SIMD opcodes (+simd128 regressed — refusing to ship a scalar artifact)"; exit 1; }; \
 		echo "OK: verified $$count SIMD opcode(s) present in the optimized wasm artifact"
 	@echo "OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)"
+
+wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WASM_SIZE_BUDGET_BYTES (hard-fails on overshoot).
+	@art=crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm; \
+	 budget=$(WASM_SIZE_BUDGET_BYTES); \
+	 case "$$budget" in ''|*[!0-9]*) echo "ERROR: WASM_SIZE_BUDGET_BYTES ('$$budget') is not a positive integer"; exit 1;; esac; \
+	 [ "$$budget" -gt 0 ] || { echo "ERROR: WASM_SIZE_BUDGET_BYTES must be > 0"; exit 1; }; \
+	 test -s "$$art" || { echo "ERROR: $$art missing or empty — wasm-pkg did not produce the optimized artifact"; exit 1; }; \
+	 size=$$(wc -c < "$$art" | tr -d ' '); \
+	 gz=$$(gzip -9nc < "$$art" | wc -c | tr -d ' '); \
+	 pct=$$(( size * 100 / budget )); \
+	 raw=target/wasm32-unknown-unknown/release/purrdf_wasm.wasm; \
+	 if [ -s "$$raw" ]; then rawsz=$$(wc -c < "$$raw" | tr -d ' '); reduc=$$(( (rawsz - size) * 100 / rawsz )); \
+	   ratio="cargo release wasm $$rawsz B -> optimized $$size B (-$$reduc%)"; \
+	 else ratio="cargo release wasm size unavailable (pre-opt module not on disk)"; fi; \
+	 rustcv=$$(rustc --version); \
+	 wbver=$$(grep -oP 'wasm-bindgen = "=\K[0-9.]+' Cargo.toml); \
+	 woptver=$$(wasm-opt --version); \
+	 line="wasm artifact: $$size bytes / budget $$budget bytes ($$pct%); gzip -9: $$gz bytes"; \
+	 echo "$$line"; echo "  $$ratio"; \
+	 echo "  toolchain: $$rustcv | wasm-bindgen =$$wbver | $$woptver"; \
+	 if [ -n "$${GITHUB_STEP_SUMMARY:-}" ]; then \
+	   { printf '### WASM size budget\n\n'; \
+	     printf -- '- %s\n' "$$line"; \
+	     printf -- '- %s\n' "$$ratio"; \
+	     printf -- '- toolchain: %s | wasm-bindgen =%s | %s\n' "$$rustcv" "$$wbver" "$$woptver"; \
+	   } >> "$$GITHUB_STEP_SUMMARY"; \
+	 fi; \
+	 if [ "$$size" -gt "$$budget" ]; then \
+	   echo "FAIL: wasm artifact $$size bytes exceeds budget $$budget bytes."; \
+	   echo "  If this growth is intended, raise WASM_SIZE_BUDGET_BYTES in the Makefile per the documented procedure (justify WHY in the commit)."; \
+	   exit 1; \
+	 fi; \
+	 echo "OK: wasm artifact within budget"
 
 wasm-pkg-test: wasm-pkg ## Build the wasm package and run the Node real-execution round-trip suite.
 	cd crates/rdf-wasm/js && node --test tests/*.test.mjs
