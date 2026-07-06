@@ -14,6 +14,10 @@ It is the same engine, byte-for-byte behavior, that ships as the `purrdf`
 Rust crates, the `purrdf` PyPI package, and `libpurrdf` — PurRDF's rule is
 **one engine, one behavior, every language**.
 
+> **Try it live** — the [RDF-1.2 playground](https://blackcat-informatics.github.io/purrdf/playground/)
+> runs this package in your browser: parse, SPARQL, SHACL, serialize, and
+> canonicalize/compare RDF-1.2 graphs client-side, with no install.
+
 ## Why this instead of an incumbent RDF/JS library?
 
 No incumbent RDF/JS library carries the RDF 1.2 features:

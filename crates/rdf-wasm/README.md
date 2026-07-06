@@ -14,6 +14,10 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 This crate (`purrdf-wasm`) is the Rust cdylib; the published npm/ESM package lives
 in [`js/`](./js/) and is named **`@blackcatinformatics/purrdf`**.
 
+> **Try it live** — the [RDF-1.2 playground](https://blackcat-informatics.github.io/purrdf/playground/)
+> runs this exact wasm build in your browser: parse, SPARQL, SHACL, serialize, and
+> canonicalize/compare graphs client-side, no toolchain and no server.
+
 ## The RDF-1.2 wedge
 
 No incumbent RDF/JS library carries RDF-1.2 **quoted-triple terms** or **directional
