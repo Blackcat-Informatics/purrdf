@@ -54,24 +54,19 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Install wasm-bindgen-cli (must match the workspace wasm-bindgen pin)
-        run: |
-          PIN="$(grep -oP 'wasm-bindgen = "=\K[0-9.]+' Cargo.toml)"
-          test -n "$PIN" || { echo "could not read the wasm-bindgen pin from Cargo.toml"; exit 1; }
-          cargo install wasm-bindgen-cli --version "$PIN" --locked
+      - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+        # Single source of truth shared with the CI wasm job: pinned, checksum-
+        # verified prebuilt wasm-bindgen-cli (matched to the Cargo.toml pin) and
+        # binaryen (matched to the Makefile BINARYEN_VERSION), with the SIMD
+        # capability verified. Replaces the previous source-built wasm-bindgen and
+        # unpinned apt binaryen so the released artifact is byte-reproducible.
+        uses: ./.github/actions/wasm-toolchain
 
-      - name: Install binaryen (wasm-opt)
-        # The wasm-pkg build emits +simd128; wasm-opt must accept --enable-simd
-        # or it would silently fall back to (or reject) a non-SIMD module. Fail
-        # fast here rather than shipping a scalar artifact.
-        run: |
-          sudo apt-get update && sudo apt-get install -y binaryen
-          wasm-opt --version
-          printf '(module)\n' | wasm-opt --enable-simd -o /dev/null - \
-            || { echo "FAIL: installed wasm-opt lacks --enable-simd support"; exit 1; }
-
-      - name: Build the wasm package
-        run: make wasm-pkg
+      - name: Build the wasm package and enforce the size budget
+        # wasm-pkg-size supersets wasm-pkg (build + wasm-opt -Oz + SIMD guard) and
+        # additionally hard-fails if the artifact exceeds WASM_SIZE_BUDGET_BYTES,
+        # so an oversized artifact can never be published. Same gate CI runs.
+        run: make wasm-pkg-size
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
