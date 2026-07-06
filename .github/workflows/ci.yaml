@@ -66,6 +66,33 @@ jobs:
       - name: Run workspace tests (includes doc tests)
         run: cargo test --workspace --locked
 
+  # The C-ABI header crates/rdf-capi/include/purrdf.h is a committed,
+  # SemVer-frozen contract that MUST stay a byte-exact projection of the crate's
+  # exported ABI. Nothing gated it before this job existed, so it silently
+  # drifted for three minor releases (missing the SHACL entry points).
+  # `make capi-check` regenerates the header with the pinned cargo-c and fails on
+  # any drift, then compiles + links + runs the C smoke test against it.
+  capi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Install cargo-c (the pinned header-contract generator)
+        # Pinned to the exact cargo-c whose bundled cbindgen the committed
+        # purrdf.h contract expects (see crates/rdf-capi/cbindgen.toml). A
+        # different cargo-c would emit spurious enum-ordering/formatting drift.
+        run: cargo install cargo-c --version 0.10.23 --locked
+
+      - name: Verify purrdf.h is current + the C smoke links and runs
+        run: make capi-check
+
   doc:
     runs-on: ubuntu-latest
     timeout-minutes: 30

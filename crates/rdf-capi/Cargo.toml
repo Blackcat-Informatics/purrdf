@@ -53,6 +53,17 @@ purrdf-sparql-results = { workspace = true }
 # ../rdf-core so `SparqlRequest`/`SparqlResult` unify.
 purrdf-sparql-eval = { workspace = true }
 
+# The lone feature the whole workspace is permitted to declare. `cargo capi`
+# (cargo-c >= 0.10) unconditionally enables a feature literally named `capi`
+# when it builds the C-ABI target and hard-errors if the crate does not declare
+# it — so `make capi-header`/`capi-check` (and the CI `capi` gate) cannot run
+# without this marker. It carries NO conditional code: the entire C-ABI surface
+# is always compiled. `scripts/check-no-features.py` allowlists exactly this
+# `purrdf-capi: capi` pair and nothing else; every other feature on every crate
+# (including any *other* feature here) still fails the zero-features gate.
+[features]
+capi = []
+
 # === cargo-c packaging (the spec-letter build mechanism) ===
 [package.metadata.capi]
 min_version = "0.10.0"
