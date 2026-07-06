@@ -173,17 +173,6 @@ jobs:
         # WASM_SIZE_BUDGET_BYTES (raise it deliberately per the Makefile).
         run: make wasm-pkg-size
 
-      - name: WASM size breakdown (diagnostics only, non-gating)
-        continue-on-error: true
-        run: |
-          cargo install twiggy --locked || true
-          {
-            echo '### WASM size breakdown'
-            echo '```'
-            twiggy top -n 20 crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY" || true
-
   benchmarks:
     runs-on: ubuntu-latest
     timeout-minutes: 120
