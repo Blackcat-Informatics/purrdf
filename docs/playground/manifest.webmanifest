@@ -1,0 +1,14 @@
+{
+  "name": "PurRDF RDF-1.2 console",
+  "short_name": "PurRDF console",
+  "description": "A zero-backend, client-side RDF-1.2 workbench: parse, serialize, SPARQL, SHACL, and graph identity, all in the browser via the PurRDF wasm engine.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0d1117",
+  "theme_color": "#1f6feb",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["developer", "utilities"]
+}

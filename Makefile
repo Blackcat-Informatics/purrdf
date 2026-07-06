@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench \
+.PHONY: help metadata fmt check book check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -236,6 +236,28 @@ wasm-pkg-test: wasm-pkg ## Build the wasm package and run the Node real-executio
 
 wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput benchmark (report-only; never a gate).
 	cd crates/rdf-wasm/js && node bench/parse.bench.mjs
+
+# The static RDF-1.2 console (docs/playground/) assembled next to a fresh copy of the
+# published ESM package — the exact tree the Pages deploy ships at /playground. The app
+# is zero-dependency vanilla ESM; "assembly" is just a copy, no bundler.
+PLAYGROUND_OUT := $(CARGO_TARGET_DIR)/playground
+playground: wasm-pkg ## Assemble the standalone RDF-1.2 console into $(CARGO_TARGET_DIR)/playground (serve it to preview).
+	@# Ship exactly the app shell + a FRESH copy of the published package. The
+	@# smoke/ Node tests and any local docs/playground/purrdf/ preview copy are
+	@# deliberately NOT shipped — the package is (re)built here from source.
+	@rm -rf "$(PLAYGROUND_OUT)"
+	@mkdir -p "$(PLAYGROUND_OUT)/purrdf"
+	@cp docs/playground/index.html docs/playground/app.mjs docs/playground/engine.worker.mjs \
+		docs/playground/style.css docs/playground/sw.mjs docs/playground/manifest.webmanifest \
+		"$(PLAYGROUND_OUT)/"
+	@cp -R docs/playground/examples "$(PLAYGROUND_OUT)/examples"
+	@cp crates/rdf-wasm/js/index.mjs "$(PLAYGROUND_OUT)/purrdf/index.mjs"
+	@cp -R crates/rdf-wasm/js/pkg "$(PLAYGROUND_OUT)/purrdf/pkg"
+	@echo "OK: console assembled at $(PLAYGROUND_OUT)"
+	@echo "    preview: (cd $(PLAYGROUND_OUT) && python3 -m http.server 8080) then open http://localhost:8080/"
+
+playground-smoke: wasm-pkg ## Smoke the console's engine calls (every pane's package call, Node-side; a CI gate).
+	node --test docs/playground/smoke/*.test.mjs
 
 capi-build: ## Build libpurrdf (cdylib + staticlib + header + pkg-config) via cargo-c.
 	cargo capi build -p purrdf-capi

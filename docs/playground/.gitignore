@@ -1,0 +1,4 @@
+# The published ESM package is copied in at build time (`make playground` / the
+# docs deploy job) — never committed. A local copy here lets you preview the
+# console straight from `docs/playground/` with a static server.
+/purrdf/
