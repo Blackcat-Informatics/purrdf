@@ -341,6 +341,22 @@ fn default_catalog() -> Vec<(i64, Codec)> {
 }
 
 /// Accumulate a GTS log as a CBOR Sequence.
+///
+/// # Examples
+///
+/// Each `add_*` call appends one frame and returns its BLAKE3 content id;
+/// [`Writer::head`] tracks the id of the last appended frame:
+///
+/// ```
+/// use purrdf_gts::writer::Writer;
+///
+/// let mut writer = Writer::new("purrdf.gts");
+/// let frame_id = writer.add_blob(b"nine lives", Some("text/plain"), None);
+/// assert_eq!(writer.head(), frame_id.as_slice());
+///
+/// let bytes = writer.into_bytes();
+/// assert!(!bytes.is_empty());
+/// ```
 // `SigningKey`'s `Debug` impl redacts the secret scalar, so deriving is safe here.
 #[derive(Debug)]
 pub struct Writer {
@@ -1214,6 +1230,18 @@ fn value_idx(value: &Value) -> Option<usize> {
 }
 
 /// Pack bytes into a `blake3:<hex>` digest string.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_gts::writer::digest_string;
+///
+/// let digest = digest_string(b"nine lives");
+/// assert!(digest.starts_with("blake3:"));
+/// assert_eq!(digest.len(), "blake3:".len() + 64);
+/// // Deterministic: the same bytes always hash to the same digest.
+/// assert_eq!(digest, digest_string(b"nine lives"));
+/// ```
 pub fn digest_string(data: &[u8]) -> String {
     digest_str(data)
 }

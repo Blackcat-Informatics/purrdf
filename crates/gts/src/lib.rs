@@ -13,6 +13,54 @@
 //! (`src/purrdf_tools/gts/`); both are gated against the same frozen
 //! language-neutral conformance corpus in `vectors/` (§18).
 //! The Python side keeps the producer; this crate owns the format engine.
+//!
+//! # Examples
+//!
+//! Write a tiny GTS log to memory with [`writer::Writer`] and fold it back
+//! with [`reader::read`]:
+//!
+//! ```
+//! use purrdf_gts::model::{Term, TermKind};
+//! use purrdf_gts::reader::read;
+//! use purrdf_gts::writer::Writer;
+//!
+//! let iri = |value: &str| Term {
+//!     kind: TermKind::Iri,
+//!     value: Some(value.to_string()),
+//!     datatype: None,
+//!     lang: None,
+//!     direction: None,
+//!     reifier: None,
+//! };
+//! let terms = vec![
+//!     iri("http://example.org/cat"),
+//!     iri("http://example.org/name"),
+//!     Term {
+//!         kind: TermKind::Literal,
+//!         value: Some("Purr".to_string()),
+//!         datatype: None,
+//!         lang: Some("en".to_string()),
+//!         direction: None,
+//!         reifier: None,
+//!     },
+//! ];
+//!
+//! let mut writer = Writer::new("purrdf.gts");
+//! writer.add_terms(&terms);
+//! writer.add_quads(&[(0, 1, 2, None)]); // (s, p, o) term ids; None = default graph
+//! let bytes = writer.into_bytes();
+//!
+//! let graph = read(&bytes, true, None);
+//! assert_eq!(graph.terms, terms);
+//! assert_eq!(graph.quads, [(0, 1, 2, None)]);
+//! assert!(graph.diagnostics.is_empty());
+//! ```
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 
 pub mod codec;
 pub mod compact;

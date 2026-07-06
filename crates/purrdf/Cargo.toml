@@ -9,9 +9,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/purrdf"
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "rdf-12", "shacl", "shex", "sparql"]
+categories = ["parser-implementations", "encoding", "data-structures"]
 
 [package.metadata.docs.rs]
 all-features = true

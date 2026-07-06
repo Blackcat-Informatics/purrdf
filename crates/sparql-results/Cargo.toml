@@ -9,9 +9,11 @@ edition.workspace = true
 repository.workspace = true
 license.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/purrdf-sparql-results"
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["sparql", "rdf", "rdf-12", "results", "serialization"]
+categories = ["encoding"]
 
 [package.metadata.docs.rs]
 all-features = true

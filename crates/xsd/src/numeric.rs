@@ -532,6 +532,25 @@ fn integer_to_decimal(value: i128) -> Decimal {
 ///
 /// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
 /// operand is not numeric.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_xsd::{XsdDatatype, numeric_add, parse};
+///
+/// let a = parse("40", XsdDatatype::Integer)?;
+/// let b = parse("2", XsdDatatype::Integer)?;
+/// assert_eq!(numeric_add(&a, &b)?.canonical_lexical(), "42");
+///
+/// // Mixed integer + decimal promotes to decimal, exactly.
+/// let half = parse("0.5", XsdDatatype::Decimal)?;
+/// assert_eq!(numeric_add(&a, &half)?.canonical_lexical(), "40.5");
+///
+/// // A non-numeric operand is a type error.
+/// let s = parse("oops", XsdDatatype::String)?;
+/// assert!(numeric_add(&a, &s).is_err());
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
 pub fn numeric_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     use XsdValue::{Decimal as Dec, Double, Float, Integer};
     match (a, b) {
@@ -708,6 +727,24 @@ fn decimal_mul(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
 /// - `xsd:float` or `xsd:double` divisor = 0.0 → IEEE result (±INF, or NaN for 0÷0).
 ///
 /// Returns `Err(TypeMismatch)` if either operand is not numeric.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_xsd::{XsdDatatype, numeric_div, parse};
+///
+/// // Integer ÷ integer yields DECIMAL (XPath rule), exactly.
+/// let seven = parse("7", XsdDatatype::Integer)?;
+/// let two = parse("2", XsdDatatype::Integer)?;
+/// let q = numeric_div(&seven, &two)?;
+/// assert_eq!(q.datatype(), XsdDatatype::Decimal);
+/// assert_eq!(q.canonical_lexical(), "3.5");
+///
+/// // Exact-type division by zero is a hard error (not a saturated value).
+/// let zero = parse("0", XsdDatatype::Integer)?;
+/// assert!(numeric_div(&seven, &zero).is_err());
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
 pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     use XsdValue::{Decimal as Dec, Double, Float, Integer};
     match (a, b) {

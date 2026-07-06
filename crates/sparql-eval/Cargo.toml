@@ -9,9 +9,11 @@ edition.workspace = true
 repository.workspace = true
 license.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/purrdf-sparql-eval"
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["sparql", "rdf", "rdf-12", "evaluator", "query"]
+categories = ["database-implementations", "data-structures"]
 
 [package.metadata.docs.rs]
 all-features = true

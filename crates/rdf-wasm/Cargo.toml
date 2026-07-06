@@ -9,9 +9,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/purrdf-wasm"
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "rdf-12", "wasm", "rdfjs", "purrdf"]
+categories = ["wasm", "web-programming"]
 
 [package.metadata.docs.rs]
 all-features = true

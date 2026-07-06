@@ -23,6 +23,12 @@
 //! `alloc::sync::Arc`) so the eventual `#![no_std]` flip stays mechanical. Per the
 //! purrdf plan, `no_std` is for embedded/C-ABI targets and is **not** a WASM
 //! prerequisite. Common types are re-exported from [`prelude`].
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 
 pub mod bundle;
 // Narrow purrdf backend traits (P2d): term interning, parser ingress,

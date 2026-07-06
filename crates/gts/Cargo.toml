@@ -8,10 +8,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/purrdf-gts"
 repository.workspace = true
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "cbor", "gts", "knowledge-graph", "linked-data"]
+categories = ["encoding", "database"]
 
 [package.metadata.docs.rs]
 all-features = true

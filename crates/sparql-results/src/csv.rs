@@ -23,6 +23,24 @@ use purrdf_core::{SparqlResult, TermValue};
 
 /// Serialize a [`SparqlResult`] to W3C SPARQL Results CSV.
 ///
+/// # Examples
+///
+/// The header is the bare variable names and records are CRLF-separated:
+///
+/// ```
+/// use purrdf_core::{RdfDatasetBuilder, TermValue};
+/// use purrdf_sparql_results::{ResultProvenance, SparqlResult, to_csv};
+///
+/// let result = SparqlResult::Solutions {
+///     variables: vec!["s".to_string()],
+///     rows: vec![vec![Some(TermValue::Iri("http://example.org/s".to_string()))]],
+///     aux: RdfDatasetBuilder::new().freeze().expect("empty aux dataset"),
+/// };
+///
+/// let csv = to_csv(&result, &ResultProvenance::default()).expect("SELECT serializes to CSV");
+/// assert_eq!(csv.bytes, b"s\r\nhttp://example.org/s\r\n");
+/// ```
+///
 /// # Errors
 ///
 /// Returns [`Error::Format`] for `Boolean` (ASK) and `Graph` (CONSTRUCT)

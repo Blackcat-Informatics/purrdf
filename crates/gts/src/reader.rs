@@ -947,6 +947,25 @@ fn catalog_from(header: &[(Value, Value)]) -> HashMap<i128, Codec> {
 /// segment boundary is a FATAL `SegmentBoundary` diagnostic and nothing past
 /// it is folded (§16, vector 17). `expected_head`, when given, is compared
 /// against the LAST segment's head; a mismatch records `TruncatedLog`.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_gts::reader::read;
+/// use purrdf_gts::writer::Writer;
+///
+/// let mut writer = Writer::new("purrdf.gts");
+/// writer.add_blob(b"nine lives", Some("text/plain"), None);
+///
+/// let graph = read(&writer.into_bytes(), true, None);
+/// assert!(graph.diagnostics.is_empty());
+/// assert_eq!(graph.blobs.len(), 1);
+///
+/// // The reader is total: even empty input folds, recording a diagnostic
+/// // instead of aborting.
+/// let empty = read(&[], true, None);
+/// assert_eq!(empty.diagnostics[0].code, "EmptyFile");
+/// ```
 pub fn read(data: &[u8], allow_segments: bool, expected_head: Option<&[u8]>) -> Graph {
     read_with_options(data, ReadOptions::new(allow_segments, expected_head))
 }

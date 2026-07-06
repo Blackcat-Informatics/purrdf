@@ -20,6 +20,28 @@ use crate::value::XsdValue;
 ///
 /// Integer-family subtypes (xsd:byte, xsd:long, xsd:unsignedInt, etc.) are in the
 /// same numeric tower as xsd:integer — `xsd:int 5 = xsd:long 5` is `true`.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::cmp::Ordering;
+///
+/// use purrdf_xsd::{XsdDatatype, parse, value_cmp};
+///
+/// let int = parse("42", XsdDatatype::Integer)?;
+/// let dec = parse("42.0", XsdDatatype::Decimal)?;
+/// let byte = parse("5", XsdDatatype::Byte)?;
+///
+/// // Numeric promotion: cross-type comparison inside the numeric tower.
+/// assert_eq!(value_cmp(&int, &dec), Some(Ordering::Equal));
+/// assert_eq!(value_cmp(&byte, &int), Some(Ordering::Less));
+///
+/// // Different value-space families are incomparable — a SPARQL type error,
+/// // NOT "not equal".
+/// let s = parse("42", XsdDatatype::String)?;
+/// assert_eq!(value_cmp(&int, &s), None);
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
 #[must_use]
 pub fn value_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
     use XsdValue::{Binary, Boolean, Double, Float, Gregorian, Integer, String as Str};
@@ -77,6 +99,21 @@ pub fn value_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
 /// `false` for incomparable operands. When the error-vs-false distinction matters
 /// (the SPARQL `=` operator raises a type error on incomparable operands), use
 /// [`value_cmp`] and treat `None` as the error.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_xsd::{XsdDatatype, parse, value_eq};
+///
+/// let a = parse("1", XsdDatatype::Integer)?;
+/// let b = parse("1.0", XsdDatatype::Decimal)?;
+/// // One value, two datatypes: value-space equality holds.
+/// assert!(value_eq(&a, &b));
+///
+/// let c = parse("2", XsdDatatype::Integer)?;
+/// assert!(!value_eq(&a, &c));
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
 #[must_use]
 pub fn value_eq(a: &XsdValue, b: &XsdValue) -> bool {
     value_cmp(a, b) == Some(Ordering::Equal)
@@ -86,6 +123,23 @@ pub fn value_eq(a: &XsdValue, b: &XsdValue) -> bool {
 ///
 /// `None` means **type error** (the value has no EBV — the evaluator raises), which
 /// is distinct from `Some(false)`. A consumer must never read `None` as `false`.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_xsd::{XsdDatatype, effective_boolean_value, parse};
+///
+/// let nonempty = parse("hi", XsdDatatype::String)?;
+/// assert_eq!(effective_boolean_value(&nonempty), Some(true));
+///
+/// let zero = parse("0", XsdDatatype::Integer)?;
+/// assert_eq!(effective_boolean_value(&zero), Some(false));
+///
+/// // Temporal values have NO effective boolean value: `None`, not `false`.
+/// let date = parse("2024-01-01", XsdDatatype::Date)?;
+/// assert_eq!(effective_boolean_value(&date), None);
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
 #[must_use]
 pub fn effective_boolean_value(v: &XsdValue) -> Option<bool> {
     Some(match v {

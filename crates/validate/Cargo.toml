@@ -9,8 +9,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/purrdf-validate"
 rust-version.workspace = true
+readme = "README.md"
 keywords = ["sarif", "shacl", "rdf", "diagnostics", "validation"]
+categories = ["encoding"]
 
 [package.metadata.docs.rs]
 all-features = true

@@ -152,6 +152,24 @@ pub enum XsdDatatype {
 impl XsdDatatype {
     /// Resolve a datatype IRI to its [`XsdDatatype`], or `None` when the IRI is not
     /// one of the XSD value-space datatypes this crate models.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::XsdDatatype;
+    ///
+    /// assert_eq!(
+    ///     XsdDatatype::from_iri("http://www.w3.org/2001/XMLSchema#integer"),
+    ///     Some(XsdDatatype::Integer)
+    /// );
+    /// // Round-trips with `iri()`.
+    /// assert_eq!(
+    ///     XsdDatatype::from_iri(XsdDatatype::DateTime.iri()),
+    ///     Some(XsdDatatype::DateTime)
+    /// );
+    /// // A non-XSD datatype IRI is simply not in the value space.
+    /// assert_eq!(XsdDatatype::from_iri("http://example.org/customType"), None);
+    /// ```
     #[must_use]
     pub fn from_iri(iri: &str) -> Option<Self> {
         Some(match iri {

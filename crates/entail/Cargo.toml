@@ -9,9 +9,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/purrdf-entail"
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "rdfs", "owl", "entailment", "reasoning"]
+categories = ["algorithms", "data-structures"]
 
 [package.metadata.docs.rs]
 all-features = true

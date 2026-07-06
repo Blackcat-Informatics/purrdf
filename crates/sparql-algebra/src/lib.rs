@@ -42,7 +42,36 @@
 //! delegation) is an *evaluation* concern that belongs in S6; this crate keeps
 //! its own enums so S6 can grow annotations/variants without a breaking re-clone.
 //! See the [`algebra`] module docs.
-
+//!
+//! # Examples
+//!
+//! Parse a query string into the algebra and inspect its root:
+//!
+//! ```
+//! use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
+//!
+//! let query = SparqlParser::new()
+//!     .parse_query(
+//!         "SELECT ?name WHERE { <http://example.org/alice> <http://example.org/name> ?name }",
+//!     )
+//!     .expect("a well-formed query parses");
+//!
+//! let Query::Select { pattern, .. } = query else {
+//!     panic!("a SELECT query parses to `Query::Select`");
+//! };
+//! let GraphPattern::Project { variables, inner } = pattern else {
+//!     panic!("the projection wraps the root pattern");
+//! };
+//! assert_eq!(variables.len(), 1);
+//! assert_eq!(variables[0].as_str(), "name");
+//! assert!(matches!(*inner, GraphPattern::Bgp { .. }));
+//! ```
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 #![forbid(unsafe_code)]
 
 pub mod algebra;

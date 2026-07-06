@@ -87,6 +87,25 @@ impl fmt::Debug for StructureError {
 impl std::error::Error for StructureError {}
 
 /// Check the spec §5.7 structural requirements, reporting every violation.
+///
+/// # Examples
+///
+/// A reference to an undeclared shape parses, but fails the structural check:
+///
+/// ```
+/// use purrdf_shex::{check_structure, parse_shexc};
+///
+/// let ok = parse_shexc(
+///     "<http://example.org/S> { <http://example.org/p> . }",
+///     None,
+/// )
+/// .expect("a well-formed schema parses");
+/// assert!(check_structure(&ok).is_ok());
+///
+/// let dangling = parse_shexc("<http://example.org/S> @<http://example.org/Missing>", None)
+///     .expect("syntactically fine");
+/// assert!(check_structure(&dangling).is_err());
+/// ```
 pub fn check_structure(schema: &Schema) -> Result<(), Vec<StructureError>> {
     let mut errors = Vec::new();
     let checker = Checker::new(schema, &mut errors);

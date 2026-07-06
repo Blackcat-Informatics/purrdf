@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 #![forbid(unsafe_code)]
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 
 //! Native, wasm-clean serializer for the SPARQL result model.
 //!
@@ -19,6 +25,39 @@
 //! lexicalization bridge, CONSTRUCT-graph N-Triples writer), the four per-format
 //! document writers (JSON/XML/CSV/TSV), and the [`serialize`] dispatcher that
 //! selects among them.
+//!
+//! # Examples
+//!
+//! Serialize a one-row `SELECT` result to SPARQL Results JSON and parse it
+//! back:
+//!
+//! ```
+//! use purrdf_core::{RdfDatasetBuilder, TermValue};
+//! use purrdf_sparql_results::{
+//!     ResultProvenance, SparqlResult, SparqlResultsFormat, from_json, serialize,
+//! };
+//!
+//! let result = SparqlResult::Solutions {
+//!     variables: vec!["s".to_string()],
+//!     rows: vec![vec![Some(TermValue::Iri("http://example.org/alice".to_string()))]],
+//!     aux: RdfDatasetBuilder::new().freeze().expect("empty aux dataset"),
+//! };
+//!
+//! let outcome = serialize(
+//!     &result,
+//!     SparqlResultsFormat::Json,
+//!     &ResultProvenance::default(),
+//! )
+//! .expect("SELECT serializes to JSON");
+//! assert!(!outcome.provenance_dropped);
+//!
+//! let parsed = from_json(&outcome.bytes).expect("emitted SRJ parses back");
+//! assert_eq!(parsed.variables, ["s"]);
+//! assert_eq!(
+//!     parsed.rows,
+//!     [vec![Some(TermValue::Iri("http://example.org/alice".to_string()))]],
+//! );
+//! ```
 
 mod csv;
 mod error;
@@ -74,6 +113,29 @@ pub struct SerializeOutcome {
 ///
 /// This is the single public entry point: it dispatches to the per-format
 /// writer ([`to_json`], [`to_xml`], [`to_csv`], [`to_tsv`]).
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_core::{RdfDatasetBuilder, TermValue};
+/// use purrdf_sparql_results::{
+///     ResultProvenance, SparqlResult, SparqlResultsFormat, serialize,
+/// };
+///
+/// let result = SparqlResult::Solutions {
+///     variables: vec!["s".to_string()],
+///     rows: vec![vec![Some(TermValue::Iri("http://example.org/s".to_string()))]],
+///     aux: RdfDatasetBuilder::new().freeze().expect("empty aux dataset"),
+/// };
+///
+/// let tsv = serialize(
+///     &result,
+///     SparqlResultsFormat::Tsv,
+///     &ResultProvenance::default(),
+/// )
+/// .expect("SELECT serializes to TSV");
+/// assert_eq!(tsv.bytes, b"?s\n<http://example.org/s>\n");
+/// ```
 ///
 /// # Errors
 ///

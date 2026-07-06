@@ -28,7 +28,12 @@
 //!
 //! [`RdfDiagnostic`]: purrdf_core::RdfDiagnostic
 //! [`ValidationReport`]: purrdf_shapes::report::ValidationReport
-
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 #![forbid(unsafe_code)]
 
 pub mod build;

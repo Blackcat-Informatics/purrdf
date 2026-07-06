@@ -70,6 +70,17 @@ pub enum XsdValue {
 
 impl XsdValue {
     /// The XSD datatype this value belongs to.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::{XsdDatatype, parse};
+    ///
+    /// // Derived integer values keep their exact datatype.
+    /// let v = parse("5", XsdDatatype::Byte)?;
+    /// assert_eq!(v.datatype(), XsdDatatype::Byte);
+    /// # Ok::<(), purrdf_xsd::XsdError>(())
+    /// ```
     #[must_use]
     pub fn datatype(&self) -> XsdDatatype {
         match self {
@@ -89,6 +100,16 @@ impl XsdValue {
     }
 
     /// The canonical lexical form of this value (XSD canonical mapping).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::{XsdDatatype, parse};
+    ///
+    /// assert_eq!(parse("+007", XsdDatatype::Integer)?.canonical_lexical(), "7");
+    /// assert_eq!(parse("1", XsdDatatype::Boolean)?.canonical_lexical(), "true");
+    /// # Ok::<(), purrdf_xsd::XsdError>(())
+    /// ```
     #[must_use]
     pub fn canonical_lexical(&self) -> String {
         match self {
@@ -121,6 +142,24 @@ impl XsdValue {
 /// Hard-fails on malformed input. This is the interning entry point: a consumer
 /// parses once and caches the result keyed by the IR's `TermId` (the cache lives in
 /// the consumer; this crate stays decoupled from `purrdf-core`).
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_xsd::{XsdDatatype, XsdValue, parse};
+///
+/// // Distinct lexical forms may denote ONE value (term identity is the IR's job).
+/// let v = parse("042", XsdDatatype::Integer)?;
+/// assert!(matches!(v, XsdValue::Integer { value: 42, .. }));
+///
+/// let b = parse("1", XsdDatatype::Boolean)?;
+/// assert!(matches!(b, XsdValue::Boolean(true)));
+///
+/// // Malformed lexicals hard-fail; derived integers are range-checked.
+/// assert!(parse("4.2", XsdDatatype::Integer).is_err());
+/// assert!(parse("300", XsdDatatype::Byte).is_err());
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
 pub fn parse(lexical: &str, datatype: XsdDatatype) -> Result<XsdValue, XsdError> {
     use XsdDatatype as D;
     match datatype {
@@ -164,6 +203,19 @@ pub fn parse(lexical: &str, datatype: XsdDatatype) -> Result<XsdValue, XsdError>
 
 /// As [`parse`], but applies the XSD-1.0 lexical restriction for `Float`/`Double`
 /// (rejects `+INF`). All other datatypes behave exactly as [`parse`].
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_xsd::{XsdDatatype, parse, parse_xsd10};
+///
+/// // XSD 1.1 (the default) accepts the `+INF` spelling; XSD 1.0 rejects it.
+/// assert!(parse("+INF", XsdDatatype::Double).is_ok());
+/// assert!(parse_xsd10("+INF", XsdDatatype::Double).is_err());
+///
+/// // The unsigned spelling is valid in both versions.
+/// assert!(parse_xsd10("INF", XsdDatatype::Double).is_ok());
+/// ```
 pub fn parse_xsd10(s: &str, dt: XsdDatatype) -> Result<XsdValue, XsdError> {
     match dt {
         XsdDatatype::Float => crate::numeric::parse_float_xsd10(s).map(XsdValue::Float),
@@ -178,6 +230,24 @@ pub fn parse_xsd10(s: &str, dt: XsdDatatype) -> Result<XsdValue, XsdError> {
 /// the caller then treats the literal as a plain (opaque) term. `Err` means the IRI
 /// *is* an XSD value-space datatype but the lexical form is invalid. This cleanly
 /// separates "unknown datatype" from "malformed lexical".
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_xsd::{XsdValue, parse_by_iri};
+///
+/// // A known XSD datatype IRI parses into the value space.
+/// let v = parse_by_iri("true", "http://www.w3.org/2001/XMLSchema#boolean")?;
+/// assert!(matches!(v, Some(XsdValue::Boolean(true))));
+///
+/// // An unknown datatype IRI is `Ok(None)` — an opaque literal, not an error.
+/// let opaque = parse_by_iri("anything", "http://example.org/customType")?;
+/// assert!(opaque.is_none());
+///
+/// // A known datatype with a malformed lexical IS an error.
+/// assert!(parse_by_iri("maybe", "http://www.w3.org/2001/XMLSchema#boolean").is_err());
+/// # Ok::<(), purrdf_xsd::XsdError>(())
+/// ```
 pub fn parse_by_iri(lexical: &str, datatype_iri: &str) -> Result<Option<XsdValue>, XsdError> {
     match XsdDatatype::from_iri(datatype_iri) {
         Some(dt) => parse(lexical, dt).map(Some),

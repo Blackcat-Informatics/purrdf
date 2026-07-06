@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+name: Feature request
+description: Propose new functionality for PurRDF.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two hard constraints to know up front: PurRDF has **no Cargo feature
+        flags** (a data carrier must not have optional behavior — every
+        consumer gets identical semantics), and it **mints no vocabulary
+        IRIs** (vocabularies are caller-supplied configuration, never
+        fabricated defaults). Proposals that add optional behavior or default
+        vocab IRIs will be reshaped to fit, not rejected — but expect the
+        reshaping.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that PurRDF makes hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How you would like it to work — API sketch, spec reference, or prior art in other RDF libraries all help.
+    validations:
+      required: true
+  - type: checkboxes
+    id: surfaces
+    attributes:
+      label: Language surface(s)
+      description: Where do you need this exposed?
+      options:
+        - label: Rust crate
+        - label: Python
+        - label: JavaScript/wasm
+        - label: C ABI

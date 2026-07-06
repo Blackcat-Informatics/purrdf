@@ -9,9 +9,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/purrdf-core"
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "rdf-12", "ir", "diagnostics", "linked-data"]
+categories = ["parser-implementations", "encoding", "data-structures"]
 
 [package.metadata.docs.rs]
 all-features = true

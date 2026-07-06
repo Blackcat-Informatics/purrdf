@@ -28,7 +28,53 @@
 //! default (repo `no-optionality` doctrine). The one `Option`-returning surface is
 //! CURIE expansion, where `None` is a *semantic* "not a CURIE / undeclared prefix"
 //! signal, faithful to the SSSOM behavior this crate subsumes.
-
+//!
+//! # Examples
+//!
+//! Parse an absolute IRI, resolve a relative reference against it, and normalize
+//! a messy spelling — the three core entry points:
+//!
+//! ```rust
+//! use purrdf_iri::parse;
+//!
+//! // Parse + validate, with zero-copy component access.
+//! let base = parse("http://example.org/a/b/c")?;
+//! assert_eq!(base.scheme(), Some("http"));
+//! assert_eq!(base.path(), "/a/b/c");
+//!
+//! // RFC-3986 §5 strict reference resolution.
+//! let joined = base.resolve("../d?x=1")?;
+//! assert_eq!(joined.as_str(), "http://example.org/a/d?x=1");
+//!
+//! // RFC-3986 §6.2.2 syntax normalization: case, percent-encoding, dot segments.
+//! let messy = parse("HTTP://EXAMPLE.org/a/./b/../c/%7Ename")?;
+//! assert_eq!(messy.normalize().as_str(), "http://example.org/a/c/~name");
+//! # Ok::<(), purrdf_iri::IriError>(())
+//! ```
+//!
+//! Expand and contract CURIEs over a caller-supplied [`PrefixMap`]:
+//!
+//! ```rust
+//! use purrdf_iri::{PrefixMap, contract, expand_curie};
+//!
+//! let mut prefixes = PrefixMap::new();
+//! prefixes.insert("ex", "http://example.org/ns#");
+//!
+//! assert_eq!(
+//!     expand_curie("ex:Thing", &prefixes),
+//!     Some("http://example.org/ns#Thing".to_owned())
+//! );
+//! assert_eq!(
+//!     contract("http://example.org/ns#Thing", &prefixes),
+//!     Some("ex:Thing".to_owned())
+//! );
+//! ```
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 #![forbid(unsafe_code)]
 
 mod curie;
