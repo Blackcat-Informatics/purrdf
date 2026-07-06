@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
+.PHONY: help metadata fmt check book check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -86,6 +86,9 @@ test: ## Run the workspace test suite.
 
 doc: ## Build docs for the 16 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance
+
+book: ## Build The PurRDF Book (mdBook user guide) into docs/book/book/.
+	mdbook build docs/book
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
 	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes

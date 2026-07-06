@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
+// which would otherwise trip the workspace `missing_docs` lint.
+#![allow(missing_docs)]
+
 //! LATERAL variable-endpoint SERVICE benchmark.
 //!
 //! `SERVICE ?g` (a variable endpoint) is evaluated as a LATERAL join: the left

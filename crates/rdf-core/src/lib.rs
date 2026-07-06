@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! `purrdf-core` -- oxigraph-free, PyO3-free RDF 1.2 kernel for the PurRDF Rust workspace.
@@ -23,6 +23,12 @@
 //! `alloc::sync::Arc`) so the eventual `#![no_std]` flip stays mechanical. Per the
 //! purrdf plan, `no_std` is for embedded/C-ABI targets and is **not** a WASM
 //! prerequisite. Common types are re-exported from [`prelude`].
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 
 pub mod bundle;
 // Narrow purrdf backend traits (P2d): term interning, parser ingress,
@@ -39,6 +45,8 @@ pub mod content_store;
 // `DatasetView` + `GraphMatch`. PyO3-free, oxigraph-free — pure kernel.
 pub mod dataset_view;
 pub mod describe;
+/// Structured diagnostics: severity, source/GTS locations, conversion losses,
+/// and the [`RdfDiagnostic`] record callers translate to their reporting layer.
 pub mod diagnostic;
 // Native FnO (W3C Function Ontology) typed catalog model + serializer.
 // PyO3-free; the `purrdf-slice` FnO emitter builds a `FnoCatalog` from the slice
@@ -53,10 +61,15 @@ pub mod ir;
 // Generic provenance sidecar for the immutable RDF 1.2 dataset (S2):
 // UnitId/ArtifactId/OriginSetId newtypes, interners, AssertionOccurrence,
 // DatasetProvenance, and the provenance gate. No PurRDF-specific concepts here.
+/// Structured non-triple material ([`RdfLookaside`]) that travels with an RDF
+/// store: typed sidecar resources, metadata entries, segment/blob records,
+/// suppressions, opaque nodes, and signature records.
 pub mod lookaside;
 pub mod provenance;
 // The machine-readable RDF↔GTS loss ledger and its drift-gated matrix (C0).
 pub mod loss;
+/// The owned RDF 1.2 value model: terms, literals (including base-direction
+/// literals), triples, quads, reifiers, and statement annotations.
 pub mod model;
 // Native SSSOM (Simple Standard for Sharing Ontology Mappings) TSV codec +
 // validator + RDF serializer. PyO3-free; replaces the `sssom` PyPI
@@ -64,6 +77,7 @@ pub mod model;
 // Shared small-vector primitives (SmallVec / IdVec) for hot, short-lived id rows.
 pub mod small;
 pub mod sssom;
+/// Dataset/import capability flags ([`RdfStoreCapabilities`]).
 pub mod store;
 pub mod turtle;
 // The canonical, review-friendly Turtle RENDERER over the IR — the oxigraph-free half

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Query shape maps (the ShapeMap spec, <https://shex.io/shape-map/>).
@@ -69,6 +69,22 @@ pub struct ShapeAssociation {
 pub struct ShapeMap(pub Vec<ShapeAssociation>);
 
 /// Parse the compact shape-map syntax, resolving relative IRIs against `base`.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_shex::{NodeSelector, parse_shape_map};
+///
+/// let map = parse_shape_map(
+///     "<http://example.org/alice>@<http://example.org/UserShape>, \
+///      {FOCUS <http://example.org/name> _}@START",
+///     None,
+/// )
+/// .expect("a well-formed shape map parses");
+/// assert_eq!(map.0.len(), 2);
+/// assert!(matches!(map.0[0].node, NodeSelector::Node(_)));
+/// assert!(matches!(map.0[1].node, NodeSelector::SubjectOf { .. }));
+/// ```
 ///
 /// # Errors
 ///

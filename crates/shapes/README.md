@@ -5,7 +5,7 @@
 </p>
 
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
-<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 
 # `purrdf-shapes` — Rust SHACL Core Validator
 
@@ -16,11 +16,11 @@
 
 > **An LLM output is a claim, not a truth.**
 
-`purrdf-shapes` is an oxigraph-backed SHACL Core validator for the PurRDF
-ontology toolchain. It validates an RDF 1.2 data graph against a SHACL shapes
-graph with no inference (parity with pySHACL `inference="none"`), using the
-non-SPARQL constraint/target surface. SPARQL-based constraints and targets
-are planned for a future release.
+`purrdf-shapes` is the native SHACL validator of the PurRDF toolkit — the
+complete SHACL Core feature set plus SHACL-SPARQL constraints and targets,
+running entirely on PurRDF's own interned IR and native SPARQL engine (no
+oxigraph, no PyO3). It validates an RDF 1.2 data graph against a SHACL shapes
+graph with no inference (parity with pySHACL `inference="none"`).
 
 In four-box terms, the data graph is usually the ABox, the shapes graph is a
 TBox/RBox validation surface, and RDF 1.2 reifier metadata is the CBox. The
@@ -35,7 +35,7 @@ full SHACL 1.2 conformance.
 The Python SHACL surface is exposed from `bindings/python` as part of the
 `purrdf_native` extension. The engine core (`engine.rs`, `shapes.rs`,
 `constraints.rs`, `path.rs`, `report.rs`, `model.rs`) is deliberately
-**PyO3-free** — it links as a plain `rlib` into the future Rust compiler without
+**PyO3-free** — it links as a plain `rlib` into any Rust consumer without
 any Python dependency.
 
 This crate is gated by a SHACL conformance corpus.
@@ -85,14 +85,19 @@ Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`,
 ## Project and community
 
 `purrdf-shapes` is developed by [Blackcat Informatics® Inc.](https://blackcatinformatics.ca)
-as part of the [PurRDF ontology and tooling](https://github.com/Blackcat-Informatics/purrdf)
-suite.
+as one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)
+RDF 1.2 toolkit. Most applications should depend on the umbrella
+[`purrdf`](https://crates.io/crates/purrdf) crate, which re-exports this crate
+as `purrdf::shapes`.
 
-Related packages:
+Related crates:
 
-- `purrdf-logic` — world-indexed reasoning engine (Rust)
-- `purrdf-gts` — Graph Transport Substrate format engine (Rust)
-- Python oracle: `src/purrdf_tools/` (PyPI: `purrdf`)
+- [`purrdf-sparql-eval`](https://crates.io/crates/purrdf-sparql-eval) — the native
+  SPARQL engine that powers SHACL-SPARQL constraints and targets
+- [`purrdf-validate`](https://crates.io/crates/purrdf-validate) — renders
+  validation reports as byte-deterministic SARIF 2.1.0
+- [`purrdf-gts`](https://crates.io/crates/purrdf-gts) — the GTS graph-transport
+  container engine
 
 ---
 
@@ -100,8 +105,9 @@ Related packages:
 
 Copyright © 2026 Blackcat Informatics® Inc.
 
-This crate is licensed under the **MIT OR Apache-2.0**
-(MIT OR Apache-2.0) — see the
-[`LICENSE`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE)
-file in the repository root. Separate proprietary/commercial terms are available;
+This crate is licensed under **MIT OR Apache-2.0** — see
+[`LICENSE-MIT`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+and
+[`LICENSE-APACHE`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
+in the repository root. Separate proprietary/commercial terms are available;
 contact `licensing@blackcatinformatics.ca`.

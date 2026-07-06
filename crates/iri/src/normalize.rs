@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! RFC-3986 §6.2.2 syntax-based normalization.
@@ -21,6 +21,19 @@ use crate::resolve::remove_dot_segments;
 impl Iri {
     /// Produce a syntax-normalized copy (RFC-3986 §6.2.2). The result is itself
     /// parsed/validated; normalization never yields an invalid IRI.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// // Case (§6.2.2.1), percent-encoding (§6.2.2.2), dot segments (§6.2.2.3).
+    /// let iri = purrdf_iri::parse("HTTP://EXAMPLE.org/a/./b/../c/%7Ename")?;
+    /// let norm = iri.normalize();
+    /// assert_eq!(norm.as_str(), "http://example.org/a/c/~name");
+    ///
+    /// // Normalization is idempotent.
+    /// assert_eq!(norm.normalize(), norm);
+    /// # Ok::<(), purrdf_iri::IriError>(())
+    /// ```
     #[must_use]
     pub fn normalize(&self) -> Self {
         let mut out = String::with_capacity(self.as_str().len());

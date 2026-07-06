@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! `purrdf` -- PyO3-free RDF 1.2 kernel for the PurRDF Rust workspace.
@@ -18,9 +18,15 @@
 //! the crate's own internal `crate::…` paths keep resolving unchanged. What remains
 //! *here* is the native text/statement/normalize surface ([`native_codecs`],
 //! [`native_quads`], [`statements`], [`turtle_normalize`]), the [`gts_compose`]
-//! author, the `flattened_dataset_from_bytes` GTS helper in [`gts`], and the
-//! the Python bindings now live in `bindings/python`.  removed the last
-//! oxigraph adapters, so the entire crate is now oxigraph-free.
+//! author, and the `flattened_dataset_from_bytes` GTS helper in [`gts`]. The
+//! Python bindings live in `bindings/python`, and the last oxigraph adapters
+//! have been removed, so the entire crate is oxigraph-free.
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 
 // ---------------------------------------------------------------------------
 // Re-exported kernel modules (live in `purrdf-core`). The re-export keeps the

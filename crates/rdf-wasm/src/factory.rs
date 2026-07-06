@@ -38,6 +38,7 @@ impl Default for DataFactory {
 
 #[wasm_bindgen]
 impl DataFactory {
+    /// `new DataFactory()` — a fresh factory with its blank-node counter at zero.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self::default()

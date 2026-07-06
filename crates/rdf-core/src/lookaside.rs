@@ -8,16 +8,24 @@ use crate::RdfLocation;
 /// Structured non-triple material that travels with an RDF store.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RdfLookaside {
+    /// Typed sidecar resources (SHACL, ShEx, docs, logic, schemas, queries, …).
     pub resources: Vec<RdfLookasideResource>,
+    /// Scoped key/value metadata entries.
     pub metadata: Vec<RdfMetadataEntry>,
+    /// Per-segment records from the source GTS file, in segment order.
     pub segments: Vec<RdfSegmentRecord>,
+    /// Content-addressed blob references (never the payload bytes).
     pub blobs: Vec<RdfBlobRecord>,
+    /// `suppress` directives (GTS §11) carried through verbatim.
     pub suppressions: Vec<RdfSuppressionRecord>,
+    /// Frames preserved as opaque nodes rather than decoded content.
     pub opaque_nodes: Vec<RdfOpaqueNodeRecord>,
+    /// Frame signature records (COSE verification outcomes).
     pub signatures: Vec<RdfSignatureRecord>,
 }
 
 impl RdfLookaside {
+    /// Whether every lookaside table is empty.
     pub fn is_empty(&self) -> bool {
         self.resources.is_empty()
             && self.metadata.is_empty()
@@ -28,6 +36,7 @@ impl RdfLookaside {
             && self.signatures.is_empty()
     }
 
+    /// The sidecar resources of exactly the given kind, in stored order.
     pub fn resources_of_kind(
         &self,
         kind: RdfLookasideKind,
@@ -79,7 +88,9 @@ impl RdfLookaside {
 /// A decoded [`RdfSuppressionRecord`] target: `{"kind": ..., "id": n}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SuppressionTarget {
+    /// What kind of id the target addresses.
     pub kind: SuppressionTargetKind,
+    /// The suppressed term/quad/reifier integer id.
     pub id: usize,
 }
 
@@ -88,8 +99,11 @@ pub struct SuppressionTarget {
 /// / content digest rather than an integer id, so they have no variant here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SuppressionTargetKind {
+    /// The target is a term, by GTS term id.
     Term,
+    /// The target is a quad, by GTS quad index.
     Quad,
+    /// The target is a reifier, by GTS reifier id.
     Reifier,
 }
 
@@ -97,9 +111,13 @@ pub enum SuppressionTargetKind {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[non_exhaustive]
 pub enum RdfLookasideKind {
+    /// SHACL shapes.
     Shacl,
+    /// ShEx schemas.
     Shex,
+    /// Documentation (e.g. ontology docs).
     Docs,
+    /// Logic rules.
     Logic,
     /// Materialized reasoning output (inferred closures, entailments, reasoner
     /// reports) that travels with the dataset as a typed sidecar — the lookaside
@@ -108,18 +126,28 @@ pub enum RdfLookasideKind {
     /// The Horn/relational-core projection of the logic layer (the
     /// NNF→Skolem→Horn floor) carried as a typed sidecar alongside its source graph.
     RelationalCore,
+    /// Data schemas (e.g. JSON Schema).
     Schema,
+    /// Queries (e.g. SPARQL).
     Query,
+    /// Mappings (e.g. SSSOM mapping sets).
     Mapping,
+    /// Projections.
     Projection,
+    /// Ontologies (e.g. OWL).
     Ontology,
+    /// General metadata (the default kind).
     #[default]
     Metadata,
+    /// Binary blob companions.
     Blob,
+    /// Any domain outside the known set, preserved verbatim.
     Other(String),
 }
 
 impl RdfLookasideKind {
+    /// The canonical lowercase kind token (e.g. `"shacl"`, `"relational-core"`);
+    /// [`Other`](Self::Other) yields its value verbatim.
     pub fn as_str(&self) -> &str {
         match self {
             Self::Shacl => "shacl",
@@ -139,6 +167,10 @@ impl RdfLookasideKind {
         }
     }
 
+    /// Resolves a case-insensitive kind hint (canonical token or a known
+    /// synonym, e.g. `"shapes"` → [`Shacl`](Self::Shacl), `"horn"` →
+    /// [`RelationalCore`](Self::RelationalCore)); unknown hints fall through to
+    /// [`Other`](Self::Other) with the original value preserved.
     pub fn from_hint(value: &str) -> Self {
         let lower = value.to_ascii_lowercase();
         match lower.as_str() {
@@ -165,18 +197,29 @@ impl RdfLookasideKind {
 /// A typed sidecar resource such as SHACL, ShEx, docs, logic, schemas, or queries.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RdfLookasideResource {
+    /// The resource's companion/index domain.
     pub kind: RdfLookasideKind,
+    /// The resource's IRI, when it has one.
     pub iri: Option<String>,
+    /// A human-readable resource name.
     pub name: Option<String>,
+    /// The named graph the resource is associated with, when any.
     pub graph_name: Option<String>,
+    /// The resource content's media type.
     pub media_type: Option<String>,
+    /// The content digest (hex) of the resource payload, when known.
     pub content_digest: Option<String>,
+    /// A filesystem or archive path the resource content lives at.
     pub path: Option<String>,
+    /// Where the resource declaration came from, when known.
     pub location: Option<RdfLocation>,
+    /// Free-form structured metadata attached to the resource.
     pub metadata: BTreeMap<String, RdfMetadataValue>,
 }
 
 impl RdfLookasideResource {
+    /// An empty resource of the given kind; fill it in with the `with_*`
+    /// builder methods.
     pub fn new(kind: RdfLookasideKind) -> Self {
         Self {
             kind,
@@ -184,42 +227,49 @@ impl RdfLookasideResource {
         }
     }
 
+    /// Sets the human-readable resource name.
     #[must_use]
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
     }
 
+    /// Sets the resource IRI.
     #[must_use]
     pub fn with_iri(mut self, iri: impl Into<String>) -> Self {
         self.iri = Some(iri.into());
         self
     }
 
+    /// Sets the associated named graph.
     #[must_use]
     pub fn with_graph_name(mut self, graph_name: impl Into<String>) -> Self {
         self.graph_name = Some(graph_name.into());
         self
     }
 
+    /// Sets the content media type.
     #[must_use]
     pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
         self.media_type = Some(media_type.into());
         self
     }
 
+    /// Sets the content digest.
     #[must_use]
     pub fn with_digest(mut self, digest: impl Into<String>) -> Self {
         self.content_digest = Some(digest.into());
         self
     }
 
+    /// Sets the content path.
     #[must_use]
     pub fn with_path(mut self, path: impl Into<String>) -> Self {
         self.path = Some(path.into());
         self
     }
 
+    /// Sets the source location of the resource declaration.
     #[must_use]
     pub fn with_location(mut self, location: RdfLocation) -> Self {
         self.location = Some(location);
@@ -227,15 +277,21 @@ impl RdfLookasideResource {
     }
 }
 
+/// A scoped key/value metadata entry carried alongside the triples.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RdfMetadataEntry {
+    /// The namespace the entry belongs to (e.g. `gts:segment:0`).
     pub scope: String,
+    /// The metadata key within its scope.
     pub key: String,
+    /// The structured metadata value.
     pub value: RdfMetadataValue,
+    /// Where the entry came from, when known.
     pub location: Option<RdfLocation>,
 }
 
 impl RdfMetadataEntry {
+    /// A metadata entry from its scope, key, and value, with no location.
     pub fn new(scope: impl Into<String>, key: impl Into<String>, value: RdfMetadataValue) -> Self {
         Self {
             scope: scope.into(),
@@ -246,21 +302,40 @@ impl RdfMetadataEntry {
     }
 }
 
+/// A structured metadata value mirroring the CBOR data model, so GTS metadata
+/// round-trips without loss.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RdfMetadataValue {
+    /// The null value.
     Null,
+    /// A boolean.
     Bool(bool),
+    /// An integer (wide enough for the full CBOR 64-bit signed/unsigned range).
     Integer(i128),
+    /// A floating-point number.
     Float(f64),
+    /// A text string.
     Text(String),
+    /// A byte string.
     Bytes(Vec<u8>),
+    /// An ordered array of values.
     Array(Vec<Self>),
+    /// A string-keyed map of values.
     Map(BTreeMap<String, Self>),
-    Tagged { tag: u64, value: Box<Self> },
+    /// A CBOR-tagged value.
+    Tagged {
+        /// The CBOR tag number.
+        tag: u64,
+        /// The tagged inner value.
+        value: Box<Self>,
+    },
+    /// A value outside the decodable set, preserved as its display form.
     Opaque(String),
 }
 
 impl RdfMetadataValue {
+    /// The borrowed string when this is a [`Text`](Self::Text) value, else
+    /// `None`.
     pub fn as_text(&self) -> Option<&str> {
         match self {
             Self::Text(value) => Some(value),
@@ -269,13 +344,20 @@ impl RdfMetadataValue {
     }
 }
 
+/// Per-segment facts recorded from the source GTS file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RdfSegmentRecord {
+    /// The zero-based segment index within the source file.
     pub index: usize,
+    /// The segment-head id (hex), when the segment declared one.
     pub head: Option<String>,
+    /// The segment's declared profile, when any.
     pub profile: Option<String>,
+    /// Whether the segment claimed a streamable layout.
     pub claimed_streamable: bool,
+    /// How many frames the streamable layout claim covers.
     pub covered: usize,
+    /// The streamable layout's tail length.
     pub tail: usize,
 }
 
@@ -301,37 +383,60 @@ pub struct RdfBlobOrigin {
 /// from [`origin`](Self::origin) when a destination is materialized.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RdfBlobRecord {
+    /// The blob's content digest (the blob_id), identifying the payload.
     pub digest: String,
+    /// The payload's declared media type.
     pub media_type: Option<String>,
+    /// The payload's declared representation/encoding.
     pub representation: Option<String>,
+    /// The declared decoded payload length in bytes, when known.
     pub decoded_len: Option<usize>,
+    /// Declared blob metadata, preserved as structured values.
     pub metadata: BTreeMap<String, RdfMetadataValue>,
     /// Content-addressed origin for streaming the payload on demand. `None` when
     /// the source file identity is unknown (e.g. a hand-built store).
     pub origin: Option<RdfBlobOrigin>,
 }
 
+/// A `suppress` directive (GTS §11) carried through verbatim; decode its
+/// targets with [`RdfLookaside::suppression_targets`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct RdfSuppressionRecord {
+    /// The declared suppression reason, when any.
     pub reason: Option<String>,
+    /// A display label for the suppressing actor (C0.8 display hint, never a
+    /// resolvable id).
     pub by: Option<String>,
+    /// The raw `{"kind": ..., "id": ...}` target maps, preserved undecoded.
     pub targets: Vec<RdfMetadataValue>,
 }
 
+/// A frame preserved as an opaque node: its content was not decoded, only its
+/// identity and public envelope survive.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RdfOpaqueNodeRecord {
+    /// The opaque node's id (hex).
     pub id: String,
+    /// The originating frame's type.
     pub frame_type: String,
+    /// Why the frame was kept opaque.
     pub reason: String,
+    /// The frame's signature status.
     pub signature_status: String,
+    /// The frame's public (unencrypted) metadata, when any.
     pub public_metadata: Option<RdfMetadataValue>,
 }
 
+/// A frame signature record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RdfSignatureRecord {
+    /// The signed frame's id (hex).
     pub frame_id: String,
+    /// The signing key id, when declared.
     pub key_id: Option<String>,
+    /// The signature's verification status.
     pub status: String,
+    /// Whether the record carries a COSE signature envelope.
     pub has_cose: bool,
 }
 

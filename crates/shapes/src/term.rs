@@ -167,12 +167,16 @@ impl Literal {
 /// A native RDF 1.2 quoted triple (statement-layer term).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Triple {
+    /// The subject term.
     pub subject: Term,
+    /// The predicate IRI.
     pub predicate: NamedNode,
+    /// The object term.
     pub object: Term,
 }
 
 impl Triple {
+    /// Construct a quoted triple from its three components.
     #[inline]
     pub fn new(subject: Term, predicate: NamedNode, object: Term) -> Self {
         Self {

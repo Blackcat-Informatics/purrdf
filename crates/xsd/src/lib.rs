@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! `purrdf-xsd` — the native XSD **value space** for the RDF 1.2 query stack.
@@ -78,7 +78,43 @@
 //! Malformed lexical input is a hard error ([`XsdError`]), never a silent default.
 //! Out-of-range integer/decimal lexicals fail rather than saturate (this crate is
 //! `i128`-bounded — already exceeding `oxsdatatypes`' `i64`).
-
+//!
+//! # Examples
+//!
+//! Parse lexical forms into the value space and compare across the numeric tower:
+//!
+//! ```rust
+//! use std::cmp::Ordering;
+//!
+//! use purrdf_xsd::{XsdDatatype, parse, value_cmp, value_eq};
+//!
+//! // Parse maps a lexical form to the value it denotes.
+//! let int = parse("42", XsdDatatype::Integer)?;
+//! assert_eq!(int.canonical_lexical(), "42");
+//!
+//! // SPARQL numeric promotion: `"42"^^xsd:integer = "42.0"^^xsd:decimal`.
+//! let dec = parse("42.0", XsdDatatype::Decimal)?;
+//! assert!(value_eq(&int, &dec));
+//!
+//! // Ordering works across numeric types too.
+//! let dbl = parse("2.5e1", XsdDatatype::Double)?;
+//! assert_eq!(value_cmp(&dbl, &int), Some(Ordering::Less));
+//!
+//! // Different value-space families are INCOMPARABLE (`None`), not "not equal".
+//! let s = parse("42", XsdDatatype::String)?;
+//! assert_eq!(value_cmp(&int, &s), None);
+//!
+//! // Malformed or out-of-range lexicals hard-fail — never a silent default.
+//! assert!(parse("4.2", XsdDatatype::Integer).is_err());
+//! assert!(parse("300", XsdDatatype::Byte).is_err());
+//! # Ok::<(), purrdf_xsd::XsdError>(())
+//! ```
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 #![forbid(unsafe_code)]
 
 pub mod binary;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! `purrdf-validate` — the **SARIF 2.1.0 reporting boundary** for PurRDF.
@@ -28,7 +28,12 @@
 //!
 //! [`RdfDiagnostic`]: purrdf_core::RdfDiagnostic
 //! [`ValidationReport`]: purrdf_shapes::report::ValidationReport
-
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 #![forbid(unsafe_code)]
 
 pub mod build;

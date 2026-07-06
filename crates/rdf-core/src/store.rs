@@ -7,16 +7,24 @@
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RdfStoreCapabilities {
+    /// Whether quads outside the default graph (named graphs) are representable.
     pub named_graphs: bool,
+    /// Whether RDF 1.2 triple terms (quoted triples) are representable.
     pub quoted_triples: bool,
+    /// Whether RDF 1.2 reifier bindings are representable.
     pub reifiers: bool,
+    /// Whether RDF 1.2 statement annotations are representable.
     pub annotations: bool,
+    /// Whether source/location context (`RdfLocation`) is preserved.
     pub source_locations: bool,
+    /// Whether conversion loss records (`RdfLoss`) are preserved.
     pub loss_records: bool,
+    /// Whether structured non-triple lookaside material is preserved.
     pub lookaside: bool,
 }
 
 impl RdfStoreCapabilities {
+    /// The plain-RDF baseline: every capability flag off.
     pub const fn plain_rdf() -> Self {
         Self {
             named_graphs: false,

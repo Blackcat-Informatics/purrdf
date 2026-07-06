@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! # purrdf — a wasm32, in-memory RDF 1.2 engine with an idiomatic RDF/JS API
@@ -41,6 +41,12 @@
 //! `purrdf-events` protocol (the `Stream`/`Sink`). Mapping logic lives in plain
 //! Rust so it unit-tests on the native workspace gate; the wasm-bindgen wrappers are
 //! exercised as real wasm under `wasm-pack test --node`.
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 
 use wasm_bindgen::prelude::*;
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The recursive-descent ShExC parser (ShEx 2.1 spec §6 grammar).
@@ -45,6 +45,24 @@ const MAX_DEPTH: usize = 96;
 
 /// Parse a ShExC document. `base` seeds relative-IRI resolution (a `BASE`
 /// directive inside the document overrides it from that point on).
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_shex::parse_shexc;
+///
+/// let schema = parse_shexc(
+///     "PREFIX ex: <http://example.org/>\n\
+///      ex:UserShape { ex:name LITERAL }",
+///     None,
+/// )
+/// .expect("a well-formed schema parses");
+/// assert_eq!(schema.shapes.len(), 1);
+/// assert_eq!(schema.shapes[0].id, "http://example.org/UserShape");
+///
+/// // Malformed input is a typed error, never a partial schema.
+/// assert!(parse_shexc("ex:Broken {", None).is_err());
+/// ```
 pub fn parse_shexc(input: &str, base: Option<&str>) -> Result<Schema> {
     let tokens = tokenize(input)?;
     let mut parser = Parser {

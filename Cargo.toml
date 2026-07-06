@@ -115,6 +115,7 @@ visual-hashing = "0.1.3"
 wasm-bindgen = "=0.2.125"
 
 [workspace.lints.rust]
+missing_docs = "warn"
 unsafe_op_in_unsafe_fn = "warn"
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"

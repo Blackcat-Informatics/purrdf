@@ -9,9 +9,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/purrdf-shapes"
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "shacl", "validation", "knowledge-graph", "rdf-12"]
+categories = ["parser-implementations"]
 
 [package.metadata.docs.rs]
 all-features = true

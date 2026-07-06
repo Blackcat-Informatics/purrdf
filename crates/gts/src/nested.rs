@@ -11,17 +11,22 @@ use crate::model::{Diagnostic, Graph};
 use crate::reader::read;
 use crate::wire::map_get;
 
+/// Media type identifying a blob as a nested GTS file (§16).
 pub const GTS_MEDIA_TYPE: &str = "application/vnd.blackcat.gts+cbor-seq";
 
 /// A root fold plus nested folds addressed by containing blob digest.
 #[derive(Debug)]
 pub struct NestedReadResult {
+    /// The folded root graph.
     pub graph: Graph,
+    /// Nested folds, keyed by the digest of the blob that contained them.
     pub subgraphs: Vec<(String, Graph)>,
+    /// Diagnostics from the root fold and every nested fold, in order.
     pub diagnostics: Vec<Diagnostic>,
 }
 
 impl NestedReadResult {
+    /// Look up a nested fold by its containing blob digest.
     pub fn subgraph(&self, digest: &str) -> Option<&Graph> {
         self.subgraphs
             .iter()

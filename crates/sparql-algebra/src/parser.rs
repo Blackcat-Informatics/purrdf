@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The public parse entry point and the recursive-descent parser that turns a
@@ -87,6 +87,20 @@ impl SparqlParser {
 
     /// Set an implicit base IRI used to resolve relative IRI references that
     /// appear before any in-query `BASE` declaration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use purrdf_sparql_algebra::SparqlParser;
+    ///
+    /// let parser = SparqlParser::new().with_base_iri("http://example.org/data/");
+    /// let query = parser
+    ///     .parse_query("SELECT ?o WHERE { <cats> <touched> ?o }")
+    ///     .expect("relative IRIs resolve against the implicit base");
+    /// // Without a base, the same relative-IRI query is a parse error.
+    /// assert!(SparqlParser::new().parse_query("SELECT ?o WHERE { <cats> <touched> ?o }").is_err());
+    /// # let _ = query;
+    /// ```
     #[must_use]
     pub fn with_base_iri(mut self, base_iri: impl Into<String>) -> Self {
         self.base_iri = Some(base_iri.into());
@@ -94,6 +108,21 @@ impl SparqlParser {
     }
 
     /// Parse a SPARQL 1.1/1.2 query into the algebra, under [`ParserOptions::default`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use purrdf_sparql_algebra::{Query, SparqlParser};
+    ///
+    /// let parser = SparqlParser::new();
+    /// let query = parser
+    ///     .parse_query("ASK { <http://example.org/s> <http://example.org/p> ?o }")
+    ///     .expect("a well-formed query parses");
+    /// assert!(matches!(query, Query::Ask { .. }));
+    ///
+    /// // Malformed input is a typed error, never a partial algebra.
+    /// assert!(parser.parse_query("SELECT WHERE").is_err());
+    /// ```
     pub fn parse_query(&self, query: &str) -> Result<Query> {
         self.parse_query_with(query, &ParserOptions::default())
     }
@@ -109,6 +138,23 @@ impl SparqlParser {
 
     /// Parse a SPARQL 1.1 Update request into the [`Update`] algebra, under
     /// [`ParserOptions::default`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use purrdf_sparql_algebra::{GraphUpdateOperation, SparqlParser};
+    ///
+    /// let update = SparqlParser::new()
+    ///     .parse_update(
+    ///         "INSERT DATA { <http://example.org/s> <http://example.org/p> \"purr\" }",
+    ///     )
+    ///     .expect("a well-formed update parses");
+    /// assert_eq!(update.operations.len(), 1);
+    /// assert!(matches!(
+    ///     update.operations[0],
+    ///     GraphUpdateOperation::InsertData { .. }
+    /// ));
+    /// ```
     pub fn parse_update(&self, update: &str) -> Result<Update> {
         self.parse_update_with(update, &ParserOptions::default())
     }

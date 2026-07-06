@@ -112,12 +112,19 @@ const SSSOM_ALWAYS: &[&str] = &[
 /// rather than re-interpreting.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SssomMeta {
+    /// `mapping_set_id` — the mapping set's identifying IRI.
     pub mapping_set_id: Option<String>,
+    /// `mapping_set_version` — the mapping set's version string.
     pub mapping_set_version: Option<String>,
+    /// `license` — the mapping set's license IRI.
     pub license: Option<String>,
+    /// `mapping_tool` — the tool that produced the mappings.
     pub mapping_tool: Option<String>,
+    /// `mapping_tool_version` — the producing tool's version.
     pub mapping_tool_version: Option<String>,
+    /// `mapping_date` — when the mappings were produced.
     pub mapping_date: Option<String>,
+    /// `comment` — free-text commentary, kept byte-for-byte as authored.
     pub comment: Option<String>,
     /// `prefix → namespace-IRI` for every declared CURIE prefix.
     pub curie_map: BTreeMap<String, String>,
@@ -132,13 +139,21 @@ pub struct SssomMeta {
 /// round-trips losslessly.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SssomMapping {
+    /// `subject_id` — the mapped subject entity (CURIE or IRI).
     pub subject_id: String,
+    /// `subject_label` — the subject's human-readable label.
     pub subject_label: Option<String>,
+    /// `predicate_id` — the mapping relation (e.g. `skos:exactMatch`).
     pub predicate_id: String,
+    /// `object_id` — the mapped object entity (CURIE or IRI).
     pub object_id: String,
+    /// `object_label` — the object's human-readable label.
     pub object_label: Option<String>,
+    /// `mapping_justification` — the `semapv:` justification for the mapping.
     pub mapping_justification: String,
+    /// `confidence` — the mapping confidence in `[0, 1]`, when scored.
     pub confidence: Option<f64>,
+    /// `comment` — free-text commentary on the row.
     pub comment: Option<String>,
     /// Any column outside the named set, in declaration order.
     pub extras: BTreeMap<String, String>,
@@ -147,7 +162,9 @@ pub struct SssomMapping {
 /// A parsed SSSOM mapping set: header metadata + its mappings.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SssomMappingSet {
+    /// The `# `-prefixed YAML header metadata.
     pub meta: SssomMeta,
+    /// The mapping rows, in file order.
     pub mappings: Vec<SssomMapping>,
 }
 
@@ -156,10 +173,15 @@ pub struct SssomMappingSet {
 /// `type` string; `check` carries the originating check name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SssomDiagnostic {
+    /// The finding's severity.
     pub severity: RdfSeverity,
+    /// The golden record's `type` string (the machine-readable finding code).
     pub code: String,
+    /// The human-readable finding message.
     pub message: String,
+    /// The offending value, when the check can point at one.
     pub instance: Option<String>,
+    /// The originating check name (e.g. `PrefixMapCompleteness`).
     pub check: String,
 }
 

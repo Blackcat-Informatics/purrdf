@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Native, RDF-1.2-first **multiset SPARQL evaluator** (purrdf S6).
@@ -37,7 +37,12 @@
 //! The crate carries **zero oxigraph-family dependencies** and builds for
 //! `wasm32-unknown-unknown` (the wasm query path); both invariants are
 //! gated by `make rdf-core-hygiene`.
-
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

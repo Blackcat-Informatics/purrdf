@@ -18,6 +18,7 @@ use structured_zstd::encoding::{CompressionLevel, compress_to_vec};
 /// A catalog entry (§5, §8.5).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Codec {
+    /// Canonical codec name from the registry (e.g. `"gzip"`, `"zstd"`).
     pub name: String,
     /// `"encode"` | `"compress"` | `"encrypt"`.
     pub cls: String,
@@ -29,7 +30,9 @@ pub enum CodecError {
     /// A missing capability: `reason` is `"unknown-codec"` or `"missing-key"`
     /// — the frame degrades to an opaque node with that reason (§8.3).
     Unavailable {
+        /// Opaque-node reason token: `"unknown-codec"` or `"missing-key"`.
         reason: &'static str,
+        /// Human-readable detail naming the codec that could not be applied.
         detail: String,
     },
     /// The codec is known but the data is corrupt — the frame is damaged.

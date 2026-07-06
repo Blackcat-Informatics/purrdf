@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+blank_issues_enabled: true
+contact_links:
+  - name: Security issue
+    url: https://github.com/Blackcat-Informatics/purrdf/blob/main/SECURITY.md
+    about: Please do not open public issues for vulnerabilities — follow the reporting process in SECURITY.md.

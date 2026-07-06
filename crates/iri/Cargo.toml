@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 [package]
@@ -9,9 +9,11 @@ edition.workspace = true
 repository.workspace = true
 license.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/purrdf-iri"
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["iri", "uri", "rfc3987", "rdf", "curie"]
+categories = ["parser-implementations", "data-structures"]
 
 [package.metadata.docs.rs]
 all-features = true

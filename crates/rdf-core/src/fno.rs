@@ -122,6 +122,7 @@ impl FnoCatalog {
 /// projection catalog — come from [`FnFunction::kind_types`]).
 #[derive(Debug, Clone)]
 pub struct FnFunction {
+    /// The function node's IRI.
     pub iri: String,
     /// `rdfs:label` (`@x-purrdf-english`).
     pub label: String,
@@ -145,6 +146,7 @@ pub struct FnFunction {
 /// The `fno:Output` node of a function.
 #[derive(Debug, Clone)]
 pub struct FnOutput {
+    /// The output node's IRI.
     pub iri: String,
     /// `fno:predicate` — the PurRDF predicate the output realises. `None` for
     /// primitives (the list functions bind no data predicate).
@@ -160,6 +162,7 @@ pub struct FnOutput {
 /// One globally-deduped `fno:Parameter` node.
 #[derive(Debug, Clone)]
 pub struct FnParam {
+    /// The parameter node's IRI.
     pub iri: String,
     /// `fno:predicate` — the source PurRDF predicate. `None` for primitives (the
     /// list functions bind no data predicate).
@@ -177,6 +180,7 @@ pub struct FnParam {
 /// One `fno:Implementation` node (one per profile `.rq`).
 #[derive(Debug, Clone)]
 pub struct FnImpl {
+    /// The implementation node's IRI.
     pub iri: String,
     /// `dcterms:format` — a plain string literal (`"application/sparql-query"`).
     pub format: String,

@@ -638,9 +638,13 @@ fn intern_value(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
 /// id) internally.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct QuadValues {
+    /// The subject term value.
     pub s: TermValue,
+    /// The predicate term value.
     pub p: TermValue,
+    /// The object term value.
     pub o: TermValue,
+    /// The graph-name term value (`None` = default graph).
     pub g: Option<TermValue>,
 }
 

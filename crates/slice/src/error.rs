@@ -16,7 +16,12 @@ pub enum SliceError {
     /// A path within a slice violates the safety rules (absolute, `..`, etc.).
     InvalidPath(String),
     /// A digest computed at discovery time does not match a stored expectation.
-    DigestMismatch { expected: String, actual: String },
+    DigestMismatch {
+        /// The stored (expected) digest.
+        expected: String,
+        /// The digest actually computed.
+        actual: String,
+    },
     /// A structurally malformed RDF Collection encountered while walking an
     /// `rdf:first`/`rdf:rest` chain.
     RdfList(purrdf::RdfListError),

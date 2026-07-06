@@ -3,6 +3,12 @@
 
 //! `purrdf-slice` — native slice catalog: manifest-based discovery, typed
 //! artifact inventory, and content-addressed IDs for the PurRDF ontology slices.
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 
 pub mod analysis;
 pub mod artifact;

@@ -17,8 +17,11 @@ use crate::writer::digest_string;
 /// Options for [`from_tar`].
 #[derive(Clone, Debug, Default)]
 pub struct FromTarOptions {
+    /// Import symlink entries instead of rejecting them.
     pub allow_symlinks: bool,
+    /// Import special entries (devices, FIFOs) instead of rejecting them.
     pub allow_special: bool,
+    /// Record owner metadata (uid/gid and user/group names) in the archive.
     pub owner: bool,
     /// Optional source label used for compression detection by extension.
     pub source_name: Option<String>,

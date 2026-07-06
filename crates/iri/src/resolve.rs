@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! RFC-3986 §5 reference resolution (strict mode) over [`Iri`] components.
@@ -58,6 +58,27 @@ impl Parts {
 impl Iri {
     /// Resolve `reference` against `self` as base, returning a new absolute
     /// [`Iri`] (RFC-3986 §5.2, strict). `self` must have a scheme.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// let base = purrdf_iri::parse("http://example.org/a/b/c?q")?;
+    ///
+    /// // Relative path references merge and dot-normalize (RFC-3986 §5.4).
+    /// assert_eq!(base.resolve("d")?.as_str(), "http://example.org/a/b/d");
+    /// assert_eq!(base.resolve("../d")?.as_str(), "http://example.org/a/d");
+    /// assert_eq!(base.resolve("/d")?.as_str(), "http://example.org/d");
+    ///
+    /// // The empty reference is the same-document reference (query kept).
+    /// assert_eq!(base.resolve("")?.as_str(), "http://example.org/a/b/c?q");
+    ///
+    /// // An absolute reference replaces the base entirely.
+    /// assert_eq!(
+    ///     base.resolve("https://example.org/x")?.as_str(),
+    ///     "https://example.org/x"
+    /// );
+    /// # Ok::<(), purrdf_iri::IriError>(())
+    /// ```
     pub fn resolve(&self, reference: &str) -> Result<Self> {
         if !self.has_scheme() {
             return Err(IriError::NonAbsoluteBase(self.as_str().to_owned()));

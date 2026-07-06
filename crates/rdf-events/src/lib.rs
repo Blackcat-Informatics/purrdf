@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The **permissive RDF 1.2 ingestion protocol** (purrdf P6): the neutral
@@ -61,7 +61,105 @@
 //! * **Ill-typed literals are preserved, never auto-rejected.** A [`EventTerm::Literal`]
 //!   with a malformed lexical form for its datatype is carried through and MAY be
 //!   flagged downstream; the protocol never rejects it at ingestion.
-
+//!
+//! # Examples
+//!
+//! A tiny source driving one triple into a counting sink — neither side knows the
+//! other's concrete type. Note the forward reference: the quad arrives BEFORE the
+//! term declarations it names, which the protocol explicitly allows.
+//!
+//! ```rust
+//! use core::ops::ControlFlow;
+//!
+//! use purrdf_events::{
+//!     EventError, EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink,
+//!     RdfEventSource, ScopeId,
+//! };
+//!
+//! /// A sink that just counts what it receives.
+//! #[derive(Default)]
+//! struct CountingSink {
+//!     terms: usize,
+//!     quads: usize,
+//!     finished: bool,
+//! }
+//!
+//! impl RdfEventSink for CountingSink {
+//!     fn term(
+//!         &mut self,
+//!         _id: EventTermId,
+//!         _term: EventTerm<'_>,
+//!     ) -> Result<ControlFlow<()>, EventError> {
+//!         self.terms += 1;
+//!         Ok(ControlFlow::Continue(()))
+//!     }
+//!
+//!     fn quad(&mut self, _q: EventQuad) -> Result<ControlFlow<()>, EventError> {
+//!         self.quads += 1;
+//!         Ok(ControlFlow::Continue(()))
+//!     }
+//!
+//!     fn reifier(
+//!         &mut self,
+//!         _reifier: EventTermId,
+//!         _triple: EventTriple,
+//!     ) -> Result<ControlFlow<()>, EventError> {
+//!         Ok(ControlFlow::Continue(()))
+//!     }
+//!
+//!     fn annotation(
+//!         &mut self,
+//!         _reifier: EventTermId,
+//!         _p: EventTermId,
+//!         _o: EventTermId,
+//!     ) -> Result<ControlFlow<()>, EventError> {
+//!         Ok(ControlFlow::Continue(()))
+//!     }
+//!
+//!     fn open_scope(&mut self) -> Result<ScopeId, EventError> {
+//!         Ok(ScopeId::DEFAULT)
+//!     }
+//!
+//!     fn close_scope(&mut self, _scope: ScopeId) -> Result<ControlFlow<()>, EventError> {
+//!         Ok(ControlFlow::Continue(()))
+//!     }
+//!
+//!     fn finish(&mut self) -> Result<(), EventError> {
+//!         self.finished = true;
+//!         Ok(())
+//!     }
+//! }
+//!
+//! /// A source replaying one hard-coded triple.
+//! struct OneTriple;
+//!
+//! impl RdfEventSource for OneTriple {
+//!     fn drive<S: RdfEventSink + ?Sized>(&self, sink: &mut S) -> Result<(), EventError> {
+//!         let (s, p, o) = (EventTermId(0), EventTermId(1), EventTermId(2));
+//!         // Forward reference: the quad may precede its term declarations.
+//!         if sink.quad(EventQuad { s, p, o, g: None })? == ControlFlow::Break(()) {
+//!             return Ok(());
+//!         }
+//!         sink.term(s, EventTerm::Iri("http://example.org/alice"))?;
+//!         sink.term(p, EventTerm::Iri("http://example.org/knows"))?;
+//!         sink.term(o, EventTerm::Iri("http://example.org/bob"))?;
+//!         sink.finish()
+//!     }
+//! }
+//!
+//! let mut sink = CountingSink::default();
+//! OneTriple.drive(&mut sink)?;
+//! assert_eq!(sink.terms, 3);
+//! assert_eq!(sink.quads, 1);
+//! assert!(sink.finished);
+//! # Ok::<(), purrdf_events::EventError>(())
+//! ```
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 #![forbid(unsafe_code)]
 
 use core::ops::ControlFlow;
@@ -135,6 +233,29 @@ pub struct EventTriple {
 /// The *value* of one declared term, borrowed for the duration of the
 /// [`term`](RdfEventSink::term) call. Self-contained: an [`EventTerm::Literal`]
 /// carries its datatype as a borrowed IRI string (by value), never an id.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_events::{EventTerm, ScopeId};
+///
+/// let iri = EventTerm::Iri("http://example.org/alice");
+/// assert_eq!(iri, EventTerm::Iri("http://example.org/alice"));
+///
+/// // A literal carries its expanded datatype IRI by value.
+/// let name = EventTerm::Literal {
+///     lexical: "Alice",
+///     datatype: "http://www.w3.org/2001/XMLSchema#string",
+///     language: None,
+///     direction: None,
+/// };
+/// assert!(matches!(name, EventTerm::Literal { lexical: "Alice", .. }));
+///
+/// // The same blank label in different scopes names DIFFERENT nodes.
+/// let b1 = EventTerm::Blank { label: "b0", scope: ScopeId(1) };
+/// let b2 = EventTerm::Blank { label: "b0", scope: ScopeId(2) };
+/// assert_ne!(b1, b2);
+/// ```
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EventTerm<'a> {
     /// An IRI, by its full string.
@@ -166,6 +287,28 @@ pub enum EventTerm<'a> {
 
 /// One quad row: an (s, p, o) statement plus an optional graph name. `g == None`
 /// names the default graph.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_events::{EventQuad, EventTermId};
+///
+/// // A default-graph statement…
+/// let q = EventQuad {
+///     s: EventTermId(0),
+///     p: EventTermId(1),
+///     o: EventTermId(2),
+///     g: None,
+/// };
+/// assert_eq!(q.g, None);
+///
+/// // …and the same statement in a named graph.
+/// let named = EventQuad {
+///     g: Some(EventTermId(3)),
+///     ..q
+/// };
+/// assert_eq!(named.g, Some(EventTermId(3)));
+/// ```
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EventQuad {
     /// Subject term id.
@@ -196,6 +339,17 @@ pub struct SourceSpan {
 
 impl SourceSpan {
     /// A span at a byte offset with line/column position.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_events::SourceSpan;
+    ///
+    /// let span = SourceSpan::new(42, 3, 7);
+    /// assert_eq!(span.byte_offset, 42);
+    /// assert_eq!(span.line, 3);
+    /// assert_eq!(span.column, 7);
+    /// ```
     pub fn new(byte_offset: usize, line: u32, column: u32) -> Self {
         Self {
             byte_offset,
@@ -250,6 +404,16 @@ pub enum EventError {
 
 impl EventError {
     /// Construct a generic message error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_events::EventError;
+    ///
+    /// let err = EventError::message("sink refused to freeze");
+    /// assert_eq!(err.to_string(), "sink refused to freeze");
+    /// assert_eq!(err, EventError::Message("sink refused to freeze".to_owned()));
+    /// ```
     pub fn message(msg: impl Into<String>) -> Self {
         Self::Message(msg.into())
     }
@@ -302,6 +466,82 @@ impl std::error::Error for EventError {}
 /// [`location`](Self::location)) default to a no-op `Continue`, and
 /// [`quads`](Self::quads) defaults to looping over [`quad`](Self::quad) honoring
 /// [`ControlFlow::Break`].
+///
+/// # Examples
+///
+/// A minimal counting sink (only the required methods implemented), exercised both
+/// through the default [`quads`](Self::quads) batching and behind `&mut dyn`:
+///
+/// ```rust
+/// use core::ops::ControlFlow;
+///
+/// use purrdf_events::{
+///     EventError, EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId,
+/// };
+///
+/// #[derive(Default)]
+/// struct CountingSink {
+///     quads: usize,
+/// }
+///
+/// impl RdfEventSink for CountingSink {
+///     fn term(
+///         &mut self,
+///         _id: EventTermId,
+///         _term: EventTerm<'_>,
+///     ) -> Result<ControlFlow<()>, EventError> {
+///         Ok(ControlFlow::Continue(()))
+///     }
+///
+///     fn quad(&mut self, _q: EventQuad) -> Result<ControlFlow<()>, EventError> {
+///         self.quads += 1;
+///         Ok(ControlFlow::Continue(()))
+///     }
+///
+///     fn reifier(
+///         &mut self,
+///         _reifier: EventTermId,
+///         _triple: EventTriple,
+///     ) -> Result<ControlFlow<()>, EventError> {
+///         Ok(ControlFlow::Continue(()))
+///     }
+///
+///     fn annotation(
+///         &mut self,
+///         _reifier: EventTermId,
+///         _p: EventTermId,
+///         _o: EventTermId,
+///     ) -> Result<ControlFlow<()>, EventError> {
+///         Ok(ControlFlow::Continue(()))
+///     }
+///
+///     fn open_scope(&mut self) -> Result<ScopeId, EventError> {
+///         Ok(ScopeId::DEFAULT)
+///     }
+///
+///     fn close_scope(&mut self, _scope: ScopeId) -> Result<ControlFlow<()>, EventError> {
+///         Ok(ControlFlow::Continue(()))
+///     }
+///
+///     fn finish(&mut self) -> Result<(), EventError> {
+///         Ok(())
+///     }
+/// }
+///
+/// let mut sink = CountingSink::default();
+/// let id = EventTermId(0);
+/// let q = EventQuad { s: id, p: id, o: id, g: None };
+///
+/// // The default `quads` loops over `quad`.
+/// assert_eq!(sink.quads(&[q, q, q])?, ControlFlow::Continue(()));
+/// assert_eq!(sink.quads, 3);
+///
+/// // Object-safe: usable behind `&mut dyn RdfEventSink`.
+/// let dynamic: &mut dyn RdfEventSink = &mut sink;
+/// dynamic.term(id, EventTerm::Iri("http://example.org/s"))?;
+/// dynamic.finish()?;
+/// # Ok::<(), EventError>(())
+/// ```
 pub trait RdfEventSink {
     /// Declare a term and its value. [`EventTermId`]s are drive-global, so the same id
     /// MUST NOT be declared twice anywhere in one drive (→
@@ -393,6 +633,90 @@ const _: fn(&mut dyn RdfEventSink) = |_| {};
 
 /// The permissive ingestion **source**: something that can drive an RDF 1.2 event
 /// stream into any [`RdfEventSink`].
+///
+/// # Examples
+///
+/// A source replaying a fixed stream (the sink boilerplate is elided — see
+/// [`RdfEventSink`] for a full implementation):
+///
+/// ```rust
+/// use core::ops::ControlFlow;
+///
+/// use purrdf_events::{
+///     EventError, EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink,
+///     RdfEventSource, ScopeId,
+/// };
+///
+/// struct TwoQuads;
+///
+/// impl RdfEventSource for TwoQuads {
+///     fn drive<S: RdfEventSink + ?Sized>(&self, sink: &mut S) -> Result<(), EventError> {
+///         let id = EventTermId(0);
+///         sink.term(id, EventTerm::Iri("http://example.org/n"))?;
+///         let q = EventQuad { s: id, p: id, o: id, g: None };
+///         sink.quads(&[q, q])?;
+///         sink.finish()
+///     }
+///
+///     // This source always declares a term before referencing it, so a sink may
+///     // skip its forward-reference buffering.
+///     fn declares_before_reference(&self) -> bool {
+///         true
+///     }
+/// }
+///
+/// # #[derive(Default)]
+/// # struct CountingSink {
+/// #     quads: usize,
+/// # }
+/// # impl RdfEventSink for CountingSink {
+/// #     fn term(
+/// #         &mut self,
+/// #         _id: EventTermId,
+/// #         _term: EventTerm<'_>,
+/// #     ) -> Result<ControlFlow<()>, EventError> {
+/// #         Ok(ControlFlow::Continue(()))
+/// #     }
+/// #     fn quad(&mut self, _q: EventQuad) -> Result<ControlFlow<()>, EventError> {
+/// #         self.quads += 1;
+/// #         Ok(ControlFlow::Continue(()))
+/// #     }
+/// #     fn reifier(
+/// #         &mut self,
+/// #         _reifier: EventTermId,
+/// #         _triple: EventTriple,
+/// #     ) -> Result<ControlFlow<()>, EventError> {
+/// #         Ok(ControlFlow::Continue(()))
+/// #     }
+/// #     fn annotation(
+/// #         &mut self,
+/// #         _reifier: EventTermId,
+/// #         _p: EventTermId,
+/// #         _o: EventTermId,
+/// #     ) -> Result<ControlFlow<()>, EventError> {
+/// #         Ok(ControlFlow::Continue(()))
+/// #     }
+/// #     fn open_scope(&mut self) -> Result<ScopeId, EventError> {
+/// #         Ok(ScopeId::DEFAULT)
+/// #     }
+/// #     fn close_scope(&mut self, _scope: ScopeId) -> Result<ControlFlow<()>, EventError> {
+/// #         Ok(ControlFlow::Continue(()))
+/// #     }
+/// #     fn finish(&mut self) -> Result<(), EventError> {
+/// #         Ok(())
+/// #     }
+/// # }
+/// let mut sink = CountingSink::default();
+/// TwoQuads.drive(&mut sink)?;
+/// assert_eq!(sink.quads, 2);
+/// assert!(TwoQuads.declares_before_reference());
+///
+/// // The erased entry point defaults to `drive`.
+/// let mut erased_sink = CountingSink::default();
+/// TwoQuads.drive_erased(&mut erased_sink)?;
+/// assert_eq!(erased_sink.quads, 2);
+/// # Ok::<(), EventError>(())
+/// ```
 pub trait RdfEventSource {
     /// Drive the full event stream into `sink`. The `?Sized` bound lets this take
     /// either a concrete sink (zero-cost, monomorphized) or a `dyn RdfEventSink`.

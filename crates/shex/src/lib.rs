@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! `purrdf-shex` — the native **ShEx 2.1** engine for PurRDF: the schema
@@ -41,7 +41,46 @@
 //! parse_shexj` is the identity on the corpus;
 //! `tests/validation_conformance.rs` runs the full `validation/` manifest
 //! (with an exact-count trait skip list and xfail ledger).
-
+//!
+//! # Examples
+//!
+//! Parse a ShExC schema and validate a node against a small Turtle graph
+//! (Turtle parsing via `purrdf-rdf`; any source of a frozen
+//! `purrdf_core::RdfDataset` works):
+//!
+//! ```
+//! use purrdf_rdf::parse_dataset;
+//! use purrdf_shex::{ValidationOptions, parse_shexc, validate_shape_map};
+//!
+//! let schema = parse_shexc(
+//!     "<http://example.org/UserShape> { <http://example.org/name> LITERAL }",
+//!     None,
+//! )
+//! .expect("a well-formed schema parses");
+//!
+//! let data = parse_dataset(
+//!     b"<http://example.org/alice> <http://example.org/name> \"Alice\" .",
+//!     "text/turtle",
+//!     None,
+//! )
+//! .expect("a well-formed graph parses");
+//!
+//! let result = validate_shape_map(
+//!     &schema,
+//!     &data,
+//!     "<http://example.org/alice>@<http://example.org/UserShape>",
+//!     None,
+//!     &ValidationOptions::default(),
+//! )
+//! .expect("a well-formed shape map parses");
+//! assert!(result.all_conformant());
+//! ```
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
 #![forbid(unsafe_code)]
 
 pub mod ast;

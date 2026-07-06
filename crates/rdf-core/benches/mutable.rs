@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
+// which would otherwise trip the workspace `missing_docs` lint.
+#![allow(missing_docs)]
+
 //! The copy-on-write `MutableDataset` measured hypothesis (purrdf P5).
 //!
 //! The PLAN frames COW as *"a measured hypothesis, not an assumed win — benchmark it

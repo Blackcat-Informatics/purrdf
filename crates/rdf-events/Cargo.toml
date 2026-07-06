@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 [package]
@@ -12,9 +12,11 @@ repository.workspace = true
 # under the workspace `MIT OR Apache-2.0` license.
 license.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/purrdf-events"
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "rdf-12", "events", "ingestion", "protocol"]
+categories = ["data-structures"]
 
 [package.metadata.docs.rs]
 all-features = true

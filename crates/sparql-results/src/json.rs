@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Canonical SPARQL Results JSON (SRJ) serializer plus the additive, provenance
@@ -28,6 +28,19 @@ use purrdf_core::{SparqlResult, TermValue};
 ///
 /// JSON carries everything that is requested, so the returned
 /// [`SerializeOutcome::provenance_dropped`] is always `false`.
+///
+/// # Examples
+///
+/// An `ASK` boolean round-trips through the SRJ document form:
+///
+/// ```
+/// use purrdf_sparql_results::{ResultProvenance, SparqlResult, from_json_boolean, to_json};
+///
+/// let outcome = to_json(&SparqlResult::Boolean(true), &ResultProvenance::default())
+///     .expect("ASK serializes to JSON");
+/// assert!(!outcome.provenance_dropped);
+/// assert!(from_json_boolean(&outcome.bytes).expect("emitted SRJ parses back"));
+/// ```
 ///
 /// # Errors
 ///

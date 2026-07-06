@@ -70,12 +70,11 @@ but it assumes nothing about your ontology or application.
 - **SHACL validation** — a native validator with the complete SHACL Core feature
   set (all constraint components, full property paths, qualified value shapes,
   property pairs), SHACL-SPARQL constraints/targets on the native engine, and
-  scoped SHACL 1.2 draft support for reifier shapes — **114/120 passing** on the
-  vendored W3C test suite (the 6 ledgered are custom-component and
-  pre-binding-semantics gaps).
+  scoped SHACL 1.2 draft support for reifier shapes — **126/126 passing** on the
+  vendored W3C test suite, zero ledgered.
 - **ShEx 2.1** — a from-scratch ShExC + ShExJ schema layer and validator gated
-  against the official shexTest suite: **1,051/1,051 attempted validation tests,
-  zero expected-failures** (imports/semantic-actions staged next), 99/99 negative
+  against the official shexTest suite: **1,105/1,105 attempted validation tests,
+  zero expected-failures** (imports and semantic actions included), 99/99 negative
   syntax, 14/14 negative structure. See [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md).
 - **GTS graph transport** — a single-file, content-addressed, append-only container
   for RDF 1.2 graphs and the binaries they reference: BLAKE3-chained CBOR segments,
@@ -132,14 +131,14 @@ quads = purrdf.parse(
     purrdf.RdfFormat.TURTLE,
 )
 
-from purrdf_native import shacl, shex
+from purrdf import shapes, shex
 
-report = shacl.validate(shapes_ttl=my_shapes, data_nt=my_data)
+report = shapes.validate(shapes_ttl=my_shapes, data_nt=my_data)
 print(report["conforms"])
 
-result = shex.validate(my_schema_shexc, my_data_ttl,
-                       [("https://example.org/alice", "https://example.org/PersonShape")])
-print(result["conforms"])
+results = shex.validate(my_schema_shexc, my_data_ttl,
+                        [("https://example.org/alice", "https://example.org/PersonShape")])
+print(all(entry["conformant"] for entry in results))
 ```
 
 The Python package also ships an [rdflib compatibility layer](./bindings/python/python/src/purrdf/compat/rdflib/)
@@ -212,6 +211,17 @@ that CI checks for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI (unpublished; built via cargo-c). |
 | [`purrdf-sparql-conformance`](./crates/sparql-conformance/) | W3C SPARQL conformance harness (unpublished). |
 
+## Documentation
+
+- **[The PurRDF Book](https://blackcat-informatics.github.io/purrdf/)** — the
+  user guide: getting started in each language, concepts, and every engine
+  (source in [`docs/book/`](./docs/book/), `make book` builds it locally).
+- **API reference** — [docs.rs/purrdf](https://docs.rs/purrdf) for the umbrella
+  crate; every member crate links its own docs.rs page from the crate map above.
+- **Specs & reports** — [GTS spec](./docs/GTS-SPEC.md),
+  [conformance scoreboard](./docs/CONFORMANCE.md),
+  [benchmarks](./docs/BENCHMARKS.md), [release process](./docs/RELEASE.md).
+
 ## Fast by measurement, not by assertion
 
 The IR keeps every term **once** in a string arena addressed by copyable
@@ -236,9 +246,9 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 
 | Engine | Suite | Result |
 | --- | --- | --- |
-| ShEx 2.1 validation | shexTest v2.1.0 (`vectors/shexTest/`) | **1,051 / 1,051** attempted, 0 xfail |
+| ShEx 2.1 validation | shexTest v2.1.0 (`vectors/shexTest/`) | **1,105 / 1,105** attempted, 0 xfail |
 | ShEx schemas / negative syntax / structure | shexTest v2.1.0 | **425/425 · 99/99 · 14/14** |
-| SHACL | W3C data-shapes (`vectors/shacl/`) | **114 / 120** (6 ledgered) |
+| SHACL | W3C data-shapes (`vectors/shacl/`) | **126 / 126**, 0 ledgered |
 | SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **48 / 48** |
 | SPARQL 1.1 | W3C suite via `purrdf-sparql-conformance` | green, xfail-ledgered |
 | RDFC-1.0 | W3C canonicalization fixtures | green |

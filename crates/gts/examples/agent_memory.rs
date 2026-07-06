@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+//! End-to-end example: an agent-memory log persisted as a GTS container
+//! (append, fold, and read back RDF 1.2 quads plus binary blobs).
+
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 

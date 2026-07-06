@@ -9,8 +9,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/purrdf-slice"
 rust-version.workspace = true
 readme = "README.md"
+keywords = ["rdf", "linked-data", "manifest", "slice", "provenance"]
+categories = ["data-structures"]
 
 [package.metadata.docs.rs]
 all-features = true

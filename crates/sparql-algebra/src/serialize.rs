@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Algebra → SPARQL **surface-text** serialization.
@@ -47,6 +47,29 @@ use crate::algebra::AggregateFunction;
 ///
 /// This is the entry point SERVICE federation uses to forward a sub-pattern to a
 /// remote endpoint. The result is a syntactically complete, re-parseable query.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
+/// use purrdf_sparql_algebra::pattern_to_select_query;
+///
+/// let parser = SparqlParser::new();
+/// let Query::Select { pattern, .. } = parser
+///     .parse_query("SELECT * WHERE { ?s <http://example.org/p> ?o }")
+///     .expect("a well-formed query parses")
+/// else {
+///     panic!("a SELECT query parses to `Query::Select`");
+/// };
+/// let GraphPattern::Project { inner, .. } = pattern else {
+///     panic!("the projection wraps the root pattern");
+/// };
+///
+/// let rendered = pattern_to_select_query(&inner);
+/// assert!(rendered.starts_with("SELECT * WHERE {"));
+/// // The rendering is complete and re-parseable.
+/// assert!(parser.parse_query(&rendered).is_ok());
+/// ```
 #[must_use]
 pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
     let mut s = String::new();

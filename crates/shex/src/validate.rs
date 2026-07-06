@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The ShEx 2.1 shape-map validator (spec §5.2–§5.5).
@@ -224,6 +224,35 @@ impl core::fmt::Debug for ValidationOptions<'_> {
 /// Each `(node, shape)` association is checked independently (memoized
 /// within the call); the result preserves association order. A focus node
 /// absent from the dataset is validated against an empty neighbourhood.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_core::TermValue;
+/// use purrdf_rdf::parse_dataset;
+/// use purrdf_shex::{ConformanceStatus, ShapeSelector, parse_shexc, validate};
+///
+/// let schema = parse_shexc(
+///     "<http://example.org/UserShape> { <http://example.org/name> LITERAL }",
+///     None,
+/// )
+/// .expect("a well-formed schema parses");
+///
+/// let data = parse_dataset(
+///     b"<http://example.org/alice> <http://example.org/name> \"Alice\" .",
+///     "text/turtle",
+///     None,
+/// )
+/// .expect("a well-formed graph parses");
+///
+/// let map = vec![(
+///     TermValue::Iri("http://example.org/alice".to_string()),
+///     ShapeSelector::Label("http://example.org/UserShape".to_string()),
+/// )];
+/// let result = validate(&schema, &data, &map);
+/// assert_eq!(result.entries.len(), 1);
+/// assert_eq!(result.entries[0].status, ConformanceStatus::Conformant);
+/// ```
 #[must_use]
 pub fn validate(
     schema: &Schema,

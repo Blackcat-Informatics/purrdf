@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
+// which would otherwise trip the workspace `missing_docs` lint.
+#![allow(missing_docs)]
+
 //! `EXISTS` anti-join benchmark: naive per-row inner work vs the decorrelated path
 //! that evaluates the inner pattern AND builds its probe index once per site.
 //!

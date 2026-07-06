@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! SPARQL Results **JSON** (SRJ) reader — the inverse of [`crate::json`].
@@ -37,6 +37,27 @@ pub struct ParsedSolutions {
 }
 
 /// Parse a SPARQL Results JSON `SELECT` document into [`ParsedSolutions`].
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_core::TermValue;
+/// use purrdf_sparql_results::from_json;
+///
+/// let doc = br#"{
+///   "head": { "vars": ["s"] },
+///   "results": { "bindings": [
+///     { "s": { "type": "uri", "value": "http://example.org/alice" } }
+///   ] }
+/// }"#;
+///
+/// let parsed = from_json(doc).expect("well-formed SRJ");
+/// assert_eq!(parsed.variables, ["s"]);
+/// assert_eq!(
+///     parsed.rows,
+///     [vec![Some(TermValue::Iri("http://example.org/alice".to_string()))]],
+/// );
+/// ```
 ///
 /// # Errors
 ///
@@ -94,6 +115,16 @@ pub fn from_json(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
 }
 
 /// Parse a SPARQL Results JSON `ASK` document into its boolean.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_sparql_results::from_json_boolean;
+///
+/// let verdict = from_json_boolean(br#"{ "head": {}, "boolean": true }"#)
+///     .expect("well-formed ASK document");
+/// assert!(verdict);
+/// ```
 ///
 /// # Errors
 ///

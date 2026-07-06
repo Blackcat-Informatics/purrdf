@@ -3,6 +3,7 @@
 
 /target/
 **/target/
+/docs/book/book/
 !vectors/shacl/af/target/
 !vectors/shacl/af/target/**
 /.venv/

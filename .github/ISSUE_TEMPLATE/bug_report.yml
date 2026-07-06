@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+name: Bug report
+description: Something in PurRDF misbehaves — wrong output, a crash, or a spec discrepancy.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Spec-conformance discrepancies
+        (W3C RDF 1.2 / SPARQL / SHACL / ShEx test-suite behavior) are especially
+        welcome — see [docs/CONFORMANCE.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md) for
+        the current conformance matrix and known ledgered gaps.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+      description: Actual behavior versus expected behavior. For spec issues, cite the spec section or W3C test name if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: >-
+        The smallest RDF input (Turtle, TriG, N-Triples/N-Quads, RDF/XML,
+        JSON-LD, YAML-LD, …), SPARQL query, or SHACL/ShEx shape that triggers
+        it, plus the code that invokes PurRDF.
+      placeholder: |
+        Input (and its format):
+
+        Code:
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Language surface
+      description: Which binding did you hit this through?
+      options:
+        - Rust crate
+        - Python (pip)
+        - JavaScript/wasm (npm)
+        - C ABI
+        - Multiple / not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The purrdf crate / pip / npm version (or git commit).
+      placeholder: "0.3.3"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and architecture, plus runtime version where relevant (rustc, Python, Node/browser).
+      placeholder: "Linux x86_64, Python 3.13"

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! ShExJ — the JSON(-LD) wire format for ShEx schemas (spec Appendix A).
@@ -46,6 +46,24 @@ pub fn parse_shexj(input: &str) -> Result<Schema> {
 }
 
 /// Serialize a [`Schema`] to pretty-printed ShExJ.
+///
+/// # Examples
+///
+/// The two syntaxes describe the same [`Schema`], so a ShExC-parsed schema
+/// round-trips through the JSON wire format:
+///
+/// ```
+/// use purrdf_shex::{parse_shexc, parse_shexj, to_shexj};
+///
+/// let schema = parse_shexc(
+///     "<http://example.org/UserShape> { <http://example.org/name> LITERAL }",
+///     None,
+/// )
+/// .expect("a well-formed schema parses");
+///
+/// let json = to_shexj(&schema);
+/// assert_eq!(parse_shexj(&json).expect("emitted ShExJ parses back"), schema);
+/// ```
 #[must_use]
 pub fn to_shexj(schema: &Schema) -> String {
     let value = schema_to_value(schema);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! RFC-3986 URI + RFC-3987 IRI parser/validator.
@@ -19,6 +19,20 @@ use core::ops::Range;
 /// literals/IRIs lexically). Component accessors return borrowed slices; nothing
 /// is re-encoded at parse time. [`normalize`](crate::Iri::normalize) produces a
 /// new `Iri` with RFC-3986 §6.2.2 syntax-based normalization applied.
+///
+/// # Examples
+///
+/// ```rust
+/// let iri = purrdf_iri::parse("http://example.org/a/b?x=1#frag")?;
+/// assert_eq!(iri.as_str(), "http://example.org/a/b?x=1#frag");
+/// assert_eq!(iri.scheme(), Some("http"));
+/// assert_eq!(iri.authority(), Some("example.org"));
+/// assert_eq!(iri.path(), "/a/b");
+/// assert_eq!(iri.query(), Some("x=1"));
+/// assert_eq!(iri.fragment(), Some("frag"));
+/// assert!(iri.has_scheme());
+/// # Ok::<(), purrdf_iri::IriError>(())
+/// ```
 #[derive(Clone, PartialEq, Eq)]
 pub struct Iri {
     pub(crate) text: String,
@@ -84,12 +98,36 @@ impl core::fmt::Debug for Iri {
 
 /// Parse and validate an **IRI** (RFC-3987). Non-ASCII `ucschar`/`iprivate` code
 /// points are permitted in the appropriate components.
+///
+/// # Examples
+///
+/// ```rust
+/// // RFC-3987 permits non-ASCII code points directly.
+/// let iri = purrdf_iri::parse("http://example.org/caf\u{e9}")?;
+/// assert_eq!(iri.path(), "/caf\u{e9}");
+///
+/// // Malformed input is a typed hard error, never a degraded fallback.
+/// assert!(purrdf_iri::parse("http://example.org/<bad>").is_err());
+/// # Ok::<(), purrdf_iri::IriError>(())
+/// ```
 pub fn parse(s: &str) -> Result<Iri> {
     parse_inner(s, Mode::Iri)
 }
 
 /// Parse and validate a **URI** (RFC-3986). Non-ASCII code points are rejected
 /// (they must be percent-encoded); everything else matches [`parse`].
+///
+/// # Examples
+///
+/// ```rust
+/// // Strict ASCII: the percent-encoded spelling is accepted…
+/// let uri = purrdf_iri::parse_uri("http://example.org/caf%C3%A9")?;
+/// assert_eq!(uri.path(), "/caf%C3%A9");
+///
+/// // …but the raw non-ASCII code point is rejected in URI mode.
+/// assert!(purrdf_iri::parse_uri("http://example.org/caf\u{e9}").is_err());
+/// # Ok::<(), purrdf_iri::IriError>(())
+/// ```
 pub fn parse_uri(s: &str) -> Result<Iri> {
     parse_inner(s, Mode::Uri)
 }
