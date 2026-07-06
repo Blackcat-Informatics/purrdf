@@ -44,6 +44,18 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
   on the wasm path; crypto stays pure-Rust for exactly this reason.
+* **wasm size is budgeted.** The optimized npm artifact
+  (`crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm`, built with `+simd128` and
+  `wasm-opt -Oz`) is gated by `make wasm-pkg-size` against the
+  `WASM_SIZE_BUDGET_BYTES` ceiling in the Makefile; CI and the npm release both
+  hard-fail on overshoot and print current-vs-budget to the job summary. The
+  size is reproducible because binaryen is pinned via `BINARYEN_VERSION` (and
+  wasm-bindgen via the `Cargo.toml` pin) — the shared `.github/actions/wasm-toolchain`
+  action installs exactly those. **Raising the ceiling is a reviewed decision:**
+  rebuild, read the printed size, set the constant with a few percent of headroom,
+  and justify the growth in the commit — a new capability/dependency, or a routine
+  rustc-stable/binaryen bump (a valid reason that must still be stated). Never
+  raise it merely to turn a red gate green.
 * **Byte determinism.** Serializers and the GTS writer are byte-deterministic.
   If your change alters emitted bytes, you must update the affected goldens and
   say why in the PR. Never introduce iteration-order, time, or RNG dependence

@@ -144,6 +144,9 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+        uses: ./.github/actions/wasm-toolchain
+
       - name: Check release crates on wasm32
         run: |
           cargo check --locked --target wasm32-unknown-unknown --lib \
@@ -163,11 +166,12 @@ jobs:
             -p purrdf \
             -p purrdf-wasm
 
-      - name: Build wasm package artifact
-        run: |
-          cargo build --locked --release --target wasm32-unknown-unknown \
-            -p purrdf-wasm --lib
-          test -s target/wasm32-unknown-unknown/release/purrdf_wasm.wasm
+      - name: Build the optimized wasm package and gate its size
+        # Builds the +simd128 release artifact, runs wasm-bindgen + wasm-opt -Oz,
+        # verifies SIMD codegen, writes current-vs-budget size + toolchain
+        # identity to the job summary, and HARD-FAILS if the artifact exceeds
+        # WASM_SIZE_BUDGET_BYTES (raise it deliberately per the Makefile).
+        run: make wasm-pkg-size
 
   benchmarks:
     runs-on: ubuntu-latest

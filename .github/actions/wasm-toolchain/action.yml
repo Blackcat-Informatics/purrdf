@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+name: wasm-toolchain
+description: >-
+  Install the pinned wasm build toolchain and a Rust build cache: the
+  wasm32-unknown-unknown target, wasm-bindgen-cli matched to the workspace
+  wasm-bindgen pin (Cargo.toml), and binaryen (wasm-opt/wasm-dis) matched to the
+  Makefile BINARYEN_VERSION. Both binaries are installed from pinned, checksum-
+  verified prebuilt release archives — no per-PR source builds — and both pins
+  are read from their single source of truth so CI and the npm release never
+  drift. Requires a prior Rust toolchain install and a checked-out repo.
+runs:
+  using: composite
+  steps:
+    - name: Add the wasm32 target
+      shell: bash
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Cache the Rust build
+      uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      with:
+        key: wasm-toolchain
+
+    - name: Read the toolchain pins (single source of truth)
+      id: pins
+      shell: bash
+      run: |
+        set -euo pipefail
+        wb="$(grep -oP 'wasm-bindgen = "=\K[0-9.]+' Cargo.toml)"
+        test -n "$wb" || { echo "could not read the wasm-bindgen pin from Cargo.toml"; exit 1; }
+        bn="$(grep -oP '^BINARYEN_VERSION := \K[0-9]+' Makefile)"
+        test -n "$bn" || { echo "could not read BINARYEN_VERSION from Makefile"; exit 1; }
+        echo "wasm_bindgen=$wb" >> "$GITHUB_OUTPUT"
+        echo "binaryen=$bn" >> "$GITHUB_OUTPUT"
+
+    - name: Install wasm-bindgen-cli (prebuilt, matched to the workspace pin)
+      shell: bash
+      run: |
+        set -euo pipefail
+        ver="${{ steps.pins.outputs.wasm_bindgen }}"
+        base="wasm-bindgen-${ver}-x86_64-unknown-linux-musl"
+        url="https://github.com/rustwasm/wasm-bindgen/releases/download/${ver}/${base}.tar.gz"
+        curl -fsSL "$url" -o /tmp/wb.tar.gz
+        curl -fsSL "${url}.sha256sum" -o /tmp/wb.sha256
+        echo "$(awk '{print $1}' /tmp/wb.sha256)  /tmp/wb.tar.gz" | sha256sum -c -
+        mkdir -p /tmp/wb && tar -xzf /tmp/wb.tar.gz -C /tmp/wb --strip-components=1
+        install -Dm0755 /tmp/wb/wasm-bindgen "$HOME/.cargo/bin/wasm-bindgen"
+        found="$(wasm-bindgen --version | awk '{print $2}')"
+        test "$found" = "$ver" || { echo "wasm-bindgen version mismatch: got $found, expected $ver"; exit 1; }
+        echo "wasm-bindgen $found installed"
+
+    - name: Install binaryen (prebuilt, matched to BINARYEN_VERSION) and verify SIMD
+      shell: bash
+      run: |
+        set -euo pipefail
+        ver="${{ steps.pins.outputs.binaryen }}"
+        base="binaryen-version_${ver}-x86_64-linux"
+        url="https://github.com/WebAssembly/binaryen/releases/download/version_${ver}/${base}.tar.gz"
+        curl -fsSL "$url" -o /tmp/bn.tar.gz
+        curl -fsSL "${url}.sha256" -o /tmp/bn.sha256
+        echo "$(awk '{print $1}' /tmp/bn.sha256)  /tmp/bn.tar.gz" | sha256sum -c -
+        mkdir -p /tmp/binaryen && tar -xzf /tmp/bn.tar.gz -C /tmp/binaryen --strip-components=1
+        echo "/tmp/binaryen/bin" >> "$GITHUB_PATH"
+        export PATH="/tmp/binaryen/bin:$PATH"
+        found="$(wasm-opt --version | grep -oE '[0-9]+' | head -1)"
+        test "$found" = "$ver" || { echo "binaryen version mismatch: got $found, expected $ver"; exit 1; }
+        printf '(module)\n' | wasm-opt --enable-simd -o /dev/null - \
+          || { echo "FAIL: installed wasm-opt lacks --enable-simd support"; exit 1; }
+        echo "binaryen $found installed (wasm-opt --enable-simd verified)"
