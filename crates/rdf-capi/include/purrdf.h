@@ -8,6 +8,10 @@
 #pragma once
 
 /* WARNING: generated file — edit crates/rdf-capi instead. */
+#define PURRDF_MAJOR 0
+#define PURRDF_MINOR 3
+#define PURRDF_PATCH 3
+
 
 #include <stdarg.h>
 #include <stdbool.h>
