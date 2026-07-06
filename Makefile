@@ -204,11 +204,11 @@ wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WA
 	 case "$$budget" in ''|*[!0-9]*) echo "ERROR: WASM_SIZE_BUDGET_BYTES ('$$budget') is not a positive integer"; exit 1;; esac; \
 	 [ "$$budget" -gt 0 ] || { echo "ERROR: WASM_SIZE_BUDGET_BYTES must be > 0"; exit 1; }; \
 	 test -s "$$art" || { echo "ERROR: $$art missing or empty — wasm-pkg did not produce the optimized artifact"; exit 1; }; \
-	 size=$$(wc -c < "$$art" | tr -d ' '); \
-	 gz=$$(gzip -9nc < "$$art" | wc -c | tr -d ' '); \
+	 size=$$(wc -c < "$$art" | awk '{print $$1}'); \
+	 gz=$$(gzip -9nc < "$$art" | wc -c | awk '{print $$1}'); \
 	 pct=$$(( size * 100 / budget )); \
 	 raw=target/wasm32-unknown-unknown/release/purrdf_wasm.wasm; \
-	 if [ -s "$$raw" ]; then rawsz=$$(wc -c < "$$raw" | tr -d ' '); reduc=$$(( (rawsz - size) * 100 / rawsz )); \
+	 if [ -s "$$raw" ]; then rawsz=$$(wc -c < "$$raw" | awk '{print $$1}'); reduc=$$(( (rawsz - size) * 100 / rawsz )); \
 	   ratio="cargo release wasm $$rawsz B -> optimized $$size B (-$$reduc%)"; \
 	 else ratio="cargo release wasm size unavailable (pre-opt module not on disk)"; fi; \
 	 rustcv=$$(rustc --version); \
