@@ -212,7 +212,7 @@ wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WA
 	   ratio="cargo release wasm $$rawsz B -> optimized $$size B (-$$reduc%)"; \
 	 else ratio="cargo release wasm size unavailable (pre-opt module not on disk)"; fi; \
 	 rustcv=$$(rustc --version); \
-	 wbver=$$(grep -oP 'wasm-bindgen = "=\K[0-9.]+' Cargo.toml); \
+	 wbver=$$(sed -n 's/.*wasm-bindgen[[:space:]]*=[[:space:]]*"=\([0-9.]*\)".*/\1/p' Cargo.toml); \
 	 woptver=$$(wasm-opt --version); \
 	 line="wasm artifact: $$size bytes / budget $$budget bytes ($$pct%); gzip -9: $$gz bytes"; \
 	 echo "$$line"; echo "  $$ratio"; \
