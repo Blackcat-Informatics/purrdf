@@ -252,6 +252,26 @@ def rust_comments(src: str) -> list[tuple[int, int, str]]:
     return comments
 
 
+def is_rust_doc_comment(text: str) -> bool:
+    """Return whether a Rust comment renders as Markdown (i.e. is a doc comment).
+
+    Only doc comments are Markdown, so only they get inline-code-span exclusion.
+    Outer/inner line docs are ``///`` and ``//!``; block docs are ``/**`` and
+    ``/*!``. Rust treats ``////`` (four-plus slashes), ``/***`` and the empty
+    ``/**/`` as *ordinary* comments, not docs — so those must NOT be excluded and
+    are matched out here.
+    """
+    if text.startswith("///") and not text.startswith("////"):
+        return True
+    if text.startswith("//!"):
+        return True
+    if text.startswith("/*!"):
+        return True
+    if text.startswith("/**") and not text.startswith(("/***", "/**/")):
+        return True
+    return False
+
+
 def scan_comments(
     comments: list[tuple[int, int, str]],
     *,
@@ -264,23 +284,25 @@ def scan_comments(
     are translated back into absolute file coordinates.
 
     When ``exclude_inline_code`` is set, matches inside a Markdown inline-code
-    span (backtick-delimited) are skipped, mirroring ``scan_markdown``. Rust doc
-    comments (``///``/``//!``) render as Markdown, so an issue-shaped token
-    inside a code span like ```term#3``` is a code literal — the exact
-    output ``RdfLocation::display`` emits — not a stale issue reference. Without
-    this, the Rust scan flagged what the Markdown scan already (correctly)
-    excludes.
+    span (backtick-delimited) are skipped **only for Rust doc comments**
+    (``///``/``//!``/``/**``/``/*!``), which render as Markdown, mirroring
+    ``scan_markdown``. In a doc comment an issue-shaped token inside a code span
+    like ```term#3``` is a code literal — the exact output
+    ``RdfLocation::display`` emits — not a stale issue reference. Ordinary
+    ``//``/``/* */`` comments are NOT Markdown, so backticks carry no special
+    meaning there and a ``#NNN`` token inside them is still flagged.
     """
     violations: list[tuple[int, int, str, str]] = []
 
     for start_line, start_col, text in comments:
         text_lines = text.split("\n")
+        doc_comment = exclude_inline_code and is_rust_doc_comment(text)
         for match in ISSUE_RE.finditer(text):
             offset = match.start()
             rel_line = text.count("\n", 0, offset) + 1
             last_nl = text.rfind("\n", 0, offset)
             rel_col = offset - last_nl
-            if exclude_inline_code:
+            if doc_comment:
                 col0 = rel_col - 1
                 spans = find_inline_code_spans(text_lines[rel_line - 1])
                 if any(s <= col0 < e for s, e in spans):
@@ -297,9 +319,11 @@ def scan_comments(
 def scan_rust(path: Path) -> list[tuple[int, int, str, str]]:
     """Return violations found in a Rust source file.
 
-    Rust doc comments are rendered as Markdown, so inline-code spans are excluded
-    exactly as ``scan_markdown`` excludes them — an issue-shaped token inside
-    backticks is a code literal, not a stale issue reference.
+    ``exclude_inline_code`` is requested, but ``scan_comments`` applies the
+    inline-code-span exclusion only to Rust *doc* comments (which render as
+    Markdown) — an issue-shaped token inside backticks in a doc comment is a code
+    literal, not a stale issue reference. Ordinary ``//``/``/* */`` comments are
+    not Markdown, so a ``#NNN`` inside backticks there is still flagged.
     """
     src = path.read_text(encoding="utf-8")
     return scan_comments(rust_comments(src), exclude_inline_code=True)
