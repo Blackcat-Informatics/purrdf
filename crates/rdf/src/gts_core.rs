@@ -12,6 +12,11 @@ use crate::{
     RdfSegmentRecord, RdfSignatureRecord, RdfSuppressionRecord,
 };
 
+/// Build the [`RdfLookaside`] sidecar from a folded GTS [`Graph`]: file- and
+/// segment-level metadata entries, segment records, content-addressed blob
+/// records (digest + origin reference, never payload bytes), lookaside
+/// resources classified from blob metadata, and the suppression / opaque-node /
+/// signature records.
 pub fn lookaside_from_graph(graph: &Graph) -> RdfLookaside {
     let metadata = graph
         .meta

@@ -1,5 +1,7 @@
-// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Writer → reader transport round-trip: terms and quads survive a fold intact.
 
 use purrdf_gts::model::{Term, TermKind};
 use purrdf_gts::reader::read;

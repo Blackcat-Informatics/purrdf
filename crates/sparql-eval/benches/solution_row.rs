@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
+// which would otherwise trip the workspace `missing_docs` lint.
+#![allow(missing_docs)]
+
 //! Micro-benchmark isolating the per-row machinery of a [`Solution`] — the
 //! inline-`SmallVec` row that the structural pass switched from `Vec` to
 //! `SmallVec<[Option<SolutionTerm>; 4]>` (inline capacity 4, the distribution

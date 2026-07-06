@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: CC-BY-4.0
+
+[book]
+title = "The PurRDF Book"
+authors = ["Blackcat Informatics® Inc."]
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/Blackcat-Informatics/purrdf"
+edit-url-template = "https://github.com/Blackcat-Informatics/purrdf/edit/main/docs/book/src/{path}"

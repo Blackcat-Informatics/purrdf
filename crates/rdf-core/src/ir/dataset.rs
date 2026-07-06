@@ -101,9 +101,13 @@ const _: () = assert!(size_of::<QuadRow>() == 16);
 /// default graph.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct QuadIds {
+    /// The subject term id.
     pub s: TermId,
+    /// The predicate term id.
     pub p: TermId,
+    /// The object term id.
     pub o: TermId,
+    /// The graph-name term id (`None` = default graph).
     pub g: Option<TermId>,
 }
 
@@ -128,26 +132,47 @@ pub enum TermRef<'a> {
     /// An IRI, by its borrowed full string.
     Iri(&'a str),
     /// A blank node, identified by `(label, scope)` (C0.2).
-    Blank { label: &'a str, scope: BlankScope },
+    Blank {
+        /// The borrowed blank-node label (without the `_:` prefix).
+        label: &'a str,
+        /// The blank-node scope the label is local to.
+        scope: BlankScope,
+    },
     /// A literal: borrowed lexical form, the (interned) datatype id, an optional
     /// borrowed language tag, and an optional base direction (C0.1).
     Literal {
+        /// The borrowed lexical form, byte-for-byte as authored.
         lexical: &'a str,
+        /// The datatype IRI's interned term id (always present; the default is
+        /// expanded at intern time).
         datatype: TermId,
+        /// The borrowed (lowercased) language tag, for language-tagged strings.
         language: Option<&'a str>,
+        /// The RDF 1.2 base direction, for directional language-tagged strings.
         direction: Option<RdfTextDirection>,
     },
     /// A triple term (RDF 1.2 quoted triple), by its resolved component ids (C0.3).
-    Triple { s: TermId, p: TermId, o: TermId },
+    Triple {
+        /// The quoted triple's subject term id.
+        s: TermId,
+        /// The quoted triple's predicate term id.
+        p: TermId,
+        /// The quoted triple's object term id.
+        o: TermId,
+    },
 }
 
 /// A borrowed, resolved quad view: each position is a [`TermRef`] borrowing into the
 /// dataset's term table. No allocation, no clone per quad.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct QuadRef<'a> {
+    /// The resolved subject term.
     pub s: TermRef<'a>,
+    /// The resolved predicate term.
     pub p: TermRef<'a>,
+    /// The resolved object term.
     pub o: TermRef<'a>,
+    /// The resolved graph-name term (`None` = default graph).
     pub g: Option<TermRef<'a>>,
 }
 

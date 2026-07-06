@@ -122,9 +122,15 @@ pub struct TargetTypeParam {
 #[derive(Debug, Clone)]
 pub enum ComponentValidator {
     /// An `ASK` query validator (`sh:SPARQLAskValidator`).
-    Ask { ask: String },
+    Ask {
+        /// The raw `ASK` query text (`sh:ask`).
+        ask: String,
+    },
     /// A `SELECT` query validator (`sh:SPARQLSelectValidator`).
-    Select { select: String },
+    Select {
+        /// The raw `SELECT` query text (`sh:select`).
+        select: String,
+    },
 }
 
 /// A single SHACL constraint on a shape or property shape.

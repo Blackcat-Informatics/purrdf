@@ -13,7 +13,9 @@ use std::fmt::Write as _;
 
 use purrdf_gts::model::{BlobEntry, Graph, Quad, Term, TermKind, Triple3};
 
+/// Scope name for the default graph (quads with no graph term).
 pub const DEFAULT_SCOPE: &str = "";
+/// Sentinel scope name selecting every quad regardless of graph.
 pub const ALL_SCOPE: &str = "__all__";
 
 const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -69,17 +71,38 @@ pub struct GtsFoldViewConfig {
     pub curie_prefixes: Vec<(String, String)>,
 }
 
+/// A term projected to a consumer-facing native value: XSD numeric/boolean
+/// literals are parsed, IRIs are CURIE-compacted, and everything else stays a
+/// string (see [`GtsFoldView::public_value`]).
 #[derive(Clone, Debug, PartialEq)]
 pub enum PublicValue {
+    /// An IRI, compacted to a CURIE when a known prefix matches.
     Iri(String),
+    /// A blank node rendered with its `_:` prefix.
     Blank(String),
+    /// A plain string literal, an unparseable typed literal, or the N-Quads
+    /// token of a triple term.
     String(String),
+    /// An `xsd:integer` literal with a parseable lexical form.
     Integer(i64),
+    /// An `xsd:decimal`/`xsd:double`/`xsd:float` literal with a parseable
+    /// lexical form.
     Float(f64),
+    /// An `xsd:boolean` literal (`true`/`1` or `false`/`0`).
     Boolean(bool),
-    LanguageString { value: String, lang: String },
+    /// A language-tagged string literal.
+    LanguageString {
+        /// The lexical form.
+        value: String,
+        /// The language tag as stored (internal `x-purrdf-*` tags are NOT
+        /// retagged here).
+        lang: String,
+    },
 }
 
+/// One dictionary term row: `(term_id, kind, value, datatype_id, lang,
+/// reifier_id)` where `kind` is `0` IRI / `1` literal / `2` blank node /
+/// `3` triple term.
 pub type TermRow = (
     usize,
     u8,
@@ -88,20 +111,38 @@ pub type TermRow = (
     Option<String>,
     Option<usize>,
 );
+/// One quad row of dictionary term ids: `(subject, predicate, object, graph?)`.
 pub type QuadRow = (usize, usize, usize, Option<usize>);
+/// One statement-layer reifier row: `(reifier_id, subject, predicate, object)`.
 pub type ReifierRow = (usize, usize, usize, usize);
+/// One statement-layer annotation row: `(reifier_id, predicate, value)`.
 pub type AnnotationRow = (usize, usize, usize);
+/// One decoded blob row: `(digest, payload bytes)`.
 pub type BlobRow = (String, Vec<u8>);
 
+/// The compact dictionary-encoded relational projection of a folded GTS graph:
+/// term dictionary, quads, statement-layer rows, and decoded blobs, all keyed by
+/// dictionary term ids (see [`relational_rows`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RelationalRows {
+    /// The term dictionary, one [`TermRow`] per term id in order.
     pub terms: Vec<TermRow>,
+    /// All quads as dictionary-id tuples.
     pub quads: Vec<QuadRow>,
+    /// The statement-layer reifier rows (graph slot flattened away).
     pub reifiers: Vec<ReifierRow>,
+    /// The statement-layer annotation rows (graph slot flattened away).
     pub annotations: Vec<AnnotationRow>,
+    /// The decoded blob payloads, keyed by content digest.
     pub blobs: Vec<BlobRow>,
 }
 
+/// Rust-owned read-side view over a folded GTS [`Graph`]: scoped quad lookup,
+/// term accessors, language-tag projection, RDF list walking, statement-layer
+/// access, and the relational projection.
+///
+/// Construction builds an IRI→term-id index and per-scope subject/predicate
+/// indexes once; all lookups are then index-backed and deterministic.
 #[derive(Debug)]
 pub struct GtsFoldView {
     graph: Graph,
@@ -147,30 +188,41 @@ impl GtsFoldView {
         view
     }
 
+    /// Consume the view and return the underlying folded [`Graph`].
     pub fn into_graph(self) -> Graph {
         self.graph
     }
 
+    /// The underlying folded [`Graph`].
     pub fn graph(&self) -> &Graph {
         &self.graph
     }
 
+    /// The dictionary [`Term`] for the given term id.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `tid` is out of range for the graph's term dictionary.
     pub fn term(&self, tid: usize) -> &Term {
         &self.graph.terms[tid]
     }
 
+    /// Whether the term is an IRI.
     pub fn is_iri(&self, tid: usize) -> bool {
         self.term(tid).kind == TermKind::Iri
     }
 
+    /// Whether the term is a blank node.
     pub fn is_bnode(&self, tid: usize) -> bool {
         self.term(tid).kind == TermKind::Bnode
     }
 
+    /// Whether the term is a literal.
     pub fn is_literal(&self, tid: usize) -> bool {
         self.term(tid).kind == TermKind::Literal
     }
 
+    /// The IRI value of the term, or `None` if the term is not an IRI.
     pub fn iri(&self, tid: usize) -> Option<&str> {
         let term = self.term(tid);
         (term.kind == TermKind::Iri)
@@ -178,22 +230,31 @@ impl GtsFoldView {
             .flatten()
     }
 
+    /// The lexical value of the term (empty string when the term has none).
     pub fn lex(&self, tid: usize) -> &str {
         self.term(tid).value.as_deref().unwrap_or("")
     }
 
+    /// The language tag of the term, if any.
     pub fn lang(&self, tid: usize) -> Option<&str> {
         self.term(tid).lang.as_deref()
     }
 
+    /// The datatype IRI of the term (as resolved by the graph's dictionary).
     pub fn datatype(&self, tid: usize) -> String {
         self.graph.datatype_iri(self.term(tid))
     }
 
+    /// The N-Quads token for the term (`<iri>`, `_:label`, quoted literal, or
+    /// `<<( s p o )>>` for a triple term).
     pub fn nq_token(&self, tid: usize) -> String {
         render_term(&self.graph, tid)
     }
 
+    /// Project the term to a consumer-facing [`PublicValue`]: XSD
+    /// integer/float/boolean literals are parsed (falling back to
+    /// [`PublicValue::String`] on an unparseable lexical form), IRIs are
+    /// CURIE-compacted, and language-tagged literals keep their stored tag.
     pub fn public_value(&self, tid: usize) -> PublicValue {
         let term = self.term(tid);
         match term.kind {
@@ -234,10 +295,15 @@ impl GtsFoldView {
         }
     }
 
+    /// The dictionary term id of an IRI, or `None` if the graph has no such
+    /// IRI term. When the dictionary contains duplicates the lowest id wins.
     pub fn tid_of_iri(&self, iri: &str) -> Option<usize> {
         self.iri_index.get(iri).copied()
     }
 
+    /// Compact an IRI to a CURIE using the consumer-supplied prefixes first,
+    /// then the built-in W3C/schema.org table; unmatched IRIs are returned
+    /// unchanged.
     pub fn curie(&self, iri: &str) -> String {
         for (prefix, namespace) in &self.curie_prefixes {
             if let Some(local) = iri.strip_prefix(namespace.as_str()) {
@@ -247,6 +313,9 @@ impl GtsFoldView {
         curie(iri)
     }
 
+    /// All quads visible in a scope. `scope` is `None` for the default graph,
+    /// [`ALL_SCOPE`] for every graph, or a named-graph IRI; an unknown graph
+    /// IRI yields no quads.
     pub fn quads(&self, scope: Option<&str>) -> Vec<Quad> {
         let Some(key) = self.scope_key(scope) else {
             return Vec::new();
@@ -269,6 +338,8 @@ impl GtsFoldView {
             .unwrap_or_default()
     }
 
+    /// The (sorted, deduplicated) subject term ids typed `rdf:type
+    /// <class_iri>` within the scope.
     pub fn subjects_by_type(&self, class_iri: &str, scope: Option<&str>) -> Vec<usize> {
         let (Some(type_tid), Some(class_tid)) =
             (self.tid_of_iri(RDF_TYPE), self.tid_of_iri(class_iri))
@@ -289,6 +360,8 @@ impl GtsFoldView {
         out.into_iter().collect()
     }
 
+    /// The (sorted, deduplicated) object term ids of `(s_tid, <p_iri>, ?o)`
+    /// within the scope.
     pub fn objects(&self, s_tid: usize, p_iri: &str, scope: Option<&str>) -> Vec<usize> {
         let Some(p_tid) = self.tid_of_iri(p_iri) else {
             return Vec::new();
@@ -307,6 +380,8 @@ impl GtsFoldView {
         out.into_iter().collect()
     }
 
+    /// A single deterministic object of `(s_tid, <p_iri>, ?o)`: the candidate
+    /// whose N-Quads token sorts first, or `None` when there is no match.
     pub fn value(&self, s_tid: usize, p_iri: &str, scope: Option<&str>) -> Option<usize> {
         self.objects(s_tid, p_iri, scope)
             .into_iter()
@@ -315,6 +390,8 @@ impl GtsFoldView {
             .map(|(_, tid)| tid)
     }
 
+    /// All (sorted, deduplicated) `(predicate, object)` term-id pairs asserted
+    /// about a subject within the scope.
     pub fn predicate_objects(&self, s_tid: usize, scope: Option<&str>) -> Vec<(usize, usize)> {
         let Some(key) = self.scope_key(scope) else {
             return Vec::new();
@@ -326,6 +403,7 @@ impl GtsFoldView {
         out.into_iter().collect()
     }
 
+    /// Whether the quad `(s_tid, <p_iri>, o_tid)` is asserted within the scope.
     pub fn has(&self, s_tid: usize, p_iri: &str, o_tid: usize, scope: Option<&str>) -> bool {
         let Some(p_tid) = self.tid_of_iri(p_iri) else {
             return false;
@@ -339,6 +417,9 @@ impl GtsFoldView {
             .is_some_and(|rows| rows.contains(&(p_tid, o_tid)))
     }
 
+    /// Walk an RDF Collection (`rdf:first`/`rdf:rest`) from its head node and
+    /// return the member term ids in order. The walk stops at `rdf:nil` and is
+    /// cycle-safe (a revisited node terminates the walk).
     pub fn rdf_list(&self, head_tid: usize, scope: Option<&str>) -> Vec<usize> {
         let nil = self.tid_of_iri(RDF_NIL);
         let mut out = Vec::new();
@@ -367,10 +448,15 @@ impl GtsFoldView {
         &self.graph.annotations
     }
 
+    /// The internal→BCP-47 retag map built from the consumer's
+    /// [`LanguageVocab`]; empty when the view was constructed without one.
     pub fn tag_map(&self) -> &BTreeMap<String, String> {
         &self.tag_map
     }
 
+    /// The set of public (lowercased BCP-47) language tags present on literals
+    /// in the graph, with internal `x-purrdf-*` tags retagged through the tag
+    /// map. Always contains `"en"`.
     pub fn available_languages(&self) -> BTreeSet<String> {
         let mut tags = BTreeSet::from(["en".to_string()]);
         for term in &self.graph.terms {
@@ -395,10 +481,16 @@ impl GtsFoldView {
         tags
     }
 
+    /// The text of [`GtsFoldView::public_literal`], dropping the language tag.
     pub fn public_text(&self, s_tid: usize, p_iri: &str, scope: Option<&str>) -> String {
         self.public_literal(s_tid, p_iri, scope).0
     }
 
+    /// The preferred literal of `(s_tid, <p_iri>, ?o)` as `(text, public
+    /// BCP-47 tag)`. Internally tagged (`x-purrdf-*`) candidates with a retag
+    /// mapping win (English-first); otherwise the deterministically first
+    /// candidate is returned with its public tag. Returns `(String::new(),
+    /// None)` when no literal matches.
     pub fn public_literal(
         &self,
         s_tid: usize,
@@ -432,6 +524,11 @@ impl GtsFoldView {
         (self.lex(first).to_string(), public)
     }
 
+    /// The literal of `(s_tid, <p_iri>, ?o)` best matching the requested
+    /// language tags (defaulting to `["en"]` when empty), as `(text, public
+    /// BCP-47 tag, is_fallback)`. When no requested tag matches, falls back to
+    /// English, then the best other tagged candidate, then an untagged one —
+    /// with the flag set to `true`.
     pub fn public_literal_with_fallback(
         &self,
         s_tid: usize,
@@ -448,6 +545,11 @@ impl GtsFoldView {
             .unwrap_or((String::new(), None, false))
     }
 
+    /// All literals of `(s_tid, <p_iri>, ?o)` matching the requested language
+    /// tags (defaulting to `["en"]` when empty), each as `(text, public BCP-47
+    /// tag, is_fallback)`. When no requested tag matches, at most one fallback
+    /// row is returned using the [`GtsFoldView::public_literal_with_fallback`]
+    /// ordering.
     pub fn public_texts(
         &self,
         s_tid: usize,
@@ -463,6 +565,12 @@ impl GtsFoldView {
         self.filter_literals(&candidates, requested)
     }
 
+    /// Project the underlying graph to [`RelationalRows`] (see
+    /// [`relational_rows`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error message when a blob payload cannot be decoded.
     pub fn relational_rows(&self) -> Result<RelationalRows, String> {
         relational_rows(&self.graph)
     }
@@ -621,6 +729,14 @@ impl GtsFoldView {
 
 type LitRow = (String, Option<String>, String);
 
+/// Project a folded GTS [`Graph`] to the compact dictionary-encoded
+/// [`RelationalRows`] view: the full term dictionary, all quads, the
+/// statement-layer reifier/annotation rows (with the always-`None` graph slot
+/// flattened away), and every blob decoded to bytes.
+///
+/// # Errors
+///
+/// Returns an error message when a blob payload cannot be decoded.
 pub fn relational_rows(graph: &Graph) -> Result<RelationalRows, String> {
     let blobs = graph
         .blobs

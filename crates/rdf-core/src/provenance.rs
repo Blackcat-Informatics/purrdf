@@ -588,17 +588,24 @@ impl Default for DatasetProvenance {
 pub enum ProvenanceError {
     /// An occurrence references a `UnitId` that has no registered kind.
     UnknownUnit {
+        /// The index of the offending occurrence in the occurrence table.
         occurrence_index: usize,
+        /// The unit id with no registered kind.
         unit: UnitId,
     },
     /// An occurrence references an `ArtifactId` that is out of range.
     UnknownArtifact {
+        /// The index of the offending occurrence in the occurrence table.
         occurrence_index: usize,
+        /// The out-of-range artifact id.
         artifact: ArtifactId,
     },
     /// A `QuadHandle` has zero occurrences but the gate was asked to enforce
     /// full coverage (every semantic quad must have ≥1 occurrence).
-    MissingOccurrence { quad_index: usize },
+    MissingOccurrence {
+        /// The dense quad ordinal with no assertion occurrence.
+        quad_index: usize,
+    },
 }
 
 impl fmt::Display for ProvenanceError {

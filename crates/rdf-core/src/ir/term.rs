@@ -215,19 +215,31 @@ pub enum TermValue {
     Iri(String),
     /// A blank node, by `(label, scope)` (C0.2). `scope` is a structural ordinal,
     /// not a term-table id, so it is dataset-independent.
-    Blank { label: String, scope: BlankScope },
+    Blank {
+        /// The blank-node label (without the `_:` prefix).
+        label: String,
+        /// The blank-node scope the label is local to.
+        scope: BlankScope,
+    },
     /// A literal (C0.1): lexical form, the datatype **IRI by value**, optional
     /// (lowercased) language tag, and optional base direction.
     Literal {
+        /// The lexical form, byte-for-byte as authored.
         lexical_form: String,
+        /// The datatype IRI, by value (never a dataset-local id).
         datatype: String,
+        /// The lowercased language tag, for language-tagged strings.
         language: Option<String>,
+        /// The RDF 1.2 base direction, for directional language-tagged strings.
         direction: Option<RdfTextDirection>,
     },
     /// A triple term, identified structurally by its `(s, p, o)` **values** (C0.3).
     Triple {
+        /// The quoted triple's subject value.
         s: Box<Self>,
+        /// The quoted triple's predicate value.
         p: Box<Self>,
+        /// The quoted triple's object value.
         o: Box<Self>,
     },
 }

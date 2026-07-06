@@ -169,6 +169,7 @@ impl Sink {
 
 #[wasm_bindgen]
 impl Sink {
+    /// `new Sink()` — an empty sink ready to accept quads via `push`.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self::default()

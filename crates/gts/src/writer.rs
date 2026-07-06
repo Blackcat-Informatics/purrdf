@@ -902,6 +902,7 @@ impl Writer {
         self.add_frame("index", Some(Value::Map(payload)), None, None, None)
     }
 
+    /// Append an `index` footer covering the frames written so far and return its frame id.
     pub fn add_index(&mut self) -> Vec<u8> {
         self.add_index_impl(false)
     }

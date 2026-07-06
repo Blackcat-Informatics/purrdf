@@ -86,14 +86,25 @@ impl TermFactory for RdfDatasetBuilder {
 /// contract boundary so the core trait does not leak an oxigraph enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RdfParseRequest<'a> {
+    /// The raw RDF bytes to parse.
     pub bytes: &'a [u8],
+    /// The format's media type (or local format id).
     pub media_type: &'a str,
+    /// The base IRI for resolving relative IRIs, when any.
     pub base_iri: Option<&'a str>,
+    /// A display name for the source (e.g. a file path) used in diagnostics.
     pub source_name: Option<&'a str>,
 }
 
 /// Parser ingress seam: drive RDF bytes into any event sink.
 pub trait RdfParserBackend {
+    /// Parses the request's bytes and delivers the resulting events into
+    /// `sink`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first fatal parse diagnostic; events delivered before the
+    /// failure may already have reached the sink.
     fn parse_into<S: RdfEventSink + ?Sized>(
         &self,
         request: RdfParseRequest<'_>,
@@ -115,16 +126,23 @@ pub trait RdfParserBackend {
 /// sub-queries while keeping the variable projectable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SparqlRequest<'a> {
+    /// The SPARQL query or update text.
     pub query: &'a str,
+    /// The base IRI for resolving relative IRIs in the query, when any.
     pub base_iri: Option<&'a str>,
+    /// Variable pre-bindings (`(name, value)` pairs); `&[]` means none.
     pub substitutions: &'a [(String, TermValue)],
 }
 
 /// Materialized SPARQL result model independent of any concrete query engine.
 #[derive(Debug, Clone)]
 pub enum SparqlResult {
+    /// A SELECT solution sequence.
     Solutions {
+        /// The projected variable names, in projection order.
         variables: Vec<String>,
+        /// One row per solution; each cell is the binding for the variable at
+        /// the same position in `variables` (`None` = unbound).
         rows: Vec<Vec<Option<TermValue>>>,
         /// Auxiliary quads invented during evaluation by value-constructing builtins
         /// (`purrdf:listSlice`/`purrdf:listConcat` mint fresh `rdf:List` cells). Empty for
@@ -132,7 +150,9 @@ pub enum SparqlResult {
         /// head returned in a solution cell; W3C tabular result formats ignore it.
         aux: Arc<RdfDataset>,
     },
+    /// A CONSTRUCT/DESCRIBE result, materialized as a frozen dataset.
     Graph(Arc<RdfDataset>),
+    /// An ASK result.
     Boolean(bool),
 }
 
@@ -140,14 +160,25 @@ pub enum SparqlResult {
 /// engine can operate on its store while a future native engine can operate on the
 /// IR/native query store.
 pub trait SparqlEngine {
+    /// The dataset representation this engine evaluates against.
     type Dataset;
 
+    /// Evaluates a SPARQL query against the dataset.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic when the query fails to parse or evaluate.
     fn query(
         &self,
         dataset: &Self::Dataset,
         request: SparqlRequest<'_>,
     ) -> Result<SparqlResult, RdfDiagnostic>;
 
+    /// Applies a SPARQL update to the dataset in place.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic when the update fails to parse or apply.
     fn update(
         &self,
         dataset: &mut Self::Dataset,
@@ -158,8 +189,11 @@ pub trait SparqlEngine {
 /// Which graph(s) a serializer should emit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SerializeGraph<'a> {
+    /// The whole dataset (default graph plus every named graph).
     Dataset,
+    /// The default graph only.
     DefaultGraph,
+    /// One named graph, by its graph-name term value.
     Named(&'a TermValue),
 }
 
@@ -167,13 +201,22 @@ pub enum SerializeGraph<'a> {
 /// as [`RdfParseRequest`]: the core trait must not expose an oxigraph enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RdfSerializeRequest<'a> {
+    /// The output format's media type (or local format id).
     pub media_type: &'a str,
+    /// Which graph(s) to emit.
     pub graph: SerializeGraph<'a>,
+    /// The base IRI the serializer may abbreviate against, when any.
     pub base_iri: Option<&'a str>,
 }
 
 /// Serializer egress seam over the frozen IR.
 pub trait RdfSerializer {
+    /// Serializes the requested graph(s) of a frozen dataset to `output`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic when the format is unsupported, the dataset cannot
+    /// be represented in it, or writing to `output` fails.
     fn serialize<W: Write>(
         &self,
         dataset: &RdfDataset,

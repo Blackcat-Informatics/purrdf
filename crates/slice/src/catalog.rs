@@ -30,9 +30,13 @@ const DCTERMS_IDENTIFIER: &str = "http://purl.org/dc/terms/identifier";
 /// The tier of a slice in the slice taxonomy.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SliceTier {
+    /// A core slice (`<vocab>tierCore`).
     Core,
+    /// An extension slice (`<vocab>tierExtension`).
     Extension,
+    /// A domain slice (`<vocab>tierDomain`).
     Domain,
+    /// A tier IRI outside the caller's vocabulary; carries the raw IRI.
     Unknown(String),
 }
 

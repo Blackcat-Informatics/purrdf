@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
+// which would otherwise trip the workspace `missing_docs` lint.
+#![allow(missing_docs)]
+
 //! End-to-end SPARQL evaluation benchmark over a ~300k-quad synthetic dataset,
 //! driven through [`NativeSparqlEngine`] (parse memoized by the plan cache, BGP
 //! orders memoized by the engine's order cache — each sample measures evaluation,

@@ -6,20 +6,28 @@ use crate::RdfLocation;
 /// RDF term category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RdfTermKind {
+    /// An IRI.
     Iri,
+    /// A blank node.
     BlankNode,
+    /// A literal.
     Literal,
+    /// An RDF 1.2 triple term (quoted triple).
     Triple,
 }
 
 /// RDF 1.2 base direction for directional language-tagged literals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RdfTextDirection {
+    /// Left-to-right base direction (`ltr`).
     Ltr,
+    /// Right-to-left base direction (`rtl`).
     Rtl,
 }
 
 impl RdfTextDirection {
+    /// The lowercase direction token (`"ltr"` or `"rtl"`) as it appears in
+    /// concrete syntaxes.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ltr => "ltr",
@@ -31,13 +39,21 @@ impl RdfTextDirection {
 /// An RDF literal, including RDF 1.2 language direction when available.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RdfLiteral {
+    /// The lexical form, byte-for-byte as authored.
     pub lexical_form: String,
+    /// The datatype IRI; `None` means the implied default (`rdf:langString`
+    /// when a language tag is present, otherwise `xsd:string`), expanded at
+    /// intern time.
     pub datatype: Option<String>,
+    /// The language tag, for language-tagged strings.
     pub language: Option<String>,
+    /// The RDF 1.2 base direction, for directional language-tagged strings.
     pub direction: Option<RdfTextDirection>,
 }
 
 impl RdfLiteral {
+    /// A simple literal: bare lexical form with no datatype, language, or
+    /// direction.
     pub fn simple(lexical_form: impl Into<String>) -> Self {
         Self {
             lexical_form: lexical_form.into(),
@@ -47,6 +63,7 @@ impl RdfLiteral {
         }
     }
 
+    /// A datatyped literal from its lexical form and datatype IRI.
     pub fn typed(lexical_form: impl Into<String>, datatype: impl Into<String>) -> Self {
         Self {
             lexical_form: lexical_form.into(),
@@ -56,6 +73,8 @@ impl RdfLiteral {
         }
     }
 
+    /// A language-tagged string from its lexical form and language tag, with
+    /// no base direction.
     pub fn language_tagged(lexical_form: impl Into<String>, language: impl Into<String>) -> Self {
         Self {
             lexical_form: lexical_form.into(),
@@ -73,33 +92,42 @@ impl RdfLiteral {
 /// match all four — there is no future variant to guard against.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RdfTerm {
+    /// An IRI, by its full string.
     Iri(String),
+    /// A blank node, by its label (without the `_:` prefix).
     BlankNode(String),
+    /// A literal.
     Literal(RdfLiteral),
+    /// An RDF 1.2 triple term (quoted triple).
     Triple(Box<RdfTriple>),
 }
 
 impl RdfTerm {
+    /// An IRI term from its full string.
     #[must_use]
     pub fn iri(value: impl Into<String>) -> Self {
         Self::Iri(value.into())
     }
 
+    /// A blank-node term from its label (without the `_:` prefix).
     #[must_use]
     pub fn blank_node(value: impl Into<String>) -> Self {
         Self::BlankNode(value.into())
     }
 
+    /// A literal term.
     #[must_use]
     pub fn literal(literal: RdfLiteral) -> Self {
         Self::Literal(literal)
     }
 
+    /// An RDF 1.2 triple term (quoted triple) from an owned triple.
     #[must_use]
     pub fn triple(triple: RdfTriple) -> Self {
         Self::Triple(Box::new(triple))
     }
 
+    /// This term's category.
     #[must_use]
     pub fn kind(&self) -> RdfTermKind {
         match self {
@@ -124,13 +152,18 @@ impl core::fmt::Display for RdfTerm {
 /// downstream adapters decide whether a target store can encode them.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RdfTriple {
+    /// The subject term (may itself be a triple term).
     pub subject: RdfTerm,
+    /// The predicate IRI.
     pub predicate: String,
+    /// The object term.
     pub object: RdfTerm,
+    /// The source location the triple was parsed from, when known.
     pub location: Option<RdfLocation>,
 }
 
 impl RdfTriple {
+    /// A triple from its subject, predicate IRI, and object, with no location.
     pub fn new(subject: RdfTerm, predicate: impl Into<String>, object: RdfTerm) -> Self {
         Self {
             subject,
@@ -140,6 +173,8 @@ impl RdfTriple {
         }
     }
 
+    /// Attaches a source location; an empty location is dropped rather than
+    /// stored.
     #[must_use]
     pub fn with_location(mut self, location: RdfLocation) -> Self {
         if !location.is_empty() {
@@ -152,14 +187,21 @@ impl RdfTriple {
 /// Owned RDF 1.2 quad with optional adapter/source context.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RdfQuad {
+    /// The subject term (may itself be a triple term).
     pub subject: RdfTerm,
+    /// The predicate IRI.
     pub predicate: String,
+    /// The object term.
     pub object: RdfTerm,
+    /// The named graph the quad belongs to (`None` = default graph).
     pub graph_name: Option<RdfTerm>,
+    /// The source location the quad was parsed from, when known.
     pub location: Option<RdfLocation>,
 }
 
 impl RdfQuad {
+    /// A default-graph quad from its subject, predicate IRI, and object, with
+    /// no location.
     pub fn new(subject: RdfTerm, predicate: impl Into<String>, object: RdfTerm) -> Self {
         Self {
             subject,
@@ -170,12 +212,15 @@ impl RdfQuad {
         }
     }
 
+    /// Places the quad in a named graph.
     #[must_use]
     pub fn in_graph(mut self, graph_name: RdfTerm) -> Self {
         self.graph_name = Some(graph_name);
         self
     }
 
+    /// Attaches a source location; an empty location is dropped rather than
+    /// stored.
     #[must_use]
     pub fn with_location(mut self, location: RdfLocation) -> Self {
         if !location.is_empty() {
@@ -188,16 +233,20 @@ impl RdfQuad {
 /// RDF 1.2 reifier binding.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RdfReifier {
+    /// The reifier term (the RDF 1.2 `~` handle naming a triple occurrence).
     pub reifier: RdfTerm,
+    /// The reified statement (the triple the reifier binds).
     pub statement: RdfTriple,
     /// The named graph the reifier declaration was asserted in (`None` = default
     /// graph). A reifier declared inside a TriG/N-Quads `GRAPH g { … }` block carries
     /// that graph so `GRAPH ?g { << … >> … }` binds `?g` to it.
     pub graph: Option<RdfTerm>,
+    /// The source location the reifier binding was parsed from, when known.
     pub location: Option<RdfLocation>,
 }
 
 impl RdfReifier {
+    /// A reifier binding in the default graph, with no location.
     pub fn new(reifier: RdfTerm, statement: RdfTriple) -> Self {
         Self {
             reifier,
@@ -214,6 +263,8 @@ impl RdfReifier {
         self
     }
 
+    /// Attaches a source location; an empty location is dropped rather than
+    /// stored.
     #[must_use]
     pub fn with_location(mut self, location: RdfLocation) -> Self {
         if !location.is_empty() {
@@ -226,16 +277,21 @@ impl RdfReifier {
 /// RDF 1.2 statement annotation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RdfAnnotation {
+    /// The reifier term the annotation is asserted about.
     pub reifier: RdfTerm,
+    /// The annotation's predicate IRI.
     pub predicate: String,
+    /// The annotation's object term.
     pub object: RdfTerm,
     /// The named graph the annotation was asserted in (`None` = default graph); see
     /// [`RdfReifier::graph`].
     pub graph: Option<RdfTerm>,
+    /// The source location the annotation was parsed from, when known.
     pub location: Option<RdfLocation>,
 }
 
 impl RdfAnnotation {
+    /// An annotation on a reifier in the default graph, with no location.
     pub fn new(reifier: RdfTerm, predicate: impl Into<String>, object: RdfTerm) -> Self {
         Self {
             reifier,
@@ -253,6 +309,8 @@ impl RdfAnnotation {
         self
     }
 
+    /// Attaches a source location; an empty location is dropped rather than
+    /// stored.
     #[must_use]
     pub fn with_location(mut self, location: RdfLocation) -> Self {
         if !location.is_empty() {

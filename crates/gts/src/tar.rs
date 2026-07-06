@@ -24,6 +24,7 @@ pub struct TarError {
 }
 
 impl TarError {
+    /// Build a tar error from a detail message.
     pub fn new(detail: impl Into<String>) -> Self {
         Self {
             detail: detail.into(),
@@ -42,16 +43,21 @@ impl std::error::Error for TarError {}
 /// Compression to apply while writing a tar stream.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TarCompression {
+    /// Emit an uncompressed tar stream (the default).
     #[default]
     None,
+    /// Compress the tar stream with gzip.
     Gzip,
+    /// Compress the tar stream with zstd.
     Zstd,
 }
 
 /// Options for [`to_tar`].
 #[derive(Clone, Debug, Default)]
 pub struct ToTarOptions {
+    /// Compression to apply to the emitted tar stream.
     pub compression: TarCompression,
+    /// Emit numeric uid/gid only, omitting user and group names.
     pub numeric_owner: bool,
 }
 

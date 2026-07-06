@@ -15,6 +15,7 @@ use crate::wire::{
     blake3_256, canonical, content_id, header_id, hex, iter_items, map_get, unwrap_header,
 };
 
+/// Byte range, identity, and chain-validation state for one frame.
 #[derive(Clone, Debug)]
 pub struct FrameInventory {
     /// Absolute CBOR sequence item index.
@@ -416,6 +417,7 @@ fn range_json(range: &ByteRange) -> String {
     )
 }
 
+/// Render the segment heads and aggregate digest as `gts-replication-heads-v1` JSON.
 pub fn heads_json(inventory: &Inventory) -> String {
     let segment_heads: Vec<String> = inventory
         .segments
@@ -443,6 +445,7 @@ pub fn heads_json(inventory: &Inventory) -> String {
     )
 }
 
+/// Render per-segment byte/item ranges and layout as `gts-replication-segments-v1` JSON.
 pub fn segments_json(inventory: &Inventory) -> String {
     let segments = inventory
         .segments
@@ -481,6 +484,10 @@ pub fn segments_json(inventory: &Inventory) -> String {
     )
 }
 
+/// Compute the byte ranges a peer at `from_head` is missing from this inventory.
+///
+/// `from_head` may name a segment head or any valid frame id; an unknown head
+/// yields [`MissingStatus::Unknown`] with `scan_required` set.
 pub fn missing(inventory: &Inventory, from_head: &[u8]) -> MissingResult {
     if inventory.has_problems() {
         return MissingResult {
@@ -550,6 +557,7 @@ pub fn missing(inventory: &Inventory, from_head: &[u8]) -> MissingResult {
     }
 }
 
+/// Render a [`missing`] result as `gts-replication-missing-v1` JSON.
 pub fn missing_json(result: &MissingResult) -> String {
     let status = match result.status {
         MissingStatus::Complete => "complete",
@@ -577,6 +585,12 @@ pub fn missing_json(result: &MissingResult) -> String {
     )
 }
 
+/// Return the clean byte suffix that follows the frame identified by `frame_id`.
+///
+/// # Errors
+///
+/// Returns an error when the file is torn or otherwise not clean, or when no
+/// valid frame carries `frame_id`.
 pub fn resume_after<'a>(data: &'a [u8], frame_id: &[u8]) -> Result<&'a [u8], String> {
     let inventory = inventory(data);
     if inventory.has_problems() {

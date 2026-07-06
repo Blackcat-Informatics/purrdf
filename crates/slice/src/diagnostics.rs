@@ -31,7 +31,9 @@ pub struct ProjectionDiagnostic {
     /// For alignment-direction findings, the SSSOM row CURIEs that the finding is
     /// about. These are `None` for the prefix-consistency lint.
     pub subject_id: Option<String>,
+    /// The SSSOM row's predicate CURIE (alignment-direction findings only).
     pub predicate_id: Option<String>,
+    /// The SSSOM row's object CURIE (alignment-direction findings only).
     pub object_id: Option<String>,
 }
 

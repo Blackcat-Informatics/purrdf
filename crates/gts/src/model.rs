@@ -20,9 +20,11 @@ use ciborium::value::Value;
 
 use crate::codec::{Codec, CodecError, decode_chain};
 
-/// Well-known datatype IRIs used by the literal-defaulting rule (§7.1).
+/// Well-known `xsd:string` datatype IRI used by the literal-defaulting rule (§7.1).
 pub const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+/// Well-known `rdf:langString` datatype IRI implied by a language tag (§7.1).
 pub const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+/// Well-known `rdf:dirLangString` datatype IRI implied by a base direction (§7.1).
 pub const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 
 /// Return whether `direction` is a valid RDF 1.2 base direction token.
@@ -33,9 +35,13 @@ pub fn is_literal_direction(direction: &str) -> bool {
 /// The kind of an RDF term, matching the wire `"k"` field (§7.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TermKind {
+    /// An IRI (wire `"k"` = 0, and the default for unknown kinds).
     Iri = 0,
+    /// A literal with lexical form, datatype, and optional language/direction.
     Literal = 1,
+    /// A blank node with a scope-local label.
     Bnode = 2,
+    /// An RDF 1.2 quoted triple term, optionally carrying a reifier.
     Triple = 3,
 }
 
@@ -70,6 +76,7 @@ pub struct Term {
 
 /// A quad of term-ids; the graph slot is `None` for the default graph.
 pub type Quad = (usize, usize, usize, Option<usize>);
+/// A `(subject, predicate, object)` triple of term-ids.
 pub type Triple3 = (usize, usize, usize);
 /// A reifier row: `(reifier, (subject, predicate, object), graph?)`.
 pub type ReifierRow = (usize, Triple3, Option<usize>);
@@ -195,7 +202,12 @@ pub enum BlobEntry {
     /// callers that never ask for the bytes still get a complete folded graph,
     /// while callers that do ask receive the same codec errors the eager path
     /// would have produced.
-    Lazy { raw: Vec<u8>, chain: Vec<Codec> },
+    Lazy {
+        /// Transformed wire bytes exactly as stored in the frame.
+        raw: Vec<u8>,
+        /// Transform chain to apply (in reverse) when the bytes are requested.
+        chain: Vec<Codec>,
+    },
 }
 
 impl BlobEntry {

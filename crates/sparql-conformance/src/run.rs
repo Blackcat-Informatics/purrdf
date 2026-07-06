@@ -48,7 +48,10 @@ pub enum RunOutcome {
     /// An `UpdateEvaluationTest` post-state: the dataset after applying the update.
     Update(Arc<RdfDataset>),
     /// A syntax test: did the query parse?
-    Syntax { parsed_ok: bool },
+    Syntax {
+        /// `true` when the query text parsed without error.
+        parsed_ok: bool,
+    },
 }
 
 /// Load the case's `qt:data` and `qt:graphData` files into a combined dataset.

@@ -21,6 +21,7 @@ const LEAF_DOMAIN: &str = "gts-mmr-leaf-v1";
 const PARENT_DOMAIN: &str = "gts-mmr-parent-v1";
 const ROOT_DOMAIN: &str = "gts-mmr-root-v1";
 
+/// One peak of the Merkle Mountain Range committed by `index.mmr`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MmrPeak {
     /// Peak tree height. Height zero is a leaf.
@@ -38,6 +39,7 @@ pub enum ProofSide {
     Right,
 }
 
+/// One sibling-hash step on the path from a proven leaf to its peak.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProofStep {
     /// Height of the parent node created by this step.

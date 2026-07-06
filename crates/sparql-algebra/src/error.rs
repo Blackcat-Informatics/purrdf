@@ -24,16 +24,31 @@ use core::fmt;
 pub enum ParseError {
     /// Tokenization failed. Carries a human reason and the byte offset at which
     /// the lexer gave up.
-    Lex { reason: String, at: usize },
+    Lex {
+        /// Human-readable description of why tokenization failed.
+        reason: String,
+        /// Byte offset into the query string at which the lexer gave up.
+        at: usize,
+    },
     /// The token stream violated the grammar. Carries a human reason and the
     /// byte offset of the offending token (best-effort).
-    Syntax { reason: String, at: usize },
+    Syntax {
+        /// Human-readable description of the grammar violation.
+        reason: String,
+        /// Byte offset of the offending token (best-effort).
+        at: usize,
+    },
     /// Well-formed SPARQL that uses a construct outside this crate's in-scope
     /// subset. Carries the name of the unsupported feature.
     Unsupported(String),
     /// An IRI/CURIE in term position is not a valid RFC-3987 IRI. Carries the
     /// rejected lexical form and the underlying reason.
-    Iri { lexical: String, reason: String },
+    Iri {
+        /// The rejected lexical form.
+        lexical: String,
+        /// The underlying validation failure reported by `purrdf-iri`.
+        reason: String,
+    },
 }
 
 impl ParseError {

@@ -287,21 +287,25 @@ impl Quad {
         String::new()
     }
 
+    /// The subject [`Term`] of the quad.
     #[wasm_bindgen(getter)]
     pub fn subject(&self) -> Term {
         self.subject.clone()
     }
 
+    /// The predicate [`Term`] of the quad.
     #[wasm_bindgen(getter)]
     pub fn predicate(&self) -> Term {
         self.predicate.clone()
     }
 
+    /// The object [`Term`] of the quad.
     #[wasm_bindgen(getter)]
     pub fn object(&self) -> Term {
         self.object.clone()
     }
 
+    /// The graph [`Term`] of the quad (`DefaultGraph` when unnamed).
     #[wasm_bindgen(getter)]
     pub fn graph(&self) -> Term {
         self.graph.clone()

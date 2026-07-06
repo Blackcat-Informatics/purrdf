@@ -107,7 +107,9 @@ pub enum OwnershipStatus {
     Unowned,
     /// The declared owner and the physical origin disagree.
     Mismatch {
+        /// The slice named by `rdfs:isDefinedBy`.
         declared: SliceIri,
+        /// The slice whose artifact physically asserts the definition.
         physical: SliceIri,
     },
 }
@@ -199,35 +201,51 @@ pub struct DependencyEdge {
 pub enum OwnershipDiagnostic {
     /// A term is claimed by multiple slices.
     Conflict {
+        /// The contested vocabulary term.
         term: NamedNode,
+        /// Every slice declaring `rdfs:isDefinedBy` for the term.
         claimants: Vec<SliceIri>,
     },
     /// The declared owner and physical origin of a term disagree.
     Mismatch {
+        /// The affected vocabulary term.
         term: NamedNode,
+        /// The slice named by `rdfs:isDefinedBy`.
         declared: SliceIri,
+        /// The slice whose artifact physically asserts the definition.
         physical: SliceIri,
     },
     /// A semantic edge has no authored `<vocab>sliceDependsOn` declaration.
     UndeclaredDependency {
+        /// The depending slice.
         from_slice: SliceIri,
+        /// The depended-upon slice.
         to_slice: SliceIri,
+        /// The artifact-role classification of the undeclared edge.
         edge_kind: EdgeKind,
     },
     /// A `<vocab>sliceDependsOn` declaration has no semantic evidence.
     StaleDependency {
+        /// The slice authoring the stale declaration.
         from_slice: SliceIri,
+        /// The declared (but unevidenced) dependency target.
         to_slice: SliceIri,
     },
     /// A vocabulary term in the vocab namespace (typed as an OWL/RDFS concept)
     /// has no `rdfs:isDefinedBy` declaration in any slice.  Non-fatal: the term
     /// is recorded in the ownership table with `OwnershipStatus::Unowned` and
     /// surfaced as a diagnostic, but does not by itself fail validation.
-    Unowned { term: NamedNode },
+    Unowned {
+        /// The unowned vocabulary term.
+        term: NamedNode,
+    },
     /// A SPARQL query artifact failed to parse and was skipped.
     UnparseableQuery {
+        /// The slice owning the query artifact.
         slice: SliceIri,
+        /// The artifact's normalized logical path within its slice.
         logical_path: String,
+        /// The parser's error message.
         message: String,
     },
 }

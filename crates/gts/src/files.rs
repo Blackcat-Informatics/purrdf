@@ -45,18 +45,27 @@ type InlineBlobMap<'a> = BTreeMap<String, (&'a [u8], Option<&'a str>)>;
 /// files-profile v2 entry kind. Absence of `files:type` is read as [`Self::File`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FileEntryKind {
+    /// A regular file (the default when `files:type` is absent).
     #[default]
     File,
+    /// A directory.
     Directory,
+    /// A symbolic link; the target is carried in `files:linkTarget`.
     Symlink,
+    /// A hard link; the target is carried in `files:linkTarget`.
     Hardlink,
+    /// A FIFO (named pipe).
     Fifo,
+    /// A character device; major/minor numbers ride in `files:devMajor`/`files:devMinor`.
     CharDev,
+    /// A block device; major/minor numbers ride in `files:devMajor`/`files:devMinor`.
     BlockDev,
+    /// A Unix domain socket.
     Socket,
 }
 
 impl FileEntryKind {
+    /// The canonical `files:type` lexical value for this kind.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::File => "file",
@@ -70,6 +79,11 @@ impl FileEntryKind {
         }
     }
 
+    /// Parse a `files:type` lexical value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `value` is not a known files-profile entry kind.
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
             "file" => Ok(Self::File),
@@ -88,6 +102,7 @@ impl FileEntryKind {
 /// One files-profile v2 extended attribute row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileXattr {
+    /// Extended-attribute name (e.g. `user.mime_type`).
     pub name: String,
     /// Base64 lexical value of the attribute bytes.
     pub value: String,
@@ -96,28 +111,46 @@ pub struct FileXattr {
 /// One verbatim PAX escape-hatch key/value row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FilePaxRecord {
+    /// PAX record key, carried verbatim.
     pub key: String,
+    /// PAX record value, carried verbatim.
     pub value: String,
 }
 
 /// Typed files-profile entry used by the Rust v2 writer/reader.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileEntry {
+    /// Archive-relative entry path (`files:path`), unique per archive.
     pub path: String,
+    /// Entry kind (`files:type`); absent on the wire means [`FileEntryKind::File`].
     pub kind: FileEntryKind,
+    /// BLAKE3 content digest of a regular file's blob (`files:digest`).
     pub digest: Option<String>,
+    /// Decoded payload size in bytes (`files:size`).
     pub size: Option<u64>,
+    /// Unix permission bits (`files:mode`).
     pub mode: Option<u32>,
+    /// Modification timestamp as an `xsd:dateTime` lexical value (`files:modified`).
     pub modified: Option<String>,
+    /// Media type of a regular file's payload (`files:mediaType`).
     pub media_type: Option<String>,
+    /// Symlink or hardlink target path (`files:linkTarget`).
     pub link_target: Option<String>,
+    /// Numeric owner user id (`files:uid`).
     pub uid: Option<u64>,
+    /// Numeric owner group id (`files:gid`).
     pub gid: Option<u64>,
+    /// Owner user name (`files:userName`).
     pub user_name: Option<String>,
+    /// Owner group name (`files:groupName`).
     pub group_name: Option<String>,
+    /// Device major number for character/block devices (`files:devMajor`).
     pub dev_major: Option<u64>,
+    /// Device minor number for character/block devices (`files:devMinor`).
     pub dev_minor: Option<u64>,
+    /// Extended-attribute rows (`files:xattr`).
     pub xattrs: Vec<FileXattr>,
+    /// Verbatim PAX escape-hatch rows (`files:paxRecord`).
     pub pax_records: Vec<FilePaxRecord>,
     /// Optional inline payload bytes for regular-file authoring.
     pub data: Option<Vec<u8>>,
@@ -126,26 +159,37 @@ pub struct FileEntry {
 /// A regular-file blob source for bounded files-profile authoring.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileBlobSource {
+    /// Filesystem path the blob bytes are streamed from.
     pub path: PathBuf,
+    /// Decoded payload size in bytes.
     pub size: u64,
+    /// Media type recorded with the blob frame.
     pub media_type: Option<String>,
+    /// Transform-chain representation (e.g. `"gzip"`) to apply when writing.
     pub representation: Option<String>,
 }
 
 /// Borrowed regular-file blob bytes for bounded files-profile authoring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileBlobBytes<'a> {
+    /// Decoded blob payload bytes.
     pub data: &'a [u8],
+    /// Media type recorded with the blob frame.
     pub media_type: Option<&'a str>,
+    /// Transform-chain representation (e.g. `"gzip"`) to apply when writing.
     pub representation: Option<&'a str>,
 }
 
 /// Borrowed regular-file blob range inside a seekable source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileBlobRange<'a> {
+    /// Byte offset of the payload within the seekable source.
     pub offset: u64,
+    /// Payload size in bytes at `offset`.
     pub size: u64,
+    /// Media type recorded with the blob frame.
     pub media_type: Option<&'a str>,
+    /// Transform-chain representation (e.g. `"gzip"`) to apply when writing.
     pub representation: Option<&'a str>,
 }
 
@@ -1145,6 +1189,12 @@ fn format_datetime(time: &std::time::SystemTime) -> Result<String, String> {
     Ok(text.replace("+00:00", "Z"))
 }
 
+/// Read typed files-profile entries from a folded graph, keyed by `files:path`.
+///
+/// # Errors
+///
+/// Returns an error when the graph is not a files-profile archive, an entry
+/// carries an invalid field value, or two entries share the same path.
 pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String> {
     let mut type_ids: HashSet<usize> = HashSet::new();
     let mut file_entry_ids: HashSet<usize> = HashSet::new();
@@ -1235,6 +1285,11 @@ pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String
     Ok(by_path)
 }
 
+/// Read files-profile entries as string field maps, keyed by `files:path`.
+///
+/// # Errors
+///
+/// Propagates the same failures as [`read_entries`].
 pub fn read_file_entries(
     graph: &Graph,
 ) -> Result<BTreeMap<String, BTreeMap<String, String>>, String> {
