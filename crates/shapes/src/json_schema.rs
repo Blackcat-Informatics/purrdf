@@ -839,11 +839,19 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
 /// value projection is a node-ref/`$ref`, whose negation semantics are not the
 /// clean value-restriction this projector guarantees) and `sh:uniqueLang`
 /// (which `compile_property` does not express — it would be silently dropped).
+///
+/// Also deliberately excludes `sh:maxCount`: its cardinality UPPER bound is not
+/// faithfully expressible under negation. [`compile_property`] projects a bare
+/// `sh:maxCount` to the permissive base (`max_count == Some(1)` selects the
+/// `single` scalar, an empty `{}`; `max_count >= 2` yields an `anyOf` whose `{}`
+/// alternative is likewise permissive), so the upper-count bound is dropped and
+/// the negand widens to "any node" — the vacuous-`not` bug. A `sh:not` property
+/// inner that carries `sh:maxCount` must therefore route to a recorded loss
+/// (the caller emits no `not`) rather than a base-negating vacuous negation.
 fn negand_value_constraint_ok(c: &Constraint) -> bool {
     matches!(
         c,
         Constraint::MinCount(_)
-            | Constraint::MaxCount(_)
             | Constraint::Datatype(_)
             | Constraint::NodeKind(_)
             | Constraint::In(_)
@@ -928,6 +936,17 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
         }
         let key = ctx.ns.compact_iri(pred.as_str());
         let (value_schema, is_required) = compile_property(&ps.constraints, &inner_iri, &key, ctx);
+        // A property conjunct that neither requires the key nor restricts its
+        // value matches every node (the permissive base); negating it would
+        // reject all — the vacuous-not bug. Route such a bare/zero-cardinality
+        // inner (only `sh:minCount 0`, or an empty constraint set) to a loss.
+        let restricts_value = ps
+            .constraints
+            .iter()
+            .any(|c| !matches!(c, Constraint::MinCount(_)));
+        if !is_required && !restricts_value {
+            return None;
+        }
         let mut props: Map<String, Value> = Map::new();
         props.insert(key.clone(), value_schema);
         let mut obj: Map<String, Value> = Map::new();
@@ -1962,6 +1981,139 @@ mod tests {
                 &json!({ "@type": "meta:NoP", "meta:p": "x" })
             ),
             "a node WITH meta:p must be REJECTED"
+        );
+    }
+
+    #[test]
+    fn test_not_property_maxcount_records_loss() {
+        // F1 (the vacuous-total false-reject, reintroduced via the property
+        // path): a `sh:not`
+        // property inner whose ONLY constraint is `sh:maxCount` is NOT faithfully
+        // negatable — `compile_property` widens a bare maxCount to the permissive
+        // base, so emitting a `not` would reject EVERY node of the target class (a
+        // vacuous-total false-reject). It must route to a recorded loss instead.
+        let c = compile_ttl(
+            r"
+            meta:MaxShape a sh:NodeShape ;
+                sh:targetClass meta:MaxT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:maxCount 1 ] ] .
+            ",
+        );
+        assert!(
+            c.losses.iter().any(|l| l.construct == "sh:not"),
+            "a bare-maxCount sh:not property inner must record a sh:not LossRecord, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let maxt = def(&schema, "MaxT");
+        assert!(
+            !serde_json::to_string(maxt)
+                .expect("def serializes")
+                .contains("\"not\""),
+            "the vacuous-total `not` must be GONE from the def, got {maxt:?}"
+        );
+        // Behavioural: the sh:not is honestly DROPPED (a recorded loss), so the
+        // total false-reject is gone — every node of the target class is accepted
+        // regardless of how many values it has for meta:p.
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:MaxT", "meta:p": ["a", "b"] })
+            ),
+            "a node with 2 values for meta:p must be ACCEPTED (sh:not[maxCount 1] must accept it)"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:MaxT", "meta:p": "a" })
+            ),
+            "a node with 1 value for meta:p must be ACCEPTED"
+        );
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:MaxT" })),
+            "a node with 0 values for meta:p must be ACCEPTED"
+        );
+    }
+
+    #[test]
+    fn test_not_property_mincount_maxcount_records_loss() {
+        // `sh:not [ sh:property [ sh:path meta:p ; sh:minCount 1 ; sh:maxCount 1 ] ]`:
+        // the maxCount upper bound is not faithfully expressible under negation
+        // (the `required` presence alone would reject nodes that HAVE the key,
+        // which is unsound — SHACL's inner `1..1` fails for a node with 2 values,
+        // so sh:not must ACCEPT it). Must route to a recorded loss, not a `not`.
+        let c = compile_ttl(
+            r"
+            meta:ExactShape a sh:NodeShape ;
+                sh:targetClass meta:ExactT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:minCount 1 ; sh:maxCount 1 ] ] .
+            ",
+        );
+        assert!(
+            c.losses.iter().any(|l| l.construct == "sh:not"),
+            "a minCount+maxCount sh:not property inner must record a sh:not LossRecord, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let exact = def(&schema, "ExactT");
+        assert!(
+            !serde_json::to_string(exact)
+                .expect("def serializes")
+                .contains("\"not\""),
+            "the vacuous `not` must be GONE from the def, got {exact:?}"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:ExactT", "meta:p": ["a", "b"] })
+            ),
+            "a node with 2 values for meta:p must be ACCEPTED (no false-reject)"
+        );
+    }
+
+    #[test]
+    fn test_not_property_datatype_sound() {
+        // LOCK the value-restriction negand path as genuinely sound under
+        // composition. `sh:not [ sh:property [ sh:path meta:p ; sh:datatype
+        // xsd:string ] ]` means "NOT (every value of p is a string)".
+        let c = compile_ttl(
+            r"
+            meta:DtShape a sh:NodeShape ;
+                sh:targetClass meta:DtT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:datatype xsd:string ] ] .
+            ",
+        );
+        assert!(
+            !c.losses.iter().any(|l| l.construct == "sh:not"),
+            "an expressible value-restriction inner must NOT record a loss, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let dtt = def(&schema, "DtT");
+        assert!(
+            dtt["allOf"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|e| e.get("not").is_some())),
+            "expected a sound structural `not` negation, got {dtt:?}"
+        );
+        // p is a NON-string (integer) ⇒ inner "all p are strings" FAILS ⇒ sh:not
+        // ACCEPTS.
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:DtT", "meta:p": 5 })),
+            "a node whose p is a non-string must be ACCEPTED"
+        );
+        // p is a string ⇒ inner conforms ⇒ sh:not REJECTS.
+        assert!(
+            !validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:DtT", "meta:p": "hello" })
+            ),
+            "a node whose p is a string must be REJECTED"
+        );
+        // p ABSENT ⇒ inner vacuously conforms (0 values) ⇒ sh:not REJECTS.
+        assert!(
+            !validates(&c.schema_json, &json!({ "@type": "meta:DtT" })),
+            "a node with p absent must be REJECTED"
         );
     }
 
