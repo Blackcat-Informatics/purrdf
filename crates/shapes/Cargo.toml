@@ -63,6 +63,11 @@ purrdf-slice = { workspace = true }
 proptest = { workspace = true }
 # Acceleration-program baselines; light feature set, see crates/logic.
 criterion = { workspace = true }
+# Trusted external JSON Schema (draft 2020-12) validator: the negation tests
+# observe the emitted schema_json's real accept/reject behaviour against JSON-LD
+# instance nodes, rather than asserting the schema's JSON shape. Dev-only; never
+# enters the release/wasm build.
+boon = { workspace = true }
 
 [[bench]]
 name = "validate"
