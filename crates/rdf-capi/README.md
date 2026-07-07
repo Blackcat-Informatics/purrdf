@@ -9,7 +9,8 @@ The **purrdf semantic C-ABI** (purrdf parcel P8): a stable,
 SemVer-disciplined `extern "C"` surface over the native `purrdf` RDF-1.2
 stack. It is the rich companion to the permissive `libgts` C-ABI — where
 `libgts` is transport/format only, **libpurrdf** exposes parse, serialize,
-pattern iteration, copy-on-write mutation, SPARQL, and GTS container round-trip.
+pattern iteration, copy-on-write mutation, SPARQL, SHACL validation/entailment,
+and GTS container round-trip.
 
 **One shared library, not two.** libpurrdf statically reuses the permissive
 `purrdf-gts` Rust crate, so a language shim links **`libpurrdf` alone** and still

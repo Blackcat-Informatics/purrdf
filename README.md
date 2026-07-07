@@ -185,14 +185,18 @@ const nq = ds.serialize("nquads");           // directions survive the round-tri
 const reparsed = Dataset.parse(nq, "nquads");
 ```
 
-See [`crates/rdf-wasm`](./crates/rdf-wasm/) (`make wasm-pkg` builds the ESM package).
+The same browser bundle also exposes SHACL validation (`shaclValidateToSarif`,
+`shaclEntail`) and RDFC-1.0 graph identity (`Dataset.canonicalize()`,
+`Dataset.isomorphic()`). See [`crates/rdf-wasm`](./crates/rdf-wasm/)
+(`make wasm-pkg` builds the ESM package).
 
 ### C
 
 `libpurrdf` ([`crates/rdf-capi`](./crates/rdf-capi/)) exposes parse, serialize,
-pattern iteration, copy-on-write mutation, SPARQL, and GTS round-trips behind a
-panic-safe C ABI with a committed header ([`include/purrdf.h`](./crates/rdf-capi/include/purrdf.h))
-that CI checks for drift. Built with cargo-c: `make capi-build`.
+pattern iteration, copy-on-write mutation, SPARQL, SHACL validation/entailment,
+and GTS round-trips behind a panic-safe C ABI with a committed, reproducible
+header ([`include/purrdf.h`](./crates/rdf-capi/include/purrdf.h)) that CI checks
+for drift. Built with cargo-c: `make capi-build`.
 
 ## Crate map
 

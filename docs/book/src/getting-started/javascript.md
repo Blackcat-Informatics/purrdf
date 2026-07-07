@@ -15,6 +15,11 @@ is the same Rust engine compiled to `wasm32` and surfaced through an
 npm install @blackcatinformatics/purrdf
 ```
 
+Prefer to try it before installing anything? The
+[RDF-1.2 playground](https://blackcat-informatics.github.io/purrdf/playground/)
+runs this exact wasm build in your browser — parse, SPARQL, SHACL, serialize, and
+canonicalize/compare RDF-1.2 graphs client-side, with no toolchain and no server.
+
 ## First dataset
 
 Await `ready()` once before anything else — it performs the one-time async
@@ -62,7 +67,16 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
 - **`Dataset`** (RDF/JS `DatasetCore`) — `Dataset.parse(input, format, base?)`,
   `serialize(format)`, `add`/`delete`/`has`/`match`/`quads`/`size`, and
   iteration (`for (const quad of dataset)`). Formats: `turtle`, `ntriples`,
-  `nquads`, `trig`, `rdfxml` (or their media types).
+  `nquads`, `trig`, `rdfxml` (or their media types); `serialize` additionally
+  accepts `jsonld`.
+- **Graph identity** — `Dataset.canonicalize()` returns the RDFC-1.0 canonical,
+  flat N-Quads for the graph; `Dataset.isomorphic(other)` decides RDF graph
+  equality under blank-node relabeling (an exact oracle backed by full RDFC-1.0
+  canonicalization).
+- **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples
+  data graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
+  `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule`
+  inferences as N-Triples.
 - **`Sink`** — a streaming consumer (`push(quad)` / `finish() → Dataset`);
   `datasetToStream` / `streamToDataset` are the async RDF/JS Stream/Sink
   helpers.
