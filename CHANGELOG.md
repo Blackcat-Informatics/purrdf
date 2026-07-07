@@ -4,6 +4,21 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.4.0] - 2026-07-07
+
+### Bug Fixes
+
+- **shapes:** Polarity-sound sh:not projection (kill vacuous class negation)
+
+### Documentation
+
+- Uplift product docs to top-tier Rust project standard
+
+### Features
+
+- **capi:** Make purrdf.h reproducible via cargo-c `capi` marker + gate it in CI
+- **wasm:** CI-gated wasm artifact size budget
+- **playground:** Standalone deployed RDF-1.2 console over purrdf-wasm
 ## [0.3.3] - 2026-07-05
 
 ### Performance

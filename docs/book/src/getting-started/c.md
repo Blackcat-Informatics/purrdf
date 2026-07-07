@@ -7,7 +7,8 @@ SPDX-License-Identifier: CC-BY-4.0
 
 `libpurrdf` is a stable, SemVer-disciplined `extern "C"` surface over the
 native PurRDF stack: parse, serialize, pattern iteration, copy-on-write
-mutation, SPARQL, and GTS container round-trips. The committed header
+mutation, SPARQL, SHACL validation/entailment, and GTS container round-trips.
+The committed, reproducible header
 [`include/purrdf.h`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h)
 **is the ABI contract** — CI fails if it drifts from the crate.
 
