@@ -234,6 +234,10 @@ const HANDLERS = {
 };
 
 self.addEventListener("message", async (event) => {
+  // Defence-in-depth: a dedicated worker only ever receives messages from the
+  // document that spawned it (event.origin is the empty string, never a foreign
+  // origin), so reject anything tagged with a cross-origin source.
+  if (event.origin && event.origin !== self.location.origin) return;
   const { id, op, args } = event.data ?? {};
   try {
     await bootReady;

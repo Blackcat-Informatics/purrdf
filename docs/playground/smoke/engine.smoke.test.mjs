@@ -175,9 +175,19 @@ test("shaclEntail materializes the sh:rule inference", () => {
   const ds = Dataset.parse(PERSON_DATA, "turtle");
   const dataNt = ds.serialize("ntriples");
   const entailed = shaclEntail(SHAPES, dataNt);
-  assert.ok(
-    entailed.includes("http://example.org/adult"),
-    "expected the ex:adult entailment in the materialized graph",
+  // Assert the exact triple the sh:rule produces (ex:dave ex:adult ex:yes) by a
+  // structural match on the parsed N-Triples — not a bare-URL substring check.
+  const out = Dataset.parse(entailed, "ntriples");
+  const f = new DataFactory();
+  const matched = out.match(
+    f.namedNode("http://example.org/dave"),
+    f.namedNode("http://example.org/adult"),
+    f.namedNode("http://example.org/yes"),
+  );
+  assert.equal(
+    matched.size,
+    1,
+    "expected the ex:dave ex:adult ex:yes entailment in the materialized graph",
   );
 });
 
