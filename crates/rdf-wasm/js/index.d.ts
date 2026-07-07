@@ -1,12 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// The wasm-bindgen-generated class declarations (DataFactory/Dataset/Quad/Sink/Term
-// and the free `version()` function) are the source of truth for the engine surface.
+// The wasm-bindgen-generated class declarations (DataFactory/Dataset/Quad/Sink/Term)
+// and the free functions (`version()`, `shaclValidateToSarif`, `shaclEntail`) are the
+// source of truth for the engine surface — the whole `#[wasm_bindgen]` surface is
+// re-exported from the package root (Dataset.canonicalize()/isomorphic() ship on the
+// Dataset class itself).
 export {
   DataFactory,
   Dataset,
   Quad,
+  shaclEntail,
+  shaclValidateToSarif,
   Sink,
   Term,
   version,

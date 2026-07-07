@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="PurRDF · a client-side RDF-1.2 console. Parse, serialize, query (SPARQL), validate (SHACL), and compare graphs entirely in your browser — no server."
+    />
+    <meta name="color-scheme" content="light dark" />
+    <title>PurRDF · RDF-1.2 console</title>
+    <link rel="stylesheet" href="./style.css" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <!-- Inline data-URI icon: no external asset, no favicon.ico round-trip. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%90%BE%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#pane-input">Skip to console</a>
+
+    <header class="app-header">
+      <div class="brand">
+        <h1>PurRDF <span class="dot">·</span> RDF-1.2 console</h1>
+        <p class="tagline">
+          A zero-backend RDF-1.2 workbench: everything runs in your browser via
+          the PurRDF wasm engine.
+        </p>
+      </div>
+      <div class="header-meta">
+        <span id="app-version" class="chip" aria-label="engine version">purrdf</span>
+        <a class="chip chip-link" href="../">The PurRDF Book</a>
+        <button id="btn-permalink" type="button" class="btn-mini">
+          Copy permalink
+        </button>
+      </div>
+    </header>
+
+    <!-- HARD-FAIL surface: every engine error lands here, never swallowed. -->
+    <div
+      id="error-banner"
+      class="banner banner-error"
+      role="alert"
+      aria-live="assertive"
+      hidden
+    ></div>
+    <div
+      id="status-banner"
+      class="banner banner-status"
+      role="status"
+      aria-live="polite"
+      hidden
+    ></div>
+
+    <p class="jsonld-note" role="note">
+      Note: JSON-LD is <strong>serialize-only</strong> here — the parse codec
+      accepts turtle, N-Triples, N-Quads, TriG, and RDF/XML, and rejects JSON-LD
+      as input by design.
+    </p>
+
+    <nav class="tabs" aria-label="Console panes">
+      <div role="tablist" aria-label="Console panes">
+        <button id="tab-input" role="tab" aria-selected="true" aria-controls="pane-input" class="tab">Input</button>
+        <button id="tab-roundtrip" role="tab" aria-selected="false" aria-controls="pane-roundtrip" class="tab" tabindex="-1">Round-trip</button>
+        <button id="tab-sparql" role="tab" aria-selected="false" aria-controls="pane-sparql" class="tab" tabindex="-1">SPARQL</button>
+        <button id="tab-shacl" role="tab" aria-selected="false" aria-controls="pane-shacl" class="tab" tabindex="-1">SHACL</button>
+        <button id="tab-identity" role="tab" aria-selected="false" aria-controls="pane-identity" class="tab" tabindex="-1">Graph identity</button>
+        <button id="tab-quads" role="tab" aria-selected="false" aria-controls="pane-quads" class="tab" tabindex="-1">Quad table</button>
+        <button id="tab-gallery" role="tab" aria-selected="false" aria-controls="pane-gallery" class="tab" tabindex="-1">Gallery</button>
+      </div>
+    </nav>
+
+    <main>
+      <!-- INPUT -->
+      <section id="pane-input" class="pane" role="tabpanel" aria-labelledby="tab-input">
+        <h2>Input graph</h2>
+        <div class="field">
+          <label for="input-format">Parse format</label>
+          <select id="input-format" class="select">
+            <option value="turtle">Turtle</option>
+            <option value="ntriples">N-Triples</option>
+            <option value="nquads">N-Quads</option>
+            <option value="trig">TriG</option>
+            <option value="rdfxml">RDF/XML</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="input-text">RDF document</label>
+          <textarea id="input-text" class="code" spellcheck="false" rows="14" aria-describedby="input-summary"></textarea>
+        </div>
+        <div class="actions">
+          <button id="btn-parse" type="button" class="btn btn-primary">Parse</button>
+        </div>
+        <p id="input-summary" class="muted" aria-live="polite"></p>
+      </section>
+
+      <!-- ROUND-TRIP -->
+      <section id="pane-roundtrip" class="pane" role="tabpanel" aria-labelledby="tab-roundtrip" hidden>
+        <h2>Round-trip &amp; differential</h2>
+        <p class="muted">
+          Render the current graph in all six serialize formats side-by-side. The
+          canonical RDFC-1.0 N-Quads form is the graph's deterministic identity.
+        </p>
+        <div class="actions">
+          <button id="btn-serialize-all" type="button" class="btn btn-primary">
+            Serialize to all formats
+          </button>
+        </div>
+        <p id="serialize-note" class="note" role="note" hidden></p>
+        <div id="serialize-output" class="ser-grid"></div>
+      </section>
+
+      <!-- SPARQL -->
+      <section id="pane-sparql" class="pane" role="tabpanel" aria-labelledby="tab-sparql" hidden>
+        <h2>SPARQL</h2>
+        <p class="muted">
+          SELECT / ASK render as a table / boolean; CONSTRUCT / DESCRIBE render as
+          Turtle. SERVICE and LOAD hard-fail (there is no server) — the error lands
+          in the banner above.
+        </p>
+        <div class="field">
+          <label for="sparql-text">Query</label>
+          <textarea id="sparql-text" class="code" spellcheck="false" rows="10"></textarea>
+        </div>
+        <div class="actions">
+          <button id="btn-run-query" type="button" class="btn btn-primary">Run</button>
+        </div>
+        <div id="sparql-results" class="results" aria-live="polite"></div>
+      </section>
+
+      <!-- SHACL -->
+      <section id="pane-shacl" class="pane" role="tabpanel" aria-labelledby="tab-shacl" hidden>
+        <h2>SHACL</h2>
+        <p class="muted">
+          The current graph is serialized to N-Triples and validated against your
+          shapes. Results are a SARIF 2.1.0 report. Materialize applies SHACL-AF
+          <code>sh:rule</code> inferences.
+        </p>
+        <div class="field">
+          <label for="shapes-text">Shapes (Turtle)</label>
+          <textarea id="shapes-text" class="code" spellcheck="false" rows="14"></textarea>
+        </div>
+        <div class="actions">
+          <button id="btn-validate" type="button" class="btn btn-primary">Validate</button>
+          <button id="btn-entail" type="button" class="btn">Materialize (entail)</button>
+          <button id="btn-download-sarif" type="button" class="btn" disabled>
+            Download report.sarif
+          </button>
+        </div>
+        <div id="sarif-results" class="results" aria-live="polite"></div>
+        <h3>Entailed N-Triples</h3>
+        <pre id="entail-output" class="code-out" aria-live="polite"></pre>
+      </section>
+
+      <!-- IDENTITY -->
+      <section id="pane-identity" class="pane" role="tabpanel" aria-labelledby="tab-identity" hidden>
+        <h2>Graph identity &amp; diff</h2>
+        <p class="muted">
+          Two graphs denote the same RDF graph iff their canonical RDFC-1.0 forms
+          are byte-identical — even after blank-node relabeling and reordering.
+        </p>
+        <div class="two-col">
+          <div>
+            <div class="field">
+              <label for="graph-a-format">Graph A format</label>
+              <select id="graph-a-format" class="select">
+                <option value="turtle">Turtle</option>
+                <option value="ntriples">N-Triples</option>
+                <option value="nquads">N-Quads</option>
+                <option value="trig">TriG</option>
+                <option value="rdfxml">RDF/XML</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="graph-a-text">Graph A</label>
+              <textarea id="graph-a-text" class="code" spellcheck="false" rows="10"></textarea>
+            </div>
+          </div>
+          <div>
+            <div class="field">
+              <label for="graph-b-format">Graph B format</label>
+              <select id="graph-b-format" class="select">
+                <option value="turtle">Turtle</option>
+                <option value="ntriples">N-Triples</option>
+                <option value="nquads">N-Quads</option>
+                <option value="trig">TriG</option>
+                <option value="rdfxml">RDF/XML</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="graph-b-text">Graph B</label>
+              <textarea id="graph-b-text" class="code" spellcheck="false" rows="10"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="btn-compare" type="button" class="btn btn-primary">Compare</button>
+        </div>
+        <p id="identity-result" class="identity-verdict" aria-live="polite"></p>
+        <div class="two-col">
+          <div>
+            <h3>Canonical A</h3>
+            <pre id="canon-a" class="code-out"></pre>
+          </div>
+          <div>
+            <h3>Canonical B</h3>
+            <pre id="canon-b" class="code-out"></pre>
+          </div>
+        </div>
+        <h3>Line diff</h3>
+        <div id="canon-diff" class="diff"></div>
+      </section>
+
+      <!-- QUAD TABLE -->
+      <section id="pane-quads" class="pane" role="tabpanel" aria-labelledby="tab-quads" hidden>
+        <h2>Quad table</h2>
+        <p class="muted">
+          The parsed graph as (subject, predicate, object, graph). Click any term
+          to filter the table with <code>match()</code>.
+        </p>
+        <div class="actions">
+          <button id="btn-refresh-quads" type="button" class="btn btn-primary">Refresh</button>
+          <button id="btn-clear-filter" type="button" class="btn" hidden>Clear filter</button>
+        </div>
+        <p id="filter-info" class="muted" aria-live="polite"></p>
+        <div id="quad-table" class="results"></div>
+      </section>
+
+      <!-- GALLERY -->
+      <section id="pane-gallery" class="pane" role="tabpanel" aria-labelledby="tab-gallery" hidden>
+        <h2>RDF-1.2 vignette gallery</h2>
+        <p class="muted">
+          Curated, self-contained examples in the <code>http://example.org/</code>
+          namespace. Load one to populate the whole console and run it; copy a
+          permalink to share the exact state.
+        </p>
+        <ul id="gallery-list" class="gallery"></ul>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <p>
+        PurRDF runs entirely client-side. No graph you load here ever leaves your
+        browser. Standard <code>rdf:</code>/<code>sh:</code>/<code>xsd:</code>
+        vocabulary only — PurRDF mints none of its own.
+      </p>
+    </footer>
+
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>

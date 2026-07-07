@@ -28,6 +28,10 @@ SPDX-License-Identifier: MIT OR Apache-2.0
   <img src="https://img.shields.io/badge/MSRV-1.96-orange.svg" alt="MSRV 1.96">
 </p>
 
+<p align="center">
+  <a href="https://blackcat-informatics.github.io/purrdf/playground/"><img src="https://img.shields.io/badge/RDF--1.2%20playground-try%20it%20live-brightgreen" alt="Try the RDF-1.2 playground in your browser"></a>
+</p>
+
 ---
 
 ## Why does this exist?
@@ -213,6 +217,10 @@ that CI checks for drift. Built with cargo-c: `make capi-build`.
 
 ## Documentation
 
+- **[RDF-1.2 playground](https://blackcat-informatics.github.io/purrdf/playground/)** —
+  a zero-install browser console: parse, query (SPARQL), validate (SHACL),
+  serialize, and canonicalize/compare RDF-1.2 (quoted triples, directional
+  literals) entirely client-side over the wasm build. No toolchain, no server.
 - **[The PurRDF Book](https://blackcat-informatics.github.io/purrdf/)** — the
   user guide: getting started in each language, concepts, and every engine
   (source in [`docs/book/`](./docs/book/), `make book` builds it locally).

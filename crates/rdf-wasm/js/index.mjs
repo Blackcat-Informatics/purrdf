@@ -3,8 +3,11 @@
 
 // purrdf — the idiomatic RDF/JS surface over the wasm engine.
 //
-// The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term) are
-// re-exported as-is; this wrapper adds the isomorphic glue that the synchronous
+// The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term) and the
+// free functions (version, shaclValidateToSarif, shaclEntail) are re-exported as-is —
+// the whole `#[wasm_bindgen]` surface is reachable from the package root, so
+// SHACL validation/entailment and Dataset.canonicalize()/isomorphic() need no deep
+// `./pkg/` import. This wrapper adds the isomorphic glue that the synchronous
 // wasm boundary cannot express in Rust:
 //   * `ready()` — one-time async wasm instantiation (required for the `web` target).
 //   * the polymorphic RDF/JS `DataFactory.literal(value, languageOrDatatype)` —
@@ -18,6 +21,8 @@ import init, {
   DataFactory,
   Dataset,
   Quad,
+  shaclEntail,
+  shaclValidateToSarif,
   Sink,
   Term,
   version,
@@ -125,4 +130,13 @@ export async function streamToDataset(quadStream) {
   return sink.finish();
 }
 
-export { DataFactory, Dataset, Quad, Sink, Term, version };
+export {
+  DataFactory,
+  Dataset,
+  Quad,
+  shaclEntail,
+  shaclValidateToSarif,
+  Sink,
+  Term,
+  version,
+};

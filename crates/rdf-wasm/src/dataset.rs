@@ -13,7 +13,8 @@
 use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
 use purrdf::ir::MutableDataset;
 use purrdf::{
-    RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, TermValue, parse_dataset, serialize_dataset,
+    RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, TermValue, canonical_flat_nquads,
+    datasets_isomorphic, parse_dataset, serialize_dataset,
 };
 use wasm_bindgen::prelude::*;
 
@@ -108,6 +109,32 @@ impl Dataset {
             .map_err(|e| diag_to_err(&e))?;
         String::from_utf8(bytes)
             .map_err(|e| JsError::new(&format!("serialization produced non-UTF-8 bytes: {e}")))
+    }
+
+    /// `canonicalize()` → the dataset as canonical, flat N-Quads under RDFC-1.0
+    /// (SHA-256).
+    ///
+    /// The deterministic identity string for the graph: two datasets denote the same
+    /// RDF graph (under blank-node relabeling) iff their canonical forms are
+    /// byte-identical. This is the same RDFC-1.0 output the conformance gate pins.
+    #[wasm_bindgen(js_name = canonicalize)]
+    pub fn canonicalize(&self) -> Result<String, JsError> {
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        canonical_flat_nquads(&frozen).map_err(|e| JsError::new(&e))
+    }
+
+    /// `isomorphic(other)` → whether this dataset and `other` are the same RDF graph
+    /// under blank-node relabeling.
+    ///
+    /// The formal RDF graph-identity check, backed by full RDFC-1.0 canonicalization:
+    /// an exact oracle with no false positives or false negatives. Equivalent to
+    /// comparing the two [`canonicalize`](Self::canonicalize) strings, but avoids
+    /// materializing them for obviously-different inputs.
+    #[wasm_bindgen(js_name = isomorphic)]
+    pub fn isomorphic(&self, other: &Self) -> Result<bool, JsError> {
+        let a = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let b = other.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        Ok(datasets_isomorphic(&a, &b))
     }
 
     /// `size` — the number of effective quads.

@@ -60,6 +60,8 @@ use wasm_bindgen::prelude::*;
 //                 (parse/serialize/size/add/delete/has/match/quads)
 //   * `query`   — the offline SPARQL surface (`Dataset.query`) over the native
 //                 evaluator
+//   * `shacl`   — SHACL validation to SARIF + SHACL-AF entailment
+//                 (`shaclValidateToSarif`/`shaclEntail`)
 //   * `stream`  — the RDF/JS Sink over the `purrdf-events` ingestion protocol
 mod codec;
 mod convert;
