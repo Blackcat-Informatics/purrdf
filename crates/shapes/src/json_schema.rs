@@ -706,15 +706,24 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                 all_of.push(compile_object_schema(inner, ctx));
             }
             Constraint::Not(inner) => match compile_negand(inner, ctx) {
-                // The inner is losslessly expressible: negate each AND-conjunct
-                // independently. `sh:class` conjuncts become `@type`-discriminated
-                // negations; multiple `sh:not` (the `owl:AllDisjointClasses`
-                // projection) each land as their own `allOf` entry, so they never
-                // clobber one another.
-                Some(parts) => {
-                    for part in parts {
-                        all_of.push(json!({ "not": part }));
-                    }
+                // The inner is losslessly expressible as the conjunction
+                // `A ∧ B ∧ …` of its parts. SHACL's `sh:not` conforms iff a node
+                // fails AT LEAST ONE conjunct — i.e. `¬(A ∧ B ∧ …)`, the negation
+                // of the whole conjunction (De Morgan: `¬A ∨ ¬B ∨ …`), NOT each
+                // conjunct negated independently (`¬A ∧ ¬B`, which is strictly
+                // too narrow and false-rejects a node failing only one conjunct).
+                // A single part negates directly; several parts negate their
+                // `allOf`. Multiple SEPARATE `sh:not` constraints (the
+                // `owl:AllDisjointClasses` projection) each still emit their own
+                // independent `{"not": …}` entry, so they never clobber one
+                // another.
+                Some(mut parts) => {
+                    let negand = if parts.len() == 1 {
+                        parts.pop().expect("len == 1")
+                    } else {
+                        json!({ "allOf": parts })
+                    };
+                    all_of.push(json!({ "not": negand }));
                 }
                 // Negative position is unsound to widen: an inner constraint the
                 // object projection would silently drop turns `not` into a negation
@@ -851,15 +860,21 @@ fn negand_value_constraint_ok(c: &Constraint) -> bool {
 }
 
 /// Losslessly project the inner shape of a `sh:not` into the list of AND-conjunct
-/// schemas a conforming node must satisfy — or `None` if any part of the inner
-/// cannot be expressed exactly.
+/// schemas — the parts whose conjunction `A ∧ B ∧ …` IS the inner (a node
+/// conforms to the inner iff it satisfies EVERY part) — or `None` if any part of
+/// the inner cannot be expressed exactly.
+///
+/// This function only returns the inner's conjuncts; it does NOT negate them.
+/// The CALLER negates their conjunction as a whole (`¬(A ∧ B ∧ …)`), which is the
+/// correct SHACL `sh:not` semantics — negating each part independently would be
+/// strictly too narrow.
 ///
 /// SOUND BY CONSTRUCTION: this is the polarity contract for negation. In negative
 /// position every silently-dropped constraint *widens* the negand, so a single
-/// unhandled construct turns the assembled `{"not": …}` into a negation of the
-/// permissive "any node" base — rejecting every node. This projector therefore
-/// returns `Some(parts)` ONLY when it can express the whole inner, and `None`
-/// (⇒ record a loss, emit no `not`) otherwise. It never drops-and-negates.
+/// unhandled construct turns the caller's assembled `{"not": …}` into a negation
+/// of the permissive "any node" base — rejecting every node. This projector
+/// therefore returns `Some(parts)` ONLY when it can express the whole inner, and
+/// `None` (⇒ record a loss, emit no `not`) otherwise. It never drops-and-negates.
 ///
 /// Expressible parts:
 /// * node-level `sh:class X` ⇒ [`type_discriminator`] on `X`'s CURIE — but only
@@ -1755,6 +1770,100 @@ mod tests {
                 &json!({ "@type": ["meta:Person", "meta:Event"] })
             ),
             "a meta:Person also typed meta:Event must be REJECTED"
+        );
+    }
+
+    #[test]
+    fn test_not_multi_conjunct_inner() {
+        // A SINGLE `sh:not` whose inner is a multi-conjunct shape
+        // (`sh:class meta:X ; sh:class meta:Y`). The inner is `X ∧ Y`, so
+        // `sh:not` conforms iff a node fails AT LEAST ONE conjunct
+        // (`¬(X ∧ Y)`), NOT `¬X ∧ ¬Y`. A node typed only meta:X must be
+        // ACCEPTED (it fails the Y conjunct); a node typed both must be
+        // REJECTED.
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class meta:X ; sh:class meta:Y ] .
+            meta:XShape a sh:NodeShape ;
+                sh:targetClass meta:X .
+            meta:YShape a sh:NodeShape ;
+                sh:targetClass meta:Y .
+            ",
+        );
+        let schema = schema_of(&c);
+        let person = def(&schema, "Person");
+        let all_of = person["allOf"].as_array().expect("Person has an allOf");
+        // Exactly ONE `{"not": {"allOf": […]}}` entry for this inner — the
+        // conjunction is negated as a whole, NOT split into two independent
+        // `{"not": …}` entries.
+        let whole_conjunction_nots = all_of
+            .iter()
+            .filter(|e| e.get("not").and_then(|n| n.get("allOf")).is_some())
+            .count();
+        assert_eq!(
+            whole_conjunction_nots, 1,
+            "expected exactly one `not` over the inner's `allOf`, got {all_of:?}"
+        );
+        // No independent per-conjunct `{"not": {"properties": {"@type": …}}}`
+        // entries were emitted for this inner.
+        let independent_type_nots = all_of
+            .iter()
+            .filter(|e| e["not"]["properties"]["@type"].is_object())
+            .count();
+        assert_eq!(
+            independent_type_nots, 0,
+            "the multi-conjunct inner must NOT be split into per-conjunct negations, got {all_of:?}"
+        );
+
+        // Behaviour on the production surface. The `sh:not` lives in the Person
+        // body, so instances must be typed meta:Person for it to apply (matching
+        // the sibling `test_not_*` tests). The ADDED types drive the inner.
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": ["meta:Person", "meta:X"] })
+            ),
+            "a node typed only meta:X (not meta:Y) fails the meta:Y conjunct, so \
+             `not(X ∧ Y)` must ACCEPT it"
+        );
+        assert!(
+            !validates(
+                &c.schema_json,
+                &json!({ "@type": ["meta:Person", "meta:X", "meta:Y"] })
+            ),
+            "a node typed both meta:X and meta:Y satisfies the inner, so \
+             `not(X ∧ Y)` must REJECT it"
+        );
+
+        // A mixed class + property-shape inner: `X ∧ (has meta:p)`. `sh:not`
+        // conforms iff a node fails at least one conjunct.
+        let c2 = compile_ttl(
+            r"
+            meta:ThingShape a sh:NodeShape ;
+                sh:targetClass meta:Thing ;
+                sh:not [ sh:class meta:X ;
+                         sh:property [ sh:path meta:p ; sh:minCount 1 ] ] .
+            meta:XShape a sh:NodeShape ;
+                sh:targetClass meta:X .
+            ",
+        );
+        assert!(
+            validates(
+                &c2.schema_json,
+                &json!({ "@type": ["meta:Thing", "meta:X"] })
+            ),
+            "typed meta:X but WITHOUT meta:p fails the property conjunct, so it \
+             must be ACCEPTED"
+        );
+        assert!(
+            !validates(
+                &c2.schema_json,
+                &json!({ "@type": ["meta:Thing", "meta:X"], "meta:p": "v" })
+            ),
+            "typed meta:X and WITH meta:p satisfies the inner, so it must be \
+             REJECTED"
         );
     }
 
