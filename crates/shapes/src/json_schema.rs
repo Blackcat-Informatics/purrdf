@@ -1671,6 +1671,234 @@ mod tests {
     }
 
     #[test]
+    fn test_not_class_accepts_own_instance() {
+        // The issue #73 reproduction: PersonShape carries
+        // `sh:not [ sh:class meta:Organization ]`. A node typed only meta:Person
+        // MUST be accepted by $defs/Person; a node ALSO typed meta:Organization
+        // MUST be rejected (the constraint is preserved, not silently dropped).
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class meta:Organization ] .
+            meta:OrganizationShape a sh:NodeShape ;
+                sh:targetClass meta:Organization .
+            ",
+        );
+        // Structure: Person's def carries an `allOf` negation of the
+        // Organization @type discriminator — not a base-negating `not`.
+        let schema = schema_of(&c);
+        let person = def(&schema, "Person");
+        let all_of = person["allOf"].as_array().expect("Person has an allOf");
+        assert!(
+            all_of.iter().any(|e| e["not"]["properties"]["@type"]["anyOf"][0]["const"]
+                == json!("meta:Organization")),
+            "expected an allOf `not` over the meta:Organization @type discriminator, got {all_of:?}"
+        );
+
+        // Behaviour, on the production surface (validate against schema_json):
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:Person" })),
+            "a node typed only meta:Person must be ACCEPTED"
+        );
+        assert!(
+            !validates(
+                &c.schema_json,
+                &json!({ "@type": ["meta:Person", "meta:Organization"] })
+            ),
+            "a node also typed meta:Organization must be REJECTED"
+        );
+    }
+
+    #[test]
+    fn test_not_class_multi_disjoint() {
+        // The owl:AllDisjointClasses projection: one shape carries SEVERAL
+        // `sh:not [ sh:class … ]`. Each must become its own independent `allOf`
+        // negation (no clobber), and an instance of the shape's own class is
+        // accepted while an instance also carrying either disjoint class is
+        // rejected.
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class meta:Organization ] ;
+                sh:not [ sh:class meta:Event ] .
+            meta:OrganizationShape a sh:NodeShape ;
+                sh:targetClass meta:Organization .
+            meta:EventShape a sh:NodeShape ;
+                sh:targetClass meta:Event .
+            ",
+        );
+        let schema = schema_of(&c);
+        let person = def(&schema, "Person");
+        let negated: Vec<Value> = person["allOf"]
+            .as_array()
+            .expect("Person has an allOf")
+            .iter()
+            .filter(|e| e.get("not").is_some())
+            .map(|e| e["not"]["properties"]["@type"]["anyOf"][0]["const"].clone())
+            .collect();
+        assert!(
+            negated.contains(&json!("meta:Organization")) && negated.contains(&json!("meta:Event")),
+            "both disjoint classes must be negated independently, got {negated:?}"
+        );
+
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:Person" })),
+            "a plain meta:Person must be ACCEPTED"
+        );
+        assert!(
+            !validates(
+                &c.schema_json,
+                &json!({ "@type": ["meta:Person", "meta:Event"] })
+            ),
+            "a meta:Person also typed meta:Event must be REJECTED"
+        );
+    }
+
+    #[test]
+    fn test_not_mixed_inner_records_loss() {
+        // Rb1: an inner mixing `sh:class` with an off-allowlist node constraint
+        // (`sh:nodeKind`) is NOT losslessly expressible. The whole `sh:not` must
+        // become a recorded loss with no `not` emitted — the vacuous-negation bug
+        // must NOT reappear via a "structural" fallback.
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class meta:Organization ; sh:nodeKind sh:IRI ] .
+            ",
+        );
+        assert!(
+            c.losses.iter().any(|l| l.construct == "sh:not"),
+            "a mixed inner must record a sh:not LossRecord, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let person = def(&schema, "Person");
+        assert!(
+            person.get("allOf").is_none() && person.get("not").is_none(),
+            "no negation may be emitted for a non-expressible mixed inner, got {person:?}"
+        );
+        // The bug does not reappear: a plain Person still validates.
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:Person" })),
+            "a plain meta:Person must still be ACCEPTED (no vacuous rejection)"
+        );
+    }
+
+    #[test]
+    fn test_not_undeclared_namespace_class_records_loss() {
+        // F6: an inner `sh:class` in an UNDECLARED namespace compacts to a full
+        // IRI that no instance's compacted @type can match — a silently
+        // never-firing negation. It must be a recorded loss instead, never an
+        // emitted (never-matching) const.
+        let c = compile_ttl(
+            r"
+            @prefix ex: <https://example.org/> .
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class <http://unknown.example/Foo> ] .
+            ",
+        );
+        assert!(
+            c.losses.iter().any(|l| l.construct == "sh:not"),
+            "an undeclared-namespace inner class must record a sh:not LossRecord, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let person = def(&schema, "Person");
+        assert!(
+            person.get("allOf").is_none() && person.get("not").is_none(),
+            "no never-matching negation may be emitted, got {person:?}"
+        );
+    }
+
+    #[test]
+    fn test_not_structural_property_preserved() {
+        // An expressible property-shape inner keeps a SOUND structural negation:
+        // `sh:not [ sh:property [ sh:path meta:p ; sh:minCount 1 ] ]` rejects
+        // nodes that HAVE meta:p and accepts nodes that lack it.
+        let c = compile_ttl(
+            r"
+            meta:NoPShape a sh:NodeShape ;
+                sh:targetClass meta:NoP ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:minCount 1 ] ] .
+            ",
+        );
+        assert!(
+            !c.losses.iter().any(|l| l.construct == "sh:not"),
+            "an expressible property-shape inner must NOT record a loss, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let nop = def(&schema, "NoP");
+        assert!(
+            nop["allOf"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|e| e.get("not").is_some())),
+            "expected a structural `not` negation, got {nop:?}"
+        );
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:NoP" })),
+            "a node WITHOUT meta:p must be ACCEPTED"
+        );
+        assert!(
+            !validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:NoP", "meta:p": "x" })
+            ),
+            "a node WITH meta:p must be REJECTED"
+        );
+    }
+
+    #[test]
+    fn test_not_self_disjoint() {
+        // Rb4: a (contradictory) self-disjoint shape must reject its own
+        // instances soundly, without panic or dangling refs.
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class meta:Person ] .
+            ",
+        );
+        assert!(
+            !validates(&c.schema_json, &json!({ "@type": "meta:Person" })),
+            "a self-disjoint Person must reject every Person instance"
+        );
+    }
+
+    #[test]
+    fn test_not_class_without_nodeshape() {
+        // Rb5: the negated class need not have its own NodeShape — the @type
+        // discriminator needs no `$def`, so no `$ref` dangles.
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class meta:Ghost ] .
+            ",
+        );
+        assert!(
+            !c.losses.iter().any(|l| l.construct == "sh:not"),
+            "a declared-namespace class needs no NodeShape to be negated, got {:?}",
+            c.losses
+        );
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:Person" })),
+            "a plain meta:Person must be ACCEPTED"
+        );
+        assert!(
+            !validates(
+                &c.schema_json,
+                &json!({ "@type": ["meta:Person", "meta:Ghost"] })
+            ),
+            "a meta:Person also typed meta:Ghost must be REJECTED"
+        );
+    }
+
+    #[test]
     fn test_not_nodekind_records_loss_no_vacuous_not() {
         // `sh:not [ sh:nodeKind sh:Literal ]` is not losslessly expressible in
         // the object projection (a JSON-LD node is always an object, never a
