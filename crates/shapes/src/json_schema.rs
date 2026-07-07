@@ -450,22 +450,6 @@ fn root_schema(defs: &Map<String, Value>, ns: &Namespaces) -> Value {
     })
 }
 
-/// Build the `@type`-discriminated `Node` schema.
-///
-/// A node carries `@id`/`@type`/`@annotation` permissively, then an `allOf` of
-/// per-class conditionals (sorted by class name for determinism). Each entry
-/// reads: *if* `@type` includes the class CURIE — `<primary>:<Class>` for a
-/// primary-namespace class, or the full `prefix:<Class>` for any other declared
-/// namespace (e.g. `logic:FormalizationCandidate`) — as a bare string OR an
-/// array member, *then* the node MUST satisfy that class's `#/$defs` body.
-///
-/// Closed-world semantics:
-/// * An instance typed `<primary>:Foo` that is MISSING a required property
-///   triggers Foo's `then` (`#/$defs/Foo`), fails Foo's `required`, and is
-///   REJECTED.
-/// * A node typed only by an UNMODELED class (no `$def`) fires no `if`, so no
-///   `then` applies and it stays permissively allowed — keeping the slice
-///   example sweep (Task 6) green on unmodeled types.
 /// The `@type`-discriminated match for a single class CURIE: a node whose
 /// `@type` is (or contains) `curie`, either as a bare string or an array member.
 ///
@@ -488,6 +472,22 @@ fn type_discriminator(curie: &str) -> Value {
     })
 }
 
+/// Build the `@type`-discriminated `Node` schema.
+///
+/// A node carries `@id`/`@type`/`@annotation` permissively, then an `allOf` of
+/// per-class conditionals (sorted by class name for determinism). Each entry
+/// reads: *if* `@type` includes the class CURIE — `<primary>:<Class>` for a
+/// primary-namespace class, or the full `prefix:<Class>` for any other declared
+/// namespace (e.g. `logic:FormalizationCandidate`) — as a bare string OR an
+/// array member, *then* the node MUST satisfy that class's `#/$defs` body.
+///
+/// Closed-world semantics:
+/// * An instance typed `<primary>:Foo` that is MISSING a required property
+///   triggers Foo's `then` (`#/$defs/Foo`), fails Foo's `required`, and is
+///   REJECTED.
+/// * A node typed only by an UNMODELED class (no `$def`) fires no `if`, so no
+///   `then` applies and it stays permissively allowed — keeping the slice
+///   example sweep (Task 6) green on unmodeled types.
 fn node_def(class_names: &[String], ns: &Namespaces) -> Value {
     // class_names arrives sorted (BTree-ordered defs iter); keep it explicit so
     // the conditional list is deterministic regardless of caller.
@@ -1672,7 +1672,7 @@ mod tests {
 
     #[test]
     fn test_not_class_accepts_own_instance() {
-        // The issue #73 reproduction: PersonShape carries
+        // The reported reproduction: PersonShape carries
         // `sh:not [ sh:class meta:Organization ]`. A node typed only meta:Person
         // MUST be accepted by $defs/Person; a node ALSO typed meta:Organization
         // MUST be rejected (the constraint is preserved, not silently dropped).
@@ -1691,8 +1691,10 @@ mod tests {
         let person = def(&schema, "Person");
         let all_of = person["allOf"].as_array().expect("Person has an allOf");
         assert!(
-            all_of.iter().any(|e| e["not"]["properties"]["@type"]["anyOf"][0]["const"]
-                == json!("meta:Organization")),
+            all_of
+                .iter()
+                .any(|e| e["not"]["properties"]["@type"]["anyOf"][0]["const"]
+                    == json!("meta:Organization")),
             "expected an allOf `not` over the meta:Organization @type discriminator, got {all_of:?}"
         );
 
