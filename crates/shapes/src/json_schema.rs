@@ -848,6 +848,23 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
 /// the negand widens to "any node" — the vacuous-`not` bug. A `sh:not` property
 /// inner that carries `sh:maxCount` must therefore route to a recorded loss
 /// (the caller emits no `not`) rather than a base-negating vacuous negation.
+///
+/// Also deliberately excludes the value-restriction constraints whose scalar
+/// projection is a BARE JSON-Schema keyword with no `type` guard:
+/// `sh:pattern` (`pattern`), `sh:minLength`/`sh:maxLength`
+/// (`minLength`/`maxLength`), and the numeric bounds
+/// `sh:minInclusive`/`sh:maxInclusive`/`sh:minExclusive`/`sh:maxExclusive`
+/// (`minimum`/`maximum`/`exclusiveMinimum`/`exclusiveMaximum`). JSON Schema
+/// applies each of these keywords only to instances of its target primitive
+/// (strings for `pattern`/length, numbers for the bounds) and passes every
+/// other type vacuously. So for an array-valued node the scalar alternative is
+/// vacuously satisfied by the array itself; under negation that widens the
+/// negand to reject EVERY array-valued node — a false-reject. They therefore
+/// route to a recorded loss rather than an unsound `not`. Only value
+/// constraints whose scalar schema is type-guarded (non-vacuous for a
+/// mismatched-type instance) remain negand-safe: `sh:datatype`/`sh:nodeKind`
+/// project `type`-tagged alternatives, `sh:in` an `enum`, `sh:hasValue` a
+/// `const`, and `sh:languageIn` a `type: "object"` literal shape.
 fn negand_value_constraint_ok(c: &Constraint) -> bool {
     matches!(
         c,
@@ -856,13 +873,6 @@ fn negand_value_constraint_ok(c: &Constraint) -> bool {
             | Constraint::NodeKind(_)
             | Constraint::In(_)
             | Constraint::HasValue(_)
-            | Constraint::Pattern { .. }
-            | Constraint::MinLength(_)
-            | Constraint::MaxLength(_)
-            | Constraint::MinInclusive(_)
-            | Constraint::MaxInclusive(_)
-            | Constraint::MinExclusive(_)
-            | Constraint::MaxExclusive(_)
             | Constraint::LanguageIn(_)
     )
 }
@@ -2114,6 +2124,145 @@ mod tests {
         assert!(
             !validates(&c.schema_json, &json!({ "@type": "meta:DtT" })),
             "a node with p absent must be REJECTED"
+        );
+    }
+
+    #[test]
+    fn test_not_property_datatype_array_sound() {
+        // The array cardinality path of the datatype negand stays sound: the
+        // scalar alternatives are `type`-guarded, so an array instance is NOT
+        // vacuously matched.
+        // `sh:not [ sh:property [ sh:path meta:p ; sh:datatype xsd:string ] ]`.
+        let c = compile_ttl(
+            r"
+            meta:DtArrShape a sh:NodeShape ;
+                sh:targetClass meta:DtArrT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:datatype xsd:string ] ] .
+            ",
+        );
+        assert!(
+            !c.losses.iter().any(|l| l.construct == "sh:not"),
+            "an expressible datatype negand must NOT record a loss, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let dtt = def(&schema, "DtArrT");
+        assert!(
+            dtt["allOf"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|e| e.get("not").is_some())),
+            "expected a sound structural `not` negation, got {dtt:?}"
+        );
+        // Every value a string ⇒ inner conforms ⇒ sh:not REJECTS.
+        assert!(
+            !validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:DtArrT", "meta:p": ["a", "b"] })
+            ),
+            "a node whose p is all strings must be REJECTED"
+        );
+        // A non-string value present ⇒ inner FAILS ⇒ sh:not ACCEPTS.
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:DtArrT", "meta:p": ["a", 5] })
+            ),
+            "a node whose p array contains a non-string must be ACCEPTED"
+        );
+        // p ABSENT ⇒ inner vacuously conforms ⇒ sh:not REJECTS.
+        assert!(
+            !validates(&c.schema_json, &json!({ "@type": "meta:DtArrT" })),
+            "a node with p absent must be REJECTED"
+        );
+    }
+
+    #[test]
+    fn test_not_property_pattern_records_loss() {
+        // F1 (value-restriction variant): `sh:pattern` projects a BARE
+        // JSON-Schema `pattern` keyword with no `type` guard. JSON Schema applies
+        // `pattern` only to strings and passes non-strings vacuously, so under
+        // negation the scalar alternative is vacuously satisfied by an
+        // array-valued node — widening the negand to false-reject EVERY array.
+        // It must route to a recorded loss and emit NO `not`.
+        let c = compile_ttl(
+            r#"
+            meta:PatShape a sh:NodeShape ;
+                sh:targetClass meta:PatT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:pattern "^A" ] ] .
+            "#,
+        );
+        assert!(
+            c.losses.iter().any(|l| l.construct == "sh:not"),
+            "a sh:pattern sh:not property inner must record a sh:not LossRecord, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let pat = def(&schema, "PatT");
+        assert!(
+            !serde_json::to_string(pat)
+                .expect("def serializes")
+                .contains("\"not\""),
+            "the vacuous `not` must be GONE from the def, got {pat:?}"
+        );
+        // Behavioural (boon): the false-reject is gone — the constraint is
+        // honestly dropped, so every array-valued node is ACCEPTED.
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:PatT", "meta:p": ["Apple", "Banana"] })
+            ),
+            "a node with one violating value must be ACCEPTED (no false-reject)"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:PatT", "meta:p": ["Apple"] })
+            ),
+            "a node whose values all match ^A must be ACCEPTED (loss dropped)"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:PatT", "meta:p": ["Banana"] })
+            ),
+            "a node whose value violates ^A must be ACCEPTED (no false-reject)"
+        );
+    }
+
+    #[test]
+    fn test_not_property_numeric_bound_records_loss() {
+        // F1 (numeric-bound variant): `sh:minInclusive` projects a BARE
+        // `minimum` keyword with no `type` guard; JSON Schema passes non-numbers
+        // vacuously, so under negation an array-valued node is vacuously matched
+        // and false-rejected. Must route to a recorded loss and emit NO `not`.
+        let c = compile_ttl(
+            r"
+            meta:NumShape a sh:NodeShape ;
+                sh:targetClass meta:NumT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:minInclusive 10 ] ] .
+            ",
+        );
+        assert!(
+            c.losses.iter().any(|l| l.construct == "sh:not"),
+            "a sh:minInclusive sh:not property inner must record a sh:not LossRecord, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let num = def(&schema, "NumT");
+        assert!(
+            !serde_json::to_string(num)
+                .expect("def serializes")
+                .contains("\"not\""),
+            "the vacuous `not` must be GONE from the def, got {num:?}"
+        );
+        // Behavioural (boon): a node with meta:p = [5] is ACCEPTED — the
+        // false-reject is gone.
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:NumT", "meta:p": [5] })
+            ),
+            "a node with meta:p = [5] must be ACCEPTED (no false-reject)"
         );
     }
 
