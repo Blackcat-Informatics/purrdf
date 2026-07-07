@@ -466,6 +466,28 @@ fn root_schema(defs: &Map<String, Value>, ns: &Namespaces) -> Value {
 /// * A node typed only by an UNMODELED class (no `$def`) fires no `if`, so no
 ///   `then` applies and it stays permissively allowed — keeping the slice
 ///   example sweep (Task 6) green on unmodeled types.
+/// The `@type`-discriminated match for a single class CURIE: a node whose
+/// `@type` is (or contains) `curie`, either as a bare string or an array member.
+///
+/// This is the SOLE source of the identity model. `node_def` uses it as the
+/// `if` of each positive per-class conditional, and the `sh:not` negation
+/// (`compile_negand`) negates it (`{"not": type_discriminator(..)}`), so a
+/// negation rejects EXACTLY the nodes the positive path would type-match — the
+/// two can never drift.
+fn type_discriminator(curie: &str) -> Value {
+    json!({
+        "required": ["@type"],
+        "properties": {
+            "@type": {
+                "anyOf": [
+                    { "const": curie },
+                    { "type": "array", "contains": { "const": curie } }
+                ]
+            }
+        }
+    })
+}
+
 fn node_def(class_names: &[String], ns: &Namespaces) -> Value {
     // class_names arrives sorted (BTree-ordered defs iter); keep it explicit so
     // the conditional list is deterministic regardless of caller.
@@ -485,17 +507,7 @@ fn node_def(class_names: &[String], ns: &Namespaces) -> Value {
                 format!("{}:{name}", ns.primary_prefix)
             };
             json!({
-                "if": {
-                    "required": ["@type"],
-                    "properties": {
-                        "@type": {
-                            "anyOf": [
-                                { "const": type_const },
-                                { "type": "array", "contains": { "const": type_const } }
-                            ]
-                        }
-                    }
-                },
+                "if": type_discriminator(&type_const),
                 "then": { "$ref": format!("#/$defs/{name}") }
             })
         })
@@ -670,7 +682,6 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     let mut all_of: Vec<Value> = Vec::new();
     let mut any_of: Vec<Value> = Vec::new();
     let mut one_of: Vec<Value> = Vec::new();
-    let mut not_schema: Option<Value> = None;
     let mut additional_properties_false = false;
     let mut closed_ignored: Vec<String> = Vec::new();
 
@@ -694,9 +705,36 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
             Constraint::Node(inner) => {
                 all_of.push(compile_object_schema(inner, ctx));
             }
-            Constraint::Not(inner) => {
-                not_schema = Some(compile_object_schema(inner, ctx));
-            }
+            Constraint::Not(inner) => match compile_negand(inner, ctx) {
+                // The inner is losslessly expressible: negate each AND-conjunct
+                // independently. `sh:class` conjuncts become `@type`-discriminated
+                // negations; multiple `sh:not` (the `owl:AllDisjointClasses`
+                // projection) each land as their own `allOf` entry, so they never
+                // clobber one another.
+                Some(parts) => {
+                    for part in parts {
+                        all_of.push(json!({ "not": part }));
+                    }
+                }
+                // Negative position is unsound to widen: an inner constraint the
+                // object projection would silently drop turns `not` into a negation
+                // of the permissive base — rejecting every node. Record the loss
+                // and emit no `not` (the SHACL/JSON-Schema Option-2 outcome).
+                None => {
+                    ctx.record(
+                        "sh:not",
+                        &shape_iri,
+                        "sh:not inner shape is not losslessly expressible in the \
+                         object projection; omitted rather than emitting a \
+                         base-negating (vacuous) not",
+                    );
+                    comments.push(
+                        "a node-level sh:not was dropped (inner shape not soundly \
+                         expressible in the object projection)"
+                            .to_owned(),
+                    );
+                }
+            },
             Constraint::Closed { ignored } => {
                 additional_properties_false = true;
                 for n in ignored {
@@ -769,9 +807,6 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     if !one_of.is_empty() {
         obj.insert("oneOf".to_owned(), Value::Array(one_of));
     }
-    if let Some(ns) = not_schema {
-        obj.insert("not".to_owned(), ns);
-    }
 
     if !comments.is_empty() {
         comments.sort();
@@ -783,6 +818,120 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
 }
 
 // ── Per-property value schema ────────────────────────────────────────────────
+
+/// Whether a value-level constraint is expressed *losslessly* by
+/// [`compile_property`] — i.e. it has a dedicated arm there and never falls
+/// through to that function's silent `_ => {}` drop.
+///
+/// Used to gate the negation projector: a `sh:not` over a property shape may
+/// only be emitted when EVERY value constraint round-trips, because a dropped
+/// constraint under negation would widen the negand to the permissive base and
+/// re-introduce the vacuous-`not` bug. Deliberately excludes `sh:class` (its
+/// value projection is a node-ref/`$ref`, whose negation semantics are not the
+/// clean value-restriction this projector guarantees) and `sh:uniqueLang`
+/// (which `compile_property` does not express — it would be silently dropped).
+fn negand_value_constraint_ok(c: &Constraint) -> bool {
+    matches!(
+        c,
+        Constraint::MinCount(_)
+            | Constraint::MaxCount(_)
+            | Constraint::Datatype(_)
+            | Constraint::NodeKind(_)
+            | Constraint::In(_)
+            | Constraint::HasValue(_)
+            | Constraint::Pattern { .. }
+            | Constraint::MinLength(_)
+            | Constraint::MaxLength(_)
+            | Constraint::MinInclusive(_)
+            | Constraint::MaxInclusive(_)
+            | Constraint::MinExclusive(_)
+            | Constraint::MaxExclusive(_)
+            | Constraint::LanguageIn(_)
+    )
+}
+
+/// Losslessly project the inner shape of a `sh:not` into the list of AND-conjunct
+/// schemas a conforming node must satisfy — or `None` if any part of the inner
+/// cannot be expressed exactly.
+///
+/// SOUND BY CONSTRUCTION: this is the polarity contract for negation. In negative
+/// position every silently-dropped constraint *widens* the negand, so a single
+/// unhandled construct turns the assembled `{"not": …}` into a negation of the
+/// permissive "any node" base — rejecting every node. This projector therefore
+/// returns `Some(parts)` ONLY when it can express the whole inner, and `None`
+/// (⇒ record a loss, emit no `not`) otherwise. It never drops-and-negates.
+///
+/// Expressible parts:
+/// * node-level `sh:class X` ⇒ [`type_discriminator`] on `X`'s CURIE — but only
+///   when `X` is in a declared namespace; an undeclared-namespace class would
+///   compact to a full IRI that no instance's compacted `@type` can match (a
+///   silently never-firing negation), so it is a loss instead.
+/// * a direct-predicate `sh:property` whose value constraints are all
+///   [`negand_value_constraint_ok`] ⇒ a `{properties, required}` conjunct.
+///
+/// Everything else (`sh:nodeKind`/`sh:datatype`/`sh:in`/… at node level, nested
+/// `sh:not`/`sh:and`/`sh:or`/`sh:xone`/`sh:node`, non-predicate paths, nested or
+/// reifier property shapes, an empty inner) ⇒ `None`.
+fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
+    // An empty inner is the permissive base; negating it rejects everything.
+    // Never emit a vacuous negation for it.
+    if inner.constraints.is_empty() && inner.property_shapes.is_empty() {
+        return None;
+    }
+
+    let mut parts: Vec<Value> = Vec::new();
+
+    // Node-level constraints: only `sh:class` is a losslessly-expressible
+    // node-identity discriminator; anything else is not expressible in the
+    // object projection and forces the whole negation to a loss.
+    for c in &inner.constraints {
+        let Constraint::Class(class) = c else {
+            return None;
+        };
+        if !ctx.ns.is_known(class.as_str()) {
+            return None;
+        }
+        parts.push(type_discriminator(&ctx.ns.compact_iri(class.as_str())));
+    }
+
+    // Property shapes: express only direct-predicate paths whose every value
+    // constraint round-trips through `compile_property`.
+    let inner_iri = inner.id.to_string();
+    for ps in &inner.property_shapes {
+        if ps.deactivated
+            || !ps.property_shapes.is_empty()
+            || !ps.reifier_shapes.is_empty()
+            || ps.reification_required
+        {
+            return None;
+        }
+        let Path::Predicate(pred) = &ps.path else {
+            return None;
+        };
+        if !ps.constraints.iter().all(negand_value_constraint_ok) {
+            return None;
+        }
+        let key = ctx.ns.compact_iri(pred.as_str());
+        let (value_schema, is_required) = compile_property(&ps.constraints, &inner_iri, &key, ctx);
+        let mut props: Map<String, Value> = Map::new();
+        props.insert(key.clone(), value_schema);
+        let mut obj: Map<String, Value> = Map::new();
+        obj.insert("type".to_owned(), json!("object"));
+        obj.insert("properties".to_owned(), Value::Object(props));
+        if is_required {
+            obj.insert("required".to_owned(), json!([key]));
+        }
+        parts.push(Value::Object(obj));
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    // Deterministic order, independent of constraint-vector position.
+    parts.sort_by_key(ToString::to_string);
+    Some(parts)
+}
 
 /// Compile one property shape's constraints into `(value_schema, is_required)`.
 ///
@@ -909,6 +1058,20 @@ fn compile_property(
                 );
                 comments.push(format!(
                     "a sh:expression constraint on property {key} was dropped (no JSON Schema equivalent)"
+                ));
+            }
+            Constraint::Not(_) => {
+                // A value-position `sh:not` has no lossless value-schema
+                // projection here. Surface it (never swallow it): emitting a
+                // negation off a base value schema would be vacuous, exactly the
+                // node-level bug this change removes.
+                ctx.record(
+                    "sh:not",
+                    shape_iri,
+                    "property-level sh:not has no lossless value-schema projection",
+                );
+                comments.push(format!(
+                    "a sh:not constraint on property {key} was dropped (no lossless value-schema projection)"
                 ));
             }
             // Counts handled above; node-shape-only constraints (Closed/And/…)
@@ -1485,7 +1648,12 @@ mod tests {
     }
 
     #[test]
-    fn test_not_constraint() {
+    fn test_not_nodekind_records_loss_no_vacuous_not() {
+        // `sh:not [ sh:nodeKind sh:Literal ]` is not losslessly expressible in
+        // the object projection (a JSON-LD node is always an object, never a
+        // literal), so the old emitter produced a `not` over the permissive base
+        // that rejected EVERY node. The sound outcome is Option 2: record a loss
+        // and emit no `not`.
         let c = compile_ttl(
             r"
             meta:NotShape a sh:NodeShape ;
@@ -1493,9 +1661,26 @@ mod tests {
                 sh:not [ sh:nodeKind sh:Literal ] .
             ",
         );
+        assert!(
+            c.losses.iter().any(|l| l.construct == "sh:not"),
+            "sh:not over a non-expressible inner must record a LossRecord, got {:?}",
+            c.losses
+        );
         let schema = schema_of(&c);
         let thing = def(&schema, "Thing");
-        assert!(thing["not"].is_object(), "expected a `not` subschema");
+        assert!(
+            thing.get("not").is_none(),
+            "no `not` may be emitted for a non-expressible inner, got {:?}",
+            thing.get("not")
+        );
+        assert!(
+            thing["$comment"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("sh:not"),
+            "expected a $comment noting the dropped sh:not, got {:?}",
+            thing.get("$comment")
+        );
     }
 
     #[test]
