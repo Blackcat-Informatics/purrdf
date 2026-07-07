@@ -1341,6 +1341,29 @@ mod tests {
         &schema["$defs"][name]
     }
 
+    /// Validate a JSON-LD instance node against the emitted `schema_json` with a
+    /// trusted external JSON-Schema (draft 2020-12) validator, returning whether
+    /// the instance is ACCEPTED.
+    ///
+    /// This is the production-surface observation the acceptance criteria demand:
+    /// it exercises the exact string `CompiledSchema.schema_json` the way a
+    /// downstream consumer (e.g. gmeow-ontology) would, rather than asserting the
+    /// schema's JSON shape.
+    fn validates(schema_json: &str, instance: &Value) -> bool {
+        use boon::{Compiler, Schemas};
+        let schema_val: Value = serde_json::from_str(schema_json).expect("schema is valid JSON");
+        let loc = "mem:///instance.schema.json";
+        let mut schemas = Schemas::new();
+        let mut compiler = Compiler::new();
+        compiler
+            .add_resource(loc, schema_val)
+            .expect("schema registers as a boon resource");
+        let sch = compiler
+            .compile(loc, &mut schemas)
+            .expect("emitted schema compiles under draft 2020-12");
+        schemas.validate(instance, sch).is_ok()
+    }
+
     #[test]
     #[should_panic(expected = "declare its prefix in the shapes document / Namespaces")]
     fn unknown_namespace_target_class_hard_fails() {
