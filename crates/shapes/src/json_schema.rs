@@ -944,7 +944,9 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
     }
 
     // Deterministic order, independent of constraint-vector position.
-    parts.sort_by_key(ToString::to_string);
+    // `sort_by_cached_key` serializes each part once instead of on every
+    // comparison.
+    parts.sort_by_cached_key(ToString::to_string);
     Some(parts)
 }
 
