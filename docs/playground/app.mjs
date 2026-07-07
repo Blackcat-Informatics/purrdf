@@ -839,23 +839,14 @@ function wireButtons() {
 }
 
 async function initHeader() {
+  // The version handshake is the ONLY startup traffic; it goes over the worker
+  // message port, not the network. The console makes NO network request after
+  // its assets load — that provable property (no server-side evaluation) is
+  // worth more than a cosmetic wasm-size chip, so the size probe is gone.
   await guard(async () => {
     const { version } = await call("version", {});
     $("app-version").textContent = `purrdf v${version}`;
   });
-  // Best-effort engine size probe (colocated wasm). Never fatal.
-  try {
-    const resp = await fetch(new URL("./purrdf/pkg/purrdf_wasm_bg.wasm", import.meta.url), {
-      method: "HEAD",
-    });
-    const len = resp.headers.get("content-length");
-    if (len) {
-      const kib = Math.round(Number(len) / 1024);
-      $("engine-size").textContent = `wasm ${kib} KiB`;
-    }
-  } catch {
-    // Size is a nicety; omission is not an error.
-  }
 }
 
 function registerServiceWorker() {
