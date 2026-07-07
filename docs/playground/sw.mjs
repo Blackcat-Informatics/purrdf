@@ -11,6 +11,7 @@ const SHELL = [
   "./index.html",
   "./app.mjs",
   "./engine.worker.mjs",
+  "./sarif.mjs",
   "./style.css",
   "./manifest.webmanifest",
   "./examples/gallery.mjs",

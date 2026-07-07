@@ -248,7 +248,8 @@ playground: wasm-pkg ## Assemble the standalone RDF-1.2 console into $(CARGO_TAR
 	@rm -rf "$(PLAYGROUND_OUT)"
 	@mkdir -p "$(PLAYGROUND_OUT)/purrdf"
 	@cp docs/playground/index.html docs/playground/app.mjs docs/playground/engine.worker.mjs \
-		docs/playground/style.css docs/playground/sw.mjs docs/playground/manifest.webmanifest \
+		docs/playground/sarif.mjs docs/playground/style.css docs/playground/sw.mjs \
+		docs/playground/manifest.webmanifest \
 		"$(PLAYGROUND_OUT)/"
 	@cp -R docs/playground/examples "$(PLAYGROUND_OUT)/examples"
 	@cp crates/rdf-wasm/js/index.mjs "$(PLAYGROUND_OUT)/purrdf/index.mjs"

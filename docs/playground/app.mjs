@@ -6,6 +6,7 @@
 // it is a pure view/message client over the worker.
 
 import { VIGNETTES, findVignette, DEFAULT_STATE } from "./examples/gallery.mjs";
+import { assertSarifVersion, describeSarif } from "./sarif.mjs";
 
 const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
 
@@ -543,10 +544,19 @@ function renderSarif(sarif) {
   const container = $("sarif-results");
   container.replaceChildren();
   const results = sarif.runs?.[0]?.results ?? [];
+  // Assert the SARIF version contract. A drift is surfaced loudly (aria-live
+  // error banner + an inline warning row), never silently echoed.
+  const versionWarning = assertSarifVersion(sarif.version);
+  if (versionWarning) {
+    showError(versionWarning);
+    container.append(
+      el("p", { id: "sarif-version-warning", class: "ask-result", text: versionWarning }),
+    );
+  }
   container.append(
     el("p", {
       class: "muted",
-      text: `SARIF ${sarif.version} · ${results.length} result(s).`,
+      text: describeSarif(sarif),
     }),
   );
   if (results.length === 0) {
