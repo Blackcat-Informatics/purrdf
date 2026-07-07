@@ -517,7 +517,7 @@ fn node_def(class_names: &[String], ns: &Namespaces) -> Value {
         "type": "object",
         "title": "A single discriminated PURRDF instance node",
         "description": format!(
-            "Validated by @type: a node typed {}:Foo MUST satisfy #/$defs/Foo (closed-world, #700). Nodes typed only by unmodeled classes are permissively allowed.",
+            "Validated by @type: a node typed {}:Foo MUST satisfy #/$defs/Foo (closed-world). Nodes typed only by unmodeled classes are permissively allowed.",
             ns.primary_prefix
         ),
         "properties": {
@@ -579,7 +579,7 @@ fn annotation_def() -> Value {
     json!({
         "type": "object",
         "title": "RDF-1.2 statement metadata (reifier annotation)",
-        "description": "Free-form metadata about an asserted triple (e.g. meta:accordingTo, meta:confidence, meta:assertedAt). Permissive; tightened by #699.",
+        "description": "Free-form metadata about an asserted triple (e.g. meta:accordingTo, meta:confidence, meta:assertedAt). Permissive.",
         "additionalProperties": {
             "anyOf": [
                 { "type": "string" },
