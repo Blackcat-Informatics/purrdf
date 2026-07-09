@@ -7,7 +7,7 @@ build-backend = "maturin"
 
 [project]
 name = "purrdf"
-version = "0.4.0"
+version = "0.4.1"
 description = "Python bindings for the PurRDF RDF 1.2 kernel, GTS carrier, SHACL, and slice tooling"
 readme = "README.md"
 requires-python = ">=3.13"

@@ -1028,10 +1028,19 @@ fn compile_property(
                         alts.push(node_ref);
                     }
                 } else {
-                    alts.push(json!({
-                        "type": "string",
-                        "$comment": format!("external class {}", c.as_str())
-                    }));
+                    // External (non-primary) class: the value is an RDF node
+                    // reference, never a string literal. A `$ref` would dangle
+                    // (external classes have no `$def`), so emit the permissive
+                    // node-reference form that accepts an `@id` object, keeping a
+                    // `$comment` noting the external class.
+                    let mut node_ref = node_ref_schema();
+                    if let Value::Object(map) = &mut node_ref {
+                        map.insert(
+                            "$comment".to_owned(),
+                            json!(format!("external class {}", c.as_str())),
+                        );
+                    }
+                    alts.push(node_ref);
                 }
             }
             Constraint::NodeKind(nk) => match nk {
@@ -1591,6 +1600,91 @@ mod tests {
         );
         // The property key compacts through the declared prefix.
         assert!(def(&schema, "Cat")["properties"]["gmeow:name"].is_object());
+    }
+
+    #[test]
+    fn external_object_class_projects_to_node_ref_not_string() {
+        // Soundness: a value constrained by `sh:class` to an EXTERNAL (non-primary)
+        // class is always an RDF node reference (`@id`), never a string literal.
+        // The old projection emitted `{"type":"string"}`, which REJECTS valid
+        // `{"@id":..}` instance data. It must project to a permissive node ref
+        // (no dangling `$ref`, since external classes have no `$def`) while a
+        // genuine `xsd:string` datatype value keeps its string projection.
+        let schema = schema_of(&compile_ttl(
+            r"
+            @prefix math: <https://blackcatinformatics.ca/math/> .
+            meta:BasisShape a sh:NodeShape ;
+                sh:targetClass meta:BasisHolder ;
+                sh:property [ sh:path meta:basis ; sh:maxCount 1 ; sh:class math:Basis ] ;
+                sh:property [ sh:path meta:label ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+        ",
+        ));
+        let basis = &def(&schema, "BasisHolder")["properties"]["meta:basis"];
+        // NOT the unsound string projection.
+        assert_ne!(
+            basis["type"],
+            json!("string"),
+            "external object class must NOT project to a string: {basis}"
+        );
+        // A permissive node reference: an object requiring `@id`.
+        assert_eq!(
+            basis["type"],
+            json!("object"),
+            "external object class projects to a node-ref object: {basis}"
+        );
+        assert!(
+            basis["properties"]["@id"].is_object(),
+            "node ref carries an @id property: {basis}"
+        );
+        assert!(
+            basis["required"]
+                .as_array()
+                .is_some_and(|r| r.iter().any(|v| v == "@id")),
+            "node ref requires @id: {basis}"
+        );
+        // The external-class provenance comment is preserved.
+        assert!(
+            basis["$comment"]
+                .as_str()
+                .is_some_and(|s| s.contains("external class")),
+            "external-class comment preserved: {basis}"
+        );
+        // No dangling $ref to a nonexistent external $def.
+        assert!(
+            basis["$ref"].is_null(),
+            "external class must NOT emit a dangling $ref: {basis}"
+        );
+
+        // Production surface: the value schema ACCEPTS an @id object and REJECTS a
+        // bare string, verified with a trusted draft-2020-12 validator.
+        let basis_json = serde_json::to_string(basis).expect("value schema serializes");
+        assert!(
+            validates(
+                &basis_json,
+                &json!({ "@id": "https://blackcatinformatics.ca/x" })
+            ),
+            "external object class must accept an @id node reference"
+        );
+        assert!(
+            !validates(&basis_json, &json!("https://blackcatinformatics.ca/x")),
+            "external object class must reject a bare string literal"
+        );
+
+        // Guard against over-correction: a genuine xsd:string datatype value still
+        // projects to a string (a bare-scalar string alternative), and the value
+        // schema still accepts a plain string literal.
+        let label = &def(&schema, "BasisHolder")["properties"]["meta:label"];
+        assert!(
+            label["anyOf"]
+                .as_array()
+                .is_some_and(|alts| alts.iter().any(|a| a["type"] == json!("string"))),
+            "datatype xsd:string still projects to a string alternative: {label}"
+        );
+        let label_json = serde_json::to_string(label).expect("value schema serializes");
+        assert!(
+            validates(&label_json, &json!("hello")),
+            "datatype xsd:string must still accept a bare string literal"
+        );
     }
 
     #[test]
