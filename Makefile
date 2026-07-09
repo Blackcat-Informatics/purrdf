@@ -231,8 +231,8 @@ wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WA
 	 fi; \
 	 echo "OK: wasm artifact within budget"
 
-wasm-pkg-test: wasm-pkg ## Build the wasm package and run the Node real-execution round-trip suite.
-	cd crates/rdf-wasm/js && node --test tests/*.test.mjs
+wasm-pkg-test: wasm-pkg ## Build the wasm package and run the npm package-root gate.
+	cd crates/rdf-wasm/js && npm run check
 
 wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput benchmark (report-only; never a gate).
 	cd crates/rdf-wasm/js && node bench/parse.bench.mjs

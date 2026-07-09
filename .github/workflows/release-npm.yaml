@@ -76,9 +76,9 @@ jobs:
       - name: Upgrade npm (trusted publishing needs npm >= 11.5.1)
         run: npm install -g npm@latest
 
-      - name: Run the Node real-execution test suite
+      - name: Run npm package gates
         working-directory: crates/rdf-wasm/js
-        run: node --test tests/*.test.mjs
+        run: npm run check
 
       - name: Pack the tarball (for attestation + SBOM)
         working-directory: crates/rdf-wasm/js

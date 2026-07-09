@@ -44,7 +44,7 @@ since ~2021 (Chrome/Edge 91+, Firefox 89+, Safari 16.4+) and Node ≥ 18.
 ## Quickstart
 
 ```js
-import { ready, DataFactory, Dataset } from "@blackcatinformatics/purrdf";
+import { ready, DataFactory, Dataset, QueryEngine } from "@blackcatinformatics/purrdf";
 
 await ready(); // one-time async wasm instantiation
 
@@ -67,6 +67,13 @@ ds.add(f.quad(f.namedNode("https://ex/stmt"), f.namedNode("https://ex/asserts"),
 // Quoted triples + directions survive a round-trip through N-Quads.
 const nq = ds.serialize("nquads");
 const reparsed = Dataset.parse(nq, "nquads");
+
+const engine = new QueryEngine();
+const names = engine.select(
+  reparsed,
+  "SELECT ?message WHERE { <https://ex/s> <https://ex/says> ?message }",
+);
+console.log(names.rows[0].message.value);
 ```
 
 ## API surface
@@ -80,6 +87,10 @@ const reparsed = Dataset.parse(nq, "nquads");
   Formats: `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml` (`serialize` also `jsonld`).
 - `Dataset.canonicalize()` / `Dataset.isomorphic(other)` — RDFC-1.0 canonical N-Quads
   and RDF graph-identity (isomorphism under blank-node relabeling).
+- `QueryEngine` — a reusable SPARQL execution context with a native plan cache,
+  typed `select` / `ask` / `construct` / `describe` helpers, atomic `update`,
+  and `queryRaw` serialization for SPARQL Results JSON/XML/CSV/TSV plus graph
+  formats. `Dataset.query(...)` remains as the compatibility raw-string helper.
 - `shaclValidateToSarif(shapesTtl, dataNt)` / `shaclEntail(shapesTtl, dataNt)` — SHACL
   validation to a SARIF 2.1.0 report and SHACL-AF `sh:rule` entailment to N-Triples.
 - `Sink`, `datasetToStream`, `streamToDataset` — the async RDF/JS
@@ -91,7 +102,8 @@ Full typings ship in `index.d.ts`.
 ## Scope
 
 In-memory only, by design: no persistent store and no network I/O inside the
-wasm module. For the container transport (GTS), SPARQL result serializers, and the
+wasm module. This package provides no network resolver, so remote `SERVICE`
+and `LOAD` fail explicitly. For the container transport (GTS), native APIs, and the
 rest of the toolkit, see the
 [main repository](https://github.com/Blackcat-Informatics/purrdf).
 
