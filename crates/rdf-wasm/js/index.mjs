@@ -11,9 +11,10 @@
 // wasm boundary cannot express in Rust:
 //   * `ready()` — one-time async wasm instantiation (required for the `web` target).
 //   * the polymorphic RDF/JS `DataFactory.literal(value, languageOrDatatype)` —
-//     dispatching a NamedNode datatype argument to `typedLiteral` (a wasm-bindgen
-//     exported type can't be recovered from an untyped value in Rust).
+//     dispatching a NamedNode datatype argument to `typedLiteral` and a
+//     `{ language, direction }` argument to `directionalLiteral`.
 //   * `Dataset` iterability (`for (const quad of dataset)`).
+//   * `Dataset.from`, `Dataset#toStream`, and `DataFactory#dataset`.
 //   * `datasetToStream` / `streamToDataset` — the async RDF/JS Stream/Sink primitives
 //     over the synchronous `Dataset.quads()` / `Sink` engine surface.
 
@@ -29,6 +30,23 @@ import init, {
 } from "./pkg/purrdf_wasm.js";
 
 let _ready = false;
+
+function isNamedNodeTerm(value) {
+  return (
+    value != null &&
+    typeof value === "object" &&
+    value.termType === "NamedNode"
+  );
+}
+
+function isDirectionalLanguage(value) {
+  return (
+    value != null &&
+    typeof value === "object" &&
+    typeof value.language === "string" &&
+    (value.direction === "ltr" || value.direction === "rtl")
+  );
+}
 
 /**
  * Instantiate the wasm module. Idempotent. In Node the wasm bytes are read from the
@@ -54,6 +72,20 @@ export async function ready(wasmBytesOrUrl) {
   if (!Dataset.prototype[Symbol.iterator]) {
     Dataset.prototype[Symbol.iterator] = function () {
       return this.quads()[Symbol.iterator]();
+    };
+  }
+
+  if (!Dataset.from) {
+    Dataset.from = function (quads = []) {
+      const dataset = new Dataset();
+      for (const quad of quads) dataset.add(quad);
+      return dataset;
+    };
+  }
+
+  if (!Dataset.prototype.toStream) {
+    Dataset.prototype.toStream = function () {
+      return datasetToStream(this);
     };
   }
 
@@ -91,19 +123,23 @@ export async function ready(wasmBytesOrUrl) {
 
   // Present the RDF/JS-spec polymorphic literal(value, languageOrDatatype). The wasm
   // method takes `(value, language?)`; a NamedNode second argument is a datatype.
+  // PurRDF also accepts `{ language, direction }` for RDF 1.2 dirLangString literals.
   if (!DataFactory.prototype.__purrdfPolymorphicLiteral) {
     const wasmLiteral = DataFactory.prototype.literal;
     DataFactory.prototype.literal = function (value, languageOrDatatype) {
-      if (
-        languageOrDatatype != null &&
-        typeof languageOrDatatype === "object" &&
-        languageOrDatatype.termType === "NamedNode"
-      ) {
+      if (isNamedNodeTerm(languageOrDatatype)) {
         return this.typedLiteral(value, languageOrDatatype);
       }
+      if (isDirectionalLanguage(languageOrDatatype)) return this.directionalLiteral(value, languageOrDatatype.language, languageOrDatatype.direction);
       return wasmLiteral.call(this, value, languageOrDatatype ?? undefined);
     };
     DataFactory.prototype.__purrdfPolymorphicLiteral = true;
+  }
+
+  if (!DataFactory.prototype.dataset) {
+    DataFactory.prototype.dataset = function (quads = []) {
+      return Dataset.from(quads);
+    };
   }
 
   _ready = true;

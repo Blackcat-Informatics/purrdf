@@ -37,7 +37,8 @@
     "pkg/purrdf_wasm_bg.wasm.d.ts"
   ],
   "scripts": {
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "npm exec --yes --package=typescript@7.0.2 -- tsc -p tsconfig.types.json"
   },
   "engines": {
     "node": ">=18"
