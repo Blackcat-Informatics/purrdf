@@ -116,7 +116,7 @@ book: ## Build The PurRDF Book (mdBook user guide) into docs/book/book/.
 	mdbook build docs/book
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes -p purrdf-wasm
 
 bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NOT a test gate). See docs/BENCHMARKS.md.
 	cd bindings/python && uv run maturin develop && uv run python benchmarks/bench_compat.py
@@ -231,8 +231,8 @@ wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WA
 	 fi; \
 	 echo "OK: wasm artifact within budget"
 
-wasm-pkg-test: wasm-pkg ## Build the wasm package and run the Node real-execution round-trip suite.
-	cd crates/rdf-wasm/js && node --test tests/*.test.mjs
+wasm-pkg-test: wasm-pkg ## Build the wasm package and run the npm package-root gate.
+	cd crates/rdf-wasm/js && npm ci --ignore-scripts --no-audit --no-fund && npm run check
 
 wasm-pkg-bench: wasm-pkg ## Build the wasm package and run the Node parse-throughput benchmark (report-only; never a gate).
 	cd crates/rdf-wasm/js && node bench/parse.bench.mjs

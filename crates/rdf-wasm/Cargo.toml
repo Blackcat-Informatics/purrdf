@@ -60,4 +60,9 @@ purrdf-validate = { workspace = true }
 wasm-bindgen = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 pretty_assertions = { workspace = true }
+
+[[bench]]
+name = "query_engine_reuse"
+harness = false

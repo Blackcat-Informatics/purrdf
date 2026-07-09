@@ -37,7 +37,13 @@
     "pkg/purrdf_wasm_bg.wasm.d.ts"
   ],
   "scripts": {
-    "test": "node --test tests/*.test.mjs"
+    "check": "npm run typecheck && npm test && npm run smoke:pack",
+    "smoke:pack": "node tests/pack-smoke.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.types.json"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
   },
   "engines": {
     "node": ">=18"

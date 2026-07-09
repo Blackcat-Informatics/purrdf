@@ -57,6 +57,33 @@ their media types. Because these are the native codecs, output is
 byte-deterministic and identical to what the Rust, Python, and C surfaces
 emit ([Codecs & Determinism](../concepts/codecs.md)).
 
+## SPARQL
+
+Use `QueryEngine` when running more than one query or when the caller wants
+typed results instead of raw strings. The engine owns the native SPARQL plan
+cache and returns package-root terms and datasets:
+
+```js
+import { QueryEngine } from "@blackcatinformatics/purrdf";
+
+const engine = new QueryEngine();
+const result = engine.select(
+  ds,
+  "PREFIX ex: <https://ex/> SELECT ?o WHERE { ex:s ex:p ?o }",
+);
+console.log(result.rows[0].o?.value);
+
+const graph = engine.construct(
+  ds,
+  "PREFIX ex: <https://ex/> CONSTRUCT { ex:copy ex:p ?o } WHERE { ex:s ex:p ?o }",
+);
+```
+
+`QueryEngine.queryRaw(...)` serializes SELECT/ASK results as SPARQL Results
+JSON/XML/CSV/TSV and graph results through the same graph formats accepted by
+`Dataset.serialize`. `QueryEngine.update(...)` applies SPARQL UPDATE atomically:
+the dataset changes only after the whole update succeeds.
+
 ## Streams and sinks
 
 The package speaks the async RDF/JS Stream/Sink protocol over the
@@ -71,8 +98,8 @@ The package speaks the async RDF/JS Stream/Sink protocol over the
 ## Scope notes
 
 - The engine is **in-memory**; there is no persistent store in the wasm
-  build. SPARQL runs over the in-memory dataset; federation and remote graph
-  loading are native-only.
+  build. SPARQL runs over the in-memory dataset; this package provides no
+  network resolver, so remote `SERVICE` and `LOAD` fail explicitly.
 - A quoted-triple term as a quad **object** currently round-trips only
   through **N-Quads** (a current native serializer limitation for the other
   formats).

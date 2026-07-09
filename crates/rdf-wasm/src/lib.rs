@@ -74,6 +74,7 @@ mod term;
 
 pub use dataset::Dataset;
 pub use factory::DataFactory;
+pub use query::{QueryEngine, QueryResult, SelectResult, SelectRow};
 pub use stream::Sink;
 pub use term::{Quad, Term};
 

@@ -26,7 +26,7 @@ Await `ready()` once before anything else — it performs the one-time async
 wasm instantiation:
 
 ```js
-import { ready, DataFactory, Dataset } from "@blackcatinformatics/purrdf";
+import { ready, DataFactory, Dataset, QueryEngine } from "@blackcatinformatics/purrdf";
 
 await ready(); // one-time async wasm instantiation
 
@@ -38,6 +38,9 @@ ds.add(f.quad(f.namedNode("https://ex/s"), f.namedNode("https://ex/says"), rtl))
 
 const nq = ds.serialize("nquads");           // directions survive the round-trip
 const reparsed = Dataset.parse(nq, "nquads");
+
+const engine = new QueryEngine();
+const ask = engine.ask(reparsed, "ASK { <https://ex/s> <https://ex/says> ?msg }");
 ```
 
 ## The RDF 1.2 wedge
@@ -73,6 +76,10 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
   flat N-Quads for the graph; `Dataset.isomorphic(other)` decides RDF graph
   equality under blank-node relabeling (an exact oracle backed by full RDFC-1.0
   canonicalization).
+- **SPARQL** — `QueryEngine` keeps the native plan cache alive across calls and
+  exposes typed `select` / `ask` / `construct` / `describe`, atomic `update`,
+  and `queryRaw` serialization. `Dataset.query(...)` remains the compatibility
+  raw-string helper.
 - **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples
   data graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule`
@@ -86,7 +93,8 @@ More on the RDF/JS mapping in [RDF/JS in JavaScript](../interop/rdfjs.md).
 ## Scope and current limitations
 
 - **In-memory only.** SPARQL queries run over the in-memory dataset;
-  federation and remote graph loading are native-only.
+  this package provides no network resolver, so remote `SERVICE` and `LOAD`
+  fail explicitly.
 - A quoted-triple term as a quad **object** currently round-trips only through
   **N-Quads** (a current native serializer limitation for the other formats).
 
@@ -98,7 +106,7 @@ the published ESM package is generated from it:
 
 ```sh
 make wasm-pkg        # release wasm + wasm-bindgen ESM bindings → js/pkg/
-make wasm-pkg-test   # the above + the Node real-execution round-trip suite
+make wasm-pkg-test   # the above + TypeScript, Node, and packed-tarball gates
 ```
 
 This requires the `wasm32-unknown-unknown` Rust target and a

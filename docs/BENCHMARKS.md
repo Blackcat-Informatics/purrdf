@@ -15,7 +15,7 @@ There are two benchmark layers:
 
 | Layer | What it measures | How to run |
 | --- | --- | --- |
-| **Rust criterion suites** | The native engine hot paths — IR layout, codecs, SPARQL evaluation, SHACL validation, GTS authoring. | `make bench` |
+| **Rust criterion suites** | The native engine hot paths — IR layout, codecs, SPARQL evaluation, SHACL validation, GTS authoring, and wasm wrapper overhead. | `make bench` |
 | **Python compat harness** | `purrdf.compat.rdflib` (the native-backed drop-in) vs. the real `rdflib` 7.x, on the operations a drop-in user actually calls. | `make bench-python` |
 
 ## Native-layer benchmarks (criterion)
@@ -47,6 +47,8 @@ They live under `crates/*/benches/`:
 - `crates/shapes/benches/validate.rs` — SHACL validation.
 - `crates/entail/benches/chase.rs` — RDFS forward-materialization chase scaling.
 - `crates/gts/benches/authoring.rs` — GTS container authoring.
+- `crates/rdf-wasm/benches/query_engine_reuse.rs` — package-root
+  `QueryEngine` reuse vs. fresh-engine construction.
 - `crates/iri/benches/parse.rs` — IRI parse/validate hot path over a mixed
   character-class corpus.
 
@@ -74,6 +76,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency on synthetic shapes/graphs. |
 | `crates/entail/benches/chase.rs` | RDFS semi-naive materialization scaling on subclass chains. |
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
+| `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
 
 ## Python compat harness (`bench_compat.py`)

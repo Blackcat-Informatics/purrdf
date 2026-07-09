@@ -75,7 +75,8 @@ const reparsed = Dataset.parse(nq, "nquads");
 
 - **In-memory only** — the oxigraph `Store` (RocksDB) and the logic engine do not
   compile to wasm and are excluded by design. SPARQL query runs offline over the
-  in-memory dataset; federation and remote graph loading are native-only.
+  in-memory dataset; this package provides no network resolver, so remote
+  `SERVICE` and `LOAD` fail explicitly.
 - Text codecs ride purrdf's native codecs — no Store dependency and no
   `purrdf-gts` RDF-codec feature.
 - A quoted-triple term as a quad **object** currently round-trips only through
@@ -85,7 +86,7 @@ const reparsed = Dataset.parse(nq, "nquads");
 
 ```sh
 make wasm-pkg        # release wasm + wasm-bindgen ESM bindings → js/pkg/
-make wasm-pkg-test   # the above + the Node real-execution round-trip suite
+make wasm-pkg-test   # the above + TypeScript, Node, and packed-tarball gates
 ```
 
 Requires the `wasm32-unknown-unknown` Rust target and `wasm-bindgen-cli` (pinned to

@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
 # Release Process
 
 PurRDF publishes Rust crates to crates.io from the GitHub Actions workflow
@@ -204,8 +209,10 @@ switches to **npm trusted publishing** (OIDC) automatically:
 
 The workflow verifies the tag against `crates/rdf-wasm/js/package.json`,
 builds the wasm artifact with the pinned `wasm-bindgen-cli` and `wasm-opt`
-(`make wasm-pkg`), runs the Node real-execution suite, packs the tarball,
-attests provenance + SPDX SBOM, and publishes with `--access public`
+(`make wasm-pkg-size`), installs the pinned npm dev tools with `npm ci`, runs
+the npm package gate (`npm run check`:
+TypeScript, Node, packed-tarball smoke, and package-size budgets), packs the
+tarball, attests provenance + SPDX SBOM, and publishes with `--access public`
 (npm's own sigstore provenance is added automatically).
 
 The js package version is bumped by hand in `crates/rdf-wasm/js/package.json`
