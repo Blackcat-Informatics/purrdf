@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
 # Release Process
 
 PurRDF publishes Rust crates to crates.io from the GitHub Actions workflow
