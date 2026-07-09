@@ -5,10 +5,13 @@ import {
   ready,
   DataFactory,
   Dataset,
+  QueryEngine,
   type DirectionalLanguage,
   type Literal,
   type NamedNode,
   type Quad,
+  type QueryResult,
+  type SelectResult,
   type RdfTerm,
 } from "@blackcatinformatics/purrdf";
 
@@ -44,9 +47,38 @@ const serialized: string = matched.serialize("nquads");
 const canonical: string = matched.canonicalize();
 const same: boolean = matched.isomorphic(Dataset.parse(serialized, "nquads"));
 const queryJson: string = matched.query("ASK { ?s ?p ?o }");
+const engine = new QueryEngine();
+const select: SelectResult = engine.select(matched, "SELECT ?s WHERE { ?s ?p ?o }");
+const maybeTerm: RdfTerm | undefined = select.rows[0]?.s;
+const ask: boolean = engine.ask(matched, "ASK { ?s ?p ?o }");
+const graph: Dataset = engine.construct(
+  matched,
+  "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+);
+const rawResults: string = engine.queryRaw(matched, "ASK { ?s ?p ?o }", { format: "json" });
+const rawGraph: string = engine.queryRaw(
+  matched,
+  "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+  { format: "nquads" },
+);
+const updated: Dataset = engine.update(
+  new Dataset(),
+  "INSERT DATA { <https://example.org/u> <https://example.org/p> <https://example.org/o> }",
+);
+const result: QueryResult = engine.query(matched, "ASK { ?s ?p ?o }");
+if (result.kind === "ask") {
+  const narrowed: boolean = result.boolean;
+  void narrowed;
+}
 
 void stream;
 void canonical;
 void same;
 void queryJson;
 void language;
+void maybeTerm;
+void ask;
+void graph;
+void rawResults;
+void rawGraph;
+void updated;

@@ -22,6 +22,7 @@ import init, {
   DataFactory,
   Dataset,
   Quad,
+  QueryEngine,
   shaclEntail,
   shaclValidateToSarif,
   Sink,
@@ -46,6 +47,59 @@ function isDirectionalLanguage(value) {
     typeof value.language === "string" &&
     (value.direction === "ltr" || value.direction === "rtl")
   );
+}
+
+function normalizeQueryOptions(options) {
+  if (options == null) return { base: undefined, format: undefined };
+  if (typeof options !== "object") {
+    throw new TypeError("query options must be an object when supplied");
+  }
+  return {
+    base: options.base ?? undefined,
+    format: options.format ?? undefined,
+  };
+}
+
+function selectResultToObject(raw) {
+  const variables = raw.variables;
+  const rawRows = raw.rows;
+  try {
+    const rows = rawRows.map((row) => {
+      const out = Object.create(null);
+      for (const variable of variables) {
+        const value = row.get(variable);
+        if (value !== undefined) out[variable] = value;
+      }
+      return out;
+    });
+    return { kind: "select", variables, rows };
+  } finally {
+    for (const row of rawRows) row.free?.();
+    raw.free?.();
+  }
+}
+
+function queryResultToObject(raw) {
+  try {
+    switch (raw.kind) {
+      case "select": {
+        const select = raw.takeSelect();
+        if (select === undefined) throw new Error("SELECT result was already consumed");
+        return selectResultToObject(select);
+      }
+      case "ask":
+        return { kind: "ask", boolean: raw.boolean };
+      case "graph": {
+        const dataset = raw.takeDataset();
+        if (dataset === undefined) throw new Error("graph result was already consumed");
+        return { kind: "graph", dataset };
+      }
+      default:
+        throw new Error(`unknown SPARQL result kind ${raw.kind}`);
+    }
+  } finally {
+    raw.free?.();
+  }
 }
 
 /**
@@ -142,6 +196,47 @@ export async function ready(wasmBytesOrUrl) {
     };
   }
 
+  if (!QueryEngine.prototype.__purrdfPackageRootApi) {
+    const wasmQuery = QueryEngine.prototype.query;
+    const wasmSelect = QueryEngine.prototype.select;
+    const wasmAsk = QueryEngine.prototype.ask;
+    const wasmConstruct = QueryEngine.prototype.construct;
+    const wasmDescribe = QueryEngine.prototype.describe;
+    const wasmUpdate = QueryEngine.prototype.update;
+    const wasmQueryRaw = QueryEngine.prototype.queryRaw;
+
+    QueryEngine.prototype.query = function (dataset, sparql, options) {
+      const { base } = normalizeQueryOptions(options);
+      return queryResultToObject(wasmQuery.call(this, dataset, sparql, base));
+    };
+    QueryEngine.prototype.select = function (dataset, sparql, options) {
+      const { base } = normalizeQueryOptions(options);
+      return selectResultToObject(wasmSelect.call(this, dataset, sparql, base));
+    };
+    QueryEngine.prototype.ask = function (dataset, sparql, options) {
+      const { base } = normalizeQueryOptions(options);
+      return wasmAsk.call(this, dataset, sparql, base);
+    };
+    QueryEngine.prototype.construct = function (dataset, sparql, options) {
+      const { base } = normalizeQueryOptions(options);
+      return wasmConstruct.call(this, dataset, sparql, base);
+    };
+    QueryEngine.prototype.describe = function (dataset, sparql, options) {
+      const { base } = normalizeQueryOptions(options);
+      return wasmDescribe.call(this, dataset, sparql, base);
+    };
+    QueryEngine.prototype.update = function (dataset, sparql, options) {
+      const { base } = normalizeQueryOptions(options);
+      wasmUpdate.call(this, dataset, sparql, base);
+      return dataset;
+    };
+    QueryEngine.prototype.queryRaw = function (dataset, sparql, options) {
+      const { base, format } = normalizeQueryOptions(options);
+      return wasmQueryRaw.call(this, dataset, sparql, base, format);
+    };
+    QueryEngine.prototype.__purrdfPackageRootApi = true;
+  }
+
   _ready = true;
 }
 
@@ -170,6 +265,7 @@ export {
   DataFactory,
   Dataset,
   Quad,
+  QueryEngine,
   shaclEntail,
   shaclValidateToSarif,
   Sink,

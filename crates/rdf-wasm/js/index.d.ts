@@ -25,6 +25,61 @@ export type LanguageOrDatatype =
 
 export type QuadGraph = NamedNode | BlankNode | DefaultGraph;
 export type RdfTerm = NamedNode | BlankNode | Literal | Variable | DefaultGraph | QuotedTriple;
+export type QueryGraphFormat =
+  | "turtle"
+  | "ttl"
+  | "ntriples"
+  | "nt"
+  | "nquads"
+  | "nq"
+  | "trig"
+  | "rdfxml"
+  | "jsonld"
+  | "text/turtle"
+  | "application/n-triples"
+  | "application/n-quads"
+  | "application/trig"
+  | "application/rdf+xml"
+  | "application/ld+json";
+export type QueryResultsFormat =
+  | "json"
+  | "srj"
+  | "xml"
+  | "csv"
+  | "tsv"
+  | "application/sparql-results+json"
+  | "application/sparql-results+xml"
+  | "text/csv"
+  | "text/tab-separated-values";
+export type QueryRawFormat = QueryGraphFormat | QueryResultsFormat;
+
+export interface QueryOptions {
+  readonly base?: string | null;
+}
+
+export interface QueryRawOptions extends QueryOptions {
+  readonly format?: QueryRawFormat | string | null;
+}
+
+export type QueryBindingRow = Record<string, RdfTerm | undefined>;
+
+export interface SelectResult {
+  readonly kind: "select";
+  readonly variables: string[];
+  readonly rows: QueryBindingRow[];
+}
+
+export interface AskResult {
+  readonly kind: "ask";
+  readonly boolean: boolean;
+}
+
+export interface GraphResult {
+  readonly kind: "graph";
+  readonly dataset: Dataset;
+}
+
+export type QueryResult = SelectResult | AskResult | GraphResult;
 
 export class Term {
   private constructor();
@@ -152,6 +207,18 @@ export class Dataset implements Iterable<Quad> {
   isomorphic(other: Dataset): boolean;
   toStream(): AsyncIterableIterator<Quad>;
   [Symbol.iterator](): IterableIterator<Quad>;
+  free(): void;
+}
+
+export class QueryEngine {
+  constructor();
+  query(dataset: Dataset, sparql: string, options?: QueryOptions | null): QueryResult;
+  select(dataset: Dataset, sparql: string, options?: QueryOptions | null): SelectResult;
+  ask(dataset: Dataset, sparql: string, options?: QueryOptions | null): boolean;
+  construct(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
+  describe(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
+  update(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
+  queryRaw(dataset: Dataset, sparql: string, options?: QueryRawOptions | null): string;
   free(): void;
 }
 

@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ready, Dataset } from "../index.mjs";
+import { ready, Dataset, QueryEngine } from "../index.mjs";
 
 // One-time wasm instantiation before any test runs.
 await ready();
@@ -50,6 +50,58 @@ test("ASK returns a boolean result document", () => {
   assert.equal(no.boolean, false);
 });
 
+test("QueryEngine SELECT returns typed package-root bindings", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  const result = engine.select(
+    ds,
+    "PREFIX ex: <https://e/> SELECT ?person ?name WHERE { ?person ex:name ?name } ORDER BY ?name",
+  );
+  assert.equal(result.kind, "select");
+  assert.deepEqual(result.variables, ["person", "name"]);
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.rows[0].person.termType, "NamedNode");
+  assert.equal(result.rows[0].person.value, "https://e/a");
+  assert.equal(result.rows[0].name.termType, "Literal");
+  assert.equal(result.rows[0].name.value, "Ann");
+});
+
+test("QueryEngine query routes ASK and graph results into discriminated objects", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  const ask = engine.query(ds, "PREFIX ex: <https://e/> ASK { ex:a ex:knows ex:b }");
+  assert.deepEqual(ask, { kind: "ask", boolean: true });
+
+  const graph = engine.query(
+    ds,
+    "PREFIX ex: <https://e/> CONSTRUCT { ?p ex:label ?name } WHERE { ?p ex:name ?name }",
+  );
+  assert.equal(graph.kind, "graph");
+  assert.equal(graph.dataset.size, 2);
+});
+
+test("QueryEngine raw serialization supports result and graph formats", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  const xml = engine.queryRaw(ds, "PREFIX ex: <https://e/> ASK { ex:a ex:knows ex:b }", {
+    format: "xml",
+  });
+  assert.match(xml, /^<\?xml/);
+
+  const nquads = engine.queryRaw(
+    ds,
+    "PREFIX ex: <https://e/> CONSTRUCT { ?p ex:label ?name } WHERE { ?p ex:name ?name }",
+    { format: "nquads" },
+  );
+  assert.match(nquads, /https:\/\/e\/label/);
+
+  assert.throws(() =>
+    engine.queryRaw(ds, "PREFIX ex: <https://e/> ASK { ex:a ex:knows ex:b }", {
+      format: "nquads",
+    }),
+  );
+});
+
 test("CONSTRUCT returns Turtle", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const ttl = ds.query(
@@ -72,6 +124,34 @@ test("a SERVICE clause hard-fails offline (no resolver in the browser)", () => {
       "PREFIX ex: <https://e/> SELECT ?o WHERE { SERVICE <https://remote/sparql> { ?s ex:knows ?o } }",
     ),
   );
+});
+
+test("QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolver", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(
+    "@prefix ex: <https://e/> . ex:a ex:p ex:b .",
+    "turtle",
+  );
+  const before = ds.canonicalize();
+
+  assert.equal(
+    engine.update(
+      ds,
+      "INSERT DATA { <https://e/c> <https://e/p> <https://e/d> }",
+    ),
+    ds,
+  );
+  assert.equal(ds.size, 2);
+
+  const stable = ds.canonicalize();
+  assert.throws(() =>
+    engine.update(
+      ds,
+      "INSERT DATA { <https://e/x> <https://e/p> <https://e/y> } ; LOAD <https://e/doc>",
+    ),
+  );
+  assert.equal(ds.canonicalize(), stable);
+  assert.notEqual(ds.canonicalize(), before);
 });
 
 test("serialize supports JSON-LD (the docs 'copy as' transcode surface)", () => {
