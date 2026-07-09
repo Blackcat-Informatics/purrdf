@@ -24,6 +24,8 @@
 //! - CONSTRUCT / DESCRIBE → **Turtle** via the `native_codecs` serializer (the one
 //!   serialization seam; never `oxigraph::io`, never the `purrdf-gts` crate).
 
+use std::rc::Rc;
+
 use purrdf::ir::MutableDataset;
 use purrdf::{SerializeGraph, serialize_dataset};
 use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult};
@@ -60,7 +62,7 @@ impl QueryResultKind {
 #[wasm_bindgen]
 #[derive(Clone, Debug)]
 pub struct SelectRow {
-    variables: Vec<String>,
+    variables: Rc<[String]>,
     values: Vec<Option<Term>>,
 }
 
@@ -69,7 +71,7 @@ impl SelectRow {
     /// Variables projected by this row, in SELECT projection order.
     #[wasm_bindgen(getter)]
     pub fn variables(&self) -> Vec<String> {
-        self.variables.clone()
+        self.variables.iter().cloned().collect()
     }
 
     /// Return the bound term for a variable name, or `undefined` for unbound/absent.
@@ -87,7 +89,7 @@ impl SelectRow {
 #[wasm_bindgen]
 #[derive(Clone, Debug)]
 pub struct SelectResult {
-    variables: Vec<String>,
+    variables: Rc<[String]>,
     rows: Vec<SelectRow>,
 }
 
@@ -102,7 +104,7 @@ impl SelectResult {
     /// Projected variables, in SELECT projection order.
     #[wasm_bindgen(getter)]
     pub fn variables(&self) -> Vec<String> {
-        self.variables.clone()
+        self.variables.iter().cloned().collect()
     }
 
     /// SELECT rows, one object-like row per solution.
@@ -376,15 +378,16 @@ fn select_result(
     variables: Vec<String>,
     rows: Vec<Vec<Option<purrdf::TermValue>>>,
 ) -> Result<SelectResult, JsError> {
+    let variables: Rc<[String]> = Rc::from(variables.into_boxed_slice());
     let rows = rows
         .into_iter()
-        .map(|row| select_row(&variables, row))
+        .map(|row| select_row(Rc::clone(&variables), row))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(SelectResult { variables, rows })
 }
 
 fn select_row(
-    variables: &[String],
+    variables: Rc<[String]>,
     row: Vec<Option<purrdf::TermValue>>,
 ) -> Result<SelectRow, JsError> {
     let values = row
@@ -397,10 +400,7 @@ fn select_row(
                 .map_err(|e| JsError::new(&e))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(SelectRow {
-        variables: variables.to_vec(),
-        values,
-    })
+    Ok(SelectRow { variables, values })
 }
 
 fn term_from_value(value: &purrdf::TermValue) -> Result<Term, String> {

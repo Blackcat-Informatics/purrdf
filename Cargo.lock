@@ -1492,6 +1492,7 @@ dependencies = [
 name = "purrdf-wasm"
 version = "0.4.1"
 dependencies = [
+ "criterion",
  "pretty_assertions",
  "purrdf",
  "purrdf-core",

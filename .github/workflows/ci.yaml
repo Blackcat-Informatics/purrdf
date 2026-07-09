@@ -213,6 +213,7 @@ jobs:
           cargo bench -p purrdf-sparql-eval --no-run --locked
           cargo bench -p purrdf-shapes --bench validate --no-run --locked
           cargo bench -p purrdf-entail --no-run --locked
+          cargo bench -p purrdf-wasm --bench query_engine_reuse --no-run --locked
 
       - name: Run native criterion suites
         run: |
@@ -222,6 +223,7 @@ jobs:
           cargo bench -p purrdf-sparql-eval --locked
           cargo bench -p purrdf-shapes --bench validate --locked
           cargo bench -p purrdf-entail --locked
+          cargo bench -p purrdf-wasm --bench query_engine_reuse --locked
 
       - name: Run Python compat harness
         working-directory: bindings/python
