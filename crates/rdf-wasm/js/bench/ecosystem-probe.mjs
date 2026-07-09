@@ -20,6 +20,9 @@ const PACKAGE_SPECS = [
   ["@comunica/query-sparql", "5.2.4"],
   ["oxigraph", "0.5.9"],
 ];
+const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
+const NPM_INSTALL_TIMEOUT_MS = 300_000;
+const PROBE_TIMEOUT_MS = 120_000;
 
 function parseArgs(argv) {
   const args = { report: null, json: null };
@@ -37,11 +40,14 @@ function parseArgs(argv) {
 }
 
 function run(command, args, options = {}) {
+  const { timeout = DEFAULT_COMMAND_TIMEOUT_MS, ...execOptions } = options;
   return execFileSync(command, args, {
     cwd: REPO_ROOT,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
-    ...options,
+    shell: process.platform === "win32" && command === "npm",
+    timeout,
+    ...execOptions,
   });
 }
 
@@ -378,11 +384,15 @@ try {
   run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", ...installSpecs], {
     cwd: project,
     stdio: "inherit",
+    timeout: NPM_INSTALL_TIMEOUT_MS,
   });
 
   const runnerPath = join(project, "probe-runner.mjs");
   await writeFile(runnerPath, runner);
-  const raw = run(process.execPath, [runnerPath], { cwd: project });
+  const raw = run(process.execPath, [runnerPath], {
+    cwd: project,
+    timeout: PROBE_TIMEOUT_MS,
+  });
   const probe = JSON.parse(raw);
   const nodeModules = join(project, "node_modules");
   const packages = {

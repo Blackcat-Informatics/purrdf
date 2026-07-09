@@ -180,7 +180,9 @@ jobs:
 
       - name: Run npm package gates
         working-directory: crates/rdf-wasm/js
-        run: npm run check
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
 
   benchmarks:
     runs-on: ubuntu-latest

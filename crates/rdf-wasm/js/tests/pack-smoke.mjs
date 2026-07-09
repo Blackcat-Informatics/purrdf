@@ -14,13 +14,19 @@ import { fileURLToPath } from "node:url";
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const MAX_TARBALL_BYTES = 1_400_000;
 const MAX_UNPACKED_BYTES = 3_600_000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
+const NPM_INSTALL_TIMEOUT_MS = 180_000;
+const SMOKE_TIMEOUT_MS = 60_000;
 
 function run(command, args, options = {}) {
+  const { timeout = DEFAULT_COMMAND_TIMEOUT_MS, ...execOptions } = options;
   return execFileSync(command, args, {
     cwd: PACKAGE_ROOT,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
-    ...options,
+    shell: process.platform === "win32" && command === "npm",
+    timeout,
+    ...execOptions,
   });
 }
 
@@ -150,14 +156,19 @@ try {
     JSON.stringify({ private: true, type: "module" }, null, 2),
   );
   const tarball = join(root, packument.filename);
-  execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball], {
+  run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball], {
     cwd: project,
     stdio: "inherit",
+    timeout: NPM_INSTALL_TIMEOUT_MS,
   });
 
   const smokePath = join(project, "smoke.mjs");
   await writeFile(smokePath, smokeProgram);
-  execFileSync(process.execPath, [smokePath], { cwd: project, stdio: "inherit" });
+  run(process.execPath, [smokePath], {
+    cwd: project,
+    stdio: "inherit",
+    timeout: SMOKE_TIMEOUT_MS,
+  });
   console.log(`OK: packed tarball smoke passed for ${packument.filename}`);
 } finally {
   await rm(root, { force: true, recursive: true });

@@ -209,7 +209,8 @@ switches to **npm trusted publishing** (OIDC) automatically:
 
 The workflow verifies the tag against `crates/rdf-wasm/js/package.json`,
 builds the wasm artifact with the pinned `wasm-bindgen-cli` and `wasm-opt`
-(`make wasm-pkg-size`), runs the npm package gate (`npm run check`:
+(`make wasm-pkg-size`), installs the pinned npm dev tools with `npm ci`, runs
+the npm package gate (`npm run check`:
 TypeScript, Node, packed-tarball smoke, and package-size budgets), packs the
 tarball, attests provenance + SPDX SBOM, and publishes with `--access public`
 (npm's own sigstore provenance is added automatically).
