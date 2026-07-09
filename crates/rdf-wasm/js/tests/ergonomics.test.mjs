@@ -41,6 +41,9 @@ test("Dataset.from and DataFactory.dataset build chainable datasets from quads",
 
   assert.equal(fromFactory.delete(q1).add(q1), fromFactory);
   assert.equal(fromFactory.size, 2);
+
+  assert.equal(Dataset.from(null).size, 0);
+  assert.equal(f.dataset(null).size, 0);
 });
 
 test("Dataset#toStream is the instance form of datasetToStream", async () => {

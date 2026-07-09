@@ -132,7 +132,7 @@ export async function ready(wasmBytesOrUrl) {
   if (!Dataset.from) {
     Dataset.from = function (quads = []) {
       const dataset = new Dataset();
-      for (const quad of quads) dataset.add(quad);
+      for (const quad of quads ?? []) dataset.add(quad);
       return dataset;
     };
   }
@@ -192,7 +192,7 @@ export async function ready(wasmBytesOrUrl) {
 
   if (!DataFactory.prototype.dataset) {
     DataFactory.prototype.dataset = function (quads = []) {
-      return Dataset.from(quads);
+      return Dataset.from(quads ?? []);
     };
   }
 

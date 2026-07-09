@@ -33,7 +33,9 @@ const quad: Quad = factory.quad(quoted, predicate, directional);
 const dataset = new Dataset();
 const chained: Dataset = dataset.add(quad).delete(quad).add(quad);
 const rebuilt: Dataset = Dataset.from(chained);
+const rebuiltFromNull: Dataset = Dataset.from(null);
 const fromFactory: Dataset = factory.dataset(rebuilt);
+const fromFactoryNull: Dataset = factory.dataset(null);
 const matched: Dataset = fromFactory.match(null, predicate, undefined, factory.variable("g"));
 
 for (const item of matched) {
@@ -82,3 +84,5 @@ void graph;
 void rawResults;
 void rawGraph;
 void updated;
+void rebuiltFromNull;
+void fromFactoryNull;
