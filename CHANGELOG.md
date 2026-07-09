@@ -4,26 +4,79 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.4.1] - 2026-07-09
+
+### Bug Fixes
+
+- **shapes:** Project external object-class values to a node-ref, not a string, in JSON Schema
 ## [0.4.0] - 2026-07-07
 
 ### Bug Fixes
 
+- **hygiene:** Exclude rustdoc inline-code spans from the issue-ref lint
+- **makefile:** Use POSIX sed for wasm-bindgen pin extraction (macOS grep -oP)
+- **makefile:** Use awk not tr to parse wc byte counts in wasm-pkg-size
+- **hygiene:** Restrict issue-ref inline-code exclusion to Rust doc comments
+- **playground:** Clear CodeQL alerts — structural entailment assertion + worker same-origin guard
+- **shapes:** Polarity-sound sh:not projection in json_schema emitter
+- **shapes:** Negate sh:not inner as a whole conjunction (De Morgan sound)
+- **shapes:** Route sh:not maxCount property inner to a loss (no vacuous not)
+- **shapes:** Route array-unsafe value-restriction sh:not inners to a loss
+- **shapes:** Route existential sh:hasValue sh:not inner to a loss
+- **shapes:** Restrict sh:not negand to exact-complement projections
 - **shapes:** Polarity-sound sh:not projection (kill vacuous class negation)
+
+### CI & Build
+
+- **capi:** Gate the purrdf.h C-ABI header against drift
+- **wasm:** Gate optimized artifact size via a pinned wasm-toolchain composite action
+- **release:** Share the pinned wasm-toolchain action and enforce the size budget on release
+- **wasm:** Drop unpinned twiggy source-build diagnostics step
+- **docs:** Deploy the RDF-1.2 console at /playground in the Pages artifact
 
 ### Documentation
 
 - Uplift product docs to top-tier Rust project standard
+- **agents:** Document the wasm size-budget gate and deliberate-raise procedure
+- Link the RDF-1.2 playground from the root and package READMEs
+- **wasm:** List the shacl module in the lib.rs surface doc comment
+- **shapes:** Strip issue-ref tokens from emitted schema descriptions
+- Reconcile README and docs for 0.4.0
 
 ### Features
 
+- **capi:** Make purrdf.h reproducible via cargo-c `capi` marker + regenerate canonically
 - **capi:** Make purrdf.h reproducible via cargo-c `capi` marker + gate it in CI
+- **wasm:** Add reproducible wasm-pkg-size budget gate (binaryen pinned)
 - **wasm:** CI-gated wasm artifact size budget
+- **wasm:** Expose SHACL + RDFC-1.0 canonicalize/isomorphic on the package surface
+- **playground:** Standalone client-side RDF-1.2 console (engine in a Web Worker)
+- **playground:** Drop the post-load wasm-size probe so the console makes zero network requests after assets load
+- **playground:** Assert the SARIF 2.1.0 contract in the SHACL pane instead of echoing the engine version
 - **playground:** Standalone deployed RDF-1.2 console over purrdf-wasm
+
+### Other
+
+- **shapes:** Satisfy fmt, clippy docs, and issue-ref hygiene gates
+
+### Performance
+
+- **shapes:** Cache the sort key for sh:not negand ordering
+
+### Testing
+
+- **shapes:** Add trusted external JSON-Schema validator harness
+- **shapes:** Behavioral accept/reject tests for polarity-sound sh:not
 ## [0.3.3] - 2026-07-05
+
+### Documentation
+
+- **capi:** Regenerate purrdf.h with SHACL validate + entail declarations
 
 ### Performance
 
 - **rdf:** Memoize the line index so parser diagnostics stay linear
+- **rdf:** Memoize parser line index — fix quadratic diagnostics scan
 ## [0.3.2] - 2026-07-05
 
 ### Bug Fixes
