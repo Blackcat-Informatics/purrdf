@@ -889,14 +889,28 @@ fn reduce_crossings(layers: &mut [Vec<String>], edges: &[NormalizedEdge], sweeps
             .or_default()
             .push(source.clone());
     }
+    let mut position_maps = layers
+        .iter()
+        .map(|layer| position_map(layer))
+        .collect::<Vec<_>>();
     for _ in 0..sweeps {
         for rank in 1..layers.len() {
-            let previous = position_map(&layers[rank - 1]);
-            sort_layer(&mut layers[rank], &neighbors_up, &previous);
+            sort_layer(
+                &mut layers[rank],
+                &neighbors_up,
+                &position_maps[rank - 1],
+                &position_maps[rank],
+            );
+            refresh_position_map(&layers[rank], &mut position_maps[rank]);
         }
         for rank in (0..layers.len() - 1).rev() {
-            let next = position_map(&layers[rank + 1]);
-            sort_layer(&mut layers[rank], &neighbors_down, &next);
+            sort_layer(
+                &mut layers[rank],
+                &neighbors_down,
+                &position_maps[rank + 1],
+                &position_maps[rank],
+            );
+            refresh_position_map(&layers[rank], &mut position_maps[rank]);
         }
     }
 }
@@ -909,15 +923,22 @@ fn position_map(layer: &[String]) -> BTreeMap<String, i64> {
         .collect()
 }
 
+fn refresh_position_map(layer: &[String], map: &mut BTreeMap<String, i64>) {
+    for (index, id) in layer.iter().enumerate() {
+        *map.get_mut(id).expect("layer position map is complete") =
+            i64::try_from(index).unwrap_or(i64::MAX / 4);
+    }
+}
+
 fn sort_layer(
     layer: &mut [String],
     neighbors: &BTreeMap<String, Vec<String>>,
     adjacent_positions: &BTreeMap<String, i64>,
+    current: &BTreeMap<String, i64>,
 ) {
-    let current = position_map(layer);
     layer.sort_by(|left, right| {
-        let (left_sum, left_count) = barycenter(left, neighbors, adjacent_positions, &current);
-        let (right_sum, right_count) = barycenter(right, neighbors, adjacent_positions, &current);
+        let (left_sum, left_count) = barycenter(left, neighbors, adjacent_positions, current);
+        let (right_sum, right_count) = barycenter(right, neighbors, adjacent_positions, current);
         (i128::from(left_sum) * i128::from(right_count))
             .cmp(&(i128::from(right_sum) * i128::from(left_count)))
             .then_with(|| left.cmp(right))

@@ -1143,25 +1143,27 @@ impl<'a> ProjectionBuilder<'a> {
         else {
             return;
         };
-        let roles = self.roles_for_predicate(&predicate);
-        for role in roles {
-            self.add_role_to_value(&subject, role);
+        for index in 0..self.spec.role_rules.len() {
+            let role = self.spec.role_rules[index]
+                .predicate_iri
+                .eq(&predicate)
+                .then(|| self.spec.role_rules[index].role.clone());
+            if let Some(role) = role {
+                self.add_role_to_value(&subject, role);
+            }
         }
     }
 
     fn apply_role_rules_to_term(&mut self, term: &VizTermId, predicate: &str) {
-        for role in self.roles_for_predicate(predicate) {
-            self.add_term_role(term, role);
+        for index in 0..self.spec.role_rules.len() {
+            let role = self.spec.role_rules[index]
+                .predicate_iri
+                .eq(predicate)
+                .then(|| self.spec.role_rules[index].role.clone());
+            if let Some(role) = role {
+                self.add_term_role(term, role);
+            }
         }
-    }
-
-    fn roles_for_predicate(&self, predicate: &str) -> Vec<VizRole> {
-        self.spec
-            .role_rules
-            .iter()
-            .filter(|rule| rule.predicate_iri == predicate)
-            .map(|rule| rule.role.clone())
-            .collect()
     }
 
     fn add_role_to_value(&mut self, value: &VizValueRef, role: VizRole) {
