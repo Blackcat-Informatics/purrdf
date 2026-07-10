@@ -1,0 +1,175 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 992 308" width="100%" role="img" aria-labelledby="purrdf-title purrdf-desc" data-purrdf-schema="purrdf-viz-export-1">
+<title id="purrdf-title">PurRDF RDF 1.2 quoted-only table</title>
+<desc id="purrdf-desc">Statement table mode RDF 1.2 visualization with 13 terms, 2 structural statements, 0 assertions, and 5 statement-layer relations.</desc>
+<metadata id="purrdf-viz-export" type="application/vnd.purrdf.viz+json">{"schema_version":"purrdf-viz-export-1","spec":{"mode":"table","focus":null,"role_rules":[],"vocabulary":[{"prefix":"ex","namespace":"https://example.org/"},{"prefix":"prov","namespace":"http://www.w3.org/ns/prov#"}],"graph_policy":"all","label_policy":"compact","max_statements":1000,"max_terms":3000,"table_fields":["statement","assertedIn","reifiers","annotations","referencedBy","depth","diagnostics"]},"spec_hash":"2b9bac2cd167a29d","model_hash":"910ef51f3832cf75","scene_hash":"cf32560ede2cef24","model":{"terms":[{"id":"term:0813fd276227d555","value":{"kind":"iri","value":"https://example.org/confidence"},"label":"ex:confidence","roles":["predicate"]},{"id":"term:1dd041881c6720d0","value":{"kind":"iri","value":"https://example.org/didNotSee"},"label":"ex:didNotSee","roles":["predicate"]},{"id":"term:25d55bcc0d21e0b9","value":{"kind":"iri","value":"https://example.org/testimony"},"label":"ex:testimony","roles":["graphName"]},{"id":"term:41745cc4e880986c","value":{"kind":"iri","value":"https://example.org/saw"},"label":"ex:saw","roles":["predicate"]},{"id":"term:490dc0429d4f0799","value":{"kind":"literal","lexical_form":"0.61","datatype":"http://www.w3.org/2001/XMLSchema#decimal","language":null,"direction":null},"label":"\"0.61\"","roles":[]},{"id":"term:54094e7623bbac83","value":{"kind":"iri","value":"https://example.org/dave"},"label":"ex:dave","roles":[]},{"id":"term:6a4d8305a11913d9","value":{"kind":"iri","value":"https://example.org/counterclaim"},"label":"ex:counterclaim","roles":["reifier"]},{"id":"term:6cb9851bd5580397","value":{"kind":"iri","value":"https://example.org/grace"},"label":"ex:grace","roles":[]},{"id":"term:86dfe73a1c26e2e4","value":{"kind":"iri","value":"https://example.org/provenance"},"label":"ex:provenance","roles":["graphName"]},{"id":"term:d87434b389804970","value":{"kind":"iri","value":"https://example.org/witness-account"},"label":"ex:witness-account","roles":["reifier"]},{"id":"term:e6cab0a5d7062005","value":{"kind":"iri","value":"https://example.org/erin"},"label":"ex:erin","roles":[]},{"id":"term:eaf80ba157035a7f","value":{"kind":"iri","value":"https://example.org/frank"},"label":"ex:frank","roles":[]},{"id":"term:f574531b9cd4a3e1","value":{"kind":"iri","value":"http://www.w3.org/ns/prov#wasAttributedTo"},"label":"prov:wasAttributedTo","roles":["predicate"]}],"statements":[{"id":"statement:cccbccc1d1228cf9","subject":{"kind":"term","id":"term:54094e7623bbac83"},"predicate":"term:41745cc4e880986c","object":{"kind":"term","id":"term:e6cab0a5d7062005"},"asserted_in":[],"nesting_depth":0,"incoming_references":1,"dialect":"rdf12","roles":["quotedStatement","annotatedStatement"]},{"id":"statement:fb13eebe492ed5b6","subject":{"kind":"term","id":"term:54094e7623bbac83"},"predicate":"term:1dd041881c6720d0","object":{"kind":"term","id":"term:e6cab0a5d7062005"},"asserted_in":[],"nesting_depth":0,"incoming_references":1,"dialect":"rdf12","roles":["quotedStatement","annotatedStatement"]}],"assertions":[],"relations":[{"kind":"annotation","id":"relation-annotation:197635ed93d4556b","reifier":"term:6a4d8305a11913d9","predicate":"term:f574531b9cd4a3e1","object":{"kind":"term","id":"term:6cb9851bd5580397"},"graph":"graph:86dfe73a1c26e2e4"},{"kind":"annotation","id":"relation-annotation:550905ba2e7c280e","reifier":"term:d87434b389804970","predicate":"term:0813fd276227d555","object":{"kind":"term","id":"term:490dc0429d4f0799"},"graph":"graph:86dfe73a1c26e2e4"},{"kind":"annotation","id":"relation-annotation:7d114008b605d06e","reifier":"term:d87434b389804970","predicate":"term:f574531b9cd4a3e1","object":{"kind":"term","id":"term:eaf80ba157035a7f"},"graph":"graph:86dfe73a1c26e2e4"},{"kind":"reifies","id":"relation-reifies:a2a0c656952bf486","reifier":"term:d87434b389804970","statement":"statement:cccbccc1d1228cf9","graph":"graph:25d55bcc0d21e0b9"},{"kind":"reifies","id":"relation-reifies:d54922ca09143b76","reifier":"term:6a4d8305a11913d9","statement":"statement:fb13eebe492ed5b6","graph":"graph:25d55bcc0d21e0b9"}],"graphs":[{"id":"graph:25d55bcc0d21e0b9","term":{"kind":"term","id":"term:25d55bcc0d21e0b9"},"label":"ex:testimony"},{"id":"graph:86dfe73a1c26e2e4","term":{"kind":"term","id":"term:86dfe73a1c26e2e4"},"label":"ex:provenance"},{"id":"graph:default","term":null,"label":"default graph"}],"references":[{"id":"reference:16a09da8c4bbdd3b","statement":"statement:cccbccc1d1228cf9","site":{"kind":"reification","relation":"relation-reifies:a2a0c656952bf486"}},{"id":"reference:fb404e4f462bffcf","statement":"statement:fb13eebe492ed5b6","site":{"kind":"reification","relation":"relation-reifies:d54922ca09143b76"}}],"table":{"fields":["statement","assertedIn","reifiers","annotations","referencedBy","depth","diagnostics"],"rows":[{"statement":"statement:cccbccc1d1228cf9","asserted_in":[],"reifier_count":1,"annotation_count":2,"referenced_by":1,"depth":0},{"statement":"statement:fb13eebe492ed5b6","asserted_in":[],"reifier_count":1,"annotation_count":1,"referenced_by":1,"depth":0}]},"diagnostics":[]},"scene":{"schema_version":"purrdf-viz-scene-1","mode":"table","nodes":[],"edges":[],"groups":[{"id":"group-legend","kind":"legend","label":"Visual grammar","members":["legend-table"]}],"legend":[{"id":"legend-table","symbol":"statement matrix","label":"one row per structural statement"}],"table":{"fields":["statement","assertedIn","reifiers","annotations","referencedBy","depth","diagnostics"],"rows":[{"id":"row-cccbccc1d1228cf9","binding":{"kind":"statement","id":"statement:cccbccc1d1228cf9"},"cells":[{"field":"statement","text":"ex:dave —ex:saw→ ex:erin","bindings":[{"kind":"statement","id":"statement:cccbccc1d1228cf9"}]},{"field":"assertedIn","text":"","bindings":[]},{"field":"reifiers","text":"1","bindings":[{"kind":"term","id":"term:d87434b389804970"}]},{"field":"annotations","text":"2","bindings":[{"kind":"relation","id":"relation-annotation:550905ba2e7c280e"},{"kind":"relation","id":"relation-annotation:7d114008b605d06e"}]},{"field":"referencedBy","text":"1","bindings":[{"kind":"reference","id":"reference:16a09da8c4bbdd3b"}]},{"field":"depth","text":"0","bindings":[{"kind":"statement","id":"statement:cccbccc1d1228cf9"}]},{"field":"diagnostics","text":"","bindings":[]}]},{"id":"row-fb13eebe492ed5b6","binding":{"kind":"statement","id":"statement:fb13eebe492ed5b6"},"cells":[{"field":"statement","text":"ex:dave —ex:didNotSee→ ex:erin","bindings":[{"kind":"statement","id":"statement:fb13eebe492ed5b6"}]},{"field":"assertedIn","text":"","bindings":[]},{"field":"reifiers","text":"1","bindings":[{"kind":"term","id":"term:6a4d8305a11913d9"}]},{"field":"annotations","text":"1","bindings":[{"kind":"relation","id":"relation-annotation:197635ed93d4556b"}]},{"field":"referencedBy","text":"1","bindings":[{"kind":"reference","id":"reference:fb404e4f462bffcf"}]},{"field":"depth","text":"0","bindings":[{"kind":"statement","id":"statement:fb13eebe492ed5b6"}]},{"field":"diagnostics","text":"","bindings":[]}]}]}},"layout":{"schema_version":"purrdf-viz-layout-1","mode":"table","width":992,"height":308,"nodes":[],"edges":[],"table":{"rect":{"x":36,"y":36,"width":920,"height":126},"cells":[{"row":0,"column":0,"rect":{"x":36,"y":36,"width":264,"height":42},"label":{"rect":{"x":46,"y":46,"width":244,"height":22},"lines":["Statement"]}},{"row":0,"column":1,"rect":{"x":300,"y":36,"width":112,"height":42},"label":{"rect":{"x":310,"y":46,"width":92,"height":22},"lines":["Asserted in"]}},{"row":0,"column":2,"rect":{"x":412,"y":36,"width":96,"height":42},"label":{"rect":{"x":422,"y":46,"width":76,"height":22},"lines":["Reifiers"]}},{"row":0,"column":3,"rect":{"x":508,"y":36,"width":112,"height":42},"label":{"rect":{"x":518,"y":46,"width":92,"height":22},"lines":["Annotations"]}},{"row":0,"column":4,"rect":{"x":620,"y":36,"width":128,"height":42},"label":{"rect":{"x":630,"y":46,"width":108,"height":22},"lines":["Referenced by"]}},{"row":0,"column":5,"rect":{"x":748,"y":36,"width":96,"height":42},"label":{"rect":{"x":758,"y":46,"width":76,"height":22},"lines":["Depth"]}},{"row":0,"column":6,"rect":{"x":844,"y":36,"width":112,"height":42},"label":{"rect":{"x":854,"y":46,"width":92,"height":22},"lines":["Diagnostics"]}},{"row":1,"column":0,"rect":{"x":36,"y":78,"width":264,"height":42},"label":{"rect":{"x":46,"y":88,"width":244,"height":22},"lines":["ex:dave —ex:saw→ ex:erin"]}},{"row":1,"column":1,"rect":{"x":300,"y":78,"width":112,"height":42},"label":{"rect":{"x":310,"y":88,"width":92,"height":22},"lines":[""]}},{"row":1,"column":2,"rect":{"x":412,"y":78,"width":96,"height":42},"label":{"rect":{"x":422,"y":88,"width":76,"height":22},"lines":["1"]}},{"row":1,"column":3,"rect":{"x":508,"y":78,"width":112,"height":42},"label":{"rect":{"x":518,"y":88,"width":92,"height":22},"lines":["2"]}},{"row":1,"column":4,"rect":{"x":620,"y":78,"width":128,"height":42},"label":{"rect":{"x":630,"y":88,"width":108,"height":22},"lines":["1"]}},{"row":1,"column":5,"rect":{"x":748,"y":78,"width":96,"height":42},"label":{"rect":{"x":758,"y":88,"width":76,"height":22},"lines":["0"]}},{"row":1,"column":6,"rect":{"x":844,"y":78,"width":112,"height":42},"label":{"rect":{"x":854,"y":88,"width":92,"height":22},"lines":[""]}},{"row":2,"column":0,"rect":{"x":36,"y":120,"width":264,"height":42},"label":{"rect":{"x":46,"y":130,"width":244,"height":22},"lines":["ex:dave —ex:didNotSee→ ex:erin"]}},{"row":2,"column":1,"rect":{"x":300,"y":120,"width":112,"height":42},"label":{"rect":{"x":310,"y":130,"width":92,"height":22},"lines":[""]}},{"row":2,"column":2,"rect":{"x":412,"y":120,"width":96,"height":42},"label":{"rect":{"x":422,"y":130,"width":76,"height":22},"lines":["1"]}},{"row":2,"column":3,"rect":{"x":508,"y":120,"width":112,"height":42},"label":{"rect":{"x":518,"y":130,"width":92,"height":22},"lines":["1"]}},{"row":2,"column":4,"rect":{"x":620,"y":120,"width":128,"height":42},"label":{"rect":{"x":630,"y":130,"width":108,"height":22},"lines":["1"]}},{"row":2,"column":5,"rect":{"x":748,"y":120,"width":96,"height":42},"label":{"rect":{"x":758,"y":130,"width":76,"height":22},"lines":["0"]}},{"row":2,"column":6,"rect":{"x":844,"y":120,"width":112,"height":42},"label":{"rect":{"x":854,"y":130,"width":92,"height":22},"lines":[""]}}]},"legend":[{"id":"legend-table","rect":{"x":36,"y":218,"width":260,"height":54}}]},"element_index":[{"element_id":"svg-legend","scene_id":"group-legend","bindings":[],"kind":"legend"},{"element_id":"svg-legend-table","scene_id":"legend-table","bindings":[],"kind":"legendEntry"},{"element_id":"svg-legend-table-label","scene_id":"legend-table","bindings":[],"kind":"legendLabel"},{"element_id":"svg-table","scene_id":"table","bindings":[],"kind":"table"},{"element_id":"svg-table-cell-0-0","scene_id":"table-header-0","bindings":[],"kind":"tableCell"},{"element_id":"svg-table-cell-0-1","scene_id":"table-header-1","bindings":[],"kind":"tableCell"},{"element_id":"svg-table-cell-0-2","scene_id":"table-header-2","bindings":[],"kind":"tableCell"},{"element_id":"svg-table-cell-0-3","scene_id":"table-header-3","bindings":[],"kind":"tableCell"},{"element_id":"svg-table-cell-0-4","scene_id":"table-header-4","bindings":[],"kind":"tableCell"},{"element_id":"svg-table-cell-0-5","scene_id":"table-header-5","bindings":[],"kind":"tableCell"},{"element_id":"svg-table-cell-0-6","scene_id":"table-header-6","bindings":[],"kind":"tableCell"},{"element_id":"svg-table-cell-1-0","scene_id":"row-cccbccc1d1228cf9","bindings":[{"kind":"statement","id":"statement:cccbccc1d1228cf9"}],"kind":"tableCell"},{"element_id":"svg-table-cell-1-1","scene_id":"row-cccbccc1d1228cf9","bindings":[],"kind":"tableCell"},{"element_id":"svg-table-cell-1-2","scene_id":"row-cccbccc1d1228cf9","bindings":[{"kind":"term","id":"term:d87434b389804970"}],"kind":"tableCell"},{"element_id":"svg-table-cell-1-3","scene_id":"row-cccbccc1d1228cf9","bindings":[{"kind":"relation","id":"relation-annotation:550905ba2e7c280e"},{"kind":"relation","id":"relation-annotation:7d114008b605d06e"}],"kind":"tableCell"},{"element_id":"svg-table-cell-1-4","scene_id":"row-cccbccc1d1228cf9","bindings":[{"kind":"reference","id":"reference:16a09da8c4bbdd3b"}],"kind":"tableCell"},{"element_id":"svg-table-cell-1-5","scene_id":"row-cccbccc1d1228cf9","bindings":[{"kind":"statement","id":"statement:cccbccc1d1228cf9"}],"kind":"tableCell"},{"element_id":"svg-table-cell-1-6","scene_id":"row-cccbccc1d1228cf9","bindings":[],"kind":"tableCell"},{"element_id":"svg-table-cell-2-0","scene_id":"row-fb13eebe492ed5b6","bindings":[{"kind":"statement","id":"statement:fb13eebe492ed5b6"}],"kind":"tableCell"},{"element_id":"svg-table-cell-2-1","scene_id":"row-fb13eebe492ed5b6","bindings":[],"kind":"tableCell"},{"element_id":"svg-table-cell-2-2","scene_id":"row-fb13eebe492ed5b6","bindings":[{"kind":"term","id":"term:6a4d8305a11913d9"}],"kind":"tableCell"},{"element_id":"svg-table-cell-2-3","scene_id":"row-fb13eebe492ed5b6","bindings":[{"kind":"relation","id":"relation-annotation:197635ed93d4556b"}],"kind":"tableCell"},{"element_id":"svg-table-cell-2-4","scene_id":"row-fb13eebe492ed5b6","bindings":[{"kind":"reference","id":"reference:fb404e4f462bffcf"}],"kind":"tableCell"},{"element_id":"svg-table-cell-2-5","scene_id":"row-fb13eebe492ed5b6","bindings":[{"kind":"statement","id":"statement:fb13eebe492ed5b6"}],"kind":"tableCell"},{"element_id":"svg-table-cell-2-6","scene_id":"row-fb13eebe492ed5b6","bindings":[],"kind":"tableCell"},{"element_id":"svg-table-label-0-0","scene_id":"table-header-0","bindings":[],"kind":"tableLabel"},{"element_id":"svg-table-label-0-1","scene_id":"table-header-1","bindings":[],"kind":"tableLabel"},{"element_id":"svg-table-label-0-2","scene_id":"table-header-2","bindings":[],"kind":"tableLabel"},{"element_id":"svg-table-label-0-3","scene_id":"table-header-3","bindings":[],"kind":"tableLabel"},{"element_id":"svg-table-label-0-4","scene_id":"table-header-4","bindings":[],"kind":"tableLabel"},{"element_id":"svg-table-label-0-5","scene_id":"table-header-5","bindings":[],"kind":"tableLabel"},{"element_id":"svg-table-label-0-6","scene_id":"table-header-6","bindings":[],"kind":"tableLabel"},{"element_id":"svg-table-label-1-0","scene_id":"row-cccbccc1d1228cf9","bindings":[{"kind":"statement","id":"statement:cccbccc1d1228cf9"}],"kind":"tableLabel"},{"element_id":"svg-table-label-1-1","scene_id":"row-cccbccc1d1228cf9","bindings":[],"kind":"tableLabel"},{"element_id":"svg-table-label-1-2","scene_id":"row-cccbccc1d1228cf9","bindings":[{"kind":"term","id":"term:d87434b389804970"}],"kind":"tableLabel"},{"element_id":"svg-table-label-1-3","scene_id":"row-cccbccc1d1228cf9","bindings":[{"kind":"relation","id":"relation-annotation:550905ba2e7c280e"},{"kind":"relation","id":"relation-annotation:7d114008b605d06e"}],"kind":"tableLabel"},{"element_id":"svg-table-label-1-4","scene_id":"row-cccbccc1d1228cf9","bindings":[{"kind":"reference","id":"reference:16a09da8c4bbdd3b"}],"kind":"tableLabel"},{"element_id":"svg-table-label-1-5","scene_id":"row-cccbccc1d1228cf9","bindings":[{"kind":"statement","id":"statement:cccbccc1d1228cf9"}],"kind":"tableLabel"},{"element_id":"svg-table-label-1-6","scene_id":"row-cccbccc1d1228cf9","bindings":[],"kind":"tableLabel"},{"element_id":"svg-table-label-2-0","scene_id":"row-fb13eebe492ed5b6","bindings":[{"kind":"statement","id":"statement:fb13eebe492ed5b6"}],"kind":"tableLabel"},{"element_id":"svg-table-label-2-1","scene_id":"row-fb13eebe492ed5b6","bindings":[],"kind":"tableLabel"},{"element_id":"svg-table-label-2-2","scene_id":"row-fb13eebe492ed5b6","bindings":[{"kind":"term","id":"term:6a4d8305a11913d9"}],"kind":"tableLabel"},{"element_id":"svg-table-label-2-3","scene_id":"row-fb13eebe492ed5b6","bindings":[{"kind":"relation","id":"relation-annotation:197635ed93d4556b"}],"kind":"tableLabel"},{"element_id":"svg-table-label-2-4","scene_id":"row-fb13eebe492ed5b6","bindings":[{"kind":"reference","id":"reference:fb404e4f462bffcf"}],"kind":"tableLabel"},{"element_id":"svg-table-label-2-5","scene_id":"row-fb13eebe492ed5b6","bindings":[{"kind":"statement","id":"statement:fb13eebe492ed5b6"}],"kind":"tableLabel"},{"element_id":"svg-table-label-2-6","scene_id":"row-fb13eebe492ed5b6","bindings":[],"kind":"tableLabel"}],"diagnostics":[]}</metadata>
+<defs>
+<marker id="arrow-assertion" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#147d8a"/></marker>
+<marker id="arrow-role" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
+<marker id="arrow-reifies" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#b65c00"/></marker>
+<marker id="arrow-annotation" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#257942"/></marker>
+<marker id="arrow-quote" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6f4ba8"/></marker>
+<clipPath id="clip-svg-legend-table-label"><rect x="104" y="224" width="184" height="42"/></clipPath>
+<clipPath id="clip-svg-table-label-0-0"><rect x="46" y="46" width="244" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-0-1"><rect x="310" y="46" width="92" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-0-2"><rect x="422" y="46" width="76" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-0-3"><rect x="518" y="46" width="92" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-0-4"><rect x="630" y="46" width="108" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-0-5"><rect x="758" y="46" width="76" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-0-6"><rect x="854" y="46" width="92" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-1-0"><rect x="46" y="88" width="244" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-1-1"><rect x="310" y="88" width="92" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-1-2"><rect x="422" y="88" width="76" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-1-3"><rect x="518" y="88" width="92" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-1-4"><rect x="630" y="88" width="108" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-1-5"><rect x="758" y="88" width="76" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-1-6"><rect x="854" y="88" width="92" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-2-0"><rect x="46" y="130" width="244" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-2-1"><rect x="310" y="130" width="92" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-2-2"><rect x="422" y="130" width="76" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-2-3"><rect x="518" y="130" width="92" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-2-4"><rect x="630" y="130" width="108" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-2-5"><rect x="758" y="130" width="76" height="22"/></clipPath>
+<clipPath id="clip-svg-table-label-2-6"><rect x="854" y="130" width="92" height="22"/></clipPath>
+<style>
+.canvas{fill:#f6f8fb}
+text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0;fill:#17202a}
+.node-shape{stroke-width:2;fill:#fff;stroke:#176b78}
+.node.blank .node-shape{stroke:#64748b;stroke-dasharray:7 4;fill:#f8fafc}
+.node.literal .node-shape{stroke:#8a5a00;fill:#fff7e6}
+.node.statement .node-shape{stroke:#6f4ba8;stroke-width:2.5;fill:#f7f3ff;stroke-dasharray:8 4}
+.statement-inner{fill:none;stroke:#b6a1d2;stroke-width:1}
+.node.reifier .node-shape{stroke:#b65c00;fill:#fff8ed;stroke-width:3}
+.node.focus .node-shape{stroke:#a53a3a;stroke-width:4}
+.node-label{font-size:14px;font-weight:700}
+.node-port{fill:#fff;stroke:#334155;stroke-width:1.5}
+.edge-path,.legend-line{fill:none;stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+.edge-label-leader{fill:none;stroke:#8392a5;stroke-width:1;stroke-dasharray:2 3}
+.edge.assertion .edge-path,.legend-line.assertion{stroke:#147d8a}
+.edge.role .edge-path,.legend-line.role{stroke:#64748b;stroke-width:1.8}
+.edge.reifies .edge-path,.legend-line.reifies{stroke:#b65c00;stroke-width:2.8;stroke-dasharray:10 4}
+.edge.annotation .edge-path,.legend-line.annotation{stroke:#257942;stroke-width:2.3}
+.edge.quoted .edge-path{stroke:#6f4ba8;stroke-width:1.7;stroke-dasharray:3 5}
+.edge-label-box{fill:#fff;stroke:#aeb9c7;stroke-width:1}
+.edge.assertion .edge-label-box{fill:#eef9fa;stroke:#66a8b0}
+.edge.role .edge-label-box{fill:#f7f8fa;stroke:#aeb7c2}
+.edge.reifies .edge-label-box{fill:#fff6e9;stroke:#d18a3d}
+.edge.annotation .edge-label-box{fill:#edf8f1;stroke:#69a67c}
+.edge.quoted .edge-label-box{fill:#f7f2fd;stroke:#9d82c1}
+.edge-label{font-size:12px;font-weight:650}
+.statement-anchor .anchor-shape{fill:#e5f4f5;stroke:#147d8a;stroke-width:2.5}
+.anchor-label{fill:#173f48;font-size:12px;font-weight:700}
+.badge-shape{fill:#eef2f6;stroke:#94a3b8;stroke-width:1}
+.graph .badge-shape{fill:#e7f5ef;stroke:#277a5a}
+.quoted .badge-shape{fill:#f1ebfa;stroke:#6f4ba8}
+.reifier .badge-shape,.reifier-count .badge-shape{fill:#fff0dc;stroke:#b65c00}
+.dialect .badge-shape,.focus .badge-shape{fill:#fdecec;stroke:#a53a3a}
+.direction .badge-shape{fill:#e8f0ff;stroke:#315d9b}
+.badge-label{font-size:10px;font-weight:650}
+.table-cell-shape{stroke:#c4ceda;stroke-width:1;fill:#fff}
+.table-cell.header .table-cell-shape{fill:#173f48;stroke:#173f48}
+.table-cell.header .table-label{fill:#fff;font-weight:700}
+.table-cell.even .table-cell-shape{fill:#f0f4f8}
+.table-label{font-size:12px}
+.legend-entry-shape{fill:#fff;stroke:#c4ceda;stroke-width:1}
+.legend-label{font-size:11px}
+.legend-symbol.assertion{fill:#e5f4f5;stroke:#147d8a;stroke-width:2}
+.legend-symbol.quoted{fill:#f7f3ff;stroke:#6f4ba8;stroke-width:2;stroke-dasharray:5 3}
+</style>
+</defs>
+<rect class="canvas" x="0" y="0" width="992" height="308"/>
+<g id="svg-table" class="statement-table">
+<g id="svg-table-cell-0-0" class="table-cell header">
+<rect class="table-cell-shape" x="36" y="36" width="264" height="42" rx="0"/>
+<text id="svg-table-label-0-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-0)"><title>Statement</title><tspan x="168" y="62">Statement</tspan></text>
+</g>
+<g id="svg-table-cell-0-1" class="table-cell header">
+<rect class="table-cell-shape" x="300" y="36" width="112" height="42" rx="0"/>
+<text id="svg-table-label-0-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-1)"><title>Asserted in</title><tspan x="356" y="62">Asserted in</tspan></text>
+</g>
+<g id="svg-table-cell-0-2" class="table-cell header">
+<rect class="table-cell-shape" x="412" y="36" width="96" height="42" rx="0"/>
+<text id="svg-table-label-0-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-2)"><title>Reifiers</title><tspan x="460" y="62">Reifiers</tspan></text>
+</g>
+<g id="svg-table-cell-0-3" class="table-cell header">
+<rect class="table-cell-shape" x="508" y="36" width="112" height="42" rx="0"/>
+<text id="svg-table-label-0-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-3)"><title>Annotations</title><tspan x="564" y="62">Annotations</tspan></text>
+</g>
+<g id="svg-table-cell-0-4" class="table-cell header">
+<rect class="table-cell-shape" x="620" y="36" width="128" height="42" rx="0"/>
+<text id="svg-table-label-0-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-4)"><title>Referenced by</title><tspan x="684" y="62">Referenced by</tspan></text>
+</g>
+<g id="svg-table-cell-0-5" class="table-cell header">
+<rect class="table-cell-shape" x="748" y="36" width="96" height="42" rx="0"/>
+<text id="svg-table-label-0-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-5)"><title>Depth</title><tspan x="796" y="62">Depth</tspan></text>
+</g>
+<g id="svg-table-cell-0-6" class="table-cell header">
+<rect class="table-cell-shape" x="844" y="36" width="112" height="42" rx="0"/>
+<text id="svg-table-label-0-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-0-6)"><title>Diagnostics</title><tspan x="900" y="62">Diagnostics</tspan></text>
+</g>
+<g id="svg-table-cell-1-0" class="table-cell odd">
+<rect class="table-cell-shape" x="36" y="78" width="264" height="42" rx="0"/>
+<text id="svg-table-label-1-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-0)"><title>ex:dave —ex:saw→ ex:erin</title><tspan x="168" y="104">ex:dave —ex:saw→ ex:erin</tspan></text>
+</g>
+<g id="svg-table-cell-1-1" class="table-cell odd">
+<rect class="table-cell-shape" x="300" y="78" width="112" height="42" rx="0"/>
+<text id="svg-table-label-1-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-1)"><title></title><tspan x="356" y="104"></tspan></text>
+</g>
+<g id="svg-table-cell-1-2" class="table-cell odd">
+<rect class="table-cell-shape" x="412" y="78" width="96" height="42" rx="0"/>
+<text id="svg-table-label-1-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-2)"><title>1</title><tspan x="460" y="104">1</tspan></text>
+</g>
+<g id="svg-table-cell-1-3" class="table-cell odd">
+<rect class="table-cell-shape" x="508" y="78" width="112" height="42" rx="0"/>
+<text id="svg-table-label-1-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-3)"><title>2</title><tspan x="564" y="104">2</tspan></text>
+</g>
+<g id="svg-table-cell-1-4" class="table-cell odd">
+<rect class="table-cell-shape" x="620" y="78" width="128" height="42" rx="0"/>
+<text id="svg-table-label-1-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-4)"><title>1</title><tspan x="684" y="104">1</tspan></text>
+</g>
+<g id="svg-table-cell-1-5" class="table-cell odd">
+<rect class="table-cell-shape" x="748" y="78" width="96" height="42" rx="0"/>
+<text id="svg-table-label-1-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-5)"><title>0</title><tspan x="796" y="104">0</tspan></text>
+</g>
+<g id="svg-table-cell-1-6" class="table-cell odd">
+<rect class="table-cell-shape" x="844" y="78" width="112" height="42" rx="0"/>
+<text id="svg-table-label-1-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-1-6)"><title></title><tspan x="900" y="104"></tspan></text>
+</g>
+<g id="svg-table-cell-2-0" class="table-cell even">
+<rect class="table-cell-shape" x="36" y="120" width="264" height="42" rx="0"/>
+<text id="svg-table-label-2-0" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-0)"><title>ex:dave —ex:didNotSee→ ex:erin</title><tspan x="168" y="146">ex:dave —ex:didNotSee→ ex:erin</tspan></text>
+</g>
+<g id="svg-table-cell-2-1" class="table-cell even">
+<rect class="table-cell-shape" x="300" y="120" width="112" height="42" rx="0"/>
+<text id="svg-table-label-2-1" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-1)"><title></title><tspan x="356" y="146"></tspan></text>
+</g>
+<g id="svg-table-cell-2-2" class="table-cell even">
+<rect class="table-cell-shape" x="412" y="120" width="96" height="42" rx="0"/>
+<text id="svg-table-label-2-2" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-2)"><title>1</title><tspan x="460" y="146">1</tspan></text>
+</g>
+<g id="svg-table-cell-2-3" class="table-cell even">
+<rect class="table-cell-shape" x="508" y="120" width="112" height="42" rx="0"/>
+<text id="svg-table-label-2-3" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-3)"><title>1</title><tspan x="564" y="146">1</tspan></text>
+</g>
+<g id="svg-table-cell-2-4" class="table-cell even">
+<rect class="table-cell-shape" x="620" y="120" width="128" height="42" rx="0"/>
+<text id="svg-table-label-2-4" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-4)"><title>1</title><tspan x="684" y="146">1</tspan></text>
+</g>
+<g id="svg-table-cell-2-5" class="table-cell even">
+<rect class="table-cell-shape" x="748" y="120" width="96" height="42" rx="0"/>
+<text id="svg-table-label-2-5" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-5)"><title>0</title><tspan x="796" y="146">0</tspan></text>
+</g>
+<g id="svg-table-cell-2-6" class="table-cell even">
+<rect class="table-cell-shape" x="844" y="120" width="112" height="42" rx="0"/>
+<text id="svg-table-label-2-6" class="table-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-table-label-2-6)"><title></title><tspan x="900" y="146"></tspan></text>
+</g>
+</g>
+<g id="svg-legend" class="legend">
+<g id="svg-legend-table" class="legend-entry legend-table">
+<rect class="legend-entry-shape" x="36" y="218" width="260" height="54" rx="4"/>
+<path class="legend-line assertion" d="M 48 245 H 92" marker-end="url(#arrow-assertion)"/>
+<text id="svg-legend-table-label" class="legend-label" text-anchor="middle" unicode-bidi="isolate" clip-path="url(#clip-svg-legend-table-label)"><title>one row per structural statement</title><tspan x="196" y="241">one row per structural</tspan><tspan x="196" y="259">statement</tspan></text>
+</g>
+</g>
+</svg>

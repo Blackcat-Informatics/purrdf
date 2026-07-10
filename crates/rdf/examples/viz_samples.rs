@@ -19,9 +19,24 @@ const EX: &str = "https://example.org/";
 const PROV: &str = "http://www.w3.org/ns/prov#";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let output = env::args_os()
-        .nth(1)
+    let mut args = env::args_os().skip(1);
+    let output = args
+        .next()
         .map_or_else(|| PathBuf::from("/inbox"), PathBuf::from);
+    let svg_only = match args.next() {
+        None => false,
+        Some(value) if value == "--svg-only" => true,
+        Some(value) => {
+            return Err(format!("unknown viz_samples option: {}", value.to_string_lossy()).into());
+        }
+    };
+    if let Some(value) = args.next() {
+        return Err(format!(
+            "unexpected viz_samples argument: {}",
+            value.to_string_lossy()
+        )
+        .into());
+    }
     fs::create_dir_all(&output)?;
     let fixtures = [
         ("ordinary-shared", ordinary_shared()),
@@ -86,8 +101,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let stem = format!("purrdf-viz2-{name}-{mode_name}");
             let svg_path = output.join(format!("{stem}.svg"));
             let json_path = output.join(format!("{stem}.json"));
-            fs::write(&svg_path, &document.svg)?;
-            fs::write(&json_path, export_json(&document.export)?)?;
+            if svg_only {
+                fs::write(
+                    &svg_path,
+                    format!(
+                        "<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->\n<!-- SPDX-License-Identifier: CC-BY-4.0 -->\n{}",
+                        document.svg
+                    ),
+                )?;
+            } else {
+                fs::write(&svg_path, &document.svg)?;
+                fs::write(&json_path, export_json(&document.export)?)?;
+            }
             writeln!(
                 summary,
                 "{stem}: {}x{}, {} nodes, {} edges, {} statements, svg-fnv64 {}",
@@ -104,8 +129,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
         }
     }
-    fs::write(output.join("purrdf-viz2-summary.txt"), summary)?;
-    fs::write(output.join("purrdf-viz2-index.html"), html)?;
+    if !svg_only {
+        fs::write(output.join("purrdf-viz2-summary.txt"), summary)?;
+        fs::write(output.join("purrdf-viz2-index.html"), html)?;
+    }
     println!(
         "wrote RDF 1.2 visualization artifacts to {}",
         output.display()

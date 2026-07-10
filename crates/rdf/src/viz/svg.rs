@@ -384,6 +384,15 @@ fn render_defs(export: &VizExport, out: &mut String, include_styles: bool) {
         )
         .expect("writing to String cannot fail");
     }
+    for edge in &export.scene.edges {
+        let color = edge_stroke(edge.kind, &edge.id);
+        writeln!(
+            out,
+            "<marker id=\"arrow-{}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"{color}\"/></marker>",
+            edge.id
+        )
+        .expect("writing to String cannot fail");
+    }
     for (id, rect) in text_clip_rects(export) {
         writeln!(
             out,
@@ -479,6 +488,7 @@ fn render_graph(export: &VizExport, out: &mut String) {
 
 fn render_edge(scene: &VizSceneEdge, layout: &VizLayoutEdge, out: &mut String) {
     let class = edge_class(scene.kind);
+    let color = edge_stroke(scene.kind, &scene.id);
     writeln!(
         out,
         "<g id=\"svg-{}-group\" class=\"edge {class}\" data-scene-id=\"{}\">",
@@ -488,10 +498,10 @@ fn render_edge(scene: &VizSceneEdge, layout: &VizLayoutEdge, out: &mut String) {
     render_accessibility(&scene.accessibility, out);
     writeln!(
         out,
-        "<path id=\"svg-{}-path\" class=\"edge-path\" d=\"{}\" marker-end=\"url(#{})\"/>",
+        "<path id=\"svg-{}-path\" class=\"edge-path\" d=\"{}\" marker-end=\"url(#arrow-{})\" style=\"stroke:{color}\"/>",
         scene.id,
         path_data(&layout.points),
-        edge_marker(scene.kind)
+        scene.id
     )
     .expect("writing to String cannot fail");
     render_edge_label_leader(&layout.points, layout.label.rect, out);
@@ -978,16 +988,23 @@ fn edge_class(kind: VizSceneEdgeKind) -> &'static str {
     }
 }
 
-fn edge_marker(kind: VizSceneEdgeKind) -> &'static str {
-    match kind {
-        VizSceneEdgeKind::Assertion => "arrow-assertion",
+fn edge_stroke(kind: VizSceneEdgeKind, id: &str) -> String {
+    let (hue, saturation, lightness) = match kind {
+        VizSceneEdgeKind::Assertion => (186, 75, 31),
         VizSceneEdgeKind::Subject | VizSceneEdgeKind::Predicate | VizSceneEdgeKind::Object => {
-            "arrow-role"
+            (215, 16, 47)
         }
-        VizSceneEdgeKind::Reifies => "arrow-reifies",
-        VizSceneEdgeKind::Annotation => "arrow-annotation",
-        VizSceneEdgeKind::QuoteSubject | VizSceneEdgeKind::QuoteObject => "arrow-quote",
-    }
+        VizSceneEdgeKind::Reifies => (30, 100, 36),
+        VizSceneEdgeKind::Annotation => (139, 53, 31),
+        VizSceneEdgeKind::QuoteSubject | VizSceneEdgeKind::QuoteObject => (265, 38, 48),
+    };
+    let hash = id.bytes().fold(2_166_136_261_u32, |value, byte| {
+        (value ^ u32::from(byte)).wrapping_mul(16_777_619)
+    });
+    let hue_offset = i32::try_from(hash % 9).unwrap_or_default() - 4;
+    let saturation_offset = i32::try_from((hash / 9) % 7).unwrap_or_default() - 3;
+    let saturation = (saturation + saturation_offset).clamp(0, 100);
+    format!("hsl({},{}%,{}%)", hue + hue_offset, saturation, lightness)
 }
 
 fn node_class(kind: VizSceneNodeKind) -> &'static str {
@@ -1310,5 +1327,33 @@ mod tests {
             path_data(&[VizPoint { x: 0, y: 0 }, VizPoint { x: 20, y: 0 }]),
             "M 0 0 H 20"
         );
+    }
+
+    #[test]
+    fn edge_colors_vary_subtly_and_deterministically() {
+        let first = edge_stroke(VizSceneEdgeKind::Subject, "edge-subject-a");
+        let second = edge_stroke(VizSceneEdgeKind::Subject, "edge-subject-b");
+        assert_eq!(
+            first,
+            edge_stroke(VizSceneEdgeKind::Subject, "edge-subject-a")
+        );
+        assert_ne!(first, second);
+        assert!(first.starts_with("hsl("));
+
+        let document = render_graph_input_svg(
+            &input(true),
+            &VizSpec::default(),
+            &VizRenderOptions::default(),
+        )
+        .expect("svg");
+        for edge in &document.export.scene.edges {
+            let color = edge_stroke(edge.kind, &edge.id);
+            assert!(
+                document
+                    .svg
+                    .contains(&format!("<marker id=\"arrow-{}\"", edge.id))
+            );
+            assert!(document.svg.contains(&format!("style=\"stroke:{color}\"")));
+        }
     }
 }

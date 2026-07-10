@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -113,7 +113,11 @@ test: ## Run the workspace test suite.
 doc: ## Build docs for the 16 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance
 
-book: ## Build The PurRDF Book (mdBook user guide) into docs/book/book/.
+book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
+	rm -rf docs/book/src/assets/visualization
+	cargo run -p purrdf-rdf --example viz_samples --locked -- docs/book/src/assets/visualization --svg-only
+
+book: book-samples ## Build The PurRDF Book (mdBook user guide) into docs/book/book/.
 	mdbook build docs/book
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
