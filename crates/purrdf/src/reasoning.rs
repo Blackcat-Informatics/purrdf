@@ -7,12 +7,10 @@ use std::sync::Arc;
 
 use purrdf_entail::{EntailError, QNode, QTriple, Regime, RuleSet};
 use purrdf_rdf::{
-    RdfDataset, RdfDiagnostic, RdfTextDirection, SparqlEngine, SparqlRequest, SparqlResult,
-    TermValue,
+    RdfDataset, RdfDiagnostic, RdfTextDirection, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_algebra::{
-    BaseDirection, GraphPattern, Literal, NamedNodePattern, Query, SparqlParser, TermPattern,
-    TriplePattern,
+    BaseDirection, GraphPattern, Literal, NamedNodePattern, Query, TermPattern,
 };
 use purrdf_sparql_eval::NativeSparqlEngine;
 
@@ -77,34 +75,27 @@ pub fn query_with_entailment(
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
 ) -> Result<SparqlResult, ReasoningError> {
+    // Parse first so invalid queries fail before potentially expensive closure work.
+    // OWL Direct also inspects this same cached plan, avoiding a second parse/cache lookup.
+    let prepared_query = engine.prepare_query(request.query, request.base_iri)?;
     let prepared = match entailment {
         QueryEntailment::Simple => Arc::clone(dataset),
         QueryEntailment::Rdf => purrdf_entail::materialize(dataset, Regime::Rdf)?,
         QueryEntailment::Rdfs => purrdf_entail::materialize(dataset, Regime::Rdfs)?,
         QueryEntailment::OwlRl => purrdf_entail::materialize(dataset, Regime::OwlRl)?,
         QueryEntailment::OwlDirect => {
-            let pattern =
-                collect_query_bgp(request.query, request.base_iri, engine.parser_options())?;
+            let pattern = collect_query_bgp(&prepared_query.query);
             purrdf_entail::materialize_dl(dataset, &pattern)?
         }
         QueryEntailment::Rif(ruleset) => purrdf_entail::materialize_rif(dataset, ruleset)?,
     };
-    engine.query(&prepared, request).map_err(Into::into)
+    engine
+        .query_prepared(&prepared, &prepared_query, request.substitutions)
+        .map_err(Into::into)
 }
 
-fn collect_query_bgp(
-    query_text: &str,
-    base_iri: Option<&str>,
-    options: &purrdf_sparql_algebra::ParserOptions,
-) -> Result<Vec<QTriple>, RdfDiagnostic> {
-    let mut parser = SparqlParser::new();
-    if let Some(base) = base_iri {
-        parser = parser.with_base_iri(base);
-    }
-    let query = parser
-        .parse_query_with(query_text, options)
-        .map_err(|error| RdfDiagnostic::error("entailed-sparql-query-parse", error.to_string()))?;
-    let pattern = match &query {
+fn collect_query_bgp(query: &Query) -> Vec<QTriple> {
+    let pattern = match query {
         Query::Select { pattern, .. }
         | Query::Construct { pattern, .. }
         | Query::Describe { pattern, .. }
@@ -112,21 +103,18 @@ fn collect_query_bgp(
     };
     let mut triples = Vec::new();
     collect_bgp(pattern, &mut triples);
-    Ok(triples
-        .into_iter()
-        .filter_map(|pattern| {
+    triples
+}
+
+fn collect_bgp(pattern: &GraphPattern, output: &mut Vec<QTriple>) {
+    match pattern {
+        GraphPattern::Bgp { patterns } => output.extend(patterns.iter().filter_map(|pattern| {
             Some(QTriple {
                 s: term_to_qnode(&pattern.subject)?,
                 p: named_node_pattern_to_qnode(&pattern.predicate),
                 o: term_to_qnode(&pattern.object)?,
             })
-        })
-        .collect())
-}
-
-fn collect_bgp<'a>(pattern: &'a GraphPattern, output: &mut Vec<&'a TriplePattern>) {
-    match pattern {
-        GraphPattern::Bgp { patterns } => output.extend(patterns),
+        })),
         GraphPattern::Join { left, right }
         | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right }
@@ -224,6 +212,41 @@ mod tests {
             ask(QueryEntailment::Rdfs),
             SparqlResult::Boolean(true)
         ));
+    }
+
+    #[test]
+    fn owl_rl_query_sees_derived_type() {
+        assert!(matches!(
+            ask(QueryEntailment::OwlRl),
+            SparqlResult::Boolean(true)
+        ));
+    }
+
+    #[test]
+    fn owl_direct_query_uses_the_query_bgp() {
+        assert!(matches!(
+            ask(QueryEntailment::OwlDirect),
+            SparqlResult::Boolean(true)
+        ));
+    }
+
+    #[test]
+    fn rdf_query_types_predicates_as_properties() {
+        let query = format!(
+            "ASK {{ <{RDFS_SUBCLASS}> a <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property> }}"
+        );
+        let result = query_with_entailment(
+            &NativeSparqlEngine::new(),
+            &hierarchy(),
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryEntailment::Rdf,
+        )
+        .unwrap();
+        assert!(matches!(result, SparqlResult::Boolean(true)));
     }
 
     #[test]

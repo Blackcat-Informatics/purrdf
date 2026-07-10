@@ -40,9 +40,9 @@ external reasoner, no `tokio`, and no string round-trip.
 * **No minted vocabulary.** Every constant in `vocab` is a standard
   `rdf:`/`rdfs:`/`owl:` IRI drawn from the entailment spec itself — this crate
   fabricates none.
-* **wasm-clean and dependency-lean.** The only dependency is `purrdf-core`
-  (itself `wasm32-unknown-unknown`-clean), so this crate carries into Rust,
-  WebAssembly, and C without a threads/filesystem/RNG dependency.
+* **wasm-clean and dependency-lean.** Dependencies are `purrdf-core` and
+  `roxmltree` (both `wasm32-unknown-unknown`-clean), so this crate carries into
+  Rust, WebAssembly, and C without a threads/filesystem/RNG dependency.
 * **Determinism.** The chase is a fixpoint over the frozen IR; a given input and
   regime always yields the same closure.
 

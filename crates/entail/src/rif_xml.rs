@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, TermValue};
-use roxmltree::{Document, Node, ParsingOptions};
+use roxmltree::{Document, Node};
 
 use crate::{Atom, EntailError, Fact, Regime, RifTerm, Rule, RuleSet, materialize};
 
@@ -58,23 +58,20 @@ where
     F: FnMut(&RifImport) -> Result<Arc<RdfDataset>, EntailError>,
 {
     let mut ruleset = parsed.ruleset;
+    let mut imported_facts = Vec::new();
     for import in &parsed.imports {
         let source = resolver(import)?;
         let closed = materialize(&source, import_regime(import.profile.as_deref()))?;
-        ruleset.facts.extend(dataset_facts(&closed));
+        imported_facts.clear();
+        fill_dataset_facts(&closed, &mut imported_facts);
+        ruleset.facts.append(&mut imported_facts);
     }
     Ok(ruleset)
 }
 
 fn parse_document(text: &str) -> Result<ParsedRifDocument, String> {
-    let document = Document::parse_with_options(
-        text,
-        ParsingOptions {
-            allow_dtd: true,
-            ..ParsingOptions::default()
-        },
-    )
-    .map_err(|error| error.to_string())?;
+    // RIF imports are resolved by the caller; XML DTD/entity expansion is never needed.
+    let document = Document::parse(text).map_err(|error| error.to_string())?;
     let root = document.root_element();
     require(&root, "Document")?;
     let mut ruleset = RuleSet::new();
@@ -83,6 +80,7 @@ fn parse_document(text: &str) -> Result<ParsedRifDocument, String> {
         match local_name(&child)? {
             "directive" => collect_import(&child, &mut imports)?,
             "payload" => parse_payload(&child, &mut ruleset)?,
+            "meta" | "id" => {}
             other => return Err(format!("unexpected Document child <{other}>")),
         }
     }
@@ -97,6 +95,7 @@ fn collect_import(directive: &Node<'_, '_>, imports: &mut Vec<RifImport>) -> Res
         match local_name(&child)? {
             "location" => location = Some(text_of(&child)),
             "profile" => profile = Some(text_of(&child)),
+            "meta" | "id" => {}
             other => return Err(format!("unexpected Import child <{other}>")),
         }
     }
@@ -112,6 +111,7 @@ fn parse_payload(payload: &Node<'_, '_>, ruleset: &mut RuleSet) -> Result<(), St
     for child in elements(&group) {
         match local_name(&child)? {
             "sentence" => parse_sentence(&child, ruleset)?,
+            "meta" | "id" | "behavior" => {}
             other => return Err(format!("unexpected Group child <{other}>")),
         }
     }
@@ -139,7 +139,7 @@ fn parse_forall(forall: &Node<'_, '_>) -> Result<Rule, String> {
     let mut formula = None;
     for child in elements(forall) {
         match local_name(&child)? {
-            "declare" | "meta" => {}
+            "declare" | "meta" | "id" => {}
             "formula" => formula = Some(child),
             other => return Err(format!("unexpected Forall child <{other}>")),
         }
@@ -153,6 +153,7 @@ fn parse_forall(forall: &Node<'_, '_>) -> Result<Rule, String> {
         match local_name(&child)? {
             "if" => body = Some(parse_conjunction(&single_element(&child, "if")?)?),
             "then" => head = Some(parse_conjunction(&single_element(&child, "then")?)?),
+            "meta" | "id" => {}
             other => return Err(format!("unexpected Implies child <{other}>")),
         }
     }
@@ -170,6 +171,7 @@ fn parse_conjunction(node: &Node<'_, '_>) -> Result<Vec<Atom>, String> {
             for child in elements(node) {
                 match local_name(&child)? {
                     "formula" => atoms.extend(parse_frame(&single_element(&child, "formula")?)?),
+                    "meta" | "id" => {}
                     other => return Err(format!("unexpected And child <{other}>")),
                 }
             }
@@ -187,6 +189,7 @@ fn parse_frame(frame: &Node<'_, '_>) -> Result<Vec<Atom>, String> {
         match local_name(&child)? {
             "object" => object = Some(parse_term(&single_element(&child, "object")?)?),
             "slot" => slots.push(parse_slot(&child)?),
+            "meta" | "id" => {}
             other => return Err(format!("unexpected Frame child <{other}>")),
         }
     }
@@ -227,11 +230,11 @@ fn parse_const(node: &Node<'_, '_>) -> Result<TermValue, String> {
         .attribute("type")
         .ok_or("Const without a type attribute")?;
     let value = text_of(node);
-    if kind == format!("{RIF_NS}iri") {
+    if kind.strip_prefix(RIF_NS) == Some("iri") {
         Ok(TermValue::iri(value))
     } else if kind.starts_with(XSD_NS) {
         Ok(TermValue::typed_literal(value, kind))
-    } else if kind == format!("{RIF_NS}local") {
+    } else if kind.strip_prefix(RIF_NS) == Some("local") {
         Err("rif:local const outside <meta> is unsupported".to_owned())
     } else {
         Err(format!("unsupported Const type {kind}"))
@@ -258,18 +261,14 @@ fn import_regime(profile: Option<&str>) -> Regime {
     }
 }
 
-fn dataset_facts(dataset: &RdfDataset) -> Vec<Fact> {
-    dataset
-        .quads()
-        .filter(|quad| quad.g.is_none())
-        .map(|quad| {
-            (
-                dataset.term_value(quad.s),
-                dataset.term_value(quad.p),
-                dataset.term_value(quad.o),
-            )
-        })
-        .collect()
+fn fill_dataset_facts(dataset: &RdfDataset, facts: &mut Vec<Fact>) {
+    facts.extend(dataset.quads().filter(|quad| quad.g.is_none()).map(|quad| {
+        (
+            dataset.term_value(quad.s),
+            dataset.term_value(quad.p),
+            dataset.term_value(quad.o),
+        )
+    }));
 }
 
 fn elements<'a, 'input>(
@@ -333,6 +332,8 @@ fn text_of(node: &Node<'_, '_>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use purrdf_core::RdfDatasetBuilder;
+
     use super::*;
 
     const RIF: &str = r#"<Document xmlns="http://www.w3.org/2007/rif#">
@@ -356,5 +357,65 @@ mod tests {
             .replace("<Frame>", "<Atom>")
             .replace("</Frame>", "</Atom>");
         assert!(matches!(parse_rif_xml(&text), Err(EntailError::Parse(_))));
+    }
+
+    #[test]
+    fn accepts_rif_metadata_without_interpreting_it() {
+        let text = RIF
+            .replace(
+                "<Document xmlns=\"http://www.w3.org/2007/rif#\">",
+                "<Document xmlns=\"http://www.w3.org/2007/rif#\"><id/>",
+            )
+            .replace("<Group>", "<Group><meta/><behavior/>")
+            .replace("<Frame>", "<Frame><id/><meta/>");
+        let parsed = parse_rif_xml(&text).unwrap();
+        assert_eq!(parsed.ruleset.facts.len(), 1);
+    }
+
+    #[test]
+    fn rejects_dtds() {
+        let text = RIF.replacen(
+            "<Document",
+            "<!DOCTYPE Document [<!ENTITY x \"expanded\">]><Document",
+            1,
+        );
+        assert!(matches!(parse_rif_xml(&text), Err(EntailError::Parse(_))));
+    }
+
+    #[test]
+    fn resolves_imports_and_merges_default_graph_facts() {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("https://example.org/imported");
+        let predicate = builder.intern_iri("https://example.org/p");
+        let object = builder.intern_iri("https://example.org/o");
+        builder.push_quad(subject, predicate, object, None);
+        let imported = builder.freeze().unwrap();
+
+        let parsed = parse_rif_xml(RIF).unwrap();
+        let ruleset = resolve_rif_imports(parsed, |_| Ok(Arc::clone(&imported))).unwrap();
+        assert!(ruleset.facts.iter().any(|fact| {
+            fact == &(
+                TermValue::iri("https://example.org/imported"),
+                TermValue::iri("https://example.org/p"),
+                TermValue::iri("https://example.org/o"),
+            )
+        }));
+    }
+
+    #[test]
+    fn maps_import_profiles_to_supported_materializers() {
+        let profile = |name: &str| Some(format!("http://www.w3.org/ns/entailment/{name}"));
+        for (name, expected) in [
+            ("OWL-Direct", Regime::OwlRl),
+            ("OWL-RL", Regime::OwlRl),
+            ("RDFS", Regime::Rdfs),
+            ("RDF", Regime::Rdf),
+            ("Simple", Regime::Simple),
+            ("RIF", Regime::Simple),
+        ] {
+            let value = profile(name);
+            assert_eq!(import_regime(value.as_deref()), expected);
+        }
+        assert_eq!(import_regime(None), Regime::Simple);
     }
 }
