@@ -237,9 +237,19 @@ def _suite_shex_validation() -> SuiteResult:
 
 
 def _suite_sparql() -> SuiteResult:
+    # The datatest harness writes each manifest tally to stderr.  Serialise its
+    # cases so libtest progress output cannot splice through those tally lines.
     cmd = [
-        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
-        "--", "--nocapture",
+        "cargo",
+        "test",
+        "-p",
+        "purrdf-sparql-conformance",
+        "--locked",
+        "--test",
+        "sparql_conformance",
+        "--",
+        "--nocapture",
+        "--test-threads=1",
     ]
     rc, out = _run(cmd, _REPO_ROOT)
     _, _, cargo_failed = _cargo_tally(out)
