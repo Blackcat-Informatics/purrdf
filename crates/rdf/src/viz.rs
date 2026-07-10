@@ -15,8 +15,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{QuadRef, RdfDataset, RdfTextDirection, TermRef, TermValue};
 
+mod layout;
 mod scene;
 
+pub use layout::*;
 pub use scene::*;
 
 const DEFAULT_GRAPH_ID: &str = "graph:default";
@@ -593,6 +595,8 @@ pub enum VizError {
     IdCollision(String),
     /// A renderer-neutral scene is structurally invalid.
     Scene(String),
+    /// Deterministic layout could not satisfy its structural invariants.
+    Layout(String),
     /// Serialization failed.
     Serialize(String),
 }
@@ -629,6 +633,7 @@ impl fmt::Display for VizError {
                 write!(f, "visualization structural identity collision for {id}")
             }
             Self::Scene(message) => f.write_str(message),
+            Self::Layout(message) => f.write_str(message),
             Self::Serialize(message) => f.write_str(message),
         }
     }

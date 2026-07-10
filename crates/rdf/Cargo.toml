@@ -114,3 +114,9 @@ criterion = { workspace = true }
 # out through the first-party serializer. Report-only; excluded from check.
 name = "native_codecs"
 harness = false
+
+[[bench]]
+# Renderer-neutral RDF 1.2 projection, scene, and deterministic layered layout.
+# Report-only; excluded from check.
+name = "viz_layout"
+harness = false
