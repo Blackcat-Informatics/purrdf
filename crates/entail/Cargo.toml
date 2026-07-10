@@ -31,6 +31,7 @@ path = "src/lib.rs"
 # string round-trip. purrdf-core is wasm32-unknown-unknown-clean, keeping this
 # crate wasm-clean (MAXIMAL PORTABILITY).
 purrdf-core = { workspace = true }
+roxmltree = { workspace = true }
 
 [dev-dependencies]
 # Report-only chase microbenchmark; `make bench` lane, excluded from `make check`.

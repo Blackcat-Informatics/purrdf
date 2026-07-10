@@ -29,6 +29,7 @@ external reasoner, no `tokio`, and no string round-trip.
 | `materialize(ds, regime)` | `Simple`, `RDF`, `RDFS`, `OWL-RL` | Forward-materialization ("chase") over a fixed rule set via a native semi-naive fixpoint. |
 | `materialize_dl(...)` | `OWL-Direct` | Open-world OWL DL over an ALCOIQ tableau — needs the query's class expressions, so it is not reachable through the plain `materialize` façade. |
 | `materialize_rif(...)` | `RIF` | RIF-Core rule entailment over a parsed `RuleSet`. |
+| `parse_rif_xml(...)` / `resolve_rif_imports(...)` | `RIF` | Normative RIF-XML parsing with caller-owned, I/O-free import resolution. |
 | `Regime::from_iri(iri)` | — | Parse a `sparql:entailmentRegime` IRI to its enum. |
 
 `D` (datatype) entailment is a typed, spec-inherent boundary

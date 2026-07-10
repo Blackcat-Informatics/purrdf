@@ -157,6 +157,15 @@ impl std::fmt::Debug for NativeSparqlEngine {
 }
 
 impl NativeSparqlEngine {
+    /// Parser configuration applied to every query this engine evaluates.
+    ///
+    /// Entailment façades use this when inspecting query algebra before handing
+    /// the query back to the engine, preventing extension-namespace drift.
+    #[must_use]
+    pub fn parser_options(&self) -> &ParserOptions {
+        &self.parser_options
+    }
+
     /// A fresh engine with an empty plan cache and no `LOAD` resolver.
     pub fn new() -> Self {
         Self::default()

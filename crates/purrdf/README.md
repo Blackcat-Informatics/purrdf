@@ -61,8 +61,10 @@ caller-supplied configuration.
   and targets, on PurRDF's own engine.
 - **ShEx 2.1** — ShExC/ShExJ schemas and shape-map validation, gated against the
   official shexTest suite.
-- **Entailment** — RDFS / OWL-RL forward materialization plus OWL-Direct and
-  RIF entry points, entirely in interned `TermId` space.
+- **Entailment** — RDFS / OWL-RL forward materialization plus query-directed
+  OWL-Direct and RIF, entirely in interned `TermId` space. The umbrella
+  `query_with_entailment` façade keeps query parsing and the selected regime
+  together; RIF-XML imports stay caller-resolved and network-free.
 - **GTS graph transport** — a single-file, content-addressed, append-only
   container for RDF 1.2 graphs: BLAKE3-chained CBOR segments, deterministic fold,
   COSE signing/encryption, pure-Rust crypto (wasm-friendly).

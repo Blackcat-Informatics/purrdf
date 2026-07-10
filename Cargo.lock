@@ -1293,6 +1293,7 @@ version = "0.4.1"
 dependencies = [
  "criterion",
  "purrdf-core",
+ "roxmltree",
 ]
 
 [[package]]
