@@ -3,7 +3,7 @@
 
 //! Statement-centric RDF 1.2 visualization projection.
 //!
-//! The core contract is the [`VizProjection`]: a renderer-neutral Statement
+//! The core contract is the [`VizProjection`](crate::viz::VizProjection): a renderer-neutral Statement
 //! Incidence Model that keeps structural statements separate from assertions,
 //! reifiers, annotations, graph context, and dialect diagnostics. Renderers use
 //! this model; they do not rediscover RDF 1.2 statement structure from flat quads.
