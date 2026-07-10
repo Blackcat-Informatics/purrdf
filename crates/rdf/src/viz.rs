@@ -17,9 +17,11 @@ use crate::{QuadRef, RdfDataset, RdfTextDirection, TermRef, TermValue};
 
 mod layout;
 mod scene;
+mod svg;
 
 pub use layout::*;
 pub use scene::*;
+pub use svg::*;
 
 const DEFAULT_GRAPH_ID: &str = "graph:default";
 const DEFAULT_MAX_STATEMENTS: usize = 500;
@@ -533,27 +535,24 @@ pub type VizModel = VizProjection;
 pub struct VizExport {
     /// Export schema version.
     pub schema_version: String,
+    /// Normalized semantic view specification.
+    pub spec: VizSpec,
     /// Deterministic spec hash.
     pub spec_hash: String,
+    /// Deterministic projected-model hash.
+    pub model_hash: String,
+    /// Deterministic semantic-scene hash.
+    pub scene_hash: String,
     /// Projected model.
     pub model: VizProjection,
-    /// Layout records.
-    pub layout: Vec<VizLayoutRecord>,
+    /// Renderer-neutral semantic scene.
+    pub scene: VizScene,
+    /// Complete deterministic geometry.
+    pub layout: VizLayout,
     /// SVG element to model-id index.
     pub element_index: Vec<VizElementIndexEntry>,
     /// Export diagnostics.
     pub diagnostics: Vec<VizDiagnostic>,
-}
-
-/// Deterministic layout record for a projected entity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VizLayoutRecord {
-    /// Model id being positioned.
-    pub id: String,
-    /// Integer x coordinate in projection units.
-    pub x: i32,
-    /// Integer y coordinate in projection units.
-    pub y: i32,
 }
 
 /// SVG element to projection-id mapping.
@@ -561,10 +560,60 @@ pub struct VizLayoutRecord {
 pub struct VizElementIndexEntry {
     /// SVG element id.
     pub element_id: String,
-    /// Projection id.
-    pub model_id: String,
-    /// Element kind.
-    pub kind: String,
+    /// Scene element id.
+    pub scene_id: String,
+    /// Semantic identities represented by the element.
+    pub bindings: Vec<VizSemanticRef>,
+    /// Typed element kind.
+    pub kind: VizElementKind,
+}
+
+/// SVG element grammar used by the load-bearing element index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VizElementKind {
+    /// Node group.
+    NodeGroup,
+    /// Node shape.
+    NodeShape,
+    /// Node text label.
+    NodeLabel,
+    /// Node badge.
+    NodeBadge,
+    /// Node badge label.
+    NodeBadgeLabel,
+    /// Node port.
+    NodePort,
+    /// Edge group.
+    EdgeGroup,
+    /// Edge route path.
+    EdgePath,
+    /// Edge text label.
+    EdgeLabel,
+    /// Edge badge.
+    EdgeBadge,
+    /// Edge badge label.
+    EdgeBadgeLabel,
+    /// Addressable statement anchor.
+    EdgeAnchor,
+    /// Statement-anchor label.
+    EdgeAnchorLabel,
+    /// Statement-anchor badge.
+    EdgeAnchorBadge,
+    /// Statement-anchor badge label.
+    EdgeAnchorBadgeLabel,
+    /// Statement table.
+    Table,
+    /// Statement table cell.
+    TableCell,
+    /// Statement table cell label.
+    TableLabel,
+    /// Visual grammar legend.
+    Legend,
+    /// Visual grammar legend entry.
+    LegendEntry,
+    /// Visual grammar legend label.
+    LegendLabel,
 }
 
 /// Visualization projection errors.

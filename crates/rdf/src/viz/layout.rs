@@ -200,6 +200,15 @@ pub struct VizLayoutTable {
     pub cells: Vec<VizLayoutTableCell>,
 }
 
+/// Positioned visual-grammar legend entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VizLayoutLegendEntry {
+    /// Scene legend entry id.
+    pub id: String,
+    /// Entry rectangle.
+    pub rect: VizRect,
+}
+
 /// Complete deterministic geometry for a semantic scene.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VizLayout {
@@ -217,16 +226,19 @@ pub struct VizLayout {
     pub edges: Vec<VizLayoutEdge>,
     /// Positioned table for table mode.
     pub table: Option<VizLayoutTable>,
+    /// Positioned visual-grammar legend entries.
+    pub legend: Vec<VizLayoutLegendEntry>,
 }
 
 /// Lay out a renderer-neutral semantic scene deterministically.
 pub fn layout_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<VizLayout, VizError> {
     validate_options(options)?;
-    let layout = if scene.mode == VizMode::Table {
+    let mut layout = if scene.mode == VizMode::Table {
         layout_table_scene(scene, options)?
     } else {
         layout_graph_scene(scene, options)?
     };
+    layout_legend(scene, &mut layout, options);
     validate_layout(scene, &layout)?;
     Ok(layout)
 }
@@ -394,6 +406,7 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
         nodes,
         edges,
         table: None,
+        legend: Vec::new(),
     })
 }
 
@@ -1442,7 +1455,38 @@ fn layout_table_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
             rect: table_rect,
             cells,
         }),
+        legend: Vec::new(),
     })
+}
+
+fn layout_legend(scene: &VizScene, layout: &mut VizLayout, options: &VizLayoutOptions) {
+    if scene.legend.is_empty() {
+        return;
+    }
+    let start_y = layout.height + 20;
+    let available_width = layout.width.max(720) - options.margin * 2;
+    let entry_width = 260;
+    let entry_height = 44;
+    let mut x = options.margin;
+    let mut y = start_y;
+    for entry in &scene.legend {
+        if x > options.margin && x + entry_width > options.margin + available_width {
+            x = options.margin;
+            y += entry_height + 10;
+        }
+        layout.legend.push(VizLayoutLegendEntry {
+            id: entry.id.clone(),
+            rect: VizRect {
+                x,
+                y,
+                width: entry_width,
+                height: entry_height,
+            },
+        });
+        x += entry_width + 12;
+    }
+    layout.width = layout.width.max(options.margin * 2 + available_width);
+    layout.height = y + entry_height + options.margin;
 }
 
 fn table_cell(row: usize, column: usize, rect: VizRect, text: &str) -> VizLayoutTableCell {
@@ -1480,6 +1524,11 @@ pub fn validate_layout(scene: &VizScene, layout: &VizLayout) -> Result<(), VizEr
     if layout.width <= 0 || layout.height <= 0 {
         return Err(VizError::Layout(
             "visualization layout has non-positive canvas bounds".to_owned(),
+        ));
+    }
+    if layout.legend.len() != scene.legend.len() {
+        return Err(VizError::Layout(
+            "layout does not cover every legend entry".to_owned(),
         ));
     }
     if scene.mode == VizMode::Table {
