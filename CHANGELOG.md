@@ -13,6 +13,7 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **rdf:** Refine visualization routing and labels
 - **rdf:** Make dense visualization routes traceable
 - **wasm:** Accept npm 12 pack output
+- **rdf:** Address visualization review findings
 
 ### Documentation
 
@@ -573,4 +574,3 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 ### Other
 
 - First commit
-
