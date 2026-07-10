@@ -459,8 +459,12 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
         .iter()
         .map(|node| node.rect.right())
         .chain(edges.iter().flat_map(|edge| {
-            std::iter::once(edge.label.rect.right())
+            edge.points
+                .iter()
+                .map(|point| point.x)
+                .chain(std::iter::once(edge.label.rect.right()))
                 .chain(edge.badges.iter().map(|badge| badge.rect.right()))
+                .chain(edge.anchor.iter().map(|anchor| anchor.rect.right()))
         }))
         .max()
         .unwrap_or(options.margin);
@@ -468,8 +472,12 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
         .iter()
         .map(|node| node.rect.bottom())
         .chain(edges.iter().flat_map(|edge| {
-            std::iter::once(edge.label.rect.bottom())
+            edge.points
+                .iter()
+                .map(|point| point.y)
+                .chain(std::iter::once(edge.label.rect.bottom()))
                 .chain(edge.badges.iter().map(|badge| badge.rect.bottom()))
+                .chain(edge.anchor.iter().map(|anchor| anchor.rect.bottom()))
         }))
         .max()
         .unwrap_or(options.margin);
@@ -2054,6 +2062,19 @@ mod tests {
         assert_eq!(first.nodes.len(), scene.nodes.len());
         assert_eq!(first.edges.len(), scene.edges.len());
         assert!(first.edges.iter().any(|edge| edge.anchor.is_some()));
+        let content_right = first.width - options.margin;
+        let content_bottom = first.height - options.margin;
+        for edge in &first.edges {
+            assert!(
+                edge.points
+                    .iter()
+                    .all(|point| point.x <= content_right && point.y <= content_bottom)
+            );
+            if let Some(anchor) = &edge.anchor {
+                assert!(anchor.rect.right() <= content_right);
+                assert!(anchor.rect.bottom() <= content_bottom);
+            }
+        }
 
         let scene_edges = scene
             .edges

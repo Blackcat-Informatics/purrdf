@@ -114,8 +114,22 @@ doc: ## Build docs for the 16 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
-	rm -rf docs/book/src/assets/visualization
-	cargo run -p purrdf-rdf --example viz_samples --locked -- docs/book/src/assets/visualization --svg-only
+	@set -eu; \
+		target=docs/book/src/assets/visualization; \
+		tmp=$$(mktemp -d docs/book/src/assets/.visualization.XXXXXX); \
+		previous="$$tmp.previous"; \
+		cleanup() { \
+			status=$$?; \
+			if [ -d "$$previous" ] && [ ! -d "$$target" ]; then mv "$$previous" "$$target"; fi; \
+			rm -rf "$$tmp" "$$previous"; \
+			exit $$status; \
+		}; \
+		trap cleanup EXIT; \
+		cargo run -p purrdf-rdf --example viz_samples --locked -- "$$tmp" --svg-only; \
+		if [ -d "$$target" ]; then mv "$$target" "$$previous"; fi; \
+		mv "$$tmp" "$$target"; \
+		rm -rf "$$previous"; \
+		trap - EXIT
 
 book: book-samples ## Build The PurRDF Book (mdBook user guide) into docs/book/book/.
 	mdbook build docs/book

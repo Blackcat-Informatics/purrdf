@@ -13,6 +13,7 @@ use std::fmt::{self, Write as _};
 
 use serde::{Deserialize, Serialize};
 
+use crate::native_codecs::ser_model::{escape_iri, escape_literal};
 use crate::{QuadRef, RdfDataset, RdfTextDirection, TermRef, TermValue};
 
 mod layout;
@@ -1026,6 +1027,14 @@ impl<'a> ProjectionBuilder<'a> {
         if let Some(id) = self.statement_by_key.get(&key) {
             return Ok(id.clone());
         }
+        let actual = self.statements.len().saturating_add(1);
+        if actual > self.spec.max_statements {
+            return Err(VizError::TooLarge {
+                limit: "statements",
+                actual,
+                allowed: self.spec.max_statements,
+            });
+        }
         let id = VizStatementId(self.mint_id("statement", &key)?);
         let dialect = self.statement_dialect(&subject_ref);
         let nesting_depth = value_ref_depth(&subject_ref, &self.statements)
@@ -1097,13 +1106,21 @@ impl<'a> ProjectionBuilder<'a> {
         if let Some(id) = self.term_by_key.get(&key) {
             return Ok(id.clone());
         }
+        let actual = self.terms.len().saturating_add(1);
+        if actual > self.spec.max_terms {
+            return Err(VizError::TooLarge {
+                limit: "terms",
+                actual,
+                allowed: self.spec.max_terms,
+            });
+        }
         let id = VizTermId(self.mint_id("term", &key)?);
-        let value = viz_term_value(value)?;
         let label = label_for_term(
             &value,
             self.spec.label_policy.clone(),
             &self.spec.vocabulary,
         );
+        let value = viz_term_value(value)?;
         self.terms.insert(
             id.clone(),
             TermDraft {
@@ -1691,15 +1708,13 @@ fn write_json_string(value: &str, out: &mut String) -> fmt::Result {
 }
 
 fn label_for_term(
-    value: &VizTermValue,
+    value: &TermValue,
     policy: VizLabelPolicy,
     vocabulary: &[VizVocabularyMapping],
 ) -> String {
     match (policy, value) {
-        (VizLabelPolicy::Full, _) => {
-            serde_json::to_string(value).unwrap_or_else(|_| "?".to_owned())
-        }
-        (_, VizTermValue::Iri { value }) => vocabulary
+        (VizLabelPolicy::Full, _) => full_term_label(value),
+        (_, TermValue::Iri(value)) => vocabulary
             .iter()
             .filter(|mapping| value.starts_with(&mapping.namespace))
             .max_by(|left, right| {
@@ -1712,9 +1727,40 @@ fn label_for_term(
                 || compact_iri(value),
                 |mapping| format!("{}:{}", mapping.prefix, &value[mapping.namespace.len()..]),
             ),
-        (_, VizTermValue::Blank { label, scope }) if *scope == 0 => format!("_:{label}"),
-        (_, VizTermValue::Blank { label, scope }) => format!("_:{label}.s{scope}"),
-        (_, VizTermValue::Literal { lexical_form, .. }) => format!("\"{lexical_form}\""),
+        (_, TermValue::Blank { label, scope }) if scope.ordinal() == 0 => format!("_:{label}"),
+        (_, TermValue::Blank { label, scope }) => format!("_:{label}.s{}", scope.ordinal()),
+        (_, TermValue::Literal { lexical_form, .. }) => format!("\"{lexical_form}\""),
+        (_, TermValue::Triple { .. }) => "quoted triple".to_owned(),
+    }
+}
+
+fn full_term_label(value: &TermValue) -> String {
+    match value {
+        TermValue::Iri(iri) => format!("<{}>", escape_iri(iri)),
+        TermValue::Blank { label, scope } if scope.ordinal() == 0 => format!("_:{label}"),
+        TermValue::Blank { label, scope } => format!("_:{label}.s{}", scope.ordinal()),
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => {
+            let literal = format!("\"{}\"", escape_literal(lexical_form));
+            if let Some(language) = language {
+                direction.as_ref().map_or_else(
+                    || format!("{literal}@{language}"),
+                    |direction| format!("{literal}@{language}--{}", direction.as_str()),
+                )
+            } else {
+                format!("{literal}^^<{}>", escape_iri(datatype))
+            }
+        }
+        TermValue::Triple { s, p, o } => format!(
+            "<<( {} {} {} )>>",
+            full_term_label(s),
+            full_term_label(p),
+            full_term_label(o)
+        ),
     }
 }
 
@@ -2238,9 +2284,62 @@ mod tests {
             err,
             VizError::TooLarge {
                 limit: "statements",
-                ..
+                actual: 1,
+                allowed: 0,
             }
         ));
+
+        let term_spec = VizSpec {
+            max_terms: 0,
+            ..VizSpec::default()
+        };
+        let mut builder = ProjectionBuilder::new(&term_spec);
+        let err = builder.term_id(iri("alice")).expect_err("too many terms");
+        assert!(matches!(
+            err,
+            VizError::TooLarge {
+                limit: "terms",
+                actual: 1,
+                allowed: 0,
+            }
+        ));
+        assert!(builder.terms.is_empty());
+        assert!(builder.term_by_key.is_empty());
+    }
+
+    #[test]
+    fn full_labels_are_rdf_lexical_terms() {
+        let full = VizLabelPolicy::Full;
+        assert_eq!(
+            label_for_term(&iri("alice"), full.clone(), &[]),
+            "<https://example.org/alice>"
+        );
+        assert_eq!(
+            label_for_term(
+                &TermValue::Literal {
+                    lexical_form: "a\"b\n".to_owned(),
+                    datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                    language: None,
+                    direction: None,
+                },
+                full.clone(),
+                &[],
+            ),
+            "\"a\\\"b\\n\"^^<http://www.w3.org/2001/XMLSchema#string>"
+        );
+        assert_eq!(
+            label_for_term(
+                &TermValue::Literal {
+                    lexical_form: "مرحبا".to_owned(),
+                    datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
+                    language: Some("ar".to_owned()),
+                    direction: Some(RdfTextDirection::Rtl),
+                },
+                full,
+                &[],
+            ),
+            "\"مرحبا\"@ar--rtl"
+        );
     }
 
     fn rich_input() -> VizGraphInput {
