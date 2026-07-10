@@ -157,6 +157,41 @@ impl std::fmt::Debug for NativeSparqlEngine {
 }
 
 impl NativeSparqlEngine {
+    /// Parse a query through this engine's memoizing plan cache.
+    ///
+    /// Callers that inspect query algebra before evaluation can retain the
+    /// returned plan and pass it to [`Self::query_prepared`], avoiding a second
+    /// parse or cache lookup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse.
+    pub fn prepare_query(
+        &self,
+        query: &str,
+        base_iri: Option<&str>,
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        self.cache
+            .borrow_mut()
+            .prepare_with(query, base_iri, &self.parser_options)
+    }
+
+    /// Evaluate a plan returned by [`Self::prepare_query`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates evaluation errors as an [`RdfDiagnostic`].
+    pub fn query_prepared(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        prepared: &PreparedQuery,
+        substitutions: &[(String, TermValue)],
+    ) -> Result<SparqlResult, RdfDiagnostic> {
+        let mut ctx = self.eval_ctx(dataset);
+        let outcome = evaluate_with_substitutions(prepared, substitutions, &mut ctx)?;
+        Ok(materialize(outcome, &ctx))
+    }
+
     /// A fresh engine with an empty plan cache and no `LOAD` resolver.
     pub fn new() -> Self {
         Self::default()
@@ -413,14 +448,8 @@ impl SparqlEngine for NativeSparqlEngine {
         dataset: &Self::Dataset,
         request: SparqlRequest<'_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared = self.cache.borrow_mut().prepare_with(
-            request.query,
-            request.base_iri,
-            &self.parser_options,
-        )?;
-        let mut ctx = self.eval_ctx(dataset);
-        let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
-        Ok(materialize(outcome, &ctx))
+        let prepared = self.prepare_query(request.query, request.base_iri)?;
+        self.query_prepared(dataset, &prepared, request.substitutions)
     }
 
     fn update(

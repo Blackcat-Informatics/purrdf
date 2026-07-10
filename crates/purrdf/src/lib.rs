@@ -71,6 +71,8 @@ pub use purrdf_rdf::*;
 
 pub mod profile;
 pub use profile::{OntologyProfile, ReifierVocab};
+pub mod reasoning;
+pub use reasoning::{QueryEntailment, ReasoningError, query_with_entailment};
 
 // ── consumer-config types, surfaced directly ────────────────────────────────
 // A consumer parameterizes an emitter without reaching into a sub-crate.

@@ -34,10 +34,12 @@ pub(crate) mod interner;
 pub(crate) mod owl_dl;
 pub(crate) mod rdfs;
 pub mod rif;
+mod rif_xml;
 pub(crate) mod vocab;
 
 pub use owl_dl::query::{QNode, QTriple, materialize_dl};
 pub use rif::{Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif};
+pub use rif_xml::{ParsedRifDocument, RifImport, parse_rif_xml, resolve_rif_imports};
 
 /// A SPARQL entailment regime (`sparql:entailmentRegime`), by its W3C IRI's local
 /// name.

@@ -4,11 +4,47 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.4.2] - 2026-07-10
+
+### Bug Fixes
+
+- Refresh lockfile for RIF parser
+
+### Features
+
+- Expose entailed SPARQL and RIF parsing
+
+### Other
+
+- Harden npm wasm RDF 1.2 toolkit
+
 ## [0.4.1] - 2026-07-09
 
 ### Bug Fixes
 
 - **shapes:** Project external object-class values to a node-ref, not a string, in JSON Schema
+- **npm:** Align package-root RDFJS typings
+- **capi:** Refresh generated ABI header
+- **npm:** Accept null dataset inputs
+- **npm:** Correct ecosystem probe evidence
+
+### Documentation
+
+- **npm:** Add ecosystem probe evidence
+
+### Features
+
+- **npm:** Add reusable SPARQL query engine
+
+### Performance
+
+- **wasm:** Benchmark query engine reuse
+
+### Testing
+
+- **npm:** Gate packed wasm package
+- **npm:** Pin package gate toolchain
+
 ## [0.4.0] - 2026-07-07
 
 ### Bug Fixes
@@ -67,6 +103,7 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 
 - **shapes:** Add trusted external JSON-Schema validator harness
 - **shapes:** Behavioral accept/reject tests for polarity-sound sh:not
+
 ## [0.3.3] - 2026-07-05
 
 ### Documentation
@@ -77,6 +114,7 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 
 - **rdf:** Memoize the line index so parser diagnostics stay linear
 - **rdf:** Memoize parser line index — fix quadratic diagnostics scan
+
 ## [0.3.2] - 2026-07-05
 
 ### Bug Fixes
@@ -86,6 +124,7 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 ### Features
 
 - **shapes:** SHACL Rules — 100% SHACL-AF coverage
+
 ## [0.3.1] - 2026-07-05
 
 ### Bug Fixes
@@ -119,6 +158,7 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **shapes:** SHACL Rules conformance corpus + inferred-graph harness
 - **shapes:** Audit every node-expression kind in sh:TripleRule subject/predicate/object positions
 - **shapes:** Cover blank-focus blank minting and multi-round fixpoint convergence
+
 ## [0.3.0] - 2026-07-05
 
 ### Benchmarks
@@ -322,45 +362,6 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 - **shapes:** Apply cargo fmt to the pinned-lexical test
 - Integrate main (parallel eval, content-addressed terms, XSD-1.0 float/double) into the W3C conformance branch
 - Strip stale gmeow-ontology issue refs from Rust comments + lint against regression
-
-This change removes every stale `#NNN` GitHub issue-reference token from
-Rust comments and in-tree markdown documentation, then adds a CI/pre-commit
-lint that rejects new ones so the convention holds.
-
-What changed:
-- `scripts/check-issue-refs.py` (new): Rust-aware linter that scans `//`,
- `///`, and `//!` comments plus `.md` files under `crates/`, `bindings/`,
- and `docs/`. String literals, character literals, raw strings, fenced code
- blocks, inline code spans, hex colors, markdown anchors, and section numbers
- like `.1` are excluded. The regex matches `#` followed by 1–5 decimal
- digits.
-- `.github/workflows/ci.yaml`: runs the new lint in CI.
-- `Makefile`: wires the lint into `make check` and provides a standalone
- `check-issue-refs` target.
-- Rust comments (138 files): stripped stale `#NNN` tokens while preserving
- explanatory prose, then repaired the broken parentheses, dangling slashes,
- and sentence fragments left by the initial mechanical pass.
-- Markdown docs (READMEs, test fixture SOURCE.md, etc.): stripped stale
- issue-reference tokens.
-
-Requirements satisfied (issue ):
-1. `#NNN` tokens removed from `//`/`///` comments across the workspace.
-2. `#NNN` refs swept from in-tree READMEs and design docs.
-3. CI/pre-commit lint added to block new `#NNN` tokens in comments and docs.
-
-Standing constraints respected (`.goals`):
-- No optional features or `cfg`-gated behavior was introduced.
-- Core Rust semantics are unchanged; the Python surface is untouched except
- for comment-only cleanups in bindings source files.
-- Wasm-able crate set remains wasm-buildable.
-- No new namespaces or ontology terms were minted.
-
-Verification:
-- `make check` passes (fmt, clippy, check, tests, license/generated/issue-ref
- hygiene).
-- `make rdf-core-hygiene` passes.
-- `make wasm` passes.
-- `python3 scripts/check-issue-refs.py` reports no violations.
 - **conformance:** Integrate origin/main; fix issue-ref lint to scan only tracked source
 - **shacl-af:** Rustfmt wrapping and register new corpus fixtures
 - Rustfmt normalization across the SARIF work
@@ -441,6 +442,7 @@ Verification:
 - **validate:** Lock SHACL helpUri anchors against the live spec format
 - **validate:** Avoid a literal #N token in the S0.5 test
 - **sparql:** Regression-cover FILTER-NOT-EXISTS arithmetic and all-FILTER UNION branch
+
 ## [0.2.1] - 2026-07-02
 
 ### Benchmarks
@@ -487,39 +489,22 @@ Verification:
 - **python:** Rustfmt the native SPARQL-results + term-direction bindings
 - Release 0.2.1: rdflib drop-in hardening — native xsd coercion + TriX/HexTuples codecs
 
-Bumps the workspace, python, capi, and npm package versions to 0.2.1. Ships
-the stage-2 hardening of the rdflib drop-in: mandatory acceptance-matrix gate,
-the three reviewer fixes (bare-form xsd:duration, SPARQL processor kwarg
-forwarding, Resource predicate/index unwrapping), in-repo tracker-reference
-cleanup, native purrdf-xsd binary/whitespace value coercion, and first-party
-native TriX and HexTuples codecs replacing the NotImplementedError plugin stubs.
-
 ### Testing
 
 - **python:** Gate — rdflib's own test suite against the compat shim
 - **python:** Downstream acceptance matrix (pyshacl / SPARQLWrapper / sssom)
+
 ## [0.2.0] - 2026-07-02
 
 ### Other
 
 - Release 0.2.0: complete umbrella facade, OntologyProfile, ShExC serializer, drop openEHR OPT
 
-- purrdf umbrella now re-exports the full published surface (gts, sparql, xsd, iri, events) so consumers depend on purrdf alone; merges the purrdf_gts engine with the purrdf_rdf GTS adapter under one gts module.
-- Surface SliceVocab / Namespaces / StatementMetadataVocab at the root and unify them behind purrdf::OntologyProfile (build once, project into each emitter's native config).
-- purrdf-shex: add to_shexc (compact-syntax serializer); round-trips all 425 shexTest schemas.
-- purrdf-shapes: remove openehr_opt (healthcare-domain vocabulary) + its test/fixture and the now-unused roxmltree dep.
-- Bump workspace + bindings + capi + js package to 0.2.0.
 ## [0.1.5] - 2026-07-02
 
 ### Bug Fixes
 
 - Fix release lanes: wasm-opt post-MVP features, workspace-inherited version
-
-- release-npm: Ubuntu's binaryen rejects the bulk-memory/nontrapping-fptoint
- ops rustc emits by default for wasm32; pass the --enable flags to wasm-opt
-- release-pypi: bindings/python inherits version.workspace = true, so the
- tag check must resolve the crate version via cargo metadata, not read the
- member Cargo.toml directly
 
 ### Documentation
 
@@ -530,145 +515,11 @@ native TriX and HexTuples codecs replacing the NotImplementedError plugin stubs.
 - Package README + metadata, js package 0.1.4
 - Shex in flight
 - Full ShEx 2.1 + complete SHACL Core + de-gmeow the library namespaces
-
-ShEx (new crate purrdf-shex, gated on vendored shexTest v2.1.0):
-- ShExC lexer/parser + ShExJ serde + structural checks (dangling refs,
- ref cycles, negation stratification via hand-rolled Tarjan SCC):
- 99/99 negativeSyntax, 14/14 negativeStructure, 425/425 schemas parse,
- 420/420 ShExJ round-trips, 419/420 ShExC==ShExJ AST ground truth
- (1 documented upstream corpus bug)
-- validator: node constraints (purrdf-xsd lexical/numeric machinery),
- value sets with stems/ranges/exclusions, EachOf/OneOf/TC matching with
- EXTRA/CLOSED (interval fast path covers 98.9%; budget-bounded
- backtracker for the rest), coinductive typing recursion, fixed shape
- maps: 1051/1051 attempted validation tests pass, zero xfails
- (54 skipped: Import/SemanticAction traits, phase 2)
-
-SHACL (crates/shapes):
-- full property paths (sequence/alternative/zeroOrMore/oneOrMore/
- zeroOrOne, cycle-safe closures, algebraic inverse rewriting),
- property-pair constraints (equals/disjoint/lessThan/lessThanOrEquals),
- qualified value shapes with sibling-disjoint semantics, property-shape
- deactivation; frozen corpus 42 -> 48 cases
-- W3C data-shapes suite vendored (vectors/shacl) + manifest-driven
- harness: 113 passed / 7 xfailed (standalone property shapes,
- sh:value defaults, pre-binding rejection, dateTime value-space,
- custom severities, structured sh:resultPath all fixed)
-
-Namespace integrity (the extraction had blind-renamed the published
-gmeow: namespace to an unpublished purrdf: one inside library code):
-- vocab/purrdf.ttl: a real, tiny purrdf carrier vocabulary (JSON-LD-star
- qSubject/qPredicate/qObject/qObjectLiteral encoding keys, the 7 SPARQL
- extension functions, neutral StatementMetadata fallback)
-- json_schema: compile(&shapes, &Namespaces) - caller-supplied prefix
- map + primary namespace (unblocks gmeow regenerate)
-- SPARQL: extension-fn namespaces are ParserOptions (gmeow aliases its
- ns); heldIn standpoint predicates are a caller-supplied table with a
- hard error when unconfigured
-- slice: SliceVocab::for_namespace threads through catalog/ownership/
- fix_deps/analysis/emitters + Python bindings (discover takes the
- namespace); gts_view LanguageVocab; fno ProjectionFunction from the
- catalog namespace; test fixtures moved to example.org
-
-Also vendored shexTest v2.1.0 + W3C data-shapes with provenance READMEs;
-purrdf-shex added to the wasm gates; 11 library-scoped issues migrated
-from gmeow-ontology (purrdf-).
-
-1523 tests passing; clippy -D warnings clean; fmt/no-features/generated/
-kernel-hygiene/wasm32 gates green.
 - Purge the invented namespace: purrdf is a toolkit, not an ontology
-
-Policy (final): purrdf mints no vocabulary IRIs. Every vocabulary the
-library reads or writes is caller-supplied configuration with no
-fabricated default — a feature exercised unconfigured hard-errors or
-stays inactive. The GMEOW ontology is a consumer; the dependency arrow
-never points from purrdf to it. (vocab/purrdf.ttl, briefly authored, is
-gone.)
-
-- sparql-algebra: ParserOptions::default = no extension namespaces;
- Function::Purrdf(PurrdfCall) keeps the ORIGINAL call IRI so output
- round-trips the caller's namespace verbatim; PURRDF_NS deleted
-- sparql-eval/conformance: engine defaults namespace-free; extension +
- standpoint suites rewritten to example.org/ext/ with harness config
-- jsonld codec: StatementMetadataVocab has no Default; star downcast
- without a configured vocab hard-fails; @vocab no longer emitted;
- the W3C rdf:reifies/@annotation lane mints nothing and stays free
-- shapes: BoxRoleVocab::for_namespace caller config (unconfigured =
- roles inactive; conformance unaffected); openehr emitter takes
- caller prefixes; corpus 38-42 fixtures moved to example.org/meta/
-- slice: ownership dependency edges use the parsed original extension
- IRI; template prose renaming (PURRDF -> caller prefix, `purrdf
- regenerate` -> `{prefix} regenerate`) so emitted artifacts carry no
- template label; parity tests point at the gmeow namespace
-- reverted the extraction's blind namespace rename in committed
- fixtures: generated/queries (54), queries/ (~90), the accessibility
- SSSOM mapping (renamed gmeow-accessibility.sssom.tsv), gts
- agent_memory example -> example.org/memory/
-- docs/CONFORMANCE.md: full scoreboard + ledger discipline; README
- conformance table (SHACL 114/120 after the lessThan per-pair fix);
- AGENTS.md/CLAUDE.md carry the not-an-ontology doctrine; purrdf-shex
- wired into the umbrella crate (purrdf::shex), release lanes, and
- wasm gates; issues - filed for the remaining ledger/roadmap
-
-grep 'blackcatinformatics.ca/purrdf' across crates/bindings/generated/
-queries = the project homepage URL only. Full gate green: 1,600+ tests,
-clippy -D warnings, fmt, no-features, generated, hygiene, wasm32.
 - Parallel parse + parallel GTS verification (deterministic by construction)
-
-- N-Triples/N-Quads: two-phase chunk-parallel parse — line-aligned chunks
- tokenized in parallel through the untouched per-line pipeline, then
- collected in document order into the store-once interner, so term ids,
- quad order, diagnostics (first error in document order), and canonical
- bytes are identical to the sequential path. 1 MiB threshold; Turtle/TriG
- stay sequential (documented: prefix/bnode state). ~1.75x on the 50k-row
- bench (55 -> 96 MiB/s); proof tests compare every pipeline stage and
- sweep chunk geometries 1..4096.
-- GTS: frame content-ids recomputed concurrently per spec §9.1 with a
- sequential prev-equality pass; cross-segment folds parallel per §3.1;
- payloads >= 128 KiB hash via blake3 update_rayon (workspace blake3 gains
- the rayon feature — inline-sequential on wasm32, gates unaffected).
- ~1.83x on the new 32 MiB gts_verify bench (1.50 -> 2.75 GiB/s); the
- 35-vector corpus folds byte-identically at RAYON_NUM_THREADS=1/3/32.
-- README: ShEx quickstart line for the Python bindings.
 - Python bindings: shex module, engine configuration, GIL release
-
-- purrdf_native.shex: validate (fixed shape maps over ShExC/ShExJ +
- Turtle/N-Triples/N-Quads; focus nodes as IRIs, _:blanks, or Turtle
- literal tokens decoded through the native codec) and parse (canonical
- ShExJ), mirroring the shacl submodule; typed stubs in the .pyi
-- Store/MutableDataset query+update gain keyword-only extension_namespaces
- and standpoint_predicates (the caller-supplied SPARQL seam config —
- purrdf mints no vocabulary); from_json_ld gains statement_vocab
-- every heavy entry point (47: parse/serialize/canonicalize, SPARQL
- query/update, GTS emit/fold/relational, SHACL/ShEx validate, slice
- discovery/analysis, SSSOM) releases the GIL via Python::detach — a
- second Python thread ran ~21.6M loop iterations during a 0.41s parse
- in the two-thread smoke (previously blocked)
 - Release 0.1.5: full SHACL/ShEx, de-gmeow'd namespaces, SPARQL eval speedups
 
-Feature work (landed across this cycle, gated at 0.1.5):
-- ShEx 2.1: new purrdf-shex crate (ShExC + ShExJ schema layer, structural
- checks, fixed-shape-map validator) — 1,051/1,051 attempted shexTest
- validation tests, 99/99 negative-syntax, 14/14 negative-structure, empty
- xfail ledgers; exposed via the Python purrdf_native.shex submodule.
-- SHACL Core completed: full property paths (sequence/alternative/
- zero-or-more/one-or-more/zero-or-one), property-pair constraints,
- qualified value shapes; W3C data-shapes harness at 114/120 with a
- 6-entry reasoned xfail ledger (custom SPARQL components + pre-binding
- corners tracked in /).
-- Namespaces are caller-supplied everywhere (Namespaces/SliceVocab/
- LanguageVocab/StandpointPredicates/ParserOptions); purrdf mints no
- vocabulary IRIs. Fixes downstream json_schema::compile for any target
- namespace.
-- SPARQL evaluation speedups (measurement-driven, results byte-identical,
- W3C conformance green): shared Rc<Regex> two-level cache (no per-row DFA
- pool churn), precomputed ORDER BY sort keys, pre-interned boolean
- constants, borrowed xsd_of_term on the compare hot path, u64-packed
- hash-join keys.
-
-Version: 0.1.5 across all crates, PyPI, and the npm js package; CITATION
-and RELEASE docs updated. purrdf-shex is a new crates.io record — its
-first publish needs the token bootstrap before trusted publishing.
 ## [0.1.3] - 2026-07-02
 
 ### Bug Fixes
@@ -680,60 +531,8 @@ first publish needs the token bootstrap before trusted publishing.
 
 - Parameterize jsonld prefix
 - Release 0.1.3: brand, first-class docs, strict lints, perf, npm lane
-
-Brand & repo:
-- PurRDF casing standardized; docs/BRAND.md defines the family rule
-- logo rebuilt with the purrdf service object (RDF triple) replacing the
- copied GTS chain; social preview corrected and re-rendered
-- first-class README (badges, quickstarts kept honest by a twin test,
- crate map, measured-perf story); CITATION.cff, SECURITY.md,
- CONTRIBUTING.md, CODE_OF_CONDUCT.md, LICENSING.md, AGENTS.md, CLAUDE.md
-
-Rust workspace:
-- [workspace.dependencies] single-sources every version; sha1 0.10/0.11
- skew fixed; hashbrown unified on 0.15; serde_yaml migrated to the
- maintained serde_yaml_ng via package rename
-- [workspace.lints]: clippy pedantic+nursery with a reasoned allow list;
- 4341 warnings fixed to zero; MSRV 1.96 declared; clippy.toml msrv pin
-- API shape: intern_iri/intern_blank take &str (~480 call sites,
- caller-side clones removed); ref_option/needless_pass_by_value fixed
- workspace-wide with only 6 scoped binding-ABI allows
-- codec hot path: tokens moved (not cloned) out of the buffer; codec
- interner rebuilt on the store-once ahash pattern: +45-50% N-Quads
- parse throughput; format_push_string swept from all serializers
-- profiles: bench keeps symbols for profiling; dev deps at opt-level 2
-
-CI & release:
-- CI now runs the test suite (previously compile-only), clippy
- -D warnings, and an MSRV job
-- Makefile rebuilt as the real gate (fmt+clippy+tests+hygiene+wasm) and
- recovers the lost wasm-pkg/capi-*/rdf-core-hygiene targets
-- npm lane: package renamed @blackcatinformatics/purrdf, release-npm.yaml
- publishes on npm-v* tags (NPM_TOKEN bootstrap, then OIDC trusted
- publishing) with provenance + SBOM attestations
-- version 0.1.3 across all 16 crates, PyPI, npm, and citation metadata
-
-Removed: vendored_asset.test.mjs (gated a gmeow-ontology playground
-asset that is not part of this extraction).
 - Stabilize the toolchain: stable-Rust-clean workspace, real MSRV
 
-purrdf-iri was the workspace's only nightly dependency
-(#![feature(portable_simd)] for the IRI delimiter scan). CI silently ran
-nightly everywhere because rustup obeys rust-toolchain.toml over the
-action's toolchain input, which made the "CI builds on stable" story and
-the MSRV job fiction.
-
-- replace the portable_simd scan with a zero-dep SWAR scan over u64
- words (from_le_bytes lane order: platform-independent, wasm-clean);
- scalar-tail behavior and the full RFC 3986/3987 suite unchanged
-- drop #![feature(portable_simd)]; the workspace now builds on stable
-- pin rust-toolchain.toml to stable so local dev, CI, and rust-version
- (MSRV 1.96) agree; release-pypi builds on stable too
-- gts: chunks_exact(2) -> as_chunks::<2> (clippy on current toolchains)
-- docs: correct the nightly claims (CONTRIBUTING, AGENTS, shapes README)
-
-Full gate green on stable: fmt, clippy -D warnings, tests, no-features,
-generated artifacts, kernel hygiene, wasm32.
 ## [0.1.1] - 2026-07-01
 
 ### Bug Fixes
@@ -747,4 +546,5 @@ generated artifacts, kernel hygiene, wasm32.
 ### Other
 
 - First commit
+
 
