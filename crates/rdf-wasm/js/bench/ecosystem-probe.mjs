@@ -11,6 +11,8 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { parsePackument } from "../tests/npm-pack-output.mjs";
+
 const REPO_ROOT = resolve(fileURLToPath(new URL("../../../../", import.meta.url)));
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const PACKAGE_SPECS = [
@@ -360,14 +362,13 @@ try {
   const packOutput = run("npm", ["pack", "--json", "--pack-destination", root], {
     cwd: PACKAGE_ROOT,
   });
-  const [purrdfPackument] = JSON.parse(packOutput);
-  if (!purrdfPackument) throw new Error("npm pack did not produce a PurRDF tarball record");
+  const purrdfPackument = parsePackument(packOutput, "npm pack for PurRDF");
   const packuments = { purrdf: purrdfPackument };
   for (const [name, version] of PACKAGE_SPECS) {
-    const [packument] = JSON.parse(
+    const packument = parsePackument(
       run("npm", ["pack", "--json", "--pack-destination", root, `${name}@${version}`]),
+      `npm pack for ${name}@${version}`,
     );
-    if (!packument) throw new Error(`npm pack did not produce a record for ${name}@${version}`);
     packuments[name] = packument;
   }
 

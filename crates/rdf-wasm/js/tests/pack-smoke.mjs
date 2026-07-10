@@ -11,6 +11,8 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { parsePackument } from "./npm-pack-output.mjs";
+
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const MAX_TARBALL_BYTES = 1_400_000;
 // The RDF 1.2 model, layout, and SVG renderer are shipped in the wasm package.
@@ -145,8 +147,7 @@ assert.ok(sarif.runs.flatMap((run) => run.results ?? []).length >= 1);
 const root = await mkdtemp(join(tmpdir(), "purrdf-pack-smoke-"));
 try {
   const packOutput = run("npm", ["pack", "--json", "--pack-destination", root]);
-  const [packument] = JSON.parse(packOutput);
-  if (!packument) throw new Error("npm pack did not return a package record");
+  const packument = parsePackument(packOutput);
   assertBudget("tarball", packument.size, MAX_TARBALL_BYTES);
   assertBudget("unpacked package", packument.unpackedSize, MAX_UNPACKED_BYTES);
   await writeSummary(packument);
