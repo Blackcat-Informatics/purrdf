@@ -114,3 +114,9 @@ criterion = { workspace = true }
 # out through the first-party serializer. Report-only; excluded from check.
 name = "native_codecs"
 harness = false
+
+[[bench]]
+# Statement-centric RDF 1.2 visualization projection and deterministic SVG export.
+# Report-only; excluded from check.
+name = "viz_projection"
+harness = false

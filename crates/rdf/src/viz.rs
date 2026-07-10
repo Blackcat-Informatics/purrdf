@@ -507,6 +507,42 @@ pub struct VizElementIndexEntry {
     pub kind: String,
 }
 
+/// Options for deterministic SVG visualization export.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VizSvgOptions {
+    /// Requested SVG width in user units.
+    pub width: i32,
+    /// Left/right/top/bottom margin in user units.
+    pub margin: i32,
+    /// Vertical row height per structural statement.
+    pub row_height: i32,
+    /// Embed the versioned [`VizExport`] JSON in an SVG `<metadata>` element.
+    pub embed_metadata: bool,
+    /// Include deterministic first-party CSS in the SVG.
+    pub include_styles: bool,
+}
+
+impl Default for VizSvgOptions {
+    fn default() -> Self {
+        Self {
+            width: 960,
+            margin: 32,
+            row_height: 112,
+            embed_metadata: true,
+            include_styles: true,
+        }
+    }
+}
+
+/// A deterministic SVG document paired with its structured visualization export.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VizSvgDocument {
+    /// Complete SVG XML text.
+    pub svg: String,
+    /// The load-bearing structured export embedded in the SVG metadata.
+    pub export: VizExport,
+}
+
 /// Visualization projection errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VizError {
@@ -628,6 +664,775 @@ pub fn project_graph_input(
 pub fn project_dataset_json(dataset: &RdfDataset, spec: &VizSpec) -> Result<String, VizError> {
     let projection = project_dataset(dataset, spec)?;
     serde_json::to_string(&projection).map_err(|err| VizError::Serialize(err.to_string()))
+}
+
+/// Build a versioned visualization export from an existing projection.
+pub fn export_projection(
+    projection: &VizProjection,
+    spec: &VizSpec,
+    options: &VizSvgOptions,
+) -> Result<VizExport, VizError> {
+    let spec_json =
+        serde_json::to_string(spec).map_err(|err| VizError::Serialize(err.to_string()))?;
+    Ok(VizExport {
+        schema_version: VIZ_EXPORT_SCHEMA_VERSION.to_owned(),
+        spec_hash: stable_hash_hex(&spec_json),
+        model: projection.clone(),
+        layout: deterministic_layout(projection, options),
+        element_index: deterministic_element_index(projection),
+        diagnostics: projection.diagnostics.clone(),
+    })
+}
+
+/// Project a dataset and build a versioned visualization export.
+pub fn project_dataset_export(
+    dataset: &RdfDataset,
+    spec: &VizSpec,
+    options: &VizSvgOptions,
+) -> Result<VizExport, VizError> {
+    let projection = project_dataset(dataset, spec)?;
+    export_projection(&projection, spec, options)
+}
+
+/// Project graph-like caller input and build a versioned visualization export.
+pub fn project_graph_input_export(
+    input: &VizGraphInput,
+    spec: &VizSpec,
+    options: &VizSvgOptions,
+) -> Result<VizExport, VizError> {
+    let projection = project_graph_input(input, spec)?;
+    export_projection(&projection, spec, options)
+}
+
+/// Render an existing visualization projection as deterministic semantic SVG.
+pub fn render_projection_svg(
+    projection: &VizProjection,
+    spec: &VizSpec,
+    options: &VizSvgOptions,
+) -> Result<VizSvgDocument, VizError> {
+    let export = export_projection(projection, spec, options)?;
+    let svg = render_svg_document(&export, options)?;
+    Ok(VizSvgDocument { svg, export })
+}
+
+/// Project a dataset and render it as deterministic semantic SVG.
+pub fn render_dataset_svg(
+    dataset: &RdfDataset,
+    spec: &VizSpec,
+    options: &VizSvgOptions,
+) -> Result<VizSvgDocument, VizError> {
+    let projection = project_dataset(dataset, spec)?;
+    render_projection_svg(&projection, spec, options)
+}
+
+/// Project graph-like caller input and render it as deterministic semantic SVG.
+pub fn render_graph_input_svg(
+    input: &VizGraphInput,
+    spec: &VizSpec,
+    options: &VizSvgOptions,
+) -> Result<VizSvgDocument, VizError> {
+    let projection = project_graph_input(input, spec)?;
+    render_projection_svg(&projection, spec, options)
+}
+
+fn deterministic_layout(
+    projection: &VizProjection,
+    options: &VizSvgOptions,
+) -> Vec<VizLayoutRecord> {
+    let width = svg_width(options);
+    let margin = svg_margin(options);
+    let row_height = svg_row_height(options);
+    let center = width / 2;
+    let subject_x = margin + 104;
+    let predicate_x = center;
+    let object_x = width - margin - 104;
+    let mut records = Vec::new();
+    let mut term_positions: BTreeMap<VizTermId, (i32, i32)> = BTreeMap::new();
+
+    for (index, statement) in projection.statements.iter().enumerate() {
+        let y = row_y(index, options);
+        records.push(VizLayoutRecord {
+            id: statement.id.0.clone(),
+            x: center,
+            y,
+        });
+        first_term_position(&mut term_positions, &statement.subject, subject_x, y);
+        term_positions
+            .entry(statement.predicate.clone())
+            .or_insert((predicate_x, y - 24));
+        first_term_position(&mut term_positions, &statement.object, object_x, y);
+    }
+
+    let term_start_y = row_y(projection.statements.len(), options) + row_height / 2;
+    for (index, term) in projection.terms.iter().enumerate() {
+        let fallback_y = term_start_y + i32_from_usize(index) * 28;
+        let (x, y) = term_positions
+            .get(&term.id)
+            .copied()
+            .unwrap_or((margin + 104, fallback_y));
+        records.push(VizLayoutRecord {
+            id: term.id.0.clone(),
+            x,
+            y,
+        });
+    }
+
+    for (index, assertion) in projection.assertions.iter().enumerate() {
+        records.push(VizLayoutRecord {
+            id: assertion.id.0.clone(),
+            x: center,
+            y: row_y(index, options) + 18,
+        });
+    }
+
+    for (index, relation) in projection.relations.iter().enumerate() {
+        let statement_index = relation_statement_id(relation)
+            .and_then(|id| {
+                projection
+                    .statements
+                    .iter()
+                    .position(|statement| statement.id == *id)
+            })
+            .unwrap_or(index);
+        records.push(VizLayoutRecord {
+            id: relation_id(relation).0.clone(),
+            x: center,
+            y: row_y(statement_index, options) + 44,
+        });
+    }
+
+    for (index, graph) in projection.graphs.iter().enumerate() {
+        records.push(VizLayoutRecord {
+            id: graph.id.0.clone(),
+            x: width - margin - 112,
+            y: margin + 24 + i32_from_usize(index) * 26,
+        });
+    }
+
+    records
+}
+
+fn first_term_position(
+    positions: &mut BTreeMap<VizTermId, (i32, i32)>,
+    value: &VizValueRef,
+    x: i32,
+    y: i32,
+) {
+    if let VizValueRef::Term { id } = value {
+        positions.entry(id.clone()).or_insert((x, y));
+    }
+}
+
+fn deterministic_element_index(projection: &VizProjection) -> Vec<VizElementIndexEntry> {
+    let mut entries = Vec::new();
+    for statement in &projection.statements {
+        entries.push(index_entry("statement", &statement.id.0));
+        if !statement.asserted_in.is_empty() {
+            entries.push(index_entry("assertion-line", &statement.id.0));
+        }
+        push_value_index(&mut entries, &statement.id, "subject", &statement.subject);
+        entries.push(VizElementIndexEntry {
+            element_id: scoped_svg_id("predicate", &statement.id.0, "predicate"),
+            model_id: statement.predicate.0.clone(),
+            kind: "predicate".to_owned(),
+        });
+        push_value_index(&mut entries, &statement.id, "object", &statement.object);
+    }
+    for relation in &projection.relations {
+        entries.push(index_entry("relation", &relation_id(relation).0));
+    }
+    for graph in &projection.graphs {
+        entries.push(index_entry("graph", &graph.id.0));
+    }
+    entries
+}
+
+fn push_value_index(
+    entries: &mut Vec<VizElementIndexEntry>,
+    statement: &VizStatementId,
+    role: &str,
+    value: &VizValueRef,
+) {
+    let model_id = match value {
+        VizValueRef::Term { id } => id.0.clone(),
+        VizValueRef::Statement { id } => id.0.clone(),
+    };
+    entries.push(VizElementIndexEntry {
+        element_id: scoped_svg_id("value", &statement.0, role),
+        model_id,
+        kind: role.to_owned(),
+    });
+}
+
+fn index_entry(kind: &str, model_id: &str) -> VizElementIndexEntry {
+    VizElementIndexEntry {
+        element_id: svg_id(kind, model_id),
+        model_id: model_id.to_owned(),
+        kind: kind.to_owned(),
+    }
+}
+
+fn render_svg_document(export: &VizExport, options: &VizSvgOptions) -> Result<String, VizError> {
+    let projection = &export.model;
+    let width = svg_width(options);
+    let height = svg_height(projection, options);
+    let margin = svg_margin(options);
+    let row_height = svg_row_height(options);
+    let subject_x = margin + 104;
+    let center = width / 2;
+    let object_x = width - margin - 104;
+    let mut out = String::new();
+    writeln!(
+        out,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-labelledby="purrdf-viz-title purrdf-viz-desc">"#
+    )
+    .expect("writing to String cannot fail");
+    out.push_str("<title id=\"purrdf-viz-title\">PurRDF semantic RDF visualization</title>\n");
+    writeln!(
+        out,
+        "<desc id=\"purrdf-viz-desc\">{} structural statements, {} assertions, {} RDF 1.2 relations.</desc>",
+        projection.statements.len(),
+        projection.assertions.len(),
+        projection.relations.len()
+    )
+    .expect("writing to String cannot fail");
+    if options.embed_metadata {
+        write_metadata(export, &mut out)?;
+    }
+    out.push_str("<defs><marker id=\"purrdf-viz-arrow\" markerWidth=\"10\" markerHeight=\"10\" refX=\"9\" refY=\"3\" orient=\"auto\" markerUnits=\"strokeWidth\"><path d=\"M0,0 L0,6 L9,3 z\" fill=\"#275c72\"/></marker></defs>\n");
+    if options.include_styles {
+        out.push_str(SVG_STYLE);
+    }
+    write_graph_chips(projection, width, margin, &mut out);
+
+    let terms = term_label_map(projection);
+    let graphs = graph_label_map(projection);
+    let relation_info = statement_relation_info(projection);
+    for (index, statement) in projection.statements.iter().enumerate() {
+        let y = row_y(index, options);
+        let row_top = y - row_height / 2 + 12;
+        let subject = value_label(&statement.subject, &terms);
+        let predicate = terms
+            .get(&statement.predicate)
+            .cloned()
+            .unwrap_or_else(|| statement.predicate.0.clone());
+        let object = value_label(&statement.object, &terms);
+        let summary = statement_summary(
+            statement,
+            &subject,
+            &predicate,
+            &object,
+            &graphs,
+            &relation_info,
+        );
+        let group_id = svg_id("statement", &statement.id.0);
+        writeln!(
+            out,
+            "<g id=\"{}\" class=\"viz-statement\" data-purrdf-id=\"{}\">",
+            escape_attr_string(&group_id),
+            escape_attr_string(&statement.id.0)
+        )
+        .expect("writing to String cannot fail");
+        write_title_desc(&group_id, &summary, &mut out);
+        writeln!(
+            out,
+            "<rect class=\"viz-row\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/>",
+            margin,
+            row_top,
+            width - margin * 2,
+            row_height - 18
+        )
+        .expect("writing to String cannot fail");
+        if statement.asserted_in.is_empty() {
+            write_quoted_capsule(
+                &statement.id,
+                &subject,
+                &predicate,
+                &object,
+                center,
+                y,
+                &mut out,
+            );
+        } else {
+            write_asserted_arrow(&statement.id, subject_x, object_x, y, &mut out);
+            write_value_label(&statement.id, "subject", subject_x, y, &subject, &mut out);
+            write_predicate_label(&statement.id, center, y - 18, &predicate, &mut out);
+            write_value_label(&statement.id, "object", object_x, y, &object, &mut out);
+            write_statement_anchor(statement, center, y, &relation_info, &mut out);
+        }
+        write_graph_badges(statement, &graphs, object_x - 18, y + 26, &mut out);
+        write_relation_summaries(statement, projection, &terms, center, y + 42, &mut out);
+        out.push_str("</g>\n");
+    }
+
+    if projection.statements.is_empty() {
+        writeln!(
+            out,
+            "<text class=\"viz-empty\" x=\"{}\" y=\"{}\">No structural statements in projection.</text>",
+            margin,
+            margin + 48
+        )
+        .expect("writing to String cannot fail");
+    }
+    out.push_str("</svg>\n");
+    Ok(out)
+}
+
+fn write_metadata(export: &VizExport, out: &mut String) -> Result<(), VizError> {
+    let json = serde_json::to_string(export).map_err(|err| VizError::Serialize(err.to_string()))?;
+    out.push_str("<metadata id=\"purrdf-viz-export\" type=\"application/vnd.purrdf.viz+json\">");
+    escape_xml_text(&json, out);
+    out.push_str("</metadata>\n");
+    Ok(())
+}
+
+const SVG_STYLE: &str = r"<style>
+.viz-row{fill:#fbfaf7;stroke:#d8dee4;stroke-width:1}
+.viz-assertion{stroke:#275c72;stroke-width:2.25;fill:none;marker-end:url(#purrdf-viz-arrow)}
+.viz-quoted{fill:#ffffff;stroke:#6f5f90;stroke-width:2;stroke-dasharray:5 4}
+.viz-anchor{fill:#12343f;stroke:#ffffff;stroke-width:1.5}
+.viz-anchor-text{font:600 11px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#ffffff;text-anchor:middle;dominant-baseline:middle}
+.viz-term{font:500 13px system-ui,-apple-system,BlinkMacSystemFont,sans-serif;fill:#172026;text-anchor:middle;dominant-baseline:middle}
+.viz-predicate{font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#275c72;text-anchor:middle}
+.viz-capsule-text{font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#2f2a45;text-anchor:middle;dominant-baseline:middle}
+.viz-chip{fill:#e8f3f1;stroke:#8ab9ad;stroke-width:1}
+.viz-chip-text{font:600 10px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#21433d;text-anchor:middle;dominant-baseline:middle}
+.viz-relation{fill:#fff7e6;stroke:#d9a441;stroke-width:1}
+.viz-relation-text{font:500 11px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#4d3a11;text-anchor:middle;dominant-baseline:middle}
+.viz-empty{font:500 14px system-ui,-apple-system,BlinkMacSystemFont,sans-serif;fill:#5b6670}
+</style>
+";
+
+fn write_graph_chips(projection: &VizProjection, width: i32, margin: i32, out: &mut String) {
+    let graph_x = width - margin - 112;
+    for (index, graph) in projection.graphs.iter().enumerate() {
+        let y = margin + 24 + i32_from_usize(index) * 26;
+        let id = svg_id("graph", &graph.id.0);
+        writeln!(
+            out,
+            "<g id=\"{}\" data-purrdf-id=\"{}\"><rect class=\"viz-chip\" x=\"{}\" y=\"{}\" width=\"112\" height=\"18\" rx=\"4\"/><text class=\"viz-chip-text\" x=\"{}\" y=\"{}\">{}</text></g>",
+            escape_attr_string(&id),
+            escape_attr_string(&graph.id.0),
+            graph_x - 56,
+            y - 9,
+            graph_x,
+            y,
+            escape_text_string(&trim_label(&graph.label, 18))
+        )
+        .expect("writing to String cannot fail");
+    }
+}
+
+fn write_quoted_capsule(
+    statement: &VizStatementId,
+    subject: &str,
+    predicate: &str,
+    object: &str,
+    center: i32,
+    y: i32,
+    out: &mut String,
+) {
+    let label = format!(
+        "{} - {} -> {}",
+        trim_label(subject, 18),
+        trim_label(predicate, 18),
+        trim_label(object, 18)
+    );
+    let id = svg_id("assertion-line", &statement.0);
+    writeln!(
+        out,
+        "<rect id=\"{}\" class=\"viz-quoted\" x=\"{}\" y=\"{}\" width=\"360\" height=\"42\" rx=\"18\" data-purrdf-id=\"{}\"/><text class=\"viz-capsule-text\" x=\"{}\" y=\"{}\">{}</text>",
+        escape_attr_string(&id),
+        center - 180,
+        y - 21,
+        escape_attr_string(&statement.0),
+        center,
+        y,
+        escape_text_string(&label)
+    )
+    .expect("writing to String cannot fail");
+}
+
+fn write_asserted_arrow(
+    statement: &VizStatementId,
+    subject_x: i32,
+    object_x: i32,
+    y: i32,
+    out: &mut String,
+) {
+    let id = svg_id("assertion-line", &statement.0);
+    writeln!(
+        out,
+        "<line id=\"{}\" class=\"viz-assertion\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" data-purrdf-id=\"{}\"/>",
+        escape_attr_string(&id),
+        subject_x + 64,
+        y,
+        object_x - 64,
+        y,
+        escape_attr_string(&statement.0)
+    )
+    .expect("writing to String cannot fail");
+}
+
+fn write_value_label(
+    statement: &VizStatementId,
+    role: &str,
+    x: i32,
+    y: i32,
+    label: &str,
+    out: &mut String,
+) {
+    let id = scoped_svg_id("value", &statement.0, role);
+    writeln!(
+        out,
+        "<text id=\"{}\" class=\"viz-term\" x=\"{}\" y=\"{}\">{}</text>",
+        escape_attr_string(&id),
+        x,
+        y,
+        escape_text_string(&trim_label(label, 24))
+    )
+    .expect("writing to String cannot fail");
+}
+
+fn write_predicate_label(
+    statement: &VizStatementId,
+    x: i32,
+    y: i32,
+    label: &str,
+    out: &mut String,
+) {
+    let id = scoped_svg_id("predicate", &statement.0, "predicate");
+    writeln!(
+        out,
+        "<text id=\"{}\" class=\"viz-predicate\" x=\"{}\" y=\"{}\">{}</text>",
+        escape_attr_string(&id),
+        x,
+        y,
+        escape_text_string(&trim_label(label, 24))
+    )
+    .expect("writing to String cannot fail");
+}
+
+fn write_statement_anchor(
+    statement: &VizStatement,
+    x: i32,
+    y: i32,
+    relation_info: &BTreeMap<VizStatementId, StatementRelationInfo>,
+    out: &mut String,
+) {
+    let info = relation_info
+        .get(&statement.id)
+        .cloned()
+        .unwrap_or_default();
+    let label = format!(
+        "{} A{} R{} N{}",
+        statement_short_label(&statement.id),
+        statement.asserted_in.len(),
+        info.reifier_count,
+        info.annotation_count
+    );
+    writeln!(
+        out,
+        "<rect class=\"viz-anchor\" x=\"{}\" y=\"{}\" width=\"78\" height=\"22\" rx=\"5\"/><text class=\"viz-anchor-text\" x=\"{}\" y=\"{}\">{}</text>",
+        x - 39,
+        y + 9,
+        x,
+        y + 20,
+        escape_text_string(&label)
+    )
+    .expect("writing to String cannot fail");
+}
+
+fn write_graph_badges(
+    statement: &VizStatement,
+    graphs: &BTreeMap<VizGraphId, String>,
+    x: i32,
+    y: i32,
+    out: &mut String,
+) {
+    for (index, graph) in statement.asserted_in.iter().enumerate() {
+        let label = graphs
+            .get(graph)
+            .cloned()
+            .unwrap_or_else(|| graph.0.clone());
+        let chip_x = x - i32_from_usize(index) * 92;
+        writeln!(
+            out,
+            "<rect class=\"viz-chip\" x=\"{}\" y=\"{}\" width=\"84\" height=\"18\" rx=\"4\"/><text class=\"viz-chip-text\" x=\"{}\" y=\"{}\">in {}</text>",
+            chip_x - 42,
+            y - 9,
+            chip_x,
+            y,
+            escape_text_string(&trim_label(&label, 10))
+        )
+        .expect("writing to String cannot fail");
+    }
+}
+
+fn write_relation_summaries(
+    statement: &VizStatement,
+    projection: &VizProjection,
+    terms: &BTreeMap<VizTermId, String>,
+    x: i32,
+    y: i32,
+    out: &mut String,
+) {
+    let mut offset = 0;
+    for relation in &projection.relations {
+        let VizRelation::Reifies {
+            id,
+            reifier,
+            statement: target,
+            ..
+        } = relation
+        else {
+            continue;
+        };
+        if target != &statement.id {
+            continue;
+        }
+        let label = terms
+            .get(reifier)
+            .cloned()
+            .unwrap_or_else(|| reifier.0.clone());
+        let element_id = svg_id("relation", &id.0);
+        let rx = x + offset;
+        writeln!(
+            out,
+            "<g id=\"{}\" data-purrdf-id=\"{}\"><rect class=\"viz-relation\" x=\"{}\" y=\"{}\" width=\"120\" height=\"20\" rx=\"4\"/><text class=\"viz-relation-text\" x=\"{}\" y=\"{}\">reifier {}</text></g>",
+            escape_attr_string(&element_id),
+            escape_attr_string(&id.0),
+            rx - 60,
+            y - 10,
+            rx,
+            y,
+            escape_text_string(&trim_label(&label, 12))
+        )
+        .expect("writing to String cannot fail");
+        offset += 132;
+    }
+}
+
+fn write_title_desc(element_id: &str, summary: &str, out: &mut String) {
+    writeln!(
+        out,
+        "<title id=\"{}-title\">{}</title><desc id=\"{}-desc\">{}</desc>",
+        escape_attr_string(element_id),
+        escape_text_string(summary),
+        escape_attr_string(element_id),
+        escape_text_string(summary)
+    )
+    .expect("writing to String cannot fail");
+}
+
+#[derive(Debug, Clone, Default)]
+struct StatementRelationInfo {
+    reifier_count: usize,
+    annotation_count: usize,
+    reifiers: Vec<VizTermId>,
+}
+
+fn statement_relation_info(
+    projection: &VizProjection,
+) -> BTreeMap<VizStatementId, StatementRelationInfo> {
+    let mut annotation_count_by_reifier: BTreeMap<VizTermId, usize> = BTreeMap::new();
+    for relation in &projection.relations {
+        if let VizRelation::Annotation { reifier, .. } = relation {
+            *annotation_count_by_reifier
+                .entry(reifier.clone())
+                .or_default() += 1;
+        }
+    }
+    let mut info_by_statement: BTreeMap<VizStatementId, StatementRelationInfo> = BTreeMap::new();
+    for relation in &projection.relations {
+        if let VizRelation::Reifies {
+            reifier, statement, ..
+        } = relation
+        {
+            let info = info_by_statement.entry(statement.clone()).or_default();
+            info.reifier_count += 1;
+            info.annotation_count += annotation_count_by_reifier
+                .get(reifier)
+                .copied()
+                .unwrap_or_default();
+            info.reifiers.push(reifier.clone());
+        }
+    }
+    info_by_statement
+}
+
+fn statement_summary(
+    statement: &VizStatement,
+    subject: &str,
+    predicate: &str,
+    object: &str,
+    graphs: &BTreeMap<VizGraphId, String>,
+    relation_info: &BTreeMap<VizStatementId, StatementRelationInfo>,
+) -> String {
+    let asserted = if statement.asserted_in.is_empty() {
+        "not asserted".to_owned()
+    } else {
+        let labels = statement
+            .asserted_in
+            .iter()
+            .map(|graph| {
+                graphs
+                    .get(graph)
+                    .cloned()
+                    .unwrap_or_else(|| graph.0.clone())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("asserted in {labels}")
+    };
+    let info = relation_info
+        .get(&statement.id)
+        .cloned()
+        .unwrap_or_default();
+    format!(
+        "{} {} {}. {asserted}. Reifiers: {}. Annotations: {}. Dialect: {:?}.",
+        subject, predicate, object, info.reifier_count, info.annotation_count, statement.dialect
+    )
+}
+
+fn term_label_map(projection: &VizProjection) -> BTreeMap<VizTermId, String> {
+    projection
+        .terms
+        .iter()
+        .map(|term| (term.id.clone(), term.label.clone()))
+        .collect()
+}
+
+fn graph_label_map(projection: &VizProjection) -> BTreeMap<VizGraphId, String> {
+    projection
+        .graphs
+        .iter()
+        .map(|graph| (graph.id.clone(), graph.label.clone()))
+        .collect()
+}
+
+fn value_label(value: &VizValueRef, terms: &BTreeMap<VizTermId, String>) -> String {
+    match value {
+        VizValueRef::Term { id } => terms.get(id).cloned().unwrap_or_else(|| id.0.clone()),
+        VizValueRef::Statement { id } => statement_short_label(id),
+    }
+}
+
+fn statement_short_label(id: &VizStatementId) -> String {
+    format!("S{}", id.0.strip_prefix("statement:").unwrap_or(&id.0))
+}
+
+fn relation_id(relation: &VizRelation) -> &VizRelationId {
+    match relation {
+        VizRelation::Reifies { id, .. } | VizRelation::Annotation { id, .. } => id,
+    }
+}
+
+fn relation_statement_id(relation: &VizRelation) -> Option<&VizStatementId> {
+    match relation {
+        VizRelation::Reifies { statement, .. } => Some(statement),
+        VizRelation::Annotation { .. } => None,
+    }
+}
+
+fn row_y(index: usize, options: &VizSvgOptions) -> i32 {
+    svg_margin(options) + 72 + i32_from_usize(index) * svg_row_height(options)
+}
+
+fn svg_height(projection: &VizProjection, options: &VizSvgOptions) -> i32 {
+    let rows = i32_from_usize(projection.statements.len().max(1));
+    svg_margin(options) * 2 + 96 + rows * svg_row_height(options)
+}
+
+fn svg_width(options: &VizSvgOptions) -> i32 {
+    options.width.max(640)
+}
+
+fn svg_margin(options: &VizSvgOptions) -> i32 {
+    options.margin.max(16)
+}
+
+fn svg_row_height(options: &VizSvgOptions) -> i32 {
+    options.row_height.max(84)
+}
+
+fn i32_from_usize(value: usize) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX / 2)
+}
+
+fn scoped_svg_id(prefix: &str, model_id: &str, suffix: &str) -> String {
+    format!("{}-{}", svg_id(prefix, model_id), suffix)
+}
+
+fn svg_id(prefix: &str, model_id: &str) -> String {
+    let mut out = String::with_capacity(prefix.len() + model_id.len() + 1);
+    out.push_str(prefix);
+    out.push('-');
+    let mut previous_dash = false;
+    for ch in model_id.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            previous_dash = false;
+        } else if !previous_dash {
+            out.push('-');
+            previous_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+fn trim_label(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let mut out = String::new();
+    for _ in 0..max_chars {
+        let Some(ch) = chars.next() else {
+            return out;
+        };
+        out.push(ch);
+    }
+    if chars.next().is_some() {
+        out.push_str("...");
+    }
+    out
+}
+
+fn escape_attr_string(value: &str) -> String {
+    let mut out = String::new();
+    escape_xml_attr(value, &mut out);
+    out
+}
+
+fn escape_text_string(value: &str) -> String {
+    let mut out = String::new();
+    escape_xml_text(value, &mut out);
+    out
+}
+
+fn escape_xml_attr(value: &str, out: &mut String) {
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+}
+
+fn escape_xml_text(value: &str, out: &mut String) {
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1630,6 +2435,93 @@ mod tests {
         let a = project_graph_input(&input, &VizSpec::default()).expect("project");
         let b = project_graph_input(&input, &VizSpec::default()).expect("project");
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn svg_export_embeds_load_bearing_metadata_and_index() {
+        let input = VizGraphInput {
+            quads: vec![VizInputQuad {
+                subject: iri("alice"),
+                predicate: KNOWS.to_owned(),
+                object: iri("bob"),
+                graph_name: None,
+            }],
+            reifiers: vec![VizInputReifier {
+                reifier: iri("claim"),
+                statement: VizInputStatement {
+                    subject: iri("alice"),
+                    predicate: KNOWS.to_owned(),
+                    object: iri("bob"),
+                },
+                graph_name: None,
+            }],
+            annotations: vec![VizInputAnnotation {
+                reifier: iri("claim"),
+                predicate: ATTRIBUTED_TO.to_owned(),
+                object: iri("carol"),
+                graph_name: None,
+            }],
+        };
+        let doc = render_graph_input_svg(&input, &VizSpec::default(), &VizSvgOptions::default())
+            .expect("svg");
+        assert!(doc.svg.contains("id=\"purrdf-viz-export\""));
+        assert!(doc.svg.contains(VIZ_EXPORT_SCHEMA_VERSION));
+        assert!(doc.svg.contains("class=\"viz-assertion\""));
+        assert!(doc.svg.contains("reifier claim"));
+        assert_eq!(doc.export.schema_version, VIZ_EXPORT_SCHEMA_VERSION);
+        assert!(!doc.export.layout.is_empty());
+        assert!(
+            doc.export
+                .element_index
+                .iter()
+                .any(|entry| entry.kind == "statement")
+        );
+    }
+
+    #[test]
+    fn svg_distinguishes_quoted_only_from_asserted() {
+        let input = VizGraphInput {
+            reifiers: vec![VizInputReifier {
+                reifier: iri("claim"),
+                statement: VizInputStatement {
+                    subject: iri("alice"),
+                    predicate: KNOWS.to_owned(),
+                    object: iri("bob"),
+                },
+                graph_name: None,
+            }],
+            ..VizGraphInput::default()
+        };
+        let doc = render_graph_input_svg(&input, &VizSpec::default(), &VizSvgOptions::default())
+            .expect("svg");
+        assert!(doc.svg.contains("class=\"viz-quoted\""));
+        assert!(!doc.svg.contains("class=\"viz-assertion\""));
+    }
+
+    #[test]
+    fn svg_output_is_deterministic_and_escapes_xml() {
+        let input = VizGraphInput {
+            quads: vec![VizInputQuad {
+                subject: TermValue::Iri("https://example.org/a<&".to_owned()),
+                predicate: KNOWS.to_owned(),
+                object: TermValue::Literal {
+                    lexical_form: "Bob <&> \"quoted\"".to_owned(),
+                    datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                    language: None,
+                    direction: None,
+                },
+                graph_name: None,
+            }],
+            ..VizGraphInput::default()
+        };
+        let a = render_graph_input_svg(&input, &VizSpec::default(), &VizSvgOptions::default())
+            .expect("svg");
+        let b = render_graph_input_svg(&input, &VizSpec::default(), &VizSvgOptions::default())
+            .expect("svg");
+        assert_eq!(a, b);
+        assert!(a.svg.contains("a&lt;&amp;"));
+        assert!(a.svg.contains("Bob &lt;&amp;&gt;"));
+        assert!(!a.svg.contains("Bob <&>"));
     }
 
     #[test]
