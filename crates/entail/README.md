@@ -29,6 +29,7 @@ external reasoner, no `tokio`, and no string round-trip.
 | `materialize(ds, regime)` | `Simple`, `RDF`, `RDFS`, `OWL-RL` | Forward-materialization ("chase") over a fixed rule set via a native semi-naive fixpoint. |
 | `materialize_dl(...)` | `OWL-Direct` | Open-world OWL DL over an ALCOIQ tableau — needs the query's class expressions, so it is not reachable through the plain `materialize` façade. |
 | `materialize_rif(...)` | `RIF` | RIF-Core rule entailment over a parsed `RuleSet`. |
+| `parse_rif_xml(...)` / `resolve_rif_imports(...)` | `RIF` | Normative RIF-XML parsing with caller-owned, I/O-free import resolution. |
 | `Regime::from_iri(iri)` | — | Parse a `sparql:entailmentRegime` IRI to its enum. |
 
 `D` (datatype) entailment is a typed, spec-inherent boundary
@@ -39,9 +40,9 @@ external reasoner, no `tokio`, and no string round-trip.
 * **No minted vocabulary.** Every constant in `vocab` is a standard
   `rdf:`/`rdfs:`/`owl:` IRI drawn from the entailment spec itself — this crate
   fabricates none.
-* **wasm-clean and dependency-lean.** The only dependency is `purrdf-core`
-  (itself `wasm32-unknown-unknown`-clean), so this crate carries into Rust,
-  WebAssembly, and C without a threads/filesystem/RNG dependency.
+* **wasm-clean and dependency-lean.** Dependencies are `purrdf-core` and
+  `roxmltree` (both `wasm32-unknown-unknown`-clean), so this crate carries into
+  Rust, WebAssembly, and C without a threads/filesystem/RNG dependency.
 * **Determinism.** The chase is a fixpoint over the frozen IR; a given input and
   regime always yields the same closure.
 
