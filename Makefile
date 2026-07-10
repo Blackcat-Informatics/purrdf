@@ -24,7 +24,7 @@ BINARYEN_VERSION := 130
 # crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm (release +simd128 build, wasm-opt
 # -Oz). `make wasm-pkg-size` (and both CI and the npm release) fail if the built
 # artifact exceeds this. RDF 1.2 semantic projection, deterministic layout, and
-# SVG export added by issue #80 measure 3_733_561 bytes; 3_900_000 keeps ~4%
+# SVG export measure 3_733_561 bytes; 3_900_000 keeps ~4%
 # headroom. The artifact's size is a joint function of
 # rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
 # (pinned via BINARYEN_VERSION), so a moved number is attributable.
