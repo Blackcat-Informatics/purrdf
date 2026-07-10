@@ -81,6 +81,167 @@ export interface GraphResult {
 
 export type QueryResult = SelectResult | AskResult | GraphResult;
 
+export type VisualMode = "compact" | "incidence" | "table";
+export type VisualLabelPolicy = "compact" | "full";
+export type VisualTableField =
+  | "statement"
+  | "assertedIn"
+  | "reifiers"
+  | "annotations"
+  | "referencedBy"
+  | "depth"
+  | "diagnostics";
+
+export interface VisualVocabularyMapping {
+  readonly prefix: string;
+  readonly namespace: string;
+}
+
+export interface VisualRoleRule {
+  readonly predicateIri: string;
+  readonly role: string;
+}
+
+export interface VisualLayoutOptions {
+  readonly margin?: number;
+  readonly rankSpacing?: number;
+  readonly nodeSpacing?: number;
+  readonly componentSpacing?: number;
+  readonly componentWrapWidth?: number;
+  readonly crossingSweeps?: number;
+  readonly maxNodeWidth?: number;
+}
+
+export interface VisualSvgOptions {
+  readonly embedMetadata?: boolean;
+  readonly includeStyles?: boolean;
+  readonly title?: string;
+}
+
+export interface VisualizationOptions {
+  readonly mode?: VisualMode;
+  readonly focus?: string | null;
+  readonly roleRules?: readonly VisualRoleRule[];
+  readonly vocabulary?: readonly VisualVocabularyMapping[];
+  readonly graph?: string | null;
+  readonly graphs?: readonly string[];
+  readonly labelPolicy?: VisualLabelPolicy;
+  readonly maxStatements?: number;
+  readonly maxTerms?: number;
+  readonly tableFields?: readonly VisualTableField[];
+  readonly layout?: VisualLayoutOptions;
+  readonly svg?: VisualSvgOptions;
+}
+
+export type VisualValueRef =
+  | { readonly kind: "term"; readonly id: string }
+  | { readonly kind: "statement"; readonly id: string };
+
+export type VisualTermValue =
+  | { readonly kind: "iri"; readonly value: string }
+  | { readonly kind: "blank"; readonly label: string; readonly scope: number }
+  | {
+      readonly kind: "literal";
+      readonly lexical_form: string;
+      readonly datatype: string;
+      readonly language: string | null;
+      readonly direction: LiteralDirection | null;
+    };
+
+export interface VisualTerm {
+  readonly id: string;
+  readonly value: VisualTermValue;
+  readonly label: string;
+  readonly roles: readonly unknown[];
+}
+
+export interface VisualStatement {
+  readonly id: string;
+  readonly subject: VisualValueRef;
+  readonly predicate: string;
+  readonly object: VisualValueRef;
+  readonly asserted_in: readonly string[];
+  readonly nesting_depth: number;
+  readonly incoming_references: number;
+  readonly dialect: "rdf12" | "symmetricRdf12" | "generalizedRdf";
+  readonly roles: readonly unknown[];
+}
+
+export type VisualRelation =
+  | {
+      readonly kind: "reifies";
+      readonly id: string;
+      readonly reifier: string;
+      readonly statement: string;
+      readonly graph: string;
+    }
+  | {
+      readonly kind: "annotation";
+      readonly id: string;
+      readonly reifier: string;
+      readonly predicate: string;
+      readonly object: VisualValueRef;
+      readonly graph: string;
+    };
+
+export interface VisualDiagnostic {
+  readonly id: string;
+  readonly code: string;
+  readonly message: string;
+  readonly target: string | null;
+  readonly dialect: VisualStatement["dialect"];
+}
+
+export interface VisualModel {
+  readonly terms: readonly VisualTerm[];
+  readonly statements: readonly VisualStatement[];
+  readonly assertions: readonly Readonly<Record<string, unknown>>[];
+  readonly relations: readonly VisualRelation[];
+  readonly graphs: readonly Readonly<Record<string, unknown>>[];
+  readonly references: readonly Readonly<Record<string, unknown>>[];
+  readonly table: Readonly<Record<string, unknown>>;
+  readonly diagnostics: readonly VisualDiagnostic[];
+}
+
+export interface VisualScene {
+  readonly schema_version: "purrdf-viz-scene-1";
+  readonly mode: VisualMode;
+  readonly nodes: readonly Readonly<Record<string, unknown>>[];
+  readonly edges: readonly Readonly<Record<string, unknown>>[];
+  readonly groups: readonly Readonly<Record<string, unknown>>[];
+  readonly legend: readonly Readonly<Record<string, unknown>>[];
+  readonly table: Readonly<Record<string, unknown>> | null;
+}
+
+export interface VisualLayout {
+  readonly schema_version: "purrdf-viz-layout-1";
+  readonly mode: VisualMode;
+  readonly width: number;
+  readonly height: number;
+  readonly nodes: readonly Readonly<Record<string, unknown>>[];
+  readonly edges: readonly Readonly<Record<string, unknown>>[];
+  readonly table: Readonly<Record<string, unknown>> | null;
+  readonly legend: readonly Readonly<Record<string, unknown>>[];
+}
+
+export interface VisualExport {
+  readonly schema_version: "purrdf-viz-export-1";
+  readonly spec: Readonly<Record<string, unknown>>;
+  readonly spec_hash: string;
+  readonly model_hash: string;
+  readonly scene_hash: string;
+  readonly model: VisualModel;
+  readonly scene: VisualScene;
+  readonly layout: VisualLayout;
+  readonly element_index: readonly Readonly<Record<string, unknown>>[];
+  readonly diagnostics: readonly VisualDiagnostic[];
+}
+
+export interface VisualSvgDocument {
+  readonly svg: string;
+  readonly export: VisualExport;
+}
+
 export class Term {
   private constructor();
   free(): void;
@@ -201,6 +362,9 @@ export class Dataset implements Iterable<Quad> {
     graph?: Term | null,
   ): Dataset;
   quads(): Quad[];
+  visualModel(options?: VisualizationOptions | null): VisualModel;
+  visualExport(options?: VisualizationOptions | null): VisualExport;
+  visualSvg(options?: VisualizationOptions | null): VisualSvgDocument;
   serialize(format: string): string;
   query(sparql: string, base?: string | null): string;
   canonicalize(): string;

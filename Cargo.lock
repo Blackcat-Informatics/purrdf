@@ -1501,6 +1501,8 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "purrdf-validate",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
 ]
 

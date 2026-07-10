@@ -16,7 +16,14 @@ use purrdf::{
     RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, TermValue, canonical_flat_nquads,
     datasets_isomorphic, parse_dataset, serialize_dataset,
 };
+use serde::Deserialize;
 use wasm_bindgen::prelude::*;
+
+use purrdf::viz::{
+    VizGraphPolicy, VizLabelPolicy, VizLayoutOptions, VizMode, VizRenderOptions, VizRole,
+    VizRoleRule, VizSpec, VizSvgOptions, VizTableField, VizVocabularyMapping, export_json,
+    project_dataset, project_dataset_export, render_dataset_svg,
+};
 
 use crate::codec::resolve_media_type;
 use crate::convert::{quad_to_quad_values, quad_values_to_quad, rdf_term_to_term_value};
@@ -35,6 +42,129 @@ fn pattern_value(term: Option<&Term>) -> Result<Option<TermValue>, JsError> {
             let rdf = t.to_rdf_term().map_err(|e| JsError::new(&e))?;
             Ok(Some(rdf_term_to_term_value(&rdf)))
         }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+struct VisualOptions {
+    mode: Option<VizMode>,
+    focus: Option<String>,
+    role_rules: Vec<VisualRoleRule>,
+    vocabulary: Vec<VizVocabularyMapping>,
+    graph: Option<String>,
+    graphs: Vec<String>,
+    label_policy: Option<VizLabelPolicy>,
+    max_statements: Option<usize>,
+    max_terms: Option<usize>,
+    table_fields: Option<Vec<VizTableField>>,
+    layout: VisualLayoutOptions,
+    svg: VisualSvgOptions,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VisualRoleRule {
+    predicate_iri: String,
+    role: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+struct VisualLayoutOptions {
+    margin: Option<i32>,
+    rank_spacing: Option<i32>,
+    node_spacing: Option<i32>,
+    component_spacing: Option<i32>,
+    component_wrap_width: Option<i32>,
+    crossing_sweeps: Option<u32>,
+    max_node_width: Option<i32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+struct VisualSvgOptions {
+    embed_metadata: Option<bool>,
+    include_styles: Option<bool>,
+    title: Option<String>,
+}
+
+impl VisualOptions {
+    fn parse(json: Option<String>) -> Result<Self, JsError> {
+        json.filter(|value| !value.trim().is_empty()).map_or_else(
+            || Ok(Self::default()),
+            |value| serde_json::from_str(&value).map_err(|error| JsError::new(&error.to_string())),
+        )
+    }
+
+    fn into_engine_options(self) -> Result<(VizSpec, VizRenderOptions), JsError> {
+        if self.graph.is_some() && !self.graphs.is_empty() {
+            return Err(JsError::new(
+                "visualization options cannot set both graph and graphs",
+            ));
+        }
+        let mut spec = VizSpec::default();
+        if let Some(mode) = self.mode {
+            spec.mode = mode;
+        }
+        spec.focus = self.focus;
+        spec.role_rules = self
+            .role_rules
+            .into_iter()
+            .map(|rule| VizRoleRule {
+                predicate_iri: rule.predicate_iri,
+                role: VizRole::Custom(rule.role),
+            })
+            .collect();
+        spec.vocabulary = self.vocabulary;
+        let graph_selectors = self
+            .graph
+            .into_iter()
+            .chain(self.graphs)
+            .collect::<Vec<_>>();
+        if !graph_selectors.is_empty() {
+            spec.graph_policy = VizGraphPolicy::Include(graph_selectors);
+        }
+        if let Some(label_policy) = self.label_policy {
+            spec.label_policy = label_policy;
+        }
+        if let Some(max_statements) = self.max_statements {
+            spec.max_statements = max_statements;
+        }
+        if let Some(max_terms) = self.max_terms {
+            spec.max_terms = max_terms;
+        }
+        if let Some(table_fields) = self.table_fields {
+            spec.table_fields = table_fields;
+        }
+
+        let mut layout = VizLayoutOptions::default();
+        macro_rules! apply_layout {
+            ($field:ident) => {
+                if let Some(value) = self.layout.$field {
+                    layout.$field = value;
+                }
+            };
+        }
+        apply_layout!(margin);
+        apply_layout!(rank_spacing);
+        apply_layout!(node_spacing);
+        apply_layout!(component_spacing);
+        apply_layout!(component_wrap_width);
+        apply_layout!(crossing_sweeps);
+        apply_layout!(max_node_width);
+
+        let mut svg = VizSvgOptions::default();
+        if let Some(embed_metadata) = self.svg.embed_metadata {
+            svg.embed_metadata = embed_metadata;
+        }
+        if let Some(include_styles) = self.svg.include_styles {
+            svg.include_styles = include_styles;
+        }
+        if let Some(title) = self.svg.title {
+            svg.title = title;
+        }
+        Ok((spec, VizRenderOptions { layout, svg }))
     }
 }
 
@@ -172,6 +302,39 @@ impl Dataset {
             .iter()
             .map(|qv| quad_values_to_quad(qv).map_err(|e| JsError::new(&e)))
             .collect()
+    }
+
+    /// `visualModelJson(optionsJson?)` -> the renderer-neutral RDF 1.2 model as JSON.
+    #[wasm_bindgen(js_name = visualModelJson)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn visual_model_json(&self, options_json: Option<String>) -> Result<String, JsError> {
+        let (spec, _) = VisualOptions::parse(options_json)?.into_engine_options()?;
+        let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
+        let model =
+            project_dataset(&frozen, &spec).map_err(|error| JsError::new(&error.to_string()))?;
+        serde_json::to_string(&model).map_err(|error| JsError::new(&error.to_string()))
+    }
+
+    /// `visualExportJson(optionsJson?)` -> model, scene, geometry, and index as JSON.
+    #[wasm_bindgen(js_name = visualExportJson)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn visual_export_json(&self, options_json: Option<String>) -> Result<String, JsError> {
+        let (spec, options) = VisualOptions::parse(options_json)?.into_engine_options()?;
+        let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
+        let export = project_dataset_export(&frozen, &spec, &options.layout)
+            .map_err(|error| JsError::new(&error.to_string()))?;
+        export_json(&export).map_err(|error| JsError::new(&error.to_string()))
+    }
+
+    /// `visualSvgJson(optionsJson?)` -> deterministic SVG and its complete export.
+    #[wasm_bindgen(js_name = visualSvgJson)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn visual_svg_json(&self, options_json: Option<String>) -> Result<String, JsError> {
+        let (spec, options) = VisualOptions::parse(options_json)?.into_engine_options()?;
+        let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
+        let document = render_dataset_svg(&frozen, &spec, &options)
+            .map_err(|error| JsError::new(&error.to_string()))?;
+        serde_json::to_string(&document).map_err(|error| JsError::new(&error.to_string()))
     }
 
     /// `match(subject?, predicate?, object?, graph?)` → a new dataset of the matching
@@ -371,6 +534,38 @@ mod tests {
         assert_eq!(quads.len(), 1);
         assert_eq!(quads[0].subject().value(), "https://e/s");
         assert_eq!(quads[0].graph().term_type(), "DefaultGraph");
+    }
+
+    #[test]
+    fn visualization_json_methods_share_one_semantic_projection() {
+        let ds = Dataset::parse(
+            "<https://e/alice> <https://e/knows> <https://e/bob> .\n",
+            "ntriples",
+            None,
+        )
+        .unwrap();
+        let options = Some(
+            r#"{"mode":"compact","vocabulary":[{"prefix":"ex","namespace":"https://e/"}],"svg":{"title":"Example graph"}}"#
+                .to_owned(),
+        );
+        let model: serde_json::Value =
+            serde_json::from_str(&ds.visual_model_json(options.clone()).expect("model JSON"))
+                .expect("model value");
+        let export: serde_json::Value =
+            serde_json::from_str(&ds.visual_export_json(options.clone()).expect("export JSON"))
+                .expect("export value");
+        let document: serde_json::Value =
+            serde_json::from_str(&ds.visual_svg_json(options).expect("SVG JSON"))
+                .expect("document value");
+        assert_eq!(model["statements"].as_array().map(Vec::len), Some(1));
+        assert_eq!(export["schema_version"], "purrdf-viz-export-1");
+        assert_eq!(export["model"], model);
+        assert_eq!(document["export"], export);
+        assert!(
+            document["svg"]
+                .as_str()
+                .is_some_and(|svg| svg.contains("<metadata id=\"purrdf-viz-export\""))
+        );
     }
 
     #[test]

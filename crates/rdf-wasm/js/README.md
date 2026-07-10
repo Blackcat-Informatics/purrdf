@@ -87,6 +87,11 @@ console.log(names.rows[0].message.value);
   Formats: `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml` (`serialize` also `jsonld`).
 - `Dataset.canonicalize()` / `Dataset.isomorphic(other)` — RDFC-1.0 canonical N-Quads
   and RDF graph-identity (isomorphism under blank-node relabeling).
+- `Dataset.visualModel(options?)` / `visualExport(options?)` /
+  `visualSvg(options?)` — the renderer-neutral RDF 1.2 model, complete semantic
+  scene and deterministic geometry, or self-contained SVG paired with that export.
+  Returned objects are structured-clone-safe and preserve triple-term identity,
+  assertion graphs, reifier/annotation graph context, nesting, and diagnostics.
 - `QueryEngine` — a reusable SPARQL execution context with a native plan cache,
   typed `select` / `ask` / `construct` / `describe` helpers, atomic `update`,
   and `queryRaw` serialization for SPARQL Results JSON/XML/CSV/TSV plus graph
@@ -98,6 +103,22 @@ console.log(names.rows[0].message.value);
 - SPARQL evaluation over the in-memory dataset (no server required).
 
 Full typings ship in `index.d.ts`.
+
+```js
+const { svg, export: graph } = reparsed.visualSvg({
+  mode: "compact",
+  vocabulary: [{ prefix: "ex", namespace: "https://ex/" }],
+  svg: { title: "RDF 1.2 graph", embedMetadata: true },
+});
+
+console.log(graph.model.statements, graph.model.relations);
+document.querySelector("#graph").innerHTML = svg;
+```
+
+Compact mode keeps ordinary asserted RDF as directed predicate-labelled edges and
+promotes statements only when they need identity. Incidence mode exposes exact
+subject/predicate/object ports. Table mode scales statement inspection without
+discarding the same underlying model.
 
 ## Scope
 

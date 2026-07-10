@@ -13,7 +13,9 @@ import { fileURLToPath } from "node:url";
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const MAX_TARBALL_BYTES = 1_400_000;
-const MAX_UNPACKED_BYTES = 3_600_000;
+// Issue #80 adds the RDF 1.2 model, layout, and SVG renderer to the wasm package.
+// The measured unpacked artifact is 3_858_572 bytes; retain about 5% headroom.
+const MAX_UNPACKED_BYTES = 4_050_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TIMEOUT_MS = 180_000;
 const SMOKE_TIMEOUT_MS = 60_000;

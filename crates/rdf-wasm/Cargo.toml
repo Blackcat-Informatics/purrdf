@@ -54,6 +54,8 @@ purrdf-sparql-results = { workspace = true }
 # SHACL engine is reached through `purrdf-validate::validate_to_sarif_string`,
 # the shared validate→SARIF helper every language binding routes through.
 purrdf-validate = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 # EXACT pin (in the workspace table): the `wasm-bindgen` CLI that generates the JS
 # bindings must match the library version byte-for-byte or it refuses to run.
 # `make wasm-pkg` and the CI Node lane install `wasm-bindgen-cli@0.2.125` to match.
