@@ -211,7 +211,7 @@ fn push_uchar_00(out: &mut String, v: u32) {
 /// control code point (C0 `0x00-0x1F`, DEL `0x7F`, and the C1 block `0x80-0x9F`) appearing
 /// raw; each rides as a `\uXXXX` `UCHAR` (the text parser decodes them back). A clean ASCII
 /// IRI (every production IRI) passes through byte-for-byte unchanged.
-fn escape_iri(iri: &str) -> Cow<'_, str> {
+pub(crate) fn escape_iri(iri: &str) -> Cow<'_, str> {
     escape_scan(iri, &IRI_CLEAN, |out, ch| match ch {
         '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
             push_uchar_00(out, ch as u32);
@@ -231,7 +231,7 @@ fn escape_iri(iri: &str) -> Cow<'_, str> {
 /// parser normalizes/replaces raw C1 code points on read — so the payload only survives an XML
 /// round-trip if the full control range rides as ASCII `\uXXXX`. The canonical form answers to
 /// RDFC-1.0 byte-conformance; this one answers to XML transport.
-fn escape_literal(lex: &str) -> Cow<'_, str> {
+pub(crate) fn escape_literal(lex: &str) -> Cow<'_, str> {
     escape_scan(lex, &LITERAL_CLEAN, |out, ch| match ch {
         '\\' => out.push_str("\\\\"),
         '"' => out.push_str("\\\""),

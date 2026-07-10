@@ -63,6 +63,11 @@ const reparsed = Dataset.parse(nq, "nquads");
 - **Graph identity** — `Dataset.canonicalize()` returns the RDFC-1.0 canonical, flat
   N-Quads for the graph; `Dataset.isomorphic(other)` decides RDF graph equality under
   blank-node relabeling (an exact oracle backed by full RDFC-1.0 canonicalization).
+- **Visualization** — `Dataset.visualModel(options?)` returns the renderer-neutral
+  RDF 1.2 statement model; `visualExport` adds the semantic scene, deterministic
+  geometry, hashes, diagnostics, and element index; `visualSvg` returns a
+  self-contained SVG paired with that complete export. All results are plain,
+  structured-clone-safe objects.
 - **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples data
   graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
@@ -70,6 +75,21 @@ const reparsed = Dataset.parse(nq, "nquads");
 - **`Sink`** — a streaming consumer (`push(quad)` / `finish() → Dataset`) over the
   `purrdf-events` ingestion protocol; **`datasetToStream`** / **`streamToDataset`**
   are the async RDF/JS Stream/Sink helpers.
+
+```js
+const { svg, export: graph } = reparsed.visualSvg({
+  mode: "compact",
+  vocabulary: [{ prefix: "ex", namespace: "https://ex/" }],
+  svg: { title: "RDF 1.2 claim graph" },
+});
+
+console.log(graph.model.statements, graph.model.relations);
+document.querySelector("#graph").innerHTML = svg;
+```
+
+Use `mode: "incidence"` to inspect exact subject/predicate/object ports and nested
+triple terms, or `mode: "table"` for one row per structural statement. A quoted
+triple is never rendered as asserted unless an assertion occurrence is present.
 
 ## Scope
 

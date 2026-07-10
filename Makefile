@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -23,8 +23,9 @@ BINARYEN_VERSION := 130
 # HARD size ceiling (bytes) for the optimized npm artifact
 # crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm (release +simd128 build, wasm-opt
 # -Oz). `make wasm-pkg-size` (and both CI and the npm release) fail if the built
-# artifact exceeds this. 3 MiB = 3145728; the measured baseline is 2_989_759
-# bytes, so this is ~5% headroom. The artifact's size is a joint function of
+# artifact exceeds this. RDF 1.2 semantic projection, deterministic layout, and
+# SVG export measure 3_733_561 bytes; 3_900_000 keeps ~4%
+# headroom. The artifact's size is a joint function of
 # rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
 # (pinned via BINARYEN_VERSION), so a moved number is attributable.
 #
@@ -34,7 +35,7 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 3145728
+WASM_SIZE_BUDGET_BYTES := 3900000
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -112,7 +113,25 @@ test: ## Run the workspace test suite.
 doc: ## Build docs for the 16 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance
 
-book: ## Build The PurRDF Book (mdBook user guide) into docs/book/book/.
+book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
+	@set -eu; \
+		target=docs/book/src/assets/visualization; \
+		tmp=$$(mktemp -d docs/book/src/assets/.visualization.XXXXXX); \
+		previous="$$tmp.previous"; \
+		cleanup() { \
+			status=$$?; \
+			if [ -d "$$previous" ] && [ ! -d "$$target" ]; then mv "$$previous" "$$target"; fi; \
+			rm -rf "$$tmp" "$$previous"; \
+			exit $$status; \
+		}; \
+		trap cleanup EXIT; \
+		cargo run -p purrdf-rdf --example viz_samples --locked -- "$$tmp" --svg-only; \
+		if [ -d "$$target" ]; then mv "$$target" "$$previous"; fi; \
+		mv "$$tmp" "$$target"; \
+		rm -rf "$$previous"; \
+		trap - EXIT
+
+book: book-samples ## Build The PurRDF Book (mdBook user guide) into docs/book/book/.
 	mdbook build docs/book
 
 bench: ## Run criterion benchmarks (report-only; never a gate).

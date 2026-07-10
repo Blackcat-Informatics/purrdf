@@ -4,6 +4,34 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.4.3] - 2026-07-10
+
+### Bug Fixes
+
+- **rdf:** Complete deterministic viz semantics
+- **rdf:** Make RDF visualization graph-readable
+- **rdf:** Refine visualization routing and labels
+- **rdf:** Make dense visualization routes traceable
+- **wasm:** Accept npm 12 pack output
+- **rdf:** Address visualization review findings
+
+### Documentation
+
+- **rdf:** Qualify visualization projection link
+
+### Features
+
+- **rdf:** Add statement incidence viz projection
+- **rdf:** Add renderer-neutral viz scenes
+- **rdf:** Add deterministic layered viz layout
+- **rdf:** Emit semantic RDF 1.2 SVG
+- **wasm:** Expose RDF visualization exports
+- **rdf:** Publish generated visualization samples
+
+### Performance
+
+- **rdf:** Reuse visualization projection scratch state
+
 ## [0.4.2] - 2026-07-10
 
 ### Bug Fixes
@@ -546,5 +574,3 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 ### Other
 
 - First commit
-
-

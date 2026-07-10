@@ -19,6 +19,7 @@
 //! | [`entail`] | [`purrdf_entail`] (RDFS / OWL-RL / OWL-Direct / RIF entailment) |
 //! | [`validate`](mod@validate) | [`purrdf_validate`] (SARIF 2.1.0 reporting boundary) |
 //! | [`slice`](mod@slice) | [`purrdf_slice`] |
+//! | [`viz`] | [`purrdf_rdf::viz`] |
 //! | [`xsd`] | [`purrdf_xsd`] |
 //! | [`iri`] | [`purrdf_iri`] |
 //! | [`events`] | [`purrdf_events`] |
@@ -122,6 +123,11 @@ pub mod events {
 /// Native slice catalog and dataset-wrapper support.
 pub mod slice {
     pub use purrdf_slice::*;
+}
+
+/// Statement-centric RDF 1.2 visualization projection and SVG export support.
+pub mod viz {
+    pub use purrdf_rdf::viz::*;
 }
 
 /// SHACL shape support.

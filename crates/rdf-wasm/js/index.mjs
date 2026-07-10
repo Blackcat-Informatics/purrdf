@@ -60,6 +60,14 @@ function normalizeQueryOptions(options) {
   };
 }
 
+function visualizationOptionsJson(options) {
+  if (options == null) return undefined;
+  if (typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("visualization options must be an object when supplied");
+  }
+  return JSON.stringify(options);
+}
+
 function selectResultToObject(raw) {
   const variables = raw.variables;
   const rawRows = raw.rows;
@@ -141,6 +149,22 @@ export async function ready(wasmBytesOrUrl) {
     Dataset.prototype.toStream = function () {
       return datasetToStream(this);
     };
+  }
+
+  if (!Dataset.prototype.__purrdfVisualizationApi) {
+    const visualModelJson = Dataset.prototype.visualModelJson;
+    const visualExportJson = Dataset.prototype.visualExportJson;
+    const visualSvgJson = Dataset.prototype.visualSvgJson;
+    Dataset.prototype.visualModel = function (options) {
+      return JSON.parse(visualModelJson.call(this, visualizationOptionsJson(options)));
+    };
+    Dataset.prototype.visualExport = function (options) {
+      return JSON.parse(visualExportJson.call(this, visualizationOptionsJson(options)));
+    };
+    Dataset.prototype.visualSvg = function (options) {
+      return JSON.parse(visualSvgJson.call(this, visualizationOptionsJson(options)));
+    };
+    Dataset.prototype.__purrdfVisualizationApi = true;
   }
 
   // RDF/JS DatasetCore.add(quad)/delete(quad) MUST return the dataset instance so calls

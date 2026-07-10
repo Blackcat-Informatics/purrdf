@@ -70,6 +70,9 @@ caller-supplied configuration.
   COSE signing/encryption, pure-Rust crypto (wasm-friendly).
 - **SARIF reporting** — diagnostics and SHACL reports rendered as byte-deterministic
   SARIF 2.1.0 for editors and CI.
+- **Statement-centric visualization** — renderer-neutral RDF 1.2 models and scenes,
+  deterministic compact/incidence/table layouts, and semantic SVG with embedded,
+  round-trippable assertion, reifier, annotation, graph, and dialect metadata.
 
 ## Quickstart
 
@@ -122,6 +125,7 @@ let schema = purrdf::shex::parse_shexc(
 | `entail` | [`purrdf-entail`](https://crates.io/crates/purrdf-entail) (RDFS / OWL-RL / OWL-Direct / RIF) |
 | `validate` | [`purrdf-validate`](https://crates.io/crates/purrdf-validate) (SARIF 2.1.0 boundary) |
 | `slice` | [`purrdf-slice`](https://crates.io/crates/purrdf-slice) (slice catalog) |
+| `viz` | RDF 1.2 semantic projection, deterministic layout, and SVG export |
 | `iri` / `xsd` / `events` | the zero-dependency foundation leaves |
 
 The same engine ships to [PyPI](https://pypi.org/project/purrdf/) (`pip install purrdf`)

@@ -36,6 +36,10 @@ loss ledger) and adds what the kernel deliberately leaves out:
   snapshot composition and content-chain verification.
 - **Describe & normalization** — per-subject Symmetric-CBD extraction and a
   review-friendly Turtle normalizer.
+- **RDF 1.2 visualization** — a statement-centric projection, renderer-neutral
+  semantic scene, deterministic layout, statement table, and self-contained SVG
+  whose embedded JSON preserves assertions, triple terms, reifiers, annotations,
+  graph context, dialect diagnostics, and element-to-model identities.
 
 The crate is PyO3-free and oxigraph-free (like the whole workspace), keeps
 reporting structured but SARIF-free — callers translate `RdfDiagnostic`s into
@@ -65,6 +69,25 @@ let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
     .expect("serializes");
 assert!(String::from_utf8(nq).unwrap().contains("meow"));
 ```
+
+The visualization surface is available as `purrdf_rdf::viz` (and as
+`purrdf::viz` through the umbrella crate):
+
+```rust
+use purrdf_rdf::viz::{VizRenderOptions, VizSpec, render_dataset_svg};
+
+let document = render_dataset_svg(&ds, &VizSpec::default(), &VizRenderOptions::default())
+    .expect("renders");
+assert!(document.svg.contains("purrdf-viz-export"));
+assert_eq!(document.export.model.statements.len(), 1);
+```
+
+`project_dataset` returns the semantic model alone, `project_dataset_export`
+adds the scene, geometry, hashes, diagnostics, and SVG element index, and
+`render_dataset_svg` emits deterministic SVG plus the same structured export.
+Compact, exact incidence, and statement-table modes all derive from one model;
+quotation never implies assertion, and reifier identity remains distinct from
+the structural triple term.
 
 Malformed input is a typed `RdfDiagnostic` with a source location where the
 codec can provide one — never a silent partial parse.

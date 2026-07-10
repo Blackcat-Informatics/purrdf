@@ -44,6 +44,7 @@ purrdf-xsd = { workspace = true }
 # (`native_codecs::jsonld`). Already in the validate + pipeline trees, so
 # this adds no new tree-wide dependency.
 serde_json = { workspace = true }
+serde = { workspace = true }
 serde_yaml = { workspace = true }
 ciborium = { workspace = true }
 # Store-once interning on the native text-codec hot path (fixed-key hashing +
@@ -112,4 +113,10 @@ criterion = { workspace = true }
 # Native RDF text codec hot paths: N-Quads parse into frozen IR and serialize back
 # out through the first-party serializer. Report-only; excluded from check.
 name = "native_codecs"
+harness = false
+
+[[bench]]
+# Renderer-neutral RDF 1.2 projection, scene, and deterministic layered layout.
+# Report-only; excluded from check.
+name = "viz_layout"
 harness = false
