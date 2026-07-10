@@ -164,7 +164,7 @@ pub fn render_export_svg(export: &VizExport, options: &VizSvgOptions) -> Result<
         escape_xml_text(&metadata, &mut out);
         out.push_str("</metadata>\n");
     }
-    render_defs(&mut out, options.include_styles);
+    render_defs(export, &mut out, options.include_styles);
     writeln!(
         out,
         "<rect class=\"canvas\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\"/>",
@@ -367,7 +367,7 @@ fn badge_bindings(badge: &VizBadge, owner: &[VizSemanticRef]) -> Vec<VizSemantic
         .map_or_else(|| owner.to_vec(), |binding| vec![binding])
 }
 
-fn render_defs(out: &mut String, include_styles: bool) {
+fn render_defs(export: &VizExport, out: &mut String, include_styles: bool) {
     out.push_str("<defs>\n");
     for (id, color) in [
         ("arrow-assertion", "#147d8a"),
@@ -382,12 +382,72 @@ fn render_defs(out: &mut String, include_styles: bool) {
         )
         .expect("writing to String cannot fail");
     }
+    for (id, rect) in text_clip_rects(export) {
+        writeln!(
+            out,
+            "<clipPath id=\"clip-{id}\"><rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/></clipPath>",
+            rect.x, rect.y, rect.width, rect.height
+        )
+        .expect("writing to String cannot fail");
+    }
     if include_styles {
         out.push_str("<style>");
         out.push_str(SVG_STYLE);
         out.push_str("</style>\n");
     }
     out.push_str("</defs>\n");
+}
+
+fn text_clip_rects(export: &VizExport) -> Vec<(String, VizRect)> {
+    let mut clips = Vec::new();
+    for node in &export.layout.nodes {
+        clips.push((format!("svg-{}-label", node.id), node.label.rect));
+        clips.extend(node.badges.iter().map(|badge| {
+            (
+                format!("svg-{}-badge-{}-label", node.id, badge.index),
+                badge.rect,
+            )
+        }));
+    }
+    for edge in &export.layout.edges {
+        clips.push((format!("svg-{}-label", edge.id), edge.label.rect));
+        clips.extend(edge.badges.iter().map(|badge| {
+            (
+                format!("svg-{}-badge-{}-label", edge.id, badge.index),
+                badge.rect,
+            )
+        }));
+        if let Some(anchor) = &edge.anchor {
+            clips.push((format!("svg-{}-anchor-label", edge.id), anchor.label.rect));
+            clips.extend(anchor.badges.iter().map(|badge| {
+                (
+                    format!("svg-{}-anchor-badge-{}-label", edge.id, badge.index),
+                    badge.rect,
+                )
+            }));
+        }
+    }
+    if let Some(table) = &export.layout.table {
+        clips.extend(table.cells.iter().map(|cell| {
+            (
+                format!("svg-table-label-{}-{}", cell.row, cell.column),
+                cell.label.rect,
+            )
+        }));
+    }
+    clips.extend(export.layout.legend.iter().map(|entry| {
+        (
+            format!("svg-{}-label", entry.id),
+            VizRect {
+                x: entry.rect.x + 68,
+                y: entry.rect.y + 6,
+                width: entry.rect.width - 76,
+                height: entry.rect.height - 12,
+            },
+        )
+    }));
+    clips.sort_by(|left, right| left.0.cmp(&right.0));
+    clips
 }
 
 fn render_graph(export: &VizExport, out: &mut String) {
@@ -621,7 +681,7 @@ fn render_legend(export: &VizExport, out: &mut String) {
                 width: geometry.rect.width - 76,
                 height: geometry.rect.height - 12,
             },
-            lines: vec![entry.label.clone()],
+            lines: wrap_text(&entry.label, chars_for_width(geometry.rect.width - 76)),
         };
         render_text(
             &format!("svg-{}-label", entry.id),
@@ -697,7 +757,7 @@ fn render_text(
 ) {
     write!(
         out,
-        "<text id=\"{id}\" class=\"{class}\" text-anchor=\"middle\" unicode-bidi=\"isolate\""
+        "<text id=\"{id}\" class=\"{class}\" text-anchor=\"middle\" unicode-bidi=\"isolate\" clip-path=\"url(#clip-{id})\""
     )
     .expect("writing to String cannot fail");
     if let Some(language) = &scene.language {
@@ -723,16 +783,11 @@ fn render_text(
     let line_count = i32::try_from(layout.lines.len()).unwrap_or(1);
     let first_y = layout.rect.y + layout.rect.height / 2 - (line_count - 1) * 9 + 5;
     for (index, line) in layout.lines.iter().enumerate() {
-        let desired = i32::try_from(line.chars().count())
-            .unwrap_or(i32::MAX / 8)
-            .saturating_mul(8)
-            .min((layout.rect.width - 4).max(1));
         write!(
             out,
-            "<tspan x=\"{}\" y=\"{}\" textLength=\"{}\" lengthAdjust=\"spacingAndGlyphs\">",
+            "<tspan x=\"{}\" y=\"{}\">",
             layout.rect.x + layout.rect.width / 2,
-            first_y + i32::try_from(index).unwrap_or_default() * 18,
-            desired.max(1)
+            first_y + i32::try_from(index).unwrap_or_default() * 18
         )
         .expect("writing to String cannot fail");
         escape_xml_text(line, out);
@@ -790,10 +845,15 @@ fn render_rect(rect: VizRect, class: &str, out: &mut String) {
 }
 
 fn render_rect_attributes(rect: VizRect, class: &str, out: &mut String) {
+    let radius = match class {
+        "table-cell-shape" | "text-clip" => 0,
+        "badge-shape" | "edge-label-box" | "legend-entry-shape" => 4,
+        _ => 6,
+    };
     write!(
         out,
-        "class=\"{class}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"6\"",
-        rect.x, rect.y, rect.width, rect.height
+        "class=\"{class}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{radius}\"",
+        rect.x, rect.y, rect.width, rect.height,
     )
     .expect("writing to String cannot fail");
 }
@@ -948,25 +1008,30 @@ fn escape_xml_text(value: &str, out: &mut String) {
 }
 
 const SVG_STYLE: &str = r"
-.canvas{fill:#f8fafc}
+.canvas{fill:#f6f8fb}
 text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0;fill:#17202a}
-.node-shape{stroke-width:2;fill:#fff;stroke:#1f6f78}
+.node-shape{stroke-width:2;fill:#fff;stroke:#176b78}
 .node.blank .node-shape{stroke:#64748b;stroke-dasharray:7 4;fill:#f8fafc}
 .node.literal .node-shape{stroke:#8a5a00;fill:#fff7e6}
 .node.statement .node-shape{stroke:#6f4ba8;stroke-width:2.5;fill:#f7f3ff;stroke-dasharray:8 4}
 .statement-inner{fill:none;stroke:#b6a1d2;stroke-width:1}
 .node.reifier .node-shape{stroke:#b65c00;fill:#fff8ed;stroke-width:3}
 .node.focus .node-shape{stroke:#a53a3a;stroke-width:4}
-.node-label{font-size:14px;font-weight:650}
+.node-label{font-size:14px;font-weight:700}
 .node-port{fill:#fff;stroke:#334155;stroke-width:1.5}
 .edge-path,.legend-line{fill:none;stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
-.edge-label-leader{fill:none;stroke:#94a3b8;stroke-width:1;stroke-dasharray:3 3}
+.edge-label-leader{fill:none;stroke:#8392a5;stroke-width:1;stroke-dasharray:2 3}
 .edge.assertion .edge-path,.legend-line.assertion{stroke:#147d8a}
 .edge.role .edge-path,.legend-line.role{stroke:#64748b;stroke-width:1.8}
 .edge.reifies .edge-path,.legend-line.reifies{stroke:#b65c00;stroke-width:2.8;stroke-dasharray:10 4}
 .edge.annotation .edge-path,.legend-line.annotation{stroke:#257942;stroke-width:2.3}
 .edge.quoted .edge-path{stroke:#6f4ba8;stroke-width:1.7;stroke-dasharray:3 5}
-.edge-label-box{fill:#fff;stroke:#cbd5e1;stroke-width:1}
+.edge-label-box{fill:#fff;stroke:#aeb9c7;stroke-width:1}
+.edge.assertion .edge-label-box{fill:#eef9fa;stroke:#66a8b0}
+.edge.role .edge-label-box{fill:#f7f8fa;stroke:#aeb7c2}
+.edge.reifies .edge-label-box{fill:#fff6e9;stroke:#d18a3d}
+.edge.annotation .edge-label-box{fill:#edf8f1;stroke:#69a67c}
+.edge.quoted .edge-label-box{fill:#f7f2fd;stroke:#9d82c1}
 .edge-label{font-size:12px;font-weight:650}
 .statement-anchor .anchor-shape{fill:#e5f4f5;stroke:#147d8a;stroke-width:2.5}
 .anchor-label{fill:#173f48;font-size:12px;font-weight:700}
@@ -977,12 +1042,12 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 .dialect .badge-shape,.focus .badge-shape{fill:#fdecec;stroke:#a53a3a}
 .direction .badge-shape{fill:#e8f0ff;stroke:#315d9b}
 .badge-label{font-size:10px;font-weight:650}
-.table-cell-shape{stroke:#cbd5e1;stroke-width:1;fill:#fff}
+.table-cell-shape{stroke:#c4ceda;stroke-width:1;fill:#fff}
 .table-cell.header .table-cell-shape{fill:#173f48;stroke:#173f48}
 .table-cell.header .table-label{fill:#fff;font-weight:700}
-.table-cell.even .table-cell-shape{fill:#f1f5f9}
+.table-cell.even .table-cell-shape{fill:#f0f4f8}
 .table-label{font-size:12px}
-.legend-entry-shape{fill:#fff;stroke:#cbd5e1;stroke-width:1}
+.legend-entry-shape{fill:#fff;stroke:#c4ceda;stroke-width:1}
 .legend-label{font-size:11px}
 .legend-symbol.assertion{fill:#e5f4f5;stroke:#147d8a;stroke-width:2}
 .legend-symbol.quoted{fill:#f7f3ff;stroke:#6f4ba8;stroke-width:2;stroke-dasharray:5 3}
@@ -1073,6 +1138,29 @@ mod tests {
                     .any(|node| node.attribute("id") == Some(entry.element_id.as_str()))
             );
         }
+        let clip_paths = xml
+            .descendants()
+            .filter(|node| node.has_tag_name("clipPath"))
+            .collect::<Vec<_>>();
+        let text_count = xml
+            .descendants()
+            .filter(|node| node.has_tag_name("text"))
+            .count();
+        assert_eq!(clip_paths.len(), text_count);
+        assert!(clip_paths.iter().all(|clip_path| {
+            clip_path
+                .children()
+                .find(|node| node.has_tag_name("rect"))
+                .is_some_and(|rect| {
+                    rect.attribute("width")
+                        .and_then(|value| value.parse::<i32>().ok())
+                        .is_some_and(|value| value > 0)
+                        && rect
+                            .attribute("height")
+                            .and_then(|value| value.parse::<i32>().ok())
+                            .is_some_and(|value| value > 0)
+                })
+        }));
     }
 
     #[test]

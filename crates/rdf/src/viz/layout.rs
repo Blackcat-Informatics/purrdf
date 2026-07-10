@@ -345,18 +345,29 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
         .map(|node| (node.id.as_str(), node))
         .collect::<BTreeMap<_, _>>();
     let anchor_lookup = build_anchor_lookup(scene, &all_rects)?;
-    let mut occupied_labels = nodes
-        .iter()
-        .map(|node| node.rect.inflated(8))
-        .chain(anchor_lookup.values().map(|rect| rect.inflated(8)))
-        .collect::<Vec<_>>();
     let parallel_offsets = parallel_edge_offsets(scene);
+    let endpoint_offsets = endpoint_offsets(scene);
+    let mut reserved_routes = Vec::new();
     let mut edges = Vec::new();
     for edge in &scene.edges {
         let start_center = endpoint_point(&edge.source, &node_lookup, &anchor_lookup)?;
         let end_center = endpoint_point(&edge.target, &node_lookup, &anchor_lookup)?;
-        let start = endpoint_boundary_point(&edge.source, start_center, end_center, &anchor_lookup);
-        let end = endpoint_boundary_point(&edge.target, end_center, start_center, &anchor_lookup);
+        let start = spread_endpoint(
+            &edge.source,
+            endpoint_boundary_point(&edge.source, start_center, end_center, &anchor_lookup),
+            start_center,
+            *endpoint_offsets
+                .get(&(edge.id.clone(), EndpointSide::Source))
+                .unwrap_or(&0),
+        );
+        let end = spread_endpoint(
+            &edge.target,
+            endpoint_boundary_point(&edge.target, end_center, start_center, &anchor_lookup),
+            end_center,
+            *endpoint_offsets
+                .get(&(edge.id.clone(), EndpointSide::Target))
+                .unwrap_or(&0),
+        );
         let mut waypoints = all_waypoints.remove(&edge.id).unwrap_or_default();
         waypoints.sort_by_key(|point| (point.x, point.y));
         if start.x > end.x {
@@ -380,7 +391,7 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
                 }
             });
         }
-        let points = if edge.kind == VizSceneEdgeKind::Reifies
+        let mut points = if edge.kind == VizSceneEdgeKind::Reifies
             && matches!(
                 &edge.target,
                 VizEndpoint::NodePort { port, .. } if port == "relation"
@@ -389,9 +400,39 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
         } else {
             route_edge(start, end, &required, offset)
         };
-        let label_size = measure_label(&edge.label.text, 22, 210);
-        let stack_size = measure_edge_label_stack(label_size, &edge.badges);
-        let stack_rect = place_edge_label(&points, stack_size, &occupied_labels, edge.kind);
+        separate_route_lanes(&mut points, &reserved_routes);
+        reserved_routes.extend(route_corridors(&points, 5));
+        edges.push(VizLayoutEdge {
+            id: edge.id.clone(),
+            points,
+            label: VizLayoutLabel {
+                rect: VizRect::default(),
+                lines: Vec::new(),
+            },
+            badges: Vec::new(),
+            anchor,
+        });
+    }
+
+    let mut occupied_labels = nodes
+        .iter()
+        .map(|node| node.rect.inflated(8))
+        .chain(anchor_lookup.values().map(|rect| rect.inflated(8)))
+        .chain(
+            edges
+                .iter()
+                .flat_map(|edge| route_corridors(&edge.points, 7)),
+        )
+        .collect::<Vec<_>>();
+    for (scene_edge, layout_edge) in scene.edges.iter().zip(&mut edges) {
+        let label_size = measure_label(&scene_edge.label.text, 22, 210);
+        let stack_size = measure_edge_label_stack(label_size, &scene_edge.badges);
+        let stack_rect = place_edge_label(
+            &layout_edge.points,
+            stack_size,
+            &occupied_labels,
+            scene_edge.kind,
+        );
         occupied_labels.push(stack_rect);
         let label_rect = VizRect {
             x: stack_rect.x + (stack_rect.width - label_size.0) / 2,
@@ -399,23 +440,16 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
             width: label_size.0,
             height: label_size.1,
         };
-        let label = VizLayoutLabel {
+        layout_edge.label = VizLayoutLabel {
             rect: label_rect,
-            lines: wrap_text(&edge.label.text, chars_for_width(label_rect.width)),
+            lines: wrap_text(&scene_edge.label.text, chars_for_width(label_rect.width)),
         };
-        let badges = place_badges(
-            &edge.badges,
+        layout_edge.badges = place_badges(
+            &scene_edge.badges,
             stack_rect.x,
             label_rect.bottom() + 4,
             stack_rect.width,
         );
-        edges.push(VizLayoutEdge {
-            id: edge.id.clone(),
-            points,
-            label,
-            badges,
-            anchor,
-        });
     }
     edges.sort_by(|left, right| left.id.cmp(&right.id));
     normalize_graph_geometry(&mut nodes, &mut edges, options.margin);
@@ -1145,6 +1179,66 @@ fn endpoint_boundary_point(
         .map_or(center, |rect| rect_boundary_point(*rect, toward))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum EndpointSide {
+    Source,
+    Target,
+}
+
+fn endpoint_offsets(scene: &VizScene) -> BTreeMap<(String, EndpointSide), i32> {
+    let mut groups: BTreeMap<VizEndpoint, Vec<(String, EndpointSide)>> = BTreeMap::new();
+    for edge in &scene.edges {
+        groups
+            .entry(edge.source.clone())
+            .or_default()
+            .push((edge.id.clone(), EndpointSide::Source));
+        groups
+            .entry(edge.target.clone())
+            .or_default()
+            .push((edge.id.clone(), EndpointSide::Target));
+    }
+    let mut offsets = BTreeMap::new();
+    for endpoints in groups.values_mut() {
+        endpoints.sort();
+        let count = i32_from_usize(endpoints.len());
+        for (index, endpoint) in endpoints.iter().enumerate() {
+            let offset = if count <= 1 {
+                0
+            } else {
+                -14 + i32_from_usize(index) * 28 / (count - 1)
+            };
+            offsets.insert(endpoint.clone(), offset);
+        }
+    }
+    offsets
+}
+
+fn spread_endpoint(
+    endpoint: &VizEndpoint,
+    point: VizPoint,
+    center: VizPoint,
+    offset: i32,
+) -> VizPoint {
+    match endpoint {
+        VizEndpoint::NodePort { port, .. } if port == "relation" => VizPoint {
+            x: point.x + offset,
+            y: point.y,
+        },
+        VizEndpoint::NodePort { .. } => VizPoint {
+            x: point.x,
+            y: point.y + offset,
+        },
+        VizEndpoint::EdgeAnchor { .. } if point.y != center.y => VizPoint {
+            x: point.x + offset,
+            y: point.y,
+        },
+        VizEndpoint::EdgeAnchor { .. } => VizPoint {
+            x: point.x,
+            y: point.y + offset,
+        },
+    }
+}
+
 fn rect_boundary_point(rect: VizRect, toward: VizPoint) -> VizPoint {
     let center = rect.center();
     let dx = toward.x - center.x;
@@ -1293,6 +1387,59 @@ fn dedup_points(points: &mut Vec<VizPoint>) {
     }
 }
 
+fn separate_route_lanes(points: &mut [VizPoint], reserved: &[VizRect]) {
+    if points.len() < 4 {
+        return;
+    }
+    for index in 1..points.len() - 2 {
+        if points[index].x != points[index + 1].x {
+            continue;
+        }
+        let original_x = points[index].x;
+        let top = points[index].y.min(points[index + 1].y);
+        let bottom = points[index].y.max(points[index + 1].y);
+        let collides = |x: i32| {
+            let corridor = VizRect {
+                x: x - 5,
+                y: top,
+                width: 10,
+                height: (bottom - top).max(1),
+            };
+            reserved.iter().any(|rect| corridor.intersects(*rect))
+        };
+        let Some(x) = (0..=8).find_map(|step| {
+            let candidates = if step == 0 {
+                [original_x, original_x]
+            } else {
+                [original_x - step * 12, original_x + step * 12]
+            };
+            candidates
+                .into_iter()
+                .find(|candidate| !collides(*candidate))
+        }) else {
+            continue;
+        };
+        points[index].x = x;
+        points[index + 1].x = x;
+    }
+}
+
+fn route_corridors(points: &[VizPoint], half_width: i32) -> Vec<VizRect> {
+    points
+        .windows(2)
+        .map(|pair| {
+            let start = pair[0];
+            let end = pair[1];
+            VizRect {
+                x: start.x.min(end.x) - half_width,
+                y: start.y.min(end.y) - half_width,
+                width: (start.x - end.x).abs() + half_width * 2,
+                height: (start.y - end.y).abs() + half_width * 2,
+            }
+        })
+        .collect()
+}
+
 fn parallel_edge_offsets(scene: &VizScene) -> BTreeMap<String, i32> {
     let mut groups: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for edge in &scene.edges {
@@ -1331,38 +1478,51 @@ fn place_edge_label(
         y: i32::midpoint(start.y, end.y),
     };
     let horizontal = (start.x - end.x).abs() >= (start.y - end.y).abs();
+    let perpendicular_gap = if horizontal {
+        size.1 / 2 + 10
+    } else {
+        size.0 / 2 + 10
+    };
     let mut best = None;
-    for step in 0..12 {
-        let offset = if step == 0 {
-            0
-        } else if step % 2 == 1 {
-            -28 * ((step + 1) / 2)
-        } else {
-            28 * (step / 2)
-        };
-        let candidate = VizRect {
-            x: center.x - size.0 / 2 + if horizontal { 0 } else { offset },
-            y: center.y - size.1 / 2 + if horizontal { offset } else { 0 },
-            width: size.0,
-            height: size.1,
-        };
-        let overlap = occupied
-            .iter()
-            .map(|rect| candidate.intersection_area(*rect))
-            .sum::<i32>();
-        if overlap == 0 {
-            return candidate;
-        }
-        if best.as_ref().is_none_or(|(best_overlap, best_step, _)| {
-            (overlap, step) < (*best_overlap, *best_step)
-        }) {
-            best = Some((overlap, step, candidate));
+    let mut order = 0;
+    for perpendicular in [-1, 1, -2, 2, -3, 3] {
+        for along in [0, -40, 40, -80, 80] {
+            let perpendicular_offset = perpendicular * perpendicular_gap;
+            let candidate = VizRect {
+                x: center.x - size.0 / 2
+                    + if horizontal {
+                        along
+                    } else {
+                        perpendicular_offset
+                    },
+                y: center.y - size.1 / 2
+                    + if horizontal {
+                        perpendicular_offset
+                    } else {
+                        along
+                    },
+                width: size.0,
+                height: size.1,
+            };
+            let overlap = occupied
+                .iter()
+                .map(|rect| candidate.intersection_area(*rect))
+                .sum::<i32>();
+            if overlap == 0 {
+                return candidate;
+            }
+            if best.as_ref().is_none_or(|(best_overlap, best_order, _)| {
+                (overlap, order) < (*best_overlap, *best_order)
+            }) {
+                best = Some((overlap, order, candidate));
+            }
+            order += 1;
         }
     }
     best.map_or(
         VizRect {
             x: center.x - size.0 / 2,
-            y: center.y - size.1 / 2,
+            y: center.y - size.1 - 10,
             width: size.0,
             height: size.1,
         },
@@ -1477,7 +1637,7 @@ fn measure_label(value: &str, max_chars: usize, max_width: i32) -> (i32, i32) {
     (width, LINE_HEIGHT * i32_from_usize(lines.len()) + 8)
 }
 
-fn wrap_text(value: &str, max_chars: usize) -> Vec<String> {
+pub(super) fn wrap_text(value: &str, max_chars: usize) -> Vec<String> {
     let max_chars = max_chars.max(1);
     if value.chars().count() <= max_chars {
         return vec![value.to_owned()];
@@ -1516,7 +1676,7 @@ fn wrap_text(value: &str, max_chars: usize) -> Vec<String> {
     }
 }
 
-fn chars_for_width(width: i32) -> usize {
+pub(super) fn chars_for_width(width: i32) -> usize {
     usize::try_from((width / CHAR_WIDTH).max(1)).unwrap_or(1)
 }
 
@@ -1605,7 +1765,7 @@ fn layout_legend(scene: &VizScene, layout: &mut VizLayout, options: &VizLayoutOp
     let start_y = layout.height + 20;
     let available_width = layout.width.max(720) - options.margin * 2;
     let entry_width = 260;
-    let entry_height = 44;
+    let entry_height = 54;
     let mut x = options.margin;
     let mut y = start_y;
     for entry in &scene.legend {
@@ -1850,6 +2010,31 @@ mod tests {
         assert_eq!(first.nodes.len(), scene.nodes.len());
         assert_eq!(first.edges.len(), scene.edges.len());
         assert!(first.edges.iter().any(|edge| edge.anchor.is_some()));
+
+        let scene_edges = scene
+            .edges
+            .iter()
+            .map(|edge| (edge.id.as_str(), edge))
+            .collect::<BTreeMap<_, _>>();
+        let mut terminals: BTreeMap<&VizEndpoint, Vec<VizPoint>> = BTreeMap::new();
+        for edge in &first.edges {
+            terminals
+                .entry(&scene_edges[edge.id.as_str()].target)
+                .or_default()
+                .push(*edge.points.last().expect("edge terminal"));
+        }
+        assert!(terminals.values().all(|points| {
+            points.iter().copied().collect::<BTreeSet<_>>().len() == points.len()
+        }));
+        for edge in &first.edges {
+            assert!(
+                first
+                    .edges
+                    .iter()
+                    .flat_map(|candidate| route_corridors(&candidate.points, 7))
+                    .all(|corridor| edge.label.rect.intersection_area(corridor) == 0)
+            );
+        }
     }
 
     #[test]

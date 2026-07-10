@@ -1712,29 +1712,7 @@ fn label_for_term(
             ),
         (_, VizTermValue::Blank { label, scope }) if *scope == 0 => format!("_:{label}"),
         (_, VizTermValue::Blank { label, scope }) => format!("_:{label}.s{scope}"),
-        (
-            _,
-            VizTermValue::Literal {
-                lexical_form,
-                language,
-                direction,
-                ..
-            },
-        ) => {
-            let mut label = format!("\"{lexical_form}\"");
-            if let Some(language) = language {
-                label.push('@');
-                label.push_str(language);
-            }
-            if let Some(direction) = direction {
-                label.push(' ');
-                label.push_str(match direction {
-                    VizTextDirection::Ltr => "ltr",
-                    VizTextDirection::Rtl => "rtl",
-                });
-            }
-            label
-        }
+        (_, VizTermValue::Literal { lexical_form, .. }) => format!("\"{lexical_form}\""),
     }
 }
 
@@ -1909,15 +1887,20 @@ mod tests {
             ..VizGraphInput::default()
         };
         let projection = project_graph_input(&input, &VizSpec::default()).expect("project");
-        assert!(projection.terms.iter().any(|term| {
-            matches!(
-                &term.value,
-                VizTermValue::Literal {
-                    direction: Some(VizTextDirection::Rtl),
-                    ..
-                }
-            )
-        }));
+        let term = projection
+            .terms
+            .iter()
+            .find(|term| {
+                matches!(
+                    &term.value,
+                    VizTermValue::Literal {
+                        direction: Some(VizTextDirection::Rtl),
+                        ..
+                    }
+                )
+            })
+            .expect("directional literal");
+        assert_eq!(term.label, "\"مرحبا\"");
     }
 
     #[test]
