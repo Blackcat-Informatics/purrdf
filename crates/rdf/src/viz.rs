@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{QuadRef, RdfDataset, RdfTextDirection, TermRef, TermValue};
 
+mod scene;
+
+pub use scene::*;
+
 const DEFAULT_GRAPH_ID: &str = "graph:default";
 const DEFAULT_MAX_STATEMENTS: usize = 500;
 /// Visualization schema version embedded in structured exports.
@@ -142,6 +146,8 @@ pub enum VizDialect {
 /// A typed visualization diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct VizDiagnostic {
+    /// Deterministic diagnostic id.
+    pub id: String,
     /// Stable machine-readable diagnostic code.
     pub code: String,
     /// Human-readable diagnostic message.
@@ -585,6 +591,8 @@ pub enum VizError {
     AmbiguousFocus(String),
     /// A deterministic identity hash collided with a different structural key.
     IdCollision(String),
+    /// A renderer-neutral scene is structurally invalid.
+    Scene(String),
     /// Serialization failed.
     Serialize(String),
 }
@@ -620,6 +628,7 @@ impl fmt::Display for VizError {
             Self::IdCollision(id) => {
                 write!(f, "visualization structural identity collision for {id}")
             }
+            Self::Scene(message) => f.write_str(message),
             Self::Serialize(message) => f.write_str(message),
         }
     }
@@ -1209,8 +1218,9 @@ impl<'a> ProjectionBuilder<'a> {
         let key = format!("{}|{code}", statement.0);
         let id = self.mint_id("diagnostic", &key)?;
         self.diagnostics.insert(
-            id,
+            id.clone(),
             VizDiagnostic {
+                id,
                 code: code.to_owned(),
                 message: message.to_owned(),
                 target: Some(statement.0.clone()),
@@ -1225,8 +1235,9 @@ impl<'a> ProjectionBuilder<'a> {
         let key = format!("{}|{code}", graph.0);
         let id = self.mint_id("diagnostic", &key)?;
         self.diagnostics.insert(
-            id,
+            id.clone(),
             VizDiagnostic {
+                id,
                 code: code.to_owned(),
                 message: message.to_owned(),
                 target: Some(graph.0.clone()),
