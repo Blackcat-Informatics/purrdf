@@ -78,6 +78,8 @@ pub mod capture_support;
 // Canonical, review-friendly Turtle serializer over the IR (Task 9): the
 // native replacement for rdflib `longturtle` in `purrdf normalize`. Oxigraph-free.
 pub mod turtle_normalize;
+/// Statement-centric RDF 1.2 visualization projection and SVG export support.
+pub mod viz;
 
 // Mirror the kernel's root-level re-exports so `purrdf::RdfTerm`,
 // `purrdf::RdfDiagnostic`, … keep resolving exactly as before. The two

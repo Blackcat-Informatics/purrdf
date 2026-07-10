@@ -44,6 +44,7 @@ purrdf-xsd = { workspace = true }
 # (`native_codecs::jsonld`). Already in the validate + pipeline trees, so
 # this adds no new tree-wide dependency.
 serde_json = { workspace = true }
+serde = { workspace = true }
 serde_yaml = { workspace = true }
 ciborium = { workspace = true }
 # Store-once interning on the native text-codec hot path (fixed-key hashing +
