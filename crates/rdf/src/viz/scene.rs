@@ -152,8 +152,10 @@ pub enum VizPortKind {
     Predicate,
     /// Object role port on a statement.
     Object,
-    /// Reification/annotation attachment port on a statement.
+    /// Reification attachment port on a statement.
     Relation,
+    /// Port used when a structural statement occurs as an RDF value.
+    Value,
 }
 
 /// Endpoint on a node port or on an addressable assertion edge.
@@ -447,7 +449,13 @@ fn build_incidence_scene(projection: &VizProjection) -> VizScene {
     let terms = term_map(projection);
     let statements = statement_map(projection);
     let relation_summary = relation_summary(projection);
-    let mut nodes = projection.terms.iter().map(term_node).collect::<Vec<_>>();
+    let visible_terms = incidence_visible_terms(projection);
+    let mut nodes = projection
+        .terms
+        .iter()
+        .filter(|term| visible_terms.contains(&term.id))
+        .map(term_node)
+        .collect::<Vec<_>>();
     nodes.extend(
         projection.statements.iter().map(|statement| {
             statement_node(statement, projection, &terms, &relation_summary, false)
@@ -724,17 +732,10 @@ fn assertion_edge(
         source: compact_value_endpoint(&statement.subject, statements, true),
         target: compact_value_endpoint(&statement.object, statements, false),
         label: plain_label(predicate),
-        badges: std::iter::once(VizBadge {
-            kind: VizBadgeKind::Asserted,
-            label: "asserted".to_owned(),
-            binding: None,
-        })
-        .chain(
-            graph_ids
-                .into_iter()
-                .map(|graph| graph_badge(graph, projection)),
-        )
-        .collect(),
+        badges: graph_ids
+            .into_iter()
+            .map(|graph| graph_badge(graph, projection))
+            .collect(),
         anchor,
         accessibility: VizAccessibility {
             title: format!("asserted {predicate}"),
@@ -769,30 +770,51 @@ fn statement_anchor(
             .iter()
             .map(|reference| VizSemanticRef::Reference(reference.id.clone())),
     );
-    let mut badges = vec![VizBadge {
-        kind: VizBadgeKind::Asserted,
-        label: "asserted".to_owned(),
-        binding: None,
-    }];
+    let mut badges = Vec::new();
     if !summary.reifiers.is_empty() {
         badges.push(VizBadge {
             kind: VizBadgeKind::ReifierCount,
-            label: format!("{} reifier(s)", summary.reifiers.len()),
+            label: format!("R {}", summary.reifiers.len()),
             binding: None,
         });
     }
     if !summary.annotation_relations.is_empty() {
         badges.push(VizBadge {
             kind: VizBadgeKind::AnnotationCount,
-            label: format!("{} annotation(s)", summary.annotation_relations.len()),
+            label: format!("A {}", summary.annotation_relations.len()),
             binding: None,
         });
     }
     if !references.is_empty() {
         badges.push(VizBadge {
             kind: VizBadgeKind::ReferenceCount,
-            label: format!("{} reference(s)", references.len()),
+            label: format!("ref {}", references.len()),
             binding: None,
+        });
+    }
+    if statement.nesting_depth > 0 {
+        badges.push(VizBadge {
+            kind: VizBadgeKind::NestingDepth,
+            label: format!("depth {}", statement.nesting_depth),
+            binding: None,
+        });
+    }
+    if statement.dialect != VizDialect::Rdf12 {
+        badges.push(VizBadge {
+            kind: VizBadgeKind::Dialect,
+            label: dialect_label(&statement.dialect).to_owned(),
+            binding: projection
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.target.as_deref() == Some(&statement.id.0))
+                .map(|diagnostic| VizSemanticRef::Diagnostic(diagnostic.id.clone())),
+        });
+    }
+    if statement.roles.contains(&VizRole::Focus) {
+        badges.push(VizBadge {
+            kind: VizBadgeKind::Focus,
+            label: "focus".to_owned(),
+            binding: Some(VizSemanticRef::Statement(statement.id.clone())),
         });
     }
     VizEdgeAnchor {
@@ -847,6 +869,7 @@ fn statement_node(
             port("predicate", VizPortKind::Predicate),
             port("object", VizPortKind::Object),
             port("relation", VizPortKind::Relation),
+            port("value", VizPortKind::Value),
         ],
         badges,
         accessibility: VizAccessibility {
@@ -1118,6 +1141,29 @@ fn compact_visible_terms(projection: &VizProjection) -> BTreeSet<VizTermId> {
     visible
 }
 
+fn incidence_visible_terms(projection: &VizProjection) -> BTreeSet<VizTermId> {
+    let mut visible = BTreeSet::new();
+    for statement in &projection.statements {
+        add_value_term(&statement.subject, &mut visible);
+        visible.insert(statement.predicate.clone());
+        add_value_term(&statement.object, &mut visible);
+    }
+    for relation in &projection.relations {
+        match relation {
+            VizRelation::Reifies { reifier, .. } => {
+                visible.insert(reifier.clone());
+            }
+            VizRelation::Annotation {
+                reifier, object, ..
+            } => {
+                visible.insert(reifier.clone());
+                add_value_term(object, &mut visible);
+            }
+        }
+    }
+    visible
+}
+
 fn add_value_term(value: &VizValueRef, terms: &mut BTreeSet<VizTermId>) {
     if let VizValueRef::Term { id } = value {
         terms.insert(id.clone());
@@ -1150,14 +1196,14 @@ fn compact_statement_endpoint(
             anchor: scene_statement_anchor_id(id),
         }
     } else {
-        node_endpoint(&scene_statement_node_id(id), "relation")
+        node_endpoint(&scene_statement_node_id(id), "value")
     }
 }
 
 fn incidence_value_endpoint(value: &VizValueRef) -> VizEndpoint {
     match value {
         VizValueRef::Term { id } => node_endpoint(&scene_term_node_id(id), "out"),
-        VizValueRef::Statement { id } => node_endpoint(&scene_statement_node_id(id), "relation"),
+        VizValueRef::Statement { id } => node_endpoint(&scene_statement_node_id(id), "value"),
     }
 }
 
@@ -1167,6 +1213,7 @@ fn statement_needs_anchor(
 ) -> bool {
     statement.incoming_references > 0
         || statement.roles.contains(&VizRole::Focus)
+        || statement.dialect != VizDialect::Rdf12
         || summaries.get(&statement.id).is_some_and(|summary| {
             !summary.reifiers.is_empty() || !summary.annotation_relations.is_empty()
         })
@@ -1361,6 +1408,11 @@ fn incidence_legend() -> Vec<VizLegendEntry> {
         legend("predicate", "predicate port", "statement predicate role"),
         legend("object", "object port", "statement object role"),
         legend("reifies", "reifies arrow", "reifier-to-statement relation"),
+        legend(
+            "annotation",
+            "annotation arrow",
+            "ordinary relation from a reifier",
+        ),
     ]
 }
 
@@ -1585,6 +1637,55 @@ mod tests {
         assert!(kinds.contains(&VizSceneEdgeKind::Subject));
         assert!(kinds.contains(&VizSceneEdgeKind::Predicate));
         assert!(kinds.contains(&VizSceneEdgeKind::Object));
+    }
+
+    #[test]
+    fn incidence_scene_omits_graph_and_annotation_predicate_only_terms() {
+        let spec = VizSpec {
+            mode: VizMode::Incidence,
+            ..VizSpec::default()
+        };
+        let (_, scene) = project_graph_input_scene(&semantic_input(true), &spec).expect("scene");
+        let labels = scene
+            .nodes
+            .iter()
+            .map(|node| node.label.text.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(!labels.contains("facts"));
+        assert!(!labels.contains("claims"));
+        assert!(!labels.contains("provenance"));
+        assert!(!labels.contains("confidence"));
+        assert!(labels.contains("knows"));
+    }
+
+    #[test]
+    fn compact_nonstandard_statement_has_dialect_anchor() {
+        let input = VizGraphInput {
+            quads: vec![VizInputQuad {
+                subject: TermValue::Triple {
+                    s: Box::new(iri("alice")),
+                    p: Box::new(TermValue::Iri(KNOWS.to_owned())),
+                    o: Box::new(iri("bob")),
+                },
+                predicate: format!("{EX}reportedBy"),
+                object: iri("carol"),
+                graph_name: None,
+            }],
+            ..VizGraphInput::default()
+        };
+        let (_, scene) = project_graph_input_scene(&input, &VizSpec::default()).expect("scene");
+        let assertion = scene
+            .edges
+            .iter()
+            .find(|edge| edge.kind == VizSceneEdgeKind::Assertion)
+            .expect("assertion");
+        let anchor = assertion.anchor.as_ref().expect("dialect anchor");
+        assert!(
+            anchor
+                .badges
+                .iter()
+                .any(|badge| badge.kind == VizBadgeKind::Dialect)
+        );
     }
 
     #[test]

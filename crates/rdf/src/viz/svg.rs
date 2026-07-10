@@ -432,6 +432,7 @@ fn render_edge(scene: &VizSceneEdge, layout: &VizLayoutEdge, out: &mut String) {
         edge_marker(scene.kind)
     )
     .expect("writing to String cannot fail");
+    render_edge_label_leader(&layout.points, layout.label.rect, out);
     render_label_box(
         &format!("svg-{}-label", scene.id),
         &scene.label,
@@ -444,6 +445,29 @@ fn render_edge(scene: &VizSceneEdge, layout: &VizLayoutEdge, out: &mut String) {
         render_anchor(&scene.id, scene_anchor, layout_anchor, out);
     }
     out.push_str("</g>\n");
+}
+
+fn render_edge_label_leader(points: &[VizPoint], label: VizRect, out: &mut String) {
+    let center = VizPoint {
+        x: label.x + label.width / 2,
+        y: label.y + label.height / 2,
+    };
+    let Some(target) = nearest_point_on_path(points, center) else {
+        return;
+    };
+    let inside_label = target.x >= label.x - 4
+        && target.x <= label.x + label.width + 4
+        && target.y >= label.y - 4
+        && target.y <= label.y + label.height + 4;
+    if inside_label {
+        return;
+    }
+    writeln!(
+        out,
+        "<path class=\"edge-label-leader\" d=\"M {} {} L {} {}\"/>",
+        center.x, center.y, target.x, target.y
+    )
+    .expect("writing to String cannot fail");
 }
 
 fn render_anchor(edge_id: &str, scene: &VizEdgeAnchor, layout: &VizLayoutAnchor, out: &mut String) {
@@ -793,6 +817,33 @@ fn path_data(points: &[VizPoint]) -> String {
     out
 }
 
+fn nearest_point_on_path(points: &[VizPoint], point: VizPoint) -> Option<VizPoint> {
+    points
+        .windows(2)
+        .map(|pair| {
+            let start = pair[0];
+            let end = pair[1];
+            let candidate = if start.x == end.x {
+                VizPoint {
+                    x: start.x,
+                    y: point.y.clamp(start.y.min(end.y), start.y.max(end.y)),
+                }
+            } else if start.y == end.y {
+                VizPoint {
+                    x: point.x.clamp(start.x.min(end.x), start.x.max(end.x)),
+                    y: start.y,
+                }
+            } else {
+                start
+            };
+            let dx = i64::from(candidate.x - point.x);
+            let dy = i64::from(candidate.y - point.y);
+            (dx * dx + dy * dy, candidate)
+        })
+        .min_by_key(|(distance, candidate)| (*distance, candidate.x, candidate.y))
+        .map(|(_, candidate)| candidate)
+}
+
 fn edge_class(kind: VizSceneEdgeKind) -> &'static str {
     match kind {
         VizSceneEdgeKind::Assertion => "assertion",
@@ -909,6 +960,7 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 .node-label{font-size:14px;font-weight:650}
 .node-port{fill:#fff;stroke:#334155;stroke-width:1.5}
 .edge-path,.legend-line{fill:none;stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+.edge-label-leader{fill:none;stroke:#94a3b8;stroke-width:1;stroke-dasharray:3 3}
 .edge.assertion .edge-path,.legend-line.assertion{stroke:#147d8a}
 .edge.role .edge-path,.legend-line.role{stroke:#64748b;stroke-width:1.8}
 .edge.reifies .edge-path,.legend-line.reifies{stroke:#b65c00;stroke-width:2.8;stroke-dasharray:10 4}
@@ -916,8 +968,8 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 .edge.quoted .edge-path{stroke:#6f4ba8;stroke-width:1.7;stroke-dasharray:3 5}
 .edge-label-box{fill:#fff;stroke:#cbd5e1;stroke-width:1}
 .edge-label{font-size:12px;font-weight:650}
-.statement-anchor .anchor-shape{fill:#173f48;stroke:#fff;stroke-width:2}
-.anchor-label{fill:#fff;font-size:12px;font-weight:700}
+.statement-anchor .anchor-shape{fill:#e5f4f5;stroke:#147d8a;stroke-width:2.5}
+.anchor-label{fill:#173f48;font-size:12px;font-weight:700}
 .badge-shape{fill:#eef2f6;stroke:#94a3b8;stroke-width:1}
 .graph .badge-shape{fill:#e7f5ef;stroke:#277a5a}
 .quoted .badge-shape{fill:#f1ebfa;stroke:#6f4ba8}

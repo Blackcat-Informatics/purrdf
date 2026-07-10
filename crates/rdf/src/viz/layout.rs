@@ -95,11 +95,26 @@ impl VizRect {
             && self.bottom() > other.y
     }
 
+    fn intersection_area(self, other: Self) -> i32 {
+        let width = self.right().min(other.right()) - self.x.max(other.x);
+        let height = self.bottom().min(other.bottom()) - self.y.max(other.y);
+        width.max(0) * height.max(0)
+    }
+
     fn translated(self, dx: i32, dy: i32) -> Self {
         Self {
             x: self.x + dx,
             y: self.y + dy,
             ..self
+        }
+    }
+
+    fn inflated(self, amount: i32) -> Self {
+        Self {
+            x: self.x - amount,
+            y: self.y - amount,
+            width: self.width + amount * 2,
+            height: self.height + amount * 2,
         }
     }
 }
@@ -330,12 +345,18 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
         .map(|node| (node.id.as_str(), node))
         .collect::<BTreeMap<_, _>>();
     let anchor_lookup = build_anchor_lookup(scene, &all_rects)?;
-    let mut occupied_labels = nodes.iter().map(|node| node.rect).collect::<Vec<_>>();
+    let mut occupied_labels = nodes
+        .iter()
+        .map(|node| node.rect.inflated(8))
+        .chain(anchor_lookup.values().map(|rect| rect.inflated(8)))
+        .collect::<Vec<_>>();
     let parallel_offsets = parallel_edge_offsets(scene);
     let mut edges = Vec::new();
     for edge in &scene.edges {
-        let start = endpoint_point(&edge.source, &node_lookup, &anchor_lookup)?;
-        let end = endpoint_point(&edge.target, &node_lookup, &anchor_lookup)?;
+        let start_center = endpoint_point(&edge.source, &node_lookup, &anchor_lookup)?;
+        let end_center = endpoint_point(&edge.target, &node_lookup, &anchor_lookup)?;
+        let start = endpoint_boundary_point(&edge.source, start_center, end_center, &anchor_lookup);
+        let end = endpoint_boundary_point(&edge.target, end_center, start_center, &anchor_lookup);
         let mut waypoints = all_waypoints.remove(&edge.id).unwrap_or_default();
         waypoints.sort_by_key(|point| (point.x, point.y));
         if start.x > end.x {
@@ -359,16 +380,35 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
                 }
             });
         }
-        let points = route_edge(start, end, &required, offset);
+        let points = if edge.kind == VizSceneEdgeKind::Reifies
+            && matches!(
+                &edge.target,
+                VizEndpoint::NodePort { port, .. } if port == "relation"
+            ) {
+            route_reifies_to_relation(start, end, offset)
+        } else {
+            route_edge(start, end, &required, offset)
+        };
         let label_size = measure_label(&edge.label.text, 22, 210);
-        let label_rect = place_edge_label(&points, label_size, &occupied_labels);
-        occupied_labels.push(label_rect);
+        let stack_size = measure_edge_label_stack(label_size, &edge.badges);
+        let stack_rect = place_edge_label(&points, stack_size, &occupied_labels, edge.kind);
+        occupied_labels.push(stack_rect);
+        let label_rect = VizRect {
+            x: stack_rect.x + (stack_rect.width - label_size.0) / 2,
+            y: stack_rect.y,
+            width: label_size.0,
+            height: label_size.1,
+        };
         let label = VizLayoutLabel {
             rect: label_rect,
             lines: wrap_text(&edge.label.text, chars_for_width(label_rect.width)),
         };
-        let badges = place_badges(&edge.badges, label_rect.x, label_rect.bottom() + 4, 240);
-        occupied_labels.extend(badges.iter().map(|badge| badge.rect));
+        let badges = place_badges(
+            &edge.badges,
+            stack_rect.x,
+            label_rect.bottom() + 4,
+            stack_rect.width,
+        );
         edges.push(VizLayoutEdge {
             id: edge.id.clone(),
             points,
@@ -1041,14 +1081,14 @@ fn place_anchor(anchor: &VizEdgeAnchor, rect: VizRect) -> VizLayoutAnchor {
 }
 
 fn measure_anchor(anchor: &VizEdgeAnchor) -> (i32, i32) {
-    let label_size = measure_label(&anchor.label.text, 18, 180);
+    let label_size = measure_label(&anchor.label.text, 16, 144);
     let widest_badge = anchor
         .badges
         .iter()
         .map(|badge| badge_width(&badge.label))
         .max()
         .unwrap_or_default();
-    let width = label_size.0.max(widest_badge + 16).clamp(88, 220);
+    let width = label_size.0.max(widest_badge + 16).clamp(80, 180);
     let rows = badge_row_count(&anchor.badges, width - 16);
     let height = 12 + label_size.1 + if rows == 0 { 0 } else { 4 + rows * 22 };
     (width, height.max(34))
@@ -1091,15 +1131,55 @@ fn endpoint_point(
     }
 }
 
+fn endpoint_boundary_point(
+    endpoint: &VizEndpoint,
+    center: VizPoint,
+    toward: VizPoint,
+    anchors: &BTreeMap<(&str, &str), VizRect>,
+) -> VizPoint {
+    let VizEndpoint::EdgeAnchor { edge, anchor } = endpoint else {
+        return center;
+    };
+    anchors
+        .get(&(edge.as_str(), anchor.as_str()))
+        .map_or(center, |rect| rect_boundary_point(*rect, toward))
+}
+
+fn rect_boundary_point(rect: VizRect, toward: VizPoint) -> VizPoint {
+    let center = rect.center();
+    let dx = toward.x - center.x;
+    let dy = toward.y - center.y;
+    if dx == 0 && dy == 0 {
+        return center;
+    }
+    if dx.abs() * rect.height >= dy.abs() * rect.width {
+        let half_width = rect.width / 2;
+        VizPoint {
+            x: center.x + dx.signum() * half_width,
+            y: center.y + dy * half_width / dx.abs().max(1),
+        }
+    } else {
+        let half_height = rect.height / 2;
+        VizPoint {
+            x: center.x + dx * half_height / dy.abs().max(1),
+            y: center.y + dy.signum() * half_height,
+        }
+    }
+}
+
 fn port_point(kind: VizPortKind, rect: VizRect) -> VizPoint {
     match kind {
         VizPortKind::In => VizPoint {
             x: rect.x,
             y: rect.y + rect.height / 2,
         },
-        VizPortKind::Out | VizPortKind::Relation => VizPoint {
+        VizPortKind::Out | VizPortKind::Value => VizPoint {
             x: rect.right(),
             y: rect.y + rect.height / 2,
+        },
+        VizPortKind::Relation => VizPoint {
+            x: rect.x + rect.width / 2,
+            y: rect.y,
         },
         VizPortKind::Subject => VizPoint {
             x: rect.x,
@@ -1152,6 +1232,29 @@ fn route_edge(
     points
 }
 
+fn route_reifies_to_relation(start: VizPoint, end: VizPoint, offset: i32) -> Vec<VizPoint> {
+    let lane_x = start.x + 32 + offset;
+    let approach_y = end.y - 32 - offset.abs();
+    let mut points = vec![
+        start,
+        VizPoint {
+            x: lane_x,
+            y: start.y,
+        },
+        VizPoint {
+            x: lane_x,
+            y: approach_y,
+        },
+        VizPoint {
+            x: end.x,
+            y: approach_y,
+        },
+        end,
+    ];
+    dedup_points(&mut points);
+    points
+}
+
 fn append_orthogonal_segment(
     points: &mut Vec<VizPoint>,
     start: VizPoint,
@@ -1161,35 +1264,15 @@ fn append_orthogonal_segment(
     if points.last().copied() != Some(start) {
         points.push(start);
     }
-    if start.x <= end.x {
-        let middle_x = start.x + (end.x - start.x) / 2 + offset;
-        points.push(VizPoint {
-            x: middle_x,
-            y: start.y,
-        });
-        points.push(VizPoint {
-            x: middle_x,
-            y: end.y,
-        });
-    } else {
-        let detour_y = start.y.min(end.y) - 48 - offset.abs();
-        points.push(VizPoint {
-            x: start.x + 28 + offset,
-            y: start.y,
-        });
-        points.push(VizPoint {
-            x: start.x + 28 + offset,
-            y: detour_y,
-        });
-        points.push(VizPoint {
-            x: end.x - 28 + offset,
-            y: detour_y,
-        });
-        points.push(VizPoint {
-            x: end.x - 28 + offset,
-            y: end.y,
-        });
-    }
+    let middle_x = i32::midpoint(start.x, end.x) + offset;
+    points.push(VizPoint {
+        x: middle_x,
+        y: start.y,
+    });
+    points.push(VizPoint {
+        x: middle_x,
+        y: end.y,
+    });
     points.push(end);
 }
 
@@ -1231,8 +1314,13 @@ fn parallel_edge_offsets(scene: &VizScene) -> BTreeMap<String, i32> {
     offsets
 }
 
-fn place_edge_label(points: &[VizPoint], size: (i32, i32), occupied: &[VizRect]) -> VizRect {
-    let (start, end) = longest_segment(points).unwrap_or_else(|| {
+fn place_edge_label(
+    points: &[VizPoint],
+    size: (i32, i32),
+    occupied: &[VizRect],
+    kind: VizSceneEdgeKind,
+) -> VizRect {
+    let (start, end) = preferred_label_segment(points, kind).unwrap_or_else(|| {
         (
             points.first().copied().unwrap_or_default(),
             points.last().copied().unwrap_or_default(),
@@ -1242,30 +1330,81 @@ fn place_edge_label(points: &[VizPoint], size: (i32, i32), occupied: &[VizRect])
         x: i32::midpoint(start.x, end.x),
         y: i32::midpoint(start.y, end.y),
     };
-    for step in 0..16 {
+    let horizontal = (start.x - end.x).abs() >= (start.y - end.y).abs();
+    let mut best = None;
+    for step in 0..12 {
         let offset = if step == 0 {
             0
         } else if step % 2 == 1 {
-            -24 * ((step + 1) / 2)
+            -28 * ((step + 1) / 2)
         } else {
-            24 * (step / 2)
+            28 * (step / 2)
         };
         let candidate = VizRect {
-            x: center.x - size.0 / 2,
-            y: center.y - size.1 / 2 + offset,
+            x: center.x - size.0 / 2 + if horizontal { 0 } else { offset },
+            y: center.y - size.1 / 2 + if horizontal { offset } else { 0 },
             width: size.0,
             height: size.1,
         };
-        if !occupied.iter().any(|rect| candidate.intersects(*rect)) {
+        let overlap = occupied
+            .iter()
+            .map(|rect| candidate.intersection_area(*rect))
+            .sum::<i32>();
+        if overlap == 0 {
             return candidate;
         }
+        if best.as_ref().is_none_or(|(best_overlap, best_step, _)| {
+            (overlap, step) < (*best_overlap, *best_step)
+        }) {
+            best = Some((overlap, step, candidate));
+        }
     }
-    VizRect {
-        x: center.x - size.0 / 2,
-        y: center.y - size.1 / 2 - 408,
-        width: size.0,
-        height: size.1,
+    best.map_or(
+        VizRect {
+            x: center.x - size.0 / 2,
+            y: center.y - size.1 / 2,
+            width: size.0,
+            height: size.1,
+        },
+        |(_, _, candidate)| candidate,
+    )
+}
+
+fn preferred_label_segment(
+    points: &[VizPoint],
+    kind: VizSceneEdgeKind,
+) -> Option<(VizPoint, VizPoint)> {
+    let mut horizontal = points.windows(2).filter_map(|pair| {
+        let start = pair[0];
+        let end = pair[1];
+        (start.y == end.y && (start.x - end.x).abs() >= 36).then_some((start, end))
+    });
+    match kind {
+        VizSceneEdgeKind::Subject
+        | VizSceneEdgeKind::Predicate
+        | VizSceneEdgeKind::Object
+        | VizSceneEdgeKind::Reifies
+        | VizSceneEdgeKind::QuoteSubject
+        | VizSceneEdgeKind::QuoteObject => horizontal.next_back(),
+        VizSceneEdgeKind::Assertion | VizSceneEdgeKind::Annotation => {
+            horizontal.max_by_key(|(start, end)| (start.x - end.x).abs())
+        }
     }
+    .or_else(|| longest_segment(points))
+}
+
+fn measure_edge_label_stack(label: (i32, i32), badges: &[VizBadge]) -> (i32, i32) {
+    if badges.is_empty() {
+        return label;
+    }
+    let badge_width = badges
+        .iter()
+        .map(|badge| badge_width(&badge.label))
+        .sum::<i32>()
+        + i32_from_usize(badges.len().saturating_sub(1)) * 6;
+    let width = label.0.max(badge_width.min(240));
+    let rows = badge_row_count(badges, width);
+    (width, label.1 + 4 + rows * 22)
 }
 
 fn longest_segment(points: &[VizPoint]) -> Option<(VizPoint, VizPoint)> {
