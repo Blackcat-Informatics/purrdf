@@ -177,7 +177,9 @@ pub enum VizGraphPolicy {
     /// Include every graph context.
     #[default]
     All,
-    /// Include only the named/default graph ids listed here.
+    /// Include only graph selectors listed here. A selector is `default`, a
+    /// full graph-name IRI, a compact blank-node label, a canonical term key,
+    /// or a deterministic visualization graph id.
     Include(Vec<String>),
 }
 
@@ -205,6 +207,26 @@ pub enum VizMode {
     Table,
 }
 
+/// Column available in the statement table projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VizTableField {
+    /// Structural statement text and identity.
+    Statement,
+    /// Graphs containing assertion occurrences.
+    AssertedIn,
+    /// Reifier count.
+    Reifiers,
+    /// Annotation count across the statement's reifiers.
+    Annotations,
+    /// Incoming triple-term reference count.
+    ReferencedBy,
+    /// Structural triple-term nesting depth.
+    Depth,
+    /// Dialect and conformance diagnostics.
+    Diagnostics,
+}
+
 /// Caller-provided semantic lens for visualization projection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VizSpec {
@@ -225,7 +247,7 @@ pub struct VizSpec {
     /// Maximum visible terms accepted by this spec.
     pub max_terms: usize,
     /// Statement table fields requested by the caller.
-    pub table_fields: Vec<String>,
+    pub table_fields: Vec<VizTableField>,
 }
 
 impl Default for VizSpec {
@@ -240,12 +262,13 @@ impl Default for VizSpec {
             max_statements: DEFAULT_MAX_STATEMENTS,
             max_terms: DEFAULT_MAX_STATEMENTS * 3,
             table_fields: vec![
-                "statement".to_owned(),
-                "assertedIn".to_owned(),
-                "reifiers".to_owned(),
-                "annotations".to_owned(),
-                "referencedBy".to_owned(),
-                "depth".to_owned(),
+                VizTableField::Statement,
+                VizTableField::AssertedIn,
+                VizTableField::Reifiers,
+                VizTableField::Annotations,
+                VizTableField::ReferencedBy,
+                VizTableField::Depth,
+                VizTableField::Diagnostics,
             ],
         }
     }
@@ -394,26 +417,46 @@ pub struct VizReference {
     pub id: VizReferenceId,
     /// Referenced structural statement.
     pub statement: VizStatementId,
-    /// Reference source category.
-    pub source: VizReferenceSource,
+    /// Exact place where the triple term occurs.
+    pub site: VizReferenceSite,
 }
 
-/// Source category for a structural-statement reference.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// Subject or object position occupied by a triple term.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum VizReferenceSource {
-    /// Statement appears in asserted subject position.
-    AssertionSubject,
-    /// Statement appears in asserted object position.
-    AssertionObject,
-    /// Statement appears in graph-name position.
-    GraphName,
-    /// Statement is the target of a reification relation.
-    ReificationTarget,
-    /// Statement appears in an annotation object.
-    AnnotationObject,
-    /// Statement appears inside another triple term.
-    NestedStatement,
+pub enum VizPosition {
+    /// Subject position.
+    Subject,
+    /// Object position.
+    Object,
+}
+
+/// Exact source site for a structural-statement reference.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum VizReferenceSite {
+    /// Triple term occurs in another structural statement.
+    Statement {
+        /// Containing structural statement.
+        statement: VizStatementId,
+        /// Subject or object position.
+        position: VizPosition,
+    },
+    /// Triple term is the target of a reification relation.
+    Reification {
+        /// Containing reification relation.
+        relation: VizRelationId,
+    },
+    /// Triple term occurs as an annotation object.
+    Annotation {
+        /// Containing annotation relation.
+        relation: VizRelationId,
+    },
+    /// Triple term occurs as a graph name in generalized RDF.
+    GraphName {
+        /// Containing graph record.
+        graph: VizGraphId,
+    },
 }
 
 /// A graph context known to the visualization projection.
@@ -422,7 +465,7 @@ pub struct VizGraph {
     /// Deterministic graph id.
     pub id: VizGraphId,
     /// Graph term. `None` is the default graph.
-    pub term: Option<VizTermId>,
+    pub term: Option<VizValueRef>,
     /// Display label.
     pub label: String,
 }
@@ -444,6 +487,15 @@ pub struct VizTableRow {
     pub depth: u32,
 }
 
+/// Statement table projection with caller-selected columns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VizTable {
+    /// Columns in display order.
+    pub fields: Vec<VizTableField>,
+    /// Structural statement rows.
+    pub rows: Vec<VizTableRow>,
+}
+
 /// The renderer-neutral Statement Incidence Model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VizProjection {
@@ -460,7 +512,7 @@ pub struct VizProjection {
     /// Triple-term references in deterministic order.
     pub references: Vec<VizReference>,
     /// Statement table rows in deterministic order.
-    pub table: Vec<VizTableRow>,
+    pub table: VizTable,
     /// Diagnostics in deterministic order.
     pub diagnostics: Vec<VizDiagnostic>,
 }
@@ -523,8 +575,16 @@ pub enum VizError {
     UnknownRolePredicate(String),
     /// A spec contains an invalid vocabulary mapping.
     InvalidVocabulary(String),
+    /// A visualization specification is internally inconsistent.
+    InvalidSpec(String),
     /// A graph-like input contains an invalid predicate.
     InvalidPredicate(String),
+    /// A focus selector does not match any projected term or statement.
+    UnknownFocus(String),
+    /// A focus selector matches more than one projected entity.
+    AmbiguousFocus(String),
+    /// A deterministic identity hash collided with a different structural key.
+    IdCollision(String),
     /// Serialization failed.
     Serialize(String),
 }
@@ -544,8 +604,21 @@ impl fmt::Display for VizError {
                 write!(f, "visualization role predicate {iri:?} is not present")
             }
             Self::InvalidVocabulary(message) => f.write_str(message),
+            Self::InvalidSpec(message) => f.write_str(message),
             Self::InvalidPredicate(predicate) => {
                 write!(f, "visualization predicate {predicate:?} is not an IRI")
+            }
+            Self::UnknownFocus(focus) => {
+                write!(
+                    f,
+                    "visualization focus {focus:?} does not match the projection"
+                )
+            }
+            Self::AmbiguousFocus(focus) => {
+                write!(f, "visualization focus {focus:?} is ambiguous")
+            }
+            Self::IdCollision(id) => {
+                write!(f, "visualization structural identity collision for {id}")
             }
             Self::Serialize(message) => f.write_str(message),
         }
@@ -643,7 +716,6 @@ struct StatementDraft {
     predicate: VizTermId,
     object: VizValueRef,
     asserted_in: BTreeSet<VizGraphId>,
-    references: BTreeSet<VizReferenceSource>,
     nesting_depth: u32,
     dialect: VizDialect,
     roles: BTreeSet<VizRole>,
@@ -657,7 +729,7 @@ struct AssertionDraft {
 
 #[derive(Debug, Clone)]
 struct GraphDraft {
-    term: Option<VizTermId>,
+    term: Option<VizValueRef>,
     label: String,
 }
 
@@ -675,6 +747,7 @@ struct ProjectionBuilder<'a> {
     references: BTreeMap<VizReferenceId, VizReference>,
     diagnostics: BTreeMap<String, VizDiagnostic>,
     role_predicates_seen: BTreeSet<String>,
+    identity_keys: BTreeMap<String, String>,
 }
 
 impl<'a> ProjectionBuilder<'a> {
@@ -692,6 +765,7 @@ impl<'a> ProjectionBuilder<'a> {
             references: BTreeMap::new(),
             diagnostics: BTreeMap::new(),
             role_predicates_seen: BTreeSet::new(),
+            identity_keys: BTreeMap::new(),
         }
     }
 
@@ -717,10 +791,14 @@ impl<'a> ProjectionBuilder<'a> {
         object: TermValue,
         graph_name: Option<TermValue>,
     ) -> Result<(), VizError> {
+        if !self.graph_selected(graph_name.as_ref()) {
+            return Ok(());
+        }
         let graph = self.graph_id(graph_name)?;
         let statement = self.statement_id(subject, predicate, object)?;
         self.apply_role_rules_to_value(&statement);
-        let assertion = VizAssertionId(format!("assertion:{}", self.assertions.len() + 1));
+        let assertion_key = format!("{}|{}", statement.0, graph.0);
+        let assertion = VizAssertionId(self.mint_id("assertion", &assertion_key)?);
         self.assertions.insert(
             assertion,
             AssertionDraft {
@@ -743,6 +821,9 @@ impl<'a> ProjectionBuilder<'a> {
         triple: TermValue,
         graph_name: Option<TermValue>,
     ) -> Result<(), VizError> {
+        if !self.graph_selected(graph_name.as_ref()) {
+            return Ok(());
+        }
         let reifier_id = self.term_id(reifier)?;
         self.add_term_role(&reifier_id, VizRole::Reifier);
         let TermValue::Triple { s, p, o } = triple else {
@@ -754,17 +835,18 @@ impl<'a> ProjectionBuilder<'a> {
         let statement = self.statement_id(*s, predicate, *o)?;
         self.add_statement_role(&statement, VizRole::QuotedStatement);
         let graph = self.graph_id(graph_name)?;
-        let relation = VizRelationId(format!("relation:reifies:{}", self.relations.len() + 1));
+        let relation_key = format!("{}|{}|{}", reifier_id.0, statement.0, graph.0);
+        let relation = VizRelationId(self.mint_id("relation-reifies", &relation_key)?);
         self.relations.insert(
             relation.clone(),
             VizRelation::Reifies {
-                id: relation,
+                id: relation.clone(),
                 reifier: reifier_id,
                 statement: statement.clone(),
                 graph,
             },
         );
-        self.add_reference(&statement, VizReferenceSource::ReificationTarget);
+        self.add_reference(&statement, VizReferenceSite::Reification { relation })?;
         Ok(())
     }
 
@@ -775,29 +857,45 @@ impl<'a> ProjectionBuilder<'a> {
         object: TermValue,
         graph_name: Option<TermValue>,
     ) -> Result<(), VizError> {
+        if !self.graph_selected(graph_name.as_ref()) {
+            return Ok(());
+        }
         let reifier_id = self.term_id(reifier)?;
         self.add_term_role(&reifier_id, VizRole::Reifier);
         let predicate_id = self.term_id(TermValue::Iri(predicate.to_owned()))?;
         self.add_term_role(&predicate_id, VizRole::Predicate);
         self.role_predicates_seen.insert(predicate.to_owned());
         self.apply_role_rules_to_term(&reifier_id, predicate);
-        let object_ref = self.value_ref(object, Some(VizReferenceSource::AnnotationObject))?;
+        let object_ref = self.value_ref(object)?;
         let graph = self.graph_id(graph_name)?;
-        let relation = VizRelationId(format!("relation:annotation:{}", self.relations.len() + 1));
+        let relation_key = format!(
+            "{}|{}|{}|{}",
+            reifier_id.0,
+            predicate_id.0,
+            value_ref_key(&object_ref),
+            graph.0
+        );
+        let relation = VizRelationId(self.mint_id("relation-annotation", &relation_key)?);
         self.relations.insert(
             relation.clone(),
             VizRelation::Annotation {
-                id: relation,
+                id: relation.clone(),
                 reifier: reifier_id,
                 predicate: predicate_id,
-                object: object_ref,
+                object: object_ref.clone(),
                 graph,
             },
         );
+        if let VizValueRef::Statement { id } = object_ref {
+            self.add_reference(&id, VizReferenceSite::Annotation { relation })?;
+        }
         Ok(())
     }
 
     fn add_default_graph(&mut self) {
+        if !self.graph_selected(None) {
+            return;
+        }
         self.graphs
             .entry(VizGraphId(DEFAULT_GRAPH_ID.to_owned()))
             .or_insert_with(|| GraphDraft {
@@ -818,21 +916,34 @@ impl<'a> ProjectionBuilder<'a> {
                 if let Some(id) = self.graph_by_key.get(&key) {
                     return Ok(id.clone());
                 }
-                let term = self.term_id(value)?;
-                self.add_term_role(&term, VizRole::GraphName);
-                let id = VizGraphId(format!("graph:{}", self.graphs.len() + 1));
-                let label = self
-                    .terms
-                    .get(&term)
-                    .map_or_else(|| id.0.clone(), |term| term.label.clone());
+                let id = VizGraphId(self.mint_id("graph", &key)?);
+                let term = self.value_ref(value)?;
+                let label = match &term {
+                    VizValueRef::Term { id } => {
+                        self.add_term_role(id, VizRole::GraphName);
+                        self.terms
+                            .get(id)
+                            .map_or_else(|| id.0.clone(), |term| term.label.clone())
+                    }
+                    VizValueRef::Statement { id } => format!("quoted {}", short_id(&id.0)),
+                };
                 self.graphs.insert(
                     id.clone(),
                     GraphDraft {
-                        term: Some(term),
+                        term: Some(term.clone()),
                         label,
                     },
                 );
                 self.graph_by_key.insert(key, id.clone());
+                if let VizValueRef::Statement { id: statement } = term {
+                    self.add_reference(
+                        &statement,
+                        VizReferenceSite::GraphName { graph: id.clone() },
+                    )?;
+                    self.add_graph_diagnostic(&id, "triple term appears as a graph name")?;
+                } else if self.graph_term_is_generalized(&id) {
+                    self.add_graph_diagnostic(&id, "literal appears as a graph name")?;
+                }
                 Ok(id)
             }
         }
@@ -844,65 +955,72 @@ impl<'a> ProjectionBuilder<'a> {
         predicate: String,
         object: TermValue,
     ) -> Result<VizStatementId, VizError> {
-        let subject_ref = self.value_ref(subject, Some(VizReferenceSource::AssertionSubject))?;
+        let subject_ref = self.value_ref(subject)?;
         let predicate_id = self.term_id(TermValue::Iri(predicate))?;
         self.add_term_role(&predicate_id, VizRole::Predicate);
-        let object_ref = self.value_ref(object, Some(VizReferenceSource::AssertionObject))?;
+        let object_ref = self.value_ref(object)?;
         let key = statement_key(&subject_ref, &predicate_id, &object_ref);
         if let Some(id) = self.statement_by_key.get(&key) {
             return Ok(id.clone());
         }
-        let id = VizStatementId(format!("statement:{}", self.statements.len() + 1));
-        let dialect = if matches!(subject_ref, VizValueRef::Statement { .. }) {
-            VizDialect::SymmetricRdf12
-        } else {
-            VizDialect::Rdf12
-        };
+        let id = VizStatementId(self.mint_id("statement", &key)?);
+        let dialect = self.statement_dialect(&subject_ref);
         let nesting_depth = value_ref_depth(&subject_ref, &self.statements)
             .max(value_ref_depth(&object_ref, &self.statements));
-        let mut roles = BTreeSet::new();
-        roles.insert(VizRole::QuotedStatement);
         self.statements.insert(
             id.clone(),
             StatementDraft {
-                subject: subject_ref,
+                subject: subject_ref.clone(),
                 predicate: predicate_id,
-                object: object_ref,
+                object: object_ref.clone(),
                 asserted_in: BTreeSet::new(),
-                references: BTreeSet::new(),
                 nesting_depth,
                 dialect: dialect.clone(),
-                roles,
+                roles: BTreeSet::new(),
             },
         );
         self.statement_by_key.insert(key, id.clone());
-        if dialect != VizDialect::Rdf12 {
-            self.diagnostics.insert(
-                format!("diagnostic:{}", self.diagnostics.len() + 1),
-                VizDiagnostic {
-                    code: "viz-dialect-symmetric-subject".to_owned(),
-                    message: "triple term appears in subject position".to_owned(),
-                    target: Some(id.0.clone()),
-                    dialect,
+        if let VizValueRef::Statement { id: nested } = subject_ref {
+            self.add_reference(
+                &nested,
+                VizReferenceSite::Statement {
+                    statement: id.clone(),
+                    position: VizPosition::Subject,
                 },
-            );
+            )?;
+        }
+        if let VizValueRef::Statement { id: nested } = object_ref {
+            self.add_reference(
+                &nested,
+                VizReferenceSite::Statement {
+                    statement: id.clone(),
+                    position: VizPosition::Object,
+                },
+            )?;
+        }
+        match dialect {
+            VizDialect::Rdf12 => {}
+            VizDialect::SymmetricRdf12 => self.add_statement_diagnostic(
+                &id,
+                "viz-dialect-symmetric-subject",
+                "triple term appears in subject position",
+                dialect,
+            )?,
+            VizDialect::GeneralizedRdf => self.add_statement_diagnostic(
+                &id,
+                "viz-dialect-generalized-subject",
+                "literal appears in subject position",
+                dialect,
+            )?,
         }
         Ok(id)
     }
 
-    fn value_ref(
-        &mut self,
-        value: TermValue,
-        reference: Option<VizReferenceSource>,
-    ) -> Result<VizValueRef, VizError> {
+    fn value_ref(&mut self, value: TermValue) -> Result<VizValueRef, VizError> {
         match value {
             TermValue::Triple { s, p, o } => {
                 let predicate = predicate_iri(*p)?;
                 let statement = self.statement_id(*s, predicate, *o)?;
-                self.add_statement_role(&statement, VizRole::QuotedStatement);
-                if let Some(source) = reference {
-                    self.add_reference(&statement, source);
-                }
                 Ok(VizValueRef::Statement { id: statement })
             }
             other => Ok(VizValueRef::Term {
@@ -916,9 +1034,13 @@ impl<'a> ProjectionBuilder<'a> {
         if let Some(id) = self.term_by_key.get(&key) {
             return Ok(id.clone());
         }
-        let id = VizTermId(format!("term:{}", self.terms.len() + 1));
+        let id = VizTermId(self.mint_id("term", &key)?);
         let value = viz_term_value(value)?;
-        let label = label_for_term(&value, self.spec.label_policy.clone());
+        let label = label_for_term(
+            &value,
+            self.spec.label_policy.clone(),
+            &self.spec.vocabulary,
+        );
         self.terms.insert(
             id.clone(),
             TermDraft {
@@ -986,22 +1108,171 @@ impl<'a> ProjectionBuilder<'a> {
         }
     }
 
-    fn add_reference(&mut self, statement: &VizStatementId, source: VizReferenceSource) {
-        let id = VizReferenceId(format!("reference:{}", self.references.len() + 1));
+    fn add_reference(
+        &mut self,
+        statement: &VizStatementId,
+        site: VizReferenceSite,
+    ) -> Result<(), VizError> {
+        let site_key =
+            serde_json::to_string(&site).map_err(|err| VizError::Serialize(err.to_string()))?;
+        let id = VizReferenceId(self.mint_id("reference", &format!("{}|{site_key}", statement.0))?);
         self.references.insert(
             id.clone(),
             VizReference {
                 id,
                 statement: statement.clone(),
-                source: source.clone(),
+                site,
             },
         );
-        if let Some(draft) = self.statements.get_mut(statement) {
-            draft.references.insert(source);
+        self.add_statement_role(statement, VizRole::QuotedStatement);
+        Ok(())
+    }
+
+    fn mint_id(&mut self, prefix: &str, key: &str) -> Result<String, VizError> {
+        let id = format!("{prefix}:{}", stable_hash_hex(key));
+        if let Some(existing) = self.identity_keys.get(&id) {
+            if existing != key {
+                return Err(VizError::IdCollision(id));
+            }
+        } else {
+            self.identity_keys.insert(id.clone(), key.to_owned());
+        }
+        Ok(id)
+    }
+
+    fn graph_selected(&self, graph: Option<&TermValue>) -> bool {
+        let VizGraphPolicy::Include(selectors) = &self.spec.graph_policy else {
+            return true;
+        };
+        let candidates = match graph {
+            None => vec!["default".to_owned(), DEFAULT_GRAPH_ID.to_owned()],
+            Some(value) => {
+                let key = term_key(value);
+                let mut candidates = vec![key.clone(), format!("graph:{}", stable_hash_hex(&key))];
+                match value {
+                    TermValue::Iri(iri) => {
+                        candidates.push(iri.clone());
+                        candidates.push(compact_iri(iri));
+                    }
+                    TermValue::Blank { label, .. } => {
+                        candidates.push(label.clone());
+                        candidates.push(format!("_:{label}"));
+                    }
+                    TermValue::Literal { lexical_form, .. } => {
+                        candidates.push(lexical_form.clone());
+                    }
+                    TermValue::Triple { .. } => {}
+                }
+                candidates
+            }
+        };
+        selectors
+            .iter()
+            .any(|selector| candidates.iter().any(|candidate| candidate == selector))
+    }
+
+    fn statement_dialect(&self, subject: &VizValueRef) -> VizDialect {
+        match subject {
+            VizValueRef::Statement { .. } => VizDialect::SymmetricRdf12,
+            VizValueRef::Term { id }
+                if self
+                    .terms
+                    .get(id)
+                    .is_some_and(|term| matches!(term.value, VizTermValue::Literal { .. })) =>
+            {
+                VizDialect::GeneralizedRdf
+            }
+            VizValueRef::Term { .. } => VizDialect::Rdf12,
+        }
+    }
+
+    fn graph_term_is_generalized(&self, graph: &VizGraphId) -> bool {
+        let Some(GraphDraft {
+            term: Some(VizValueRef::Term { id }),
+            ..
+        }) = self.graphs.get(graph)
+        else {
+            return false;
+        };
+        self.terms
+            .get(id)
+            .is_some_and(|term| matches!(term.value, VizTermValue::Literal { .. }))
+    }
+
+    fn add_statement_diagnostic(
+        &mut self,
+        statement: &VizStatementId,
+        code: &str,
+        message: &str,
+        dialect: VizDialect,
+    ) -> Result<(), VizError> {
+        let key = format!("{}|{code}", statement.0);
+        let id = self.mint_id("diagnostic", &key)?;
+        self.diagnostics.insert(
+            id,
+            VizDiagnostic {
+                code: code.to_owned(),
+                message: message.to_owned(),
+                target: Some(statement.0.clone()),
+                dialect,
+            },
+        );
+        Ok(())
+    }
+
+    fn add_graph_diagnostic(&mut self, graph: &VizGraphId, message: &str) -> Result<(), VizError> {
+        let code = "viz-dialect-generalized-graph-name";
+        let key = format!("{}|{code}", graph.0);
+        let id = self.mint_id("diagnostic", &key)?;
+        self.diagnostics.insert(
+            id,
+            VizDiagnostic {
+                code: code.to_owned(),
+                message: message.to_owned(),
+                target: Some(graph.0.clone()),
+                dialect: VizDialect::GeneralizedRdf,
+            },
+        );
+        Ok(())
+    }
+
+    fn apply_focus(&mut self) -> Result<(), VizError> {
+        let Some(focus) = self.spec.focus.as_deref() else {
+            return Ok(());
+        };
+        let mut term_matches = self
+            .terms
+            .iter()
+            .filter_map(|(id, term)| term_matches_focus(id, term, focus).then_some(id.clone()))
+            .collect::<Vec<_>>();
+        let mut statement_matches = self
+            .statement_by_key
+            .iter()
+            .filter_map(|(key, id)| {
+                (id.0 == focus || key == focus || short_id(&id.0) == focus).then_some(id.clone())
+            })
+            .collect::<Vec<_>>();
+        term_matches.sort();
+        term_matches.dedup();
+        statement_matches.sort();
+        statement_matches.dedup();
+        match term_matches.len() + statement_matches.len() {
+            0 => Err(VizError::UnknownFocus(focus.to_owned())),
+            1 => {
+                if let Some(id) = term_matches.first() {
+                    self.add_term_role(id, VizRole::Focus);
+                } else if let Some(id) = statement_matches.first() {
+                    self.add_statement_role(id, VizRole::Focus);
+                }
+                Ok(())
+            }
+            _ => Err(VizError::AmbiguousFocus(focus.to_owned())),
         }
     }
 
     fn validate_spec(&self) -> Result<(), VizError> {
+        let mut prefixes = BTreeMap::new();
+        let mut namespaces = BTreeMap::new();
         for mapping in &self.spec.vocabulary {
             if mapping.prefix.is_empty() || mapping.namespace.is_empty() {
                 return Err(VizError::InvalidVocabulary(
@@ -1009,6 +1280,35 @@ impl<'a> ProjectionBuilder<'a> {
                         .to_owned(),
                 ));
             }
+            if let Some(existing) = prefixes.insert(&mapping.prefix, &mapping.namespace)
+                && existing != &mapping.namespace
+            {
+                return Err(VizError::InvalidVocabulary(format!(
+                    "visualization prefix {:?} maps to multiple namespaces",
+                    mapping.prefix
+                )));
+            }
+            if let Some(existing) = namespaces.insert(&mapping.namespace, &mapping.prefix)
+                && existing != &mapping.prefix
+            {
+                return Err(VizError::InvalidVocabulary(format!(
+                    "visualization namespace {:?} maps to multiple prefixes",
+                    mapping.namespace
+                )));
+            }
+        }
+        if let VizGraphPolicy::Include(selectors) = &self.spec.graph_policy
+            && selectors.iter().any(String::is_empty)
+        {
+            return Err(VizError::InvalidSpec(
+                "visualization graph selectors must not be empty".to_owned(),
+            ));
+        }
+        let field_count = self.spec.table_fields.iter().collect::<BTreeSet<_>>().len();
+        if field_count != self.spec.table_fields.len() {
+            return Err(VizError::InvalidSpec(
+                "visualization table fields must be unique".to_owned(),
+            ));
         }
         for rule in &self.spec.role_rules {
             if !self.role_predicates_seen.contains(&rule.predicate_iri)
@@ -1025,6 +1325,7 @@ impl<'a> ProjectionBuilder<'a> {
 
     fn finish(mut self) -> Result<VizProjection, VizError> {
         self.validate_spec()?;
+        self.apply_focus()?;
         if self.statements.len() > self.spec.max_statements {
             return Err(VizError::TooLarge {
                 limit: "statements",
@@ -1090,7 +1391,13 @@ impl<'a> ProjectionBuilder<'a> {
                 object: draft.object.clone(),
                 asserted_in: draft.asserted_in.iter().cloned().collect(),
                 nesting_depth: draft.nesting_depth,
-                incoming_references: draft.references.len() as u32,
+                incoming_references: u32::try_from(
+                    self.references
+                        .values()
+                        .filter(|reference| reference.statement == *id)
+                        .count(),
+                )
+                .unwrap_or(u32::MAX),
                 dialect: draft.dialect.clone(),
                 roles: draft.roles.iter().cloned().collect(),
             })
@@ -1120,7 +1427,7 @@ impl<'a> ProjectionBuilder<'a> {
 
         let references = self.references.into_values().collect();
 
-        let table = statements
+        let table_rows = statements
             .iter()
             .map(|statement| {
                 let reifiers = reifiers_by_statement
@@ -1146,6 +1453,11 @@ impl<'a> ProjectionBuilder<'a> {
                 }
             })
             .collect();
+
+        let table = VizTable {
+            fields: self.spec.table_fields.clone(),
+            rows: table_rows,
+        };
 
         Ok(VizProjection {
             terms,
@@ -1311,12 +1623,28 @@ fn write_json_string(value: &str, out: &mut String) -> fmt::Result {
     out.write_str(&encoded)
 }
 
-fn label_for_term(value: &VizTermValue, policy: VizLabelPolicy) -> String {
+fn label_for_term(
+    value: &VizTermValue,
+    policy: VizLabelPolicy,
+    vocabulary: &[VizVocabularyMapping],
+) -> String {
     match (policy, value) {
         (VizLabelPolicy::Full, _) => {
             serde_json::to_string(value).unwrap_or_else(|_| "?".to_owned())
         }
-        (_, VizTermValue::Iri { value }) => compact_iri(value),
+        (_, VizTermValue::Iri { value }) => vocabulary
+            .iter()
+            .filter(|mapping| value.starts_with(&mapping.namespace))
+            .max_by(|left, right| {
+                left.namespace
+                    .len()
+                    .cmp(&right.namespace.len())
+                    .then_with(|| right.prefix.cmp(&left.prefix))
+            })
+            .map_or_else(
+                || compact_iri(value),
+                |mapping| format!("{}:{}", mapping.prefix, &value[mapping.namespace.len()..]),
+            ),
         (_, VizTermValue::Blank { label, scope }) if *scope == 0 => format!("_:{label}"),
         (_, VizTermValue::Blank { label, scope }) => format!("_:{label}.s{scope}"),
         (
@@ -1343,6 +1671,23 @@ fn label_for_term(value: &VizTermValue, policy: VizLabelPolicy) -> String {
             label
         }
     }
+}
+
+fn term_matches_focus(id: &VizTermId, term: &TermDraft, focus: &str) -> bool {
+    if id.0 == focus || term.label == focus {
+        return true;
+    }
+    match &term.value {
+        VizTermValue::Iri { value } => value == focus,
+        VizTermValue::Blank { label, .. } => label == focus || format!("_:{label}") == focus,
+        VizTermValue::Literal { lexical_form, .. } => lexical_form == focus,
+    }
+}
+
+fn short_id(id: &str) -> String {
+    id.rsplit(':')
+        .next()
+        .map_or_else(|| id.to_owned(), |suffix| suffix.chars().take(8).collect())
 }
 
 fn compact_iri(iri: &str) -> String {
@@ -1412,7 +1757,7 @@ mod tests {
         assert_eq!(statement.incoming_references, 1);
         assert!(statement.roles.contains(&VizRole::AssertedStatement));
         assert!(statement.roles.contains(&VizRole::AnnotatedStatement));
-        let row = &projection.table[0];
+        let row = &projection.table.rows[0];
         assert_eq!(row.reifier_count, 1);
         assert_eq!(row.annotation_count, 2);
     }
@@ -1472,6 +1817,7 @@ mod tests {
         assert_eq!(
             projection
                 .table
+                .rows
                 .iter()
                 .map(|row| row.reifier_count)
                 .sum::<usize>(),
@@ -1633,6 +1979,196 @@ mod tests {
     }
 
     #[test]
+    fn asserted_only_statement_is_not_quoted() {
+        let input = VizGraphInput {
+            quads: vec![VizInputQuad {
+                subject: iri("alice"),
+                predicate: KNOWS.to_owned(),
+                object: iri("bob"),
+                graph_name: None,
+            }],
+            ..VizGraphInput::default()
+        };
+        let projection = project_graph_input(&input, &VizSpec::default()).expect("project");
+        let statement = &projection.statements[0];
+        assert!(statement.roles.contains(&VizRole::AssertedStatement));
+        assert!(!statement.roles.contains(&VizRole::QuotedStatement));
+        assert_eq!(statement.incoming_references, 0);
+    }
+
+    #[test]
+    fn structural_ids_and_projection_are_input_order_independent() {
+        let first = rich_input();
+        let mut reversed = first.clone();
+        reversed.quads.reverse();
+        reversed.reifiers.reverse();
+        reversed.annotations.reverse();
+        let a = project_graph_input(&first, &VizSpec::default()).expect("project first");
+        let b = project_graph_input(&reversed, &VizSpec::default()).expect("project reversed");
+        assert_eq!(a, b);
+        assert!(
+            a.terms
+                .iter()
+                .all(|term| term.id.0.starts_with("term:") && term.id.0.len() == 21)
+        );
+        assert!(a.statements.iter().all(|statement| {
+            statement.id.0.starts_with("statement:") && statement.id.0.len() == 26
+        }));
+    }
+
+    #[test]
+    fn references_record_exact_containing_sites() {
+        let nested = TermValue::Triple {
+            s: Box::new(iri("alice")),
+            p: Box::new(TermValue::Iri(KNOWS.to_owned())),
+            o: Box::new(iri("bob")),
+        };
+        let input = VizGraphInput {
+            quads: vec![
+                VizInputQuad {
+                    subject: nested.clone(),
+                    predicate: format!("{EX}reportedBy"),
+                    object: iri("carol"),
+                    graph_name: None,
+                },
+                VizInputQuad {
+                    subject: iri("carol"),
+                    predicate: format!("{EX}disputes"),
+                    object: nested,
+                    graph_name: None,
+                },
+            ],
+            reifiers: vec![VizInputReifier {
+                reifier: iri("claim"),
+                statement: VizInputStatement {
+                    subject: iri("alice"),
+                    predicate: KNOWS.to_owned(),
+                    object: iri("bob"),
+                },
+                graph_name: None,
+            }],
+            ..VizGraphInput::default()
+        };
+        let projection = project_graph_input(&input, &VizSpec::default()).expect("project");
+        let inner = projection
+            .statements
+            .iter()
+            .find(|statement| {
+                projection
+                    .terms
+                    .iter()
+                    .find(|term| term.id == statement.predicate)
+                    .is_some_and(|term| term.label == "knows")
+            })
+            .expect("inner statement");
+        let sites = projection
+            .references
+            .iter()
+            .filter(|reference| reference.statement == inner.id)
+            .map(|reference| &reference.site)
+            .collect::<Vec<_>>();
+        assert_eq!(sites.len(), 3);
+        assert!(sites.iter().any(|site| matches!(
+            site,
+            VizReferenceSite::Statement {
+                position: VizPosition::Subject,
+                ..
+            }
+        )));
+        assert!(sites.iter().any(|site| matches!(
+            site,
+            VizReferenceSite::Statement {
+                position: VizPosition::Object,
+                ..
+            }
+        )));
+        assert!(
+            sites
+                .iter()
+                .any(|site| matches!(site, VizReferenceSite::Reification { .. }))
+        );
+        assert_eq!(inner.incoming_references, 3);
+    }
+
+    #[test]
+    fn graph_filter_focus_vocabulary_and_table_fields_are_operational() {
+        let input = rich_input();
+        let spec = VizSpec {
+            focus: Some(format!("{EX}alice")),
+            vocabulary: vec![VizVocabularyMapping {
+                prefix: "ex".to_owned(),
+                namespace: EX.to_owned(),
+            }],
+            graph_policy: VizGraphPolicy::Include(vec![format!("{EX}facts")]),
+            table_fields: vec![VizTableField::Statement, VizTableField::AssertedIn],
+            ..VizSpec::default()
+        };
+        let projection = project_graph_input(&input, &spec).expect("project");
+        assert_eq!(projection.assertions.len(), 2);
+        assert!(projection.relations.is_empty());
+        assert!(
+            projection
+                .graphs
+                .iter()
+                .all(|graph| graph.label == "ex:facts")
+        );
+        let alice = projection
+            .terms
+            .iter()
+            .find(|term| term.label == "ex:alice")
+            .expect("focused alice");
+        assert!(alice.roles.contains(&VizRole::Focus));
+        assert_eq!(
+            projection.table.fields,
+            vec![VizTableField::Statement, VizTableField::AssertedIn]
+        );
+    }
+
+    #[test]
+    fn generalized_literal_subject_is_explicit() {
+        let input = VizGraphInput {
+            quads: vec![VizInputQuad {
+                subject: TermValue::Literal {
+                    lexical_form: "subject".to_owned(),
+                    datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                    language: None,
+                    direction: None,
+                },
+                predicate: KNOWS.to_owned(),
+                object: iri("bob"),
+                graph_name: None,
+            }],
+            ..VizGraphInput::default()
+        };
+        let projection = project_graph_input(&input, &VizSpec::default()).expect("project");
+        assert_eq!(projection.statements[0].dialect, VizDialect::GeneralizedRdf);
+        assert!(
+            projection
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "viz-dialect-generalized-subject")
+        );
+    }
+
+    #[test]
+    fn invalid_focus_and_duplicate_table_fields_hard_error() {
+        let missing_focus = VizSpec {
+            focus: Some(format!("{EX}missing")),
+            ..VizSpec::default()
+        };
+        let err = project_graph_input(&rich_input(), &missing_focus).expect_err("missing focus");
+        assert!(matches!(err, VizError::UnknownFocus(_)));
+
+        let duplicate_fields = VizSpec {
+            table_fields: vec![VizTableField::Statement, VizTableField::Statement],
+            ..VizSpec::default()
+        };
+        let err =
+            project_graph_input(&rich_input(), &duplicate_fields).expect_err("duplicate fields");
+        assert!(matches!(err, VizError::InvalidSpec(_)));
+    }
+
+    #[test]
     fn size_limits_hard_error() {
         let spec = VizSpec {
             max_statements: 0,
@@ -1655,5 +2191,39 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    fn rich_input() -> VizGraphInput {
+        VizGraphInput {
+            quads: vec![
+                VizInputQuad {
+                    subject: iri("alice"),
+                    predicate: KNOWS.to_owned(),
+                    object: iri("bob"),
+                    graph_name: Some(iri("facts")),
+                },
+                VizInputQuad {
+                    subject: iri("bob"),
+                    predicate: KNOWS.to_owned(),
+                    object: iri("carol"),
+                    graph_name: Some(iri("facts")),
+                },
+            ],
+            reifiers: vec![VizInputReifier {
+                reifier: iri("claim"),
+                statement: VizInputStatement {
+                    subject: iri("alice"),
+                    predicate: KNOWS.to_owned(),
+                    object: iri("bob"),
+                },
+                graph_name: Some(iri("claims")),
+            }],
+            annotations: vec![VizInputAnnotation {
+                reifier: iri("claim"),
+                predicate: ATTRIBUTED_TO.to_owned(),
+                object: iri("carol"),
+                graph_name: Some(iri("provenance")),
+            }],
+        }
     }
 }
