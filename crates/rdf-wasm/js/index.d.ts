@@ -81,6 +81,151 @@ export interface GraphResult {
 
 export type QueryResult = SelectResult | AskResult | GraphResult;
 
+export type VizMode = "compact" | "incidence" | "table";
+export type VizDialect = "rdf12" | "symmetricRdf12" | "generalizedRdf";
+export type VizRole =
+  | "focus"
+  | "reifier"
+  | "graphName"
+  | "predicate"
+  | "quotedStatement"
+  | "assertedStatement"
+  | "annotatedStatement"
+  | { custom: string };
+
+export interface VisualOptions {
+  readonly mode?: VizMode;
+  readonly focus?: string | null;
+  readonly graph?: string | readonly string[] | null;
+  readonly maxDepth?: number;
+  readonly maxStatements?: number;
+  readonly maxTerms?: number;
+  readonly width?: number;
+  readonly margin?: number;
+  readonly rowHeight?: number;
+  readonly embedMetadata?: boolean;
+  readonly includeStyles?: boolean;
+  readonly spec?: Record<string, unknown>;
+  readonly svg?: Record<string, unknown>;
+}
+
+export type VizValueRef =
+  | { readonly kind: "term"; readonly id: string }
+  | { readonly kind: "statement"; readonly id: string };
+
+export type VizTermValue =
+  | { readonly kind: "iri"; readonly value: string }
+  | { readonly kind: "blank"; readonly label: string; readonly scope: number }
+  | {
+      readonly kind: "literal";
+      readonly lexical_form: string;
+      readonly datatype: string;
+      readonly language: string | null;
+      readonly direction: LiteralDirection | null;
+    };
+
+export interface VizTerm {
+  readonly id: string;
+  readonly value: VizTermValue;
+  readonly label: string;
+  readonly roles: VizRole[];
+}
+
+export interface VizStatement {
+  readonly id: string;
+  readonly subject: VizValueRef;
+  readonly predicate: string;
+  readonly object: VizValueRef;
+  readonly asserted_in: string[];
+  readonly nesting_depth: number;
+  readonly incoming_references: number;
+  readonly dialect: VizDialect;
+  readonly roles: VizRole[];
+}
+
+export interface VizAssertion {
+  readonly id: string;
+  readonly statement: string;
+  readonly graph: string;
+}
+
+export type VizRelation =
+  | {
+      readonly kind: "reifies";
+      readonly id: string;
+      readonly reifier: string;
+      readonly statement: string;
+      readonly graph: string;
+    }
+  | {
+      readonly kind: "annotation";
+      readonly id: string;
+      readonly reifier: string;
+      readonly predicate: string;
+      readonly object: VizValueRef;
+      readonly graph: string;
+    };
+
+export interface VizGraph {
+  readonly id: string;
+  readonly term: string | null;
+  readonly label: string;
+}
+
+export interface VizReference {
+  readonly id: string;
+  readonly statement: string;
+  readonly source: string;
+}
+
+export interface VizTableRow {
+  readonly statement: string;
+  readonly asserted_in: string[];
+  readonly reifier_count: number;
+  readonly annotation_count: number;
+  readonly referenced_by: number;
+  readonly depth: number;
+}
+
+export interface VizDiagnostic {
+  readonly code: string;
+  readonly message: string;
+  readonly target: string | null;
+  readonly dialect: VizDialect;
+}
+
+export interface VizModel {
+  readonly terms: VizTerm[];
+  readonly statements: VizStatement[];
+  readonly assertions: VizAssertion[];
+  readonly relations: VizRelation[];
+  readonly graphs: VizGraph[];
+  readonly references: VizReference[];
+  readonly table: VizTableRow[];
+  readonly diagnostics: VizDiagnostic[];
+}
+
+export interface VizLayoutRecord {
+  readonly id: string;
+  readonly x: number;
+  readonly y: number;
+}
+
+export interface VizElementIndexEntry {
+  readonly element_id: string;
+  readonly model_id: string;
+  readonly kind: string;
+}
+
+export interface VizExport {
+  readonly schema_version: "purrdf-viz-export-1";
+  readonly spec_hash: string;
+  readonly model: VizModel;
+  readonly layout: VizLayoutRecord[];
+  readonly element_index: VizElementIndexEntry[];
+  readonly diagnostics: VizDiagnostic[];
+}
+
 export class Term {
   private constructor();
   free(): void;
@@ -205,6 +350,11 @@ export class Dataset implements Iterable<Quad> {
   query(sparql: string, base?: string | null): string;
   canonicalize(): string;
   isomorphic(other: Dataset): boolean;
+  visualModel(options?: VisualOptions | string | null): VizModel;
+  visualExport(options?: VisualOptions | string | null): VizExport;
+  visualSvg(options?: VisualOptions | string | null): string;
+  visualModelJson(optionsJson?: string | null): string;
+  visualExportJson(optionsJson?: string | null): string;
   toStream(): AsyncIterableIterator<Quad>;
   [Symbol.iterator](): IterableIterator<Quad>;
   free(): void;

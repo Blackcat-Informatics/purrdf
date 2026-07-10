@@ -48,6 +48,9 @@ ds.add(f.quad(f.namedNode("https://ex/stmt"), f.namedNode("https://ex/asserts"),
 // Quoted triples + directions survive a round-trip through N-Quads.
 const nq = ds.serialize("nquads");
 const reparsed = Dataset.parse(nq, "nquads");
+
+const model = reparsed.visualModel({ mode: "compact", maxStatements: 500 });
+const svg = reparsed.visualSvg({ mode: "compact", width: 960 });
 ```
 
 ## API
@@ -63,6 +66,10 @@ const reparsed = Dataset.parse(nq, "nquads");
 - **Graph identity** — `Dataset.canonicalize()` returns the RDFC-1.0 canonical, flat
   N-Quads for the graph; `Dataset.isomorphic(other)` decides RDF graph equality under
   blank-node relabeling (an exact oracle backed by full RDFC-1.0 canonicalization).
+- **Visualization** — `Dataset.visualModel(options?)`, `Dataset.visualExport(options?)`,
+  and `Dataset.visualSvg(options?)` expose the same statement-centric projection as
+  the Rust crate. SVG output is deterministic and embeds the versioned
+  `purrdf-viz-export-1` metadata model it was rendered from.
 - **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples data
   graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as

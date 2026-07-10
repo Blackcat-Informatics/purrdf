@@ -59,3 +59,31 @@ test("Dataset#toStream is the instance form of datasetToStream", async () => {
   assert.equal(streamed.length, 1);
   assert.equal(streamed[0].equals(q), true);
 });
+
+test("Dataset visual APIs expose RDF 1.2 statement metadata and SVG", () => {
+  const f = new DataFactory();
+  const rdfReifies = f.namedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies");
+  const claim = f.namedNode("https://e/claim");
+  const quoted = f.quotedTriple(
+    f.namedNode("https://e/alice"),
+    f.namedNode("https://e/knows"),
+    f.namedNode("https://e/bob"),
+  );
+  const ds = new Dataset();
+  ds.add(f.quad(claim, rdfReifies, quoted));
+
+  const model = ds.visualModel({ mode: "compact", maxStatements: 10 });
+  assert.equal(model.statements.length, 1);
+  assert.equal(model.statements[0].asserted_in.length, 0);
+  assert.equal(model.relations[0].kind, "reifies");
+
+  const exported = ds.visualExport({ mode: "compact", width: 720 });
+  assert.equal(exported.schema_version, "purrdf-viz-export-1");
+  assert.ok(exported.layout.length > 0);
+  assert.ok(exported.element_index.some((entry) => entry.kind === "statement"));
+
+  const svg = ds.visualSvg({ mode: "compact", width: 720 });
+  assert.match(svg, /<metadata id="purrdf-viz-export"/);
+  assert.match(svg, /class="viz-quoted"/);
+  assert.doesNotMatch(svg, /class="viz-assertion"/);
+});

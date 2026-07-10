@@ -60,6 +60,15 @@ function normalizeQueryOptions(options) {
   };
 }
 
+function normalizeVisualOptions(options) {
+  if (options == null) return undefined;
+  if (typeof options === "string") return options;
+  if (typeof options !== "object") {
+    throw new TypeError("visualization options must be an object when supplied");
+  }
+  return JSON.stringify(options);
+}
+
 function selectResultToObject(raw) {
   const variables = raw.variables;
   const rawRows = raw.rows;
@@ -235,6 +244,27 @@ export async function ready(wasmBytesOrUrl) {
       return wasmQueryRaw.call(this, dataset, sparql, base, format);
     };
     QueryEngine.prototype.__purrdfPackageRootApi = true;
+  }
+
+  if (!Dataset.prototype.__purrdfVisualApi) {
+    const wasmVisualModelJson = Dataset.prototype.visualModelJson;
+    const wasmVisualExportJson = Dataset.prototype.visualExportJson;
+    const wasmVisualSvg = Dataset.prototype.visualSvg;
+
+    Dataset.prototype.visualModel = function (options) {
+      return JSON.parse(
+        wasmVisualModelJson.call(this, normalizeVisualOptions(options)),
+      );
+    };
+    Dataset.prototype.visualExport = function (options) {
+      return JSON.parse(
+        wasmVisualExportJson.call(this, normalizeVisualOptions(options)),
+      );
+    };
+    Dataset.prototype.visualSvg = function (options) {
+      return wasmVisualSvg.call(this, normalizeVisualOptions(options));
+    };
+    Dataset.prototype.__purrdfVisualApi = true;
   }
 
   _ready = true;

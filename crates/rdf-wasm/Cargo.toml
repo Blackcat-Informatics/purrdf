@@ -58,6 +58,9 @@ purrdf-validate = { workspace = true }
 # bindings must match the library version byte-for-byte or it refuses to run.
 # `make wasm-pkg` and the CI Node lane install `wasm-bindgen-cli@0.2.125` to match.
 wasm-bindgen = { workspace = true }
+# JSON option parsing for the wasm visualization methods. `serde_json` is already
+# in the engine dependency tree; the direct edge documents this crate's API use.
+serde_json = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

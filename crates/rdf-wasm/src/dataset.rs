@@ -12,10 +12,15 @@
 
 use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
 use purrdf::ir::MutableDataset;
+use purrdf::viz::{
+    VizGraphPolicy, VizMode, VizSpec, VizSvgOptions, project_dataset_export, project_dataset_json,
+    render_dataset_svg,
+};
 use purrdf::{
     RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, TermValue, canonical_flat_nquads,
     datasets_isomorphic, parse_dataset, serialize_dataset,
 };
+use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
 use crate::codec::resolve_media_type;
@@ -41,6 +46,125 @@ fn pattern_value(term: Option<&Term>) -> Result<Option<TermValue>, JsError> {
 /// Map an engine diagnostic to a JS error.
 pub(crate) fn diag_to_err(diag: &RdfDiagnostic) -> JsError {
     JsError::new(&diag.to_string())
+}
+
+fn viz_to_err(err: &purrdf::viz::VizError) -> JsError {
+    JsError::new(&err.to_string())
+}
+
+fn parse_visual_options(options_json: Option<String>) -> Result<(VizSpec, VizSvgOptions), JsError> {
+    let mut spec = VizSpec::default();
+    let mut svg = VizSvgOptions::default();
+    let Some(raw) = options_json else {
+        return Ok((spec, svg));
+    };
+    if raw.trim().is_empty() {
+        return Ok((spec, svg));
+    }
+    let value: Value = serde_json::from_str(&raw)
+        .map_err(|e| JsError::new(&format!("visualization options must be JSON: {e}")))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| JsError::new("visualization options must be a JSON object"))?;
+
+    if let Some(nested_spec) = object.get("spec") {
+        spec = serde_json::from_value(nested_spec.clone())
+            .map_err(|e| JsError::new(&format!("invalid visualization spec: {e}")))?;
+    }
+    if let Some(nested_svg) = object.get("svg") {
+        svg = serde_json::from_value(nested_svg.clone())
+            .map_err(|e| JsError::new(&format!("invalid SVG visualization options: {e}")))?;
+    }
+    if let Some(mode) = object.get("mode") {
+        spec.mode = parse_viz_mode(mode)?;
+    }
+    if let Some(focus) = object.get("focus") {
+        spec.focus = parse_optional_string(focus, "focus")?;
+    }
+    if let Some(graph) = object.get("graph") {
+        spec.graph_policy = parse_graph_policy(graph)?;
+    }
+    if let Some(max_statements) = object.get("maxStatements") {
+        spec.max_statements = parse_usize(max_statements, "maxStatements")?;
+    }
+    if let Some(max_terms) = object.get("maxTerms") {
+        spec.max_terms = parse_usize(max_terms, "maxTerms")?;
+    }
+    if let Some(width) = object.get("width") {
+        svg.width = parse_i32(width, "width")?;
+    }
+    if let Some(margin) = object.get("margin") {
+        svg.margin = parse_i32(margin, "margin")?;
+    }
+    if let Some(row_height) = object.get("rowHeight") {
+        svg.row_height = parse_i32(row_height, "rowHeight")?;
+    }
+    if let Some(embed_metadata) = object.get("embedMetadata") {
+        svg.embed_metadata = parse_bool(embed_metadata, "embedMetadata")?;
+    }
+    if let Some(include_styles) = object.get("includeStyles") {
+        svg.include_styles = parse_bool(include_styles, "includeStyles")?;
+    }
+    Ok((spec, svg))
+}
+
+fn parse_viz_mode(value: &Value) -> Result<VizMode, JsError> {
+    serde_json::from_value(value.clone())
+        .map_err(|e| JsError::new(&format!("invalid visualization mode: {e}")))
+}
+
+fn parse_optional_string(value: &Value, field: &str) -> Result<Option<String>, JsError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_str()
+        .map(|s| Some(s.to_owned()))
+        .ok_or_else(|| JsError::new(&format!("{field} must be a string or null")))
+}
+
+fn parse_graph_policy(value: &Value) -> Result<VizGraphPolicy, JsError> {
+    if value.is_null() {
+        return Ok(VizGraphPolicy::All);
+    }
+    if let Some(graph) = value.as_str() {
+        return Ok(VizGraphPolicy::Include(vec![graph.to_owned()]));
+    }
+    let Some(items) = value.as_array() else {
+        return Err(JsError::new(
+            "graph must be null, a string, or a string array",
+        ));
+    };
+    let mut graphs = Vec::with_capacity(items.len());
+    for item in items {
+        let graph = item
+            .as_str()
+            .ok_or_else(|| JsError::new("graph array entries must be strings"))?;
+        graphs.push(graph.to_owned());
+    }
+    Ok(VizGraphPolicy::Include(graphs))
+}
+
+fn parse_usize(value: &Value, field: &str) -> Result<usize, JsError> {
+    let Some(number) = value.as_u64() else {
+        return Err(JsError::new(&format!(
+            "{field} must be a non-negative integer"
+        )));
+    };
+    usize::try_from(number).map_err(|_| JsError::new(&format!("{field} is too large")))
+}
+
+fn parse_i32(value: &Value, field: &str) -> Result<i32, JsError> {
+    let Some(number) = value.as_i64() else {
+        return Err(JsError::new(&format!("{field} must be an integer")));
+    };
+    i32::try_from(number).map_err(|_| JsError::new(&format!("{field} is out of range")))
+}
+
+fn parse_bool(value: &Value, field: &str) -> Result<bool, JsError> {
+    value
+        .as_bool()
+        .ok_or_else(|| JsError::new(&format!("{field} must be a boolean")))
 }
 
 /// An RDF/JS `DatasetCore` backed by the engine's COW mutable dataset.
@@ -135,6 +259,42 @@ impl Dataset {
         let a = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         let b = other.inner.freeze().map_err(|e| diag_to_err(&e))?;
         Ok(datasets_isomorphic(&a, &b))
+    }
+
+    /// `visualModelJson(optionsJson?)` → a deterministic JSON visualization model.
+    ///
+    /// The package-root JS wrapper exposes this as `visualModel(options?)` and parses
+    /// the returned JSON into a structured-clone-safe object.
+    #[wasm_bindgen(js_name = visualModelJson)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn visual_model_json(&self, options_json: Option<String>) -> Result<String, JsError> {
+        let (spec, _) = parse_visual_options(options_json)?;
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        project_dataset_json(&frozen, &spec).map_err(|err| viz_to_err(&err))
+    }
+
+    /// `visualExportJson(optionsJson?)` → a versioned JSON export with model + layout.
+    ///
+    /// The export is the same load-bearing metadata embedded by `visualSvg`.
+    #[wasm_bindgen(js_name = visualExportJson)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn visual_export_json(&self, options_json: Option<String>) -> Result<String, JsError> {
+        let (spec, svg_options) = parse_visual_options(options_json)?;
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let export =
+            project_dataset_export(&frozen, &spec, &svg_options).map_err(|err| viz_to_err(&err))?;
+        serde_json::to_string(&export).map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// `visualSvg(optionsJson?)` → deterministic semantic SVG with embedded metadata.
+    #[wasm_bindgen(js_name = visualSvg)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn visual_svg(&self, options_json: Option<String>) -> Result<String, JsError> {
+        let (spec, svg_options) = parse_visual_options(options_json)?;
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let document =
+            render_dataset_svg(&frozen, &spec, &svg_options).map_err(|err| viz_to_err(&err))?;
+        Ok(document.svg)
     }
 
     /// `size` — the number of effective quads.
@@ -470,6 +630,38 @@ mod tests {
             !ds.has(&query).unwrap(),
             "a directional literal must NOT match a plain langString literal (RDF-1.2 distinguishes them)"
         );
+    }
+
+    #[test]
+    fn visual_model_export_and_svg_surface_statement_metadata() {
+        let factory = crate::factory::DataFactory::new();
+        let rdf_reifies =
+            factory.named_node("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies".to_owned());
+        let claim = factory.named_node("https://e/claim".to_owned());
+        let quoted = factory
+            .quoted_triple(
+                &named("https://e/alice"),
+                &named("https://e/knows"),
+                &named("https://e/bob"),
+            )
+            .unwrap();
+        let reifies = factory.quad(&claim, &rdf_reifies, &quoted, None);
+        let mut ds = Dataset::new().unwrap();
+        ds.add(&reifies).unwrap();
+
+        let options = Some(r#"{"mode":"compact","maxStatements":10,"width":720}"#.to_owned());
+        let model = ds.visual_model_json(options.clone()).unwrap();
+        assert!(model.contains("\"statements\""));
+        assert!(model.contains("\"asserted_in\":[]"));
+
+        let export = ds.visual_export_json(options.clone()).unwrap();
+        assert!(export.contains("\"schema_version\":\"purrdf-viz-export-1\""));
+        assert!(export.contains("\"element_index\""));
+
+        let svg = ds.visual_svg(options).unwrap();
+        assert!(svg.contains("id=\"purrdf-viz-export\""));
+        assert!(svg.contains("class=\"viz-quoted\""));
+        assert!(!svg.contains("class=\"viz-assertion\""));
     }
 
     // The unsupported-format error path builds a JsError (wasm-only); the pure

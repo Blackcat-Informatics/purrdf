@@ -13,6 +13,9 @@ import {
   type QueryResult,
   type SelectResult,
   type RdfTerm,
+  type VisualOptions,
+  type VizExport,
+  type VizModel,
 } from "@blackcatinformatics/purrdf";
 
 await ready();
@@ -48,6 +51,11 @@ const stream: AsyncIterableIterator<Quad> = matched.toStream();
 const serialized: string = matched.serialize("nquads");
 const canonical: string = matched.canonicalize();
 const same: boolean = matched.isomorphic(Dataset.parse(serialized, "nquads"));
+const visualOptions: VisualOptions = { mode: "compact", maxStatements: 500, width: 960 };
+const visualModel: VizModel = matched.visualModel(visualOptions);
+const visualExport: VizExport = matched.visualExport(visualOptions);
+const visualSvg: string = matched.visualSvg(visualOptions);
+const visualModelJson: string = matched.visualModelJson(JSON.stringify(visualOptions));
 const queryJson: string = matched.query("ASK { ?s ?p ?o }");
 const engine = new QueryEngine();
 const select: SelectResult = engine.select(matched, "SELECT ?s WHERE { ?s ?p ?o }");
@@ -76,6 +84,10 @@ if (result.kind === "ask") {
 void stream;
 void canonical;
 void same;
+void visualModel;
+void visualExport;
+void visualSvg;
+void visualModelJson;
 void queryJson;
 void language;
 void maybeTerm;

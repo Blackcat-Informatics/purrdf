@@ -74,6 +74,11 @@ const names = engine.select(
   "SELECT ?message WHERE { <https://ex/s> <https://ex/says> ?message }",
 );
 console.log(names.rows[0].message.value);
+
+// Renderer-neutral RDF 1.2 visualization data and deterministic SVG.
+const model = reparsed.visualModel({ mode: "compact", maxStatements: 500 });
+const svg = reparsed.visualSvg({ mode: "compact", width: 960 });
+console.log(model.statements.length, svg.includes("purrdf-viz-export"));
 ```
 
 ## API surface
@@ -87,6 +92,11 @@ console.log(names.rows[0].message.value);
   Formats: `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml` (`serialize` also `jsonld`).
 - `Dataset.canonicalize()` / `Dataset.isomorphic(other)` — RDFC-1.0 canonical N-Quads
   and RDF graph-identity (isomorphism under blank-node relabeling).
+- `Dataset.visualModel(options?)`, `Dataset.visualExport(options?)`, and
+  `Dataset.visualSvg(options?)` — RDF 1.2 statement-centric visualization:
+  asserted triples stay distinct from quoted-only triple terms, reifiers and
+  annotations keep their own identities and graph contexts, and SVG embeds the
+  versioned `purrdf-viz-export-1` JSON metadata it was rendered from.
 - `QueryEngine` — a reusable SPARQL execution context with a native plan cache,
   typed `select` / `ask` / `construct` / `describe` helpers, atomic `update`,
   and `queryRaw` serialization for SPARQL Results JSON/XML/CSV/TSV plus graph
