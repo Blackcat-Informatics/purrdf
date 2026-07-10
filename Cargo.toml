@@ -29,7 +29,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
@@ -43,21 +43,21 @@ homepage = "https://blackcatinformatics.ca/purrdf/"
 # re-enabled per crate with `default-features = true` where required.
 [workspace.dependencies]
 # --- internal crates (paths are relative to the WORKSPACE ROOT) ---
-purrdf = { path = "crates/purrdf", version = "0.4.2" }
-purrdf-core = { path = "crates/rdf-core", version = "0.4.2" }
-purrdf-entail = { path = "crates/entail", version = "0.4.2" }
-purrdf-events = { path = "crates/rdf-events", version = "0.4.2" }
-purrdf-gts = { path = "crates/gts", version = "0.4.2" }
-purrdf-iri = { path = "crates/iri", version = "0.4.2" }
-purrdf-rdf = { path = "crates/rdf", version = "0.4.2" }
-purrdf-shapes = { path = "crates/shapes", version = "0.4.2" }
-purrdf-shex = { path = "crates/shex", version = "0.4.2" }
-purrdf-slice = { path = "crates/slice", version = "0.4.2" }
-purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "0.4.2" }
-purrdf-sparql-eval = { path = "crates/sparql-eval", version = "0.4.2" }
-purrdf-sparql-results = { path = "crates/sparql-results", version = "0.4.2" }
-purrdf-validate = { path = "crates/validate", version = "0.4.2" }
-purrdf-xsd = { path = "crates/xsd", version = "0.4.2" }
+purrdf = { path = "crates/purrdf", version = "0.4.3" }
+purrdf-core = { path = "crates/rdf-core", version = "0.4.3" }
+purrdf-entail = { path = "crates/entail", version = "0.4.3" }
+purrdf-events = { path = "crates/rdf-events", version = "0.4.3" }
+purrdf-gts = { path = "crates/gts", version = "0.4.3" }
+purrdf-iri = { path = "crates/iri", version = "0.4.3" }
+purrdf-rdf = { path = "crates/rdf", version = "0.4.3" }
+purrdf-shapes = { path = "crates/shapes", version = "0.4.3" }
+purrdf-shex = { path = "crates/shex", version = "0.4.3" }
+purrdf-slice = { path = "crates/slice", version = "0.4.3" }
+purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "0.4.3" }
+purrdf-sparql-eval = { path = "crates/sparql-eval", version = "0.4.3" }
+purrdf-sparql-results = { path = "crates/sparql-results", version = "0.4.3" }
+purrdf-validate = { path = "crates/validate", version = "0.4.3" }
+purrdf-xsd = { path = "crates/xsd", version = "0.4.3" }
 
 # --- external crates ---
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
