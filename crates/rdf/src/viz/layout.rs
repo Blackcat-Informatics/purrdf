@@ -16,6 +16,7 @@ const CHAR_WIDTH: i32 = 8;
 const LINE_HEIGHT: i32 = 18;
 const NODE_PAD_X: i32 = 16;
 const NODE_PAD_Y: i32 = 12;
+const VERTICAL_LANE_SPACING: i32 = 16;
 
 /// Deterministic layout options independent of SVG.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,7 +348,7 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
     let anchor_lookup = build_anchor_lookup(scene, &all_rects)?;
     let parallel_offsets = parallel_edge_offsets(scene);
     let endpoint_offsets = endpoint_offsets(scene);
-    let mut reserved_routes = Vec::new();
+    let mut reserved_vertical_lanes = Vec::new();
     let mut edges = Vec::new();
     for edge in &scene.edges {
         let start_center = endpoint_point(&edge.source, &node_lookup, &anchor_lookup)?;
@@ -400,8 +401,8 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
         } else {
             route_edge(start, end, &required, offset)
         };
-        separate_route_lanes(&mut points, &reserved_routes);
-        reserved_routes.extend(route_corridors(&points, 5));
+        separate_route_lanes(&mut points, &reserved_vertical_lanes);
+        reserved_vertical_lanes.extend(vertical_lane_segments(&points));
         edges.push(VizLayoutEdge {
             id: edge.id.clone(),
             points,
@@ -1408,7 +1409,14 @@ fn dedup_points(points: &mut Vec<VizPoint>) {
     }
 }
 
-fn separate_route_lanes(points: &mut [VizPoint], reserved: &[VizRect]) {
+#[derive(Debug, Clone, Copy)]
+struct VerticalLaneSegment {
+    x: i32,
+    top: i32,
+    bottom: i32,
+}
+
+fn separate_route_lanes(points: &mut [VizPoint], reserved: &[VerticalLaneSegment]) {
     if points.len() < 4 {
         return;
     }
@@ -1420,19 +1428,19 @@ fn separate_route_lanes(points: &mut [VizPoint], reserved: &[VizRect]) {
         let top = points[index].y.min(points[index + 1].y);
         let bottom = points[index].y.max(points[index + 1].y);
         let collides = |x: i32| {
-            let corridor = VizRect {
-                x: x - 5,
-                y: top,
-                width: 10,
-                height: (bottom - top).max(1),
-            };
-            reserved.iter().any(|rect| corridor.intersects(*rect))
+            reserved.iter().any(|lane| {
+                top < lane.bottom && bottom > lane.top && (x - lane.x).abs() < VERTICAL_LANE_SPACING
+            })
         };
-        let Some(x) = (0..=8).find_map(|step| {
+        let Some(x) = (0..=reserved.len() + 1).find_map(|step| {
+            let step = i32_from_usize(step);
             let candidates = if step == 0 {
                 [original_x, original_x]
             } else {
-                [original_x - step * 12, original_x + step * 12]
+                [
+                    original_x - step * VERTICAL_LANE_SPACING,
+                    original_x + step * VERTICAL_LANE_SPACING,
+                ]
             };
             candidates
                 .into_iter()
@@ -1443,6 +1451,21 @@ fn separate_route_lanes(points: &mut [VizPoint], reserved: &[VizRect]) {
         points[index].x = x;
         points[index + 1].x = x;
     }
+}
+
+fn vertical_lane_segments(points: &[VizPoint]) -> Vec<VerticalLaneSegment> {
+    points
+        .windows(2)
+        .filter_map(|pair| {
+            let start = pair[0];
+            let end = pair[1];
+            (start.x == end.x && start.y != end.y).then_some(VerticalLaneSegment {
+                x: start.x,
+                top: start.y.min(end.y),
+                bottom: start.y.max(end.y),
+            })
+        })
+        .collect()
 }
 
 fn route_corridors(points: &[VizPoint], half_width: i32) -> Vec<VizRect> {
@@ -2114,5 +2137,25 @@ mod tests {
             layout_scene(&scene, &options),
             Err(VizError::Layout(_))
         ));
+    }
+
+    #[test]
+    fn overlapping_vertical_routes_receive_traceable_lane_spacing() {
+        let mut points = vec![
+            VizPoint { x: 0, y: 0 },
+            VizPoint { x: 102, y: 0 },
+            VizPoint { x: 102, y: 100 },
+            VizPoint { x: 200, y: 100 },
+        ];
+        separate_route_lanes(
+            &mut points,
+            &[VerticalLaneSegment {
+                x: 100,
+                top: -20,
+                bottom: 120,
+            }],
+        );
+        assert_eq!(points[1].x, 118);
+        assert_eq!(points[2].x, 118);
     }
 }

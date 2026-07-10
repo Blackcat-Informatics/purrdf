@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use super::*;
 
+const ROUTE_CORNER_RADIUS: i32 = 8;
+
 /// SVG emitter options. Semantic and layout choices live outside this type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VizSvgOptions {
@@ -862,19 +864,79 @@ fn path_data(points: &[VizPoint]) -> String {
     let mut out = String::new();
     if let Some(first) = points.first() {
         write!(out, "M {} {}", first.x, first.y).expect("writing to String cannot fail");
-        let mut previous = *first;
-        for point in points.iter().skip(1) {
-            if point.x == previous.x {
-                write!(out, " V {}", point.y).expect("writing to String cannot fail");
-            } else if point.y == previous.y {
-                write!(out, " H {}", point.x).expect("writing to String cannot fail");
+        let mut cursor = *first;
+        for index in 1..points.len().saturating_sub(1) {
+            let previous = points[index - 1];
+            let corner = points[index];
+            let next = points[index + 1];
+            if let Some((before, after)) = rounded_corner(previous, corner, next) {
+                append_path_segment(&mut out, cursor, before);
+                write!(out, " Q {} {} {} {}", corner.x, corner.y, after.x, after.y)
+                    .expect("writing to String cannot fail");
+                cursor = after;
             } else {
-                write!(out, " L {} {}", point.x, point.y).expect("writing to String cannot fail");
+                append_path_segment(&mut out, cursor, corner);
+                cursor = corner;
             }
-            previous = *point;
+        }
+        if let Some(last) = points.last().copied() {
+            append_path_segment(&mut out, cursor, last);
         }
     }
     out
+}
+
+fn rounded_corner(
+    previous: VizPoint,
+    corner: VizPoint,
+    next: VizPoint,
+) -> Option<(VizPoint, VizPoint)> {
+    let incoming_horizontal = previous.y == corner.y;
+    let outgoing_horizontal = corner.y == next.y;
+    if incoming_horizontal == outgoing_horizontal
+        || (previous.x != corner.x && !incoming_horizontal)
+        || (corner.x != next.x && !outgoing_horizontal)
+    {
+        return None;
+    }
+    let incoming_length = (previous.x - corner.x).abs() + (previous.y - corner.y).abs();
+    let outgoing_length = (next.x - corner.x).abs() + (next.y - corner.y).abs();
+    let radius = ROUTE_CORNER_RADIUS
+        .min(incoming_length / 2)
+        .min(outgoing_length / 2);
+    (radius >= 2).then(|| {
+        (
+            point_toward(corner, previous, radius),
+            point_toward(corner, next, radius),
+        )
+    })
+}
+
+fn point_toward(point: VizPoint, target: VizPoint, distance: i32) -> VizPoint {
+    if point.x == target.x {
+        VizPoint {
+            x: point.x,
+            y: point.y + (target.y - point.y).signum() * distance,
+        }
+    } else {
+        VizPoint {
+            x: point.x + (target.x - point.x).signum() * distance,
+            y: point.y,
+        }
+    }
+}
+
+fn append_path_segment(out: &mut String, from: VizPoint, to: VizPoint) {
+    if from == to {
+        return;
+    }
+    if from.x == to.x {
+        write!(out, " V {}", to.y).expect("writing to String cannot fail");
+    } else if from.y == to.y {
+        write!(out, " H {}", to.x).expect("writing to String cannot fail");
+    } else {
+        write!(out, " L {} {}", to.x, to.y).expect("writing to String cannot fail");
+    }
 }
 
 fn nearest_point_on_path(points: &[VizPoint], point: VizPoint) -> Option<VizPoint> {
@@ -1232,5 +1294,21 @@ mod tests {
         assert!(!first.export.spec_hash.is_empty());
         assert!(!first.export.model_hash.is_empty());
         assert!(!first.export.scene_hash.is_empty());
+    }
+
+    #[test]
+    fn orthogonal_svg_paths_round_real_corners() {
+        assert_eq!(
+            path_data(&[
+                VizPoint { x: 0, y: 0 },
+                VizPoint { x: 20, y: 0 },
+                VizPoint { x: 20, y: 20 },
+            ]),
+            "M 0 0 H 12 Q 20 0 20 8 V 20"
+        );
+        assert_eq!(
+            path_data(&[VizPoint { x: 0, y: 0 }, VizPoint { x: 20, y: 0 }]),
+            "M 0 0 H 20"
+        );
     }
 }
