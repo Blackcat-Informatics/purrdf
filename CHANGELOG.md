@@ -4,11 +4,137 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.4.2] - 2026-07-10
+
+### Features
+
+- Expose entailed SPARQL and RIF parsing
+
+### Other
+
+- Harden npm wasm RDF 1.2 toolkit
+
+Harden npm wasm RDF 1.2 toolkit
+
+Summary
+
+This branch hardens the wasm npm package into a package-root RDF 1.2 TypeScript toolkit and offline SPARQL platform over the existing Rust engine. It adds package-correct RDF/JS declarations, dependency-free runtime ergonomics, a reusable query engine with native plan-cache lifetime, packed-package release gates, package-size budgets, and repeatable ecosystem evidence.
+
+Requirements Satisfied
+
+- Replaced package-root TypeScript declarations with hand-authored RDF/JS-compatible types for terms, quads, literals, directional language literals, datasets, streams, sinks, canonical graph identity, iteration, and null-safe equality.
+- Added dependency-free package-root helpers: `Dataset.from`, `Dataset#toStream`, `DataFactory#dataset`, chainable dataset mutation, and RDF 1.2 directional literal support.
+- Promoted SPARQL to a reusable TypeScript API through `QueryEngine`, typed SELECT/ASK/CONSTRUCT/DESCRIBE helpers, raw result serialization, atomic update support, and compatibility for `Dataset.query`.
+- Remote `SERVICE` and remote `LOAD` now produce explicit hard errors unless a host resolver is supplied by the embedding environment.
+- Added npm quality gates: TypeScript compile test, packed-tarball install/import smoke test, package-size checks, CI wiring, and release workflow wiring.
+- Added repeatable ecosystem probe evidence comparing current package behavior and footprint with N3.js, rdf-ext, graphy, Comunica, and Oxigraph JS, with exact installed package versions and commands.
+- Preserved PurRDF constraints: no new Cargo features, no optional dependencies, no semantic cfg split, no caller-vocabulary defaults, deterministic output paths left intact, and wasm/package-size gates passing.
+
+Files Changed
+
+- `.github/workflows/ci.yaml`: runs package and wasm benchmark gates in CI.
+- `.github/workflows/release-npm.yaml`: installs pinned npm dependencies before the npm release check.
+- `Cargo.lock`: records the wasm bench dev-dependency edge.
+- `Makefile`: wires npm package check, package-size reporting, and wasm benchmark coverage.
+- `crates/rdf-capi/include/purrdf.h`: regenerated C header version constants after the workspace version bump.
+- `crates/rdf-wasm/Cargo.toml`: adds the criterion bench target for query-engine reuse.
+- `crates/rdf-wasm/README.md`: updates wasm package surface notes.
+- `crates/rdf-wasm/benches/query_engine_reuse.rs`: measures reusable query-engine behavior.
+- `crates/rdf-wasm/js/README.md`: documents package-root import and toolkit usage.
+- `crates/rdf-wasm/js/bench/ecosystem-probe.mjs`: adds repeatable ecosystem and footprint probing.
+- `crates/rdf-wasm/js/index.d.ts`: replaces package-root declarations with package-correct RDF/JS and SPARQL types.
+- `crates/rdf-wasm/js/index.mjs`: adds package-root helpers, typed query engine wrappers, null-safe dataset creation, hard errors for remote operations, and package-size checks.
+- `crates/rdf-wasm/js/package-lock.json`: pins npm gate toolchain and probe dependencies.
+- `crates/rdf-wasm/js/package.json`: defines pinned checks, smoke tests, and package metadata scripts.
+- `crates/rdf-wasm/js/tests/ergonomics.test.mjs`: covers package-root RDF/JS ergonomics.
+- `crates/rdf-wasm/js/tests/pack-smoke.mjs`: validates the packed tarball in a temp project.
+- `crates/rdf-wasm/js/tests/query.test.mjs`: covers SPARQL query/update/runtime behavior.
+- `crates/rdf-wasm/js/tests/types/package-root.types.ts`: compile-only package-root TypeScript fixture.
+- `crates/rdf-wasm/js/tsconfig.types.json`: TypeScript config for declaration validation.
+- `crates/rdf-wasm/src/lib.rs`: exports the wasm query module.
+- `crates/rdf-wasm/src/query.rs`: implements typed query/update bindings, result serialization, hard errors for unsupported remote operations, and shared projection storage for SELECT rows.
+- `docs/BENCHMARKS.md`: documents the wasm query-engine bench.
+- `docs/NPM-ECOSYSTEM.md`: records generated package comparison evidence.
+- `docs/RELEASE.md`: documents the npm release gate.
+- `docs/book/src/getting-started/javascript.md`: updates JavaScript getting-started guidance.
+- `docs/book/src/interop/rdfjs.md`: updates RDF/JS interop documentation.
+
+Validation
+
+- `make capi-check`: passed after regenerating `crates/rdf-capi/include/purrdf.h`.
+- `cd crates/rdf-wasm/js && npm ci --ignore-scripts --no-audit --no-fund && npm run check`: passed, including TypeScript, 43 Node tests, packed-tarball smoke, and package-size checks.
+- `node crates/rdf-wasm/js/bench/ecosystem-probe.mjs --write-report docs/NPM-ECOSYSTEM.md`: passed.
+- `cargo test -p purrdf-wasm --lib --locked`: passed.
+- `cargo bench -p purrdf-wasm --bench query_engine_reuse --no-run --locked`: passed.
+- `cargo clippy -p purrdf-wasm --all-targets --locked -- -D warnings`: passed.
+- `make wasm-pkg-test`: passed; optimized wasm package build, TypeScript gate, 43 Node tests, packed smoke, npm tarball 1,130,515 bytes / 1,400,000 byte budget, unpacked package 3,174,729 bytes / 3,600,000 byte budget.
+- `make wasm-pkg-size`: passed; wasm artifact 3,061,875 bytes / 3,145,728 byte budget, gzip -9 1,109,590 bytes, SIMD verified.
+- `make conformance`: passed; 2,855 pass, 10 ledgered xfail/skip, 0 failures, GREEN verdict.
+- `make check`: passed; fmt, clippy, build, tests, hygiene, generated checks, issue-reference scan, version checks, and wasm build.
+- `gh pr checks 79` before the Stage 3 base sync: all visible non-skipped checks passed.
+- Stage 3 base sync: `git fetch origin main`, `git merge origin/main`, and `git push` completed cleanly at `05ad1a5`.
+- `gh pr checks 79` after the Stage 3 base sync: all visible non-skipped checks passed, including `benchmarks` in 29m53s.
+
+Goals And Constraints
+
+- GREENFIELD-FIRST / maximal utility: the package now exposes a serious package-root RDF 1.2 and SPARQL surface rather than thin generated bindings.
+- RUST-FIRST, PYTHON-SURFACE / maximal performance: query execution, update behavior, serialization, and projection storage stay in Rust-backed wasm bindings; JS wrappers provide ergonomic access without replacing engine behavior.
+- LOW/NO OPTIONALITY, HARD FAILS: no optional package dependencies or Cargo features were added; unavailable remote `SERVICE` and `LOAD` paths hard-error.
+- Maximal portability: wasm build, wasm package tests, wasm package-size gate, and full workspace check all passed.
+
+Deferral Gate
+
+- Branch diff scan over `git diff origin/main...HEAD`: no hits.
+- PR-comment scan produced two false positives from process comments: line 328 is a review table scope-status row that says the branch stayed focused and passed; line 496 is a completion status noting benchmark success and no extra code changes. Neither records uncompleted product work.
+
+Implementation Notes
+
+- `QueryEngine` owns native engine state so plan-cache reuse survives across JS calls.
+- SELECT rows share projection storage in Rust to avoid cloning the variable list for every row.
+- The ecosystem probe reads installed package metadata and preloads Oxigraph data before measured query runs so the comparison is reproducible and fairer.
+- Packed-package smoke tests install from the actual `npm pack` tarball and exercise RDF 1.2, SPARQL, SHACL, and graph identity behavior through the package root.
+- The Stage 3 merge from `origin/main` had no conflicts. The base branch contributed `CHANGELOG.md`; no conflict-resolution choices were required.
+
+parent_hashes: 05ad1a5f88576a7224a7a429fadb0bb1ca6ac373
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 79
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/79
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: e0e7bb69e958dd12c2593394b1f18886e2d71059
+GhpRsq-Head-Ref: paudley/77-npm-wasm-toolkit-sparql
+GhpRsq-Head-OID: 05ad1a5f88576a7224a7a429fadb0bb1ca6ac373
+GhpRsq-Result-Tree: 41766d08e9333d888350a378be943e1580b89d02
+GhpRsq-Parent-Hashes: 05ad1a5f88576a7224a7a429fadb0bb1ca6ac373
+GhpRsq-Squash-Notes-SHA256: 1ab0881f6790db8d9c216ef1353767840569f6af90abcc1058989d530c52a110
 ## [0.4.1] - 2026-07-09
 
 ### Bug Fixes
 
 - **shapes:** Project external object-class values to a node-ref, not a string, in JSON Schema
+- **npm:** Align package-root RDFJS typings
+- **capi:** Refresh generated ABI header
+- **npm:** Accept null dataset inputs
+- **npm:** Correct ecosystem probe evidence
+
+### Documentation
+
+- **npm:** Add ecosystem probe evidence
+
+### Features
+
+- **npm:** Add reusable SPARQL query engine
+
+### Performance
+
+- **wasm:** Benchmark query engine reuse
+
+### Testing
+
+- **npm:** Gate packed wasm package
+- **npm:** Pin package gate toolchain
 ## [0.4.0] - 2026-07-07
 
 ### Bug Fixes

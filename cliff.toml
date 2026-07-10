@@ -46,7 +46,7 @@ split_commits = false
 # Strip issue/PR references before parsing so no `#NNN` reaches the changelog.
 commit_preprocessors = [
   { pattern = '\((?:closes?|fixes?|resolves?)\s+#\d+\)', replace = "" },
-  { pattern = '\(#\d+\)', replace = "" },
+  { pattern = '\s*\(#\d+\)', replace = "" },
   { pattern = '#\d+', replace = "" },
   { pattern = '\(\s*\)', replace = "" },
   { pattern = ' {2,}', replace = " " },
