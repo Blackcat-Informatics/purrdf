@@ -24,9 +24,10 @@ use ::purrdf::{RdfDataset, TermId};
 
 use crate::term::{NamedNode, Term, split_scope_suffix, term_id_to_native};
 
-/// Resolve a pattern term to its interned id, trying each candidate lookup key
-/// ([`Term::lookup_term_values`]) until one resolves. Returns `None` if the term is
-/// not interned in this dataset (the pattern then matches nothing).
+/// Resolve a pattern term to its interned id using variant-specific dataset
+/// lookups, recursively resolving the components of a quoted triple. Returns
+/// `None` if the term (including any quoted-triple component) is not interned
+/// in this dataset, in which case the pattern matches nothing.
 pub(crate) fn resolve_id(dataset: &RdfDataset, term: &Term) -> Option<TermId> {
     match term {
         Term::NamedNode(node) => dataset.term_id_by_iri(node.as_str()),
