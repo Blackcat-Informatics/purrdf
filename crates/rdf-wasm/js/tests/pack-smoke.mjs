@@ -93,7 +93,7 @@ const select = engine.select(
   "PREFIX ex: <https://example.org/> SELECT ?msg WHERE { ex:stmt ex:says ?msg }",
 );
 assert.equal(select.kind, "select");
-assert.equal(select.rows[0].msg.direction, "rtl");
+assert.equal(select.rows.take(0).msg.direction, "rtl");
 assert.equal(
   engine.ask(reparsed, "PREFIX ex: <https://example.org/> ASK { ex:stmt ex:says ?msg }"),
   true,

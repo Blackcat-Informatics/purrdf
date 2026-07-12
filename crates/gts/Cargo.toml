@@ -32,6 +32,8 @@ blake3 = { workspace = true }
 # execution, so results are identical everywhere.
 rayon = { workspace = true }
 ciborium = { workspace = true }
+# Borrowed deterministic-CBOR views serialize recursively without cloning Value trees.
+serde = { workspace = true }
 flate2 = { workspace = true }
 # pure-Rust zstd encoder/decoder — no C toolchain, wasm-friendly
 structured-zstd = { workspace = true }

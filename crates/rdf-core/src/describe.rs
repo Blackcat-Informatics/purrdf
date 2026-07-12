@@ -29,7 +29,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
-use crate::{QuadIds, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, TermId, TermRef, TermValue};
+use crate::{QuadIds, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, TermId, TermRef};
 
 /// A reusable extractor: it builds the subject/object adjacency and the reifier
 /// endpoint index **once**, so extracting the SCBD of many subjects (one per exported
@@ -100,9 +100,7 @@ impl<'a> Describer<'a> {
     /// Propagates a freeze diagnostic if the extracted subgraph is somehow invalid
     /// (it never should be, being a subset of an already-valid dataset).
     pub fn describe_iri(&self, subject: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        let seed = self
-            .dataset
-            .term_id_by_value(&TermValue::Iri(subject.to_string()));
+        let seed = self.dataset.term_id_by_iri(subject);
         self.describe_seeds(seed.into_iter().collect())
     }
 
@@ -117,10 +115,7 @@ impl<'a> Describer<'a> {
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         let seeds: Vec<TermId> = subjects
             .into_iter()
-            .filter_map(|s| {
-                self.dataset
-                    .term_id_by_value(&TermValue::Iri(s.to_string()))
-            })
+            .filter_map(|s| self.dataset.term_id_by_iri(s))
             .collect();
         self.describe_seeds(seeds)
     }

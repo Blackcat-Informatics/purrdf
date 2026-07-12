@@ -443,6 +443,13 @@ fn quoted_triple_object_renders_to_ntriples() {
         let token = String::from_utf8(buffer_bytes(buffer)).unwrap();
         assert!(token.contains("<https://e/s>"), "got: {token}");
         assert!(token.contains("<https://e/o>"), "got: {token}");
+        // A triple TERM must round-trip as the non-asserting `<<( … )>>` form —
+        // the bare `<< … >>` delimiter is a *reifying, asserting* triple in the
+        // native parser and would silently grow the graph on re-parse.
+        assert!(
+            token.starts_with("<<("),
+            "triple-term object must serialize as a non-asserting `<<( … )>>` token, got: {token}"
+        );
 
         purrdf_buffer_free(buffer);
         purrdf_cursor_free(cursor);

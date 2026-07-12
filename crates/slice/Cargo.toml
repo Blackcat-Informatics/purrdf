@@ -30,7 +30,7 @@ path = "src/lib.rs"
 # `gts` text codecs (`parse_dataset`) into the `RdfDataset` IR and query it directly.
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.
-purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.4.3" }
+purrdf = { package = "purrdf-rdf", path = "../rdf", version = "0.5.0" }
 # Native SPARQL parser — competency/verify queries are PARSED
 # (RFC §10), never text-searched, to extract referenced term IRIs. Replaces the
 # oxigraph-family SPARQL parser; RDF-1.2 quoted triple terms are first-class.
@@ -56,3 +56,8 @@ serde = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 insta = { workspace = true, features = ["json"] }
+criterion = { workspace = true }
+
+[[bench]]
+name = "ownership"
+harness = false

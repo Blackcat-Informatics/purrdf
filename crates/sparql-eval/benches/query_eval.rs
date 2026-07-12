@@ -24,6 +24,8 @@
 //! - `e_group_aggregate`  — GROUP BY 200 keys with COUNT + AVG + MAX.
 //! - `f_path_transitive`  — `reportsTo+` closure to the tree root (30k solutions).
 //! - `g_order_by_limit`   — whole-relation ORDER BY (numeric DESC, tiebreak) + LIMIT.
+//! - `h_distinct_dept`    — SELECT DISTINCT collapsing 30k rows to 200 keys, the
+//!   entry-API dedup path in `modifier.rs`.
 //!
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench query_eval` (the
 //! `make bench` lane) — excluded from `make check`.
@@ -180,6 +182,17 @@ SELECT ?p ?a WHERE {
   ?p ex:age ?a .
 } ORDER BY DESC(?a) ?p LIMIT 10";
 
+/// (h) DISTINCT over a heavily duplicated key: 30k joined rows collapse to the
+/// 200 distinct `ex:dept` values, so the `dedup` entry-API path (`modifier.rs`)
+/// does 30k hash-map probes with ~29.8k `Entry::Occupied` hits and only 200
+/// `Entry::Vacant` inserts — the regime the single-owner `entry()` rewrite
+/// (replacing a separate `contains_key` probe + `insert`) targets.
+const Q_H: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT DISTINCT ?d WHERE {
+  ?p ex:dept ?d .
+}";
+
 /// The full case list as `(criterion id, query text, minimum expected rows)`.
 /// The row floor is a sanity check that every case does real work (an empty
 /// result would silently benchmark a no-op plan).
@@ -191,6 +204,7 @@ const CASES: &[(&str, &str, usize)] = &[
     ("e_group_aggregate", Q_E, 200),
     ("f_path_transitive", Q_F, PEOPLE - 1),
     ("g_order_by_limit", Q_G, 10),
+    ("h_distinct_dept", Q_H, 200),
 ];
 
 /// Run one query end-to-end through the engine, returning its solution count.

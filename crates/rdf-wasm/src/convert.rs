@@ -72,6 +72,37 @@ pub(crate) fn term_value_to_rdf_term(value: &TermValue) -> Result<RdfTerm, Strin
     })
 }
 
+/// Lift a dataset-independent [`TermValue`] into an owned [`RdfTerm`] by moving
+/// every string and nested value. Query-result egress uses this path so one cell
+/// is not cloned while crossing the wasm boundary.
+pub(crate) fn term_value_into_rdf_term(value: TermValue) -> Result<RdfTerm, String> {
+    Ok(match value {
+        TermValue::Iri(iri) => RdfTerm::Iri(iri),
+        TermValue::Blank { label, .. } => RdfTerm::BlankNode(label),
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => RdfTerm::Literal(RdfLiteral {
+            lexical_form,
+            datatype: Some(datatype),
+            language,
+            direction,
+        }),
+        TermValue::Triple { s, p, o } => {
+            let TermValue::Iri(predicate) = *p else {
+                return Err("a triple-term predicate must be an IRI".to_owned());
+            };
+            RdfTerm::Triple(Box::new(RdfTriple::new(
+                term_value_into_rdf_term(*s)?,
+                predicate,
+                term_value_into_rdf_term(*o)?,
+            )))
+        }
+    })
+}
+
 /// Lower a JS [`Quad`] to the engine's [`QuadValues`] insert/query key.
 pub(crate) fn quad_to_quad_values(quad: &Quad) -> Result<QuadValues, String> {
     let s = rdf_term_to_term_value(&quad.subject.to_rdf_term()?);
@@ -165,5 +196,23 @@ mod tests {
             Term::from_inner(TermInner::DefaultGraph),
         );
         assert!(quad_to_quad_values(&q).is_err());
+    }
+
+    #[test]
+    fn owned_term_value_conversion_matches_borrowed_conversion() {
+        let value = TermValue::Triple {
+            s: Box::new(TermValue::Iri("https://e/s".to_owned())),
+            p: Box::new(TermValue::Iri("https://e/p".to_owned())),
+            o: Box::new(TermValue::Literal {
+                lexical_form: "value".to_owned(),
+                datatype: "https://e/datatype".to_owned(),
+                language: None,
+                direction: None,
+            }),
+        };
+        assert_eq!(
+            term_value_into_rdf_term(value.clone()).expect("owned conversion"),
+            term_value_to_rdf_term(&value).expect("borrowed conversion")
+        );
     }
 }

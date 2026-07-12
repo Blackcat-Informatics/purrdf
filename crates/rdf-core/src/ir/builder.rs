@@ -44,6 +44,18 @@ fn hash_of<T: Hash>(value: &T) -> u64 {
     hasher.finish()
 }
 
+fn hash_lookup_value(lookup: &TermLookup<'_>) -> u64 {
+    let mut hasher = ahash::AHasher::default();
+    hash_lookup(lookup, &mut hasher);
+    hasher.finish()
+}
+
+fn hash_stored_value(arena: &[u8], term: &InternedTerm) -> u64 {
+    let mut hasher = ahash::AHasher::default();
+    hash_stored(arena, term, &mut hasher);
+    hasher.finish()
+}
+
 /// **Store-once** insert-or-find (P3c): `vec` is the sole owner of the values;
 /// `table` holds only their `u32` indices, with hash/eq that look INTO `vec`. Returns
 /// the index of the (existing or newly pushed) value. No value is ever stored twice.
@@ -236,11 +248,7 @@ impl Interner {
     /// through the arena) and pushes the strings to the arena only on a MISS, so a
     /// duplicate value costs no arena bytes. Idempotent: equal values map to one id.
     fn intern(&mut self, lookup: TermLookup<'_>) -> TermId {
-        let hash = {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            hash_lookup(&lookup, &mut h);
-            h.finish()
-        };
+        let hash = hash_lookup_value(&lookup);
         {
             let (arena, terms) = (&self.arena, &self.terms);
             if let Some(&i) = self
@@ -294,11 +302,8 @@ impl Interner {
             self.content_ids.insert(TermId::from_index(i), id);
         }
         let (arena, terms) = (&self.arena, &self.terms);
-        self.index.insert_unique(hash, i, |&i| {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            hash_stored(arena, &terms[i as usize], &mut h);
-            h.finish()
-        });
+        self.index
+            .insert_unique(hash, i, |&i| hash_stored_value(arena, &terms[i as usize]));
         TermId::from_index(i)
     }
 
@@ -320,11 +325,7 @@ impl Interner {
     /// that point, so a miss here must return `None`, never insert.
     fn lookup_iri(&self, iri: &str) -> Option<TermId> {
         let lookup = TermLookup::Iri(iri);
-        let hash = {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            hash_lookup(&lookup, &mut h);
-            h.finish()
-        };
+        let hash = hash_lookup_value(&lookup);
         let (arena, terms) = (&self.arena, &self.terms);
         self.index
             .find(hash, |&i| term_eq(arena, &terms[i as usize], &lookup))
@@ -911,33 +912,42 @@ impl RdfDatasetBuilder {
         // to a new position, so every location handle must be remapped to its quad's
         // post-sort index — otherwise `location_of` returns a *different* quad's
         // location, an LSP break for any consumer reading through the compat bridge.
-        let mut indexed: Vec<(QuadRow, u32)> = quads
-            .into_iter()
-            .enumerate()
-            .map(|(push, row)| (row, push as u32))
-            .collect();
-        indexed.sort_unstable_by_key(|(row, _)| *row);
-        let mut push_to_frozen: HashMap<u32, u32> = HashMap::with_capacity(indexed.len());
-        let quads: Vec<QuadRow> = indexed
-            .into_iter()
-            .enumerate()
-            .map(|(frozen, (row, push))| {
-                push_to_frozen.insert(push, frozen as u32);
-                row
-            })
-            .collect();
-        // Remap each location's handle from push ordinal → frozen ordinal. A handle
-        // whose push ordinal never materialized (e.g. attached then a duplicate
-        // quad was pushed) is dropped: its quad collapsed into a surviving row that
-        // carries its own handle.
-        let mut locations: Vec<(QuadHandle, RdfLocation)> = locations
-            .into_iter()
-            .filter_map(|(handle, loc)| {
-                push_to_frozen
-                    .get(&(handle.index() as u32))
-                    .map(|&frozen| (QuadHandle::from_index(frozen), loc))
-            })
-            .collect();
+        let (quads, mut locations) = if locations.is_empty() {
+            let mut quads = quads;
+            quads.sort_unstable();
+            (quads, locations)
+        } else {
+            let mut indexed: Vec<(QuadRow, u32)> = quads
+                .into_iter()
+                .enumerate()
+                .map(|(push, row)| (row, push as u32))
+                .collect();
+            indexed.sort_unstable_by_key(|(row, _)| *row);
+
+            // Push ordinals are dense, so a dense remap is both smaller and faster
+            // than hashing each ordinal. This allocation exists only for datasets
+            // that actually carry source locations.
+            let mut push_to_frozen = vec![u32::MAX; indexed.len()];
+            let quads: Vec<QuadRow> = indexed
+                .into_iter()
+                .enumerate()
+                .map(|(frozen, (row, push))| {
+                    push_to_frozen[push as usize] = frozen as u32;
+                    row
+                })
+                .collect();
+            let locations = locations
+                .into_iter()
+                .filter_map(|(handle, loc)| {
+                    push_to_frozen
+                        .get(handle.index())
+                        .copied()
+                        .filter(|&frozen| frozen != u32::MAX)
+                        .map(|frozen| (QuadHandle::from_index(frozen), loc))
+                })
+                .collect();
+            (quads, locations)
+        };
         reifiers.sort_unstable();
         annotations.sort_unstable();
         locations.sort_unstable_by_key(|(handle, _)| *handle);

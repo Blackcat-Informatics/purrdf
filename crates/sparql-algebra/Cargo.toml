@@ -62,3 +62,7 @@ harness = false
 [[bench]]
 name = "tokenize_values"
 harness = false
+
+[[bench]]
+name = "update_reparse"
+harness = false

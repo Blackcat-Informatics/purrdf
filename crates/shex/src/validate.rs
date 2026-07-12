@@ -28,6 +28,7 @@ mod node;
 mod pattern;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermRef, TermValue};
 
@@ -342,7 +343,7 @@ struct Engine<'a> {
     sem_acts: &'a SemActRegistry<'a>,
     start: Option<&'a ShapeExpr>,
     shape_map: HashMap<&'a str, &'a ShapeExpr>,
-    te_map: HashMap<&'a str, &'a TripleExpr>,
+    prepared_shapes: HashMap<*const Shape, Result<Arc<PreparedShape<'a>>, String>>,
     label_ids: HashMap<&'a str, u32>,
     /// Settled `(node, shape)` verdicts for this validation call.
     memo: HashMap<Pair, Result<(), String>>,
@@ -352,6 +353,90 @@ struct Engine<'a> {
     used_assumptions: HashSet<Pair>,
     /// Labels being proven for a detached focus (cycle guard).
     detached_in_progress: HashSet<u32>,
+}
+
+struct PreparedShape<'a> {
+    compiled: Compiled<'a>,
+    forward: BTreeMap<&'a str, Vec<usize>>,
+    inverse: BTreeMap<&'a str, Vec<usize>>,
+    unique: bool,
+}
+
+fn prepare_shape<'a>(
+    shape: &'a Shape,
+    te_map: &HashMap<&'a str, &'a TripleExpr>,
+) -> Result<PreparedShape<'a>, String> {
+    let compiled = match &shape.expression {
+        Some(expr) => matcher::compile(expr, te_map)?,
+        None => Compiled {
+            root: CNode::Each(
+                Vec::new(),
+                Card {
+                    min: 1,
+                    max: Some(1),
+                },
+                Vec::new(),
+            ),
+            slots: Vec::new(),
+        },
+    };
+    let mut forward = BTreeMap::new();
+    let mut inverse = BTreeMap::new();
+    for (index, slot) in compiled.slots.iter().enumerate() {
+        let bucket = if slot.inverse {
+            &mut inverse
+        } else {
+            &mut forward
+        };
+        bucket
+            .entry(slot.predicate)
+            .or_insert_with(Vec::new)
+            .push(index);
+    }
+    let unique = forward
+        .values()
+        .chain(inverse.values())
+        .all(|slots| slots.len() == 1);
+    Ok(PreparedShape {
+        compiled,
+        forward,
+        inverse,
+        unique,
+    })
+}
+
+fn collect_shapes<'a>(expr: &'a ShapeExpr, shapes: &mut Vec<&'a Shape>) {
+    match expr {
+        ShapeExpr::And(parts) | ShapeExpr::Or(parts) => {
+            for part in parts {
+                collect_shapes(part, shapes);
+            }
+        }
+        ShapeExpr::Not(inner) => collect_shapes(inner, shapes),
+        ShapeExpr::Shape(shape) => {
+            shapes.push(shape);
+            if let Some(expr) = &shape.expression {
+                collect_triple_expr_shapes(expr, shapes);
+            }
+        }
+        ShapeExpr::Node(_) | ShapeExpr::External | ShapeExpr::Ref(_) => {}
+    }
+}
+
+fn collect_triple_expr_shapes<'a>(expr: &'a TripleExpr, shapes: &mut Vec<&'a Shape>) {
+    match expr {
+        TripleExpr::EachOf(group) | TripleExpr::OneOf(group) => {
+            for child in &group.expressions {
+                collect_triple_expr_shapes(child, shapes);
+            }
+        }
+        TripleExpr::TripleConstraint(constraint) => {
+            if let Some(value_expr) = &constraint.value_expr {
+                collect_shapes(value_expr, shapes);
+            }
+        }
+        TripleExpr::Ref(_) => {}
+    }
 }
 
 impl<'a> Engine<'a> {
@@ -376,12 +461,29 @@ impl<'a> Engine<'a> {
         if let Some(start) = &schema.start {
             crate::structure::collect_triple_labels_shape_expr(start, &mut te_labels);
         }
+        let te_map: HashMap<&'a str, &'a TripleExpr> = te_labels.into_iter().collect();
+        let mut shapes = Vec::new();
+        for expr in shape_map.values() {
+            collect_shapes(expr, &mut shapes);
+        }
+        for expr in te_map.values() {
+            collect_triple_expr_shapes(expr, &mut shapes);
+        }
+        if let Some(start) = schema.start.as_deref() {
+            collect_shapes(start, &mut shapes);
+        }
+        let mut prepared_shapes = HashMap::new();
+        for shape in shapes {
+            prepared_shapes
+                .entry(std::ptr::from_ref(shape))
+                .or_insert_with(|| prepare_shape(shape, &te_map).map(Arc::new));
+        }
         Self {
             data,
             sem_acts,
             start: schema.start.as_deref(),
             shape_map,
-            te_map: te_labels.into_iter().collect(),
+            prepared_shapes,
             label_ids: HashMap::new(),
             memo: HashMap::new(),
             in_progress: HashSet::new(),
@@ -494,31 +596,14 @@ impl<'a> Engine<'a> {
     // ── shape / triple-expression matching (§5.2, §5.5) ─────────────────────
 
     fn match_shape(&mut self, focus: Focus<'_>, shape: &'a Shape) -> Result<(), String> {
-        let compiled = match &shape.expression {
-            Some(expr) => matcher::compile(expr, &self.te_map)?,
-            None => Compiled {
-                root: CNode::Each(
-                    Vec::new(),
-                    Card {
-                        min: 1,
-                        max: Some(1),
-                    },
-                    Vec::new(),
-                ),
-                slots: Vec::new(),
-            },
-        };
-        // Per-(predicate, direction) slot indexes, in deterministic order.
-        let mut forward: BTreeMap<&'a str, Vec<usize>> = BTreeMap::new();
-        let mut inverse: BTreeMap<&'a str, Vec<usize>> = BTreeMap::new();
-        for (index, slot) in compiled.slots.iter().enumerate() {
-            let bucket = if slot.inverse {
-                &mut inverse
-            } else {
-                &mut forward
-            };
-            bucket.entry(slot.predicate).or_default().push(index);
-        }
+        let prepared = self
+            .prepared_shapes
+            .get(&std::ptr::from_ref(shape))
+            .expect("every structural shape is prepared at engine construction")
+            .clone()?;
+        let compiled = &prepared.compiled;
+        let forward = &prepared.forward;
+        let inverse = &prepared.inverse;
 
         // Neighbourhood: arcs out, plus arcs in for inverse-mentioned
         // predicates; sorted by TermId for determinism.
@@ -595,10 +680,7 @@ impl<'a> Engine<'a> {
         // Fast path: every (predicate, direction) lives in exactly one slot,
         // so the assignment is forced up to EXTRA diversion and per-slot
         // counts collapse to intervals.
-        let unique = forward
-            .values()
-            .chain(inverse.values())
-            .all(|v| v.len() == 1);
+        let unique = prepared.unique;
         // `assignment[i]` is the slot arc `i` was routed to (`None` when
         // diverted to `EXTRA`), kept alongside `counts` so semantic actions
         // can be fired per matched arc rather than merely per slot.
@@ -615,14 +697,14 @@ impl<'a> Engine<'a> {
                     assignment[index] = Some(slot);
                 }
             }
-            if !matcher::counts_match(&compiled, &counts) {
-                return Err(cardinality_reason(&compiled, &arcs, &value_failures));
+            if !matcher::counts_match(compiled, &counts) {
+                return Err(cardinality_reason(compiled, &arcs, &value_failures));
             }
             (counts, assignment)
         } else {
-            match matcher::assignment_search(&compiled, &options)? {
+            match matcher::assignment_search(compiled, &options)? {
                 Some(found) => found,
-                None => return Err(cardinality_reason(&compiled, &arcs, &value_failures)),
+                None => return Err(cardinality_reason(compiled, &arcs, &value_failures)),
             }
         };
         // Per-slot matched value nodes, in arc order, for firing triple-
@@ -634,7 +716,7 @@ impl<'a> Engine<'a> {
             }
         }
         // The neighbourhood matched; fire semantic actions (§5.5.2).
-        self.fire_sem_acts(focus, shape, &compiled, &counts, &matched_values)
+        self.fire_sem_acts(focus, shape, compiled, &counts, &matched_values)
     }
 
     /// Dispatch the semantic actions that a successful shape match triggers:

@@ -32,6 +32,12 @@ use ::purrdf::{RdfTextDirection, TermId, TermValue};
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
+/// Stable canonical ordering for RDF-facing values whose display form is the
+/// byte-level ordering contract. Each key is rendered exactly once.
+pub(crate) fn sort_canonical<T: ToString>(values: &mut [T]) {
+    values.sort_by_cached_key(ToString::to_string);
+}
+
 /// A native RDF term IRI (named node). Wraps a `String`; mirrors the slice of the
 /// oxigraph `NamedNode` API the engine actually uses (`as_str`, `Ord`, `Display`).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -161,6 +167,12 @@ impl Literal {
     #[inline]
     pub fn datatype_str(&self) -> &str {
         &self.datatype
+    }
+
+    /// The RDF 1.2 base direction, if present.
+    #[inline]
+    pub fn direction(&self) -> Option<RdfTextDirection> {
+        self.direction
     }
 }
 
@@ -309,7 +321,7 @@ impl Term {
 /// Split a scope-qualified blank label `"{label}.s{n}"` (n > 0) into `(label, n)`,
 /// the inverse of [`BlankScope::qualify_label`](::purrdf::BlankScope::qualify_label).
 /// Returns `None` for a bare (default-scope) label.
-fn split_scope_suffix(qualified: &str) -> Option<(&str, u32)> {
+pub(crate) fn split_scope_suffix(qualified: &str) -> Option<(&str, u32)> {
     let dot = qualified.rfind(".s")?;
     let digits = &qualified[dot + 2..];
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
@@ -460,6 +472,8 @@ pub fn term_value_to_native(value: &TermValue) -> Term {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
 
     fn nn(iri: &str) -> Term {
@@ -519,5 +533,38 @@ mod tests {
     fn escapes_special_chars_like_oxigraph() {
         let t = Term::Literal(Literal::new_simple_literal("a\"b\nc\td\\e\u{0007}f"));
         assert_eq!(t.to_string(), "\"a\\\"b\\nc\\td\\\\e\\u0007f\"");
+    }
+
+    #[test]
+    fn canonical_sort_renders_each_key_once() {
+        struct Counted<'a> {
+            key: &'static str,
+            calls: &'a Cell<usize>,
+        }
+        impl std::fmt::Display for Counted<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.calls.set(self.calls.get() + 1);
+                f.write_str(self.key)
+            }
+        }
+
+        let calls = Cell::new(0);
+        let mut values = [
+            Counted {
+                key: "c",
+                calls: &calls,
+            },
+            Counted {
+                key: "a",
+                calls: &calls,
+            },
+            Counted {
+                key: "b",
+                calls: &calls,
+            },
+        ];
+        sort_canonical(&mut values);
+        assert_eq!(calls.get(), values.len());
+        assert_eq!(values.map(|value| value.key), ["a", "b", "c"]);
     }
 }

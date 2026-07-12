@@ -13,10 +13,12 @@
 //! detection.
 //!
 //! Ids are assigned in first-seen (insertion) order, driven by the deterministic
-//! parse order, so the whole table is reproducible run to run — the lookup map is a
-//! [`BTreeMap`] and no result is ever derived from hash iteration.
+//! parse order, so the whole table is reproducible run to run. The store-once lookup
+//! table contains only dense ids and no result is ever derived from hash iteration.
 
-use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
+
+use hashbrown::HashTable;
 
 /// A DL role: a named object property, or its inverse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -142,14 +144,20 @@ pub(crate) enum Decomp {
 /// A structural interning table mapping (NNF) concepts to dense concept ids.
 #[derive(Default)]
 pub(crate) struct ConceptTable {
-    /// Concept → id (lookup only; never iterated for a result).
-    map: BTreeMap<Concept, u32>,
+    /// Store-once concept index: ids only; equality resolves through `concepts`.
+    index: HashTable<u32>,
     /// id → the canonical NNF concept.
     concepts: Vec<Concept>,
     /// id → structural decomposition (child ids resolved).
     decomp: Vec<Decomp>,
     /// id → id of its NNF negation (filled by [`ConceptTable::finalize`]).
     neg: Vec<Option<u32>>,
+}
+
+fn hash_concept(concept: &Concept) -> u64 {
+    let mut hasher = ahash::AHasher::default();
+    concept.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl ConceptTable {
@@ -164,7 +172,11 @@ impl ConceptTable {
 
     /// Intern an already-NNF concept (children recursed first).
     fn intern_nnf(&mut self, c: &Concept) -> u32 {
-        if let Some(&id) = self.map.get(c) {
+        let hash = hash_concept(c);
+        if let Some(&id) = self
+            .index
+            .find(hash, |&id| self.concepts[id as usize] == *c)
+        {
             return id;
         }
         let decomp = match c {
@@ -189,7 +201,8 @@ impl ConceptTable {
         self.concepts.push(c.clone());
         self.decomp.push(decomp);
         self.neg.push(None);
-        self.map.insert(c.clone(), id);
+        self.index
+            .insert_unique(hash, id, |&id| hash_concept(&self.concepts[id as usize]));
         id
     }
 

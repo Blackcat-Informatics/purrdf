@@ -59,11 +59,28 @@ test("QueryEngine SELECT returns typed package-root bindings", () => {
   );
   assert.equal(result.kind, "select");
   assert.deepEqual(result.variables, ["person", "name"]);
+  assert.equal(result.rowCount, 2);
   assert.equal(result.rows.length, 2);
-  assert.equal(result.rows[0].person.termType, "NamedNode");
-  assert.equal(result.rows[0].person.value, "https://e/a");
-  assert.equal(result.rows[0].name.termType, "Literal");
-  assert.equal(result.rows[0].name.value, "Ann");
+  assert.equal(result.rows.remaining, 2);
+  const first = result.rows.take(0);
+  assert.equal(first.person.termType, "NamedNode");
+  assert.equal(first.person.value, "https://e/a");
+  assert.equal(first.name.termType, "Literal");
+  assert.equal(first.name.value, "Ann");
+  assert.deepEqual([...result.rows].map((row) => row.name.value), ["Bob"]);
+  assert.equal(result.rows.remaining, 0);
+});
+
+test("QueryEngine SELECT rows are a single-owner stream", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  const result = engine.select(
+    ds,
+    "PREFIX ex: <https://e/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name",
+  );
+  assert.deepEqual(result.rows.toArray().map((row) => row.name.value), ["Ann", "Bob"]);
+  assert.deepEqual(result.rows.toArray(), []);
+  assert.equal(result.rows.take(0), undefined);
 });
 
 test("QueryEngine query routes ASK and graph results into discriminated objects", () => {

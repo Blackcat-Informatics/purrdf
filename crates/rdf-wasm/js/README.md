@@ -73,7 +73,7 @@ const names = engine.select(
   reparsed,
   "SELECT ?message WHERE { <https://ex/s> <https://ex/says> ?message }",
 );
-console.log(names.rows[0].message.value);
+console.log(names.rows.take(0)?.message.value);
 ```
 
 ## API surface
@@ -95,7 +95,9 @@ console.log(names.rows[0].message.value);
 - `QueryEngine` — a reusable SPARQL execution context with a native plan cache,
   typed `select` / `ask` / `construct` / `describe` helpers, atomic `update`,
   and `queryRaw` serialization for SPARQL Results JSON/XML/CSV/TSV plus graph
-  formats. `Dataset.query(...)` remains as the compatibility raw-string helper.
+  formats. SELECT `rows` are a single-owner iterable; use `take(index)`,
+  `toArray()`, or iteration, and call `free()` when abandoning unconsumed rows.
+  `Dataset.query(...)` remains as the compatibility raw-string helper.
 - `shaclValidateToSarif(shapesTtl, dataNt)` / `shaclEntail(shapesTtl, dataNt)` — SHACL
   validation to a SARIF 2.1.0 report and SHACL-AF `sh:rule` entailment to N-Triples.
 - `Sink`, `datasetToStream`, `streamToDataset` — the async RDF/JS

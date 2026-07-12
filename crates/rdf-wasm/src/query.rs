@@ -36,7 +36,7 @@ use purrdf_sparql_results::{
 use wasm_bindgen::prelude::*;
 
 use crate::codec::resolve_media_type;
-use crate::convert::term_value_to_rdf_term;
+use crate::convert::term_value_into_rdf_term;
 use crate::dataset::{Dataset, diag_to_err};
 use crate::term::Term;
 
@@ -60,7 +60,7 @@ impl QueryResultKind {
 
 /// One SELECT binding row.
 #[wasm_bindgen]
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct SelectRow {
     variables: Rc<[String]>,
     values: Vec<Option<Term>>,
@@ -83,14 +83,23 @@ impl SelectRow {
             .cloned()
             .flatten()
     }
+
+    /// Move one value out by projection index, or return `undefined` when the
+    /// cell is unbound, absent, or was already consumed.
+    #[wasm_bindgen(js_name = takeValue)]
+    pub fn take_value(&mut self, index: usize) -> Option<Term> {
+        self.values.get_mut(index)?.take()
+    }
 }
 
 /// A typed SELECT result returned by the raw wasm binding.
 #[wasm_bindgen]
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct SelectResult {
     variables: Rc<[String]>,
-    rows: Vec<SelectRow>,
+    rows: Vec<Option<SelectRow>>,
+    next: usize,
+    remaining: usize,
 }
 
 #[wasm_bindgen]
@@ -107,10 +116,37 @@ impl SelectResult {
         self.variables.iter().cloned().collect()
     }
 
-    /// SELECT rows, one object-like row per solution.
+    /// Total number of SELECT rows, including rows already consumed.
+    #[wasm_bindgen(getter = rowCount)]
+    pub fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Number of rows that have not yet been consumed.
     #[wasm_bindgen(getter)]
-    pub fn rows(&self) -> Vec<SelectRow> {
-        self.rows.clone()
+    pub fn remaining(&self) -> usize {
+        self.remaining
+    }
+
+    /// Move a row out by result index. Each row can be consumed once.
+    #[wasm_bindgen(js_name = takeRow)]
+    pub fn take_row(&mut self, index: usize) -> Option<SelectRow> {
+        let row = self.rows.get_mut(index)?.take()?;
+        self.remaining -= 1;
+        Some(row)
+    }
+
+    /// Move the next unconsumed row out of the result.
+    #[wasm_bindgen(js_name = nextRow)]
+    pub fn next_row(&mut self) -> Option<SelectRow> {
+        while self.next < self.rows.len() {
+            let index = self.next;
+            self.next += 1;
+            if let Some(row) = self.take_row(index) {
+                return Some(row);
+            }
+        }
+        None
     }
 }
 
@@ -379,11 +415,17 @@ fn select_result(
     rows: Vec<Vec<Option<purrdf::TermValue>>>,
 ) -> Result<SelectResult, JsError> {
     let variables: Rc<[String]> = Rc::from(variables.into_boxed_slice());
-    let rows = rows
+    let rows: Vec<Option<SelectRow>> = rows
         .into_iter()
-        .map(|row| select_row(Rc::clone(&variables), row))
+        .map(|row| select_row(Rc::clone(&variables), row).map(Some))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(SelectResult { variables, rows })
+    let remaining = rows.len();
+    Ok(SelectResult {
+        variables,
+        rows,
+        next: 0,
+        remaining,
+    })
 }
 
 fn select_row(
@@ -394,7 +436,6 @@ fn select_row(
         .into_iter()
         .map(|value| {
             value
-                .as_ref()
                 .map(term_from_value)
                 .transpose()
                 .map_err(|e| JsError::new(&e))
@@ -403,9 +444,9 @@ fn select_row(
     Ok(SelectRow { variables, values })
 }
 
-fn term_from_value(value: &purrdf::TermValue) -> Result<Term, String> {
-    let term = term_value_to_rdf_term(value)?;
-    Ok(Term::from_rdf_term(&term))
+fn term_from_value(value: purrdf::TermValue) -> Result<Term, String> {
+    let term = term_value_into_rdf_term(value)?;
+    Ok(Term::from_canonical_rdf_term(term))
 }
 
 fn serialize_query_result(result: &SparqlResult, format: Option<&str>) -> Result<String, JsError> {
@@ -478,5 +519,37 @@ fn sparql_result_kind(result: &SparqlResult) -> &'static str {
         SparqlResult::Solutions { .. } => "SELECT solutions",
         SparqlResult::Boolean(_) => "ASK boolean",
         SparqlResult::Graph(_) => "CONSTRUCT/DESCRIBE graph",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::term::TermInner;
+
+    #[test]
+    fn select_rows_are_moved_once_and_share_variables() {
+        let rows = vec![
+            vec![Some(purrdf::TermValue::Iri("https://e/a".to_owned()))],
+            vec![Some(purrdf::TermValue::Iri("https://e/b".to_owned()))],
+        ];
+        let mut result = select_result(vec!["value".to_owned()], rows).expect("select result");
+
+        assert_eq!(result.row_count(), 2);
+        assert_eq!(result.remaining(), 2);
+        let mut second = result.take_row(1).expect("indexed row");
+        assert!(Rc::ptr_eq(&result.variables, &second.variables));
+        assert!(result.take_row(1).is_none());
+        assert_eq!(result.remaining(), 1);
+        assert!(matches!(
+            second.take_value(0).expect("bound value").inner,
+            TermInner::Named(iri) if iri == "https://e/b"
+        ));
+        assert!(second.take_value(0).is_none());
+
+        let first = result.next_row().expect("remaining row");
+        assert!(Rc::ptr_eq(&result.variables, &first.variables));
+        assert_eq!(result.remaining(), 0);
+        assert!(result.next_row().is_none());
     }
 }

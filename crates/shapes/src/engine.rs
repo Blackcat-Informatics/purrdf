@@ -175,7 +175,7 @@ pub(crate) fn resolve_focus_nodes(
     }
 
     // Sort for a stable, deterministic ordering across iterations.
-    nodes.sort_by_cached_key(ToString::to_string);
+    crate::term::sort_canonical(&mut nodes);
     Ok(nodes)
 }
 

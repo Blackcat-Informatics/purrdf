@@ -70,21 +70,63 @@ function visualizationOptionsJson(options) {
 
 function selectResultToObject(raw) {
   const variables = raw.variables;
-  const rawRows = raw.rows;
-  try {
-    const rows = rawRows.map((row) => {
+  const length = raw.rowCount;
+  let closed = false;
+
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    raw.free?.();
+  };
+  if (length === 0) close();
+  const materialize = (row) => {
+    try {
       const out = Object.create(null);
-      for (const variable of variables) {
-        const value = row.get(variable);
+      for (let index = 0; index < variables.length; index += 1) {
+        const variable = variables[index];
+        const value = row.takeValue(index);
         if (value !== undefined) out[variable] = value;
       }
       return out;
-    });
-    return { kind: "select", variables, rows };
-  } finally {
-    for (const row of rawRows) row.free?.();
-    raw.free?.();
-  }
+    } finally {
+      row.free?.();
+      if (raw.remaining === 0) close();
+    }
+  };
+  const rows = {
+    get length() {
+      return length;
+    },
+    get remaining() {
+      return closed ? 0 : raw.remaining;
+    },
+    take(index) {
+      if (closed) return undefined;
+      const row = raw.takeRow(index);
+      return row === undefined ? undefined : materialize(row);
+    },
+    next() {
+      if (closed) return { done: true, value: undefined };
+      const row = raw.nextRow();
+      if (row === undefined) {
+        close();
+        return { done: true, value: undefined };
+      }
+      return { done: false, value: materialize(row) };
+    },
+    return() {
+      close();
+      return { done: true, value: undefined };
+    },
+    toArray() {
+      return Array.from(this);
+    },
+    free: close,
+    [Symbol.iterator]() {
+      return this;
+    },
+  };
+  return { kind: "select", variables, rowCount: length, rows, free: close };
 }
 
 function queryResultToObject(raw) {

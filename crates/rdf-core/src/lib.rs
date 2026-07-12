@@ -107,9 +107,9 @@ pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 pub use ir::{
     BlankScope, CanonHash, Canonicalized, DatasetDiff, DatasetSink, FrozenDatasetSource, GtsBundle,
     HandleEntry, HandleKey, MutableDataset, PipelineBundle, PipelineBundleError, QuadHandle,
-    QuadIds, QuadProbePlan, QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
-    RdfEnvelope, TermId, TermRef, TermValue, ValidatedRdfDatasetBuilder, canonicalize,
-    canonicalize_with, dataset_diff, datasets_isomorphic,
+    QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder,
+    RdfDatasetVisitor, RdfEnvelope, TermId, TermRef, TermValue, ValidatedRdfDatasetBuilder,
+    canonicalize, canonicalize_with, dataset_diff, datasets_isomorphic,
 };
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,
@@ -134,7 +134,10 @@ pub use sssom::{
     SSSOM_DEFAULT_VALIDATION_TYPES, SssomDiagnostic, SssomMapping, SssomMappingSet, SssomMeta,
 };
 pub use store::RdfStoreCapabilities;
-pub use turtle::{emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri};
+pub use turtle::{
+    emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri,
+    write_dataset_annotation, write_dataset_quad, write_dataset_reifier, write_dataset_term,
+};
 pub use turtle_render::render as render_canonical_turtle;
 
 /// The common purrdf-core surface, for `use purrdf_core::prelude::*;`.
@@ -150,7 +153,8 @@ pub mod prelude {
     pub use crate::dataset_view::{DatasetView, GraphMatch};
     pub use crate::diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
     pub use crate::ir::{
-        QuadIds, QuadRef, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue,
+        QuadIds, QuadPatternCursor, QuadRef, RdfDataset, RdfDatasetBuilder, TermId, TermRef,
+        TermValue,
     };
     pub use crate::model::{
         RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTermKind, RdfTextDirection,

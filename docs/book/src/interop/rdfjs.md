@@ -71,13 +71,18 @@ const result = engine.select(
   ds,
   "PREFIX ex: <https://ex/> SELECT ?o WHERE { ex:s ex:p ?o }",
 );
-console.log(result.rows[0].o?.value);
+console.log(result.rows.take(0)?.o?.value);
 
 const graph = engine.construct(
   ds,
   "PREFIX ex: <https://ex/> CONSTRUCT { ex:copy ex:p ?o } WHERE { ex:s ex:p ?o }",
 );
 ```
+
+SELECT rows are single-owner and lazy across the wasm boundary. Iterate
+`result.rows`, call `result.rows.take(index)` for indexed consumption, or call
+`result.rows.toArray()` to materialize the remaining rows. A row can be consumed
+once; call `result.free()` when abandoning a result before exhaustion.
 
 `QueryEngine.queryRaw(...)` serializes SELECT/ASK results as SPARQL Results
 JSON/XML/CSV/TSV and graph results through the same graph formats accepted by

@@ -224,29 +224,34 @@ fn days_in_month(year: i64, month: u8) -> u8 {
 fn parse_ymd(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(i64, u8, u8), XsdError> {
     let neg = s.starts_with('-');
     let body = if neg { &s[1..] } else { s };
-    let parts: Vec<&str> = body.split('-').collect();
-    if parts.len() != 3 {
+    let Some((year_text, month_day)) = body.split_once('-') else {
+        return Err(invalid(dt, lexical, "expected YYYY-MM-DD"));
+    };
+    let Some((month_text, day_text)) = month_day.split_once('-') else {
+        return Err(invalid(dt, lexical, "expected YYYY-MM-DD"));
+    };
+    if day_text.contains('-') {
         return Err(invalid(dt, lexical, "expected YYYY-MM-DD"));
     }
-    if parts[0].len() < 4 || parts[1].len() != 2 || parts[2].len() != 2 {
+    if year_text.len() < 4 || month_text.len() != 2 || day_text.len() != 2 {
         return Err(invalid(dt, lexical, "bad date field widths"));
     }
     // XSD 1.1 §3.3.7: a year wider than 4 digits must not have a leading zero.
     // Exactly 4 digits with a leading zero (e.g. "0044", "0000") are valid.
-    if parts[0].len() > 4 && parts[0].starts_with('0') {
+    if year_text.len() > 4 && year_text.starts_with('0') {
         return Err(invalid(
             dt,
             lexical,
             "year wider than 4 digits must not have a leading zero",
         ));
     }
-    let year_mag: i64 = parts[0]
+    let year_mag: i64 = year_text
         .parse()
         .map_err(|_| invalid(dt, lexical, "bad year"))?;
-    let month: u8 = parts[1]
+    let month: u8 = month_text
         .parse()
         .map_err(|_| invalid(dt, lexical, "bad month"))?;
-    let day: u8 = parts[2]
+    let day: u8 = day_text
         .parse()
         .map_err(|_| invalid(dt, lexical, "bad day"))?;
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
@@ -261,29 +266,34 @@ fn parse_ymd(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(i64, u8, u8), X
 
 /// Parse `hh:mm:ss(.fff)?` into `(hour, minute, second)`.
 fn parse_hms(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(u8, u8, Decimal), XsdError> {
-    let parts: Vec<&str> = s.split(':').collect();
-    if parts.len() != 3 {
+    let Some((hour_text, minute_second)) = s.split_once(':') else {
+        return Err(invalid(dt, lexical, "expected hh:mm:ss"));
+    };
+    let Some((minute_text, second_text)) = minute_second.split_once(':') else {
+        return Err(invalid(dt, lexical, "expected hh:mm:ss"));
+    };
+    if second_text.contains(':') {
         return Err(invalid(dt, lexical, "expected hh:mm:ss"));
     }
-    if parts[0].len() != 2 || parts[1].len() != 2 {
+    if hour_text.len() != 2 || minute_text.len() != 2 {
         return Err(invalid(dt, lexical, "bad time field widths"));
     }
-    let hour: u8 = parts[0]
+    let hour: u8 = hour_text
         .parse()
         .map_err(|_| invalid(dt, lexical, "bad hour"))?;
-    let minute: u8 = parts[1]
+    let minute: u8 = minute_text
         .parse()
         .map_err(|_| invalid(dt, lexical, "bad minute"))?;
     // Reject a trailing-dot seconds lexical (e.g. "00.") — parse_decimal accepts it
     // as a valid decimal ("1.0") but it is not a valid XSD time seconds field.
-    if parts[2].ends_with('.') {
+    if second_text.ends_with('.') {
         return Err(invalid(dt, lexical, "seconds has trailing decimal point"));
     }
     // Reject a leading sign in the seconds field — seconds must be non-negative.
-    if parts[2].starts_with('-') || parts[2].starts_with('+') {
+    if second_text.starts_with('-') || second_text.starts_with('+') {
         return Err(invalid(dt, lexical, "seconds must not have a sign"));
     }
-    let second = parse_decimal(parts[2]).map_err(|_| invalid(dt, lexical, "bad second"))?;
+    let second = parse_decimal(second_text).map_err(|_| invalid(dt, lexical, "bad second"))?;
     // XSD has no leap seconds: seconds must be in [0, 60). Whole part >= 60 is invalid.
     if second.whole_part() >= 60 {
         return Err(invalid(dt, lexical, "seconds out of range (must be < 60)"));

@@ -9,7 +9,9 @@
 //! engine intern terms from the source dataset and re-materialize them into a fresh
 //! builder soundly.
 
-use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+
+use hashbrown::HashTable;
 
 use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermId, TermValue};
 
@@ -18,19 +20,27 @@ use crate::vocab::RDFS_RESOURCE;
 /// Local `TermValue`→`u32` interner over dataset-independent terms.
 #[derive(Default)]
 pub(crate) struct Interner {
-    map: HashMap<TermValue, u32>,
+    index: HashTable<u32>,
     values: Vec<TermValue>,
+}
+
+fn hash_value(value: &TermValue) -> u64 {
+    let mut hasher = ahash::AHasher::default();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl Interner {
     /// Intern `v`, returning its stable dense id (assigned in first-seen order).
     pub(crate) fn intern(&mut self, v: TermValue) -> u32 {
-        if let Some(&id) = self.map.get(&v) {
+        let hash = hash_value(&v);
+        if let Some(&id) = self.index.find(hash, |&id| self.values[id as usize] == v) {
             return id;
         }
         let id = u32::try_from(self.values.len()).expect("term count fits u32");
-        self.values.push(v.clone());
-        self.map.insert(v, id);
+        self.values.push(v);
+        self.index
+            .insert_unique(hash, id, |&id| hash_value(&self.values[id as usize]));
         id
     }
 
@@ -47,7 +57,11 @@ impl Interner {
     /// The id already assigned to `iri`, if it has been interned (lookup only).
     #[cfg(test)]
     pub(crate) fn id_of_iri(&self, iri: &str) -> Option<u32> {
-        self.map.get(&TermValue::Iri(iri.to_owned())).copied()
+        let value = TermValue::Iri(iri.to_owned());
+        let hash = hash_value(&value);
+        self.index
+            .find(hash, |&id| self.values[id as usize] == value)
+            .copied()
     }
 
     /// Whether `id` may occupy a triple *subject* position (an IRI or blank node —

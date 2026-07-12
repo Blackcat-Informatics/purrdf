@@ -8,8 +8,8 @@
 //! because oxigraph's `Store::dump` rewrites the RDF 1.2 reifier shorthand
 //! `<< s p o >>` into an extra `rdf:reifies` indirection node with opaque blank
 //! labels — changing the *structure* of the document. The native reasoning lane
-//! commits artifacts whose structure (`[] rdf:reifies << … >>`, triple-term
-//! objects via `purrdf:concludes << … >>`, etc.) must be preserved, so this
+//! commits artifacts whose structure (`[] rdf:reifies <<( … )>>`, triple-term
+//! objects via `purrdf:concludes <<( … )>>`, etc.) must be preserved, so this
 //! emitter writes the clean full-IRI form the committed artifacts use.
 //!
 //! The emitter is intentionally *cosmetic-agnostic*: it emits FULL `<iri>` forms
@@ -25,9 +25,13 @@
 //! - Blank node: `_:label` (or `[]` for an empty/anonymous reifier subject —
 //!   see [`emit_reifier`] / [`emit_annotation`])
 //! - Literal: `"lex"`, `"lex"@lang`, `"lex"@lang--ltr`/`"lex"@lang--rtl`, `"lex"^^<datatype>` (escaped)
-//! - Triple term (RDF 1.2): `<< <s> <p> <o> >>` (the reifier-shorthand form)
+//! - Triple term (RDF 1.2): `<<( <s> <p> <o> )>>` (non-asserting; distinct from
+//!   the bare `<< s p o >>` reifier shorthand, which asserts the triple)
 
-use crate::{RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTriple};
+use crate::{
+    QuadIds, RdfAnnotation, RdfDataset, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTriple,
+    TermId, TermRef,
+};
 use std::fmt::Write as _;
 
 /// Percent-encode a string the way Python's `urllib.parse.quote(value, safe="")`
@@ -73,6 +77,11 @@ pub fn rule_iri(base: &str, rule_name: &str) -> String {
 /// [`crate::ir::canon::write_literal_escaped`] exactly.
 fn escape_literal(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
+    write_literal_escaped(value, &mut out);
+    out
+}
+
+fn write_literal_escaped(value: &str, out: &mut String) {
     for ch in value.chars() {
         match ch {
             '\\' => out.push_str("\\\\"),
@@ -86,7 +95,6 @@ fn escape_literal(value: &str) -> String {
             c => out.push(c),
         }
     }
-    out
 }
 
 /// Render an [`RdfLiteral`] as an N-Triples/Turtle literal token.
@@ -123,6 +131,11 @@ fn emit_literal(literal: &RdfLiteral) -> String {
 /// `purrdf::native_codecs::ser_model` exactly.
 fn escape_iri(iri: &str) -> String {
     let mut out = String::with_capacity(iri.len());
+    write_iri_escaped(iri, &mut out);
+    out
+}
+
+fn write_iri_escaped(iri: &str, out: &mut String) {
     for ch in iri.chars() {
         match ch {
             '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
@@ -134,11 +147,119 @@ fn escape_iri(iri: &str) -> String {
             c => out.push(c),
         }
     }
-    out
+}
+
+/// Append one interned term to an existing Turtle/N-Triples output buffer.
+///
+/// This is the borrowed counterpart of [`emit_term`]: it resolves directly from
+/// the frozen dataset and allocates neither an owned term tree nor an intermediate
+/// rendered string.
+pub fn write_dataset_term(dataset: &RdfDataset, id: TermId, out: &mut String) {
+    match dataset.resolve(id) {
+        TermRef::Iri(iri) => {
+            out.push('<');
+            write_iri_escaped(iri, out);
+            out.push('>');
+        }
+        TermRef::Blank { label, scope } => {
+            out.push_str("_:");
+            out.push_str(label);
+            if scope != crate::BlankScope::DEFAULT {
+                let _ = write!(out, ".s{}", scope.ordinal());
+            }
+        }
+        TermRef::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => {
+            out.push('"');
+            write_literal_escaped(lexical, out);
+            out.push('"');
+            if let Some(language) = language {
+                out.push('@');
+                out.push_str(language);
+                if let Some(direction) = direction {
+                    out.push_str("--");
+                    out.push_str(direction.as_str());
+                }
+            } else {
+                let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
+                    unreachable!("literal datatype must resolve to an IRI")
+                };
+                out.push_str("^^<");
+                out.push_str(datatype);
+                out.push('>');
+            }
+        }
+        TermRef::Triple { s, p, o } => {
+            out.push_str("<<( ");
+            write_dataset_term(dataset, s, out);
+            out.push(' ');
+            write_dataset_predicate(dataset, p, out);
+            out.push(' ');
+            write_dataset_term(dataset, o, out);
+            out.push_str(" )>>");
+        }
+    }
+}
+
+fn write_dataset_predicate(dataset: &RdfDataset, id: TermId, out: &mut String) {
+    let TermRef::Iri(iri) = dataset.resolve(id) else {
+        unreachable!("predicate must resolve to an IRI")
+    };
+    out.push('<');
+    out.push_str(iri);
+    out.push('>');
+}
+
+/// Append one ID-native quad as the same default-graph statement emitted by
+/// [`emit_quad`]. The graph-name slot is intentionally ignored by this Turtle
+/// projection, matching the owned emitter.
+pub fn write_dataset_quad(dataset: &RdfDataset, quad: QuadIds, out: &mut String) {
+    write_dataset_term(dataset, quad.s, out);
+    out.push(' ');
+    write_dataset_predicate(dataset, quad.p, out);
+    out.push(' ');
+    write_dataset_term(dataset, quad.o, out);
+    out.push_str(" .\n");
+}
+
+/// Append one ID-native annotation row without materializing owned terms.
+pub fn write_dataset_annotation(
+    dataset: &RdfDataset,
+    reifier: TermId,
+    predicate: TermId,
+    object: TermId,
+    out: &mut String,
+) {
+    write_dataset_term(dataset, reifier, out);
+    out.push(' ');
+    write_dataset_predicate(dataset, predicate, out);
+    out.push(' ');
+    write_dataset_term(dataset, object, out);
+    out.push_str(" .\n");
+}
+
+/// Append one ID-native reifier binding without materializing its statement tree.
+pub fn write_dataset_reifier(
+    dataset: &RdfDataset,
+    reifier: TermId,
+    statement: TermId,
+    out: &mut String,
+) {
+    const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+    write_dataset_term(dataset, reifier, out);
+    out.push_str(" <");
+    out.push_str(RDF_REIFIES);
+    out.push_str("> ");
+    write_dataset_term(dataset, statement, out);
+    out.push_str(" .\n");
 }
 
 /// Serialize an [`RdfTerm`] to its Turtle form (full `<iri>`, `_:bnode`, literal,
-/// or the RDF 1.2 triple-term shorthand `<< <s> <p> <o> >>`).
+/// or the RDF 1.2 non-asserting triple term `<<( <s> <p> <o> )>>`).
 pub fn emit_term(term: &RdfTerm) -> String {
     match term {
         RdfTerm::Iri(iri) => format!("<{}>", escape_iri(iri)),
@@ -148,10 +269,16 @@ pub fn emit_term(term: &RdfTerm) -> String {
     }
 }
 
-/// Serialize an [`RdfTriple`] as an RDF 1.2 triple-term: `<< <s> <p> <o> >>`.
+/// Serialize an [`RdfTriple`] as an RDF 1.2 triple-term: `<<( <s> <p> <o> )>>`.
+///
+/// The parens matter — the bare `<< s p o >>` form is a *reifying triple* that
+/// ALSO asserts `s p o` (and mints a reifier), so re-parsing it would grow the
+/// graph. A triple term denotes the triple without asserting it, which is what
+/// every embedded position (a triple-term object, or the `rdf:reifies` object
+/// via [`emit_reifier`]) requires.
 fn emit_triple_term(triple: &RdfTriple) -> String {
     format!(
-        "<< {} <{}> {} >>",
+        "<<( {} <{}> {} )>>",
         emit_term(&triple.subject),
         triple.predicate,
         emit_term(&triple.object)
@@ -172,7 +299,7 @@ pub fn emit_quad(quad: &RdfQuad) -> String {
     )
 }
 
-/// Emit a reifier binding as `<reifier> rdf:reifies << s p o >> ; <pred> <obj> ; … .`
+/// Emit a reifier binding as `<reifier> rdf:reifies <<( s p o )>> ; <pred> <obj> ; … .`
 ///
 /// A blank-node reifier is emitted as the anonymous `[]` form **only when
 /// annotations are folded onto it** — then the whole binding is one
@@ -273,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn emit_term_triple_term_is_reifier_shorthand() {
+    fn emit_term_triple_term_uses_non_asserting_parens() {
         let triple = RdfTriple::new(
             iri("http://example.org/s"),
             "http://example.org/p",
@@ -281,7 +408,36 @@ mod tests {
         );
         assert_eq!(
             emit_term(&RdfTerm::triple(triple)),
-            "<< <http://example.org/s> <http://example.org/p> <http://example.org/o> >>"
+            "<<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>>"
+        );
+    }
+
+    #[test]
+    fn write_dataset_term_triple_arm_uses_non_asserting_parens() {
+        // Coverage for the ID-native (borrowed) writer's `TermRef::Triple` arm
+        // directly: a triple-term OBJECT of an ordinary quad (not an
+        // `rdf:reifies` statement) must serialize with the `<<( … )>>`
+        // delimiter. Spelling it bare `<< … >>` would re-parse as a *reifying,
+        // asserting* triple — a different, larger graph — so this asserts the
+        // exact delimiter rather than only the component IRIs.
+        let mut builder = crate::RdfDatasetBuilder::new();
+        let s = builder.intern_iri("http://example.org/s");
+        let p = builder.intern_iri("http://example.org/p");
+        let o = builder.intern_iri("http://example.org/o");
+        let statement = builder.intern_triple(s, p, o);
+        let outer_s = builder.intern_iri("http://example.org/outer");
+        let outer_p = builder.intern_iri("http://example.org/concludes");
+        builder.push_quad(outer_s, outer_p, statement, None);
+        let dataset = builder.freeze().expect("dataset freezes");
+
+        let mut out = String::new();
+        for quad in dataset.quads() {
+            write_dataset_quad(&dataset, quad, &mut out);
+        }
+        assert_eq!(
+            out,
+            "<http://example.org/outer> <http://example.org/concludes> \
+<<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> .\n"
         );
     }
 
@@ -340,9 +496,9 @@ mod tests {
                 "<https://purrdf.org/rule/x>".to_owned(),
             )],
         );
-        // Anonymous reifier subject, rdf:reifies head, triple-term shorthand,
+        // Anonymous reifier subject, rdf:reifies head, non-asserting triple term,
         // and the folded annotation — all in one statement.
-        assert!(out.starts_with("[] <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> << "));
+        assert!(out.starts_with("[] <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( "));
         assert!(out.contains("purrdf.org/ontology#viaRule> <https://purrdf.org/rule/x>"));
         assert!(out.trim_end().ends_with(" ."));
     }
@@ -362,7 +518,7 @@ mod tests {
 
         let out = emit_reifier(&reifier, &[]);
         assert!(
-            out.starts_with("_:r0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> << "),
+            out.starts_with("_:r0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( "),
             "blank reifier must keep its label when annotations ride standalone: {out}"
         );
 

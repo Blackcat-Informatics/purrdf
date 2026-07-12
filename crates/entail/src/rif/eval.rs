@@ -14,10 +14,9 @@
 //! `(label, scope)` value), never skolemized. Output is `original + derived`,
 //! frozen into a fresh dataset — fully deterministic.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder};
+use purrdf_core::{FastMap, FastSet, RdfDataset, RdfDatasetBuilder};
 
 use crate::EntailError;
 use crate::interner::{Interner, intern_into};
@@ -53,6 +52,78 @@ struct CompiledRule {
 /// or `None` if still free.
 type Binding = Vec<Option<u32>>;
 
+/// Append-only fact rows plus one posting list per RDF position. Candidate order
+/// follows fact insertion order, so indexing changes work performed, not result
+/// determinism.
+#[derive(Default)]
+struct FactIndex {
+    facts: Vec<[u32; 3]>,
+    by_subject: FastMap<u32, Vec<usize>>,
+    by_predicate: FastMap<u32, Vec<usize>>,
+    by_object: FastMap<u32, Vec<usize>>,
+}
+
+impl FactIndex {
+    fn from_facts(facts: Vec<[u32; 3]>) -> Self {
+        let mut index = Self::default();
+        for fact in facts {
+            index.push(fact);
+        }
+        index
+    }
+
+    fn push(&mut self, fact: [u32; 3]) {
+        let ordinal = self.facts.len();
+        self.facts.push(fact);
+        self.by_subject.entry(fact[0]).or_default().push(ordinal);
+        self.by_predicate.entry(fact[1]).or_default().push(ordinal);
+        self.by_object.entry(fact[2]).or_default().push(ordinal);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.facts.is_empty()
+    }
+
+    /// Drop all facts and postings while retaining allocated capacity, so the
+    /// next chase iteration's frontier can be rebuilt without reallocating.
+    fn clear(&mut self) {
+        self.facts.clear();
+        self.by_subject.clear();
+        self.by_predicate.clear();
+        self.by_object.clear();
+    }
+
+    /// The shortest posting list selected by constants and already-bound
+    /// variables. `None` means no slot is bound and the caller scans all facts.
+    fn candidate_ordinals(&self, atom: &PatternAtom, binding: &Binding) -> Option<&[usize]> {
+        let mut best: Option<&[usize]> = None;
+        for (slot, postings) in [
+            (atom.s, &self.by_subject),
+            (atom.p, &self.by_predicate),
+            (atom.o, &self.by_object),
+        ] {
+            let Some(value) = bound_value(slot, binding) else {
+                continue;
+            };
+            let candidate = postings.get(&value).map_or(&[][..], Vec::as_slice);
+            if best.is_none_or(|current| candidate.len() < current.len()) {
+                best = Some(candidate);
+            }
+        }
+        best
+    }
+
+    fn estimate(&self, atom: &PatternAtom, binding: &Binding) -> usize {
+        self.candidate_ordinals(atom, binding)
+            .map_or(self.facts.len(), <[usize]>::len)
+    }
+}
+
+#[derive(Default)]
+struct ChaseStats {
+    candidate_facts_examined: usize,
+}
+
 /// Materialize the RIF rule set over `ds`, returning `original quads + derived
 /// triples`.
 ///
@@ -68,7 +139,7 @@ pub fn materialize_rif(ds: &RdfDataset, rules: &RuleSet) -> Result<Arc<RdfDatase
     let mut interner = Interner::default();
 
     // Seed: the source dataset's default-graph triples, in dataset order.
-    let mut facts: HashSet<[u32; 3]> = HashSet::new();
+    let mut facts: FastSet<[u32; 3]> = FastSet::default();
     let mut seed: Vec<[u32; 3]> = Vec::new();
     for q in ds.quads() {
         if q.g.is_some() {
@@ -79,7 +150,7 @@ pub fn materialize_rif(ds: &RdfDataset, rules: &RuleSet) -> Result<Arc<RdfDatase
         let o = interner.intern(ds.term_value(q.o));
         push_fact(&mut facts, &mut seed, [s, p, o]);
     }
-    let original: HashSet<[u32; 3]> = facts.clone();
+    let original: FastSet<[u32; 3]> = facts.clone();
 
     // Seed: the rule set's ground facts (imported RDF + ground frames).
     for (s, p, o) in &rules.facts {
@@ -96,13 +167,13 @@ pub fn materialize_rif(ds: &RdfDataset, rules: &RuleSet) -> Result<Arc<RdfDatase
         .map(|r| compile_rule(r, &mut interner))
         .collect::<Result<Vec<_>, _>>()?;
 
-    chase(&mut facts, seed, &compiled);
+    let _stats = chase(&mut facts, seed, &compiled);
 
     // Emit: original quads (all graphs) + every seeded/derived fact that is not an
     // original default-graph triple, in a deterministic order.
     let mut b = RdfDatasetBuilder::new();
     b.push_dataset(ds);
-    // `HashSet` iteration order is not stable across runs, so sort the accumulated
+    // Set iteration order is not stable across runs, so sort the accumulated
     // facts by their interned term ids to get a deterministic (not insertion-order)
     // emission order.
     let mut ordered: Vec<[u32; 3]> = facts.iter().copied().collect();
@@ -120,7 +191,7 @@ pub fn materialize_rif(ds: &RdfDataset, rules: &RuleSet) -> Result<Arc<RdfDatase
 }
 
 /// Insert `t` into the accumulated set and, if new, the ordered frontier seed.
-fn push_fact(facts: &mut HashSet<[u32; 3]>, order: &mut Vec<[u32; 3]>, t: [u32; 3]) {
+fn push_fact(facts: &mut FastSet<[u32; 3]>, order: &mut Vec<[u32; 3]>, t: [u32; 3]) {
     if facts.insert(t) {
         order.push(t);
     }
@@ -141,7 +212,7 @@ fn compile_rule(
     // Range-restriction (safety) check up front: every head variable must be
     // bound by some body atom. Walk the model terms directly so that valid-rule
     // compilation below is byte-identical (same interned ids, same var indices).
-    let body_vars: HashSet<&str> = rule.body.iter().flat_map(atom_var_names).collect();
+    let body_vars: FastSet<&str> = rule.body.iter().flat_map(atom_var_names).collect();
     for name in rule.head.iter().flat_map(atom_var_names) {
         if !body_vars.contains(name) {
             return Err(EntailError::Parse(format!(
@@ -204,25 +275,25 @@ fn compile_slot(term: &RifTerm, interner: &mut Interner, vars: &mut Vec<String>)
 }
 
 /// Semi-naive forward chase to the least fixpoint.
-fn chase(facts: &mut HashSet<[u32; 3]>, seed: Vec<[u32; 3]>, rules: &[CompiledRule]) {
-    let mut all: Vec<[u32; 3]> = seed.clone();
-    let mut delta: Vec<[u32; 3]> = seed;
+fn chase(facts: &mut FastSet<[u32; 3]>, seed: Vec<[u32; 3]>, rules: &[CompiledRule]) -> ChaseStats {
+    let mut all = FactIndex::from_facts(seed.clone());
+    let mut delta = FactIndex::from_facts(seed);
     let mut derived: Vec<[u32; 3]> = Vec::new();
-    let mut next: Vec<[u32; 3]> = Vec::new();
+    let mut stats = ChaseStats::default();
     while !delta.is_empty() {
         derived.clear();
-        next.clear();
         for rule in rules {
-            fire_rule(rule, &all, &delta, &mut derived);
+            fire_rule(rule, &all, &delta, &mut derived, &mut stats);
         }
+        delta.clear();
         for &t in &derived {
             if facts.insert(t) {
                 all.push(t);
-                next.push(t);
+                delta.push(t);
             }
         }
-        std::mem::swap(&mut delta, &mut next);
     }
+    stats
 }
 
 /// Fire one rule semi-naively: for each body position `pivot`, bind that atom only
@@ -231,65 +302,184 @@ fn chase(facts: &mut HashSet<[u32; 3]>, seed: Vec<[u32; 3]>, rules: &[CompiledRu
 /// fact wherever it lands in the body; the fixpoint deduplicates re-derivations.
 fn fire_rule(
     rule: &CompiledRule,
-    all: &[[u32; 3]],
-    delta: &[[u32; 3]],
+    all: &FactIndex,
+    delta: &FactIndex,
     derived: &mut Vec<[u32; 3]>,
+    stats: &mut ChaseStats,
 ) {
     for pivot in 0..rule.body.len() {
-        let mut bindings: Vec<Binding> = Vec::new();
-        // The pivot atom binds against the frontier only.
-        for &fact in delta {
-            let mut b = vec![None; rule.num_vars];
-            if match_atom(&rule.body[pivot], fact, &mut b) {
-                bindings.push(b);
-            }
-        }
-        // The remaining atoms (in body order, skipping the pivot) join against all.
-        for (i, atom) in rule.body.iter().enumerate() {
-            if i == pivot {
-                continue;
-            }
-            if bindings.is_empty() {
-                break;
-            }
-            let mut next: Vec<Binding> = Vec::new();
-            for b in &bindings {
-                for &fact in all {
-                    let mut nb = b.clone();
-                    if match_atom(atom, fact, &mut nb) {
-                        next.push(nb);
-                    }
+        let mut binding = vec![None; rule.num_vars];
+        let mut remaining: Vec<usize> = (0..rule.body.len()).filter(|&i| i != pivot).collect();
+        match delta.candidate_ordinals(&rule.body[pivot], &binding) {
+            Some(ordinals) => {
+                for &ordinal in ordinals {
+                    match_pivot(
+                        rule,
+                        pivot,
+                        delta.facts[ordinal],
+                        all,
+                        &mut remaining,
+                        &mut binding,
+                        derived,
+                        stats,
+                    );
                 }
             }
-            bindings = next;
-        }
-        for b in &bindings {
-            for h in &rule.head {
-                derived.push(instantiate(h, b));
+            None => {
+                for &fact in &delta.facts {
+                    match_pivot(
+                        rule,
+                        pivot,
+                        fact,
+                        all,
+                        &mut remaining,
+                        &mut binding,
+                        derived,
+                        stats,
+                    );
+                }
             }
         }
     }
 }
 
-/// Try to bind `atom`'s slots against `fact`, extending `b`. Returns `false` (and
-/// leaves `b` in a possibly-partially-extended state, which the caller discards)
-/// on any conflict.
-fn match_atom(atom: &PatternAtom, fact: [u32; 3], b: &mut Binding) -> bool {
-    bind_slot(atom.s, fact[0], b) && bind_slot(atom.p, fact[1], b) && bind_slot(atom.o, fact[2], b)
+#[allow(clippy::too_many_arguments)]
+fn match_pivot(
+    rule: &CompiledRule,
+    pivot: usize,
+    fact: [u32; 3],
+    all: &FactIndex,
+    remaining: &mut Vec<usize>,
+    binding: &mut Binding,
+    derived: &mut Vec<[u32; 3]>,
+    stats: &mut ChaseStats,
+) {
+    stats.candidate_facts_examined += 1;
+    let mut changed = [0usize; 3];
+    let Some(changed_count) = match_atom(&rule.body[pivot], fact, binding, &mut changed) else {
+        return;
+    };
+    join_remaining(rule, all, remaining, binding, derived, stats);
+    rollback(binding, &changed[..changed_count]);
+}
+
+fn join_remaining(
+    rule: &CompiledRule,
+    all: &FactIndex,
+    remaining: &mut Vec<usize>,
+    binding: &mut Binding,
+    derived: &mut Vec<[u32; 3]>,
+    stats: &mut ChaseStats,
+) {
+    if remaining.is_empty() {
+        for head in &rule.head {
+            derived.push(instantiate(head, binding));
+        }
+        return;
+    }
+
+    let choice = remaining
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, atom)| (all.estimate(&rule.body[**atom], binding), **atom))
+        .map(|(position, _)| position)
+        .expect("remaining atoms is non-empty");
+    let atom_index = remaining.swap_remove(choice);
+    let atom = &rule.body[atom_index];
+    match all.candidate_ordinals(atom, binding) {
+        Some(ordinals) => {
+            for &ordinal in ordinals {
+                match_join_candidate(
+                    rule,
+                    atom,
+                    all.facts[ordinal],
+                    all,
+                    remaining,
+                    binding,
+                    derived,
+                    stats,
+                );
+            }
+        }
+        None => {
+            for &fact in &all.facts {
+                match_join_candidate(rule, atom, fact, all, remaining, binding, derived, stats);
+            }
+        }
+    }
+    remaining.push(atom_index);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn match_join_candidate(
+    rule: &CompiledRule,
+    atom: &PatternAtom,
+    fact: [u32; 3],
+    all: &FactIndex,
+    remaining: &mut Vec<usize>,
+    binding: &mut Binding,
+    derived: &mut Vec<[u32; 3]>,
+    stats: &mut ChaseStats,
+) {
+    stats.candidate_facts_examined += 1;
+    let mut changed = [0usize; 3];
+    if let Some(changed_count) = match_atom(atom, fact, binding, &mut changed) {
+        join_remaining(rule, all, remaining, binding, derived, stats);
+        rollback(binding, &changed[..changed_count]);
+    }
+}
+
+/// Try to bind `atom` against `fact`, recording newly-bound variable slots so the
+/// caller can restore the reusable binding after recursive descent.
+fn match_atom(
+    atom: &PatternAtom,
+    fact: [u32; 3],
+    binding: &mut Binding,
+    changed: &mut [usize; 3],
+) -> Option<usize> {
+    let mut changed_count = 0;
+    for (slot, value) in [(atom.s, fact[0]), (atom.p, fact[1]), (atom.o, fact[2])] {
+        if !bind_slot(slot, value, binding, changed, &mut changed_count) {
+            rollback(binding, &changed[..changed_count]);
+            return None;
+        }
+    }
+    Some(changed_count)
 }
 
 /// Unify one slot with a term id: a constant must equal it; a free variable binds
 /// to it; an already-bound variable must equal its binding.
-fn bind_slot(slot: Slot, value: u32, b: &mut Binding) -> bool {
+fn bind_slot(
+    slot: Slot,
+    value: u32,
+    binding: &mut Binding,
+    changed: &mut [usize; 3],
+    changed_count: &mut usize,
+) -> bool {
     match slot {
         Slot::Const(c) => c == value,
-        Slot::Var(i) => match b[i] {
+        Slot::Var(i) => match binding[i] {
             Some(existing) => existing == value,
             None => {
-                b[i] = Some(value);
+                binding[i] = Some(value);
+                changed[*changed_count] = i;
+                *changed_count += 1;
                 true
             }
         },
+    }
+}
+
+fn rollback(binding: &mut Binding, changed: &[usize]) {
+    for &index in changed {
+        binding[index] = None;
+    }
+}
+
+fn bound_value(slot: Slot, binding: &Binding) -> Option<u32> {
+    match slot {
+        Slot::Const(value) => Some(value),
+        Slot::Var(index) => binding[index],
     }
 }
 
@@ -427,5 +617,65 @@ mod tests {
             }
             other => panic!("expected Parse error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn indexed_backtracking_avoids_cartesian_fact_scans() {
+        const COMMON: u32 = 10;
+        const RARE: u32 = 11;
+        const DERIVED: u32 = 12;
+
+        let mut seed: Vec<[u32; 3]> = (0..1_000).map(|n| [n, COMMON, n + 1]).collect();
+        seed.push([500, RARE, 2_000]);
+        let mut facts: FastSet<[u32; 3]> = seed.iter().copied().collect();
+        let rule = CompiledRule {
+            body: vec![
+                PatternAtom {
+                    s: Slot::Var(0),
+                    p: Slot::Const(COMMON),
+                    o: Slot::Var(1),
+                },
+                PatternAtom {
+                    s: Slot::Var(1),
+                    p: Slot::Const(RARE),
+                    o: Slot::Var(2),
+                },
+            ],
+            head: vec![PatternAtom {
+                s: Slot::Var(0),
+                p: Slot::Const(DERIVED),
+                o: Slot::Var(2),
+            }],
+            num_vars: 3,
+        };
+
+        let stats = chase(&mut facts, seed, &[rule]);
+        assert!(facts.contains(&[499, DERIVED, 2_000]));
+        assert!(
+            stats.candidate_facts_examined < 5_000,
+            "posting-list joins should inspect thousands, not the million-row Cartesian product: {}",
+            stats.candidate_facts_examined
+        );
+    }
+
+    #[test]
+    fn failed_repeated_variable_match_rolls_back_binding() {
+        let atom = PatternAtom {
+            s: Slot::Var(0),
+            p: Slot::Const(7),
+            o: Slot::Var(0),
+        };
+        let mut binding = vec![None];
+        let mut changed = [0usize; 3];
+
+        assert_eq!(
+            match_atom(&atom, [1, 7, 2], &mut binding, &mut changed),
+            None
+        );
+        assert_eq!(binding, vec![None]);
+        assert_eq!(
+            match_atom(&atom, [3, 7, 3], &mut binding, &mut changed),
+            Some(1)
+        );
     }
 }

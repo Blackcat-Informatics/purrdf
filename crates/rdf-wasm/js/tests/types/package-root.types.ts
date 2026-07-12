@@ -65,7 +65,7 @@ const visualSvg: VisualSvgDocument = matched.visualSvg({
 const queryJson: string = matched.query("ASK { ?s ?p ?o }");
 const engine = new QueryEngine();
 const select: SelectResult = engine.select(matched, "SELECT ?s WHERE { ?s ?p ?o }");
-const maybeTerm: RdfTerm | undefined = select.rows[0]?.s;
+const maybeTerm: RdfTerm | undefined = select.rows.take(0)?.s;
 const ask: boolean = engine.ask(matched, "ASK { ?s ?p ?o }");
 const graph: Dataset = engine.construct(
   matched,

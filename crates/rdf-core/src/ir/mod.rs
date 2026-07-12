@@ -41,7 +41,8 @@ pub use bundle::{GtsBundle, RdfEnvelope};
 pub use canon::{CanonHash, Canonicalized, canonicalize, canonicalize_with};
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{
-    QuadHandle, QuadIds, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetIter, TermRef,
+    QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetIter,
+    TermRef,
 };
 pub use event_sink::RdfDatasetVisitor;
 pub use ingest::{DatasetSink, FrozenDatasetSource};

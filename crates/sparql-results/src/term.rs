@@ -97,7 +97,7 @@ fn predicate_iri(p: &TermValue) -> String {
 
 /// The N-Triples / TSV token for a result cell: the kernel `emit_term` over the
 /// bridged owned term (`<iri>`, `_:label`, `"lex"` / `"lex"@lang` /
-/// `"lex"^^<dt>`, or `<< s p o >>`).
+/// `"lex"^^<dt>`, or the non-asserting triple term `<<( s p o )>>`).
 pub(crate) fn ntriples_token(value: &TermValue) -> String {
     emit_term(&term_value_to_rdf_term(value))
 }
@@ -183,7 +183,7 @@ mod tests {
         };
         assert_eq!(
             ntriples_token(&v),
-            "<< <http://example.org/s> <http://example.org/p> <http://example.org/o> >>"
+            "<<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>>"
         );
     }
 
