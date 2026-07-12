@@ -967,9 +967,9 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
     }
 
     // Deterministic order, independent of constraint-vector position.
-    // `sort_by_cached_key` serializes each part once instead of on every
+    // The canonical sorter serializes each part once instead of on every
     // comparison.
-    parts.sort_by_cached_key(ToString::to_string);
+    crate::term::sort_canonical(&mut parts);
     Some(parts)
 }
 
@@ -1130,14 +1130,14 @@ fn compile_property(
     }
 
     if !enum_values.is_empty() {
-        enum_values.sort_by_key(ToString::to_string);
+        crate::term::sort_canonical(&mut enum_values);
         enum_values.dedup();
         value.insert("enum".to_owned(), Value::Array(enum_values));
     }
 
     if !alts.is_empty() {
         // Stable order, de-duplicated.
-        alts.sort_by_key(ToString::to_string);
+        crate::term::sort_canonical(&mut alts);
         alts.dedup();
         if alts.len() == 1 {
             // Fold the single alternative into the value map.

@@ -525,7 +525,7 @@ fn reifiers_for(store: &ShaclData, triple_term: &Term) -> Vec<Term> {
     .map(|(subject, _, _)| subject)
     .collect();
     let mut reifiers: Vec<Term> = reifiers_set.into_iter().collect();
-    reifiers.sort_by_key(Term::to_string);
+    crate::term::sort_canonical(&mut reifiers);
     reifiers
 }
 

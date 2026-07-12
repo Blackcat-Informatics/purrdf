@@ -70,7 +70,7 @@ fn project_graph_data(data: &RdfDataset, ns: &Namespaces) -> Value {
             }
         }
     }
-    subjects.sort_by_key(Term::to_string);
+    crate::term::sort_canonical(&mut subjects);
 
     let mut nodes: Vec<Value> = Vec::with_capacity(subjects.len());
     for subj in &subjects {
@@ -143,7 +143,7 @@ fn project_subject_data(data: &RdfDataset, ns: &Namespaces, subject: &Term) -> V
     }
 
     for (key, mut objects) in by_pred {
-        objects.sort_by_key(ToString::to_string);
+        crate::term::sort_canonical(&mut objects);
         let values: Vec<Value> = objects.iter().map(|t| project_value(t, ns)).collect();
         let v = if values.len() == 1 {
             values.into_iter().next().unwrap()
