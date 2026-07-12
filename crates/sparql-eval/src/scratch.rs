@@ -31,7 +31,9 @@
 
 use purrdf_core::{RdfDataset, TermId, TermRef, TermValue};
 
-use crate::DetHashMap;
+use std::hash::{Hash, Hasher};
+
+use hashbrown::HashTable;
 
 /// An id into a [`ScratchInterner`]'s per-query table of computed terms.
 ///
@@ -108,8 +110,14 @@ impl SolutionTerm {
 pub struct ScratchInterner {
     /// `ScratchId` index → the computed value.
     values: Vec<TermValue>,
-    /// value → id, for de-duplication.
-    index: DetHashMap<TermValue, ScratchId>,
+    /// Store-once value index: ids only; equality resolves through `values`.
+    index: HashTable<ScratchId>,
+}
+
+fn hash_value(value: &TermValue) -> u64 {
+    let mut hasher = ahash::AHasher::default();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl ScratchInterner {
@@ -127,12 +135,17 @@ impl ScratchInterner {
         if let Some(id) = dataset.term_id_by_value(&value) {
             return SolutionTerm::Existing(id);
         }
-        if let Some(&sid) = self.index.get(&value) {
+        let hash = hash_value(&value);
+        if let Some(&sid) = self
+            .index
+            .find(hash, |sid| self.values[sid.index()] == value)
+        {
             return SolutionTerm::Computed(sid);
         }
         let sid = ScratchId::from_index(self.values.len());
-        self.values.push(value.clone());
-        self.index.insert(value, sid);
+        self.values.push(value);
+        self.index
+            .insert_unique(hash, sid, |sid| hash_value(&self.values[sid.index()]));
         SolutionTerm::Computed(sid)
     }
 

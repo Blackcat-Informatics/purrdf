@@ -32,6 +32,9 @@ path = "src/lib.rs"
 # crate wasm-clean (MAXIMAL PORTABILITY).
 purrdf-core = { workspace = true }
 roxmltree = { workspace = true }
+# Fixed-key store-once interners and RIF posting-list indexes.
+ahash = { workspace = true }
+hashbrown = { workspace = true }
 
 [dev-dependencies]
 # Report-only chase microbenchmark; `make bench` lane, excluded from `make check`.

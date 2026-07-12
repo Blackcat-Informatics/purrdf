@@ -1291,7 +1291,9 @@ dependencies = [
 name = "purrdf-entail"
 version = "0.4.3"
 dependencies = [
+ "ahash",
  "criterion",
+ "hashbrown 0.15.5",
  "purrdf-core",
  "roxmltree",
 ]
@@ -1453,6 +1455,7 @@ dependencies = [
  "ahash",
  "criterion",
  "getrandom 0.3.4",
+ "hashbrown 0.15.5",
  "js-sys",
  "md-5",
  "pretty_assertions",

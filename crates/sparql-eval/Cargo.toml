@@ -69,6 +69,9 @@ rayon = { workspace = true }
 # (default features only — no `union`/`serde`; wasm-clean, `unsafe`-free). Version
 # is pinned once in the root `[workspace.dependencies]`.
 smallvec = { workspace = true }
+# Store-once computed-term interning: the value vector owns each term exactly once
+# and the raw table stores only dense ScratchIds.
+hashbrown = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # OS entropy for the RAND()/UUID()/STRUUID() seed on native targets. Target-gated
