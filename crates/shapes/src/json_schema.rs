@@ -245,11 +245,17 @@ pub struct CompiledSchema {
 /// and carries the caller-supplied [`Namespaces`] every helper compacts with.
 struct Ctx<'ns> {
     losses: Vec<LossRecord>,
-    /// The set of class local-names that WILL receive a `$def` — i.e. every
-    /// `LocalName(target_class)` over all non-deactivated `Target::Class(..)`
-    /// shapes. An object property's `sh:class C` may only emit a
-    /// `#/$defs/<LocalName(C)>` ref when `LocalName(C)` is in this set;
-    /// otherwise the ref would dangle (no shape ⇒ no `$def`).
+    /// The set of `Namespaces::def_key` keys that WILL receive a `$def` — i.e.
+    /// every `def_key(target_class)` over all non-deactivated
+    /// `Target::Class(..)` shapes. This MUST use the same key function as the
+    /// `$defs` map built in [`compile`] (`ns.def_key`, not a bare local name):
+    /// a primary-namespace class and a non-primary class sharing a local name
+    /// (e.g. `gmeow:Distribution` vs `math:Distribution`) are DISTINCT
+    /// `def_key`s but would collapse to the same bare local name, which would
+    /// make one twin's absence from `$defs` invisible to this set. An object
+    /// property's `sh:class C` may only emit a `#/$defs/<def_key(C)>` ref when
+    /// `def_key(C)` is in this set; otherwise the ref would dangle (no shape ⇒
+    /// no `$def`).
     emitted_defs: BTreeSet<String>,
     /// The namespace table driving ALL compaction / keying decisions.
     ns: &'ns Namespaces,
@@ -304,11 +310,17 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
     // build here instead of silently mis-discriminating or clobbering a `$def`.
     assert_target_class_keys_are_unambiguous(shapes, ns);
 
-    // PASS 1: compute the set of class local-names that WILL receive a `$def`,
-    // using the EXACT same iteration that builds the `$defs` map below (every
-    // `Target::Class(..)` of every non-deactivated node shape). This lets the
-    // per-property emitter decide whether a `sh:class C` ref can resolve before
-    // the `$defs` map is fully built, so it never writes a dangling `$ref`.
+    // PASS 1: compute the set of `def_key`s that WILL receive a `$def`, using
+    // the EXACT same iteration AND the EXACT same key function (`ns.def_key`)
+    // as the `$defs` map built below (every `Target::Class(..)` of every
+    // non-deactivated node shape). Keying this set by bare local name instead
+    // would conflate a primary class with any non-primary class sharing its
+    // local name (e.g. `gmeow:Distribution` vs `math:Distribution` both
+    // reducing to `"Distribution"`), making one twin's presence mask the
+    // other's absence from `$defs` — a dangling `$ref`. This lets the
+    // per-property emitter decide whether a `sh:class C` ref can resolve
+    // before the `$defs` map is fully built, so it never writes a dangling
+    // `$ref`.
     let mut emitted_defs: BTreeSet<String> = BTreeSet::new();
     for shape in &shapes.node_shapes {
         if shape.deactivated {
@@ -316,7 +328,7 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
         }
         for target in &shape.targets {
             if let Target::Class(c) = target {
-                emitted_defs.insert(local_name(c.as_str()));
+                emitted_defs.insert(ns.def_key(c.as_str()));
             }
         }
     }
@@ -1001,13 +1013,23 @@ fn compile_property(
                 alts.push(datatype_value_schema(dt.as_str()));
             }
             Constraint::Class(c) => {
+                // Resolve/emit by `def_key` — the SAME key the `$defs` map
+                // (built in `compile`) and `emitted_defs` (PASS 1, above) use.
+                // A bare local name would conflate a primary class with any
+                // non-primary class sharing its local name; `def_key` keeps
+                // them distinct (bare local name for the primary namespace,
+                // full CURIE — e.g. `math:Distribution` — for any other
+                // declared namespace), so the ref written here always matches
+                // an existing `$defs` entry or falls back to a permissive
+                // node-ref, never a dangling `$ref`.
+                let def_key = ctx.ns.def_key(c.as_str());
+                let has_def = ctx.emitted_defs.contains(&def_key);
                 if ctx.ns.is_primary(c.as_str()) {
-                    let name = local_name(c.as_str());
-                    if ctx.emitted_defs.contains(&name) {
+                    if has_def {
                         // The class has a NodeShape ⇒ a `$def` is emitted for it.
                         // Object property: a node ref OR the class `$ref`.
                         alts.push(node_ref_schema());
-                        alts.push(json!({ "$ref": format!("#/$defs/{name}") }));
+                        alts.push(json!({ "$ref": format!("#/$defs/{def_key}") }));
                     } else {
                         // The class has NO NodeShape ⇒ no `$def` is emitted, so a
                         // `$ref` to it would dangle and make the schema
@@ -1027,12 +1049,21 @@ fn compile_property(
                         }
                         alts.push(node_ref);
                     }
+                } else if has_def {
+                    // Non-primary class WITH a NodeShape ⇒ it DOES have a `$def`
+                    // (keyed by its full CURIE — see `Namespaces::def_key`), so
+                    // resolve to it exactly like a primary class, just under the
+                    // CURIE key (e.g. `#/$defs/math:Distribution`). A JSON
+                    // pointer reference segment does not need to escape `:`, so
+                    // this pointer form is valid without further encoding.
+                    alts.push(node_ref_schema());
+                    alts.push(json!({ "$ref": format!("#/$defs/{def_key}") }));
                 } else {
-                    // External (non-primary) class: the value is an RDF node
-                    // reference, never a string literal. A `$ref` would dangle
-                    // (external classes have no `$def`), so emit the permissive
-                    // node-reference form that accepts an `@id` object, keeping a
-                    // `$comment` noting the external class.
+                    // External (non-primary) class with NO NodeShape: the value
+                    // is still an RDF node reference, never a string literal, but
+                    // a `$ref` would dangle (no `$def` for it), so emit the
+                    // permissive node-reference form that accepts an `@id`
+                    // object, keeping a `$comment` noting the external class.
                     let mut node_ref = node_ref_schema();
                     if let Value::Object(map) = &mut node_ref {
                         map.insert(
@@ -2637,6 +2668,125 @@ mod tests {
         let alts = member["anyOf"].as_array().expect("anyOf");
         assert!(alts.iter().any(|a| a["$ref"] == json!("#/$defs/Person")));
         assert!(alts.iter().any(|a| a["properties"]["@id"].is_object()));
+    }
+
+    /// Walk every `$ref` string reachable from `schema` and assert it resolves
+    /// to an existing key under `$defs` — the general "zero dangling refs"
+    /// acceptance criterion, independent of which property happened to trigger
+    /// a given `$ref`.
+    fn assert_no_dangling_defs_refs(schema: &Value) {
+        let defs = schema["$defs"].as_object().expect("$defs is an object");
+        let mut stack: Vec<&Value> = vec![schema];
+        while let Some(v) = stack.pop() {
+            match v {
+                Value::Object(map) => {
+                    if let Some(Value::String(r)) = map.get("$ref")
+                        && let Some(key) = r.strip_prefix("#/$defs/")
+                    {
+                        assert!(
+                            defs.contains_key(key),
+                            "dangling $ref: {r:?} has no matching $defs entry"
+                        );
+                    }
+                    for val in map.values() {
+                        stack.push(val);
+                    }
+                }
+                Value::Array(arr) => stack.extend(arr.iter()),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn cross_namespace_local_name_twins_never_dangle_a_ref() {
+        // Regression for the PASS-1/`$defs` keying mismatch: `emitted_defs` used
+        // to be keyed by bare local name while the `$defs` map (and the
+        // `emitted_defs` set, after this fix) are keyed by `Namespaces::def_key`
+        // — bare local name for the PRIMARY namespace, full CURIE for any other
+        // declared namespace. A primary class and a non-primary class sharing a
+        // local name (here `meta:Distribution` vs `logic:Distribution`, mirroring
+        // the real `gmeow:Distribution` / `math:Distribution` case) used to
+        // collapse to the SAME `emitted_defs` entry even though only the
+        // `logic:` twin has an actual NodeShape/`$def` — so a `sh:class` ref to
+        // the shape-less `meta:` twin resolved as if it had a `$def` and wrote a
+        // `#/$defs/Distribution` `$ref` that DANGLED (no such entry exists,
+        // since `logic:Distribution` is keyed `logic:Distribution`, not
+        // `Distribution`).
+        let c = compile_ttl(
+            r"
+            @prefix logic: <https://blackcatinformatics.ca/logic/> .
+            logic:DistributionShape a sh:NodeShape ;
+                sh:targetClass logic:Distribution ;
+                sh:property [ sh:path logic:mean ; sh:maxCount 1 ; sh:datatype xsd:decimal ] .
+            meta:HolderShape a sh:NodeShape ;
+                sh:targetClass meta:Holder ;
+                sh:property [ sh:path meta:primaryDist ; sh:maxCount 1 ; sh:class meta:Distribution ] ;
+                sh:property [ sh:path meta:logicDist ; sh:maxCount 1 ; sh:class logic:Distribution ] .
+            ",
+        );
+        let schema = schema_of(&c);
+
+        // (a) Both defs are present, under their CORRECT, DISTINCT keys.
+        assert!(
+            def(&schema, "logic:Distribution").is_object(),
+            "the non-primary class keeps its CURIE-keyed $def"
+        );
+        assert!(
+            schema["$defs"]["Distribution"].is_null(),
+            "meta:Distribution has no NodeShape of its own; it must NOT leak a bare-local-name \
+             $def borrowed from its logic: twin"
+        );
+
+        // (c) A ref to the shape-less primary twin does not dangle: it must
+        // project to a permissive node-ref, never a `$ref`.
+        let primary_dist = &def(&schema, "Holder")["properties"]["meta:primaryDist"];
+        assert!(
+            primary_dist["$ref"].is_null(),
+            "meta:Distribution has no $def; a ref to it must not dangle a $ref: {primary_dist}"
+        );
+        assert_eq!(
+            primary_dist["type"],
+            json!("object"),
+            "meta:Distribution projects to a permissive node-ref: {primary_dist}"
+        );
+        assert!(
+            primary_dist["$comment"]
+                .as_str()
+                .is_some_and(|s| s.contains("no NodeShape")),
+            "expected a $comment noting the missing NodeShape: {primary_dist}"
+        );
+
+        // The non-primary twin WITH a NodeShape resolves to its CURIE-keyed
+        // `$def`, exactly like a primary class resolves to its local-name-keyed
+        // `$def`.
+        let logic_dist = &def(&schema, "Holder")["properties"]["meta:logicDist"];
+        let alts = logic_dist["anyOf"].as_array().expect("anyOf");
+        assert!(
+            alts.iter()
+                .any(|a| a["$ref"] == json!("#/$defs/logic:Distribution")),
+            "logic:Distribution has a NodeShape; its ref must resolve to its CURIE-keyed $def: \
+             {logic_dist}"
+        );
+
+        // (b) ZERO dangling `#/$defs/...` refs anywhere in the compiled schema.
+        assert_no_dangling_defs_refs(&schema);
+
+        // Production surface: the emitted schema actually compiles and
+        // validates end-to-end under a real draft-2020-12 validator — proving
+        // the colon-bearing `$defs` key + JSON-pointer `$ref` form (already used
+        // elsewhere for non-primary target classes) is tolerated here too, not
+        // just structurally present.
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({
+                    "@type": "meta:Holder",
+                    "meta:logicDist": { "@id": "https://example.org/meta/d1" }
+                })
+            ),
+            "a Holder referencing a shaped logic:Distribution must validate"
+        );
     }
 
     #[test]
