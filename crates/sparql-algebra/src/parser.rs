@@ -231,12 +231,40 @@ impl<'a> Parser<'a, '_> {
         Some(token)
     }
 
-    /// Clone the unconsumed token suffix for the two grammar productions that
-    /// intentionally parse the same source span twice. Ordinary cursor advances
-    /// move token payloads; only these rare reparsing forms clone escaped lexemes.
-    fn fork_remaining(&self) -> Self {
+    /// Clone only the tokens spanning the next balanced `{ … }` block starting
+    /// at `self.pos` (which must be the opening `{`), for the two grammar
+    /// productions that intentionally parse the same source span twice.
+    /// Ordinary cursor advances move token payloads; only these rare
+    /// reparsing forms clone lexemes, and only the braced block rather than
+    /// the whole remaining token stream — bounding a `;`-separated
+    /// multi-operation UPDATE's `DELETE WHERE` reparse to O(block) per
+    /// operation instead of O(remaining tokens) (which made the whole
+    /// request O(n²) in the number of operations).
+    ///
+    /// Finds the matching `}` with a brace-depth scan (depth starts at 0,
+    /// `{` increments, `}` decrements, stop when it returns to 0). If the
+    /// scan never balances back to 0 — `self.pos` was not actually at a `{`,
+    /// or the input is malformed — falls back to the full remaining suffix
+    /// so behavior stays correct (just unoptimized) on that edge case.
+    fn fork_block(&self) -> Self {
+        let mut depth: i32 = 0;
+        let mut block_end = None;
+        for (offset, slot) in self.tokens[self.pos..].iter().enumerate() {
+            match slot.as_ref().map(|s| &s.token) {
+                Some(Token::LBrace) => depth += 1,
+                Some(Token::RBrace) => {
+                    depth -= 1;
+                    if depth == 0 {
+                        block_end = Some(self.pos + offset);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end_idx = block_end.map_or(self.tokens.len(), |idx| idx + 1);
         Self {
-            tokens: self.tokens[self.pos..].to_vec(),
+            tokens: self.tokens[self.pos..end_idx].to_vec(),
             pos: 0,
             end: self.end,
             prefixes: self.prefixes.clone(),
@@ -635,7 +663,6 @@ impl<'a> Parser<'a, '_> {
         if !self.at(&Token::LBrace) {
             let dataset = self.parse_dataset_clauses()?;
             self.expect_kw("WHERE")?;
-            self.expect(&Token::LBrace)?;
             // The short form's template *is* the WHERE triples block (§16.2.1) — but an
             // RDF 1.2 reifier/annotation (`~ id`, `{| … |}`) inside that block desugars
             // to a FRESH synthetic reifier blank at parse time (`parse_triple_annotations`
@@ -650,9 +677,13 @@ impl<'a> Parser<'a, '_> {
             // reifier blanks, decoupled from the template's (W3C `eval-triple-terms`
             // `construct-5`/`expr-1`: a query-supplied `~`/`{| |}` name IS a real token, so
             // re-tokenizing reproduces the SAME label there — only the auto-generated
-            // synthetic blanks differ between the two parses).
+            // synthetic blanks differ between the two parses). The fork is bounded to the
+            // braced block (`fork_block`, not the whole remaining token stream) — `self`
+            // still owns the opening `{` at this point, so the sub-parser must consume its
+            // own copy before reading the template.
             let (template, counters) = {
-                let mut template_parser = self.fork_remaining();
+                let mut template_parser = self.fork_block();
+                template_parser.expect(&Token::LBrace)?;
                 let template = template_parser.parse_construct_template()?;
                 let counters = (
                     template_parser.agg_counter,
@@ -662,6 +693,7 @@ impl<'a> Parser<'a, '_> {
                 (template, counters)
             };
             self.set_counters(counters);
+            self.expect(&Token::LBrace)?;
             let where_patterns = self.parse_construct_template()?;
             self.expect(&Token::RBrace)?;
             let where_pat = GraphPattern::Bgp {
@@ -943,8 +975,11 @@ impl<'a> Parser<'a, '_> {
         }
         if self.eat_kw("WHERE") {
             // DELETE WHERE { QuadPattern } — the template IS the where pattern.
+            // `fork_block` bounds the clone to this operation's braced block, so a
+            // `;`-separated multi-operation UPDATE stays linear instead of the whole
+            // request being O(n²) in the number of `DELETE WHERE` operations.
             let (delete, counters) = {
-                let mut delete_parser = self.fork_remaining();
+                let mut delete_parser = self.fork_block();
                 let delete = delete_parser.parse_quad_pattern_block(true)?;
                 let counters = (
                     delete_parser.agg_counter,
