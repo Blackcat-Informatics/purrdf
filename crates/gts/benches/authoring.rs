@@ -11,12 +11,54 @@
 //! the core container work measurable: rsyncable zstd block compression and
 //! deterministic snapshot emission over a representative folded graph.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 
 use purrdf_gts::codec::encode_chain;
 use purrdf_gts::model::{Graph, Term, TermKind};
 use purrdf_gts::reader::read;
+use purrdf_gts::wire::{canonical, deterministic, encode};
 use purrdf_gts::writer::{SnapshotOptions, Writer, snapshot_from_graph};
+
+thread_local! {
+    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
+    static ALLOCATED_BYTES: Cell<u64> = const { Cell::new(0) };
+}
+
+struct CountingAllocator;
+
+// SAFETY: every operation forwards the original pointer/layout to the system
+// allocator; the thread-local counters are observational only.
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOCATIONS.with(|count| count.set(count.get() + 1));
+        ALLOCATED_BYTES.with(|bytes| bytes.set(bytes.get() + layout.size() as u64));
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        ALLOCATIONS.with(|count| count.set(count.get() + 1));
+        ALLOCATED_BYTES.with(|bytes| bytes.set(bytes.get() + new_size as u64));
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+fn allocation_snapshot() -> (u64, u64) {
+    (ALLOCATIONS.with(Cell::get), ALLOCATED_BYTES.with(Cell::get))
+}
+
+fn allocation_delta(before: (u64, u64), after: (u64, u64)) -> (u64, u64) {
+    (after.0 - before.0, after.1 - before.1)
+}
 
 const PAYLOAD_LEN: usize = 512 * 1024;
 const ROWS: usize = 2_000;
@@ -106,6 +148,21 @@ fn bench_rsyncable_zstd(c: &mut Criterion) {
 
 fn bench_snapshot_authoring(c: &mut Criterion) {
     let graph = graph_with_quads(ROWS);
+    let payload = graph.snapshot_payload();
+    let before = allocation_snapshot();
+    let legacy = encode(&deterministic(&payload));
+    let legacy_alloc = allocation_delta(before, allocation_snapshot());
+    let before = allocation_snapshot();
+    let borrowed = canonical(&payload);
+    let borrowed_alloc = allocation_delta(before, allocation_snapshot());
+    assert_eq!(
+        borrowed, legacy,
+        "borrowed canonical bytes must match oracle"
+    );
+    println!(
+        "[gts_authoring] canonical snapshot: recursive allocations={} bytes={}; borrowed allocations={} bytes={}",
+        legacy_alloc.0, legacy_alloc.1, borrowed_alloc.0, borrowed_alloc.1
+    );
 
     let mut group = c.benchmark_group("gts_authoring");
     group.throughput(Throughput::Elements(ROWS as u64));

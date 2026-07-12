@@ -10,6 +10,8 @@
 //! the previous item's `"id"`; the first frame's `"prev"` is the Header's.
 
 use ciborium::value::Value;
+use serde::Serialize;
+use serde::ser::{SerializeMap, SerializeSeq, SerializeTupleVariant, Serializer};
 
 /// CBOR self-describe tag (RFC 8949 §3.4.6); MAY prefix the Header item (§3).
 pub const SELF_DESCRIBE_TAG: u64 = 55799;
@@ -53,15 +55,78 @@ pub fn deterministic(v: &Value) -> Value {
     }
 }
 
+struct Canonical<'a>(&'a Value);
+
+struct CanonicalMap<'a> {
+    entries: &'a [(Value, Value)],
+    excluded: &'a [&'a str],
+}
+
+fn sorted_entries<'a>(
+    entries: &'a [(Value, Value)],
+    excluded: &[&str],
+) -> Vec<(Vec<u8>, &'a Value, &'a Value)> {
+    let mut keyed: Vec<_> = entries
+        .iter()
+        .filter(|(key, _)| !matches!(key, Value::Text(text) if excluded.contains(&text.as_str())))
+        .map(|(key, value)| (canonical(key), key, value))
+        .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    keyed
+}
+
+impl Serialize for Canonical<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            Value::Tag(tag, inner) => {
+                let mut tagged =
+                    serializer.serialize_tuple_variant("@@TAG@@", 0, "@@TAGGED@@", 2)?;
+                tagged.serialize_field(tag)?;
+                tagged.serialize_field(&Self(inner))?;
+                tagged.end()
+            }
+            Value::Array(items) => {
+                let mut sequence = serializer.serialize_seq(Some(items.len()))?;
+                for item in items {
+                    sequence.serialize_element(&Self(item))?;
+                }
+                sequence.end()
+            }
+            Value::Map(entries) => CanonicalMap {
+                entries,
+                excluded: &[],
+            }
+            .serialize(serializer),
+            // Delegate scalar spelling to ciborium so shortest integers/floats and
+            // future scalar variants stay byte-identical to the library encoder.
+            scalar => scalar.serialize(serializer),
+        }
+    }
+}
+
+impl Serialize for CanonicalMap<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let entries = sorted_entries(self.entries, self.excluded);
+        let mut map = serializer.serialize_map(Some(entries.len()))?;
+        for (_, key, value) in entries {
+            map.serialize_entry(&Canonical(key), &Canonical(value))?;
+        }
+        map.end()
+    }
+}
+
 /// Encode an object as deterministic CBOR (RFC 8949 §4.2).
 pub fn canonical(v: &Value) -> Vec<u8> {
-    encode(&deterministic(v))
+    let mut out = Vec::new();
+    ciborium::ser::into_writer(&Canonical(v), &mut out)
+        .expect("CBOR encoding to a Vec cannot fail");
+    out
 }
 
 /// Append deterministic CBOR to an existing buffer without allocating a
 /// temporary encoded byte vector.
 pub fn append_canonical(v: &Value, out: &mut Vec<u8>) {
-    encode_into(&deterministic(v), out);
+    ciborium::ser::into_writer(&Canonical(v), out).expect("CBOR encoding to a Vec cannot fail");
 }
 
 /// Input size at which BLAKE3 switches to multi-threaded hashing.
@@ -107,12 +172,23 @@ pub fn map_get<'a>(entries: &'a [(Value, Value)], key: &str) -> Option<&'a Value
 }
 
 fn hash_excluding(entries: &[(Value, Value)], excluded: &[&str]) -> Vec<u8> {
-    let content: Vec<(Value, Value)> = entries
-        .iter()
-        .filter(|(k, _)| !matches!(k, Value::Text(t) if excluded.contains(&t.as_str())))
-        .cloned()
-        .collect();
-    blake3_256(&canonical(&Value::Map(content)))
+    struct HashWriter(blake3::Hasher);
+
+    impl std::io::Write for HashWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0.update(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut writer = HashWriter(blake3::Hasher::new());
+    ciborium::ser::into_writer(&CanonicalMap { entries, excluded }, &mut writer)
+        .expect("hash writer cannot fail");
+    writer.0.finalize().as_bytes().to_vec()
 }
 
 /// Compute a frame's `"id"` over its content (excluding `"id"`/`"sig"`).
@@ -182,5 +258,74 @@ pub fn unwrap_header(item: &Value) -> Result<&Vec<(Value, Value)>, String> {
     match inner {
         Value::Map(entries) => Ok(entries),
         _ => Err("header item is not a CBOR map".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nested_value() -> Value {
+        Value::Tag(
+            SELF_DESCRIBE_TAG,
+            Box::new(Value::Map(vec![
+                (
+                    Value::Text("z".to_owned()),
+                    Value::Array(vec![
+                        Value::Integer(24.into()),
+                        Value::Float(1.5),
+                        Value::Bool(true),
+                        Value::Null,
+                    ]),
+                ),
+                (
+                    Value::Text("a".to_owned()),
+                    Value::Map(vec![
+                        (
+                            Value::Integer((-1).into()),
+                            Value::Text("negative".to_owned()),
+                        ),
+                        (Value::Integer(1.into()), Value::Bytes(vec![0, 1, 2, 255])),
+                    ]),
+                ),
+            ])),
+        )
+    }
+
+    #[test]
+    fn borrowed_canonical_encoder_is_byte_identical_to_recursive_oracle() {
+        let value = nested_value();
+        let expected = encode(&deterministic(&value));
+        assert_eq!(canonical(&value), expected);
+
+        let mut appended = vec![0xaa];
+        append_canonical(&value, &mut appended);
+        assert_eq!(&appended[1..], expected);
+    }
+
+    #[test]
+    fn streaming_excluded_map_hash_matches_recursive_oracle() {
+        let entries = vec![
+            (Value::Text("sig".to_owned()), Value::Bytes(vec![9; 64])),
+            (Value::Text("d".to_owned()), nested_value()),
+            (Value::Text("id".to_owned()), Value::Bytes(vec![8; 32])),
+            (
+                Value::Text("t".to_owned()),
+                Value::Text("snapshot".to_owned()),
+            ),
+        ];
+        let legacy = |excluded: &[&str]| {
+            let content: Vec<_> = entries
+                .iter()
+                .filter(|(key, _)| {
+                    !matches!(key, Value::Text(text) if excluded.contains(&text.as_str()))
+                })
+                .cloned()
+                .collect();
+            blake3_256(&encode(&deterministic(&Value::Map(content))))
+        };
+
+        assert_eq!(content_id(&entries), legacy(&["id", "sig"]));
+        assert_eq!(header_id(&entries), legacy(&["id"]));
     }
 }

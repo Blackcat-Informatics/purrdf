@@ -474,12 +474,11 @@ impl Writer {
         }
 
         if !graph.meta.is_empty() {
-            let mut entries: Vec<(Value, Value)> = graph
+            let entries: Vec<(Value, Value)> = graph
                 .meta
                 .iter()
                 .map(|(key, value)| (key.clone().into(), value.clone()))
                 .collect();
-            entries.sort_by_key(|(key, _)| canonical(key));
             writer.add_meta(Value::Map(entries));
         }
 
@@ -537,11 +536,10 @@ impl Writer {
         let cat_entries: Vec<(Value, Value)> = catalog
             .iter()
             .map(|(id, c)| {
-                let mut ce: Vec<(Value, Value)> = vec![
+                let ce: Vec<(Value, Value)> = vec![
                     ("name".into(), c.name.clone().into()),
                     ("cls".into(), c.cls.clone().into()),
                 ];
-                ce.sort_by_key(|a| canonical(&a.0));
                 (iv(*id), Value::Map(ce))
             })
             .collect();
@@ -560,10 +558,8 @@ impl Writer {
         if let Some(meta) = options.meta {
             header.push(("meta".into(), meta));
         }
-        header.sort_by_key(|a| canonical(&a.0));
         let id = header_id(&header);
         header.push(("id".into(), Value::Bytes(id.clone())));
-        header.sort_by_key(|a| canonical(&a.0));
 
         let header_value = Value::Map(header);
         let buf = if options.magic_tag {
@@ -731,7 +727,6 @@ impl Writer {
         }
         frame.push(("prev".into(), Value::Bytes(self.prev.clone())));
 
-        frame.sort_by_key(|a| canonical(&a.0));
         // The signature is not part of the frame-id preimage (§9.2). This lets
         // signatures be verified against the same id after streamable
         // compaction carries them as detached evidence.
@@ -747,8 +742,6 @@ impl Writer {
         if let Some(sig) = sig {
             frame.push(("sig".into(), Value::Bytes(sig)));
         }
-        frame.sort_by_key(|a| canonical(&a.0));
-
         self.offsets.push(self.buf.len());
         self.types.push(frame_type.to_string());
         self.frame_ids.push(id.clone());
@@ -861,7 +854,6 @@ impl Writer {
         if let Some(b) = by {
             payload.push(("by".into(), Value::from(b as u64)));
         }
-        payload.sort_by_key(|a| canonical(&a.0));
         self.add_frame("suppress", Some(Value::Map(payload)), None, None, None)
     }
 
