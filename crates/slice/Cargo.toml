@@ -56,3 +56,8 @@ serde = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 insta = { workspace = true, features = ["json"] }
+criterion = { workspace = true }
+
+[[bench]]
+name = "ownership"
+harness = false

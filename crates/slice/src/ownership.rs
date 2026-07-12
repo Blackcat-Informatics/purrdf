@@ -30,7 +30,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use purrdf::RdfTerm;
+use purrdf::{RdfDataset, TermId, TermRef};
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
 use crate::catalog::{SliceCatalog, SliceRecord};
@@ -293,6 +293,7 @@ impl<'a> OwnershipAnalyzer<'a> {
     /// the evidence-bearing dependency graph from *validated* ownership only.
     pub fn analyze(&self) -> Result<OwnershipReport, SliceError> {
         let mut diagnostics = Vec::new();
+        let mut rdf_facts: HashMap<(usize, usize), RdfArtifactFacts> = HashMap::new();
 
         // ── Phase 1: declared ownership (rdfs:isDefinedBy), per slice ────────
         //
@@ -307,20 +308,17 @@ impl<'a> OwnershipAnalyzer<'a> {
         // and are emitted as OwnershipStatus::Unowned.
         let mut declared_terms: BTreeSet<NamedNode> = BTreeSet::new();
 
-        for record in self.catalog.records() {
+        for (record_index, record) in self.catalog.records().iter().enumerate() {
             let slice_iri = record.manifest.slice_iri.clone();
-            for artifact in &record.artifacts {
+            for (artifact_index, artifact) in record.artifacts.iter().enumerate() {
                 // Only ontology/shape RDF artifacts declare ownership.
                 if !is_ownership_bearing(&artifact.role) {
                     continue;
                 }
                 let store = parse_rdf_artifact(artifact)?;
+                let facts = inspect_rdf_dataset(store.inner(), self.catalog.vocab().ns());
                 // Collect rdfs:isDefinedBy claims.
-                for (subject, owner) in collect_is_defined_by(&store) {
-                    // Only terms in the caller's vocab namespace are owned.
-                    if !subject.as_str().starts_with(self.catalog.vocab().ns()) {
-                        continue;
-                    }
+                for (subject, owner) in &facts.is_defined_by {
                     claims
                         .entry(subject.clone())
                         .or_default()
@@ -339,9 +337,8 @@ impl<'a> OwnershipAnalyzer<'a> {
                 }
                 // Collect declared vocabulary terms (typed subjects in the
                 // caller's vocab namespace).
-                for term in collect_declared_terms(&store, self.catalog.vocab().ns()) {
-                    declared_terms.insert(term);
-                }
+                declared_terms.extend(facts.declared_terms.iter().cloned());
+                rdf_facts.insert((record_index, artifact_index), facts);
             }
         }
 
@@ -430,11 +427,10 @@ impl<'a> OwnershipAnalyzer<'a> {
         }
 
         // ── Phase 4: authored declarations (<vocab>sliceDependsOn) ───────────
-        let depends_on_iri = self.catalog.vocab().slice_depends_on();
         let mut declared_deps: BTreeMap<SliceIri, BTreeSet<SliceIri>> = BTreeMap::new();
         for record in self.catalog.records() {
             let from = record.manifest.slice_iri.clone();
-            let targets = collect_slice_depends_on(record, &depends_on_iri)?;
+            let targets = collect_slice_depends_on(record);
             if !targets.is_empty() {
                 declared_deps.entry(from).or_default().extend(targets);
             }
@@ -447,9 +443,9 @@ impl<'a> OwnershipAnalyzer<'a> {
         let mut edge_evidence: BTreeMap<(SliceIri, SliceIri, EdgeKind), Vec<EdgeEvidence>> =
             BTreeMap::new();
 
-        for record in self.catalog.records() {
+        for (record_index, record) in self.catalog.records().iter().enumerate() {
             let from = record.manifest.slice_iri.clone();
-            for artifact in &record.artifacts {
+            for (artifact_index, artifact) in record.artifacts.iter().enumerate() {
                 let Some(kind) = edge_kind_for_role(&artifact.role) else {
                     continue;
                 };
@@ -460,9 +456,8 @@ impl<'a> OwnershipAnalyzer<'a> {
                     raw_digest: artifact.raw_digest.clone(),
                 };
 
-                // Extract referenced IRIs (parsed, never text-searched).
-                let referenced = match kind {
-                    EdgeKind::Query => match extract_query_iris(artifact) {
+                if kind == EdgeKind::Query {
+                    let referenced = match extract_query_iris(artifact) {
                         Ok(set) => set,
                         Err(message) => {
                             diagnostics.push(OwnershipDiagnostic::UnparseableQuery {
@@ -472,28 +467,37 @@ impl<'a> OwnershipAnalyzer<'a> {
                             });
                             continue;
                         }
-                    },
-                    _ => extract_rdf_iris(artifact),
-                };
-
-                for term in referenced {
-                    let Some(owner) = validated_owner.get(&term) else {
-                        continue;
                     };
-                    // No self-edges: a slice does not depend on itself.
-                    if owner == &from {
-                        continue;
-                    }
-                    let key = (from.clone(), owner.clone(), kind);
-                    let ev = EdgeEvidence {
-                        from_artifact: from_evidence.clone(),
-                        referenced_term: term.clone(),
-                    };
-                    let bucket = edge_evidence.entry(key).or_default();
-                    if !bucket.contains(&ev) {
-                        bucket.push(ev);
-                    }
+                    collect_reference_evidence(
+                        referenced.iter(),
+                        &validated_owner,
+                        &from,
+                        kind,
+                        &from_evidence,
+                        &mut edge_evidence,
+                    );
+                    continue;
                 }
+
+                let key = (record_index, artifact_index);
+                if let std::collections::hash_map::Entry::Vacant(entry) = rdf_facts.entry(key) {
+                    let Ok(store) = parse_rdf_artifact(artifact) else {
+                        continue;
+                    };
+                    entry.insert(inspect_rdf_dataset(
+                        store.inner(),
+                        self.catalog.vocab().ns(),
+                    ));
+                }
+                let referenced = &rdf_facts[&key].referenced_iris;
+                collect_reference_evidence(
+                    referenced.iter(),
+                    &validated_owner,
+                    &from,
+                    kind,
+                    &from_evidence,
+                    &mut edge_evidence,
+                );
             }
         }
 
@@ -580,6 +584,34 @@ impl<'a> OwnershipAnalyzer<'a> {
     }
 }
 
+fn collect_reference_evidence<'a>(
+    referenced: impl Iterator<Item = &'a NamedNode>,
+    validated_owner: &HashMap<NamedNode, SliceIri>,
+    from: &SliceIri,
+    kind: EdgeKind,
+    from_evidence: &ArtifactEvidence,
+    edge_evidence: &mut BTreeMap<(SliceIri, SliceIri, EdgeKind), Vec<EdgeEvidence>>,
+) {
+    for term in referenced {
+        let Some(owner) = validated_owner.get(term) else {
+            continue;
+        };
+        // No self-edges: a slice does not depend on itself.
+        if owner == from {
+            continue;
+        }
+        let key = (from.clone(), owner.clone(), kind);
+        let ev = EdgeEvidence {
+            from_artifact: from_evidence.clone(),
+            referenced_term: term.clone(),
+        };
+        let bucket = edge_evidence.entry(key).or_default();
+        if !bucket.contains(&ev) {
+            bucket.push(ev);
+        }
+    }
+}
+
 // ── Role classification ───────────────────────────────────────────────────────
 
 /// Whether an artifact role declares term ownership (`rdfs:isDefinedBy`).
@@ -606,6 +638,13 @@ fn edge_kind_for_role(role: &ArtifactRole) -> Option<EdgeKind> {
 
 // ── RDF helpers ───────────────────────────────────────────────────────────────
 
+#[derive(Debug, Default)]
+struct RdfArtifactFacts {
+    is_defined_by: Vec<(NamedNode, SliceIri)>,
+    declared_terms: BTreeSet<NamedNode>,
+    referenced_iris: BTreeSet<NamedNode>,
+}
+
 /// Parse an RDF artifact's bytes into a native dataset (lenient for `@x-purrdf-*`
 /// language tags). Hard-fails on a syntax error.
 fn parse_rdf_artifact(artifact: &ArtifactRecord) -> Result<Dataset, SliceError> {
@@ -616,44 +655,61 @@ fn parse_rdf_artifact(artifact: &ArtifactRecord) -> Result<Dataset, SliceError> 
     Dataset::parse_turtle(artifact.content.as_slice(), &artifact.logical_path)
 }
 
-/// Collect all `subject rdfs:isDefinedBy owner` pairs (owner must be a NamedNode).
-fn collect_is_defined_by(store: &Dataset) -> Vec<(NamedNode, SliceIri)> {
-    let mut out = Vec::new();
-    for quad in store.inner().owned_quads() {
-        if quad.predicate != RDFS_IS_DEFINED_BY {
-            continue;
-        }
-        let RdfTerm::Iri(subject) = &quad.subject else {
-            continue;
-        };
-        if let RdfTerm::Iri(owner) = &quad.object {
-            out.push((NamedNode::new_unchecked(subject.clone()), owner.clone()));
-        }
-    }
-    out
-}
+/// Inspect one parsed RDF artifact once. Borrowed IRI slices are deduplicated
+/// while walking the interned IR, then only the unique retained values are owned.
+fn inspect_rdf_dataset(store: &RdfDataset, vocab_ns: &str) -> RdfArtifactFacts {
+    let mut is_defined_by: BTreeSet<(&str, &str)> = BTreeSet::new();
+    let mut declared_terms: BTreeSet<&str> = BTreeSet::new();
+    let mut referenced_iris: BTreeSet<&str> = BTreeSet::new();
 
-/// Collect every vocab-namespaced subject typed as an OWL/RDFS vocabulary
-/// construct (`owl:Class`, `owl:ObjectProperty`, etc.) in the given dataset.
-/// These are "declared terms" that must have an `rdfs:isDefinedBy` or they will
-/// be flagged as `OwnershipStatus::Unowned`.
-fn collect_declared_terms(store: &Dataset, vocab_ns: &str) -> BTreeSet<NamedNode> {
-    let mut out = BTreeSet::new();
-    for quad in store.inner().owned_quads() {
-        if quad.predicate != RDF_TYPE {
-            continue;
+    for quad in store.quads() {
+        collect_term_iri_refs(store, quad.s, &mut referenced_iris);
+        collect_term_iri_refs(store, quad.p, &mut referenced_iris);
+        collect_term_iri_refs(store, quad.o, &mut referenced_iris);
+        if let Some(graph) = quad.g
+            && let TermRef::Iri(iri) = store.resolve(graph)
+        {
+            referenced_iris.insert(iri);
         }
-        let RdfTerm::Iri(subject) = &quad.subject else {
+
+        let (TermRef::Iri(subject), TermRef::Iri(predicate), TermRef::Iri(object)) = (
+            store.resolve(quad.s),
+            store.resolve(quad.p),
+            store.resolve(quad.o),
+        ) else {
             continue;
         };
-        let RdfTerm::Iri(object) = &quad.object else {
-            continue;
-        };
-        if VOCAB_TERM_TYPES.contains(&object.as_str()) && subject.starts_with(vocab_ns) {
-            out.insert(NamedNode::new_unchecked(subject.clone()));
+
+        if predicate == RDFS_IS_DEFINED_BY && subject.starts_with(vocab_ns) {
+            is_defined_by.insert((subject, object));
+        }
+        if predicate == RDF_TYPE
+            && subject.starts_with(vocab_ns)
+            && VOCAB_TERM_TYPES.contains(&object)
+        {
+            declared_terms.insert(subject);
         }
     }
-    out
+
+    RdfArtifactFacts {
+        is_defined_by: is_defined_by
+            .into_iter()
+            .map(|(subject, owner)| {
+                (
+                    NamedNode::new_unchecked(subject.to_owned()),
+                    owner.to_owned(),
+                )
+            })
+            .collect(),
+        declared_terms: declared_terms
+            .into_iter()
+            .map(|term| NamedNode::new_unchecked(term.to_owned()))
+            .collect(),
+        referenced_iris: referenced_iris
+            .into_iter()
+            .map(|term| NamedNode::new_unchecked(term.to_owned()))
+            .collect(),
+    }
 }
 
 /// Collect the `<vocab>sliceDependsOn` targets declared in a slice's manifest,
@@ -661,31 +717,8 @@ fn collect_declared_terms(store: &Dataset, vocab_ns: &str) -> BTreeSet<NamedNode
 /// whose subject is some *other* resource in the manifest (e.g. a blank-node
 /// description or an unrelated IRI) is never picked up — only edges authored on
 /// the slice itself reconcile against computed dependencies (G8 MED).
-fn collect_slice_depends_on(
-    record: &SliceRecord,
-    depends_on_iri: &str,
-) -> Result<BTreeSet<SliceIri>, SliceError> {
-    let mut out = BTreeSet::new();
-    // The manifest is preserved as an IR dataset; re-derive its named-node
-    // objects of <vocab>sliceDependsOn. We parse the manifest artifact directly
-    // for a robust oxigraph query surface (the IR carries the same triples).
-    let Some(manifest_artifact) = record
-        .artifacts
-        .iter()
-        .find(|a| a.role == ArtifactRole::Manifest)
-    else {
-        return Ok(out);
-    };
-    let store = parse_rdf_artifact(manifest_artifact)?;
-    // The slice IRI must be a valid IRI to participate; a malformed one yields no
-    // edges (mirrors the original `NamedNode::new(...)` guard).
-    if NamedNode::new(&record.manifest.slice_iri).is_err() {
-        return Ok(out);
-    }
-    for target in store.object_iris(&record.manifest.slice_iri, depends_on_iri)? {
-        out.insert(target);
-    }
-    Ok(out)
+fn collect_slice_depends_on(record: &SliceRecord) -> BTreeSet<SliceIri> {
+    record.manifest.depends_on.iter().cloned().collect()
 }
 
 /// Extract every NamedNode IRI that appears anywhere in an RDF artifact:
@@ -693,48 +726,24 @@ fn collect_slice_depends_on(
 /// triple-term components (RFC §10). Literal lexical forms are *not* mined for
 /// IRIs — only the datatype IRI of a literal counts.
 ///
-/// This is a **best-effort cross-reference scan** that runs over heterogeneous
-/// artifacts (a Documentation `docs.md` or Example is not RDF and legitimately
-/// yields no IRIs). It deliberately tolerates a parse failure: any artifact that
-/// is *required* to be valid RDF (an ownership-bearing module/shapes/manifest)
-/// is already hard-validated in Phase 1 / `collect_slice_depends_on`, so a
-/// parse failure here only means "this non-RDF artifact contributes no edges".
-fn extract_rdf_iris(artifact: &ArtifactRecord) -> BTreeSet<NamedNode> {
-    let mut out = BTreeSet::new();
-    let Ok(store) = parse_rdf_artifact(artifact) else {
-        return out;
-    };
-    for quad in store.inner().owned_quads() {
-        collect_term_iris(&quad.subject, &mut out);
-        out.insert(NamedNode::new_unchecked(quad.predicate.clone()));
-        collect_term_iris(&quad.object, &mut out);
-        if let Some(RdfTerm::Iri(g)) = &quad.graph_name {
-            out.insert(NamedNode::new_unchecked(g.clone()));
-        }
-    }
-    out
-}
-
 /// Mine every NamedNode IRI from one term: an IRI itself, a literal's expanded
 /// datatype IRI (the lexical form is NOT mined), and a quoted triple's components.
 /// A blank node contributes no IRI. The frozen IR always expands a literal's
 /// datatype (C0.1), so a plain `xsd:string` / `rdf:langString` literal mines the
 /// expanded datatype exactly as oxigraph's `lit.datatype()` did.
-fn collect_term_iris(term: &RdfTerm, out: &mut BTreeSet<NamedNode>) {
-    match term {
-        RdfTerm::Iri(n) => {
-            out.insert(NamedNode::new_unchecked(n.clone()));
+fn collect_term_iri_refs<'a>(store: &'a RdfDataset, term: TermId, out: &mut BTreeSet<&'a str>) {
+    match store.resolve(term) {
+        TermRef::Iri(iri) => {
+            out.insert(iri);
         }
-        RdfTerm::BlankNode(_) => {}
-        RdfTerm::Literal(lit) => {
-            if let Some(dt) = &lit.datatype {
-                out.insert(NamedNode::new_unchecked(dt.clone()));
-            }
+        TermRef::Blank { .. } => {}
+        TermRef::Literal { datatype, .. } => {
+            collect_term_iri_refs(store, datatype, out);
         }
-        RdfTerm::Triple(triple) => {
-            collect_term_iris(&triple.subject, out);
-            out.insert(NamedNode::new_unchecked(triple.predicate.clone()));
-            collect_term_iris(&triple.object, out);
+        TermRef::Triple { s, p, o } => {
+            collect_term_iri_refs(store, s, out);
+            collect_term_iri_refs(store, p, out);
+            collect_term_iri_refs(store, o, out);
         }
     }
 }
@@ -1023,5 +1032,47 @@ fn walk_ground_term(t: &purrdf_sparql_algebra::GroundTerm, out: &mut BTreeSet<Na
         // the parser, so it cannot appear in a VALUES clause, and a blank node
         // carries no IRI dependency edge — a no-op.
         GT::BlankNode(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod rdf_fact_tests {
+    use super::*;
+
+    const EX: &str = "https://example.org/vocab/";
+
+    #[test]
+    fn one_ir_walk_collects_ownership_and_nested_rdf12_references() {
+        let input = format!(
+            "@prefix ex: <{EX}> .\n\
+             @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             ex:term a owl:Class ; rdfs:isDefinedBy ex:slice .\n\
+             ex:record ex:mentions <<( ex:term ex:edge \"value\"^^ex:datatype )>> .\n"
+        );
+        let store = Dataset::parse_turtle(input.as_bytes(), "facts.ttl").expect("valid RDF 1.2");
+        let facts = inspect_rdf_dataset(store.inner(), EX);
+
+        assert_eq!(
+            facts.is_defined_by,
+            vec![(
+                NamedNode::new_unchecked(format!("{EX}term")),
+                format!("{EX}slice")
+            )]
+        );
+        assert!(
+            facts
+                .declared_terms
+                .contains(&NamedNode::new_unchecked(format!("{EX}term")))
+        );
+        for local in ["term", "slice", "record", "mentions", "edge", "datatype"] {
+            assert!(
+                facts
+                    .referenced_iris
+                    .contains(&NamedNode::new_unchecked(format!("{EX}{local}"))),
+                "missing {local}"
+            );
+        }
     }
 }

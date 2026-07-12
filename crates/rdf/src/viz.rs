@@ -1454,6 +1454,8 @@ impl<'a> ProjectionBuilder<'a> {
             }
         }
 
+        let incoming_by_statement = incoming_reference_counts(self.references.values());
+
         let terms = self
             .terms
             .into_iter()
@@ -1475,13 +1477,7 @@ impl<'a> ProjectionBuilder<'a> {
                 object: draft.object.clone(),
                 asserted_in: draft.asserted_in.iter().cloned().collect(),
                 nesting_depth: draft.nesting_depth,
-                incoming_references: u32::try_from(
-                    self.references
-                        .values()
-                        .filter(|reference| reference.statement == *id)
-                        .count(),
-                )
-                .unwrap_or(u32::MAX),
+                incoming_references: incoming_by_statement.get(id).copied().unwrap_or_default(),
                 dialect: draft.dialect.clone(),
                 roles: draft.roles.iter().cloned().collect(),
             })
@@ -1554,6 +1550,17 @@ impl<'a> ProjectionBuilder<'a> {
             diagnostics: self.diagnostics.into_values().collect(),
         })
     }
+}
+
+fn incoming_reference_counts<'a>(
+    references: impl Iterator<Item = &'a VizReference>,
+) -> BTreeMap<VizStatementId, u32> {
+    let mut counts: BTreeMap<VizStatementId, u32> = BTreeMap::new();
+    for reference in references {
+        let count = counts.entry(reference.statement.clone()).or_default();
+        *count = count.saturating_add(1);
+    }
+    counts
 }
 
 fn term_ref_value(dataset: &RdfDataset, term: TermRef<'_>) -> TermValue {
@@ -2184,6 +2191,28 @@ mod tests {
                 .any(|site| matches!(site, VizReferenceSite::Reification { .. }))
         );
         assert_eq!(inner.incoming_references, 3);
+    }
+
+    #[test]
+    fn incoming_reference_counts_visit_each_reference_once() {
+        use std::cell::Cell;
+
+        let projection = project_graph_input(&rich_input(), &VizSpec::default()).expect("project");
+        let visits = Cell::new(0_u32);
+        let counts = incoming_reference_counts(projection.references.iter().inspect(|_| {
+            visits.set(visits.get().saturating_add(1));
+        }));
+
+        assert_eq!(
+            visits.get(),
+            u32::try_from(projection.references.len()).expect("fixture fits in u32")
+        );
+        for statement in &projection.statements {
+            assert_eq!(
+                counts.get(&statement.id).copied().unwrap_or_default(),
+                statement.incoming_references
+            );
+        }
     }
 
     #[test]

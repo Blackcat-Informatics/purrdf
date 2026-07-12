@@ -1408,6 +1408,7 @@ dependencies = [
 name = "purrdf-slice"
 version = "0.4.3"
 dependencies = [
+ "criterion",
  "hex",
  "insta",
  "petgraph",
