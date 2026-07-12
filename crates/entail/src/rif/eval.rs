@@ -84,6 +84,15 @@ impl FactIndex {
         self.facts.is_empty()
     }
 
+    /// Drop all facts and postings while retaining allocated capacity, so the
+    /// next chase iteration's frontier can be rebuilt without reallocating.
+    fn clear(&mut self) {
+        self.facts.clear();
+        self.by_subject.clear();
+        self.by_predicate.clear();
+        self.by_object.clear();
+    }
+
     /// The shortest posting list selected by constants and already-bound
     /// variables. `None` means no slot is bound and the caller scans all facts.
     fn candidate_ordinals(&self, atom: &PatternAtom, binding: &Binding) -> Option<&[usize]> {
@@ -270,21 +279,19 @@ fn chase(facts: &mut FastSet<[u32; 3]>, seed: Vec<[u32; 3]>, rules: &[CompiledRu
     let mut all = FactIndex::from_facts(seed.clone());
     let mut delta = FactIndex::from_facts(seed);
     let mut derived: Vec<[u32; 3]> = Vec::new();
-    let mut next: Vec<[u32; 3]> = Vec::new();
     let mut stats = ChaseStats::default();
     while !delta.is_empty() {
         derived.clear();
-        next.clear();
         for rule in rules {
             fire_rule(rule, &all, &delta, &mut derived, &mut stats);
         }
+        delta.clear();
         for &t in &derived {
             if facts.insert(t) {
                 all.push(t);
-                next.push(t);
+                delta.push(t);
             }
         }
-        delta = FactIndex::from_facts(std::mem::take(&mut next));
     }
     stats
 }
