@@ -134,7 +134,10 @@ pub use sssom::{
     SSSOM_DEFAULT_VALIDATION_TYPES, SssomDiagnostic, SssomMapping, SssomMappingSet, SssomMeta,
 };
 pub use store::RdfStoreCapabilities;
-pub use turtle::{emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri};
+pub use turtle::{
+    emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri,
+    write_dataset_annotation, write_dataset_quad, write_dataset_reifier, write_dataset_term,
+};
 pub use turtle_render::render as render_canonical_turtle;
 
 /// The common purrdf-core surface, for `use purrdf_core::prelude::*;`.

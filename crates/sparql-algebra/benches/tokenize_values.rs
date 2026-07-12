@@ -17,7 +17,7 @@
 //! removes on the common no-escape path.
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
-use purrdf_sparql_algebra::lexer::tokenize;
+use purrdf_sparql_algebra::{SparqlParser, lexer::tokenize};
 
 const ROWS: usize = 4_000;
 
@@ -48,6 +48,13 @@ fn bench_tokenize_values(c: &mut Criterion) {
         bencher.iter(|| {
             let toks = tokenize(black_box(&text)).expect("tokenize");
             black_box(toks);
+        });
+    });
+    group.bench_function("parse_values_4k", |bencher| {
+        let parser = SparqlParser::new();
+        bencher.iter(|| {
+            let query = parser.parse_query(black_box(&text)).expect("parse");
+            black_box(query);
         });
     });
     group.finish();

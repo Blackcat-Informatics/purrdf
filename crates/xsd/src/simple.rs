@@ -49,16 +49,18 @@ pub fn normalize_whitespace_replace(s: &str) -> String {
 /// verbatim (it is not part of the XSD `whiteSpace` facet).
 #[must_use]
 pub fn normalize_whitespace_collapse(s: &str) -> String {
-    // After `replace`, the only XSD-whitespace character remaining is the ASCII space,
-    // so splitting on `' '` and dropping empty segments performs the collapse-plus-trim
-    // exactly (leading/trailing/interior runs all become empty segments).
-    let replaced = normalize_whitespace_replace(s);
-    let mut out = String::with_capacity(replaced.len());
-    for segment in replaced.split(' ').filter(|seg| !seg.is_empty()) {
-        if !out.is_empty() {
-            out.push(' ');
+    let mut out = String::with_capacity(s.len());
+    let mut pending_space = false;
+    for ch in s.chars() {
+        if matches!(ch, ' ' | '\t' | '\n' | '\r') {
+            pending_space = !out.is_empty();
+        } else {
+            if pending_space {
+                out.push(' ');
+                pending_space = false;
+            }
+            out.push(ch);
         }
-        out.push_str(segment);
     }
     out
 }

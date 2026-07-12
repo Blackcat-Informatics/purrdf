@@ -6,6 +6,7 @@
 //! and named-graph scoping.
 
 use std::cmp::Ordering;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use purrdf_core::{GraphMatch, TermId, TermValue};
@@ -18,13 +19,13 @@ use purrdf_xsd::{XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 
-use crate::DetHashSet;
 use crate::convert::{ground_term_to_value, named_node_to_value};
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval};
 use crate::expr::{eval_expr, xsd_of, xsd_to_term};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
+use crate::{DetHashMap, DetHashSet, DetHasher};
 
 /// Inline `VALUES`: one solution per binding row, each cell an interned ground term
 /// (or unbound for `UNDEF`).
@@ -90,16 +91,20 @@ pub(crate) fn eval_reduced(
 /// Drop duplicate rows, preserving first-seen order (SolutionTerm equality is exact
 /// RDF-term identity — see the scratch-interner promotion rule).
 fn dedup(seq: SolutionSeq) -> SolutionSeq {
-    let mut seen: DetHashSet<Solution> = DetHashSet::default();
-    let mut rows = Vec::new();
-    for row in seq.rows {
-        if seen.insert(row.clone()) {
-            rows.push(row);
+    let mut unique = DetHashMap::with_capacity_and_hasher(seq.rows.len(), DetHasher::default());
+    for (ordinal, row) in seq.rows.into_iter().enumerate() {
+        if let Entry::Vacant(entry) = unique.entry(row) {
+            entry.insert(ordinal);
         }
     }
+    let mut rows: Vec<_> = unique
+        .into_iter()
+        .map(|(row, ordinal)| (ordinal, row))
+        .collect();
+    rows.sort_unstable_by_key(|(ordinal, _)| *ordinal);
     SolutionSeq {
         schema: seq.schema,
-        rows,
+        rows: rows.into_iter().map(|(_, row)| row).collect(),
     }
 }
 
@@ -485,23 +490,26 @@ pub(crate) fn eval_group(
     let key_cols: Vec<Option<usize>> = variables.iter().map(|v| in_schema.index_of(v)).collect();
 
     // Partition rows into groups, keeping groups in first-seen order.
-    let mut order: Vec<Vec<Option<SolutionTerm>>> = Vec::new();
-    let mut groups: crate::DetHashMap<Vec<Option<SolutionTerm>>, Vec<usize>> =
-        crate::DetHashMap::default();
+    let mut groups: DetHashMap<Solution, (usize, Vec<usize>)> = DetHashMap::default();
     for (idx, row) in seq.rows.iter().enumerate() {
-        let key: Vec<Option<SolutionTerm>> =
-            key_cols.iter().map(|c| c.and_then(|c| row[c])).collect();
-        if !groups.contains_key(&key) {
-            order.push(key.clone());
-            groups.insert(key.clone(), Vec::new());
+        let key: Solution = key_cols.iter().map(|c| c.and_then(|c| row[c])).collect();
+        let next_ordinal = groups.len();
+        match groups.entry(key) {
+            Entry::Occupied(mut entry) => entry.get_mut().1.push(idx),
+            Entry::Vacant(entry) => {
+                entry.insert((next_ordinal, vec![idx]));
+            }
         }
-        groups.get_mut(&key).unwrap().push(idx);
     }
     // No GROUP BY + empty input + aggregates → a single empty group.
-    if order.is_empty() && variables.is_empty() && !aggregates.is_empty() {
-        order.push(Vec::new());
-        groups.insert(Vec::new(), Vec::new());
+    if groups.is_empty() && variables.is_empty() && !aggregates.is_empty() {
+        groups.insert(Solution::new(), (0, Vec::new()));
     }
+    let mut groups: Vec<_> = groups
+        .into_iter()
+        .map(|(key, (ordinal, rows))| (ordinal, key, rows))
+        .collect();
+    groups.sort_unstable_by_key(|(ordinal, _, _)| *ordinal);
 
     let mut out_schema = VarSchema::from_vars(variables.iter().cloned());
     for (out_var, _) in aggregates {
@@ -525,10 +533,9 @@ pub(crate) fn eval_group(
     let rows = if safe {
         let base = ctx.scratch.computed_count();
         let minted = crate::parallel::par_chunk_try_map_init(
-            &order,
+            &groups,
             || ctx.fork_for_worker(),
-            |child, acc, key| {
-                let idxs = &groups[key];
+            |child, acc, (_, key, idxs)| {
                 let mut row = smallvec::smallvec![None; out_width];
                 for (i, _) in variables.iter().enumerate() {
                     row[i] = key[i];
@@ -545,9 +552,8 @@ pub(crate) fn eval_group(
             .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))
             .collect()
     } else {
-        let mut rows = Vec::with_capacity(order.len());
-        for key in &order {
-            let idxs = &groups[key];
+        let mut rows = Vec::with_capacity(groups.len());
+        for (_, key, idxs) in &groups {
             let mut row = smallvec::smallvec![None; out_width];
             for (i, _) in variables.iter().enumerate() {
                 row[i] = key[i];

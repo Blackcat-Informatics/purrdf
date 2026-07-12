@@ -27,7 +27,10 @@
 //! - Literal: `"lex"`, `"lex"@lang`, `"lex"@lang--ltr`/`"lex"@lang--rtl`, `"lex"^^<datatype>` (escaped)
 //! - Triple term (RDF 1.2): `<< <s> <p> <o> >>` (the reifier-shorthand form)
 
-use crate::{RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTriple};
+use crate::{
+    QuadIds, RdfAnnotation, RdfDataset, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTriple,
+    TermId, TermRef,
+};
 use std::fmt::Write as _;
 
 /// Percent-encode a string the way Python's `urllib.parse.quote(value, safe="")`
@@ -73,6 +76,11 @@ pub fn rule_iri(base: &str, rule_name: &str) -> String {
 /// [`crate::ir::canon::write_literal_escaped`] exactly.
 fn escape_literal(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
+    write_literal_escaped(value, &mut out);
+    out
+}
+
+fn write_literal_escaped(value: &str, out: &mut String) {
     for ch in value.chars() {
         match ch {
             '\\' => out.push_str("\\\\"),
@@ -86,7 +94,6 @@ fn escape_literal(value: &str) -> String {
             c => out.push(c),
         }
     }
-    out
 }
 
 /// Render an [`RdfLiteral`] as an N-Triples/Turtle literal token.
@@ -123,6 +130,11 @@ fn emit_literal(literal: &RdfLiteral) -> String {
 /// `purrdf::native_codecs::ser_model` exactly.
 fn escape_iri(iri: &str) -> String {
     let mut out = String::with_capacity(iri.len());
+    write_iri_escaped(iri, &mut out);
+    out
+}
+
+fn write_iri_escaped(iri: &str, out: &mut String) {
     for ch in iri.chars() {
         match ch {
             '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
@@ -134,7 +146,115 @@ fn escape_iri(iri: &str) -> String {
             c => out.push(c),
         }
     }
-    out
+}
+
+/// Append one interned term to an existing Turtle/N-Triples output buffer.
+///
+/// This is the borrowed counterpart of [`emit_term`]: it resolves directly from
+/// the frozen dataset and allocates neither an owned term tree nor an intermediate
+/// rendered string.
+pub fn write_dataset_term(dataset: &RdfDataset, id: TermId, out: &mut String) {
+    match dataset.resolve(id) {
+        TermRef::Iri(iri) => {
+            out.push('<');
+            write_iri_escaped(iri, out);
+            out.push('>');
+        }
+        TermRef::Blank { label, scope } => {
+            out.push_str("_:");
+            out.push_str(label);
+            if scope != crate::BlankScope::DEFAULT {
+                let _ = write!(out, ".s{}", scope.ordinal());
+            }
+        }
+        TermRef::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => {
+            out.push('"');
+            write_literal_escaped(lexical, out);
+            out.push('"');
+            if let Some(language) = language {
+                out.push('@');
+                out.push_str(language);
+                if let Some(direction) = direction {
+                    out.push_str("--");
+                    out.push_str(direction.as_str());
+                }
+            } else {
+                let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
+                    unreachable!("literal datatype must resolve to an IRI")
+                };
+                out.push_str("^^<");
+                out.push_str(datatype);
+                out.push('>');
+            }
+        }
+        TermRef::Triple { s, p, o } => {
+            out.push_str("<< ");
+            write_dataset_term(dataset, s, out);
+            out.push(' ');
+            write_dataset_predicate(dataset, p, out);
+            out.push(' ');
+            write_dataset_term(dataset, o, out);
+            out.push_str(" >>");
+        }
+    }
+}
+
+fn write_dataset_predicate(dataset: &RdfDataset, id: TermId, out: &mut String) {
+    let TermRef::Iri(iri) = dataset.resolve(id) else {
+        unreachable!("predicate must resolve to an IRI")
+    };
+    out.push('<');
+    out.push_str(iri);
+    out.push('>');
+}
+
+/// Append one ID-native quad as the same default-graph statement emitted by
+/// [`emit_quad`]. The graph-name slot is intentionally ignored by this Turtle
+/// projection, matching the owned emitter.
+pub fn write_dataset_quad(dataset: &RdfDataset, quad: QuadIds, out: &mut String) {
+    write_dataset_term(dataset, quad.s, out);
+    out.push(' ');
+    write_dataset_predicate(dataset, quad.p, out);
+    out.push(' ');
+    write_dataset_term(dataset, quad.o, out);
+    out.push_str(" .\n");
+}
+
+/// Append one ID-native annotation row without materializing owned terms.
+pub fn write_dataset_annotation(
+    dataset: &RdfDataset,
+    reifier: TermId,
+    predicate: TermId,
+    object: TermId,
+    out: &mut String,
+) {
+    write_dataset_term(dataset, reifier, out);
+    out.push(' ');
+    write_dataset_predicate(dataset, predicate, out);
+    out.push(' ');
+    write_dataset_term(dataset, object, out);
+    out.push_str(" .\n");
+}
+
+/// Append one ID-native reifier binding without materializing its statement tree.
+pub fn write_dataset_reifier(
+    dataset: &RdfDataset,
+    reifier: TermId,
+    statement: TermId,
+    out: &mut String,
+) {
+    const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+    write_dataset_term(dataset, reifier, out);
+    out.push_str(" <");
+    out.push_str(RDF_REIFIES);
+    out.push_str("> ");
+    write_dataset_term(dataset, statement, out);
+    out.push_str(" .\n");
 }
 
 /// Serialize an [`RdfTerm`] to its Turtle form (full `<iri>`, `_:bnode`, literal,
