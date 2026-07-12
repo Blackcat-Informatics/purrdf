@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, GraphMatch, QuadIds, RdfDataset, TermId};
+use purrdf_core::{GraphMatch, QuadIds, QuadPatternCursor, RdfDataset, TermId};
 
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
@@ -17,14 +17,33 @@ use crate::term::{
 
 /// A pattern-quad cursor. It holds an `Arc<RdfDataset>` clone (`pin`) so the
 /// term arena the views borrow into cannot dangle — the cursor stays valid even
-/// after every `PurrdfDataset` handle is freed. The matching rows are snapshot
-/// into an owned `Vec<QuadIds>` at creation (no live iterator, so no
-/// self-referential borrow). Single-threaded.
+/// after every `PurrdfDataset` handle is freed. Matching rows are pulled lazily
+/// from the core's owned indexed cursor and are never collected. Single-threaded.
 #[derive(Debug)]
 pub struct PurrdfCursor {
-    pin: Arc<RdfDataset>,
-    rows: Vec<QuadIds>,
-    pos: usize,
+    state: CursorState,
+}
+
+#[derive(Debug)]
+enum CursorState {
+    Empty(Arc<RdfDataset>),
+    Pattern(QuadPatternCursor),
+}
+
+impl CursorState {
+    fn next(&mut self) -> Option<QuadIds> {
+        match self {
+            Self::Empty(_) => None,
+            Self::Pattern(cursor) => cursor.next(),
+        }
+    }
+
+    fn dataset(&self) -> &RdfDataset {
+        match self {
+            Self::Empty(dataset) => dataset,
+            Self::Pattern(cursor) => cursor.dataset(),
+        }
+    }
 }
 
 /// A resolved subject/predicate/object slot.
@@ -98,7 +117,8 @@ unsafe fn resolve_graph(
 /// Open a pattern cursor. Each of `s`/`p`/`o` is a nullable input term view
 /// (null = unbound). `g` is a non-null [`PurrdfGraphMatch`] (use kind `Any` for
 /// "any graph"). A bound term/graph value that is interned nowhere yields an
-/// empty cursor (not an error). The cursor pins the dataset's `Arc`.
+/// empty cursor (not an error). The cursor pins the dataset's `Arc` and advances
+/// the selected core index lazily; opening it does not collect matching rows.
 ///
 /// # Safety
 /// `dataset` must be a live handle; the view/match pointers must be valid where
@@ -128,26 +148,25 @@ pub unsafe extern "C" fn purrdf_quads_for_pattern(
             let object = resolve_slot(view, o)?;
             let graph = resolve_graph(view, &*g)?;
 
-            let rows: Vec<QuadIds> = match graph {
-                GraphSlot::Absent => Vec::new(),
+            let state = match graph {
+                GraphSlot::Absent => CursorState::Empty(pin),
                 GraphSlot::Match(_)
                     if subject.is_absent() || predicate.is_absent() || object.is_absent() =>
                 {
-                    Vec::new()
+                    CursorState::Empty(pin)
                 }
-                // `RdfDataset` overrides the `DatasetView::quads_for_pattern` default
-                // with the indexed lookup, so this takes the fast path.
-                GraphSlot::Match(graph_match) => view
-                    .quads_for_pattern(
+                GraphSlot::Match(graph_match) => {
+                    let cursor = pin.quads_for_pattern_cursor(
                         subject.term_id(),
                         predicate.term_id(),
                         object.term_id(),
                         graph_match,
-                    )
-                    .collect(),
+                    );
+                    CursorState::Pattern(cursor)
+                }
             };
 
-            *out_cursor = Box::into_raw(Box::new(PurrdfCursor { pin, rows, pos: 0 }));
+            *out_cursor = Box::into_raw(Box::new(PurrdfCursor { state }));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -183,12 +202,10 @@ pub unsafe extern "C" fn purrdf_cursor_next(
                 return PurrdfStatus::NullPointer as i32;
             }
             let cursor = &mut *cursor;
-            if cursor.pos >= cursor.rows.len() {
+            let Some(quad) = cursor.state.next() else {
                 return PurrdfStatus::CursorExhausted as i32;
-            }
-            let quad = cursor.rows[cursor.pos];
-            cursor.pos += 1;
-            let dataset = cursor.pin.as_ref();
+            };
+            let dataset = cursor.state.dataset();
             render_term(dataset, quad.s, &mut *out_s);
             render_term(dataset, quad.p, &mut *out_p);
             render_term(dataset, quad.o, &mut *out_o);

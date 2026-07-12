@@ -75,7 +75,9 @@ drifts from the crate (`make capi-check`).
 - A term view from `purrdf_cursor_next` borrows into the dataset arena; its
   `PurrdfStr` pointers are valid until the next `purrdf_cursor_next` on that
   cursor or `purrdf_cursor_free`. The cursor pins the dataset's `Arc`, so it
-  stays valid even after every `PurrdfDataset` handle is freed.
+  stays valid even after every `PurrdfDataset` handle is freed. Pattern rows
+  are pulled lazily from the selected core index rather than collected when
+  the cursor opens.
 - A term view from `purrdf_rowcursor_term` borrows into the current row's owned
   value; valid until the next `purrdf_rowcursor_next` or `purrdf_rowcursor_free`.
 - A buffer's bytes (`purrdf_buffer_data`) are valid until `purrdf_buffer_free`.

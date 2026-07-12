@@ -218,9 +218,8 @@ typedef struct PurrdfBuffer PurrdfBuffer;
 /**
  * A pattern-quad cursor. It holds an `Arc<RdfDataset>` clone (`pin`) so the
  * term arena the views borrow into cannot dangle — the cursor stays valid even
- * after every `PurrdfDataset` handle is freed. The matching rows are snapshot
- * into an owned `Vec<QuadIds>` at creation (no live iterator, so no
- * self-referential borrow). Single-threaded.
+ * after every `PurrdfDataset` handle is freed. Matching rows are pulled lazily
+ * from the core's owned indexed cursor and are never collected. Single-threaded.
  */
 typedef struct PurrdfCursor PurrdfCursor;
 
@@ -421,7 +420,8 @@ void purrdf_buffer_free(PurrdfBuffer *buf);
  * Open a pattern cursor. Each of `s`/`p`/`o` is a nullable input term view
  * (null = unbound). `g` is a non-null [`PurrdfGraphMatch`] (use kind `Any` for
  * "any graph"). A bound term/graph value that is interned nowhere yields an
- * empty cursor (not an error). The cursor pins the dataset's `Arc`.
+ * empty cursor (not an error). The cursor pins the dataset's `Arc` and advances
+ * the selected core index lazily; opening it does not collect matching rows.
  *
  * # Safety
  * `dataset` must be a live handle; the view/match pointers must be valid where

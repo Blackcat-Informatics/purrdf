@@ -19,6 +19,9 @@
 //!   consumers that work in term ids.
 //! - [`RdfDataset::quad_refs`] yields [`QuadRef`] — a borrowed, resolved view
 //!   (`&str` lexical content, no allocation) for consumers that need values.
+//! - [`RdfDataset::quads_for_pattern_cursor`] yields an owned
+//!   [`QuadPatternCursor`] that pins an [`Arc`] and lazily follows the selected
+//!   quad index without collecting matching rows.
 //!
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -421,6 +424,12 @@ enum QuadCandidates<'a> {
     },
 }
 
+#[derive(Clone, Copy, Debug)]
+enum QuadCandidateAccess {
+    Sequential,
+    Permuted(QuadPermutation),
+}
+
 impl<'a> Iterator for QuadCandidates<'a> {
     type Item = &'a QuadRow;
     #[inline]
@@ -440,6 +449,64 @@ impl<'a> Iterator for QuadCandidates<'a> {
         }
     }
 }
+
+/// An owned, row-materialization-free cursor over one indexed quad pattern.
+///
+/// The cursor pins the frozen dataset with an [`Arc`], stores only the selected
+/// index source, candidate bounds, and pattern IDs, and resolves candidates on
+/// demand. It therefore remains valid after every other dataset handle is
+/// dropped without materializing matching [`QuadIds`] into a result vector.
+#[derive(Debug)]
+pub struct QuadPatternCursor {
+    dataset: Arc<RdfDataset>,
+    access: QuadCandidateAccess,
+    next: usize,
+    end: usize,
+    s: Option<TermId>,
+    p: Option<TermId>,
+    o: Option<TermId>,
+    g: GraphMatch,
+}
+
+impl QuadPatternCursor {
+    /// The pinned dataset whose term IDs the yielded rows address.
+    #[must_use]
+    pub fn dataset(&self) -> &RdfDataset {
+        &self.dataset
+    }
+}
+
+impl Iterator for QuadPatternCursor {
+    type Item = QuadIds;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.next < self.end {
+            let index = self.next;
+            self.next += 1;
+            let row = match self.access {
+                QuadCandidateAccess::Sequential => &self.dataset.quads[index],
+                QuadCandidateAccess::Permuted(permutation) => {
+                    let ordinal = self.dataset.permutation(permutation)[index] as usize;
+                    &self.dataset.quads[ordinal]
+                }
+            };
+            if self.s.is_none_or(|id| row.s == id)
+                && self.p.is_none_or(|id| row.p == id)
+                && self.o.is_none_or(|id| row.o == id)
+                && self.g.matches(row.g)
+            {
+                return Some(QuadIds::from(*row));
+            }
+        }
+        None
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.end - self.next))
+    }
+}
+
+impl std::iter::FusedIterator for QuadPatternCursor {}
 
 impl RdfDataset {
     /// Assemble a frozen dataset from already-validated, already-ordered parts.
@@ -911,6 +978,24 @@ impl RdfDataset {
         }
     }
 
+    fn candidate_access(
+        &self,
+        plan: &QuadProbePlan,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> (QuadCandidateAccess, usize, usize) {
+        let (best, lo, hi) = self.candidate_run(plan, s, p, o, g);
+        match best {
+            QuadPermutation::Spog => (QuadCandidateAccess::Sequential, lo, hi),
+            _ if (hi - lo).saturating_mul(4) > self.quads.len() => {
+                (QuadCandidateAccess::Sequential, 0, self.quads.len())
+            }
+            _ => (QuadCandidateAccess::Permuted(best), lo, hi),
+        }
+    }
+
     /// An O(log n) UPPER-BOUND estimate of the number of quads matching
     /// `(s, p, o, g)`: the length of the permutation-index candidate run whose
     /// leading bound axes match the pattern. EXACT when the bound positions (plus any
@@ -954,6 +1039,36 @@ impl RdfDataset {
         self.quads_for_pattern_with_plan(&plan, s, p, o, g)
     }
 
+    /// Open an owned, lazy cursor over quads matching `(s, p, o, g)`.
+    ///
+    /// This uses the same permutation selection, binary-searched candidate run,
+    /// low-selectivity fallback, and residual filter as
+    /// [`Self::quads_for_pattern_with_plan`]. The cursor clones only this
+    /// dataset's [`Arc`] and never allocates or collects matching rows. Opening
+    /// the first query for a non-identity permutation may initialize the
+    /// dataset's shared lazy index, exactly as the borrowed query path does.
+    #[must_use]
+    pub fn quads_for_pattern_cursor(
+        self: &Arc<Self>,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> QuadPatternCursor {
+        let plan = Self::probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+        let (access, next, end) = self.candidate_access(&plan, s, p, o, g);
+        QuadPatternCursor {
+            dataset: Arc::clone(self),
+            access,
+            next,
+            end,
+            s,
+            p,
+            o,
+            g,
+        }
+    }
+
     /// Like `Self::quads_for_pattern_indexed`, but with a caller-precomputed
     /// [`QuadProbePlan`] (see [`Self::probe_plan`]) so the per-call permutation
     /// selection — loop-invariant across an index-nested-loop join slot — is skipped.
@@ -968,28 +1083,13 @@ impl RdfDataset {
         o: Option<TermId>,
         g: GraphMatch,
     ) -> impl Iterator<Item = QuadIds> + '_ + use<'_> {
-        let (best, lo, hi) = self.candidate_run(plan, s, p, o, g);
-        let candidates = match best {
-            // For SPOG the run is a sub-slice of the freeze-sorted table (sequential).
-            QuadPermutation::Spog => QuadCandidates::Slice(self.quads[lo..hi].iter()),
-            _ => {
-                // Selectivity guard: a non-identity permutation visits its run via
-                // `u32` ordinal indirection — random access into `quads`. For a
-                // low-selectivity prefix (a large run, e.g. a predicate matching much
-                // of the dataset), that scattered access costs more than a sequential
-                // pass, so fall back to a full sequential scan + residual filter (same
-                // result). Random access runs ~4× a sequential pass, so the crossover
-                // is a run wider than a quarter of the table.
-                if (hi - lo).saturating_mul(4) > self.quads.len() {
-                    QuadCandidates::Slice(self.quads.iter())
-                } else {
-                    let arr = self.permutation(best);
-                    QuadCandidates::Permuted {
-                        ordinals: arr[lo..hi].iter(),
-                        quads: &self.quads,
-                    }
-                }
-            }
+        let (access, lo, hi) = self.candidate_access(plan, s, p, o, g);
+        let candidates = match access {
+            QuadCandidateAccess::Sequential => QuadCandidates::Slice(self.quads[lo..hi].iter()),
+            QuadCandidateAccess::Permuted(permutation) => QuadCandidates::Permuted {
+                ordinals: self.permutation(permutation)[lo..hi].iter(),
+                quads: &self.quads,
+            },
         };
 
         candidates
@@ -2455,6 +2555,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn owned_pattern_cursor_pins_and_lazily_reads_dataset() {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = iri(&mut builder, "subject");
+        let predicate = iri(&mut builder, "predicate");
+        let first = iri(&mut builder, "first");
+        let second = iri(&mut builder, "second");
+        builder.push_quad(subject, predicate, first, None);
+        builder.push_quad(subject, predicate, second, None);
+        let dataset = builder.freeze().expect("valid dataset");
+
+        let mut cursor = dataset.quads_for_pattern_cursor(
+            Some(subject),
+            Some(predicate),
+            None,
+            GraphMatch::Default,
+        );
+        drop(dataset);
+
+        assert_eq!(cursor.by_ref().count(), 2);
+        assert!(cursor.next().is_none());
+    }
+
     use proptest::prelude::*;
 
     proptest! {
@@ -2558,7 +2681,12 @@ mod tests {
                 .collect();
             let indexed: BTreeSet<_> =
                 ds.quads_for_pattern_indexed(s, p, o, g).map(key).collect();
-            prop_assert_eq!(indexed, scan);
+            prop_assert_eq!(&indexed, &scan);
+            let cursor: BTreeSet<_> = ds
+                .quads_for_pattern_cursor(s, p, o, g)
+                .map(key)
+                .collect();
+            prop_assert_eq!(&cursor, &scan);
         }
 
         /// `cardinality_estimate` is a sound UPPER BOUND on the true match count for

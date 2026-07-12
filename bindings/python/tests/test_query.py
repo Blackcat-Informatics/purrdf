@@ -63,6 +63,21 @@ def test_initbindings_projects_bound_variable(
     assert run(compat) == run(oracle)
 
 
+def test_native_select_row_outlives_shared_result(compat: ModuleType) -> None:
+    """A yielded native row owns its cells and shares immutable variables."""
+    graph = _social_graph(compat)
+    native = graph._store.query(  # noqa: SLF001 - binding ownership regression
+        f"SELECT ?person ?name WHERE {{ ?person <{EX}name> ?name }} ORDER BY ?name"
+    )
+    variables = native.variables
+    first = next(native)
+
+    assert len(native) == 2
+    del native
+    assert first[variables[0]].value == f"{EX}a"
+    assert first[variables[1]].value == "Ann"
+
+
 def test_initbindings_ask_matches_oracle(
     compat: ModuleType, oracle: ModuleType
 ) -> None:

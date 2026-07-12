@@ -35,8 +35,7 @@ fn run_select(engine: &QueryEngine, dataset: &Dataset) -> usize {
     engine
         .select(dataset, SELECT_BY_OBJECT, None)
         .expect("SELECT succeeds")
-        .rows()
-        .len()
+        .row_count()
 }
 
 fn bench_query_engine_reuse(c: &mut Criterion) {

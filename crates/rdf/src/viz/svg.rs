@@ -4,7 +4,6 @@
 //! Deterministic SVG emission over semantic scenes and concrete layouts.
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 

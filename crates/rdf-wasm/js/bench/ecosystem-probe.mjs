@@ -273,9 +273,17 @@ const results = {
   purrdf: {
     parse: await measure(() => purrdf.Dataset.parse(SIMPLE_NT, "ntriples"), (ds) => String(ds.size) + " quads"),
     serialize: await measure(() => purrdfDataset.serialize("ntriples"), (text) => String(text.length) + " chars"),
-    select: await measure(() => purrdfEngine.select(purrdfDataset, SELECT_SIMPLE), (r) => String(r.rows.length) + " rows"),
-    propertyPath: await measure(() => purrdfEngine.select(purrdfDataset, SELECT_PATH), (r) => String(r.rows.length) + " rows"),
-    aggregation: await measure(() => purrdfEngine.select(purrdfDataset, SELECT_AGG), (r) => r.rows[0]?.count?.value ?? "no count"),
+    select: await measure(() => purrdfEngine.select(purrdfDataset, SELECT_SIMPLE), (r) => {
+      const count = r.rowCount;
+      r.free();
+      return String(count) + " rows";
+    }),
+    propertyPath: await measure(() => purrdfEngine.select(purrdfDataset, SELECT_PATH), (r) => {
+      const count = r.rowCount;
+      r.free();
+      return String(count) + " rows";
+    }),
+    aggregation: await measure(() => purrdfEngine.select(purrdfDataset, SELECT_AGG), (r) => r.rows.take(0)?.count?.value ?? "no count"),
     graphIdentity: await measure(() => {
       const a = purrdf.Dataset.parse("_:a <https://bench.example/p> <https://bench.example/o> .", "ntriples");
       const b = purrdf.Dataset.parse("_:b <https://bench.example/p> <https://bench.example/o> .", "ntriples");

@@ -107,9 +107,9 @@ pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 pub use ir::{
     BlankScope, CanonHash, Canonicalized, DatasetDiff, DatasetSink, FrozenDatasetSource, GtsBundle,
     HandleEntry, HandleKey, MutableDataset, PipelineBundle, PipelineBundleError, QuadHandle,
-    QuadIds, QuadProbePlan, QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
-    RdfEnvelope, TermId, TermRef, TermValue, ValidatedRdfDatasetBuilder, canonicalize,
-    canonicalize_with, dataset_diff, datasets_isomorphic,
+    QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder,
+    RdfDatasetVisitor, RdfEnvelope, TermId, TermRef, TermValue, ValidatedRdfDatasetBuilder,
+    canonicalize, canonicalize_with, dataset_diff, datasets_isomorphic,
 };
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,
@@ -153,7 +153,8 @@ pub mod prelude {
     pub use crate::dataset_view::{DatasetView, GraphMatch};
     pub use crate::diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
     pub use crate::ir::{
-        QuadIds, QuadRef, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue,
+        QuadIds, QuadPatternCursor, QuadRef, RdfDataset, RdfDatasetBuilder, TermId, TermRef,
+        TermValue,
     };
     pub use crate::model::{
         RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTermKind, RdfTextDirection,

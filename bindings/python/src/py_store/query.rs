@@ -10,6 +10,8 @@
 //! CONSTRUCT triples are `RdfTriple`. The engine is `NativeSparqlEngine`; the
 //! oxigraph `QueryResults` type is gone from this surface.
 
+use std::sync::Arc;
+
 use purrdf_sparql_eval::{NativeSparqlEngine, ParserOptions, StandpointPredicates};
 use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -50,7 +52,7 @@ pub(super) fn build_engine(
 #[pyclass(name = "QuerySolutions")]
 #[derive(Debug)]
 pub struct PyQuerySolutions {
-    variables: Vec<String>,
+    variables: Arc<[String]>,
     rows: Vec<Vec<Option<RdfTerm>>>,
     pos: usize,
 }
@@ -77,9 +79,10 @@ impl PyQuerySolutions {
         if slf.pos >= slf.rows.len() {
             return Ok(None);
         }
-        let row = slf.rows[slf.pos].clone();
-        let variables = slf.variables.clone();
+        let pos = slf.pos;
         slf.pos += 1;
+        let row = std::mem::take(&mut slf.rows[pos]);
+        let variables = Arc::clone(&slf.variables);
         Ok(Some(Py::new(py, PyQuerySolution { variables, row })?))
     }
 
@@ -92,7 +95,7 @@ impl PyQuerySolutions {
 #[pyclass(name = "QuerySolution")]
 #[derive(Debug)]
 pub struct PyQuerySolution {
-    variables: Vec<String>,
+    variables: Arc<[String]>,
     row: Vec<Option<RdfTerm>>,
 }
 
@@ -219,7 +222,7 @@ pub(crate) fn materialize_results(py: Python<'_>, result: SparqlResult) -> PyRes
             Ok(Py::new(
                 py,
                 PyQuerySolutions {
-                    variables,
+                    variables: variables.into(),
                     rows,
                     pos: 0,
                 },

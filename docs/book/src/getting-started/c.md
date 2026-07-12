@@ -90,6 +90,8 @@ int main(void) {
   memory; copy the bytes out if they must outlive the borrow. Term views from
   `purrdf_cursor_next` are valid until the next `purrdf_cursor_next` on that
   cursor or `purrdf_cursor_free`.
+- Pattern cursors pin the dataset and pull rows lazily from the selected core
+  index; opening a cursor does not allocate a matching-row snapshot.
 - `PurrdfDataset` is frozen and `Send + Sync` — readable concurrently from
   many threads. `PurrdfGraph` (the copy-on-write mutable delta) and cursors
   are single-threaded.

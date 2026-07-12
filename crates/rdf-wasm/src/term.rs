@@ -115,6 +115,17 @@ impl Term {
         }
     }
 
+    /// Build a [`Term`] from an already-canonical owned engine term without
+    /// cloning its strings. `TermValue` egress is canonical by construction.
+    pub(crate) fn from_canonical_rdf_term(t: RdfTerm) -> Self {
+        match t {
+            RdfTerm::Iri(iri) => Self::from_inner(TermInner::Named(iri)),
+            RdfTerm::BlankNode(label) => Self::from_inner(TermInner::Blank(label)),
+            RdfTerm::Literal(lit) => Self::from_inner(TermInner::Literal(lit)),
+            RdfTerm::Triple(triple) => Self::from_inner(TermInner::Quoted(triple)),
+        }
+    }
+
     /// Lower this term to the engine's owned [`RdfTerm`].
     ///
     /// Errors for `Variable`/`DefaultGraph`, which are not part of the RDF data model

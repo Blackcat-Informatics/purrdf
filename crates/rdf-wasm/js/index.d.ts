@@ -63,10 +63,26 @@ export interface QueryRawOptions extends QueryOptions {
 
 export type QueryBindingRow = Record<string, RdfTerm | undefined>;
 
+export interface QueryBindingRows extends IterableIterator<QueryBindingRow> {
+  /** Total row count, including rows already consumed. */
+  readonly length: number;
+  /** Rows not yet consumed. */
+  readonly remaining: number;
+  /** Move one row out by result index. Each index can be consumed once. */
+  take(index: number): QueryBindingRow | undefined;
+  /** Materialize all remaining rows and exhaust the stream. */
+  toArray(): QueryBindingRow[];
+  /** Release unconsumed wasm result storage. */
+  free(): void;
+}
+
 export interface SelectResult {
   readonly kind: "select";
   readonly variables: string[];
-  readonly rows: QueryBindingRow[];
+  readonly rowCount: number;
+  readonly rows: QueryBindingRows;
+  /** Release unconsumed wasm result storage. */
+  free(): void;
 }
 
 export interface AskResult {
