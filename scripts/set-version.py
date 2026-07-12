@@ -28,6 +28,8 @@ a dependency line carrying BOTH ``path = "…"`` and ``version = "…"``):
 Other version locations:
 * ``crates/rdf-capi/Cargo.toml``         — ``[package.metadata.capi.library] version``
 * ``bindings/python/uv.lock``            — the editable ``purrdf`` package pin
+* ``CITATION.cff``                       — ``version`` (and ``date-released``,
+                                           stamped to today's release date)
 
 Edits are line-scoped so file formatting and comments are preserved (only the
 version value changes). Deps that inherit via ``version.workspace = true`` and
@@ -43,6 +45,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
@@ -158,6 +161,41 @@ def set_uv_lock(root: Path, version: str) -> None:
     lock.write_text("[[package]]".join(blocks), encoding="utf-8")
 
 
+def set_citation_cff(root: Path, version: str) -> None:
+    """Sync ``CITATION.cff`` ``version`` and ``date-released`` to the release.
+
+    The citation metadata carries its own ``version`` string that ``git`` /
+    Zenodo / CFF consumers cite. It is not a build input, so it silently drifted
+    out of the version lane between 0.2.1 and 0.5.0; the coherence gate now pins
+    it (``scripts/check-versions.py``), and this rewrite keeps it in lockstep so
+    the gate never trips at release time. The top-level ``version:`` key is
+    rewritten (never ``cff-version:``, which names the CFF schema), and
+    ``date-released`` is stamped to today so the citation date matches the day the
+    release is cut. Edits are line-scoped; the value is normalized to the quoted
+    form CFF uses.
+    """
+    path = root / "CITATION.cff"
+    today = date.today().isoformat()
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    set_version = set_date = False
+    for i, line in enumerate(lines):
+        # Anchor to a column-0 ``version:`` so ``cff-version:`` and any nested
+        # (indented) version keys are never matched.
+        if re.match(r"version:\s", line):
+            lines[i] = re.sub(r'(version:\s*)"?[^"\n]*"?', rf'\g<1>"{version}"', line)
+            set_version = True
+        elif re.match(r"date-released:\s", line):
+            lines[i] = re.sub(
+                r'(date-released:\s*)"?[^"\n]*"?', rf'\g<1>"{today}"', line
+            )
+            set_date = True
+    if not set_version:
+        raise SystemExit(f"FAIL: no top-level version: key found in {path}")
+    if not set_date:
+        raise SystemExit(f"FAIL: no date-released: key found in {path}")
+    path.write_text("".join(lines), encoding="utf-8")
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print("usage: python3 scripts/set-version.py <x.y.z>", file=sys.stderr)
@@ -189,6 +227,9 @@ def main(argv: list[str]) -> int:
         version,
     )
     set_uv_lock(root, version)
+
+    # 4. Citation metadata (cited version + release date; pinned by the gate).
+    set_citation_cff(root, version)
 
     print(
         f"set version {version} across crates.io/PyPI/npm "

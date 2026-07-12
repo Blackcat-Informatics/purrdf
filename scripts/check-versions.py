@@ -12,9 +12,12 @@ lint closes both gaps as a hard, no-optionality gate:
 
 1. **Version coherence.** The workspace version (``Cargo.toml``
    ``[workspace.package].version``), the PyPI project version
-   (``bindings/python/pyproject.toml`` ``[project].version``), and the npm
-   package version (``crates/rdf-wasm/js/package.json`` ``version``) must be
-   byte-identical. A single tag then names one coherent release.
+   (``bindings/python/pyproject.toml`` ``[project].version``), the npm
+   package version (``crates/rdf-wasm/js/package.json`` ``version``), and the
+   cited version (``CITATION.cff`` ``version``) must be byte-identical. A single
+   tag then names one coherent release. ``CITATION.cff`` is not a build input, so
+   it drifted out of the lane between 0.2.1 and 0.5.0; pinning it here keeps the
+   cited version honest for every future release.
 
 2. **Publish-list completeness.** The ordered crate list the crates.io release
    lane publishes (the ``crates=( … )`` array in
@@ -76,6 +79,21 @@ def npm_version(root: Path) -> str:
         )
     )
     return data["version"]
+
+
+def citation_version(root: Path) -> str:
+    """The ``version`` value from ``CITATION.cff`` (never ``cff-version``).
+
+    CFF is YAML; rather than take a YAML dependency, match the column-0
+    ``version:`` key (the schema key ``cff-version:`` is prefixed, so ``^version:``
+    cannot match it) and strip optional quotes. Kept deliberately narrow so a
+    nested/indented ``version`` elsewhere in the document can never be picked up.
+    """
+    text = (root / "CITATION.cff").read_text(encoding="utf-8")
+    match = re.search(r'^version:\s*"?([^"\n]+?)"?\s*$', text, flags=re.MULTILINE)
+    if match is None:
+        raise ValueError("CITATION.cff: no top-level version: field")
+    return match.group(1)
 
 
 def workspace_metadata(root: Path) -> dict:
@@ -182,6 +200,7 @@ def main() -> int:
         "Cargo.toml [workspace.package].version": workspace_version(root),
         "bindings/python/pyproject.toml [project].version": pyproject_version(root),
         "crates/rdf-wasm/js/package.json .version": npm_version(root),
+        "CITATION.cff version": citation_version(root),
     }
     distinct = set(versions.values())
     if len(distinct) != 1:
