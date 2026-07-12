@@ -759,10 +759,11 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
 
 /**
  * Render a single term view to one N-Triples term token (e.g. `<iri>`, `_:b`,
- * `"lex"^^<dt>`, or `<< s p o >>` for a quoted triple) into `*out_buffer`
- * (UTF-8, no trailing dot). When the view carries a dataset `term_id`, the term
- * is resolved against `dataset` (so quoted triples materialize recursively);
- * otherwise the token is built from the view fields (non-triple only).
+ * `"lex"^^<dt>`, or `<<( s p o )>>` for a non-asserting quoted-triple term)
+ * into `*out_buffer` (UTF-8, no trailing dot). When the view carries a dataset
+ * `term_id`, the term is resolved against `dataset` (so quoted triples
+ * materialize recursively); otherwise the token is built from the view fields
+ * (non-triple only).
  *
  * # Safety
  * `dataset` must be the live handle the view's `term_id` came from (when

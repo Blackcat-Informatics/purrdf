@@ -9,7 +9,7 @@
 //! [`Error::Format`]. The header is the bare variable names (no `?`), records are
 //! separated by CRLF per the RFC 4180 reference, and each cell is the "value":
 //! the IRI string, the literal lexical form, `_:label` for a blank node, or the
-//! N-Triples `<< … >>` token for a triple term (CSV predates RDF-1.2).
+//! N-Triples non-asserting triple-term token `<<( … )>>` (CSV predates RDF-1.2).
 //!
 //! CSV is a flat exit gate: it has no extension point, so a populated
 //! [`ResultProvenance`] is trimmed and the drop is signalled via
@@ -250,7 +250,7 @@ mod tests {
         // The token contains spaces but no quoting trigger, so it is emitted raw.
         let expected = concat!(
             "t\r\n",
-            "<< <http://example.org/s> <http://example.org/p> <http://example.org/o> >>\r\n",
+            "<<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>>\r\n",
         );
         assert_eq!(csv_text(&result, &ResultProvenance::default()), expected);
     }

@@ -251,7 +251,7 @@ fn starred_graph() -> SparqlResult {
         location: None,
     });
 
-    // Reifier: <stmt1> rdf:reifies << book6 dc:title "…" >>.
+    // Reifier: <stmt1> rdf:reifies <<( book6 dc:title "…" )>>.
     let statement = RdfTriple {
         subject: RdfTerm::iri("http://example.org/book/book6"),
         predicate: "http://purl.org/dc/elements/1.1/title".to_string(),

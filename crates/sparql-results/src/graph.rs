@@ -72,6 +72,35 @@ mod tests {
     }
 
     #[test]
+    fn triple_term_object_serializes_as_non_asserting_delimiter() {
+        // A CONSTRUCT graph whose object is a triple TERM (not an `rdf:reifies`
+        // statement) must round-trip as `<<( s p o )>>`. The bare `<< s p o >>`
+        // form is a *reifying, asserting* triple in the native parser — spelling
+        // a plain triple-term object that way would silently grow the re-parsed
+        // graph by one quad instead of preserving a single non-asserting term.
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri("http://example.org/s");
+        let p = builder.intern_iri("http://example.org/p");
+        let o = builder.intern_iri("http://example.org/o");
+        let statement = builder.intern_triple(s, p, o);
+        let outer_subject = builder.intern_iri("http://example.org/outer");
+        let outer_predicate = builder.intern_iri("http://example.org/concludes");
+        builder.push_quad(outer_subject, outer_predicate, statement, None);
+        let dataset = builder.freeze().expect("dataset freezes");
+
+        let nt = dataset_to_ntriples(&dataset);
+        assert_eq!(
+            nt,
+            "<http://example.org/outer> <http://example.org/concludes> \
+<<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> .\n"
+        );
+        assert!(
+            !nt.contains("> << <"),
+            "triple-term object must never use the bare reifying-triple delimiter: {nt}"
+        );
+    }
+
+    #[test]
     fn borrowed_writer_is_byte_identical_to_owned_emitter() {
         let mut builder = RdfDatasetBuilder::new();
         let subject = builder.intern_blank("subject", BlankScope(7));

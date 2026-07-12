@@ -9,7 +9,8 @@
 //! [`Error::Format`]. The header is the `?`-prefixed variable names, rows are
 //! separated by LF, and each bound cell uses SPARQL/Turtle term syntax via the
 //! kernel-backed [`crate::term::ntriples_token`] (`<iri>`, `"lex"` /
-//! `"lex"@lang` / `"lex"^^<dt>`, `_:label`, or `<< … >>`). Unbound cells are the
+//! `"lex"@lang` / `"lex"^^<dt>`, `_:label`, or the non-asserting triple term
+//! `<<( … )>>`). Unbound cells are the
 //! empty string. Tab/newline characters inside literals are escaped by the
 //! kernel's literal emitter, so no field-level quoting is needed.
 //!
