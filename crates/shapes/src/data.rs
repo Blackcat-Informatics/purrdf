@@ -22,15 +22,33 @@ use std::sync::Arc;
 use ::purrdf::{DatasetView, GraphMatch, QuadIds};
 use ::purrdf::{RdfDataset, TermId};
 
-use crate::term::{NamedNode, Term, term_id_to_native};
+use crate::term::{NamedNode, Term, split_scope_suffix, term_id_to_native};
 
 /// Resolve a pattern term to its interned id, trying each candidate lookup key
 /// ([`Term::lookup_term_values`]) until one resolves. Returns `None` if the term is
 /// not interned in this dataset (the pattern then matches nothing).
 pub(crate) fn resolve_id(dataset: &RdfDataset, term: &Term) -> Option<TermId> {
-    term.lookup_term_values()
-        .iter()
-        .find_map(|value| dataset.term_id_by_value(value))
+    match term {
+        Term::NamedNode(node) => dataset.term_id_by_iri(node.as_str()),
+        Term::BlankNode(label) => dataset
+            .term_id_by_blank(label, ::purrdf::BlankScope::DEFAULT)
+            .or_else(|| {
+                let (label, scope) = split_scope_suffix(label)?;
+                dataset.term_id_by_blank(label, ::purrdf::BlankScope(scope))
+            }),
+        Term::Literal(literal) => dataset.term_id_by_literal(
+            literal.value(),
+            literal.datatype_str(),
+            literal.language(),
+            literal.direction(),
+        ),
+        Term::Triple(triple) => {
+            let s = resolve_id(dataset, &triple.subject)?;
+            let p = dataset.term_id_by_iri(triple.predicate.as_str())?;
+            let o = resolve_id(dataset, &triple.object)?;
+            dataset.term_id_by_triple(s, p, o)
+        }
+    }
 }
 
 /// Which graph(s) a pattern lookup ranges over.

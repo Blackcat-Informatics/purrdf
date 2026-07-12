@@ -162,6 +162,12 @@ impl Literal {
     pub fn datatype_str(&self) -> &str {
         &self.datatype
     }
+
+    /// The RDF 1.2 base direction, if present.
+    #[inline]
+    pub fn direction(&self) -> Option<RdfTextDirection> {
+        self.direction
+    }
 }
 
 /// A native RDF 1.2 quoted triple (statement-layer term).
@@ -309,7 +315,7 @@ impl Term {
 /// Split a scope-qualified blank label `"{label}.s{n}"` (n > 0) into `(label, n)`,
 /// the inverse of [`BlankScope::qualify_label`](::purrdf::BlankScope::qualify_label).
 /// Returns `None` for a bare (default-scope) label.
-fn split_scope_suffix(qualified: &str) -> Option<(&str, u32)> {
+pub(crate) fn split_scope_suffix(qualified: &str) -> Option<(&str, u32)> {
     let dot = qualified.rfind(".s")?;
     let digits = &qualified[dot + 2..];
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {

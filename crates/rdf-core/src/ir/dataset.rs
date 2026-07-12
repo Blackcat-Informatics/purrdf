@@ -1100,6 +1100,105 @@ impl RdfDataset {
         hasher.finish()
     }
 
+    fn value_index(&self) -> &ValueIndex {
+        self.value_index.get_or_init(|| {
+            let mut map: ValueIndex =
+                HashMap::with_capacity_and_hasher(self.terms.len(), FastHasher::default());
+            for i in 0..self.terms.len() {
+                let id = TermId::from_index(i as u32);
+                let mut hasher = ahash::AHasher::default();
+                self.hash_term(id, &mut hasher);
+                map.entry(hasher.finish()).or_default().push(id);
+            }
+            map
+        })
+    }
+
+    fn find_hashed(&self, hash: u64, mut matches: impl FnMut(TermId) -> bool) -> Option<TermId> {
+        self.value_index()
+            .get(&hash)?
+            .iter()
+            .copied()
+            .find(|&id| matches(id))
+    }
+
+    /// The id of an interned IRI, without allocating an owned [`TermValue`].
+    #[must_use]
+    pub fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
+        let mut hasher = ahash::AHasher::default();
+        0u8.hash(&mut hasher);
+        iri.hash(&mut hasher);
+        self.find_hashed(hasher.finish(), |id| self.iri_matches(id, iri))
+    }
+
+    /// The id of an interned blank node, without allocating its label.
+    #[must_use]
+    pub fn term_id_by_blank(&self, label: &str, scope: BlankScope) -> Option<TermId> {
+        let mut hasher = ahash::AHasher::default();
+        1u8.hash(&mut hasher);
+        label.hash(&mut hasher);
+        scope.hash(&mut hasher);
+        self.find_hashed(hasher.finish(), |id| {
+            matches!(
+                &self.terms[id.index()],
+                InternedTerm::Blank { label: stored, scope: stored_scope }
+                    if arena_str(&self.arena, *stored) == label && *stored_scope == scope
+            )
+        })
+    }
+
+    /// The id of an interned literal, borrowing all string components.
+    #[must_use]
+    pub fn term_id_by_literal(
+        &self,
+        lexical_form: &str,
+        datatype: &str,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+    ) -> Option<TermId> {
+        let mut hasher = ahash::AHasher::default();
+        2u8.hash(&mut hasher);
+        lexical_form.hash(&mut hasher);
+        datatype.hash(&mut hasher);
+        language.hash(&mut hasher);
+        direction.hash(&mut hasher);
+        self.find_hashed(hasher.finish(), |id| {
+            let InternedTerm::Literal(lit) = &self.terms[id.index()] else {
+                return false;
+            };
+            arena_str(&self.arena, lit.lexical_form) == lexical_form
+                && self.iri_matches(lit.datatype, datatype)
+                && lit.language.map(|r| arena_str(&self.arena, r)) == language
+                && lit.direction == direction
+        })
+    }
+
+    /// The id of an interned triple term from already-resolved component ids.
+    ///
+    /// Component ids must belong to this dataset. Callers with values should first
+    /// resolve them through the corresponding borrowed lookup methods.
+    #[must_use]
+    pub fn term_id_by_triple(&self, s: TermId, p: TermId, o: TermId) -> Option<TermId> {
+        if s.index() >= self.terms.len()
+            || p.index() >= self.terms.len()
+            || o.index() >= self.terms.len()
+        {
+            return None;
+        }
+        let mut hasher = ahash::AHasher::default();
+        3u8.hash(&mut hasher);
+        self.hash_term(s, &mut hasher);
+        self.hash_term(p, &mut hasher);
+        self.hash_term(o, &mut hasher);
+        self.find_hashed(hasher.finish(), |id| {
+            matches!(
+                self.terms[id.index()],
+                InternedTerm::Triple { s: stored_s, p: stored_p, o: stored_o }
+                    if stored_s == s && stored_p == p && stored_o == o
+            )
+        })
+    }
+
     /// The id of an interned term given its **dataset-independent** value, or
     /// `None` if the dataset contains no such term (purrdf P4).
     ///
@@ -1112,22 +1211,9 @@ impl RdfDataset {
     /// `TermRef`'s datatype/triple ids are local to whichever dataset minted them.
     #[must_use]
     pub fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        let index = self.value_index.get_or_init(|| {
-            let mut map: ValueIndex =
-                HashMap::with_capacity_and_hasher(self.terms.len(), FastHasher::default());
-            for i in 0..self.terms.len() {
-                let id = TermId::from_index(i as u32);
-                let mut hasher = ahash::AHasher::default();
-                self.hash_term(id, &mut hasher);
-                map.entry(hasher.finish()).or_default().push(id);
-            }
-            map
-        });
-        index
-            .get(&Self::hash_of(value))?
-            .iter()
-            .copied()
-            .find(|&id| self.term_matches_value(id, value))
+        self.find_hashed(Self::hash_of(value), |id| {
+            self.term_matches_value(id, value)
+        })
     }
 
     /// Iterate quads as ID-native [`QuadIds`]. **Zero allocations, infallible, no
@@ -1299,7 +1385,7 @@ impl RdfDataset {
     /// `None` case can only coincide with an empty reifier table — exactly the case in
     /// which [`reifier_quads`](Self::reifier_quads) yields nothing anyway.
     fn rdf_reifies_id(&self) -> Option<TermId> {
-        self.term_id_by_value(&TermValue::Iri(RDF_REIFIES.to_owned()))
+        self.term_id_by_iri(RDF_REIFIES)
     }
 
     /// Iterate the reifier side-table AS resolved virtual triples: each
@@ -1728,11 +1814,64 @@ mod tests {
             o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         assert_eq!(ds.term_id_by_value(&triple_val), Some(tr));
+        assert_eq!(ds.term_id_by_iri("http://example.org/s"), Some(s));
+        assert_eq!(ds.term_id_by_blank("b0", BlankScope::DEFAULT), Some(bn));
+        assert_eq!(
+            ds.term_id_by_literal(
+                "hello",
+                "http://www.w3.org/2001/XMLSchema#string",
+                None,
+                None,
+            ),
+            Some(plain)
+        );
+        assert_eq!(
+            ds.term_id_by_literal(
+                "bonjour",
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+                Some("fr"),
+                None,
+            ),
+            Some(lang)
+        );
+        assert_eq!(ds.term_id_by_triple(s, p, o), Some(tr));
         // An absent value misses.
         assert_eq!(
             ds.term_id_by_value(&TermValue::Iri("http://example.org/absent".to_string())),
             None
         );
+        assert_eq!(ds.term_id_by_iri("http://example.org/absent"), None);
+        assert_eq!(
+            ds.term_id_by_literal(
+                "hello",
+                "http://www.w3.org/2001/XMLSchema#integer",
+                None,
+                None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn borrowed_triple_lookup_rejects_foreign_component_ids() {
+        let mut local = RdfDatasetBuilder::new();
+        let s = iri(&mut local, "s");
+        let p = iri(&mut local, "p");
+        let o = iri(&mut local, "o");
+        let triple = local.intern_triple(s, p, o);
+        local.push_quad(s, p, triple, None);
+        let local = local.freeze().unwrap();
+
+        let mut foreign = RdfDatasetBuilder::new();
+        for n in 0..local.term_count() + 2 {
+            let id = foreign.intern_iri(&format!("http://example.org/foreign/{n}"));
+            foreign.push_quad(id, id, id, None);
+        }
+        let foreign = foreign.freeze().unwrap();
+        let foreign_id = foreign.quads().last().unwrap().s;
+
+        assert_eq!(local.term_id_by_triple(s, p, o), Some(triple));
+        assert_eq!(local.term_id_by_triple(s, p, foreign_id), None);
     }
 
     #[test]

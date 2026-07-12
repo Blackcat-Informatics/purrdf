@@ -43,7 +43,7 @@ use std::sync::Arc;
 use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    TermId, TermRef,
+    TermId, TermRef, TermValue,
 };
 
 // ---------------------------------------------------------------------------
@@ -458,6 +458,38 @@ fn bench_resolve(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_value_lookup(c: &mut Criterion) {
+    let ds = build_dataset();
+    let iri = "http://example.org/s400";
+    let iri_id = ds.term_id_by_iri(iri).expect("representative IRI");
+    let sample = ds
+        .quads()
+        .find(|q| q.s == iri_id && matches!(ds.resolve(q.o), TermRef::Triple { .. }))
+        .expect("representative quoted triple");
+    let triple_id = sample.o;
+    let TermRef::Triple { s, p, o } = ds.resolve(triple_id) else {
+        unreachable!("sample object is a triple term")
+    };
+
+    // Warm the lazy reverse index outside the timed region.
+    let _ = ds.term_id_by_iri(iri);
+
+    let mut group = c.benchmark_group("ir_value_lookup");
+    group.bench_function("owned_iri_key", |b| {
+        b.iter(|| {
+            let value = TermValue::Iri(std::hint::black_box(iri).to_owned());
+            std::hint::black_box(ds.term_id_by_value(&value))
+        });
+    });
+    group.bench_function("borrowed_iri", |b| {
+        b.iter(|| std::hint::black_box(ds.term_id_by_iri(std::hint::black_box(iri))));
+    });
+    group.bench_function("borrowed_triple", |b| {
+        b.iter(|| std::hint::black_box(ds.term_id_by_triple(s, p, o)));
+    });
+    group.finish();
+}
+
 /// P4b indexed `quads_for_pattern` vs the linear scan, on WARM permutation
 /// indexes. Each `(s|p|o)`-bound shape exercises a different permutation (SPOG / POS /
 /// OSP); the scan baseline is the same id-equality filter the trait default runs.
@@ -584,6 +616,7 @@ criterion_group!(
     bench_build,
     bench_iterate,
     bench_resolve,
+    bench_value_lookup,
     bench_pattern_warm,
     bench_pattern_cold,
     bench_pattern_concurrent
