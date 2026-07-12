@@ -4,6 +4,93 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.5.0] - 2026-07-11
+
+### Breaking Changes
+
+- **npm/wasm SELECT rows are now single-owner streams.** `SelectResult.rows` is
+  a `QueryBindingRows` iterable rather than an array. This prevents the raw wasm
+  layer from cloning every row and term before the package wrapper materializes
+  them. Consume an indexed row with `result.rows.take(index)`, iterate remaining
+  rows with `for...of`, or explicitly materialize them with
+  `result.rows.toArray()`. Each row can be consumed once. `rows.length` and
+  `result.rowCount` are the original total; `rows.remaining` is the unconsumed
+  count. Call `result.free()` when abandoning unconsumed rows.
+- **The raw wasm cloning getter was removed.** Replace `raw.rows` with
+  `raw.rowCount`, `raw.takeRow(index)`, or `raw.nextRow()`. Move cells from a raw
+  row with `row.takeValue(index)`; the non-consuming `row.get(variable)` remains
+  available when cloning one individual term is intentional.
+
+Before:
+
+```js
+const result = engine.select(dataset, query);
+const first = result.rows[0];
+const allRows = result.rows;
+```
+
+After:
+
+```js
+const result = engine.select(dataset, query);
+const first = result.rows.take(0);
+const remainingRows = result.rows.toArray();
+
+// For bounded-memory processing, stream instead:
+for (const row of engine.select(dataset, query).rows) {
+  consume(row);
+}
+```
+
+Python query-result classes and the C ABI function signatures are unchanged.
+
+### Performance
+
+- **Core IR:** the common provenance-free freeze path sorts quads directly;
+  provenance remapping uses a dense vector; interners use fixed-key `ahash`; and
+  borrowed IRI, blank, literal, and structural triple lookup avoids temporary
+  `TermValue` trees. On the deterministic 3,200-quad fixture, allocated bytes
+  fell from 1,312,246 to 1,211,366 (7.7%) and peak live bytes from 471,104 to
+  415,296 (11.8%).
+- **SPARQL and XSD:** parser tokens move out of the cursor, whitespace and fixed
+  temporal fields avoid intermediate collections, DISTINCT/GROUP BY own keys
+  and rows once, and graph-result serialization writes ID-native terms directly
+  to the output buffer.
+- **Reasoning:** SPARQL, entailment, and OWL concept interners store canonical
+  values once. RIF joins use subject/predicate/object postings, choose the
+  smallest available candidate set, and backtrack one reusable binding buffer.
+- **SHACL and ShEx:** deterministic term sorting renders one key per value, and
+  ShEx structural expressions and predicate-direction maps compile once per
+  validation engine rather than once per focus node.
+- **GTS:** canonical CBOR map keys are sorted by borrowed encoded keys and values
+  stream directly to writers and BLAKE3. On the deterministic 2,000-quad
+  snapshot, allocations fell from 32,040 to 14,027 (56.2%) and allocated bytes
+  from 2,277,740 to 982,840 (56.8%).
+- **Visualization and slices:** incoming statement references are counted in one
+  pass. Slice ownership parses each RDF artifact once, walks ID-native terms once,
+  and reuses the catalog's parsed manifest projection.
+- **Bindings:** Python moves SELECT rows while sharing one immutable variable
+  array; wasm moves rows, cells, strings, and nested triple terms; C pattern
+  cursors no longer allocate a result-sized `Vec<QuadIds>`.
+
+### Rust API
+
+- Added `RdfDataset::quads_for_pattern_cursor` and `QuadPatternCursor`, an
+  `Arc`-pinned owned iterator over the same selected quad index and residual
+  filter used by borrowed pattern queries. It remains valid after other dataset
+  handles are dropped and does not collect matching rows.
+- Added borrowed dataset term writers and borrowed term lookup methods for
+  allocation-sensitive crate consumers.
+
+### Compatibility
+
+- RDF, SPARQL, SHACL, ShEx, visualization, and GTS semantic ordering remains
+  deterministic. Graph serialization is byte-equal to the prior owned path, and
+  every frozen GTS item re-encodes byte-for-byte.
+- The optimization evidence above uses allocation counters, exact bytes, and
+  bounded candidate-work assertions. No wall-clock claim is made from the shared
+  high-contention development host.
+
 ## [0.4.3] - 2026-07-10
 
 ### Bug Fixes
