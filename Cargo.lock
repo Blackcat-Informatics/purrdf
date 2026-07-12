@@ -1477,6 +1477,7 @@ dependencies = [
 name = "purrdf-sparql-results"
 version = "0.5.0"
 dependencies = [
+ "criterion",
  "insta",
  "pretty_assertions",
  "purrdf-core",

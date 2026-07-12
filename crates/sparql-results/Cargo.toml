@@ -36,3 +36,14 @@ purrdf-core = { workspace = true }
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 insta = { workspace = true }
+# Borrowed-writer streaming N-Triples serialization hot-path baseline. Defaults
+# off (no plotters/rayon) like the sibling crates, so `make bench` stays lean and
+# no oxigraph-family edge enters the dev tree.
+criterion = { workspace = true }
+
+[[bench]]
+# CONSTRUCT-graph -> N-Triples streaming serialization (`to_json`'s `Graph`
+# branch, which drives `graph::dataset_to_ntriples`'s borrowed `write_dataset_*`
+# writers). Report-only; `make bench` lane only — excluded from `make check`.
+name = "graph_serialize"
+harness = false
