@@ -78,6 +78,7 @@ function selectResultToObject(raw) {
     closed = true;
     raw.free?.();
   };
+  if (length === 0) close();
   const materialize = (row) => {
     try {
       const out = Object.create(null);
