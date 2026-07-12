@@ -76,3 +76,7 @@ harness = false
 [[bench]]
 name = "pattern_lookup"
 harness = false
+
+[[bench]]
+name = "canonical_sort"
+harness = false

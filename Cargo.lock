@@ -1394,6 +1394,7 @@ dependencies = [
 name = "purrdf-shex"
 version = "0.5.0"
 dependencies = [
+ "criterion",
  "pretty_assertions",
  "purrdf-core",
  "purrdf-iri",

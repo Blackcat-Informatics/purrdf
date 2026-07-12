@@ -45,3 +45,9 @@ pretty_assertions = { workspace = true }
 # Turtle parsing for the validation conformance harness only (the library
 # itself depends on the ring-fenced kernel, never the codec stack).
 purrdf-rdf = { workspace = true }
+# Acceleration-program baselines; light feature set, see crates/logic.
+criterion = { workspace = true }
+
+[[bench]]
+name = "prepared_validate"
+harness = false
