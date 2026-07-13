@@ -526,9 +526,13 @@ fn value_vocab_enum_defs(
     // de-duplicated and sorted (BTreeSet) across both datasets.
     let mut class_iris: BTreeSet<String> = BTreeSet::new();
     for ds in datasets {
-        for (subject, _pred, _obj) in
-            native_quads(ds, None, Some(&type_term), Some(&marker_term), GraphFilter::AnyGraph)
-        {
+        for (subject, _pred, _obj) in native_quads(
+            ds,
+            None,
+            Some(&type_term),
+            Some(&marker_term),
+            GraphFilter::AnyGraph,
+        ) {
             if let Term::NamedNode(n) = subject {
                 class_iris.insert(n.as_str().to_owned());
             }
@@ -574,9 +578,13 @@ fn members_of(
     let mut member_iris: BTreeSet<String> = BTreeSet::new();
     let mut blank_labels: BTreeSet<String> = BTreeSet::new();
     for ds in datasets {
-        for (subject, _pred, _obj) in
-            native_quads(ds, None, Some(&type_term), Some(&class_term), GraphFilter::AnyGraph)
-        {
+        for (subject, _pred, _obj) in native_quads(
+            ds,
+            None,
+            Some(&type_term),
+            Some(&class_term),
+            GraphFilter::AnyGraph,
+        ) {
             match subject {
                 Term::NamedNode(n) => {
                     member_iris.insert(n.as_str().to_owned());
@@ -625,7 +633,11 @@ fn member_description(datasets: &[&RdfDataset; 2], member_iri: &str) -> String {
 
 /// The canonically-first (sorted-smallest) literal object of `(subject, predicate)`
 /// across the datasets, or `None` when there is no literal value.
-fn first_literal(datasets: &[&RdfDataset; 2], subject_iri: &str, predicate: &str) -> Option<String> {
+fn first_literal(
+    datasets: &[&RdfDataset; 2],
+    subject_iri: &str,
+    predicate: &str,
+) -> Option<String> {
     let subject = Term::NamedNode(NamedNode::from(subject_iri));
     let pred = Term::NamedNode(NamedNode::from(predicate));
     let mut values: BTreeSet<String> = BTreeSet::new();
@@ -3402,9 +3414,8 @@ mod tests {
     /// prefix (the fixture's non-primary vocabulary namespace) is declared here so
     /// bodies can use `logic:` terms directly.
     fn compile_vocab(body: &str) -> CompiledSchema {
-        let ttl = format!(
-            "{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n{body}"
-        );
+        let ttl =
+            format!("{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n{body}");
         let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("Turtle parse");
         let shapes = from_dataset(&dataset).expect("shape parse");
         let vocab = ValueVocab::new(MARKER);
@@ -3452,7 +3463,10 @@ mod tests {
         "#,
         ));
         let enum_def = def(&schema, "TermStabilityEnum");
-        assert!(enum_def["enum"].is_array(), "the `enum` keyword is load-bearing");
+        assert!(
+            enum_def["enum"].is_array(),
+            "the `enum` keyword is load-bearing"
+        );
         assert!(
             enum_def.get("oneOf").is_none() && enum_def.get("const").is_none(),
             "a value-vocabulary $def never emits oneOf/const"
@@ -3504,8 +3518,7 @@ mod tests {
         let openapi: Value =
             serde_json::from_str(&compiled.openapi_json).expect("openapi is valid JSON");
         assert_eq!(
-            schema["$defs"]["ColorEnum"],
-            openapi["components"]["schemas"]["ColorEnum"],
+            schema["$defs"]["ColorEnum"], openapi["components"]["schemas"]["ColorEnum"],
             "the enum $def is byte-identical across JSON Schema $defs and OpenAPI components/schemas"
         );
     }
@@ -3519,8 +3532,14 @@ mod tests {
         "#;
         let a = compile_vocab(body);
         let b = compile_vocab(body);
-        assert_eq!(a.schema_json, b.schema_json, "schema output must be byte-stable");
-        assert_eq!(a.openapi_json, b.openapi_json, "openapi output must be byte-stable");
+        assert_eq!(
+            a.schema_json, b.schema_json,
+            "schema output must be byte-stable"
+        );
+        assert_eq!(
+            a.openapi_json, b.openapi_json,
+            "openapi output must be byte-stable"
+        );
     }
 
     #[test]
@@ -3542,7 +3561,11 @@ mod tests {
         );
         let desc_a = schema_of(&order_a)["$defs"]["ColorEnum"]["x-enum-descriptions"][0].clone();
         let desc_b = schema_of(&order_b)["$defs"]["ColorEnum"]["x-enum-descriptions"][0].clone();
-        assert_eq!(desc_a, json!("Alpha"), "picks the canonically-first comment");
+        assert_eq!(
+            desc_a,
+            json!("Alpha"),
+            "picks the canonically-first comment"
+        );
         assert_eq!(desc_a, desc_b, "selection is independent of triple order");
     }
 
@@ -3564,7 +3587,10 @@ mod tests {
         let shapes = from_dataset(&dataset).expect("shape parse");
         let plain = compile(&shapes, &fixture_ns());
         let none = compile_with_value_vocab(&shapes, &fixture_ns(), None);
-        assert_eq!(plain.schema_json, none.schema_json, "None must equal compile()");
+        assert_eq!(
+            plain.schema_json, none.schema_json,
+            "None must equal compile()"
+        );
         assert_eq!(plain.openapi_json, none.openapi_json);
 
         let vocab = ValueVocab::new("https://example.org/meta/NoSuchMarker");
