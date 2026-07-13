@@ -35,7 +35,7 @@ pub mod sparql;
 pub mod term;
 pub mod text_ingest;
 
-pub use json_schema::Namespaces;
+pub use json_schema::{Namespaces, ValueVocab, ValueVocabProjection, compile_with_value_vocab};
 pub use rules::{apply_rules, entail_dataset};
 
 /// Crate version string for cache/toolchain salt parity with Python package
