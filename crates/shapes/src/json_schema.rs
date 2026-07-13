@@ -3936,4 +3936,109 @@ mod tests {
         );
         assert_no_dangling_defs_refs(&schema);
     }
+
+    // ── Acceptance proofs (Task 4): round-trip + open-validator decoupling ────
+
+    /// The `meta:` term IRI for a fixture instance subject.
+    fn meta_term(local: &str) -> Term {
+        Term::NamedNode(NamedNode::from(
+            format!("https://example.org/meta/{local}").as_str(),
+        ))
+    }
+
+    #[test]
+    fn value_vocab_projected_instance_round_trips_through_enum() {
+        // Encoding AC: a projected instance carrying an ANCHOR individual validates
+        // against the compiled enum $ref (both metadata-free and metadata-bearing —
+        // the x-enum-* arrays are annotations and must not affect validation); a
+        // NON-anchor value is rejected. This proves members use the {"@id":curie}
+        // encoding (not bare strings) on the real projector + validator surfaces.
+        for member_meta in ["", r#"; rdfs:comment "A stable term.""#] {
+            let compiled = compile_vocab(&format!(
+                "logic:TermStability a logic:AbstractIndividualType .
+                logic:stable     a logic:TermStability {member_meta} .
+                logic:deprecated a logic:TermStability .
+                meta:TermShape a sh:NodeShape ;
+                    sh:targetClass meta:Term ;
+                    sh:property [ sh:path meta:stability ; sh:class logic:TermStability ; sh:maxCount 1 ] .
+                meta:anchor    a meta:Term ; meta:stability logic:stable .
+                meta:offanchor a meta:Term ; meta:stability logic:bogus ."
+            ));
+            // Re-parse the same document to project instances from it.
+            let ttl = format!(
+                "{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n\
+                 logic:TermStability a logic:AbstractIndividualType .\n\
+                 logic:stable a logic:TermStability {member_meta} .\n\
+                 meta:anchor a meta:Term ; meta:stability logic:stable .\n\
+                 meta:offanchor a meta:Term ; meta:stability logic:bogus ."
+            );
+            let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("parse");
+            let anchor =
+                crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("anchor"));
+            let off =
+                crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("offanchor"));
+            assert!(
+                validates(&compiled.schema_json, &anchor),
+                "anchor instance must validate (member_meta={member_meta:?}); projected = {anchor}"
+            );
+            assert!(
+                !validates(&compiled.schema_json, &off),
+                "a non-anchor value must be rejected by the enum $ref"
+            );
+        }
+    }
+
+    #[test]
+    fn value_vocab_projection_leaves_the_live_validator_open() {
+        // R5: on an rdfs:range-associated OPEN property (no sh:class), a non-anchor
+        // IRI value CONFORMS to the live SHACL validator, yet its projection is
+        // REJECTED by the closed enum schema — proving the projection never closes
+        // the validator. Also pins that no sh:in was injected into the shape IR.
+        let ttl = format!(
+            "{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n\
+             logic:TermStability a logic:AbstractIndividualType .\n\
+             logic:stable a logic:TermStability .\n\
+             meta:stability rdfs:range logic:TermStability .\n\
+             meta:TermShape a sh:NodeShape ;\n\
+                 sh:targetClass meta:Term ;\n\
+                 sh:property [ sh:path meta:stability ; sh:maxCount 1 ] .\n\
+             meta:t1 a meta:Term ; meta:stability logic:bogus ."
+        );
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("parse");
+        let shapes = from_dataset(&dataset).expect("shapes");
+
+        // No sh:in was introduced anywhere in the validating shape IR.
+        let has_sh_in = shapes.node_shapes.iter().any(|s| {
+            s.property_shapes.iter().any(|ps| {
+                ps.constraints
+                    .iter()
+                    .any(|c| matches!(c, Constraint::In(_)))
+            })
+        });
+        assert!(
+            !has_sh_in,
+            "the projection must not inject sh:in into the shape set"
+        );
+
+        // The live SHACL validator conforms the non-anchor value (open world).
+        let report =
+            crate::engine::validate_dataset(dataset.as_ref(), &shapes).expect("validation runs");
+        assert!(
+            report.conforms,
+            "the open property conforms a non-anchor value in the live validator"
+        );
+
+        // The SAME value is rejected by the closed enum projection.
+        let vocab = ValueVocab::new(MARKER);
+        let proj = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: dataset.as_ref(),
+        };
+        let compiled = compile_with_value_vocab(&shapes, &fixture_ns(), Some(&proj));
+        let node = crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("t1"));
+        assert!(
+            !validates(&compiled.schema_json, &node),
+            "the projection is closed: the non-anchor value fails the enum $ref"
+        );
+    }
 }
