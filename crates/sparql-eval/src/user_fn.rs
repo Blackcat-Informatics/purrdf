@@ -1,23 +1,33 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Dynamic, host-injected SHACL-AF SPARQL-based functions (`sh:SPARQLFunction`).
+//! Dynamic, host-injected user functions — of two kinds under one IRI namespace.
 //!
-//! A shapes graph may declare its own functions: an IRI typed `sh:SPARQLFunction`
-//! with ordered `sh:parameter`s, an optional `sh:returnType`, and a `sh:select` or
-//! `sh:ask` body. Those calls appear in constraint/target queries and in SHACL-AF
-//! node expressions as an ordinary call-position IRI, which the parser lowers to
-//! [`Function::Custom`](purrdf_sparql_algebra::Function::Custom) (it is under no
-//! configured extension-function namespace, so it is not the closed `PurrdfFn`
-//! set). The evaluator resolves that IRI against a caller-injected
-//! [`UserFunctionRegistry`] at eval time — the open counterpart to the closed,
-//! parse-time-resolved `PurrdfFn` dispatch.
+//! A call-position IRI that is under no configured extension-function namespace
+//! (so not the closed, parse-time-resolved `PurrdfFn` set) is lowered by the
+//! parser to [`Function::Custom`](purrdf_sparql_algebra::Function::Custom) and
+//! resolved at eval time against a caller-injected [`UserFunctionRegistry`] — the
+//! open counterpart to `PurrdfFn` dispatch. The registry holds two independent
+//! kinds keyed by IRI, hard-failing on a cross-kind collision so an IRI is
+//! unambiguously one kind or the other:
 //!
-//! The registry is pure data (parsed bodies + parameter metadata); executing a
-//! call binds the arguments to the parameter variables as a pre-binding rewrite
-//! (the same `crate::substitute` path `$this` injection uses) and evaluates the
-//! body in a recursion-bounded child context. This keeps SPARQL execution inside
-//! the evaluator and the registry free of any engine coupling.
+//! - **SHACL-AF SPARQL-bodied** ([`UserFunction`]) — declared by a shapes graph as
+//!   an IRI typed `sh:SPARQLFunction` with ordered `sh:parameter`s, an optional
+//!   `sh:returnType`, and a `sh:select`/`sh:ask` body. This kind is pure data
+//!   (parsed body + parameter metadata); executing a call binds the arguments to
+//!   the parameter variables as a pre-binding rewrite (the same `crate::substitute`
+//!   path `$this` injection uses) and evaluates the body in a recursion-bounded
+//!   child context, keeping SPARQL execution inside the evaluator and the registry
+//!   free of engine coupling.
+//!
+//! - **Native (host-Rust closure)** ([`NativeFunction`], registered via
+//!   [`UserFunctionRegistry::register_native`]) — a `Send + Sync` closure over the
+//!   already-evaluated argument values (see [`NativeFnBody`]) for scoring
+//!   predicates whose bodies cannot be expressed in SPARQL (e.g. an external-index
+//!   read). It carries a declared [`Arity`] (fail-fast checked before the closure
+//!   runs) and a [`Volatility`] the fork-join parallel-evaluation gate consults to
+//!   decide whether the call may run across worker threads. It takes no
+//!   [`EvalCtx`] and so cannot re-enter the evaluator.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
