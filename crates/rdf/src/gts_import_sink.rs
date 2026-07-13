@@ -475,6 +475,8 @@ mod tests {
     use purrdf_gts::reader::StreamingSink;
     use purrdf_gts::writer::Writer;
 
+    use crate::RdfTextDirection;
+
     fn iri_term(value: &str) -> Term {
         Term {
             kind: TermKind::Iri,
@@ -832,8 +834,14 @@ mod tests {
         );
     }
 
-    /// Directional literals: GTS `Term` carries no base direction, so the sink path
-    /// yields `direction == None`, but lexical form, datatype, and language survive.
+    /// Directional literals: this test's INPUT term carries no base direction
+    /// (`direction: None` below), so the resolved literal's direction is `None`.
+    /// GTS `Term` itself DOES carry base direction (see module docs above and
+    /// [`SinkImporter::intern_literal`], which parses it via
+    /// `crate::gts_resolve::parse_gts_direction`); the absent-direction case is
+    /// exercised here, lexical form, datatype, and language survive regardless. See
+    /// `directional_literal_rtl_survives_sink_path` below for the
+    /// direction-PRESENT case.
     #[test]
     fn directional_literal_lexical_lang_survive_sink_path() {
         let mut resolver = SegmentResolver::new(RecordingSink::new());
@@ -868,7 +876,63 @@ mod tests {
             } => {
                 assert_eq!(lexical, "Bonjour", "lexical preserved verbatim");
                 assert_eq!(language, Some("fr"), "language lowercased per C0.1");
-                assert_eq!(direction, None, "GTS cannot carry base direction");
+                assert_eq!(
+                    direction, None,
+                    "this term's input direction was None, not a GTS limitation"
+                );
+            }
+            other => panic!("expected literal, got {other:?}"),
+        }
+    }
+
+    /// Directional literals, direction-PRESENT case: a GTS `Term` whose
+    /// `direction` is `Some("rtl")` (with the RDF 1.2-required language tag)
+    /// survives the sink path intact. `parse_gts_direction`
+    /// (`crate::gts_resolve`) accepts only the literal tokens `"ltr"`/`"rtl"`
+    /// and requires a non-empty `language` whenever `direction` is set;
+    /// `SinkImporter::intern_literal` calls it and stores the resolved
+    /// [`crate::RdfTextDirection`] onto the literal, so the frozen dataset must
+    /// resolve it back as `Some(RdfTextDirection::Rtl)` — proving GTS DOES carry
+    /// base direction end to end through the sink path.
+    #[test]
+    fn directional_literal_rtl_survives_sink_path() {
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
+        resolver.term(0, 0, &iri_term("http://example.org/s"));
+        resolver.term(0, 1, &iri_term("http://example.org/p"));
+        resolver.term(
+            0,
+            2,
+            &Term {
+                kind: TermKind::Literal,
+                value: Some("مرحبا".to_owned()),
+                datatype: None,
+                lang: Some("AR".to_owned()),
+                direction: Some("rtl".to_owned()),
+                reifier: None,
+            },
+        );
+        resolver.quad(0, (0, 1, 2, None));
+        let (mut resolver, error) = finish_direct(resolver);
+        assert!(error.is_none(), "{error:?}");
+
+        let lit_id = resolver.sink().id(0, 2).expect("literal resolved");
+        let dataset = std::mem::take(&mut resolver.sink_mut().inner.builder)
+            .freeze()
+            .expect("freeze");
+        match dataset.resolve(lit_id) {
+            TermRef::Literal {
+                lexical,
+                language,
+                direction,
+                ..
+            } => {
+                assert_eq!(lexical, "مرحبا", "lexical preserved verbatim");
+                assert_eq!(language, Some("ar"), "language lowercased per C0.1");
+                assert_eq!(
+                    direction,
+                    Some(RdfTextDirection::Rtl),
+                    "GTS base direction survives the sink path"
+                );
             }
             other => panic!("expected literal, got {other:?}"),
         }
