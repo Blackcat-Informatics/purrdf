@@ -130,6 +130,13 @@ pub struct UserFunction {
 /// A native (host-Rust) user function body: a closure over the already-evaluated,
 /// dataset-independent argument values.
 ///
+/// The arguments arrive as a slice of **borrows** (`&[&TermValue]`): every value
+/// already lives in the evaluator's per-call argument buffer for the duration of
+/// the call, so the dispatch path lends the closure those borrows rather than deep
+/// cloning each [`TermValue`] (which owns heap strings for IRIs/literals) on the
+/// per-row scoring hot path this seam exists to serve. A closure that needs to
+/// retain a value past the call clones it itself.
+///
 /// Unlike a [`UserFunction`]'s SPARQL body, this takes **no [`EvalCtx`]** — it
 /// therefore cannot re-enter the evaluator, so there is no recursion/re-entrancy
 /// boundary to bound (the SPARQL-bodied path's `MAX_UDF_DEPTH` guard does not
@@ -138,7 +145,7 @@ pub struct UserFunction {
 /// gate relies on that declaration alone to decide whether the call may run across
 /// worker threads, so a closure that lies about its own volatility can silently
 /// diverge under parallel evaluation.
-pub type NativeFnBody = Arc<dyn Fn(&[TermValue]) -> Result<TermValue, EvalError> + Send + Sync>;
+pub type NativeFnBody = Arc<dyn Fn(&[&TermValue]) -> Result<TermValue, EvalError> + Send + Sync>;
 
 /// A native function's determinism class — the volatility axis of its descriptor
 /// (after PostgreSQL's `provolatile`).
@@ -496,9 +503,11 @@ pub(crate) fn eval_native_function(
     if args.iter().any(Option::is_none) {
         return Ok(None);
     }
-    let values: Vec<TermValue> = args
+    // Lend the closure borrows into the caller's argument buffer — no per-call
+    // deep clone of the (heap-string-owning) TermValues on the scoring hot path.
+    let values: Vec<&TermValue> = args
         .iter()
-        .map(|arg| arg.clone().expect("checked all-Some above"))
+        .map(|arg| arg.as_ref().expect("checked all-Some above"))
         .collect();
 
     // Guard the host closure with catch_unwind: a panicking closure (dim
@@ -548,8 +557,8 @@ mod tests {
 
     /// A native closure that adds one to its sole integer-literal argument.
     fn inc_native_body() -> NativeFnBody {
-        Arc::new(|args: &[TermValue]| {
-            let TermValue::Literal { lexical_form, .. } = &args[0] else {
+        Arc::new(|args: &[&TermValue]| {
+            let TermValue::Literal { lexical_form, .. } = args[0] else {
                 return Err(EvalError::function("expected a literal argument"));
             };
             let n: i64 = lexical_form
@@ -567,8 +576,8 @@ mod tests {
     /// by `divisor`, returning an `xsd:double`. Pure math over the argument
     /// value, so it is honestly `Volatility::Stable`.
     fn ratio_score_native_body(divisor: f64) -> NativeFnBody {
-        Arc::new(move |args: &[TermValue]| {
-            let TermValue::Literal { lexical_form, .. } = &args[0] else {
+        Arc::new(move |args: &[&TermValue]| {
+            let TermValue::Literal { lexical_form, .. } = args[0] else {
                 return Err(EvalError::function("expected a literal argument"));
             };
             let n: f64 = lexical_form
@@ -585,8 +594,8 @@ mod tests {
     /// and `arg / 5.0` otherwise — used to exercise `ORDER BY`'s handling of
     /// `NaN` scores (E-nan).
     fn nan_score_native_body() -> NativeFnBody {
-        Arc::new(|args: &[TermValue]| {
-            let TermValue::Literal { lexical_form, .. } = &args[0] else {
+        Arc::new(|args: &[&TermValue]| {
+            let TermValue::Literal { lexical_form, .. } = args[0] else {
                 return Err(EvalError::function("expected a literal argument"));
             };
             let n: f64 = lexical_form
@@ -1087,7 +1096,7 @@ mod tests {
             EX_NATIVE_ERR,
             Arity::Exact(1),
             Volatility::Stable,
-            Arc::new(|_args: &[TermValue]| Err(EvalError::function("boom"))),
+            Arc::new(|_args: &[&TermValue]| Err(EvalError::function("boom"))),
         );
         let ds = empty_dataset();
         let query = format!("SELECT ((<{EX_NATIVE_ERR}>(1)) AS ?v) WHERE {{}}");
@@ -1128,7 +1137,7 @@ mod tests {
             EX_NATIVE_PANIC,
             Arity::Exact(1),
             Volatility::Stable,
-            Arc::new(|_args: &[TermValue]| panic!("native closure exploded")),
+            Arc::new(|_args: &[&TermValue]| panic!("native closure exploded")),
         );
         let ds = empty_dataset();
         let query = format!("SELECT ((<{EX_NATIVE_PANIC}>(1)) AS ?v) WHERE {{}}");
@@ -1198,7 +1207,7 @@ mod tests {
             EX_NATIVE_UNBOUND,
             Arity::Exact(1),
             Volatility::Stable,
-            Arc::new(|_args: &[TermValue]| {
+            Arc::new(|_args: &[&TermValue]| {
                 panic!("must not be invoked when an argument is unbound")
             }),
         );

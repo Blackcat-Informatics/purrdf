@@ -823,7 +823,7 @@ mod tests {
     }
 
     fn trivial_native_body() -> crate::user_fn::NativeFnBody {
-        std::sync::Arc::new(|_args: &[TermValue]| {
+        std::sync::Arc::new(|_args: &[&TermValue]| {
             Ok(TermValue::typed_literal(
                 "1",
                 "http://www.w3.org/2001/XMLSchema#integer",
