@@ -731,6 +731,55 @@ fn compacted_paged_serializes_byte_identical_to_single() {
     );
 }
 
+// ── from_parts: warm restart without the eager re-scan ──────────────────────────
+
+#[test]
+fn from_parts_reconstitutes_without_materializing_pages() {
+    // Seal a 3-page dataset the EAGER way (from_provider materializes every page once),
+    // then decompose it into its persisted parts.
+    let corpus = parity_corpus();
+    let raw = split_pages(&corpus, 3);
+    let eager = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(raw.clone())))
+        .expect("seal pages");
+    let (dictionary, parts) = eager.to_parts();
+    assert_eq!(parts.len(), 3, "one part per page");
+
+    // Rebuild from those parts over a COUNTING provider serving the SAME page contents.
+    // The warm-restart path must materialize NO page at construction — that is the whole
+    // point (an already-indexed store reloads without re-scanning).
+    let p0 = raw[0].clone();
+    let p1 = raw[1].clone();
+    let p2 = raw[2].clone();
+    let counting = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(move || p0.clone()),
+        Box::new(move || p1.clone()),
+        Box::new(move || p2.clone()),
+    ]));
+    let warm = PagedDataset::from_parts(
+        dictionary,
+        counting.clone() as Arc<dyn purrdf_core::PageProvider>,
+        parts,
+    );
+    assert_eq!(
+        counting.hits(),
+        0,
+        "from_parts must not materialize any page (unlike the eager from_provider seal)"
+    );
+    assert_eq!(warm.page_count(), 3);
+
+    // The reconstituted dataset is byte-identical to the eagerly-sealed one, and it
+    // genuinely serves reads — which DO now pull pages lazily through the provider.
+    assert_eq!(
+        collect_rows(&eager),
+        collect_rows(&warm),
+        "from_parts yields the same rows as from_provider"
+    );
+    assert!(
+        counting.hits() > 0,
+        "reads materialize pages lazily after construction"
+    );
+}
+
 /// The paged dataset and its provider must be thread-shareable.
 #[test]
 fn paged_dataset_is_send_sync() {

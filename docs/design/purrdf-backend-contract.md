@@ -221,6 +221,12 @@ overlapping quad — silent dedup would hide a construction error and make the
 composed dataset depend on page ordering, so overlap is a rejected input, not a
 condition the layer papers over.
 
+Disjointness is enforced on **all three composed streams**, not only the base quads:
+the primary quads and both RDF 1.2 side tables — the reifier bindings and the
+annotation triples — are each concatenated across pages with no cross-page dedup, so
+two pages that share a reifier binding or an annotation triple are refused exactly as
+two that share a base quad. The refusal names which stream the duplicate is in.
+
 ### G4 — a `PageProvider` is deterministic and thread-safe
 
 A `PageProvider` supplies page contents to the paged layer on demand. It must be
@@ -238,6 +244,29 @@ published crate, because every published crate must stay
 The in-memory provider satisfies the G4 contract on every target, including
 wasm32; a consumer that needs persistence implements the same deterministic,
 `Send + Sync` `PageProvider` seam against its own storage tier.
+
+### G6 — two construction paths: eager seal vs warm restart
+
+`PagedDataset` offers two constructors with different cost and different guarantees:
+
+- **`from_provider` (eager).** Materializes every page ONCE to fold its terms into the
+  shared dictionary by value (G1) and to verify quad-disjointness (G3). This is the
+  checked path and the reference way to build a paged dataset from raw pages — but its
+  construction cost is `O(all pages)`, which for a very large store is exactly the scan
+  the paged design exists to defer.
+- **`from_parts` (warm restart).** Reconstitutes a dataset from a pre-built
+  `GlobalDictionary` and per-page `PagePart`s (`to_parts` is the inverse) WITHOUT
+  materializing any page — construction is `O(page count)`, not `O(all content)`. A
+  store that has already sealed once and persisted its dictionary and translations
+  reloads through this path. It does NOT re-verify G3 (it cannot without reading the
+  pages); the caller warrants the parts came from a previously-disjoint seal.
+
+The reference `PagedDataset` is a **demonstrator** backend: `from_provider`'s eager
+seal means it does not itself build a dictionary incrementally at ingest. A consumer
+whose working set exceeds what a single eager scan can afford builds its index
+incrementally at ingest and reaches the evaluator either through `from_parts` (a warm
+restart from that persisted index) or by implementing `DatasetView` directly (C1) —
+the id-agnostic read seam serves the evaluator over any backend, not only this one.
 
 ---
 

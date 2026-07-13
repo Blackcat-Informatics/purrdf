@@ -176,6 +176,28 @@ impl std::error::Error for PagedFreezeError {
     }
 }
 
+/// One page's pre-built seal metadata, the unit of
+/// [`PagedDataset::from_parts`]/[`to_parts`](PagedDataset::to_parts).
+///
+/// A [`PageTranslation`] can only be produced by walking a page (its by-value
+/// re-intern boundary), so this is NOT how a fresh corpus is ingested — it is how an
+/// ALREADY-INDEXED store is reconstituted. A backend that persists its
+/// [`GlobalDictionary`] and per-page translations reloads a [`PagedDataset`] from these
+/// parts WITHOUT re-scanning every page (the warm-restart path), where
+/// [`from_provider`](PagedDataset::from_provider) would eagerly re-materialize all of
+/// them. `capabilities` and `quad_count` are the page's seal-time metadata, kept so the
+/// reconstituted dataset answers [`capabilities`](DatasetView::capabilities) and
+/// [`len_hint`](DatasetView::len_hint) without a materialization.
+#[derive(Debug, Clone)]
+pub struct PagePart {
+    /// The page's local↔global term-id map (as built at its original seal).
+    pub translation: PageTranslation,
+    /// The page's capabilities, captured at seal time.
+    pub capabilities: RdfStoreCapabilities,
+    /// The page's quad count, captured at seal time.
+    pub quad_count: usize,
+}
+
 /// A reference, in-memory, demand-paged dataset composing many frozen
 /// [`RdfDataset`] pages into one logical [`DatasetView`] keyed on
 /// [`GlobalTermId`]. See the [module docs](self) for the id-composition and
@@ -328,6 +350,92 @@ impl PagedDataset {
             caps,
             total_quads,
         })
+    }
+
+    /// Reconstitute a paged dataset from PRE-BUILT parts WITHOUT materializing any page
+    /// — the warm-restart / already-indexed constructor.
+    ///
+    /// [`from_provider`](Self::from_provider) is the eager path: it materializes every
+    /// page once to fold its terms into the shared dictionary and to check G3
+    /// quad-disjointness. A store that has ALREADY done that and persisted the resulting
+    /// [`GlobalDictionary`] and per-page [`PagePart`]s does not need to re-scan — this
+    /// constructor rebuilds the dataset from those parts and defers every page load to
+    /// query time (each page's [`OnceLock`] starts empty). For a large store that is the
+    /// difference between an O(all pages) reload and an O(1) one.
+    ///
+    /// `caps` and `total_quads` are DERIVED from the parts (the OR of the per-page
+    /// capabilities and the sum of the per-page quad counts), so the reconstituted
+    /// dataset answers [`capabilities`](DatasetView::capabilities) and
+    /// [`len_hint`](DatasetView::len_hint) without a materialization.
+    ///
+    /// # Disjointness
+    ///
+    /// Unlike [`from_provider`](Self::from_provider), this path does NOT re-verify G3
+    /// quad-disjointness — it cannot without reading the pages, which is the cost it
+    /// exists to avoid. The caller warrants that `parts` came from a previously-sealed
+    /// dataset (e.g. [`to_parts`](Self::to_parts)) whose pages were disjoint; the read
+    /// path relies on that invariant exactly as `from_provider`'s output does.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `parts.len()` disagrees with `provider.page_count()` — the parts and
+    /// the provider must describe the SAME pages `0..page_count`.
+    #[must_use]
+    pub fn from_parts(
+        dictionary: GlobalDictionary,
+        provider: Arc<dyn PageProvider>,
+        parts: Vec<PagePart>,
+    ) -> Self {
+        assert_eq!(
+            parts.len(),
+            provider.page_count(),
+            "from_parts: {} parts but the provider has {} pages",
+            parts.len(),
+            provider.page_count()
+        );
+        let mut caps = RdfStoreCapabilities::plain_rdf();
+        let mut total_quads = 0usize;
+        let mut pages: Vec<PageSlot> = Vec::with_capacity(parts.len());
+        for (i, part) in parts.into_iter().enumerate() {
+            caps = caps.union(part.capabilities);
+            total_quads += part.quad_count;
+            pages.push(PageSlot {
+                id: PageId(u32::try_from(i).expect("page count fits u32")),
+                translation: part.translation,
+                // Lazy: query-time access materializes through the provider (the whole
+                // point — construction touches no page).
+                resident: OnceLock::new(),
+                caps: part.capabilities,
+                quad_count: part.quad_count,
+            });
+        }
+        Self {
+            dictionary,
+            pages: pages.into_boxed_slice(),
+            provider,
+            caps,
+            total_quads,
+        }
+    }
+
+    /// Decompose this dataset into its shared [`GlobalDictionary`] and per-page
+    /// [`PagePart`]s — the inverse of [`from_parts`](Self::from_parts).
+    ///
+    /// A pure clone of the seal-time metadata (no page is materialized): a store can
+    /// persist these parts and later reload via [`from_parts`](Self::from_parts) without
+    /// the eager re-scan. Pages are returned in ascending [`PageId`] order.
+    #[must_use]
+    pub fn to_parts(&self) -> (GlobalDictionary, Vec<PagePart>) {
+        let parts = self
+            .pages
+            .iter()
+            .map(|slot| PagePart {
+                translation: slot.translation.clone(),
+                capabilities: slot.caps,
+                quad_count: slot.quad_count,
+            })
+            .collect();
+        (self.dictionary.clone(), parts)
     }
 
     /// Produce a variant retaining `keep` (each an existing [`PageId`]) as fresh dense
