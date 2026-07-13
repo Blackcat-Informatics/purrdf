@@ -3878,6 +3878,26 @@ mod tests {
         );
     }
 
+    #[test]
+    #[should_panic(expected = "collides with a class `$def` key")]
+    fn value_vocab_enum_key_class_def_key_clash_hard_fails() {
+        // A vocab class `logic:Color` enum-keys to `ColorEnum`, which is the SAME
+        // `$def` key a primary-namespace target class `meta:ColorEnum` receives
+        // (local-name keyed) — the enum-key-vs-class-key clash guard must reject
+        // it, distinct from both the twins guard and the undeclared-namespace
+        // guard (both `logic:` and `meta:` are declared namespaces here).
+        compile_vocab(
+            r"
+            logic:Color a logic:AbstractIndividualType .
+            logic:red   a logic:Color .
+
+            meta:ColorEnumShape a sh:NodeShape ;
+                sh:targetClass meta:ColorEnum ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ] .
+        ",
+        );
+    }
+
     // ── Referencing $ref (Task 3) ────────────────────────────────────────────
 
     /// Compile with a SEPARATE ontology dataset and shapes dataset (both `logic:`
@@ -3983,6 +4003,50 @@ mod tests {
             def(&schema, "Term")["properties"]["meta:stability"],
             json!({ "$ref": "#/$defs/TermStabilityEnum" }),
             "a shapes-side rdfs:range resolves via the ontology∪shapes union scan"
+        );
+    }
+
+    #[test]
+    fn value_vocab_multi_range_picks_largest_class_iri_deterministically() {
+        // When ONE predicate declares rdfs:range over TWO distinct value-vocab
+        // classes, the winner is the class with the lexicographically LARGEST
+        // class IRI (".../logic/Beta" > ".../logic/Alpha"), not load order.
+        let forward = schema_of(&compile_vocab(
+            r"
+            logic:Alpha a logic:AbstractIndividualType .
+            logic:a1    a logic:Alpha .
+            logic:Beta  a logic:AbstractIndividualType .
+            logic:b1    a logic:Beta .
+            meta:choice rdfs:range logic:Alpha, logic:Beta .
+            meta:ThingShape a sh:NodeShape ;
+                sh:targetClass meta:Thing ;
+                sh:property [ sh:path meta:choice ; sh:maxCount 1 ] .
+        ",
+        ));
+        assert_eq!(
+            def(&forward, "Thing")["properties"]["meta:choice"],
+            json!({ "$ref": "#/$defs/BetaEnum" }),
+            "the larger class IRI (logic:Beta) wins the multi-range tiebreak"
+        );
+
+        // Reversed triple order (Beta declared before Alpha) must yield the
+        // IDENTICAL winner — the tiebreak is by value, not by scan order.
+        let reversed = schema_of(&compile_vocab(
+            r"
+            logic:Beta  a logic:AbstractIndividualType .
+            logic:b1    a logic:Beta .
+            logic:Alpha a logic:AbstractIndividualType .
+            logic:a1    a logic:Alpha .
+            meta:choice rdfs:range logic:Beta, logic:Alpha .
+            meta:ThingShape a sh:NodeShape ;
+                sh:targetClass meta:Thing ;
+                sh:property [ sh:path meta:choice ; sh:maxCount 1 ] .
+        ",
+        ));
+        assert_eq!(
+            def(&reversed, "Thing")["properties"]["meta:choice"],
+            json!({ "$ref": "#/$defs/BetaEnum" }),
+            "the winner is order-independent: still logic:Beta when declared first"
         );
     }
 
