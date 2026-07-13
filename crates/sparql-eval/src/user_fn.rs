@@ -219,7 +219,7 @@ pub struct NativeFunction {
 impl core::fmt::Debug for NativeFunction {
     /// The closure body has no `Debug` impl, so only the declared arity and
     /// volatility are shown (the same two fields the fork-join parallel gate and
-    /// [`eval_native_function`] consult).
+    /// the native-dispatch path `eval_native_function` consult).
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("NativeFunction")
             .field("arity", &self.arity)
