@@ -526,7 +526,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     let safe = aggregates.iter().all(|(_, agg)| match agg {
         AggregateExpression::CountStar { .. } => true,
         AggregateExpression::FunctionCall { expression, .. } => {
-            crate::parallel::is_parallel_safe(expression)
+            crate::parallel::is_parallel_safe(expression, ctx.user_functions)
         }
     });
 

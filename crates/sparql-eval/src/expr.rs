@@ -186,7 +186,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
     let seq = eval(inner, ctx)?;
     let schema = seq.schema.clone();
-    let rows = if crate::parallel::is_parallel_safe(expr) {
+    let rows = if crate::parallel::is_parallel_safe(expr, ctx.user_functions) {
         crate::parallel::par_chunk_try_map_init(
             &seq.rows,
             || ctx.fork_for_worker(),
@@ -231,7 +231,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
     let width = schema.len();
     let schema = Arc::new(schema);
 
-    let rows = if crate::parallel::is_parallel_safe(expr) {
+    let rows = if crate::parallel::is_parallel_safe(expr, ctx.user_functions) {
         // Parallel path: `is_parallel_safe` excludes `BNODE` (every arity), so the
         // per-solution `BNODE(strExpr)` memo (`ctx.current_row`/`ctx.bnode_memo`) is
         // never observed here — no per-row `current_row` bookkeeping is needed.
@@ -1649,6 +1649,18 @@ fn eval_function<D: DatasetView + Sync>(
                 && let Some(func) = registry.resolve(iri.as_str())
             {
                 let result = crate::user_fn::eval_user_function(func, iri.as_str(), &vals, ctx)?;
+                return Ok(result.map(|value| intern(ctx, value)));
+            }
+            // A caller-injected native (host-Rust closure) function, resolved from
+            // the same registry's second table. Checked after the SPARQL-bodied
+            // path (so a same-registry cross-kind collision can never arise — the
+            // registry's collision guard already makes that unrepresentable) and
+            // before the XSD-cast fallback, so a function IRI never collides with a
+            // datatype IRI.
+            if let Some(registry) = ctx.user_functions
+                && let Some(native) = registry.resolve_native(iri.as_str())
+            {
+                let result = crate::user_fn::eval_native_function(native, iri.as_str(), &vals)?;
                 return Ok(result.map(|value| intern(ctx, value)));
             }
             if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {

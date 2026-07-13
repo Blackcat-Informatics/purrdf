@@ -158,8 +158,11 @@ fn project_subject_data(data: &RdfDataset, ns: &Namespaces, subject: &Term) -> V
 
 /// Project a single object term into its JSON-LD value form.
 ///
-/// MUST match the value-schema convention in [`crate::json_schema`].
-fn project_value(term: &Term, ns: &Namespaces) -> Value {
+/// MUST match the value-schema convention in [`crate::json_schema`]. It is the
+/// SINGLE source of the value encoding: the schema emitter's `sh:in` enum members
+/// delegate here (`crate::json_schema::term_enum_value`) so a projected value and
+/// its enum member can never drift.
+pub(crate) fn project_value(term: &Term, ns: &Namespaces) -> Value {
     match term {
         Term::NamedNode(n) => json!({ "@id": ns.compact_iri(n.as_str()) }),
         Term::BlankNode(b) => json!({ "@id": format!("_:{}", b.as_str()) }),
