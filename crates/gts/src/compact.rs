@@ -305,18 +305,136 @@ pub fn base64url_decode(s: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// Sorted `(frame_id, cose)` pairs over every detached signature in `g`.
+/// Whether `g` is itself a previously-compacted pack — carries a
+/// `stream:Compaction` provenance node — as opposed to a raw authored tail.
+///
+/// A pack's `g.signatures` (the raw per-frame `"sig"` observations folded by
+/// the reader) contains ONLY the mandatory packaging head signature on the
+/// re-issued index footer (§10.1: `compact_streamable` never re-signs a
+/// carried content frame). Distinguishing a repack input from a raw tail lets
+/// [`sorted_detached_pairs`] exclude that packaging observation from the
+/// authorship union — it must never leak into the detached-authorship root.
+fn is_repack_input(g: &Graph) -> bool {
+    let Some(rdf_type) = g
+        .terms
+        .iter()
+        .position(|t| t.value.as_deref() == Some(RDF_TYPE))
+    else {
+        return false;
+    };
+    let Some(compaction) = g
+        .terms
+        .iter()
+        .position(|t| t.value.as_deref() == Some(stream::COMPACTION))
+    else {
+        return false;
+    };
+    g.quads
+        .iter()
+        .any(|&(_, p, o, _)| p == rdf_type && o == compaction)
+}
+
+/// The literal object value(s) of every quad `(subject, predicate_iri, ?)` in
+/// `g`, for every `subject` typed `stream:DetachedSignature`.
+///
+/// Parses the input graph's OWN carried `stream:DetachedSignature` provenance
+/// nodes back into `(frame_id, cose)` byte pairs — the authorship signatures
+/// accumulated by any PRIOR compaction(s), so a repack's detached root keeps
+/// binding the ORIGINAL author frame sigs, not just whatever
+/// `compact_streamable` observed fresh on this input. A node missing either
+/// literal, or carrying one that fails to decode, is skipped — a malformed
+/// provenance shape is unresolvable, not a license to guess (refuse-don't-trust,
+/// mirrored from `purrdf_rdf::gts_certify`'s suppression-target resolution).
+fn carried_detached_pairs(g: &Graph) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let Some(rdf_type) = g
+        .terms
+        .iter()
+        .position(|t| t.value.as_deref() == Some(RDF_TYPE))
+    else {
+        return Vec::new();
+    };
+    let Some(detached_class) = g
+        .terms
+        .iter()
+        .position(|t| t.value.as_deref() == Some(stream::DETACHED_SIGNATURE))
+    else {
+        return Vec::new();
+    };
+    let Some(source_frame_pred) = g
+        .terms
+        .iter()
+        .position(|t| t.value.as_deref() == Some(stream::SOURCE_FRAME))
+    else {
+        return Vec::new();
+    };
+    let Some(cose_pred) = g
+        .terms
+        .iter()
+        .position(|t| t.value.as_deref() == Some(stream::COSE))
+    else {
+        return Vec::new();
+    };
+    let nodes = g
+        .quads
+        .iter()
+        .filter(|&&(_, p, o, _)| p == rdf_type && o == detached_class)
+        .map(|&(s, _, _, _)| s);
+    let mut out = Vec::new();
+    for node in nodes {
+        let frame_lit = g
+            .quads
+            .iter()
+            .find(|&&(s, p, _, _)| s == node && p == source_frame_pred)
+            .and_then(|&(_, _, o, _)| g.terms.get(o))
+            .and_then(|t| t.value.as_deref());
+        let cose_lit = g
+            .quads
+            .iter()
+            .find(|&&(s, p, _, _)| s == node && p == cose_pred)
+            .and_then(|&(_, _, o, _)| g.terms.get(o))
+            .and_then(|t| t.value.as_deref());
+        let (Some(frame_lit), Some(cose_lit)) = (frame_lit, cose_lit) else {
+            continue;
+        };
+        let (Ok(frame_id), Ok(cose)) = (mmr::parse_hex_32(frame_lit), base64url_decode(cose_lit))
+        else {
+            continue;
+        };
+        out.push((frame_id, cose));
+    }
+    out
+}
+
+/// Sorted, deduplicated `(frame_id, cose)` pairs over every detached
+/// AUTHORSHIP signature in `g` — the union of:
+///  - the fresh per-frame COSE folded onto `g.signatures` when `g` is a raw
+///    authored tail (never a repack input — see [`is_repack_input`], which
+///    excludes a pack's own mandatory packaging observation), and
+///  - the carried `stream:DetachedSignature` provenance already present in
+///    `g` (accumulated by any prior compaction — see
+///    [`carried_detached_pairs`]).
 ///
 /// A frame may carry multiple co-signatures under key rotation, so `frame_id`
 /// alone is not a unique key — the `cose` tie-break is required for a stable,
-/// deterministic leaf order.
-fn sorted_detached_pairs(g: &Graph) -> Vec<(&[u8], &[u8])> {
-    let mut pairs: Vec<(&[u8], &[u8])> = g
-        .signatures
-        .iter()
-        .filter_map(|s| s.cose.as_deref().map(|cose| (s.frame_id.as_slice(), cose)))
-        .collect();
+/// deterministic leaf order. The union is deduplicated so an identical pair
+/// surviving both sources (impossible today, but not an invariant this
+/// function should assume) contributes exactly one leaf.
+fn sorted_detached_pairs(g: &Graph) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = if is_repack_input(g) {
+        Vec::new()
+    } else {
+        g.signatures
+            .iter()
+            .filter_map(|s| {
+                s.cose
+                    .as_deref()
+                    .map(|cose| (s.frame_id.clone(), cose.to_vec()))
+            })
+            .collect()
+    };
+    pairs.extend(carried_detached_pairs(g));
     pairs.sort_unstable();
+    pairs.dedup();
     pairs
 }
 
@@ -329,7 +447,7 @@ fn sorted_detached_pairs(g: &Graph) -> Vec<(&[u8], &[u8])> {
 pub fn detached_signature_leaves(g: &Graph) -> Vec<Vec<u8>> {
     sorted_detached_pairs(g)
         .into_iter()
-        .map(|(frame_id, cose)| detached_signature_leaf(frame_id, cose))
+        .map(|(frame_id, cose)| detached_signature_leaf(&frame_id, &cose))
         .collect()
 }
 
@@ -349,10 +467,10 @@ pub fn detached_signature_proof(g: &Graph, frame_id: &[u8], cose: &[u8]) -> Opti
     let pairs = sorted_detached_pairs(g);
     let leaf_index = pairs
         .iter()
-        .position(|&(f, c)| f == frame_id && c == cose)?;
+        .position(|(f, c)| f.as_slice() == frame_id && c.as_slice() == cose)?;
     let leaves: Vec<Vec<u8>> = pairs
         .into_iter()
-        .map(|(f, c)| detached_signature_leaf(f, c))
+        .map(|(f, c)| detached_signature_leaf(&f, &c))
         .collect();
     mmr::prove(&leaves, leaf_index)
 }
@@ -366,6 +484,14 @@ fn streaming_index(
     sealed_size: Option<usize>,
     content_digest: Option<&str>,
 ) -> Result<GraphBuilder, CompactRefusedError> {
+    // The detached-authorship union (§10.1): fresh frame COSE from
+    // `g.signatures` (when `g` is a raw tail — never a repack's own
+    // packaging observation) UNIONED with the carried `stream:DetachedSignature`
+    // provenance already present in `g` (accumulated by any prior
+    // compaction). Computed once, up front, so the boolean drives the fixed
+    // vocabulary block's id assignment identically to the pairs used below.
+    let detached_pairs = sorted_detached_pairs(g);
+
     let mut b = GraphBuilder::default();
     // Fixed vocabulary block — constant ids across engines for determinism.
     let t_type = b.add(TermKind::Iri, RDF_TYPE);
@@ -390,11 +516,10 @@ fn streaming_index(
     let t_content_digest =
         content_digest.map(|_| b.add(TermKind::Iri, stream::CONTENT_REFOLD_DIGEST));
     // The detached-signature root term rides the fixed block only when the
-    // source carries at least one detached signature (empty set ⇒ no quad,
+    // union carries at least one detached signature (empty set ⇒ no quad,
     // keeping `signatures_bound` vacuously true for unsigned tails).
-    let has_detached_sig = g.signatures.iter().any(|s| s.cose.is_some());
     let t_detached_root =
-        has_detached_sig.then(|| b.add(TermKind::Iri, stream::DETACHED_SIGNATURE_ROOT));
+        (!detached_pairs.is_empty()).then(|| b.add(TermKind::Iri, stream::DETACHED_SIGNATURE_ROOT));
 
     // One Manifestation per promised blob, in delivery order.
     for (order, digest) in blob_order.iter().enumerate() {
@@ -450,12 +575,15 @@ fn streaming_index(
         b.quad(c, t_cd, o);
     }
 
-    // Detached frame signatures (§10.1): checkable claims about the original log.
-    for (j, sig) in g.signatures.iter().filter(|s| s.cose.is_some()).enumerate() {
+    // Detached frame signatures (§10.1): checkable claims about the original
+    // log — the FULL authorship union, so a re-emitted pack carries forward
+    // every original author signature across any number of repacks, not just
+    // the ones freshly observed on this input.
+    for (j, (frame_id, cose)) in detached_pairs.iter().enumerate() {
         let node = b.add(TermKind::Bnode, &format!("s{j}"));
-        let cose_b64 = base64url_unpadded(sig.cose.as_deref().unwrap_or(&[]));
+        let cose_b64 = base64url_unpadded(cose);
         b.quad(node, t_type, t_detached_sig);
-        let o = b.literal(&format!("blake3:{}", hex(&sig.frame_id)), None);
+        let o = b.literal(&format!("blake3:{}", hex(frame_id)), None);
         b.quad(node, t_source_frame, o);
         let o = b.literal(&cose_b64, None);
         b.quad(node, t_cose, o);
@@ -465,7 +593,10 @@ fn streaming_index(
     // commitment (§10.1 signature preservation) — omitted entirely when the
     // set is empty (no zero-count root emitted for an unsigned tail).
     if let Some(t_root) = t_detached_root {
-        let leaves = detached_signature_leaves(g);
+        let leaves: Vec<Vec<u8>> = detached_pairs
+            .iter()
+            .map(|(frame_id, cose)| detached_signature_leaf(frame_id, cose))
+            .collect();
         let root = mmr::root(&leaves);
         let o = b.literal(&format!("blake3:{}", hex(&root)), None);
         b.quad(c, t_root, o);

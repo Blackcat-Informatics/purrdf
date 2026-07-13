@@ -9,9 +9,11 @@ use std::collections::HashMap;
 
 use ciborium::value::Value;
 use ed25519_dalek::SigningKey;
-use purrdf_gts::compact::DictStrategy;
+use purrdf_gts::compact::{DictStrategy, detached_signature_proof};
+use purrdf_gts::mmr;
 use purrdf_gts::model::{Term, TermKind};
 use purrdf_gts::reader::read;
+use purrdf_gts::stream;
 use purrdf_gts::writer::Writer;
 use purrdf_rdf::gts_certify::{
     CompactionCertificate, compact_and_certify, compose, effective_digest, refold_digest,
@@ -344,6 +346,176 @@ fn compose_chains_matching_certificates_and_rejects_mismatched_ones() {
     assert!(
         compose(&cert_ab, &cert_other).is_none(),
         "mismatched pre/post digests must not compose"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// GAP G2 — original authorship signatures must stay bound under EACH pack's
+// `stream:detachedSignatureRoot` across ANY NUMBER of repacks and key
+// rotations, distinct from each pack's own packaging (index/head) signature.
+// ---------------------------------------------------------------------------
+
+/// A source GTS file with TWO authorship signing epochs — `n_a` claims signed
+/// under `kid_a`, then `n_b` more claims signed under `kid_b` — the key
+/// rotation this compaction pipeline must survive (GTS-SPEC §10.1: "after ANY
+/// NUMBER OF REPACKS AND KEY ROTATIONS, each frame must still verify under
+/// the key active when it was authored"). The shared predicate term rides an
+/// UNSIGNED leading frame (pure vocabulary, not an authorship claim).
+fn source_with_rotated_authors(
+    kid_a: &str,
+    byte_a: u8,
+    n_a: u32,
+    kid_b: &str,
+    byte_b: u8,
+    n_b: u32,
+) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.add_terms(&[iri_term("https://example.org/p".to_string())]);
+    let p = 0usize;
+    let mut next_id = 1usize;
+
+    w.sign_with(fixed_key(byte_a), kid_a);
+    let mut terms_a = Vec::new();
+    let mut quads_a = Vec::new();
+    for i in 0..n_a {
+        let s = next_id;
+        terms_a.push(iri_term(format!("https://example.org/a{i}")));
+        next_id += 1;
+        let o = next_id;
+        terms_a.push(literal_term(format!("claim-a {i}")));
+        next_id += 1;
+        quads_a.push((s, p, o, None));
+    }
+    w.add_terms(&terms_a);
+    w.add_quads(&quads_a);
+
+    w.sign_with(fixed_key(byte_b), kid_b);
+    let mut terms_b = Vec::new();
+    let mut quads_b = Vec::new();
+    for i in 0..n_b {
+        let s = next_id;
+        terms_b.push(iri_term(format!("https://example.org/b{i}")));
+        next_id += 1;
+        let o = next_id;
+        terms_b.push(literal_term(format!("claim-b {i}")));
+        next_id += 1;
+        quads_b.push((s, p, o, None));
+    }
+    w.add_terms(&terms_b);
+    w.add_quads(&quads_b);
+
+    w.into_bytes()
+}
+
+/// The literal value of the object of the first quad using `predicate_iri`.
+fn object_literal(g: &purrdf_gts::model::Graph, predicate_iri: &str) -> Option<String> {
+    let p = g
+        .terms
+        .iter()
+        .position(|t| t.value.as_deref() == Some(predicate_iri))?;
+    g.quads
+        .iter()
+        .find(|&&(_, pred, _, _)| pred == p)
+        .and_then(|&(_, _, o, _)| g.terms[o].value.clone())
+}
+
+#[test]
+fn signatures_survive_two_repacks_and_key_rotation() {
+    let source = source_with_rotated_authors("authorA", 1, 3, "authorB", 2, 3);
+
+    let (pack1, _cert1) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "packaging1".to_string()),
+    )
+    .expect("first compaction succeeds");
+
+    // A SECOND repack — of the pack itself, not the raw source. This is the
+    // case GAP G2 identified: a naive implementation derives the detached
+    // set only from `g.signatures`, which on a pack contains ONLY the
+    // packaging observation, silently dropping the original authorship set.
+    let (pack2, _cert2) = compact_and_certify(
+        &pack1,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(9), "packaging2".to_string()),
+    )
+    .expect("second compaction (a repack of the first pack) succeeds");
+    assert_ne!(
+        pack1, pack2,
+        "the second repack must genuinely differ from the first (a real repack, not a no-op)"
+    );
+
+    let full_ring = keyring(&[
+        ("authorA", 1),
+        ("authorB", 2),
+        ("packaging1", 7),
+        ("packaging2", 9),
+    ]);
+    let report = verify_compaction(&source, &pack2, &full_ring)
+        .expect("verify_compaction succeeds across two repacks");
+    assert!(
+        report.signatures_bound,
+        "the ORIGINAL authorship signatures (both keys, across the rotation) must remain \
+         bound under pack2's detachedSignatureRoot after a SECOND repack: {report:?}"
+    );
+    assert!(
+        report.signatures_verify,
+        "every carried authorship signature verifies against a full keyring: {report:?}"
+    );
+    assert!(
+        report.packaging_sig_ok,
+        "pack2's own packaging (index/head) signature verifies: {report:?}"
+    );
+
+    // `detached_signature_proof` for an authorA-signed frame verifies against
+    // pack2's OWN `detachedSignatureRoot` — the selective per-frame proof
+    // survives the second repack, not just the aggregate bound-ness check.
+    let source_graph = read(&source, true, None);
+    let a_sig = source_graph
+        .signatures
+        .first()
+        .expect("the first signed frame in the source is authorA-signed");
+    let a_cose = a_sig
+        .cose
+        .as_deref()
+        .expect("the authorA frame carries raw COSE bytes");
+    let pack2_graph = read(&pack2, true, None);
+    let root_literal = object_literal(&pack2_graph, stream::DETACHED_SIGNATURE_ROOT)
+        .expect("pack2 carries a detachedSignatureRoot (the source is signed)");
+    let expected_root =
+        mmr::parse_hex_32(&root_literal).expect("root literal parses as a 32-byte hex value");
+    let proof = detached_signature_proof(&pack2_graph, &a_sig.frame_id, a_cose).expect(
+        "the ORIGINAL authorA signature must have a selective inclusion proof against pack2 \
+         — this is exactly what GAP G2's bug lost on the second repack",
+    );
+    assert_eq!(
+        proof.root, expected_root,
+        "the proof targets pack2's own emitted root"
+    );
+    mmr::verify_proof(&proof).expect("the per-frame authorship proof verifies standalone");
+
+    // Anti-tautology / falsifiability: a keyring MISSING authorA fails
+    // `signatures_verify`, while `signatures_bound` and `packaging_sig_ok`
+    // stay true — the binding is structural (an MMR commitment), entirely
+    // independent of whether a verifier happens to hold the signing key.
+    let partial_ring = keyring(&[("authorB", 2), ("packaging2", 9)]);
+    let partial = verify_compaction(&source, &pack2, &partial_ring)
+        .expect("verify_compaction succeeds even with a partial keyring");
+    assert!(
+        !partial.signatures_verify,
+        "a keyring missing authorA must fail signatures_verify: {partial:?}"
+    );
+    assert!(
+        partial.signatures_bound,
+        "binding is independent of key availability: {partial:?}"
+    );
+    assert!(
+        partial.packaging_sig_ok,
+        "packaging verification is independent of the missing authorship key: {partial:?}"
     );
 }
 
