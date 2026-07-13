@@ -1304,33 +1304,53 @@ impl ActiveStreamingSegment {
             described,
             blob_events,
         };
-        // Owned provenance fields for the `sink.frame()` call fired below,
-        // once `folder` has released its borrow of `sink`.
-        let ctx_id: Vec<u8>;
-        let ctx_type: String;
-        let ctx_valid: bool;
+        // `sink.frame()` is fired for THIS frame before any of its rows are
+        // folded (the `StreamingSink::frame` contract), so index builders can
+        // attribute the rows that follow to this frame's provenance.
+        let range = ByteRange {
+            start: frame_start,
+            end: frame_end,
+        };
         if let Value::Map(frame) = raw {
             let stored_id: Option<&Vec<u8>> = match map_get(frame, "id") {
                 Some(Value::Bytes(b)) => Some(b),
                 _ => None,
             };
             let computed = content_id(frame);
+            let ftype = text_or(map_get(frame, "t"), "").to_string();
             if stored_id.map(|b| &b[..]) != Some(&computed[..]) {
+                let ctx_id = stored_id.cloned().unwrap_or_else(|| computed.clone());
+                folder.with_sink(|segment_index, sink| {
+                    sink.frame(FrameContext {
+                        segment_index,
+                        frame_index,
+                        content_id: &ctx_id,
+                        range,
+                        frame_type: &ftype,
+                        valid: false,
+                    });
+                });
                 folder.diag(
                     "DamagedFrame",
                     "frame self-hash mismatch".to_string(),
                     Some(abs_index),
                 );
-                let ftype = text_or(map_get(frame, "t"), "").to_string();
                 folder.opaque(frame, &ftype, "damaged");
                 self.expected_prev = stored_id.cloned().unwrap_or(computed);
                 self.frame_ids.push(self.expected_prev.clone());
-                ctx_id = self.expected_prev.clone();
-                ctx_type = ftype;
-                ctx_valid = false;
             } else {
                 let prev_ok = matches!(map_get(frame, "prev"),
                     Some(Value::Bytes(b)) if *b == self.expected_prev);
+                folder.with_sink(|segment_index, sink| {
+                    sink.frame(FrameContext {
+                        segment_index,
+                        frame_index,
+                        content_id: &computed,
+                        range,
+                        frame_type: &ftype,
+                        valid: prev_ok,
+                    });
+                });
                 if !prev_ok {
                     folder.diag(
                         "BrokenChain",
@@ -1352,46 +1372,35 @@ impl ActiveStreamingSegment {
                         cose,
                     });
                 }
-                let ftype = text_or(map_get(frame, "t"), "").to_string();
                 folder.fold_frame(frame, abs_index);
-                ctx_id = computed;
-                ctx_type = ftype;
-                ctx_valid = prev_ok;
             }
         } else {
+            folder.with_sink(|segment_index, sink| {
+                sink.frame(FrameContext {
+                    segment_index,
+                    frame_index,
+                    content_id: &[],
+                    range,
+                    frame_type: "<non-map>",
+                    valid: false,
+                });
+            });
             folder.diag(
                 "DamagedFrame",
                 "frame is not a map".to_string(),
                 Some(abs_index),
             );
             self.frame_ids.push(Vec::new());
-            ctx_id = Vec::new();
-            ctx_type = "<non-map>".to_string();
-            ctx_valid = false;
         }
         let catalog = std::mem::take(&mut folder.catalog);
         let index_records = std::mem::take(&mut folder.index_records);
         let described = std::mem::take(&mut folder.described);
         let blob_events = std::mem::take(&mut folder.blob_events);
-        let restored_sink = folder.sink.take();
         drop(folder);
         self.catalog = catalog;
         self.index_records = index_records;
         self.described = described;
         self.blob_events = blob_events;
-        if let Some(sink) = restored_sink {
-            sink.frame(FrameContext {
-                segment_index: self.segment_index,
-                frame_index,
-                content_id: &ctx_id,
-                range: ByteRange {
-                    start: frame_start,
-                    end: frame_end,
-                },
-                frame_type: &ctx_type,
-                valid: ctx_valid,
-            });
-        }
     }
 
     fn finish_into_result(
