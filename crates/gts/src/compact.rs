@@ -724,7 +724,17 @@ pub fn compact_streamable(
     for sup in shifted_suppressions(&g, base) {
         w.add_suppress(sup.targets, sup.reason.as_deref(), sup.by);
     }
-    // Blobs in delivery order; declared metadata rides along.
+    // Blobs in delivery order; declared metadata rides along. When a pack
+    // dictionary is pinned, content-blob frames are re-emitted through the
+    // `zstd` transform so they are actually compressed against `dict` above —
+    // an unused in-band dictionary would otherwise be dead weight. The sealed
+    // original (the nested source GTS) is never dict-compressed: it carries
+    // its own framing and is excluded from the dictionary training corpus.
+    let content_transform: Vec<String> = if strategy == DictStrategy::None {
+        Vec::new()
+    } else {
+        vec!["zstd".to_string()]
+    };
     for digest in &blob_order {
         if Some(digest.as_str()) == sealed_digest.as_deref() {
             w.add_blob(
@@ -739,13 +749,14 @@ pub fn compact_streamable(
         let Some(bytes) = blob_bytes(&g, digest)? else {
             continue;
         };
-        match bytes {
-            Cow::Borrowed(bytes) => {
-                w.add_blob(bytes, mt.as_deref(), rep.as_deref());
-            }
-            Cow::Owned(bytes) => {
-                w.add_blob_owned(bytes, mt.as_deref(), rep.as_deref());
-            }
+        let owned = match bytes {
+            Cow::Borrowed(bytes) => bytes.to_vec(),
+            Cow::Owned(bytes) => bytes,
+        };
+        if content_transform.is_empty() {
+            w.add_blob_owned(owned, mt.as_deref(), rep.as_deref());
+        } else {
+            w.add_blob_transformed(owned, mt.as_deref(), rep.as_deref(), &content_transform);
         }
     }
     // The MANDATORY packaging head signature: sign ONLY the re-issued

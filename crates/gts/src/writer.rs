@@ -830,6 +830,18 @@ impl Writer {
         self.add_frame("annot", Some(Value::Array(rows)), None, None, None)
     }
 
+    /// Build the `pub` metadata map (`digest`/`mt`/`rep`) shared by every blob-frame writer.
+    fn blob_pub_meta(data: &[u8], mt: Option<&str>, rep: Option<&str>) -> Option<Value> {
+        let mut pub_entries: Vec<(Value, Value)> = vec![("digest".into(), digest_str(data).into())];
+        if let Some(m) = mt {
+            pub_entries.push(("mt".into(), m.into()));
+        }
+        if let Some(r) = rep {
+            pub_entries.push(("rep".into(), r.into()));
+        }
+        Some(Value::Map(pub_entries))
+    }
+
     /// Append an inline `blob` frame; metadata goes in `pub` (§12).
     pub fn add_blob(&mut self, data: &[u8], mt: Option<&str>, rep: Option<&str>) -> Vec<u8> {
         self.add_blob_owned(data.to_vec(), mt, rep)
@@ -842,16 +854,36 @@ impl Writer {
         mt: Option<&str>,
         rep: Option<&str>,
     ) -> Vec<u8> {
-        let mut pub_entries: Vec<(Value, Value)> =
-            vec![("digest".into(), digest_str(&data).into())];
-        if let Some(m) = mt {
-            pub_entries.push(("mt".into(), m.into()));
-        }
-        if let Some(r) = rep {
-            pub_entries.push(("rep".into(), r.into()));
-        }
-        let pub_meta = Some(Value::Map(pub_entries));
+        let pub_meta = Self::blob_pub_meta(&data, mt, rep);
         self.add_frame("blob", None, Some(data), None, pub_meta)
+    }
+
+    /// Append an owned inline `blob` frame whose payload is carried through
+    /// `transform` (e.g. `["zstd"]`) before being stored in `"d"`.
+    ///
+    /// When this writer was constructed with [`WriterOptions::dict`], any
+    /// `"zstd"` transform in `transform` encodes against the pinned pack
+    /// dictionary, matching [`Writer::add_frame_with_options`]'s dict wiring.
+    /// Metadata (`digest`/`mt`/`rep`) is computed over the pre-transform bytes,
+    /// so readers observe the same content digest as an untransformed blob.
+    pub fn add_blob_transformed(
+        &mut self,
+        data: Vec<u8>,
+        mt: Option<&str>,
+        rep: Option<&str>,
+        transform: &[String],
+    ) -> Vec<u8> {
+        let pub_meta = Self::blob_pub_meta(&data, mt, rep);
+        self.add_frame_with_options(
+            "blob",
+            FrameOptions {
+                raw: Some(data),
+                transform: transform.to_vec(),
+                pub_meta,
+                ..FrameOptions::default()
+            },
+        )
+        .expect("invalid frame options")
     }
 
     /// Append a `meta` frame.

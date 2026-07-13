@@ -67,6 +67,35 @@ fn fixed_source() -> Vec<u8> {
     w.into_bytes()
 }
 
+/// A larger, more redundant source than [`fixed_source`]: 300 content blobs
+/// of long, near-identical text.
+///
+/// [`fixed_source`]'s 40-blob corpus exists to freeze small, fast-folding
+/// vectors, not to demonstrate a net size win — its blob content is small
+/// enough that the pinned dictionary's own bytes (finalized header + trailing
+/// content window, `crates/gts/src/dict.rs`) can outweigh what 40 tiny frames
+/// individually save. This corpus has enough repeated structure for the
+/// dictionary's one-time cost to be genuinely amortized by real per-frame
+/// zstd savings, so a strictly-smaller-pack assertion actually exercises
+/// "compression happened", not an artifact of too little content to benefit.
+fn size_comparison_source() -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(authorship_key(), "authorA");
+    for i in 0..300u32 {
+        let blob = format!(
+            "<https://example.org/s{}> <https://example.org/p> \"dict vector claim {} about \
+             cats and the shared structure repeated across every blob in this redundant \
+             corpus, which a pack dictionary should compress extremely well\" .\n",
+            i % 7,
+            i
+        )
+        .into_bytes();
+        w.add_blob_owned(blob, Some("text/plain"), None);
+    }
+    w.add_index();
+    w.into_bytes()
+}
+
 fn vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors")
 }
@@ -118,6 +147,98 @@ fn header_carries_dct_entry(bytes: &[u8]) -> bool {
         return false;
     };
     matches!(map_get(entries, "dct"), Some(Value::Map(dct)) if !dct.is_empty())
+}
+
+/// The 4-byte zstd frame magic number (`28 B5 2F FD`, little-endian
+/// `0xFD2FB528`) — the same byte pattern `xxd -p … | grep -oc 28b52ffd`
+/// counts. Counting occurrences in the raw file bytes is a blunt but
+/// falsifiable proxy for "at least one frame is actually zstd-compressed":
+/// an inert pinned dictionary with every blob stored `identity` would count
+/// zero, exactly the bug this drift guard exists to catch.
+const ZSTD_FRAME_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
+/// Count non-overlapping-position occurrences of the zstd frame magic number
+/// in `bytes`.
+fn count_zstd_frame_magic(bytes: &[u8]) -> usize {
+    bytes
+        .windows(ZSTD_FRAME_MAGIC.len())
+        .filter(|window| *window == ZSTD_FRAME_MAGIC)
+        .count()
+}
+
+#[test]
+fn dict_primed_vectors_are_actually_zstd_compressed_not_an_inert_header() {
+    let rawcontent = read_vector("30-dict-rawcontent.gts");
+    let trained = read_vector("31-dict-trained.gts");
+
+    // Every one of the 40 content blobs must be zstd-transformed against the
+    // pinned pack dictionary: a pinned `dct` header entry with zero zstd
+    // frames means the dictionary is dead weight, which is exactly the bug
+    // this test must fail on.
+    let rawcontent_frames = count_zstd_frame_magic(&rawcontent);
+    let trained_frames = count_zstd_frame_magic(&trained);
+    assert!(
+        rawcontent_frames > 0,
+        "30-dict-rawcontent.gts must contain at least one zstd frame magic number \
+         (28b52ffd); found {rawcontent_frames} — the pinned dictionary is unused"
+    );
+    assert!(
+        trained_frames > 0,
+        "31-dict-trained.gts must contain at least one zstd frame magic number \
+         (28b52ffd); found {trained_frames} — the pinned dictionary is unused"
+    );
+}
+
+#[test]
+fn dict_primed_packs_are_strictly_smaller_than_the_undicted_pack() {
+    let source = size_comparison_source();
+
+    let (rawcontent, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::RawContent,
+        TIMESTAMP,
+        false,
+        (packaging_key(), "pack".to_string()),
+    )
+    .expect("raw-content dict compaction succeeds over the fixed source");
+    let (trained, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::Trained,
+        TIMESTAMP,
+        false,
+        (packaging_key(), "pack".to_string()),
+    )
+    .expect("trained dict compaction succeeds over the fixed source");
+    let (undicted, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (packaging_key(), "pack".to_string()),
+    )
+    .expect("undicted compaction succeeds over the fixed source");
+
+    // A dict-primed pack pays the dictionary bytes up front (stored
+    // uncompressed and in-band, §5) but must recoup that cost by actually
+    // compressing the content-blob corpus against it — over a 40-blob
+    // repeated-structure corpus the net must land strictly smaller than the
+    // same source with no dictionary and no compression at all. This is the
+    // falsifiable half of the "trained-dictionary-compressed" claim: an inert
+    // dictionary (frames still stored `identity`) would only ever be larger.
+    assert!(
+        rawcontent.len() < undicted.len(),
+        "raw-content dict-primed pack ({} bytes) must be strictly smaller than the \
+         undicted pack ({} bytes)",
+        rawcontent.len(),
+        undicted.len()
+    );
+    assert!(
+        trained.len() < undicted.len(),
+        "trained dict-primed pack ({} bytes) must be strictly smaller than the \
+         undicted pack ({} bytes)",
+        trained.len(),
+        undicted.len()
+    );
 }
 
 #[test]
