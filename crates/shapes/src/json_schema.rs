@@ -735,17 +735,20 @@ fn first_literal(
 ) -> Option<String> {
     let subject = Term::NamedNode(NamedNode::from(subject_iri));
     let pred = Term::NamedNode(NamedNode::from(predicate));
-    let mut values: BTreeSet<String> = BTreeSet::new();
+    let mut min: Option<String> = None;
     for ds in datasets {
         for (_subject, _pred, obj) in
             native_quads(ds, Some(&subject), Some(&pred), None, GraphFilter::AnyGraph)
         {
             if let Term::Literal(lit) = obj {
-                values.insert(lit.value().to_owned());
+                let value = lit.value();
+                if min.as_deref().is_none_or(|current| value < current) {
+                    min = Some(value.to_owned());
+                }
             }
         }
     }
-    values.into_iter().next()
+    min
 }
 
 /// Build a value-vocabulary enum `$def`. The flat `enum` keyword is ALWAYS the
