@@ -366,3 +366,128 @@ fn query_materializes_only_the_pages_the_plan_needs() {
         "the cached page is not re-materialized on a repeat query"
     );
 }
+
+// ── Test D — harder SPARQL feature classes: paged == single (byte-identical) ─────
+//
+// The BGP parity above proves basic joins cross pages. These guards extend that proof
+// to the SPARQL feature classes whose evaluation is NOT a plain triple scan — property
+// paths, aggregates, and subqueries — over a multi-page `PagedDataset`. Each fixture is
+// built so the feature genuinely spans page boundaries, and each asserts the paged
+// result is byte-identical (same `variables`, same ordered `rows`) to the single-dataset
+// evaluation of the SAME prepared query through the public engine entry points.
+
+/// Evaluate `query` over a single frozen dataset of `corpus` AND over `pages` sealed
+/// into a `PagedDataset`, and assert the two `Solutions` are identical. `min_rows`
+/// guards against a vacuous pass (empty == empty). The pages MUST be exactly the corpus
+/// re-partitioned, so any divergence is the paged evaluation, not a different dataset.
+fn assert_paged_matches_single(
+    corpus: &[Triple],
+    pages: Vec<Arc<RdfDataset>>,
+    query: &str,
+    min_rows: usize,
+) {
+    let single = build_page(corpus);
+    let paged = paged_over(pages);
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine.prepare_query(query, None).expect("prepare");
+
+    let (single_vars, single_rows) = solutions(
+        engine
+            .query_prepared(&single, &prepared, &[])
+            .expect("single query"),
+    );
+    let (paged_vars, paged_rows) = solutions(
+        engine
+            .query_prepared_view(&paged, &prepared, &[])
+            .expect("paged query"),
+    );
+
+    assert!(
+        single_rows.len() >= min_rows,
+        "non-vacuous: expected at least {min_rows} rows, got {}",
+        single_rows.len()
+    );
+    assert_eq!(single_vars, paged_vars, "same projected variables");
+    assert_eq!(
+        single_rows, paged_rows,
+        "byte-identical rows: single == paged"
+    );
+}
+
+const PATH_QUERY: &str = "\
+PREFIX ex: <http://example.org/>
+SELECT ?y WHERE { ex:alice ex:knows+ ?y } ORDER BY ?y";
+
+#[test]
+fn paged_property_path_parity_across_pages() {
+    // A knows-chain alice→bob→carol→dave→erin with EACH edge on its own page, so the
+    // transitive `ex:knows+` closure can only be computed by walking across all pages.
+    let p0 = vec![(iri("alice"), iri("knows"), iri("bob"))];
+    let p1 = vec![(iri("bob"), iri("knows"), iri("carol"))];
+    let p2 = vec![(iri("carol"), iri("knows"), iri("dave"))];
+    let p3 = vec![(iri("dave"), iri("knows"), iri("erin"))];
+    let corpus: Vec<Triple> = p0
+        .iter()
+        .chain(&p1)
+        .chain(&p2)
+        .chain(&p3)
+        .cloned()
+        .collect();
+    let pages = vec![
+        build_page(&p0),
+        build_page(&p1),
+        build_page(&p2),
+        build_page(&p3),
+    ];
+    // The closure of alice under knows+ is {bob, carol, dave, erin} — 4 rows spanning
+    // all four pages.
+    assert_paged_matches_single(&corpus, pages, PATH_QUERY, 4);
+}
+
+const AGGREGATE_QUERY: &str = "\
+PREFIX ex: <http://example.org/>
+SELECT ?g (COUNT(?p) AS ?c) WHERE { ?p ex:inGroup ?g } GROUP BY ?g ORDER BY ?g";
+
+#[test]
+fn paged_aggregate_group_by_parity_across_pages() {
+    // Members of two groups spread across three pages, so each group's COUNT must sum
+    // contributions materialized from multiple pages.
+    let p0 = vec![
+        (iri("p1"), iri("inGroup"), iri("g_a")),
+        (iri("p2"), iri("inGroup"), iri("g_b")),
+    ];
+    let p1 = vec![
+        (iri("p3"), iri("inGroup"), iri("g_a")),
+        (iri("p4"), iri("inGroup"), iri("g_a")),
+    ];
+    let p2 = vec![(iri("p5"), iri("inGroup"), iri("g_b"))];
+    let corpus: Vec<Triple> = p0.iter().chain(&p1).chain(&p2).cloned().collect();
+    let pages = vec![build_page(&p0), build_page(&p1), build_page(&p2)];
+    // Two groups (g_a with 3 members, g_b with 2), each counted across pages → 2 rows.
+    assert_paged_matches_single(&corpus, pages, AGGREGATE_QUERY, 2);
+}
+
+const SUBQUERY_QUERY: &str = "\
+PREFIX ex: <http://example.org/>
+SELECT ?x ?c WHERE {
+  { SELECT ?x (COUNT(?y) AS ?c) WHERE { ?x ex:knows ?y } GROUP BY ?x }
+} ORDER BY ?x ?c";
+
+#[test]
+fn paged_subquery_parity_across_pages() {
+    // Each subject's knows-edges are spread across pages, so the inner aggregating
+    // subquery must count them cross-page before the outer query projects the result.
+    let p0 = vec![
+        (iri("alice"), iri("knows"), iri("bob")),
+        (iri("alice"), iri("knows"), iri("carol")),
+    ];
+    let p1 = vec![
+        (iri("alice"), iri("knows"), iri("dave")), // alice's third edge, on another page
+        (iri("bob"), iri("knows"), iri("carol")),
+    ];
+    let corpus: Vec<Triple> = p0.iter().chain(&p1).cloned().collect();
+    let pages = vec![build_page(&p0), build_page(&p1)];
+    // alice (3 edges) and bob (1 edge) → 2 rows; alice's count only equals 3 if the
+    // subquery aggregated across both pages.
+    assert_paged_matches_single(&corpus, pages, SUBQUERY_QUERY, 2);
+}
