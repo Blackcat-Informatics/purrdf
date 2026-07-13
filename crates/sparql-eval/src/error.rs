@@ -49,11 +49,13 @@ pub enum EvalError {
     /// looping forever or guessing an answer.
     Data(String),
 
-    /// A SHACL-AF SPARQL-based function (`sh:SPARQLFunction`) call was invalid: an
-    /// arity mismatch, a `sh:datatype`/`sh:nodeKind`/`sh:returnType` violation, or
-    /// exceeding the user-function recursion bound. Per the hard-fail doctrine a
-    /// mis-invoked function aborts the query rather than yielding a wrong or unbound
-    /// value.
+    /// A user function call was invalid — either a SHACL-AF SPARQL-based function
+    /// (`sh:SPARQLFunction`: an arity mismatch, a
+    /// `sh:datatype`/`sh:nodeKind`/`sh:returnType` violation, or exceeding the
+    /// user-function recursion bound) or a native (host-Rust closure) function
+    /// (an arity mismatch, the closure's own returned `Err`, or a caught panic
+    /// inside the closure). Per the hard-fail doctrine a mis-invoked function
+    /// aborts the query rather than yielding a wrong or unbound value.
     Function(String),
 }
 
@@ -94,7 +96,7 @@ impl core::fmt::Display for EvalError {
             Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
             Self::Remote(msg) => write!(f, "SERVICE federation error: {msg}"),
             Self::Data(msg) => write!(f, "malformed RDF input: {msg}"),
-            Self::Function(msg) => write!(f, "SHACL-AF function error: {msg}"),
+            Self::Function(msg) => write!(f, "user function error: {msg}"),
         }
     }
 }

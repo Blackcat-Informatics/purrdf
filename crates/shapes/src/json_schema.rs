@@ -28,13 +28,31 @@
 //! `sh:sparql` / `sh:SPARQLTarget` constraints have no JSON Schema equivalent.
 //! They are never silently skipped: each one is dropped, recorded as a
 //! [`LossRecord`], and annotated with a `$comment` on the affected schema.
+//!
+//! # Value-vocabulary enum projection (opt-in, projection-only)
+//!
+//! [`compile_with_value_vocab`] optionally projects *value vocabularies* — an
+//! `owl:Class` whose members are seeded named individuals, marked by a
+//! caller-supplied [`ValueVocab`] — to standalone `{ClassLocal}Enum` `$defs`. Such
+//! vocabularies are deliberately OPEN in the live SHACL validator ("anchor, not a
+//! fence") and carry no `sh:in`; this derivation surfaces their anchor set as a
+//! closed `enum` for codegen / API consumers WITHOUT ever injecting `sh:in` or
+//! otherwise mutating the validating shape set. Members are `{"@id": curie}`
+//! objects (the projector's encoding, so a projected instance validates); the flat
+//! `enum` keyword stays load-bearing in every case, with member symbol names and
+//! docs carried on the parallel `x-enum-varnames` / `x-enum-descriptions` arrays.
+//! A property whose `sh:class` or ontology `rdfs:range` is such a vocabulary emits
+//! a `$ref` to its enum `$def`, cardinality preserved.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use ::purrdf::RdfDataset;
 use serde_json::{Map, Value, json};
 
+use crate::data::{GraphFilter, native_quads};
+use crate::model::{rdf, rdfs};
 use crate::shapes::{Constraint, NodeKindValue, Path, Shape, Shapes, Target};
-use crate::term::Term;
+use crate::term::{NamedNode, Term};
 
 const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -117,7 +135,7 @@ impl Namespaces {
     /// Returns `Err` when `primary_prefix` resolves in neither `doc_prefixes`
     /// nor the builtins.
     pub fn new(primary_prefix: &str, doc_prefixes: &[(String, String)]) -> Result<Self, String> {
-        let mut merged: std::collections::BTreeMap<String, String> = BUILTIN_PREFIXES
+        let mut merged: BTreeMap<String, String> = BUILTIN_PREFIXES
             .iter()
             .map(|(p, n)| ((*p).to_owned(), (*n).to_owned()))
             .collect();
@@ -239,6 +257,60 @@ pub struct CompiledSchema {
     pub losses: Vec<LossRecord>,
 }
 
+// ── Value-vocabulary projection config ───────────────────────────────────────
+
+/// A caller-supplied marker identifying *value-vocabulary* classes.
+///
+/// A value vocabulary is an `owl:Class` whose members are seeded named
+/// individuals (e.g. `TermStability` = `stable` / `experimental` / `deprecated`).
+/// These classes are deliberately OPEN in the live SHACL validator ("anchor, not
+/// a fence") and so carry no `sh:in`; [`compile_with_value_vocab`] nonetheless
+/// projects each one to a standalone `{ClassLocal}Enum` `$def` for JSON-Schema /
+/// OpenAPI consumers, WITHOUT ever mutating the validating shape set.
+///
+/// `abstract_individual_type` is the IRI of the marker class: a class `V` is a
+/// value vocabulary iff `V rdf:type <abstract_individual_type>`. PurRDF mints no
+/// vocabulary IRIs, so this is caller configuration with NO `Default` — mirroring
+/// [`crate::model::BoxRoleVocab`] and `SliceVocab`. A `None` projection (see
+/// [`compile_with_value_vocab`]) means the feature is INACTIVE, not that a
+/// required dependency is missing; compilation then matches [`compile`] exactly.
+#[derive(Debug, Clone)]
+pub struct ValueVocab {
+    abstract_individual_type: String,
+}
+
+impl ValueVocab {
+    /// Construct a value-vocabulary marker from the marker class IRI.
+    #[must_use]
+    pub fn new(abstract_individual_type: &str) -> Self {
+        Self {
+            abstract_individual_type: abstract_individual_type.to_owned(),
+        }
+    }
+
+    /// The marker class IRI whose instances are value-vocabulary classes.
+    #[must_use]
+    pub fn abstract_individual_type(&self) -> &str {
+        &self.abstract_individual_type
+    }
+}
+
+/// The co-required inputs enabling the value-vocabulary enum projection: the
+/// caller's [`ValueVocab`] marker AND the ontology/data graph holding the
+/// individuals to enumerate.
+///
+/// Bundling the two makes "a marker with no ontology to enumerate" unrepresentable
+/// (fail-closed by type). Enumeration additionally scans the shapes graph, so
+/// range/label axioms declared shapes-side are honored (see
+/// [`compile_with_value_vocab`]).
+#[derive(Debug, Clone, Copy)]
+pub struct ValueVocabProjection<'a> {
+    /// The caller-supplied value-vocabulary marker.
+    pub vocab: &'a ValueVocab,
+    /// The ontology / data graph holding the value-vocabulary individuals.
+    pub ontology: &'a RdfDataset,
+}
+
 // ── Compilation context ──────────────────────────────────────────────────────
 
 /// Accumulates losses while compiling so every emitter helper can record one,
@@ -257,15 +329,31 @@ struct Ctx<'ns> {
     /// `def_key(C)` is in this set; otherwise the ref would dangle (no shape ⇒
     /// no `$def`).
     emitted_defs: BTreeSet<String>,
+    /// Value-vocabulary classes → their `{Local}Enum` `$def` key. A `sh:class`
+    /// pointing at one of these resolves to the enum `$ref` (projection-only)
+    /// rather than the permissive node-ref. Empty unless a value-vocabulary
+    /// projection is active.
+    value_vocab_enums: BTreeMap<String, String>,
+    /// Predicate IRIs whose `rdfs:range` is a value-vocabulary class → that
+    /// class's `{Local}Enum` `$def` key. Drives the enum `$ref` for OPEN
+    /// vocabularies that carry no `sh:class`. Empty unless a projection is active.
+    predicate_ranges: BTreeMap<String, String>,
     /// The namespace table driving ALL compaction / keying decisions.
     ns: &'ns Namespaces,
 }
 
 impl<'ns> Ctx<'ns> {
-    fn new(emitted_defs: BTreeSet<String>, ns: &'ns Namespaces) -> Self {
+    fn new(
+        emitted_defs: BTreeSet<String>,
+        value_vocab_enums: BTreeMap<String, String>,
+        predicate_ranges: BTreeMap<String, String>,
+        ns: &'ns Namespaces,
+    ) -> Self {
         Self {
             losses: Vec::new(),
             emitted_defs,
+            value_vocab_enums,
+            predicate_ranges,
             ns,
         }
     }
@@ -299,6 +387,35 @@ impl<'ns> Ctx<'ns> {
 /// namespace with no declared prefix, or when two distinct target classes
 /// would share a `$defs` key — see [`Namespaces::def_key`].
 pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
+    compile_with_value_vocab(shapes, ns, None)
+}
+
+/// Compile a parsed [`Shapes`] graph, optionally projecting *value vocabularies*
+/// to enum `$defs`.
+///
+/// Identical to [`compile`] when `projection` is `None`. When `Some`, each class
+/// `V` marked as a value vocabulary (`V rdf:type <marker>`, the marker taken from
+/// [`ValueVocab`]) is projected to a standalone `{LocalName(V)}Enum` `$def` whose
+/// members are `V`'s named individuals — enumerated from the projection's ontology
+/// graph UNIONED with the shapes graph — encoded as `{"@id": curie}` objects (the
+/// same encoding the instance projector emits, so a projected instance validates).
+/// The flat JSON-Schema `enum` keyword is always the load-bearing form; member
+/// symbol names and docs ride the parallel `x-enum-varnames` / `x-enum-descriptions`
+/// extension arrays. The projection is DERIVATION-ONLY: it never injects `sh:in`
+/// and never mutates the validating shape set, so the live SHACL validator stays
+/// open-world.
+///
+/// # Panics
+///
+/// Panics (build-time, fail-closed) under the same conditions as [`compile`], and
+/// additionally when a value-vocabulary class is in an undeclared namespace or two
+/// value-vocabulary classes would share a `{LocalName}Enum` `$def` key (or an enum
+/// key collides with a class `$def` key).
+pub fn compile_with_value_vocab(
+    shapes: &Shapes,
+    ns: &Namespaces,
+    projection: Option<&ValueVocabProjection<'_>>,
+) -> CompiledSchema {
     // Keying invariant (Gap D, fail-closed): every primary-namespace `$def`
     // is keyed by the class LOCAL NAME and the `@type` discriminator is
     // `<primary_prefix>:<LocalName>`. That is sound ONLY while every target
@@ -309,6 +426,12 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
     // class from an undeclared namespace or a colliding key HARD-fails the
     // build here instead of silently mis-discriminating or clobbering a `$def`.
     assert_target_class_keys_are_unambiguous(shapes, ns);
+
+    // Value-vocabulary enum `$defs` (projection-only): class IRI → (enum key,
+    // `$def` body). Empty when `projection` is `None`. Enum keys are guarded for
+    // collisions against each other and the class `$def` keys before use.
+    let (vocab_enums, vocab_losses) = value_vocab_enum_defs(shapes, ns, projection);
+    assert_value_vocab_enum_keys_unambiguous(shapes, ns, &vocab_enums);
 
     // PASS 1: compute the set of `def_key`s that WILL receive a `$def`, using
     // the EXACT same iteration AND the EXACT same key function (`ns.def_key`)
@@ -332,8 +455,24 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
             }
         }
     }
+    // The value-vocabulary enum `$defs` are always emitted, so a `$ref` to one
+    // (the referencing-property path) never dangles.
+    for (key, _def) in vocab_enums.values() {
+        emitted_defs.insert(key.clone());
+    }
 
-    let mut ctx = Ctx::new(emitted_defs, ns);
+    // The referencing-property lookups: `sh:class` → enum key (class IRI keyed),
+    // and predicate `rdfs:range` → enum key (predicate IRI keyed).
+    let value_vocab_enums: BTreeMap<String, String> = vocab_enums
+        .iter()
+        .map(|(class_iri, (key, _def))| (class_iri.clone(), key.clone()))
+        .collect();
+    let predicate_ranges = value_vocab_predicate_ranges(shapes, projection, &vocab_enums);
+
+    let mut ctx = Ctx::new(emitted_defs, value_vocab_enums, predicate_ranges, ns);
+    // Enum enumeration losses (empty vocab, blank-node member) recorded first,
+    // deterministically, ahead of the per-shape losses.
+    ctx.losses.extend(vocab_losses);
 
     // Build $defs: one entry per `sh:targetClass` of every active node shape,
     // keyed by the class local name; the body is the shape compiled as an object
@@ -372,6 +511,14 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
     // branch.
     defs.insert("Node".to_owned(), node_def(&class_names, ns));
 
+    // Value-vocabulary enum `$defs` are inserted AFTER the `class_names` snapshot
+    // (mirroring `Node`) so they are never treated as `@type` class branches, yet
+    // still flow into both surfaces (JSON Schema `$defs` + OpenAPI
+    // `components/schemas`) via the shared `defs` map.
+    for (key, def) in vocab_enums.values() {
+        defs.insert(key.clone(), def.clone());
+    }
+
     let schema = root_schema(&defs, ns);
     let openapi = openapi_doc(&defs);
 
@@ -382,13 +529,303 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
     }
 }
 
+/// A single value-vocabulary member: its compacted CURIE (the `enum` value id),
+/// its identifier-safe symbol name (`x-enum-varnames`), and its doc string
+/// (`x-enum-descriptions`, empty when the member carries neither `rdfs:comment`
+/// nor `rdfs:label`).
+struct VocabMember {
+    curie: String,
+    varname: String,
+    description: String,
+}
+
+/// Derive the value-vocabulary enum `$defs`: `class IRI → (enum key, $def body)`.
+///
+/// Enumerates value-vocabulary classes (`?V rdf:type <marker>`) and each one's
+/// named individuals (`?x rdf:type V`) over the ontology graph UNIONED with the
+/// shapes graph, deterministically (sorted, de-duplicated). Returns the map plus
+/// any recorded losses (empty vocabulary, blank-node member). Empty when
+/// `projection` is `None`.
+fn value_vocab_enum_defs(
+    shapes: &Shapes,
+    ns: &Namespaces,
+    projection: Option<&ValueVocabProjection<'_>>,
+) -> (BTreeMap<String, (String, Value)>, Vec<LossRecord>) {
+    let mut out: BTreeMap<String, (String, Value)> = BTreeMap::new();
+    let mut losses: Vec<LossRecord> = Vec::new();
+    let Some(proj) = projection else {
+        return (out, losses);
+    };
+
+    let datasets: [&RdfDataset; 2] = [proj.ontology, shapes.shapes_dataset.as_ref()];
+    let type_term = Term::NamedNode(NamedNode::from(rdf::TYPE));
+    let marker_term = Term::NamedNode(NamedNode::from(proj.vocab.abstract_individual_type()));
+
+    // Value-vocabulary classes = named subjects of `?V rdf:type <marker>`,
+    // de-duplicated and sorted (BTreeSet) across both datasets.
+    let mut class_iris: BTreeSet<String> = BTreeSet::new();
+    for ds in datasets {
+        for (subject, _pred, _obj) in native_quads(
+            ds,
+            None,
+            Some(&type_term),
+            Some(&marker_term),
+            GraphFilter::AnyGraph,
+        ) {
+            if let Term::NamedNode(n) = subject {
+                class_iris.insert(n.as_str().to_owned());
+            }
+        }
+    }
+
+    for class_iri in &class_iris {
+        assert!(
+            ns.is_known(class_iri),
+            "json_schema: value-vocabulary class {class_iri:?} has no declared namespace \
+             prefix — its `{{Local}}Enum` `$def` key and members derive from a prefix CURIE; \
+             declare its prefix in the shapes document / Namespaces before marking it"
+        );
+        let key = format!("{}Enum", local_name(class_iri));
+        let (members, member_losses) = members_of(&datasets, class_iri, ns);
+        losses.extend(member_losses);
+        if members.is_empty() {
+            losses.push(LossRecord {
+                construct: "value-vocabulary".to_owned(),
+                shape_iri: class_iri.clone(),
+                reason: "no named individuals; emitting an empty enum".to_owned(),
+            });
+        }
+        out.insert(class_iri.clone(), (key, build_enum_def(&members)));
+    }
+
+    (out, losses)
+}
+
+/// Map each predicate whose `rdfs:range` is a value-vocabulary class to that
+/// class's `{Local}Enum` `$def` key, scanning the ontology graph UNIONED with the
+/// shapes graph (range axioms commonly live shapes-side). Empty when the
+/// projection is inactive or there are no value-vocabulary classes.
+///
+/// A single `(?P, rdfs:range, ?O)` scan per dataset is performed — O(1) queries
+/// in the number of vocab classes, rather than one scan per class — filtering
+/// each matched object against `vocab_enums` by IRI string. When a predicate's
+/// `rdfs:range` is declared over multiple distinct vocab classes, the class
+/// with the lexicographically largest IRI wins, matching the deterministic
+/// last-write-wins tiebreak of a sorted-by-`class_iri` resolution.
+fn value_vocab_predicate_ranges(
+    shapes: &Shapes,
+    projection: Option<&ValueVocabProjection<'_>>,
+    vocab_enums: &BTreeMap<String, (String, Value)>,
+) -> BTreeMap<String, String> {
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let Some(proj) = projection else {
+        return out;
+    };
+    if vocab_enums.is_empty() {
+        return out;
+    }
+    let datasets: [&RdfDataset; 2] = [proj.ontology, shapes.shapes_dataset.as_ref()];
+    let range_term = Term::NamedNode(NamedNode::from(rdfs::RANGE));
+    // predicate -> (winning class_iri, enum_key); on conflict the larger class_iri wins.
+    let mut winners: BTreeMap<String, (&str, &str)> = BTreeMap::new();
+    for ds in datasets {
+        for (subject, _pred, object) in
+            native_quads(ds, None, Some(&range_term), None, GraphFilter::AnyGraph)
+        {
+            let Term::NamedNode(p) = subject else {
+                continue;
+            };
+            let Term::NamedNode(o) = &object else {
+                continue;
+            };
+            let Some((class_iri, (enum_key, _def))) = vocab_enums.get_key_value(o.as_str()) else {
+                continue;
+            };
+            winners
+                .entry(p.as_str().to_owned())
+                .and_modify(|winner| {
+                    if class_iri.as_str() > winner.0 {
+                        *winner = (class_iri.as_str(), enum_key.as_str());
+                    }
+                })
+                .or_insert((class_iri.as_str(), enum_key.as_str()));
+        }
+    }
+    for (predicate, (_class_iri, enum_key)) in winners {
+        out.insert(predicate, enum_key.to_owned());
+    }
+    out
+}
+
+/// Enumerate the named individuals of `class_iri` (`?x rdf:type class_iri`) across
+/// the datasets, as sorted, de-duplicated [`VocabMember`]s. Blank-node members are
+/// dropped WITH a recorded loss (never silently). Members are ordered by CURIE.
+fn members_of(
+    datasets: &[&RdfDataset; 2],
+    class_iri: &str,
+    ns: &Namespaces,
+) -> (Vec<VocabMember>, Vec<LossRecord>) {
+    let type_term = Term::NamedNode(NamedNode::from(rdf::TYPE));
+    let class_term = Term::NamedNode(NamedNode::from(class_iri));
+
+    // De-duplicate member IRIs (sorted) and blank-node labels (sorted) across both
+    // datasets before shaping, so the output is order-independent of scan order.
+    let mut member_iris: BTreeSet<String> = BTreeSet::new();
+    let mut blank_labels: BTreeSet<String> = BTreeSet::new();
+    for ds in datasets {
+        for (subject, _pred, _obj) in native_quads(
+            ds,
+            None,
+            Some(&type_term),
+            Some(&class_term),
+            GraphFilter::AnyGraph,
+        ) {
+            match subject {
+                Term::NamedNode(n) => {
+                    member_iris.insert(n.as_str().to_owned());
+                }
+                Term::BlankNode(label) => {
+                    blank_labels.insert(label);
+                }
+                Term::Literal(_) | Term::Triple(_) => {}
+            }
+        }
+    }
+
+    let losses: Vec<LossRecord> = blank_labels
+        .into_iter()
+        .map(|label| LossRecord {
+            construct: "value-vocabulary member".to_owned(),
+            shape_iri: class_iri.to_owned(),
+            reason: format!("blank-node individual _:{label} cannot be an enum member; dropped"),
+        })
+        .collect();
+
+    let mut members: Vec<VocabMember> = member_iris
+        .iter()
+        .map(|iri| VocabMember {
+            curie: ns.compact_iri(iri),
+            varname: local_name(iri),
+            description: member_description(datasets, iri),
+        })
+        .collect();
+    // Order by the `enum` value (CURIE); dedup identical CURIEs.
+    members.sort_by(|a, b| a.curie.cmp(&b.curie));
+    members.dedup_by(|a, b| a.curie == b.curie);
+    (members, losses)
+}
+
+/// The doc string for a value-vocabulary member: the canonically-first
+/// `rdfs:comment`, falling back to the canonically-first `rdfs:label`, else empty.
+///
+/// "Canonically first" = sort all candidate lexical values and take the smallest,
+/// so selection is independent of dataset/interner iteration order (determinism).
+fn member_description(datasets: &[&RdfDataset; 2], member_iri: &str) -> String {
+    first_literal(datasets, member_iri, rdfs::COMMENT)
+        .or_else(|| first_literal(datasets, member_iri, rdfs::LABEL))
+        .unwrap_or_default()
+}
+
+/// The canonically-first (sorted-smallest) literal object of `(subject, predicate)`
+/// across the datasets, or `None` when there is no literal value.
+fn first_literal(
+    datasets: &[&RdfDataset; 2],
+    subject_iri: &str,
+    predicate: &str,
+) -> Option<String> {
+    let subject = Term::NamedNode(NamedNode::from(subject_iri));
+    let pred = Term::NamedNode(NamedNode::from(predicate));
+    let mut min: Option<String> = None;
+    for ds in datasets {
+        for (_subject, _pred, obj) in
+            native_quads(ds, Some(&subject), Some(&pred), None, GraphFilter::AnyGraph)
+        {
+            if let Term::Literal(lit) = obj {
+                let value = lit.value();
+                if min.as_deref().is_none_or(|current| value < current) {
+                    min = Some(value.to_owned());
+                }
+            }
+        }
+    }
+    min
+}
+
+/// Build a value-vocabulary enum `$def`. The flat `enum` keyword is ALWAYS the
+/// load-bearing form (mainstream codegen turns a JSON-Schema `enum` array into a
+/// native enum type); member metadata rides the parallel `x-enum-varnames` /
+/// `x-enum-descriptions` arrays, aligned index-for-index to the sorted `enum`.
+fn build_enum_def(members: &[VocabMember]) -> Value {
+    let enum_values: Vec<Value> = members.iter().map(|m| json!({ "@id": m.curie })).collect();
+    let varnames: Vec<Value> = members
+        .iter()
+        .map(|m| Value::String(m.varname.clone()))
+        .collect();
+
+    let mut def = Map::new();
+    def.insert("enum".to_owned(), Value::Array(enum_values));
+    def.insert("x-enum-varnames".to_owned(), Value::Array(varnames));
+    // Only emit descriptions when at least one member carries a doc, so a
+    // metadata-free vocabulary stays a bare `enum` (no empty parallel array).
+    if members.iter().any(|m| !m.description.is_empty()) {
+        let descriptions: Vec<Value> = members
+            .iter()
+            .map(|m| Value::String(m.description.clone()))
+            .collect();
+        def.insert("x-enum-descriptions".to_owned(), Value::Array(descriptions));
+    }
+    def.insert(
+        "$comment".to_owned(),
+        Value::String("projection of an open value vocabulary (anchor, not a fence)".to_owned()),
+    );
+    Value::Object(def)
+}
+
+/// Enforce that the value-vocabulary enum `$def` keys are collision-free
+/// (build-time, fail-closed): no two value-vocabulary classes share a
+/// `{Local}Enum` key (cross-namespace local-name twins), and no enum key clashes
+/// with a class `$def` key.
+fn assert_value_vocab_enum_keys_unambiguous(
+    shapes: &Shapes,
+    ns: &Namespaces,
+    vocab_enums: &BTreeMap<String, (String, Value)>,
+) {
+    // The class `$def` keys (every active target class), which enum keys must not clash with.
+    let mut class_keys: BTreeSet<String> = BTreeSet::new();
+    for shape in &shapes.node_shapes {
+        if shape.deactivated {
+            continue;
+        }
+        for target in &shape.targets {
+            if let Target::Class(c) = target {
+                class_keys.insert(ns.def_key(c.as_str()));
+            }
+        }
+    }
+
+    let mut key_to_class: BTreeMap<String, String> = BTreeMap::new();
+    for (class_iri, (key, _def)) in vocab_enums {
+        assert!(
+            !class_keys.contains(key),
+            "json_schema: value-vocabulary enum key {key:?} (from {class_iri}) collides with a \
+             class `$def` key — disambiguate before projecting"
+        );
+        if let Some(prev) = key_to_class.insert(key.clone(), class_iri.clone()) {
+            panic!(
+                "json_schema: distinct value-vocabulary classes share the enum `$def` key \
+                 {key:?} ({prev} vs {class_iri}) — cross-namespace local-name twins; \
+                 disambiguate before projecting"
+            );
+        }
+    }
+}
+
 /// Enforce the keying precondition (Gap D): every active `sh:targetClass`
 /// is in a DECLARED namespace (so [`Namespaces::def_key`] yields a stable
 /// `$defs` key and [`node_def`] can rebuild its `@type` const) and those keys
 /// are collision-free. Panics with a descriptive message otherwise
 /// (build-time, fail-closed).
 fn assert_target_class_keys_are_unambiguous(shapes: &Shapes, ns: &Namespaces) {
-    use std::collections::BTreeMap;
     let mut key_to_iri: BTreeMap<String, String> = BTreeMap::new();
     for shape in &shapes.node_shapes {
         if shape.deactivated {
@@ -663,8 +1100,10 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     // and (b) DROP one block's constraints. Merging the constraint lists per key
     // and compiling once is both order-independent and semantically complete.
     // `BTreeMap` keeps the emitted property order deterministic (sorted keys).
-    let mut by_key: std::collections::BTreeMap<String, Vec<Constraint>> =
-        std::collections::BTreeMap::new();
+    // Each entry: compacted JSON key → (raw predicate IRI, merged constraints).
+    // The raw IRI is retained so the value-vocabulary `rdfs:range` lookup can key
+    // by predicate IRI (the compacted key would lose the namespace).
+    let mut by_key: BTreeMap<String, (String, Vec<Constraint>)> = BTreeMap::new();
     for ps in &shape.property_shapes {
         // Only direct predicate paths shape outgoing JSON properties; inverse
         // and composite paths (sequence/alternative/closures) are skipped with
@@ -678,12 +1117,14 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
         let key = ctx.ns.compact_iri(pred.as_str());
         by_key
             .entry(key)
-            .or_default()
+            .or_insert_with(|| (pred.as_str().to_owned(), Vec::new()))
+            .1
             .extend(ps.constraints.iter().cloned());
     }
 
-    for (key, constraints) in &by_key {
-        let (value_schema, is_required) = compile_property(constraints, &shape_iri, key, ctx);
+    for (key, (pred_iri, constraints)) in &by_key {
+        let (value_schema, is_required) =
+            compile_property(constraints, &shape_iri, key, pred_iri, ctx);
         if is_required {
             required.push(key.clone());
         }
@@ -856,16 +1297,15 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
 /// bounds `sh:minInclusive`/`sh:maxInclusive`/`sh:minExclusive`/`sh:maxExclusive`,
 /// `sh:hasValue`) is deliberately excluded, because its positive projection
 /// through [`compile_property`] is NOT an exact complement:
-/// * Array/type vacuity — `sh:pattern`, the length bounds and the numeric
-///   bounds project to a BARE JSON-Schema keyword that JSON Schema applies only
-///   to its target primitive and passes vacuously for every other type. For an
-///   array-valued node the scalar alternative is vacuously satisfied, so under
-///   negation the negand widens to reject EVERY array-valued node — a
-///   false-reject.
-/// * Encoding mismatch — `sh:in` over IRI members and `sh:datatype`'s
-///   typed-literal object form project an instance encoding (enum members,
-///   `@type`-tagged objects) that does not line up value-for-value with the
-///   negated instance, so the complement is not exact.
+/// * Array/type vacuity — `sh:pattern`, the length bounds, the numeric bounds
+///   and `sh:in` (a bare `enum` keyword) project to a JSON-Schema keyword that
+///   applies only to its target primitive and passes vacuously for every other
+///   type. For an array-valued node the scalar alternative is vacuously
+///   satisfied, so under negation the negand widens to reject EVERY array-valued
+///   node — a false-reject.
+/// * Encoding mismatch — `sh:datatype`'s typed-literal object form projects an
+///   instance encoding (`@type`-tagged objects) that does not line up
+///   value-for-value with the negated instance, so the complement is not exact.
 /// * Quantifier mismatch — `sh:hasValue` is EXISTENTIAL ("at least one value
 ///   equals `V`"), yet its `const` projection expresses the UNIVERSAL reading
 ///   ("p absent, OR every value equals `V`"). Negating the universal projection
@@ -951,7 +1391,13 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
             return None;
         }
         let key = ctx.ns.compact_iri(pred.as_str());
-        let (value_schema, is_required) = compile_property(&ps.constraints, &inner_iri, &key, ctx);
+        // Presence-only negand (constraints are all `negand_value_constraint_ok`,
+        // i.e. `sh:minCount`): the value-vocabulary `rdfs:range` enrichment is a
+        // POSITIVE value projection and MUST NOT widen a negand (it would make the
+        // emitted `not` reject the wrong nodes). Pass an empty predicate IRI so the
+        // range lookup never fires here.
+        let (value_schema, is_required) =
+            compile_property(&ps.constraints, &inner_iri, &key, "", ctx);
         // A property conjunct that neither requires the key nor restricts its
         // value matches every node (the permissive base); negating it would
         // reject all — the vacuous-not bug. Route such a bare/zero-cardinality
@@ -993,6 +1439,7 @@ fn compile_property(
     constraints: &[Constraint],
     shape_iri: &str,
     key: &str,
+    pred_iri: &str,
     ctx: &mut Ctx<'_>,
 ) -> (Value, bool) {
     // The "scalar" value schema (a single value, pre-cardinality).
@@ -1005,6 +1452,12 @@ fn compile_property(
     let mut min_count: Option<u64> = None;
     let mut max_count: Option<u64> = None;
 
+    // Value-vocabulary precedence (E4): whether ANY `sh:class` was present, and
+    // the enum key emitted by a vocab-resolving `sh:class` (if any). Drives
+    // whether the `rdfs:range` enum `$ref` applies after the loop.
+    let mut had_any_class = false;
+    let mut class_enum_key: Option<String> = None;
+
     for c in constraints {
         match c {
             Constraint::MinCount(n) => min_count = Some(*n),
@@ -1013,6 +1466,15 @@ fn compile_property(
                 alts.push(datatype_value_schema(dt.as_str()));
             }
             Constraint::Class(c) => {
+                had_any_class = true;
+                // A `sh:class` pointing at a value-vocabulary class resolves to the
+                // enum `$ref` (projection-only), tightening the open node-ref to the
+                // anchor set WITHOUT touching the validating shape.
+                if let Some(enum_key) = ctx.value_vocab_enums.get(c.as_str()) {
+                    alts.push(json!({ "$ref": format!("#/$defs/{enum_key}") }));
+                    class_enum_key = Some(enum_key.clone());
+                    continue;
+                }
                 // Resolve/emit by `def_key` — the SAME key the `$defs` map
                 // (built in `compile`) and `emitted_defs` (PASS 1, above) use.
                 // A bare local name would conflate a primary class with any
@@ -1157,6 +1619,44 @@ fn compile_property(
             // Counts handled above; node-shape-only constraints (Closed/And/…)
             // do not appear on a property shape's value schema.
             _ => {}
+        }
+    }
+
+    // Value-vocabulary `rdfs:range` path (E4 precedence): an explicit `sh:class`
+    // always wins. Only a property with NO `sh:class` takes the range-derived enum
+    // `$ref`; a `sh:class` that coexists with a value-vocabulary range records a
+    // conflict loss (the range enum is suppressed).
+    if let Some(range_key) = ctx.predicate_ranges.get(pred_iri).cloned() {
+        match (&class_enum_key, had_any_class) {
+            (Some(class_key), _) => {
+                // A vocab `sh:class` already emitted its enum `$ref`; it wins.
+                if *class_key != range_key {
+                    ctx.record(
+                        "rdfs:range",
+                        shape_iri,
+                        &format!(
+                            "predicate {pred_iri} has a value-vocabulary sh:class ({class_key}) \
+                             and a conflicting value-vocabulary rdfs:range ({range_key}); \
+                             sh:class wins, range enum suppressed"
+                        ),
+                    );
+                }
+            }
+            (None, true) => {
+                // A non-vocab `sh:class` is present; it wins, range enum suppressed.
+                ctx.record(
+                    "rdfs:range",
+                    shape_iri,
+                    &format!(
+                        "predicate {pred_iri} has a sh:class and a value-vocabulary \
+                         rdfs:range ({range_key}); sh:class wins, range enum suppressed"
+                    ),
+                );
+            }
+            (None, false) => {
+                // Open vocabulary (no sh:class): the enum `$ref` is the value schema.
+                alts.push(json!({ "$ref": format!("#/$defs/{range_key}") }));
+            }
         }
     }
 
@@ -1327,16 +1827,16 @@ fn term_lexical(term: &Term) -> String {
     }
 }
 
-/// The `sh:in` enum member value, matching what the projector emits.
+/// The `sh:in` enum member value, matching EXACTLY what the projector emits for a
+/// value of the same term.
 ///
-/// IRIs project as the compacted CURIE/IRI string; literals as their lexical.
+/// Delegates to [`crate::instance::project_value`] — the single source of the
+/// value encoding — so an `sh:in` member and the projected instance value it
+/// constrains can never drift. In particular an IRI member is `{"@id": curie}`
+/// (NOT a bare CURIE string): a projected node value is the object form, so a
+/// bare-string enum would reject the very data the shape accepts.
 fn term_enum_value(term: &Term, ns: &Namespaces) -> Value {
-    match term {
-        Term::NamedNode(n) => Value::String(ns.compact_iri(n.as_str())),
-        Term::Literal(lit) => Value::String(lit.value().to_owned()),
-        Term::BlankNode(b) => Value::String(b.as_str().to_owned()),
-        other @ Term::Triple(_) => Value::String(other.to_string()),
-    }
+    crate::instance::project_value(term, ns)
 }
 
 /// The `sh:hasValue` const value (projected form).
@@ -1801,6 +2301,49 @@ mod tests {
         let mut sorted = strs.clone();
         sorted.sort_unstable();
         assert_eq!(strs, sorted, "enum must be sorted");
+    }
+
+    #[test]
+    fn sh_in_over_iris_uses_id_object_members() {
+        // Regression: a `sh:in` list of IRIs must project members as `{"@id":curie}`
+        // objects (the projector's encoding), NOT bare CURIE strings — otherwise a
+        // projected instance value `{"@id":..}` fails the enum it should satisfy.
+        let schema = schema_of(&compile_ttl(
+            r"
+            meta:StateShape a sh:NodeShape ;
+                sh:targetClass meta:State ;
+                sh:property [ sh:path meta:kind ; sh:maxCount 1 ;
+                              sh:in ( meta:open meta:closed ) ] .
+        ",
+        ));
+        assert_eq!(
+            def(&schema, "State")["properties"]["meta:kind"]["enum"],
+            json!([{ "@id": "meta:closed" }, { "@id": "meta:open" }]),
+            "IRI sh:in members are {{\"@id\":curie}} objects, sorted"
+        );
+    }
+
+    #[test]
+    fn sh_in_over_iris_round_trips_through_projection() {
+        // The production-surface proof: an instance projected via the instance
+        // projector VALIDATES against the `sh:in`-derived schema. Before the fix
+        // the bare-string enum rejected the projected `{"@id":..}` value.
+        let ttl = format!(
+            "{PREFIXES}\
+             meta:StateShape a sh:NodeShape ;\n\
+                 sh:targetClass meta:State ;\n\
+                 sh:property [ sh:path meta:kind ; sh:maxCount 1 ;\n\
+                               sh:in ( meta:open meta:closed ) ] .\n\
+             meta:s1 a meta:State ; meta:kind meta:open ."
+        );
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("parse");
+        let shapes = from_dataset(&dataset).expect("shapes");
+        let compiled = compile(&shapes, &fixture_ns());
+        let node = crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("s1"));
+        assert!(
+            validates(&compiled.schema_json, &node),
+            "a projected instance must validate against its own sh:in enum; projected = {node}"
+        );
     }
 
     #[test]
@@ -3062,5 +3605,582 @@ mod tests {
         // pretty-printed (2-space) + trailing newline
         assert!(a.schema_json.ends_with("}\n"));
         assert!(a.schema_json.contains("\n  \""), "expected 2-space indent");
+    }
+
+    // ── Value-vocabulary enum $def projection ────────────────────────────────
+
+    /// The marker IRI a shapes document / consumer would declare for value
+    /// vocabularies. Caller-supplied; nothing is minted in library code.
+    const MARKER: &str = "https://blackcatinformatics.ca/logic/AbstractIndividualType";
+
+    /// Compile `body` (prefixed) WITH the value-vocabulary projection active
+    /// (marker = [`MARKER`], ontology = the same parsed dataset). The `logic:`
+    /// prefix (the fixture's non-primary vocabulary namespace) is declared here so
+    /// bodies can use `logic:` terms directly.
+    fn compile_vocab(body: &str) -> CompiledSchema {
+        let ttl =
+            format!("{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n{body}");
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("Turtle parse");
+        let shapes = from_dataset(&dataset).expect("shape parse");
+        let vocab = ValueVocab::new(MARKER);
+        let projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: dataset.as_ref(),
+        };
+        compile_with_value_vocab(&shapes, &fixture_ns(), Some(&projection))
+    }
+
+    #[test]
+    fn value_vocab_standalone_enum_def_even_when_unreferenced() {
+        // R1/R2/R3: a marked class with NO referencing property still projects a
+        // `{Local}Enum` $def whose members are its sorted `{"@id":curie}` individuals.
+        let schema = schema_of(&compile_vocab(
+            r"
+            logic:TermStability a logic:AbstractIndividualType .
+            logic:stable       a logic:TermStability .
+            logic:experimental a logic:TermStability .
+            logic:deprecated   a logic:TermStability .
+        ",
+        ));
+        assert_eq!(
+            def(&schema, "TermStabilityEnum")["enum"],
+            json!([
+                { "@id": "logic:deprecated" },
+                { "@id": "logic:experimental" },
+                { "@id": "logic:stable" },
+            ]),
+            "members are the sorted individuals, encoded as {{\"@id\":curie}} objects"
+        );
+    }
+
+    #[test]
+    fn value_vocab_enum_is_load_bearing_with_parallel_metadata_arrays() {
+        // E1/E2: the `enum` keyword is ALWAYS present (never oneOf/const); member
+        // symbol names ride `x-enum-varnames` and docs ride `x-enum-descriptions`,
+        // aligned index-for-index to the sorted `enum` (rdfs:comment wins over label).
+        let schema = schema_of(&compile_vocab(
+            r#"
+            logic:TermStability a logic:AbstractIndividualType .
+            logic:stable       a logic:TermStability ; rdfs:label "Stable label" ; rdfs:comment "A stable term." .
+            logic:experimental a logic:TermStability ; rdfs:comment "Experimental term." .
+            logic:deprecated   a logic:TermStability .
+        "#,
+        ));
+        let enum_def = def(&schema, "TermStabilityEnum");
+        assert!(
+            enum_def["enum"].is_array(),
+            "the `enum` keyword is load-bearing"
+        );
+        assert!(
+            enum_def.get("oneOf").is_none() && enum_def.get("const").is_none(),
+            "a value-vocabulary $def never emits oneOf/const"
+        );
+        assert_eq!(
+            enum_def["x-enum-varnames"],
+            json!(["deprecated", "experimental", "stable"]),
+            "varnames = sorted member local names, aligned to the enum"
+        );
+        assert_eq!(
+            enum_def["x-enum-descriptions"],
+            json!(["", "Experimental term.", "A stable term."]),
+            "descriptions parallel to enum; comment wins over label; empty where absent"
+        );
+    }
+
+    #[test]
+    fn value_vocab_metadata_free_omits_descriptions() {
+        // A vocabulary whose members carry no doc emits `enum` + `x-enum-varnames`
+        // but NO `x-enum-descriptions` (no empty parallel array).
+        let schema = schema_of(&compile_vocab(
+            r"
+            logic:Color a logic:AbstractIndividualType .
+            logic:red   a logic:Color .
+            logic:green a logic:Color .
+        ",
+        ));
+        let enum_def = def(&schema, "ColorEnum");
+        assert!(enum_def["enum"].is_array());
+        assert!(enum_def["x-enum-varnames"].is_array());
+        assert!(
+            enum_def.get("x-enum-descriptions").is_none(),
+            "no descriptions array when no member has a doc"
+        );
+    }
+
+    #[test]
+    fn value_vocab_enum_def_appears_in_both_surfaces() {
+        // The enum $def (with its x-enum-* arrays) mirrors identically into the
+        // OpenAPI `components/schemas` surface.
+        let compiled = compile_vocab(
+            r#"
+            logic:Color a logic:AbstractIndividualType .
+            logic:red   a logic:Color ; rdfs:comment "Red." .
+            logic:green a logic:Color .
+        "#,
+        );
+        let schema = schema_of(&compiled);
+        let openapi: Value =
+            serde_json::from_str(&compiled.openapi_json).expect("openapi is valid JSON");
+        assert_eq!(
+            schema["$defs"]["ColorEnum"], openapi["components"]["schemas"]["ColorEnum"],
+            "the enum $def is byte-identical across JSON Schema $defs and OpenAPI components/schemas"
+        );
+    }
+
+    #[test]
+    fn value_vocab_output_is_byte_deterministic() {
+        let body = r#"
+            logic:TermStability a logic:AbstractIndividualType .
+            logic:stable       a logic:TermStability ; rdfs:comment "Stable." .
+            logic:deprecated   a logic:TermStability .
+        "#;
+        let a = compile_vocab(body);
+        let b = compile_vocab(body);
+        assert_eq!(
+            a.schema_json, b.schema_json,
+            "schema output must be byte-stable"
+        );
+        assert_eq!(
+            a.openapi_json, b.openapi_json,
+            "openapi output must be byte-stable"
+        );
+    }
+
+    #[test]
+    fn value_vocab_description_selection_is_load_order_independent() {
+        // A member with MULTIPLE rdfs:comment values, presented in two DIFFERENT
+        // triple orders, yields the SAME (canonically-first) description — proving
+        // sort-then-pick, not iteration-first.
+        let order_a = compile_vocab(
+            r#"
+            logic:Color a logic:AbstractIndividualType .
+            logic:red   a logic:Color ; rdfs:comment "Zeta" ; rdfs:comment "Alpha" .
+        "#,
+        );
+        let order_b = compile_vocab(
+            r#"
+            logic:Color a logic:AbstractIndividualType .
+            logic:red   a logic:Color ; rdfs:comment "Alpha" ; rdfs:comment "Zeta" .
+        "#,
+        );
+        let desc_a = schema_of(&order_a)["$defs"]["ColorEnum"]["x-enum-descriptions"][0].clone();
+        let desc_b = schema_of(&order_b)["$defs"]["ColorEnum"]["x-enum-descriptions"][0].clone();
+        assert_eq!(
+            desc_a,
+            json!("Alpha"),
+            "picks the canonically-first comment"
+        );
+        assert_eq!(desc_a, desc_b, "selection is independent of triple order");
+    }
+
+    #[test]
+    fn value_vocab_none_and_zero_match_equal_plain_compile() {
+        // R7: None == compile(); AND a marker that matches zero classes == compile()
+        // (the realistic misconfiguration — wrong marker IRI — must not perturb output).
+        let ttl = format!(
+            "{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n{}",
+            r"
+            meta:CatShape a sh:NodeShape ;
+                sh:targetClass meta:Cat ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ] .
+            logic:TermStability a logic:AbstractIndividualType .
+            logic:stable a logic:TermStability .
+        "
+        );
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("Turtle parse");
+        let shapes = from_dataset(&dataset).expect("shape parse");
+        let plain = compile(&shapes, &fixture_ns());
+        let none = compile_with_value_vocab(&shapes, &fixture_ns(), None);
+        assert_eq!(
+            plain.schema_json, none.schema_json,
+            "None must equal compile()"
+        );
+        assert_eq!(plain.openapi_json, none.openapi_json);
+
+        let vocab = ValueVocab::new("https://example.org/meta/NoSuchMarker");
+        let proj = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: dataset.as_ref(),
+        };
+        let zero = compile_with_value_vocab(&shapes, &fixture_ns(), Some(&proj));
+        assert_eq!(
+            plain.schema_json, zero.schema_json,
+            "a marker matching zero classes must equal compile()"
+        );
+    }
+
+    #[test]
+    fn value_vocab_empty_records_loss_and_empty_enum() {
+        let compiled = compile_vocab(
+            r"
+            logic:Empty a logic:AbstractIndividualType .
+        ",
+        );
+        assert_eq!(
+            schema_of(&compiled)["$defs"]["EmptyEnum"]["enum"],
+            json!([]),
+            "an empty vocabulary emits an empty enum"
+        );
+        assert!(
+            compiled
+                .losses
+                .iter()
+                .any(|l| l.construct == "value-vocabulary" && l.shape_iri.ends_with("Empty")),
+            "an empty vocabulary is recorded as a loss, not silently dropped"
+        );
+    }
+
+    #[test]
+    fn value_vocab_blank_node_member_is_dropped_with_loss() {
+        let compiled = compile_vocab(
+            r"
+            logic:HasBlank a logic:AbstractIndividualType .
+            logic:named a logic:HasBlank .
+            [] a logic:HasBlank .
+        ",
+        );
+        assert_eq!(
+            schema_of(&compiled)["$defs"]["HasBlankEnum"]["enum"],
+            json!([{ "@id": "logic:named" }]),
+            "the named member survives; the blank-node member is dropped"
+        );
+        assert!(
+            compiled
+                .losses
+                .iter()
+                .any(|l| l.construct == "value-vocabulary member"),
+            "the dropped blank-node member is recorded as a loss"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "cross-namespace local-name twins")]
+    fn value_vocab_local_name_twins_hard_fail() {
+        // Two vocab classes with the same local name in different declared
+        // namespaces both key to `ColorEnum` — the collision guard must reject it.
+        compile_vocab(
+            r"
+            meta:Color  a logic:AbstractIndividualType .
+            logic:Color a logic:AbstractIndividualType .
+        ",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "has no declared namespace prefix")]
+    fn value_vocab_undeclared_namespace_class_hard_fails() {
+        // A vocab class in a namespace the Namespaces table does not declare has
+        // no prefix CURIE to key its `{Local}Enum` $def / members by.
+        compile_vocab(
+            r"
+            @prefix und: <https://undeclared.example/> .
+            und:Foo a logic:AbstractIndividualType .
+            und:bar a und:Foo .
+        ",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "collides with a class `$def` key")]
+    fn value_vocab_enum_key_class_def_key_clash_hard_fails() {
+        // A vocab class `logic:Color` enum-keys to `ColorEnum`, which is the SAME
+        // `$def` key a primary-namespace target class `meta:ColorEnum` receives
+        // (local-name keyed) — the enum-key-vs-class-key clash guard must reject
+        // it, distinct from both the twins guard and the undeclared-namespace
+        // guard (both `logic:` and `meta:` are declared namespaces here).
+        compile_vocab(
+            r"
+            logic:Color a logic:AbstractIndividualType .
+            logic:red   a logic:Color .
+
+            meta:ColorEnumShape a sh:NodeShape ;
+                sh:targetClass meta:ColorEnum ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ] .
+        ",
+        );
+    }
+
+    // ── Referencing $ref (Task 3) ────────────────────────────────────────────
+
+    /// Compile with a SEPARATE ontology dataset and shapes dataset (both `logic:`
+    /// declared), so a `rdfs:range` declared shapes-side but absent ontology-side
+    /// still resolves via the union scan.
+    fn compile_split(ontology_body: &str, shapes_body: &str) -> CompiledSchema {
+        let logic = "@prefix logic: <https://blackcatinformatics.ca/logic/> .\n";
+        let onto = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}{logic}{ontology_body}"
+        ))
+        .expect("ontology Turtle parse");
+        let shapes_ds =
+            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{logic}{shapes_body}"))
+                .expect("shapes Turtle parse");
+        let shapes = from_dataset(&shapes_ds).expect("shape parse");
+        let vocab = ValueVocab::new(MARKER);
+        let projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: onto.as_ref(),
+        };
+        compile_with_value_vocab(&shapes, &fixture_ns(), Some(&projection))
+    }
+
+    const STABILITY_VOCAB: &str = r"
+        logic:TermStability a logic:AbstractIndividualType .
+        logic:stable     a logic:TermStability .
+        logic:deprecated a logic:TermStability .
+    ";
+
+    #[test]
+    fn value_vocab_sh_class_single_emits_scalar_ref() {
+        // R4: sh:class → vocab, maxCount 1 ⇒ a bare scalar $ref to the enum $def.
+        let schema = schema_of(&compile_vocab(&format!(
+            "{STABILITY_VOCAB}
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:class logic:TermStability ; sh:maxCount 1 ] ."
+        )));
+        assert_eq!(
+            def(&schema, "Term")["properties"]["meta:stability"],
+            json!({ "$ref": "#/$defs/TermStabilityEnum" }),
+            "single-valued vocab property is a scalar $ref"
+        );
+        assert_no_dangling_defs_refs(&schema);
+    }
+
+    #[test]
+    fn value_vocab_sh_class_multi_wraps_ref_in_array() {
+        // R4: multi-valued ⇒ anyOf[scalar $ref, array-of-$ref], cardinality preserved.
+        let schema = schema_of(&compile_vocab(&format!(
+            "{STABILITY_VOCAB}
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:class logic:TermStability ] ."
+        )));
+        let prop = &def(&schema, "Term")["properties"]["meta:stability"];
+        let alts = prop["anyOf"]
+            .as_array()
+            .expect("multi-valued property is anyOf");
+        assert!(
+            alts.contains(&json!({ "$ref": "#/$defs/TermStabilityEnum" })),
+            "the bare scalar $ref is one alternative"
+        );
+        assert!(
+            alts.iter().any(|a| a["type"] == json!("array")
+                && a["items"] == json!({ "$ref": "#/$defs/TermStabilityEnum" })),
+            "the array form wraps the same $ref in items"
+        );
+        assert_no_dangling_defs_refs(&schema);
+    }
+
+    #[test]
+    fn value_vocab_rdfs_range_open_property_emits_ref() {
+        // R4: a property with NO sh:class but a vocab rdfs:range ⇒ enum $ref.
+        let schema = schema_of(&compile_vocab(&format!(
+            "{STABILITY_VOCAB}
+            meta:stability rdfs:range logic:TermStability .
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:maxCount 1 ] ."
+        )));
+        assert_eq!(
+            def(&schema, "Term")["properties"]["meta:stability"],
+            json!({ "$ref": "#/$defs/TermStabilityEnum" }),
+            "an open (no sh:class) property with a vocab range resolves to the enum $ref"
+        );
+        assert_no_dangling_defs_refs(&schema);
+    }
+
+    #[test]
+    fn value_vocab_rdfs_range_declared_shapes_side_still_resolves() {
+        // The rdfs:range lives ONLY in the shapes dataset (not the ontology one);
+        // the union scan must still find it.
+        let schema = schema_of(&compile_split(
+            STABILITY_VOCAB,
+            r"
+            meta:stability rdfs:range logic:TermStability .
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:maxCount 1 ] .",
+        ));
+        assert_eq!(
+            def(&schema, "Term")["properties"]["meta:stability"],
+            json!({ "$ref": "#/$defs/TermStabilityEnum" }),
+            "a shapes-side rdfs:range resolves via the ontology∪shapes union scan"
+        );
+    }
+
+    #[test]
+    fn value_vocab_multi_range_picks_largest_class_iri_deterministically() {
+        // When ONE predicate declares rdfs:range over TWO distinct value-vocab
+        // classes, the winner is the class with the lexicographically LARGEST
+        // class IRI (".../logic/Beta" > ".../logic/Alpha"), not load order.
+        let forward = schema_of(&compile_vocab(
+            r"
+            logic:Alpha a logic:AbstractIndividualType .
+            logic:a1    a logic:Alpha .
+            logic:Beta  a logic:AbstractIndividualType .
+            logic:b1    a logic:Beta .
+            meta:choice rdfs:range logic:Alpha, logic:Beta .
+            meta:ThingShape a sh:NodeShape ;
+                sh:targetClass meta:Thing ;
+                sh:property [ sh:path meta:choice ; sh:maxCount 1 ] .
+        ",
+        ));
+        assert_eq!(
+            def(&forward, "Thing")["properties"]["meta:choice"],
+            json!({ "$ref": "#/$defs/BetaEnum" }),
+            "the larger class IRI (logic:Beta) wins the multi-range tiebreak"
+        );
+
+        // Reversed triple order (Beta declared before Alpha) must yield the
+        // IDENTICAL winner — the tiebreak is by value, not by scan order.
+        let reversed = schema_of(&compile_vocab(
+            r"
+            logic:Beta  a logic:AbstractIndividualType .
+            logic:b1    a logic:Beta .
+            logic:Alpha a logic:AbstractIndividualType .
+            logic:a1    a logic:Alpha .
+            meta:choice rdfs:range logic:Beta, logic:Alpha .
+            meta:ThingShape a sh:NodeShape ;
+                sh:targetClass meta:Thing ;
+                sh:property [ sh:path meta:choice ; sh:maxCount 1 ] .
+        ",
+        ));
+        assert_eq!(
+            def(&reversed, "Thing")["properties"]["meta:choice"],
+            json!({ "$ref": "#/$defs/BetaEnum" }),
+            "the winner is order-independent: still logic:Beta when declared first"
+        );
+    }
+
+    #[test]
+    fn value_vocab_sh_class_wins_over_conflicting_range() {
+        // E4 precedence: a non-vocab sh:class coexisting with a vocab rdfs:range
+        // keeps the sh:class behavior and records a conflict loss (no enum $ref).
+        let compiled = compile_vocab(&format!(
+            "{STABILITY_VOCAB}
+            meta:stability rdfs:range logic:TermStability .
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:class meta:OtherNode ; sh:maxCount 1 ] ."
+        ));
+        let schema = schema_of(&compiled);
+        let prop = def(&schema, "Term")["properties"]["meta:stability"].to_string();
+        assert!(
+            !prop.contains("TermStabilityEnum"),
+            "an explicit sh:class wins; the range enum $ref is suppressed"
+        );
+        assert!(
+            compiled
+                .losses
+                .iter()
+                .any(|l| l.construct == "rdfs:range" && l.reason.contains("sh:class wins")),
+            "the class/range conflict is recorded as a loss"
+        );
+        assert_no_dangling_defs_refs(&schema);
+    }
+
+    // ── Acceptance proofs (Task 4): round-trip + open-validator decoupling ────
+
+    /// The `meta:` term IRI for a fixture instance subject.
+    fn meta_term(local: &str) -> Term {
+        Term::NamedNode(NamedNode::from(
+            format!("https://example.org/meta/{local}").as_str(),
+        ))
+    }
+
+    #[test]
+    fn value_vocab_projected_instance_round_trips_through_enum() {
+        // Encoding AC: a projected instance carrying an ANCHOR individual validates
+        // against the compiled enum $ref (both metadata-free and metadata-bearing —
+        // the x-enum-* arrays are annotations and must not affect validation); a
+        // NON-anchor value is rejected. This proves members use the {"@id":curie}
+        // encoding (not bare strings) on the real projector + validator surfaces.
+        for member_meta in ["", r#"; rdfs:comment "A stable term.""#] {
+            let compiled = compile_vocab(&format!(
+                "logic:TermStability a logic:AbstractIndividualType .
+                logic:stable     a logic:TermStability {member_meta} .
+                logic:deprecated a logic:TermStability .
+                meta:TermShape a sh:NodeShape ;
+                    sh:targetClass meta:Term ;
+                    sh:property [ sh:path meta:stability ; sh:class logic:TermStability ; sh:maxCount 1 ] .
+                meta:anchor    a meta:Term ; meta:stability logic:stable .
+                meta:offanchor a meta:Term ; meta:stability logic:bogus ."
+            ));
+            // Re-parse the same document to project instances from it.
+            let ttl = format!(
+                "{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n\
+                 logic:TermStability a logic:AbstractIndividualType .\n\
+                 logic:stable a logic:TermStability {member_meta} .\n\
+                 meta:anchor a meta:Term ; meta:stability logic:stable .\n\
+                 meta:offanchor a meta:Term ; meta:stability logic:bogus ."
+            );
+            let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("parse");
+            let anchor =
+                crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("anchor"));
+            let off =
+                crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("offanchor"));
+            assert!(
+                validates(&compiled.schema_json, &anchor),
+                "anchor instance must validate (member_meta={member_meta:?}); projected = {anchor}"
+            );
+            assert!(
+                !validates(&compiled.schema_json, &off),
+                "a non-anchor value must be rejected by the enum $ref"
+            );
+        }
+    }
+
+    #[test]
+    fn value_vocab_projection_leaves_the_live_validator_open() {
+        // R5: on an rdfs:range-associated OPEN property (no sh:class), a non-anchor
+        // IRI value CONFORMS to the live SHACL validator, yet its projection is
+        // REJECTED by the closed enum schema — proving the projection never closes
+        // the validator. Also pins that no sh:in was injected into the shape IR.
+        let ttl = format!(
+            "{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n\
+             logic:TermStability a logic:AbstractIndividualType .\n\
+             logic:stable a logic:TermStability .\n\
+             meta:stability rdfs:range logic:TermStability .\n\
+             meta:TermShape a sh:NodeShape ;\n\
+                 sh:targetClass meta:Term ;\n\
+                 sh:property [ sh:path meta:stability ; sh:maxCount 1 ] .\n\
+             meta:t1 a meta:Term ; meta:stability logic:bogus ."
+        );
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("parse");
+        let shapes = from_dataset(&dataset).expect("shapes");
+
+        // No sh:in was introduced anywhere in the validating shape IR.
+        let has_sh_in = shapes.node_shapes.iter().any(|s| {
+            s.property_shapes.iter().any(|ps| {
+                ps.constraints
+                    .iter()
+                    .any(|c| matches!(c, Constraint::In(_)))
+            })
+        });
+        assert!(
+            !has_sh_in,
+            "the projection must not inject sh:in into the shape set"
+        );
+
+        // The live SHACL validator conforms the non-anchor value (open world).
+        let report =
+            crate::engine::validate_dataset(dataset.as_ref(), &shapes).expect("validation runs");
+        assert!(
+            report.conforms,
+            "the open property conforms a non-anchor value in the live validator"
+        );
+
+        // The SAME value is rejected by the closed enum projection.
+        let vocab = ValueVocab::new(MARKER);
+        let proj = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: dataset.as_ref(),
+        };
+        let compiled = compile_with_value_vocab(&shapes, &fixture_ns(), Some(&proj));
+        let node = crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("t1"));
+        assert!(
+            !validates(&compiled.schema_json, &node),
+            "the projection is closed: the non-anchor value fails the enum $ref"
+        );
     }
 }

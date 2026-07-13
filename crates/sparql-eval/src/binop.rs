@@ -148,8 +148,8 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    if !crate::parallel::is_parallel_safe_pattern(left)
-        || !crate::parallel::is_parallel_safe_pattern(right)
+    if !crate::parallel::is_parallel_safe_pattern(left, ctx.user_functions)
+        || !crate::parallel::is_parallel_safe_pattern(right, ctx.user_functions)
     {
         let l = eval(left, ctx)?;
         let r = eval(right, ctx)?;
@@ -473,7 +473,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
     let shared = l.schema.shared_columns(&r.schema);
 
     // A left outer join emits at least one row per left row.
-    let rows = if crate::parallel::is_parallel_safe(expr) {
+    let rows = if crate::parallel::is_parallel_safe(expr, ctx.user_functions) {
         crate::parallel::par_chunk_try_map_init(
             &l.rows,
             || ctx.fork_for_worker(),

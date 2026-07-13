@@ -609,6 +609,16 @@ pub mod rdfs {
 
     /// `rdfs:subClassOf` — the RDFS subclass predicate.
     pub const SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+
+    /// `rdfs:range` — the range predicate (a property's values are instances of
+    /// the range class).
+    pub const RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
+
+    /// `rdfs:label` — a human-readable name for a resource.
+    pub const LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
+
+    /// `rdfs:comment` — a human-readable description of a resource.
+    pub const COMMENT: &str = "http://www.w3.org/2000/01/rdf-schema#comment";
 }
 
 /// XSD namespace base string.
