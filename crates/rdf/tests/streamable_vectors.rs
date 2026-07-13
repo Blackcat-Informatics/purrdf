@@ -20,9 +20,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use ciborium::value::Value;
 use ed25519_dalek::SigningKey;
 use purrdf_gts::compact::DictStrategy;
 use purrdf_gts::reader::read;
+use purrdf_gts::wire::{iter_items, map_get};
 use purrdf_rdf::gts_certify::{compact_and_certify, verify_compaction};
 
 const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
@@ -129,6 +131,27 @@ fn frozen_vector_independently_verifies_the_facets_this_repo_can_check() {
     );
 }
 
+/// Whether the file's header item (the first CBOR item, §3.1) carries a
+/// non-empty `"dct"` map (§5) — the authoritative, upstream-defined signal
+/// that a pack dictionary was actually pinned in-band (matches
+/// `crates/rdf/tests/dict_vectors.rs::header_carries_dct_entry`, the same
+/// mechanism vector 31 (`31-dict-trained.gts`) uses to prove its `"dct"`
+/// entry IS present; reused here to prove the opposite for 25b).
+fn header_carries_dct_entry(bytes: &[u8]) -> bool {
+    let (items, _torn) = iter_items(bytes);
+    let Some((_, first)) = items.first() else {
+        return false;
+    };
+    let inner = match first {
+        Value::Tag(_, inner) => inner.as_ref(),
+        other => other,
+    };
+    let Value::Map(entries) = inner else {
+        return false;
+    };
+    matches!(map_get(entries, "dct"), Some(Value::Map(dct)) if !dct.is_empty())
+}
+
 #[test]
 fn frozen_vector_pins_no_pack_dictionary() {
     // `25-streamable-source.gts` carries only two tiny content blobs (10 and 100
@@ -138,6 +161,24 @@ fn frozen_vector_pins_no_pack_dictionary() {
     // with `DictStrategy::None`, so the frozen pack carries no `"dct"` header
     // entry and no zstd-compressed frames.
     let frozen = read_vector("25b-streamable-compacted.gts");
+
+    // Authoritative proof (GTS-SPEC §5): the pack HEADER must carry no
+    // `"dct"` map at all. Counting zstd frames alone cannot prove this — a
+    // pack could carry a pinned `"dct"` entry while every blob still uses an
+    // identity (uncompressed) frame, so this header-level check is the real
+    // "no in-band pack dictionary is pinned" assertion.
+    assert!(
+        !header_carries_dct_entry(&frozen),
+        "25b-streamable-compacted.gts header must carry no \"dct\" entry \
+         (DictStrategy::None pins no in-band pack dictionary)"
+    );
+
+    // Separate codec-behavior check: with no dictionary pinned, this frozen
+    // pack's two tiny blobs also happen to carry no zstd-compressed frames.
+    // This is a fact about THIS vector's codec choice, not by itself proof
+    // of "no dictionary" (an inert pinned dictionary next to all-identity
+    // frames would also count zero) — kept alongside, not instead of, the
+    // header-level assertion above.
     const ZSTD_FRAME_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
     let zstd_frames = frozen
         .windows(ZSTD_FRAME_MAGIC.len())
