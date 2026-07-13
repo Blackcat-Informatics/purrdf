@@ -13,11 +13,18 @@
 //! [`bits`] lands the whole primitive layer (Task 1 of the succinct-pack-codec
 //! feature): [`bits::IntVector`] (fixed-width bit-packed integers),
 //! [`bits::BitVec`]/[`bits::RankSelect`] (rank1/select1/rank0/select0 succinct
-//! bitmaps), and the varint/zigzag/delta-list byte helpers. The dictionary and
-//! bitmap-triples encoders that consume these primitives arrive in later tasks.
+//! bitmaps), and the varint/zigzag/delta-list byte helpers.
+//!
+//! [`dict`] lands the four-section value dictionary (Task 2):
+//! [`dict::PackDict`] assigns one unified id per distinct term value (scanned by
+//! role from an `RdfDataset`'s base quads), PFC-compresses each section on disk, and
+//! decodes into an owned, query-ready form. The bitmap-triples encoder that consumes
+//! it arrives in a later task.
 //!
 //! `#[doc(hidden)]` (see [`super::pack`]'s declaration): this whole tree is an
 //! internal-codec surface, not a SemVer-guaranteed part of the crate's public API.
 
 #[doc(hidden)]
 pub mod bits;
+#[doc(hidden)]
+pub mod dict;
