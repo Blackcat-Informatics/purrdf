@@ -18,8 +18,8 @@ use ciborium::value::Value;
 
 use crate::codec::{Codec, CodecError, decode_chain, decode_chain_with_decrypt};
 use crate::model::{
-    AnnotationRow, Diagnostic, Graph, OpaqueNode, Quad, ReifierRow, Signature, StreamableInfo,
-    Suppression, Term, TermKind, Triple3,
+    AnnotationRow, ByteRange, Diagnostic, Graph, OpaqueNode, Quad, ReifierRow, Signature,
+    StreamableInfo, Suppression, Term, TermKind, Triple3,
 };
 use crate::reader_layout::{IndexRecord, check_index_mmr, layout_check};
 use crate::reader_rows::{
@@ -181,6 +181,49 @@ pub struct StreamingReadResult {
     pub torn: Option<usize>,
 }
 
+/// Physical provenance of one streamed frame: where its bytes live and what it
+/// hashes to.
+///
+/// Fired once per frame by [`read_to_sink_from_reader`] (and its callers)
+/// before that frame's rows are folded, so index builders can record byte
+/// offsets without re-parsing the source. The field semantics mirror
+/// `replication::FrameInventory`, the offline equivalent computed from a
+/// fully-buffered file.
+#[derive(Clone, Debug)]
+pub struct FrameContext<'a> {
+    /// Zero-based segment index.
+    pub segment_index: usize,
+    /// Zero-based frame index within the segment (excludes the header).
+    pub frame_index: usize,
+    /// Frame content-id: the stored `"id"` when present and self-hash-valid,
+    /// else the recomputed id; empty for a non-map placeholder frame.
+    pub content_id: &'a [u8],
+    /// `[start, end)` byte range of this frame in the source.
+    pub range: ByteRange,
+    /// Wire `"t"` value; `"<non-map>"` for a non-map placeholder frame.
+    pub frame_type: &'a str,
+    /// True when both the id self-hash and the `prev`-chain link hold.
+    pub valid: bool,
+}
+
+impl FrameContext<'_> {
+    /// Recompute the content-id over `source[range]` and compare it to
+    /// [`Self::content_id`].
+    ///
+    /// Returns `false` when the range is out of bounds, the bytes fail to
+    /// decode as CBOR, or the decoded value is not a map — a damaged frame
+    /// never verifies.
+    pub fn verify(&self, source: &[u8]) -> bool {
+        let Some(bytes) = source.get(self.range.start..self.range.end) else {
+            return false;
+        };
+        let Ok(Value::Map(map)) = ciborium::de::from_reader::<Value, _>(bytes) else {
+            return false;
+        };
+        content_id(&map) == self.content_id
+    }
+}
+
 /// Sink for [`read_to_sink`] events.
 ///
 /// Term ids in events are segment-local ids. A sink that needs a file-level
@@ -188,6 +231,8 @@ pub struct StreamingReadResult {
 /// project rows into a table can usually consume the segment-local ids directly
 /// with the segment index as the scope.
 pub trait StreamingSink {
+    /// Per-frame provenance, fired once per frame before its rows are processed.
+    fn frame(&mut self, _ctx: FrameContext<'_>) {}
     /// Accepted term row.
     fn term(&mut self, _segment_index: usize, _term_id: usize, _term: &Term) {}
     /// Accepted quad row.
@@ -1123,10 +1168,10 @@ impl<R: Read> Read for StreamingCountingReader<R> {
 
 fn next_stream_item<R: Read>(
     reader: &mut StreamingCountingReader<R>,
-) -> Result<Option<Value>, usize> {
+) -> Result<Option<(Value, usize, usize)>, usize> {
     let start = reader.pos;
     match ciborium::de::from_reader::<Value, _>(&mut *reader) {
-        Ok(item) => Ok(Some(item)),
+        Ok(item) => Ok(Some((item, start, reader.pos))),
         Err(_) if reader.pos == start => Ok(None),
         Err(_) => Err(start),
     }
@@ -1232,12 +1277,18 @@ impl ActiveStreamingSegment {
         &mut self,
         raw: &Value,
         abs_index: usize,
+        frame_start: usize,
+        frame_end: usize,
         sink: &mut dyn StreamingSink,
         content_key: Option<&'k ContentKeyResolver<'k>>,
     ) {
         if !self.valid_header {
             return;
         }
+        // Captured before any push below — the zero-based index of THIS
+        // frame within the segment (mirrors `collect_frames` in
+        // `replication.rs`).
+        let frame_index = self.frame_ids.len();
         let catalog = std::mem::take(&mut self.catalog);
         let index_records = std::mem::take(&mut self.index_records);
         let described = std::mem::take(&mut self.described);
@@ -1253,6 +1304,11 @@ impl ActiveStreamingSegment {
             described,
             blob_events,
         };
+        // Owned provenance fields for the `sink.frame()` call fired below,
+        // once `folder` has released its borrow of `sink`.
+        let ctx_id: Vec<u8>;
+        let ctx_type: String;
+        let ctx_valid: bool;
         if let Value::Map(frame) = raw {
             let stored_id: Option<&Vec<u8>> = match map_get(frame, "id") {
                 Some(Value::Bytes(b)) => Some(b),
@@ -1269,6 +1325,9 @@ impl ActiveStreamingSegment {
                 folder.opaque(frame, &ftype, "damaged");
                 self.expected_prev = stored_id.cloned().unwrap_or(computed);
                 self.frame_ids.push(self.expected_prev.clone());
+                ctx_id = self.expected_prev.clone();
+                ctx_type = ftype;
+                ctx_valid = false;
             } else {
                 let prev_ok = matches!(map_get(frame, "prev"),
                     Some(Value::Bytes(b)) if *b == self.expected_prev);
@@ -1287,13 +1346,17 @@ impl ActiveStreamingSegment {
                         _ => ("invalid", None),
                     };
                     folder.push_signature(Signature {
-                        frame_id: computed,
+                        frame_id: computed.clone(),
                         kid: None,
                         status: status.to_string(),
                         cose,
                     });
                 }
+                let ftype = text_or(map_get(frame, "t"), "").to_string();
                 folder.fold_frame(frame, abs_index);
+                ctx_id = computed;
+                ctx_type = ftype;
+                ctx_valid = prev_ok;
             }
         } else {
             folder.diag(
@@ -1302,16 +1365,33 @@ impl ActiveStreamingSegment {
                 Some(abs_index),
             );
             self.frame_ids.push(Vec::new());
+            ctx_id = Vec::new();
+            ctx_type = "<non-map>".to_string();
+            ctx_valid = false;
         }
         let catalog = std::mem::take(&mut folder.catalog);
         let index_records = std::mem::take(&mut folder.index_records);
         let described = std::mem::take(&mut folder.described);
         let blob_events = std::mem::take(&mut folder.blob_events);
+        let restored_sink = folder.sink.take();
         drop(folder);
         self.catalog = catalog;
         self.index_records = index_records;
         self.described = described;
         self.blob_events = blob_events;
+        if let Some(sink) = restored_sink {
+            sink.frame(FrameContext {
+                segment_index: self.segment_index,
+                frame_index,
+                content_id: &ctx_id,
+                range: ByteRange {
+                    start: frame_start,
+                    end: frame_end,
+                },
+                frame_type: &ctx_type,
+                valid: ctx_valid,
+            });
+        }
     }
 
     fn finish_into_result(
@@ -1377,7 +1457,7 @@ pub fn read_to_sink_from_reader<R: Read>(
     let mut item_index = 0usize;
     let mut current: Option<ActiveStreamingSegment> = None;
     loop {
-        let item = match next_stream_item(&mut reader) {
+        let (item, frame_start, frame_end) = match next_stream_item(&mut reader) {
             Ok(Some(item)) => item,
             Ok(None) => break,
             Err(torn) => {
@@ -1424,7 +1504,14 @@ pub fn read_to_sink_from_reader<R: Read>(
                 sink,
             ));
         } else if let Some(segment) = current.as_mut() {
-            segment.process_frame(&item, item_index, sink, options.content_key);
+            segment.process_frame(
+                &item,
+                item_index,
+                frame_start,
+                frame_end,
+                sink,
+                options.content_key,
+            );
         } else {
             push_result_diagnostic(
                 &mut result,
