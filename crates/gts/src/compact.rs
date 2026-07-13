@@ -250,8 +250,8 @@ fn base64url_unpadded(data: &[u8]) -> String {
 }
 
 /// Decode a base64url WITHOUT padding (RFC 4648 §5) string — the inverse of
-/// [`base64url_unpadded`], used to recover a `stream:cose` literal's raw
-/// COSE_Sign1 bytes (Task 5 signature verification).
+/// `base64url_unpadded`, used to recover a `stream:cose` literal's raw
+/// COSE_Sign1 bytes for signature verification.
 ///
 /// # Errors
 /// HARD-ERRORS on a padding character (`=`) or any byte outside the unpadded
