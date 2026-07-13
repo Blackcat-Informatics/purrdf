@@ -26,7 +26,7 @@
 //! CBOR round-trips so a certificate can be carried and replayed independent
 //! of this crate's in-memory shape.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ciborium::value::{Integer, Value};
 use ed25519_dalek::{SigningKey, VerifyingKey};
@@ -197,8 +197,23 @@ pub fn content_projection(g: &Graph) -> Graph {
 /// attempted (refuse-don't-trust: never runs RDFC-1.0's combinatorial
 /// n-degree search against untrusted, potentially adversarial input).
 pub fn refold_digest(g: &Graph) -> Result<String, CertifyError> {
-    let projected = content_projection(g);
-    let dataset = dataset_from_gts_graph(&projected)?;
+    canonical_digest(&content_projection(g))
+}
+
+/// The RDFC-1.0 (SHA-256) digest of an already-projected graph, as lowercase hex.
+///
+/// Shared by [`refold_digest`] (over [`content_projection`]) and
+/// [`effective_digest`] (over [`effective_projection`]) — the two digest
+/// domains differ only in which projection feeds this canonicalize+hash step.
+///
+/// # Errors
+/// Returns [`CertifyError::Dataset`] when `projected` cannot be bridged into a
+/// frozen dataset, and [`CertifyError::Poison`] when its blank-node count
+/// exceeds [`POISON_BLANK_LIMIT`] — refused BEFORE canonicalization is
+/// attempted (refuse-don't-trust: never runs RDFC-1.0's combinatorial
+/// n-degree search against untrusted, potentially adversarial input).
+fn canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
+    let dataset = dataset_from_gts_graph(projected)?;
     let blanks = crate::ir::canon::blank_count(&dataset);
     if blanks > POISON_BLANK_LIMIT {
         return Err(CertifyError::Poison(blanks));
@@ -206,6 +221,159 @@ pub fn refold_digest(g: &Graph) -> Result<String, CertifyError> {
     let canonical = canonicalize_with(&dataset, CanonHash::Sha256);
     let digest = Sha256::digest(canonical.nquads.as_bytes());
     Ok(wire::hex(digest.as_slice()))
+}
+
+/// A term-id resolved to its own `value` string, or `None` when the id is
+/// out of range or the resolved term carries no value.
+///
+/// `ciborium::Value` is not `Hash`/`Eq` — term values are always plain
+/// strings (`Term::value: Option<String>`), so resolving straight to
+/// `String` lets [`term_suppressed_values`]/[`quad_suppressed_targets`] use
+/// ordinary hash sets instead of a CBOR-aware comparator.
+fn resolved_term_value(g: &Graph, id: usize) -> Option<String> {
+    g.terms.get(id).and_then(|t| t.value.clone())
+}
+
+/// The kind text of a suppress-target map, or `None` when `target` is not a
+/// map or carries no `"kind"` text field.
+fn target_kind(target: &Value) -> Option<&str> {
+    let Value::Map(entries) = target else {
+        return None;
+    };
+    entries.iter().find_map(|(k, v)| match (k, v) {
+        (Value::Text(k), Value::Text(v)) if k == "kind" => Some(v.as_str()),
+        _ => None,
+    })
+}
+
+/// Term VALUES hidden by every `term`-kind suppression target in `g`
+/// (GTS-SPEC §11: a `term` target hides the term value AND every quad in
+/// which that value appears, in ANY position).
+fn term_suppressed_values(g: &Graph) -> HashSet<String> {
+    let mut hidden = HashSet::new();
+    for sup in &g.suppressions {
+        for t in &sup.targets {
+            if target_kind(t) != Some("term") {
+                continue;
+            }
+            let Value::Map(entries) = t else { continue };
+            if let Some(Value::Integer(i)) = wire::map_get(entries, "id")
+                && let Some(id) = as_usize(i)
+                && let Some(value) = resolved_term_value(g, id)
+            {
+                hidden.insert(value);
+            }
+        }
+    }
+    hidden
+}
+
+/// One resolved `quad`-kind suppression target: `(subject, predicate,
+/// object, graph?)` VALUES — `graph` is `None` when the target's `"q"` array
+/// omits the (optional) 4th element, matching a default-graph quad exactly
+/// like the base wire encoding (GTS-SPEC §11).
+type ValueQuad = (String, String, String, Option<String>);
+
+/// Every `quad`-kind suppression target in `g`, resolved to term VALUES.
+fn quad_suppressed_targets(g: &Graph) -> HashSet<ValueQuad> {
+    let mut hidden = HashSet::new();
+    for sup in &g.suppressions {
+        for t in &sup.targets {
+            if target_kind(t) != Some("quad") {
+                continue;
+            }
+            let Value::Map(entries) = t else { continue };
+            let Some(Value::Array(ids)) = wire::map_get(entries, "q") else {
+                continue;
+            };
+            if ids.len() < 3 {
+                continue;
+            }
+            let resolved: Vec<Option<String>> = ids
+                .iter()
+                .map(|v| match v {
+                    Value::Integer(i) => as_usize(i).and_then(|id| resolved_term_value(g, id)),
+                    _ => None,
+                })
+                .collect();
+            // A malformed/out-of-range component makes the target
+            // unresolvable — skip it rather than guess (refuse-don't-trust).
+            if resolved[..3].iter().any(Option::is_none) {
+                continue;
+            }
+            let graph = resolved.get(3).cloned().unwrap_or(None);
+            if ids.len() > 3 && graph.is_none() {
+                continue;
+            }
+            hidden.insert((
+                resolved[0].clone().expect("checked above"),
+                resolved[1].clone().expect("checked above"),
+                resolved[2].clone().expect("checked above"),
+                graph,
+            ));
+        }
+    }
+    hidden
+}
+
+/// Project `g` down to its EFFECTIVE (post-suppression) view: start from
+/// [`content_projection`], then remove every base quad hidden by a `term`- or
+/// `quad`-kind suppression (GTS-SPEC §11).
+///
+/// `blob`- and `frame`-kind suppressions never remove base quads: a `blob`
+/// suppression hides content-addressed bytes that never appear as N-Quads
+/// text, and a `frame`-kind suppression is refused pre-compaction (§10.1), so
+/// it can never reach a fold this function is applied to. `reifier`-kind
+/// suppressions hide a reifier BINDING (an `rdf:reifies` side-table entry),
+/// not a base quad — filtering it out here would require also dropping the
+/// matching reifier row and every annotation keyed off it, which is a
+/// materially different (and separately trustworthy) operation from the
+/// value-wise quad removal this function performs; scoping this function to
+/// the two kinds that actually change the base-quad N-Quads digest (`term`,
+/// `quad`) keeps it exact rather than approximately-right.
+#[must_use]
+pub fn effective_projection(g: &Graph) -> Graph {
+    let mut projected = content_projection(g);
+    let hidden_terms = term_suppressed_values(g);
+    let hidden_quads = quad_suppressed_targets(g);
+    if hidden_terms.is_empty() && hidden_quads.is_empty() {
+        return projected;
+    }
+    let hides = |v: &Option<String>| v.as_ref().is_some_and(|v| hidden_terms.contains(v));
+    projected.quads.retain(|&(s, p, o, gr)| {
+        let sv = resolved_term_value(g, s);
+        let pv = resolved_term_value(g, p);
+        let ov = resolved_term_value(g, o);
+        let gv = gr.and_then(|id| resolved_term_value(g, id));
+        if hides(&sv) || hides(&pv) || hides(&ov) || hides(&gv) {
+            return false;
+        }
+        match (sv, pv, ov) {
+            (Some(sv), Some(pv), Some(ov)) => !hidden_quads.contains(&(sv, pv, ov, gv)),
+            // A quad with an unresolvable component can never match a
+            // resolved suppression target — keep it (nothing to hide it).
+            _ => true,
+        }
+    });
+    projected
+}
+
+/// The RDFC-1.0 (SHA-256) digest of `g`'s EFFECTIVE (post-suppression)
+/// projection, as lowercase hex — see [`effective_projection`].
+///
+/// Where [`refold_digest`] proves value-wise RAW retention (every byte stays
+/// present), `effective_digest` proves the suppression↔compaction commuting
+/// square: a pre-compaction fold and its post-compaction pack yield the SAME
+/// effective digest whenever the compaction carried every suppression
+/// forward faithfully — the view a suppression-aware consumer actually sees
+/// is preserved, not just the underlying bytes.
+///
+/// # Errors
+/// Returns [`CertifyError::Dataset`] when the projection cannot be bridged
+/// into a frozen dataset, and [`CertifyError::Poison`] when its blank-node
+/// count exceeds [`POISON_BLANK_LIMIT`].
+pub fn effective_digest(g: &Graph) -> Result<String, CertifyError> {
+    canonical_digest(&effective_projection(g))
 }
 
 // ---------------------------------------------------------------------------
@@ -237,9 +405,13 @@ pub struct CompactionReport {
     /// The pack's own MANDATORY packaging (index/head) signature is present
     /// and cryptographically valid under the supplied keyring.
     pub packaging_sig_ok: bool,
-    /// Every suppression present in the pre-compaction fold is carried
+    /// TRUE iff BOTH halves of §10.1 suppression preservation hold: (raw)
+    /// every suppression present in the pre-compaction fold is carried
     /// forward into the post-compaction fold (compared by resolved term
-    /// VALUE, not by id — ids are re-based by the rewrite).
+    /// VALUE, not by id — ids are re-based by the rewrite), AND (effective)
+    /// [`effective_digest`] agrees between pre and post — the
+    /// suppression↔compaction commuting square: the view a suppression-aware
+    /// consumer actually sees is preserved, not merely the underlying bytes.
     pub suppressions_ok: bool,
 }
 
@@ -424,8 +596,9 @@ fn suppression_signature(g: &Graph, sup: &Suppression) -> SuppressionSignature {
 }
 
 /// Every suppression present in `pre`'s fold is carried forward in `post`'s
-/// fold (raw retention, compared value-wise).
-fn suppressions_ok(pre: &Graph, post: &Graph) -> bool {
+/// fold (RAW retention, compared value-wise) — the first of the two halves
+/// [`suppressions_ok`] requires.
+fn suppression_retention_ok(pre: &Graph, post: &Graph) -> bool {
     let post_signatures: Vec<SuppressionSignature> = post
         .suppressions
         .iter()
@@ -435,6 +608,20 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> bool {
         let signature = suppression_signature(pre, sup);
         post_signatures.contains(&signature)
     })
+}
+
+/// TRUE iff BOTH: `pre`'s suppressions are retained value-wise in `post`
+/// (RAW), AND `pre`/`post` agree on [`effective_digest`] (EFFECTIVE) — the
+/// suppression↔compaction commuting square (see [`CompactionReport::suppressions_ok`]).
+///
+/// # Errors
+/// Returns [`CertifyError`] only when an effective projection genuinely
+/// cannot be canonicalized (dataset bridge failure or the poison guard) —
+/// never for a suppression mismatch, which surfaces as `Ok(false)`.
+fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
+    let retained = suppression_retention_ok(pre, post);
+    let effective_equivalent = effective_digest(pre)? == effective_digest(post)?;
+    Ok(retained && effective_equivalent)
 }
 
 /// Independently verify a claimed streamable compaction from raw bytes.
@@ -468,7 +655,7 @@ pub fn verify_compaction(
     let signatures_bound = signatures_bound_ok(&pre, &post);
     let signatures_verify = signatures_verify_ok(&post, keyring);
     let packaging_sig_ok = verify_file_with_keyring(post_bytes, keyring).valid >= 1;
-    let suppressions_ok = suppressions_ok(&pre, &post);
+    let suppressions_ok = suppressions_ok(&pre, &post)?;
 
     Ok(CompactionReport {
         refold_equivalent,

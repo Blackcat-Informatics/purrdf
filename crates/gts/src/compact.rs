@@ -888,6 +888,328 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------
+    // Issue #89 Task 6, Part A — adversarial `shifted_suppressions`
+    // coverage across all five suppress-target kinds (GTS-SPEC §11).
+    // -----------------------------------------------------------------
+
+    fn iri(v: &str) -> Term {
+        Term {
+            kind: TermKind::Iri,
+            value: Some(v.to_string()),
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: None,
+        }
+    }
+
+    fn bnode(v: &str) -> Term {
+        Term {
+            kind: TermKind::Bnode,
+            value: Some(v.to_string()),
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: None,
+        }
+    }
+
+    /// Build a `suppress-target` map: `{"kind": kind, ...extra}`.
+    fn target(kind: &str, extra: Vec<(&str, Value)>) -> Value {
+        let mut entries: Vec<(Value, Value)> = vec![("kind".into(), kind.into())];
+        entries.extend(extra.into_iter().map(|(k, v)| (k.into(), v)));
+        Value::Map(entries)
+    }
+
+    fn target_id(t: &Value) -> Option<usize> {
+        let Value::Map(entries) = t else { return None };
+        value_idx(map_get(entries, "id")?)
+    }
+
+    fn target_q(t: &Value) -> Option<Vec<Value>> {
+        let Value::Map(entries) = t else { return None };
+        match map_get(entries, "q")? {
+            Value::Array(items) => Some(items.clone()),
+            _ => None,
+        }
+    }
+
+    fn target_digest(t: &Value) -> Option<String> {
+        let Value::Map(entries) = t else { return None };
+        match map_get(entries, "digest")? {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    fn find_term_id(g: &Graph, value: &str) -> Option<usize> {
+        g.terms
+            .iter()
+            .position(|t| t.value.as_deref() == Some(value))
+    }
+
+    #[test]
+    fn term_suppression_is_carried_forward_value_wise_and_non_dangling() {
+        let mut w = Writer::new("generic");
+        w.add_terms(&[
+            iri("https://example.org/s"), // 0
+            iri("https://example.org/p"), // 1
+            iri("https://example.org/o"), // 2 — the suppressed term
+        ]);
+        w.add_quads(&[(0, 1, 2, None)]);
+        w.add_suppress(
+            vec![target("term", vec![("id", Value::from(2u64))])],
+            Some("pii"),
+            None,
+        );
+        let source = w.into_bytes();
+
+        let packed = compact_streamable(&source, params(DictStrategy::None, None))
+            .expect("compaction succeeds");
+        let g = read(&packed, true, None);
+        assert!(
+            g.diagnostics.is_empty(),
+            "pack must fold cleanly: {:?}",
+            g.diagnostics
+        );
+
+        // The suppressed term's VALUE is retained — suppression is a display
+        // overlay, never a deletion (GTS-SPEC §11).
+        let oid =
+            find_term_id(&g, "https://example.org/o").expect("suppressed term value retained");
+        // The quad it appeared in is likewise retained verbatim.
+        let sid = find_term_id(&g, "https://example.org/s").expect("subject retained");
+        let pid = find_term_id(&g, "https://example.org/p").expect("predicate retained");
+        assert!(
+            g.quads.contains(&(sid, pid, oid, None)),
+            "the quad naming the suppressed term must still be present (never deleted)"
+        );
+
+        let sup = g
+            .suppressions
+            .iter()
+            .find(|s| {
+                s.targets
+                    .iter()
+                    .any(|t| target_text(t, "kind") == Some("term"))
+            })
+            .expect("term suppression carried forward into the pack");
+        let t = sup
+            .targets
+            .iter()
+            .find(|t| target_text(t, "kind") == Some("term"))
+            .unwrap();
+        assert_eq!(
+            target_id(t),
+            Some(oid),
+            "the carried term suppression must resolve to the SAME term value in the pack"
+        );
+    }
+
+    #[test]
+    fn quad_suppression_is_carried_forward_value_wise_and_non_dangling() {
+        let mut w = Writer::new("generic");
+        w.add_terms(&[
+            iri("https://example.org/s2"), // 0
+            iri("https://example.org/p2"), // 1
+            iri("https://example.org/o2"), // 2
+        ]);
+        w.add_quads(&[(0, 1, 2, None)]);
+        w.add_suppress(
+            vec![target(
+                "quad",
+                vec![(
+                    "q",
+                    Value::Array(vec![
+                        Value::from(0u64),
+                        Value::from(1u64),
+                        Value::from(2u64),
+                    ]),
+                )],
+            )],
+            None,
+            None,
+        );
+        let source = w.into_bytes();
+
+        let packed = compact_streamable(&source, params(DictStrategy::None, None))
+            .expect("compaction succeeds");
+        let g = read(&packed, true, None);
+        assert!(
+            g.diagnostics.is_empty(),
+            "pack must fold cleanly: {:?}",
+            g.diagnostics
+        );
+
+        let sid = find_term_id(&g, "https://example.org/s2").expect("subject retained");
+        let pid = find_term_id(&g, "https://example.org/p2").expect("predicate retained");
+        let oid = find_term_id(&g, "https://example.org/o2").expect("object retained");
+        assert!(
+            g.quads.contains(&(sid, pid, oid, None)),
+            "the targeted quad must still be present (never deleted)"
+        );
+
+        let sup = g
+            .suppressions
+            .iter()
+            .find(|s| {
+                s.targets
+                    .iter()
+                    .any(|t| target_text(t, "kind") == Some("quad"))
+            })
+            .expect("quad suppression carried forward into the pack");
+        let t = sup
+            .targets
+            .iter()
+            .find(|t| target_text(t, "kind") == Some("quad"))
+            .unwrap();
+        let q = target_q(t).expect("quad target carries a \"q\" array");
+        let ids: Vec<usize> = q
+            .iter()
+            .map(|v| value_idx(v).expect("q element is an id"))
+            .collect();
+        assert_eq!(
+            ids,
+            vec![sid, pid, oid],
+            "the carried quad suppression must resolve to the SAME (s,p,o) values in the pack"
+        );
+    }
+
+    #[test]
+    fn reifier_suppression_is_carried_forward_value_wise_and_non_dangling() {
+        let mut w = Writer::new("generic");
+        w.add_terms(&[
+            iri("https://example.org/s3"), // 0
+            iri("https://example.org/p3"), // 1
+            iri("https://example.org/o3"), // 2
+            bnode("rf1"),                  // 3 — the reifier
+        ]);
+        w.add_quads(&[(0, 1, 2, None)]);
+        w.add_reifies(&[(3, (0, 1, 2), None)]);
+        w.add_suppress(
+            vec![target("reifier", vec![("id", Value::from(3u64))])],
+            None,
+            None,
+        );
+        let source = w.into_bytes();
+
+        let packed = compact_streamable(&source, params(DictStrategy::None, None))
+            .expect("compaction succeeds");
+        let g = read(&packed, true, None);
+        assert!(
+            g.diagnostics.is_empty(),
+            "pack must fold cleanly: {:?}",
+            g.diagnostics
+        );
+
+        let sid = find_term_id(&g, "https://example.org/s3").expect("subject retained");
+        let pid = find_term_id(&g, "https://example.org/p3").expect("predicate retained");
+        let oid = find_term_id(&g, "https://example.org/o3").expect("object retained");
+        let rid = g
+            .reifiers
+            .iter()
+            .find(|&&(_, spo, _)| spo == (sid, pid, oid))
+            .map(|&(r, _, _)| r)
+            .expect("the reifier binding must still be present (never deleted)");
+
+        let sup = g
+            .suppressions
+            .iter()
+            .find(|s| {
+                s.targets
+                    .iter()
+                    .any(|t| target_text(t, "kind") == Some("reifier"))
+            })
+            .expect("reifier suppression carried forward into the pack");
+        let t = sup
+            .targets
+            .iter()
+            .find(|t| target_text(t, "kind") == Some("reifier"))
+            .unwrap();
+        assert_eq!(
+            target_id(t),
+            Some(rid),
+            "the carried reifier suppression must resolve to the SAME reifier binding in the pack"
+        );
+    }
+
+    #[test]
+    fn blob_suppression_is_carried_verbatim_and_the_blob_bytes_are_retained() {
+        let mut w = Writer::new("generic");
+        let data = b"classified cat photograph".to_vec();
+        let digest = digest_str(&data);
+        w.add_blob_owned(data.clone(), Some("text/plain"), None);
+        w.add_suppress(
+            vec![target("blob", vec![("digest", digest.clone().into())])],
+            Some("classified"),
+            None,
+        );
+        let source = w.into_bytes();
+
+        let packed = compact_streamable(&source, params(DictStrategy::None, None))
+            .expect("compaction succeeds");
+        let g = read(&packed, true, None);
+        assert!(
+            g.diagnostics.is_empty(),
+            "pack must fold cleanly: {:?}",
+            g.diagnostics
+        );
+
+        // The suppressed blob's bytes are PRESENT — suppression hides, it
+        // never deletes.
+        let (_, entry) = g
+            .blobs
+            .iter()
+            .find(|(d, _)| *d == digest)
+            .expect("the suppressed blob is retained in the pack, not deleted");
+        assert_eq!(
+            entry.decoded_vec().expect("blob decodes"),
+            data,
+            "the retained blob bytes must be byte-identical to the source"
+        );
+
+        let sup = g
+            .suppressions
+            .iter()
+            .find(|s| {
+                s.targets
+                    .iter()
+                    .any(|t| target_text(t, "kind") == Some("blob"))
+            })
+            .expect("blob suppression carried forward into the pack");
+        let t = sup
+            .targets
+            .iter()
+            .find(|t| target_text(t, "kind") == Some("blob"))
+            .unwrap();
+        assert_eq!(
+            target_digest(t),
+            Some(digest),
+            "a blob suppression's digest must be carried verbatim (content-addressing is \
+             layout-independent)"
+        );
+    }
+
+    #[test]
+    fn frame_suppression_refuses_compaction() {
+        let mut w = Writer::new("generic");
+        w.add_terms(&[iri("https://example.org/s4")]);
+        w.add_suppress(
+            vec![target("frame", vec![("id", Value::Bytes(vec![7u8; 32]))])],
+            None,
+            None,
+        );
+        let source = w.into_bytes();
+
+        let err = compact_streamable(&source, params(DictStrategy::None, None))
+            .expect_err("a frame-addressed suppression must refuse compaction (§10.1)");
+        assert!(
+            err.to_string().contains("frame-addressed suppression"),
+            "refusal message should name the cause: {err}"
+        );
+    }
+
     #[test]
     fn base64url_decode_rejects_padding_and_out_of_alphabet_bytes() {
         assert!(

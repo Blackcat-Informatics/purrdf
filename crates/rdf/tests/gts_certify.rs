@@ -7,12 +7,15 @@
 
 use std::collections::HashMap;
 
+use ciborium::value::Value;
 use ed25519_dalek::SigningKey;
 use purrdf_gts::compact::DictStrategy;
 use purrdf_gts::model::{Term, TermKind};
+use purrdf_gts::reader::read;
 use purrdf_gts::writer::Writer;
 use purrdf_rdf::gts_certify::{
-    CompactionCertificate, compact_and_certify, compose, verify_compaction,
+    CompactionCertificate, compact_and_certify, compose, effective_digest, refold_digest,
+    verify_compaction,
 };
 
 const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
@@ -368,5 +371,224 @@ fn certificate_canonical_cbor_round_trips_and_is_deterministic() {
     assert_eq!(
         round_tripped, cert,
         "from_canonical_cbor(to_canonical_cbor(cert)) must be identity"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #89 Task 6, Part C — the effective-view digest and the
+// suppression↔compaction commuting square.
+// ---------------------------------------------------------------------------
+
+/// Build a `suppress-target` map: `{"kind": kind, ...extra}` (GTS-SPEC §11).
+fn target(kind: &str, extra: Vec<(&str, Value)>) -> Value {
+    let mut entries: Vec<(Value, Value)> = vec![("kind".into(), kind.into())];
+    entries.extend(extra.into_iter().map(|(k, v)| (k.into(), v)));
+    Value::Map(entries)
+}
+
+/// Two quads — `<s> <p> <secret-o>` and `<s2> <p2> "public claim"` — with an
+/// OPTIONAL `term`-kind suppression hiding `<secret-o>` (and, per §11, every
+/// quad it appears in).
+fn source_with_term_suppression(byte: u8, kid: &str, suppress: bool) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+    w.add_terms(&[
+        iri_term("https://example.org/s".to_string()), // 0
+        iri_term("https://example.org/p".to_string()), // 1
+        iri_term("https://example.org/secret-o".to_string()), // 2
+        iri_term("https://example.org/s2".to_string()), // 3
+        iri_term("https://example.org/p2".to_string()), // 4
+        literal_term("public claim".to_string()),      // 5
+    ]);
+    w.add_quads(&[(0, 1, 2, None), (3, 4, 5, None)]);
+    if suppress {
+        w.add_suppress(
+            vec![target("term", vec![("id", Value::from(2u64))])],
+            Some("pii"),
+            None,
+        );
+    }
+    w.into_bytes()
+}
+
+/// Like [`source_with_term_suppression`] but the OPTIONAL suppression is a
+/// `quad`-kind target naming `<s> <p> <secret-o>` exactly.
+fn source_with_quad_suppression(byte: u8, kid: &str, suppress: bool) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+    w.add_terms(&[
+        iri_term("https://example.org/s".to_string()), // 0
+        iri_term("https://example.org/p".to_string()), // 1
+        iri_term("https://example.org/secret-o".to_string()), // 2
+        iri_term("https://example.org/s2".to_string()), // 3
+        iri_term("https://example.org/p2".to_string()), // 4
+        literal_term("public claim".to_string()),      // 5
+    ]);
+    w.add_quads(&[(0, 1, 2, None), (3, 4, 5, None)]);
+    if suppress {
+        w.add_suppress(
+            vec![target(
+                "quad",
+                vec![(
+                    "q",
+                    Value::Array(vec![
+                        Value::from(0u64),
+                        Value::from(1u64),
+                        Value::from(2u64),
+                    ]),
+                )],
+            )],
+            None,
+            None,
+        );
+    }
+    w.into_bytes()
+}
+
+#[test]
+fn term_suppression_commutes_through_compaction() {
+    let source = source_with_term_suppression(1, "author", true);
+    let pre_fold = read(&source, true, None);
+    assert!(pre_fold.diagnostics.is_empty(), "source folds cleanly");
+
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compaction of a term-suppressing source succeeds");
+    let post_fold = read(&pack, true, None);
+    assert!(post_fold.diagnostics.is_empty(), "pack folds cleanly");
+
+    // RAW digest ignores suppressions entirely — the suppressed bytes are
+    // retained either way, so refold_equivalent stays true.
+    assert_eq!(
+        refold_digest(&pre_fold).expect("pre raw digest"),
+        refold_digest(&post_fold).expect("post raw digest"),
+        "the raw refold digest must stay equal (bytes are retained, never deleted)"
+    );
+
+    // EFFECTIVE digest: the suppression↔compaction commuting square — the
+    // compactor carried the suppression forward, so the view a
+    // suppression-aware consumer sees is preserved too.
+    let pre_eff = effective_digest(&pre_fold).expect("pre effective digest");
+    let post_eff = effective_digest(&post_fold).expect("post effective digest");
+    assert_eq!(
+        pre_eff, post_eff,
+        "effective_digest must commute through a faithful compaction"
+    );
+
+    // Anti-tautology: a source WITHOUT the suppression has a DIFFERENT
+    // effective digest — effective_digest actually responds to suppression,
+    // it is not just silently equal to the raw digest.
+    let unsuppressed = source_with_term_suppression(1, "author", false);
+    let unsuppressed_fold = read(&unsuppressed, true, None);
+    let unsuppressed_eff =
+        effective_digest(&unsuppressed_fold).expect("unsuppressed effective digest");
+    assert_ne!(
+        pre_eff, unsuppressed_eff,
+        "the term suppression must actually change the effective view"
+    );
+    assert_eq!(
+        refold_digest(&pre_fold).expect("suppressed raw digest"),
+        refold_digest(&unsuppressed_fold).expect("unsuppressed raw digest"),
+        "sanity: the RAW digest does NOT depend on suppression, only the EFFECTIVE one does"
+    );
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&source, &pack, &ring).expect("verify_compaction succeeds");
+    assert!(
+        report.suppressions_ok,
+        "a faithful term-suppression carry must pass suppressions_ok: {report:?}"
+    );
+}
+
+#[test]
+fn quad_suppression_commutes_through_compaction() {
+    let source = source_with_quad_suppression(1, "author", true);
+    let pre_fold = read(&source, true, None);
+    assert!(pre_fold.diagnostics.is_empty(), "source folds cleanly");
+
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compaction of a quad-suppressing source succeeds");
+    let post_fold = read(&pack, true, None);
+    assert!(post_fold.diagnostics.is_empty(), "pack folds cleanly");
+
+    assert_eq!(
+        refold_digest(&pre_fold).expect("pre raw digest"),
+        refold_digest(&post_fold).expect("post raw digest"),
+        "the raw refold digest must stay equal (bytes are retained, never deleted)"
+    );
+
+    let pre_eff = effective_digest(&pre_fold).expect("pre effective digest");
+    let post_eff = effective_digest(&post_fold).expect("post effective digest");
+    assert_eq!(
+        pre_eff, post_eff,
+        "effective_digest must commute through a faithful compaction"
+    );
+
+    let unsuppressed = source_with_quad_suppression(1, "author", false);
+    let unsuppressed_fold = read(&unsuppressed, true, None);
+    let unsuppressed_eff =
+        effective_digest(&unsuppressed_fold).expect("unsuppressed effective digest");
+    assert_ne!(
+        pre_eff, unsuppressed_eff,
+        "the quad suppression must actually change the effective view"
+    );
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&source, &pack, &ring).expect("verify_compaction succeeds");
+    assert!(
+        report.suppressions_ok,
+        "a faithful quad-suppression carry must pass suppressions_ok: {report:?}"
+    );
+}
+
+#[test]
+fn dropping_the_carried_suppression_flips_suppressions_ok_to_false() {
+    let source = source_with_term_suppression(1, "author", true);
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compaction succeeds");
+
+    // Sanity: the faithful pack passes before we mangle it.
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    assert!(
+        verify_compaction(&source, &pack, &ring)
+            .expect("verify_compaction succeeds")
+            .suppressions_ok,
+        "the faithful pack must pass suppressions_ok before mangling"
+    );
+
+    // Hand-build a "post" that folds cleanly but is MISSING the carried
+    // suppression — the falsifiability check: suppressions_ok must catch it.
+    let mut mangled_fold = read(&pack, true, None);
+    assert!(
+        !mangled_fold.suppressions.is_empty(),
+        "sanity: the pack carries the suppression before we drop it"
+    );
+    mangled_fold.suppressions.clear();
+    let mangled = Writer::deterministic(&mangled_fold, "purrdf.gts")
+        .expect("deterministic writer builds from the mangled fold")
+        .into_bytes();
+
+    let report = verify_compaction(&source, &mangled, &ring)
+        .expect("verify_compaction still produces a report for the mangled pack");
+    assert!(
+        !report.suppressions_ok,
+        "dropping the carried suppression must be detected: {report:?}"
     );
 }
