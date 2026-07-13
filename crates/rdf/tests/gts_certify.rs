@@ -14,7 +14,8 @@ use purrdf_gts::mmr;
 use purrdf_gts::model::{Term, TermKind};
 use purrdf_gts::reader::read;
 use purrdf_gts::stream;
-use purrdf_gts::writer::Writer;
+use purrdf_gts::wire;
+use purrdf_gts::writer::{Writer, term_to_wire};
 use purrdf_rdf::gts_certify::{
     CompactionCertificate, compact_and_certify, compose, effective_digest, refold_digest,
     verify_compaction,
@@ -253,6 +254,150 @@ fn broken_seam_is_detected_without_erroring() {
     assert!(
         !report.seam_chain_ok,
         "a corrupted frame must be reported as a broken seam: {report:?}"
+    );
+}
+
+/// Manually append a REAL accretive-tail `terms` frame directly onto `pack`'s
+/// own id/prev chain: the frame's `"prev"` names `prev` verbatim, continuing
+/// the SAME segment (no new header) — exactly GTS-SPEC §3.3's "streamable
+/// through frame *N*, accretive tail" layout (the frames after a claimed
+/// segment's last intact `index` footer).
+///
+/// `Writer` always mints a fresh header genesis (`Writer::new`/
+/// `with_options` compute `prev` from the header's OWN self-hash) and has no
+/// public way to resume an existing chain from an arbitrary prior head, so a
+/// pack produced by `compact_and_certify` cannot be "continued" through the
+/// high-level `Writer` API. This drives the exact same low-level wire
+/// primitives `Writer::add_frame_with_options` uses internally
+/// (`term_to_wire`, `wire::content_id`, `wire::append_canonical`) with an
+/// explicit `prev`, rather than inventing a parallel writer abstraction.
+fn append_tail_terms_frame(pack: &[u8], prev: &[u8], term: &Term) -> Vec<u8> {
+    let payload = Value::Array(vec![term_to_wire(term)]);
+    let mut frame: Vec<(Value, Value)> = vec![
+        ("t".into(), "terms".into()),
+        ("d".into(), payload),
+        ("prev".into(), Value::Bytes(prev.to_vec())),
+    ];
+    let id = wire::content_id(&frame);
+    frame.push(("id".into(), Value::Bytes(id)));
+    let mut composite = pack.to_vec();
+    wire::append_canonical(&Value::Map(frame), &mut composite);
+    composite
+}
+
+#[test]
+fn accretive_tail_after_pack_chains_cleanly_across_the_seam() {
+    // The two-phase-ledger scenario: an immutable, sealed pack followed by
+    // a live, accretive tail appended after it. The tail frame chains onto
+    // the PACK's own head (GTS-SPEC §3.3) — not a fresh
+    // segment, and not merely concatenated bytes: the frame's `prev` must
+    // equal the pack's real last-frame id or the fold reports a broken
+    // chain, so a clean fold here genuinely exercises the pack/tail seam.
+    let source = source_with_content(1, "author", 5, None);
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compact_and_certify succeeds");
+
+    let pack_graph = read(&pack, true, None);
+    assert!(
+        pack_graph.diagnostics.is_empty(),
+        "sanity: the pack alone must fold cleanly before a tail is appended"
+    );
+    let pack_head = pack_graph
+        .segment_heads
+        .last()
+        .expect("a streamable pack has a segment head")
+        .clone();
+    let pre_terms = pack_graph.terms.len();
+
+    let tail_term = iri_term("https://example.org/tail-node".to_string());
+    let composite = append_tail_terms_frame(&pack, &pack_head, &tail_term);
+    assert_ne!(
+        composite, pack,
+        "the composite must genuinely carry the appended tail bytes"
+    );
+
+    let composite_graph = read(&composite, true, None);
+    assert!(
+        composite_graph.diagnostics.is_empty(),
+        "an accretive tail correctly chained onto the pack's own head must fold with \
+         no diagnostics: {:?}",
+        composite_graph.diagnostics
+    );
+    assert!(
+        composite_graph.terms.len() > pre_terms,
+        "the tail frame's new term must actually be folded in, not silently dropped \
+         at the seam"
+    );
+    let layout = &composite_graph.segment_streamable[0];
+    assert!(
+        layout.claimed && layout.tail == 1,
+        "the fold must recognize exactly one legal accretive frame after the pack's \
+         covered/claimed prefix: {layout:?}"
+    );
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&source, &composite, &ring)
+        .expect("verify_compaction succeeds across a genuine pack/tail seam");
+    assert!(
+        report.seam_chain_ok,
+        "an intact pack+accretive-tail chain must report seam_chain_ok = true: {report:?}"
+    );
+}
+
+#[test]
+fn torn_tail_prev_breaks_seam_chain_ok_without_erroring() {
+    // Same pack/tail construction as the positive seam test, but the tail
+    // frame's `prev` is corrupted so it no longer names the pack's real
+    // head — the tail->pack link itself is torn. This is distinct from
+    // `broken_seam_is_detected_without_erroring`, which corrupts a byte
+    // INSIDE the pack's own trailing index footer with no tail present at
+    // all; here the pack is untouched and only the seam-crossing link breaks.
+    let source = source_with_content(1, "author", 5, None);
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compact_and_certify succeeds");
+
+    let pack_head = read(&pack, true, None)
+        .segment_heads
+        .last()
+        .expect("a streamable pack has a segment head")
+        .clone();
+    let mut torn_prev = pack_head.clone();
+    let last = torn_prev.len() - 1;
+    torn_prev[last] ^= 0xFF;
+    assert_ne!(torn_prev, pack_head);
+
+    let tail_term = iri_term("https://example.org/tail-node".to_string());
+    let composite = append_tail_terms_frame(&pack, &torn_prev, &tail_term);
+
+    let composite_graph = read(&composite, true, None);
+    assert!(
+        composite_graph
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "BrokenChain"),
+        "a tail frame whose prev does not name the pack's real head must be reported \
+         as a broken chain: {:?}",
+        composite_graph.diagnostics
+    );
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&source, &composite, &ring)
+        .expect("a torn pack/tail seam still yields a report, not an error");
+    assert!(
+        !report.seam_chain_ok,
+        "a torn tail->pack chain link must be reported as a broken seam: {report:?}"
     );
 }
 
