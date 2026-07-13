@@ -48,6 +48,9 @@ pub const COSE: &str = "https://w3id.org/gts/stream#cose";
 /// projection, embedded so a repack certifies without the pre-compaction bytes
 /// (proof-carrying pack, §10.1 refold equivalence).
 pub const CONTENT_REFOLD_DIGEST: &str = "https://w3id.org/gts/stream#contentRefoldDigest";
+/// `stream:detachedSignatureRoot` — MMR root binding the set of carried detached
+/// frame signatures under one commitment (§10.1 signature preservation).
+pub const DETACHED_SIGNATURE_ROOT: &str = "https://w3id.org/gts/stream#detachedSignatureRoot";
 
 /// The fixed compactor identity recorded as `stream:agent` — a constant so
 /// the rewrite is byte-reproducible across engines (§14.1 determinism).

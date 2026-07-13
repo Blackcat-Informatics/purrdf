@@ -8,6 +8,8 @@
 //! every COSE_Sign1 frame, and returns a data result suitable for libraries and
 //! CLIs. Trust-policy findings remain separate from cryptographic validity.
 
+use std::collections::HashMap;
+
 use ciborium::value::Value;
 use ed25519_dalek::VerifyingKey;
 
@@ -233,8 +235,94 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
     };
 
     let mut graph = graph.unwrap_or_else(|| read(data, true, None));
+    // Fold the resolved single key into a one-entry keyring so single-key and
+    // rotation-capable verification share the same core (no parallel resolver
+    // mechanism).
+    debug_assert!(
+        errors.is_empty(),
+        "every earlier error path returns before reaching the shared keyring core"
+    );
+    let mut keyring = HashMap::with_capacity(1);
+    keyring.insert(kid.clone(), public);
+    let result = verify_against_keyring(&mut graph, &keyring, options);
+
+    VerificationResult {
+        ok: result.ok,
+        kid: Some(kid),
+        fingerprint: Some(fingerprint),
+        emojihash: Some(emojihash(&raw_public, 11)),
+        emojihash_labels: Some(emojihash_labels(&raw_public, 11)),
+        randomart: Some(randomart(&raw_public, "GTS transport")),
+        frames: result.signed,
+        signed: result.signed,
+        valid: result.valid,
+        trusted: result.trusted,
+        invalid: result.invalid,
+        unverified: result.unverified,
+        errors: result.errors,
+        diagnostics: graph.diagnostics,
+        profile_findings: result.profile_findings,
+    }
+}
+
+/// Verify a GTS file's embedded signatures against a rotation-capable keyring.
+///
+/// Every COSE `kid` present in the folded signatures is resolved independently
+/// against `keyring`, so a file whose frames were signed under different keys
+/// over time (key rotation) verifies as long as each `kid` used is present.
+/// This is the core [`verify_file_with_options`] also uses internally, folded
+/// down to its single resolved key.
+// Pinned to the default hasher: the public surface here mirrors the caller's
+// key store, not a hot lookup path worth generalizing over `BuildHasher`.
+#[allow(clippy::implicit_hasher)]
+pub fn verify_file_with_keyring(
+    data: &[u8],
+    keyring: &HashMap<String, VerifyingKey>,
+) -> VerificationResult {
+    let mut graph = read(data, true, None);
+    let options = VerifyOptions::default();
+    let result = verify_against_keyring(&mut graph, keyring, &options);
+    VerificationResult {
+        ok: result.ok,
+        kid: None,
+        fingerprint: None,
+        emojihash: None,
+        emojihash_labels: None,
+        randomart: None,
+        frames: result.signed,
+        signed: result.signed,
+        valid: result.valid,
+        trusted: result.trusted,
+        invalid: result.invalid,
+        unverified: result.unverified,
+        errors: result.errors,
+        diagnostics: graph.diagnostics,
+        profile_findings: result.profile_findings,
+    }
+}
+
+/// Counts, errors, and trust findings from resolving each embedded signature
+/// against `keyring` — shared by [`verify_file_with_options`] (a one-entry
+/// keyring around its resolved transport key) and [`verify_file_with_keyring`]
+/// (an explicit rotation-capable keyring).
+struct KeyringVerification {
+    signed: usize,
+    valid: usize,
+    invalid: usize,
+    unverified: usize,
+    trusted: usize,
+    errors: Vec<String>,
+    profile_findings: Vec<ProfileFinding>,
+    ok: bool,
+}
+
+fn verify_against_keyring(
+    graph: &mut Graph,
+    keyring: &HashMap<String, VerifyingKey>,
+    options: &VerifyOptions,
+) -> KeyringVerification {
     verify_signatures(&mut graph.signatures, |candidate| {
-        (candidate == kid).then_some(public)
+        keyring.get(candidate).copied()
     });
 
     let signed = graph.signatures.len();
@@ -253,10 +341,11 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
         .iter()
         .filter(|sig| sig.status == "unverified")
         .count();
-    let trusts = signature_trust(&graph, Some(&options.trust_policy));
+    let trusts = signature_trust(graph, Some(&options.trust_policy));
     let trusted = trusts.iter().filter(|item| item.trusted).count();
-    let profile_findings = evaluate_profile_policy(&graph, Some(&options.trust_policy), None);
+    let profile_findings = evaluate_profile_policy(graph, Some(&options.trust_policy), None);
 
+    let mut errors = Vec::new();
     if invalid > 0 {
         errors.push(format!("{invalid} signature(s) invalid"));
     }
@@ -274,22 +363,15 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
         .any(|finding| finding.severity == Severity::Error);
     let ok = errors.is_empty() && invalid == 0 && unverified == 0 && !has_profile_error;
 
-    VerificationResult {
-        ok,
-        kid: Some(kid),
-        fingerprint: Some(fingerprint),
-        emojihash: Some(emojihash(&raw_public, 11)),
-        emojihash_labels: Some(emojihash_labels(&raw_public, 11)),
-        randomart: Some(randomart(&raw_public, "GTS transport")),
-        frames: signed,
+    KeyringVerification {
         signed,
         valid,
-        trusted,
         invalid,
         unverified,
+        trusted,
         errors,
-        diagnostics: graph.diagnostics,
         profile_findings,
+        ok,
     }
 }
 

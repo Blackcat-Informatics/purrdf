@@ -23,10 +23,11 @@ use std::borrow::Cow;
 use ciborium::value::Value;
 
 use crate::dict;
+use crate::mmr;
 use crate::model::{Graph, Quad, ReifierRow, Suppression, Term, TermKind};
 use crate::reader::{read, read_file_segments};
 use crate::stream;
-use crate::wire::{digest_str, hex, map_get};
+use crate::wire::{blake3_256, digest_str, hex, map_get};
 use crate::writer::{Writer, WriterOptions};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -248,6 +249,58 @@ fn base64url_unpadded(data: &[u8]) -> String {
     out
 }
 
+/// Sorted `(frame_id, cose)` pairs over every detached signature in `g`.
+///
+/// A frame may carry multiple co-signatures under key rotation, so `frame_id`
+/// alone is not a unique key — the `cose` tie-break is required for a stable,
+/// deterministic leaf order.
+fn sorted_detached_pairs(g: &Graph) -> Vec<(&[u8], &[u8])> {
+    let mut pairs: Vec<(&[u8], &[u8])> = g
+        .signatures
+        .iter()
+        .filter_map(|s| s.cose.as_deref().map(|cose| (s.frame_id.as_slice(), cose)))
+        .collect();
+    pairs.sort_unstable();
+    pairs
+}
+
+/// The MMR leaves committed by `stream:detachedSignatureRoot`: one
+/// `blake3(frame_id || cose)` hash per detached signature, in sorted
+/// `(frame_id, cose)` order (§10.1 signature preservation).
+///
+/// Public so a certificate consumer (GTS-SPEC §10.2) can independently derive
+/// the same leaf set and prove membership without re-deriving the sort.
+pub fn detached_signature_leaves(g: &Graph) -> Vec<Vec<u8>> {
+    sorted_detached_pairs(g)
+        .into_iter()
+        .map(|(frame_id, cose)| detached_signature_leaf(frame_id, cose))
+        .collect()
+}
+
+/// `blake3(frame_id || cose)` — the leaf preimage for one detached signature.
+fn detached_signature_leaf(frame_id: &[u8], cose: &[u8]) -> Vec<u8> {
+    let mut preimage = Vec::with_capacity(frame_id.len() + cose.len());
+    preimage.extend_from_slice(frame_id);
+    preimage.extend_from_slice(cose);
+    blake3_256(&preimage)
+}
+
+/// A selective per-frame authorship proof: the detached inclusion proof for
+/// one `(frame_id, cose)` leaf under [`detached_signature_leaves`]'s root.
+///
+/// Returns `None` when no detached signature matches `(frame_id, cose)`.
+pub fn detached_signature_proof(g: &Graph, frame_id: &[u8], cose: &[u8]) -> Option<mmr::Proof> {
+    let pairs = sorted_detached_pairs(g);
+    let leaf_index = pairs
+        .iter()
+        .position(|&(f, c)| f == frame_id && c == cose)?;
+    let leaves: Vec<Vec<u8>> = pairs
+        .into_iter()
+        .map(|(f, c)| detached_signature_leaf(f, c))
+        .collect();
+    mmr::prove(&leaves, leaf_index)
+}
+
 /// Build the leading streaming index + compaction provenance (§3.3, §13.3).
 fn streaming_index(
     g: &Graph,
@@ -280,6 +333,12 @@ fn streaming_index(
     // mirroring how the sealed-source quad is emitted conditionally.
     let t_content_digest =
         content_digest.map(|_| b.add(TermKind::Iri, stream::CONTENT_REFOLD_DIGEST));
+    // The detached-signature root term rides the fixed block only when the
+    // source carries at least one detached signature (empty set ⇒ no quad,
+    // keeping `signatures_bound` vacuously true for unsigned tails).
+    let has_detached_sig = g.signatures.iter().any(|s| s.cose.is_some());
+    let t_detached_root =
+        has_detached_sig.then(|| b.add(TermKind::Iri, stream::DETACHED_SIGNATURE_ROOT));
 
     // One Manifestation per promised blob, in delivery order.
     for (order, digest) in blob_order.iter().enumerate() {
@@ -344,6 +403,16 @@ fn streaming_index(
         b.quad(node, t_source_frame, o);
         let o = b.literal(&cose_b64, None);
         b.quad(node, t_cose, o);
+    }
+
+    // One MMR root binding the whole detached-signature set under a single
+    // commitment (§10.1 signature preservation) — omitted entirely when the
+    // set is empty (no zero-count root emitted for an unsigned tail).
+    if let Some(t_root) = t_detached_root {
+        let leaves = detached_signature_leaves(g);
+        let root = mmr::root(&leaves);
+        let o = b.literal(&format!("blake3:{}", hex(&root)), None);
+        b.quad(c, t_root, o);
     }
     Ok(b)
 }
@@ -461,19 +530,36 @@ fn build_pack_dict(
     Ok(Some((DICT_NAME.to_string(), bytes)))
 }
 
+/// Parameters for [`compact_streamable`].
+// `SigningKey`'s `Debug` impl redacts the secret scalar, so deriving is safe here.
+#[derive(Debug)]
+pub struct CompactionParams<'a> {
+    /// The rewrite time recorded as `stream:timestamp` — an explicit
+    /// parameter so the output is byte-reproducible.
+    pub timestamp: &'a str,
+    /// Carry the verbatim source bytes as a nested GTS blob (§12.1), role
+    /// `"source"` — REQUIRED for `evidence` input.
+    pub seal_original: bool,
+    /// The in-band pack dictionary strategy trained over the batched
+    /// content-blob corpus and pinned per pack ([`DictStrategy::Trained`] is
+    /// the production default).
+    pub strategy: DictStrategy,
+    /// When supplied by the certifying authoring wrapper, embedded as
+    /// `stream:contentRefoldDigest` provenance so a repack certifies without
+    /// the pre-compaction bytes.
+    pub content_digest: Option<&'a str>,
+    /// When present, `(key, kid)` used to sign ONLY the re-issued ordering
+    /// commitment (the trailing `index` footer) — the MANDATORY packaging
+    /// signature attesting ordering/packaging, never frame authorship. Carried
+    /// detached authorship signatures live in provenance quads instead
+    /// (§10.1); this is a distinct, separately-verifiable claim.
+    pub packaging_signer: Option<(ed25519_dalek::SigningKey, String)>,
+}
+
 /// Rewrite a GTS file into one streamable segment (§10.1).
 ///
-/// `data` must verify cleanly (refuse-don't-trust). `timestamp` is the
-/// rewrite time recorded as `stream:timestamp` — an explicit parameter so
-/// the output is byte-reproducible. `seal_original` carries the verbatim
-/// source bytes as a nested GTS blob (§12.1), role `"source"` — REQUIRED
-/// for `evidence` input.
-///
-/// `strategy` selects the in-band pack dictionary trained over the batched
-/// content-blob corpus and pinned per pack ([`DictStrategy::Trained`] is the
-/// production default). `content_digest`, when supplied by the certifying
-/// authoring wrapper, is embedded as `stream:contentRefoldDigest` provenance so
-/// a repack certifies without the pre-compaction bytes.
+/// `data` must verify cleanly (refuse-don't-trust). See [`CompactionParams`]
+/// for the rewrite parameters.
 ///
 /// # Errors
 /// Returns [`CompactRefusedError`] when the input is not safely compactable, a
@@ -481,11 +567,15 @@ fn build_pack_dict(
 /// rejects the configuration.
 pub fn compact_streamable(
     data: &[u8],
-    timestamp: &str,
-    seal_original: bool,
-    strategy: DictStrategy,
-    content_digest: Option<&str>,
+    params: CompactionParams<'_>,
 ) -> Result<Vec<u8>, CompactRefusedError> {
+    let CompactionParams {
+        timestamp,
+        seal_original,
+        strategy,
+        content_digest,
+        packaging_signer,
+    } = params;
     let (mut g, profile) = refusal_gate(data, seal_original)?;
 
     // Delivery plan: most-significant-first — ascending decoded size, digest
@@ -602,7 +692,13 @@ pub fn compact_streamable(
             }
         }
     }
-    // The re-issued ordering commitment: the compactor is its sole attester.
+    // The MANDATORY packaging head signature: sign ONLY the re-issued
+    // ordering commitment below, never the frames already appended above.
+    // This attests ordering/packaging — the compactor is its sole attester —
+    // distinct from the carried detached authorship signatures (§10.1).
+    if let Some((key, kid)) = packaging_signer {
+        w.sign_with(key, &kid);
+    }
     w.add_index();
     Ok(w.into_bytes())
 }
@@ -635,39 +731,33 @@ mod tests {
             .any(|t| t.value.as_deref() == Some(stream::CONTENT_REFOLD_DIGEST))
     }
 
+    /// A `CompactionParams` with the shared test defaults: fixed timestamp, no
+    /// source seal, no packaging signer.
+    fn params(strategy: DictStrategy, content_digest: Option<&str>) -> CompactionParams<'_> {
+        CompactionParams {
+            timestamp: "2026-01-01T00:00:00Z",
+            seal_original: false,
+            strategy,
+            content_digest,
+            packaging_signer: None,
+        }
+    }
+
     #[test]
     fn compaction_is_byte_deterministic_with_a_trained_dict() {
         let source = source_with_blobs();
-        let a = compact_streamable(
-            &source,
-            "2026-01-01T00:00:00Z",
-            false,
-            DictStrategy::Trained,
-            None,
-        )
-        .expect("compaction succeeds");
-        let b = compact_streamable(
-            &source,
-            "2026-01-01T00:00:00Z",
-            false,
-            DictStrategy::Trained,
-            None,
-        )
-        .expect("compaction succeeds");
+        let a = compact_streamable(&source, params(DictStrategy::Trained, None))
+            .expect("compaction succeeds");
+        let b = compact_streamable(&source, params(DictStrategy::Trained, None))
+            .expect("compaction succeeds");
         assert_eq!(a, b, "a trained-dict compaction must be byte-reproducible");
     }
 
     #[test]
     fn compacted_pack_folds_cleanly_and_blobs_decode_through_the_dict() {
         let source = source_with_blobs();
-        let packed = compact_streamable(
-            &source,
-            "2026-01-01T00:00:00Z",
-            false,
-            DictStrategy::Trained,
-            None,
-        )
-        .expect("compaction succeeds");
+        let packed = compact_streamable(&source, params(DictStrategy::Trained, None))
+            .expect("compaction succeeds");
         let g = read(&packed, true, None);
         assert!(
             g.diagnostics.is_empty(),
@@ -685,22 +775,10 @@ mod tests {
     #[test]
     fn the_dictionary_is_invisible_to_the_fold() {
         let source = source_with_blobs();
-        let trained = compact_streamable(
-            &source,
-            "2026-01-01T00:00:00Z",
-            false,
-            DictStrategy::Trained,
-            None,
-        )
-        .expect("trained compaction");
-        let undicted = compact_streamable(
-            &source,
-            "2026-01-01T00:00:00Z",
-            false,
-            DictStrategy::None,
-            None,
-        )
-        .expect("undicted compaction");
+        let trained = compact_streamable(&source, params(DictStrategy::Trained, None))
+            .expect("trained compaction");
+        let undicted = compact_streamable(&source, params(DictStrategy::None, None))
+            .expect("undicted compaction");
         assert_ne!(
             trained, undicted,
             "pinning a dictionary changes the header bytes"
@@ -726,24 +804,15 @@ mod tests {
     #[test]
     fn embedded_content_digest_appears_only_when_supplied() {
         let source = source_with_blobs();
-        let without = compact_streamable(
-            &source,
-            "2026-01-01T00:00:00Z",
-            false,
-            DictStrategy::Trained,
-            None,
-        )
-        .expect("compaction");
+        let without =
+            compact_streamable(&source, params(DictStrategy::Trained, None)).expect("compaction");
         assert!(
             !digest_quad_present(&without),
             "no content-refold digest without one supplied"
         );
         let with = compact_streamable(
             &source,
-            "2026-01-01T00:00:00Z",
-            false,
-            DictStrategy::Trained,
-            Some("blake3:0123456789abcdef"),
+            params(DictStrategy::Trained, Some("blake3:0123456789abcdef")),
         )
         .expect("compaction");
         assert!(
