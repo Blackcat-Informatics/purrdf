@@ -20,7 +20,8 @@ use std::sync::Arc;
 
 use purrdf_core::{
     CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PageId, PagedDataset,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermRef, TermValue,
+    PagedFreezeError, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermRef, TermValue,
+    render_canonical_turtle,
 };
 
 // The standard RDF Collection vocabulary (crate-internal constants are not public;
@@ -467,6 +468,179 @@ fn reifier_and_annotation_views_compose_across_pages() {
     );
     // `annotation_quads` sees the same two annotations as virtual quads.
     assert_eq!(paged.annotation_quads().count(), 2);
+}
+
+// ── Freeze / disjointness refusal (G3) ─────────────────────────────────────────
+
+#[test]
+fn freeze_refuses_non_quad_disjoint_pages() {
+    // Two pages that carry the SAME triple via the SAME term values → after mapping
+    // to the shared GlobalTermId space they are the SAME global quad, so the seal MUST
+    // refuse (never silently dedup).
+    let shared = (iri("s"), iri("p"), iri("o"));
+    let page0 = build_page(std::slice::from_ref(&shared));
+    let page1 = build_page(std::slice::from_ref(&shared));
+    let provider = Arc::new(InMemoryPageProvider::new(vec![page0, page1]));
+    let err = PagedDataset::from_provider(provider).expect_err("overlapping pages must refuse");
+    match err {
+        PagedFreezeError::QuadOverlap(o) => {
+            assert_eq!(o.first_page, PageId(0), "the earlier page is named");
+            assert_eq!(o.second_page, PageId(1), "the later page is named");
+            assert_eq!(o.subject, iri("s"));
+            assert_eq!(o.predicate, iri("p"));
+            assert_eq!(o.object, iri("o"));
+            assert_eq!(o.graph, None, "default-graph quad");
+        }
+        PagedFreezeError::Page(fault) => panic!("expected QuadOverlap, got page fault: {fault}"),
+    }
+
+    // The disjoint construction (distinct global quads) is the normal path and Oks.
+    let ok_pages = vec![
+        build_page(&[(iri("s"), iri("p"), iri("o"))]),
+        build_page(&[(iri("s2"), iri("p"), iri("o"))]),
+    ];
+    let ok_provider = Arc::new(InMemoryPageProvider::new(ok_pages));
+    let paged = PagedDataset::from_provider(ok_provider).expect("disjoint pages seal");
+    assert_eq!(paged.page_count(), 2);
+    assert_eq!(paged.quads().count(), 2, "both disjoint quads survive");
+}
+
+// ── Compaction: dead-id reclaim + determinism ──────────────────────────────────
+
+/// A three-page corpus where page 2's terms (`dave`, `likes`, `eve`) are UNIQUE to it,
+/// so dropping page 2 makes exactly those three ids dead.
+fn reclaim_pages() -> Vec<Arc<RdfDataset>> {
+    vec![
+        build_page(&[(iri("alice"), iri("knows"), iri("bob"))]),
+        build_page(&[(iri("bob"), iri("knows"), iri("carol"))]),
+        build_page(&[(iri("dave"), iri("likes"), iri("eve"))]),
+    ]
+}
+
+#[test]
+fn compact_reclaims_dead_ids_deterministically() {
+    let provider = Arc::new(InMemoryPageProvider::new(reclaim_pages()));
+    let full = PagedDataset::from_provider(provider).expect("seal pages");
+
+    // Seven distinct IRIs across the three pages.
+    let full_len = full.dictionary().len();
+    assert_eq!(full_len, 7, "alice knows bob carol dave likes eve");
+
+    // Evict page 2. Its three unique terms are now DEAD but the dictionary still
+    // carries them (len unchanged) — reclaim only happens at compaction.
+    let dropped = full.drop_page(PageId(2));
+    assert_eq!(dropped.page_count(), 2);
+    assert_eq!(
+        dropped.dictionary().len(),
+        full_len,
+        "dropping a page does NOT reclaim ids"
+    );
+    // The dead terms are still resolvable by value in the oversized dictionary.
+    for dead in [iri("dave"), iri("likes"), iri("eve")] {
+        assert!(
+            dropped.term_id_by_value(&dead).is_some(),
+            "dead term {dead:?} is retained before compaction"
+        );
+    }
+
+    // Compact: the three dead ids are reclaimed, so len shrinks by EXACTLY three.
+    let compacted = dropped.compact();
+    assert_eq!(
+        compacted.dictionary().len(),
+        full_len - 3,
+        "compaction reclaims exactly the 3 terms unique to the dropped page"
+    );
+    for reclaimed in [iri("dave"), iri("likes"), iri("eve")] {
+        assert!(
+            compacted.term_id_by_value(&reclaimed).is_none(),
+            "reclaimed term {reclaimed:?} is gone after compaction"
+        );
+    }
+
+    // Meaning is preserved: every surviving quad resolves to identical TermValues.
+    assert_eq!(
+        collect_rows(&compacted),
+        vec![
+            vec![
+                iri("alice"),
+                iri("knows"),
+                iri("bob"),
+                TermValue::iri("urn:default-graph")
+            ],
+            vec![
+                iri("bob"),
+                iri("knows"),
+                iri("carol"),
+                TermValue::iri("urn:default-graph")
+            ],
+        ],
+        "compaction preserves the surviving quads by value"
+    );
+
+    // Determinism: compacting the SAME live set twice assigns IDENTICAL GlobalTermIds
+    // to every survivor (a pure function of the live term-value set). Compare the id
+    // of every live value under two independent compactions.
+    let compacted_again = dropped.compact();
+    assert_eq!(
+        compacted.dictionary().len(),
+        compacted_again.dictionary().len()
+    );
+    for value in [iri("alice"), iri("knows"), iri("bob"), iri("carol")] {
+        assert_eq!(
+            compacted.term_id_by_value(&value),
+            compacted_again.term_id_by_value(&value),
+            "value {value:?} must get the same GlobalTermId across compactions"
+        );
+    }
+    // And the whole id→value mapping is identical index-for-index.
+    for i in 0..compacted.dictionary().len() {
+        let id = purrdf_core::GlobalTermId::from_index(u64::try_from(i).expect("fits u64"));
+        assert_eq!(
+            to_value(&compacted, id),
+            to_value(&compacted_again, id),
+            "id {i} resolves to the same value across compactions"
+        );
+    }
+}
+
+// ── Serialization equivalence (determinism vs a single dataset) ─────────────────
+
+/// Materialize a paged dataset's quads (by value) into a fresh single `RdfDataset`.
+fn materialize_to_dataset(paged: &PagedDataset) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    for q in paged.quads() {
+        let s = intern_value(&mut b, &to_value(paged, q.s));
+        let p = intern_value(&mut b, &to_value(paged, q.p));
+        let o = intern_value(&mut b, &to_value(paged, q.o));
+        let g = q.g.map(|g| intern_value(&mut b, &to_value(paged, g)));
+        b.push_quad(s, p, o, g);
+    }
+    b.freeze().expect("materialized freeze")
+}
+
+#[test]
+fn compacted_paged_serializes_byte_identical_to_single() {
+    let corpus = parity_corpus();
+
+    // The single-dataset reference and its canonical Turtle.
+    let single = build_page(&corpus);
+    let single_ttl = render_canonical_turtle(&single, &[]);
+
+    // The paged view over the SAME triples, split across 3 pages, then COMPACTED
+    // (a canonical renumber). Materialize its quads back into one RdfDataset and
+    // serialize — the honest determinism check (there is no standalone paged
+    // serializer; proving the materialized-equivalent is byte-identical is the point).
+    let pages = split_pages(&corpus, 3);
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+    let compacted = paged.compact();
+    let materialized = materialize_to_dataset(&compacted);
+    let paged_ttl = render_canonical_turtle(&materialized, &[]);
+
+    assert_eq!(
+        single_ttl, paged_ttl,
+        "compacted-then-materialized paged dataset must serialize byte-identically"
+    );
 }
 
 /// The paged dataset and its provider must be thread-shareable.

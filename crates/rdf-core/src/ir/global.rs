@@ -318,7 +318,12 @@ type GlobalValueIndex = HashMap<u64, Vec<GlobalTermId>, FastHasher>;
 /// ahash, hash/eq resolving into the arena BY VALUE), and a lazily-built reverse
 /// value index. `Send + Sync` (the lazy index rides an [`OnceLock`], like
 /// [`RdfDataset`](super::RdfDataset)).
-#[derive(Debug)]
+///
+/// `Clone` is a genuine deep copy of the arena, term table, and value index —
+/// `PagedDataset::with_pages` clones the oversized dictionary when it drops pages
+/// (the dictionary keeps its now-dead ids until `PagedDataset::compact` reclaims
+/// them).
+#[derive(Debug, Clone)]
 pub struct GlobalDictionary {
     /// The byte arena owning every interned string ONCE; terms hold ranges.
     arena: Vec<u8>,
@@ -521,6 +526,42 @@ impl GlobalDictionary {
                 s: *s,
                 p: *p,
                 o: *o,
+            },
+        }
+    }
+
+    /// Resolve a global id to its **dataset-independent** [`TermValue`], recursing
+    /// through a literal's datatype IRI and a triple term's components (the inverse
+    /// of [`intern`](Self::intern)). Unlike [`resolve`](Self::resolve) — which hands
+    /// back component ids local to THIS dictionary — the returned value is
+    /// self-contained, so it survives being re-interned into a different dictionary.
+    /// This is what [`PagedDataset::compact`](super::paged::PagedDataset::compact)
+    /// re-interns into its fresh, dead-id-free dictionary.
+    #[must_use]
+    pub fn term_value(&self, id: GlobalTermId) -> TermValue {
+        match &self.terms[id.index()] {
+            GlobalInternedTerm::Iri(iri) => TermValue::Iri(arena_str(&self.arena, *iri).to_owned()),
+            GlobalInternedTerm::Blank { label, scope } => TermValue::Blank {
+                label: arena_str(&self.arena, *label).to_owned(),
+                scope: *scope,
+            },
+            GlobalInternedTerm::Literal(lit) => {
+                // A literal's datatype is always an interned IRI (C0.1).
+                let datatype = match &self.terms[lit.datatype.index()] {
+                    GlobalInternedTerm::Iri(iri) => arena_str(&self.arena, *iri).to_owned(),
+                    _ => unreachable!("a literal datatype is always an interned IRI"),
+                };
+                TermValue::Literal {
+                    lexical_form: arena_str(&self.arena, lit.lexical_form).to_owned(),
+                    datatype,
+                    language: lit.language.map(|r| arena_str(&self.arena, r).to_owned()),
+                    direction: lit.direction,
+                }
+            }
+            GlobalInternedTerm::Triple { s, p, o } => TermValue::Triple {
+                s: Box::new(self.term_value(*s)),
+                p: Box::new(self.term_value(*p)),
+                o: Box::new(self.term_value(*o)),
             },
         }
     }

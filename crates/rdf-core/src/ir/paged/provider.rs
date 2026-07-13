@@ -107,6 +107,65 @@ impl PageProvider for InMemoryPageProvider {
     }
 }
 
+/// A provider that exposes a SUBSET of another provider's pages under fresh, dense
+/// [`PageId`]s — the page-eviction primitive behind
+/// [`PagedDataset::with_pages`](super::PagedDataset::with_pages) /
+/// [`drop_page`](super::PagedDataset::drop_page).
+///
+/// `indices[new_id]` is the ORIGINAL page id in `inner` that new dense page `new_id`
+/// re-materializes, so the pruned dataset keeps dense `0..kept` page ordinals (the
+/// [`PagedDataset`](super::PagedDataset) invariant) while its retained per-page
+/// translations still address the ORIGINAL — now oversized — dictionary. Holds only
+/// an `Arc` and a boxed slice, so it stays `Send + Sync` and `wasm32`-clean.
+pub struct SubsetPageProvider {
+    /// The backing provider whose pages are being subset.
+    inner: Arc<dyn PageProvider>,
+    /// `indices[new_id] = original PageId`; its length is the pruned page count.
+    indices: Box<[PageId]>,
+}
+
+impl std::fmt::Debug for SubsetPageProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `dyn PageProvider` is not `Debug`; summarize by the retained id map.
+        f.debug_struct("SubsetPageProvider")
+            .field("indices", &self.indices)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SubsetPageProvider {
+    /// Expose exactly `indices` (each an original page id in `inner`) as dense pages
+    /// `0..indices.len()`. Order is preserved: new page `i` materializes
+    /// `inner`'s `indices[i]`.
+    #[must_use]
+    pub fn new(inner: Arc<dyn PageProvider>, indices: Vec<PageId>) -> Self {
+        Self {
+            inner,
+            indices: indices.into_boxed_slice(),
+        }
+    }
+}
+
+impl PageProvider for SubsetPageProvider {
+    fn page_count(&self) -> usize {
+        self.indices.len()
+    }
+
+    fn materialize(&self, page: PageId) -> Result<Arc<RdfDataset>, PageFault> {
+        let index = usize::try_from(page.0).expect("page id fits usize");
+        let Some(&original) = self.indices.get(index) else {
+            return Err(PageFault {
+                page,
+                message: format!(
+                    "subset page index {index} out of range 0..{}",
+                    self.indices.len()
+                ),
+            });
+        };
+        self.inner.materialize(original)
+    }
+}
+
 /// A reference provider that OBSERVES demand: each [`materialize`](PageProvider::materialize)
 /// call increments an atomic hit counter, so a test can assert exactly which pages
 /// were pulled and when.

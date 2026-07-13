@@ -27,7 +27,12 @@ use crate::ir::{GlobalDictionary, GlobalTermId, RdfDataset, TermId};
 ///
 /// See the [module docs](self) for the two directions and the by-value re-intern
 /// boundary.
-#[derive(Debug)]
+///
+/// `Clone` copies both id tables — [`PagedDataset::with_pages`](super::PagedDataset::with_pages)
+/// carries a retained page's translation into the pruned dataset unchanged (its
+/// local id space and the global ids it points at are untouched by dropping OTHER
+/// pages).
+#[derive(Debug, Clone)]
 pub struct PageTranslation {
     /// `local_to_global[TermId::index()]` is the page-local term's shared
     /// [`GlobalTermId`]. Dense, indexed by the page's `0..term_count` term table.
@@ -96,5 +101,44 @@ impl PageTranslation {
     #[inline]
     pub fn term_count(&self) -> usize {
         self.local_to_global.len()
+    }
+
+    /// The shared [`GlobalTermId`] of every page-local term, in local index order.
+    /// Because a frozen page's term table is closed over triple components and
+    /// literal datatypes, this slice IS the set of global ids the page keeps live —
+    /// which [`PagedDataset::compact`](super::PagedDataset::compact) unions across the
+    /// retained pages to mark-live before reclaiming dead ids.
+    #[must_use]
+    #[inline]
+    pub fn global_ids(&self) -> &[GlobalTermId] {
+        &self.local_to_global
+    }
+
+    /// Rebuild this translation with every global id passed through `remap`. The
+    /// page's LOCAL id space and its quad table are unchanged — only the global side
+    /// moves — so the reverse `(global, local)` table is re-sorted for the fresh
+    /// global ids. Used by [`PagedDataset::compact`](super::PagedDataset::compact) to
+    /// point a retained page at the compacted dictionary.
+    #[must_use]
+    pub(crate) fn remap(&self, remap: impl Fn(GlobalTermId) -> GlobalTermId) -> Self {
+        let local_to_global: Vec<GlobalTermId> =
+            self.local_to_global.iter().map(|&g| remap(g)).collect();
+        let mut global_to_local: Vec<(GlobalTermId, TermId)> = local_to_global
+            .iter()
+            .enumerate()
+            .map(|(i, &g)| {
+                (
+                    g,
+                    TermId::from_index(u32::try_from(i).expect("page term index fits u32")),
+                )
+            })
+            .collect();
+        // Re-sort the reverse table by the NEW global ids for the binary search. The
+        // remap is a bijection over live ids, so keys stay unique.
+        global_to_local.sort_unstable_by_key(|&(g, _)| g);
+        Self {
+            local_to_global: local_to_global.into_boxed_slice(),
+            global_to_local: global_to_local.into_boxed_slice(),
+        }
     }
 }

@@ -40,6 +40,7 @@
 pub mod provider;
 pub mod translation;
 
+use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
@@ -47,7 +48,10 @@ use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::ir::{GlobalDictionary, GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
 
-pub use provider::{CountingDemandProvider, InMemoryPageProvider, PageFault, PageId, PageProvider};
+pub use provider::{
+    CountingDemandProvider, InMemoryPageProvider, PageFault, PageId, PageProvider,
+    SubsetPageProvider,
+};
 pub use translation::PageTranslation;
 
 /// One page of a [`PagedDataset`]: its [`PageId`], the local↔global
@@ -63,6 +67,78 @@ struct PageSlot {
     /// [`PagedDataset::page`] on first access (deterministic per the provider
     /// contract).
     resident: OnceLock<Arc<RdfDataset>>,
+    /// This page's capabilities, captured at seal time so
+    /// [`with_pages`](PagedDataset::with_pages) can recompute the honest composite of
+    /// a page SUBSET without re-materializing.
+    caps: RdfStoreCapabilities,
+    /// This page's quad count, captured at seal time so a page-subset dataset can sum
+    /// its own `total_quads` without re-materializing.
+    quad_count: usize,
+}
+
+/// Why sealing a provider into a [`PagedDataset`] failed.
+///
+/// The seal pass is the checked construction path: besides a provider
+/// [`PageFault`], it REFUSES (never silently dedups) when the pages are not
+/// quad-disjoint in [`GlobalTermId`] space — i.e. the same global quad `(s, p, o, g)`
+/// occurs on more than one page (G3). Naming both offending pages and the quad makes
+/// the refusal actionable.
+#[derive(Debug)]
+pub enum PagedFreezeError {
+    /// A page could not be materialized by the provider.
+    Page(PageFault),
+    /// Two pages carry the SAME global quad — the pages are not quad-disjoint, so the
+    /// seal refuses rather than collapse the duplicate. Boxed to keep the enum (and
+    /// therefore the seal `Result`) small.
+    QuadOverlap(Box<PagedQuadOverlap>),
+}
+
+/// The offending quad of a [`PagedFreezeError::QuadOverlap`] refusal: the two pages
+/// that share it and the quad resolved to dataset-independent [`TermValue`]s.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PagedQuadOverlap {
+    /// The lower-numbered page that first carried the quad.
+    pub first_page: PageId,
+    /// The higher-numbered page that repeats it.
+    pub second_page: PageId,
+    /// The shared quad's subject value.
+    pub subject: TermValue,
+    /// The shared quad's predicate value.
+    pub predicate: TermValue,
+    /// The shared quad's object value.
+    pub object: TermValue,
+    /// The shared quad's graph value (`None` = the default graph).
+    pub graph: Option<TermValue>,
+}
+
+impl From<PageFault> for PagedFreezeError {
+    fn from(fault: PageFault) -> Self {
+        Self::Page(fault)
+    }
+}
+
+impl std::fmt::Display for PagedFreezeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Page(fault) => write!(f, "{fault}"),
+            Self::QuadOverlap(o) => write!(
+                f,
+                "pages {} and {} are not quad-disjoint: the global quad \
+                 (s={:?}, p={:?}, o={:?}, g={:?}) occurs on both; PagedDataset refuses \
+                 to silently dedup (G3)",
+                o.first_page.0, o.second_page.0, o.subject, o.predicate, o.object, o.graph
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PagedFreezeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Page(fault) => Some(fault),
+            Self::QuadOverlap(_) => None,
+        }
+    }
 }
 
 /// A reference, in-memory, demand-paged dataset composing many frozen
@@ -102,23 +178,45 @@ impl std::fmt::Debug for PagedDataset {
 
 impl PagedDataset {
     /// Seal a provider's pages into a queryable paged dataset (the eager
-    /// correctness-required pass; see the [module docs](self)).
+    /// correctness-required pass; see the [module docs](self)). This is the CHECKED
+    /// construction path — the only public constructor — so the quad-disjointness
+    /// refusal below is always on the production path, never a test-only helper.
     ///
     /// For each `PageId` in `0..page_count` this materializes the page ONCE, folds
     /// its terms into the shared [`GlobalDictionary`] by value, ORs its capabilities,
     /// and adds its quad count to the running total — then drops the materialized
-    /// page (query-time access re-materializes it, cached). Returns the first
-    /// [`PageFault`] if any page fails to materialize.
+    /// page (query-time access re-materializes it, cached).
+    ///
+    /// # Quad-disjointness (G3)
+    ///
+    /// Pages MUST be quad-disjoint in [`GlobalTermId`] space. After mapping each
+    /// page's quads to the shared id space, if the SAME global quad `(s, p, o, g)`
+    /// appears on more than one page the seal REFUSES with
+    /// [`PagedFreezeError::QuadOverlap`] — it never silently dedups (the paged read
+    /// path assumes disjoint pages and does no cross-page dedup). The disjoint success
+    /// path is behavior-identical to before.
     ///
     /// # Errors
     ///
-    /// Propagates a [`PageFault`] from the provider if a page cannot be materialized.
-    pub fn from_provider(provider: Arc<dyn PageProvider>) -> Result<Self, PageFault> {
+    /// [`PagedFreezeError::Page`] if a page cannot be materialized;
+    /// [`PagedFreezeError::QuadOverlap`] if two pages share a global quad.
+    pub fn from_provider(provider: Arc<dyn PageProvider>) -> Result<Self, PagedFreezeError> {
         let page_count = provider.page_count();
         let mut dictionary = GlobalDictionary::new();
         let mut caps = RdfStoreCapabilities::plain_rdf();
         let mut total_quads = 0usize;
         let mut pages: Vec<PageSlot> = Vec::with_capacity(page_count);
+        // G3 refusal ledger: the first page on which each global quad was seen. A
+        // second sighting on a LATER page is a non-disjoint overlap. Insertion order
+        // is deterministic (pages ascending, each page's quads in frozen order), so
+        // the refusal is reproducible.
+        type GlobalQuad = (
+            GlobalTermId,
+            GlobalTermId,
+            GlobalTermId,
+            Option<GlobalTermId>,
+        );
+        let mut seen: HashMap<GlobalQuad, PageId> = HashMap::new();
         for i in 0..page_count {
             let id = PageId(u32::try_from(i).expect("page count fits u32"));
             let page = provider.materialize(id)?;
@@ -127,8 +225,32 @@ impl PagedDataset {
             // complete (value lookups are correct for terms on not-yet-requeried
             // pages).
             let translation = PageTranslation::build(&page, &mut dictionary);
-            caps = caps.union(page.capabilities());
-            total_quads += page.quad_count();
+            let page_caps = page.capabilities();
+            let page_quads = page.quad_count();
+            // G3: map each of this page's quads to the shared id space and refuse on a
+            // cross-page collision. A page's own quads are distinct and its terms map
+            // injectively to global ids, so any collision here is with an EARLIER page.
+            for q in page.quads() {
+                let key: GlobalQuad = (
+                    translation.to_global(q.s),
+                    translation.to_global(q.p),
+                    translation.to_global(q.o),
+                    q.g.map(|g| translation.to_global(g)),
+                );
+                if let Some(&first_page) = seen.get(&key) {
+                    return Err(PagedFreezeError::QuadOverlap(Box::new(PagedQuadOverlap {
+                        first_page,
+                        second_page: id,
+                        subject: dictionary.term_value(key.0),
+                        predicate: dictionary.term_value(key.1),
+                        object: dictionary.term_value(key.2),
+                        graph: key.3.map(|g| dictionary.term_value(g)),
+                    })));
+                }
+                seen.insert(key, id);
+            }
+            caps = caps.union(page_caps);
+            total_quads += page_quads;
             pages.push(PageSlot {
                 id,
                 translation,
@@ -137,6 +259,8 @@ impl PagedDataset {
                 // provider; a counted rebuild for the demand provider — the observable
                 // lazy hook).
                 resident: OnceLock::new(),
+                caps: page_caps,
+                quad_count: page_quads,
             });
         }
         Ok(Self {
@@ -146,6 +270,144 @@ impl PagedDataset {
             caps,
             total_quads,
         })
+    }
+
+    /// Produce a variant retaining `keep` (each an existing [`PageId`]) as fresh dense
+    /// pages `0..keep.len()`, in the given order — the page-eviction primitive.
+    ///
+    /// The returned dataset keeps the ORIGINAL (now possibly oversized) dictionary: a
+    /// dropped page's ids are NOT reclaimed here — that is exactly what
+    /// [`compact`](Self::compact) later does. This models lillith's real use case:
+    /// pages are evicted over time, the shared dictionary accumulates dead ids, and a
+    /// periodic compaction reclaims them. The retained per-page translations are
+    /// carried over verbatim (their local id spaces and the global ids they point at
+    /// are untouched by dropping OTHER pages), and `caps` / `total_quads` are the
+    /// honest recomputation over ONLY the retained pages.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any id in `keep` is out of range (`>= page_count`).
+    #[must_use]
+    pub fn with_pages(&self, keep: &[PageId]) -> Self {
+        // The retained pages keep the oversized dictionary; its dead ids survive until
+        // `compact`. The clone is a deep copy over an identical term table, so its lazy
+        // value index stays valid.
+        let dictionary = self.dictionary.clone();
+        let mut caps = RdfStoreCapabilities::plain_rdf();
+        let mut total_quads = 0usize;
+        let mut pages: Vec<PageSlot> = Vec::with_capacity(keep.len());
+        for (new_index, &original) in keep.iter().enumerate() {
+            let src = usize::try_from(original.0).expect("page id fits usize");
+            let slot = &self.pages[src];
+            caps = caps.union(slot.caps);
+            total_quads += slot.quad_count;
+            pages.push(PageSlot {
+                id: PageId(u32::try_from(new_index).expect("page count fits u32")),
+                translation: slot.translation.clone(),
+                resident: OnceLock::new(),
+                caps: slot.caps,
+                quad_count: slot.quad_count,
+            });
+        }
+        let indices: Vec<PageId> = keep.to_vec();
+        Self {
+            dictionary,
+            pages: pages.into_boxed_slice(),
+            provider: Arc::new(SubsetPageProvider::new(self.provider.clone(), indices)),
+            caps,
+            total_quads,
+        }
+    }
+
+    /// Drop one page, returning a variant over the remaining pages (a thin wrapper
+    /// over [`with_pages`](Self::with_pages)). The surviving pages keep the oversized
+    /// dictionary until [`compact`](Self::compact) reclaims the dropped page's dead
+    /// ids.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `drop` is out of range (`>= page_count`).
+    #[must_use]
+    pub fn drop_page(&self, drop: PageId) -> Self {
+        assert!(
+            (usize::try_from(drop.0).expect("page id fits usize")) < self.pages.len(),
+            "drop_page: page {} out of range 0..{}",
+            drop.0,
+            self.pages.len()
+        );
+        let keep: Vec<PageId> = self
+            .pages
+            .iter()
+            .map(|s| s.id)
+            .filter(|&p| p != drop)
+            .collect();
+        self.with_pages(&keep)
+    }
+
+    /// Reclaim dead global ids and renumber the survivors DETERMINISTICALLY.
+    ///
+    /// Compaction is a pure function of the LIVE term-VALUE set:
+    ///
+    /// 1. **Mark-live** — union the retained pages' term tables into a
+    ///    `BTreeSet<GlobalTermId>` (sorted, deterministic). A frozen page's term table
+    ///    is closed over triple components and literal datatypes, so this union IS the
+    ///    transitive set of ids the pages' quads and side tables reference.
+    /// 2. **Renumber canonically** — resolve each live id to its dataset-independent
+    ///    [`TermValue`], sort those VALUES in canonical order (see
+    ///    [`TermValue`]'s `Ord`, which mirrors the serializer), and re-intern them in
+    ///    that order into a fresh [`GlobalDictionary`]. The new id assignment therefore
+    ///    depends only on the live value set — not the old numbering, ingest order, or
+    ///    page order — so compacting the same live set twice yields identical ids.
+    /// 3. **Rebuild translations** — pass each retained page's global side through the
+    ///    old→new remap ([`PageTranslation::remap`]); local id spaces and quad tables
+    ///    are unchanged. The lazy `value_index` resets with the fresh dictionary.
+    ///
+    /// The result has no dead ids and a canonical global numbering, and preserves
+    /// every quad's meaning (each survivor resolves to the identical `TermValue`).
+    #[must_use]
+    pub fn compact(&self) -> Self {
+        // 1. Mark-live: the sorted union of every retained page's global ids.
+        let mut live: BTreeSet<GlobalTermId> = BTreeSet::new();
+        for slot in &self.pages {
+            live.extend(slot.translation.global_ids().iter().copied());
+        }
+        // 2. Resolve to dataset-independent values and sort them CANONICALLY, so the
+        // fresh id assignment is a pure function of the live value set.
+        let mut live_values: Vec<(GlobalTermId, TermValue)> = live
+            .iter()
+            .map(|&old| (old, self.dictionary.term_value(old)))
+            .collect();
+        live_values.sort_by(|(_, a), (_, b)| a.cmp(b));
+        // Re-intern in canonical order into a fresh dictionary; record old→new.
+        let mut dictionary = GlobalDictionary::new();
+        let mut remap: HashMap<GlobalTermId, GlobalTermId> =
+            HashMap::with_capacity(live_values.len());
+        for (old, value) in &live_values {
+            remap.insert(*old, dictionary.intern(value));
+        }
+        // 3. Rebuild each page's translation through the remap; local spaces unchanged.
+        let pages: Vec<PageSlot> = self
+            .pages
+            .iter()
+            .map(|slot| PageSlot {
+                id: slot.id,
+                translation: slot.translation.remap(|g| {
+                    *remap
+                        .get(&g)
+                        .expect("every retained page global id is live and remapped")
+                }),
+                resident: OnceLock::new(),
+                caps: slot.caps,
+                quad_count: slot.quad_count,
+            })
+            .collect();
+        Self {
+            dictionary,
+            pages: pages.into_boxed_slice(),
+            provider: self.provider.clone(),
+            caps: self.caps,
+            total_quads: self.total_quads,
+        }
     }
 
     /// The number of pages composing this dataset.
