@@ -89,6 +89,11 @@ rayon = { workspace = true }
 # newline splitting; serializer escape fast-path classification). SIMD on
 # x86/aarch64, portable SWAR fallback elsewhere — wasm-clean, no feature gate.
 memchr = { workspace = true }
+# RDFC-1.0 digest of the compaction certificate's content projection
+# (`gts_certify`): default features (std) re-enabled, matching `purrdf-core`'s
+# own canonicalizer — the workspace-level entry is default-features = false
+# for the wasm-clean eval path.
+sha2 = { workspace = true, default-features = true }
 
 # Maintainer-only golden-capture binary. Freezes the native
 # SPARQL engine over the corpus as committed goldens under
@@ -96,6 +101,25 @@ memchr = { workspace = true }
 [[bin]]
 name = "capture_sparql_goldens"
 path = "src/bin/capture_sparql_goldens.rs"
+
+# Maintainer-only vector-freezing binary. Regenerates the two dict-compaction
+# corpus vectors (`vectors/30-dict-rawcontent.gts`, `vectors/31-dict-trained.gts`)
+# from one fixed signed source via `gts_certify::compact_and_certify`. The
+# committed `.gts` bytes are the frozen artifacts; `tests/dict_vectors.rs`
+# is the drift guard, not this binary.
+[[bin]]
+name = "gen_dict_vectors"
+path = "src/bin/gen_dict_vectors.rs"
+
+# Maintainer-only vector-freezing binary. Re-freezes the streamable-compaction
+# corpus vector (`vectors/25b-streamable-compacted.gts` plus its
+# `.expected.json` fold) from the frozen `vectors/25-streamable-source.gts` via
+# `gts_certify::compact_and_certify`. The committed `.gts`/`.expected.json`
+# bytes are the frozen artifacts; `tests/streamable_vectors.rs` is the drift
+# guard, not this binary.
+[[bin]]
+name = "gen_streamable_vectors"
+path = "src/bin/gen_streamable_vectors.rs"
 
 [dev-dependencies]
 # Rich colored line-diffs on assert_eq! failure. Drop-in: a shadowing

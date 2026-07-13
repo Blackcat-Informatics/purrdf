@@ -41,6 +41,10 @@ pub use purrdf_core::{
 };
 
 pub mod gts;
+// Streamable-compaction certificates (GTS-SPEC §10.1/§10.2, Task
+// 5): content projection + refold digest, `verify_compaction`, `compose`, and
+// the certifying authoring wrapper `compact_and_certify`.
+pub mod gts_certify;
 mod gts_core;
 mod gts_import_graph;
 mod gts_import_sink;
@@ -99,14 +103,14 @@ pub use native_quads::{
 };
 pub use purrdf_core::{
     ArtifactId, ArtifactIndex, ArtifactInterner, ArtifactRecord, AssertionOccurrence, Attribution,
-    AttributionRole, BlankScope, BundleError, Bytes, CanonHash, Canonicalized, ContentDigest,
-    ContentStore, ContentStoreError, DatasetDiff, DatasetMut, DatasetProvenance, DatasetSink,
-    DatasetView, FastHasher, FastMap, FastSet, FnFunction, FnImpl, FnMapping, FnOutput, FnParam,
-    FnParamMapping, FnReturnMapping, FnoCatalog, FrozenDatasetSource, GraphMatch, GraphMatchValue,
-    GtsBundle, HandleEntry, HandleKey, IdSet, IdVec, LossEntry, LossLedger, MutableDataset,
-    OriginKind, OriginSetId, OriginSetInterner, PROJECTION_CODECS, PipelineBundle,
-    PipelineBundleError, ProvenanceError, QuadHandle, QuadIds, QuadPatternCursor, QuadRef,
-    QuadValues, RdfAnnotation, RdfBlobOrigin, RdfBlobRecord, RdfBundle, RdfDataset,
+    AttributionRole, BlankScope, BudgetExceeded, BundleError, Bytes, CanonHash, Canonicalized,
+    ContentDigest, ContentStore, ContentStoreError, DatasetDiff, DatasetMut, DatasetProvenance,
+    DatasetSink, DatasetView, FastHasher, FastMap, FastSet, FnFunction, FnImpl, FnMapping,
+    FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog, FrozenDatasetSource,
+    GraphMatch, GraphMatchValue, GtsBundle, HandleEntry, HandleKey, IdSet, IdVec, LossEntry,
+    LossLedger, MutableDataset, OriginKind, OriginSetId, OriginSetInterner, PROJECTION_CODECS,
+    PipelineBundle, PipelineBundleError, ProvenanceError, QuadHandle, QuadIds, QuadPatternCursor,
+    QuadRef, QuadValues, RdfAnnotation, RdfBlobOrigin, RdfBlobRecord, RdfBundle, RdfDataset,
     RdfDatasetBuilder, RdfDatasetVisitor, RdfDiagnostic, RdfEnvelope, RdfListError, RdfLiteral,
     RdfLocation, RdfLookaside, RdfLookasideKind, RdfLookasideResource, RdfLoss, RdfMetadataEntry,
     RdfMetadataValue, RdfOpaqueNodeRecord, RdfParseRequest, RdfParserBackend, RdfQuad, RdfReifier,
@@ -118,7 +122,8 @@ pub use purrdf_core::{
     canonicalize, canonicalize_with, check_provenance, dataset_diff, datasets_isomorphic,
     emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, fno_to_ntriples,
     fno_to_quads, gts_to_rdf_loss_ledger, loss_matrix_json, pair_loss_ledger,
-    rdf_to_gts_loss_ledger, rule_iri, smallvec, transcode_loss_matrix_json,
+    rdf_to_gts_loss_ledger, rule_iri, smallvec, transcode_loss_matrix_json, try_canonicalize,
+    try_canonicalize_with,
 };
 
 // Shared USTAR (tar) codec: byte-deterministic writer + reader used by both the

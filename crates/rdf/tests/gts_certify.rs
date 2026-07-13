@@ -1,0 +1,1152 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Streamable-compaction certificates (Task 5): content projection
+//! and refold-digest equivalence, `verify_compaction`, `compose`, and the
+//! certifying authoring wrapper `compact_and_certify`.
+
+use std::collections::HashMap;
+
+use ciborium::value::Value;
+use ed25519_dalek::SigningKey;
+use purrdf_gts::compact::{DictStrategy, detached_signature_proof};
+use purrdf_gts::mmr;
+use purrdf_gts::model::{Term, TermKind};
+use purrdf_gts::reader::read;
+use purrdf_gts::stream;
+use purrdf_gts::wire;
+use purrdf_gts::writer::{Writer, term_to_wire};
+use purrdf_rdf::gts_certify::{
+    CertifyError, CompactionCertificate, compact_and_certify, compose, effective_digest,
+    refold_digest, verify_compaction,
+};
+
+const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
+
+/// A fixed, deterministic Ed25519 signing key (RFC 8032 signing is
+/// deterministic per key + message, so tests stay byte-reproducible).
+fn fixed_key(byte: u8) -> SigningKey {
+    SigningKey::from_bytes(&[byte; 32])
+}
+
+fn iri_term(value: String) -> Term {
+    Term {
+        kind: TermKind::Iri,
+        value: Some(value),
+        datatype: None,
+        lang: None,
+        direction: None,
+        reifier: None,
+    }
+}
+
+fn literal_term(value: String) -> Term {
+    Term {
+        kind: TermKind::Literal,
+        value: Some(value),
+        datatype: None,
+        lang: None,
+        direction: None,
+        reifier: None,
+    }
+}
+
+fn blank_term(label: &str) -> Term {
+    Term {
+        kind: TermKind::Bnode,
+        value: Some(label.to_string()),
+        datatype: None,
+        lang: None,
+        direction: None,
+        reifier: None,
+    }
+}
+
+/// A source GTS file carrying real RDF content — `n` `example.org` claims
+/// (`<s{i}> <p> "claim {i}"`), authored as one signed terms frame and one
+/// signed quads frame — so every frame a streamable compaction turns into
+/// detached-signature provenance is exercised, not just blob frames.
+///
+/// When `mutate` names an index, that claim's object literal differs
+/// (`"MUTATED claim {i}"`), producing a genuinely different source.
+fn source_with_content(byte: u8, kid: &str, n: u32, mutate: Option<u32>) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+
+    let mut terms = vec![iri_term("https://example.org/p".to_string())];
+    let p = 0usize;
+    let mut quads = Vec::new();
+    for i in 0..n {
+        let s = terms.len();
+        terms.push(iri_term(format!("https://example.org/s{i}")));
+        let o = terms.len();
+        let text = if mutate == Some(i) {
+            format!("MUTATED claim {i}")
+        } else {
+            format!("claim {i}")
+        };
+        terms.push(literal_term(text));
+        quads.push((s, p, o, None));
+    }
+    w.add_terms(&terms);
+    w.add_quads(&quads);
+    w.into_bytes()
+}
+
+/// Like [`source_with_content`], plus `blob_n` compressible content blobs —
+/// the corpus a pack dictionary strategy actually has something to train on.
+fn source_with_content_and_blobs(byte: u8, kid: &str, quad_n: u32, blob_n: u32) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+
+    let mut terms = vec![iri_term("https://example.org/p".to_string())];
+    let p = 0usize;
+    let mut quads = Vec::new();
+    for i in 0..quad_n {
+        let s = terms.len();
+        terms.push(iri_term(format!("https://example.org/s{i}")));
+        let o = terms.len();
+        terms.push(literal_term(format!("claim {i}")));
+        quads.push((s, p, o, None));
+    }
+    w.add_terms(&terms);
+    w.add_quads(&quads);
+
+    for i in 0..blob_n {
+        let blob = format!(
+            "<https://example.org/s{}> <https://example.org/p> \"blob claim {} about cats\" .\n",
+            i % 37,
+            i
+        )
+        .into_bytes();
+        w.add_blob_owned(blob, Some("text/plain"), None);
+    }
+    w.into_bytes()
+}
+
+fn keyring(pairs: &[(&str, u8)]) -> HashMap<String, ed25519_dalek::VerifyingKey> {
+    pairs
+        .iter()
+        .map(|&(kid, byte)| (kid.to_string(), fixed_key(byte).verifying_key()))
+        .collect()
+}
+
+/// A GTS source whose content projection is exactly the W3C RDFC-1.0 test
+/// suite's SOLE negative (call-budget poison) fixture, `test074`
+/// (`crates/rdf/tests/fixtures/rdfc/test074-in.nq`): `n` blank nodes, every
+/// ORDERED pair (including self-loops) linked by the same predicate — a
+/// complete symmetric digraph. `crates/rdf/tests/rdfc_w3c.rs` proves this
+/// exact shape (`n = 10`) exceeds `RDFC_CALL_LIMIT` (~5s of permutation
+/// search before the poison guard trips) against the panicking canonicalizer
+/// (`canonicalize`/`canonicalize_with`) — so, by that same construction,
+/// running it through the pre-fix `verify_compaction` (which canonicalized
+/// untrusted bytes via the panicking entry) would abort the process. This
+/// builder reproduces the identical shape as a GTS pack so
+/// `verify_compaction` can be exercised on it directly, proving the fixed
+/// verify path fails closed with an `Err` instead.
+///
+/// `n = 10` already exceeds the 1,000,000 call budget (a single ambiguous
+/// hash group of 10 mutually-symmetric blanks contributes up to `10! =
+/// 3,628,800` permutations to just ONE `hash_n_degree` call) while staying
+/// nowhere near [`purrdf_rdf::gts_certify::POISON_BLANK_LIMIT`]'s 100,000
+/// blank-COUNT pre-reject — the whole point of the gap this test closes.
+fn poison_symmetric_source(byte: u8, kid: &str, n: usize) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+
+    let mut terms = vec![iri_term("https://example.org/p".to_string())];
+    let p = 0usize;
+    let mut blanks = Vec::with_capacity(n);
+    for i in 0..n {
+        blanks.push(terms.len());
+        terms.push(blank_term(&format!("e{i}")));
+    }
+    let mut quads = Vec::with_capacity(n * n);
+    for &a in &blanks {
+        for &b in &blanks {
+            quads.push((a, p, b, None));
+        }
+    }
+    w.add_terms(&terms);
+    w.add_quads(&quads);
+    w.into_bytes()
+}
+
+/// A GTS source with `pairs` independent symmetric blank-node PAIRS (`x_i <->
+/// y_i` via mutual edges on the same predicate, RDFC-1.0's simplest
+/// automorphism shape — see `symmetric_ring_resolves_deterministically` in
+/// `crates/rdf-core/src/ir/canon.rs`), each pair tied to its OWN unique
+/// ground anchor so pairs are mutually distinguishable (no CROSS-pair
+/// symmetry) while remaining internally ambiguous (so canonicalization must
+/// still resolve each pair's 2-permutation n-degree search, not just take a
+/// first-degree fast path). A LEGITIMATE large (`2 * pairs` blank nodes),
+/// non-globally-symmetric content graph: each pair's resolution is O(1) work,
+/// so the total stays far under `RDFC_CALL_LIMIT` regardless of `pairs` —
+/// proving the fallible budget (not a flat blank-COUNT cutoff) is what
+/// should gate verification, per the plan's explicit "do not reject
+/// legitimate large non-symmetric graphs" requirement.
+fn large_non_symmetric_source(byte: u8, kid: &str, pairs: u32) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+
+    let mut terms = vec![iri_term("https://example.org/p".to_string())];
+    let p = 0usize;
+    let mut quads = Vec::new();
+    for i in 0..pairs {
+        let anchor = terms.len();
+        terms.push(iri_term(format!("https://example.org/anchor{i}")));
+        let x = terms.len();
+        terms.push(blank_term(&format!("x{i}")));
+        let y = terms.len();
+        terms.push(blank_term(&format!("y{i}")));
+        quads.push((x, p, y, None));
+        quads.push((y, p, x, None));
+        quads.push((x, p, anchor, None));
+        quads.push((y, p, anchor, None));
+    }
+    w.add_terms(&terms);
+    w.add_quads(&quads);
+    w.into_bytes()
+}
+
+#[test]
+fn faithful_repack_verifies_all_ok() {
+    let source = source_with_content(1, "author", 5, None);
+    let (pack, cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compact_and_certify succeeds on a clean signed source");
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&source, &pack, &ring).expect("verify_compaction succeeds");
+    assert!(
+        report.all_ok(),
+        "a faithful repack must pass every check: {report:?}"
+    );
+    assert_eq!(
+        cert.pre_refold_digest, cert.post_refold_digest,
+        "a faithful repack's certificate carries equal pre/post digests"
+    );
+    assert!(
+        !cert.detached_sig_roots.is_empty(),
+        "the signed source carries detached signatures, so a root is bound"
+    );
+    assert_eq!(cert.packaging_kids, vec!["pack".to_string()]);
+}
+
+#[test]
+fn content_mutation_breaks_refold_equivalence() {
+    let source = source_with_content(1, "author", 5, None);
+    // A genuinely different source: one claim's object literal differs.
+    let mutated_source = source_with_content(1, "author", 5, Some(2));
+    assert_ne!(
+        source, mutated_source,
+        "the mutated source must be byte-different from the original"
+    );
+
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compact_and_certify succeeds");
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&mutated_source, &pack, &ring)
+        .expect("verify_compaction still produces a report");
+    assert!(
+        !report.refold_equivalent,
+        "a real content change (not the same pre) must flip refold_equivalent to false \
+         (anti-tautology: this is not just comparing a digest to itself)"
+    );
+}
+
+#[test]
+fn codec_recompression_preserves_refold_equivalence() {
+    let source = source_with_content_and_blobs(1, "author", 4, 48);
+
+    let (trained, cert_trained) = compact_and_certify(
+        &source,
+        DictStrategy::Trained,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack-trained".to_string()),
+    )
+    .expect("trained-dict compaction succeeds");
+    let (raw, cert_raw) = compact_and_certify(
+        &source,
+        DictStrategy::RawContent,
+        TIMESTAMP,
+        false,
+        (fixed_key(9), "pack-raw".to_string()),
+    )
+    .expect("raw-content-dict compaction succeeds");
+
+    assert_ne!(
+        trained, raw,
+        "different dict strategies pin different dictionary bytes"
+    );
+    assert_eq!(
+        cert_trained.pre_refold_digest, cert_raw.pre_refold_digest,
+        "the SAME source folds to the same pre digest regardless of pack codec choice"
+    );
+    assert_eq!(
+        cert_trained.post_refold_digest, cert_raw.post_refold_digest,
+        "the fold is over decoded content, so codec re-compression does not change the \
+         post digest either"
+    );
+
+    let ring = keyring(&[("author", 1), ("pack-trained", 7), ("pack-raw", 9)]);
+    assert!(
+        verify_compaction(&source, &trained, &ring)
+            .expect("verify_compaction succeeds")
+            .refold_equivalent
+    );
+    assert!(
+        verify_compaction(&source, &raw, &ring)
+            .expect("verify_compaction succeeds")
+            .refold_equivalent
+    );
+}
+
+#[test]
+fn broken_seam_is_detected_without_erroring() {
+    let source = source_with_content(1, "author", 5, None);
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compact_and_certify succeeds");
+
+    // Corrupt one payload byte near the end of the pack (inside the trailing
+    // signed `index` footer frame) — the frame's own content-id self-hash
+    // mismatches, so the reader degrades it to a damaged opaque node (§7.6)
+    // rather than aborting; every earlier frame (the actual content) still
+    // folds cleanly, so this exercises exactly `seam_chain_ok` going false.
+    let mut corrupted = pack.clone();
+    let flip_at = corrupted.len() - 8;
+    corrupted[flip_at] ^= 0xFF;
+    assert_ne!(corrupted, pack);
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&source, &corrupted, &ring)
+        .expect("a damaged trailing frame still yields a report, not an error");
+    assert!(
+        !report.seam_chain_ok,
+        "a corrupted frame must be reported as a broken seam: {report:?}"
+    );
+}
+
+/// Manually append a REAL accretive-tail `terms` frame directly onto `pack`'s
+/// own id/prev chain: the frame's `"prev"` names `prev` verbatim, continuing
+/// the SAME segment (no new header) — exactly GTS-SPEC §3.3's "streamable
+/// through frame *N*, accretive tail" layout (the frames after a claimed
+/// segment's last intact `index` footer).
+///
+/// `Writer` always mints a fresh header genesis (`Writer::new`/
+/// `with_options` compute `prev` from the header's OWN self-hash) and has no
+/// public way to resume an existing chain from an arbitrary prior head, so a
+/// pack produced by `compact_and_certify` cannot be "continued" through the
+/// high-level `Writer` API. This drives the exact same low-level wire
+/// primitives `Writer::add_frame_with_options` uses internally
+/// (`term_to_wire`, `wire::content_id`, `wire::append_canonical`) with an
+/// explicit `prev`, rather than inventing a parallel writer abstraction.
+fn append_tail_terms_frame(pack: &[u8], prev: &[u8], term: &Term) -> Vec<u8> {
+    let payload = Value::Array(vec![term_to_wire(term)]);
+    let mut frame: Vec<(Value, Value)> = vec![
+        ("t".into(), "terms".into()),
+        ("d".into(), payload),
+        ("prev".into(), Value::Bytes(prev.to_vec())),
+    ];
+    let id = wire::content_id(&frame);
+    frame.push(("id".into(), Value::Bytes(id)));
+    let mut composite = pack.to_vec();
+    wire::append_canonical(&Value::Map(frame), &mut composite);
+    composite
+}
+
+#[test]
+fn accretive_tail_after_pack_chains_cleanly_across_the_seam() {
+    // The two-phase-ledger scenario: an immutable, sealed pack followed by
+    // a live, accretive tail appended after it. The tail frame chains onto
+    // the PACK's own head (GTS-SPEC §3.3) — not a fresh
+    // segment, and not merely concatenated bytes: the frame's `prev` must
+    // equal the pack's real last-frame id or the fold reports a broken
+    // chain, so a clean fold here genuinely exercises the pack/tail seam.
+    let source = source_with_content(1, "author", 5, None);
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compact_and_certify succeeds");
+
+    let pack_graph = read(&pack, true, None);
+    assert!(
+        pack_graph.diagnostics.is_empty(),
+        "sanity: the pack alone must fold cleanly before a tail is appended"
+    );
+    let pack_head = pack_graph
+        .segment_heads
+        .last()
+        .expect("a streamable pack has a segment head")
+        .clone();
+    let pre_terms = pack_graph.terms.len();
+
+    let tail_term = iri_term("https://example.org/tail-node".to_string());
+    let composite = append_tail_terms_frame(&pack, &pack_head, &tail_term);
+    assert_ne!(
+        composite, pack,
+        "the composite must genuinely carry the appended tail bytes"
+    );
+
+    let composite_graph = read(&composite, true, None);
+    assert!(
+        composite_graph.diagnostics.is_empty(),
+        "an accretive tail correctly chained onto the pack's own head must fold with \
+         no diagnostics: {:?}",
+        composite_graph.diagnostics
+    );
+    assert!(
+        composite_graph.terms.len() > pre_terms,
+        "the tail frame's new term must actually be folded in, not silently dropped \
+         at the seam"
+    );
+    let layout = &composite_graph.segment_streamable[0];
+    assert!(
+        layout.claimed && layout.tail == 1,
+        "the fold must recognize exactly one legal accretive frame after the pack's \
+         covered/claimed prefix: {layout:?}"
+    );
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&source, &composite, &ring)
+        .expect("verify_compaction succeeds across a genuine pack/tail seam");
+    assert!(
+        report.seam_chain_ok,
+        "an intact pack+accretive-tail chain must report seam_chain_ok = true: {report:?}"
+    );
+}
+
+#[test]
+fn torn_tail_prev_breaks_seam_chain_ok_without_erroring() {
+    // Same pack/tail construction as the positive seam test, but the tail
+    // frame's `prev` is corrupted so it no longer names the pack's real
+    // head — the tail->pack link itself is torn. This is distinct from
+    // `broken_seam_is_detected_without_erroring`, which corrupts a byte
+    // INSIDE the pack's own trailing index footer with no tail present at
+    // all; here the pack is untouched and only the seam-crossing link breaks.
+    let source = source_with_content(1, "author", 5, None);
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compact_and_certify succeeds");
+
+    let pack_head = read(&pack, true, None)
+        .segment_heads
+        .last()
+        .expect("a streamable pack has a segment head")
+        .clone();
+    let mut torn_prev = pack_head.clone();
+    let last = torn_prev.len() - 1;
+    torn_prev[last] ^= 0xFF;
+    assert_ne!(torn_prev, pack_head);
+
+    let tail_term = iri_term("https://example.org/tail-node".to_string());
+    let composite = append_tail_terms_frame(&pack, &torn_prev, &tail_term);
+
+    let composite_graph = read(&composite, true, None);
+    assert!(
+        composite_graph
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "BrokenChain"),
+        "a tail frame whose prev does not name the pack's real head must be reported \
+         as a broken chain: {:?}",
+        composite_graph.diagnostics
+    );
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&source, &composite, &ring)
+        .expect("a torn pack/tail seam still yields a report, not an error");
+    assert!(
+        !report.seam_chain_ok,
+        "a torn tail->pack chain link must be reported as a broken seam: {report:?}"
+    );
+}
+
+#[test]
+fn missing_authorship_key_fails_signatures_verify_but_full_keyring_succeeds() {
+    let source = source_with_content(1, "author", 5, None);
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compact_and_certify succeeds");
+
+    // A keyring that resolves the packaging key but has rotated past (or
+    // never had) the original authorship key.
+    let partial_ring = keyring(&[("pack", 7)]);
+    let partial =
+        verify_compaction(&source, &pack, &partial_ring).expect("verify_compaction succeeds");
+    assert!(
+        !partial.signatures_verify,
+        "a keyring missing the authorship kid must fail signatures_verify"
+    );
+    assert!(
+        partial.packaging_sig_ok,
+        "the packaging signature is independent of the missing authorship key"
+    );
+
+    // Full (rotation-capable) keyring resolves both.
+    let full_ring = keyring(&[("author", 1), ("pack", 7)]);
+    let full = verify_compaction(&source, &pack, &full_ring).expect("verify_compaction succeeds");
+    assert!(
+        full.signatures_verify,
+        "the full keyring resolves the carried authorship signatures: {full:?}"
+    );
+}
+
+#[test]
+fn compose_chains_matching_certificates_and_rejects_mismatched_ones() {
+    let source = source_with_content(1, "author", 3, None);
+    let (pack1, cert_ab) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack1".to_string()),
+    )
+    .expect("first compaction succeeds");
+    let (_pack2, cert_bc) = compact_and_certify(
+        &pack1,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(9), "pack2".to_string()),
+    )
+    .expect("second compaction (of the first pack) succeeds");
+
+    // `pack1` is the shared intermediate: cert_ab's post digest must equal
+    // cert_bc's pre digest (content_projection strips ALL provenance layers,
+    // including the first compaction's own, so re-compacting a pack yields
+    // the SAME content digest as the original source).
+    assert_eq!(cert_ab.post_refold_digest, cert_bc.pre_refold_digest);
+
+    let composed = compose(&cert_ab, &cert_bc).expect("B is the shared intermediate for both");
+    assert_eq!(composed.pre_refold_digest, cert_ab.pre_refold_digest);
+    assert_eq!(composed.post_refold_digest, cert_bc.post_refold_digest);
+    assert_eq!(
+        composed.packaging_kids,
+        vec!["pack1".to_string(), "pack2".to_string()]
+    );
+    assert_eq!(
+        composed.detached_sig_roots.len(),
+        cert_ab.detached_sig_roots.len() + cert_bc.detached_sig_roots.len(),
+        "compose accretes (concatenates) the detached-signature roots of both certificates"
+    );
+
+    // A certificate whose pre digest is unrelated does not compose. (Content
+    // must genuinely differ, not just the signing key — a different key over
+    // the SAME subject/object content would still fold to the same digest,
+    // since signatures never enter the content projection.)
+    let other_source = source_with_content(2, "author2", 3, Some(0));
+    let (_other_pack, cert_other) = compact_and_certify(
+        &other_source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(11), "pack3".to_string()),
+    )
+    .expect("unrelated compaction succeeds");
+    assert!(
+        compose(&cert_ab, &cert_other).is_none(),
+        "mismatched pre/post digests must not compose"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// GAP G2 — original authorship signatures must stay bound under EACH pack's
+// `stream:detachedSignatureRoot` across ANY NUMBER of repacks and key
+// rotations, distinct from each pack's own packaging (index/head) signature.
+// ---------------------------------------------------------------------------
+
+/// A source GTS file with TWO authorship signing epochs — `n_a` claims signed
+/// under `kid_a`, then `n_b` more claims signed under `kid_b` — the key
+/// rotation this compaction pipeline must survive (GTS-SPEC §10.1: "after ANY
+/// NUMBER OF REPACKS AND KEY ROTATIONS, each frame must still verify under
+/// the key active when it was authored"). The shared predicate term rides an
+/// UNSIGNED leading frame (pure vocabulary, not an authorship claim).
+fn source_with_rotated_authors(
+    kid_a: &str,
+    byte_a: u8,
+    n_a: u32,
+    kid_b: &str,
+    byte_b: u8,
+    n_b: u32,
+) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.add_terms(&[iri_term("https://example.org/p".to_string())]);
+    let p = 0usize;
+    let mut next_id = 1usize;
+
+    w.sign_with(fixed_key(byte_a), kid_a);
+    let mut terms_a = Vec::new();
+    let mut quads_a = Vec::new();
+    for i in 0..n_a {
+        let s = next_id;
+        terms_a.push(iri_term(format!("https://example.org/a{i}")));
+        next_id += 1;
+        let o = next_id;
+        terms_a.push(literal_term(format!("claim-a {i}")));
+        next_id += 1;
+        quads_a.push((s, p, o, None));
+    }
+    w.add_terms(&terms_a);
+    w.add_quads(&quads_a);
+
+    w.sign_with(fixed_key(byte_b), kid_b);
+    let mut terms_b = Vec::new();
+    let mut quads_b = Vec::new();
+    for i in 0..n_b {
+        let s = next_id;
+        terms_b.push(iri_term(format!("https://example.org/b{i}")));
+        next_id += 1;
+        let o = next_id;
+        terms_b.push(literal_term(format!("claim-b {i}")));
+        next_id += 1;
+        quads_b.push((s, p, o, None));
+    }
+    w.add_terms(&terms_b);
+    w.add_quads(&quads_b);
+
+    w.into_bytes()
+}
+
+/// The literal value of the object of the first quad using `predicate_iri`.
+fn object_literal(g: &purrdf_gts::model::Graph, predicate_iri: &str) -> Option<String> {
+    let p = g
+        .terms
+        .iter()
+        .position(|t| t.value.as_deref() == Some(predicate_iri))?;
+    g.quads
+        .iter()
+        .find(|&&(_, pred, _, _)| pred == p)
+        .and_then(|&(_, _, o, _)| g.terms[o].value.clone())
+}
+
+#[test]
+fn signatures_survive_two_repacks_and_key_rotation() {
+    let source = source_with_rotated_authors("authorA", 1, 3, "authorB", 2, 3);
+
+    let (pack1, _cert1) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "packaging1".to_string()),
+    )
+    .expect("first compaction succeeds");
+
+    // A SECOND repack — of the pack itself, not the raw source. This is the
+    // case GAP G2 identified: a naive implementation derives the detached
+    // set only from `g.signatures`, which on a pack contains ONLY the
+    // packaging observation, silently dropping the original authorship set.
+    let (pack2, _cert2) = compact_and_certify(
+        &pack1,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(9), "packaging2".to_string()),
+    )
+    .expect("second compaction (a repack of the first pack) succeeds");
+    assert_ne!(
+        pack1, pack2,
+        "the second repack must genuinely differ from the first (a real repack, not a no-op)"
+    );
+
+    let full_ring = keyring(&[
+        ("authorA", 1),
+        ("authorB", 2),
+        ("packaging1", 7),
+        ("packaging2", 9),
+    ]);
+    let report = verify_compaction(&source, &pack2, &full_ring)
+        .expect("verify_compaction succeeds across two repacks");
+    assert!(
+        report.signatures_bound,
+        "the ORIGINAL authorship signatures (both keys, across the rotation) must remain \
+         bound under pack2's detachedSignatureRoot after a SECOND repack: {report:?}"
+    );
+    assert!(
+        report.signatures_verify,
+        "every carried authorship signature verifies against a full keyring: {report:?}"
+    );
+    assert!(
+        report.packaging_sig_ok,
+        "pack2's own packaging (index/head) signature verifies: {report:?}"
+    );
+
+    // `detached_signature_proof` for an authorA-signed frame verifies against
+    // pack2's OWN `detachedSignatureRoot` — the selective per-frame proof
+    // survives the second repack, not just the aggregate bound-ness check.
+    let source_graph = read(&source, true, None);
+    let a_sig = source_graph
+        .signatures
+        .first()
+        .expect("the first signed frame in the source is authorA-signed");
+    let a_cose = a_sig
+        .cose
+        .as_deref()
+        .expect("the authorA frame carries raw COSE bytes");
+    let pack2_graph = read(&pack2, true, None);
+    let root_literal = object_literal(&pack2_graph, stream::DETACHED_SIGNATURE_ROOT)
+        .expect("pack2 carries a detachedSignatureRoot (the source is signed)");
+    let expected_root =
+        mmr::parse_hex_32(&root_literal).expect("root literal parses as a 32-byte hex value");
+    let proof = detached_signature_proof(&pack2_graph, &a_sig.frame_id, a_cose).expect(
+        "the ORIGINAL authorA signature must have a selective inclusion proof against pack2 \
+         — this is exactly what GAP G2's bug lost on the second repack",
+    );
+    assert_eq!(
+        proof.root, expected_root,
+        "the proof targets pack2's own emitted root"
+    );
+    mmr::verify_proof(&proof).expect("the per-frame authorship proof verifies standalone");
+
+    // Anti-tautology / falsifiability: a keyring MISSING authorA fails
+    // `signatures_verify`, while `signatures_bound` and `packaging_sig_ok`
+    // stay true — the binding is structural (an MMR commitment), entirely
+    // independent of whether a verifier happens to hold the signing key.
+    let partial_ring = keyring(&[("authorB", 2), ("packaging2", 9)]);
+    let partial = verify_compaction(&source, &pack2, &partial_ring)
+        .expect("verify_compaction succeeds even with a partial keyring");
+    assert!(
+        !partial.signatures_verify,
+        "a keyring missing authorA must fail signatures_verify: {partial:?}"
+    );
+    assert!(
+        partial.signatures_bound,
+        "binding is independent of key availability: {partial:?}"
+    );
+    assert!(
+        partial.packaging_sig_ok,
+        "packaging verification is independent of the missing authorship key: {partial:?}"
+    );
+}
+
+#[test]
+fn certificate_canonical_cbor_round_trips_and_is_deterministic() {
+    let source = source_with_content(1, "author", 4, None);
+    let (_pack, cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compact_and_certify succeeds");
+
+    let first = cert.to_canonical_cbor();
+    let second = cert.to_canonical_cbor();
+    assert_eq!(
+        first, second,
+        "encoding the same certificate twice must be byte-identical"
+    );
+
+    let round_tripped =
+        CompactionCertificate::from_canonical_cbor(&first).expect("canonical CBOR parses back");
+    assert_eq!(
+        round_tripped, cert,
+        "from_canonical_cbor(to_canonical_cbor(cert)) must be identity"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 6, Part C — the effective-view digest and the
+// suppression↔compaction commuting square.
+// ---------------------------------------------------------------------------
+
+/// Build a `suppress-target` map: `{"kind": kind, ...extra}` (GTS-SPEC §11).
+fn target(kind: &str, extra: Vec<(&str, Value)>) -> Value {
+    let mut entries: Vec<(Value, Value)> = vec![("kind".into(), kind.into())];
+    entries.extend(extra.into_iter().map(|(k, v)| (k.into(), v)));
+    Value::Map(entries)
+}
+
+/// Two quads — `<s> <p> <secret-o>` and `<s2> <p2> "public claim"` — with an
+/// OPTIONAL `term`-kind suppression hiding `<secret-o>` (and, per §11, every
+/// quad it appears in).
+fn source_with_term_suppression(byte: u8, kid: &str, suppress: bool) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+    w.add_terms(&[
+        iri_term("https://example.org/s".to_string()), // 0
+        iri_term("https://example.org/p".to_string()), // 1
+        iri_term("https://example.org/secret-o".to_string()), // 2
+        iri_term("https://example.org/s2".to_string()), // 3
+        iri_term("https://example.org/p2".to_string()), // 4
+        literal_term("public claim".to_string()),      // 5
+    ]);
+    w.add_quads(&[(0, 1, 2, None), (3, 4, 5, None)]);
+    if suppress {
+        w.add_suppress(
+            vec![target("term", vec![("id", Value::from(2u64))])],
+            Some("pii"),
+            None,
+        );
+    }
+    w.into_bytes()
+}
+
+/// Like [`source_with_term_suppression`] but the OPTIONAL suppression is a
+/// `quad`-kind target naming `<s> <p> <secret-o>` exactly.
+fn source_with_quad_suppression(byte: u8, kid: &str, suppress: bool) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+    w.add_terms(&[
+        iri_term("https://example.org/s".to_string()), // 0
+        iri_term("https://example.org/p".to_string()), // 1
+        iri_term("https://example.org/secret-o".to_string()), // 2
+        iri_term("https://example.org/s2".to_string()), // 3
+        iri_term("https://example.org/p2".to_string()), // 4
+        literal_term("public claim".to_string()),      // 5
+    ]);
+    w.add_quads(&[(0, 1, 2, None), (3, 4, 5, None)]);
+    if suppress {
+        w.add_suppress(
+            vec![target(
+                "quad",
+                vec![(
+                    "q",
+                    Value::Array(vec![
+                        Value::from(0u64),
+                        Value::from(1u64),
+                        Value::from(2u64),
+                    ]),
+                )],
+            )],
+            None,
+            None,
+        );
+    }
+    w.into_bytes()
+}
+
+#[test]
+fn term_suppression_commutes_through_compaction() {
+    let source = source_with_term_suppression(1, "author", true);
+    let pre_fold = read(&source, true, None);
+    assert!(pre_fold.diagnostics.is_empty(), "source folds cleanly");
+
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compaction of a term-suppressing source succeeds");
+    let post_fold = read(&pack, true, None);
+    assert!(post_fold.diagnostics.is_empty(), "pack folds cleanly");
+
+    // RAW digest ignores suppressions entirely — the suppressed bytes are
+    // retained either way, so refold_equivalent stays true.
+    assert_eq!(
+        refold_digest(&pre_fold).expect("pre raw digest"),
+        refold_digest(&post_fold).expect("post raw digest"),
+        "the raw refold digest must stay equal (bytes are retained, never deleted)"
+    );
+
+    // EFFECTIVE digest: the suppression↔compaction commuting square — the
+    // compactor carried the suppression forward, so the view a
+    // suppression-aware consumer sees is preserved too.
+    let pre_eff = effective_digest(&pre_fold).expect("pre effective digest");
+    let post_eff = effective_digest(&post_fold).expect("post effective digest");
+    assert_eq!(
+        pre_eff, post_eff,
+        "effective_digest must commute through a faithful compaction"
+    );
+
+    // Anti-tautology: a source WITHOUT the suppression has a DIFFERENT
+    // effective digest — effective_digest actually responds to suppression,
+    // it is not just silently equal to the raw digest.
+    let unsuppressed = source_with_term_suppression(1, "author", false);
+    let unsuppressed_fold = read(&unsuppressed, true, None);
+    let unsuppressed_eff =
+        effective_digest(&unsuppressed_fold).expect("unsuppressed effective digest");
+    assert_ne!(
+        pre_eff, unsuppressed_eff,
+        "the term suppression must actually change the effective view"
+    );
+    assert_eq!(
+        refold_digest(&pre_fold).expect("suppressed raw digest"),
+        refold_digest(&unsuppressed_fold).expect("unsuppressed raw digest"),
+        "sanity: the RAW digest does NOT depend on suppression, only the EFFECTIVE one does"
+    );
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&source, &pack, &ring).expect("verify_compaction succeeds");
+    assert!(
+        report.suppressions_ok,
+        "a faithful term-suppression carry must pass suppressions_ok: {report:?}"
+    );
+}
+
+#[test]
+fn quad_suppression_commutes_through_compaction() {
+    let source = source_with_quad_suppression(1, "author", true);
+    let pre_fold = read(&source, true, None);
+    assert!(pre_fold.diagnostics.is_empty(), "source folds cleanly");
+
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compaction of a quad-suppressing source succeeds");
+    let post_fold = read(&pack, true, None);
+    assert!(post_fold.diagnostics.is_empty(), "pack folds cleanly");
+
+    assert_eq!(
+        refold_digest(&pre_fold).expect("pre raw digest"),
+        refold_digest(&post_fold).expect("post raw digest"),
+        "the raw refold digest must stay equal (bytes are retained, never deleted)"
+    );
+
+    let pre_eff = effective_digest(&pre_fold).expect("pre effective digest");
+    let post_eff = effective_digest(&post_fold).expect("post effective digest");
+    assert_eq!(
+        pre_eff, post_eff,
+        "effective_digest must commute through a faithful compaction"
+    );
+
+    let unsuppressed = source_with_quad_suppression(1, "author", false);
+    let unsuppressed_fold = read(&unsuppressed, true, None);
+    let unsuppressed_eff =
+        effective_digest(&unsuppressed_fold).expect("unsuppressed effective digest");
+    assert_ne!(
+        pre_eff, unsuppressed_eff,
+        "the quad suppression must actually change the effective view"
+    );
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&source, &pack, &ring).expect("verify_compaction succeeds");
+    assert!(
+        report.suppressions_ok,
+        "a faithful quad-suppression carry must pass suppressions_ok: {report:?}"
+    );
+}
+
+#[test]
+fn dropping_the_carried_suppression_flips_suppressions_ok_to_false() {
+    let source = source_with_term_suppression(1, "author", true);
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compaction succeeds");
+
+    // Sanity: the faithful pack passes before we mangle it.
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    assert!(
+        verify_compaction(&source, &pack, &ring)
+            .expect("verify_compaction succeeds")
+            .suppressions_ok,
+        "the faithful pack must pass suppressions_ok before mangling"
+    );
+
+    // Hand-build a "post" that folds cleanly but is MISSING the carried
+    // suppression — the falsifiability check: suppressions_ok must catch it.
+    let mut mangled_fold = read(&pack, true, None);
+    assert!(
+        !mangled_fold.suppressions.is_empty(),
+        "sanity: the pack carries the suppression before we drop it"
+    );
+    mangled_fold.suppressions.clear();
+    let mangled = Writer::deterministic(&mangled_fold, "purrdf.gts")
+        .expect("deterministic writer builds from the mangled fold")
+        .into_bytes();
+
+    let report = verify_compaction(&source, &mangled, &ring)
+        .expect("verify_compaction still produces a report for the mangled pack");
+    assert!(
+        !report.suppressions_ok,
+        "dropping the carried suppression must be detected: {report:?}"
+    );
+}
+
+/// GAP G4: `verify_compaction` folds and canonicalizes UNTRUSTED bytes
+/// (`pre_bytes`/`post_bytes` come from the caller, not from this crate's own
+/// authoring path). A pre-fix reader routed that canonicalization through the
+/// panicking `canonicalize_with`, so a crafted pack whose content projection
+/// is a small-but-maximally-symmetric blank graph — too few blanks to trip
+/// the cheap `POISON_BLANK_LIMIT` blank-COUNT pre-reject, but enough to blow
+/// RDFC-1.0's `RDFC_CALL_LIMIT` n-degree search budget — would abort the
+/// whole process instead of returning an error. This is the "verifier never
+/// poison-panics" proof: `verify_compaction` must return a clean `Err`
+/// instead.
+#[test]
+fn verify_compaction_fails_closed_on_symmetric_poison_content() {
+    // 10 mutually-symmetric blanks (the exact `test074` shape) is already
+    // proven (in `rdfc_w3c.rs`) to exceed `RDFC_CALL_LIMIT`, while its blank
+    // COUNT (10) is nowhere near `POISON_BLANK_LIMIT` (100,000) — so only the
+    // fallible budget guard, not the count pre-reject, can catch it.
+    let poison = poison_symmetric_source(1, "author", 10);
+    let ring = keyring(&[("author", 1)]);
+
+    // `post_bytes` is immaterial here: `verify_compaction` computes and
+    // compares the PRE-side refold digest before it ever looks at post, so
+    // the poison pre-bytes alone are enough to exercise the failure path.
+    // Re-folding the SAME poison bytes as "post" keeps the fixture minimal
+    // and self-contained (no dependency on a separate valid pack).
+    match verify_compaction(&poison, &poison, &ring) {
+        Err(CertifyError::CanonBudgetExceeded(err)) => {
+            assert_eq!(
+                err.blank_count, 10,
+                "the budget-exceeded diagnostic must report the poison graph's blank count"
+            );
+        }
+        other => panic!(
+            "expected verify_compaction to fail CLOSED with \
+             CertifyError::CanonBudgetExceeded on a symmetric-poison content projection \
+             (never panic, never silently pass); got {other:?}"
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GAP G6 — `content_projection` must not strip a LEGITIMATE content node
+// merely because it happens to be typed with a reserved `stream:` class; it
+// must strip ONLY the provenance the compactor itself mints.
+// ---------------------------------------------------------------------------
+
+/// `rdf:type`, spelled out locally: `gts_certify::RDF_TYPE` is a private
+/// constant, and nothing else in this crate's public surface exposes it.
+const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+
+/// A source whose CONTENT — authored by the "user", not by any compactor —
+/// includes a blank node typed with a reserved `stream:` provenance class
+/// (`stream:Manifestation`). Nothing in RDF or in GTS-SPEC reserves that IRI
+/// from being used as an ordinary `rdf:type` object by a document's own
+/// content; only `purrdf_gts::compact`'s streaming index gets to mint an
+/// AUTHORITATIVE `stream:Manifestation` node (one per promised blob, bnode
+/// label `m{order}`). This builder's node is a same-shaped LOOKALIKE with an
+/// unrelated bnode label (`contentNode`), asserted directly by the source —
+/// exactly the case `content_projection` must not confuse with real
+/// compaction provenance.
+///
+/// When `mutate` is true, the node's `ex:name` literal differs
+/// (`"Mallory"` vs `"Alice"`) — a genuine content difference gated behind the
+/// reserved-class-typed subject.
+fn source_with_manifestation_typed_content(byte: u8, kid: &str, mutate: bool) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+    let name = if mutate { "Mallory" } else { "Alice" };
+    w.add_terms(&[
+        blank_term("contentNode"),                        // 0
+        iri_term(RDF_TYPE.to_string()),                   // 1
+        iri_term(stream::MANIFESTATION.to_string()),      // 2
+        iri_term("https://example.org/name".to_string()), // 3
+        literal_term(name.to_string()),                   // 4
+    ]);
+    w.add_quads(&[
+        (0, 1, 2, None), // _:contentNode rdf:type stream:Manifestation (CONTENT, not provenance)
+        (0, 3, 4, None), // _:contentNode ex:name "Alice" | "Mallory"
+    ]);
+    w.into_bytes()
+}
+
+#[test]
+fn manifestation_typed_content_node_mutation_is_not_masked_by_projection() {
+    let source = source_with_manifestation_typed_content(1, "author", false);
+    let mutated_source = source_with_manifestation_typed_content(1, "author", true);
+    assert_ne!(
+        source, mutated_source,
+        "the mutated source must be byte-different from the original"
+    );
+
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect(
+        "compact_and_certify succeeds on a source carrying a reserved-class-typed content node",
+    );
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&mutated_source, &pack, &ring)
+        .expect("verify_compaction still produces a report");
+    assert!(
+        !report.refold_equivalent,
+        "a real content mutation on a blank node that merely happens to be typed with a \
+         reserved stream: class must still flip refold_equivalent to false — \
+         content_projection must not strip that node's quads just because a `rdf:type` \
+         object matches a reserved class name; only the compactor's OWN minted provenance \
+         subgraph may be stripped (anti-tautology: if content_projection over-strips by \
+         class alone, both sides lose the mutated quad and this assertion fails)"
+    );
+}
+
+/// The flip side of the poison test: a LARGE content graph that is NOT
+/// globally symmetric (each blank pair's automorphism is resolved by a
+/// cheap, independent 2-permutation search, distinguished pair-to-pair by a
+/// unique ground anchor) must still canonicalize and verify successfully.
+/// Guards against the wrong fix for GAP G4 — merely lowering
+/// `POISON_BLANK_LIMIT` — which would falsely reject this legitimate,
+/// merely-large graph even though it stays far under `RDFC_CALL_LIMIT`.
+#[test]
+fn verify_compaction_accepts_large_non_symmetric_content() {
+    // 1,500 independent symmetric pairs = 3,000 blank nodes total, each
+    // pair's ambiguity resolved independently and cheaply (a 2-permutation
+    // search per pair, not one global combinatorial search) — comfortably
+    // legitimate, and comfortably larger than what a naive flat-count
+    // tightening would need to reject to catch the 10-blank poison case.
+    let source = large_non_symmetric_source(1, "author", 1_500);
+    let (pack, cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compact_and_certify must not treat a large non-symmetric graph as poison");
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&source, &pack, &ring)
+        .expect("verify_compaction must not fail closed on a legitimate large graph");
+    assert!(
+        report.all_ok(),
+        "a faithful repack of a large non-symmetric content graph must still verify: {report:?}"
+    );
+    assert_eq!(
+        cert.pre_refold_digest, cert.post_refold_digest,
+        "the large non-symmetric content graph must refold to equal pre/post digests"
+    );
+}
