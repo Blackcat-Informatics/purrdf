@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use purrdf_core::{
     CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PageId, PagedDataset,
-    PagedFreezeError, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermRef, TermValue,
-    render_canonical_turtle,
+    PagedFreezeError, PagedQuadTable, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermRef,
+    TermValue, render_canonical_turtle,
 };
 
 // The standard RDF Collection vocabulary (crate-internal constants are not public;
@@ -486,6 +486,7 @@ fn freeze_refuses_non_quad_disjoint_pages() {
         PagedFreezeError::QuadOverlap(o) => {
             assert_eq!(o.first_page, PageId(0), "the earlier page is named");
             assert_eq!(o.second_page, PageId(1), "the later page is named");
+            assert_eq!(o.table, PagedQuadTable::Primary, "a base-quad overlap");
             assert_eq!(o.subject, iri("s"));
             assert_eq!(o.predicate, iri("p"));
             assert_eq!(o.object, iri("o"));
@@ -503,6 +504,93 @@ fn freeze_refuses_non_quad_disjoint_pages() {
     let paged = PagedDataset::from_provider(ok_provider).expect("disjoint pages seal");
     assert_eq!(paged.page_count(), 2);
     assert_eq!(paged.quads().count(), 2, "both disjoint quads survive");
+}
+
+#[test]
+fn freeze_refuses_non_disjoint_side_tables() {
+    // The reifier and annotation side tables are composed across pages the SAME way as
+    // primary quads — concatenated with no cross-page dedup — so the seal must enforce
+    // disjointness on them too, not just the primary quads. Both pages below carry
+    // DISJOINT primary quads (so the primary ledger stays clean) but a DUPLICATE
+    // side-table entry, which must be refused and attributed to the right stream.
+
+    // (1) Annotation overlap: the shared `(r, confidence, high)` annotation appears on
+    // both pages; the composed annotation stream would emit it twice.
+    let anno_page = |s: &str, o: &str| {
+        let mut b = RdfDatasetBuilder::new();
+        let subj = b.intern_iri(&format!("http://example.org/{s}"));
+        let p = b.intern_iri("http://example.org/p");
+        let obj = b.intern_iri(&format!("http://example.org/{o}"));
+        b.push_quad(subj, p, obj, None); // a page-unique primary quad
+        let r = b.intern_iri("http://example.org/r");
+        let conf = b.intern_iri("http://example.org/confidence");
+        let high = b.intern_iri("http://example.org/high");
+        b.push_annotation(r, conf, high); // the SHARED annotation
+        b.freeze().expect("annotation page")
+    };
+    let provider = Arc::new(InMemoryPageProvider::new(vec![
+        anno_page("s0", "o0"),
+        anno_page("s1", "o1"),
+    ]));
+    match PagedDataset::from_provider(provider)
+        .expect_err("duplicate annotation across pages must refuse")
+    {
+        PagedFreezeError::QuadOverlap(o) => {
+            assert_eq!(
+                o.table,
+                PagedQuadTable::Annotation,
+                "annotation-table overlap"
+            );
+            assert_eq!(o.first_page, PageId(0));
+            assert_eq!(o.second_page, PageId(1));
+            assert_eq!(o.subject, iri("r"));
+            assert_eq!(o.predicate, iri("confidence"));
+            assert_eq!(o.object, iri("high"));
+        }
+        PagedFreezeError::Page(fault) => panic!("expected QuadOverlap, got page fault: {fault}"),
+    }
+
+    // (2) Reifier overlap: the shared reifier binding `r rdf:reifies <<(a b c)>>` (over
+    // an unasserted triple term) appears on both pages; the composed reifier stream
+    // would emit it twice.
+    let reifier_page = |s: &str, o: &str| {
+        let mut b = RdfDatasetBuilder::new();
+        let subj = b.intern_iri(&format!("http://example.org/{s}"));
+        let p = b.intern_iri("http://example.org/p");
+        let obj = b.intern_iri(&format!("http://example.org/{o}"));
+        b.push_quad(subj, p, obj, None); // a page-unique primary quad
+        let a = b.intern_iri("http://example.org/a");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
+        let triple = b.intern_triple(a, bb, c);
+        let r = b.intern_iri("http://example.org/r");
+        b.push_reifier(r, triple); // the SHARED reifier binding
+        b.freeze().expect("reifier page")
+    };
+    let provider = Arc::new(InMemoryPageProvider::new(vec![
+        reifier_page("s0", "o0"),
+        reifier_page("s1", "o1"),
+    ]));
+    match PagedDataset::from_provider(provider)
+        .expect_err("duplicate reifier binding across pages must refuse")
+    {
+        PagedFreezeError::QuadOverlap(o) => {
+            assert_eq!(o.table, PagedQuadTable::Reifier, "reifier-table overlap");
+            assert_eq!(o.first_page, PageId(0));
+            assert_eq!(o.second_page, PageId(1));
+            assert_eq!(o.subject, iri("r"));
+            assert_eq!(
+                o.object,
+                TermValue::Triple {
+                    s: Box::new(iri("a")),
+                    p: Box::new(iri("b")),
+                    o: Box::new(iri("c")),
+                },
+                "the reified triple term is the shared object"
+            );
+        }
+        PagedFreezeError::Page(fault) => panic!("expected QuadOverlap, got page fault: {fault}"),
+    }
 }
 
 // ── Compaction: dead-id reclaim + determinism ──────────────────────────────────

@@ -93,14 +93,43 @@ pub enum PagedFreezeError {
     QuadOverlap(Box<PagedQuadOverlap>),
 }
 
+/// Which composed quad stream a [`PagedFreezeError::QuadOverlap`] refusal came from.
+/// The paged view exposes three cross-page streams that each assume disjoint pages and
+/// do NO cross-page dedup — the primary quads and the two RDF 1.2 side tables — so the
+/// seal enforces disjointness on all three, not just the primary quads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PagedQuadTable {
+    /// The base (asserted) quads, surfaced by [`DatasetView::quads`].
+    Primary,
+    /// The reifier bindings, surfaced by [`DatasetView::reifier_quads`] as
+    /// `(reifier, rdf:reifies, triple-term)` virtual quads.
+    Reifier,
+    /// The annotation triples, surfaced by [`DatasetView::annotation_quads`].
+    Annotation,
+}
+
+impl PagedQuadTable {
+    /// A short human label for the refusal message.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Reifier => "reifier side-table",
+            Self::Annotation => "annotation side-table",
+        }
+    }
+}
+
 /// The offending quad of a [`PagedFreezeError::QuadOverlap`] refusal: the two pages
-/// that share it and the quad resolved to dataset-independent [`TermValue`]s.
+/// that share it, which composed stream it belongs to, and the quad resolved to
+/// dataset-independent [`TermValue`]s.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PagedQuadOverlap {
     /// The lower-numbered page that first carried the quad.
     pub first_page: PageId,
     /// The higher-numbered page that repeats it.
     pub second_page: PageId,
+    /// Which cross-page quad stream (primary or a side table) the duplicate is in.
+    pub table: PagedQuadTable,
     /// The shared quad's subject value.
     pub subject: TermValue,
     /// The shared quad's predicate value.
@@ -123,10 +152,16 @@ impl std::fmt::Display for PagedFreezeError {
             Self::Page(fault) => write!(f, "{fault}"),
             Self::QuadOverlap(o) => write!(
                 f,
-                "pages {} and {} are not quad-disjoint: the global quad \
+                "pages {} and {} are not quad-disjoint in the {} stream: the global quad \
                  (s={:?}, p={:?}, o={:?}, g={:?}) occurs on both; PagedDataset refuses \
                  to silently dedup (G3)",
-                o.first_page.0, o.second_page.0, o.subject, o.predicate, o.object, o.graph
+                o.first_page.0,
+                o.second_page.0,
+                o.table.label(),
+                o.subject,
+                o.predicate,
+                o.object,
+                o.graph
             ),
         }
     }
@@ -206,17 +241,25 @@ impl PagedDataset {
         let mut caps = RdfStoreCapabilities::plain_rdf();
         let mut total_quads = 0usize;
         let mut pages: Vec<PageSlot> = Vec::with_capacity(page_count);
-        // G3 refusal ledger: the first page on which each global quad was seen. A
-        // second sighting on a LATER page is a non-disjoint overlap. Insertion order
-        // is deterministic (pages ascending, each page's quads in frozen order), so
-        // the refusal is reproducible.
+        // G3 refusal ledgers: the first page on which each global quad was seen, kept
+        // PER composed stream. A second sighting on a LATER page is a non-disjoint
+        // overlap in that stream. The paged read path concatenates each stream across
+        // pages and does NO cross-page dedup, so the seal enforces disjointness on all
+        // three — the primary quads AND both RDF 1.2 side tables (reifier bindings,
+        // annotation triples). Insertion order is deterministic (pages ascending, each
+        // page's quads in frozen order), so the refusal is reproducible. The ledgers
+        // are SEPARATE: a base quad and a reifier virtual quad may legitimately share
+        // the same `(s, p, o, g)` values without being a duplicate emission, because
+        // they surface through different trait methods.
         type GlobalQuad = (
             GlobalTermId,
             GlobalTermId,
             GlobalTermId,
             Option<GlobalTermId>,
         );
-        let mut seen: HashMap<GlobalQuad, PageId> = HashMap::new();
+        let mut seen_primary: HashMap<GlobalQuad, PageId> = HashMap::new();
+        let mut seen_reifier: HashMap<GlobalQuad, PageId> = HashMap::new();
+        let mut seen_annotation: HashMap<GlobalQuad, PageId> = HashMap::new();
         for i in 0..page_count {
             let id = PageId(u32::try_from(i).expect("page count fits u32"));
             let page = provider.materialize(id)?;
@@ -227,29 +270,41 @@ impl PagedDataset {
             let translation = PageTranslation::build(&page, &mut dictionary);
             let page_caps = page.capabilities();
             let page_quads = page.quad_count();
-            // G3: map each of this page's quads to the shared id space and refuse on a
-            // cross-page collision. A page's own quads are distinct and its terms map
-            // injectively to global ids, so any collision here is with an EARLIER page.
+            // G3: map each of this page's quads (primary + side tables) to the shared id
+            // space and refuse on a cross-page collision. A page's own quads within a
+            // stream are distinct and its terms map injectively to global ids, so any
+            // collision here is with an EARLIER page. `key` is `Copy`, so it survives
+            // the move into the ledger for the error report.
+            let overlap = |key: GlobalQuad, first_page: PageId, table: PagedQuadTable| {
+                PagedFreezeError::QuadOverlap(Box::new(PagedQuadOverlap {
+                    first_page,
+                    second_page: id,
+                    table,
+                    subject: dictionary.term_value(key.0),
+                    predicate: dictionary.term_value(key.1),
+                    object: dictionary.term_value(key.2),
+                    graph: key.3.map(|g| dictionary.term_value(g)),
+                }))
+            };
             for q in page.quads() {
-                let key: GlobalQuad = (
-                    translation.to_global(q.s),
-                    translation.to_global(q.p),
-                    translation.to_global(q.o),
-                    q.g.map(|g| translation.to_global(g)),
-                );
-                // Single hash+probe: `insert` returns the prior page id iff this global
-                // quad was already seen (an EARLIER page — see the injectivity argument
-                // above), which is exactly the cross-page overlap we refuse. `key` is
-                // `Copy`, so it survives the move into the map for the error report.
-                if let Some(first_page) = seen.insert(key, id) {
-                    return Err(PagedFreezeError::QuadOverlap(Box::new(PagedQuadOverlap {
-                        first_page,
-                        second_page: id,
-                        subject: dictionary.term_value(key.0),
-                        predicate: dictionary.term_value(key.1),
-                        object: dictionary.term_value(key.2),
-                        graph: key.3.map(|g| dictionary.term_value(g)),
-                    })));
+                let g = map_quad_to_global(&translation, q);
+                let key: GlobalQuad = (g.s, g.p, g.o, g.g);
+                if let Some(first_page) = seen_primary.insert(key, id) {
+                    return Err(overlap(key, first_page, PagedQuadTable::Primary));
+                }
+            }
+            for q in page.reifier_quads() {
+                let g = map_quad_to_global(&translation, q);
+                let key: GlobalQuad = (g.s, g.p, g.o, g.g);
+                if let Some(first_page) = seen_reifier.insert(key, id) {
+                    return Err(overlap(key, first_page, PagedQuadTable::Reifier));
+                }
+            }
+            for q in page.annotation_quads() {
+                let g = map_quad_to_global(&translation, q);
+                let key: GlobalQuad = (g.s, g.p, g.o, g.g);
+                if let Some(first_page) = seen_annotation.insert(key, id) {
+                    return Err(overlap(key, first_page, PagedQuadTable::Annotation));
                 }
             }
             caps = caps.union(page_caps);

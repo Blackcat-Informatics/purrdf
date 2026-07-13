@@ -59,7 +59,7 @@ pub use ingest::{DatasetSink, FrozenDatasetSource};
 pub use mutable::{MutableDataset, QuadValues};
 pub use paged::{
     CountingDemandProvider, InMemoryPageProvider, PageFault, PageId, PageProvider, PageTranslation,
-    PagedDataset, PagedFreezeError, PagedQuadOverlap, SubsetPageProvider,
+    PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable, SubsetPageProvider,
 };
 pub use pipeline_bundle::{HandleEntry, HandleKey, PipelineBundle, PipelineBundleError};
 pub use term::{BlankScope, TermId, TermValue};
