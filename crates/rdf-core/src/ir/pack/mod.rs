@@ -28,6 +28,14 @@
 //! [`triples::TriplesRef::from_bytes`] is the borrowed, zero-copy reader that
 //! answers all 8 `(s, p, o)` pattern shapes without decompression.
 //!
+//! [`side`] lands the RDF 1.2 reifier/annotation side-tables (Task 4):
+//! [`side::SideTables::encode`] builds a self-contained encoding of every
+//! reifier binding and statement annotation (in unified [`dict::PackTermId`]s)
+//! from a [`dict::PackDict`] + `RdfDataset`, and [`side::SideTablesRef::from_bytes`]
+//! is the borrowed, zero-copy reader that reproduces `RdfDataset::reifier_quads`,
+//! `RdfDataset::annotation_quads`, and `RdfDataset::annotations_of_with_graph`
+//! byte-for-byte over the unified id space.
+//!
 //! `#[doc(hidden)]` (see [`super::pack`]'s declaration): this whole tree is an
 //! internal-codec surface, not a SemVer-guaranteed part of the crate's public API.
 
@@ -35,5 +43,7 @@
 pub mod bits;
 #[doc(hidden)]
 pub mod dict;
+#[doc(hidden)]
+pub mod side;
 #[doc(hidden)]
 pub mod triples;

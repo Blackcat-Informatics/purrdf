@@ -9,8 +9,13 @@
 //! # Id layout
 //!
 //! Terms are scanned by ROLE from the dataset's base quads (subject / predicate /
-//! object; RDF 1.2 side-table-only terms are out of scope — Task 4 owns that
-//! section) and partitioned into four disjoint groups:
+//! object) and partitioned into four disjoint groups. [`encode`](PackDict::encode)
+//! ALSO folds in every term the RDF 1.2 reifier/annotation side-tables reference
+//! (a reifier resource, a reified triple-term, an annotation's predicate/object,
+//! and any of their graph names) that is not already covered by a base-quad role
+//! — see the "auxiliary-value closure" doc on `encode` for the exact mechanism
+//! (Task 4: [`super::side::SideTables`] is the consumer that needs every such
+//! reference to resolve to a unified id):
 //!
 //! - **shared** — appears as both a subject and an object somewhere (`S ∩ O`).
 //! - **subject_only** — subject, never object.
@@ -60,6 +65,16 @@ use crate::ir::term::{StrRange, arena_str};
 use crate::{BlankScope, RdfDataset, RdfTextDirection, TermRef, TermValue};
 
 use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for, read_varint, write_varint};
+
+/// The `rdf:reifies` predicate IRI — the RDF 1.2 reification indirection edge
+/// (`reifier rdf:reifies <<( s p o )>>`). A local mirror of the same private
+/// constant in `crate::ir::dataset` (also duplicated in `crate::ir::mutable`):
+/// the ingest path interns this exact IRI as a term whenever at least one
+/// reifier binding exists, even though no [`ReifierRow`](crate::ir::dataset::ReifierRow)
+/// tuple stores it directly (`RdfDataset::reifier_quads` looks it up by value).
+/// [`PackDict::encode`]'s side-table closure fold-in (below) mirrors that same
+/// condition so [`super::side::SideTables`] can mint a unified id for it.
+const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
 /// The unified term-identity space this module mints: a plain, 1-based `u64` (id `0`
 /// is never assigned). A pure type alias, not a newtype — Task 6 wraps this in a real
@@ -731,14 +746,53 @@ impl PackDict {
         predicates.sort();
         graph_values.sort();
 
+        // Step 1.5 (Task 4 amendment): RDF 1.2 side-table term closure roots. A
+        // reifier row (`reifier, triple-term, graph`) and an annotation row
+        // (`reifier, predicate, object, graph`) may reference terms that hold NO
+        // base-quad S/P/O role at all — e.g. a reifier resource that is never
+        // itself a triple's subject/object. Collect every such reference here as
+        // an ADDITIONAL closure root, folded into the dictionary below by the
+        // exact same worklist the graph-name fold-in already uses, so
+        // [`super::side::SideTables`] always finds a unified id for every
+        // side-table reference it needs to resolve. A referenced triple term's
+        // own `s`/`p`/`o` components are handled transitively by the shared
+        // `while qi < queue.len()` worklist loop below — a `TermValue::Triple`
+        // entry always expands its components there, whatever put it in the
+        // queue.
+        let mut side_values: Vec<TermValue> = Vec::new();
+        for (reifier, triple, graph) in dataset.reifiers_with_graph() {
+            side_values.push(dataset.term_value(reifier));
+            side_values.push(dataset.term_value(triple));
+            if let Some(g) = graph {
+                side_values.push(dataset.term_value(g));
+            }
+        }
+        for (reifier, pred, obj, graph) in dataset.annotations_with_graph() {
+            side_values.push(dataset.term_value(reifier));
+            side_values.push(dataset.term_value(pred));
+            side_values.push(dataset.term_value(obj));
+            if let Some(g) = graph {
+                side_values.push(dataset.term_value(g));
+            }
+        }
+        // The `rdf:reifies` indirection predicate itself: see the [`RDF_REIFIES`]
+        // doc comment for why it must be folded in on the SAME condition
+        // (reifiers non-empty) the ingest path uses to intern it.
+        if dataset.reifiers_with_graph().next().is_some() {
+            side_values.push(TermValue::Iri(RDF_REIFIES.to_owned()));
+        }
+        side_values.sort();
+        side_values.dedup();
+
         // Step 2: closure over auxiliary references (literal datatypes, triple
         // components) not already covered by a base role, PLUS graph-name terms (a
-        // quad's `g` slot) not already covered by a base S/P/O role — see the
-        // "Graph-name terms" note in the [module docs](self). A graph-name value
-        // already present under some role keeps its existing id (no new entry); one
-        // with no other role is folded into `object_only`, using the exact same
-        // worklist/dedup machinery as the literal-datatype/triple-component closure
-        // (so a spec-illegal nested graph-name value, were one ever produced, would
+        // quad's `g` slot) and side-table terms (Step 1.5, above) not already
+        // covered by a base S/P/O role — see the "Graph-name terms" note in the
+        // [module docs](self). A graph-name/side-table value already present under
+        // some role keeps its existing id (no new entry); one with no other role
+        // is folded into `object_only`, using the exact same worklist/dedup
+        // machinery as the literal-datatype/triple-component closure (so a
+        // spec-illegal nested graph-name value, were one ever produced, would
         // still be handled correctly). Deterministic regardless of hash-set
         // iteration order: every worklist source here is an already-sorted Vec, and
         // the result is re-sorted before use — no hash-iteration order ever reaches
@@ -755,7 +809,7 @@ impl PackDict {
             queue.push(v.clone());
         }
         let mut extra: Vec<TermValue> = Vec::new();
-        for v in &graph_values {
+        for v in graph_values.iter().chain(side_values.iter()) {
             if present.insert(v.clone()) {
                 extra.push(v.clone());
                 queue.push(v.clone());
@@ -854,6 +908,21 @@ impl PackDict {
     #[must_use]
     pub fn n_terms(&self) -> u64 {
         self.n_shared + self.n_subject_only + self.n_object_only + self.n_predicates
+    }
+
+    /// `true` iff at least one dictionary entry is an RDF 1.2 triple term (quoted
+    /// triple) — mirrors `RdfDataset::capabilities`'s `quoted_triples` flag
+    /// (`terms.iter().any(|t| matches!(t, InternedTerm::Triple { .. }))`), but
+    /// scoped to this dictionary's entries (every triple term that is reachable
+    /// from a base quad, a literal datatype, another triple term, a graph name, or
+    /// — after the Task 4 amendment — an RDF 1.2 reifier/annotation side-table
+    /// reference; see [`encode`](Self::encode)). Used by
+    /// [`super::side::capabilities`].
+    #[must_use]
+    pub fn has_triple_term(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| matches!(e, DictEntry::Triple { .. }))
     }
 
     /// Append a string to the arena, returning its range.
@@ -1380,6 +1449,101 @@ mod tests {
             .id_by_value(&iri("g"))
             .expect("present via its subject role");
         assert_eq!(dict.term_value(id), iri("g"));
+    }
+
+    #[test]
+    fn reifier_only_term_gets_unified_id_via_side_table_closure() {
+        // The reifier resource and the reified triple-term both hold NO base-quad
+        // S/P/O role: the reifier binds `<< s p o >>` PURELY as a side-table row (no
+        // base quad is ever pushed — reification lives entirely in the side table).
+        // The Task 4 amendment must still fold both into the dictionary (into
+        // `object_only`, having no other role) and round-trip them.
+        let mut b = RdfDatasetBuilder::new();
+        let s = intern_value(&mut b, &iri("s"));
+        let p = intern_value(&mut b, &iri("p"));
+        let o = intern_value(&mut b, &iri("o"));
+        let triple = b.intern_triple(s, p, o);
+        let reifier = intern_value(&mut b, &iri("r"));
+        b.push_reifier(reifier, triple);
+        let dataset = b.freeze().expect("valid dataset");
+        assert_eq!(dataset.quad_count(), 0, "reification is side-table only");
+
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        let reifier_id = dict.id_by_value(&iri("r")).expect("reifier term present");
+        assert_eq!(dict.term_value(reifier_id), iri("r"));
+        let triple_value = TermValue::Triple {
+            s: Box::new(iri("s")),
+            p: Box::new(iri("p")),
+            o: Box::new(iri("o")),
+        };
+        let triple_id = dict
+            .id_by_value(&triple_value)
+            .expect("triple-term present via the reifier row");
+        assert_eq!(dict.term_value(triple_id), triple_value);
+    }
+
+    #[test]
+    fn annotation_only_predicate_and_object_get_unified_ids_via_side_table_closure() {
+        // The annotation's predicate and object appear ONLY in the annotation
+        // side-table (never a base quad's subject/predicate/object).
+        let mut b = RdfDatasetBuilder::new();
+        let s = intern_value(&mut b, &iri("s"));
+        let p = intern_value(&mut b, &iri("p"));
+        let o = intern_value(&mut b, &iri("o"));
+        let triple = b.intern_triple(s, p, o);
+        let reifier = intern_value(&mut b, &iri("r"));
+        b.push_reifier(reifier, triple);
+        let ap = intern_value(&mut b, &iri("confidence"));
+        let ao = intern_value(&mut b, &TermValue::simple_literal("0.9"));
+        b.push_annotation(reifier, ap, ao);
+        let dataset = b.freeze().expect("valid dataset");
+
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        let ao_id = dict
+            .id_by_value(&TermValue::simple_literal("0.9"))
+            .expect("annotation object present via the side table");
+        assert_eq!(dict.term_value(ao_id), TermValue::simple_literal("0.9"));
+        let ap_id = dict
+            .id_by_value(&iri("confidence"))
+            .expect("annotation predicate present via the side table");
+        assert_eq!(dict.term_value(ap_id), iri("confidence"));
+    }
+
+    #[test]
+    fn rdf_reifies_predicate_gets_unified_id_when_reifiers_present() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = intern_value(&mut b, &iri("s"));
+        let p = intern_value(&mut b, &iri("p"));
+        let o = intern_value(&mut b, &iri("o"));
+        let triple = b.intern_triple(s, p, o);
+        let reifier = intern_value(&mut b, &iri("r"));
+        // Mirror the ingest path: `rdf:reifies` is interned even though it never
+        // appears in any base quad or side-table row tuple directly.
+        b.intern_iri(RDF_REIFIES);
+        b.push_reifier(reifier, triple);
+        let dataset = b.freeze().expect("valid dataset");
+
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        let id = dict
+            .id_by_value(&TermValue::Iri(RDF_REIFIES.to_owned()))
+            .expect("rdf:reifies present when reifiers are non-empty");
+        assert_eq!(dict.term_value(id), TermValue::Iri(RDF_REIFIES.to_owned()));
+        // It plays no predicate role anywhere, so it must not ALSO hold a
+        // predicate-section id (mirrors `graph_only_term_gets_unified_id_in_object_only`).
+        assert_eq!(
+            dict.predicate_id_by_value(&TermValue::Iri(RDF_REIFIES.to_owned())),
+            None
+        );
+    }
+
+    #[test]
+    fn rdf_reifies_absent_when_no_reifiers() {
+        let dataset = build_dataset(&[(iri("s"), iri("p"), iri("o"))]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        assert_eq!(
+            dict.id_by_value(&TermValue::Iri(RDF_REIFIES.to_owned())),
+            None
+        );
     }
 
     #[test]
