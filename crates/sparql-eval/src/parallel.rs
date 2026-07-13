@@ -44,7 +44,12 @@
 //! is excluded, because the fork model gives every worker an *independent* copy of
 //! that state rather than a shared, ordered one — running such a builtin under
 //! fork-join would make its result depend on worker scheduling, not just row
-//! content.
+//! content. [`Function::Custom`] — a caller-injected user function resolved
+//! against a [`UserFunctionRegistry`] — is likewise excluded unless the registry
+//! attests the callee is safe: a native function is safe only when registered
+//! [`Volatility::Stable`], and a SPARQL-bodied function is conservatively always
+//! unsafe (its body can itself reach `RAND`/`UUID`/`BNODE`/the list constructors,
+//! and that per-call state would merge into a forked child instead of `ctx`).
 
 use purrdf_core::{DatasetView, TermId, TermValue, ViewTermId};
 use purrdf_sparql_algebra::{
@@ -54,6 +59,7 @@ use purrdf_sparql_algebra::{
 use crate::error::EvalError;
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::Solution;
+use crate::user_fn::{UserFunctionRegistry, Volatility};
 
 /// Rows/groups at or below this stay sequential (thread spin-up would dominate
 /// the work for small inputs). Initial value; Task 7's bench tunes it.
@@ -193,22 +199,32 @@ pub(crate) fn should_parallelize(work_items: usize) -> bool {
 /// `listIndexOf`/`listContains`) and `heldIn` touch neither counter, so they are
 /// left safe. When in doubt this walk flags UNSAFE — a sequential fallback is
 /// always a correct (if slower) answer.
-pub(crate) fn is_parallel_safe(expr: &Expression) -> bool {
-    !expr_reaches_unsafe_builtin(expr)
+///
+/// `registry` is the caller's [`UserFunctionRegistry`] (`ctx.user_functions`), if
+/// any: it is consulted only when the walk reaches a [`Function::Custom`] call —
+/// see [`function_is_unsafe`] for exactly how a native-vs-SPARQL-bodied callee is
+/// classified. `None` (no registry configured) makes every `Custom` IRI resolve
+/// to the deterministic XSD-cast/hard-error fallback, hence safe.
+pub(crate) fn is_parallel_safe(expr: &Expression, registry: Option<&UserFunctionRegistry>) -> bool {
+    !expr_reaches_unsafe_builtin(expr, registry)
 }
 
 /// Whether `pattern` (recursively) is safe to evaluate under the fork-join
 /// parallel model — the pattern-level twin of [`is_parallel_safe`], for callers
 /// (e.g. `UNION`) that must gate a whole sub-pattern rather than a single
 /// expression. Exposes the same walk [`is_parallel_safe`] already runs
-/// internally for `EXISTS`.
-pub(crate) fn is_parallel_safe_pattern(pattern: &GraphPattern) -> bool {
-    !pattern_reaches_unsafe_builtin(pattern)
+/// internally for `EXISTS`. `registry` is threaded through exactly as in
+/// [`is_parallel_safe`].
+pub(crate) fn is_parallel_safe_pattern(
+    pattern: &GraphPattern,
+    registry: Option<&UserFunctionRegistry>,
+) -> bool {
+    !pattern_reaches_unsafe_builtin(pattern, registry)
 }
 
 /// `true` iff `expr` (recursively) reaches an unsafe builtin — see
 /// [`is_parallel_safe`].
-fn expr_reaches_unsafe_builtin(expr: &Expression) -> bool {
+fn expr_reaches_unsafe_builtin(expr: &Expression, registry: Option<&UserFunctionRegistry>) -> bool {
     match expr {
         Expression::NamedNode(_)
         | Expression::Literal(_)
@@ -226,30 +242,55 @@ fn expr_reaches_unsafe_builtin(expr: &Expression) -> bool {
         | Expression::Subtract(a, b)
         | Expression::Multiply(a, b)
         | Expression::Divide(a, b) => {
-            expr_reaches_unsafe_builtin(a) || expr_reaches_unsafe_builtin(b)
+            expr_reaches_unsafe_builtin(a, registry) || expr_reaches_unsafe_builtin(b, registry)
         }
         Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-            expr_reaches_unsafe_builtin(a)
+            expr_reaches_unsafe_builtin(a, registry)
         }
         Expression::In(head, list) => {
-            expr_reaches_unsafe_builtin(head) || list.iter().any(expr_reaches_unsafe_builtin)
+            expr_reaches_unsafe_builtin(head, registry)
+                || list
+                    .iter()
+                    .any(|e| expr_reaches_unsafe_builtin(e, registry))
         }
         Expression::If(a, b, c) => {
-            expr_reaches_unsafe_builtin(a)
-                || expr_reaches_unsafe_builtin(b)
-                || expr_reaches_unsafe_builtin(c)
+            expr_reaches_unsafe_builtin(a, registry)
+                || expr_reaches_unsafe_builtin(b, registry)
+                || expr_reaches_unsafe_builtin(c, registry)
         }
-        Expression::Coalesce(list) => list.iter().any(expr_reaches_unsafe_builtin),
+        Expression::Coalesce(list) => list
+            .iter()
+            .any(|e| expr_reaches_unsafe_builtin(e, registry)),
         Expression::FunctionCall(f, args) => {
-            function_is_unsafe(f) || args.iter().any(expr_reaches_unsafe_builtin)
+            function_is_unsafe(f, registry)
+                || args
+                    .iter()
+                    .any(|e| expr_reaches_unsafe_builtin(e, registry))
         }
-        Expression::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern),
+        Expression::Exists(pattern) => pattern_reaches_unsafe_builtin(pattern, registry),
     }
 }
 
 /// Whether `f` is itself one of the stateful-mint builtins (see
-/// [`is_parallel_safe`]'s doc comment for the full rationale).
-fn function_is_unsafe(f: &Function) -> bool {
+/// [`is_parallel_safe`]'s doc comment for the full rationale), or an unsafe
+/// [`Function::Custom`] user-function call.
+///
+/// A `Custom(iri)` call is resolved against `registry` (`ctx.user_functions`):
+///
+/// - No registry, or the IRI resolves to neither custom kind (an XSD cast, or an
+///   undefined-function hard error) — deterministic, so safe.
+/// - Resolves to a **native** function — safe iff its declared
+///   [`Volatility`] is NOT [`Volatile`](Volatility::Volatile): `Stable` is
+///   deterministic for the lifetime of the query, so it may run across
+///   fork-join workers exactly like a pure builtin.
+/// - Resolves to a **SPARQL-bodied** [`crate::user_fn::UserFunction`] —
+///   ALWAYS unsafe, conservatively: its body is itself an arbitrary SPARQL
+///   query that can mint `RAND`/`UUID`/`BNODE`/list cells, and that per-call
+///   state would merge into a forked child (see
+///   `crate::user_fn::eval_user_function`'s state merge-back) rather than the
+///   real `ctx` — silently diverging from the sequential stream exactly like
+///   the builtins above. A sequential fallback is always correct.
+fn function_is_unsafe(f: &Function, registry: Option<&UserFunctionRegistry>) -> bool {
     match f {
         Function::Rand | Function::Uuid | Function::StrUuid | Function::BNode => true,
         Function::Purrdf(call) => matches!(
@@ -257,58 +298,84 @@ fn function_is_unsafe(f: &Function) -> bool {
             purrdf_sparql_algebra::PurrdfFn::ListSlice
                 | purrdf_sparql_algebra::PurrdfFn::ListConcat
         ),
+        Function::Custom(iri) => {
+            let Some(reg) = registry else { return false };
+            if let Some(native) = reg.resolve_native(iri.as_str()) {
+                // Native fn: unsafe iff declared Volatile; Stable is
+                // deterministic-within-query, hence fork-join safe. (Wildcard
+                // arm — Volatility is `#[non_exhaustive]`.)
+                return matches!(native.volatility, Volatility::Volatile);
+            }
+            // A SPARQL-bodied user function's body may mint RAND/UUID/BNODE/list
+            // cells whose per-query state merges into a *forked* child and is
+            // then discarded — silently diverging from the sequential stream.
+            // Classify it UNSAFE (conservative + correct; sequential is always
+            // right). An IRI resolving to neither custom kind is an XSD cast or
+            // a hard error — both deterministic — so it stays safe.
+            reg.resolve(iri.as_str()).is_some()
+        }
         _ => false,
     }
 }
 
 /// `true` iff `pattern` (recursively) reaches an unsafe builtin through any
 /// expression-bearing variant — see [`is_parallel_safe`].
-fn pattern_reaches_unsafe_builtin(pattern: &GraphPattern) -> bool {
+fn pattern_reaches_unsafe_builtin(
+    pattern: &GraphPattern,
+    registry: Option<&UserFunctionRegistry>,
+) -> bool {
     match pattern {
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => false,
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right } => {
-            pattern_reaches_unsafe_builtin(left) || pattern_reaches_unsafe_builtin(right)
+            pattern_reaches_unsafe_builtin(left, registry)
+                || pattern_reaches_unsafe_builtin(right, registry)
         }
         GraphPattern::Graph { inner, .. }
         | GraphPattern::Service { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }
-        | GraphPattern::Project { inner, .. } => pattern_reaches_unsafe_builtin(inner),
+        | GraphPattern::Project { inner, .. } => pattern_reaches_unsafe_builtin(inner, registry),
         GraphPattern::Filter { expr, inner } => {
-            expr_reaches_unsafe_builtin(expr) || pattern_reaches_unsafe_builtin(inner)
+            expr_reaches_unsafe_builtin(expr, registry)
+                || pattern_reaches_unsafe_builtin(inner, registry)
         }
         GraphPattern::Extend {
             inner, expression, ..
-        } => expr_reaches_unsafe_builtin(expression) || pattern_reaches_unsafe_builtin(inner),
+        } => {
+            expr_reaches_unsafe_builtin(expression, registry)
+                || pattern_reaches_unsafe_builtin(inner, registry)
+        }
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
         } => {
-            pattern_reaches_unsafe_builtin(left)
-                || pattern_reaches_unsafe_builtin(right)
-                || expression.as_ref().is_some_and(expr_reaches_unsafe_builtin)
+            pattern_reaches_unsafe_builtin(left, registry)
+                || pattern_reaches_unsafe_builtin(right, registry)
+                || expression
+                    .as_ref()
+                    .is_some_and(|e| expr_reaches_unsafe_builtin(e, registry))
         }
         GraphPattern::OrderBy { inner, expression } => {
-            pattern_reaches_unsafe_builtin(inner)
+            pattern_reaches_unsafe_builtin(inner, registry)
                 || expression.iter().any(|oe| match oe {
                     OrderExpression::Asc(e) | OrderExpression::Desc(e) => {
-                        expr_reaches_unsafe_builtin(e)
+                        expr_reaches_unsafe_builtin(e, registry)
                     }
                 })
         }
         GraphPattern::Group {
             inner, aggregates, ..
         } => {
-            pattern_reaches_unsafe_builtin(inner)
+            pattern_reaches_unsafe_builtin(inner, registry)
                 || aggregates.iter().any(|(_, agg)| match agg {
                     AggregateExpression::CountStar { .. } => false,
                     AggregateExpression::FunctionCall { expression, .. } => {
-                        expr_reaches_unsafe_builtin(expression)
+                        expr_reaches_unsafe_builtin(expression, registry)
                     }
                 })
         }
@@ -633,7 +700,7 @@ mod tests {
             Box::new(Expression::Literal(Literal::new_simple("1"))),
             Box::new(Expression::Literal(Literal::new_simple("2"))),
         );
-        assert!(is_parallel_safe(&arith));
+        assert!(is_parallel_safe(&arith, None));
 
         let regex = call(
             Function::Regex,
@@ -642,21 +709,24 @@ mod tests {
                 Expression::Literal(Literal::new_simple("^a")),
             ],
         );
-        assert!(is_parallel_safe(&regex));
+        assert!(is_parallel_safe(&regex, None));
     }
 
     #[test]
     fn rand_uuid_struuid_bnode_are_unsafe() {
-        assert!(!is_parallel_safe(&call(Function::Rand, vec![])));
-        assert!(!is_parallel_safe(&call(Function::Uuid, vec![])));
-        assert!(!is_parallel_safe(&call(Function::StrUuid, vec![])));
-        assert!(!is_parallel_safe(&call(Function::BNode, vec![])));
-        assert!(!is_parallel_safe(&call(
-            Function::BNode,
-            vec![Expression::Variable(purrdf_sparql_algebra::Variable::new(
-                "x"
-            ))]
-        )));
+        assert!(!is_parallel_safe(&call(Function::Rand, vec![]), None));
+        assert!(!is_parallel_safe(&call(Function::Uuid, vec![]), None));
+        assert!(!is_parallel_safe(&call(Function::StrUuid, vec![]), None));
+        assert!(!is_parallel_safe(&call(Function::BNode, vec![]), None));
+        assert!(!is_parallel_safe(
+            &call(
+                Function::BNode,
+                vec![Expression::Variable(purrdf_sparql_algebra::Variable::new(
+                    "x"
+                ))]
+            ),
+            None
+        ));
     }
 
     #[test]
@@ -670,19 +740,22 @@ mod tests {
                 vec![],
             )
         };
-        assert!(!is_parallel_safe(&mk(
-            PurrdfFn::ListSlice,
-            "http://ex/listSlice"
-        )));
-        assert!(!is_parallel_safe(&mk(
-            PurrdfFn::ListConcat,
-            "http://ex/listConcat"
-        )));
-        assert!(is_parallel_safe(&mk(
-            PurrdfFn::ListLength,
-            "http://ex/listLength"
-        )));
-        assert!(is_parallel_safe(&mk(PurrdfFn::HeldIn, "http://ex/heldIn")));
+        assert!(!is_parallel_safe(
+            &mk(PurrdfFn::ListSlice, "http://ex/listSlice"),
+            None
+        ));
+        assert!(!is_parallel_safe(
+            &mk(PurrdfFn::ListConcat, "http://ex/listConcat"),
+            None
+        ));
+        assert!(is_parallel_safe(
+            &mk(PurrdfFn::ListLength, "http://ex/listLength"),
+            None
+        ));
+        assert!(is_parallel_safe(
+            &mk(PurrdfFn::HeldIn, "http://ex/heldIn"),
+            None
+        ));
     }
 
     #[test]
@@ -696,13 +769,13 @@ mod tests {
             Box::new(safe.clone()),
             Box::new(rand.clone()),
         );
-        assert!(!is_parallel_safe(&in_if));
+        assert!(!is_parallel_safe(&in_if, None));
 
         let in_coalesce = Expression::Coalesce(vec![safe.clone(), rand.clone()]);
-        assert!(!is_parallel_safe(&in_coalesce));
+        assert!(!is_parallel_safe(&in_coalesce, None));
 
         let in_fn_args = call(Function::Concat, vec![safe, rand]);
-        assert!(!is_parallel_safe(&in_fn_args));
+        assert!(!is_parallel_safe(&in_fn_args, None));
     }
 
     #[test]
@@ -725,7 +798,7 @@ mod tests {
             inner: Box::new(inner_bgp),
         };
         let exists = Expression::Exists(Box::new(filtered_inner));
-        assert!(!is_parallel_safe(&exists));
+        assert!(!is_parallel_safe(&exists, None));
 
         // Sanity: the same shape without RAND() is safe.
         let inner_bgp2 = GraphPattern::Bgp {
@@ -736,7 +809,91 @@ mod tests {
             }],
         };
         let safe_exists = Expression::Exists(Box::new(inner_bgp2));
-        assert!(is_parallel_safe(&safe_exists));
+        assert!(is_parallel_safe(&safe_exists, None));
+    }
+
+    // ---- is_parallel_safe: Function::Custom / UserFunctionRegistry ----------
+
+    const CUSTOM_NATIVE_IRI: &str = "http://example.org/ns#customNative";
+    const CUSTOM_SPARQL_IRI: &str = "http://example.org/ns#customSparql";
+    const CUSTOM_UNKNOWN_IRI: &str = "http://example.org/ns#customUnknown";
+
+    fn custom_call(iri: &str) -> Expression {
+        call(Function::Custom(NamedNode::new_unchecked(iri)), Vec::new())
+    }
+
+    fn trivial_native_body() -> crate::user_fn::NativeFnBody {
+        std::sync::Arc::new(|_args: &[TermValue]| {
+            Ok(TermValue::typed_literal(
+                "1",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+        })
+    }
+
+    fn trivial_sparql_function() -> crate::user_fn::UserFunction {
+        crate::user_fn::UserFunction {
+            params: Vec::new(),
+            required: 0,
+            body: std::sync::Arc::new(
+                purrdf_sparql_algebra::SparqlParser::new()
+                    .parse_query("SELECT (1 AS ?result) WHERE {}")
+                    .expect("parse trivial function body"),
+            ),
+            kind: crate::user_fn::UserFnBody::Select,
+            return_constraint: crate::user_fn::TypeConstraint::default(),
+        }
+    }
+
+    #[test]
+    fn native_stable_custom_is_parallel_safe() {
+        let mut reg = UserFunctionRegistry::new();
+        reg.register_native(
+            CUSTOM_NATIVE_IRI,
+            crate::user_fn::Arity::Exact(0),
+            Volatility::Stable,
+            trivial_native_body(),
+        );
+        assert!(is_parallel_safe(
+            &custom_call(CUSTOM_NATIVE_IRI),
+            Some(&reg)
+        ));
+    }
+
+    #[test]
+    fn native_volatile_custom_is_parallel_unsafe() {
+        let mut reg = UserFunctionRegistry::new();
+        reg.register_native(
+            CUSTOM_NATIVE_IRI,
+            crate::user_fn::Arity::Exact(0),
+            Volatility::Volatile,
+            trivial_native_body(),
+        );
+        assert!(!is_parallel_safe(
+            &custom_call(CUSTOM_NATIVE_IRI),
+            Some(&reg)
+        ));
+    }
+
+    #[test]
+    fn sparql_bodied_custom_is_parallel_unsafe() {
+        let mut reg = UserFunctionRegistry::new();
+        reg.insert(CUSTOM_SPARQL_IRI, trivial_sparql_function());
+        assert!(!is_parallel_safe(
+            &custom_call(CUSTOM_SPARQL_IRI),
+            Some(&reg)
+        ));
+    }
+
+    #[test]
+    fn unknown_custom_without_registry_stays_safe() {
+        assert!(is_parallel_safe(&custom_call(CUSTOM_UNKNOWN_IRI), None));
+
+        let reg = UserFunctionRegistry::new();
+        assert!(is_parallel_safe(
+            &custom_call(CUSTOM_UNKNOWN_IRI),
+            Some(&reg)
+        ));
     }
 
     // ---- par_chunk_map ----------------------------------------------------
