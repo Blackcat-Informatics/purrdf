@@ -111,6 +111,10 @@ sha2 = { version = "0.10", default-features = false }
 # ONLY: `union` (adds unsafe) and `serde` stay OFF; wasm-clean, no runtime deps.
 smallvec = "1"
 structured-zstd = "0.0.40"
+# pure-Rust PRNG; used ONLY to deterministically seed structured-zstd's ambient
+# FastCOVER reservoir sampling (which has no seed parameter) so pack dictionaries
+# are byte-reproducible. wasm32-unknown-unknown-clean.
+fastrand = "2"
 tempfile = "3"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 visual-hashing = "0.1.3"

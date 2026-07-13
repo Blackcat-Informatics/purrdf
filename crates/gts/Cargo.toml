@@ -35,8 +35,14 @@ ciborium = { workspace = true }
 # Borrowed deterministic-CBOR views serialize recursively without cloning Value trees.
 serde = { workspace = true }
 flate2 = { workspace = true }
-# pure-Rust zstd encoder/decoder — no C toolchain, wasm-friendly
-structured-zstd = { workspace = true }
+# pure-Rust zstd encoder/decoder — no C toolchain, wasm-friendly. The
+# `dict_builder` capability (pure-Rust FastCOVER training) is enabled here for the
+# in-band pack dictionaries (GTS-SPEC §5 "dct"); it pulls only std + fastrand,
+# both wasm32-unknown-unknown-clean, so `make wasm` stays green. This enables an
+# upstream capability, not a purrdf `[features]` table.
+structured-zstd = { workspace = true, features = ["dict_builder"] }
+# Seeds structured-zstd's ambient FastCOVER reservoir RNG for reproducible dicts.
+fastrand = { workspace = true }
 time = { workspace = true }
 filetime = { workspace = true }
 # pure-Rust Ed25519 (COSE_Sign1, §9.2) — deterministic per RFC 8032, wasm-friendly

@@ -1311,6 +1311,7 @@ dependencies = [
  "ciborium",
  "criterion",
  "ed25519-dalek",
+ "fastrand",
  "filetime",
  "flate2",
  "rayon",
@@ -1934,6 +1935,7 @@ version = "0.0.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af7b9352cd002e0abc4d70cbf06656c8edd93f74a7f00fdafdb36c5a3bcd67ce"
 dependencies = [
+ "fastrand",
  "twox-hash",
 ]
 
