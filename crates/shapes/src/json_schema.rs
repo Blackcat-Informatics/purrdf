@@ -28,6 +28,21 @@
 //! `sh:sparql` / `sh:SPARQLTarget` constraints have no JSON Schema equivalent.
 //! They are never silently skipped: each one is dropped, recorded as a
 //! [`LossRecord`], and annotated with a `$comment` on the affected schema.
+//!
+//! # Value-vocabulary enum projection (opt-in, projection-only)
+//!
+//! [`compile_with_value_vocab`] optionally projects *value vocabularies* — an
+//! `owl:Class` whose members are seeded named individuals, marked by a
+//! caller-supplied [`ValueVocab`] — to standalone `{ClassLocal}Enum` `$defs`. Such
+//! vocabularies are deliberately OPEN in the live SHACL validator ("anchor, not a
+//! fence") and carry no `sh:in`; this derivation surfaces their anchor set as a
+//! closed `enum` for codegen / API consumers WITHOUT ever injecting `sh:in` or
+//! otherwise mutating the validating shape set. Members are `{"@id": curie}`
+//! objects (the projector's encoding, so a projected instance validates); the flat
+//! `enum` keyword stays load-bearing in every case, with member symbol names and
+//! docs carried on the parallel `x-enum-varnames` / `x-enum-descriptions` arrays.
+//! A property whose `sh:class` or ontology `rdfs:range` is such a vocabulary emits
+//! a `$ref` to its enum `$def`, cardinality preserved.
 
 use std::collections::{BTreeMap, BTreeSet};
 
