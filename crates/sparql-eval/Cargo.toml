@@ -129,3 +129,12 @@ harness = false
 # — excluded from `make check`.
 name = "solution_row"
 harness = false
+
+[[bench]]
+# Cross-page BGP evaluation: the same 3-pattern join + FILTER query over
+# a single frozen RdfDataset vs a multi-page PagedDataset whose knows/name/age
+# triples are split across pages, so the join unifies across page boundaries.
+# Report-only, no single-vs-paged speedup assertion; `make bench` lane only —
+# excluded from `make check`.
+name = "paged_cross_page_bgp"
+harness = false

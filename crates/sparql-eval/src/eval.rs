@@ -17,7 +17,9 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{GraphMatch, RdfDataset, TermFactory, TermValue};
+use purrdf_core::{
+    DatasetView, GraphMatch, RdfDataset, TermFactory, TermId, TermValue, ViewTermId,
+};
 use purrdf_sparql_algebra::{GraphPattern, Query, Variable};
 
 use crate::DetHashMap;
@@ -129,21 +131,21 @@ impl LossVocabulary {
 /// pairing and the keyed/wild split derived from it — depends on the outer schema, not
 /// just the inner pattern and graph. Keying on it makes a cached index correct *by
 /// construction* even if the same `EXISTS` AST node is reached under two outer schemas.
-pub(crate) type ExistsCacheKey = (usize, (u8, u32), u64);
+pub(crate) type ExistsCacheKey<I> = (usize, (u8, Option<I>), u64);
 
 /// A memoized `EXISTS`/`NOT EXISTS` inner pattern together with the probe index built
 /// over it. The inner pattern is evaluated unconstrained **once** per [`ExistsCacheKey`];
 /// the `(shared, keyed, wild)` index is built once and reused to existence-probe every
 /// outer row (see [`crate::binop::probe_has_match`]). This is what turns a `FILTER (NOT)
 /// EXISTS` anti-join from N per-row index rebuilds into N O(1)/scan probes.
-pub(crate) struct ExistsInner {
+pub(crate) struct ExistsInner<I: ViewTermId = TermId> {
     /// The inner pattern's unconstrained result (outer-row-independent).
-    pub inner: Arc<SolutionSeq>,
+    pub inner: Arc<SolutionSeq<I>>,
     /// Shared columns between the outer schema and `inner.schema`, as
     /// `(outer_ordinal, inner_ordinal)` pairs (the probe's join key).
     pub shared: Vec<(usize, usize)>,
     /// Inner rows fully bound on the shared columns, grouped by their key.
-    pub keyed: DetHashMap<crate::binop::JoinKey, Vec<usize>>,
+    pub keyed: DetHashMap<crate::binop::JoinKey<I>, Vec<usize>>,
     /// Inner rows with an unbound shared column (compatible with any probe value).
     pub wild: Vec<usize>,
 }
@@ -175,21 +177,28 @@ pub(crate) fn schema_fingerprint(schema: &crate::solution::VarSchema) -> u64 {
 pub type BgpOrderCache = std::sync::RwLock<DetHashMap<(u64, u64), Arc<[usize]>>>;
 
 /// The mutable evaluation context threaded through [`eval`].
-pub struct EvalCtx<'d> {
-    /// The frozen dataset being queried (the concrete IR — see the module docs for
-    /// why this is not a generic `DatasetView`).
-    pub dataset: &'d RdfDataset,
+///
+/// Generic over the read view `D` (the storage-backend seam): the evaluator drives
+/// the dataset entirely through the [`DatasetView`] trait, so any backend whose id
+/// type is the production [`TermId`] (`D::Id = TermId`) plugs in unchanged. The
+/// binding/solution id space is still concrete `TermId` in this layer; a backend with
+/// its own id space bridges to `TermId` before this boundary. `D` defaults to
+/// [`RdfDataset`], so the bare spelling `EvalCtx<'d>` names the production
+/// instantiation everywhere it did before.
+pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
+    /// The frozen read view being queried, driven through the [`DatasetView`] trait.
+    pub dataset: &'d D,
     /// The per-query interner for terms computed during evaluation (BIND, VALUES,
     /// aggregate output, arithmetic/string-function results).
     pub scratch: ScratchInterner,
     /// The graph currently in scope (set by `GRAPH`; the default graph at the root).
     /// At the root this is `GraphMatch::Default`, which `active_dataset` resolves to
     /// either the store default graph or a `FROM`/`USING`-merged default graph.
-    pub active_graph: GraphMatch,
+    pub active_graph: GraphMatch<D::Id>,
     /// The SPARQL active dataset (§13): how `active_graph == Default` is sourced and
     /// which named graphs `GRAPH` may address. Set from a query's `FROM` clause (the
     /// query path) or an UPDATE op's `USING` / `WITH` (the update path).
-    pub(crate) active_dataset: ActiveDataset,
+    pub(crate) active_dataset: ActiveDataset<D::Id>,
     /// A monotonic counter for minting fresh blank nodes (`BNODE()` and CONSTRUCT
     /// template blanks).
     pub bnode_counter: u64,
@@ -208,7 +217,7 @@ pub struct EvalCtx<'d> {
     /// form bypasses this entirely and always mints fresh. Query-scoped like the
     /// other caches on this context — never cleared mid-query, since a later row
     /// never revisits an earlier row's ordinal within the same `Extend` chain.
-    pub(crate) bnode_memo: DetHashMap<(u64, String), SolutionTerm>,
+    pub(crate) bnode_memo: DetHashMap<(u64, String), SolutionTerm<D::Id>>,
     /// The evaluation-time value of NOW() — an xsd:dateTime, captured once at
     /// context construction from the host platform's real wall clock so all NOW()
     /// calls in a query return the same instant (SPARQL 1.1 §17.4.5.1).
@@ -235,7 +244,7 @@ pub struct EvalCtx<'d> {
     /// over it are outer-row-independent, so this turns `expr::exists`'s per-row
     /// re-evaluation *and* per-row index rebuild into a single build per site.
     /// Naturally per-query: a fresh [`EvalCtx`] is built for each `query()` call.
-    pub(crate) exists_inner_cache: DetHashMap<ExistsCacheKey, Arc<ExistsInner>>,
+    pub(crate) exists_inner_cache: DetHashMap<ExistsCacheKey<D::Id>, Arc<ExistsInner<D::Id>>>,
     /// Per-query syntactic variable cache for expression positions inside an
     /// `EXISTS` inner pattern, keyed by the immutable inner-pattern AST address.
     /// Correlation detection runs for every outer row; caching this pure walk keeps
@@ -256,7 +265,7 @@ pub struct EvalCtx<'d> {
     /// `(dataset, scratch)` — the dataset is pinned for the context's lifetime and
     /// the scratch interner dedups by value — so the cached term is bit-identical
     /// to what a fresh intern would return.
-    pub(crate) cached_bool_terms: [Option<SolutionTerm>; 2],
+    pub(crate) cached_bool_terms: [Option<SolutionTerm<D::Id>>; 2],
     /// Per-query memo of interned constant expression atoms (`NamedNode` /
     /// `Literal`), keyed by the atom node's immutable AST address. A constant atom
     /// inside a `FILTER`/`BIND` is otherwise re-`to_owned()`'d into an owned
@@ -274,7 +283,7 @@ pub struct EvalCtx<'d> {
     /// otherwise return a stale, wrong-row value from this cache.
     /// [`Self::in_substituted_exists`] flags exactly that window so `const_atom`
     /// bypasses this cache while it is set.
-    pub(crate) const_atom_cache: DetHashMap<usize, SolutionTerm>,
+    pub(crate) const_atom_cache: DetHashMap<usize, SolutionTerm<D::Id>>,
     /// Per-query memo of the parsed XSD value of a dataset literal, keyed by its
     /// `TermId`. `FILTER`/comparison hot paths (`compare`/`equal`/`ebv_term`) parse
     /// the same `Existing(TermId)` literal's lexical form via `parse_by_iri` on
@@ -284,7 +293,7 @@ pub struct EvalCtx<'d> {
     /// value" outcome) collapses per-row re-parsing to one parse per distinct id.
     /// Naturally per-query. Only dataset (`Existing`) ids are cached; computed
     /// scratch values are ephemeral and stay on the borrowed-view path.
-    pub(crate) xsd_parse_cache: DetHashMap<purrdf_core::TermId, Option<purrdf_xsd::XsdValue>>,
+    pub(crate) xsd_parse_cache: DetHashMap<D::Id, Option<purrdf_xsd::XsdValue>>,
     /// The `SERVICE` federation source, if one is injected. `None` in
     /// the default engine path: a non-silent `SERVICE` then hard-fails. Tests and
     /// the conformance harness inject an in-memory source via [`EvalCtx::with_remote`].
@@ -353,7 +362,7 @@ const _: fn() = || {
     assert_send_sync::<EvalCtx<'static>>();
 };
 
-impl core::fmt::Debug for EvalCtx<'_> {
+impl<D: DatasetView + Sync> core::fmt::Debug for EvalCtx<'_, D> {
     /// Summarized: the injected `SERVICE` source (`remote`) is a plain `dyn`
     /// trait object and the per-query caches are noise, so only the scalar
     /// evaluation state is shown.
@@ -370,9 +379,9 @@ impl core::fmt::Debug for EvalCtx<'_> {
     }
 }
 
-impl<'d> EvalCtx<'d> {
+impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// A fresh context over `dataset`, scoped to the default graph.
-    pub fn new(dataset: &'d RdfDataset) -> Self {
+    pub fn new(dataset: &'d D) -> Self {
         let now_val = purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now());
         let rng_seed: u64 = crate::clock::entropy_seed();
 
@@ -686,11 +695,13 @@ impl<'d> EvalCtx<'d> {
     }
 
     /// A compact hashable encoding of the active graph, for [`ExistsCacheKey`].
-    pub(crate) fn graph_key(&self) -> (u8, u32) {
+    /// The named-graph id rides as `Option<D::Id>` (not a truncated integer) so the
+    /// key is collision-free for any id width (e.g. a `u64` `GlobalTermId`).
+    pub(crate) fn graph_key(&self) -> (u8, Option<D::Id>) {
         match self.active_graph {
-            GraphMatch::Any => (0, 0),
-            GraphMatch::Default => (1, 0),
-            GraphMatch::Named(id) => (2, id.index() as u32),
+            GraphMatch::Any => (0, None),
+            GraphMatch::Default => (1, None),
+            GraphMatch::Named(id) => (2, Some(id)),
         }
     }
 }
@@ -701,7 +712,10 @@ impl<'d> EvalCtx<'d> {
 /// returns [`EvalError::Unsupported`] naming the construct. Property paths are
 /// evaluated in-engine (S8, the `path` module); the remaining out-of-scope
 /// nodes (`Service`, `Lateral`) stay permanent hard errors (SERVICE is S6b).
-pub fn eval(pattern: &GraphPattern, ctx: &mut EvalCtx<'_>) -> Result<SolutionSeq, EvalError> {
+pub fn eval<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     match pattern {
         GraphPattern::Bgp { patterns } => crate::bgp::eval_bgp(patterns, ctx),
         GraphPattern::Path {
@@ -758,9 +772,9 @@ pub fn eval(pattern: &GraphPattern, ctx: &mut EvalCtx<'_>) -> Result<SolutionSeq
 /// The result of evaluating a top-level query form — the internal counterpart of
 /// the `SparqlResult` egress model (materialized by the engine, S6 Task 9).
 #[derive(Debug)]
-pub enum Outcome {
+pub enum Outcome<I: ViewTermId = TermId> {
     /// `SELECT` solutions (a multiset over the projected schema).
-    Solutions(SolutionSeq),
+    Solutions(SolutionSeq<I>),
     /// `CONSTRUCT`/`DESCRIBE` graph result.
     Graph(Arc<RdfDataset>),
     /// `ASK` boolean.
@@ -771,7 +785,10 @@ pub enum Outcome {
 ///
 /// `SELECT`/`ASK` walk the modifier-wrapped pattern; `CONSTRUCT` and `DESCRIBE` emit
 /// the IR dataset directly (`DESCRIBE` via the canonical Symmetric CBD).
-pub fn evaluate_query(query: &Query, ctx: &mut EvalCtx<'_>) -> Result<Outcome, EvalError> {
+pub fn evaluate_query<D: DatasetView + Sync>(
+    query: &Query,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Outcome<D::Id>, EvalError> {
     // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
     ctx.active_dataset = ActiveDataset::from_query_dataset(query.dataset(), ctx.dataset);
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
@@ -800,9 +817,9 @@ pub fn evaluate_query(query: &Query, ctx: &mut EvalCtx<'_>) -> Result<Outcome, E
 /// Shared by the engine's `SparqlResult` materializer and the SERVICE result
 /// path, both of which turn an interned solution sequence into owned
 /// term values via the per-query [`ScratchInterner`](crate::scratch::ScratchInterner).
-pub(crate) fn materialize_solutions(
-    seq: &SolutionSeq,
-    ctx: &EvalCtx<'_>,
+pub(crate) fn materialize_solutions<D: DatasetView + Sync>(
+    seq: &SolutionSeq<D::Id>,
+    ctx: &EvalCtx<'_, D>,
 ) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
     let variables = seq
         .schema
@@ -811,9 +828,9 @@ pub(crate) fn materialize_solutions(
         .map(|v| v.as_str().to_owned())
         .collect();
     // Literal datatype IRIs repeat massively across a result (a handful of XSD
-    // types over tens of thousands of cells), so each datatype TermId is resolved
+    // types over tens of thousands of cells), so each datatype id is resolved
     // once per call and cloned from a small memo instead of re-resolved per cell.
-    let mut datatype_memo: DetHashMap<purrdf_core::TermId, String> = DetHashMap::default();
+    let mut datatype_memo: DetHashMap<D::Id, String> = DetHashMap::default();
     let mut rows = Vec::with_capacity(seq.rows.len());
     for row in &seq.rows {
         let mut out = Vec::with_capacity(row.len());
@@ -827,10 +844,10 @@ pub(crate) fn materialize_solutions(
 
 /// [`ScratchInterner::value_of`], with repeated literal datatype-IRI resolutions
 /// served from `datatype_memo` (egress-only; identical output values).
-fn memoized_value_of(
-    ctx: &EvalCtx<'_>,
-    term: SolutionTerm,
-    datatype_memo: &mut DetHashMap<purrdf_core::TermId, String>,
+fn memoized_value_of<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm<D::Id>,
+    datatype_memo: &mut DetHashMap<D::Id, String>,
 ) -> TermValue {
     match term {
         SolutionTerm::Existing(id) => memoized_term_value(ctx.dataset, id, datatype_memo),
@@ -840,10 +857,10 @@ fn memoized_value_of(
 
 /// `scratch::term_id_to_value`, with the literal datatype id → IRI string
 /// resolution memoized across cells (recursing through RDF-1.2 triple terms).
-fn memoized_term_value(
-    dataset: &RdfDataset,
-    id: purrdf_core::TermId,
-    datatype_memo: &mut DetHashMap<purrdf_core::TermId, String>,
+fn memoized_term_value<D: DatasetView>(
+    dataset: &D,
+    id: D::Id,
+    datatype_memo: &mut DetHashMap<D::Id, String>,
 ) -> TermValue {
     match dataset.resolve(id) {
         purrdf_core::TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),

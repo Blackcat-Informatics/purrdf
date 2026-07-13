@@ -17,7 +17,7 @@ pub enum RdfTermKind {
 }
 
 /// RDF 1.2 base direction for directional language-tagged literals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RdfTextDirection {
     /// Left-to-right base direction (`ltr`).
     Ltr,

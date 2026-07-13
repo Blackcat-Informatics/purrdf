@@ -16,17 +16,72 @@
 //! object-safety obligation.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::RdfStoreCapabilities;
 use crate::collections::{RDF_ALT, RDF_BAG, RDF_FIRST, RDF_NIL, RDF_REST, RDF_SEQ, RDF_TYPE};
 use crate::collections::{RdfListError, container_member_index};
-use crate::ir::{QuadIds, QuadRef, RdfDataset, TermId, TermRef, TermValue};
+use crate::ir::{QuadIds, QuadProbePlan, QuadRef, RdfDataset, TermId, TermRef, TermValue};
 
 mod sealed {
     pub trait Sealed {}
 
-    impl Sealed for crate::ir::RdfDataset {}
     impl Sealed for crate::ir::MutableDataset {}
+}
+
+/// The associated id type of a [`DatasetView`]. An id is meaningful only within the
+/// view that minted it (C0.8); these bounds are exactly what the evaluator's
+/// join/index machinery needs of an id (`Copy` to pass by value, `Eq`/`Ord`/`Hash`
+/// to key joins and index probes, `Send`/`Sync`/`'static` to cross the query
+/// boundary). The production id is [`TermId`]; a paged/global backend mints its own.
+///
+/// # Join-key encoding
+///
+/// The evaluator hash-joins on a single [`JoinKeyAtom`](Self::JoinKeyAtom): a `Copy`,
+/// totally-ordered atom that packs *either* a dataset id (via [`encode`](Self::encode))
+/// *or* an evaluator-minted computed-term id (via
+/// [`encode_computed`](Self::encode_computed)) into ONE key space, with the two
+/// disjoint by construction so an id never collides with a computed key (which would
+/// be a wrong join result, not a slowdown). For [`TermId`] the atom is the historical
+/// packed `u64` — dataset ids in `[0, 2^32)`, computed ids in `[2^32, 2^33)` — so the
+/// production hash-join is bit-identical to before the id-generic seam. A wider id
+/// (e.g. `GlobalTermId`) uses a wider atom (`u128`) so the same disjointness holds at
+/// its width.
+pub trait ViewTermId:
+    Copy + Eq + Ord + core::hash::Hash + core::fmt::Debug + Send + Sync + 'static
+{
+    /// A `Copy`, totally-ordered atom that encodes a dataset id OR a computed-term
+    /// id into one hash-join key space (see the trait docs). For [`TermId`] this is
+    /// `u64`; for a wider id it is `u128`.
+    type JoinKeyAtom: Copy + Eq + Ord + core::hash::Hash + Send + Sync + 'static;
+
+    /// Encode this dataset id into the join-key space. The image of `encode` over all
+    /// ids MUST be disjoint from the image of [`encode_computed`](Self::encode_computed)
+    /// over all scratch indices, so an `Existing` binding never shares a key with a
+    /// `Computed` one.
+    fn encode(self) -> Self::JoinKeyAtom;
+
+    /// Encode an evaluator-minted computed-term scratch index (a `u32`) into the join-key
+    /// space, disjoint from every [`encode`](Self::encode) image (see the trait docs).
+    fn encode_computed(scratch_index: u32) -> Self::JoinKeyAtom;
+}
+
+impl ViewTermId for TermId {
+    type JoinKeyAtom = u64;
+
+    #[inline]
+    fn encode(self) -> u64 {
+        let ix = self.index() as u64;
+        debug_assert!(ix < (1 << 32), "TermId index must fit u32");
+        ix
+    }
+
+    #[inline]
+    fn encode_computed(scratch_index: u32) -> u64 {
+        // Dataset ids occupy `[0, 2^32)`; computed ids occupy `[2^32, 2^33)`. Bit 32
+        // is the disjointness tag — byte-identical to the historical `join_key_u64`.
+        (1 << 32) | u64::from(scratch_index)
+    }
 }
 
 /// How a pattern query matches the graph slot of a quad.
@@ -36,21 +91,25 @@ mod sealed {
 /// hence this dedicated three-way match. Deliberately exhaustive (NOT
 /// `#[non_exhaustive]`): a quad's graph is either the default or exactly one named
 /// graph, so the three cases are closed.
+///
+/// Generic over the id type `Id` (defaulting to [`TermId`]) so it names a graph in
+/// any [`DatasetView`]'s id space; the bare spelling `GraphMatch` continues to name
+/// the `RdfDataset` (`TermId`) instantiation everywhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GraphMatch {
+pub enum GraphMatch<Id = TermId> {
     /// Match quads in any graph (default or named).
     Any,
     /// Match only quads in the default graph (`g == None`).
     Default,
     /// Match only quads in the named graph identified by this id.
-    Named(TermId),
+    Named(Id),
 }
 
-impl GraphMatch {
+impl<Id: Copy + PartialEq> GraphMatch<Id> {
     /// Whether a quad's stored graph slot (`None` = default graph) matches.
     #[inline]
     #[must_use]
-    pub fn matches(self, graph: Option<TermId>) -> bool {
+    pub fn matches(self, graph: Option<Id>) -> bool {
         match self {
             Self::Any => true,
             Self::Default => graph.is_none(),
@@ -86,15 +145,31 @@ pub enum GraphMatchValue<'a> {
 
 /// A static, allocation-free read view over an RDF dataset (purrdf backend
 /// contract, C2/C3/C6). All methods are infallible for a frozen, validated dataset.
-pub trait DatasetView: sealed::Sealed {
+pub trait DatasetView {
+    /// The dataset-local id type this view mints and reads in (C0.8). For the
+    /// production [`RdfDataset`] this is [`TermId`]; a paged/global backend supplies
+    /// its own id, which is meaningful only within this view.
+    type Id: ViewTermId;
+
+    /// The opaque, loop-invariant probe plan a pattern query precomputes once (from
+    /// which axes a pattern binds) and reuses across the probe rows of one
+    /// index-nested-loop join slot (see [`Self::probe_plan`] /
+    /// [`Self::quads_for_pattern_with_plan`]). A backend with no access-pattern index
+    /// uses the unit plan `()`.
+    ///
+    /// `Send + Sync` because the plan is computed once per join slot and then
+    /// captured by value into every parallel probe worker (see the BGP join loop):
+    /// the loop-invariant plan crosses the fork boundary, so it must be shareable.
+    type ProbePlan: Copy + Send + Sync;
+
     /// Iterate every quad as `Copy` [`QuadIds`] (dataset-local term ids).
-    fn quads(&self) -> impl Iterator<Item = QuadIds> + '_;
+    fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_;
 
     /// Iterate every quad as a borrowed, resolved [`QuadRef`] (no allocation).
-    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_;
+    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_;
 
-    /// Resolve a dataset-local [`TermId`] to its borrowed [`TermRef`].
-    fn resolve(&self, id: TermId) -> TermRef<'_>;
+    /// Resolve a dataset-local id to its borrowed [`TermRef`].
+    fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id>;
 
     /// Quads matching an optional `(s, p, o)` id pattern and a [`GraphMatch`].
     ///
@@ -103,14 +178,14 @@ pub trait DatasetView: sealed::Sealed {
     /// Callers resolve term *values* to ids first (`term_id_by_value`, P4).
     fn quads_for_pattern(
         &self,
-        s: Option<TermId>,
-        p: Option<TermId>,
-        o: Option<TermId>,
-        g: GraphMatch,
-    ) -> impl Iterator<Item = QuadIds> + '_ {
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.quads().filter(move |q| {
             // Closure params named `id` (not s/p/o) to avoid shadowing the outer
-            // `Option<TermId>` filters with the unwrapped `TermId`.
+            // `Option<Self::Id>` filters with the unwrapped id.
             s.is_none_or(|id| q.s == id)
                 && p.is_none_or(|id| q.p == id)
                 && o.is_none_or(|id| q.o == id)
@@ -118,13 +193,13 @@ pub trait DatasetView: sealed::Sealed {
         })
     }
 
-    /// Resolve a term **value** to its dataset-local [`TermId`], without minting.
+    /// Resolve a term **value** to its dataset-local id, without minting.
     ///
     /// A value interned nowhere in this view yields `None` (it names no term), so a
     /// structural walk keyed on a not-present IRI simply finds nothing — absence is
     /// an empty match, never an error. Backends with a reverse value index (P4) use
     /// it; others may scan.
-    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId>;
+    fn term_id_by_value(&self, value: &TermValue) -> Option<Self::Id>;
 
     /// The capabilities this view's backing data exposes (C7).
     fn capabilities(&self) -> RdfStoreCapabilities;
@@ -132,6 +207,93 @@ pub trait DatasetView: sealed::Sealed {
     /// A size hint for the number of quads, if known.
     fn len_hint(&self) -> Option<usize> {
         None
+    }
+
+    /// Precompute the loop-invariant [`ProbePlan`](Self::ProbePlan) for a pattern of
+    /// the given bound-axis shape and graph constraint, to be reused across the probe
+    /// rows of an index-nested-loop join slot via
+    /// [`Self::quads_for_pattern_with_plan`]. An index-free backend returns the unit
+    /// plan; [`RdfDataset`] returns its permutation-and-prefix plan.
+    fn probe_plan(
+        &self,
+        s_bound: bool,
+        p_bound: bool,
+        o_bound: bool,
+        g: GraphMatch<Self::Id>,
+    ) -> Self::ProbePlan;
+
+    /// Quads matching `(s, p, o, g)` under a caller-precomputed
+    /// [`ProbePlan`](Self::ProbePlan). Behaviourally identical to
+    /// [`Self::quads_for_pattern`] — the plan only skips the per-row permutation
+    /// selection; the yielded quads and their order are unchanged. An index-free
+    /// backend ignores the (unit) plan and forwards to `quads_for_pattern`.
+    fn quads_for_pattern_with_plan(
+        &self,
+        plan: &Self::ProbePlan,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_;
+
+    /// An upper-bound cardinality estimate for `(s, p, o, g)`, FOR COST RANKING ONLY
+    /// (never an exact `COUNT`). The default materializes the pattern and counts it;
+    /// a backend with index bounds (P4) overrides this with an `O(log n)` estimate.
+    fn cardinality_estimate(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> usize {
+        self.quads_for_pattern(s, p, o, g).count()
+    }
+
+    /// The number of distinct interned terms this view addresses.
+    fn term_count(&self) -> usize;
+
+    /// A cheap, deterministic size fingerprint for a dataset-aware cache key (e.g. a
+    /// join-order cache). A *cache discriminator*, not a content digest. The default
+    /// is `0` (no discrimination); [`RdfDataset`] hashes its quad and term counts.
+    fn stats_fingerprint(&self) -> u64 {
+        0
+    }
+
+    /// The RDF 1.2 reifier side-table AS resolved virtual triples: each
+    /// `(reifier, triple-term)` binding becomes a `(reifier, rdf:reifies, triple-term)`
+    /// quad carrying the declaration's own graph slot. Capability-gated: a backend
+    /// with no reifier layer yields nothing (the default).
+    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        std::iter::empty()
+    }
+
+    /// The RDF 1.2 annotation side-table AS resolved virtual triples: each
+    /// `(reifier, predicate, object)` annotation becomes a quad carrying its own graph
+    /// slot. Capability-gated: a backend with no annotation layer yields nothing.
+    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        std::iter::empty()
+    }
+
+    /// The `(predicate, object, graph)` annotations declared for `reifier` (`graph`
+    /// `None` ⇒ default graph). Capability-gated: a backend with no annotation layer
+    /// yields nothing (the default ignores `reifier`).
+    fn annotations_of_with_graph(
+        &self,
+        reifier: Self::Id,
+    ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
+        let _ = reifier;
+        std::iter::empty()
+    }
+
+    /// Every named graph this view addresses, in ascending id order (sorted,
+    /// deduplicated). Drives `GRAPH ?g` enumeration, so the order is
+    /// result-observable and must be deterministic. The default derives the set
+    /// from the quads the view can see; a backend that also tracks explicitly
+    /// declared *empty* named graphs (e.g. [`RdfDataset`]) overrides this to
+    /// include them.
+    fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
+        let set: BTreeSet<Self::Id> = self.quads().filter_map(|q| q.g).collect();
+        set.into_iter()
     }
 
     /// Materialize an `rdf:first`/`rdf:rest`/`rdf:nil` Collection whose head is
@@ -147,7 +309,11 @@ pub trait DatasetView: sealed::Sealed {
     ///
     /// If the `rdf:first` IRI is not interned in this view at all, no Collection can
     /// exist, so the result is an empty `Vec` (`Ok`), not an error.
-    fn rdf_list(&self, head: TermId, graph: GraphMatch) -> Result<Vec<TermId>, RdfListError> {
+    fn rdf_list(
+        &self,
+        head: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Result<Vec<Self::Id>, RdfListError> {
         // No `rdf:first` in the term table ⇒ no cons cell can exist here.
         let Some(first_p) = self.term_id_by_value(&TermValue::iri(RDF_FIRST)) else {
             return Ok(Vec::new());
@@ -161,7 +327,7 @@ pub trait DatasetView: sealed::Sealed {
         let mut out = Vec::new();
         // Cycle guard: revisited cell terminates the walk (mirrors the reference
         // GTS `rdf_list` seen-set).
-        let mut seen: BTreeSet<TermId> = BTreeSet::new();
+        let mut seen: BTreeSet<Self::Id> = BTreeSet::new();
         let mut current = head;
         loop {
             if Some(current) == nil {
@@ -219,8 +385,8 @@ pub trait DatasetView: sealed::Sealed {
     /// RDF Container members `rdf:_1`..`rdf:_n` of `head` in numeric order, scoped
     /// to `graph`. Gaps are skipped; ordering is by the numeric suffix, NOT dataset
     /// order.
-    fn rdf_container_members(&self, head: TermId, graph: GraphMatch) -> Vec<TermId> {
-        let mut indexed: Vec<(u64, TermId)> = Vec::new();
+    fn rdf_container_members(&self, head: Self::Id, graph: GraphMatch<Self::Id>) -> Vec<Self::Id> {
+        let mut indexed: Vec<(u64, Self::Id)> = Vec::new();
         for q in self.quads_for_pattern(Some(head), None, None, graph) {
             if let TermRef::Iri(iri) = self.resolve(q.p)
                 && let Some(n) = container_member_index(iri)
@@ -238,7 +404,11 @@ pub trait DatasetView: sealed::Sealed {
     /// or carrying any `rdf:_n` property is walked as a Container
     /// ([`rdf_container_members`](Self::rdf_container_members)). A head matching
     /// neither yields an empty `Vec`.
-    fn members(&self, head: TermId, graph: GraphMatch) -> Result<Vec<TermId>, RdfListError> {
+    fn members(
+        &self,
+        head: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Result<Vec<Self::Id>, RdfListError> {
         // Collection shape wins: an `rdf:first` edge marks a cons cell.
         if let Some(first_p) = self.term_id_by_value(&TermValue::iri(RDF_FIRST))
             && self
@@ -267,10 +437,10 @@ pub trait DatasetView: sealed::Sealed {
     #[doc(hidden)]
     fn is_cons_cell(
         &self,
-        id: TermId,
-        first_p: TermId,
-        rest_p: Option<TermId>,
-        graph: GraphMatch,
+        id: Self::Id,
+        first_p: Self::Id,
+        rest_p: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
     ) -> bool {
         if self
             .quads_for_pattern(Some(id), Some(first_p), None, graph)
@@ -289,7 +459,7 @@ pub trait DatasetView: sealed::Sealed {
     /// Whether `head` is typed `rdf:Seq`/`rdf:Bag`/`rdf:Alt` in `graph`. Internal
     /// helper for [`members`](Self::members) container dispatch.
     #[doc(hidden)]
-    fn is_typed_container(&self, head: TermId, graph: GraphMatch) -> bool {
+    fn is_typed_container(&self, head: Self::Id, graph: GraphMatch<Self::Id>) -> bool {
         let Some(type_p) = self.term_id_by_value(&TermValue::iri(RDF_TYPE)) else {
             return false;
         };
@@ -351,6 +521,9 @@ pub trait DatasetMut: sealed::Sealed {
 
 /// The production read view: the immutable value-interned [`RdfDataset`] (C1).
 impl DatasetView for RdfDataset {
+    type Id = TermId;
+    type ProbePlan = QuadProbePlan;
+
     #[inline]
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         // Inherent methods take method-resolution priority over trait methods, so
@@ -397,6 +570,195 @@ impl DatasetView for RdfDataset {
     fn len_hint(&self) -> Option<usize> {
         Some(Self::quad_count(self))
     }
+
+    #[inline]
+    fn probe_plan(
+        &self,
+        s_bound: bool,
+        p_bound: bool,
+        o_bound: bool,
+        g: GraphMatch,
+    ) -> QuadProbePlan {
+        // Inherent `probe_plan` is a value-independent associated fn (no `&self`).
+        Self::probe_plan(s_bound, p_bound, o_bound, g)
+    }
+
+    #[inline]
+    fn quads_for_pattern_with_plan(
+        &self,
+        plan: &QuadProbePlan,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        Self::quads_for_pattern_with_plan(self, plan, s, p, o, g)
+    }
+
+    #[inline]
+    fn cardinality_estimate(
+        &self,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> usize {
+        Self::cardinality_estimate(self, s, p, o, g)
+    }
+
+    #[inline]
+    fn term_count(&self) -> usize {
+        Self::term_count(self)
+    }
+
+    #[inline]
+    fn stats_fingerprint(&self) -> u64 {
+        Self::stats_fingerprint(self)
+    }
+
+    #[inline]
+    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        Self::reifier_quads(self)
+    }
+
+    #[inline]
+    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        Self::annotation_quads(self)
+    }
+
+    #[inline]
+    fn annotations_of_with_graph(
+        &self,
+        reifier: TermId,
+    ) -> impl Iterator<Item = (TermId, TermId, Option<TermId>)> + '_ {
+        Self::annotations_of_with_graph(self, reifier)
+    }
+
+    #[inline]
+    fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
+        // The inherent set includes explicitly-declared empty named graphs, which
+        // the quads-derived default would miss, so delegate to it verbatim.
+        Self::named_graphs(self)
+    }
+}
+
+/// A shared [`Arc`]-wrapped read view is itself a read view: every method delegates
+/// to the inner `T`, so `Arc<RdfDataset>` (the engine's `Dataset` handle) plugs into
+/// the generic evaluator directly, byte-for-byte identical to the bare `RdfDataset`.
+/// Every method — including the ones `RdfDataset` overrides for its indexed read path
+/// and RDF 1.2 side-tables — is forwarded, so no default (e.g. an empty reifier layer)
+/// can silently diverge from the inner view.
+impl<T: DatasetView> DatasetView for Arc<T> {
+    type Id = T::Id;
+    type ProbePlan = T::ProbePlan;
+
+    #[inline]
+    fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).quads()
+    }
+
+    #[inline]
+    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_ {
+        (**self).quad_refs()
+    }
+
+    #[inline]
+    fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id> {
+        (**self).resolve(id)
+    }
+
+    #[inline]
+    fn quads_for_pattern(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).quads_for_pattern(s, p, o, g)
+    }
+
+    #[inline]
+    fn term_id_by_value(&self, value: &TermValue) -> Option<Self::Id> {
+        (**self).term_id_by_value(value)
+    }
+
+    #[inline]
+    fn capabilities(&self) -> RdfStoreCapabilities {
+        (**self).capabilities()
+    }
+
+    #[inline]
+    fn len_hint(&self) -> Option<usize> {
+        (**self).len_hint()
+    }
+
+    #[inline]
+    fn probe_plan(
+        &self,
+        s_bound: bool,
+        p_bound: bool,
+        o_bound: bool,
+        g: GraphMatch<Self::Id>,
+    ) -> Self::ProbePlan {
+        (**self).probe_plan(s_bound, p_bound, o_bound, g)
+    }
+
+    #[inline]
+    fn quads_for_pattern_with_plan(
+        &self,
+        plan: &Self::ProbePlan,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).quads_for_pattern_with_plan(plan, s, p, o, g)
+    }
+
+    #[inline]
+    fn cardinality_estimate(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> usize {
+        (**self).cardinality_estimate(s, p, o, g)
+    }
+
+    #[inline]
+    fn term_count(&self) -> usize {
+        (**self).term_count()
+    }
+
+    #[inline]
+    fn stats_fingerprint(&self) -> u64 {
+        (**self).stats_fingerprint()
+    }
+
+    #[inline]
+    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).reifier_quads()
+    }
+
+    #[inline]
+    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).annotation_quads()
+    }
+
+    #[inline]
+    fn annotations_of_with_graph(
+        &self,
+        reifier: Self::Id,
+    ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
+        (**self).annotations_of_with_graph(reifier)
+    }
+
+    #[inline]
+    fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
+        (**self).named_graphs()
+    }
 }
 
 #[cfg(test)]
@@ -412,8 +774,10 @@ mod tests {
     fn graph_match_three_way() {
         let mut b = RdfDatasetBuilder::new();
         let g = iri(&mut b, "g");
-        assert!(GraphMatch::Any.matches(None) && GraphMatch::Any.matches(Some(g)));
-        assert!(GraphMatch::Default.matches(None) && !GraphMatch::Default.matches(Some(g)));
+        assert!(GraphMatch::<TermId>::Any.matches(None) && GraphMatch::Any.matches(Some(g)));
+        assert!(
+            GraphMatch::<TermId>::Default.matches(None) && !GraphMatch::Default.matches(Some(g))
+        );
         assert!(GraphMatch::Named(g).matches(Some(g)) && !GraphMatch::Named(g).matches(None));
     }
 

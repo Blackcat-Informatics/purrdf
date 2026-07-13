@@ -31,7 +31,7 @@
 //! **projected away**, so two independent BGPs that happen to reuse the label `_:b`
 //! never accidentally share a join variable.
 
-use purrdf_core::{DatasetView, GraphMatch, QuadIds, QuadProbePlan, RdfDataset, TermId, TermRef};
+use purrdf_core::{DatasetView, GraphMatch, QuadIds, TermId, TermRef, ViewTermId};
 use purrdf_sparql_algebra::{
     GraphPattern, Literal, NamedNodePattern, TermPattern, TriplePattern, Variable,
 };
@@ -56,40 +56,40 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 const BLANK_VAR_PREFIX: char = '\u{0}';
 
 /// A compiled triple-pattern position.
-enum Pos {
+enum Pos<I: ViewTermId = TermId> {
     /// A variable (or blank-node) column index into the working schema.
     Slot(usize),
     /// A ground constant resolved to its dataset id.
-    Bound(TermId),
+    Bound(I),
     /// A nested RDF 1.2 quoted-triple pattern `<<( s p o )>>` that contains at least
     /// one variable (a fully-ground quoted triple resolves to a single [`Pos::Bound`]
     /// id instead). Binding descends into the candidate row's triple-term value,
     /// unifying the inner positions and enforcing repeated-variable consistency.
-    Triple(Box<TriplePos>),
+    Triple(Box<TriplePos<I>>),
 }
 
 /// A compiled nested quoted-triple position: its three component positions, each
 /// itself a [`Pos`] (so quoted triples may nest, and any component may be a variable,
 /// a ground constant, or a further nested triple).
-struct TriplePos {
-    s: Pos,
-    p: Pos,
-    o: Pos,
+struct TriplePos<I: ViewTermId = TermId> {
+    s: Pos<I>,
+    p: Pos<I>,
+    o: Pos<I>,
 }
 
 /// One compiled triple pattern: its three positions in `(s, p, o)` order.
-struct CompiledPattern {
-    s: Pos,
-    p: Pos,
-    o: Pos,
+struct CompiledPattern<I: ViewTermId = TermId> {
+    s: Pos<I>,
+    p: Pos<I>,
+    o: Pos<I>,
 }
 
 /// Evaluate a basic graph pattern to a multiset of solutions over its real
 /// (non-blank) variables.
-pub(crate) fn eval_bgp(
+pub(crate) fn eval_bgp<D: DatasetView + Sync>(
     patterns: &[TriplePattern],
-    ctx: &EvalCtx<'_>,
-) -> Result<SolutionSeq, EvalError> {
+    ctx: &EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     // The empty BGP is the identity table Z: one solution binding nothing.
     if patterns.is_empty() {
         return Ok(SolutionSeq::unit());
@@ -142,7 +142,7 @@ pub(crate) fn eval_bgp(
         .term_id_by_value(&purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
 
     // Index-nested-loop evaluation. Rows start as a single all-unbound solution.
-    let mut rows: Vec<Solution> = vec![smallvec::smallvec![None; working.len()]];
+    let mut rows: Vec<Solution<D::Id>> = vec![smallvec::smallvec![None; working.len()]];
     for &i in order.iter() {
         let cp = &compiled[i];
         // The probe's bound-axis shape is fixed across this slot's rows (a variable is
@@ -151,8 +151,8 @@ pub(crate) fn eval_bgp(
         // `QuadProbePlan` once from the first row (non-empty — the loop `break`s above
         // the moment `rows` empties) and capture the `Copy` plan in every worker,
         // instead of re-selecting it per row.
-        let plan: Option<QuadProbePlan> = match &scope {
-            GraphScope::One(gm) => Some(RdfDataset::probe_plan(
+        let plan: Option<D::ProbePlan> = match &scope {
+            GraphScope::One(gm) => Some(ctx.dataset.probe_plan(
                 query_id(&cp.s, &rows[0]).is_some(),
                 query_id(&cp.p, &rows[0]).is_some(),
                 query_id(&cp.o, &rows[0]).is_some(),
@@ -194,7 +194,7 @@ pub(crate) fn eval_bgp(
                 // local to this row's worker (each row gets its own), identical to the
                 // sequential path.
                 GraphScope::Merge(gs) => {
-                    let mut seen: DetHashSet<(TermId, TermId, TermId)> = DetHashSet::default();
+                    let mut seen: DetHashSet<(D::Id, D::Id, D::Id)> = DetHashSet::default();
                     for &g in gs {
                         for quad in ctx.dataset.quads_for_pattern(s, p, o, GraphMatch::Named(g)) {
                             if !seen.insert((quad.s, quad.p, quad.o)) {
@@ -224,8 +224,8 @@ pub(crate) fn eval_bgp(
 ///
 /// This is the S7 behaviour `cost_based_order` replaced; it is intentionally
 /// deterministic and never materialises a plan as triples.
-fn structural_order(compiled: &[CompiledPattern]) -> Vec<usize> {
-    fn constrained(pos: &Pos, bound: &[bool]) -> bool {
+fn structural_order<I: ViewTermId>(compiled: &[CompiledPattern<I>]) -> Vec<usize> {
+    fn constrained<I: ViewTermId>(pos: &Pos<I>, bound: &[bool]) -> bool {
         match pos {
             Pos::Bound(_) => true,
             Pos::Slot(c) => bound[*c],
@@ -283,10 +283,10 @@ const COST_DP_MAX_PATTERNS: usize = 8;
 /// just not memoised. The cache key is `(dataset stats fingerprint, BGP shape key)`; on
 /// a hit the cached order's length is asserted against `compiled` so a (vanishingly
 /// unlikely) shape-key collision re-plans rather than indexing out of bounds.
-fn plan_or_cached_order(
-    compiled: &[CompiledPattern],
-    dataset: &RdfDataset,
-    scope: &GraphScope,
+fn plan_or_cached_order<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
     cache: Option<&BgpOrderCache>,
 ) -> Arc<[usize]> {
     let Some(cache) = cache else {
@@ -314,7 +314,7 @@ fn plan_or_cached_order(
 /// the order cache key. Encodes `compiled.len()` and the full positional structure so two
 /// structurally distinct BGPs cannot collide to one cached order, and folds in the scope
 /// because a pattern's cardinality (hence its best order) is scope-dependent.
-fn bgp_shape_key(compiled: &[CompiledPattern], scope: &GraphScope) -> u64 {
+fn bgp_shape_key<I: ViewTermId>(compiled: &[CompiledPattern<I>], scope: &GraphScope<I>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     compiled.len().hash(&mut h);
@@ -331,7 +331,7 @@ fn bgp_shape_key(compiled: &[CompiledPattern], scope: &GraphScope) -> u64 {
                 GraphMatch::Default => 1u8.hash(&mut h),
                 GraphMatch::Named(id) => {
                     2u8.hash(&mut h);
-                    id.index().hash(&mut h);
+                    id.encode().hash(&mut h);
                 }
             }
         }
@@ -339,7 +339,7 @@ fn bgp_shape_key(compiled: &[CompiledPattern], scope: &GraphScope) -> u64 {
             1u8.hash(&mut h);
             gs.len().hash(&mut h);
             for g in gs {
-                g.index().hash(&mut h);
+                g.encode().hash(&mut h);
             }
         }
     }
@@ -348,7 +348,7 @@ fn bgp_shape_key(compiled: &[CompiledPattern], scope: &GraphScope) -> u64 {
 
 /// Hash one compiled position structurally (tag + payload), descending into nested
 /// quoted triples — a helper for [`bgp_shape_key`].
-fn hash_pos<H: std::hash::Hasher>(pos: &Pos, h: &mut H) {
+fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
     use std::hash::Hash;
     match pos {
         Pos::Slot(c) => {
@@ -357,7 +357,12 @@ fn hash_pos<H: std::hash::Hasher>(pos: &Pos, h: &mut H) {
         }
         Pos::Bound(id) => {
             1u8.hash(h);
-            id.index().hash(h);
+            // Hash the id via its join-key encoding: for `TermId` this is the 0-based
+            // index as `u64` (byte-identical to the historical `id.index().hash(h)` on a
+            // 64-bit target), and it is available for any `ViewTermId` id width. Only a
+            // join-order-cache discriminator (a collision is at worst a suboptimal order,
+            // never a wrong result), so the exact bytes need only be deterministic.
+            id.encode().hash(h);
         }
         Pos::Triple(t) => {
             2u8.hash(h);
@@ -395,10 +400,10 @@ fn hash_pos<H: std::hash::Hasher>(pos: &Pos, h: &mut H) {
 /// identical run to run, no hash-iteration leak.
 ///
 /// Returns a permutation of `0..compiled.len()`.
-fn cost_based_order(
-    compiled: &[CompiledPattern],
-    dataset: &RdfDataset,
-    scope: &GraphScope,
+fn cost_based_order<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
 ) -> Vec<usize> {
     let n = compiled.len();
     if n <= 1 {
@@ -435,7 +440,11 @@ fn cost_based_order(
 /// ground position through, leave slots and quoted-triple positions free. A
 /// quoted-triple position is treated as unconstrained — a conservative over-estimate,
 /// safe by the multiset invariant. For a FROM/USING merge, sum the per-graph estimates.
-fn base_cardinality(dataset: &RdfDataset, cp: &CompiledPattern, scope: &GraphScope) -> usize {
+fn base_cardinality<D: DatasetView>(
+    dataset: &D,
+    cp: &CompiledPattern<D::Id>,
+    scope: &GraphScope<D::Id>,
+) -> usize {
     let s = constant_of(&cp.s);
     let p = constant_of(&cp.p);
     let o = constant_of(&cp.o);
@@ -450,7 +459,7 @@ fn base_cardinality(dataset: &RdfDataset, cp: &CompiledPattern, scope: &GraphSco
 
 /// The ground id of a position, or `None` for a slot or (conservatively) a nested
 /// quoted-triple position.
-fn constant_of(pos: &Pos) -> Option<TermId> {
+fn constant_of<I: ViewTermId>(pos: &Pos<I>) -> Option<I> {
     match pos {
         Pos::Bound(id) => Some(*id),
         Pos::Slot(_) | Pos::Triple(_) => None,
@@ -461,7 +470,7 @@ fn constant_of(pos: &Pos) -> Option<TermId> {
 /// earlier-scheduled pattern — each is an equality-join axis (selectivity ~`1/T`).
 /// Ground constants are excluded: their selectivity is already folded into the
 /// pattern's base cardinality.
-fn join_positions(cp: &CompiledPattern, bound: &[bool]) -> usize {
+fn join_positions<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &[bool]) -> usize {
     [&cp.s, &cp.p, &cp.o]
         .into_iter()
         .filter(|pos| pos_has_bound_slot(pos, bound))
@@ -477,8 +486,8 @@ fn step_size(running: f64, base_p: f64, joins: usize, t: f64) -> f64 {
 /// Greedy minimum-cardinality join order for a large BGP (`n > COST_DP_MAX_PATTERNS`):
 /// repeatedly schedule the connected pattern whose appended intermediate-size estimate
 /// is smallest, lowest-index on ties. Connectivity is enforced exactly as in the DP.
-fn cost_order_greedy(
-    compiled: &[CompiledPattern],
+fn cost_order_greedy<I: ViewTermId>(
+    compiled: &[CompiledPattern<I>],
     base: &[f64],
     t: f64,
     n_cols: usize,
@@ -568,7 +577,12 @@ struct DpPlan {
 /// The order is carried as a nibble-packed `u64` (see [`DpPlan`]): each DP transition
 /// copies the `Copy` struct and shifts in one nibble — no heap allocation per step.
 /// The final order is decoded MSB→LSB into a `Vec<usize>` for the caller.
-fn cost_order_dp(compiled: &[CompiledPattern], base: &[f64], t: f64, n_cols: usize) -> Vec<usize> {
+fn cost_order_dp<I: ViewTermId>(
+    compiled: &[CompiledPattern<I>],
+    base: &[f64],
+    t: f64,
+    n_cols: usize,
+) -> Vec<usize> {
     let n = compiled.len();
     // Safety invariant: each pattern index must fit in a 4-bit nibble (values 1–15
     // after the 1-based offset). COST_DP_MAX_PATTERNS == 8 satisfies this with margin.
@@ -667,14 +681,14 @@ fn cost_order_dp(compiled: &[CompiledPattern], base: &[f64], t: f64, n_cols: usi
 /// Whether a pattern shares at least one already-bound variable with the bindings
 /// produced so far (so joining it cannot be a Cartesian product). Descends into nested
 /// quoted triples: a triple position is connected if any of its inner slots is bound.
-fn pattern_connected(cp: &CompiledPattern, bound: &[bool]) -> bool {
+fn pattern_connected<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &[bool]) -> bool {
     [&cp.s, &cp.p, &cp.o]
         .into_iter()
         .any(|pos| pos_has_bound_slot(pos, bound))
 }
 
 /// Whether a position contains an already-bound slot anywhere (recursively).
-fn pos_has_bound_slot(pos: &Pos, bound: &[bool]) -> bool {
+fn pos_has_bound_slot<I: ViewTermId>(pos: &Pos<I>, bound: &[bool]) -> bool {
     match pos {
         Pos::Bound(_) => false,
         Pos::Slot(c) => bound[*c],
@@ -686,7 +700,7 @@ fn pos_has_bound_slot(pos: &Pos, bound: &[bool]) -> bool {
 
 /// Record a scheduled pattern's slot columns as now-bound (descending into nested
 /// quoted triples).
-fn mark_bound(cp: &CompiledPattern, bound: &mut [bool]) {
+fn mark_bound<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &mut [bool]) {
     for pos in [&cp.s, &cp.p, &cp.o] {
         for_each_slot(pos, &mut |c| bound[c] = true);
     }
@@ -694,7 +708,7 @@ fn mark_bound(cp: &CompiledPattern, bound: &mut [bool]) {
 
 /// Visit every slot column reachable from a position (itself, or the inner positions
 /// of a nested quoted triple).
-fn for_each_slot(pos: &Pos, f: &mut impl FnMut(usize)) {
+fn for_each_slot<I: ViewTermId>(pos: &Pos<I>, f: &mut impl FnMut(usize)) {
     match pos {
         Pos::Bound(_) => {}
         Pos::Slot(c) => f(*c),
@@ -750,11 +764,11 @@ fn is_blank_var(var: &Variable) -> bool {
 
 /// Compile a triple pattern's positions. Returns `Ok(None)` if a ground constant is
 /// absent from the dataset (the pattern — and hence the BGP — cannot match).
-fn compile_pattern(
+fn compile_pattern<D: DatasetView>(
     pattern: &TriplePattern,
     schema: &VarSchema,
-    dataset: &RdfDataset,
-) -> Result<Option<CompiledPattern>, EvalError> {
+    dataset: &D,
+) -> Result<Option<CompiledPattern<D::Id>>, EvalError> {
     let Some(s) = compile_term(&pattern.subject, schema, dataset)? else {
         return Ok(None);
     };
@@ -769,11 +783,11 @@ fn compile_pattern(
 
 /// Compile a subject/object term position. `Ok(None)` = an absent ground constant
 /// (the pattern — and hence the BGP — cannot match).
-fn compile_term(
+fn compile_term<D: DatasetView>(
     term: &TermPattern,
     schema: &VarSchema,
-    dataset: &RdfDataset,
-) -> Result<Option<Pos>, EvalError> {
+    dataset: &D,
+) -> Result<Option<Pos<D::Id>>, EvalError> {
     match term {
         TermPattern::Variable(v) => Ok(Some(Pos::Slot(slot_col(schema, v)))),
         TermPattern::BlankNode(b) => Ok(Some(Pos::Slot(slot_col(schema, &blank_var(b.as_str()))))),
@@ -800,11 +814,11 @@ fn compile_term(
 
 /// Compile a nested quoted-triple pattern's three positions. `Ok(None)` if any
 /// ground component is absent from the dataset (so the whole pattern cannot match).
-fn compile_triple_pos(
+fn compile_triple_pos<D: DatasetView>(
     triple: &TriplePattern,
     schema: &VarSchema,
-    dataset: &RdfDataset,
-) -> Result<Option<TriplePos>, EvalError> {
+    dataset: &D,
+) -> Result<Option<TriplePos<D::Id>>, EvalError> {
     let Some(s) = compile_term(&triple.subject, schema, dataset)? else {
         return Ok(None);
     };
@@ -843,11 +857,11 @@ fn term_has_variable(term: &TermPattern) -> bool {
 }
 
 /// Compile a predicate position (IRI or variable). `None` = an absent ground IRI.
-fn compile_predicate(
+fn compile_predicate<D: DatasetView>(
     predicate: &NamedNodePattern,
     schema: &VarSchema,
-    dataset: &RdfDataset,
-) -> Option<Pos> {
+    dataset: &D,
+) -> Option<Pos<D::Id>> {
     match predicate {
         NamedNodePattern::Variable(v) => Some(Pos::Slot(
             schema
@@ -864,7 +878,7 @@ fn compile_predicate(
 /// constant, an already-bound variable's id, or `None` (a wildcard / a variable not
 /// yet bound). A `Computed` binding (never produced inside a BGP) degrades to a
 /// wildcard and is rejected by [`bind_row`].
-fn query_id(pos: &Pos, row: &Solution) -> Option<TermId> {
+fn query_id<I: ViewTermId>(pos: &Pos<I>, row: &Solution<I>) -> Option<I> {
     match pos {
         Pos::Bound(id) => Some(*id),
         Pos::Slot(col) => match row[*col] {
@@ -883,12 +897,12 @@ fn query_id(pos: &Pos, row: &Solution) -> Option<TermId> {
 /// quoted-triple position fails to unify, or if a ground constant disagrees (the
 /// virtual reification candidates are NOT pre-filtered by `quads_for_pattern`, so a
 /// `Pos::Bound` mismatch must be rejected here).
-fn bind_row(
-    row: &Solution,
-    cp: &CompiledPattern,
-    quad: &QuadIds,
-    dataset: &RdfDataset,
-) -> Option<Solution> {
+fn bind_row<D: DatasetView>(
+    row: &Solution<D::Id>,
+    cp: &CompiledPattern<D::Id>,
+    quad: &QuadIds<D::Id>,
+    dataset: &D,
+) -> Option<Solution<D::Id>> {
     let mut out = row.clone();
     for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
         if !bind_pos(&mut out, pos, id, dataset) {
@@ -904,7 +918,12 @@ fn bind_row(
 /// - a `Pos::Slot` repeated/previously-bound variable that disagrees;
 /// - a `Pos::Triple` whose candidate id is not a triple term, or whose components fail
 ///   to unify recursively.
-fn bind_pos(out: &mut Solution, pos: &Pos, id: TermId, dataset: &RdfDataset) -> bool {
+fn bind_pos<D: DatasetView>(
+    out: &mut Solution<D::Id>,
+    pos: &Pos<D::Id>,
+    id: D::Id,
+    dataset: &D,
+) -> bool {
     match pos {
         Pos::Bound(want) => *want == id,
         Pos::Slot(col) => {
@@ -950,15 +969,15 @@ fn bind_pos(out: &mut Solution, pos: &Pos, id: TermId, dataset: &RdfDataset) -> 
 /// side-table walks are not pre-narrowed by the probe. A callback keeps this hot path
 /// lazy without boxing or allocating an intermediate candidate buffer.
 #[allow(clippy::too_many_arguments)]
-fn emit_virtual_candidates(
-    dataset: &RdfDataset,
-    cp: &CompiledPattern,
-    s: Option<TermId>,
-    p: Option<TermId>,
-    o: Option<TermId>,
-    reifies_id: Option<TermId>,
-    gm: GraphMatch,
-    mut emit: impl FnMut(QuadIds),
+fn emit_virtual_candidates<D: DatasetView>(
+    dataset: &D,
+    cp: &CompiledPattern<D::Id>,
+    s: Option<D::Id>,
+    p: Option<D::Id>,
+    o: Option<D::Id>,
+    reifies_id: Option<D::Id>,
+    gm: GraphMatch<D::Id>,
+    mut emit: impl FnMut(QuadIds<D::Id>),
 ) {
     // Reifier layer: only when the predicate can be `rdf:reifies`. The object must also
     // be triple-term-shaped to be worth scanning — a quoted-triple pattern position
@@ -1018,7 +1037,7 @@ fn emit_virtual_candidates(
 /// Whether an object position could resolve to a quoted-triple term (so the reifier
 /// layer — whose object is always a triple term — is worth scanning for it). An IRI or
 /// literal constant never is.
-fn object_can_be_triple_term(pos: &Pos, dataset: &RdfDataset) -> bool {
+fn object_can_be_triple_term<D: DatasetView>(pos: &Pos<D::Id>, dataset: &D) -> bool {
     match pos {
         // A free variable or a structural quoted-triple pattern can match a triple term.
         Pos::Slot(_) | Pos::Triple(_) => true,
@@ -1086,10 +1105,10 @@ fn literal_to_string(l: &Literal) -> String {
 /// This is a pure-introspection path: it does not evaluate the query, and it
 /// falls back to source order for BGPs whose constants are absent from the dataset
 /// (those BGPs are empty regardless of order).
-pub(crate) fn explain_pattern_orders(
-    dataset: &RdfDataset,
-    active_dataset: &ActiveDataset,
-    active_graph: GraphMatch,
+pub(crate) fn explain_pattern_orders<D: DatasetView>(
+    dataset: &D,
+    active_dataset: &ActiveDataset<D::Id>,
+    active_graph: GraphMatch<D::Id>,
     pattern: &GraphPattern,
     out: &mut Vec<String>,
 ) -> Result<(), EvalError> {
@@ -1157,7 +1176,7 @@ pub(crate) fn explain_pattern_orders(
 }
 
 /// An empty solution sequence over only the real (non-blank) variables of `working`.
-fn empty_over_real_vars(working: &VarSchema) -> SolutionSeq {
+fn empty_over_real_vars<I: ViewTermId>(working: &VarSchema) -> SolutionSeq<I> {
     let real = real_var_schema(working);
     SolutionSeq::empty(Arc::new(real))
 }
@@ -1170,7 +1189,10 @@ fn real_var_schema(working: &VarSchema) -> VarSchema {
 /// Project the working rows onto only the real variables, dropping the synthetic
 /// blank-node columns (which are scoped to this BGP and must not leak into joins).
 /// Multiset cardinality is preserved (no dedup).
-fn project_out_blanks(working: &VarSchema, rows: Vec<Solution>) -> SolutionSeq {
+fn project_out_blanks<I: ViewTermId>(
+    working: &VarSchema,
+    rows: Vec<Solution<I>>,
+) -> SolutionSeq<I> {
     // The working columns that survive, in order.
     let keep: Vec<usize> = working
         .vars()
@@ -1203,7 +1225,7 @@ mod tests {
     use super::*;
     use crate::scratch::ScratchInterner;
     use pretty_assertions::assert_eq;
-    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
     use purrdf_sparql_algebra::{Literal, NamedNode};
 
     /// A small graph:

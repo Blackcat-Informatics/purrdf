@@ -31,7 +31,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, TermValue};
+use purrdf_core::{DatasetView, RdfDataset, TermValue, ViewTermId};
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern, Variable};
 
 use crate::error::EvalError;
@@ -94,12 +94,12 @@ pub trait RemoteQuerySource {
 ///
 /// Returns [`EvalError::Remote`] for a non-silent failure (no source, variable
 /// endpoint, transport/decode error).
-pub(crate) fn eval_service(
+pub(crate) fn eval_service<D: DatasetView + Sync>(
     name: &NamedNodePattern,
     inner: &GraphPattern,
     silent: bool,
-    ctx: &mut EvalCtx<'_>,
-) -> Result<SolutionSeq, EvalError> {
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     // Resolve the endpoint IRI. A variable endpoint needs per-row (lateral)
     // resolution, which the engine defers — so it is a hard error unless SILENT.
     let endpoint = match name {
@@ -133,7 +133,10 @@ pub(crate) fn eval_service(
 
 /// On `SILENT`, return the join identity (one empty row, a no-op for the
 /// surrounding join); otherwise raise [`EvalError::Remote`] with `msg()`.
-fn silent_or_err(silent: bool, msg: impl FnOnce() -> String) -> Result<SolutionSeq, EvalError> {
+fn silent_or_err<I: ViewTermId>(
+    silent: bool,
+    msg: impl FnOnce() -> String,
+) -> Result<SolutionSeq<I>, EvalError> {
     if silent {
         Ok(identity_seq())
     } else {
@@ -143,7 +146,7 @@ fn silent_or_err(silent: bool, msg: impl FnOnce() -> String) -> Result<SolutionS
 
 /// The join identity: a single empty-binding row. `Join(left, identity) == left`,
 /// so a swallowed `SERVICE SILENT` leaves the surrounding query unchanged.
-fn identity_seq() -> SolutionSeq {
+fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
     SolutionSeq {
         schema: Arc::new(VarSchema::new()),
         rows: vec![smallvec::smallvec![]],
@@ -154,7 +157,10 @@ fn identity_seq() -> SolutionSeq {
 /// yielding a [`SolutionSeq`] over the result schema. (Mirrors `modifier::eval_values`
 /// but carries `TermValue` directly, so remote blank nodes survive — `GroundTerm`
 /// has no blank-node variant.)
-fn ingest(resolved: ResolvedBindings, ctx: &mut EvalCtx<'_>) -> SolutionSeq {
+fn ingest<D: DatasetView + Sync>(
+    resolved: ResolvedBindings,
+    ctx: &mut EvalCtx<'_, D>,
+) -> SolutionSeq<D::Id> {
     let schema = Arc::new(VarSchema::from_vars(resolved.variables));
     let width = schema.len();
     let mut rows = Vec::with_capacity(resolved.rows.len());
@@ -207,7 +213,7 @@ impl RemoteQuerySource for LocalRemoteQuerySource {
         // Thread this source into the forwarded evaluation so a nested SERVICE
         // inside the forwarded query resolves against the same in-memory sources
         // rather than hard-failing on a missing remote.
-        let mut ctx = EvalCtx::new(dataset).with_remote(self);
+        let mut ctx = EvalCtx::new(&**dataset).with_remote(self);
         match crate::eval::evaluate_query(&parsed, &mut ctx)
             .map_err(|e| RemoteError::Decode(e.to_string()))?
         {

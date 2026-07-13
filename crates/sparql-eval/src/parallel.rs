@@ -46,7 +46,7 @@
 //! fork-join would make its result depend on worker scheduling, not just row
 //! content.
 
-use purrdf_core::{RdfDataset, TermValue};
+use purrdf_core::{DatasetView, TermId, TermValue, ViewTermId};
 use purrdf_sparql_algebra::{
     AggregateExpression, Expression, Function, GraphPattern, OrderExpression,
 };
@@ -479,10 +479,10 @@ where
 ///   [`TermValue`] ([`PortableTerm::Fresh`]) while the child (and its scratch)
 ///   is still alive, for the caller to re-intern against the parent later.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum PortableTerm {
+pub(crate) enum PortableTerm<I = TermId> {
     /// A term already valid in the parent's id space: an `Existing` dataset
     /// term, or a `Computed` id minted before the fork.
-    Parent(SolutionTerm),
+    Parent(SolutionTerm<I>),
     /// A value the child minted after the fork; not yet interned anywhere but
     /// the child's own (about-to-be-dropped) scratch.
     Fresh(TermValue),
@@ -492,11 +492,11 @@ pub(crate) enum PortableTerm {
 /// scratch into a portable form, while `local` is still alive. `base` is the
 /// parent's [`ScratchInterner::computed_count`] captured **at fork time** —
 /// see [`PortableTerm`] for the id rule this relies on.
-pub(crate) fn portable_row(
+pub(crate) fn portable_row<I: ViewTermId>(
     local: &ScratchInterner,
     base: usize,
-    row: &Solution,
-) -> Vec<Option<PortableTerm>> {
+    row: &Solution<I>,
+) -> Vec<Option<PortableTerm<I>>> {
     row.iter()
         .map(|cell| match cell {
             None => None,
@@ -520,11 +520,11 @@ pub(crate) fn portable_row(
 /// workers minting the same fresh value converge on the same parent id
 /// deterministically (whichever reinterns first wins the id; the same value
 /// reinterned again is deduplicated against it, not re-minted).
-pub(crate) fn reintern_portable_row(
+pub(crate) fn reintern_portable_row<D: DatasetView>(
     main: &mut ScratchInterner,
-    dataset: &RdfDataset,
-    prow: Vec<Option<PortableTerm>>,
-) -> Solution {
+    dataset: &D,
+    prow: Vec<Option<PortableTerm<D::Id>>>,
+) -> Solution<D::Id> {
     prow.into_iter()
         .map(|cell| match cell {
             None => None,
@@ -549,19 +549,23 @@ pub(crate) fn reintern_portable_row(
 /// nothing) or a `MIN`/`MAX`/`SAMPLE` group (whose result is an existing bound
 /// value passed through) — `BIND`/most aggregates mint a genuinely new value
 /// and always take the `Portable` arm, exactly as before this fast path.
-pub(crate) enum MintedRow {
+pub(crate) enum MintedRow<I = TermId> {
     /// No cell of this row is a post-fork mint — pass it through untouched.
-    Direct(Solution),
+    Direct(Solution<I>),
     /// At least one cell was freshly minted by the child after the fork;
     /// captured in portable form for [`reintern_minted_row`] to re-intern.
-    Portable(Vec<Option<PortableTerm>>),
+    Portable(Vec<Option<PortableTerm<I>>>),
 }
 
 /// Classify one worker-produced `row` into a [`MintedRow`]: `Direct` iff no
 /// cell is a `Computed(sid)` with `sid >= base` (a post-fork mint), else
 /// `Portable` (materialized against `local` — the minting child's scratch —
 /// while it is still alive). See [`MintedRow`] for the reasoning.
-pub(crate) fn minted_row(local: &ScratchInterner, base: usize, row: Solution) -> MintedRow {
+pub(crate) fn minted_row<I: ViewTermId>(
+    local: &ScratchInterner,
+    base: usize,
+    row: Solution<I>,
+) -> MintedRow<I> {
     let has_fresh_mint = row
         .iter()
         .any(|cell| matches!(cell, Some(SolutionTerm::Computed(sid)) if sid.index() >= base));
@@ -578,11 +582,11 @@ pub(crate) fn minted_row(local: &ScratchInterner, base: usize, row: Solution) ->
 /// source-index order across all workers — see [`reintern_portable_row`]'s doc
 /// comment for why that ordering (not anything in this function) is what makes
 /// the result deterministic.
-pub(crate) fn reintern_minted_row(
+pub(crate) fn reintern_minted_row<D: DatasetView>(
     main: &mut ScratchInterner,
-    dataset: &RdfDataset,
-    row: MintedRow,
-) -> Solution {
+    dataset: &D,
+    row: MintedRow<D::Id>,
+) -> Solution<D::Id> {
     match row {
         MintedRow::Direct(solution) => solution,
         MintedRow::Portable(prow) => reintern_portable_row(main, dataset, prow),
@@ -806,9 +810,9 @@ mod tests {
                 if item % 7 != 0 {
                     std::thread::yield_now();
                 }
-                acc.push(vec![Some(SolutionTerm::Existing(
-                    purrdf_core::TermId::from_index(item as u32),
-                ))]);
+                acc.push(vec![Some(SolutionTerm::Existing(TermId::from_index(
+                    item as u32,
+                )))]);
                 Ok(())
             },
         )
@@ -842,9 +846,9 @@ mod tests {
                 if item % 3 == 0 {
                     std::thread::yield_now();
                 }
-                acc.push(vec![Some(SolutionTerm::Existing(
-                    purrdf_core::TermId::from_index(item as u32),
-                ))]);
+                acc.push(vec![Some(SolutionTerm::Existing(TermId::from_index(
+                    item as u32,
+                )))]);
                 Ok(())
             },
         )
@@ -876,9 +880,9 @@ mod tests {
                 0_u64
             },
             |_state, acc, &item| {
-                acc.push(vec![Some(SolutionTerm::Existing(
-                    purrdf_core::TermId::from_index(item as u32),
-                ))]);
+                acc.push(vec![Some(SolutionTerm::Existing(TermId::from_index(
+                    item as u32,
+                )))]);
                 Ok(())
             },
         )

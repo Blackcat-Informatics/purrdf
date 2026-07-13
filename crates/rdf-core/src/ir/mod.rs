@@ -29,10 +29,19 @@ pub mod mutable;
 // Evented, ID-addressed OUTPUT of a frozen dataset (C6): the dual of the
 // permissive ingestion protocol, for chase / SHACL-result / projection consumers.
 pub mod event_sink;
+// The u64-scaled GLOBAL term-identity layer (backend seam): a separate id space
+// (`GlobalTermId`) and its value-interner (`GlobalDictionary`), for paged /
+// cross-segment backends. NEVER widens the frozen dataset's u32 `TermId` niche.
+pub mod global;
 // The permissive-ingestion adapter (purrdf P6): an `RdfEventSink` (the
 // `purrdf-events` protocol) that buffers forward references and freezes a dataset
 // at `finish()`, plus the frozen-IR-replay `RdfEventSource` that drives it.
 pub mod ingest;
+// A reference, in-memory, demand-paged dataset (backend seam): `PagedDataset`
+// composes many frozen `RdfDataset` pages into one logical `DatasetView` keyed on
+// `GlobalTermId`, plus the `PageProvider` demand-paging hook and per-page
+// `PageTranslation` local↔global id map.
+pub mod paged;
 pub mod term;
 pub mod validate;
 
@@ -45,7 +54,13 @@ pub use dataset::{
     TermRef,
 };
 pub use event_sink::RdfDatasetVisitor;
+pub use global::{GlobalDictionary, GlobalTermId};
 pub use ingest::{DatasetSink, FrozenDatasetSource};
 pub use mutable::{MutableDataset, QuadValues};
+pub use paged::{
+    CountingDemandProvider, InMemoryPageProvider, PageFault, PageId, PagePart, PageProvider,
+    PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable,
+    SubsetPageProvider,
+};
 pub use pipeline_bundle::{HandleEntry, HandleKey, PipelineBundle, PipelineBundleError};
 pub use term::{BlankScope, TermId, TermValue};

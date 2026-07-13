@@ -29,7 +29,7 @@
 //! single integer compare. The one lookup cost (`term_id_by_value`) is paid only
 //! when a term is *minted* (BIND/VALUES/aggregate output), never in BGP matching.
 
-use purrdf_core::{RdfDataset, TermId, TermRef, TermValue};
+use purrdf_core::{DatasetView, TermId, TermRef, TermValue, ViewTermId};
 
 use std::hash::{Hash, Hasher};
 
@@ -57,6 +57,13 @@ impl ScratchId {
     pub(crate) fn index(self) -> usize {
         self.0 as usize
     }
+
+    /// The raw `u32` table index, for encoding a `Computed` id into a
+    /// [`ViewTermId::JoinKeyAtom`] join key (see [`SolutionTerm::join_key`]).
+    #[inline]
+    pub(crate) fn raw(self) -> u32 {
+        self.0
+    }
 }
 
 /// One bound value in a solution row.
@@ -64,41 +71,44 @@ impl ScratchId {
 /// See the [module docs](self) for the `Existing`/`Computed` unification rule that
 /// keeps this `Copy` and join-comparable by a single integer compare.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum SolutionTerm {
-    /// A term that exists in the queried dataset (dataset-local [`TermId`]).
-    Existing(TermId),
+pub enum SolutionTerm<I = TermId> {
+    /// A term that exists in the queried dataset (the view's local id `I`).
+    Existing(I),
     /// A term minted during evaluation, held in the [`ScratchInterner`].
     Computed(ScratchId),
 }
 
-impl SolutionTerm {
-    /// A total, collision-free `u64` encoding used as a single-column hash-join key,
-    /// so a one-variable join key is a `Copy` `u64` with **no per-row `Vec`
-    /// allocation**.
+impl<I: ViewTermId> SolutionTerm<I> {
+    /// A total, collision-free encoding used as a single-column hash-join key, so a
+    /// one-variable join key is a `Copy` [`ViewTermId::JoinKeyAtom`] with **no per-row
+    /// `Vec` allocation**.
     ///
-    /// `Existing` ids map into `[0, 2^32)` and `Computed` ids into `[2^32, 2^33)`, so
-    /// two terms encode to the same `u64` **iff** they are equal — the same invariant
-    /// the `Existing`/`Computed` unification rule already guarantees for join
-    /// correctness (a value present in the dataset is never also a `Computed` id).
-    /// A collision here would be a *wrong join result*, not a slowdown, so the width
-    /// assumption (both ids fit `u32` — `TermId` is a `NonZeroU32`, `ScratchId` a
-    /// `u32`) is asserted in debug builds.
+    /// `Existing` ids encode into the id space and `Computed` ids into a disjoint
+    /// space (see [`ViewTermId`]'s join-key contract), so two terms encode to the same
+    /// atom **iff** they are equal — the same invariant the `Existing`/`Computed`
+    /// unification rule already guarantees for join correctness (a value present in the
+    /// dataset is never also a `Computed` id). A collision here would be a *wrong join
+    /// result*, not a slowdown. For `I = TermId` the atom is the historical packed
+    /// `u64` (`Existing` in `[0, 2^32)`, `Computed` in `[2^32, 2^33)`), so the
+    /// production hash-join is byte-identical.
     #[inline]
-    pub(crate) fn join_key_u64(self) -> u64 {
+    pub(crate) fn join_key(self) -> I::JoinKeyAtom {
         match self {
-            Self::Existing(id) => {
-                let ix = id.index() as u64;
-                debug_assert!(ix < (1 << 32), "TermId index must fit u32");
-                ix
-            }
-            Self::Computed(sid) => {
-                let s = sid.index() as u64;
-                debug_assert!(s < (1 << 32), "ScratchId must fit u32");
-                (1 << 32) | s
-            }
+            Self::Existing(id) => id.encode(),
+            Self::Computed(sid) => I::encode_computed(sid.raw()),
         }
     }
 }
+
+/// The `I = TermId` monomorphization must keep its historical layout: `TermId` is a
+/// `NonZeroU32`, so the two-variant enum has a spare discriminant value and
+/// `Option<SolutionTerm<TermId>>` is niche-packed to the SAME size as
+/// `SolutionTerm<TermId>` (no extra word). Genericizing over `I` must not grow the
+/// production row cell.
+const _: () = assert!(
+    size_of::<Option<SolutionTerm<TermId>>>() == size_of::<SolutionTerm<TermId>>(),
+    "Option<SolutionTerm<TermId>> must stay niche-packed to SolutionTerm<TermId>'s size"
+);
 
 /// A per-query interner for terms computed during evaluation.
 ///
@@ -131,7 +141,7 @@ impl ScratchInterner {
     ///
     /// This is the unification rule: a value already in the data never becomes a
     /// `Computed` id, so cross-case join keys are unequal by construction.
-    pub fn intern(&mut self, dataset: &RdfDataset, value: TermValue) -> SolutionTerm {
+    pub fn intern<D: DatasetView>(&mut self, dataset: &D, value: TermValue) -> SolutionTerm<D::Id> {
         if let Some(id) = dataset.term_id_by_value(&value) {
             return SolutionTerm::Existing(id);
         }
@@ -155,7 +165,7 @@ impl ScratchInterner {
     /// terms, expanding the literal datatype id to its IRI string); `Computed` ids
     /// are read from the scratch table. This is the egress boundary used to build
     /// `SparqlResult` rows.
-    pub fn value_of(&self, dataset: &RdfDataset, term: SolutionTerm) -> TermValue {
+    pub fn value_of<D: DatasetView>(&self, dataset: &D, term: SolutionTerm<D::Id>) -> TermValue {
         match term {
             SolutionTerm::Existing(id) => term_id_to_value(dataset, id),
             SolutionTerm::Computed(sid) => self.values[sid.index()].clone(),
@@ -182,7 +192,7 @@ impl ScratchInterner {
 ///
 /// Recurses through RDF-1.2 triple terms and expands a literal's datatype id to its
 /// IRI string, so the result carries no dataset-local ids (the C0.8 boundary).
-pub(crate) fn term_id_to_value(dataset: &RdfDataset, id: TermId) -> TermValue {
+pub(crate) fn term_id_to_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
     match dataset.resolve(id) {
         TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
         TermRef::Blank { label, scope } => TermValue::Blank {
@@ -219,7 +229,7 @@ pub(crate) fn term_id_to_value(dataset: &RdfDataset, id: TermId) -> TermValue {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 
     fn dataset_with_one_iri() -> std::sync::Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();

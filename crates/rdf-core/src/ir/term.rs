@@ -329,6 +329,91 @@ impl TermValue {
     pub fn is_blank(&self) -> bool {
         matches!(self, Self::Blank { .. })
     }
+
+    /// The canonical kind tag used to order terms of DIFFERENT kinds. It mirrors the
+    /// canonical Turtle renderer's `ObjKey` kind ordering (IRI < Literal < Blank <
+    /// Triple, see `turtle_render`), so the total order below AGREES with the
+    /// serializer's notion of canonical term order rather than inventing a second,
+    /// conflicting one. (Note this is NOT the derive order, which would put Blank
+    /// before Literal — hence the hand-written `Ord`.)
+    #[inline]
+    fn canonical_tag(&self) -> u8 {
+        match self {
+            Self::Iri(_) => 0,
+            Self::Literal { .. } => 1,
+            Self::Blank { .. } => 2,
+            Self::Triple { .. } => 3,
+        }
+    }
+}
+
+// A TOTAL, dataset-independent order over `TermValue` — the canonical order in which
+// `PagedDataset::compact` re-interns the live terms, so the renumbered
+// `GlobalTermId` assignment is a pure function of the live term-VALUE set (never of
+// ingest order, page order, or the old numbering). Cross-kind order follows
+// [`canonical_tag`](TermValue::canonical_tag) (the serializer's IRI < Literal < Blank
+// < Triple); within a kind the components compare in the same (datatype, language,
+// lexical) precedence the renderer's `ObjKey` uses, with `direction` as a final
+// tiebreak so two literals differing ONLY in base direction (distinct values) still
+// order deterministically.
+impl Ord for TermValue {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.canonical_tag()
+            .cmp(&other.canonical_tag())
+            .then_with(|| match (self, other) {
+                (Self::Iri(a), Self::Iri(b)) => a.cmp(b),
+                (
+                    Self::Literal {
+                        lexical_form: la,
+                        datatype: da,
+                        language: ga,
+                        direction: dira,
+                    },
+                    Self::Literal {
+                        lexical_form: lb,
+                        datatype: db,
+                        language: gb,
+                        direction: dirb,
+                    },
+                ) => da
+                    .cmp(db)
+                    .then_with(|| ga.cmp(gb))
+                    .then_with(|| la.cmp(lb))
+                    .then_with(|| dira.cmp(dirb)),
+                (
+                    Self::Blank {
+                        label: la,
+                        scope: sa,
+                    },
+                    Self::Blank {
+                        label: lb,
+                        scope: sb,
+                    },
+                ) => la.cmp(lb).then_with(|| sa.cmp(sb)),
+                (
+                    Self::Triple {
+                        s: sa,
+                        p: pa,
+                        o: oa,
+                    },
+                    Self::Triple {
+                        s: sb,
+                        p: pb,
+                        o: ob,
+                    },
+                ) => sa.cmp(sb).then_with(|| pa.cmp(pb)).then_with(|| oa.cmp(ob)),
+                // Equal tags guarantee the same variant, so every reachable pair is
+                // matched above; a mixed-variant pair is unreachable here.
+                _ => core::cmp::Ordering::Equal,
+            })
+    }
+}
+
+impl PartialOrd for TermValue {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 // `Hash` is hand-written (not derived) with **explicit** discriminant tags so it is

@@ -36,6 +36,23 @@ impl RdfStoreCapabilities {
             lookaside: false,
         }
     }
+
+    /// The field-wise logical OR of two capability sets: a flag is on in the result
+    /// iff it is on in EITHER input. A composite view over several backing stores
+    /// (e.g. a paged dataset folding many pages) reports a capability if any page
+    /// surfaces it, so the union is the honest aggregate capability.
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self {
+            named_graphs: self.named_graphs || other.named_graphs,
+            quoted_triples: self.quoted_triples || other.quoted_triples,
+            reifiers: self.reifiers || other.reifiers,
+            annotations: self.annotations || other.annotations,
+            source_locations: self.source_locations || other.source_locations,
+            loss_records: self.loss_records || other.loss_records,
+            lookaside: self.lookaside || other.lookaside,
+        }
+    }
 }
 
 impl Default for RdfStoreCapabilities {

@@ -96,7 +96,7 @@ pub use bundle::{
 pub use collections::RdfListError;
 pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
-pub use dataset_view::{DatasetMut, DatasetView, GraphMatch, GraphMatchValue};
+pub use dataset_view::{DatasetMut, DatasetView, GraphMatch, GraphMatchValue, ViewTermId};
 pub use describe::{Describer, describe};
 pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfLoss, RdfSeverity};
 pub use fno::{
@@ -105,11 +105,14 @@ pub use fno::{
 };
 pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 pub use ir::{
-    BlankScope, CanonHash, Canonicalized, DatasetDiff, DatasetSink, FrozenDatasetSource, GtsBundle,
-    HandleEntry, HandleKey, MutableDataset, PipelineBundle, PipelineBundleError, QuadHandle,
-    QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder,
-    RdfDatasetVisitor, RdfEnvelope, TermId, TermRef, TermValue, ValidatedRdfDatasetBuilder,
-    canonicalize, canonicalize_with, dataset_diff, datasets_isomorphic,
+    BlankScope, CanonHash, Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink,
+    FrozenDatasetSource, GlobalDictionary, GlobalTermId, GtsBundle, HandleEntry, HandleKey,
+    InMemoryPageProvider, MutableDataset, PageFault, PageId, PagePart, PageProvider,
+    PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable,
+    PipelineBundle, PipelineBundleError, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan,
+    QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope,
+    SubsetPageProvider, TermId, TermRef, TermValue, ValidatedRdfDatasetBuilder, canonicalize,
+    canonicalize_with, dataset_diff, datasets_isomorphic,
 };
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,

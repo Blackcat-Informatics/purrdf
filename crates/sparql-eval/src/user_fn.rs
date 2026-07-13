@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use purrdf_core::TermValue;
+use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_algebra::Query;
 
 use crate::DetHashMap;
@@ -199,11 +199,11 @@ fn matches_node_kind(value: &TermValue, nk: NodeKind) -> bool {
 ///
 /// [`EvalError::Function`] on an arity or type-constraint violation or on exceeding
 /// the user-function recursion bound; propagates body evaluation errors.
-pub(crate) fn eval_user_function(
+pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     func: &UserFunction,
     iri: &str,
     args: &[Option<TermValue>],
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<TermValue>, EvalError> {
     if args.len() < func.required || args.len() > func.params.len() {
         return Err(EvalError::function(format!(
