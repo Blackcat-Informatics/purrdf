@@ -871,7 +871,8 @@ mod tests {
         );
         resolver.quad(0, (0, 1, 2, None));
         let (_resolver, error) = finish_direct(resolver);
-        let err = error.expect("a genuinely dangling reifier binding must STILL fail after phase 2");
+        let err =
+            error.expect("a genuinely dangling reifier binding must STILL fail after phase 2");
         assert_eq!(err.code, "rdf-ir-missing-reifier-binding");
     }
 

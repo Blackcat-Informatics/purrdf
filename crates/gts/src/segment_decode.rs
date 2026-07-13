@@ -386,7 +386,8 @@ impl<S: ResolvedSink> SegmentResolver<S> {
                 Some(g) => Some(self.resolve_term(segment_index, g, "reifier graph name", 0)?),
                 None => None,
             };
-            self.sink.push_reifier(segment_index, reifier_id, s, p, o, g)?;
+            self.sink
+                .push_reifier(segment_index, reifier_id, s, p, o, g)?;
         }
 
         // Annotations `(reifier, predicate, object, graph?)`.
@@ -537,7 +538,8 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         // Streaming phase: stash the raw term verbatim. A quoted-triple term
         // cannot be resolved yet — its reifier binding may arrive in a later
         // frame — so we defer ALL resolution to segment close.
-        self.raw_terms.insert((segment_index, term_id), term.clone());
+        self.raw_terms
+            .insert((segment_index, term_id), term.clone());
     }
 
     fn quad(&mut self, segment_index: usize, quad: Quad) {

@@ -10,6 +10,12 @@
 //! GTS-specific frames (blobs, opaque nodes, signatures, suppressions) that have
 //! no place in the neutral RDF event vocabulary.
 //!
+//! It rides the bounded-memory streaming fold (GTS-SPEC §7.7 "Streaming fold and
+//! bounded memory"): the reader delivers one frame at a time and the decode core
+//! buffers only the current segment's descriptors, so an external index builder
+//! (posting lists, a ClaimId→byte-offset map) runs in a single pass without ever
+//! materializing the union dataset.
+//!
 //! # Id and scope mapping
 //!
 //! The decode core resolves each segment's terms in a deterministic
