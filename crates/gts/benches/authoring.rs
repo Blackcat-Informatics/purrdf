@@ -17,6 +17,7 @@ use std::cell::Cell;
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 
 use purrdf_gts::codec::encode_chain;
+use purrdf_gts::compact::{CompactionParams, DictStrategy, compact_streamable};
 use purrdf_gts::model::{Graph, Term, TermKind};
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{canonical, deterministic, encode};
@@ -218,10 +219,57 @@ fn bench_verify(c: &mut Criterion) {
     group.finish();
 }
 
+/// A fixed multi-blob source with repeated structure — the corpus a pack
+/// dictionary strategy actually has something to train on (mirrors
+/// `purrdf_gts::compact::tests::source_with_blobs`).
+const DICT_BLOB_COUNT: u32 = 64;
+
+fn dict_compaction_source() -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    for i in 0..DICT_BLOB_COUNT {
+        let blob = format!(
+            "<https://example.org/s{}> <https://example.org/p> \"claim {} about cats\" .\n",
+            i % 37,
+            i
+        )
+        .into_bytes();
+        w.add_blob_owned(blob, Some("text/plain"), None);
+    }
+    w.into_bytes()
+}
+
+/// Streamable compaction with a FastCOVER-trained in-band pack dictionary
+/// (GTS-SPEC §5 `"dct"`, §8.5 `zstd` `dct` parameter) — report-only, no
+/// speedup assertion.
+fn bench_dict_compaction(c: &mut Criterion) {
+    let source = dict_compaction_source();
+
+    let mut group = c.benchmark_group("gts_compact");
+    group.throughput(Throughput::Bytes(source.len() as u64));
+    group.bench_function("trained_dict_64_blobs", |bencher| {
+        bencher.iter(|| {
+            let packed = compact_streamable(
+                black_box(&source),
+                CompactionParams {
+                    timestamp: "2026-01-01T00:00:00Z",
+                    seal_original: false,
+                    strategy: DictStrategy::Trained,
+                    content_digest: None,
+                    packaging_signer: None,
+                },
+            )
+            .expect("trained-dict compaction succeeds");
+            black_box(packed);
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_rsyncable_zstd,
     bench_snapshot_authoring,
-    bench_verify
+    bench_verify,
+    bench_dict_compaction
 );
 criterion_main!(benches);

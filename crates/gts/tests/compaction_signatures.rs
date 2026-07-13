@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Detached-signature MMR binding + mandatory packaging head signature +
-//! keyring (rotation-capable) verification (issue #89 Task 4).
+//! keyring (rotation-capable) verification (Task 4).
 
 use std::collections::HashMap;
 

@@ -251,7 +251,7 @@ fn base64url_unpadded(data: &[u8]) -> String {
 
 /// Decode a base64url WITHOUT padding (RFC 4648 §5) string — the inverse of
 /// [`base64url_unpadded`], used to recover a `stream:cose` literal's raw
-/// COSE_Sign1 bytes (issue #89 Task 5 signature verification).
+/// COSE_Sign1 bytes (Task 5 signature verification).
 ///
 /// # Errors
 /// HARD-ERRORS on a padding character (`=`) or any byte outside the unpadded
@@ -889,7 +889,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Issue #89 Task 6, Part A — adversarial `shifted_suppressions`
+    // Task 6, Part A — adversarial `shifted_suppressions`
     // coverage across all five suppress-target kinds (GTS-SPEC §11).
     // -----------------------------------------------------------------
 

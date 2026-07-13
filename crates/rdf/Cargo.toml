@@ -102,6 +102,15 @@ sha2 = { workspace = true, default-features = true }
 name = "capture_sparql_goldens"
 path = "src/bin/capture_sparql_goldens.rs"
 
+# Maintainer-only vector-freezing binary. Regenerates the two dict-compaction
+# corpus vectors (`vectors/30-dict-rawcontent.gts`, `vectors/31-dict-trained.gts`)
+# from one fixed signed source via `gts_certify::compact_and_certify`. The
+# committed `.gts` bytes are the frozen artifacts; `tests/dict_vectors.rs`
+# is the drift guard, not this binary.
+[[bin]]
+name = "gen_dict_vectors"
+path = "src/bin/gen_dict_vectors.rs"
+
 [dev-dependencies]
 # Rich colored line-diffs on assert_eq! failure. Drop-in: a shadowing
 # `use pretty_assertions::assert_eq;` per test file; identical on pass.

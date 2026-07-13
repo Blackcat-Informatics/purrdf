@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! GTS streamable-compaction certificates (GTS-SPEC §10.1/§10.2, issue #89 Task 5).
+//! GTS streamable-compaction certificates (GTS-SPEC §10.1/§10.2, Task 5).
 //!
 //! A [`CompactionCertificate`] is the correctness-critical proof that a
 //! streamable compaction (`purrdf_gts::compact::compact_streamable`) preserved

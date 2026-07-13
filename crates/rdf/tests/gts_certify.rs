@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Streamable-compaction certificates (issue #89 Task 5): content projection
+//! Streamable-compaction certificates (Task 5): content projection
 //! and refold-digest equivalence, `verify_compaction`, `compose`, and the
 //! certifying authoring wrapper `compact_and_certify`.
 
@@ -375,7 +375,7 @@ fn certificate_canonical_cbor_round_trips_and_is_deterministic() {
 }
 
 // ---------------------------------------------------------------------------
-// Issue #89 Task 6, Part C — the effective-view digest and the
+// Task 6, Part C — the effective-view digest and the
 // suppression↔compaction commuting square.
 // ---------------------------------------------------------------------------
 
