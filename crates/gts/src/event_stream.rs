@@ -92,10 +92,11 @@ const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langSt
 ///
 /// Every GTS hook defaults to a no-op `Continue`, so a consumer that only cares
 /// about RDF terms and quads implements just [`RdfEventSink`] and inherits inert
-/// GTS hooks. Each provenance-bearing hook receives the [`FrameContext`] cached
-/// from the most recently streamed frame — `None` before the first frame has
-/// been announced, since the reader fires a frame's provenance *after* that
-/// frame's rows.
+/// GTS hooks. The reader announces a frame's provenance via [`Self::frame`]
+/// *before* that frame's rows, so each provenance-bearing hook receives the
+/// [`FrameContext`] of the frame it belongs to — the cache holds the current
+/// frame by the time these hooks fire. (A hook's context is `None` only when no
+/// frame provenance is available at all.)
 pub trait GtsEventSink: RdfEventSink {
     /// Per-frame byte/identity provenance, announced once per frame.
     fn frame(&mut self, _ctx: FrameContext<'_>) -> Result<ControlFlow<()>, EventError> {
