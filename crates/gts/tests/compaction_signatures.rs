@@ -3,6 +3,12 @@
 
 //! Detached-signature MMR binding + mandatory packaging head signature +
 //! keyring (rotation-capable) verification (Task 4).
+//!
+//! The packaging head signature is mandatory at the type level:
+//! `CompactionParams::packaging_signer` is `(SigningKey, String)`, not
+//! `Option<(SigningKey, String)>`, so no caller of `compact_streamable` can
+//! construct a request that omits it — an unsigned pack cannot be
+//! represented, let alone emitted.
 
 use std::collections::HashMap;
 
@@ -66,7 +72,7 @@ fn packaging_params<'a>(packaging_key: SigningKey, packaging_kid: &str) -> Compa
         seal_original: false,
         strategy: DictStrategy::None,
         content_digest: None,
-        packaging_signer: Some((packaging_key, packaging_kid.to_string())),
+        packaging_signer: (packaging_key, packaging_kid.to_string()),
     }
 }
 
@@ -239,6 +245,44 @@ fn the_packaging_head_signature_is_distinct_from_carried_authorship_signatures()
     );
     assert_eq!(result.signed, 1);
     assert!(result.ok, "verification succeeds: {:?}", result.errors);
+}
+
+/// R1 makes the packaging head signature MANDATORY: `CompactionParams`
+/// declares `packaging_signer` as a plain `(SigningKey, String)` tuple, not
+/// an `Option`, so an unsigned pack is unrepresentable through this API —
+/// there is no code path that can call [`compact_streamable`] without
+/// supplying a signer, and this test is the runtime witness that every pack
+/// this function CAN emit does carry exactly the mandatory packaging
+/// signature, independent of whether the source content was itself signed.
+#[test]
+fn every_compacted_pack_carries_the_mandatory_packaging_signature_even_over_an_unsigned_source() {
+    let source = source_unsigned(4);
+    let packaging_kid = "pack-mandatory";
+    let packed = compact_streamable(&source, packaging_params(fixed_key(13), packaging_kid))
+        .expect("compaction of an unsigned source still succeeds and still signs the pack");
+
+    let packed_graph = read(&packed, true, None);
+    assert_eq!(
+        packed_graph.signatures.len(),
+        1,
+        "a pack compacted from a fully unsigned source still carries exactly one frame \
+         signature — the mandatory packaging head signature, minted regardless of source \
+         authorship"
+    );
+    assert_eq!(
+        Some(&packed_graph.signatures[0].frame_id),
+        packed_graph.segment_heads.last(),
+        "the mandatory packaging signature authenticates the re-issued index/head frame"
+    );
+
+    let public = fixed_key(13).verifying_key();
+    let keyring = HashMap::from([(packaging_kid.to_string(), public)]);
+    let result = verify_file_with_keyring(&packed, &keyring);
+    assert!(
+        result.ok && result.valid == 1 && result.signed == 1,
+        "the mandatory packaging signature verifies under its key: {:?}",
+        result.errors
+    );
 }
 
 #[test]

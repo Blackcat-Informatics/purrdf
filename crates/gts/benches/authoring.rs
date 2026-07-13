@@ -15,6 +15,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use ed25519_dalek::SigningKey;
 
 use purrdf_gts::codec::encode_chain;
 use purrdf_gts::compact::{CompactionParams, DictStrategy, compact_streamable};
@@ -255,7 +256,7 @@ fn bench_dict_compaction(c: &mut Criterion) {
                     seal_original: false,
                     strategy: DictStrategy::Trained,
                     content_digest: None,
-                    packaging_signer: None,
+                    packaging_signer: (SigningKey::from_bytes(&[42u8; 32]), "bench".to_string()),
                 },
             )
             .expect("trained-dict compaction succeeds");

@@ -1014,7 +1014,7 @@ pub fn compact_and_certify(
             seal_original,
             strategy,
             content_digest: Some(&digest),
-            packaging_signer: Some((key, kid.clone())),
+            packaging_signer: (key, kid.clone()),
         },
     )?;
 

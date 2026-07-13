@@ -735,12 +735,18 @@ pub struct CompactionParams<'a> {
     /// `stream:contentRefoldDigest` provenance so a repack certifies without
     /// the pre-compaction bytes.
     pub content_digest: Option<&'a str>,
-    /// When present, `(key, kid)` used to sign ONLY the re-issued ordering
-    /// commitment (the trailing `index` footer) — the MANDATORY packaging
-    /// signature attesting ordering/packaging, never frame authorship. Carried
-    /// detached authorship signatures live in provenance quads instead
-    /// (§10.1); this is a distinct, separately-verifiable claim.
-    pub packaging_signer: Option<(ed25519_dalek::SigningKey, String)>,
+    /// `(key, kid)` used to sign ONLY the re-issued ordering commitment (the
+    /// trailing `index` footer) — the MANDATORY packaging signature attesting
+    /// ordering/packaging, never frame authorship. Carried detached
+    /// authorship signatures live in provenance quads instead (§10.1); this
+    /// is a distinct, separately-verifiable claim.
+    ///
+    /// REQUIRED, not optional: R1 makes the packaging head signature
+    /// mandatory, so a pack with no packaging signature must be
+    /// unrepresentable through this API rather than merely discouraged — the
+    /// field is a plain tuple, not an `Option`, precisely so an unsigned pack
+    /// cannot be constructed by a caller that forgets to supply a signer.
+    pub packaging_signer: (ed25519_dalek::SigningKey, String),
 }
 
 /// Rewrite a GTS file into one streamable segment (§10.1).
@@ -894,17 +900,27 @@ pub fn compact_streamable(
     // ordering commitment below, never the frames already appended above.
     // This attests ordering/packaging — the compactor is its sole attester —
     // distinct from the carried detached authorship signatures (§10.1).
-    if let Some((key, kid)) = packaging_signer {
-        w.sign_with(key, &kid);
-    }
+    // `packaging_signer` is a required field (not `Option`), so this always
+    // runs: an unsigned pack is unrepresentable through this API.
+    let (key, kid) = packaging_signer;
+    w.sign_with(key, &kid);
     w.add_index();
     Ok(w.into_bytes())
 }
 
 #[cfg(test)]
 mod tests {
+    use ed25519_dalek::SigningKey;
+
     use super::*;
     use crate::reader::read;
+
+    /// A fixed, deterministic Ed25519 signing key (RFC 8032 signing is
+    /// deterministic per key + message, so tests stay byte-reproducible) —
+    /// mirrors `crates/gts/tests/compaction_signatures.rs::fixed_key`.
+    fn fixed_key(byte: u8) -> SigningKey {
+        SigningKey::from_bytes(&[byte; 32])
+    }
 
     /// A source GTS file whose content blobs share structure — the corpus a
     /// pack dictionary trains on.
@@ -930,14 +946,15 @@ mod tests {
     }
 
     /// A `CompactionParams` with the shared test defaults: fixed timestamp, no
-    /// source seal, no packaging signer.
+    /// source seal, a fixed packaging signer (the field is mandatory — see
+    /// [`CompactionParams::packaging_signer`]).
     fn params(strategy: DictStrategy, content_digest: Option<&str>) -> CompactionParams<'_> {
         CompactionParams {
             timestamp: "2026-01-01T00:00:00Z",
             seal_original: false,
             strategy,
             content_digest,
-            packaging_signer: None,
+            packaging_signer: (fixed_key(99), "pack-test".to_string()),
         }
     }
 
