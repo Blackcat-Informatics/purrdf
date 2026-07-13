@@ -57,7 +57,7 @@
 //! resolving a pattern's predicate constant may use either method
 //! interchangeably.
 //!
-//! # Seam for later tasks
+//! # Raw-id seam for the view layer
 //!
 //! This module works entirely in raw `u64` unified ids (`PackTermId` is a plain
 //! type alias here). The `PackView`/`ViewTermId` newtype wraps these
