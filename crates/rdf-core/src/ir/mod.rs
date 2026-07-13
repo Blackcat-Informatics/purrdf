@@ -37,6 +37,11 @@ pub mod global;
 // `purrdf-events` protocol) that buffers forward references and freezes a dataset
 // at `finish()`, plus the frozen-IR-replay `RdfEventSource` that drives it.
 pub mod ingest;
+// A reference, in-memory, demand-paged dataset (backend seam): `PagedDataset`
+// composes many frozen `RdfDataset` pages into one logical `DatasetView` keyed on
+// `GlobalTermId`, plus the `PageProvider` demand-paging hook and per-page
+// `PageTranslation` local↔global id map.
+pub mod paged;
 pub mod term;
 pub mod validate;
 
@@ -52,5 +57,9 @@ pub use event_sink::RdfDatasetVisitor;
 pub use global::{GlobalDictionary, GlobalTermId};
 pub use ingest::{DatasetSink, FrozenDatasetSource};
 pub use mutable::{MutableDataset, QuadValues};
+pub use paged::{
+    CountingDemandProvider, InMemoryPageProvider, PageFault, PageId, PageProvider, PageTranslation,
+    PagedDataset,
+};
 pub use pipeline_bundle::{HandleEntry, HandleKey, PipelineBundle, PipelineBundleError};
 pub use term::{BlankScope, TermId, TermValue};

@@ -105,12 +105,13 @@ pub use fno::{
 };
 pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 pub use ir::{
-    BlankScope, CanonHash, Canonicalized, DatasetDiff, DatasetSink, FrozenDatasetSource,
-    GlobalDictionary, GlobalTermId, GtsBundle, HandleEntry, HandleKey, MutableDataset,
-    PipelineBundle, PipelineBundleError, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan,
-    QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope, TermId,
-    TermRef, TermValue, ValidatedRdfDatasetBuilder, canonicalize, canonicalize_with, dataset_diff,
-    datasets_isomorphic,
+    BlankScope, CanonHash, Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink,
+    FrozenDatasetSource, GlobalDictionary, GlobalTermId, GtsBundle, HandleEntry, HandleKey,
+    InMemoryPageProvider, MutableDataset, PageFault, PageId, PageProvider, PageTranslation,
+    PagedDataset, PipelineBundle, PipelineBundleError, QuadHandle, QuadIds, QuadPatternCursor,
+    QuadProbePlan, QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
+    RdfEnvelope, TermId, TermRef, TermValue, ValidatedRdfDatasetBuilder, canonicalize,
+    canonicalize_with, dataset_diff, datasets_isomorphic,
 };
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,
