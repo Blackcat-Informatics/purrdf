@@ -36,14 +36,27 @@
 //! `RdfDataset::annotation_quads`, and `RdfDataset::annotations_of_with_graph`
 //! byte-for-byte over the unified id space.
 //!
+//! [`container`] lands the on-disk pack container (Task 5): [`PackBuilder`]
+//! frames the dict/triples/side sections' bytes into ONE fixed-layout,
+//! mmap-friendly file with a section-directory integrity check (each section's
+//! SHA-256, plus the dataset's RDFC-1.0 canonical digest), and [`PackView`] is
+//! the borrowed, zero-copy, fail-closed reader over that file — the module's
+//! public face for everything this tree assembles. See [`container`]'s doc
+//! comment for the exact byte layout.
+//!
 //! `#[doc(hidden)]` (see [`super::pack`]'s declaration): this whole tree is an
 //! internal-codec surface, not a SemVer-guaranteed part of the crate's public API.
 
 #[doc(hidden)]
 pub mod bits;
 #[doc(hidden)]
+pub mod container;
+#[doc(hidden)]
 pub mod dict;
 #[doc(hidden)]
 pub mod side;
 #[doc(hidden)]
 pub mod triples;
+
+#[doc(hidden)]
+pub use container::{PackBuilder, PackError, PackView};
