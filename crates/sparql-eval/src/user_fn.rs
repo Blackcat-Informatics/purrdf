@@ -574,7 +574,10 @@ mod tests {
             let n: f64 = lexical_form
                 .parse()
                 .map_err(|_| EvalError::function("argument is not numeric"))?;
-            Ok(TermValue::typed_literal((n / divisor).to_string(), XSD_DOUBLE))
+            Ok(TermValue::typed_literal(
+                (n / divisor).to_string(),
+                XSD_DOUBLE,
+            ))
         })
     }
 
