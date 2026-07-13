@@ -96,7 +96,7 @@ pub use bundle::{
 pub use collections::RdfListError;
 pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
-pub use dataset_view::{DatasetMut, DatasetView, GraphMatch, GraphMatchValue};
+pub use dataset_view::{DatasetMut, DatasetView, GraphMatch, GraphMatchValue, ViewTermId};
 pub use describe::{Describer, describe};
 pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfLoss, RdfSeverity};
 pub use fno::{

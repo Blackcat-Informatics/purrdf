@@ -102,16 +102,20 @@ const _: () = assert!(size_of::<QuadRow>() == 16);
 
 /// A small `Copy` quad row in term ids, for ID-native consumers. `g == None` is the
 /// default graph.
+///
+/// Generic over the id type `Id` (the [`DatasetView::Id`](crate::DatasetView::Id) of
+/// the view that minted it) with a default of [`TermId`], so the bare spelling
+/// `QuadIds` continues to name the `RdfDataset` instantiation everywhere.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct QuadIds {
+pub struct QuadIds<Id = TermId> {
     /// The subject term id.
-    pub s: TermId,
+    pub s: Id,
     /// The predicate term id.
-    pub p: TermId,
+    pub p: Id,
     /// The object term id.
-    pub o: TermId,
+    pub o: Id,
     /// The graph-name term id (`None` = default graph).
-    pub g: Option<TermId>,
+    pub g: Option<Id>,
 }
 
 impl From<QuadRow> for QuadIds {
@@ -130,8 +134,12 @@ impl From<QuadRow> for QuadIds {
 /// `&str` slices borrowed from the dataset, so resolving a term performs **no
 /// allocation and no clone**. Triple components are returned as ids; resolve them
 /// recursively with [`RdfDataset::resolve`] if their values are needed.
+///
+/// Generic over the id type `Id` (defaulting to [`TermId`]) for the id-carrying
+/// variants (a literal's `datatype`, a triple term's `s`/`p`/`o`), so the bare
+/// spelling `TermRef<'a>` continues to name the `RdfDataset` instantiation.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum TermRef<'a> {
+pub enum TermRef<'a, Id = TermId> {
     /// An IRI, by its borrowed full string.
     Iri(&'a str),
     /// A blank node, identified by `(label, scope)` (C0.2).
@@ -148,7 +156,7 @@ pub enum TermRef<'a> {
         lexical: &'a str,
         /// The datatype IRI's interned term id (always present; the default is
         /// expanded at intern time).
-        datatype: TermId,
+        datatype: Id,
         /// The borrowed (lowercased) language tag, for language-tagged strings.
         language: Option<&'a str>,
         /// The RDF 1.2 base direction, for directional language-tagged strings.
@@ -157,26 +165,29 @@ pub enum TermRef<'a> {
     /// A triple term (RDF 1.2 quoted triple), by its resolved component ids (C0.3).
     Triple {
         /// The quoted triple's subject term id.
-        s: TermId,
+        s: Id,
         /// The quoted triple's predicate term id.
-        p: TermId,
+        p: Id,
         /// The quoted triple's object term id.
-        o: TermId,
+        o: Id,
     },
 }
 
 /// A borrowed, resolved quad view: each position is a [`TermRef`] borrowing into the
 /// dataset's term table. No allocation, no clone per quad.
+///
+/// Generic over the id type `Id` (defaulting to [`TermId`]), so the bare spelling
+/// `QuadRef<'a>` continues to name the `RdfDataset` instantiation.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct QuadRef<'a> {
+pub struct QuadRef<'a, Id = TermId> {
     /// The resolved subject term.
-    pub s: TermRef<'a>,
+    pub s: TermRef<'a, Id>,
     /// The resolved predicate term.
-    pub p: TermRef<'a>,
+    pub p: TermRef<'a, Id>,
     /// The resolved object term.
-    pub o: TermRef<'a>,
+    pub o: TermRef<'a, Id>,
     /// The resolved graph-name term (`None` = default graph).
-    pub g: Option<TermRef<'a>>,
+    pub g: Option<TermRef<'a, Id>>,
 }
 
 /// The immutable, frozen RDF 1.2 dataset. Constructed only via
