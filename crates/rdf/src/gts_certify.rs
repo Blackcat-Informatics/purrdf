@@ -752,7 +752,7 @@ fn suppression_retention_ok(pre: &Graph, post: &Graph) -> bool {
 /// suppression↔compaction commuting square (see [`CompactionReport::suppressions_ok`]).
 ///
 /// Called only from [`verify_compaction`] over UNTRUSTED bytes, so the
-/// effective-digest agreement is computed via [`try_effective_digest`]
+/// effective-digest agreement is computed via `try_effective_digest`
 /// (fail-closed on a poison-budget graph) rather than [`effective_digest`]
 /// (which panics for trusted callers).
 ///
@@ -777,7 +777,7 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
 /// `pre_bytes`/`post_bytes` are UNTRUSTED (an independent verifier's whole
 /// point is to not trust the claimant), so every digest this function
 /// computes over them goes through the fallible RDFC-1.0 canonicalizer
-/// ([`try_refold_digest`]/[`try_effective_digest`], backing
+/// (`try_refold_digest`/`try_effective_digest`, backing
 /// [`try_canonicalize_with`]) rather than the panicking
 /// [`canonicalize_with`]: a pathologically symmetric blank graph that stays
 /// under [`POISON_BLANK_LIMIT`]'s cheap blank-COUNT pre-reject yet exhausts
