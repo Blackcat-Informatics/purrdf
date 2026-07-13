@@ -1,52 +1,42 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The **authoritative** GTS ingestion path: a [`StreamingSink`] that preserves
-//! per-segment blank-node scope while folding into the immutable IR (C2.a).
+//! The **authoritative** GTS ingestion path: an [`RdfDatasetBuilder`]-backed
+//! [`ResolvedSink`] that preserves per-segment blank-node scope while folding
+//! into the immutable IR (C2.a).
 //!
 //! `purrdf_gts::reader::read()` folds every segment into one append-order term
 //! table, which destroys per-segment blank-node scope (the same `_:b1` label in
 //! two different segments names two *different* nodes, but the folded table loses
 //! that). The only place segment identity survives is the streaming sink
 //! callbacks, each of which carries a `segment_index`. This importer therefore
-//! drives [`purrdf_gts::reader::read_to_sink`] and interns each segment's blank
-//! nodes under a per-segment [`BlankScope`] — making this the correctness-bearing
-//! ingestion path for blank-node scope (see `docs/design/819-rdf-ir-dataflow.md`,
-//! *Appendix C0.2* and the `bnode-scope-flatten` loss code).
+//! drives [`purrdf_gts::reader::read_to_sink`] through a
+//! [`SegmentResolver`](purrdf_gts::segment_decode::SegmentResolver) and interns
+//! each segment's blank nodes under a per-segment [`BlankScope`] — making this the
+//! correctness-bearing ingestion path for blank-node scope (see
+//! `docs/design/819-rdf-ir-dataflow.md`, *Appendix C0.2* and the
+//! `bnode-scope-flatten` loss code).
 //!
-//! # Two-phase resolution (event-order independence)
+//! # Subsumed decode core
 //!
-//! `purrdf_gts::writer::Writer::deterministic` emits frames in the order `terms →
-//! quads → reifies → annot`, and the reader dispatches frames in stream order. A
-//! quoted-triple `Term` therefore arrives (in the `terms` frame) carrying only its
-//! `reifier` id — the `reifies` frame that binds that reifier to the triple's
-//! `(s, p, o)` arrives **later**. A single-pass importer that resolves a triple
-//! term the instant its `term` event fires cannot succeed: the binding is not yet
-//! known (`rdf-ir-missing-reifier-binding`).
-//!
-//! This importer is therefore **two-phase**:
-//!
-//! 1. **Streaming phase** (during `read_to_sink`): record RAW per-segment
-//!    descriptors — for each gts term id its kind plus, for triple terms, the
-//!    reifier id linking it to its components — and RAW reifier bindings and
-//!    quad / reifier / annotation rows as gts-id rows. Nothing is resolved or
-//!    failed eagerly on a not-yet-known binding.
-//! 2. **Resolution phase** (after `read_to_sink` returns, before `freeze`): now
-//!    that every `term` and `reifies` event has been seen, resolve each gts term
-//!    to a [`TermId`] — non-triple terms intern directly; triple terms resolve
-//!    their now-complete `(s, p, o)` recursively, inner-first, depth-bounded by
-//!    [`MAX_GTS_TERM_NESTING_DEPTH`] — then push the raw quad / reifier /
-//!    annotation rows through the per-segment remap.
+//! GTS-frame decode and per-segment two-phase resolution — the event-order
+//! independence that lets a quoted-triple `Term` resolve regardless of whether
+//! its `reifies` binding arrived before or after it — live EXACTLY ONCE in
+//! [`purrdf_gts::segment_decode`]. [`SinkImporter`] is the immutable-IR emit
+//! target: it implements [`ResolvedSink`], interning resolved terms into an
+//! [`RdfDatasetBuilder`], pushing resolved quad / reifier / annotation rows, and
+//! mapping the four structured decode failures onto rich [`RdfDiagnostic`]
+//! locations. The [`SegmentResolver`](purrdf_gts::segment_decode::SegmentResolver)
+//! owns the buffering, sorted-key resolution order, and per-segment flush.
 //!
 //! Per the no-optionality / hard-fail doctrine, a *genuinely* dangling term id or
-//! reifier binding — one still unresolved after ALL events are seen — is an `Err`,
-//! never a silent skip. Only the merely out-of-order case now resolves.
-
-use std::collections::HashMap;
+//! reifier binding — one still unresolved after ALL of a segment's events are
+//! seen — is an `Err`, never a silent skip. Only the merely out-of-order case
+//! resolves.
 
 use ciborium::value::Value;
-use purrdf_gts::model::{OpaqueNode, Quad, Signature, StreamableInfo, Suppression, Term, TermKind};
-use purrdf_gts::reader::StreamingSink;
+use purrdf_gts::model::{Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression};
+use purrdf_gts::segment_decode::{ResolvedSink, SegmentResolver};
 
 use crate::{
     BlankScope, GtsBundle, RdfDatasetBuilder, RdfDiagnostic, RdfEnvelope, RdfLiteral, RdfLocation,
@@ -54,88 +44,42 @@ use crate::{
     RdfSuppressionRecord, TermId, TermRef,
 };
 
-/// Depth bound for resolving nested quoted-triple terms, mirroring the
-/// `MAX_GTS_TERM_NESTING_DEPTH` guard in [`crate::gts`]. A cyclic or absurdly
-/// nested triple term hard-fails rather than recursing without bound.
-const MAX_GTS_TERM_NESTING_DEPTH: usize = 16;
-
-/// A [`StreamingSink`] that folds GTS events into the immutable IR with per-segment
-/// blank-node scope isolation, two-phase so it is independent of `term`/`reifier`/
-/// `quad` event order (see the module docs).
+/// The immutable-IR emit target for GTS ingestion: an [`RdfDatasetBuilder`] that
+/// interns each segment's blank nodes under a per-segment [`BlankScope`]. The
+/// GTS-frame decode and two-phase resolution that drive it live once in
+/// [`purrdf_gts::segment_decode`]; this type only interns resolved terms, pushes
+/// resolved rows, and maps decode failures onto [`RdfDiagnostic`] locations.
 struct SinkImporter {
     /// The fallible IR builder we intern terms and push structure into.
     builder: RdfDatasetBuilder,
-    /// RAW per-segment terms recorded during the streaming phase, keyed by
-    /// `(segment_index, gts_term_id)`. Resolved to [`TermId`]s in phase 2. The
-    /// streaming callbacks cannot resolve a quoted-triple term yet (its reifier
-    /// binding may arrive later), so each term is stashed verbatim.
-    raw_terms: HashMap<(usize, usize), Term>,
-    /// Per-segment map from GTS segment-local term id → our [`TermId`], populated
-    /// during phase-2 resolution. The key is `(segment_index, gts_term_id)`.
-    remaps: HashMap<(usize, usize), TermId>,
-    /// Per-segment reifier bindings (`(segment_index, reifier gts-id) → (s, p, o)
-    /// gts-ids`), recorded from `reifier` events so a Triple term delivered earlier
-    /// (or later) can recover its components THROUGH the segment's remap in phase 2.
-    reifier_bindings: HashMap<(usize, usize), purrdf_gts::model::Triple3>,
-    /// RAW quad rows `(segment_index, (s, p, o, g) gts-ids)`, resolved in phase 2.
-    raw_quads: Vec<(usize, Quad)>,
-    /// RAW reifier rows `(segment_index, reifier gts-id, (s, p, o) gts-ids, graph
-    /// gts-id?)`, resolved in phase 2 to bind the reifier resource (in its named graph)
-    /// to the interned triple.
-    raw_reifiers: Vec<(usize, usize, purrdf_gts::model::Triple3, Option<usize>)>,
-    /// RAW annotation rows `(segment_index, (r, p, v) gts-ids, graph gts-id?)`, resolved
-    /// in phase 2.
-    raw_annotations: Vec<(usize, purrdf_gts::model::Triple3, Option<usize>)>,
     /// Out-of-band material accumulated from blob / signature / suppression /
     /// segment-head / opaque events.
     lookaside: RdfLookaside,
-    /// First deferred error. `StreamingSink` methods return `()`, so a referential
-    /// failure is parked here and surfaced after the reader returns.
-    error: Option<RdfDiagnostic>,
 }
 
 impl SinkImporter {
     fn new() -> Self {
         Self {
             builder: RdfDatasetBuilder::new(),
-            raw_terms: HashMap::new(),
-            remaps: HashMap::new(),
-            reifier_bindings: HashMap::new(),
-            raw_quads: Vec::new(),
-            raw_reifiers: Vec::new(),
-            raw_annotations: Vec::new(),
             lookaside: RdfLookaside::default(),
-            error: None,
         }
     }
+}
 
-    /// Record the first deferred error; later errors do not overwrite it.
-    fn fail(&mut self, diagnostic: RdfDiagnostic) {
-        if self.error.is_none() {
-            self.error = Some(diagnostic);
-        }
-    }
+impl ResolvedSink for SinkImporter {
+    type Id = TermId;
+    type Error = RdfDiagnostic;
 
-    /// Resolve a GTS segment-local term id to its interned [`TermId`], resolving it
-    /// (and any nested quoted triples) on demand if not yet interned. Fails if the
-    /// id was never introduced by a `term` event (a genuinely dangling reference).
-    ///
-    /// This is the phase-2 primitive: it is memoizing (through `self.remaps`) and
-    /// depth-bounded against cyclic quoted triples.
-    fn resolve_term(
+    fn intern_iri(
         &mut self,
         segment_index: usize,
         gts_id: usize,
-        role: &str,
-        depth: usize,
+        iri: &str,
     ) -> Result<TermId, RdfDiagnostic> {
-        if let Some(&id) = self.remaps.get(&(segment_index, gts_id)) {
-            return Ok(id);
-        }
-        if depth > MAX_GTS_TERM_NESTING_DEPTH {
+        if iri.is_empty() {
             return Err(RdfDiagnostic::error(
-                "rdf-ir-term-nesting-limit",
-                "GTS triple-term nesting depth limit exceeded",
+                "rdf-ir-iri-missing-value",
+                "GTS IRI term requires a non-empty value",
             )
             .with_location(
                 RdfLocation::logical("gts:sink")
@@ -143,240 +87,286 @@ impl SinkImporter {
                     .with_gts_term(gts_id),
             ));
         }
-        // MOVE the raw term out: it resolves at most once (every later reference
-        // hits the `remaps` cache above), so taking ownership lets interning
-        // mutably borrow `self.builder` without a borrow conflict AND without
-        // cloning the term's owned strings. A (pathological) cyclic reference now
-        // surfaces as a dangling-term-ref — the term is already removed — rather
-        // than the nesting-limit; both are hard failures and a GTS Writer never
-        // emits cycles. The streaming path is the scope-correct authority, not the
-        // zero-alloc one (that is the `import_graph` contract).
-        let Some(term) = self.raw_terms.remove(&(segment_index, gts_id)) else {
-            return Err(RdfDiagnostic::error(
-                "rdf-ir-dangling-term-ref",
-                format!(
-                    "GTS {role} references segment-{segment_index} term id {gts_id}, \
-                     which no `term` event introduced"
-                ),
-            )
-            .with_location(
-                RdfLocation::logical("gts:sink")
-                    .with_gts_segment(segment_index)
-                    .with_gts_term(gts_id),
-            ));
-        };
-        let our_id = self.intern_raw_term(segment_index, gts_id, term, depth)?;
-        self.remaps.insert((segment_index, gts_id), our_id);
-        Ok(our_id)
+        Ok(self.builder.intern_iri(iri))
     }
 
-    /// Intern one already-located raw term, recursing (inner-first) for quoted
-    /// triples through their reifier binding.
-    ///
-    /// Takes the raw [`Term`] BY VALUE (it was just `remove()`d from `raw_terms`,
-    /// so the sink uniquely owns it) and MOVES its owned strings (`value` / `lang` /
-    /// `direction`) into the interner instead of cloning — completing the
-    /// no-clone path the streaming design promises.
-    fn intern_raw_term(
+    // Per-segment scope isolation (C0.2): scope = segment_index + 1 so the SAME
+    // blank label in different segments interns to DISTINCT ids, while scope 0
+    // stays reserved for the default/global scope.
+    fn intern_blank(
         &mut self,
         segment_index: usize,
-        gts_id: usize,
-        term: Term,
-        depth: usize,
+        _gts_id: usize,
+        label: &str,
     ) -> Result<TermId, RdfDiagnostic> {
-        let our_id = match term.kind {
-            TermKind::Iri => {
-                let Some(iri) = term.value.filter(|value| !value.is_empty()) else {
-                    return Err(RdfDiagnostic::error(
-                        "rdf-ir-iri-missing-value",
-                        "GTS IRI term requires a non-empty value",
-                    )
-                    .with_location(
-                        RdfLocation::logical("gts:sink")
-                            .with_gts_segment(segment_index)
-                            .with_gts_term(gts_id),
-                    ));
-                };
-                self.builder.intern_iri(&iri)
-            }
-            // Per-segment scope isolation (C0.2): scope = segment_index + 1 so the
-            // SAME blank label in different segments interns to DISTINCT ids, while
-            // scope 0 stays reserved for the default/global scope.
-            TermKind::Bnode => {
-                let label = term
-                    .value
-                    .unwrap_or_else(|| format!("gts_bnode_{segment_index}_{gts_id}"));
-                let scope = BlankScope(segment_index as u32 + 1);
-                self.builder.intern_blank(&label, scope)
-            }
-            TermKind::Literal => {
-                let literal = self.literal_from_term(segment_index, term, depth)?;
-                self.builder.intern_literal(literal)
-            }
-            TermKind::Triple => {
-                let Some(reifier_gts_id) = term.reifier else {
-                    return Err(RdfDiagnostic::error(
-                        "rdf-ir-unbound-triple-term",
-                        "GTS triple term has no reifier binding",
-                    )
-                    .with_location(
-                        RdfLocation::logical("gts:sink")
-                            .with_gts_segment(segment_index)
-                            .with_gts_term(gts_id),
-                    ));
-                };
-                let (s, p, o) =
-                    self.resolve_triple_components(segment_index, reifier_gts_id, depth + 1)?;
-                self.builder.intern_triple(s, p, o)
-            }
-        };
-        Ok(our_id)
+        let scope = BlankScope(segment_index as u32 + 1);
+        Ok(self.builder.intern_blank(label, scope))
     }
 
-    /// Build an [`RdfLiteral`] from a GTS literal term, resolving its datatype id
-    /// THROUGH the segment's terms (phase 2).
-    ///
     /// GTS *does* carry RDF 1.2 base direction (`purrdf-gts`'s `Term` has a
-    /// `direction: Option<String>` slot), so it is read here via
-    /// [`parse_gts_direction`](crate::gts_resolve::parse_gts_direction) and preserved
-    /// onto the literal — direction is NOT a projection loss on this path.
-    fn literal_from_term(
+    /// `direction: Option<String>` slot), so it is parsed here via
+    /// [`parse_gts_direction`](crate::gts_resolve::parse_gts_direction) and
+    /// preserved onto the literal — direction is NOT a projection loss on this
+    /// path. The datatype id is already resolved; it MUST resolve to an IRI.
+    fn intern_literal(
         &mut self,
         segment_index: usize,
-        term: Term,
-        depth: usize,
-    ) -> Result<RdfLiteral, RdfDiagnostic> {
-        let datatype = match term.datatype {
-            Some(dt_gts_id) => {
-                let dt_id =
-                    self.resolve_term(segment_index, dt_gts_id, "literal datatype", depth + 1)?;
-                match self.builder.resolve(dt_id) {
-                    TermRef::Iri(iri) => Some(iri.to_string()),
-                    other => {
-                        return Err(RdfDiagnostic::error(
-                            "rdf-ir-literal-datatype-not-iri",
-                            format!("GTS literal datatype must resolve to an IRI, got {other:?}"),
-                        )
-                        .with_location(
-                            RdfLocation::logical("gts:sink")
-                                .with_gts_segment(segment_index)
-                                .with_gts_term(dt_gts_id),
-                        ));
-                    }
+        gts_id: usize,
+        lexical: String,
+        datatype: Option<TermId>,
+        lang: Option<String>,
+        direction: Option<String>,
+    ) -> Result<TermId, RdfDiagnostic> {
+        let datatype = match datatype {
+            Some(dt_id) => match self.builder.resolve(dt_id) {
+                TermRef::Iri(iri) => Some(iri.to_string()),
+                other => {
+                    return Err(RdfDiagnostic::error(
+                        "rdf-ir-literal-datatype-not-iri",
+                        format!("GTS literal datatype must resolve to an IRI, got {other:?}"),
+                    )
+                    .with_location(
+                        RdfLocation::logical("gts:sink")
+                            .with_gts_segment(segment_index)
+                            .with_gts_term(gts_id),
+                    ));
                 }
-            }
+            },
             None => None,
         };
-        // Parse direction (which requires the language tag) BEFORE moving the owned
-        // `value`/`lang`/`direction` strings out of the term.
-        let direction = crate::gts_resolve::parse_gts_direction(
-            term.direction.as_deref(),
-            term.lang.as_deref(),
-        )?;
-        Ok(RdfLiteral {
-            lexical_form: term.value.unwrap_or_default(),
+        // Parse direction (which requires the language tag) before moving the
+        // owned `lexical`/`lang` strings into the literal.
+        let direction =
+            crate::gts_resolve::parse_gts_direction(direction.as_deref(), lang.as_deref())?;
+        Ok(self.builder.intern_literal(RdfLiteral {
+            lexical_form: lexical,
             datatype,
-            language: term.lang,
+            language: lang,
             direction,
-        })
+        }))
     }
 
-    /// Resolve the `(s, p, o)` of the triple a reifier binds, THROUGH this
-    /// segment's terms, with a depth bound against cyclic quoted triples. The
-    /// reifier binding MUST exist by phase 2 (all `reifies` events are in); a
-    /// missing binding here is a genuine dangling reference, hence an `Err`.
-    fn resolve_triple_components(
+    fn intern_triple(
+        &mut self,
+        _segment_index: usize,
+        _gts_id: usize,
+        s: TermId,
+        p: TermId,
+        o: TermId,
+    ) -> Result<TermId, RdfDiagnostic> {
+        Ok(self.builder.intern_triple(s, p, o))
+    }
+
+    fn push_quad(
+        &mut self,
+        _segment_index: usize,
+        s: TermId,
+        p: TermId,
+        o: TermId,
+        g: Option<TermId>,
+    ) -> Result<(), RdfDiagnostic> {
+        self.builder.push_quad(s, p, o, g);
+        Ok(())
+    }
+
+    fn push_reifier(
+        &mut self,
+        _segment_index: usize,
+        reifier: TermId,
+        s: TermId,
+        p: TermId,
+        o: TermId,
+        g: Option<TermId>,
+    ) -> Result<(), RdfDiagnostic> {
+        let triple_term = self.builder.intern_triple(s, p, o);
+        self.builder.push_reifier_in_graph(reifier, triple_term, g);
+        Ok(())
+    }
+
+    fn push_annotation(
+        &mut self,
+        _segment_index: usize,
+        reifier: TermId,
+        p: TermId,
+        o: TermId,
+        g: Option<TermId>,
+    ) -> Result<(), RdfDiagnostic> {
+        self.builder.push_annotation_in_graph(reifier, p, o, g);
+        Ok(())
+    }
+
+    fn err_dangling_term(&self, segment_index: usize, gts_id: usize, role: &str) -> RdfDiagnostic {
+        RdfDiagnostic::error(
+            "rdf-ir-dangling-term-ref",
+            format!(
+                "GTS {role} references segment-{segment_index} term id {gts_id}, \
+                 which no `term` event introduced"
+            ),
+        )
+        .with_location(
+            RdfLocation::logical("gts:sink")
+                .with_gts_segment(segment_index)
+                .with_gts_term(gts_id),
+        )
+    }
+
+    fn err_nesting_limit(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
+        RdfDiagnostic::error(
+            "rdf-ir-term-nesting-limit",
+            "GTS triple-term nesting depth limit exceeded",
+        )
+        .with_location(
+            RdfLocation::logical("gts:sink")
+                .with_gts_segment(segment_index)
+                .with_gts_term(gts_id),
+        )
+    }
+
+    fn err_unbound_triple(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
+        RdfDiagnostic::error(
+            "rdf-ir-unbound-triple-term",
+            "GTS triple term has no reifier binding",
+        )
+        .with_location(
+            RdfLocation::logical("gts:sink")
+                .with_gts_segment(segment_index)
+                .with_gts_term(gts_id),
+        )
+    }
+
+    fn err_missing_reifier(&self, segment_index: usize, reifier: usize) -> RdfDiagnostic {
+        RdfDiagnostic::error(
+            "rdf-ir-missing-reifier-binding",
+            format!(
+                "GTS triple term references reifier {reifier} in segment \
+                 {segment_index} with no recorded binding"
+            ),
+        )
+        .with_location(
+            RdfLocation::logical("gts:sink")
+                .with_gts_segment(segment_index)
+                .with_gts_reifier(reifier),
+        )
+    }
+
+    fn suppression(
+        &mut self,
+        _segment_index: usize,
+        suppression: &Suppression,
+    ) -> Result<(), RdfDiagnostic> {
+        self.lookaside.suppressions.push(RdfSuppressionRecord {
+            reason: suppression.reason.clone(),
+            // `by` is a segment-local term id; we record it as a display hint
+            // only, never as a cross-dataset id (C0.8).
+            by: suppression.by.map(|term_id| format!("term#{term_id}")),
+            targets: suppression
+                .targets
+                .iter()
+                .map(metadata_value_from_cbor)
+                .collect(),
+        });
+        Ok(())
+    }
+
+    fn blob(
+        &mut self,
+        _segment_index: usize,
+        digest: &str,
+        meta: Option<&Value>,
+    ) -> Result<(), RdfDiagnostic> {
+        let metadata = match meta.map(metadata_value_from_cbor) {
+            Some(RdfMetadataValue::Map(map)) => map,
+            Some(value) => {
+                let mut map = std::collections::BTreeMap::new();
+                map.insert("value".to_owned(), value);
+                map
+            }
+            None => std::collections::BTreeMap::new(),
+        };
+        let media_type = metadata
+            .get("mt")
+            .and_then(RdfMetadataValue::as_text)
+            .map(str::to_owned);
+        let representation = metadata
+            .get("rep")
+            .and_then(RdfMetadataValue::as_text)
+            .map(str::to_owned);
+        self.lookaside.blobs.push(crate::RdfBlobRecord {
+            digest: digest.to_owned(),
+            media_type,
+            representation,
+            decoded_len: None,
+            metadata,
+            // The streaming sink delivers a blob's digest + metadata, not its
+            // payload. The content digest above is the blob_id reference; the
+            // streaming path records no segment-head origin here, whereas the
+            // folded read path (`gts::blob_records`) populates it.
+            origin: None,
+        });
+        Ok(())
+    }
+
+    fn opaque(&mut self, _segment_index: usize, opaque: &OpaqueNode) -> Result<(), RdfDiagnostic> {
+        self.lookaside.opaque_nodes.push(RdfOpaqueNodeRecord {
+            id: hex_bytes(&opaque.id),
+            frame_type: opaque.frame_type.clone(),
+            reason: opaque.reason.clone(),
+            signature_status: opaque.sigstat.clone(),
+            public_metadata: opaque.pub_meta.as_ref().map(metadata_value_from_cbor),
+        });
+        Ok(())
+    }
+
+    fn signature(
+        &mut self,
+        _segment_index: usize,
+        signature: &Signature,
+    ) -> Result<(), RdfDiagnostic> {
+        self.lookaside.signatures.push(RdfSignatureRecord {
+            frame_id: hex_bytes(&signature.frame_id),
+            key_id: signature.kid.clone(),
+            status: signature.status.clone(),
+            has_cose: signature.cose.is_some(),
+        });
+        Ok(())
+    }
+
+    fn segment_head(&mut self, segment_index: usize, head: &[u8]) -> Result<(), RdfDiagnostic> {
+        // Grow/patch the per-segment record with its head id.
+        self.ensure_segment_record(segment_index).head = Some(hex_bytes(head));
+        Ok(())
+    }
+
+    fn streamable_layout(
         &mut self,
         segment_index: usize,
-        reifier: usize,
-        depth: usize,
-    ) -> Result<(TermId, TermId, TermId), RdfDiagnostic> {
-        if depth > MAX_GTS_TERM_NESTING_DEPTH {
-            return Err(RdfDiagnostic::error(
-                "rdf-ir-term-nesting-limit",
-                "GTS triple-term nesting depth limit exceeded",
-            )
-            .with_location(
-                RdfLocation::logical("gts:sink")
-                    .with_gts_segment(segment_index)
-                    .with_gts_reifier(reifier),
-            ));
-        }
-        let Some(&(s, p, o)) = self.reifier_bindings.get(&(segment_index, reifier)) else {
-            return Err(RdfDiagnostic::error(
-                "rdf-ir-missing-reifier-binding",
-                format!(
-                    "GTS triple term references reifier {reifier} in segment \
-                     {segment_index} with no recorded binding"
-                ),
-            )
-            .with_location(
-                RdfLocation::logical("gts:sink")
-                    .with_gts_segment(segment_index)
-                    .with_gts_reifier(reifier),
-            ));
-        };
-        let s = self.resolve_term(segment_index, s, "reified subject", depth)?;
-        let p = self.resolve_term(segment_index, p, "reified predicate", depth)?;
-        let o = self.resolve_term(segment_index, o, "reified object", depth)?;
-        Ok((s, p, o))
+        info: &StreamableInfo,
+    ) -> Result<(), RdfDiagnostic> {
+        let record = self.ensure_segment_record(segment_index);
+        record.claimed_streamable = info.claimed;
+        record.covered = info.covered;
+        record.tail = info.tail;
+        Ok(())
     }
 
-    /// Phase 2: resolve every recorded term and push every recorded row, after the
-    /// reader has delivered ALL `term` / `reifies` / `quad` / `annot` events.
-    fn finish(&mut self) -> Result<(), RdfDiagnostic> {
-        // Resolve every introduced term (idempotent through `remaps`). Iterate in a
-        // deterministic order so the interner's allocation order — and thus the
-        // frozen term order — is reproducible for a fixed event stream.
-        let mut keys: Vec<(usize, usize)> = self.raw_terms.keys().copied().collect();
-        keys.sort_unstable();
-        for (segment_index, gts_id) in keys {
-            self.resolve_term(segment_index, gts_id, "term", 0)?;
-        }
-
-        // Quads.
-        let raw_quads = std::mem::take(&mut self.raw_quads);
-        for (segment_index, (s, p, o, g)) in raw_quads {
-            let s = self.resolve_term(segment_index, s, "quad subject", 0)?;
-            let p = self.resolve_term(segment_index, p, "quad predicate", 0)?;
-            let o = self.resolve_term(segment_index, o, "quad object", 0)?;
-            let g = match g {
-                Some(g) => Some(self.resolve_term(segment_index, g, "quad graph name", 0)?),
-                None => None,
-            };
-            self.builder.push_quad(s, p, o, g);
-        }
-
-        // Reifier bindings: bind the reifier resource to the interned triple term.
-        let raw_reifiers = std::mem::take(&mut self.raw_reifiers);
-        for (segment_index, reifier, (s, p, o), graph) in raw_reifiers {
-            let reifier_id = self.resolve_term(segment_index, reifier, "reifier", 0)?;
-            let s = self.resolve_term(segment_index, s, "reified subject", 0)?;
-            let p = self.resolve_term(segment_index, p, "reified predicate", 0)?;
-            let o = self.resolve_term(segment_index, o, "reified object", 0)?;
-            let g = match graph {
-                Some(g) => Some(self.resolve_term(segment_index, g, "reifier graph name", 0)?),
-                None => None,
-            };
-            let triple_term = self.builder.intern_triple(s, p, o);
-            self.builder
-                .push_reifier_in_graph(reifier_id, triple_term, g);
-        }
-
-        // Annotations `(reifier, predicate, object, graph?)`.
-        let raw_annotations = std::mem::take(&mut self.raw_annotations);
-        for (segment_index, (r, p, v), graph) in raw_annotations {
-            let r = self.resolve_term(segment_index, r, "annotation reifier", 0)?;
-            let p = self.resolve_term(segment_index, p, "annotation predicate", 0)?;
-            let v = self.resolve_term(segment_index, v, "annotation object", 0)?;
-            let g = match graph {
-                Some(g) => Some(self.resolve_term(segment_index, g, "annotation graph name", 0)?),
-                None => None,
-            };
-            self.builder.push_annotation_in_graph(r, p, v, g);
-        }
-
-        Ok(())
+    fn diagnostic(&mut self, diagnostic: &Diagnostic) -> Result<(), RdfDiagnostic> {
+        // A reader diagnostic is a hard fold failure on the IR path (the IR is
+        // the authority, no degraded fold). The `SegmentResolver` latches the
+        // first one returned here.
+        Err(RdfDiagnostic::error(
+            "rdf-ir-gts-fold-diagnostic",
+            format!(
+                "GTS fold diagnostic {}: {}",
+                diagnostic.code, diagnostic.detail
+            ),
+        )
+        .with_location({
+            let location = RdfLocation::logical("gts:sink");
+            match diagnostic.frame_index {
+                Some(frame_index) => location.with_gts_frame(frame_index),
+                None => location,
+            }
+        }))
     }
 }
 
@@ -421,154 +411,6 @@ fn metadata_value_from_cbor(value: &Value) -> RdfMetadataValue {
     }
 }
 
-impl StreamingSink for SinkImporter {
-    fn term(&mut self, segment_index: usize, gts_term_id: usize, term: &Term) {
-        if self.error.is_some() {
-            return;
-        }
-        // Streaming phase: stash the raw term verbatim. A quoted-triple term cannot
-        // be resolved yet — its reifier binding may arrive in a later frame — so we
-        // defer ALL resolution to phase 2, where every event has been seen.
-        self.raw_terms
-            .insert((segment_index, gts_term_id), term.clone());
-    }
-
-    fn quad(&mut self, segment_index: usize, quad: Quad) {
-        if self.error.is_some() {
-            return;
-        }
-        self.raw_quads.push((segment_index, quad));
-    }
-
-    fn reifier(&mut self, segment_index: usize, reifier: purrdf_gts::model::ReifierRow) {
-        if self.error.is_some() {
-            return;
-        }
-        // purrdf-gts row-array: `(reifier_id, (s, p, o), graph?)`. The graph slot
-        // records the named graph the reifier was declared in (`None` = default graph)
-        // and is threaded into the IR's graph-scoped statement layer in phase 2.
-        let (reifier_id, triple, graph) = reifier;
-        // Record the reifier → (s, p, o) binding for this segment so a Triple term
-        // (delivered in any order) can resolve its components in phase 2, and stash
-        // the row (with its named graph, if any) so the reifier resource is bound to
-        // the interned triple in phase 2.
-        self.reifier_bindings
-            .insert((segment_index, reifier_id), triple);
-        self.raw_reifiers
-            .push((segment_index, reifier_id, triple, graph));
-    }
-
-    fn annotation(&mut self, segment_index: usize, annotation: purrdf_gts::model::AnnotationRow) {
-        if self.error.is_some() {
-            return;
-        }
-        // Row-array: `(reifier, predicate, value, graph?)`. The graph slot records the
-        // named graph the annotation was asserted in and is threaded into the IR's
-        // graph-scoped statement layer in phase 2.
-        let (reifier, predicate, value, graph) = annotation;
-        self.raw_annotations
-            .push((segment_index, (reifier, predicate, value), graph));
-    }
-
-    fn suppression(&mut self, _segment_index: usize, suppression: &Suppression) {
-        self.lookaside.suppressions.push(RdfSuppressionRecord {
-            reason: suppression.reason.clone(),
-            // `by` is a segment-local term id; we record it as a display hint only,
-            // never as a cross-dataset id (C0.8).
-            by: suppression.by.map(|term_id| format!("term#{term_id}")),
-            targets: suppression
-                .targets
-                .iter()
-                .map(metadata_value_from_cbor)
-                .collect(),
-        });
-    }
-
-    fn blob(&mut self, _segment_index: usize, digest: &str, meta: Option<&Value>) {
-        let metadata = match meta.map(metadata_value_from_cbor) {
-            Some(RdfMetadataValue::Map(map)) => map,
-            Some(value) => {
-                let mut map = std::collections::BTreeMap::new();
-                map.insert("value".to_owned(), value);
-                map
-            }
-            None => std::collections::BTreeMap::new(),
-        };
-        let media_type = metadata
-            .get("mt")
-            .and_then(RdfMetadataValue::as_text)
-            .map(str::to_owned);
-        let representation = metadata
-            .get("rep")
-            .and_then(RdfMetadataValue::as_text)
-            .map(str::to_owned);
-        self.lookaside.blobs.push(crate::RdfBlobRecord {
-            digest: digest.to_owned(),
-            media_type,
-            representation,
-            decoded_len: None,
-            metadata,
-            // The streaming sink delivers a blob's digest + metadata, not its
-            // payload. The content digest above is the blob_id reference; richer
-            // origin (segment-head) enrichment for the streaming path is a
-            // follow-up — the folded read path (`gts::blob_records`) populates it.
-            origin: None,
-        });
-    }
-
-    fn opaque(&mut self, _segment_index: usize, opaque: &OpaqueNode) {
-        self.lookaside.opaque_nodes.push(RdfOpaqueNodeRecord {
-            id: hex_bytes(&opaque.id),
-            frame_type: opaque.frame_type.clone(),
-            reason: opaque.reason.clone(),
-            signature_status: opaque.sigstat.clone(),
-            public_metadata: opaque.pub_meta.as_ref().map(metadata_value_from_cbor),
-        });
-    }
-
-    fn signature(&mut self, _segment_index: usize, signature: &Signature) {
-        self.lookaside.signatures.push(RdfSignatureRecord {
-            frame_id: hex_bytes(&signature.frame_id),
-            key_id: signature.kid.clone(),
-            status: signature.status.clone(),
-            has_cose: signature.cose.is_some(),
-        });
-    }
-
-    fn segment_head(&mut self, segment_index: usize, head: &[u8]) {
-        // Grow/patch the per-segment record with its head id.
-        self.ensure_segment_record(segment_index).head = Some(hex_bytes(head));
-    }
-
-    fn streamable_layout(&mut self, segment_index: usize, info: &StreamableInfo) {
-        let record = self.ensure_segment_record(segment_index);
-        record.claimed_streamable = info.claimed;
-        record.covered = info.covered;
-        record.tail = info.tail;
-    }
-
-    fn diagnostic(&mut self, diagnostic: &purrdf_gts::model::Diagnostic) {
-        // A reader diagnostic is a hard fold failure on the IR path (the IR is the
-        // authority, no degraded fold). Record the first as the deferred error.
-        self.fail(
-            RdfDiagnostic::error(
-                "rdf-ir-gts-fold-diagnostic",
-                format!(
-                    "GTS fold diagnostic {}: {}",
-                    diagnostic.code, diagnostic.detail
-                ),
-            )
-            .with_location({
-                let location = RdfLocation::logical("gts:sink");
-                match diagnostic.frame_index {
-                    Some(frame_index) => location.with_gts_frame(frame_index),
-                    None => location,
-                }
-            }),
-        );
-    }
-}
-
 impl SinkImporter {
     /// Ensure a [`RdfSegmentRecord`] exists for `segment_index`, returning it.
     fn ensure_segment_record(&mut self, segment_index: usize) -> &mut RdfSegmentRecord {
@@ -600,23 +442,27 @@ impl SinkImporter {
 ///
 /// Drives [`purrdf_gts::reader::read_to_sink`] with `allow_segments = true` so a
 /// multi-segment file is delivered as per-segment events (the only place segment
-/// identity survives). Resolution is **two-phase** (see the module docs) so a
-/// quoted-triple term is resolved regardless of whether its `reifies` binding
-/// arrived before or after the term itself. Any reader diagnostic or genuinely
-/// dangling term reference is a HARD failure (`Err`); on success the interned terms
-/// are frozen via [`RdfDatasetBuilder::freeze`] and paired with the envelope.
+/// identity survives) through a
+/// [`SegmentResolver`](purrdf_gts::segment_decode::SegmentResolver) that owns the
+/// two-phase resolution: a quoted-triple term resolves regardless of whether its
+/// `reifies` binding arrived before or after the term itself. Any reader
+/// diagnostic or genuinely dangling term reference is a HARD failure (`Err`) — a
+/// latched streaming error takes precedence over phase-2 resolution; on success
+/// the interned terms are frozen via [`RdfDatasetBuilder::freeze`] and paired with
+/// the envelope.
 pub fn import_gts_events(bytes: &[u8]) -> Result<GtsBundle, RdfDiagnostic> {
-    let mut importer = SinkImporter::new();
-    let _ = purrdf_gts::reader::read_to_sink(bytes, true, None, &mut importer);
+    let mut resolver = SegmentResolver::new(SinkImporter::new());
+    let _ = purrdf_gts::reader::read_to_sink(bytes, true, None, &mut resolver);
 
-    if let Some(error) = importer.error {
+    // A latched streaming error (e.g. a reader diagnostic) precedes phase-2.
+    if let Some(error) = resolver.take_error() {
         return Err(error);
     }
 
-    // Phase 2: now that ALL term / reifier / quad / annotation events are seen,
-    // resolve every term and push every row.
-    importer.finish()?;
+    // Flush the final segment: resolve its terms and push its rows.
+    resolver.finish()?;
 
+    let importer = resolver.into_sink();
     let lookaside = importer.lookaside;
     let dataset = importer.builder.freeze()?;
     Ok(GtsBundle::new(dataset, RdfEnvelope::new(lookaside)))
@@ -625,8 +471,11 @@ pub fn import_gts_events(bytes: &[u8]) -> Result<GtsBundle, RdfDiagnostic> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purrdf_gts::model::{Graph, Term, Term as GtsTerm, TermKind as GtsKind};
+    use purrdf_gts::model::{Graph, Term, Term as GtsTerm, TermKind, TermKind as GtsKind};
+    use purrdf_gts::reader::StreamingSink;
     use purrdf_gts::writer::Writer;
+
+    use crate::RdfTextDirection;
 
     fn iri_term(value: &str) -> Term {
         Term {
@@ -650,23 +499,221 @@ mod tests {
         }
     }
 
-    /// Drive the streaming events then run phase 2, returning the importer for
-    /// post-resolution assertions (the public `import_gts_events` does both phases
-    /// from bytes; this exercises the hand-ordered direct-sink path).
-    fn finish_direct(mut importer: SinkImporter) -> SinkImporter {
-        if importer.error.is_none()
-            && let Err(diagnostic) = importer.finish()
-        {
-            importer.fail(diagnostic);
+    /// Drive the streaming events then run phase 2, returning the resolver plus any
+    /// error for post-resolution assertions (the public `import_gts_events` does
+    /// both phases from bytes; this exercises the hand-ordered direct-sink path). A
+    /// latched streaming error takes precedence over the phase-2 flush. Generic
+    /// over the emit target so it also drives [`RecordingSink`]-wrapped resolvers.
+    fn finish_direct<S: ResolvedSink>(
+        mut resolver: SegmentResolver<S>,
+    ) -> (SegmentResolver<S>, Option<S::Error>) {
+        if let Some(error) = resolver.take_error() {
+            return (resolver, Some(error));
         }
-        importer
+        let error = resolver.finish().err();
+        (resolver, error)
     }
 
     /// Resolve `our_id` back to its interned blank `(label, scope)` for assertions.
-    fn blank_scope(importer: &SinkImporter, id: TermId) -> (String, BlankScope) {
-        match importer.builder.resolve(id) {
+    fn blank_scope(builder: &RdfDatasetBuilder, id: TermId) -> (String, BlankScope) {
+        match builder.resolve(id) {
             TermRef::Blank { label, scope } => (label.to_string(), scope),
             other => panic!("expected blank node, got {other:?}"),
+        }
+    }
+
+    /// TEST-ONLY [`ResolvedSink`] wrapping [`SinkImporter`] that additionally
+    /// records `(segment_index, gts_id) → TermId` for every resolved TERM as it
+    /// is interned.
+    ///
+    /// This replaces the removed `SegmentResolver::remap` white-box inspector:
+    /// R8 (bounded-memory streaming fold) forbids the *production* resolver from
+    /// retaining a whole-file `(segment, gts_id) → id` map (it must drop at each
+    /// segment close), but a handful of tests need to observe cross-segment term
+    /// identity (e.g. "the same IRI in two segments resolves to the same id, but
+    /// the same blank label resolves to different ids"). Holding that map here,
+    /// in the test harness, is fine — it is not the hot streaming path.
+    struct RecordingSink {
+        inner: SinkImporter,
+        ids: std::collections::HashMap<(usize, usize), TermId>,
+    }
+
+    impl RecordingSink {
+        fn new() -> Self {
+            Self {
+                inner: SinkImporter::new(),
+                ids: std::collections::HashMap::new(),
+            }
+        }
+
+        /// Look up the target id a segment-local gts id resolved to.
+        fn id(&self, segment_index: usize, gts_id: usize) -> Option<TermId> {
+            self.ids.get(&(segment_index, gts_id)).copied()
+        }
+    }
+
+    impl ResolvedSink for RecordingSink {
+        type Id = TermId;
+        type Error = RdfDiagnostic;
+
+        fn intern_iri(
+            &mut self,
+            segment_index: usize,
+            gts_id: usize,
+            iri: &str,
+        ) -> Result<TermId, RdfDiagnostic> {
+            let id = self.inner.intern_iri(segment_index, gts_id, iri)?;
+            self.ids.insert((segment_index, gts_id), id);
+            Ok(id)
+        }
+
+        fn intern_blank(
+            &mut self,
+            segment_index: usize,
+            gts_id: usize,
+            label: &str,
+        ) -> Result<TermId, RdfDiagnostic> {
+            let id = self.inner.intern_blank(segment_index, gts_id, label)?;
+            self.ids.insert((segment_index, gts_id), id);
+            Ok(id)
+        }
+
+        fn intern_literal(
+            &mut self,
+            segment_index: usize,
+            gts_id: usize,
+            lexical: String,
+            datatype: Option<TermId>,
+            lang: Option<String>,
+            direction: Option<String>,
+        ) -> Result<TermId, RdfDiagnostic> {
+            let id = self.inner.intern_literal(
+                segment_index,
+                gts_id,
+                lexical,
+                datatype,
+                lang,
+                direction,
+            )?;
+            self.ids.insert((segment_index, gts_id), id);
+            Ok(id)
+        }
+
+        fn intern_triple(
+            &mut self,
+            segment_index: usize,
+            gts_id: usize,
+            s: TermId,
+            p: TermId,
+            o: TermId,
+        ) -> Result<TermId, RdfDiagnostic> {
+            let id = self.inner.intern_triple(segment_index, gts_id, s, p, o)?;
+            self.ids.insert((segment_index, gts_id), id);
+            Ok(id)
+        }
+
+        fn push_quad(
+            &mut self,
+            segment_index: usize,
+            s: TermId,
+            p: TermId,
+            o: TermId,
+            g: Option<TermId>,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.push_quad(segment_index, s, p, o, g)
+        }
+
+        fn push_reifier(
+            &mut self,
+            segment_index: usize,
+            reifier: TermId,
+            s: TermId,
+            p: TermId,
+            o: TermId,
+            g: Option<TermId>,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.push_reifier(segment_index, reifier, s, p, o, g)
+        }
+
+        fn push_annotation(
+            &mut self,
+            segment_index: usize,
+            reifier: TermId,
+            p: TermId,
+            o: TermId,
+            g: Option<TermId>,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.push_annotation(segment_index, reifier, p, o, g)
+        }
+
+        fn err_dangling_term(
+            &self,
+            segment_index: usize,
+            gts_id: usize,
+            role: &str,
+        ) -> RdfDiagnostic {
+            self.inner.err_dangling_term(segment_index, gts_id, role)
+        }
+
+        fn err_nesting_limit(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
+            self.inner.err_nesting_limit(segment_index, gts_id)
+        }
+
+        fn err_unbound_triple(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
+            self.inner.err_unbound_triple(segment_index, gts_id)
+        }
+
+        fn err_missing_reifier(&self, segment_index: usize, reifier: usize) -> RdfDiagnostic {
+            self.inner.err_missing_reifier(segment_index, reifier)
+        }
+
+        fn suppression(
+            &mut self,
+            segment_index: usize,
+            suppression: &Suppression,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.suppression(segment_index, suppression)
+        }
+
+        fn blob(
+            &mut self,
+            segment_index: usize,
+            digest: &str,
+            meta: Option<&Value>,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.blob(segment_index, digest, meta)
+        }
+
+        fn opaque(
+            &mut self,
+            segment_index: usize,
+            opaque: &OpaqueNode,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.opaque(segment_index, opaque)
+        }
+
+        fn signature(
+            &mut self,
+            segment_index: usize,
+            signature: &Signature,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.signature(segment_index, signature)
+        }
+
+        fn segment_head(&mut self, segment_index: usize, head: &[u8]) -> Result<(), RdfDiagnostic> {
+            self.inner.segment_head(segment_index, head)
+        }
+
+        fn streamable_layout(
+            &mut self,
+            segment_index: usize,
+            info: &StreamableInfo,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.streamable_layout(segment_index, info)
+        }
+
+        fn diagnostic(&mut self, diagnostic: &Diagnostic) -> Result<(), RdfDiagnostic> {
+            self.inner.diagnostic(diagnostic)
         }
     }
 
@@ -678,32 +725,34 @@ mod tests {
     /// distinct ids (per-segment scope) while `ex:s` MUST be one shared id.
     #[test]
     fn gate2_multi_segment_blank_scope_isolation_direct() {
-        let mut importer = SinkImporter::new();
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
 
         // Segment 0: term 0 = ex:s, term 1 = ex:p, term 2 = _:b1, quad (s p b1).
-        importer.term(0, 0, &iri_term("http://example.org/s"));
-        importer.term(0, 1, &iri_term("http://example.org/p"));
-        importer.term(0, 2, &blank_term("b1"));
-        importer.quad(0, (0, 1, 2, None));
+        resolver.term(0, 0, &iri_term("http://example.org/s"));
+        resolver.term(0, 1, &iri_term("http://example.org/p"));
+        resolver.term(0, 2, &blank_term("b1"));
+        resolver.quad(0, (0, 1, 2, None));
 
         // Segment 1: term 0 = ex:s (same IRI value), term 1 = ex:p2, term 2 = _:b1
         // (SAME label, DIFFERENT node), quad (s p2 b1).
-        importer.term(1, 0, &iri_term("http://example.org/s"));
-        importer.term(1, 1, &iri_term("http://example.org/p2"));
-        importer.term(1, 2, &blank_term("b1"));
-        importer.quad(1, (0, 1, 2, None));
+        resolver.term(1, 0, &iri_term("http://example.org/s"));
+        resolver.term(1, 1, &iri_term("http://example.org/p2"));
+        resolver.term(1, 2, &blank_term("b1"));
+        resolver.quad(1, (0, 1, 2, None));
 
-        let mut importer = finish_direct(importer);
-        assert!(
-            importer.error.is_none(),
-            "no error expected: {:?}",
-            importer.error
-        );
+        let (mut resolver, error) = finish_direct(resolver);
+        assert!(error.is_none(), "no error expected: {error:?}");
 
-        let seg0_s = importer.remaps[&(0, 0)];
-        let seg1_s = importer.remaps[&(1, 0)];
-        let seg0_b1 = importer.remaps[&(0, 2)];
-        let seg1_b1 = importer.remaps[&(1, 2)];
+        let seg0_s = resolver
+            .sink()
+            .id(0, 0)
+            .expect("segment 0 subject resolved");
+        let seg1_s = resolver
+            .sink()
+            .id(1, 0)
+            .expect("segment 1 subject resolved");
+        let seg0_b1 = resolver.sink().id(0, 2).expect("segment 0 blank resolved");
+        let seg1_b1 = resolver.sink().id(1, 2).expect("segment 1 blank resolved");
 
         // The shared IRI interns to ONE id across both segments (value identity).
         assert_eq!(seg0_s, seg1_s, "ex:s is the same node across segments");
@@ -713,14 +762,14 @@ mod tests {
             seg0_b1, seg1_b1,
             "_:b1 in segment 0 and segment 1 are DIFFERENT nodes (scope isolation)"
         );
-        let (label0, scope0) = blank_scope(&importer, seg0_b1);
-        let (label1, scope1) = blank_scope(&importer, seg1_b1);
+        let (label0, scope0) = blank_scope(&resolver.sink().inner.builder, seg0_b1);
+        let (label1, scope1) = blank_scope(&resolver.sink().inner.builder, seg1_b1);
         assert_eq!(label0, "b1");
         assert_eq!(label1, "b1");
         assert_eq!(scope0, BlankScope(1), "segment 0 → scope 1");
         assert_eq!(scope1, BlankScope(2), "segment 1 → scope 2");
 
-        let dataset = std::mem::take(&mut importer.builder)
+        let dataset = std::mem::take(&mut resolver.sink_mut().inner.builder)
             .freeze()
             .expect("freeze");
         // 2 quads, distinct blanks: ex:s, ex:p, b1@s0, ex:p2, b1@s1 = 5 terms.
@@ -730,31 +779,75 @@ mod tests {
 
     /// A quad that references a GTS term id no `term` event introduced MUST surface
     /// as a hard `Err` (no silent skip), even though resolution is now deferred to
-    /// phase 2.
+    /// phase 2. Hand-fed defense-in-depth for the resolver's own no-optionality
+    /// contract; see `dangling_term_ref_real_bytes_is_err` below for the same
+    /// contract proven through the PUBLIC `import_gts_events` byte path.
     #[test]
     fn gate2_unknown_term_reference_is_err_direct() {
-        let mut importer = SinkImporter::new();
-        importer.term(0, 0, &iri_term("http://example.org/s"));
-        importer.term(0, 1, &iri_term("http://example.org/p"));
+        let mut resolver = SegmentResolver::new(SinkImporter::new());
+        resolver.term(0, 0, &iri_term("http://example.org/s"));
+        resolver.term(0, 1, &iri_term("http://example.org/p"));
         // Object id 9 was never introduced.
-        importer.quad(0, (0, 1, 9, None));
-        let importer = finish_direct(importer);
-        assert!(
-            importer.error.is_some(),
-            "dangling reference must defer an error"
-        );
-        let err = importer.error.unwrap();
+        resolver.quad(0, (0, 1, 9, None));
+        let (_resolver, error) = finish_direct(resolver);
+        let err = error.expect("dangling reference must defer an error");
         assert_eq!(err.code, "rdf-ir-dangling-term-ref");
     }
 
-    /// Directional literals: GTS `Term` carries no base direction, so the sink path
-    /// yields `direction == None`, but lexical form, datatype, and language survive.
+    /// R6-exec2 (real bytes): a quad naming an undeclared segment-local term id,
+    /// authored through the PUBLIC `purrdf_gts::writer::Writer`, is a hard `Err`
+    /// when driven through the PUBLIC `import_gts_events` byte path — no silent
+    /// skip, no partial `GtsBundle`.
+    ///
+    /// `Writer::add_quads` takes raw `usize` ids and performs NO client-side
+    /// validation, so a quad naming an id no `term` event ever introduced
+    /// round-trips into a fully well-formed, correctly content-hashed, correctly
+    /// chained GTS frame. The raw GTS reader is a deliberately permissive
+    /// Baseline Reader (GTS-SPEC §7.4/§7.5): it diagnoses the row as
+    /// `PositionConstraint` and DROPS it rather than erroring (the same
+    /// degrade-and-continue behavior the frozen conformance vector
+    /// `vectors/13-position-constraint.expected.json` pins). `SinkImporter`'s
+    /// `ResolvedSink::diagnostic` — "the IR is the authority, no degraded fold"
+    /// (module docs above) — promotes ANY reader diagnostic to a hard `Err`
+    /// before phase 2 ever runs, so no partial dataset is ever frozen.
+    #[test]
+    fn dangling_term_ref_real_bytes_is_err() {
+        let mut w = Writer::new("generic");
+        w.add_terms(&[
+            iri_term("http://example.org/s"),
+            iri_term("http://example.org/p"),
+            iri_term("http://example.org/o"),
+        ]);
+        // Object id 99 was never introduced by any `term` event in this segment.
+        w.add_quads(&[(0, 1, 99, None)]);
+        let data = w.into_bytes();
+
+        let err = import_gts_events(&data)
+            .expect_err("a dangling quad reference must hard-fail import_gts_events on real bytes");
+        assert_eq!(
+            err.code, "rdf-ir-gts-fold-diagnostic",
+            "the reader's PositionConstraint diagnostic is promoted to a hard Err: {err:?}"
+        );
+        assert!(
+            err.message.contains("PositionConstraint"),
+            "error names the underlying diagnostic: {err:?}"
+        );
+    }
+
+    /// Directional literals: this test's INPUT term carries no base direction
+    /// (`direction: None` below), so the resolved literal's direction is `None`.
+    /// GTS `Term` itself DOES carry base direction (see module docs above and
+    /// [`SinkImporter::intern_literal`], which parses it via
+    /// `crate::gts_resolve::parse_gts_direction`); the absent-direction case is
+    /// exercised here, lexical form, datatype, and language survive regardless. See
+    /// `directional_literal_rtl_survives_sink_path` below for the
+    /// direction-PRESENT case.
     #[test]
     fn directional_literal_lexical_lang_survive_sink_path() {
-        let mut importer = SinkImporter::new();
-        importer.term(0, 0, &iri_term("http://example.org/s"));
-        importer.term(0, 1, &iri_term("http://example.org/p"));
-        importer.term(
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
+        resolver.term(0, 0, &iri_term("http://example.org/s"));
+        resolver.term(0, 1, &iri_term("http://example.org/p"));
+        resolver.term(
             0,
             2,
             &Term {
@@ -766,12 +859,12 @@ mod tests {
                 reifier: None,
             },
         );
-        importer.quad(0, (0, 1, 2, None));
-        let mut importer = finish_direct(importer);
-        assert!(importer.error.is_none(), "{:?}", importer.error);
+        resolver.quad(0, (0, 1, 2, None));
+        let (mut resolver, error) = finish_direct(resolver);
+        assert!(error.is_none(), "{error:?}");
 
-        let lit_id = importer.remaps[&(0, 2)];
-        let dataset = std::mem::take(&mut importer.builder)
+        let lit_id = resolver.sink().id(0, 2).expect("literal resolved");
+        let dataset = std::mem::take(&mut resolver.sink_mut().inner.builder)
             .freeze()
             .expect("freeze");
         match dataset.resolve(lit_id) {
@@ -783,7 +876,63 @@ mod tests {
             } => {
                 assert_eq!(lexical, "Bonjour", "lexical preserved verbatim");
                 assert_eq!(language, Some("fr"), "language lowercased per C0.1");
-                assert_eq!(direction, None, "GTS cannot carry base direction");
+                assert_eq!(
+                    direction, None,
+                    "this term's input direction was None, not a GTS limitation"
+                );
+            }
+            other => panic!("expected literal, got {other:?}"),
+        }
+    }
+
+    /// Directional literals, direction-PRESENT case: a GTS `Term` whose
+    /// `direction` is `Some("rtl")` (with the RDF 1.2-required language tag)
+    /// survives the sink path intact. `parse_gts_direction`
+    /// (`crate::gts_resolve`) accepts only the literal tokens `"ltr"`/`"rtl"`
+    /// and requires a non-empty `language` whenever `direction` is set;
+    /// `SinkImporter::intern_literal` calls it and stores the resolved
+    /// [`crate::RdfTextDirection`] onto the literal, so the frozen dataset must
+    /// resolve it back as `Some(RdfTextDirection::Rtl)` — proving GTS DOES carry
+    /// base direction end to end through the sink path.
+    #[test]
+    fn directional_literal_rtl_survives_sink_path() {
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
+        resolver.term(0, 0, &iri_term("http://example.org/s"));
+        resolver.term(0, 1, &iri_term("http://example.org/p"));
+        resolver.term(
+            0,
+            2,
+            &Term {
+                kind: TermKind::Literal,
+                value: Some("مرحبا".to_owned()),
+                datatype: None,
+                lang: Some("AR".to_owned()),
+                direction: Some("rtl".to_owned()),
+                reifier: None,
+            },
+        );
+        resolver.quad(0, (0, 1, 2, None));
+        let (mut resolver, error) = finish_direct(resolver);
+        assert!(error.is_none(), "{error:?}");
+
+        let lit_id = resolver.sink().id(0, 2).expect("literal resolved");
+        let dataset = std::mem::take(&mut resolver.sink_mut().inner.builder)
+            .freeze()
+            .expect("freeze");
+        match dataset.resolve(lit_id) {
+            TermRef::Literal {
+                lexical,
+                language,
+                direction,
+                ..
+            } => {
+                assert_eq!(lexical, "مرحبا", "lexical preserved verbatim");
+                assert_eq!(language, Some("ar"), "language lowercased per C0.1");
+                assert_eq!(
+                    direction,
+                    Some(RdfTextDirection::Rtl),
+                    "GTS base direction survives the sink path"
+                );
             }
             other => panic!("expected literal, got {other:?}"),
         }
@@ -793,16 +942,16 @@ mod tests {
     /// object position of the outer triple. (Hand-ordered direct-sink events.)
     #[test]
     fn nested_triple_term_survives_sink_path() {
-        let mut importer = SinkImporter::new();
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
         // Inner triple (ex:a ex:p ex:b) reified by reifier r0; outer triple
         // (ex:a ex:asserts <<inner>>) reified by reifier r1.
-        importer.term(0, 0, &iri_term("http://example.org/a"));
-        importer.term(0, 1, &iri_term("http://example.org/p"));
-        importer.term(0, 2, &iri_term("http://example.org/b"));
-        importer.term(0, 3, &iri_term("http://example.org/r0"));
-        importer.reifier(0, (3, (0, 1, 2), None));
+        resolver.term(0, 0, &iri_term("http://example.org/a"));
+        resolver.term(0, 1, &iri_term("http://example.org/p"));
+        resolver.term(0, 2, &iri_term("http://example.org/b"));
+        resolver.term(0, 3, &iri_term("http://example.org/r0"));
+        resolver.reifier(0, (3, (0, 1, 2), None));
         // Inner triple TERM bound to reifier r0 (gts id 3).
-        importer.term(
+        resolver.term(
             0,
             4,
             &Term {
@@ -814,10 +963,10 @@ mod tests {
                 reifier: Some(3),
             },
         );
-        importer.term(0, 5, &iri_term("http://example.org/asserts"));
-        importer.term(0, 6, &iri_term("http://example.org/r1"));
-        importer.reifier(0, (6, (0, 5, 4), None));
-        importer.term(
+        resolver.term(0, 5, &iri_term("http://example.org/asserts"));
+        resolver.term(0, 6, &iri_term("http://example.org/r1"));
+        resolver.reifier(0, (6, (0, 5, 4), None));
+        resolver.term(
             0,
             7,
             &Term {
@@ -829,13 +978,13 @@ mod tests {
                 reifier: Some(6),
             },
         );
-        importer.quad(0, (0, 5, 7, None));
-        let mut importer = finish_direct(importer);
-        assert!(importer.error.is_none(), "{:?}", importer.error);
+        resolver.quad(0, (0, 5, 7, None));
+        let (mut resolver, error) = finish_direct(resolver);
+        assert!(error.is_none(), "{error:?}");
 
-        let inner = importer.remaps[&(0, 4)];
-        let outer = importer.remaps[&(0, 7)];
-        let dataset = std::mem::take(&mut importer.builder)
+        let inner = resolver.sink().id(0, 4).expect("inner triple resolved");
+        let outer = resolver.sink().id(0, 7).expect("outer triple resolved");
+        let dataset = std::mem::take(&mut resolver.sink_mut().inner.builder)
             .freeze()
             .expect("freeze");
         match dataset.resolve(outer) {
@@ -849,18 +998,18 @@ mod tests {
     /// Multiple distinct reifiers binding ONE triple all survive.
     #[test]
     fn multiple_reifiers_for_one_triple_survive_sink_path() {
-        let mut importer = SinkImporter::new();
-        importer.term(0, 0, &iri_term("http://example.org/s"));
-        importer.term(0, 1, &iri_term("http://example.org/p"));
-        importer.term(0, 2, &iri_term("http://example.org/o"));
-        importer.term(0, 3, &iri_term("http://example.org/r1"));
-        importer.term(0, 4, &iri_term("http://example.org/r2"));
-        importer.reifier(0, (3, (0, 1, 2), None));
-        importer.reifier(0, (4, (0, 1, 2), None));
-        let mut importer = finish_direct(importer);
-        assert!(importer.error.is_none(), "{:?}", importer.error);
+        let mut resolver = SegmentResolver::new(SinkImporter::new());
+        resolver.term(0, 0, &iri_term("http://example.org/s"));
+        resolver.term(0, 1, &iri_term("http://example.org/p"));
+        resolver.term(0, 2, &iri_term("http://example.org/o"));
+        resolver.term(0, 3, &iri_term("http://example.org/r1"));
+        resolver.term(0, 4, &iri_term("http://example.org/r2"));
+        resolver.reifier(0, (3, (0, 1, 2), None));
+        resolver.reifier(0, (4, (0, 1, 2), None));
+        let (mut resolver, error) = finish_direct(resolver);
+        assert!(error.is_none(), "{error:?}");
 
-        let dataset = std::mem::take(&mut importer.builder)
+        let dataset = std::mem::take(&mut resolver.sink_mut().builder)
             .freeze()
             .expect("freeze");
         let reifiers: Vec<_> = dataset.reifiers().collect();
@@ -1011,11 +1160,11 @@ mod tests {
     /// merely out-of-order one (which now resolves).
     #[test]
     fn dangling_reifier_binding_is_err_after_all_events() {
-        let mut importer = SinkImporter::new();
-        importer.term(0, 0, &iri_term("http://example.org/s"));
-        importer.term(0, 1, &iri_term("http://example.org/asserts"));
+        let mut resolver = SegmentResolver::new(SinkImporter::new());
+        resolver.term(0, 0, &iri_term("http://example.org/s"));
+        resolver.term(0, 1, &iri_term("http://example.org/asserts"));
         // Triple term bound to reifier id 99, which NO `reifies` event ever supplies.
-        importer.term(
+        resolver.term(
             0,
             2,
             &Term {
@@ -1027,16 +1176,11 @@ mod tests {
                 reifier: Some(99),
             },
         );
-        importer.quad(0, (0, 1, 2, None));
-        let importer = finish_direct(importer);
-        assert!(
-            importer.error.is_some(),
-            "a genuinely dangling reifier binding must STILL fail after phase 2"
-        );
-        assert_eq!(
-            importer.error.unwrap().code,
-            "rdf-ir-missing-reifier-binding"
-        );
+        resolver.quad(0, (0, 1, 2, None));
+        let (_resolver, error) = finish_direct(resolver);
+        let err =
+            error.expect("a genuinely dangling reifier binding must STILL fail after phase 2");
+        assert_eq!(err.code, "rdf-ir-missing-reifier-binding");
     }
 
     /// GATE 2 (b) — REAL multi-segment GTS bytes. Two `Writer::deterministic`
