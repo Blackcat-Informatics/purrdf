@@ -314,15 +314,31 @@ struct Ctx<'ns> {
     /// `def_key(C)` is in this set; otherwise the ref would dangle (no shape ⇒
     /// no `$def`).
     emitted_defs: BTreeSet<String>,
+    /// Value-vocabulary classes → their `{Local}Enum` `$def` key. A `sh:class`
+    /// pointing at one of these resolves to the enum `$ref` (projection-only)
+    /// rather than the permissive node-ref. Empty unless a value-vocabulary
+    /// projection is active.
+    value_vocab_enums: BTreeMap<String, String>,
+    /// Predicate IRIs whose `rdfs:range` is a value-vocabulary class → that
+    /// class's `{Local}Enum` `$def` key. Drives the enum `$ref` for OPEN
+    /// vocabularies that carry no `sh:class`. Empty unless a projection is active.
+    predicate_ranges: BTreeMap<String, String>,
     /// The namespace table driving ALL compaction / keying decisions.
     ns: &'ns Namespaces,
 }
 
 impl<'ns> Ctx<'ns> {
-    fn new(emitted_defs: BTreeSet<String>, ns: &'ns Namespaces) -> Self {
+    fn new(
+        emitted_defs: BTreeSet<String>,
+        value_vocab_enums: BTreeMap<String, String>,
+        predicate_ranges: BTreeMap<String, String>,
+        ns: &'ns Namespaces,
+    ) -> Self {
         Self {
             losses: Vec::new(),
             emitted_defs,
+            value_vocab_enums,
+            predicate_ranges,
             ns,
         }
     }
@@ -430,7 +446,15 @@ pub fn compile_with_value_vocab(
         emitted_defs.insert(key.clone());
     }
 
-    let mut ctx = Ctx::new(emitted_defs, ns);
+    // The referencing-property lookups: `sh:class` → enum key (class IRI keyed),
+    // and predicate `rdfs:range` → enum key (predicate IRI keyed).
+    let value_vocab_enums: BTreeMap<String, String> = vocab_enums
+        .iter()
+        .map(|(class_iri, (key, _def))| (class_iri.clone(), key.clone()))
+        .collect();
+    let predicate_ranges = value_vocab_predicate_ranges(shapes, projection, &vocab_enums);
+
+    let mut ctx = Ctx::new(emitted_defs, value_vocab_enums, predicate_ranges, ns);
     // Enum enumeration losses (empty vocab, blank-node member) recorded first,
     // deterministically, ahead of the per-shape losses.
     ctx.losses.extend(vocab_losses);
@@ -560,6 +584,43 @@ fn value_vocab_enum_defs(
     }
 
     (out, losses)
+}
+
+/// Map each predicate whose `rdfs:range` is a value-vocabulary class to that
+/// class's `{Local}Enum` `$def` key, scanning the ontology graph UNIONED with the
+/// shapes graph (range axioms commonly live shapes-side). Empty when the
+/// projection is inactive or there are no value-vocabulary classes.
+fn value_vocab_predicate_ranges(
+    shapes: &Shapes,
+    projection: Option<&ValueVocabProjection<'_>>,
+    vocab_enums: &BTreeMap<String, (String, Value)>,
+) -> BTreeMap<String, String> {
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let Some(proj) = projection else {
+        return out;
+    };
+    if vocab_enums.is_empty() {
+        return out;
+    }
+    let datasets: [&RdfDataset; 2] = [proj.ontology, shapes.shapes_dataset.as_ref()];
+    let range_term = Term::NamedNode(NamedNode::from(rdfs::RANGE));
+    for (class_iri, (enum_key, _def)) in vocab_enums {
+        let class_term = Term::NamedNode(NamedNode::from(class_iri.as_str()));
+        for ds in datasets {
+            for (subject, _pred, _obj) in native_quads(
+                ds,
+                None,
+                Some(&range_term),
+                Some(&class_term),
+                GraphFilter::AnyGraph,
+            ) {
+                if let Term::NamedNode(p) = subject {
+                    out.insert(p.as_str().to_owned(), enum_key.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Enumerate the named individuals of `class_iri` (`?x rdf:type class_iri`) across
@@ -1003,7 +1064,10 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     // and (b) DROP one block's constraints. Merging the constraint lists per key
     // and compiling once is both order-independent and semantically complete.
     // `BTreeMap` keeps the emitted property order deterministic (sorted keys).
-    let mut by_key: BTreeMap<String, Vec<Constraint>> = BTreeMap::new();
+    // Each entry: compacted JSON key → (raw predicate IRI, merged constraints).
+    // The raw IRI is retained so the value-vocabulary `rdfs:range` lookup can key
+    // by predicate IRI (the compacted key would lose the namespace).
+    let mut by_key: BTreeMap<String, (String, Vec<Constraint>)> = BTreeMap::new();
     for ps in &shape.property_shapes {
         // Only direct predicate paths shape outgoing JSON properties; inverse
         // and composite paths (sequence/alternative/closures) are skipped with
@@ -1017,12 +1081,14 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
         let key = ctx.ns.compact_iri(pred.as_str());
         by_key
             .entry(key)
-            .or_default()
+            .or_insert_with(|| (pred.as_str().to_owned(), Vec::new()))
+            .1
             .extend(ps.constraints.iter().cloned());
     }
 
-    for (key, constraints) in &by_key {
-        let (value_schema, is_required) = compile_property(constraints, &shape_iri, key, ctx);
+    for (key, (pred_iri, constraints)) in &by_key {
+        let (value_schema, is_required) =
+            compile_property(constraints, &shape_iri, key, pred_iri, ctx);
         if is_required {
             required.push(key.clone());
         }
@@ -1290,7 +1356,13 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
             return None;
         }
         let key = ctx.ns.compact_iri(pred.as_str());
-        let (value_schema, is_required) = compile_property(&ps.constraints, &inner_iri, &key, ctx);
+        // Presence-only negand (constraints are all `negand_value_constraint_ok`,
+        // i.e. `sh:minCount`): the value-vocabulary `rdfs:range` enrichment is a
+        // POSITIVE value projection and MUST NOT widen a negand (it would make the
+        // emitted `not` reject the wrong nodes). Pass an empty predicate IRI so the
+        // range lookup never fires here.
+        let (value_schema, is_required) =
+            compile_property(&ps.constraints, &inner_iri, &key, "", ctx);
         // A property conjunct that neither requires the key nor restricts its
         // value matches every node (the permissive base); negating it would
         // reject all — the vacuous-not bug. Route such a bare/zero-cardinality
@@ -1332,6 +1404,7 @@ fn compile_property(
     constraints: &[Constraint],
     shape_iri: &str,
     key: &str,
+    pred_iri: &str,
     ctx: &mut Ctx<'_>,
 ) -> (Value, bool) {
     // The "scalar" value schema (a single value, pre-cardinality).
@@ -1344,6 +1417,12 @@ fn compile_property(
     let mut min_count: Option<u64> = None;
     let mut max_count: Option<u64> = None;
 
+    // Value-vocabulary precedence (E4): whether ANY `sh:class` was present, and
+    // the enum key emitted by a vocab-resolving `sh:class` (if any). Drives
+    // whether the `rdfs:range` enum `$ref` applies after the loop.
+    let mut had_any_class = false;
+    let mut class_enum_key: Option<String> = None;
+
     for c in constraints {
         match c {
             Constraint::MinCount(n) => min_count = Some(*n),
@@ -1352,6 +1431,15 @@ fn compile_property(
                 alts.push(datatype_value_schema(dt.as_str()));
             }
             Constraint::Class(c) => {
+                had_any_class = true;
+                // A `sh:class` pointing at a value-vocabulary class resolves to the
+                // enum `$ref` (projection-only), tightening the open node-ref to the
+                // anchor set WITHOUT touching the validating shape.
+                if let Some(enum_key) = ctx.value_vocab_enums.get(c.as_str()) {
+                    alts.push(json!({ "$ref": format!("#/$defs/{enum_key}") }));
+                    class_enum_key = Some(enum_key.clone());
+                    continue;
+                }
                 // Resolve/emit by `def_key` — the SAME key the `$defs` map
                 // (built in `compile`) and `emitted_defs` (PASS 1, above) use.
                 // A bare local name would conflate a primary class with any
@@ -1496,6 +1584,44 @@ fn compile_property(
             // Counts handled above; node-shape-only constraints (Closed/And/…)
             // do not appear on a property shape's value schema.
             _ => {}
+        }
+    }
+
+    // Value-vocabulary `rdfs:range` path (E4 precedence): an explicit `sh:class`
+    // always wins. Only a property with NO `sh:class` takes the range-derived enum
+    // `$ref`; a `sh:class` that coexists with a value-vocabulary range records a
+    // conflict loss (the range enum is suppressed).
+    if let Some(range_key) = ctx.predicate_ranges.get(pred_iri).cloned() {
+        match (&class_enum_key, had_any_class) {
+            (Some(class_key), _) => {
+                // A vocab `sh:class` already emitted its enum `$ref`; it wins.
+                if *class_key != range_key {
+                    ctx.record(
+                        "rdfs:range",
+                        shape_iri,
+                        &format!(
+                            "predicate {pred_iri} has a value-vocabulary sh:class ({class_key}) \
+                             and a conflicting value-vocabulary rdfs:range ({range_key}); \
+                             sh:class wins, range enum suppressed"
+                        ),
+                    );
+                }
+            }
+            (None, true) => {
+                // A non-vocab `sh:class` is present; it wins, range enum suppressed.
+                ctx.record(
+                    "rdfs:range",
+                    shape_iri,
+                    &format!(
+                        "predicate {pred_iri} has a sh:class and a value-vocabulary \
+                         rdfs:range ({range_key}); sh:class wins, range enum suppressed"
+                    ),
+                );
+            }
+            (None, false) => {
+                // Open vocabulary (no sh:class): the enum `$ref` is the value schema.
+                alts.push(json!({ "$ref": format!("#/$defs/{range_key}") }));
+            }
         }
     }
 
@@ -3674,5 +3800,140 @@ mod tests {
             und:bar a und:Foo .
         ",
         );
+    }
+
+    // ── Referencing $ref (Task 3) ────────────────────────────────────────────
+
+    /// Compile with a SEPARATE ontology dataset and shapes dataset (both `logic:`
+    /// declared), so a `rdfs:range` declared shapes-side but absent ontology-side
+    /// still resolves via the union scan.
+    fn compile_split(ontology_body: &str, shapes_body: &str) -> CompiledSchema {
+        let logic = "@prefix logic: <https://blackcatinformatics.ca/logic/> .\n";
+        let onto = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}{logic}{ontology_body}"
+        ))
+        .expect("ontology Turtle parse");
+        let shapes_ds =
+            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{logic}{shapes_body}"))
+                .expect("shapes Turtle parse");
+        let shapes = from_dataset(&shapes_ds).expect("shape parse");
+        let vocab = ValueVocab::new(MARKER);
+        let projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: onto.as_ref(),
+        };
+        compile_with_value_vocab(&shapes, &fixture_ns(), Some(&projection))
+    }
+
+    const STABILITY_VOCAB: &str = r"
+        logic:TermStability a logic:AbstractIndividualType .
+        logic:stable     a logic:TermStability .
+        logic:deprecated a logic:TermStability .
+    ";
+
+    #[test]
+    fn value_vocab_sh_class_single_emits_scalar_ref() {
+        // R4: sh:class → vocab, maxCount 1 ⇒ a bare scalar $ref to the enum $def.
+        let schema = schema_of(&compile_vocab(&format!(
+            "{STABILITY_VOCAB}
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:class logic:TermStability ; sh:maxCount 1 ] ."
+        )));
+        assert_eq!(
+            def(&schema, "Term")["properties"]["meta:stability"],
+            json!({ "$ref": "#/$defs/TermStabilityEnum" }),
+            "single-valued vocab property is a scalar $ref"
+        );
+        assert_no_dangling_defs_refs(&schema);
+    }
+
+    #[test]
+    fn value_vocab_sh_class_multi_wraps_ref_in_array() {
+        // R4: multi-valued ⇒ anyOf[scalar $ref, array-of-$ref], cardinality preserved.
+        let schema = schema_of(&compile_vocab(&format!(
+            "{STABILITY_VOCAB}
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:class logic:TermStability ] ."
+        )));
+        let prop = &def(&schema, "Term")["properties"]["meta:stability"];
+        let alts = prop["anyOf"]
+            .as_array()
+            .expect("multi-valued property is anyOf");
+        assert!(
+            alts.contains(&json!({ "$ref": "#/$defs/TermStabilityEnum" })),
+            "the bare scalar $ref is one alternative"
+        );
+        assert!(
+            alts.iter().any(|a| a["type"] == json!("array")
+                && a["items"] == json!({ "$ref": "#/$defs/TermStabilityEnum" })),
+            "the array form wraps the same $ref in items"
+        );
+        assert_no_dangling_defs_refs(&schema);
+    }
+
+    #[test]
+    fn value_vocab_rdfs_range_open_property_emits_ref() {
+        // R4: a property with NO sh:class but a vocab rdfs:range ⇒ enum $ref.
+        let schema = schema_of(&compile_vocab(&format!(
+            "{STABILITY_VOCAB}
+            meta:stability rdfs:range logic:TermStability .
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:maxCount 1 ] ."
+        )));
+        assert_eq!(
+            def(&schema, "Term")["properties"]["meta:stability"],
+            json!({ "$ref": "#/$defs/TermStabilityEnum" }),
+            "an open (no sh:class) property with a vocab range resolves to the enum $ref"
+        );
+        assert_no_dangling_defs_refs(&schema);
+    }
+
+    #[test]
+    fn value_vocab_rdfs_range_declared_shapes_side_still_resolves() {
+        // The rdfs:range lives ONLY in the shapes dataset (not the ontology one);
+        // the union scan must still find it.
+        let schema = schema_of(&compile_split(
+            STABILITY_VOCAB,
+            r"
+            meta:stability rdfs:range logic:TermStability .
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:maxCount 1 ] .",
+        ));
+        assert_eq!(
+            def(&schema, "Term")["properties"]["meta:stability"],
+            json!({ "$ref": "#/$defs/TermStabilityEnum" }),
+            "a shapes-side rdfs:range resolves via the ontology∪shapes union scan"
+        );
+    }
+
+    #[test]
+    fn value_vocab_sh_class_wins_over_conflicting_range() {
+        // E4 precedence: a non-vocab sh:class coexisting with a vocab rdfs:range
+        // keeps the sh:class behavior and records a conflict loss (no enum $ref).
+        let compiled = compile_vocab(&format!(
+            "{STABILITY_VOCAB}
+            meta:stability rdfs:range logic:TermStability .
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:class meta:OtherNode ; sh:maxCount 1 ] ."
+        ));
+        let schema = schema_of(&compiled);
+        let prop = def(&schema, "Term")["properties"]["meta:stability"].to_string();
+        assert!(
+            !prop.contains("TermStabilityEnum"),
+            "an explicit sh:class wins; the range enum $ref is suppressed"
+        );
+        assert!(
+            compiled
+                .losses
+                .iter()
+                .any(|l| l.construct == "rdfs:range" && l.reason.contains("sh:class wins")),
+            "the class/range conflict is recorded as a loss"
+        );
+        assert_no_dangling_defs_refs(&schema);
     }
 }
