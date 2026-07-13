@@ -12,7 +12,9 @@
 use std::sync::Arc;
 
 use purrdf_core::ir::pack::container::{PackBuilder, PackError, PackView};
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
+use purrdf_core::ir::pack::dict::PackDictError;
+use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+use sha2::{Digest, Sha256};
 
 /// The committed golden fixture's path (see [`golden_bytes_match_committed_fixture`]
 /// and [`regenerate_pack_small_golden`] below for how it was produced).
@@ -41,7 +43,7 @@ fn small_fixture() -> Arc<RdfDataset> {
     });
     b.push_quad(s2, p2, lit, None);
 
-    let blank_s = b.intern_blank("b1", purrdf_core::BlankScope::default());
+    let blank_s = b.intern_blank("b1", BlankScope::default());
     let p3 = b.intern_iri("http://example.org/p3");
     let o3 = b.intern_iri("http://example.org/o3");
     b.push_quad(blank_s, p3, o3, None);
@@ -101,8 +103,8 @@ fn rich_fixture() -> Arc<RdfDataset> {
     let p2b = b.intern_iri("http://example.org/p2b");
     b.push_quad(s2, p2b, lit_typed, None);
 
-    let blank1 = b.intern_blank("blank1", purrdf_core::BlankScope::default());
-    let blank2 = b.intern_blank("blank2", purrdf_core::BlankScope::default());
+    let blank1 = b.intern_blank("blank1", BlankScope::default());
+    let blank2 = b.intern_blank("blank2", BlankScope::default());
     let p3 = b.intern_iri("http://example.org/p3");
     b.push_quad(blank1, p3, blank2, None);
 
@@ -279,6 +281,107 @@ fn from_bytes_rejects_truncated_input() {
     let err_empty =
         PackView::from_bytes(&[]).expect_err("an empty buffer must be rejected as truncated");
     assert_eq!(err_empty, PackError::Truncated);
+}
+
+/// A malformed pack whose literal datatype id points at a Blank entry (rather
+/// than an Iri entry) must be REJECTED by `from_bytes` with a clean
+/// `Err(PackError::Dict(PackDictError::Malformed(_)))` — never panic. Before
+/// `validate_references` learned to check the referenced entry's KIND (and
+/// not merely that its id was in range), this exact byte shape reached
+/// `PackDict::term_value`'s `unreachable!()` on ANY later query, a DoS on
+/// untrusted pack bytes.
+///
+/// Built end-to-end through the production surface: a real dataset, a real
+/// `PackBuilder::build_bytes` encoding, then ONE targeted byte flip (the
+/// literal's datatype-id varint, located by searching for its lexical form's
+/// own bytes — both the real datatype id and the blank node's id are single-
+/// byte LEB128 varints here, so the flip changes no length/offset anywhere
+/// else), with the DICT section's stored SHA-256 recomputed so the
+/// section-digest check (which runs first) does not itself catch the tamper
+/// before dict validation gets a chance to.
+#[test]
+fn from_bytes_rejects_literal_datatype_not_referencing_an_iri() {
+    let mut b = RdfDatasetBuilder::new();
+
+    let s1 = b.intern_iri("http://example.org/s1");
+    let p1 = b.intern_iri("http://example.org/p1");
+    const MARKER: &str = "ZZZ_TAMPER_MARKER_LITERAL_LEXICAL_FORM_UNIQUE_0001";
+    let lit = b.intern_literal(RdfLiteral {
+        lexical_form: MARKER.to_owned(),
+        datatype: Some("http://example.org/customtype".to_owned()),
+        language: None,
+        direction: None,
+    });
+    b.push_quad(s1, p1, lit, None);
+
+    let blank = b.intern_blank("btamper", BlankScope::default());
+    let p2 = b.intern_iri("http://example.org/p2");
+    let o2 = b.intern_iri("http://example.org/o2");
+    b.push_quad(blank, p2, o2, None);
+
+    let dataset = b.freeze().expect("valid dataset");
+    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+
+    let view = PackView::from_bytes(&bytes).expect("a freshly built pack opens");
+    let datatype_id = view
+        .dict()
+        .id_by_value(&TermValue::Iri("http://example.org/customtype".to_owned()))
+        .expect("the datatype IRI was interned as its own dictionary entry");
+    let blank_id = view
+        .dict()
+        .id_by_value(&TermValue::Blank {
+            label: "btamper".to_owned(),
+            scope: BlankScope::default(),
+        })
+        .expect("the blank node was interned");
+    assert_ne!(datatype_id, blank_id);
+    let datatype_byte = u8::try_from(datatype_id)
+        .expect("test fixture keeps every unified id under 128 (single-byte varint)");
+    let blank_byte = u8::try_from(blank_id)
+        .expect("test fixture keeps every unified id under 128 (single-byte varint)");
+
+    // Locate the literal's lexical-form bytes verbatim in the encoded pack;
+    // per `encode_record`'s layout the very next byte is the datatype id's
+    // (single-byte, since `datatype_byte < 128`) varint.
+    let marker_bytes = MARKER.as_bytes();
+    let marker_pos = bytes
+        .windows(marker_bytes.len())
+        .position(|w| w == marker_bytes)
+        .expect("the literal's lexical form is present verbatim in the encoded pack");
+    let datatype_byte_pos = marker_pos + marker_bytes.len();
+
+    let mut corrupted = bytes;
+    assert_eq!(
+        corrupted[datatype_byte_pos], datatype_byte,
+        "byte immediately after the lexical form must be the literal's single-byte \
+         datatype-id varint"
+    );
+    corrupted[datatype_byte_pos] = blank_byte;
+
+    // Recompute the DICT section's stored SHA-256 over the tampered bytes —
+    // see container.rs's module doc comment for the fixed header/directory
+    // layout (DICT is directory entry 0: `kind`@64 (4B), `offset`@68 (8B),
+    // `len`@76 (8B), `sha256`@84 (32B)). Without this, `from_bytes` would
+    // (correctly) reject the pack as `SectionDigestMismatch` before dict
+    // validation ever runs, proving nothing about THIS gap.
+    let dict_offset = u64::from_le_bytes(corrupted[68..76].try_into().unwrap()) as usize;
+    let dict_len = u64::from_le_bytes(corrupted[76..84].try_into().unwrap()) as usize;
+    assert!(
+        (dict_offset..dict_offset + dict_len).contains(&datatype_byte_pos),
+        "the tampered byte must fall inside the DICT section"
+    );
+    let new_digest: [u8; 32] =
+        Sha256::digest(&corrupted[dict_offset..dict_offset + dict_len]).into();
+    corrupted[84..116].copy_from_slice(&new_digest);
+
+    let err = PackView::from_bytes(&corrupted).expect_err(
+        "a literal datatype id that resolves to a Blank (not Iri) dictionary entry must be \
+         rejected, not panic",
+    );
+    assert!(
+        matches!(err, PackError::Dict(PackDictError::Malformed(_))),
+        "expected Dict(Malformed(_)), got {err:?}"
+    );
 }
 
 #[test]

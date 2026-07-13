@@ -937,27 +937,40 @@ impl PackDict {
     }
 
     /// Validate that every decoded id reference (a literal's datatype, a triple
-    /// term's `s`/`p`/`o`) falls within `1..=n_terms()`. Called once by
+    /// term's `s`/`p`/`o`) falls within `1..=n_terms()`, and that a literal's
+    /// datatype id specifically resolves to an [`DictEntry::Iri`] (never a
+    /// blank node, a literal, or a triple term). Called once by
     /// [`EncodedDict::decode`] after the value list is fully decoded (id ranges
     /// are only fully known once the whole dictionary is assembled).
+    ///
+    /// This is what lets [`term_value`](Self::term_value) treat a literal's
+    /// datatype entry as an IRI unconditionally: any pack that survived this
+    /// check can never violate that invariant.
     fn validate_references(&self) -> Result<(), PackDictError> {
         let n = self.n_terms();
         let in_range = |id: PackTermId| id >= 1 && id <= n;
         for entry in &self.entries {
             match entry {
-                DictEntry::Literal { datatype, .. } if !in_range(*datatype) => {
-                    return Err(PackDictError::Malformed(
-                        "dict: literal datatype id out of range",
-                    ));
+                DictEntry::Literal { datatype, .. } => {
+                    if !in_range(*datatype) {
+                        return Err(PackDictError::Malformed(
+                            "dict: literal datatype id out of range",
+                        ));
+                    }
+                    if !matches!(self.entry(*datatype), DictEntry::Iri(_)) {
+                        return Err(PackDictError::Malformed(
+                            "dict: literal datatype id does not reference an IRI",
+                        ));
+                    }
                 }
-                DictEntry::Triple { s, p, o }
-                    if !in_range(*s) || !in_range(*p) || !in_range(*o) =>
-                {
-                    return Err(PackDictError::Malformed(
-                        "dict: triple component id out of range",
-                    ));
+                DictEntry::Triple { s, p, o } => {
+                    if !in_range(*s) || !in_range(*p) || !in_range(*o) {
+                        return Err(PackDictError::Malformed(
+                            "dict: triple component id out of range",
+                        ));
+                    }
                 }
-                _ => {}
+                DictEntry::Iri(_) | DictEntry::Blank { .. } => {}
             }
         }
         Ok(())
