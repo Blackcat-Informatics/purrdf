@@ -17,8 +17,8 @@ use purrdf_gts::stream;
 use purrdf_gts::wire;
 use purrdf_gts::writer::{Writer, term_to_wire};
 use purrdf_rdf::gts_certify::{
-    CompactionCertificate, compact_and_certify, compose, effective_digest, refold_digest,
-    verify_compaction,
+    CertifyError, CompactionCertificate, compact_and_certify, compose, effective_digest,
+    refold_digest, verify_compaction,
 };
 
 const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
@@ -44,6 +44,17 @@ fn literal_term(value: String) -> Term {
     Term {
         kind: TermKind::Literal,
         value: Some(value),
+        datatype: None,
+        lang: None,
+        direction: None,
+        reifier: None,
+    }
+}
+
+fn blank_term(label: &str) -> Term {
+    Term {
+        kind: TermKind::Bnode,
+        value: Some(label.to_string()),
         datatype: None,
         lang: None,
         direction: None,
@@ -118,6 +129,84 @@ fn keyring(pairs: &[(&str, u8)]) -> HashMap<String, ed25519_dalek::VerifyingKey>
         .iter()
         .map(|&(kid, byte)| (kid.to_string(), fixed_key(byte).verifying_key()))
         .collect()
+}
+
+/// A GTS source whose content projection is exactly the W3C RDFC-1.0 test
+/// suite's SOLE negative (call-budget poison) fixture, `test074`
+/// (`crates/rdf/tests/fixtures/rdfc/test074-in.nq`): `n` blank nodes, every
+/// ORDERED pair (including self-loops) linked by the same predicate — a
+/// complete symmetric digraph. `crates/rdf/tests/rdfc_w3c.rs` proves this
+/// exact shape (`n = 10`) exceeds `RDFC_CALL_LIMIT` (~5s of permutation
+/// search before the poison guard trips) against the panicking canonicalizer
+/// (`canonicalize`/`canonicalize_with`) — so, by that same construction,
+/// running it through the pre-fix `verify_compaction` (which canonicalized
+/// untrusted bytes via the panicking entry) would abort the process. This
+/// builder reproduces the identical shape as a GTS pack so
+/// `verify_compaction` can be exercised on it directly, proving the fixed
+/// verify path fails closed with an `Err` instead.
+///
+/// `n = 10` already exceeds the 1,000,000 call budget (a single ambiguous
+/// hash group of 10 mutually-symmetric blanks contributes up to `10! =
+/// 3,628,800` permutations to just ONE `hash_n_degree` call) while staying
+/// nowhere near [`purrdf_rdf::gts_certify::POISON_BLANK_LIMIT`]'s 100,000
+/// blank-COUNT pre-reject — the whole point of the gap this test closes.
+fn poison_symmetric_source(byte: u8, kid: &str, n: usize) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+
+    let mut terms = vec![iri_term("https://example.org/p".to_string())];
+    let p = 0usize;
+    let mut blanks = Vec::with_capacity(n);
+    for i in 0..n {
+        blanks.push(terms.len());
+        terms.push(blank_term(&format!("e{i}")));
+    }
+    let mut quads = Vec::with_capacity(n * n);
+    for &a in &blanks {
+        for &b in &blanks {
+            quads.push((a, p, b, None));
+        }
+    }
+    w.add_terms(&terms);
+    w.add_quads(&quads);
+    w.into_bytes()
+}
+
+/// A GTS source with `pairs` independent symmetric blank-node PAIRS (`x_i <->
+/// y_i` via mutual edges on the same predicate, RDFC-1.0's simplest
+/// automorphism shape — see `symmetric_ring_resolves_deterministically` in
+/// `crates/rdf-core/src/ir/canon.rs`), each pair tied to its OWN unique
+/// ground anchor so pairs are mutually distinguishable (no CROSS-pair
+/// symmetry) while remaining internally ambiguous (so canonicalization must
+/// still resolve each pair's 2-permutation n-degree search, not just take a
+/// first-degree fast path). A LEGITIMATE large (`2 * pairs` blank nodes),
+/// non-globally-symmetric content graph: each pair's resolution is O(1) work,
+/// so the total stays far under `RDFC_CALL_LIMIT` regardless of `pairs` —
+/// proving the fallible budget (not a flat blank-COUNT cutoff) is what
+/// should gate verification, per the plan's explicit "do not reject
+/// legitimate large non-symmetric graphs" requirement.
+fn large_non_symmetric_source(byte: u8, kid: &str, pairs: u32) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+
+    let mut terms = vec![iri_term("https://example.org/p".to_string())];
+    let p = 0usize;
+    let mut quads = Vec::new();
+    for i in 0..pairs {
+        let anchor = terms.len();
+        terms.push(iri_term(format!("https://example.org/anchor{i}")));
+        let x = terms.len();
+        terms.push(blank_term(&format!("x{i}")));
+        let y = terms.len();
+        terms.push(blank_term(&format!("y{i}")));
+        quads.push((x, p, y, None));
+        quads.push((y, p, x, None));
+        quads.push((x, p, anchor, None));
+        quads.push((y, p, anchor, None));
+    }
+    w.add_terms(&terms);
+    w.add_quads(&quads);
+    w.into_bytes()
 }
 
 #[test]
@@ -907,5 +996,81 @@ fn dropping_the_carried_suppression_flips_suppressions_ok_to_false() {
     assert!(
         !report.suppressions_ok,
         "dropping the carried suppression must be detected: {report:?}"
+    );
+}
+
+/// GAP G4: `verify_compaction` folds and canonicalizes UNTRUSTED bytes
+/// (`pre_bytes`/`post_bytes` come from the caller, not from this crate's own
+/// authoring path). A pre-fix reader routed that canonicalization through the
+/// panicking `canonicalize_with`, so a crafted pack whose content projection
+/// is a small-but-maximally-symmetric blank graph — too few blanks to trip
+/// the cheap `POISON_BLANK_LIMIT` blank-COUNT pre-reject, but enough to blow
+/// RDFC-1.0's `RDFC_CALL_LIMIT` n-degree search budget — would abort the
+/// whole process instead of returning an error. This is the "verifier never
+/// poison-panics" proof: `verify_compaction` must return a clean `Err`
+/// instead.
+#[test]
+fn verify_compaction_fails_closed_on_symmetric_poison_content() {
+    // 10 mutually-symmetric blanks (the exact `test074` shape) is already
+    // proven (in `rdfc_w3c.rs`) to exceed `RDFC_CALL_LIMIT`, while its blank
+    // COUNT (10) is nowhere near `POISON_BLANK_LIMIT` (100,000) — so only the
+    // fallible budget guard, not the count pre-reject, can catch it.
+    let poison = poison_symmetric_source(1, "author", 10);
+    let ring = keyring(&[("author", 1)]);
+
+    // `post_bytes` is immaterial here: `verify_compaction` computes and
+    // compares the PRE-side refold digest before it ever looks at post, so
+    // the poison pre-bytes alone are enough to exercise the failure path.
+    // Re-folding the SAME poison bytes as "post" keeps the fixture minimal
+    // and self-contained (no dependency on a separate valid pack).
+    match verify_compaction(&poison, &poison, &ring) {
+        Err(CertifyError::CanonBudgetExceeded(err)) => {
+            assert_eq!(
+                err.blank_count, 10,
+                "the budget-exceeded diagnostic must report the poison graph's blank count"
+            );
+        }
+        other => panic!(
+            "expected verify_compaction to fail CLOSED with \
+             CertifyError::CanonBudgetExceeded on a symmetric-poison content projection \
+             (never panic, never silently pass); got {other:?}"
+        ),
+    }
+}
+
+/// The flip side of the poison test: a LARGE content graph that is NOT
+/// globally symmetric (each blank pair's automorphism is resolved by a
+/// cheap, independent 2-permutation search, distinguished pair-to-pair by a
+/// unique ground anchor) must still canonicalize and verify successfully.
+/// Guards against the wrong fix for GAP G4 — merely lowering
+/// `POISON_BLANK_LIMIT` — which would falsely reject this legitimate,
+/// merely-large graph even though it stays far under `RDFC_CALL_LIMIT`.
+#[test]
+fn verify_compaction_accepts_large_non_symmetric_content() {
+    // 1,500 independent symmetric pairs = 3,000 blank nodes total, each
+    // pair's ambiguity resolved independently and cheaply (a 2-permutation
+    // search per pair, not one global combinatorial search) — comfortably
+    // legitimate, and comfortably larger than what a naive flat-count
+    // tightening would need to reject to catch the 10-blank poison case.
+    let source = large_non_symmetric_source(1, "author", 1_500);
+    let (pack, cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compact_and_certify must not treat a large non-symmetric graph as poison");
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&source, &pack, &ring)
+        .expect("verify_compaction must not fail closed on a legitimate large graph");
+    assert!(
+        report.all_ok(),
+        "a faithful repack of a large non-symmetric content graph must still verify: {report:?}"
+    );
+    assert_eq!(
+        cert.pre_refold_digest, cert.post_refold_digest,
+        "the large non-symmetric content graph must refold to equal pre/post digests"
     );
 }

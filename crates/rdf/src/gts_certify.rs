@@ -42,7 +42,7 @@ use purrdf_gts::wire;
 
 use crate::gts::dataset_from_gts_graph;
 use crate::gts_core::diagnostics_to_error;
-use crate::{CanonHash, RdfDiagnostic, canonicalize_with};
+use crate::{BudgetExceeded, CanonHash, RdfDiagnostic, canonicalize_with, try_canonicalize_with};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
@@ -62,6 +62,14 @@ pub enum CertifyError {
     /// The content projection's blank-node count exceeds [`POISON_BLANK_LIMIT`]
     /// — refused rather than risking a non-terminating RDFC-1.0 run.
     Poison(usize),
+    /// An UNTRUSTED (verification-path) canonicalization exceeded RDFC-1.0's
+    /// n-degree search call budget — a pathologically symmetric blank graph
+    /// that [`Self::Poison`]'s cheap blank-node-COUNT pre-reject did not catch
+    /// (a small but highly symmetric graph can blow the call budget while
+    /// staying far under [`POISON_BLANK_LIMIT`]). [`verify_compaction`] routes
+    /// through the fallible canonicalizer and surfaces this instead of letting
+    /// the RDFC-1.0 engine panic on adversarial verifier input.
+    CanonBudgetExceeded(BudgetExceeded),
     /// The certificate's canonical CBOR encoding is malformed.
     Cbor(String),
     /// An internal invariant was violated (e.g. a freshly authored
@@ -80,6 +88,7 @@ impl std::fmt::Display for CertifyError {
                 "refusing to canonicalize a content projection with {count} blank node(s) \
                  (exceeds the {POISON_BLANK_LIMIT} poison guard)"
             ),
+            Self::CanonBudgetExceeded(err) => write!(f, "compaction verification failed: {err}"),
             Self::Cbor(msg) => write!(f, "compaction certificate CBOR error: {msg}"),
             Self::Invariant(msg) => {
                 write!(f, "compaction certificate invariant violated: {msg}")
@@ -92,6 +101,7 @@ impl std::error::Error for CertifyError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Dataset(diag) => Some(diag),
+            Self::CanonBudgetExceeded(err) => Some(err),
             Self::Refused(_) | Self::Poison(_) | Self::Cbor(_) | Self::Invariant(_) => None,
         }
     }
@@ -221,6 +231,49 @@ fn canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
     let canonical = canonicalize_with(&dataset, CanonHash::Sha256);
     let digest = Sha256::digest(canonical.nquads.as_bytes());
     Ok(wire::hex(digest.as_slice()))
+}
+
+/// The fallible twin of [`canonical_digest`], for UNTRUSTED input
+/// ([`verify_compaction`] and everything it calls): identical up through the
+/// cheap [`POISON_BLANK_LIMIT`] blank-COUNT pre-reject, but canonicalizes
+/// through [`try_canonicalize_with`] so a pathologically symmetric graph that
+/// stays under the count limit yet exhausts RDFC-1.0's n-degree search call
+/// budget surfaces as [`CertifyError::CanonBudgetExceeded`] instead of
+/// panicking. Byte-identical `Ok` digest to [`canonical_digest`] on any input
+/// both accept — determinism is unaffected, only the failure mode on
+/// adversarial input changes from abort to a returned error.
+fn try_canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
+    let dataset = dataset_from_gts_graph(projected)?;
+    let blanks = crate::ir::canon::blank_count(&dataset);
+    if blanks > POISON_BLANK_LIMIT {
+        return Err(CertifyError::Poison(blanks));
+    }
+    let canonical = try_canonicalize_with(&dataset, CanonHash::Sha256)
+        .map_err(CertifyError::CanonBudgetExceeded)?;
+    let digest = Sha256::digest(canonical.nquads.as_bytes());
+    Ok(wire::hex(digest.as_slice()))
+}
+
+/// The fallible twin of [`refold_digest`], for UNTRUSTED input — see
+/// [`try_canonical_digest`].
+///
+/// # Errors
+/// Returns [`CertifyError::Dataset`], [`CertifyError::Poison`], or
+/// [`CertifyError::CanonBudgetExceeded`] — never panics, regardless of how
+/// adversarially symmetric `g`'s content projection is.
+fn try_refold_digest(g: &Graph) -> Result<String, CertifyError> {
+    try_canonical_digest(&content_projection(g))
+}
+
+/// The fallible twin of [`effective_digest`], for UNTRUSTED input — see
+/// [`try_canonical_digest`].
+///
+/// # Errors
+/// Returns [`CertifyError::Dataset`], [`CertifyError::Poison`], or
+/// [`CertifyError::CanonBudgetExceeded`] — never panics, regardless of how
+/// adversarially symmetric `g`'s effective projection is.
+fn try_effective_digest(g: &Graph) -> Result<String, CertifyError> {
+    try_canonical_digest(&effective_projection(g))
 }
 
 /// A term-id resolved to its own `value` string, or `None` when the id is
@@ -614,13 +667,19 @@ fn suppression_retention_ok(pre: &Graph, post: &Graph) -> bool {
 /// (RAW), AND `pre`/`post` agree on [`effective_digest`] (EFFECTIVE) — the
 /// suppression↔compaction commuting square (see [`CompactionReport::suppressions_ok`]).
 ///
+/// Called only from [`verify_compaction`] over UNTRUSTED bytes, so the
+/// effective-digest agreement is computed via [`try_effective_digest`]
+/// (fail-closed on a poison-budget graph) rather than [`effective_digest`]
+/// (which panics for trusted callers).
+///
 /// # Errors
 /// Returns [`CertifyError`] only when an effective projection genuinely
-/// cannot be canonicalized (dataset bridge failure or the poison guard) —
-/// never for a suppression mismatch, which surfaces as `Ok(false)`.
+/// cannot be canonicalized (dataset bridge failure, the blank-count poison
+/// guard, or RDFC-1.0 call-budget exhaustion) — never for a suppression
+/// mismatch, which surfaces as `Ok(false)`.
 fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
     let retained = suppression_retention_ok(pre, post);
-    let effective_equivalent = effective_digest(pre)? == effective_digest(post)?;
+    let effective_equivalent = try_effective_digest(pre)? == try_effective_digest(post)?;
     Ok(retained && effective_equivalent)
 }
 
@@ -631,6 +690,17 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
 /// embedded `stream:contentRefoldDigest` — the refold digest is always
 /// recomputed from both `pre_bytes` and `post_bytes` here.
 ///
+/// `pre_bytes`/`post_bytes` are UNTRUSTED (an independent verifier's whole
+/// point is to not trust the claimant), so every digest this function
+/// computes over them goes through the fallible RDFC-1.0 canonicalizer
+/// ([`try_refold_digest`]/[`try_effective_digest`], backing
+/// [`try_canonicalize_with`]) rather than the panicking
+/// [`canonicalize_with`]: a pathologically symmetric blank graph that stays
+/// under [`POISON_BLANK_LIMIT`]'s cheap blank-COUNT pre-reject yet exhausts
+/// RDFC-1.0's n-degree search call budget surfaces as
+/// [`CertifyError::CanonBudgetExceeded`], never a process-aborting panic —
+/// this function must never be a resource-exhaustion (or crash) vector.
+///
 /// A post pack with a broken hash chain (a corrupted frame) still returns
 /// `Ok` with `seam_chain_ok: false` rather than erroring — the reader
 /// degrades a damaged frame to an opaque node rather than aborting (§7.6), so
@@ -638,7 +708,9 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
 ///
 /// # Errors
 /// Returns [`CertifyError`] only when a content projection genuinely cannot be
-/// canonicalized: the GTS→dataset bridge fails, or the poison guard trips.
+/// canonicalized: the GTS→dataset bridge fails, the blank-count poison guard
+/// trips, or the RDFC-1.0 call budget is exhausted on a symmetric-poison
+/// graph.
 // The keyring mirrors the caller's key store, not a hot lookup path worth
 // generalizing over `BuildHasher` — matches `verify_file_with_keyring`.
 #[allow(clippy::implicit_hasher)]
@@ -650,7 +722,7 @@ pub fn verify_compaction(
     let pre = read(pre_bytes, true, None);
     let post = read(post_bytes, true, None);
 
-    let refold_equivalent = refold_digest(&pre)? == refold_digest(&post)?;
+    let refold_equivalent = try_refold_digest(&pre)? == try_refold_digest(&post)?;
     let seam_chain_ok = post.diagnostics.is_empty();
     let signatures_bound = signatures_bound_ok(&pre, &post);
     let signatures_verify = signatures_verify_ok(&post, keyring);

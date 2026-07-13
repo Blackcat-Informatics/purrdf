@@ -38,7 +38,10 @@ pub mod validate;
 
 pub use builder::{RdfDatasetBuilder, ValidatedRdfDatasetBuilder};
 pub use bundle::{GtsBundle, RdfEnvelope};
-pub use canon::{CanonHash, Canonicalized, canonicalize, canonicalize_with};
+pub use canon::{
+    BudgetExceeded, CanonHash, Canonicalized, canonicalize, canonicalize_with, try_canonicalize,
+    try_canonicalize_with,
+};
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{
     QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetIter,

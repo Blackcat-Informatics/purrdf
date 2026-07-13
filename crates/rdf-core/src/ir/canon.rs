@@ -177,7 +177,9 @@ pub struct Canonicalized {
 /// overlay).
 ///
 /// Deterministic and oxigraph-free. Hard-`panic!`s only if the n-degree search
-/// exceeds `RDFC_CALL_LIMIT` on a pathologically symmetric blank graph.
+/// exceeds `RDFC_CALL_LIMIT` on a pathologically symmetric blank graph. Trusted
+/// callers only — see [`try_canonicalize`] for a fallible entry safe to run
+/// over untrusted input.
 #[must_use]
 pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
     canonicalize_with(ds, CanonHash::Sha256)
@@ -185,9 +187,45 @@ pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
 
 /// Canonicalize `ds` under full W3C RDFC-1.0 with an explicit hash algorithm
 /// ([`CanonHash::Sha384`] is the spec's SHA-384 variant). See [`canonicalize`].
+///
+/// Trusted callers only (hard-`panic!`s on poison-budget exhaustion, `.goals`
+/// no-knob contract) — see [`try_canonicalize_with`] for the fallible
+/// equivalent.
 #[must_use]
 pub fn canonicalize_with(ds: &RdfDataset, hash: CanonHash) -> Canonicalized {
     CanonState::new(ds, hash).run()
+}
+
+/// Canonicalize `ds` under full W3C RDFC-1.0 (SHA-256), returning
+/// [`Err(BudgetExceeded)`](BudgetExceeded) instead of panicking when the
+/// n-degree search exceeds `RDFC_CALL_LIMIT`.
+///
+/// This is the entry point for UNTRUSTED input (e.g. an independent
+/// certificate-verification path folding caller-supplied bytes): a
+/// pathologically symmetric blank graph must fail closed with a value the
+/// caller can propagate as an error, never abort the process. Byte-identical
+/// output to [`canonicalize`] on success — same algorithm, same n-quads, same
+/// labels; only the exhaustion behavior differs. See [`canonicalize`] for
+/// trusted callers, which panics instead.
+///
+/// # Errors
+/// Returns [`BudgetExceeded`] when the n-degree search's call/permutation
+/// budget is exhausted before the dataset canonicalizes.
+pub fn try_canonicalize(ds: &RdfDataset) -> Result<Canonicalized, BudgetExceeded> {
+    try_canonicalize_with(ds, CanonHash::Sha256)
+}
+
+/// Fallible, explicit-hash-algorithm form of [`try_canonicalize`]. See
+/// [`canonicalize_with`] for the panicking (trusted-caller) equivalent.
+///
+/// # Errors
+/// Returns [`BudgetExceeded`] when the n-degree search's call/permutation
+/// budget is exhausted before the dataset canonicalizes.
+pub fn try_canonicalize_with(
+    ds: &RdfDataset,
+    hash: CanonHash,
+) -> Result<Canonicalized, BudgetExceeded> {
+    CanonState::new(ds, hash).run_fallible()
 }
 
 /// The count of distinct blank nodes in `ds` (incl. blanks nested inside triple
@@ -406,8 +444,37 @@ struct CanonState<'a> {
     budget: u64,
 }
 
-/// Internal early-unwind carrier for the poison-budget guard.
-struct BudgetExceeded;
+/// Internal early-unwind carrier for the poison-budget guard (no payload —
+/// [`CanonState::run_fallible`] attaches the blank count when it surfaces the
+/// public [`BudgetExceeded`] to a caller).
+struct Exhausted;
+
+/// The n-degree search's call/permutation budget (`RDFC_CALL_LIMIT`) was
+/// exhausted before the dataset canonicalized — a pathologically symmetric
+/// blank graph (adversarial input, not a legitimate large dataset: a
+/// non-symmetric graph of any size stays well under budget). Returned by
+/// [`try_canonicalize`]/[`try_canonicalize_with`] instead of the panic that
+/// [`canonicalize`]/[`canonicalize_with`] raise for trusted callers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BudgetExceeded {
+    /// The number of distinct blank nodes in the input that triggered
+    /// exhaustion (diagnostic only).
+    pub blank_count: usize,
+}
+
+impl std::fmt::Display for BudgetExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "RDFC-1.0 canonicalization exceeded its call budget ({RDFC_CALL_LIMIT}) on a \
+             pathologically symmetric blank graph ({} blanks); the input is adversarial and \
+             cannot be canonicalized deterministically within bounds",
+            self.blank_count
+        )
+    }
+}
+
+impl std::error::Error for BudgetExceeded {}
 
 impl<'a> CanonState<'a> {
     fn new(ds: &'a RdfDataset, hash: CanonHash) -> Self {
@@ -436,16 +503,24 @@ impl<'a> CanonState<'a> {
         }
     }
 
-    /// Run the full algorithm, panicking on poison-budget exhaustion.
-    fn run(mut self) -> Canonicalized {
+    /// Run the full algorithm, panicking on poison-budget exhaustion (trusted
+    /// callers — [`canonicalize`]/[`canonicalize_with`]).
+    fn run(self) -> Canonicalized {
+        match self.run_fallible() {
+            Ok(canonicalized) => canonicalized,
+            Err(err) => panic!("{err}"),
+        }
+    }
+
+    /// Run the full algorithm, returning `Err(BudgetExceeded)` instead of
+    /// panicking on poison-budget exhaustion (untrusted callers —
+    /// [`try_canonicalize`]/[`try_canonicalize_with`]). Byte-identical
+    /// `Ok` output to [`Self::run`].
+    fn run_fallible(mut self) -> Result<Canonicalized, BudgetExceeded> {
+        let blank_count = self.blanks.len();
         match self.run_inner() {
             Ok(()) => {}
-            Err(BudgetExceeded) => panic!(
-                "RDFC-1.0 canonicalization exceeded its call budget ({RDFC_CALL_LIMIT}) on a \
-                 pathologically symmetric blank graph ({} blanks); the input is adversarial and \
-                 cannot be canonicalized deterministically within bounds",
-                self.blanks.len()
-            ),
+            Err(Exhausted) => return Err(BudgetExceeded { blank_count }),
         }
         let nquads = self.serialize_canonical();
         let labels = self
@@ -454,10 +529,10 @@ impl<'a> CanonState<'a> {
             .iter()
             .map(|(&id, label)| (id, label.clone()))
             .collect();
-        Canonicalized { nquads, labels }
+        Ok(Canonicalized { nquads, labels })
     }
 
-    fn run_inner(&mut self) -> Result<(), BudgetExceeded> {
+    fn run_inner(&mut self) -> Result<(), Exhausted> {
         // §4.4 step 3: first-degree hash of every blank, grouped by hash.
         let mut by_hash: BTreeMap<HashHex, Vec<TermId>> = BTreeMap::new();
         for &b in &self.blanks {
@@ -529,8 +604,8 @@ impl<'a> CanonState<'a> {
         &mut self,
         identifier: TermId,
         mut issuer: IdIssuer,
-    ) -> Result<(HashHex, IdIssuer), BudgetExceeded> {
-        self.budget = self.budget.checked_sub(1).ok_or(BudgetExceeded)?;
+    ) -> Result<(HashHex, IdIssuer), Exhausted> {
+        self.budget = self.budget.checked_sub(1).ok_or(Exhausted)?;
 
         // §4.8 step 3: map related-blank hash → the related blanks bearing it.
         let mut hn: BTreeMap<HashHex, Vec<TermId>> = BTreeMap::new();
@@ -554,7 +629,7 @@ impl<'a> CanonState<'a> {
                 // contributes k! permutations, so this — not the recursive-call count —
                 // is the dominant cost on a pathologically symmetric graph (e.g. a
                 // 10-blank clique). Counting it here bounds the actual work.
-                self.budget = self.budget.checked_sub(1).ok_or(BudgetExceeded)?;
+                self.budget = self.budget.checked_sub(1).ok_or(Exhausted)?;
                 let mut issuer_copy = issuer.clone();
                 let mut path = String::new();
                 let mut recursion: Vec<TermId> = Vec::new();
