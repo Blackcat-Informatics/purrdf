@@ -325,7 +325,7 @@ impl<S: ResolvedSink> SegmentResolver<S> {
     /// Count of the per-segment reifier→triple binding map currently
     /// retained (see the `reifier_bindings` field doc). This is populated as
     /// `reifier` events for the CURRENTLY OPEN segment stream in, and is `0`
-    /// immediately after every [`Self::resolve_buffered`] flush — so reading
+    /// immediately after every `resolve_buffered` flush — so reading
     /// it right after a segment has flushed (e.g. on the first event of the
     /// next segment, or after [`Self::finish`]) is bounded by a single
     /// segment's own reifier cardinality, never by the sum across every
