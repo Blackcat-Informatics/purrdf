@@ -44,6 +44,10 @@ pub const DETACHED_SIGNATURE: &str = "https://w3id.org/gts/stream#DetachedSignat
 pub const SOURCE_FRAME: &str = "https://w3id.org/gts/stream#sourceFrame";
 /// `stream:cose` — raw COSE_Sign1 bytes of a detached frame signature.
 pub const COSE: &str = "https://w3id.org/gts/stream#cose";
+/// `stream:contentRefoldDigest` — the RDFC-1.0 digest of the compacted content
+/// projection, embedded so a repack certifies without the pre-compaction bytes
+/// (proof-carrying pack, §10.1 refold equivalence).
+pub const CONTENT_REFOLD_DIGEST: &str = "https://w3id.org/gts/stream#contentRefoldDigest";
 
 /// The fixed compactor identity recorded as `stream:agent` — a constant so
 /// the rewrite is byte-reproducible across engines (§14.1 determinism).

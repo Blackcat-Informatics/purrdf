@@ -22,15 +22,39 @@ use std::borrow::Cow;
 
 use ciborium::value::Value;
 
+use crate::dict;
 use crate::model::{Graph, Quad, ReifierRow, Suppression, Term, TermKind};
 use crate::reader::{read, read_file_segments};
 use crate::stream;
 use crate::wire::{digest_str, hex, map_get};
-use crate::writer::Writer;
+use crate::writer::{Writer, WriterOptions};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+
+/// In-band pack dictionary name pinned in the header `"dct"` map (§5).
+const DICT_NAME: &str = "pack";
+/// Target size of the pinned pack dictionary. FastCOVER/raw-content truncate the
+/// content to fit; a fixed value keeps compaction byte-deterministic.
+const DICT_TARGET_LEN: usize = 16 * 1024;
+
+/// Which in-band dictionary a pack pins for its `zstd` `dct` codec (§8.5).
+///
+/// Both are byte-deterministic; the trained strategy is the production default
+/// (Req 3 headline is "trained"), and the raw-content strategy is a named
+/// alternate. The choice affects only the pinned dictionary bytes, never the
+/// fold — a reader decodes the in-band dictionary either way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DictStrategy {
+    /// FastCOVER-trained dictionary (the production default).
+    Trained,
+    /// Raw-content dictionary (canonical trailing window of the corpus).
+    RawContent,
+    /// No pack dictionary — plain `zstd` frames (used when there is no content
+    /// blob corpus to train on).
+    None,
+}
 
 /// The input is not safely compactable (§10.1/§14.1 refuse-don't-trust).
 #[derive(Debug)]
@@ -231,6 +255,7 @@ fn streaming_index(
     timestamp: &str,
     sealed_digest: Option<&str>,
     sealed_size: Option<usize>,
+    content_digest: Option<&str>,
 ) -> Result<GraphBuilder, CompactRefusedError> {
     let mut b = GraphBuilder::default();
     // Fixed vocabulary block — constant ids across engines for determinism.
@@ -251,6 +276,10 @@ fn streaming_index(
     let t_detached_sig = b.add(TermKind::Iri, stream::DETACHED_SIGNATURE);
     let t_source_frame = b.add(TermKind::Iri, stream::SOURCE_FRAME);
     let t_cose = b.add(TermKind::Iri, stream::COSE);
+    // The content-refold digest term rides the fixed block only when embedded,
+    // mirroring how the sealed-source quad is emitted conditionally.
+    let t_content_digest =
+        content_digest.map(|_| b.add(TermKind::Iri, stream::CONTENT_REFOLD_DIGEST));
 
     // One Manifestation per promised blob, in delivery order.
     for (order, digest) in blob_order.iter().enumerate() {
@@ -297,6 +326,13 @@ fn streaming_index(
     if let Some(sealed) = sealed_digest {
         let o = b.literal(sealed, None);
         b.quad(c, t_sealed_source, o);
+    }
+    // Proof-carrying pack: embed the RDFC-1.0 content digest so a repack
+    // certifies without the pre-compaction bytes. Excluded from the content
+    // projection at verification time, so it cannot perturb the equivalence.
+    if let (Some(t_cd), Some(digest)) = (t_content_digest, content_digest) {
+        let o = b.literal(digest, None);
+        b.quad(c, t_cd, o);
     }
 
     // Detached frame signatures (§10.1): checkable claims about the original log.
@@ -387,6 +423,44 @@ fn value_idx(v: &Value) -> Option<usize> {
     }
 }
 
+/// Build the in-band pack dictionary over the batched content-blob corpus.
+///
+/// The corpus is every content blob's decoded bytes (the sealed original — the
+/// whole source log — is excluded, it is not "content"). A pack with no content
+/// blobs has no corpus, so it pins no dictionary and its frames use plain `zstd`.
+/// The producers are order-independent, so the emitted `dct` bytes equal
+/// `trained_dict`/`raw_content_dict` of the corpus regardless of iteration order.
+fn build_pack_dict(
+    g: &Graph,
+    blob_order: &[String],
+    sealed_digest: Option<&str>,
+    strategy: DictStrategy,
+) -> Result<Option<(String, Vec<u8>)>, CompactRefusedError> {
+    if strategy == DictStrategy::None {
+        return Ok(None);
+    }
+    let mut corpus: Vec<Vec<u8>> = Vec::new();
+    for digest in blob_order {
+        if Some(digest.as_str()) == sealed_digest {
+            continue;
+        }
+        if let Some(bytes) = blob_bytes(g, digest)? {
+            corpus.push(bytes.into_owned());
+        }
+    }
+    if corpus.is_empty() {
+        return Ok(None);
+    }
+    let refs: Vec<&[u8]> = corpus.iter().map(Vec::as_slice).collect();
+    let bytes = match strategy {
+        DictStrategy::Trained => dict::trained_dict(&refs, DICT_TARGET_LEN),
+        DictStrategy::RawContent => dict::raw_content_dict(&refs, DICT_TARGET_LEN),
+        DictStrategy::None => unreachable!("handled above"),
+    }
+    .map_err(|err| CompactRefusedError(format!("cannot build the pack dictionary: {err}")))?;
+    Ok(Some((DICT_NAME.to_string(), bytes)))
+}
+
 /// Rewrite a GTS file into one streamable segment (§10.1).
 ///
 /// `data` must verify cleanly (refuse-don't-trust). `timestamp` is the
@@ -394,10 +468,23 @@ fn value_idx(v: &Value) -> Option<usize> {
 /// the output is byte-reproducible. `seal_original` carries the verbatim
 /// source bytes as a nested GTS blob (§12.1), role `"source"` — REQUIRED
 /// for `evidence` input.
+///
+/// `strategy` selects the in-band pack dictionary trained over the batched
+/// content-blob corpus and pinned per pack ([`DictStrategy::Trained`] is the
+/// production default). `content_digest`, when supplied by the certifying
+/// authoring wrapper, is embedded as `stream:contentRefoldDigest` provenance so
+/// a repack certifies without the pre-compaction bytes.
+///
+/// # Errors
+/// Returns [`CompactRefusedError`] when the input is not safely compactable, a
+/// blob cannot be decoded, the pack dictionary cannot be built, or the writer
+/// rejects the configuration.
 pub fn compact_streamable(
     data: &[u8],
     timestamp: &str,
     seal_original: bool,
+    strategy: DictStrategy,
+    content_digest: Option<&str>,
 ) -> Result<Vec<u8>, CompactRefusedError> {
     let (mut g, profile) = refusal_gate(data, seal_original)?;
 
@@ -426,16 +513,30 @@ pub fn compact_streamable(
         None
     };
 
+    // Pack dictionary trained over the batched content-blob corpus (the sealed
+    // original — the whole source — is excluded). The dict producers are
+    // order-independent, so blob-delivery order need not be threaded here.
+    let dict = build_pack_dict(&g, &blob_order, sealed_digest.as_deref(), strategy)?;
+
     let index = streaming_index(
         &g,
         &blob_order,
         timestamp,
         sealed_digest.as_deref(),
         sealed_digest.as_ref().map(|_| data.len()),
+        content_digest,
     )?;
     let base = index.terms.len();
 
-    let mut w = Writer::with_layout(&profile, Some("streamable"));
+    let mut w = Writer::with_options(
+        &profile,
+        WriterOptions {
+            layout: Some("streamable".to_string()),
+            dict,
+            ..WriterOptions::default()
+        },
+    )
+    .map_err(|err| CompactRefusedError(format!("cannot configure the pack writer: {err}")))?;
     // Leading streaming index: the catalog presages everything below it.
     w.add_terms(&index.terms);
     w.add_quads(&index.quads);
@@ -504,4 +605,150 @@ pub fn compact_streamable(
     // The re-issued ordering commitment: the compactor is its sole attester.
     w.add_index();
     Ok(w.into_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reader::read;
+
+    /// A source GTS file whose content blobs share structure — the corpus a
+    /// pack dictionary trains on.
+    fn source_with_blobs() -> Vec<u8> {
+        let mut w = Writer::new("purrdf.gts");
+        for i in 0..64u32 {
+            let blob = format!(
+                "<https://example.org/s{}> <https://example.org/p> \"claim {} about cats\" .\n",
+                i % 37,
+                i
+            )
+            .into_bytes();
+            w.add_blob_owned(blob, Some("text/plain"), None);
+        }
+        w.into_bytes()
+    }
+
+    fn digest_quad_present(bytes: &[u8]) -> bool {
+        let g = read(bytes, true, None);
+        g.terms
+            .iter()
+            .any(|t| t.value.as_deref() == Some(stream::CONTENT_REFOLD_DIGEST))
+    }
+
+    #[test]
+    fn compaction_is_byte_deterministic_with_a_trained_dict() {
+        let source = source_with_blobs();
+        let a = compact_streamable(
+            &source,
+            "2026-01-01T00:00:00Z",
+            false,
+            DictStrategy::Trained,
+            None,
+        )
+        .expect("compaction succeeds");
+        let b = compact_streamable(
+            &source,
+            "2026-01-01T00:00:00Z",
+            false,
+            DictStrategy::Trained,
+            None,
+        )
+        .expect("compaction succeeds");
+        assert_eq!(a, b, "a trained-dict compaction must be byte-reproducible");
+    }
+
+    #[test]
+    fn compacted_pack_folds_cleanly_and_blobs_decode_through_the_dict() {
+        let source = source_with_blobs();
+        let packed = compact_streamable(
+            &source,
+            "2026-01-01T00:00:00Z",
+            false,
+            DictStrategy::Trained,
+            None,
+        )
+        .expect("compaction succeeds");
+        let g = read(&packed, true, None);
+        assert!(
+            g.diagnostics.is_empty(),
+            "compacted pack must fold cleanly (dict resolves): {:?}",
+            g.diagnostics
+        );
+        assert_eq!(g.blobs.len(), 64, "every content blob survives the repack");
+        for (_, entry) in &g.blobs {
+            entry
+                .decoded_vec()
+                .expect("dict-compressed blob must decode against the pinned in-band dictionary");
+        }
+    }
+
+    #[test]
+    fn the_dictionary_is_invisible_to_the_fold() {
+        let source = source_with_blobs();
+        let trained = compact_streamable(
+            &source,
+            "2026-01-01T00:00:00Z",
+            false,
+            DictStrategy::Trained,
+            None,
+        )
+        .expect("trained compaction");
+        let undicted = compact_streamable(
+            &source,
+            "2026-01-01T00:00:00Z",
+            false,
+            DictStrategy::None,
+            None,
+        )
+        .expect("undicted compaction");
+        assert_ne!(
+            trained, undicted,
+            "pinning a dictionary changes the header bytes"
+        );
+        let a = read(&trained, true, None);
+        let b = read(&undicted, true, None);
+        let a_blobs: Vec<Vec<u8>> = a
+            .blobs
+            .iter()
+            .map(|(_, e)| e.decoded_vec().unwrap())
+            .collect();
+        let b_blobs: Vec<Vec<u8>> = b
+            .blobs
+            .iter()
+            .map(|(_, e)| e.decoded_vec().unwrap())
+            .collect();
+        assert_eq!(
+            a_blobs, b_blobs,
+            "the pack dictionary is a compression detail, invisible to the fold"
+        );
+    }
+
+    #[test]
+    fn embedded_content_digest_appears_only_when_supplied() {
+        let source = source_with_blobs();
+        let without = compact_streamable(
+            &source,
+            "2026-01-01T00:00:00Z",
+            false,
+            DictStrategy::Trained,
+            None,
+        )
+        .expect("compaction");
+        assert!(
+            !digest_quad_present(&without),
+            "no content-refold digest without one supplied"
+        );
+        let with = compact_streamable(
+            &source,
+            "2026-01-01T00:00:00Z",
+            false,
+            DictStrategy::Trained,
+            Some("blake3:0123456789abcdef"),
+        )
+        .expect("compaction");
+        assert!(
+            digest_quad_present(&with),
+            "the supplied content-refold digest must be embedded as provenance"
+        );
+    }
 }
