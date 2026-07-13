@@ -1651,6 +1651,18 @@ fn eval_function<D: DatasetView + Sync>(
                 let result = crate::user_fn::eval_user_function(func, iri.as_str(), &vals, ctx)?;
                 return Ok(result.map(|value| intern(ctx, value)));
             }
+            // A caller-injected native (host-Rust closure) function, resolved from
+            // the same registry's second table. Checked after the SPARQL-bodied
+            // path (so a same-registry cross-kind collision can never arise — the
+            // registry's collision guard already makes that unrepresentable) and
+            // before the XSD-cast fallback, so a function IRI never collides with a
+            // datatype IRI.
+            if let Some(registry) = ctx.user_functions
+                && let Some(native) = registry.resolve_native(iri.as_str())
+            {
+                let result = crate::user_fn::eval_native_function(native, iri.as_str(), &vals)?;
+                return Ok(result.map(|value| intern(ctx, value)));
+            }
             if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {
                 return Ok(eval_xsd_cast(ctx, target, arg(&vals, 0)));
             }
