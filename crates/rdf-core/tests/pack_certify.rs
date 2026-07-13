@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use purrdf_core::ir::pack::bits::{IntVector, IntVectorRef};
 use purrdf_core::ir::pack::certify::{PackDigest, verify_pack};
 use purrdf_core::ir::pack::container::{PackBuilder, PackError, PackView};
 use purrdf_core::{CanonHash, RdfDataset, RdfDatasetBuilder, RdfLiteral, try_canonicalize_with};
@@ -203,6 +204,133 @@ fn verify_pack_is_deterministic_across_two_builds() {
         digest_a, digest_b,
         "two builds of the same dataset must verify to the same PackDigest"
     );
+}
+
+/// The section directory's per-entry byte length: `kind` (4) + `offset` (8) +
+/// `len` (8) + `sha256` (32) — see `ir::pack::container`'s module docs,
+/// "Section directory" table.
+const DIR_ENTRY_LEN: usize = 4 + 8 + 8 + 32;
+
+/// The fixed header length before the section directory begins — see the same
+/// module docs' "Header" table.
+const HEADER_LEN: usize = 64;
+
+/// `SIDE` is the third (last) of the three fixed-order directory entries
+/// (`DICT`, then `TRIPLES`, then `SIDE` — see the module docs).
+const SIDE_ENTRY_INDEX: usize = 2;
+
+/// `verify_pack` must fail CLOSED (a clean `Err`), never panic, when the
+/// independent reconstruction it drives through `RdfDatasetBuilder::freeze`
+/// finds a structural violation that survived `PackView::from_bytes`.
+///
+/// # Why this tamper crosses the `from_bytes` / `freeze` boundary
+///
+/// `from_bytes` validates each section in relative isolation:
+/// `dict.rs`'s `validate_references` only range-checks a `Triple` dictionary
+/// entry's own `s`/`p`/`o` ids (it never checks that the referenced entries
+/// hold the RIGHT *role* — e.g. that `p` resolves to an IRI), and
+/// `side.rs`'s `SideTablesRef::from_bytes` only checks that the
+/// `reifier_triple` column is nonzero and length-matches its sibling columns
+/// (it never checks that each id actually resolves to a `Triple` dictionary
+/// entry, only `freeze`'s structural validator — `ir::validate::validate`,
+/// specifically its reifier-target check — enforces that RDF 1.2 C0.4
+/// constraint). So repointing one `reifier_triple` row at a NON-triple,
+/// in-range, nonzero dictionary id is invisible to every check `from_bytes`
+/// runs, yet `reconstruct`'s replay of `view.reifier_quads()` carries that
+/// wrong-typed id straight into `push_reifier_in_graph`, and
+/// `RdfDatasetBuilder::freeze` rejects it with `rdf-ir-reifier-not-triple`.
+///
+/// The substitute id used here is unified id `1`. `TermValue`'s `Ord` impl
+/// (`ir::term`) orders every `Iri` before every `Blank`/`Literal`/`Triple`
+/// (see its `canonical_tag` precedence), and `dict.rs::PackDict::encode`
+/// assigns unified ids `1..=n` in that sorted order — so id `1` is always an
+/// IRI whenever the dataset interns at least one (true of `rich_fixture`),
+/// which is exactly a NON-triple, in-range, nonzero id: a valid substitute
+/// that trips no `from_bytes` check.
+///
+/// This drives the actual `verify_pack(bytes)` production entry point
+/// end-to-end (not a lower-level unit test), so it exercises the same code
+/// path a caller handed adversarial bytes would.
+#[test]
+fn verify_pack_returns_err_when_reconstruction_fails_structural_validation() {
+    let dataset = rich_fixture();
+    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+
+    // -- Locate the SIDE section's directory entry (index 2 of 3) -----------
+    let side_entry_start = HEADER_LEN + SIDE_ENTRY_INDEX * DIR_ENTRY_LEN;
+    let side_offset = u64::from_le_bytes(
+        bytes[side_entry_start + 4..side_entry_start + 12]
+            .try_into()
+            .expect("8 bytes"),
+    ) as usize;
+    let side_len = u64::from_le_bytes(
+        bytes[side_entry_start + 12..side_entry_start + 20]
+            .try_into()
+            .expect("8 bytes"),
+    ) as usize;
+
+    // -- Walk far enough into the SIDE section body to find `reifier_triple` --
+    // Layout (`side.rs`'s `SideTablesRef::from_bytes`): a 1-byte format version,
+    // an 8-byte `reifies_predicate` id, then the `reifier_reifier` column, THEN
+    // the `reifier_triple` column — the one we tamper.
+    let side_body = &bytes[side_offset..side_offset + side_len];
+    let mut pos = 1 + 8;
+    let reifier_reifier =
+        IntVectorRef::from_bytes(&side_body[pos..]).expect("reifier_reifier decodes");
+    pos += reifier_reifier.serialized_len();
+    let reifier_triple_rel_start = pos;
+    let reifier_triple =
+        IntVectorRef::from_bytes(&side_body[pos..]).expect("reifier_triple decodes");
+    assert!(
+        !reifier_triple.is_empty(),
+        "the rich fixture binds at least one reifier"
+    );
+
+    // -- Rebuild `reifier_triple` with row 0 repointed at unified id 1 -------
+    // Same width, same length in, same width, same length out: `IntVector`'s
+    // serialization is a pure function of (width, values), so this re-encode
+    // is byte-length-identical to the original and can be spliced in place.
+    let width = reifier_triple.width();
+    let mut patched = IntVector::with_width(width);
+    for i in 0..reifier_triple.len() {
+        patched.push(if i == 0 { 1 } else { reifier_triple.get(i) });
+    }
+    let patched_bytes = patched.to_bytes();
+    assert_eq!(
+        patched_bytes.len(),
+        reifier_triple.serialized_len(),
+        "same width and length must re-serialize to the same byte length"
+    );
+
+    let mut corrupted = bytes.clone();
+    let abs_start = side_offset + reifier_triple_rel_start;
+    corrupted[abs_start..abs_start + patched_bytes.len()].copy_from_slice(&patched_bytes);
+
+    // -- Recompute and patch the SIDE section's own directory SHA-256 -------
+    let new_side_digest: [u8; 32] =
+        Sha256::digest(&corrupted[side_offset..side_offset + side_len]).into();
+    let digest_start = side_entry_start + 4 + 8 + 8;
+    corrupted[digest_start..digest_start + 32].copy_from_slice(&new_side_digest);
+
+    // The tamper must be invisible to `from_bytes` — that is the whole point.
+    PackView::from_bytes(&corrupted).expect(
+        "a reifier-triple id repointed at an in-range, nonzero, non-triple id must \
+         still open cleanly: from_bytes never checks that cross-role constraint",
+    );
+
+    // `verify_pack` must fail CLOSED, not panic, once reconstruction hits it.
+    let err = verify_pack(&corrupted).expect_err(
+        "a reifier bound to a non-triple target must fail freeze's structural \
+         validation inside verify_pack, not panic",
+    );
+    assert!(
+        matches!(err, PackError::Malformed(_)),
+        "expected PackError::Malformed from the failed reconstruction, got {err:?}"
+    );
+
+    // The untampered pack still verifies fine — the patch, not the fixture
+    // itself, is what breaks reconstruction.
+    assert!(verify_pack(&bytes).is_ok());
 }
 
 #[test]

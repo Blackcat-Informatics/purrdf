@@ -227,6 +227,17 @@ fn reconstruct(view: &PackView<'_>) -> RdfDatasetBuilder {
 /// - Any [`PackError`] [`PackView::from_bytes`] can return (bad magic, unsupported
 ///   version, truncation, a section's SHA-256 failing its stored digest, or a
 ///   submodule's own structural validation failing).
+/// - [`PackError::Malformed`] if the independent reconstruction — replaying the
+///   pack's own decoded quads/reifiers/annotations into a fresh
+///   [`RdfDatasetBuilder`] — fails [`RdfDatasetBuilder::freeze`]'s structural
+///   validation (C0 positional constraints, id-reference validity, triple-term
+///   acyclicity). A cross-role inconsistency that survives `from_bytes` (e.g. a
+///   side-table reifier row repointed at a non-triple target, or a dictionary
+///   triple-term entry whose predicate is not an IRI) surfaces here, not as a
+///   panic: `from_bytes`'s per-submodule checks validate each section in
+///   isolation, but only this reconstruct-then-freeze step re-checks those
+///   cross-section role constraints, and untrusted bytes must fail closed
+///   rather than hang or panic even when they trip it.
 /// - [`PackError::CanonBudgetExceeded`] if the reconstructed dataset's RDFC-1.0
 ///   canonicalization exceeds its call budget (a pathologically symmetric blank
 ///   graph — untrusted input fails closed here rather than hanging or panicking).
@@ -237,9 +248,9 @@ pub fn verify_pack(bytes: &[u8]) -> Result<PackDigest, PackError> {
     let view = PackView::from_bytes(bytes)?;
 
     let builder = reconstruct(&view);
-    let reconstructed = builder
-        .freeze()
-        .expect("a pack reconstruction only ever pushes structurally valid rows");
+    let reconstructed = builder.freeze().map_err(|_| {
+        PackError::Malformed("verify_pack: reconstructed dataset failed structural validation")
+    })?;
 
     let canonicalized = crate::try_canonicalize_with(&reconstructed, CanonHash::Sha256)
         .map_err(|_| PackError::CanonBudgetExceeded)?;
