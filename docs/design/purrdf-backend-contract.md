@@ -270,6 +270,78 @@ the id-agnostic read seam serves the evaluator over any backend, not only this o
 
 ---
 
+## P-clauses — the pack backend (a read-only succinct `DatasetView`)
+
+The pack codec is a THIRD `DatasetView` implementer alongside the frozen
+`RdfDataset` (C1) and the paged layer (G-clauses): a **factory-built,
+read-only, zero-copy** succinct encoding of a whole dataset into one
+self-contained byte buffer. Where the paged layer composes many mutable pages
+under one durable dictionary, a pack is a single immutable snapshot — the
+shape a large reference corpus takes once it is done changing.
+
+### P0 — `PackBuilder` writes, `PackView` reads; the split is total
+
+`PackBuilder::build_bytes(&RdfDataset) -> Vec<u8>` is the **offline factory
+writer**: a pure function of the source dataset's value content (no
+hash-iteration order, wall-clock, or RNG reaches the output — two calls on the
+same dataset produce byte-identical bytes) that encodes the value dictionary,
+graph-partitioned bitmap-triples, and RDF 1.2 side-tables (reifiers,
+annotations) into one fixed-layout container.
+
+`PackView::from_bytes(&[u8]) -> Result<PackView<'_>, PackError>` is the
+**borrowed, zero-copy reader**: it never allocates a copy of the section
+bytes, decodes the dictionary once, and answers every `DatasetView` query
+(`quads`, `quads_for_pattern`, `resolve`, `term_id_by_value`, reifier/
+annotation reads, `example.org`-scoped list traversal, and so on) straight off
+the borrowed sections. There is no write path back from a `PackView` to a
+pack file, and no incremental append — a pack is built once, in full, and read
+many times. A consumer that needs to keep adding data works against the
+paged layer (G-clauses) or the mutable `RdfDataset` overlay (C4) and only
+packs the result once it is ready to freeze for distribution or archival.
+
+`PackView::from_bytes` fails closed at open time: magic, format version,
+section count, each section's own SHA-256 (checked before that section's
+bytes are handed to its decoder), each section's internal structural
+validation, and the header's capability/term-count fields cross-checked
+against the values recomputed from the decoded sections. A successfully
+opened `PackView` therefore never panics on a later query.
+
+### P1 — the certified-projection digest (`verify_pack`)
+
+A pack's header stores a SHA-256 digest of the source dataset's RDFC-1.0
+canonical N-Quads, computed once at build time. That value alone is trusted
+data — nothing re-derives it from the pack's own sections when the file is
+merely opened. `verify_pack(&[u8]) -> Result<PackDigest, PackError>` closes
+that gap: it walks the opened `PackView` through the `DatasetView` seam,
+RE-INTERNS every quad and every RDF 1.2 side-table row (reifier bindings,
+statement annotations) into a fresh dataset, canonicalizes that
+reconstruction with the SAME RDFC-1.0 procedure `PackBuilder::build_bytes`
+used, and compares the two digests. Only a pack whose stored digest agrees
+with its own independently-recomputed contents is a **certified read-only
+projection** of its source dataset — this catches a tampered digest header
+field that per-section SHA-256 integrity alone cannot see (the digest field
+sits outside the section directory's coverage). `pack_digest` reads the
+stored (unverified) header value only, for a caller that wants the claimed
+digest without paying the reconstruction cost.
+
+### P2 — the memory-mapped tier is the consumer's, per G5
+
+Exactly as G5 draws the line for the paged layer's durable tiers, `purrdf-core`
+never mmaps a pack file itself: `PackView::from_bytes` takes a **borrowed
+`&[u8]`**, with no filesystem, threads, wall-clock, or RNG anywhere in the
+codec, so it stays `wasm32-unknown-unknown`-clean. A native consumer that
+wants to serve a pack larger than comfortably fits in heap memory `mmap`s the
+file itself and hands the resulting slice to `PackView::from_bytes` — the pack
+format's fixed, 8-byte-aligned section layout (see the container module's
+on-disk layout docs) exists precisely so that slice can be read zero-copy,
+without the codec ever knowing it is backed by a mapped file rather than a
+`Vec<u8>`. `crates/rdf-core/tests/pack_mmap.rs` demonstrates exactly this
+seam end to end: it is the only place in the crate's test suite that depends
+on an mmap crate, gated off the wasm32 target, and confined to
+`[dev-dependencies]`.
+
+---
+
 ## Determinism & wasm
 
 Determinism in PurRDF comes from **id-sorting and BTree egress** and from applying
