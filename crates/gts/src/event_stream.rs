@@ -219,6 +219,14 @@ impl<'s> EventEmitter<'s> {
         if self.current_segment == Some(segment_index) {
             return Ok(());
         }
+        // Genuine segment change: the shared decode core resolves and flushes
+        // one segment's terms in full (inner-triple first) before opening the
+        // next, so `iri_map` can never hold an IRI a later literal in THIS new
+        // segment still needs — every datatype IRI a literal references is
+        // (re-)interned within its own segment before that literal is emitted.
+        // Dropping the map here bounds `EventEmitter`'s retained memory to one
+        // segment's worth of IRIs (R8) instead of the whole file's.
+        self.iri_map.clear();
         if self.cancelled {
             self.current_segment = Some(segment_index);
             return Ok(());
