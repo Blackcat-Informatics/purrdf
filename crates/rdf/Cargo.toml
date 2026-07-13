@@ -111,6 +111,16 @@ path = "src/bin/capture_sparql_goldens.rs"
 name = "gen_dict_vectors"
 path = "src/bin/gen_dict_vectors.rs"
 
+# Maintainer-only vector-freezing binary. Re-freezes the streamable-compaction
+# corpus vector (`vectors/25b-streamable-compacted.gts` plus its
+# `.expected.json` fold) from the frozen `vectors/25-streamable-source.gts` via
+# `gts_certify::compact_and_certify`. The committed `.gts`/`.expected.json`
+# bytes are the frozen artifacts; `tests/streamable_vectors.rs` is the drift
+# guard, not this binary.
+[[bin]]
+name = "gen_streamable_vectors"
+path = "src/bin/gen_streamable_vectors.rs"
+
 [dev-dependencies]
 # Rich colored line-diffs on assert_eq! failure. Drop-in: a shadowing
 # `use pretty_assertions::assert_eq;` per test file; identical on pass.

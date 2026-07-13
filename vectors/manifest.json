@@ -881,9 +881,9 @@
       "expected": {
         "graph": "vectors/25b-streamable-compacted.expected.json",
         "diagnostics": [],
-        "expected_head": "ebbd43fdb48021f0ee80a4c352abe43cf0e5b7fe8676d5a917492bd0c27db6ae",
+        "expected_head": "5acd890b4d9fd3d8239bc793cd0f8354cae54924543a2c13e65ade76a57300dc",
         "segment_heads": [
-          "ebbd43fdb48021f0ee80a4c352abe43cf0e5b7fe8676d5a917492bd0c27db6ae"
+          "5acd890b4d9fd3d8239bc793cd0f8354cae54924543a2c13e65ade76a57300dc"
         ],
         "opaque_reasons": []
       },
