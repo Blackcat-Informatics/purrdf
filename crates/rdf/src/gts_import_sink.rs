@@ -475,9 +475,6 @@ mod tests {
     use purrdf_gts::reader::StreamingSink;
     use purrdf_gts::writer::Writer;
 
-    /// Convenience alias for a resolver wrapping the immutable-IR sink.
-    type Resolver = SegmentResolver<SinkImporter>;
-
     fn iri_term(value: &str) -> Term {
         Term {
             kind: TermKind::Iri,
@@ -503,8 +500,11 @@ mod tests {
     /// Drive the streaming events then run phase 2, returning the resolver plus any
     /// error for post-resolution assertions (the public `import_gts_events` does
     /// both phases from bytes; this exercises the hand-ordered direct-sink path). A
-    /// latched streaming error takes precedence over the phase-2 flush.
-    fn finish_direct(mut resolver: Resolver) -> (Resolver, Option<RdfDiagnostic>) {
+    /// latched streaming error takes precedence over the phase-2 flush. Generic
+    /// over the emit target so it also drives [`RecordingSink`]-wrapped resolvers.
+    fn finish_direct<S: ResolvedSink>(
+        mut resolver: SegmentResolver<S>,
+    ) -> (SegmentResolver<S>, Option<S::Error>) {
         if let Some(error) = resolver.take_error() {
             return (resolver, Some(error));
         }
@@ -513,10 +513,205 @@ mod tests {
     }
 
     /// Resolve `our_id` back to its interned blank `(label, scope)` for assertions.
-    fn blank_scope(resolver: &Resolver, id: TermId) -> (String, BlankScope) {
-        match resolver.sink().builder.resolve(id) {
+    fn blank_scope(builder: &RdfDatasetBuilder, id: TermId) -> (String, BlankScope) {
+        match builder.resolve(id) {
             TermRef::Blank { label, scope } => (label.to_string(), scope),
             other => panic!("expected blank node, got {other:?}"),
+        }
+    }
+
+    /// TEST-ONLY [`ResolvedSink`] wrapping [`SinkImporter`] that additionally
+    /// records `(segment_index, gts_id) → TermId` for every resolved TERM as it
+    /// is interned.
+    ///
+    /// This replaces the removed `SegmentResolver::remap` white-box inspector:
+    /// R8 (bounded-memory streaming fold) forbids the *production* resolver from
+    /// retaining a whole-file `(segment, gts_id) → id` map (it must drop at each
+    /// segment close), but a handful of tests need to observe cross-segment term
+    /// identity (e.g. "the same IRI in two segments resolves to the same id, but
+    /// the same blank label resolves to different ids"). Holding that map here,
+    /// in the test harness, is fine — it is not the hot streaming path.
+    struct RecordingSink {
+        inner: SinkImporter,
+        ids: std::collections::HashMap<(usize, usize), TermId>,
+    }
+
+    impl RecordingSink {
+        fn new() -> Self {
+            Self {
+                inner: SinkImporter::new(),
+                ids: std::collections::HashMap::new(),
+            }
+        }
+
+        /// Look up the target id a segment-local gts id resolved to.
+        fn id(&self, segment_index: usize, gts_id: usize) -> Option<TermId> {
+            self.ids.get(&(segment_index, gts_id)).copied()
+        }
+    }
+
+    impl ResolvedSink for RecordingSink {
+        type Id = TermId;
+        type Error = RdfDiagnostic;
+
+        fn intern_iri(
+            &mut self,
+            segment_index: usize,
+            gts_id: usize,
+            iri: &str,
+        ) -> Result<TermId, RdfDiagnostic> {
+            let id = self.inner.intern_iri(segment_index, gts_id, iri)?;
+            self.ids.insert((segment_index, gts_id), id);
+            Ok(id)
+        }
+
+        fn intern_blank(
+            &mut self,
+            segment_index: usize,
+            gts_id: usize,
+            label: &str,
+        ) -> Result<TermId, RdfDiagnostic> {
+            let id = self.inner.intern_blank(segment_index, gts_id, label)?;
+            self.ids.insert((segment_index, gts_id), id);
+            Ok(id)
+        }
+
+        fn intern_literal(
+            &mut self,
+            segment_index: usize,
+            gts_id: usize,
+            lexical: String,
+            datatype: Option<TermId>,
+            lang: Option<String>,
+            direction: Option<String>,
+        ) -> Result<TermId, RdfDiagnostic> {
+            let id = self.inner.intern_literal(
+                segment_index,
+                gts_id,
+                lexical,
+                datatype,
+                lang,
+                direction,
+            )?;
+            self.ids.insert((segment_index, gts_id), id);
+            Ok(id)
+        }
+
+        fn intern_triple(
+            &mut self,
+            segment_index: usize,
+            gts_id: usize,
+            s: TermId,
+            p: TermId,
+            o: TermId,
+        ) -> Result<TermId, RdfDiagnostic> {
+            let id = self.inner.intern_triple(segment_index, gts_id, s, p, o)?;
+            self.ids.insert((segment_index, gts_id), id);
+            Ok(id)
+        }
+
+        fn push_quad(
+            &mut self,
+            segment_index: usize,
+            s: TermId,
+            p: TermId,
+            o: TermId,
+            g: Option<TermId>,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.push_quad(segment_index, s, p, o, g)
+        }
+
+        fn push_reifier(
+            &mut self,
+            segment_index: usize,
+            reifier: TermId,
+            s: TermId,
+            p: TermId,
+            o: TermId,
+            g: Option<TermId>,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.push_reifier(segment_index, reifier, s, p, o, g)
+        }
+
+        fn push_annotation(
+            &mut self,
+            segment_index: usize,
+            reifier: TermId,
+            p: TermId,
+            o: TermId,
+            g: Option<TermId>,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.push_annotation(segment_index, reifier, p, o, g)
+        }
+
+        fn err_dangling_term(
+            &self,
+            segment_index: usize,
+            gts_id: usize,
+            role: &str,
+        ) -> RdfDiagnostic {
+            self.inner.err_dangling_term(segment_index, gts_id, role)
+        }
+
+        fn err_nesting_limit(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
+            self.inner.err_nesting_limit(segment_index, gts_id)
+        }
+
+        fn err_unbound_triple(&self, segment_index: usize, gts_id: usize) -> RdfDiagnostic {
+            self.inner.err_unbound_triple(segment_index, gts_id)
+        }
+
+        fn err_missing_reifier(&self, segment_index: usize, reifier: usize) -> RdfDiagnostic {
+            self.inner.err_missing_reifier(segment_index, reifier)
+        }
+
+        fn suppression(
+            &mut self,
+            segment_index: usize,
+            suppression: &Suppression,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.suppression(segment_index, suppression)
+        }
+
+        fn blob(
+            &mut self,
+            segment_index: usize,
+            digest: &str,
+            meta: Option<&Value>,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.blob(segment_index, digest, meta)
+        }
+
+        fn opaque(
+            &mut self,
+            segment_index: usize,
+            opaque: &OpaqueNode,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.opaque(segment_index, opaque)
+        }
+
+        fn signature(
+            &mut self,
+            segment_index: usize,
+            signature: &Signature,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.signature(segment_index, signature)
+        }
+
+        fn segment_head(&mut self, segment_index: usize, head: &[u8]) -> Result<(), RdfDiagnostic> {
+            self.inner.segment_head(segment_index, head)
+        }
+
+        fn streamable_layout(
+            &mut self,
+            segment_index: usize,
+            info: &StreamableInfo,
+        ) -> Result<(), RdfDiagnostic> {
+            self.inner.streamable_layout(segment_index, info)
+        }
+
+        fn diagnostic(&mut self, diagnostic: &Diagnostic) -> Result<(), RdfDiagnostic> {
+            self.inner.diagnostic(diagnostic)
         }
     }
 
@@ -528,7 +723,7 @@ mod tests {
     /// distinct ids (per-segment scope) while `ex:s` MUST be one shared id.
     #[test]
     fn gate2_multi_segment_blank_scope_isolation_direct() {
-        let mut resolver = SegmentResolver::new(SinkImporter::new());
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
 
         // Segment 0: term 0 = ex:s, term 1 = ex:p, term 2 = _:b1, quad (s p b1).
         resolver.term(0, 0, &iri_term("http://example.org/s"));
@@ -546,10 +741,16 @@ mod tests {
         let (mut resolver, error) = finish_direct(resolver);
         assert!(error.is_none(), "no error expected: {error:?}");
 
-        let seg0_s = resolver.remap(0, 0).expect("segment 0 subject resolved");
-        let seg1_s = resolver.remap(1, 0).expect("segment 1 subject resolved");
-        let seg0_b1 = resolver.remap(0, 2).expect("segment 0 blank resolved");
-        let seg1_b1 = resolver.remap(1, 2).expect("segment 1 blank resolved");
+        let seg0_s = resolver
+            .sink()
+            .id(0, 0)
+            .expect("segment 0 subject resolved");
+        let seg1_s = resolver
+            .sink()
+            .id(1, 0)
+            .expect("segment 1 subject resolved");
+        let seg0_b1 = resolver.sink().id(0, 2).expect("segment 0 blank resolved");
+        let seg1_b1 = resolver.sink().id(1, 2).expect("segment 1 blank resolved");
 
         // The shared IRI interns to ONE id across both segments (value identity).
         assert_eq!(seg0_s, seg1_s, "ex:s is the same node across segments");
@@ -559,14 +760,14 @@ mod tests {
             seg0_b1, seg1_b1,
             "_:b1 in segment 0 and segment 1 are DIFFERENT nodes (scope isolation)"
         );
-        let (label0, scope0) = blank_scope(&resolver, seg0_b1);
-        let (label1, scope1) = blank_scope(&resolver, seg1_b1);
+        let (label0, scope0) = blank_scope(&resolver.sink().inner.builder, seg0_b1);
+        let (label1, scope1) = blank_scope(&resolver.sink().inner.builder, seg1_b1);
         assert_eq!(label0, "b1");
         assert_eq!(label1, "b1");
         assert_eq!(scope0, BlankScope(1), "segment 0 → scope 1");
         assert_eq!(scope1, BlankScope(2), "segment 1 → scope 2");
 
-        let dataset = std::mem::take(&mut resolver.sink_mut().builder)
+        let dataset = std::mem::take(&mut resolver.sink_mut().inner.builder)
             .freeze()
             .expect("freeze");
         // 2 quads, distinct blanks: ex:s, ex:p, b1@s0, ex:p2, b1@s1 = 5 terms.
@@ -593,7 +794,7 @@ mod tests {
     /// yields `direction == None`, but lexical form, datatype, and language survive.
     #[test]
     fn directional_literal_lexical_lang_survive_sink_path() {
-        let mut resolver = SegmentResolver::new(SinkImporter::new());
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
         resolver.term(0, 0, &iri_term("http://example.org/s"));
         resolver.term(0, 1, &iri_term("http://example.org/p"));
         resolver.term(
@@ -612,8 +813,8 @@ mod tests {
         let (mut resolver, error) = finish_direct(resolver);
         assert!(error.is_none(), "{error:?}");
 
-        let lit_id = resolver.remap(0, 2).expect("literal resolved");
-        let dataset = std::mem::take(&mut resolver.sink_mut().builder)
+        let lit_id = resolver.sink().id(0, 2).expect("literal resolved");
+        let dataset = std::mem::take(&mut resolver.sink_mut().inner.builder)
             .freeze()
             .expect("freeze");
         match dataset.resolve(lit_id) {
@@ -635,7 +836,7 @@ mod tests {
     /// object position of the outer triple. (Hand-ordered direct-sink events.)
     #[test]
     fn nested_triple_term_survives_sink_path() {
-        let mut resolver = SegmentResolver::new(SinkImporter::new());
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
         // Inner triple (ex:a ex:p ex:b) reified by reifier r0; outer triple
         // (ex:a ex:asserts <<inner>>) reified by reifier r1.
         resolver.term(0, 0, &iri_term("http://example.org/a"));
@@ -675,9 +876,9 @@ mod tests {
         let (mut resolver, error) = finish_direct(resolver);
         assert!(error.is_none(), "{error:?}");
 
-        let inner = resolver.remap(0, 4).expect("inner triple resolved");
-        let outer = resolver.remap(0, 7).expect("outer triple resolved");
-        let dataset = std::mem::take(&mut resolver.sink_mut().builder)
+        let inner = resolver.sink().id(0, 4).expect("inner triple resolved");
+        let outer = resolver.sink().id(0, 7).expect("outer triple resolved");
+        let dataset = std::mem::take(&mut resolver.sink_mut().inner.builder)
             .freeze()
             .expect("freeze");
         match dataset.resolve(outer) {

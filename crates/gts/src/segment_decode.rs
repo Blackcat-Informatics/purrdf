@@ -242,8 +242,12 @@ pub struct SegmentResolver<S: ResolvedSink> {
     /// RAW per-segment terms buffered during the streaming phase, keyed by
     /// `(segment_index, gts_id)`, resolved and drained at segment close.
     raw_terms: HashMap<(usize, usize), Term>,
-    /// Per-segment map from `(segment_index, gts_id)` to the target id, kept
-    /// across flushes so [`Self::remap`] can inspect it after resolution.
+    /// Per-segment memo from `(segment_index, gts_id)` to the target id,
+    /// populated as the currently buffered segment's terms resolve (so a term
+    /// referenced twice — e.g. as both a quad subject and a reifier subject —
+    /// interns once) and cleared at the end of [`Self::resolve_buffered`]:
+    /// segment-local ids never cross a segment boundary, so retaining this
+    /// past segment close would grow it O(total terms across ALL segments).
     remaps: HashMap<(usize, usize), S::Id>,
     /// Per-segment reifier bindings `(segment_index, reifier) → (s, p, o)` gts
     /// ids, recorded from `reifier` events so a Triple term (any order) can
@@ -269,7 +273,7 @@ impl<S: ResolvedSink> std::fmt::Debug for SegmentResolver<S> {
             .field("buffered_quads", &self.raw_quads.len())
             .field("buffered_reifiers", &self.raw_reifiers.len())
             .field("buffered_annotations", &self.raw_annotations.len())
-            .field("remaps", &self.remaps.len())
+            .field("buffered_remaps", &self.remaps.len())
             .field("current_segment", &self.current_segment)
             .field("has_error", &self.error.is_some())
             .finish_non_exhaustive()
@@ -305,12 +309,6 @@ impl<S: ResolvedSink> SegmentResolver<S> {
     /// Consume the resolver, returning the emit target.
     pub fn into_sink(self) -> S {
         self.sink
-    }
-
-    /// Look up the target id a segment-local gts id resolved to, for white-box
-    /// inspection after [`Self::finish`].
-    pub fn remap(&self, segment_index: usize, gts_id: usize) -> Option<S::Id> {
-        self.remaps.get(&(segment_index, gts_id)).copied()
     }
 
     /// Take the first latched streaming error, if any.
@@ -402,6 +400,15 @@ impl<S: ResolvedSink> SegmentResolver<S> {
             };
             self.sink.push_annotation(segment_index, r, p, v, g)?;
         }
+
+        // Bounded-memory streaming fold: both maps are segment-local — no
+        // resolution ever crosses a segment boundary (reifier bindings, and
+        // the term-id remap memo, are only ever read for the segment that is
+        // currently buffered) — so drop them here rather than retaining them
+        // for the lifetime of the resolver. Without this, both grow O(total
+        // reifiers/terms across ALL segments) instead of O(one segment).
+        self.reifier_bindings.clear();
+        self.remaps.clear();
 
         Ok(())
     }
