@@ -22,6 +22,11 @@ all-features = true
 workspace = true
 
 [dependencies]
+# The zero-dependency, wasm-clean RDF 1.2 ingestion protocol (purrdf P6): the
+# neutral `RdfEventSink` seam the GTS event bridge (`event_stream`) folds into.
+# This edge is acyclic — `purrdf-events` depends on nothing — so it never risks
+# a cycle and keeps `make wasm` green.
+purrdf-events = { workspace = true }
 # emojihash + randomart visual fingerprints, published from
 # Blackcat-Informatics/visual-hashing.
 visual-hashing = { workspace = true }

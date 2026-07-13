@@ -1314,6 +1314,7 @@ dependencies = [
  "fastrand",
  "filetime",
  "flate2",
+ "purrdf-events",
  "rayon",
  "serde",
  "sha1",

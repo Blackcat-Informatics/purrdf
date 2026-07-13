@@ -66,6 +66,7 @@ pub mod codec;
 pub mod compact;
 pub mod cose;
 pub mod dict;
+pub mod event_stream;
 // emojihash + randomart now live in the standalone `visual-hashing` crate;
 // re-exported here so `purrdf_gts::emojihash::…` paths keep resolving.
 pub use visual_hashing as emojihash;
