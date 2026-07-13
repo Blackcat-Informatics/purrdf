@@ -212,6 +212,17 @@ impl<'s> EventEmitter<'s> {
         id
     }
 
+    /// Count of resolved IRI strings currently retained in `iri_map` (see the
+    /// field doc). `iri_map` is cleared on every genuine segment transition
+    /// ([`Self::ensure_scope`]), so reading this right after a segment has
+    /// been fully resolved reflects only THAT segment's own interned-IRI
+    /// count, never the cumulative total across every segment seen so far.
+    /// Exposed for tests asserting the bounded-memory contract (GTS-SPEC
+    /// §7.7) from outside the crate.
+    pub fn interned_iri_count(&self) -> usize {
+        self.iri_map.len()
+    }
+
     /// Ensure the scope for `segment_index` is the open one, closing the previous
     /// segment's scope and opening a fresh one on a segment change. A no-op once
     /// cancelled (beyond recording the segment).

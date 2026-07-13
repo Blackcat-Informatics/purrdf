@@ -681,3 +681,115 @@ fn dangling_term_ref_is_err() {
     );
     assert_eq!(sink.finish_count, 0, "the failed drive was never finalized");
 }
+
+/// Feed ONLY the first term of segment `seg`. This single event is what trips
+/// `SegmentResolver::advance_segment` (the incoming `segment_index` exceeds
+/// the currently-buffered one), which synchronously flushes whichever
+/// segment was previously buffered — resolving its terms/quads/reifiers into
+/// the sink and, per the bounded-memory fix, clearing `reifier_bindings` and
+/// `remaps` — before this segment starts accumulating anything of its own.
+fn open_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>, seg: usize) {
+    resolver.term(seg, 0, &iri(&format!("http://example.org/seg{seg}/s")));
+}
+
+/// Feed the REST of segment `seg` (4 more IRI terms, one quad, and two
+/// reifiers binding that quad's triple) — everything [`open_bounded_memory_segment`]
+/// did not already send. Together the two functions introduce 5 distinct IRI
+/// terms and 2 reifier bindings per segment, all segment-qualified
+/// (`http://example.org/seg{seg}/...`) so no cross-segment id reuse could
+/// accidentally mask a leak as "the same entry, re-seen".
+fn fill_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>, seg: usize) {
+    resolver.term(seg, 1, &iri(&format!("http://example.org/seg{seg}/p")));
+    resolver.term(seg, 2, &iri(&format!("http://example.org/seg{seg}/o")));
+    resolver.term(seg, 3, &iri(&format!("http://example.org/seg{seg}/r1")));
+    resolver.term(seg, 4, &iri(&format!("http://example.org/seg{seg}/r2")));
+    resolver.quad(seg, (0, 1, 2, None));
+    resolver.reifier(seg, (3, (0, 1, 2), None));
+    resolver.reifier(seg, (4, (0, 1, 2), None));
+}
+
+/// R8-exec: bounded-memory streaming fold (GTS-SPEC §7.7). `SegmentResolver`'s
+/// per-segment `reifier_bindings` / `remaps` maps, and the bridged
+/// `EventEmitter`'s `iri_map`, must stay bounded to O(one segment) as MANY
+/// segments stream through — never grow with the cumulative segment count.
+///
+/// This drives a hand-built 12-segment fixture directly through
+/// `SegmentResolver`'s public `StreamingSink` callbacks (no GTS byte
+/// encoding needed — the same technique `dangling_term_ref_is_err` above
+/// uses) and samples the resolver's and emitter's retained sizes immediately
+/// after each segment's flush (i.e. right after the NEXT segment's first
+/// event, before that next segment has contributed anything of its own). A
+/// regression that stops clearing `reifier_bindings`/`remaps`
+/// (`resolve_buffered`) or `iri_map` (`EventEmitter::ensure_scope`) makes
+/// these counts grow with the segment index instead of staying flat, so this
+/// assertion is falsifiable: reverting either clear turns it red.
+#[test]
+fn bounded_memory_across_many_segments() {
+    const SEGMENTS: usize = 12;
+    const IRIS_PER_SEGMENT: usize = 5;
+
+    let mut sink = CollectSink::default();
+    let mut resolver = SegmentResolver::new(EventEmitter::new(&mut sink));
+
+    open_bounded_memory_segment(&mut resolver, 0);
+    fill_bounded_memory_segment(&mut resolver, 0);
+    for seg in 1..SEGMENTS {
+        let flushed = seg - 1;
+        // Trips the flush of `flushed`; segment `seg` has contributed
+        // nothing yet at this point (only its first term is buffered).
+        open_bounded_memory_segment(&mut resolver, seg);
+        assert_eq!(
+            resolver.buffered_reifier_binding_count(),
+            0,
+            "flushing segment {flushed} (triggered by segment {seg}'s first \
+             event) must have emptied reifier_bindings (cleared at flush), \
+             not accumulated the {expected} reifiers introduced across all \
+             segments seen so far",
+            expected = 2 * seg,
+        );
+        assert_eq!(
+            resolver.buffered_remap_count(),
+            0,
+            "flushing segment {flushed} (triggered by segment {seg}'s first \
+             event) must have emptied the gts-id remap memo (cleared at \
+             flush), not accumulated resolutions across segments"
+        );
+        assert_eq!(
+            resolver.sink().interned_iri_count(),
+            IRIS_PER_SEGMENT,
+            "after flushing segment {flushed}, EventEmitter.iri_map must \
+             hold only that segment's own {IRIS_PER_SEGMENT} IRIs, not the \
+             cumulative total across all segments flushed so far"
+        );
+        fill_bounded_memory_segment(&mut resolver, seg);
+    }
+
+    // No StreamingSink callback failure was latched.
+    assert!(
+        resolver.take_error().is_none(),
+        "the hand-fed fixture is well-formed"
+    );
+    // Flush the final (12th) segment explicitly — nothing downstream ever
+    // starts segment 12 to trigger it automatically — and re-check the same
+    // bound on the last segment too.
+    resolver
+        .finish()
+        .expect("finish resolves the final buffered segment");
+    assert_eq!(
+        resolver.buffered_reifier_binding_count(),
+        0,
+        "the final segment's reifier_bindings must also be cleared at finish()"
+    );
+    assert_eq!(
+        resolver.buffered_remap_count(),
+        0,
+        "the final segment's remap memo must also be cleared at finish()"
+    );
+    assert_eq!(
+        resolver.sink().interned_iri_count(),
+        IRIS_PER_SEGMENT,
+        "the final segment's iri_map must hold only its own \
+         {IRIS_PER_SEGMENT} IRIs, not the cumulative total across all \
+         {SEGMENTS} segments"
+    );
+}

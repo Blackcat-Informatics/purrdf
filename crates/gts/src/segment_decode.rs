@@ -274,6 +274,7 @@ impl<S: ResolvedSink> std::fmt::Debug for SegmentResolver<S> {
             .field("buffered_reifiers", &self.raw_reifiers.len())
             .field("buffered_annotations", &self.raw_annotations.len())
             .field("buffered_remaps", &self.remaps.len())
+            .field("buffered_reifier_bindings", &self.reifier_bindings.len())
             .field("current_segment", &self.current_segment)
             .field("has_error", &self.error.is_some())
             .finish_non_exhaustive()
@@ -314,6 +315,27 @@ impl<S: ResolvedSink> SegmentResolver<S> {
     /// Take the first latched streaming error, if any.
     pub fn take_error(&mut self) -> Option<S::Error> {
         self.error.take()
+    }
+
+    /// Count of the per-segment reifier→triple binding map currently
+    /// retained (see the `reifier_bindings` field doc). This is populated as
+    /// `reifier` events for the CURRENTLY OPEN segment stream in, and is `0`
+    /// immediately after every [`Self::resolve_buffered`] flush — so reading
+    /// it right after a segment has flushed (e.g. on the first event of the
+    /// next segment, or after [`Self::finish`]) is bounded by a single
+    /// segment's own reifier cardinality, never by the sum across every
+    /// segment already flushed. Exposed for tests asserting the
+    /// bounded-memory contract (GTS-SPEC §7.7) from outside the crate.
+    pub fn buffered_reifier_binding_count(&self) -> usize {
+        self.reifier_bindings.len()
+    }
+
+    /// Count of the per-segment gts-id → target-id remap memo currently
+    /// retained (see the `remaps` field doc). Same bound as
+    /// [`Self::buffered_reifier_binding_count`]: `0` immediately after every
+    /// segment flush.
+    pub fn buffered_remap_count(&self) -> usize {
+        self.remaps.len()
     }
 
     /// Flush the final buffered segment, resolving its terms and pushing its
