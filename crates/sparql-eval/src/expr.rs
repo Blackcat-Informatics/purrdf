@@ -25,7 +25,9 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use purrdf_core::{BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermRef, TermValue};
+use purrdf_core::{
+    BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermId, TermRef, TermValue,
+};
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
 use purrdf_xsd::{
     XsdDatatype, XsdValue, effective_boolean_value, numeric_abs, numeric_add, numeric_ceil,
@@ -48,11 +50,11 @@ const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#di
 
 /// Evaluate an expression over a solution. See the [module docs](self) for the
 /// `Ok(Some)` / `Ok(None)` / `Err` contract.
-pub(crate) fn eval_expr(
+pub(crate) fn eval_expr<D: DatasetView<Id = TermId> + Sync>(
     expr: &Expression,
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm>, EvalError> {
     match expr {
         // ---- atoms ---------------------------------------------------------
@@ -156,11 +158,11 @@ pub(crate) fn eval_expr(
 
 /// Evaluate `expr` and reduce it to an effective boolean value (`Ok(None)` =
 /// error/unbound).
-pub(crate) fn eval_ebv(
+pub(crate) fn eval_ebv<D: DatasetView<Id = TermId> + Sync>(
     expr: &Expression,
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<bool>, EvalError> {
     ebv_of(expr, row, schema, ctx)
 }
@@ -177,10 +179,10 @@ pub(crate) fn eval_ebv(
 /// surviving rows are the ORIGINAL rows (never a value derived from the child's
 /// scratch), so each forked child's scratch is discarded after use — nothing to
 /// re-intern via [`crate::parallel::reintern_minted_row`].
-pub(crate) fn eval_filter(
+pub(crate) fn eval_filter<D: DatasetView<Id = TermId> + Sync>(
     expr: &Expression,
     inner: &GraphPattern,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq, EvalError> {
     let seq = eval(inner, ctx)?;
     let schema = seq.schema.clone();
@@ -217,11 +219,11 @@ pub(crate) fn eval_filter(
 /// [`crate::parallel::portable_row`] while its scratch is still alive, and this
 /// function re-interns each portable row against `ctx.scratch` afterwards, in
 /// source-index order, via [`crate::parallel::reintern_portable_row`].
-pub(crate) fn eval_extend(
+pub(crate) fn eval_extend<D: DatasetView<Id = TermId> + Sync>(
     inner: &GraphPattern,
     var: &Variable,
     expr: &Expression,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq, EvalError> {
     let seq = eval(inner, ctx)?;
     let mut schema = (*seq.schema).clone();
@@ -282,7 +284,10 @@ fn lookup(
 }
 
 /// Intern a value to a solution term (promoting to an existing dataset id).
-fn intern(ctx: &mut EvalCtx<'_>, value: TermValue) -> SolutionTerm {
+fn intern<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: TermValue,
+) -> SolutionTerm {
     ctx.scratch.intern(ctx.dataset, value)
 }
 
@@ -290,8 +295,8 @@ fn intern(ctx: &mut EvalCtx<'_>, value: TermValue) -> SolutionTerm {
 /// node's AST address (see [`EvalCtx::const_atom_cache`]). `build` — which owns
 /// the `TermValue` allocation — runs only on a cache miss, so a FILTER/BIND over
 /// N rows pays the `to_owned()` + intern probe once, not N times.
-fn const_atom(
-    ctx: &mut EvalCtx<'_>,
+fn const_atom<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     expr: &Expression,
     build: impl FnOnce() -> TermValue,
 ) -> SolutionTerm {
@@ -313,7 +318,10 @@ fn const_atom(
 }
 
 /// Materialize a solution term to an owned value.
-fn value_of(ctx: &EvalCtx<'_>, term: SolutionTerm) -> TermValue {
+fn value_of<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm,
+) -> TermValue {
     ctx.scratch.value_of(ctx.dataset, term)
 }
 
@@ -324,7 +332,10 @@ fn value_of(ctx: &EvalCtx<'_>, term: SolutionTerm) -> TermValue {
 /// intern probe once, not N times. The cache is exact — interning is
 /// deterministic for the context's pinned dataset and dedup-by-value scratch, so
 /// the cached term is the same `SolutionTerm` a fresh intern would produce.
-fn bool_term(ctx: &mut EvalCtx<'_>, b: bool) -> SolutionTerm {
+fn bool_term<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    b: bool,
+) -> SolutionTerm {
     let slot = usize::from(b);
     if let Some(term) = ctx.cached_bool_terms[slot] {
         return term;
@@ -335,12 +346,18 @@ fn bool_term(ctx: &mut EvalCtx<'_>, b: bool) -> SolutionTerm {
 }
 
 /// Intern an `xsd:string` literal.
-fn string_term(ctx: &mut EvalCtx<'_>, lexical: &str) -> SolutionTerm {
+fn string_term<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    lexical: &str,
+) -> SolutionTerm {
     intern(ctx, typed(lexical, XSD_STRING))
 }
 
 /// Intern an `xsd:integer` literal.
-fn integer_term(ctx: &mut EvalCtx<'_>, value: i64) -> SolutionTerm {
+fn integer_term<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: i64,
+) -> SolutionTerm {
     intern(ctx, typed(&value.to_string(), XSD_INTEGER))
 }
 
@@ -370,11 +387,11 @@ pub(crate) fn xsd_of(value: &TermValue) -> Option<XsdValue> {
 }
 
 /// The effective boolean value of an evaluated expression (`Ok(None)` = error).
-fn ebv_of(
+fn ebv_of<D: DatasetView<Id = TermId> + Sync>(
     expr: &Expression,
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<bool>, EvalError> {
     match eval_expr(expr, row, schema, ctx)? {
         Some(term) => Ok(ebv_term(ctx, term)),
@@ -383,7 +400,10 @@ fn ebv_of(
 }
 
 /// The effective boolean value of a concrete term (`None` = type error).
-fn ebv_term(ctx: &mut EvalCtx<'_>, term: SolutionTerm) -> Option<bool> {
+fn ebv_term<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    term: SolutionTerm,
+) -> Option<bool> {
     // A language-tagged string (rdf:langString / rdf:dirLangString) has no effective
     // boolean value — EBV covers only xsd:string, xsd:boolean, and the numeric types.
     let is_lang_tagged = match term {
@@ -423,7 +443,10 @@ fn ebv_term(ctx: &mut EvalCtx<'_>, term: SolutionTerm) -> Option<bool> {
 /// fixed id, so a comparison/`FILTER` over N rows parses each distinct literal once
 /// instead of once per row. Computed scratch values are ephemeral and stay on the
 /// direct borrowed-view path.
-fn xsd_of_term(ctx: &mut EvalCtx<'_>, term: SolutionTerm) -> Option<XsdValue> {
+fn xsd_of_term<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    term: SolutionTerm,
+) -> Option<XsdValue> {
     match term {
         SolutionTerm::Existing(id) => {
             if let Some(cached) = ctx.xsd_parse_cache.get(&id) {
@@ -448,7 +471,10 @@ fn xsd_of_term(ctx: &mut EvalCtx<'_>, term: SolutionTerm) -> Option<XsdValue> {
 
 /// Whether a solution term is a literal, checked on the borrowed view (no
 /// materialization).
-fn term_is_literal(ctx: &EvalCtx<'_>, term: SolutionTerm) -> bool {
+fn term_is_literal<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm,
+) -> bool {
     match term {
         SolutionTerm::Existing(id) => {
             matches!(ctx.dataset.resolve(id), TermRef::Literal { .. })
@@ -461,7 +487,10 @@ fn term_is_literal(ctx: &EvalCtx<'_>, term: SolutionTerm) -> bool {
 
 /// Whether a solution term is a triple term, checked on the borrowed view (no
 /// materialization) — mirrors [`term_is_literal`].
-fn term_is_triple(ctx: &EvalCtx<'_>, term: SolutionTerm) -> bool {
+fn term_is_triple<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm,
+) -> bool {
     match term {
         SolutionTerm::Existing(id) => {
             matches!(ctx.dataset.resolve(id), TermRef::Triple { .. })
@@ -475,12 +504,12 @@ fn term_is_triple(ctx: &EvalCtx<'_>, term: SolutionTerm) -> bool {
 /// Evaluate a comparison: both operands to values, compare in the XSD value space,
 /// and test the resulting [`Ordering`] with `keep`. `None` (error/unbound operand
 /// or incomparable values) propagates.
-fn compare(
+fn compare<D: DatasetView<Id = TermId> + Sync>(
     a: &Expression,
     b: &Expression,
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
     keep: impl Fn(Ordering) -> bool,
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let ta = eval_expr(a, row, schema, ctx)?;
@@ -513,12 +542,12 @@ fn compare(
 /// incomparable literals are a type error (`None`). This is the equality companion to
 /// the ordering [`compare`]; using `compare` for `=` would wrongly turn a distinct
 /// IRI pair into an error.
-fn equal(
+fn equal<D: DatasetView<Id = TermId> + Sync>(
     a: &Expression,
     b: &Expression,
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let ta = eval_expr(a, row, schema, ctx)?;
     let tb = eval_expr(b, row, schema, ctx)?;
@@ -563,12 +592,12 @@ fn equal(
 
 /// `expr IN (list)`: true if equal (value semantics) to any list entry; an error in
 /// the list propagates only if no `true` is found (SPARQL §17.4.1.9).
-fn eval_in(
+fn eval_in<D: DatasetView<Id = TermId> + Sync>(
     needle: &Expression,
     haystack: &[Expression],
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let Some(target) = eval_expr(needle, row, schema, ctx)? else {
         return Ok(None);
@@ -830,11 +859,11 @@ fn pattern_expr_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
 /// row's bound variables pre-seeded as a VALUES-like leading input, so they are
 /// visible as bound during expression evaluation. This result is NOT memoized
 /// because it depends on the specific outer row.
-fn exists(
+fn exists<D: DatasetView<Id = TermId> + Sync>(
     pattern: &GraphPattern,
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<bool, EvalError> {
     // Build the set of outer-bound variables (those with a concrete binding in
     // the current row), then check if any of them are referenced in expression
@@ -1250,10 +1279,10 @@ fn substitute_expr(expr: &Expression, bindings: &[(Variable, Expression)]) -> Ex
 
 /// Build the binding list for substitution from the outer row's bound variables,
 /// materializing each `SolutionTerm` to a constant `Expression`.
-pub(crate) fn outer_bindings_for_substitution(
+pub(crate) fn outer_bindings_for_substitution<D: DatasetView<Id = TermId> + Sync>(
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &EvalCtx<'_>,
+    ctx: &EvalCtx<'_, D>,
 ) -> Vec<(Variable, Expression)> {
     use purrdf_core::TermValue;
     use purrdf_sparql_algebra::{Literal, NamedNode};
@@ -1291,12 +1320,12 @@ pub(crate) fn outer_bindings_for_substitution(
 }
 
 /// Dispatch a built-in (or custom) function call.
-fn eval_function(
+fn eval_function<D: DatasetView<Id = TermId> + Sync>(
     function: &Function,
     args: &[Expression],
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm>, EvalError> {
     match function {
         Function::Contains => {
@@ -1665,8 +1694,8 @@ fn eval_function(
 /// `"false"`, not `"0"`) — only a source with no numeric/boolean value (a plain
 /// string, an already-`xsd:string` literal, an unrecognized datatype, …) falls back to
 /// copying its lexical form verbatim.
-fn eval_xsd_cast(
-    ctx: &mut EvalCtx<'_>,
+fn eval_xsd_cast<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     target: XsdDatatype,
     source: Option<&TermValue>,
 ) -> Option<SolutionTerm> {
@@ -1858,9 +1887,9 @@ fn format_plain_decimal(value: f64) -> String {
 /// absent from the dataset is a well-formed negative answer — `Ok(Some(false))`, not
 /// `None`. Missing `accordingTo`/`sharpens` interning simply yields no
 /// matches (→ false), which is correct.
-fn eval_held_in(
+fn eval_held_in<D: DatasetView<Id = TermId> + Sync>(
     vals: &[Option<TermValue>],
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm>, EvalError> {
     // The predicate table is mandatory configuration — fail loudly BEFORE looking at
     // the arguments, so a misconfigured deployment cannot get a quietly-wrong answer.
@@ -1898,9 +1927,9 @@ fn eval_held_in(
     // `accordingTo`. If it was never interned, there are no vantage standpoints.
     let held = according_to_id.is_some_and(|atid| {
         ctx.dataset
-            .annotations_of(reifier_id)
-            .filter(|(pred, _)| *pred == atid)
-            .map(|(_, vantage)| vantage)
+            .annotations_of_with_graph(reifier_id)
+            .filter(|(pred, _, _)| *pred == atid)
+            .map(|(_, vantage, _)| vantage)
             .any(|vantage| {
                 // Held directly in the queried standpoint, …
                 vantage == standpoint_id
@@ -1927,11 +1956,11 @@ fn arg(vals: &[Option<TermValue>], i: usize) -> Option<&TermValue> {
     vals.get(i).and_then(|v| v.as_ref())
 }
 
-fn eval_string_pred_expr(
+fn eval_string_pred_expr<D: DatasetView<Id = TermId> + Sync>(
     args: &[Expression],
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
     f: impl Fn(&str, &str) -> bool,
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let result = {
@@ -1946,11 +1975,11 @@ fn eval_string_pred_expr(
     Ok(Some(bool_term(ctx, result)))
 }
 
-fn eval_regex_expr(
+fn eval_regex_expr<D: DatasetView<Id = TermId> + Sync>(
     args: &[Expression],
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let text = eval_string_arg_expr(args.first(), row, schema, ctx)?;
     let pattern = eval_string_arg_expr(args.get(1), row, schema, ctx)?;
@@ -1965,11 +1994,11 @@ fn eval_regex_expr(
     }
 }
 
-fn eval_lang_matches_expr(
+fn eval_lang_matches_expr<D: DatasetView<Id = TermId> + Sync>(
     args: &[Expression],
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let result = {
         let (Some((tag, _)), Some((range, _))) = (
@@ -1985,11 +2014,11 @@ fn eval_lang_matches_expr(
     Ok(Some(bool_term(ctx, result)))
 }
 
-fn eval_string_arg_expr(
+fn eval_string_arg_expr<D: DatasetView<Id = TermId> + Sync>(
     expr: Option<&Expression>,
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<(String, Option<String>)>, EvalError> {
     let Some(expr) = expr else {
         return Ok(None);
@@ -2020,11 +2049,11 @@ fn eval_string_arg_expr(
     }
 }
 
-fn eval_str_lexical_expr(
+fn eval_str_lexical_expr<D: DatasetView<Id = TermId> + Sync>(
     expr: &Expression,
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<String>, EvalError> {
     match expr {
         Expression::NamedNode(node) => Ok(Some(node.as_str().to_owned())),
@@ -2038,11 +2067,11 @@ fn eval_str_lexical_expr(
     }
 }
 
-fn eval_lang_lexical_expr(
+fn eval_lang_lexical_expr<D: DatasetView<Id = TermId> + Sync>(
     expr: &Expression,
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<String>, EvalError> {
     match expr {
         Expression::Literal(lit) => Ok(Some(
@@ -2059,7 +2088,10 @@ fn eval_lang_lexical_expr(
     }
 }
 
-fn str_lexical_term(ctx: &EvalCtx<'_>, term: SolutionTerm) -> Option<String> {
+fn str_lexical_term<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm,
+) -> Option<String> {
     match term {
         SolutionTerm::Existing(id) => match ctx.dataset.resolve(id) {
             TermRef::Iri(iri) => Some(iri.to_owned()),
@@ -2074,7 +2106,10 @@ fn str_lexical_term(ctx: &EvalCtx<'_>, term: SolutionTerm) -> Option<String> {
     }
 }
 
-fn lang_lexical_term(ctx: &EvalCtx<'_>, term: SolutionTerm) -> Option<String> {
+fn lang_lexical_term<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm,
+) -> Option<String> {
     match term {
         SolutionTerm::Existing(id) => match ctx.dataset.resolve(id) {
             TermRef::Literal { language, .. } => Some(language.unwrap_or_default().to_owned()),
@@ -2148,8 +2183,8 @@ fn string_arg_value(
 
 /// Apply a pure string transform to a single string argument, preserving its
 /// language tag.
-fn map_string(
-    ctx: &mut EvalCtx<'_>,
+fn map_string<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
     f: impl Fn(&str) -> String,
 ) -> Result<Option<SolutionTerm>, EvalError> {
@@ -2160,8 +2195,8 @@ fn map_string(
 }
 
 /// A two-string boolean predicate (CONTAINS/STRSTARTS/STRENDS).
-fn string_pred(
-    ctx: &mut EvalCtx<'_>,
+fn string_pred<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
     f: impl Fn(&str, &str) -> bool,
 ) -> Result<Option<SolutionTerm>, EvalError> {
@@ -2173,7 +2208,11 @@ fn string_pred(
 
 /// Intern a string literal, as `rdf:langString@lang` if a language is present, else
 /// `xsd:string`.
-fn make_string(ctx: &mut EvalCtx<'_>, lexical: String, lang: Option<String>) -> SolutionTerm {
+fn make_string<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    lexical: String,
+    lang: Option<String>,
+) -> SolutionTerm {
     match lang {
         Some(l) => intern(
             ctx,
@@ -2191,8 +2230,8 @@ fn make_string(ctx: &mut EvalCtx<'_>, lexical: String, lang: Option<String>) -> 
 /// Intern a string literal keeping a language tag and (RDF 1.2) base direction:
 /// `rdf:dirLangString` when both are present, `rdf:langString` when only a
 /// language is, else `xsd:string`. A direction without a language is dropped.
-fn make_string_dir(
-    ctx: &mut EvalCtx<'_>,
+fn make_string_dir<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     lexical: String,
     lang: Option<String>,
     dir: Option<RdfTextDirection>,
@@ -2215,8 +2254,8 @@ fn make_string_dir(
 /// `CONCAT(...)`: concatenate string arguments. The result keeps the language tag
 /// **and** base direction iff *every* argument shares the same `(lang, dir)` pair;
 /// if either facet differs across arguments the result is a plain `xsd:string`.
-fn eval_concat(
-    ctx: &mut EvalCtx<'_>,
+fn eval_concat<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let mut out = String::new();
@@ -2240,8 +2279,8 @@ fn eval_concat(
 }
 
 /// `SUBSTR(str, start[, length])` with 1-based indexing over Unicode scalars.
-fn eval_substr(
-    ctx: &mut EvalCtx<'_>,
+fn eval_substr<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let Some((s, lang)) = string_arg(vals, 0) else {
@@ -2287,8 +2326,8 @@ fn args_compatible(arg1_lang: Option<&str>, arg2_lang: Option<&str>) -> bool {
 }
 
 /// `STRBEFORE`/`STRAFTER(haystack, needle)`.
-fn eval_str_before_after(
-    ctx: &mut EvalCtx<'_>,
+fn eval_str_before_after<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
     before: bool,
 ) -> Result<Option<SolutionTerm>, EvalError> {
@@ -2318,8 +2357,8 @@ fn eval_str_before_after(
 }
 
 /// `REPLACE(str, pattern, replacement[, flags])` via the regex engine.
-fn eval_replace(
-    ctx: &mut EvalCtx<'_>,
+fn eval_replace<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let Some((s, lang)) = string_arg(vals, 0) else {
@@ -2339,8 +2378,8 @@ fn eval_replace(
 }
 
 /// `REGEX(text, pattern[, flags])`.
-fn eval_regex(
-    ctx: &mut EvalCtx<'_>,
+fn eval_regex<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let Some((text, _)) = string_arg(vals, 0) else {
@@ -2363,7 +2402,11 @@ fn eval_regex(
 /// rows of one filter share a single compiled regex and therefore its lazy-DFA
 /// cache pool, instead of each row cloning a fresh one. Compile failures are
 /// cached as `None` (same errors, compiled once).
-fn cached_regex(ctx: &mut EvalCtx<'_>, pattern: &str, flags: &str) -> Option<Arc<regex::Regex>> {
+fn cached_regex<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    pattern: &str,
+    flags: &str,
+) -> Option<Arc<regex::Regex>> {
     if let Some(cached) = ctx
         .regex_cache
         .get(pattern)
@@ -2395,8 +2438,8 @@ fn build_regex(pattern: &str, flags: &str) -> Option<regex::Regex> {
 }
 
 /// `langMatches(tag, range)` — RFC 4647 basic filtering (`*` matches any tag).
-fn eval_lang_matches(
-    ctx: &mut EvalCtx<'_>,
+fn eval_lang_matches<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let (Some((tag, _)), Some((range, _))) = (string_arg(vals, 0), string_arg(vals, 1)) else {
@@ -2413,8 +2456,8 @@ fn eval_lang_matches(
 }
 
 /// `STRLANG(lexical, lang)`.
-fn eval_str_lang(
-    ctx: &mut EvalCtx<'_>,
+fn eval_str_lang<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
     // §17.4.2.5: the lexical-form argument must be a simple/`xsd:string` literal
@@ -2432,8 +2475,8 @@ fn eval_str_lang(
 /// `STRLANGDIR(lexical, lang, dir)` — RDF 1.2 directional-language-string
 /// constructor. An empty `dir` yields a plain `rdf:langString`; `ltr`/`rtl`
 /// (case-insensitive) yield an `rdf:dirLangString`; any other direction errors.
-fn eval_str_lang_dir(
-    ctx: &mut EvalCtx<'_>,
+fn eval_str_lang_dir<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let (Some((lex, _)), Some((lang, _)), Some((dir, _))) = (
@@ -2465,8 +2508,8 @@ fn eval_str_lang_dir(
 }
 
 /// `STRDT(lexical, datatypeIri)`.
-fn eval_str_dt(
-    ctx: &mut EvalCtx<'_>,
+fn eval_str_dt<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
     // §17.4.2.4: the lexical-form argument must be a simple/`xsd:string` literal
@@ -2481,8 +2524,8 @@ fn eval_str_dt(
 }
 
 /// `TRIPLE(s, p, o)` — RDF 1.2 triple-term constructor.
-fn eval_triple_ctor(
-    ctx: &mut EvalCtx<'_>,
+fn eval_triple_ctor<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let (Some(s), Some(p), Some(o)) = (arg(vals, 0), arg(vals, 1), arg(vals, 2)) else {
@@ -2505,8 +2548,8 @@ fn eval_triple_ctor(
 }
 
 /// Extract a component of a triple term (`SUBJECT`/`PREDICATE`/`OBJECT`).
-fn triple_part(
-    ctx: &mut EvalCtx<'_>,
+fn triple_part<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
     pick: impl Fn(TermValue, TermValue, TermValue) -> TermValue,
 ) -> Result<Option<SolutionTerm>, EvalError> {
@@ -2529,19 +2572,22 @@ fn xsd_int_of(v: &TermValue) -> Option<i64> {
 
 /// Convert a computed [`XsdValue`] back into an interned [`SolutionTerm`] using the
 /// canonical typed-literal form. The datatype IRI comes from `v.datatype().iri()`.
-pub(crate) fn xsd_to_term(ctx: &mut EvalCtx<'_>, v: &XsdValue) -> SolutionTerm {
+pub(crate) fn xsd_to_term<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    v: &XsdValue,
+) -> SolutionTerm {
     intern(ctx, typed(&v.canonical_lexical(), v.datatype().iri()))
 }
 
 /// Evaluate a binary numeric expression: resolve both operands to [`XsdValue`], call
 /// `op`, and return `Ok(Some(term))` on success or `Ok(None)` on any error (type
 /// error, overflow, divide-by-zero — all SPARQL expression errors).
-fn binary_numeric(
+fn binary_numeric<D: DatasetView<Id = TermId> + Sync>(
     a: &Expression,
     b: &Expression,
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
     op: impl Fn(&XsdValue, &XsdValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let (Some(ta), Some(tb)) = (
@@ -2562,11 +2608,11 @@ fn binary_numeric(
 
 /// Evaluate a unary numeric expression (`+` / `-`): resolve the operand, call `op`,
 /// return `Ok(None)` on any error.
-fn unary_numeric(
+fn unary_numeric<D: DatasetView<Id = TermId> + Sync>(
     a: &Expression,
     row: &[Option<SolutionTerm>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
     op: impl Fn(&XsdValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
 ) -> Result<Option<SolutionTerm>, EvalError> {
     let Some(ta) = eval_expr(a, row, schema, ctx)? else {
@@ -2584,8 +2630,8 @@ fn unary_numeric(
 
 /// Apply a unary numeric function from the `vals` pre-evaluated argument list.
 /// Argument 0 must be a numeric literal; type errors → `Ok(None)`.
-fn unary_numeric_fn(
-    ctx: &mut EvalCtx<'_>,
+fn unary_numeric_fn<D: DatasetView<Id = TermId> + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
     op: impl Fn(&XsdValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
 ) -> Result<Option<SolutionTerm>, EvalError> {
@@ -2604,7 +2650,7 @@ fn unary_numeric_fn(
 
 /// Splitmix64 step: advance the PRNG state and return the next pseudo-random u64.
 /// Algorithm: <https://prng.di.unimi.it/splitmix64.c>
-fn next_u64(ctx: &mut EvalCtx<'_>) -> u64 {
+fn next_u64<D: DatasetView<Id = TermId> + Sync>(ctx: &mut EvalCtx<'_, D>) -> u64 {
     ctx.rng_state = ctx.rng_state.wrapping_add(0x9e37_79b9_7f4a_7c15);
     let mut z = ctx.rng_state;
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -2613,7 +2659,7 @@ fn next_u64(ctx: &mut EvalCtx<'_>) -> u64 {
 }
 
 /// Mint a fresh blank node (`BNODE()`/`BNODE(strExpr)`'s cache-miss path).
-fn mint_bnode(ctx: &mut EvalCtx<'_>) -> SolutionTerm {
+fn mint_bnode<D: DatasetView<Id = TermId> + Sync>(ctx: &mut EvalCtx<'_, D>) -> SolutionTerm {
     ctx.bnode_counter += 1;
     let label = format!("bnode{}", ctx.bnode_counter);
     intern(
@@ -2721,7 +2767,7 @@ fn format_tz_string(offset_minutes: Option<i64>) -> String {
 
 /// Mint a version-4 UUID from the PRNG state and return it as a
 /// lowercase-hyphenated `8-4-4-4-12` string (without any `urn:uuid:` prefix).
-fn make_uuid(ctx: &mut EvalCtx<'_>) -> (String, [u8; 16]) {
+fn make_uuid<D: DatasetView<Id = TermId> + Sync>(ctx: &mut EvalCtx<'_, D>) -> (String, [u8; 16]) {
     let hi = next_u64(ctx);
     let lo = next_u64(ctx);
     let mut bytes = [0u8; 16];
@@ -2897,7 +2943,7 @@ mod tests {
         let bad =
             Expression::FunctionCall(Function::Regex, vec![lit("Hello"), lit("^h"), lit("z")]);
         // Total `(pattern, flags)` entries across the pattern-keyed two-level map.
-        let entries = |ctx: &EvalCtx<'_>| {
+        let entries = |ctx: &EvalCtx<'_, Arc<RdfDataset>>| {
             ctx.regex_cache
                 .values()
                 .map(crate::DetHashMap::len)

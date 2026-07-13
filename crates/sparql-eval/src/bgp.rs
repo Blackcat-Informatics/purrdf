@@ -31,7 +31,7 @@
 //! **projected away**, so two independent BGPs that happen to reuse the label `_:b`
 //! never accidentally share a join variable.
 
-use purrdf_core::{DatasetView, GraphMatch, QuadIds, QuadProbePlan, RdfDataset, TermId, TermRef};
+use purrdf_core::{DatasetView, GraphMatch, QuadIds, TermId, TermRef};
 use purrdf_sparql_algebra::{
     GraphPattern, Literal, NamedNodePattern, TermPattern, TriplePattern, Variable,
 };
@@ -86,9 +86,9 @@ struct CompiledPattern {
 
 /// Evaluate a basic graph pattern to a multiset of solutions over its real
 /// (non-blank) variables.
-pub(crate) fn eval_bgp(
+pub(crate) fn eval_bgp<D: DatasetView<Id = TermId> + Sync>(
     patterns: &[TriplePattern],
-    ctx: &EvalCtx<'_>,
+    ctx: &EvalCtx<'_, D>,
 ) -> Result<SolutionSeq, EvalError> {
     // The empty BGP is the identity table Z: one solution binding nothing.
     if patterns.is_empty() {
@@ -151,8 +151,8 @@ pub(crate) fn eval_bgp(
         // `QuadProbePlan` once from the first row (non-empty — the loop `break`s above
         // the moment `rows` empties) and capture the `Copy` plan in every worker,
         // instead of re-selecting it per row.
-        let plan: Option<QuadProbePlan> = match &scope {
-            GraphScope::One(gm) => Some(RdfDataset::probe_plan(
+        let plan: Option<D::ProbePlan> = match &scope {
+            GraphScope::One(gm) => Some(ctx.dataset.probe_plan(
                 query_id(&cp.s, &rows[0]).is_some(),
                 query_id(&cp.p, &rows[0]).is_some(),
                 query_id(&cp.o, &rows[0]).is_some(),
@@ -283,9 +283,9 @@ const COST_DP_MAX_PATTERNS: usize = 8;
 /// just not memoised. The cache key is `(dataset stats fingerprint, BGP shape key)`; on
 /// a hit the cached order's length is asserted against `compiled` so a (vanishingly
 /// unlikely) shape-key collision re-plans rather than indexing out of bounds.
-fn plan_or_cached_order(
+fn plan_or_cached_order<D: DatasetView<Id = TermId>>(
     compiled: &[CompiledPattern],
-    dataset: &RdfDataset,
+    dataset: &D,
     scope: &GraphScope,
     cache: Option<&BgpOrderCache>,
 ) -> Arc<[usize]> {
@@ -395,9 +395,9 @@ fn hash_pos<H: std::hash::Hasher>(pos: &Pos, h: &mut H) {
 /// identical run to run, no hash-iteration leak.
 ///
 /// Returns a permutation of `0..compiled.len()`.
-fn cost_based_order(
+fn cost_based_order<D: DatasetView<Id = TermId>>(
     compiled: &[CompiledPattern],
-    dataset: &RdfDataset,
+    dataset: &D,
     scope: &GraphScope,
 ) -> Vec<usize> {
     let n = compiled.len();
@@ -435,7 +435,11 @@ fn cost_based_order(
 /// ground position through, leave slots and quoted-triple positions free. A
 /// quoted-triple position is treated as unconstrained — a conservative over-estimate,
 /// safe by the multiset invariant. For a FROM/USING merge, sum the per-graph estimates.
-fn base_cardinality(dataset: &RdfDataset, cp: &CompiledPattern, scope: &GraphScope) -> usize {
+fn base_cardinality<D: DatasetView<Id = TermId>>(
+    dataset: &D,
+    cp: &CompiledPattern,
+    scope: &GraphScope,
+) -> usize {
     let s = constant_of(&cp.s);
     let p = constant_of(&cp.p);
     let o = constant_of(&cp.o);
@@ -750,10 +754,10 @@ fn is_blank_var(var: &Variable) -> bool {
 
 /// Compile a triple pattern's positions. Returns `Ok(None)` if a ground constant is
 /// absent from the dataset (the pattern — and hence the BGP — cannot match).
-fn compile_pattern(
+fn compile_pattern<D: DatasetView<Id = TermId>>(
     pattern: &TriplePattern,
     schema: &VarSchema,
-    dataset: &RdfDataset,
+    dataset: &D,
 ) -> Result<Option<CompiledPattern>, EvalError> {
     let Some(s) = compile_term(&pattern.subject, schema, dataset)? else {
         return Ok(None);
@@ -769,10 +773,10 @@ fn compile_pattern(
 
 /// Compile a subject/object term position. `Ok(None)` = an absent ground constant
 /// (the pattern — and hence the BGP — cannot match).
-fn compile_term(
+fn compile_term<D: DatasetView<Id = TermId>>(
     term: &TermPattern,
     schema: &VarSchema,
-    dataset: &RdfDataset,
+    dataset: &D,
 ) -> Result<Option<Pos>, EvalError> {
     match term {
         TermPattern::Variable(v) => Ok(Some(Pos::Slot(slot_col(schema, v)))),
@@ -800,10 +804,10 @@ fn compile_term(
 
 /// Compile a nested quoted-triple pattern's three positions. `Ok(None)` if any
 /// ground component is absent from the dataset (so the whole pattern cannot match).
-fn compile_triple_pos(
+fn compile_triple_pos<D: DatasetView<Id = TermId>>(
     triple: &TriplePattern,
     schema: &VarSchema,
-    dataset: &RdfDataset,
+    dataset: &D,
 ) -> Result<Option<TriplePos>, EvalError> {
     let Some(s) = compile_term(&triple.subject, schema, dataset)? else {
         return Ok(None);
@@ -843,10 +847,10 @@ fn term_has_variable(term: &TermPattern) -> bool {
 }
 
 /// Compile a predicate position (IRI or variable). `None` = an absent ground IRI.
-fn compile_predicate(
+fn compile_predicate<D: DatasetView<Id = TermId>>(
     predicate: &NamedNodePattern,
     schema: &VarSchema,
-    dataset: &RdfDataset,
+    dataset: &D,
 ) -> Option<Pos> {
     match predicate {
         NamedNodePattern::Variable(v) => Some(Pos::Slot(
@@ -883,11 +887,11 @@ fn query_id(pos: &Pos, row: &Solution) -> Option<TermId> {
 /// quoted-triple position fails to unify, or if a ground constant disagrees (the
 /// virtual reification candidates are NOT pre-filtered by `quads_for_pattern`, so a
 /// `Pos::Bound` mismatch must be rejected here).
-fn bind_row(
+fn bind_row<D: DatasetView<Id = TermId>>(
     row: &Solution,
     cp: &CompiledPattern,
     quad: &QuadIds,
-    dataset: &RdfDataset,
+    dataset: &D,
 ) -> Option<Solution> {
     let mut out = row.clone();
     for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
@@ -904,7 +908,12 @@ fn bind_row(
 /// - a `Pos::Slot` repeated/previously-bound variable that disagrees;
 /// - a `Pos::Triple` whose candidate id is not a triple term, or whose components fail
 ///   to unify recursively.
-fn bind_pos(out: &mut Solution, pos: &Pos, id: TermId, dataset: &RdfDataset) -> bool {
+fn bind_pos<D: DatasetView<Id = TermId>>(
+    out: &mut Solution,
+    pos: &Pos,
+    id: TermId,
+    dataset: &D,
+) -> bool {
     match pos {
         Pos::Bound(want) => *want == id,
         Pos::Slot(col) => {
@@ -950,8 +959,8 @@ fn bind_pos(out: &mut Solution, pos: &Pos, id: TermId, dataset: &RdfDataset) -> 
 /// side-table walks are not pre-narrowed by the probe. A callback keeps this hot path
 /// lazy without boxing or allocating an intermediate candidate buffer.
 #[allow(clippy::too_many_arguments)]
-fn emit_virtual_candidates(
-    dataset: &RdfDataset,
+fn emit_virtual_candidates<D: DatasetView<Id = TermId>>(
+    dataset: &D,
     cp: &CompiledPattern,
     s: Option<TermId>,
     p: Option<TermId>,
@@ -1018,7 +1027,7 @@ fn emit_virtual_candidates(
 /// Whether an object position could resolve to a quoted-triple term (so the reifier
 /// layer — whose object is always a triple term — is worth scanning for it). An IRI or
 /// literal constant never is.
-fn object_can_be_triple_term(pos: &Pos, dataset: &RdfDataset) -> bool {
+fn object_can_be_triple_term<D: DatasetView<Id = TermId>>(pos: &Pos, dataset: &D) -> bool {
     match pos {
         // A free variable or a structural quoted-triple pattern can match a triple term.
         Pos::Slot(_) | Pos::Triple(_) => true,
@@ -1086,8 +1095,8 @@ fn literal_to_string(l: &Literal) -> String {
 /// This is a pure-introspection path: it does not evaluate the query, and it
 /// falls back to source order for BGPs whose constants are absent from the dataset
 /// (those BGPs are empty regardless of order).
-pub(crate) fn explain_pattern_orders(
-    dataset: &RdfDataset,
+pub(crate) fn explain_pattern_orders<D: DatasetView<Id = TermId>>(
+    dataset: &D,
     active_dataset: &ActiveDataset,
     active_graph: GraphMatch,
     pattern: &GraphPattern,
@@ -1203,7 +1212,7 @@ mod tests {
     use super::*;
     use crate::scratch::ScratchInterner;
     use pretty_assertions::assert_eq;
-    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
     use purrdf_sparql_algebra::{Literal, NamedNode};
 
     /// A small graph:

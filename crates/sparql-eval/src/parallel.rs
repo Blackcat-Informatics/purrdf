@@ -46,7 +46,7 @@
 //! fork-join would make its result depend on worker scheduling, not just row
 //! content.
 
-use purrdf_core::{RdfDataset, TermValue};
+use purrdf_core::{DatasetView, TermId, TermValue};
 use purrdf_sparql_algebra::{
     AggregateExpression, Expression, Function, GraphPattern, OrderExpression,
 };
@@ -520,9 +520,9 @@ pub(crate) fn portable_row(
 /// workers minting the same fresh value converge on the same parent id
 /// deterministically (whichever reinterns first wins the id; the same value
 /// reinterned again is deduplicated against it, not re-minted).
-pub(crate) fn reintern_portable_row(
+pub(crate) fn reintern_portable_row<D: DatasetView<Id = TermId>>(
     main: &mut ScratchInterner,
-    dataset: &RdfDataset,
+    dataset: &D,
     prow: Vec<Option<PortableTerm>>,
 ) -> Solution {
     prow.into_iter()
@@ -578,9 +578,9 @@ pub(crate) fn minted_row(local: &ScratchInterner, base: usize, row: Solution) ->
 /// source-index order across all workers — see [`reintern_portable_row`]'s doc
 /// comment for why that ordering (not anything in this function) is what makes
 /// the result deterministic.
-pub(crate) fn reintern_minted_row(
+pub(crate) fn reintern_minted_row<D: DatasetView<Id = TermId>>(
     main: &mut ScratchInterner,
-    dataset: &RdfDataset,
+    dataset: &D,
     row: MintedRow,
 ) -> Solution {
     match row {
@@ -806,9 +806,9 @@ mod tests {
                 if item % 7 != 0 {
                     std::thread::yield_now();
                 }
-                acc.push(vec![Some(SolutionTerm::Existing(
-                    purrdf_core::TermId::from_index(item as u32),
-                ))]);
+                acc.push(vec![Some(SolutionTerm::Existing(TermId::from_index(
+                    item as u32,
+                )))]);
                 Ok(())
             },
         )
@@ -842,9 +842,9 @@ mod tests {
                 if item % 3 == 0 {
                     std::thread::yield_now();
                 }
-                acc.push(vec![Some(SolutionTerm::Existing(
-                    purrdf_core::TermId::from_index(item as u32),
-                ))]);
+                acc.push(vec![Some(SolutionTerm::Existing(TermId::from_index(
+                    item as u32,
+                )))]);
                 Ok(())
             },
         )
@@ -876,9 +876,9 @@ mod tests {
                 0_u64
             },
             |_state, acc, &item| {
-                acc.push(vec![Some(SolutionTerm::Existing(
-                    purrdf_core::TermId::from_index(item as u32),
-                ))]);
+                acc.push(vec![Some(SolutionTerm::Existing(TermId::from_index(
+                    item as u32,
+                )))]);
                 Ok(())
             },
         )

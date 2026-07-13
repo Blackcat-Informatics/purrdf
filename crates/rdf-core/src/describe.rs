@@ -29,15 +29,59 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
-use crate::{QuadIds, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, TermId, TermRef};
+use crate::{
+    DatasetView, QuadIds, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTerm,
+    RdfTriple, TermId, TermRef, TermValue,
+};
+
+/// Resolve a term id to the owned [`RdfTerm`] model through the [`DatasetView`] read
+/// path (recursively for triple terms) — the id-agnostic twin of
+/// `RdfDataset::to_owned_term`, so the extractor rebuilds a describing subgraph over
+/// any backend whose id type is [`TermId`].
+fn owned_term<D: DatasetView<Id = TermId>>(dataset: &D, id: TermId) -> RdfTerm {
+    match dataset.resolve(id) {
+        TermRef::Iri(iri) => RdfTerm::iri(iri),
+        TermRef::Blank { label, scope } => RdfTerm::blank_node(scope.qualify_label(label)),
+        TermRef::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => {
+            let datatype_iri = match dataset.resolve(datatype) {
+                TermRef::Iri(iri) => iri.to_owned(),
+                other => unreachable!("literal datatype must resolve to an IRI, got {other:?}"),
+            };
+            RdfTerm::literal(RdfLiteral {
+                lexical_form: lexical.to_owned(),
+                datatype: Some(datatype_iri),
+                language: language.map(str::to_owned),
+                direction,
+            })
+        }
+        TermRef::Triple { s, p, o } => {
+            let subject = owned_term(dataset, s);
+            let predicate = match dataset.resolve(p) {
+                TermRef::Iri(iri) => iri.to_owned(),
+                other => unreachable!("triple predicate must resolve to an IRI, got {other:?}"),
+            };
+            let object = owned_term(dataset, o);
+            RdfTerm::triple(RdfTriple::new(subject, predicate, object))
+        }
+    }
+}
 
 /// A reusable extractor: it builds the subject/object adjacency and the reifier
 /// endpoint index **once**, so extracting the SCBD of many subjects (one per exported
 /// term/slice) is cheap — each extraction is a bounded graph walk over the index, not
 /// a full re-scan of the dataset.
+///
+/// Generic over the read view `D` (any [`DatasetView`] whose id type is [`TermId`]),
+/// so the SCBD walk runs over the concrete [`RdfDataset`] or any other backend
+/// unchanged; the extracted subgraph is always a fresh [`RdfDataset`].
 #[derive(Debug)]
-pub struct Describer<'a> {
-    dataset: &'a RdfDataset,
+pub struct Describer<'a, D: DatasetView<Id = TermId> = RdfDataset> {
+    dataset: &'a D,
     /// term id → the quads that touch it as subject or object.
     by_endpoint: BTreeMap<TermId, Vec<QuadIds>>,
     /// term id → the `(reifier, triple-term)` bindings whose reified triple has this
@@ -47,10 +91,10 @@ pub struct Describer<'a> {
     annotations_by_reifier: BTreeMap<TermId, Vec<(TermId, TermId)>>,
 }
 
-impl<'a> Describer<'a> {
+impl<'a, D: DatasetView<Id = TermId>> Describer<'a, D> {
     /// Build the adjacency indices over `dataset`.
     #[must_use]
-    pub fn new(dataset: &'a RdfDataset) -> Self {
+    pub fn new(dataset: &'a D) -> Self {
         let mut by_endpoint: BTreeMap<TermId, Vec<QuadIds>> = BTreeMap::new();
         for q in dataset.quads() {
             by_endpoint.entry(q.s).or_default().push(q);
@@ -61,7 +105,7 @@ impl<'a> Describer<'a> {
         }
 
         let mut reifiers_by_endpoint: BTreeMap<TermId, Vec<(TermId, TermId)>> = BTreeMap::new();
-        for (reifier, triple) in dataset.reifiers() {
+        for (reifier, triple) in dataset.reifier_quads().map(|q| (q.s, q.o)) {
             if let TermRef::Triple { s, p: _, o } = dataset.resolve(triple) {
                 reifiers_by_endpoint
                     .entry(s)
@@ -77,7 +121,7 @@ impl<'a> Describer<'a> {
         }
 
         let mut annotations_by_reifier: BTreeMap<TermId, Vec<(TermId, TermId)>> = BTreeMap::new();
-        for (reifier, p, o) in dataset.annotations() {
+        for (reifier, p, o) in dataset.annotation_quads().map(|q| (q.s, q.p, q.o)) {
             annotations_by_reifier
                 .entry(reifier)
                 .or_default()
@@ -100,7 +144,7 @@ impl<'a> Describer<'a> {
     /// Propagates a freeze diagnostic if the extracted subgraph is somehow invalid
     /// (it never should be, being a subset of an already-valid dataset).
     pub fn describe_iri(&self, subject: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        let seed = self.dataset.term_id_by_iri(subject);
+        let seed = self.dataset.term_id_by_value(&TermValue::iri(subject));
         self.describe_seeds(seed.into_iter().collect())
     }
 
@@ -115,7 +159,7 @@ impl<'a> Describer<'a> {
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         let seeds: Vec<TermId> = subjects
             .into_iter()
-            .filter_map(|s| self.dataset.term_id_by_iri(s))
+            .filter_map(|s| self.dataset.term_id_by_value(&TermValue::iri(s)))
             .collect();
         self.describe_seeds(seeds)
     }
@@ -246,7 +290,7 @@ impl<'a> Describer<'a> {
         if let Some(&new) = remap.get(&old) {
             return new;
         }
-        let owned = self.dataset.to_owned_term(old);
+        let owned = owned_term(self.dataset, old);
         let new = builder.intern_owned_term(&owned);
         remap.insert(old, new);
         new

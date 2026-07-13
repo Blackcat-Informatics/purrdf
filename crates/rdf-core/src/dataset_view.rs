@@ -16,6 +16,7 @@
 //! object-safety obligation.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::RdfStoreCapabilities;
 use crate::collections::{RDF_ALT, RDF_BAG, RDF_FIRST, RDF_NIL, RDF_REST, RDF_SEQ, RDF_TYPE};
@@ -109,7 +110,11 @@ pub trait DatasetView {
     /// index-nested-loop join slot (see [`Self::probe_plan`] /
     /// [`Self::quads_for_pattern_with_plan`]). A backend with no access-pattern index
     /// uses the unit plan `()`.
-    type ProbePlan: Copy;
+    ///
+    /// `Send + Sync` because the plan is computed once per join slot and then
+    /// captured by value into every parallel probe worker (see the BGP join loop):
+    /// the loop-invariant plan crosses the fork boundary, so it must be shareable.
+    type ProbePlan: Copy + Send + Sync;
 
     /// Iterate every quad as `Copy` [`QuadIds`] (dataset-local term ids).
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_;
@@ -232,6 +237,17 @@ pub trait DatasetView {
     ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
         let _ = reifier;
         std::iter::empty()
+    }
+
+    /// Every named graph this view addresses, in ascending id order (sorted,
+    /// deduplicated). Drives `GRAPH ?g` enumeration, so the order is
+    /// result-observable and must be deterministic. The default derives the set
+    /// from the quads the view can see; a backend that also tracks explicitly
+    /// declared *empty* named graphs (e.g. [`RdfDataset`]) overrides this to
+    /// include them.
+    fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
+        let set: BTreeSet<Self::Id> = self.quads().filter_map(|q| q.g).collect();
+        set.into_iter()
     }
 
     /// Materialize an `rdf:first`/`rdf:rest`/`rdf:nil` Collection whose head is
@@ -570,6 +586,132 @@ impl DatasetView for RdfDataset {
         reifier: TermId,
     ) -> impl Iterator<Item = (TermId, TermId, Option<TermId>)> + '_ {
         Self::annotations_of_with_graph(self, reifier)
+    }
+
+    #[inline]
+    fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
+        // The inherent set includes explicitly-declared empty named graphs, which
+        // the quads-derived default would miss, so delegate to it verbatim.
+        Self::named_graphs(self)
+    }
+}
+
+/// A shared [`Arc`]-wrapped read view is itself a read view: every method delegates
+/// to the inner `T`, so `Arc<RdfDataset>` (the engine's `Dataset` handle) plugs into
+/// the generic evaluator directly, byte-for-byte identical to the bare `RdfDataset`.
+/// Every method — including the ones `RdfDataset` overrides for its indexed read path
+/// and RDF 1.2 side-tables — is forwarded, so no default (e.g. an empty reifier layer)
+/// can silently diverge from the inner view.
+impl<T: DatasetView> DatasetView for Arc<T> {
+    type Id = T::Id;
+    type ProbePlan = T::ProbePlan;
+
+    #[inline]
+    fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).quads()
+    }
+
+    #[inline]
+    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_ {
+        (**self).quad_refs()
+    }
+
+    #[inline]
+    fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id> {
+        (**self).resolve(id)
+    }
+
+    #[inline]
+    fn quads_for_pattern(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).quads_for_pattern(s, p, o, g)
+    }
+
+    #[inline]
+    fn term_id_by_value(&self, value: &TermValue) -> Option<Self::Id> {
+        (**self).term_id_by_value(value)
+    }
+
+    #[inline]
+    fn capabilities(&self) -> RdfStoreCapabilities {
+        (**self).capabilities()
+    }
+
+    #[inline]
+    fn len_hint(&self) -> Option<usize> {
+        (**self).len_hint()
+    }
+
+    #[inline]
+    fn probe_plan(
+        &self,
+        s_bound: bool,
+        p_bound: bool,
+        o_bound: bool,
+        g: GraphMatch<Self::Id>,
+    ) -> Self::ProbePlan {
+        (**self).probe_plan(s_bound, p_bound, o_bound, g)
+    }
+
+    #[inline]
+    fn quads_for_pattern_with_plan(
+        &self,
+        plan: &Self::ProbePlan,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).quads_for_pattern_with_plan(plan, s, p, o, g)
+    }
+
+    #[inline]
+    fn cardinality_estimate(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> usize {
+        (**self).cardinality_estimate(s, p, o, g)
+    }
+
+    #[inline]
+    fn term_count(&self) -> usize {
+        (**self).term_count()
+    }
+
+    #[inline]
+    fn stats_fingerprint(&self) -> u64 {
+        (**self).stats_fingerprint()
+    }
+
+    #[inline]
+    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).reifier_quads()
+    }
+
+    #[inline]
+    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).annotation_quads()
+    }
+
+    #[inline]
+    fn annotations_of_with_graph(
+        &self,
+        reifier: Self::Id,
+    ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
+        (**self).annotations_of_with_graph(reifier)
+    }
+
+    #[inline]
+    fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
+        (**self).named_graphs()
     }
 }
 

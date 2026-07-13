@@ -43,7 +43,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, TermId, TermRef, TermValue};
+use purrdf_core::{DatasetView, TermId, TermRef, TermValue};
 use purrdf_sparql_algebra::{NamedNode, PropertyPathExpression, TermPattern, Variable};
 
 use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
@@ -85,8 +85,8 @@ type ReachCache = RefCell<DetHashMap<ReachKey, Rc<BTreeSet<TermId>>>>;
 /// `FROM`/`USING`-merged default graph), the once-resolved negated-set cache, and
 /// a per-evaluation reachability memo. Bundling these keeps the recursive
 /// path-evaluation signatures small.
-struct PathCtx<'a> {
-    dataset: &'a RdfDataset,
+struct PathCtx<'a, D: DatasetView<Id = TermId> + Sync> {
+    dataset: &'a D,
     scope: GraphScope,
     cache: NegatedCache,
     reach_cache: ReachCache,
@@ -96,13 +96,20 @@ struct PathCtx<'a> {
 /// `NegatedPropertySet`'s excluded predicates to `TermId`s. The result is
 /// threaded through all `reach`/`closure`/`step_negated` calls so that IRI
 /// resolution is not repeated on every traversal step.
-fn build_negated_cache(path: &PropertyPathExpression, dataset: &RdfDataset) -> NegatedCache {
+fn build_negated_cache<D: DatasetView<Id = TermId> + Sync>(
+    path: &PropertyPathExpression,
+    dataset: &D,
+) -> NegatedCache {
     let mut cache = NegatedCache::new();
     collect_negated(path, dataset, &mut cache);
     cache
 }
 
-fn collect_negated(path: &PropertyPathExpression, dataset: &RdfDataset, cache: &mut NegatedCache) {
+fn collect_negated<D: DatasetView<Id = TermId> + Sync>(
+    path: &PropertyPathExpression,
+    dataset: &D,
+    cache: &mut NegatedCache,
+) {
     use PropertyPathExpression as P;
     match path {
         P::NegatedPropertySet(elems) => {
@@ -150,11 +157,11 @@ fn collect_negated(path: &PropertyPathExpression, dataset: &RdfDataset, cache: &
 /// self-pairing (W3C `property-path/zero_or_more_set_start` /
 /// `zero_or_more_set_end`). A non-reflexive path cannot connect an absent node
 /// to anything else (it has no edges to traverse), so it correctly stays empty.
-pub(crate) fn eval_path(
+pub(crate) fn eval_path<D: DatasetView<Id = TermId> + Sync>(
     subject: &TermPattern,
     path: &PropertyPathExpression,
     object: &TermPattern,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq, EvalError> {
     let dataset = ctx.dataset;
     let scope = ctx.active_dataset.scope_for(ctx.active_graph);
@@ -342,7 +349,10 @@ enum Endpoint {
 }
 
 /// Resolve an endpoint term to a [`Endpoint`].
-fn resolve_end(term: &TermPattern, dataset: &RdfDataset) -> Result<Endpoint, EvalError> {
+fn resolve_end<D: DatasetView<Id = TermId> + Sync>(
+    term: &TermPattern,
+    dataset: &D,
+) -> Result<Endpoint, EvalError> {
     match term {
         TermPattern::Variable(v) => Ok(Endpoint::Free { var: v.clone() }),
         // A blank node in a path endpoint is an anonymous variable (SPARQL §4.1.4):
@@ -387,7 +397,10 @@ fn visible_var(term: &TermPattern) -> Option<Variable> {
 /// All terms that appear as a subject or object of a quad in the active-dataset scope
 /// — the node universe for a both-endpoints-variable path (SPARQL §18.1.7). The
 /// `BTreeSet` de-dupes endpoints, so a `FROM`-merged scope needs no extra triple dedup.
-fn node_universe(dataset: &RdfDataset, scope: &GraphScope) -> BTreeSet<TermId> {
+fn node_universe<D: DatasetView<Id = TermId> + Sync>(
+    dataset: &D,
+    scope: &GraphScope,
+) -> BTreeSet<TermId> {
     let mut out = BTreeSet::new();
     scope.for_each_quad(dataset, None, None, None, |q| {
         out.insert(q.s);
@@ -396,11 +409,11 @@ fn node_universe(dataset: &RdfDataset, scope: &GraphScope) -> BTreeSet<TermId> {
     out
 }
 
-fn reach_cached(
+fn reach_cached<D: DatasetView<Id = TermId> + Sync>(
     path: &PropertyPathExpression,
     node: TermId,
     forward: bool,
-    ctx: &PathCtx<'_>,
+    ctx: &PathCtx<'_, D>,
 ) -> Rc<BTreeSet<TermId>> {
     let key = (
         std::ptr::from_ref::<PropertyPathExpression>(path) as usize,
@@ -416,11 +429,11 @@ fn reach_cached(
     result
 }
 
-fn reach_uncached(
+fn reach_uncached<D: DatasetView<Id = TermId> + Sync>(
     path: &PropertyPathExpression,
     node: TermId,
     forward: bool,
-    ctx: &PathCtx<'_>,
+    ctx: &PathCtx<'_, D>,
 ) -> BTreeSet<TermId> {
     use PropertyPathExpression as P;
     match path {
@@ -519,11 +532,11 @@ fn path_has_repetition(path: &PropertyPathExpression) -> bool {
 /// and `Sequence`/`Alternative` compose that order structurally, so row order
 /// is stable run-to-run. Must never be called on a path containing repetition
 /// (`path_has_repetition(path)` is checked once by the caller, `eval_path`).
-fn simple_reach_multiset(
+fn simple_reach_multiset<D: DatasetView<Id = TermId> + Sync>(
     path: &PropertyPathExpression,
     node: TermId,
     forward: bool,
-    ctx: &PathCtx<'_>,
+    ctx: &PathCtx<'_, D>,
 ) -> Vec<TermId> {
     use PropertyPathExpression as P;
     match path {
@@ -561,11 +574,11 @@ fn simple_reach_multiset(
 
 /// One predicate hop. Forward: objects of `(node, p, ?)`; backward: subjects of
 /// `(?, p, node)`. A predicate absent from the dataset yields nothing.
-fn step_predicate(
+fn step_predicate<D: DatasetView<Id = TermId> + Sync>(
     p: &NamedNode,
     node: TermId,
     forward: bool,
-    ctx: &PathCtx<'_>,
+    ctx: &PathCtx<'_, D>,
 ) -> BTreeSet<TermId> {
     let Some(pid) = ctx.dataset.term_id_by_value(&named_node_to_value(p)) else {
         return BTreeSet::new();
@@ -591,11 +604,11 @@ fn step_predicate(
 /// unioned, and a direction with no listed elements is omitted entirely (see
 /// [`NegatedSets`]). Uses the pre-resolved `cache` to avoid re-resolving
 /// excluded IRIs on every call.
-fn step_negated(
+fn step_negated<D: DatasetView<Id = TermId> + Sync>(
     elems: &[purrdf_sparql_algebra::NegatedPathElement],
     node: TermId,
     forward: bool,
-    ctx: &PathCtx<'_>,
+    ctx: &PathCtx<'_, D>,
 ) -> BTreeSet<TermId> {
     let sets = &ctx.cache[&(elems.as_ptr() as usize)];
     let mut out = BTreeSet::new();
@@ -611,11 +624,11 @@ fn step_negated(
 /// One hop along any predicate NOT in `excluded`, in the given direction —
 /// the direction-parameterised primitive `step_negated` composes twice (once
 /// per element kind) to get the full negated-set relation.
-fn step_excluding(
+fn step_excluding<D: DatasetView<Id = TermId> + Sync>(
     excluded: &BTreeSet<TermId>,
     node: TermId,
     forward: bool,
-    ctx: &PathCtx<'_>,
+    ctx: &PathCtx<'_, D>,
 ) -> BTreeSet<TermId> {
     let mut out = BTreeSet::new();
     if forward {
@@ -638,11 +651,11 @@ fn step_excluding(
 
 /// `<any>` / `<any:ns>`: one hop along any predicate, optionally restricted to
 /// predicates whose IRI begins with the namespace prefix.
-fn step_wildcard(
+fn step_wildcard<D: DatasetView<Id = TermId> + Sync>(
     namespace: Option<&NamedNode>,
     node: TermId,
     forward: bool,
-    ctx: &PathCtx<'_>,
+    ctx: &PathCtx<'_, D>,
 ) -> BTreeSet<TermId> {
     let prefix = namespace.map(NamedNode::as_str);
     let pred_ok = |pid: TermId| -> bool {
@@ -676,11 +689,11 @@ fn step_wildcard(
 /// by applying `inner` at least once. The visited-set guards the endpoint frontier
 /// so cyclic graphs terminate; `node` itself appears iff it is reachable from
 /// itself via a cycle (the correct SPARQL `+` behaviour).
-fn closure(
+fn closure<D: DatasetView<Id = TermId> + Sync>(
     inner: &PropertyPathExpression,
     node: TermId,
     forward: bool,
-    ctx: &PathCtx<'_>,
+    ctx: &PathCtx<'_, D>,
 ) -> BTreeSet<TermId> {
     // `result` stays an ordered `BTreeSet` — it is the returned/egress set, and its
     // iteration order determines solution-row order (byte-identity). `visited` is a
@@ -710,11 +723,11 @@ fn closure(
 /// single joint traversal: every node reachable by applying `inner` at least once
 /// from any seed. Equivalent to unioning `closure` over each seed, but visits each
 /// node at most once (O(V+E), not O(|seeds|·(V+E))).
-fn closure_multi(
+fn closure_multi<D: DatasetView<Id = TermId> + Sync>(
     inner: &PropertyPathExpression,
     seeds: &BTreeSet<TermId>,
     forward: bool,
-    ctx: &PathCtx<'_>,
+    ctx: &PathCtx<'_, D>,
 ) -> BTreeSet<TermId> {
     // As in `closure`: ordered `result` for egress, O(1) `DetHashSet` for the
     // membership-only `visited` guard.
@@ -743,13 +756,13 @@ fn closure_multi(
 /// (re-entrant per `k`), so a node reachable at multiple repetition counts is
 /// reported. `max == None` (`{n,}`) applies `inner` exactly `min` times then takes
 /// the `*`-closure of that frontier.
-fn range_reach(
+fn range_reach<D: DatasetView<Id = TermId> + Sync>(
     inner: &PropertyPathExpression,
     node: TermId,
     forward: bool,
     min: u32,
     max: Option<u32>,
-    ctx: &PathCtx<'_>,
+    ctx: &PathCtx<'_, D>,
 ) -> BTreeSet<TermId> {
     let mut out = BTreeSet::new();
     // `current` = nodes reachable in exactly `k` applications; k starts at 0.
@@ -784,7 +797,7 @@ fn range_reach(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use purrdf_core::RdfDatasetBuilder;
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder};
     use purrdf_sparql_algebra::NamedNode;
 
     const EX: &str = "http://ex/";

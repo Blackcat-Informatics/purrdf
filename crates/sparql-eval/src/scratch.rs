@@ -29,7 +29,7 @@
 //! single integer compare. The one lookup cost (`term_id_by_value`) is paid only
 //! when a term is *minted* (BIND/VALUES/aggregate output), never in BGP matching.
 
-use purrdf_core::{RdfDataset, TermId, TermRef, TermValue};
+use purrdf_core::{DatasetView, TermId, TermRef, TermValue};
 
 use std::hash::{Hash, Hasher};
 
@@ -131,7 +131,11 @@ impl ScratchInterner {
     ///
     /// This is the unification rule: a value already in the data never becomes a
     /// `Computed` id, so cross-case join keys are unequal by construction.
-    pub fn intern(&mut self, dataset: &RdfDataset, value: TermValue) -> SolutionTerm {
+    pub fn intern<D: DatasetView<Id = TermId>>(
+        &mut self,
+        dataset: &D,
+        value: TermValue,
+    ) -> SolutionTerm {
         if let Some(id) = dataset.term_id_by_value(&value) {
             return SolutionTerm::Existing(id);
         }
@@ -155,7 +159,11 @@ impl ScratchInterner {
     /// terms, expanding the literal datatype id to its IRI string); `Computed` ids
     /// are read from the scratch table. This is the egress boundary used to build
     /// `SparqlResult` rows.
-    pub fn value_of(&self, dataset: &RdfDataset, term: SolutionTerm) -> TermValue {
+    pub fn value_of<D: DatasetView<Id = TermId>>(
+        &self,
+        dataset: &D,
+        term: SolutionTerm,
+    ) -> TermValue {
         match term {
             SolutionTerm::Existing(id) => term_id_to_value(dataset, id),
             SolutionTerm::Computed(sid) => self.values[sid.index()].clone(),
@@ -182,7 +190,7 @@ impl ScratchInterner {
 ///
 /// Recurses through RDF-1.2 triple terms and expands a literal's datatype id to its
 /// IRI string, so the result carries no dataset-local ids (the C0.8 boundary).
-pub(crate) fn term_id_to_value(dataset: &RdfDataset, id: TermId) -> TermValue {
+pub(crate) fn term_id_to_value<D: DatasetView<Id = TermId>>(dataset: &D, id: TermId) -> TermValue {
     match dataset.resolve(id) {
         TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
         TermRef::Blank { label, scope } => TermValue::Blank {
@@ -219,7 +227,7 @@ pub(crate) fn term_id_to_value(dataset: &RdfDataset, id: TermId) -> TermValue {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 
     fn dataset_with_one_iri() -> std::sync::Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();

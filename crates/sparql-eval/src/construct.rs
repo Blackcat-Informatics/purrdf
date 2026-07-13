@@ -27,7 +27,7 @@ use purrdf_core::loss::{
     LOSS_ANNOTATION_LAYER_DROPPED, LOSS_REIFIER_LAYER_DROPPED, LOSS_STANDPOINT_SCOPE_DROPPED,
 };
 use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, TermFactory, TermId, TermRef, TermValue,
+    DatasetView, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermFactory, TermId, TermRef, TermValue,
 };
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern, TermPattern, TriplePattern};
 
@@ -56,10 +56,10 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// behaves like a plain `CONSTRUCT`. When the `WHERE` has no `rdf:reifies`
 /// pattern at all the detection does zero extra work and the output is
 /// byte-identical to a plain `CONSTRUCT`.
-pub(crate) fn eval_construct(
+pub(crate) fn eval_construct<D: DatasetView<Id = TermId> + Sync>(
     template: &[TriplePattern],
     pattern: &GraphPattern,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Arc<RdfDataset>, EvalError> {
     let seq = eval(pattern, ctx)?;
     let schema = seq.schema.clone();
@@ -383,12 +383,12 @@ fn collect_term_pattern_vars(term: &TermPattern, out: &mut BTreeSet<String>) {
 /// `<lossNode>` is a DETERMINISTIC blank node whose label is derived purely from the
 /// resolved triple-term content, so identical drops across rows collapse to one node
 /// via the builder's dedup.
-fn emit_dropped_losses(
+fn emit_dropped_losses<D: DatasetView<Id = TermId> + Sync>(
     dropped: &[DroppedReifier],
     row: &Solution,
     schema: &VarSchema,
     builder: &mut RdfDatasetBuilder,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
     (proj_loss_id, loss_code_id, lost_reifies_id): (TermId, TermId, TermId),
 ) {
     for d in dropped {
@@ -465,13 +465,13 @@ fn loss_node_label(code: &str, inner: &TermValue) -> String {
 
 /// Instantiate one template triple for `row`, interning into `builder`. Returns
 /// `None` if the triple is skipped (an unbound variable or an ill-formed position).
-fn instantiate(
+fn instantiate<D: DatasetView<Id = TermId> + Sync>(
     tp: &TriplePattern,
     row: &Solution,
     schema: &VarSchema,
     builder: &mut RdfDatasetBuilder,
     blanks: &mut DetHashMap<String, String>,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Option<(TermId, TermId, TermId)> {
     let s = instantiate_term(&tp.subject, row, schema, blanks, ctx)?;
     let p = instantiate_predicate(&tp.predicate, row, schema, ctx)?;

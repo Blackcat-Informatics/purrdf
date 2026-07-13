@@ -24,7 +24,7 @@
 
 use std::collections::BTreeSet;
 
-use purrdf_core::{DatasetView, GraphMatch, QuadIds, RdfDataset, TermId, TermValue};
+use purrdf_core::{DatasetView, GraphMatch, QuadIds, TermId, TermValue};
 use purrdf_sparql_algebra::{QueryDataset, UsingClause};
 
 use crate::convert::named_node_to_value;
@@ -65,9 +65,9 @@ pub(crate) enum GraphScope {
 /// Resolve a list of graph IRIs to their dataset-local ids, dropping any that name no
 /// term (an absent graph contributes nothing — never an error), then sort+dedupe for
 /// a deterministic, duplicate-free merge set.
-fn resolve_graphs(
+fn resolve_graphs<D: DatasetView<Id = TermId>>(
     graphs: &[purrdf_sparql_algebra::NamedNode],
-    dataset: &RdfDataset,
+    dataset: &D,
 ) -> Vec<TermId> {
     let mut ids: Vec<TermId> = graphs
         .iter()
@@ -89,7 +89,10 @@ impl ActiveDataset {
 
     /// Build the active dataset from a query's `FROM` / `FROM NAMED` clause. An empty
     /// clause means "use the store's default dataset" (§13.2).
-    pub(crate) fn from_query_dataset(qd: &QueryDataset, dataset: &RdfDataset) -> Self {
+    pub(crate) fn from_query_dataset<D: DatasetView<Id = TermId>>(
+        qd: &QueryDataset,
+        dataset: &D,
+    ) -> Self {
         if qd.default.is_empty() && qd.named.is_empty() {
             return Self::store_default();
         }
@@ -103,7 +106,10 @@ impl ActiveDataset {
     /// clauses (the write-path twin of [`from_query_dataset`]). The caller only invokes
     /// this when `using` is non-empty (§3.1.3: `USING` replaces `WITH`'s effect on the
     /// WHERE dataset).
-    pub(crate) fn from_using(using: &[UsingClause], dataset: &RdfDataset) -> Self {
+    pub(crate) fn from_using<D: DatasetView<Id = TermId>>(
+        using: &[UsingClause],
+        dataset: &D,
+    ) -> Self {
         let mut default = Vec::new();
         let mut named = Vec::new();
         for u in using {
@@ -131,7 +137,10 @@ impl ActiveDataset {
     /// Scope the WHERE default graph to a single `WITH <g>` graph (named graphs stay
     /// unrestricted). An absent `g` yields an empty default graph (the WHERE matches
     /// nothing), matching the implicit-existence doctrine.
-    pub(crate) fn with_default_graph(dataset: &RdfDataset, g: &TermValue) -> Self {
+    pub(crate) fn with_default_graph<D: DatasetView<Id = TermId>>(
+        dataset: &D,
+        g: &TermValue,
+    ) -> Self {
         let ids = dataset
             .term_id_by_value(g)
             .map(|id| vec![id])
@@ -170,9 +179,9 @@ impl GraphScope {
     /// per-graph indexed reads are unioned in order; **no triple de-dup is applied
     /// here** (the BGP caller de-dupes by `(s,p,o)`; endpoint-collecting callers do
     /// not need it).
-    pub(crate) fn for_each_quad(
+    pub(crate) fn for_each_quad<D: DatasetView<Id = TermId>>(
         &self,
-        dataset: &RdfDataset,
+        dataset: &D,
         s: Option<TermId>,
         p: Option<TermId>,
         o: Option<TermId>,

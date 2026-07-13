@@ -18,6 +18,7 @@
 
 use std::sync::Arc;
 
+use purrdf_core::{DatasetView, TermId};
 use purrdf_sparql_algebra::{Expression, GraphPattern};
 
 use crate::error::EvalError;
@@ -43,10 +44,10 @@ pub(crate) enum JoinKey {
 }
 
 /// Evaluate `left . right` (algebra `Join`) as a hash join on shared variables.
-pub(crate) fn eval_join(
+pub(crate) fn eval_join<D: DatasetView<Id = TermId> + Sync>(
     left: &GraphPattern,
     right: &GraphPattern,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq, EvalError> {
     let l = eval(left, ctx)?;
     let r = eval(right, ctx)?;
@@ -62,10 +63,10 @@ pub(crate) fn eval_join(
 /// μ, the sole case being a variable-endpoint `SERVICE ?g` whose endpoint IRI is
 /// bound by μ. Reuses the correlated-EXISTS substitution machinery, including the
 /// address-keyed-cache ABA guard (`in_substituted_exists`) around the inner eval.
-pub(crate) fn eval_lateral(
+pub(crate) fn eval_lateral<D: DatasetView<Id = TermId> + Sync>(
     left: &GraphPattern,
     right: &GraphPattern,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq, EvalError> {
     let l = eval(left, ctx)?;
     let left_schema = Arc::clone(&l.schema);
@@ -139,10 +140,10 @@ pub(crate) fn eval_lateral(
 /// re-intern them back into `ctx.scratch`, left branch first then right, via
 /// [`crate::parallel::reintern_portable_row`] — reproducing the sequential
 /// concat's exact row order (left rows, then right rows) and column layout.
-pub(crate) fn eval_union(
+pub(crate) fn eval_union<D: DatasetView<Id = TermId> + Sync>(
     left: &GraphPattern,
     right: &GraphPattern,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq, EvalError> {
     if !crate::parallel::is_parallel_safe_pattern(left)
         || !crate::parallel::is_parallel_safe_pattern(right)
@@ -156,7 +157,7 @@ pub(crate) fn eval_union(
     // A shared (immutable) borrow of `ctx`: both closures below only need
     // `fork_for_worker`'s `&self` access, so they run concurrently over the same
     // `&EvalCtx` — `EvalCtx: Sync` (see its definition) makes this sound.
-    let ctx_ref: &EvalCtx<'_> = ctx;
+    let ctx_ref: &EvalCtx<'_, D> = ctx;
 
     // Each closure forks its own child, evaluates its branch on it, and
     // classifies every result row (see [`crate::parallel::minted_row`]): a row
@@ -429,11 +430,11 @@ fn merge(
 
 /// Evaluate `left OPTIONAL { right }` (algebra `LeftJoin`) as a left outer join,
 /// with an optional inline `FILTER` condition evaluated on the merged solution.
-pub(crate) fn eval_left_join(
+pub(crate) fn eval_left_join<D: DatasetView<Id = TermId> + Sync>(
     left: &GraphPattern,
     right: &GraphPattern,
     expression: Option<&Expression>,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq, EvalError> {
     let l = eval(left, ctx)?;
     let r = eval(right, ctx)?;
@@ -456,11 +457,11 @@ pub(crate) fn eval_left_join(
 /// nothing — see its doc comment), so nothing new escapes a forked child's
 /// scratch and it is discarded after use — no re-interning via
 /// [`crate::parallel::reintern_minted_row`] is needed.
-fn left_outer_join_filtered(
+fn left_outer_join_filtered<D: DatasetView<Id = TermId> + Sync>(
     l: &SolutionSeq,
     r: &SolutionSeq,
     expr: &Expression,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq, EvalError> {
     let out = Arc::new(l.schema.union(&r.schema));
     let out_len = out.len();
@@ -578,10 +579,10 @@ fn left_outer_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
 /// SPARQL §18.5): solutions with disjoint domains never remove, so `MINUS` over
 /// patterns with no common variable is a no-op. The result schema is the left
 /// schema (MINUS introduces no right columns) and left multiplicity is preserved.
-pub(crate) fn eval_minus(
+pub(crate) fn eval_minus<D: DatasetView<Id = TermId> + Sync>(
     left: &GraphPattern,
     right: &GraphPattern,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq, EvalError> {
     let l = eval(left, ctx)?;
     let r = eval(right, ctx)?;
