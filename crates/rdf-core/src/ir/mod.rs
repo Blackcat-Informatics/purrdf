@@ -42,6 +42,16 @@ pub mod ingest;
 // `GlobalTermId`, plus the `PageProvider` demand-paging hook and per-page
 // `PageTranslation` local↔global id map.
 pub mod paged;
+// The succinct, dependency-free bit-packing / rank-select / varint codec kernel
+// (pack): fixed-width `IntVector`, rank/select bitmaps, and varint/zigzag/delta
+// helpers for the FoQ inverted-list and value-dictionary encoders landing in later
+// tasks. `#[doc(hidden)]`: this is an internal-codec surface, not a SemVer-
+// guaranteed part of the crate's public API — it is `pub` only so this crate's own
+// `benches/pack_bits.rs` (a separate compilation unit) can reach it, matching the
+// `#[doc(hidden)] pub` bench-only-surface convention already used in
+// `purrdf-rdf::native_codecs::parse_dataset_forced_sequential`.
+#[doc(hidden)]
+pub mod pack;
 pub mod term;
 pub mod validate;
 

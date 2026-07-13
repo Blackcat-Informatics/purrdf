@@ -83,6 +83,14 @@ name = "mutable"
 harness = false
 
 [[bench]]
+# Succinct `pack` primitives (Task 1 of the succinct-pack-codec feature):
+# `IntVector::get` and `RankSelect`'s `rank1`/`select1`, each at a few sizes.
+# Report-only — no timing/speedup assertions. `make bench` lane only — excluded
+# from `make check`.
+name = "pack_bits"
+harness = false
+
+[[bench]]
 # Intern-time content-id overhead harness: three groups measuring
 # ordinary-IRI interning with content addressing inactive vs active (prefix-miss
 # cost) and genuine `blake3:<64hex>` content-id interning (prefix-hit + decode +
