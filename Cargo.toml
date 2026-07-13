@@ -92,6 +92,13 @@ md-5 = { version = "0.10", default-features = false }
 # SIMD byte scanning (SWAR fallback, wasm-clean). Used by the purrdf-rdf codec
 # hot paths and the purrdf-sparql-algebra tokenizer.
 memchr = "2"
+# Memory-mapped file I/O. DEV-ONLY (see G5 in
+# docs/design/purrdf-backend-contract.md): the memory-mapped tier is an
+# external-consumer concern, never a published crate's runtime dependency, so
+# this is used solely from `crates/rdf-core/tests/pack_mmap.rs` as a
+# dev-dependency demonstrating the mmap seam. Not wasm32-relevant (mmap has no
+# meaning there); `make wasm` builds `--lib` only, so this never reaches it.
+memmap2 = "0.9"
 petgraph = { version = "0.8", default-features = false }
 pretty_assertions = "1"
 proptest = "1"

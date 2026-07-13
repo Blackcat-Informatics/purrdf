@@ -65,6 +65,15 @@ proptest = { workspace = true }
 # the sibling crates (logic/shacl/validate): criterion's plotters/rayon defaults are
 # off so `make bench` builds fast and the cargo-bench stdout summary is all we need.
 criterion = { workspace = true }
+# DEV-ONLY, native-only: demonstrates the G5 external-consumer mmap seam
+# (docs/design/purrdf-backend-contract.md) in
+# `tests/pack_mmap.rs` — a memory-mapped pack file handed to
+# `PackView::from_bytes` as a borrowed slice. Never a runtime dependency of
+# this crate; excluded from the wasm32 build by the test file's
+# `#![cfg(not(target_arch = "wasm32"))]` gate.
+memmap2 = { workspace = true }
+# Writes the built pack bytes to a real temp file for `pack_mmap.rs` to mmap.
+tempfile = { workspace = true }
 
 [[bench]]
 # IR layout / operational-metrics harness: AoS-vs-SoA(-vs-predicate-adjacency)
@@ -83,10 +92,28 @@ name = "mutable"
 harness = false
 
 [[bench]]
+# Succinct `pack` primitives: `IntVector::get` and `RankSelect`'s
+# `rank1`/`select1`, each at a few sizes.
+# Report-only — no timing/speedup assertions. `make bench` lane only — excluded
+# from `make check`.
+name = "pack_bits"
+harness = false
+
+[[bench]]
 # Intern-time content-id overhead harness: three groups measuring
 # ordinary-IRI interning with content addressing inactive vs active (prefix-miss
 # cost) and genuine `blake3:<64hex>` content-id interning (prefix-hit + decode +
 # side-table insert). Report-only — no timing/speedup assertions. `make bench`
 # lane only — excluded from `make check`.
 name = "intern_content_id"
+harness = false
+
+[[bench]]
+# Succinct `pack` codec end-to-end harness: `PackBuilder::build_bytes`
+# (encode), `PackView::from_bytes` (open), `quads_for_pattern` over a
+# `PackView` for subject/predicate/object-bound and full-scan shapes, and
+# `verify_pack` (the certified-projection RDFC-1.0 recompute). Report-only —
+# no timing/speedup assertions. `make bench` lane only — excluded from
+# `make check`.
+name = "pack_query"
 harness = false

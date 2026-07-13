@@ -71,6 +71,31 @@ machine-readable loss ledger
 rather than disappearing. The same discipline applies at the SPARQL results
 boundary ([Result Formats](../sparql/results.md)) and the RDF↔GTS boundary.
 
+## The succinct pack codec
+
+Alongside the text codecs above, `purrdf-core` ships a **binary** codec for a
+different job: a read-only, query-the-compressed-form encoding of a whole
+dataset for large-scale reference bundles, not an interchange format with a
+media type. `PackBuilder::build_bytes(&dataset)` writes a self-contained,
+byte-deterministic pack — a value dictionary, graph-partitioned succinct
+bitmap-triples, and RDF 1.2 side-tables (reifier bindings, statement
+annotations) — into one `Vec<u8>`. `PackView::from_bytes(&[u8])` opens it
+zero-copy over a borrowed slice and answers pattern queries directly against
+the packed bytes, with no decompression or materialization step first.
+
+Reach for a pack when a dataset is done changing and needs to be distributed,
+archived, or served at a scale where re-parsing text on every load is too
+slow: RDF 1.2 (named graphs, quoted triples, reifiers, annotations) is fully
+supported, and `verify_pack` independently recomputes the dataset's RDFC-1.0
+digest from the pack's own decoded contents — a **certified read-only
+projection**, not merely a compressed file. The library never memory-maps a
+pack itself (every published crate stays `wasm32-unknown-unknown`-clean); a
+native consumer that wants a durable, larger-than-heap tier `mmap`s the file
+and hands `PackView::from_bytes` the resulting borrowed slice. See the
+"Pack backend" section of
+[the backend contract](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/design/purrdf-backend-contract.md)
+for the full contract.
+
 ## Conformance
 
 The codecs are gated by the W3C `rdf-tests` syntax corpus, vendored and frozen
@@ -82,4 +107,6 @@ and Turtle at the time of writing. The live scoreboard is
 
 - [Canonicalization & Diff](canonicalization.md) — when you need a *canonical*
   serialization rather than just a deterministic one.
-- [The Interned Dataset IR](interned-dataset.md) — what the codecs parse into.
+- [The Interned Dataset IR](interned-dataset.md) — what the text codecs parse
+  into, and the `DatasetView` read seam the pack codec implements alongside
+  `RdfDataset`.

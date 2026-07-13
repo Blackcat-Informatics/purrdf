@@ -752,7 +752,7 @@ fn suppression_retention_ok(pre: &Graph, post: &Graph) -> bool {
 /// suppression↔compaction commuting square (see [`CompactionReport::suppressions_ok`]).
 ///
 /// Called only from [`verify_compaction`] over UNTRUSTED bytes, so the
-/// effective-digest agreement is computed via [`try_effective_digest`]
+/// effective-digest agreement is computed via `try_effective_digest`
 /// (fail-closed on a poison-budget graph) rather than [`effective_digest`]
 /// (which panics for trusted callers).
 ///
