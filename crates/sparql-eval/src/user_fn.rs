@@ -517,9 +517,12 @@ pub(crate) fn eval_native_function(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
+    use purrdf_core::{
+        RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
+    };
     use purrdf_sparql_algebra::SparqlParser;
 
     use crate::NativeSparqlEngine;
@@ -535,8 +538,13 @@ mod tests {
     const EX_NATIVE_COLLIDE: &str = "http://example.org/ns#nativeCollide";
     const EX_SPARQL_ONLY: &str = "http://example.org/ns#sparqlOnly";
     const EX_NATIVE_ONLY: &str = "http://example.org/ns#nativeOnly";
+    const EX_SCORE: &str = "http://example.org/ns#score";
+    const EX_SCORE_NAN: &str = "http://example.org/ns#scoreNan";
+    const EX_VAL: &str = "http://example.org/ns#val";
+    const EX_SUBJECT_PREFIX: &str = "http://example.org/ns#s";
 
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 
     /// A native closure that adds one to its sole integer-literal argument.
     fn inc_native_body() -> NativeFnBody {
@@ -553,6 +561,90 @@ mod tests {
 
     fn empty_dataset() -> Arc<RdfDataset> {
         RdfDatasetBuilder::new().freeze().expect("freeze")
+    }
+
+    /// A native closure that parses its literal argument as `f64` and divides it
+    /// by `divisor`, returning an `xsd:double`. Pure math over the argument
+    /// value, so it is honestly `Volatility::Stable`.
+    fn ratio_score_native_body(divisor: f64) -> NativeFnBody {
+        Arc::new(move |args: &[TermValue]| {
+            let TermValue::Literal { lexical_form, .. } = &args[0] else {
+                return Err(EvalError::function("expected a literal argument"));
+            };
+            let n: f64 = lexical_form
+                .parse()
+                .map_err(|_| EvalError::function("argument is not numeric"))?;
+            Ok(TermValue::typed_literal((n / divisor).to_string(), XSD_DOUBLE))
+        })
+    }
+
+    /// A native closure returning `xsd:double` `NaN` for a non-positive argument
+    /// and `arg / 5.0` otherwise — used to exercise `ORDER BY`'s handling of
+    /// `NaN` scores (E-nan).
+    fn nan_score_native_body() -> NativeFnBody {
+        Arc::new(|args: &[TermValue]| {
+            let TermValue::Literal { lexical_form, .. } = &args[0] else {
+                return Err(EvalError::function("expected a literal argument"));
+            };
+            let n: f64 = lexical_form
+                .parse()
+                .map_err(|_| EvalError::function("argument is not numeric"))?;
+            let score = if n <= 0.0 { f64::NAN } else { n / 5.0 };
+            Ok(TermValue::typed_literal(score.to_string(), XSD_DOUBLE))
+        })
+    }
+
+    /// A dataset of `n` subjects `ex:s1..ex:sN`, each with an integer `ex:val`
+    /// property `1..=n`.
+    fn scored_dataset(n: usize) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let val_pred = b.intern_iri(EX_VAL);
+        for i in 1..=n {
+            let s = b.intern_iri(&format!("{EX_SUBJECT_PREFIX}{i}"));
+            let v = b.intern_literal(RdfLiteral::typed(i.to_string(), XSD_INTEGER.to_owned()));
+            b.push_quad(s, val_pred, v, None);
+        }
+        b.freeze().expect("freeze")
+    }
+
+    /// Run `query` and collect the bound `?s` (sole projected column) IRIs of
+    /// every solution row as an unordered set.
+    fn run_subject_set(
+        ds: &Arc<RdfDataset>,
+        query: &str,
+        registry: &UserFunctionRegistry,
+    ) -> BTreeSet<String> {
+        run_subject_rows(ds, query, registry).into_iter().collect()
+    }
+
+    /// Run `query` and collect the bound `?s` (sole projected column) IRIs of
+    /// every solution row in result order.
+    fn run_subject_rows(
+        ds: &Arc<RdfDataset>,
+        query: &str,
+        registry: &UserFunctionRegistry,
+    ) -> Vec<String> {
+        let result = NativeSparqlEngine::new()
+            .query_with_user_functions(
+                ds,
+                SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                registry,
+            )
+            .expect("query");
+        match result {
+            SparqlResult::Solutions { rows, .. } => rows
+                .into_iter()
+                .map(|row| match row[0].as_ref().expect("bound subject") {
+                    TermValue::Iri(iri) => iri.clone(),
+                    other => panic!("expected an IRI subject, got {other:?}"),
+                })
+                .collect(),
+            other => panic!("expected solutions, got {other:?}"),
+        }
     }
 
     fn parse(body: &str) -> Arc<Query> {
@@ -1235,5 +1327,160 @@ mod tests {
             }
             other => panic!("expected solutions, got {other:?}"),
         }
+    }
+
+    // ── R7: engine-level push-down determinism (Task 4) ─────────────────────
+
+    /// `FILTER(<score>(?v) > 0.5)` over a `Stable` native scorer returns exactly
+    /// the subjects whose score exceeds the threshold — the native call is
+    /// correctly pushed down into the FILTER predicate.
+    #[test]
+    fn native_score_in_filter_pushes_down() {
+        const N: usize = 20;
+        let mut registry = UserFunctionRegistry::new();
+        registry.register_native(
+            EX_SCORE,
+            Arity::Exact(1),
+            Volatility::Stable,
+            ratio_score_native_body(N as f64),
+        );
+        let ds = scored_dataset(N);
+        let query =
+            format!("SELECT ?s WHERE {{ ?s <{EX_VAL}> ?v . FILTER(<{EX_SCORE}>(?v) > 0.5) }}");
+
+        let got = run_subject_set(&ds, &query, &registry);
+        // score(v) = v / 20 > 0.5  <=>  v > 10.
+        let expected: BTreeSet<String> = (11..=N)
+            .map(|i| format!("{EX_SUBJECT_PREFIX}{i}"))
+            .collect();
+        assert_eq!(
+            got, expected,
+            "FILTER over the native scorer must keep exactly the subjects above threshold"
+        );
+    }
+
+    /// `ORDER BY DESC(<score>(?v))` yields the correct score-descending order and
+    /// is reproducible across two runs — the `Stable` native fn is deterministic
+    /// under the evaluator's ordering path.
+    #[test]
+    fn native_score_in_order_by_is_deterministic() {
+        const N: usize = 20;
+        let mut registry = UserFunctionRegistry::new();
+        registry.register_native(
+            EX_SCORE,
+            Arity::Exact(1),
+            Volatility::Stable,
+            ratio_score_native_body(N as f64),
+        );
+        let ds = scored_dataset(N);
+        let query =
+            format!("SELECT ?s WHERE {{ ?s <{EX_VAL}> ?v }} ORDER BY DESC(<{EX_SCORE}>(?v))");
+
+        let first = run_subject_rows(&ds, &query, &registry);
+        // score is strictly increasing in v, so DESC(score) == DESC(v).
+        let expected: Vec<String> = (1..=N)
+            .rev()
+            .map(|i| format!("{EX_SUBJECT_PREFIX}{i}"))
+            .collect();
+        assert_eq!(
+            first, expected,
+            "expected score-descending (val-descending) order"
+        );
+
+        let second = run_subject_rows(&ds, &query, &registry);
+        assert_eq!(
+            first, second,
+            "ORDER BY over a Stable native fn must be deterministic across runs"
+        );
+    }
+
+    /// (E-nan) A scorer returning `xsd:double` `NaN` for some rows still yields a
+    /// stable *total* order under `ORDER BY`: every input row is present (no row
+    /// is dropped for having an incomparable/NaN key) and the row order is
+    /// identical across two runs. SPARQL's ORDER BY total order over the
+    /// `xsd:double` value space already gives `NaN` a fixed (deterministic,
+    /// lexical-fallback) slot — see `compare_sort_keys` in `modifier.rs` — so
+    /// this test documents that guarantee for a native-fn-derived score rather
+    /// than surfacing a latent bug.
+    #[test]
+    fn native_score_order_by_is_total_over_nan() {
+        let mut b = RdfDatasetBuilder::new();
+        let val_pred = b.intern_iri(EX_VAL);
+        let vals: Vec<i64> = (-5..=5).collect();
+        for v in &vals {
+            let s = b.intern_iri(&format!("{EX_SUBJECT_PREFIX}{v}"));
+            let lit = b.intern_literal(RdfLiteral::typed(v.to_string(), XSD_INTEGER.to_owned()));
+            b.push_quad(s, val_pred, lit, None);
+        }
+        let ds = b.freeze().expect("freeze");
+
+        let mut registry = UserFunctionRegistry::new();
+        registry.register_native(
+            EX_SCORE_NAN,
+            Arity::Exact(1),
+            Volatility::Stable,
+            nan_score_native_body(),
+        );
+        let query =
+            format!("SELECT ?s WHERE {{ ?s <{EX_VAL}> ?v }} ORDER BY ASC(<{EX_SCORE_NAN}>(?v))");
+
+        let first = run_subject_rows(&ds, &query, &registry);
+        let expected_set: BTreeSet<String> = vals
+            .iter()
+            .map(|v| format!("{EX_SUBJECT_PREFIX}{v}"))
+            .collect();
+        assert_eq!(
+            first.len(),
+            vals.len(),
+            "every input row (including NaN-scored ones) must survive ORDER BY"
+        );
+        assert_eq!(
+            first.iter().cloned().collect::<BTreeSet<String>>(),
+            expected_set,
+            "no row may be dropped or duplicated by a NaN-valued sort key"
+        );
+
+        let second = run_subject_rows(&ds, &query, &registry);
+        assert_eq!(
+            first, second,
+            "ORDER BY must be a stable, deterministic total order even with NaN keys present"
+        );
+    }
+
+    /// FILTER over a `Stable` native scorer, over a dataset large enough to
+    /// cross [`crate::parallel::PARALLEL_MIN_ROWS`], returns exactly the
+    /// expected rows — proving the native fn is safely usable on the fork-join
+    /// parallel path at scale (same answer as the sequential semantics).
+    #[test]
+    fn native_score_filter_over_parallel_threshold() {
+        // Comfortably above PARALLEL_MIN_ROWS (1024) so the FILTER's row count
+        // actually crosses the fork-join threshold.
+        const N: usize = 1500;
+        let mut registry = UserFunctionRegistry::new();
+        registry.register_native(
+            EX_SCORE,
+            Arity::Exact(1),
+            Volatility::Stable,
+            ratio_score_native_body(N as f64),
+        );
+        let ds = scored_dataset(N);
+        let query =
+            format!("SELECT ?s WHERE {{ ?s <{EX_VAL}> ?v . FILTER(<{EX_SCORE}>(?v) > 0.5) }}");
+
+        let first = run_subject_set(&ds, &query, &registry);
+        // score(v) = v / 1500 > 0.5  <=>  v > 750.
+        let expected: BTreeSet<String> = (751..=N)
+            .map(|i| format!("{EX_SUBJECT_PREFIX}{i}"))
+            .collect();
+        assert_eq!(
+            first, expected,
+            "parallel-path FILTER over the native scorer must match the sequential answer"
+        );
+
+        let second = run_subject_set(&ds, &query, &registry);
+        assert_eq!(
+            first, second,
+            "the parallel-path result must be deterministic across runs"
+        );
     }
 }
