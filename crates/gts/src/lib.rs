@@ -85,6 +85,7 @@ mod reader_layout;
 mod reader_rows;
 mod reader_union;
 pub mod replication;
+pub mod segment_decode;
 pub mod stream;
 pub mod tar;
 pub mod ulid;
