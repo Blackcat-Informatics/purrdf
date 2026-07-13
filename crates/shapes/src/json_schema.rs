@@ -811,8 +811,7 @@ fn assert_value_vocab_enum_keys_unambiguous(
              class `$def` key — disambiguate before projecting"
         );
         if let Some(prev) = key_to_class.insert(key.clone(), class_iri.clone()) {
-            assert_eq!(
-                &prev, class_iri,
+            panic!(
                 "json_schema: distinct value-vocabulary classes share the enum `$def` key \
                  {key:?} ({prev} vs {class_iri}) — cross-namespace local-name twins; \
                  disambiguate before projecting"
