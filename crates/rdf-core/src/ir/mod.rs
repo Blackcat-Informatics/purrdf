@@ -29,6 +29,10 @@ pub mod mutable;
 // Evented, ID-addressed OUTPUT of a frozen dataset (C6): the dual of the
 // permissive ingestion protocol, for chase / SHACL-result / projection consumers.
 pub mod event_sink;
+// The u64-scaled GLOBAL term-identity layer (backend seam): a separate id space
+// (`GlobalTermId`) and its value-interner (`GlobalDictionary`), for paged /
+// cross-segment backends. NEVER widens the frozen dataset's u32 `TermId` niche.
+pub mod global;
 // The permissive-ingestion adapter (purrdf P6): an `RdfEventSink` (the
 // `purrdf-events` protocol) that buffers forward references and freezes a dataset
 // at `finish()`, plus the frozen-IR-replay `RdfEventSource` that drives it.
@@ -45,6 +49,7 @@ pub use dataset::{
     TermRef,
 };
 pub use event_sink::RdfDatasetVisitor;
+pub use global::{GlobalDictionary, GlobalTermId};
 pub use ingest::{DatasetSink, FrozenDatasetSource};
 pub use mutable::{MutableDataset, QuadValues};
 pub use pipeline_bundle::{HandleEntry, HandleKey, PipelineBundle, PipelineBundleError};
