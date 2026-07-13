@@ -777,7 +777,7 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
 /// `pre_bytes`/`post_bytes` are UNTRUSTED (an independent verifier's whole
 /// point is to not trust the claimant), so every digest this function
 /// computes over them goes through the fallible RDFC-1.0 canonicalizer
-/// ([`try_refold_digest`]/[`try_effective_digest`], backing
+/// (`try_refold_digest`/`try_effective_digest`, backing
 /// [`try_canonicalize_with`]) rather than the panicking
 /// [`canonicalize_with`]: a pathologically symmetric blank graph that stays
 /// under [`POISON_BLANK_LIMIT`]'s cheap blank-COUNT pre-reject yet exhausts
