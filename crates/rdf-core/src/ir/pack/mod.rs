@@ -50,11 +50,21 @@
 //! `impl DatasetView for PackView<'_>` answers every read-side query straight off
 //! the pack's decoded dictionary + borrowed sections, with no materialization step.
 //!
+//! [`certify`] lands the certified-projection verifier (Task 7):
+//! [`certify::verify_pack`] independently reconstructs the dataset a pack claims
+//! to encode (via the Task 6 `DatasetView` seam) and recomputes its RDFC-1.0
+//! digest, failing closed if it disagrees with the pack's stored `rdfc_digest`
+//! header field — turning a pack into a certified read-only projection of its
+//! source dataset, on top of the per-section SHA-256 integrity `PackView::from_bytes`
+//! already enforces.
+//!
 //! `#[doc(hidden)]` (see [`super::pack`]'s declaration): this whole tree is an
 //! internal-codec surface, not a SemVer-guaranteed part of the crate's public API.
 
 #[doc(hidden)]
 pub mod bits;
+#[doc(hidden)]
+pub mod certify;
 #[doc(hidden)]
 pub mod container;
 #[doc(hidden)]
@@ -66,6 +76,8 @@ pub mod triples;
 #[doc(hidden)]
 pub mod view;
 
+#[doc(hidden)]
+pub use certify::{PackDigest, pack_digest, verify_pack};
 #[doc(hidden)]
 pub use container::{PackBuilder, PackError, PackView};
 #[doc(hidden)]

@@ -115,7 +115,7 @@ pub use ir::{
     canonicalize_with, dataset_diff, datasets_isomorphic, try_canonicalize, try_canonicalize_with,
 };
 #[doc(hidden)]
-pub use ir::{PackBuilder, PackError, PackId, PackView};
+pub use ir::{PackBuilder, PackDigest, PackError, PackId, PackView, pack_digest, verify_pack};
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,
     RdfMetadataEntry, RdfMetadataValue, RdfOpaqueNodeRecord, RdfSegmentRecord, RdfSignatureRecord,

@@ -71,7 +71,7 @@ pub use global::{GlobalDictionary, GlobalTermId};
 pub use ingest::{DatasetSink, FrozenDatasetSource};
 pub use mutable::{MutableDataset, QuadValues};
 #[doc(hidden)]
-pub use pack::{PackBuilder, PackError, PackId, PackView};
+pub use pack::{PackBuilder, PackDigest, PackError, PackId, PackView, pack_digest, verify_pack};
 pub use paged::{
     CountingDemandProvider, InMemoryPageProvider, PageFault, PageId, PagePart, PageProvider,
     PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable,

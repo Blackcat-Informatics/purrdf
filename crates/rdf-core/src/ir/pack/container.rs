@@ -215,6 +215,21 @@ pub enum PackError {
     /// the dataset's RDFC-1.0 digest (a pathologically symmetric blank
     /// graph — see [`crate::BudgetExceeded`]).
     CanonBudgetExceeded,
+    /// [`super::certify::verify_pack`]'s independent RDFC-1.0 recompute over the
+    /// pack's own decoded contents disagreed with the header's stored
+    /// `rdfc_digest` field. Unlike [`Self::SectionDigestMismatch`], this is NOT a
+    /// byte-corruption signal `from_bytes` can see on its own: the `rdfc_digest`
+    /// header field sits outside the section directory's SHA-256 coverage (see
+    /// [module docs](self)), so a pack whose digest field was tampered with still
+    /// opens cleanly — this variant is the certified-projection defense that
+    /// catches exactly that case.
+    RdfcDigestMismatch {
+        /// The digest recorded in the pack's header.
+        expected: [u8; 32],
+        /// The digest independently recomputed from the pack's own decoded
+        /// contents.
+        computed: [u8; 32],
+    },
     /// The DICT section failed to decode.
     Dict(PackDictError),
     /// The TRIPLES section failed to decode.
@@ -240,6 +255,14 @@ impl std::fmt::Display for PackError {
                 f,
                 "pack-container: RDFC-1.0 canonicalization exceeded its call budget"
             ),
+            Self::RdfcDigestMismatch { expected, computed } => {
+                write!(
+                    f,
+                    "pack-container: RDFC-1.0 digest mismatch: header claims {}, recomputed {}",
+                    hex32(expected),
+                    hex32(computed)
+                )
+            }
             Self::Dict(e) => write!(f, "pack-container: dict section: {e}"),
             Self::Triples(e) => write!(f, "pack-container: triples section: {e}"),
             Self::Side(e) => write!(f, "pack-container: side section: {e}"),
@@ -312,6 +335,19 @@ fn read_digest(bytes: &[u8], pos: &mut usize) -> [u8; 32] {
     digest.copy_from_slice(&bytes[*pos..*pos + 32]);
     *pos += 32;
     digest
+}
+
+/// Lowercase-hex a 32-byte digest, for [`PackError::RdfcDigestMismatch`]'s
+/// `Display`. A tiny local helper rather than a crate-wide hex utility: the
+/// only other digest-hex renderer ([`super::certify::PackDigest::to_hex`])
+/// lives one layer up and this module has no reason to depend on it.
+fn hex32(digest: &[u8; 32]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(64);
+    for b in digest {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 // ---------------------------------------------------------------------------
