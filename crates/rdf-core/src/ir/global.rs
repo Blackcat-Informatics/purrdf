@@ -99,7 +99,26 @@ impl GlobalTermId {
 
 /// A `GlobalTermId` is a valid [`DatasetView`](crate::DatasetView) id, so a paged /
 /// global backend (Task 4) can use it as its `DatasetView::Id`.
-impl ViewTermId for GlobalTermId {}
+///
+/// Its [`JoinKeyAtom`](ViewTermId::JoinKeyAtom) is `u128`: a dataset id occupies the
+/// low 64 bits (`[0, 2^64)`, since a `GlobalTermId` dense index is `u64`-bounded) and
+/// a computed-term id sets bit 64 (`[2^64, 2^64 + 2^32)`), so the two spaces are
+/// disjoint by construction — an id can never collide with a computed key.
+impl ViewTermId for GlobalTermId {
+    type JoinKeyAtom = u128;
+
+    #[inline]
+    fn encode(self) -> u128 {
+        // The dense index is `u64`-bounded, so it fits the low 64 bits with bit 64
+        // clear — disjoint from every `encode_computed` image (which sets bit 64).
+        self.index() as u128
+    }
+
+    #[inline]
+    fn encode_computed(scratch_index: u32) -> u128 {
+        (1u128 << 64) | u128::from(scratch_index)
+    }
+}
 
 // The `NonZeroU64` niche is the global layer's `Option`-packing invariant, exactly
 // as `TermId`'s `NonZeroU32` niche is for the frozen dataset. The THIRD assertion is

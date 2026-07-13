@@ -56,7 +56,7 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// behaves like a plain `CONSTRUCT`. When the `WHERE` has no `rdf:reifies`
 /// pattern at all the detection does zero extra work and the output is
 /// byte-identical to a plain `CONSTRUCT`.
-pub(crate) fn eval_construct<D: DatasetView<Id = TermId> + Sync>(
+pub(crate) fn eval_construct<D: DatasetView + Sync>(
     template: &[TriplePattern],
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
@@ -383,9 +383,9 @@ fn collect_term_pattern_vars(term: &TermPattern, out: &mut BTreeSet<String>) {
 /// `<lossNode>` is a DETERMINISTIC blank node whose label is derived purely from the
 /// resolved triple-term content, so identical drops across rows collapse to one node
 /// via the builder's dedup.
-fn emit_dropped_losses<D: DatasetView<Id = TermId> + Sync>(
+fn emit_dropped_losses<D: DatasetView + Sync>(
     dropped: &[DroppedReifier],
-    row: &Solution,
+    row: &Solution<D::Id>,
     schema: &VarSchema,
     builder: &mut RdfDatasetBuilder,
     ctx: &mut EvalCtx<'_, D>,
@@ -465,9 +465,9 @@ fn loss_node_label(code: &str, inner: &TermValue) -> String {
 
 /// Instantiate one template triple for `row`, interning into `builder`. Returns
 /// `None` if the triple is skipped (an unbound variable or an ill-formed position).
-fn instantiate<D: DatasetView<Id = TermId> + Sync>(
+fn instantiate<D: DatasetView + Sync>(
     tp: &TriplePattern,
-    row: &Solution,
+    row: &Solution<D::Id>,
     schema: &VarSchema,
     builder: &mut RdfDatasetBuilder,
     blanks: &mut DetHashMap<String, String>,

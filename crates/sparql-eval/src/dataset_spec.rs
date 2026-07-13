@@ -24,52 +24,52 @@
 
 use std::collections::BTreeSet;
 
-use purrdf_core::{DatasetView, GraphMatch, QuadIds, TermId, TermValue};
+use purrdf_core::{DatasetView, GraphMatch, QuadIds, TermId, TermValue, ViewTermId};
 use purrdf_sparql_algebra::{QueryDataset, UsingClause};
 
 use crate::convert::named_node_to_value;
 
 /// How the active **default graph** is sourced.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum DefaultSpec {
+pub(crate) enum DefaultSpec<I: ViewTermId = TermId> {
     /// No `FROM`/`USING`: the store's own default graph.
     StoreDefault,
     /// `FROM`/`USING` graphs: the RDF-merge of these named graphs (sorted, deduped).
     /// An empty vector is legal — every named IRI was absent, or only `FROM NAMED`
     /// was given — and matches nothing.
-    Merged(Vec<TermId>),
+    Merged(Vec<I>),
 }
 
-/// The SPARQL active dataset (§13), resolved to dataset-local ids once per query/op.
+/// The SPARQL active dataset (§13), resolved to view-local ids once per query/op.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ActiveDataset {
+pub(crate) struct ActiveDataset<I: ViewTermId = TermId> {
     /// The active default-graph specification.
-    default: DefaultSpec,
+    default: DefaultSpec<I>,
     /// The graphs addressable by `GRAPH`. `None` = every store named graph (the
     /// no-clause default); `Some(set)` = exactly these (an explicit `FROM NAMED` /
     /// `USING NAMED`; possibly empty).
-    named: Option<BTreeSet<TermId>>,
+    named: Option<BTreeSet<I>>,
 }
 
 /// The resolved graph filter(s) for the *current* evaluation scope — almost always a
 /// single [`GraphMatch`]; a `FROM`/`USING`-merged default graph expands to one filter
 /// per merged graph (the union of which IS the RDF-merge).
-pub(crate) enum GraphScope {
+pub(crate) enum GraphScope<I: ViewTermId = TermId> {
     /// A single filter (store default, a named graph, or `Any`). No de-dup needed.
-    One(GraphMatch),
+    One(GraphMatch<I>),
     /// The merge of these named graphs. A consumer producing *rows* (BGP) must de-dupe
     /// triples; a consumer collecting *endpoints* into a set (paths) gets it for free.
-    Merge(Vec<TermId>),
+    Merge(Vec<I>),
 }
 
-/// Resolve a list of graph IRIs to their dataset-local ids, dropping any that name no
+/// Resolve a list of graph IRIs to their view-local ids, dropping any that name no
 /// term (an absent graph contributes nothing — never an error), then sort+dedupe for
 /// a deterministic, duplicate-free merge set.
-fn resolve_graphs<D: DatasetView<Id = TermId>>(
+fn resolve_graphs<D: DatasetView>(
     graphs: &[purrdf_sparql_algebra::NamedNode],
     dataset: &D,
-) -> Vec<TermId> {
-    let mut ids: Vec<TermId> = graphs
+) -> Vec<D::Id> {
+    let mut ids: Vec<D::Id> = graphs
         .iter()
         .filter_map(|n| dataset.term_id_by_value(&named_node_to_value(n)))
         .collect();
@@ -78,7 +78,7 @@ fn resolve_graphs<D: DatasetView<Id = TermId>>(
     ids
 }
 
-impl ActiveDataset {
+impl<I: ViewTermId> ActiveDataset<I> {
     /// The store's own default dataset: the store default graph plus every named graph.
     pub(crate) fn store_default() -> Self {
         Self {
@@ -89,7 +89,7 @@ impl ActiveDataset {
 
     /// Build the active dataset from a query's `FROM` / `FROM NAMED` clause. An empty
     /// clause means "use the store's default dataset" (§13.2).
-    pub(crate) fn from_query_dataset<D: DatasetView<Id = TermId>>(
+    pub(crate) fn from_query_dataset<D: DatasetView<Id = I>>(
         qd: &QueryDataset,
         dataset: &D,
     ) -> Self {
@@ -106,10 +106,7 @@ impl ActiveDataset {
     /// clauses (the write-path twin of [`from_query_dataset`]). The caller only invokes
     /// this when `using` is non-empty (§3.1.3: `USING` replaces `WITH`'s effect on the
     /// WHERE dataset).
-    pub(crate) fn from_using<D: DatasetView<Id = TermId>>(
-        using: &[UsingClause],
-        dataset: &D,
-    ) -> Self {
+    pub(crate) fn from_using<D: DatasetView<Id = I>>(using: &[UsingClause], dataset: &D) -> Self {
         let mut default = Vec::new();
         let mut named = Vec::new();
         for u in using {
@@ -137,10 +134,7 @@ impl ActiveDataset {
     /// Scope the WHERE default graph to a single `WITH <g>` graph (named graphs stay
     /// unrestricted). An absent `g` yields an empty default graph (the WHERE matches
     /// nothing), matching the implicit-existence doctrine.
-    pub(crate) fn with_default_graph<D: DatasetView<Id = TermId>>(
-        dataset: &D,
-        g: &TermValue,
-    ) -> Self {
+    pub(crate) fn with_default_graph<D: DatasetView<Id = I>>(dataset: &D, g: &TermValue) -> Self {
         let ids = dataset
             .term_id_by_value(g)
             .map(|id| vec![id])
@@ -155,7 +149,7 @@ impl ActiveDataset {
     /// (`GraphMatch::Default`) expands through the default spec (store default or a
     /// merge); an in-`GRAPH` scope (`Named`) is always a single filter — the default
     /// merge never applies inside a `GRAPH` block.
-    pub(crate) fn scope_for(&self, active_graph: GraphMatch) -> GraphScope {
+    pub(crate) fn scope_for(&self, active_graph: GraphMatch<I>) -> GraphScope<I> {
         match active_graph {
             GraphMatch::Default => match &self.default {
                 DefaultSpec::StoreDefault => GraphScope::One(GraphMatch::Default),
@@ -166,7 +160,7 @@ impl ActiveDataset {
     }
 
     /// Whether the named graph `id` is addressable by `GRAPH` under this dataset.
-    pub(crate) fn named_allows(&self, id: TermId) -> bool {
+    pub(crate) fn named_allows(&self, id: I) -> bool {
         match &self.named {
             None => true,
             Some(set) => set.contains(&id),
@@ -174,18 +168,18 @@ impl ActiveDataset {
     }
 }
 
-impl GraphScope {
+impl<I: ViewTermId> GraphScope<I> {
     /// Visit every quad matching `(s, p, o)` in this scope. For a merged scope the
     /// per-graph indexed reads are unioned in order; **no triple de-dup is applied
     /// here** (the BGP caller de-dupes by `(s,p,o)`; endpoint-collecting callers do
     /// not need it).
-    pub(crate) fn for_each_quad<D: DatasetView<Id = TermId>>(
+    pub(crate) fn for_each_quad<D: DatasetView<Id = I>>(
         &self,
         dataset: &D,
-        s: Option<TermId>,
-        p: Option<TermId>,
-        o: Option<TermId>,
-        mut f: impl FnMut(QuadIds),
+        s: Option<I>,
+        p: Option<I>,
+        o: Option<I>,
+        mut f: impl FnMut(QuadIds<I>),
     ) {
         match self {
             Self::One(gm) => {

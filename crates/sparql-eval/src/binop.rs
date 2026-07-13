@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, TermId};
+use purrdf_core::{DatasetView, TermId, ViewTermId};
 use purrdf_sparql_algebra::{Expression, GraphPattern};
 
 use crate::error::EvalError;
@@ -30,25 +30,26 @@ use crate::{DetHashMap, DetHasher};
 /// A hash-join key over the shared columns of two solutions.
 ///
 /// The overwhelmingly common case is a **single** shared variable (a star join on
-/// `?p`), so that case is specialized to a `Copy` `u64` ([`SolutionTerm::join_key_u64`])
+/// `?p`), so that case is specialized to a `Copy` join-key atom ([`SolutionTerm::join_key`])
 /// — no per-row heap allocation on either the build or probe side. Joins on zero or
 /// ≥2 shared columns keep the general owned-vector key. Within one join the shared
 /// column count is fixed, so every key is the same variant and the two never compare
 /// across variants.
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub(crate) enum JoinKey {
-    /// Exactly one shared column: the term encoded as a collision-free `u64`.
-    Single(u64),
+pub(crate) enum JoinKey<I: ViewTermId = TermId> {
+    /// Exactly one shared column: the term encoded as a collision-free join-key atom
+    /// ([`SolutionTerm::join_key`]). For `I = TermId` this is the historical `u64`.
+    Single(I::JoinKeyAtom),
     /// Zero or ≥2 shared columns: the bound terms in shared-column order.
-    Multi(Vec<SolutionTerm>),
+    Multi(Vec<SolutionTerm<I>>),
 }
 
 /// Evaluate `left . right` (algebra `Join`) as a hash join on shared variables.
-pub(crate) fn eval_join<D: DatasetView<Id = TermId> + Sync>(
+pub(crate) fn eval_join<D: DatasetView + Sync>(
     left: &GraphPattern,
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq, EvalError> {
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let l = eval(left, ctx)?;
     let r = eval(right, ctx)?;
     Ok(hash_join(&l, &r))
@@ -63,11 +64,11 @@ pub(crate) fn eval_join<D: DatasetView<Id = TermId> + Sync>(
 /// μ, the sole case being a variable-endpoint `SERVICE ?g` whose endpoint IRI is
 /// bound by μ. Reuses the correlated-EXISTS substitution machinery, including the
 /// address-keyed-cache ABA guard (`in_substituted_exists`) around the inner eval.
-pub(crate) fn eval_lateral<D: DatasetView<Id = TermId> + Sync>(
+pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     left: &GraphPattern,
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq, EvalError> {
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let l = eval(left, ctx)?;
     let left_schema = Arc::clone(&l.schema);
     let left_len = left_schema.len();
@@ -76,7 +77,9 @@ pub(crate) fn eval_lateral<D: DatasetView<Id = TermId> + Sync>(
     // per-row results and the union of their schemas (stable across rows for the
     // SERVICE ?var use, but computed generally).
     let mut right_schema = VarSchema::new();
-    let mut per_row: Vec<(Solution, SolutionSeq)> = Vec::with_capacity(l.rows.len());
+    // Each left row μ paired with the per-row `right` result it drives.
+    type LateralPerRow<I> = Vec<(Solution<I>, SolutionSeq<I>)>;
+    let mut per_row: LateralPerRow<D::Id> = Vec::with_capacity(l.rows.len());
     for mu in &l.rows {
         let bindings = crate::expr::outer_bindings_for_substitution(mu, &left_schema, ctx);
         let substituted = crate::expr::substitute_pattern(right, &bindings);
@@ -96,7 +99,7 @@ pub(crate) fn eval_lateral<D: DatasetView<Id = TermId> + Sync>(
 
     let out = Arc::new(left_schema.union(&right_schema));
     let out_len = out.len();
-    let mut rows: Vec<Solution> = Vec::new();
+    let mut rows: Vec<Solution<D::Id>> = Vec::new();
     for (mu, r) in &per_row {
         let right_to_out = right_to_out_map(&r.schema, &out);
         for nu in &r.rows {
@@ -140,11 +143,11 @@ pub(crate) fn eval_lateral<D: DatasetView<Id = TermId> + Sync>(
 /// re-intern them back into `ctx.scratch`, left branch first then right, via
 /// [`crate::parallel::reintern_portable_row`] — reproducing the sequential
 /// concat's exact row order (left rows, then right rows) and column layout.
-pub(crate) fn eval_union<D: DatasetView<Id = TermId> + Sync>(
+pub(crate) fn eval_union<D: DatasetView + Sync>(
     left: &GraphPattern,
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq, EvalError> {
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     if !crate::parallel::is_parallel_safe_pattern(left)
         || !crate::parallel::is_parallel_safe_pattern(right)
     {
@@ -165,7 +168,7 @@ pub(crate) fn eval_union<D: DatasetView<Id = TermId> + Sync>(
     // branch) is kept as-is with zero extra allocation, and only a row
     // carrying a genuinely fresh cell pays for the portable-materialize round
     // trip. The child (and its scratch) does not survive past this closure.
-    let eval_branch = |pattern: &GraphPattern| -> Result<PortableBranch, EvalError> {
+    let eval_branch = |pattern: &GraphPattern| -> Result<PortableBranch<D::Id>, EvalError> {
         let mut child = ctx_ref.fork_for_worker();
         let seq = eval(pattern, &mut child)?;
         let minted: Vec<_> = seq
@@ -213,7 +216,7 @@ pub(crate) fn eval_union<D: DatasetView<Id = TermId> + Sync>(
 /// union schema (left columns first). Shared by both the sequential fallback
 /// and (conceptually) documents the exact row shape the parallel path in
 /// [`eval_union`] must reproduce.
-fn concat_union(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
+fn concat_union<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> SolutionSeq<I> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -244,7 +247,7 @@ fn concat_union(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
 /// result row classified via [`crate::parallel::minted_row`] — `Direct` (no
 /// remap needed) or `Portable` (materialized while the branch's forked child
 /// is still alive) — so it survives that child being dropped.
-type PortableBranch = (Arc<VarSchema>, Vec<crate::parallel::MintedRow>);
+type PortableBranch<I> = (Arc<VarSchema>, Vec<crate::parallel::MintedRow<I>>);
 
 /// The mapping from a right operand's column ordinal to its ordinal in `out`.
 fn right_to_out_map(right: &VarSchema, out: &VarSchema) -> Vec<usize> {
@@ -265,13 +268,13 @@ fn right_to_out_map(right: &VarSchema, out: &VarSchema) -> Vec<usize> {
 /// Exposed `pub(crate)` so an `EXISTS` site can build the index over its inner
 /// result **once** and reuse it across every outer row (see [`probe_has_match`]),
 /// rather than rebuilding it per probe.
-pub(crate) fn build_index(
-    r: &SolutionSeq,
+pub(crate) fn build_index<I: ViewTermId>(
+    r: &SolutionSeq<I>,
     shared: &[(usize, usize)],
-) -> (DetHashMap<JoinKey, Vec<usize>>, Vec<usize>) {
+) -> (DetHashMap<JoinKey<I>, Vec<usize>>, Vec<usize>) {
     // Pre-size to the build-row count: the exact upper bound on distinct keys, so a
     // large build side is filled without incremental rehash-and-reallocate churn.
-    let mut keyed: DetHashMap<JoinKey, Vec<usize>> =
+    let mut keyed: DetHashMap<JoinKey<I>, Vec<usize>> =
         DetHashMap::with_capacity_and_hasher(r.rows.len(), DetHasher::default());
     let mut wild: Vec<usize> = Vec::new();
     for (idx, rrow) in r.rows.iter().enumerate() {
@@ -295,12 +298,12 @@ pub(crate) fn build_index(
 /// this falls back to a per-row compatibility scan over the full inner result — that
 /// case is O(|inner|) per probe. A probe fully bound on its shared columns (the common
 /// anti-join shape) hits the keyed bucket in O(1).
-pub(crate) fn probe_has_match(
-    probe: &[Option<SolutionTerm>],
+pub(crate) fn probe_has_match<I: ViewTermId>(
+    probe: &[Option<SolutionTerm<I>>],
     shared: &[(usize, usize)],
-    keyed: &DetHashMap<JoinKey, Vec<usize>>,
+    keyed: &DetHashMap<JoinKey<I>, Vec<usize>>,
     wild: &[usize],
-    r_rows: &[Solution],
+    r_rows: &[Solution<I>],
 ) -> bool {
     match bound_key(probe, shared, KeySide::Left) {
         // Fully bound on shared columns: a present exact-key bucket is a match
@@ -315,7 +318,7 @@ pub(crate) fn probe_has_match(
 }
 
 /// Hash-join two solution sequences on their shared variables.
-fn hash_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
+fn hash_join<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> SolutionSeq<I> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -381,18 +384,18 @@ enum KeySide {
 /// right key iff the two rows agree on every (bound) shared column. A single shared
 /// column — the common star-join shape — produces an allocation-free
 /// [`JoinKey::Single`]; zero or ≥2 columns fall back to an owned [`JoinKey::Multi`].
-fn bound_key(
-    row: &[Option<SolutionTerm>],
+fn bound_key<I: ViewTermId>(
+    row: &[Option<SolutionTerm<I>>],
     shared: &[(usize, usize)],
     side: KeySide,
-) -> Option<JoinKey> {
+) -> Option<JoinKey<I>> {
     let col_of = |ia: usize, ib: usize| match side {
         KeySide::Left => ia,
         KeySide::Right => ib,
     };
     if let [(ia, ib)] = *shared {
         // Single shared column: no heap allocation for the key.
-        return Some(JoinKey::Single(row[col_of(ia, ib)]?.join_key_u64()));
+        return Some(JoinKey::Single(row[col_of(ia, ib)]?.join_key()));
     }
     let mut key = Vec::with_capacity(shared.len());
     for &(ia, ib) in shared {
@@ -406,13 +409,13 @@ fn bound_key(
 /// output slot only if still unbound, so a shared column unbound on the left is
 /// filled from the right (and an already-bound shared column — equal by
 /// compatibility — is left intact).
-fn merge(
-    left_row: &Solution,
-    right_row: &Solution,
+fn merge<I: ViewTermId>(
+    left_row: &Solution<I>,
+    right_row: &Solution<I>,
     left_len: usize,
     right_to_out: &[usize],
     out_len: usize,
-) -> Solution {
+) -> Solution<I> {
     debug_assert_eq!(left_row.len(), left_len);
     // One exact-size allocation, initialized from the left row directly (no
     // write-None-then-overwrite pass over the left prefix).
@@ -430,12 +433,12 @@ fn merge(
 
 /// Evaluate `left OPTIONAL { right }` (algebra `LeftJoin`) as a left outer join,
 /// with an optional inline `FILTER` condition evaluated on the merged solution.
-pub(crate) fn eval_left_join<D: DatasetView<Id = TermId> + Sync>(
+pub(crate) fn eval_left_join<D: DatasetView + Sync>(
     left: &GraphPattern,
     right: &GraphPattern,
     expression: Option<&Expression>,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq, EvalError> {
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let l = eval(left, ctx)?;
     let r = eval(right, ctx)?;
     match expression {
@@ -457,12 +460,12 @@ pub(crate) fn eval_left_join<D: DatasetView<Id = TermId> + Sync>(
 /// nothing — see its doc comment), so nothing new escapes a forked child's
 /// scratch and it is discarded after use — no re-interning via
 /// [`crate::parallel::reintern_minted_row`] is needed.
-fn left_outer_join_filtered<D: DatasetView<Id = TermId> + Sync>(
-    l: &SolutionSeq,
-    r: &SolutionSeq,
+fn left_outer_join_filtered<D: DatasetView + Sync>(
+    l: &SolutionSeq<D::Id>,
+    r: &SolutionSeq<D::Id>,
     expr: &Expression,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq, EvalError> {
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let out = Arc::new(l.schema.union(&r.schema));
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -520,7 +523,7 @@ fn left_outer_join_filtered<D: DatasetView<Id = TermId> + Sync>(
 
 /// Left outer join: every left solution merged with each compatible right
 /// solution, or emitted alone (right columns unbound) when none is compatible.
-fn left_outer_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
+fn left_outer_join<I: ViewTermId>(l: &SolutionSeq<I>, r: &SolutionSeq<I>) -> SolutionSeq<I> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
     let left_len = l.schema.len();
@@ -579,11 +582,11 @@ fn left_outer_join(l: &SolutionSeq, r: &SolutionSeq) -> SolutionSeq {
 /// SPARQL §18.5): solutions with disjoint domains never remove, so `MINUS` over
 /// patterns with no common variable is a no-op. The result schema is the left
 /// schema (MINUS introduces no right columns) and left multiplicity is preserved.
-pub(crate) fn eval_minus<D: DatasetView<Id = TermId> + Sync>(
+pub(crate) fn eval_minus<D: DatasetView + Sync>(
     left: &GraphPattern,
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq, EvalError> {
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let l = eval(left, ctx)?;
     let r = eval(right, ctx)?;
     let shared = l.schema.shared_columns(&r.schema);

@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use purrdf_core::describe::Describer;
-use purrdf_core::{DatasetView, RdfDataset, TermId, TermValue};
+use purrdf_core::{DatasetView, RdfDataset, TermValue};
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern};
 
 use crate::error::EvalError;
@@ -29,7 +29,7 @@ use crate::eval::{EvalCtx, eval, materialize_solutions};
 
 /// Evaluate a `DESCRIBE` query to a frozen IR dataset: the union Symmetric CBD of its
 /// resolved subject IRIs.
-pub(crate) fn eval_describe<D: DatasetView<Id = TermId> + Sync>(
+pub(crate) fn eval_describe<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     targets: &[NamedNodePattern],
     ctx: &mut EvalCtx<'_, D>,

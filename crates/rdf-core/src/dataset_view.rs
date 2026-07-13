@@ -34,9 +34,55 @@ mod sealed {
 /// join/index machinery needs of an id (`Copy` to pass by value, `Eq`/`Ord`/`Hash`
 /// to key joins and index probes, `Send`/`Sync`/`'static` to cross the query
 /// boundary). The production id is [`TermId`]; a paged/global backend mints its own.
-pub trait ViewTermId: Copy + Eq + Ord + core::hash::Hash + Send + Sync + 'static {}
+///
+/// # Join-key encoding
+///
+/// The evaluator hash-joins on a single [`JoinKeyAtom`](Self::JoinKeyAtom): a `Copy`,
+/// totally-ordered atom that packs *either* a dataset id (via [`encode`](Self::encode))
+/// *or* an evaluator-minted computed-term id (via
+/// [`encode_computed`](Self::encode_computed)) into ONE key space, with the two
+/// disjoint by construction so an id never collides with a computed key (which would
+/// be a wrong join result, not a slowdown). For [`TermId`] the atom is the historical
+/// packed `u64` — dataset ids in `[0, 2^32)`, computed ids in `[2^32, 2^33)` — so the
+/// production hash-join is bit-identical to before the id-generic seam. A wider id
+/// (e.g. `GlobalTermId`) uses a wider atom (`u128`) so the same disjointness holds at
+/// its width.
+pub trait ViewTermId:
+    Copy + Eq + Ord + core::hash::Hash + core::fmt::Debug + Send + Sync + 'static
+{
+    /// A `Copy`, totally-ordered atom that encodes a dataset id OR a computed-term
+    /// id into one hash-join key space (see the trait docs). For [`TermId`] this is
+    /// `u64`; for a wider id it is `u128`.
+    type JoinKeyAtom: Copy + Eq + Ord + core::hash::Hash + Send + Sync + 'static;
 
-impl ViewTermId for TermId {}
+    /// Encode this dataset id into the join-key space. The image of `encode` over all
+    /// ids MUST be disjoint from the image of [`encode_computed`](Self::encode_computed)
+    /// over all scratch indices, so an `Existing` binding never shares a key with a
+    /// `Computed` one.
+    fn encode(self) -> Self::JoinKeyAtom;
+
+    /// Encode an evaluator-minted computed-term scratch index (a `u32`) into the join-key
+    /// space, disjoint from every [`encode`](Self::encode) image (see the trait docs).
+    fn encode_computed(scratch_index: u32) -> Self::JoinKeyAtom;
+}
+
+impl ViewTermId for TermId {
+    type JoinKeyAtom = u64;
+
+    #[inline]
+    fn encode(self) -> u64 {
+        let ix = self.index() as u64;
+        debug_assert!(ix < (1 << 32), "TermId index must fit u32");
+        ix
+    }
+
+    #[inline]
+    fn encode_computed(scratch_index: u32) -> u64 {
+        // Dataset ids occupy `[0, 2^32)`; computed ids occupy `[2^32, 2^33)`. Bit 32
+        // is the disjointness tag — byte-identical to the historical `join_key_u64`.
+        (1 << 32) | u64::from(scratch_index)
+    }
+}
 
 /// How a pattern query matches the graph slot of a quad.
 ///

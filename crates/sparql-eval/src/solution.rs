@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+use purrdf_core::{TermId, ViewTermId};
 use purrdf_sparql_algebra::Variable;
 
 use crate::DetHashMap;
@@ -124,21 +125,21 @@ impl VarSchema {
 /// the common row lives inline with no heap allocation and spills to the heap
 /// only for wider schemas. Derefs to `&[Option<SolutionTerm>]`, so indexing,
 /// iteration, slicing, and `&[Option<SolutionTerm>]` parameters are unchanged.
-pub type Solution = smallvec::SmallVec<[Option<SolutionTerm>; 4]>;
+pub type Solution<I = TermId> = smallvec::SmallVec<[Option<SolutionTerm<I>>; 4]>;
 
 /// A multiset (bag) of [`Solution`]s over a shared [`VarSchema`].
 ///
 /// `rows.len()` is the solution cardinality; duplicate rows are preserved
 /// (multiset semantics) until an explicit `DISTINCT`/`REDUCED`.
 #[derive(Clone, Debug)]
-pub struct SolutionSeq {
+pub struct SolutionSeq<I: ViewTermId = TermId> {
     /// The shared variable schema (so a row is just a `Vec<Option<SolutionTerm>>`).
     pub schema: Arc<VarSchema>,
     /// The solution rows (a bag — duplicates significant).
-    pub rows: Vec<Solution>,
+    pub rows: Vec<Solution<I>>,
 }
 
-impl SolutionSeq {
+impl<I: ViewTermId> SolutionSeq<I> {
     /// An empty sequence over `schema` (zero solutions).
     pub fn empty(schema: Arc<VarSchema>) -> Self {
         Self {
@@ -178,9 +179,9 @@ impl SolutionSeq {
 /// [`VarSchema::shared_columns`]). This is the predicate underlying `Join`,
 /// `LeftJoin`, and `Minus`.
 #[must_use]
-pub fn compatible(
-    a: &[Option<SolutionTerm>],
-    b: &[Option<SolutionTerm>],
+pub fn compatible<I: ViewTermId>(
+    a: &[Option<SolutionTerm<I>>],
+    b: &[Option<SolutionTerm<I>>],
     shared: &[(usize, usize)],
 ) -> bool {
     shared.iter().all(|&(ia, ib)| match (a[ia], b[ib]) {
@@ -238,12 +239,12 @@ mod tests {
         // None is compatible with anything.
         assert!(compatible(&[None], &[term(2)], &shared));
         assert!(compatible(&[term(1)], &[None], &shared));
-        assert!(compatible(&[None], &[None], &shared));
+        assert!(compatible::<TermId>(&[None], &[None], &shared));
     }
 
     #[test]
     fn unit_sequence_has_one_empty_solution() {
-        let z = SolutionSeq::unit();
+        let z = SolutionSeq::<TermId>::unit();
         assert_eq!(z.len(), 1);
         assert!(z.schema.is_empty());
         assert!(z.rows[0].is_empty());

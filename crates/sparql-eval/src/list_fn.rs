@@ -26,7 +26,7 @@
 //! The walk is cycle-guarded: a cyclic or torn `rdf:List` is malformed input and
 //! hard-fails ([`EvalError::Data`]) rather than looping forever.
 
-use purrdf_core::{BlankScope, DatasetView, TermId, TermValue};
+use purrdf_core::{BlankScope, DatasetView, TermValue};
 use purrdf_sparql_algebra::PurrdfFn;
 use purrdf_xsd::XsdValue;
 
@@ -47,11 +47,11 @@ const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 /// expression contract: `Ok(Some)` is a value, `Ok(None)` is a SPARQL error/unbound,
 /// and `Err` is a hard failure. The non-list [`PurrdfFn::HeldIn`] is handled by its
 /// own arm in [`crate::expr`] and never reaches here (defensively an internal error).
-pub(crate) fn dispatch<D: DatasetView<Id = TermId> + Sync>(
+pub(crate) fn dispatch<D: DatasetView + Sync>(
     func: PurrdfFn,
     vals: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<SolutionTerm>, EvalError> {
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match func {
         PurrdfFn::ListLength => list_length(ctx, vals),
         PurrdfFn::ListGet => list_get(ctx, vals),
@@ -65,10 +65,10 @@ pub(crate) fn dispatch<D: DatasetView<Id = TermId> + Sync>(
 
 /// `listLength(list)` → the number of members, as `xsd:integer`. A non-list
 /// argument yields a SPARQL error (`Ok(None)`).
-fn list_length<D: DatasetView<Id = TermId> + Sync>(
+fn list_length<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
-) -> Result<Option<SolutionTerm>, EvalError> {
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let Some(head) = arg(vals, 0) else {
         return Ok(None);
     };
@@ -80,10 +80,10 @@ fn list_length<D: DatasetView<Id = TermId> + Sync>(
 
 /// `listGet(list, index)` → the zero-based member, or a SPARQL error when the
 /// index is out of range / not an integer.
-fn list_get<D: DatasetView<Id = TermId> + Sync>(
+fn list_get<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
-) -> Result<Option<SolutionTerm>, EvalError> {
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let (Some(head), Some(index)) = (arg(vals, 0), arg(vals, 1)) else {
         return Ok(None);
     };
@@ -104,10 +104,10 @@ fn list_get<D: DatasetView<Id = TermId> + Sync>(
 
 /// `listIndexOf(list, value)` → the zero-based index of the first occurrence,
 /// or a SPARQL error when the value is absent.
-fn list_index_of<D: DatasetView<Id = TermId> + Sync>(
+fn list_index_of<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
-) -> Result<Option<SolutionTerm>, EvalError> {
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let (Some(head), Some(value)) = (arg(vals, 0), arg(vals, 1)) else {
         return Ok(None);
     };
@@ -122,10 +122,10 @@ fn list_index_of<D: DatasetView<Id = TermId> + Sync>(
 
 /// `listContains(list, value)` → `xsd:boolean`. A non-list argument yields a
 /// SPARQL error (`Ok(None)`); membership over a valid (possibly empty) list is total.
-fn list_contains<D: DatasetView<Id = TermId> + Sync>(
+fn list_contains<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
-) -> Result<Option<SolutionTerm>, EvalError> {
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let (Some(head), Some(value)) = (arg(vals, 0), arg(vals, 1)) else {
         return Ok(None);
     };
@@ -140,10 +140,10 @@ fn list_contains<D: DatasetView<Id = TermId> + Sync>(
 /// (negatives to 0), so an out-of-range or inverted range yields `rdf:nil`. The new
 /// cells are buffered on [`EvalCtx`] and surface at the result boundary (see
 /// [`materialize_list`]). A non-list / non-integer argument yields a SPARQL error.
-fn list_slice<D: DatasetView<Id = TermId> + Sync>(
+fn list_slice<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
-) -> Result<Option<SolutionTerm>, EvalError> {
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let (Some(head), Some(start), Some(end)) = (arg(vals, 0), arg(vals, 1), arg(vals, 2)) else {
         return Ok(None);
     };
@@ -164,10 +164,10 @@ fn list_slice<D: DatasetView<Id = TermId> + Sync>(
 /// `listConcat(listA, listB)` → a fresh `rdf:List` of A's members followed by
 /// B's. The new cells are buffered on [`EvalCtx`] and surface at the result boundary
 /// (see [`materialize_list`]). A non-list argument yields a SPARQL error.
-fn list_concat<D: DatasetView<Id = TermId> + Sync>(
+fn list_concat<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
-) -> Result<Option<SolutionTerm>, EvalError> {
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let (Some(a), Some(b)) = (arg(vals, 0), arg(vals, 1)) else {
         return Ok(None);
     };
@@ -186,7 +186,7 @@ fn list_concat<D: DatasetView<Id = TermId> + Sync>(
 /// `cell rdf:first member` / `cell rdf:rest next` are pushed onto
 /// [`EvalCtx::constructed`] to surface at the result boundary; the empty list is
 /// simply `rdf:nil` (no cells).
-fn materialize_list<D: DatasetView<Id = TermId> + Sync>(
+fn materialize_list<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     members: Vec<TermValue>,
 ) -> TermValue {
@@ -235,26 +235,23 @@ fn as_index(value: &TermValue) -> Option<i64> {
 }
 
 /// Intern a value to a solution term (promoting to an existing dataset id).
-fn intern<D: DatasetView<Id = TermId> + Sync>(
+fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
-) -> SolutionTerm {
+) -> SolutionTerm<D::Id> {
     ctx.scratch.intern(ctx.dataset, value)
 }
 
 /// Intern an `xsd:integer` literal.
-fn integer_term<D: DatasetView<Id = TermId> + Sync>(
+fn integer_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: i64,
-) -> SolutionTerm {
+) -> SolutionTerm<D::Id> {
     intern(ctx, typed(&value.to_string(), XSD_INTEGER))
 }
 
 /// Intern an `xsd:boolean` literal.
-fn bool_term<D: DatasetView<Id = TermId> + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    b: bool,
-) -> SolutionTerm {
+fn bool_term<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, b: bool) -> SolutionTerm<D::Id> {
     intern(ctx, typed(if b { "true" } else { "false" }, XSD_BOOLEAN))
 }
 
@@ -285,7 +282,7 @@ fn typed(lexical: &str, datatype: &str) -> TermValue {
 /// * `Err(EvalError::Data)` — a cyclic, torn, or multi-edge list (a cell revisited,
 ///   an interior cell missing `rdf:first`/`rdf:rest`, or a cell carrying two of
 ///   either edge): malformed input, a hard fail.
-fn walk<D: DatasetView<Id = TermId> + Sync>(
+fn walk<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     head: &TermValue,
 ) -> Result<Option<Vec<TermValue>>, EvalError> {
@@ -306,7 +303,7 @@ fn walk<D: DatasetView<Id = TermId> + Sync>(
 }
 
 /// Walk a list interned in the active dataset (the common case).
-fn walk_dataset<D: DatasetView<Id = TermId> + Sync>(
+fn walk_dataset<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     head: &TermValue,
 ) -> Result<Option<Vec<TermValue>>, EvalError> {
@@ -325,7 +322,7 @@ fn walk_dataset<D: DatasetView<Id = TermId> + Sync>(
 
     let scope = ctx.active_dataset.scope_for(ctx.active_graph);
     let mut members: Vec<TermValue> = Vec::new();
-    let mut seen: DetHashSet<TermId> = DetHashSet::default();
+    let mut seen: DetHashSet<D::Id> = DetHashSet::default();
     let mut cur = head_id;
     loop {
         if cur == nil_id {
@@ -340,7 +337,7 @@ fn walk_dataset<D: DatasetView<Id = TermId> + Sync>(
         // A well-formed cell has exactly one `rdf:first` and one `rdf:rest`. Two of
         // either makes the cell ambiguous: take no arbitrary, iteration-order-dependent
         // branch — hard-fail (the malformed-input contract).
-        let mut first_obj: Option<TermId> = None;
+        let mut first_obj: Option<D::Id> = None;
         let mut first_count = 0usize;
         scope.for_each_quad(ctx.dataset, Some(cur), Some(first_id), None, |q| {
             first_obj = Some(q.o);
@@ -361,7 +358,7 @@ fn walk_dataset<D: DatasetView<Id = TermId> + Sync>(
         };
         members.push(term_id_to_value(ctx.dataset, fo));
 
-        let mut rest_obj: Option<TermId> = None;
+        let mut rest_obj: Option<D::Id> = None;
         let mut rest_count = 0usize;
         scope.for_each_quad(ctx.dataset, Some(cur), Some(rest_id), None, |q| {
             rest_obj = Some(q.o);
@@ -384,7 +381,7 @@ fn walk_dataset<D: DatasetView<Id = TermId> + Sync>(
 /// within the same query. Returns `None` when `head` is not a constructed-list head
 /// (the caller then treats it as a non-list / unbound); otherwise the same
 /// well-formed / malformed contract as [`walk_dataset`].
-fn walk_constructed<D: DatasetView<Id = TermId> + Sync>(
+fn walk_constructed<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     head: &TermValue,
 ) -> Option<Result<Vec<TermValue>, EvalError>> {
@@ -430,7 +427,7 @@ fn walk_constructed<D: DatasetView<Id = TermId> + Sync>(
 /// The unique object of `(subject, predicate, ?)` in the per-query constructed
 /// buffer: `Ok(None)` if absent, `Ok(Some)` if exactly one, `Err` if more than one
 /// (a multi-edge malformed cell — same hard-fail as the dataset walk).
-fn single_constructed_edge<D: DatasetView<Id = TermId> + Sync>(
+fn single_constructed_edge<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     subject: &TermValue,
     predicate: &TermValue,

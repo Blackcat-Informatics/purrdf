@@ -43,7 +43,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, TermId, TermRef, TermValue};
+use purrdf_core::{DatasetView, TermId, TermRef, TermValue, ViewTermId};
 use purrdf_sparql_algebra::{NamedNode, PropertyPathExpression, TermPattern, Variable};
 
 use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
@@ -64,51 +64,51 @@ use crate::{DetHashMap, DetHashSet};
 /// because an empty `TermId` set would only arise from a non-empty element
 /// list whose IRIs are simply absent from the dataset, which still
 /// legitimately participates (excluding nothing that occurs).
-struct NegatedSets {
+struct NegatedSets<I: ViewTermId = TermId> {
     /// Predicates excluded from a **forward** hop (the plain, non-`^` elements),
     /// or `None` if the set has no plain elements.
-    forward: Option<BTreeSet<TermId>>,
+    forward: Option<BTreeSet<I>>,
     /// Predicates excluded from a **reverse** hop (the `^`-prefixed elements),
     /// or `None` if the set has no inverted elements.
-    inverse: Option<BTreeSet<TermId>>,
+    inverse: Option<BTreeSet<I>>,
 }
 
-/// Per-`NegatedPropertySet` exclusion sets, resolved to dataset ids ONCE per
+/// Per-`NegatedPropertySet` exclusion sets, resolved to view ids ONCE per
 /// `eval_path` call and keyed by the element slice's data pointer (stable for
 /// the immutable path AST).
-type NegatedCache = BTreeMap<usize, NegatedSets>;
-type ReachKey = (usize, TermId, bool);
-type ReachCache = RefCell<DetHashMap<ReachKey, Rc<BTreeSet<TermId>>>>;
+type NegatedCache<I = TermId> = BTreeMap<usize, NegatedSets<I>>;
+type ReachKey<I = TermId> = (usize, I, bool);
+type ReachCache<I = TermId> = RefCell<DetHashMap<ReachKey<I>, Rc<BTreeSet<I>>>>;
 
 /// The immutable, traversal-wide context shared by every `reach` recursion: the
 /// frozen dataset, the active dataset graph scope (§13: a single graph, or a
 /// `FROM`/`USING`-merged default graph), the once-resolved negated-set cache, and
 /// a per-evaluation reachability memo. Bundling these keeps the recursive
 /// path-evaluation signatures small.
-struct PathCtx<'a, D: DatasetView<Id = TermId> + Sync> {
+struct PathCtx<'a, D: DatasetView + Sync> {
     dataset: &'a D,
-    scope: GraphScope,
-    cache: NegatedCache,
-    reach_cache: ReachCache,
+    scope: GraphScope<D::Id>,
+    cache: NegatedCache<D::Id>,
+    reach_cache: ReachCache<D::Id>,
 }
 
 /// Build a `NegatedCache` by walking `path` once and pre-resolving every
 /// `NegatedPropertySet`'s excluded predicates to `TermId`s. The result is
 /// threaded through all `reach`/`closure`/`step_negated` calls so that IRI
 /// resolution is not repeated on every traversal step.
-fn build_negated_cache<D: DatasetView<Id = TermId> + Sync>(
+fn build_negated_cache<D: DatasetView + Sync>(
     path: &PropertyPathExpression,
     dataset: &D,
-) -> NegatedCache {
+) -> NegatedCache<D::Id> {
     let mut cache = NegatedCache::new();
     collect_negated(path, dataset, &mut cache);
     cache
 }
 
-fn collect_negated<D: DatasetView<Id = TermId> + Sync>(
+fn collect_negated<D: DatasetView + Sync>(
     path: &PropertyPathExpression,
     dataset: &D,
-    cache: &mut NegatedCache,
+    cache: &mut NegatedCache<D::Id>,
 ) {
     use PropertyPathExpression as P;
     match path {
@@ -157,12 +157,12 @@ fn collect_negated<D: DatasetView<Id = TermId> + Sync>(
 /// self-pairing (W3C `property-path/zero_or_more_set_start` /
 /// `zero_or_more_set_end`). A non-reflexive path cannot connect an absent node
 /// to anything else (it has no edges to traverse), so it correctly stays empty.
-pub(crate) fn eval_path<D: DatasetView<Id = TermId> + Sync>(
+pub(crate) fn eval_path<D: DatasetView + Sync>(
     subject: &TermPattern,
     path: &PropertyPathExpression,
     object: &TermPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq, EvalError> {
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let dataset = ctx.dataset;
     let scope = ctx.active_dataset.scope_for(ctx.active_graph);
 
@@ -196,7 +196,7 @@ pub(crate) fn eval_path<D: DatasetView<Id = TermId> + Sync>(
     // shapes are unified behind `node_reach`, which returns a `Vec` either way
     // (with genuine duplicates in the bag case, and none in the set case).
     let bag = !path_has_repetition(path);
-    let node_reach = |node: TermId, forward: bool| -> Vec<TermId> {
+    let node_reach = |node: D::Id, forward: bool| -> Vec<D::Id> {
         if bag {
             simple_reach_multiset(path, node, forward, &pctx)
         } else {
@@ -207,18 +207,19 @@ pub(crate) fn eval_path<D: DatasetView<Id = TermId> + Sync>(
         }
     };
 
-    let mut rows: Vec<Solution> = Vec::new();
-    let push_pair =
-        |rows: &mut Vec<Solution>, s_id: Option<SolutionTerm>, o_id: Option<SolutionTerm>| {
-            let mut row = smallvec::smallvec![None; width];
-            if let (Some(c), Some(id)) = (s_col, s_id) {
-                row[c] = Some(id);
-            }
-            if let (Some(c), Some(id)) = (o_col, o_id) {
-                row[c] = Some(id);
-            }
-            rows.push(row);
-        };
+    let mut rows: Vec<Solution<D::Id>> = Vec::new();
+    let push_pair = |rows: &mut Vec<Solution<D::Id>>,
+                     s_id: Option<SolutionTerm<D::Id>>,
+                     o_id: Option<SolutionTerm<D::Id>>| {
+        let mut row = smallvec::smallvec![None; width];
+        if let (Some(c), Some(id)) = (s_col, s_id) {
+            row[c] = Some(id);
+        }
+        if let (Some(c), Some(id)) = (o_col, o_id) {
+            row[c] = Some(id);
+        }
+        rows.push(row);
+    };
 
     match (s_end, o_end) {
         // Both ground: an ASK-shaped membership test. The schema is empty, so
@@ -335,9 +336,9 @@ pub(crate) fn eval_path<D: DatasetView<Id = TermId> + Sync>(
 
 /// A resolved path endpoint: a ground dataset id, a ground term absent from the
 /// dataset, or a free (variable / blank) position.
-enum Endpoint {
+enum Endpoint<I: ViewTermId = TermId> {
     /// A ground constant resolved to its dataset id.
-    Bound(TermId),
+    Bound(I),
     /// A ground constant that is not the subject or object of any quad in the
     /// dataset. Still a valid RDF term for the zero-length reflexive identity
     /// (see [`eval_path`]'s doc comment) — just not reachable by any real hop.
@@ -349,10 +350,10 @@ enum Endpoint {
 }
 
 /// Resolve an endpoint term to a [`Endpoint`].
-fn resolve_end<D: DatasetView<Id = TermId> + Sync>(
+fn resolve_end<D: DatasetView + Sync>(
     term: &TermPattern,
     dataset: &D,
-) -> Result<Endpoint, EvalError> {
+) -> Result<Endpoint<D::Id>, EvalError> {
     match term {
         TermPattern::Variable(v) => Ok(Endpoint::Free { var: v.clone() }),
         // A blank node in a path endpoint is an anonymous variable (SPARQL §4.1.4):
@@ -397,10 +398,7 @@ fn visible_var(term: &TermPattern) -> Option<Variable> {
 /// All terms that appear as a subject or object of a quad in the active-dataset scope
 /// — the node universe for a both-endpoints-variable path (SPARQL §18.1.7). The
 /// `BTreeSet` de-dupes endpoints, so a `FROM`-merged scope needs no extra triple dedup.
-fn node_universe<D: DatasetView<Id = TermId> + Sync>(
-    dataset: &D,
-    scope: &GraphScope,
-) -> BTreeSet<TermId> {
+fn node_universe<D: DatasetView + Sync>(dataset: &D, scope: &GraphScope<D::Id>) -> BTreeSet<D::Id> {
     let mut out = BTreeSet::new();
     scope.for_each_quad(dataset, None, None, None, |q| {
         out.insert(q.s);
@@ -409,12 +407,12 @@ fn node_universe<D: DatasetView<Id = TermId> + Sync>(
     out
 }
 
-fn reach_cached<D: DatasetView<Id = TermId> + Sync>(
+fn reach_cached<D: DatasetView + Sync>(
     path: &PropertyPathExpression,
-    node: TermId,
+    node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> Rc<BTreeSet<TermId>> {
+) -> Rc<BTreeSet<D::Id>> {
     let key = (
         std::ptr::from_ref::<PropertyPathExpression>(path) as usize,
         node,
@@ -429,12 +427,12 @@ fn reach_cached<D: DatasetView<Id = TermId> + Sync>(
     result
 }
 
-fn reach_uncached<D: DatasetView<Id = TermId> + Sync>(
+fn reach_uncached<D: DatasetView + Sync>(
     path: &PropertyPathExpression,
-    node: TermId,
+    node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> BTreeSet<TermId> {
+) -> BTreeSet<D::Id> {
     use PropertyPathExpression as P;
     match path {
         P::NamedNode(p) => step_predicate(p, node, forward, ctx),
@@ -532,12 +530,12 @@ fn path_has_repetition(path: &PropertyPathExpression) -> bool {
 /// and `Sequence`/`Alternative` compose that order structurally, so row order
 /// is stable run-to-run. Must never be called on a path containing repetition
 /// (`path_has_repetition(path)` is checked once by the caller, `eval_path`).
-fn simple_reach_multiset<D: DatasetView<Id = TermId> + Sync>(
+fn simple_reach_multiset<D: DatasetView + Sync>(
     path: &PropertyPathExpression,
-    node: TermId,
+    node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> Vec<TermId> {
+) -> Vec<D::Id> {
     use PropertyPathExpression as P;
     match path {
         P::NamedNode(p) => step_predicate(p, node, forward, ctx).into_iter().collect(),
@@ -574,12 +572,12 @@ fn simple_reach_multiset<D: DatasetView<Id = TermId> + Sync>(
 
 /// One predicate hop. Forward: objects of `(node, p, ?)`; backward: subjects of
 /// `(?, p, node)`. A predicate absent from the dataset yields nothing.
-fn step_predicate<D: DatasetView<Id = TermId> + Sync>(
+fn step_predicate<D: DatasetView + Sync>(
     p: &NamedNode,
-    node: TermId,
+    node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> BTreeSet<TermId> {
+) -> BTreeSet<D::Id> {
     let Some(pid) = ctx.dataset.term_id_by_value(&named_node_to_value(p)) else {
         return BTreeSet::new();
     };
@@ -604,12 +602,12 @@ fn step_predicate<D: DatasetView<Id = TermId> + Sync>(
 /// unioned, and a direction with no listed elements is omitted entirely (see
 /// [`NegatedSets`]). Uses the pre-resolved `cache` to avoid re-resolving
 /// excluded IRIs on every call.
-fn step_negated<D: DatasetView<Id = TermId> + Sync>(
+fn step_negated<D: DatasetView + Sync>(
     elems: &[purrdf_sparql_algebra::NegatedPathElement],
-    node: TermId,
+    node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> BTreeSet<TermId> {
+) -> BTreeSet<D::Id> {
     let sets = &ctx.cache[&(elems.as_ptr() as usize)];
     let mut out = BTreeSet::new();
     if let Some(excluded) = &sets.forward {
@@ -624,12 +622,12 @@ fn step_negated<D: DatasetView<Id = TermId> + Sync>(
 /// One hop along any predicate NOT in `excluded`, in the given direction —
 /// the direction-parameterised primitive `step_negated` composes twice (once
 /// per element kind) to get the full negated-set relation.
-fn step_excluding<D: DatasetView<Id = TermId> + Sync>(
-    excluded: &BTreeSet<TermId>,
-    node: TermId,
+fn step_excluding<D: DatasetView + Sync>(
+    excluded: &BTreeSet<D::Id>,
+    node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> BTreeSet<TermId> {
+) -> BTreeSet<D::Id> {
     let mut out = BTreeSet::new();
     if forward {
         ctx.scope
@@ -651,14 +649,14 @@ fn step_excluding<D: DatasetView<Id = TermId> + Sync>(
 
 /// `<any>` / `<any:ns>`: one hop along any predicate, optionally restricted to
 /// predicates whose IRI begins with the namespace prefix.
-fn step_wildcard<D: DatasetView<Id = TermId> + Sync>(
+fn step_wildcard<D: DatasetView + Sync>(
     namespace: Option<&NamedNode>,
-    node: TermId,
+    node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> BTreeSet<TermId> {
+) -> BTreeSet<D::Id> {
     let prefix = namespace.map(NamedNode::as_str);
-    let pred_ok = |pid: TermId| -> bool {
+    let pred_ok = |pid: D::Id| -> bool {
         match prefix {
             None => true,
             Some(pfx) => {
@@ -689,19 +687,19 @@ fn step_wildcard<D: DatasetView<Id = TermId> + Sync>(
 /// by applying `inner` at least once. The visited-set guards the endpoint frontier
 /// so cyclic graphs terminate; `node` itself appears iff it is reachable from
 /// itself via a cycle (the correct SPARQL `+` behaviour).
-fn closure<D: DatasetView<Id = TermId> + Sync>(
+fn closure<D: DatasetView + Sync>(
     inner: &PropertyPathExpression,
-    node: TermId,
+    node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> BTreeSet<TermId> {
+) -> BTreeSet<D::Id> {
     // `result` stays an ordered `BTreeSet` — it is the returned/egress set, and its
     // iteration order determines solution-row order (byte-identity). `visited` is a
     // membership-only guard, never iterated into output, so it uses an O(1)
     // `DetHashSet` instead of the O(log n) `BTreeSet` on the closure's hot loop.
     let mut result = BTreeSet::new();
-    let mut visited: DetHashSet<TermId> = DetHashSet::default();
-    let mut frontier: Vec<TermId> = reach_cached(inner, node, forward, ctx)
+    let mut visited: DetHashSet<D::Id> = DetHashSet::default();
+    let mut frontier: Vec<D::Id> = reach_cached(inner, node, forward, ctx)
         .iter()
         .copied()
         .collect();
@@ -723,17 +721,17 @@ fn closure<D: DatasetView<Id = TermId> + Sync>(
 /// single joint traversal: every node reachable by applying `inner` at least once
 /// from any seed. Equivalent to unioning `closure` over each seed, but visits each
 /// node at most once (O(V+E), not O(|seeds|·(V+E))).
-fn closure_multi<D: DatasetView<Id = TermId> + Sync>(
+fn closure_multi<D: DatasetView + Sync>(
     inner: &PropertyPathExpression,
-    seeds: &BTreeSet<TermId>,
+    seeds: &BTreeSet<D::Id>,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> BTreeSet<TermId> {
+) -> BTreeSet<D::Id> {
     // As in `closure`: ordered `result` for egress, O(1) `DetHashSet` for the
     // membership-only `visited` guard.
     let mut result = BTreeSet::new();
-    let mut visited: DetHashSet<TermId> = DetHashSet::default();
-    let mut frontier: Vec<TermId> = Vec::new();
+    let mut visited: DetHashSet<D::Id> = DetHashSet::default();
+    let mut frontier: Vec<D::Id> = Vec::new();
     for &s in seeds {
         frontier.extend(reach_cached(inner, s, forward, ctx).iter().copied());
     }
@@ -756,17 +754,17 @@ fn closure_multi<D: DatasetView<Id = TermId> + Sync>(
 /// (re-entrant per `k`), so a node reachable at multiple repetition counts is
 /// reported. `max == None` (`{n,}`) applies `inner` exactly `min` times then takes
 /// the `*`-closure of that frontier.
-fn range_reach<D: DatasetView<Id = TermId> + Sync>(
+fn range_reach<D: DatasetView + Sync>(
     inner: &PropertyPathExpression,
-    node: TermId,
+    node: D::Id,
     forward: bool,
     min: u32,
     max: Option<u32>,
     ctx: &PathCtx<'_, D>,
-) -> BTreeSet<TermId> {
+) -> BTreeSet<D::Id> {
     let mut out = BTreeSet::new();
     // `current` = nodes reachable in exactly `k` applications; k starts at 0.
-    let mut current: BTreeSet<TermId> = BTreeSet::from([node]);
+    let mut current: BTreeSet<D::Id> = BTreeSet::from([node]);
     for k in 0u32.. {
         if k >= min {
             out.extend(current.iter().copied());

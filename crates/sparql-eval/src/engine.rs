@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use purrdf_core::{
     DatasetView, GraphMatch, MutableDataset, RdfDataset, RdfDiagnostic, SparqlEngine,
-    SparqlRequest, SparqlResult, TermId, TermValue,
+    SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
 
@@ -191,13 +191,13 @@ impl NativeSparqlEngine {
     }
 
     /// [`Self::query_prepared`] over any [`DatasetView`] backend whose id type is the
-    /// production [`TermId`]. The concrete [`Self::query_prepared`] is a thin wrapper
+    /// production [`TermId`](purrdf_core::TermId). The concrete [`Self::query_prepared`] is a thin wrapper
     /// that derefs its `Arc<RdfDataset>` and calls this.
     ///
     /// # Errors
     ///
     /// Propagates evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_prepared_view<D: DatasetView<Id = TermId> + Sync>(
+    pub fn query_prepared_view<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         prepared: &PreparedQuery,
@@ -269,10 +269,7 @@ impl NativeSparqlEngine {
     /// eval options) into it. `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already
     /// correct by construction: [`EvalCtx::new`] samples the real host wall clock
     /// and OS entropy itself.
-    fn eval_ctx<'d, D: DatasetView<Id = TermId> + Sync>(
-        &'d self,
-        dataset: &'d D,
-    ) -> EvalCtx<'d, D> {
+    fn eval_ctx<'d, D: DatasetView + Sync>(&'d self, dataset: &'d D) -> EvalCtx<'d, D> {
         let mut ctx = EvalCtx::new(dataset)
             .with_order_cache(&self.order_cache)
             .with_eval_options(self.eval_options);
@@ -308,13 +305,13 @@ impl NativeSparqlEngine {
     }
 
     /// [`Self::explain_query`] over any [`DatasetView`] backend whose id type is the
-    /// production [`TermId`]. The cost-based join order is computed against the given
+    /// production [`TermId`](purrdf_core::TermId). The cost-based join order is computed against the given
     /// view's cardinalities exactly as the concrete path does.
     ///
     /// # Errors
     ///
     /// Returns an [`RdfDiagnostic`] if the query text does not parse.
-    pub fn explain_query_view<D: DatasetView<Id = TermId> + Sync>(
+    pub fn explain_query_view<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         query_text: &str,
@@ -363,12 +360,12 @@ impl NativeSparqlEngine {
     }
 
     /// [`Self::query_with_shacl_prebinding`] over any [`DatasetView`] backend whose id
-    /// type is the production [`TermId`].
+    /// type is the production [`TermId`](purrdf_core::TermId).
     ///
     /// # Errors
     ///
     /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_shacl_prebinding_view<D: DatasetView<Id = TermId> + Sync>(
+    pub fn query_with_shacl_prebinding_view<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         query: &str,
@@ -408,12 +405,12 @@ impl NativeSparqlEngine {
     }
 
     /// [`Self::query_with_shacl_prebinding_and_functions`] over any [`DatasetView`]
-    /// backend whose id type is the production [`TermId`].
+    /// backend whose id type is the production [`TermId`](purrdf_core::TermId).
     ///
     /// # Errors
     ///
     /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_shacl_prebinding_and_functions_view<D: DatasetView<Id = TermId> + Sync>(
+    pub fn query_with_shacl_prebinding_and_functions_view<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         query: &str,
@@ -450,12 +447,12 @@ impl NativeSparqlEngine {
     }
 
     /// [`Self::query_with_source`] over any [`DatasetView`] backend whose id type is
-    /// the production [`TermId`].
+    /// the production [`TermId`](purrdf_core::TermId).
     ///
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_source_view<D: DatasetView<Id = TermId> + Sync>(
+    pub fn query_with_source_view<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         request: SparqlRequest<'_>,
@@ -490,12 +487,12 @@ impl NativeSparqlEngine {
     }
 
     /// [`Self::query_with_user_functions`] over any [`DatasetView`] backend whose id
-    /// type is the production [`TermId`].
+    /// type is the production [`TermId`](purrdf_core::TermId).
     ///
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
-    pub fn query_with_user_functions_view<D: DatasetView<Id = TermId> + Sync>(
+    pub fn query_with_user_functions_view<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         request: SparqlRequest<'_>,
@@ -517,11 +514,11 @@ impl NativeSparqlEngine {
 /// When there are no substitutions the cached parse is evaluated directly (the hot
 /// path). Otherwise the cached parse is **cloned** and rewritten — the substitution
 /// must never poison the shared, un-substituted plan-cache entry.
-fn evaluate_with_substitutions<D: DatasetView<Id = TermId> + Sync>(
+fn evaluate_with_substitutions<D: DatasetView + Sync>(
     prepared: &PreparedQuery,
     substitutions: &[(String, TermValue)],
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Outcome, RdfDiagnostic> {
+) -> Result<Outcome<D::Id>, RdfDiagnostic> {
     let eval_err = |e: crate::error::EvalError| {
         RdfDiagnostic::error("native-sparql-query-eval", e.to_string())
     };
@@ -533,11 +530,11 @@ fn evaluate_with_substitutions<D: DatasetView<Id = TermId> + Sync>(
     evaluate_query(&substituted, ctx).map_err(eval_err)
 }
 
-fn evaluate_with_shacl_prebinding<D: DatasetView<Id = TermId> + Sync>(
+fn evaluate_with_shacl_prebinding<D: DatasetView + Sync>(
     prepared: &PreparedQuery,
     substitutions: &[(String, TermValue)],
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Outcome, RdfDiagnostic> {
+) -> Result<Outcome<D::Id>, RdfDiagnostic> {
     let substituted =
         crate::substitute::apply_shacl_prebinding(prepared.query.clone(), substitutions)?;
     evaluate_query(&substituted, ctx)
@@ -588,8 +585,8 @@ impl SparqlEngine for NativeSparqlEngine {
 /// Materialize an evaluation [`Outcome`] into the dataset-independent
 /// `SparqlResult` egress model (the interned-id space ends here: every solution
 /// cell becomes an owned [`TermValue`](purrdf_core::TermValue)).
-fn materialize<D: DatasetView<Id = TermId> + Sync>(
-    outcome: Outcome,
+fn materialize<D: DatasetView + Sync>(
+    outcome: Outcome<D::Id>,
     ctx: &EvalCtx<'_, D>,
 ) -> SparqlResult {
     match outcome {
