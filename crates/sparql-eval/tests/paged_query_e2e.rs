@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Headline acceptance for issue #90: a SPARQL query served DIRECTLY by the native
+//! Headline acceptance: a SPARQL query served DIRECTLY by the native
 //! evaluator over a multi-page [`PagedDataset`] (the external paged backend), through
 //! the engine's public generic entry points ([`NativeSparqlEngine::query_prepared_view`]
 //! / [`NativeSparqlEngine::explain_query_view`]).
@@ -29,8 +29,8 @@
 use std::sync::Arc;
 
 use purrdf_core::{
-    CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PagedDataset, RdfDataset,
-    RdfDatasetBuilder, RdfLiteral, SparqlResult, TermId, TermValue,
+    CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PagedDataset,
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult, TermId, TermValue,
 };
 use purrdf_sparql_eval::NativeSparqlEngine;
 
@@ -133,9 +133,21 @@ fn parity_page_age() -> Vec<Triple> {
 fn parity_page_name() -> Vec<Triple> {
     vec![
         (iri("bob"), iri("name"), TermValue::simple_literal("Bob")),
-        (iri("carol"), iri("name"), TermValue::simple_literal("Carol")),
-        (iri("frank"), iri("name"), TermValue::simple_literal("Frank")),
-        (iri("heidi"), iri("name"), TermValue::simple_literal("Heidi")),
+        (
+            iri("carol"),
+            iri("name"),
+            TermValue::simple_literal("Carol"),
+        ),
+        (
+            iri("frank"),
+            iri("name"),
+            TermValue::simple_literal("Frank"),
+        ),
+        (
+            iri("heidi"),
+            iri("name"),
+            TermValue::simple_literal("Heidi"),
+        ),
         (iri("dave"), iri("name"), TermValue::simple_literal("Dave")),
     ]
 }
@@ -175,8 +187,11 @@ fn paged_query_parity_is_byte_identical_to_single_dataset() {
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(PARITY_QUERY, None).expect("prepare");
 
-    let (single_vars, single_rows) =
-        solutions(engine.query_prepared(&single, &prepared, &[]).expect("single query"));
+    let (single_vars, single_rows) = solutions(
+        engine
+            .query_prepared(&single, &prepared, &[])
+            .expect("single query"),
+    );
     let (paged_vars, paged_rows) = solutions(
         engine
             .query_prepared_view(&paged, &prepared, &[])
@@ -187,7 +202,11 @@ fn paged_query_parity_is_byte_identical_to_single_dataset() {
     // FILTER, carol(17) is dropped, judy(no name/age) and dave(no knows edge) never bind.
     // ORDER BY ?name makes the row order total and deterministic.
     assert_eq!(single_vars, vec!["x", "name", "age"], "projected variables");
-    assert_eq!(single_rows.len(), 3, "Bob, Frank, Heidi survive the join+filter");
+    assert_eq!(
+        single_rows.len(),
+        3,
+        "Bob, Frank, Heidi survive the join+filter"
+    );
     let subjects: Vec<&TermValue> = single_rows.iter().map(|r| r[0].as_ref().unwrap()).collect();
     assert_eq!(subjects, vec![&iri("bob"), &iri("frank"), &iri("heidi")]);
 
@@ -196,7 +215,10 @@ fn paged_query_parity_is_byte_identical_to_single_dataset() {
     // the proof a SPARQL query is served directly over the paged backend, unifying `?x`
     // across pages, with a byte-identical result to the single-dataset evaluation.
     assert_eq!(single_vars, paged_vars, "same projected variables");
-    assert_eq!(single_rows, paged_rows, "byte-identical rows: single == paged");
+    assert_eq!(
+        single_rows, paged_rows,
+        "byte-identical rows: single == paged"
+    );
 }
 
 // ── Test B — cross-page join order is cost-driven (F1 guard) ─────────────────────
@@ -266,7 +288,11 @@ fn cross_page_join_order_is_cost_driven_and_flips_with_skew() {
     let order1 = engine
         .explain_query_view(&fixture1, SKEW_QUERY, None)
         .expect("explain fixture 1");
-    assert_eq!(order1, vec![PATTERN_A, PATTERN_B], "selective pa probed first");
+    assert_eq!(
+        order1,
+        vec![PATTERN_A, PATTERN_B],
+        "selective pa probed first"
+    );
 
     let order2 = engine
         .explain_query_view(&fixture2, SKEW_QUERY, None)
@@ -274,7 +300,11 @@ fn cross_page_join_order_is_cost_driven_and_flips_with_skew() {
     // The FLIP: inverting the cross-page skew inverts the probe order. This can only
     // happen if the Σ-per-page cost model is actually consulted — an estimator that
     // ignored the paged cardinalities would return the same (source) order both times.
-    assert_eq!(order2, vec![PATTERN_B, PATTERN_A], "selective pb probed first");
+    assert_eq!(
+        order2,
+        vec![PATTERN_B, PATTERN_A],
+        "selective pb probed first"
+    );
     assert_ne!(order1, order2, "the probe order flips with the skew");
 }
 
@@ -304,7 +334,9 @@ fn query_materializes_only_the_pages_the_plan_needs() {
     );
 
     let engine = NativeSparqlEngine::new();
-    let prepared = engine.prepare_query(BOUND_SUBJECT_QUERY, None).expect("prepare");
+    let prepared = engine
+        .prepare_query(BOUND_SUBJECT_QUERY, None)
+        .expect("prepare");
 
     // Run the bound-subject query through the PUBLIC generic entry point.
     let (_vars, rows) = solutions(
@@ -319,7 +351,10 @@ fn query_materializes_only_the_pages_the_plan_needs() {
     // The lazy hook fired for EXACTLY the one page that could match (page 0); pages 1
     // and 2 — whose translations lack `:alice` — were never re-materialized.
     let delta = provider.hits() - hits_after_seal;
-    assert_eq!(delta, 1, "only page 0 (the page containing :alice) materialized");
+    assert_eq!(
+        delta, 1,
+        "only page 0 (the page containing :alice) materialized"
+    );
 
     // A second identical run hits the per-page OnceLock cache — no further pulls.
     let _ = engine
