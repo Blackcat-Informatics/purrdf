@@ -1261,16 +1261,15 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
 /// bounds `sh:minInclusive`/`sh:maxInclusive`/`sh:minExclusive`/`sh:maxExclusive`,
 /// `sh:hasValue`) is deliberately excluded, because its positive projection
 /// through [`compile_property`] is NOT an exact complement:
-/// * Array/type vacuity — `sh:pattern`, the length bounds and the numeric
-///   bounds project to a BARE JSON-Schema keyword that JSON Schema applies only
-///   to its target primitive and passes vacuously for every other type. For an
-///   array-valued node the scalar alternative is vacuously satisfied, so under
-///   negation the negand widens to reject EVERY array-valued node — a
-///   false-reject.
-/// * Encoding mismatch — `sh:in` over IRI members and `sh:datatype`'s
-///   typed-literal object form project an instance encoding (enum members,
-///   `@type`-tagged objects) that does not line up value-for-value with the
-///   negated instance, so the complement is not exact.
+/// * Array/type vacuity — `sh:pattern`, the length bounds, the numeric bounds
+///   and `sh:in` (a bare `enum` keyword) project to a JSON-Schema keyword that
+///   applies only to its target primitive and passes vacuously for every other
+///   type. For an array-valued node the scalar alternative is vacuously
+///   satisfied, so under negation the negand widens to reject EVERY array-valued
+///   node — a false-reject.
+/// * Encoding mismatch — `sh:datatype`'s typed-literal object form projects an
+///   instance encoding (`@type`-tagged objects) that does not line up
+///   value-for-value with the negated instance, so the complement is not exact.
 /// * Quantifier mismatch — `sh:hasValue` is EXISTENTIAL ("at least one value
 ///   equals `V`"), yet its `const` projection expresses the UNIVERSAL reading
 ///   ("p absent, OR every value equals `V`"). Negating the universal projection
@@ -1792,16 +1791,16 @@ fn term_lexical(term: &Term) -> String {
     }
 }
 
-/// The `sh:in` enum member value, matching what the projector emits.
+/// The `sh:in` enum member value, matching EXACTLY what the projector emits for a
+/// value of the same term.
 ///
-/// IRIs project as the compacted CURIE/IRI string; literals as their lexical.
+/// Delegates to [`crate::instance::project_value`] — the single source of the
+/// value encoding — so an `sh:in` member and the projected instance value it
+/// constrains can never drift. In particular an IRI member is `{"@id": curie}`
+/// (NOT a bare CURIE string): a projected node value is the object form, so a
+/// bare-string enum would reject the very data the shape accepts.
 fn term_enum_value(term: &Term, ns: &Namespaces) -> Value {
-    match term {
-        Term::NamedNode(n) => Value::String(ns.compact_iri(n.as_str())),
-        Term::Literal(lit) => Value::String(lit.value().to_owned()),
-        Term::BlankNode(b) => Value::String(b.as_str().to_owned()),
-        other @ Term::Triple(_) => Value::String(other.to_string()),
-    }
+    crate::instance::project_value(term, ns)
 }
 
 /// The `sh:hasValue` const value (projected form).
@@ -2266,6 +2265,49 @@ mod tests {
         let mut sorted = strs.clone();
         sorted.sort_unstable();
         assert_eq!(strs, sorted, "enum must be sorted");
+    }
+
+    #[test]
+    fn sh_in_over_iris_uses_id_object_members() {
+        // Regression: a `sh:in` list of IRIs must project members as `{"@id":curie}`
+        // objects (the projector's encoding), NOT bare CURIE strings — otherwise a
+        // projected instance value `{"@id":..}` fails the enum it should satisfy.
+        let schema = schema_of(&compile_ttl(
+            r"
+            meta:StateShape a sh:NodeShape ;
+                sh:targetClass meta:State ;
+                sh:property [ sh:path meta:kind ; sh:maxCount 1 ;
+                              sh:in ( meta:open meta:closed ) ] .
+        ",
+        ));
+        assert_eq!(
+            def(&schema, "State")["properties"]["meta:kind"]["enum"],
+            json!([{ "@id": "meta:closed" }, { "@id": "meta:open" }]),
+            "IRI sh:in members are {{\"@id\":curie}} objects, sorted"
+        );
+    }
+
+    #[test]
+    fn sh_in_over_iris_round_trips_through_projection() {
+        // The production-surface proof: an instance projected via the instance
+        // projector VALIDATES against the `sh:in`-derived schema. Before the fix
+        // the bare-string enum rejected the projected `{"@id":..}` value.
+        let ttl = format!(
+            "{PREFIXES}\
+             meta:StateShape a sh:NodeShape ;\n\
+                 sh:targetClass meta:State ;\n\
+                 sh:property [ sh:path meta:kind ; sh:maxCount 1 ;\n\
+                               sh:in ( meta:open meta:closed ) ] .\n\
+             meta:s1 a meta:State ; meta:kind meta:open ."
+        );
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("parse");
+        let shapes = from_dataset(&dataset).expect("shapes");
+        let compiled = compile(&shapes, &fixture_ns());
+        let node = crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("s1"));
+        assert!(
+            validates(&compiled.schema_json, &node),
+            "a projected instance must validate against its own sh:in enum; projected = {node}"
+        );
     }
 
     #[test]
