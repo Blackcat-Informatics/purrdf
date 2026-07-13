@@ -58,7 +58,6 @@
 //! `tests/event_bridge.rs`).
 
 use core::ops::ControlFlow;
-use std::collections::HashMap;
 
 use ciborium::value::Value;
 use purrdf_events::{
@@ -69,6 +68,13 @@ use purrdf_events::{
 use crate::model::{ByteRange, Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression};
 use crate::reader::{FrameContext, ReadOptions, StreamingReadResult, read_to_sink_with_options};
 use crate::segment_decode::{ResolvedSink, SegmentResolver};
+
+/// A [`std::collections::HashMap`] keyed by the workspace's fixed-key `ahash`
+/// policy (`crates/rdf-core/src/hash.rs`'s `FastHasher`) — no runtime RNG
+/// seeding, so it stays wasm-clean. Iteration order is unspecified; this map is
+/// only ever point-looked-up, never iterated for egress.
+type FastMap<K, V> =
+    std::collections::HashMap<K, V, core::hash::BuildHasherDefault<ahash::AHasher>>;
 
 /// Well-known `xsd:string` datatype IRI implied by a plain literal (RDF §7.1).
 ///
@@ -185,7 +191,7 @@ pub struct EventEmitter<'s> {
     next_id: u32,
     /// Resolved IRI text by minted id, retained so a literal's datatype id can be
     /// resolved back to its IRI string for [`EventTerm::Literal`].
-    iri_map: HashMap<EventTermId, String>,
+    iri_map: FastMap<EventTermId, String>,
     /// The segment whose scope is currently open, if any.
     current_segment: Option<usize>,
     /// The scope opened for [`Self::current_segment`].
@@ -215,7 +221,7 @@ impl<'s> EventEmitter<'s> {
         Self {
             sink,
             next_id: 0,
-            iri_map: HashMap::new(),
+            iri_map: FastMap::default(),
             current_segment: None,
             current_scope: ScopeId::DEFAULT,
             cached: None,

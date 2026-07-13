@@ -27,6 +27,10 @@ workspace = true
 # This edge is acyclic — `purrdf-events` depends on nothing — so it never risks
 # a cycle and keeps `make wasm` green.
 purrdf-events = { workspace = true }
+# Fixed-key (no runtime RNG seeding) hasher for the segment-decode / event-bridge
+# dedup maps — mirrors the workspace's `FastHasher` policy (`crates/rdf-core/src/hash.rs`);
+# wasm-clean since `getrandom` is absent on wasm32 and `default-features = false` here.
+ahash = { workspace = true }
 # emojihash + randomart visual fingerprints, published from
 # Blackcat-Informatics/visual-hashing.
 visual-hashing = { workspace = true }

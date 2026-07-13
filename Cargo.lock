@@ -1307,6 +1307,7 @@ name = "purrdf-gts"
 version = "0.5.0"
 dependencies = [
  "aes-gcm",
+ "ahash",
  "blake3",
  "ciborium",
  "criterion",
