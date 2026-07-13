@@ -602,7 +602,7 @@ mod tests {
 
     /// A native closure returning `xsd:double` `NaN` for a non-positive argument
     /// and `arg / 5.0` otherwise — used to exercise `ORDER BY`'s handling of
-    /// `NaN` scores (E-nan).
+    /// `NaN` scores.
     fn nan_score_native_body() -> NativeFnBody {
         Arc::new(|args: &[&TermValue]| {
             let TermValue::Literal { lexical_form, .. } = args[0] else {
@@ -1351,7 +1351,7 @@ mod tests {
         }
     }
 
-    // ── R7: engine-level push-down determinism (Task 4) ─────────────────────
+    // ── engine-level push-down determinism ──────────────────────────────────
 
     /// `FILTER(<score>(?v) > 0.5)` over a `Stable` native scorer returns exactly
     /// the subjects whose score exceeds the threshold — the native call is
@@ -1416,7 +1416,7 @@ mod tests {
         );
     }
 
-    /// (E-nan) A scorer returning `xsd:double` `NaN` for some rows still yields a
+    /// A scorer returning `xsd:double` `NaN` for some rows still yields a
     /// stable *total* order under `ORDER BY`: every input row is present (no row
     /// is dropped for having an incomparable/NaN key) and the row order is
     /// identical across two runs. SPARQL's ORDER BY total order over the
