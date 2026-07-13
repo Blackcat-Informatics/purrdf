@@ -123,32 +123,116 @@ impl From<compact::CompactRefusedError> for CertifyError {
 // Part 1 — content projection + refold digest
 // ---------------------------------------------------------------------------
 
-/// The term-ids that are the subject of at least one `rdf:type` quad naming a
-/// compaction-provenance class (`stream:Compaction`, `stream:Manifestation`,
-/// `stream:DetachedSignature`).
+/// The CLOSED predicate vocabulary `purrdf_gts::compact::streaming_index`
+/// ever puts a `stream:Compaction` node (the `c` bnode) on the subject side
+/// of — see `crates/gts/src/compact.rs`'s `streaming_index`, the sole minter
+/// of this shape.
+const COMPACTION_PREDICATES: &[&str] = &[
+    RDF_TYPE,
+    stream::AGENT,
+    stream::TIMESTAMP,
+    stream::SOURCE_HEAD,
+    stream::SEALED_SOURCE,
+    stream::CONTENT_REFOLD_DIGEST,
+    stream::DETACHED_SIGNATURE_ROOT,
+];
+
+/// The CLOSED predicate vocabulary `streaming_index` ever puts a
+/// `stream:Manifestation` node (an `m{order}` bnode) on the subject side of.
+const MANIFESTATION_PREDICATES: &[&str] = &[
+    RDF_TYPE,
+    stream::DIGEST,
+    stream::MEDIA_TYPE,
+    stream::SIZE,
+    stream::ROLE,
+    stream::ORDER,
+];
+
+/// The CLOSED predicate vocabulary `streaming_index` ever puts a
+/// `stream:DetachedSignature` node (an `s{n}` bnode) on the subject side of.
+const DETACHED_SIGNATURE_PREDICATES: &[&str] = &[RDF_TYPE, stream::SOURCE_FRAME, stream::COSE];
+
+/// The closed provenance-predicate vocabulary for a reserved `stream:` class
+/// IRI, or `None` when `class_iri` names no reserved class at all.
+fn provenance_predicates_for_class(class_iri: &str) -> Option<&'static [&'static str]> {
+    if class_iri == stream::COMPACTION {
+        Some(COMPACTION_PREDICATES)
+    } else if class_iri == stream::MANIFESTATION {
+        Some(MANIFESTATION_PREDICATES)
+    } else if class_iri == stream::DETACHED_SIGNATURE {
+        Some(DETACHED_SIGNATURE_PREDICATES)
+    } else {
+        None
+    }
+}
+
+/// The term-ids that are genuine compaction-provenance nodes minted by
+/// `purrdf_gts::compact::streaming_index` — the `c` (`stream:Compaction`),
+/// `m{order}` (`stream:Manifestation`), and `s{n}` (`stream:DetachedSignature`)
+/// bnodes it emits — as opposed to any ordinary content node that merely
+/// happens to carry an `rdf:type` triple naming one of those same reserved
+/// class IRIs.
 ///
-/// Provenance nodes are the subjects of ALL their own quads (the streaming
-/// index/provenance authoring in `purrdf_gts::compact` never lets a content
-/// node reuse a provenance node's id), so dropping every quad whose subject is
-/// in this set removes provenance completely and leaves the content graph
-/// untouched.
+/// Nothing in RDF or GTS-SPEC reserves `stream:Compaction`/
+/// `stream:Manifestation`/`stream:DetachedSignature` from being used as an
+/// ordinary `rdf:type` object by a document's own content, so typing alone is
+/// not a safe anchor: a subject is only classed as provenance when BOTH (a)
+/// it has exactly one reserved-class `rdf:type` (an ambiguous double-typed
+/// subject is never something `streaming_index` itself would mint, so it is
+/// left alone — fail closed, keep it VISIBLE to the refold comparison rather
+/// than risk hiding a real content difference), AND (b) every quad the
+/// subject appears in (as subject) uses ONLY a predicate from that class's
+/// CLOSED provenance vocabulary (see `*_PREDICATES` above, mirroring exactly
+/// what `streaming_index` emits — never a superset). A content node reusing
+/// the reserved `rdf:type` but carrying so much as one foreign predicate
+/// (e.g. an application property) fails (b) and keeps every one of its quads.
+///
+/// Provenance nodes recognized by this closed-vocabulary test ARE the
+/// subjects of ALL their own quads (by construction: `streaming_index` never
+/// lets a content node reuse a provenance node's id, and the predicate-closure
+/// check above independently re-verifies it per graph), so dropping every
+/// quad whose subject is in this set removes provenance completely and
+/// leaves a lookalike content node's quads untouched.
 fn provenance_subject_ids(g: &Graph) -> crate::FastSet<usize> {
-    let mut ids = crate::FastSet::default();
+    // Every reserved-class `rdf:type` object claimed by each subject.
+    let mut reserved_types: HashMap<usize, HashSet<&str>> = HashMap::new();
     for &(s, p, o, _) in &g.quads {
         if g.terms.get(p).and_then(|t| t.value.as_deref()) != Some(RDF_TYPE) {
             continue;
         }
-        let is_provenance_class = match g.terms.get(o).and_then(|t| t.value.as_deref()) {
-            Some(v) => {
-                v == stream::COMPACTION
-                    || v == stream::MANIFESTATION
-                    || v == stream::DETACHED_SIGNATURE
-            }
-            None => false,
+        let Some(class_iri) = g.terms.get(o).and_then(|t| t.value.as_deref()) else {
+            continue;
         };
-        if is_provenance_class {
-            ids.insert(s);
+        if provenance_predicates_for_class(class_iri).is_some() {
+            reserved_types.entry(s).or_default().insert(class_iri);
         }
+    }
+
+    let mut ids = crate::FastSet::default();
+    'subjects: for (&s, classes) in &reserved_types {
+        let mut classes_iter = classes.iter();
+        let (Some(&class_iri), None) = (classes_iter.next(), classes_iter.next()) else {
+            // Zero (unreachable — the entry only exists with >=1) or more
+            // than one reserved class claimed: not a shape `streaming_index`
+            // would ever mint. Fail closed — leave the subject's quads alone.
+            continue;
+        };
+        let allowed = provenance_predicates_for_class(class_iri)
+            .expect("class_iri came from provenance_predicates_for_class returning Some");
+        for &(qs, p, _, _) in &g.quads {
+            if qs != s {
+                continue;
+            }
+            let Some(pv) = g.terms.get(p).and_then(|t| t.value.as_deref()) else {
+                // An unresolved predicate can never be verified as within the
+                // closed vocabulary — refuse-don't-trust, leave it alone.
+                continue 'subjects;
+            };
+            if !allowed.contains(&pv) {
+                continue 'subjects;
+            }
+        }
+        ids.insert(s);
     }
     ids
 }

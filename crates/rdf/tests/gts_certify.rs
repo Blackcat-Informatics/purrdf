@@ -1038,6 +1038,82 @@ fn verify_compaction_fails_closed_on_symmetric_poison_content() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// GAP G6 — `content_projection` must not strip a LEGITIMATE content node
+// merely because it happens to be typed with a reserved `stream:` class; it
+// must strip ONLY the provenance the compactor itself mints.
+// ---------------------------------------------------------------------------
+
+/// `rdf:type`, spelled out locally: `gts_certify::RDF_TYPE` is a private
+/// constant, and nothing else in this crate's public surface exposes it.
+const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+
+/// A source whose CONTENT — authored by the "user", not by any compactor —
+/// includes a blank node typed with a reserved `stream:` provenance class
+/// (`stream:Manifestation`). Nothing in RDF or in GTS-SPEC reserves that IRI
+/// from being used as an ordinary `rdf:type` object by a document's own
+/// content; only `purrdf_gts::compact`'s streaming index gets to mint an
+/// AUTHORITATIVE `stream:Manifestation` node (one per promised blob, bnode
+/// label `m{order}`). This builder's node is a same-shaped LOOKALIKE with an
+/// unrelated bnode label (`contentNode`), asserted directly by the source —
+/// exactly the case `content_projection` must not confuse with real
+/// compaction provenance.
+///
+/// When `mutate` is true, the node's `ex:name` literal differs
+/// (`"Mallory"` vs `"Alice"`) — a genuine content difference gated behind the
+/// reserved-class-typed subject.
+fn source_with_manifestation_typed_content(byte: u8, kid: &str, mutate: bool) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+    let name = if mutate { "Mallory" } else { "Alice" };
+    w.add_terms(&[
+        blank_term("contentNode"),                        // 0
+        iri_term(RDF_TYPE.to_string()),                   // 1
+        iri_term(stream::MANIFESTATION.to_string()),      // 2
+        iri_term("https://example.org/name".to_string()), // 3
+        literal_term(name.to_string()),                   // 4
+    ]);
+    w.add_quads(&[
+        (0, 1, 2, None), // _:contentNode rdf:type stream:Manifestation (CONTENT, not provenance)
+        (0, 3, 4, None), // _:contentNode ex:name "Alice" | "Mallory"
+    ]);
+    w.into_bytes()
+}
+
+#[test]
+fn manifestation_typed_content_node_mutation_is_not_masked_by_projection() {
+    let source = source_with_manifestation_typed_content(1, "author", false);
+    let mutated_source = source_with_manifestation_typed_content(1, "author", true);
+    assert_ne!(
+        source, mutated_source,
+        "the mutated source must be byte-different from the original"
+    );
+
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictStrategy::None,
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect(
+        "compact_and_certify succeeds on a source carrying a reserved-class-typed content node",
+    );
+
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report = verify_compaction(&mutated_source, &pack, &ring)
+        .expect("verify_compaction still produces a report");
+    assert!(
+        !report.refold_equivalent,
+        "a real content mutation on a blank node that merely happens to be typed with a \
+         reserved stream: class must still flip refold_equivalent to false — \
+         content_projection must not strip that node's quads just because a `rdf:type` \
+         object matches a reserved class name; only the compactor's OWN minted provenance \
+         subgraph may be stripped (anti-tautology: if content_projection over-strips by \
+         class alone, both sides lose the mutated quad and this assertion fails)"
+    );
+}
+
 /// The flip side of the poison test: a LARGE content graph that is NOT
 /// globally symmetric (each blank pair's automorphism is resolved by a
 /// cheap, independent 2-permutation search, distinguished pair-to-pair by a
