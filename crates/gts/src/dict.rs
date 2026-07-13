@@ -9,7 +9,12 @@
 //! be a **pure function of the batched corpus** — the GTS writer is byte
 //! deterministic, and a nondeterministic dictionary would break that invariant.
 //!
-//! Two producers share that contract:
+//! Both producers emit a **finalized** zstd dictionary (magic number, a non-zero
+//! dict-id, entropy tables, offset history, then content); the raw content alone
+//! cannot prime a zstd encoder (`set_dictionary_from_bytes` rejects a zero id or
+//! zero repeat offsets), so finalization is mandatory for the dictionary to be
+//! usable on both the encode and decode paths. The two producers differ only in
+//! how the dictionary *content* is selected:
 //!
 //! - [`raw_content_dict`] keeps a canonical trailing window of the corpus — no
 //!   training, no randomness; trivially wasm-clean and deterministic.
@@ -19,10 +24,12 @@
 //!   seed that global deterministically from the corpus immediately before
 //!   training, on the single training thread. The seed is derived from the corpus
 //!   bytes, never from ambient state, so repeated builds on the authoring
-//!   platform are byte-identical. The trained bytes are pinned in-band, so every
-//!   reader — native or wasm — decodes the same dictionary.
+//!   platform are byte-identical; the finalized bytes are pinned in-band, so
+//!   every reader — native or wasm — decodes the same dictionary.
 
-use structured_zstd::dictionary::{FastCoverOptions, train_fastcover_raw_from_slice};
+use structured_zstd::dictionary::{
+    FastCoverOptions, FinalizeOptions, create_fastcover_dict_from_source, finalize_raw_dict,
+};
 
 /// A dictionary could not be built from the supplied corpus.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,27 +71,33 @@ fn derive_seed(concat: &[u8]) -> u64 {
     )
 }
 
-/// Build a deterministic **raw-content** dictionary from `corpus`.
+/// Build a deterministic **raw-content** finalized dictionary from `corpus`.
 ///
-/// A zstd raw dictionary is history the compressor sees *before* the payload; the
-/// bytes nearest the end are the cheapest matches, so we keep the trailing
-/// `target_len` bytes of the canonical concatenation (or the whole thing when it
-/// is already smaller). No randomness is involved, so this is deterministic and
+/// The dictionary content is the canonical trailing window of the corpus (a zstd
+/// raw dictionary is history the compressor sees before the payload, so the bytes
+/// nearest the end are the cheapest matches); `finalize_raw_dict` truncates it to
+/// the budget and layers on the magic, deterministic FNV dict-id, entropy tables
+/// and offset history. No randomness is involved, so this is deterministic and
 /// wasm-clean by construction.
-#[must_use]
-pub fn raw_content_dict(corpus: &[&[u8]], target_len: usize) -> Vec<u8> {
+///
+/// # Errors
+/// Returns [`DictError`] when the corpus is empty or `target_len` is too small to
+/// hold the finalized header and offset history.
+pub fn raw_content_dict(corpus: &[&[u8]], target_len: usize) -> Result<Vec<u8>, DictError> {
     let concat = canonical_concat(corpus);
-    if concat.len() <= target_len {
-        return concat;
+    if concat.is_empty() {
+        return Err(DictError("empty corpus".to_owned()));
     }
-    concat[concat.len() - target_len..].to_vec()
+    finalize_raw_dict(&concat, &concat, target_len, FinalizeOptions::default())
+        .map_err(|err| DictError(err.to_string()))
 }
 
-/// Build a deterministic **FastCOVER-trained** dictionary from `corpus`.
+/// Build a deterministic **FastCOVER-trained** finalized dictionary from `corpus`.
 ///
 /// The ambient `fastrand` global is seeded from the corpus immediately before
 /// training so the reservoir sampler is reproducible; training is single-threaded
-/// so the seeded thread-local is the one the sampler reads.
+/// so the seeded thread-local is the one the sampler reads. The trainer finalizes
+/// the raw content into a full dictionary binary.
 ///
 /// # Errors
 /// Returns [`DictError`] when the corpus is empty or too small for FastCOVER to
@@ -95,15 +108,22 @@ pub fn trained_dict(corpus: &[&[u8]], target_len: usize) -> Result<Vec<u8>, Dict
         return Err(DictError("empty corpus".to_owned()));
     }
     fastrand::seed(derive_seed(&concat));
-    match train_fastcover_raw_from_slice(&concat, target_len, &FastCoverOptions::default()) {
-        Ok((dict, _tuned)) => Ok(dict),
-        Err(err) => Err(DictError(err.to_string())),
-    }
+    let mut out = Vec::new();
+    create_fastcover_dict_from_source(
+        concat.as_slice(),
+        &mut out,
+        target_len,
+        &FastCoverOptions::default(),
+        FinalizeOptions::default(),
+    )
+    .map_err(|err| DictError(err.to_string()))?;
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use structured_zstd::decoding::Dictionary;
 
     /// A corpus with enough repeated structure for FastCOVER to train on.
     fn sample_corpus() -> Vec<Vec<u8>> {
@@ -123,15 +143,22 @@ mod tests {
         owned.iter().map(Vec::as_slice).collect()
     }
 
+    /// A finalized dictionary must parse via the zstd decoder — this is exactly
+    /// the check that would fail on a bare raw-content blob.
+    fn assert_is_valid_finalized_dict(dict: &[u8]) {
+        Dictionary::decode_dict(dict).expect("output must be a valid finalized zstd dictionary");
+    }
+
     #[test]
-    fn raw_content_dict_is_deterministic_and_bounded() {
+    fn raw_content_dict_is_deterministic_and_valid() {
         let owned = sample_corpus();
         let corpus = as_slices(&owned);
-        let a = raw_content_dict(&corpus, 4096);
-        let b = raw_content_dict(&corpus, 4096);
+        let a = raw_content_dict(&corpus, 4096).expect("build");
+        let b = raw_content_dict(&corpus, 4096).expect("build");
         assert_eq!(a, b, "raw-content dict must be byte-reproducible");
         assert!(!a.is_empty());
         assert!(a.len() <= 4096, "must respect the target length bound");
+        assert_is_valid_finalized_dict(&a);
     }
 
     #[test]
@@ -141,20 +168,21 @@ mod tests {
         let mut reversed = forward.clone();
         reversed.reverse();
         assert_eq!(
-            raw_content_dict(&forward, 4096),
-            raw_content_dict(&reversed, 4096),
+            raw_content_dict(&forward, 4096).expect("build"),
+            raw_content_dict(&reversed, 4096).expect("build"),
             "canonical ordering must ignore caller iteration order"
         );
     }
 
     #[test]
-    fn trained_dict_is_deterministic() {
+    fn trained_dict_is_deterministic_and_valid() {
         let owned = sample_corpus();
         let corpus = as_slices(&owned);
         let a = trained_dict(&corpus, 4096).expect("training should succeed");
         let b = trained_dict(&corpus, 4096).expect("training should succeed");
         assert_eq!(a, b, "seeded FastCOVER must be byte-reproducible");
         assert!(!a.is_empty());
+        assert_is_valid_finalized_dict(&a);
     }
 
     #[test]
@@ -171,8 +199,14 @@ mod tests {
     }
 
     #[test]
-    fn trained_dict_rejects_empty_corpus() {
-        let err = trained_dict(&[], 4096).expect_err("empty corpus must be rejected");
-        assert_eq!(err, DictError("empty corpus".to_owned()));
+    fn producers_reject_empty_corpus() {
+        assert_eq!(
+            trained_dict(&[], 4096).expect_err("empty corpus must be rejected"),
+            DictError("empty corpus".to_owned())
+        );
+        assert_eq!(
+            raw_content_dict(&[], 4096).expect_err("empty corpus must be rejected"),
+            DictError("empty corpus".to_owned())
+        );
     }
 }

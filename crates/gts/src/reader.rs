@@ -917,16 +917,48 @@ fn is_header_item(item: &Value) -> bool {
     }
 }
 
+/// Parse the header `"dct"` map (§5): named, uncompressed in-band dictionary
+/// bytes that a catalog codec's `"dct"` param references by name.
+fn header_dict_table(header: &[(Value, Value)]) -> HashMap<&str, &[u8]> {
+    let mut out = HashMap::new();
+    if let Some(Value::Map(entries)) = map_get(header, "dct") {
+        for (name, bytes) in entries {
+            if let (Value::Text(name), Value::Bytes(bytes)) = (name, bytes) {
+                out.insert(name.as_str(), bytes.as_slice());
+            }
+        }
+    }
+    out
+}
+
+/// Build the file-local codec catalog from the header `"cat"` map (§5, §8.5).
+///
+/// A codec entry that names a `"dct"` dictionary not present in the header
+/// `"dct"` map is a hard error (§8.3, fail closed): that catalog id is
+/// dropped from the map entirely, so any frame referencing it degrades to an
+/// `unknown-codec` opaque node during codec resolution rather than silently
+/// decoding without the dictionary (or against the wrong one).
 fn catalog_from(header: &[(Value, Value)]) -> HashMap<i128, Codec> {
+    let dict_table = header_dict_table(header);
     let mut out = HashMap::new();
     if let Some(Value::Map(raw)) = map_get(header, "cat") {
         for (cid, entry) in raw {
             if let (Some(cid), Value::Map(fields)) = (as_i128(cid), entry) {
+                let dct = match map_get(fields, "dct") {
+                    Some(Value::Text(name)) => match dict_table.get(name.as_str()) {
+                        Some(bytes) => Some((*bytes).to_vec()),
+                        // Fail closed: an unresolvable dictionary reference
+                        // drops the whole catalog entry, not just the dct.
+                        None => continue,
+                    },
+                    _ => None,
+                };
                 out.insert(
                     cid,
                     Codec {
                         name: text_or(map_get(fields, "name"), "").to_string(),
                         cls: text_or(map_get(fields, "cls"), "encode").to_string(),
+                        dct,
                     },
                 );
             }

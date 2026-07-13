@@ -69,6 +69,14 @@ pub struct WriterOptions {
     pub magic_tag: bool,
     /// Optional layout-state claim. Only `"streamable"` is defined in this revision.
     pub layout: Option<String>,
+    /// Optional in-band pack dictionary for the `zstd` `dct` codec: `(dict_name,
+    /// dict_bytes)` (§5 header `"dct"`, §8.5 `zstd` `dct` parameter).
+    /// `dict_bytes` are stored uncompressed and in-band under `dict_name` in the
+    /// header `"dct"` map; the catalog's `zstd` entry references `dict_name`,
+    /// and every subsequent frame whose transform includes `"zstd"` is encoded
+    /// against `dict_bytes`. Requires the (default or supplied) catalog to
+    /// carry a `"zstd"` entry.
+    pub dict: Option<(String, Vec<u8>)>,
 }
 
 impl Default for WriterOptions {
@@ -78,6 +86,7 @@ impl Default for WriterOptions {
             meta: None,
             magic_tag: true,
             layout: None,
+            dict: None,
         }
     }
 }
@@ -302,41 +311,11 @@ pub fn snapshot_from_graph(
 
 fn default_catalog() -> Vec<(i64, Codec)> {
     vec![
-        (
-            0,
-            Codec {
-                name: "identity".to_string(),
-                cls: "encode".to_string(),
-            },
-        ),
-        (
-            1,
-            Codec {
-                name: "gzip".to_string(),
-                cls: "compress".to_string(),
-            },
-        ),
-        (
-            2,
-            Codec {
-                name: "zstd".to_string(),
-                cls: "compress".to_string(),
-            },
-        ),
-        (
-            3,
-            Codec {
-                name: "zstd-rsyncable".to_string(),
-                cls: "compress".to_string(),
-            },
-        ),
-        (
-            7,
-            Codec {
-                name: "cose-encrypt0".to_string(),
-                cls: "encrypt".to_string(),
-            },
-        ),
+        (0, Codec::new("identity", "encode")),
+        (1, Codec::new("gzip", "compress")),
+        (2, Codec::new("zstd", "compress")),
+        (3, Codec::new("zstd-rsyncable", "compress")),
+        (7, Codec::new("cose-encrypt0", "encrypt")),
     ]
 }
 
@@ -371,6 +350,10 @@ pub struct Writer {
     frame_ids: Vec<Vec<u8>>,
     // When set, every appended frame is COSE_Sign1-signed over its id (§9.2).
     signer: Option<(ed25519_dalek::SigningKey, String)>,
+    // When set (via `WriterOptions::dict`), every frame whose transform
+    // includes `"zstd"` is encoded against this pinned pack dictionary (§5
+    // header `"dct"`, §8.5 `zstd` `dct` parameter).
+    dict_bytes: Option<Vec<u8>>,
 }
 
 impl Writer {
@@ -533,13 +516,29 @@ impl Writer {
             .map(|(id, c)| (c.name.clone(), *id))
             .collect();
 
+        let (dict_name, dict_bytes) = match options.dict {
+            Some((name, bytes)) => {
+                if !name_to_id.contains_key("zstd") {
+                    return Err(WriterError::MissingCatalogEntry("zstd".to_string()));
+                }
+                (Some(name), Some(bytes))
+            }
+            None => (None, None),
+        };
+
         let cat_entries: Vec<(Value, Value)> = catalog
             .iter()
             .map(|(id, c)| {
-                let ce: Vec<(Value, Value)> = vec![
+                let mut ce: Vec<(Value, Value)> = vec![
                     ("name".into(), c.name.clone().into()),
                     ("cls".into(), c.cls.clone().into()),
                 ];
+                if c.name == "zstd"
+                    && let Some(name) = &dict_name
+                {
+                    // §5 codec `"dct"` references the header `"dct"` map key.
+                    ce.push(("dct".into(), name.clone().into()));
+                }
                 (iv(*id), Value::Map(ce))
             })
             .collect();
@@ -554,6 +553,14 @@ impl Writer {
             // The layout-state claim is part of the header content, so it is
             // covered by the genesis self-hash (§3.3, §5).
             header.push(("layout".into(), layout.into()));
+        }
+        if let (Some(name), Some(bytes)) = (&dict_name, &dict_bytes) {
+            // §5: dictionaries are stored uncompressed and in-band; the header
+            // "dct" map covers the genesis self-hash below like every other key.
+            header.push((
+                "dct".into(),
+                Value::Map(vec![(name.clone().into(), Value::Bytes(bytes.clone()))]),
+            ));
         }
         if let Some(meta) = options.meta {
             header.push(("meta".into(), meta));
@@ -576,6 +583,7 @@ impl Writer {
             types: Vec::new(),
             frame_ids: Vec::new(),
             signer: None,
+            dict_bytes,
         })
     }
 
@@ -690,8 +698,19 @@ impl Writer {
             };
             let mut x_ids: Vec<i64> = self.chain_ids(&transform)?;
             if !transform.is_empty() {
-                source =
-                    encode_chain_with_options(&transform, &source, EncodeOptions { zstd_level })?;
+                // The pack dictionary only primes plain `zstd` frames (§8.5);
+                // `zstd-rsyncable`'s independent blocks are out of scope for a
+                // single frame dictionary (codec.rs rejects that combination).
+                let dict = if transform.iter().any(|name| name == "zstd") {
+                    self.dict_bytes.as_deref()
+                } else {
+                    None
+                };
+                source = encode_chain_with_options(
+                    &transform,
+                    &source,
+                    EncodeOptions { zstd_level, dict },
+                )?;
             }
             if let Some(encrypt) = encrypt {
                 let encrypt_id = self
