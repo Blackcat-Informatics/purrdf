@@ -249,6 +249,62 @@ fn base64url_unpadded(data: &[u8]) -> String {
     out
 }
 
+/// Decode a base64url WITHOUT padding (RFC 4648 §5) string — the inverse of
+/// [`base64url_unpadded`], used to recover a `stream:cose` literal's raw
+/// COSE_Sign1 bytes (issue #89 Task 5 signature verification).
+///
+/// # Errors
+/// HARD-ERRORS on a padding character (`=`) or any byte outside the unpadded
+/// alphabet (`A-Za-z0-9-_`) — a malformed literal must fail loudly rather than
+/// silently decode to truncated or garbage bytes (refuse-don't-trust).
+pub fn base64url_decode(s: &str) -> Result<Vec<u8>, String> {
+    fn sextet(byte: u8) -> Result<u32, String> {
+        match byte {
+            b'A'..=b'Z' => Ok(u32::from(byte - b'A')),
+            b'a'..=b'z' => Ok(u32::from(byte - b'a') + 26),
+            b'0'..=b'9' => Ok(u32::from(byte - b'0') + 52),
+            b'-' => Ok(62),
+            b'_' => Ok(63),
+            b'=' => Err("unexpected padding character '=' in unpadded base64url".to_string()),
+            other => Err(format!(
+                "byte {other:#04x} is outside the base64url (RFC 4648 §5) alphabet"
+            )),
+        }
+    }
+    let bytes = s.as_bytes();
+    if bytes.len() % 4 == 1 {
+        return Err(format!(
+            "base64url input length {} leaves a single trailing character (invalid)",
+            bytes.len()
+        ));
+    }
+    let mut out = Vec::with_capacity((bytes.len() / 4 + 1) * 3);
+    let mut chunks = bytes.chunks_exact(4);
+    for chunk in &mut chunks {
+        let n = (sextet(chunk[0])? << 18)
+            | (sextet(chunk[1])? << 12)
+            | (sextet(chunk[2])? << 6)
+            | sextet(chunk[3])?;
+        out.push((n >> 16) as u8);
+        out.push((n >> 8) as u8);
+        out.push(n as u8);
+    }
+    match chunks.remainder() {
+        [] => {}
+        [a, b] => {
+            let n = (sextet(*a)? << 18) | (sextet(*b)? << 12);
+            out.push((n >> 16) as u8);
+        }
+        [a, b, c] => {
+            let n = (sextet(*a)? << 18) | (sextet(*b)? << 12) | (sextet(*c)? << 6);
+            out.push((n >> 16) as u8);
+            out.push((n >> 8) as u8);
+        }
+        _ => unreachable!("chunks_exact(4) remainder is always shorter than 4"),
+    }
+    Ok(out)
+}
+
 /// Sorted `(frame_id, cose)` pairs over every detached signature in `g`.
 ///
 /// A frame may carry multiple co-signatures under key rotation, so `frame_id`
@@ -818,6 +874,37 @@ mod tests {
         assert!(
             digest_quad_present(&with),
             "the supplied content-refold digest must be embedded as provenance"
+        );
+    }
+
+    #[test]
+    fn base64url_round_trips_through_the_encoder_for_every_remainder_length() {
+        for len in 0..=17usize {
+            let data: Vec<u8> = (0..len).map(|i| (i * 37 + 5) as u8).collect();
+            let encoded = base64url_unpadded(&data);
+            let decoded = base64url_decode(&encoded)
+                .unwrap_or_else(|err| panic!("length {len} round trip must decode: {err}"));
+            assert_eq!(decoded, data, "length {len} round trip must be lossless");
+        }
+    }
+
+    #[test]
+    fn base64url_decode_rejects_padding_and_out_of_alphabet_bytes() {
+        assert!(
+            base64url_decode("aGVsbG8=").is_err(),
+            "a trailing '=' padding character must be rejected"
+        );
+        assert!(
+            base64url_decode("+++=").is_err(),
+            "standard-alphabet '+' is not in the base64url alphabet"
+        );
+        assert!(
+            base64url_decode("a/b/").is_err(),
+            "standard-alphabet '/' is not in the base64url alphabet"
+        );
+        assert!(
+            base64url_decode("a").is_err(),
+            "a single trailing character cannot decode to a whole byte"
         );
     }
 }

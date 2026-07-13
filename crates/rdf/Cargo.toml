@@ -89,6 +89,11 @@ rayon = { workspace = true }
 # newline splitting; serializer escape fast-path classification). SIMD on
 # x86/aarch64, portable SWAR fallback elsewhere — wasm-clean, no feature gate.
 memchr = { workspace = true }
+# RDFC-1.0 digest of the compaction certificate's content projection
+# (`gts_certify`): default features (std) re-enabled, matching `purrdf-core`'s
+# own canonicalizer — the workspace-level entry is default-features = false
+# for the wasm-clean eval path.
+sha2 = { workspace = true, default-features = true }
 
 # Maintainer-only golden-capture binary. Freezes the native
 # SPARQL engine over the corpus as committed goldens under

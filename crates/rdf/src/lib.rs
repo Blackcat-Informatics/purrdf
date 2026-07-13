@@ -41,6 +41,10 @@ pub use purrdf_core::{
 };
 
 pub mod gts;
+// Streamable-compaction certificates (GTS-SPEC §10.1/§10.2, issue #89 Task
+// 5): content projection + refold digest, `verify_compaction`, `compose`, and
+// the certifying authoring wrapper `compact_and_certify`.
+pub mod gts_certify;
 mod gts_core;
 mod gts_import_graph;
 mod gts_import_sink;
