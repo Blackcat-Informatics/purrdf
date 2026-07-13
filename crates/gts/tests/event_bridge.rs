@@ -649,14 +649,80 @@ fn graph_scoped_reifier_is_hard_error() {
     assert_eq!(sink.finish_count, 0, "a failed drive is never finalized");
 }
 
-/// R6-exec2: a quad naming an undeclared segment-local term is a hard `Err`.
+/// R6-exec2 (real bytes): a quad naming an undeclared segment-local term id,
+/// authored through the PUBLIC `Writer`, is a hard `Err` when driven through
+/// the PUBLIC `stream_events` byte path — no silent skip, no partial index.
 ///
-/// The GTS `Writer`/`reader` path sanitizes every quad position (an out-of-range
-/// id is diagnosed and dropped, never emitted), so a genuinely dangling quad
-/// reference is not authorable through it. We therefore drive the public
-/// `SegmentResolver` + `EventEmitter` bridge directly with hand-fed streaming
-/// events — the same bridge `stream_events` builds internally — and assert the
-/// resolution phase surfaces the dangling reference as an `Err`.
+/// `Writer::add_quads` takes raw `usize` ids and performs NO client-side
+/// validation, so a quad naming an id no `term` event ever introduced
+/// round-trips into a fully well-formed, correctly content-hashed, correctly
+/// chained GTS frame (contrary to the `dangling_term_ref_is_err` doc comment
+/// below in an earlier revision of this suite, which assumed no such fixture
+/// was authorable). The raw GTS reader is a deliberately permissive Baseline
+/// Reader (GTS-SPEC §7.4/§7.5): `reader::read`/`read_to_sink` themselves stay
+/// `Ok`, diagnosing the row as `PositionConstraint` and dropping it — the
+/// SAME behavior the frozen conformance vector
+/// `vectors/13-position-constraint.expected.json` pins. `EventEmitter`'s
+/// `ResolvedSink::diagnostic` escalates exactly that diagnostic (and its
+/// `ForwardReference` sibling) to a hard `EventError`, so the public
+/// `stream_events` byte path fails closed instead of silently finalizing a
+/// sink that never even saw the dropped quad.
+#[test]
+fn dangling_term_ref_real_bytes_is_err() {
+    let mut w = Writer::new("generic");
+    w.add_terms(&[
+        iri("http://example.org/s"),
+        iri("http://example.org/p"),
+        iri("http://example.org/o"),
+    ]);
+    // Object id 99 was never introduced by any `term` event in this segment.
+    w.add_quads(&[(0, 1, 99, None)]);
+    let data = w.into_bytes();
+
+    // Sanity: the raw GTS reader is intentionally permissive here (Baseline
+    // Reader degrade-and-continue, §7.6) — confirms the fixture reaches
+    // exactly the dangling-reference diagnostic, not some unrelated earlier
+    // hard-fail (a bad chain/hash would abort before position checking runs).
+    let graph = read(&data, true, None);
+    assert_eq!(
+        graph.diagnostics.len(),
+        1,
+        "the raw reader diagnoses exactly the dangling quad: {:?}",
+        graph.diagnostics
+    );
+    assert_eq!(graph.diagnostics[0].code, "PositionConstraint");
+    assert!(
+        graph.quads.is_empty(),
+        "the raw reader drops the dangling quad rather than materializing it"
+    );
+
+    // The public RDF event byte path must fail closed.
+    let mut sink = CollectSink::default();
+    let err = stream_events(&data, ReadOptions::new(true, None), &mut sink)
+        .expect_err("a dangling quad reference must hard-fail stream_events on real bytes");
+    assert!(
+        err.to_string().contains("dangling term reference"),
+        "error names the dangling reference: {err}"
+    );
+
+    // No partial index: the sink never received a single event.
+    assert_eq!(sink.finish_count, 0, "a failed drive is never finalized");
+    assert!(
+        sink.declaration_order.is_empty(),
+        "no term was ever declared to the sink — the segment never resolved"
+    );
+    assert!(
+        sink.quads.is_empty(),
+        "no quad was ever declared to the sink"
+    );
+}
+
+/// R6-exec2 (defense in depth): the SAME `SegmentResolver` + `EventEmitter`
+/// bridge `stream_events` builds internally ALSO hard-fails a dangling quad
+/// reference when driven directly with hand-fed streaming events — pinning
+/// the resolver's own no-optionality contract independent of whatever the
+/// raw byte reader happens to filter first. See
+/// `dangling_term_ref_real_bytes_is_err` above for the real-byte-path proof.
 #[test]
 fn dangling_term_ref_is_err() {
     let mut sink = CollectSink::default();

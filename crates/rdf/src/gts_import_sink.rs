@@ -777,7 +777,9 @@ mod tests {
 
     /// A quad that references a GTS term id no `term` event introduced MUST surface
     /// as a hard `Err` (no silent skip), even though resolution is now deferred to
-    /// phase 2.
+    /// phase 2. Hand-fed defense-in-depth for the resolver's own no-optionality
+    /// contract; see `dangling_term_ref_real_bytes_is_err` below for the same
+    /// contract proven through the PUBLIC `import_gts_events` byte path.
     #[test]
     fn gate2_unknown_term_reference_is_err_direct() {
         let mut resolver = SegmentResolver::new(SinkImporter::new());
@@ -788,6 +790,46 @@ mod tests {
         let (_resolver, error) = finish_direct(resolver);
         let err = error.expect("dangling reference must defer an error");
         assert_eq!(err.code, "rdf-ir-dangling-term-ref");
+    }
+
+    /// R6-exec2 (real bytes): a quad naming an undeclared segment-local term id,
+    /// authored through the PUBLIC `purrdf_gts::writer::Writer`, is a hard `Err`
+    /// when driven through the PUBLIC `import_gts_events` byte path — no silent
+    /// skip, no partial `GtsBundle`.
+    ///
+    /// `Writer::add_quads` takes raw `usize` ids and performs NO client-side
+    /// validation, so a quad naming an id no `term` event ever introduced
+    /// round-trips into a fully well-formed, correctly content-hashed, correctly
+    /// chained GTS frame. The raw GTS reader is a deliberately permissive
+    /// Baseline Reader (GTS-SPEC §7.4/§7.5): it diagnoses the row as
+    /// `PositionConstraint` and DROPS it rather than erroring (the same
+    /// degrade-and-continue behavior the frozen conformance vector
+    /// `vectors/13-position-constraint.expected.json` pins). `SinkImporter`'s
+    /// `ResolvedSink::diagnostic` — "the IR is the authority, no degraded fold"
+    /// (module docs above) — promotes ANY reader diagnostic to a hard `Err`
+    /// before phase 2 ever runs, so no partial dataset is ever frozen.
+    #[test]
+    fn dangling_term_ref_real_bytes_is_err() {
+        let mut w = Writer::new("generic");
+        w.add_terms(&[
+            iri_term("http://example.org/s"),
+            iri_term("http://example.org/p"),
+            iri_term("http://example.org/o"),
+        ]);
+        // Object id 99 was never introduced by any `term` event in this segment.
+        w.add_quads(&[(0, 1, 99, None)]);
+        let data = w.into_bytes();
+
+        let err = import_gts_events(&data)
+            .expect_err("a dangling quad reference must hard-fail import_gts_events on real bytes");
+        assert_eq!(
+            err.code, "rdf-ir-gts-fold-diagnostic",
+            "the reader's PositionConstraint diagnostic is promoted to a hard Err: {err:?}"
+        );
+        assert!(
+            err.message.contains("PositionConstraint"),
+            "error names the underlying diagnostic: {err:?}"
+        );
     }
 
     /// Directional literals: GTS `Term` carries no base direction, so the sink path

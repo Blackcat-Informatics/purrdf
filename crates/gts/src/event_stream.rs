@@ -38,6 +38,24 @@
 //! *graph-scoped* reifier or annotation therefore cannot be represented, and the
 //! bridge raises a hard [`purrdf_events::EventError`] rather than silently
 //! dropping the graph — honoring the no-swallow doctrine.
+//!
+//! The raw GTS reader ([`crate::reader`]) is a deliberately permissive
+//! Baseline Reader (GTS-SPEC §7.4/§7.5, GTS-CONFORMANCE.md §6): a row whose
+//! subject/predicate/object/graph-name/datatype/reifier names a segment-local
+//! term id no `term` event ever introduced is diagnosed (`PositionConstraint`
+//! or `ForwardReference`) and DROPPED, and folding continues so a damaged or
+//! partially-authored file still yields its recoverable content. That
+//! degrade-and-continue policy is right for the raw byte reader, but the RDF
+//! event protocol promises every id it ever declares is usable — a row that
+//! silently vanishes is indistinguishable from a fact that was never
+//! asserted. [`EventEmitter::diagnostic`] therefore escalates exactly those
+//! two diagnostic codes to a hard [`purrdf_events::EventError`] (the same
+//! "genuinely dangling term id" failure [`stream_events`] documents), while
+//! every other reader diagnostic (frame damage, chain breaks, unknown codecs,
+//! …) still passes through to [`GtsEventSink::gts_diagnostic`] unharmed —
+//! that class of degradation is not a dangling reference and stays governed
+//! by the permissive-read contract (see `claimid_offset_index_single_pass` in
+//! `tests/event_bridge.rs`).
 
 use core::ops::ControlFlow;
 use std::collections::HashMap;
@@ -563,6 +581,28 @@ impl ResolvedSink for EventEmitter<'_> {
     fn diagnostic(&mut self, diag: &Diagnostic) -> Result<(), Self::Error> {
         if self.cancelled {
             return Ok(());
+        }
+        // `PositionConstraint` / `ForwardReference` mean the RAW GTS reader
+        // (§7.4/§7.5) just silently DROPPED a row — a quad/reifier/annotation
+        // whose subject/predicate/object/graph-name/dt/rf named a segment-local
+        // term id no `term` event ever introduced — rather than resolving it.
+        // GTS's Baseline Reader is deliberately permissive about this (it
+        // degrades and keeps folding survivors, per GTS-CONFORMANCE.md §6), but
+        // the RDF event protocol is stricter: every id it ever declares MUST be
+        // usable, and a row silently vanishing from the stream is exactly the
+        // "genuinely dangling term id" this module's docs already promise is an
+        // `Err`, never a silent skip. Escalate here rather than passing it
+        // through as an informational `gts_diagnostic` — otherwise the drive
+        // would finish "successfully" having quietly dropped the row, which is
+        // indistinguishable from that row never having been asserted.
+        if matches!(
+            diag.code.as_str(),
+            "PositionConstraint" | "ForwardReference"
+        ) {
+            return Err(EventError::message(format!(
+                "GTS dangling term reference ({}): {}",
+                diag.code, diag.detail
+            )));
         }
         // A frame-scoped diagnostic carries the cached frame provenance; a
         // file-level diagnostic (e.g. `EmptyFile`) carries none.
