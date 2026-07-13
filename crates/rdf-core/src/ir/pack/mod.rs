@@ -17,9 +17,16 @@
 //!
 //! [`dict`] lands the four-section value dictionary (Task 2):
 //! [`dict::PackDict`] assigns one unified id per distinct term value (scanned by
-//! role from an `RdfDataset`'s base quads), PFC-compresses each section on disk, and
-//! decodes into an owned, query-ready form. The bitmap-triples encoder that consumes
-//! it arrives in a later task.
+//! role from an `RdfDataset`'s base quads, including graph-name-only terms —
+//! see that module's docs), PFC-compresses each section on disk, and decodes
+//! into an owned, query-ready form.
+//!
+//! [`triples`] lands the graph-partitioned succinct bitmap-triples + FoQ
+//! auxiliary indexes (Task 3): [`triples::Triples::encode`] builds one
+//! self-contained bitmap-triples structure per graph (partition 0 = default
+//! graph) from a [`dict::PackDict`] + `RdfDataset`, and
+//! [`triples::TriplesRef::from_bytes`] is the borrowed, zero-copy reader that
+//! answers all 8 `(s, p, o)` pattern shapes without decompression.
 //!
 //! `#[doc(hidden)]` (see [`super::pack`]'s declaration): this whole tree is an
 //! internal-codec surface, not a SemVer-guaranteed part of the crate's public API.
@@ -28,3 +35,5 @@
 pub mod bits;
 #[doc(hidden)]
 pub mod dict;
+#[doc(hidden)]
+pub mod triples;

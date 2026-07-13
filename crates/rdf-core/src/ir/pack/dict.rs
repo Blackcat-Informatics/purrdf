@@ -9,15 +9,19 @@
 //! # Id layout
 //!
 //! Terms are scanned by ROLE from the dataset's base quads (subject / predicate /
-//! object; graph names and RDF 1.2 side-table-only terms are out of scope — Task 4
-//! owns those sections) and partitioned into four disjoint groups:
+//! object; RDF 1.2 side-table-only terms are out of scope — Task 4 owns that
+//! section) and partitioned into four disjoint groups:
 //!
 //! - **shared** — appears as both a subject and an object somewhere (`S ∩ O`).
 //! - **subject_only** — subject, never object.
 //! - **object_only** — object, never subject. This section ALSO absorbs any
 //!   "auxiliary" value that is referenced only structurally — a literal's datatype
-//!   IRI, or a triple term's `s`/`p`/`o` component — and has no S/P/O role of its
-//!   own (see [`encode`](PackDict::encode)'s doc for the exact closure rule).
+//!   IRI, a triple term's `s`/`p`/`o` component, or a quad's named-graph term (a
+//!   value used ONLY in a quad's `g` slot, never as an S/P/O) — and has no S/P/O
+//!   role of its own (see [`encode`](PackDict::encode)'s doc for the exact closure
+//!   rule). A graph-name value that ALSO plays an S/P/O role keeps its existing id
+//!   from that role; it is never duplicated. This is how [`PackDict::id_by_value`]
+//!   resolves a `GraphMatch::Named` graph-name constant to a unified id (Task 3).
 //! - **predicates** — appears as a predicate. A term that is BOTH a predicate and a
 //!   subject/object gets a separate entry in the predicate section IN ADDITION to
 //!   its shared/subject_only/object_only entry — HDT keeps the predicate id space
@@ -687,14 +691,19 @@ impl PackDict {
     #[must_use]
     pub fn encode(dataset: &RdfDataset) -> EncodedDict {
         // Step 1: base S/P/O role sets, by TermId (cheap membership tests), from the
-        // base quads only.
+        // base quads only. Also collect the distinct set of graph-name TermIds (a
+        // quad's `g` slot) — see the graph-name amendment in Step 2 below.
         let mut subj_ids: IdSet = IdSet::default();
         let mut pred_ids: IdSet = IdSet::default();
         let mut obj_ids: IdSet = IdSet::default();
+        let mut graph_ids: IdSet = IdSet::default();
         for q in dataset.quads() {
             subj_ids.insert(q.s);
             pred_ids.insert(q.p);
             obj_ids.insert(q.o);
+            if let Some(g) = q.g {
+                graph_ids.insert(g);
+            }
         }
 
         let mut shared: Vec<TermValue> = subj_ids
@@ -711,17 +720,29 @@ impl PackDict {
             .collect();
         let mut predicates: Vec<TermValue> =
             pred_ids.iter().map(|&id| dataset.term_value(id)).collect();
+        // Sorted (not merely deterministic-order) so the graph-name fold-in below can
+        // walk it in canonical order like every other base-role Vec.
+        let mut graph_values: Vec<TermValue> =
+            graph_ids.iter().map(|&id| dataset.term_value(id)).collect();
 
         shared.sort();
         subject_only.sort();
         object_only.sort();
         predicates.sort();
+        graph_values.sort();
 
         // Step 2: closure over auxiliary references (literal datatypes, triple
-        // components) not already covered by a base role. Deterministic regardless
-        // of hash-set iteration order: the closure worklist walks the already-sorted
-        // Vecs in order, and the result is re-sorted before use — no hash-iteration
-        // order ever reaches the output (byte-determinism discipline).
+        // components) not already covered by a base role, PLUS graph-name terms (a
+        // quad's `g` slot) not already covered by a base S/P/O role — see the
+        // "Graph-name terms" note in the [module docs](self). A graph-name value
+        // already present under some role keeps its existing id (no new entry); one
+        // with no other role is folded into `object_only`, using the exact same
+        // worklist/dedup machinery as the literal-datatype/triple-component closure
+        // (so a spec-illegal nested graph-name value, were one ever produced, would
+        // still be handled correctly). Deterministic regardless of hash-set
+        // iteration order: every worklist source here is an already-sorted Vec, and
+        // the result is re-sorted before use — no hash-iteration order ever reaches
+        // the output (byte-determinism discipline).
         let mut present: FastSet<TermValue> = FastSet::default();
         let mut queue: Vec<TermValue> = Vec::new();
         for v in shared
@@ -734,6 +755,12 @@ impl PackDict {
             queue.push(v.clone());
         }
         let mut extra: Vec<TermValue> = Vec::new();
+        for v in &graph_values {
+            if present.insert(v.clone()) {
+                extra.push(v.clone());
+                queue.push(v.clone());
+            }
+        }
         let mut qi = 0usize;
         while qi < queue.len() {
             let current = queue[qi].clone();
@@ -1302,6 +1329,57 @@ mod tests {
         assert_ne!(non_predicate_id, predicate_id);
         assert_eq!(dict.term_value(non_predicate_id), iri("p"));
         assert_eq!(dict.term_value(predicate_id), iri("p"));
+    }
+
+    #[test]
+    fn graph_only_term_gets_unified_id_in_object_only() {
+        // "g" appears ONLY as a quad's graph-name slot — never as a subject,
+        // predicate, or object — so the graph-name amendment must still mint it a
+        // unified id (folded into `object_only`) and round-trip it via
+        // `id_by_value`/`term_value`, with no spurious predicate-role id.
+        let mut b = RdfDatasetBuilder::new();
+        let s = intern_value(&mut b, &iri("s"));
+        let p = intern_value(&mut b, &iri("p"));
+        let o = intern_value(&mut b, &iri("o"));
+        let g = intern_value(&mut b, &iri("g"));
+        b.push_quad(s, p, o, Some(g));
+        let dataset = b.freeze().expect("valid dataset");
+
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        assert_eq!(dict.n_object_only(), 2, "\"o\" and the graph-only \"g\"");
+        let id = dict
+            .id_by_value(&iri("g"))
+            .expect("graph-name term present");
+        assert_eq!(dict.term_value(id), iri("g"));
+        // "g" plays no predicate role anywhere, so it must not hold a predicate id.
+        assert_eq!(dict.predicate_id_by_value(&iri("g")), None);
+    }
+
+    #[test]
+    fn graph_name_that_is_also_subject_keeps_its_existing_id() {
+        // "g" names the graph of the second quad AND is the subject of the first
+        // quad: it must get exactly ONE non-predicate unified id (its
+        // subject_only/shared id), not a second duplicate object_only entry.
+        let mut b = RdfDatasetBuilder::new();
+        let g = intern_value(&mut b, &iri("g"));
+        let p = intern_value(&mut b, &iri("p"));
+        let o1 = intern_value(&mut b, &iri("o1"));
+        let s2 = intern_value(&mut b, &iri("s2"));
+        let o2 = intern_value(&mut b, &iri("o2"));
+        b.push_quad(g, p, o1, None);
+        b.push_quad(s2, p, o2, Some(g));
+        let dataset = b.freeze().expect("valid dataset");
+
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        // "g" and "s2" are both subjects, never objects, so subject_only holds
+        // exactly those two — the graph-name fold-in must not have ALSO placed "g"
+        // in object_only as a duplicate entry.
+        assert_eq!(dict.n_subject_only(), 2);
+        assert_eq!(dict.n_object_only(), 2, "\"o1\" and \"o2\" only");
+        let id = dict
+            .id_by_value(&iri("g"))
+            .expect("present via its subject role");
+        assert_eq!(dict.term_value(id), iri("g"));
     }
 
     #[test]
