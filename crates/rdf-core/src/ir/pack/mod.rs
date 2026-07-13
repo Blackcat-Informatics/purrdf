@@ -15,11 +15,12 @@
 //! [`bits::BitVec`]/[`bits::RankSelect`] (rank1/select1/rank0/select0 succinct
 //! bitmaps), and the varint/zigzag/delta-list byte helpers.
 //!
-//! [`dict`] lands the four-section value dictionary (Task 2):
-//! [`dict::PackDict`] assigns one unified id per distinct term value (scanned by
-//! role from an `RdfDataset`'s base quads, including graph-name-only terms —
-//! see that module's docs), PFC-compresses each section on disk, and decodes
-//! into an owned, query-ready form.
+//! [`dict`] lands the unified value dictionary (Task 2):
+//! [`dict::PackDict`] assigns ONE unified id per distinct term value —
+//! regardless of role (subject, predicate, object, graph name, or structural
+//! reference) — scanned from an `RdfDataset`'s base quads and side tables (see
+//! that module's docs), PFC-compresses the whole sorted value list on disk,
+//! and decodes into an owned, query-ready form.
 //!
 //! [`triples`] lands the graph-partitioned succinct bitmap-triples + FoQ
 //! auxiliary indexes (Task 3): [`triples::Triples::encode`] builds one

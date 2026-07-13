@@ -186,10 +186,14 @@ fn build_int_vector(values: &[u64]) -> IntVector {
 /// [`TriplesRef::from_bytes`] requires.
 const TRIPLES_FORMAT_VERSION: u8 = 1;
 
-/// Resolve `id`'s unified [`PackTermId`] via `dict`'s non-predicate lookup
-/// (`id_by_value`), memoized per `TermId` so repeated subjects/objects/graph
-/// names in the quad scan cost one `term_value`+lookup each, not one per quad.
-fn resolve_non_predicate(
+/// Resolve `id`'s unified [`PackTermId`] via `dict`'s single id-space lookup
+/// (`id_by_value` — see [`super::dict`]'s module docs: one unified id per
+/// distinct value, regardless of role), memoized per `TermId` so repeated
+/// subjects/predicates/objects/graph names in the quad scan cost one
+/// `term_value`+lookup each, not one per quad. Used for every quad component —
+/// `s`, `p`, `o`, and `g` alike — since the dictionary no longer splits
+/// predicates into a separate id space.
+fn resolve_unified(
     dataset: &RdfDataset,
     dict: &PackDict,
     cache: &mut FastMap<TermId, PackTermId>,
@@ -200,27 +204,9 @@ fn resolve_non_predicate(
     }
     let value = dataset.term_value(id);
     let u = dict.id_by_value(&value).expect(
-        "PackDict::encode covers every subject/object/graph-name role term (incl. the \
-         graph-name amendment), so every quad's s/o/g term resolves here",
+        "PackDict::encode covers every role a quad component can play (incl. the \
+         graph-name amendment), so every quad's s/p/o/g term resolves here",
     );
-    cache.insert(id, u);
-    u
-}
-
-/// The predicate-role twin of [`resolve_non_predicate`].
-fn resolve_predicate(
-    dataset: &RdfDataset,
-    dict: &PackDict,
-    cache: &mut FastMap<TermId, PackTermId>,
-    id: TermId,
-) -> PackTermId {
-    if let Some(&u) = cache.get(&id) {
-        return u;
-    }
-    let value = dataset.term_value(id);
-    let u = dict
-        .predicate_id_by_value(&value)
-        .expect("PackDict::encode covers every predicate-role term, so every quad's p resolves");
     cache.insert(id, u);
     u
 }
@@ -374,10 +360,11 @@ impl Triples {
     /// graph, always present even if empty; each named graph gets its own
     /// partition, stored ascending by graph unified id), and build each
     /// partition's bitmap-triples + FoQ indexes. `dict` resolves every quad
-    /// component to its unified [`PackTermId`] (subjects/objects/graph names via
-    /// [`PackDict::id_by_value`], predicates via
-    /// [`PackDict::predicate_id_by_value`]) — it MUST be the dictionary built
-    /// from this exact `dataset` (via [`PackDict::encode`]), so every reference
+    /// component — subject, predicate, object, and graph name alike — to its
+    /// single unified [`PackTermId`] via [`PackDict::id_by_value`] (see
+    /// [`super::dict`]'s module docs: this dictionary mints ONE id per distinct
+    /// value, regardless of role) — `dict` MUST be the dictionary built from
+    /// this exact `dataset` (via [`PackDict::encode`]), so every reference
     /// resolves; see the [module docs](self).
     ///
     /// # Panics
@@ -387,20 +374,19 @@ impl Triples {
     /// contract violation, not a data-dependent error.
     #[must_use]
     pub fn encode(dict: &PackDict, dataset: &RdfDataset) -> Self {
-        let mut non_predicate_cache: FastMap<TermId, PackTermId> = FastMap::default();
-        let mut predicate_cache: FastMap<TermId, PackTermId> = FastMap::default();
+        let mut cache: FastMap<TermId, PackTermId> = FastMap::default();
 
         let mut default_triples: Vec<(u64, u64, u64)> = Vec::new();
         let mut named: BTreeMap<PackTermId, Vec<(u64, u64, u64)>> = BTreeMap::new();
 
         for q in dataset.quads() {
-            let s_uni = resolve_non_predicate(dataset, dict, &mut non_predicate_cache, q.s);
-            let p_uni = resolve_predicate(dataset, dict, &mut predicate_cache, q.p);
-            let o_uni = resolve_non_predicate(dataset, dict, &mut non_predicate_cache, q.o);
+            let s_uni = resolve_unified(dataset, dict, &mut cache, q.s);
+            let p_uni = resolve_unified(dataset, dict, &mut cache, q.p);
+            let o_uni = resolve_unified(dataset, dict, &mut cache, q.o);
             match q.g {
                 None => default_triples.push((s_uni, p_uni, o_uni)),
                 Some(g) => {
-                    let g_uni = resolve_non_predicate(dataset, dict, &mut non_predicate_cache, g);
+                    let g_uni = resolve_unified(dataset, dict, &mut cache, g);
                     named.entry(g_uni).or_default().push((s_uni, p_uni, o_uni));
                 }
             }

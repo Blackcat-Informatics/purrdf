@@ -155,28 +155,23 @@ fn build_int_vector(values: &[u64]) -> IntVector {
     v
 }
 
-/// Resolve `value` to its unified [`PackTermId`], preferring a non-predicate
-/// role and falling back to the predicate-section id — the SAME preference
-/// order [`PackDict`]'s own "Lookup rule" documents for resolving a structural
-/// reference (a literal's datatype, a triple term's components): prefer
-/// `id_by_value`, fall back to `predicate_id_by_value` only if the value has no
-/// non-predicate role. A side-table reference (a reifier, a reified
-/// triple-term, an annotation predicate/object, a graph name) is exactly such a
-/// structural reference, so it follows the same rule.
+/// Resolve `value` to its unified [`PackTermId`] — [`PackDict`] mints exactly
+/// ONE id per distinct value regardless of role (see its module docs), so a
+/// side-table reference (a reifier, a reified triple-term, an annotation
+/// predicate/object, a graph name) resolves via the single `id_by_value`
+/// lookup like any other reference.
 ///
 /// # Panics
 ///
-/// Panics if `value` resolves to neither section — a caller-side contract
-/// violation: `dict` MUST be [`PackDict::encode`]'s output for the SAME
-/// `dataset` `value` was read from (its Task 4 side-table closure amendment
-/// guarantees every such reference resolves).
+/// Panics if `value` was never interned — a caller-side contract violation:
+/// `dict` MUST be [`PackDict::encode`]'s output for the SAME `dataset` `value`
+/// was read from (its Task 4 side-table closure amendment guarantees every
+/// such reference resolves).
 fn resolve_any(dict: &PackDict, value: &TermValue) -> PackTermId {
-    dict.id_by_value(value)
-        .or_else(|| dict.predicate_id_by_value(value))
-        .expect(
-            "PackDict::encode's side-table closure amendment guarantees every reifier/annotation \
-             term (and rdf:reifies, when reifiers are non-empty) resolves to a unified id",
-        )
+    dict.id_by_value(value).expect(
+        "PackDict::encode's side-table closure amendment guarantees every reifier/annotation \
+         term (and rdf:reifies, when reifiers are non-empty) resolves to a unified id",
+    )
 }
 
 /// Verify `map`'s stored values are strictly ascending — the invariant

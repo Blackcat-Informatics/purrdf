@@ -1,61 +1,67 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! A four-section HDT-style value dictionary (Task 2 of the succinct-pack-codec
-//! feature): one unified [`PackTermId`](self)-space (a plain `u64`, 1-based) per
-//! distinct [`TermValue`] scanned from an [`RdfDataset`], PFC-compressed on disk and
-//! decoded into OWNED structures at [`PackDict::open`].
+//! A single, unified PFC value dictionary (Task 2 of the succinct-pack-codec
+//! feature): ONE [`PackTermId`](self) (a plain `u64`, 1-based) per distinct
+//! [`TermValue`] scanned from an [`RdfDataset`] — REGARDLESS of which role
+//! (subject, predicate, object, graph name, literal datatype, triple-term
+//! component, reifier/annotation side-table term) it plays — PFC-compressed on
+//! disk and decoded into OWNED structures at [`PackDict::open`].
 //!
-//! # Id layout
+//! # Id layout: one unified id per distinct value
 //!
-//! Terms are scanned by ROLE from the dataset's base quads (subject / predicate /
-//! object) and partitioned into four disjoint groups. [`encode`](PackDict::encode)
-//! ALSO folds in every term the RDF 1.2 reifier/annotation side-tables reference
-//! (a reifier resource, a reified triple-term, an annotation's predicate/object,
-//! and any of their graph names) that is not already covered by a base-quad role
-//! — see the "auxiliary-value closure" doc on `encode` for the exact mechanism
-//! (Task 4: [`super::side::SideTables`] is the consumer that needs every such
-//! reference to resolve to a unified id):
+//! Every distinct [`TermValue`] the dataset ever references, in ANY position,
+//! gets EXACTLY ONE unified id. Terms sort in the canonical [`TermValue`] order
+//! (`Ord`) and unified ids are assigned `1..=N` by that order. There is no
+//! per-role partitioning: a term that is used as BOTH a predicate and a
+//! subject/object still has exactly one id, and a term used ONLY as a predicate
+//! (a "pure predicate", never a subject or object anywhere) still gets an id —
+//! there is no role for which a term can be "invisible".
 //!
-//! - **shared** — appears as both a subject and an object somewhere (`S ∩ O`).
-//! - **subject_only** — subject, never object.
-//! - **object_only** — object, never subject. This section ALSO absorbs any
-//!   "auxiliary" value that is referenced only structurally — a literal's datatype
-//!   IRI, a triple term's `s`/`p`/`o` component, or a quad's named-graph term (a
-//!   value used ONLY in a quad's `g` slot, never as an S/P/O) — and has no S/P/O
-//!   role of its own (see [`encode`](PackDict::encode)'s doc for the exact closure
-//!   rule). A graph-name value that ALSO plays an S/P/O role keeps its existing id
-//!   from that role; it is never duplicated. This is how [`PackDict::id_by_value`]
-//!   resolves a `GraphMatch::Named` graph-name constant to a unified id (Task 3).
-//! - **predicates** — appears as a predicate. A term that is BOTH a predicate and a
-//!   subject/object gets a separate entry in the predicate section IN ADDITION to
-//!   its shared/subject_only/object_only entry — HDT keeps the predicate id space
-//!   independent, so the same value can carry two distinct unified ids.
+//! This single-id-space design is required by the seam
+//! [`crate::DatasetView::term_id_by_value`] exposes: a caller resolves EVERY
+//! pattern constant (subject, predicate, OR object) through that one
+//! position-agnostic method, and the production `RdfDataset` backend already
+//! mints exactly one [`crate::TermId`] per distinct value, matched in any
+//! triple position. A classic-HDT split (a separate id space for predicates,
+//! as an earlier revision of this module used) is incompatible with that seam:
+//! a pure predicate would resolve to `None` there, and a dual-role term would
+//! resolve to an id that does not match its predicate-position occurrences.
+//! Collapsing to one id space removes that landmine; the triples layer
+//! ([`super::triples`]) does not need a split id space either — it already
+//! remaps every unified id to a dense, per-partition LOCAL id, so the global
+//! id's width/role is irrelevant to triple compression.
 //!
-//! Within a section, terms sort in the canonical [`TermValue`] order (`Ord`); unified
-//! ids are then assigned `1..=N` by concatenating the four sections in the FIXED
-//! order `[shared, subject_only, object_only, predicates]`.
+//! [`encode`](PackDict::encode) folds in every term the dataset references,
+//! including ones with no base-quad S/P/O role of their own:
+//!
+//! - A quad's named-graph term (`g` slot).
+//! - A literal's datatype IRI, and a triple term's `s`/`p`/`o` components
+//!   (structural references — a record holds these by id, not by embedded
+//!   value, so each must have its OWN entry), transitively.
+//! - Every term the RDF 1.2 reifier/annotation side-tables reference (a
+//!   reifier resource, a reified triple-term, an annotation's
+//!   predicate/object, and any of their graph names) — see the
+//!   "auxiliary-value closure" doc on `encode` for the exact mechanism
+//!   (Task 4: [`super::side::SideTables`] is the consumer that needs every
+//!   such reference to resolve to a unified id).
 //!
 //! # Lookup rule (id_by_value vs. predicate_id_by_value)
 //!
-//! A value may hold up to two unified ids (one from `{shared, subject_only,
-//! object_only}`, one from `predicates`). [`PackDict::id_by_value`] searches ONLY the
-//! three non-predicate sections (in that priority order — but they are mutually
-//! exclusive by construction, so there is never more than one hit) and is the
-//! lookup an evaluator uses for a pattern's subject/object constant.
-//! [`PackDict::predicate_id_by_value`] searches ONLY the predicate section, for a
-//! pattern's predicate constant. This mirrors how a value's REFERENCE from inside an
-//! encoded record (a literal's datatype id, a triple term's component ids) is
-//! resolved at encode time: prefer a non-predicate id, fall back to the predicate id
-//! only if the value has no non-predicate role.
+//! [`PackDict::id_by_value`] resolves ANY value — subject, predicate, object,
+//! graph name, or structural reference — to its single unified id.
+//! [`PackDict::predicate_id_by_value`] is kept for source-compatibility with
+//! callers written against the earlier split-id-space design; it now simply
+//! DELEGATES to `id_by_value` (both methods always agree — see
+//! [`predicate_id_by_value`](PackDict::predicate_id_by_value)'s doc). A caller
+//! resolving a pattern's predicate constant may use either method
+//! interchangeably.
 //!
 //! # Seam for later tasks
 //!
-//! This module works entirely in raw `u64` unified ids (`PackTermId` is a plain type
-//! alias here). Task 6's `PackView`/`ViewTermId` newtype wraps these `u64`s; Task 3's
-//! bitmap-triples layer uses the `*_role_to_unified` / `unified_to_*_role`
-//! conversions below to translate between its dense per-role numbering and this
-//! dictionary's unified id space via pure range arithmetic (no stored permutation).
+//! This module works entirely in raw `u64` unified ids (`PackTermId` is a plain
+//! type alias here). Task 6's `PackView`/`ViewTermId` newtype wraps these
+//! `u64`s.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -344,14 +350,15 @@ fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// Per-section PFC encode/decode.
+// PFC encode/decode of the single, unified value list.
 // ---------------------------------------------------------------------------
 
-/// PFC-encode one section's already-sorted term values into a self-contained byte
-/// block: `u64 term_count`, `u64 bucket_count`, a serialized [`IntVector`] of
-/// per-bucket BYTE offsets into the bucket-data stream (so a bucket can be located
-/// without scanning from the start), then the bucket-data stream itself.
-fn encode_section(values: &[TermValue], value_to_id: &FastMap<TermValue, PackTermId>) -> Vec<u8> {
+/// PFC-encode the dictionary's already-sorted term values into a self-contained
+/// byte block: `u64 term_count`, `u64 bucket_count`, a serialized [`IntVector`]
+/// of per-bucket BYTE offsets into the bucket-data stream (so a bucket can be
+/// located without scanning from the start), then the bucket-data stream
+/// itself.
+fn encode_values(values: &[TermValue], value_to_id: &FastMap<TermValue, PackTermId>) -> Vec<u8> {
     let term_count = values.len();
     let bucket_count = term_count.div_ceil(BUCKET_SIZE);
     let mut bucket_data = Vec::new();
@@ -387,11 +394,9 @@ fn encode_section(values: &[TermValue], value_to_id: &FastMap<TermValue, PackTer
     out
 }
 
-/// Decode one PFC section, pushing each entry into `dict` in unified-id order (the
-/// caller is responsible for calling this once per section, in the fixed
-/// `[shared, subject_only, object_only, predicates]` order, so unified ids come out
-/// `1..=n_terms`). Returns the section's term count.
-fn decode_section(bytes: &[u8], dict: &mut PackDict) -> Result<u64, PackDictError> {
+/// Decode the PFC-encoded value list, pushing each entry into `dict` in unified-id
+/// order (`1..=n_terms`). Returns the term count.
+fn decode_values(bytes: &[u8], dict: &mut PackDict) -> Result<u64, PackDictError> {
     let mut pos = 0usize;
     let term_count = read_u64_header(bytes, &mut pos)?;
     let bucket_count = read_u64_header(bytes, &mut pos)?;
@@ -536,52 +541,34 @@ enum DictEntry {
 /// [`EncodedDict::from_bytes`] requires.
 const DICT_FORMAT_VERSION: u8 = 1;
 
-/// The output of [`PackDict::encode`]: the four PFC-encoded section byte blocks plus
-/// their term counts. Self-contained and independently round-trippable via
-/// [`to_bytes`](Self::to_bytes)/[`from_bytes`](Self::from_bytes) — a later container
-/// format (Task 5) frames these bytes alongside its other blocks, or a caller can
-/// treat an `EncodedDict` as a standalone dictionary file.
+/// The output of [`PackDict::encode`]: the single PFC-encoded value-list byte
+/// block plus its term count. Self-contained and independently
+/// round-trippable via [`to_bytes`](Self::to_bytes)/[`from_bytes`](Self::from_bytes)
+/// — a later container format (Task 5) frames these bytes alongside its other
+/// blocks, or a caller can treat an `EncodedDict` as a standalone dictionary
+/// file.
 #[derive(Debug, Clone)]
 pub struct EncodedDict {
-    /// The number of terms in the `shared` (subject ∩ object) section.
-    pub n_shared: u64,
-    /// The number of terms in the `subject_only` section.
-    pub n_subject_only: u64,
-    /// The number of terms in the `object_only` section (including closure-added
-    /// auxiliary values — see the [module docs](self)).
-    pub n_object_only: u64,
-    /// The number of terms in the `predicates` section.
-    pub n_predicates: u64,
-    shared_bytes: Vec<u8>,
-    subject_only_bytes: Vec<u8>,
-    object_only_bytes: Vec<u8>,
-    predicates_bytes: Vec<u8>,
+    /// The total number of unified ids this dictionary mints — one per
+    /// distinct [`TermValue`] the dataset references, in ANY role.
+    pub n_terms: u64,
+    values_bytes: Vec<u8>,
 }
 
 impl EncodedDict {
-    /// The total number of unified ids this dictionary mints (`n_shared +
-    /// n_subject_only + n_object_only + n_predicates`).
+    /// The total number of unified ids this dictionary mints.
     #[must_use]
     pub fn n_terms(&self) -> u64 {
-        self.n_shared + self.n_subject_only + self.n_object_only + self.n_predicates
+        self.n_terms
     }
 
-    /// Serialize to the self-contained, versioned on-disk form: a 1-byte version tag,
-    /// then the four sections in fixed order, each as an 8-byte LE length prefix
-    /// followed by that many bytes.
+    /// Serialize to the self-contained, versioned on-disk form: a 1-byte version tag
+    /// followed by the PFC-encoded value-list bytes.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(1 + self.values_bytes.len());
         out.push(DICT_FORMAT_VERSION);
-        for section in [
-            &self.shared_bytes,
-            &self.subject_only_bytes,
-            &self.object_only_bytes,
-            &self.predicates_bytes,
-        ] {
-            out.extend_from_slice(&(section.len() as u64).to_le_bytes());
-            out.extend_from_slice(section);
-        }
+        out.extend_from_slice(&self.values_bytes);
         out
     }
 
@@ -590,7 +577,7 @@ impl EncodedDict {
     /// # Errors
     ///
     /// [`PackDictError::Truncated`]/[`PackDictError::Malformed`] on a short buffer,
-    /// an unsupported version tag, or a section whose own header is inconsistent.
+    /// an unsupported version tag, or a header whose own fields are inconsistent.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PackDictError> {
         let version = *bytes.first().ok_or(PackDictError::Truncated {
             needed: 1,
@@ -599,70 +586,42 @@ impl EncodedDict {
         if version != DICT_FORMAT_VERSION {
             return Err(PackDictError::Malformed("dict: unsupported format version"));
         }
-        let mut pos = 1usize;
-        let mut sections: [Vec<u8>; 4] = Default::default();
-        for section in &mut sections {
-            let len = read_u64_header(bytes, &mut pos)? as usize;
-            let end = pos + len;
-            let slice = bytes.get(pos..end).ok_or(PackDictError::Truncated {
-                needed: end,
-                found: bytes.len(),
-            })?;
-            *section = slice.to_vec();
-            pos = end;
-        }
-        let [
-            shared_bytes,
-            subject_only_bytes,
-            object_only_bytes,
-            predicates_bytes,
-        ] = sections;
-        let n_shared = peek_term_count(&shared_bytes)?;
-        let n_subject_only = peek_term_count(&subject_only_bytes)?;
-        let n_object_only = peek_term_count(&object_only_bytes)?;
-        let n_predicates = peek_term_count(&predicates_bytes)?;
+        let values_bytes = bytes[1..].to_vec();
+        let n_terms = peek_term_count(&values_bytes)?;
         Ok(Self {
-            n_shared,
-            n_subject_only,
-            n_object_only,
-            n_predicates,
-            shared_bytes,
-            subject_only_bytes,
-            object_only_bytes,
-            predicates_bytes,
+            n_terms,
+            values_bytes,
         })
     }
 
-    /// Decode all four PFC sections into an owned [`PackDict`], ready for
+    /// Decode the PFC value list into an owned [`PackDict`], ready for
     /// [`resolve`](PackDict::resolve)/[`id_by_value`](PackDict::id_by_value) queries.
     ///
     /// # Errors
     ///
-    /// [`PackDictError`] if a section is malformed, truncated, or contains an
+    /// [`PackDictError`] if the buffer is malformed, truncated, or contains an
     /// out-of-range id reference.
     pub fn decode(&self) -> Result<PackDict, PackDictError> {
         let mut dict = PackDict {
-            n_shared: 0,
-            n_subject_only: 0,
-            n_object_only: 0,
-            n_predicates: 0,
             arena: Vec::new(),
             entries: Vec::new(),
         };
-        dict.n_shared = decode_section(&self.shared_bytes, &mut dict)?;
-        dict.n_subject_only = decode_section(&self.subject_only_bytes, &mut dict)?;
-        dict.n_object_only = decode_section(&self.object_only_bytes, &mut dict)?;
-        dict.n_predicates = decode_section(&self.predicates_bytes, &mut dict)?;
+        let decoded = decode_values(&self.values_bytes, &mut dict)?;
+        if decoded != self.n_terms {
+            return Err(PackDictError::Malformed(
+                "dict: decoded term count disagrees with the header",
+            ));
+        }
         dict.validate_references()?;
         Ok(dict)
     }
 }
 
-/// Peek a PFC section's own leading `u64 term_count` header field without decoding
-/// its records.
-fn peek_term_count(section_bytes: &[u8]) -> Result<u64, PackDictError> {
+/// Peek the value list's own leading `u64 term_count` header field without
+/// decoding its records.
+fn peek_term_count(values_bytes: &[u8]) -> Result<u64, PackDictError> {
     let mut pos = 0usize;
-    read_u64_header(section_bytes, &mut pos)
+    read_u64_header(values_bytes, &mut pos)
 }
 
 // ---------------------------------------------------------------------------
@@ -672,14 +631,9 @@ fn peek_term_count(section_bytes: &[u8]) -> Result<u64, PackDictError> {
 /// The decoded, query-ready value dictionary: one unified [`PackTermId`] per
 /// distinct [`TermValue`], resolved from an owned byte arena + entry table built by
 /// [`EncodedDict::decode`]/[`PackDict::open`]. See the [module docs](self) for the
-/// four-section id layout and the `id_by_value` vs. `predicate_id_by_value` lookup
-/// rule.
+/// single-id-space model and the `id_by_value`/`predicate_id_by_value` equivalence.
 #[derive(Debug, Clone)]
 pub struct PackDict {
-    n_shared: u64,
-    n_subject_only: u64,
-    n_object_only: u64,
-    n_predicates: u64,
     /// The byte arena owning every interned string ONCE; entries hold ranges.
     arena: Vec<u8>,
     /// Dense table of decoded entries; unified id `i` (1-based) lives at
@@ -688,9 +642,9 @@ pub struct PackDict {
 }
 
 impl PackDict {
-    /// Scan `dataset`'s base quads and build the four-section dictionary (see the
-    /// [module docs](self) for the exact section rule), returning the PFC-encoded,
-    /// not-yet-parsed [`EncodedDict`].
+    /// Scan `dataset`'s base quads and build the unified dictionary (see the
+    /// [module docs](self) for the exact id-assignment rule), returning the
+    /// PFC-encoded, not-yet-parsed [`EncodedDict`].
     ///
     /// # The auxiliary-value closure
     ///
@@ -698,123 +652,76 @@ impl PackDict {
     /// hold their OWN unified id (records reference them by id, not by embedded
     /// value), but they do not necessarily appear as a subject/predicate/object of
     /// any base quad (e.g. `xsd:integer` as a literal's datatype is rarely itself a
-    /// triple's subject or object). After the base S/P/O role scan, this method
-    /// computes the closure of every such auxiliary reference, transitively (an
-    /// auxiliary value can itself be a literal or a nested triple term), and folds
-    /// any NOT already present in one of the four sections into `object_only`. A
-    /// value already present anywhere keeps its existing id and is never duplicated.
+    /// triple's subject or object). After the base-role scan, this method computes
+    /// the closure of every such auxiliary reference, transitively (an auxiliary
+    /// value can itself be a literal or a nested triple term), folding in any value
+    /// not already collected. A value already present keeps its existing id and is
+    /// never duplicated.
     #[must_use]
     pub fn encode(dataset: &RdfDataset) -> EncodedDict {
-        // Step 1: base S/P/O role sets, by TermId (cheap membership tests), from the
-        // base quads only. Also collect the distinct set of graph-name TermIds (a
-        // quad's `g` slot) — see the graph-name amendment in Step 2 below.
-        let mut subj_ids: IdSet = IdSet::default();
-        let mut pred_ids: IdSet = IdSet::default();
-        let mut obj_ids: IdSet = IdSet::default();
-        let mut graph_ids: IdSet = IdSet::default();
+        // Step 1: every distinct term id used in ANY base-quad role — subject,
+        // predicate, object, or graph name — collapsed into ONE set (this is
+        // the crux of the single-id-space fix: unlike an HDT-style split, a
+        // predicate and a subject/object share the very same membership test).
+        let mut base_ids: IdSet = IdSet::default();
         for q in dataset.quads() {
-            subj_ids.insert(q.s);
-            pred_ids.insert(q.p);
-            obj_ids.insert(q.o);
+            base_ids.insert(q.s);
+            base_ids.insert(q.p);
+            base_ids.insert(q.o);
             if let Some(g) = q.g {
-                graph_ids.insert(g);
+                base_ids.insert(g);
             }
         }
-
-        let mut shared: Vec<TermValue> = subj_ids
-            .intersection(&obj_ids)
-            .map(|&id| dataset.term_value(id))
-            .collect();
-        let mut subject_only: Vec<TermValue> = subj_ids
-            .difference(&obj_ids)
-            .map(|&id| dataset.term_value(id))
-            .collect();
-        let mut object_only: Vec<TermValue> = obj_ids
-            .difference(&subj_ids)
-            .map(|&id| dataset.term_value(id))
-            .collect();
-        let mut predicates: Vec<TermValue> =
-            pred_ids.iter().map(|&id| dataset.term_value(id)).collect();
-        // Sorted (not merely deterministic-order) so the graph-name fold-in below can
-        // walk it in canonical order like every other base-role Vec.
-        let mut graph_values: Vec<TermValue> =
-            graph_ids.iter().map(|&id| dataset.term_value(id)).collect();
-
-        shared.sort();
-        subject_only.sort();
-        object_only.sort();
-        predicates.sort();
-        graph_values.sort();
+        let mut values: Vec<TermValue> =
+            base_ids.iter().map(|&id| dataset.term_value(id)).collect();
 
         // Step 1.5 (Task 4 amendment): RDF 1.2 side-table term closure roots. A
         // reifier row (`reifier, triple-term, graph`) and an annotation row
         // (`reifier, predicate, object, graph`) may reference terms that hold NO
-        // base-quad S/P/O role at all — e.g. a reifier resource that is never
-        // itself a triple's subject/object. Collect every such reference here as
-        // an ADDITIONAL closure root, folded into the dictionary below by the
-        // exact same worklist the graph-name fold-in already uses, so
-        // [`super::side::SideTables`] always finds a unified id for every
-        // side-table reference it needs to resolve. A referenced triple term's
-        // own `s`/`p`/`o` components are handled transitively by the shared
-        // `while qi < queue.len()` worklist loop below — a `TermValue::Triple`
-        // entry always expands its components there, whatever put it in the
-        // queue.
-        let mut side_values: Vec<TermValue> = Vec::new();
+        // base-quad role at all — e.g. a reifier resource that is never itself a
+        // triple's subject/object. Collect every such reference here as an
+        // ADDITIONAL root, so [`super::side::SideTables`] always finds a unified
+        // id for every side-table reference it needs to resolve. A referenced
+        // triple term's own `s`/`p`/`o` components are handled transitively by
+        // the shared `while qi < queue.len()` worklist loop below — a
+        // `TermValue::Triple` entry always expands its components there,
+        // whatever put it in the queue.
         for (reifier, triple, graph) in dataset.reifiers_with_graph() {
-            side_values.push(dataset.term_value(reifier));
-            side_values.push(dataset.term_value(triple));
+            values.push(dataset.term_value(reifier));
+            values.push(dataset.term_value(triple));
             if let Some(g) = graph {
-                side_values.push(dataset.term_value(g));
+                values.push(dataset.term_value(g));
             }
         }
         for (reifier, pred, obj, graph) in dataset.annotations_with_graph() {
-            side_values.push(dataset.term_value(reifier));
-            side_values.push(dataset.term_value(pred));
-            side_values.push(dataset.term_value(obj));
+            values.push(dataset.term_value(reifier));
+            values.push(dataset.term_value(pred));
+            values.push(dataset.term_value(obj));
             if let Some(g) = graph {
-                side_values.push(dataset.term_value(g));
+                values.push(dataset.term_value(g));
             }
         }
         // The `rdf:reifies` indirection predicate itself: see the [`RDF_REIFIES`]
         // doc comment for why it must be folded in on the SAME condition
         // (reifiers non-empty) the ingest path uses to intern it.
         if dataset.reifiers_with_graph().next().is_some() {
-            side_values.push(TermValue::Iri(RDF_REIFIES.to_owned()));
+            values.push(TermValue::Iri(RDF_REIFIES.to_owned()));
         }
-        side_values.sort();
-        side_values.dedup();
 
-        // Step 2: closure over auxiliary references (literal datatypes, triple
-        // components) not already covered by a base role, PLUS graph-name terms (a
-        // quad's `g` slot) and side-table terms (Step 1.5, above) not already
-        // covered by a base S/P/O role — see the "Graph-name terms" note in the
-        // [module docs](self). A graph-name/side-table value already present under
-        // some role keeps its existing id (no new entry); one with no other role
-        // is folded into `object_only`, using the exact same worklist/dedup
-        // machinery as the literal-datatype/triple-component closure (so a
-        // spec-illegal nested graph-name value, were one ever produced, would
-        // still be handled correctly). Deterministic regardless of hash-set
-        // iteration order: every worklist source here is an already-sorted Vec, and
-        // the result is re-sorted before use — no hash-iteration order ever reaches
-        // the output (byte-determinism discipline).
-        let mut present: FastSet<TermValue> = FastSet::default();
-        let mut queue: Vec<TermValue> = Vec::new();
-        for v in shared
-            .iter()
-            .chain(subject_only.iter())
-            .chain(object_only.iter())
-            .chain(predicates.iter())
-        {
-            present.insert(v.clone());
-            queue.push(v.clone());
-        }
+        // Deterministic regardless of hash-set iteration order: `values` is
+        // sorted+deduped here (and again after the closure step below) before
+        // any id is assigned — no hash-iteration order ever reaches the output
+        // (byte-determinism discipline).
+        values.sort();
+        values.dedup();
+
+        // Step 2: closure over auxiliary structural references (literal
+        // datatypes, triple components) not already collected — transitively,
+        // since an auxiliary value can itself be a literal or a nested triple
+        // term.
+        let mut present: FastSet<TermValue> = values.iter().cloned().collect();
+        let mut queue: Vec<TermValue> = values.clone();
         let mut extra: Vec<TermValue> = Vec::new();
-        for v in graph_values.iter().chain(side_values.iter()) {
-            if present.insert(v.clone()) {
-                extra.push(v.clone());
-                queue.push(v.clone());
-            }
-        }
         let mut qi = 0usize;
         while qi < queue.len() {
             let current = queue[qi].clone();
@@ -839,32 +746,19 @@ impl PackDict {
             }
             qi += 1;
         }
-        extra.sort();
-        object_only.extend(extra);
-        object_only.sort();
+        values.extend(extra);
+        values.sort();
+        values.dedup();
 
-        // Step 3: assign unified ids 1..=N in fixed section order, and build the
-        // encode-time reference map (first-section-wins: shared > subject_only >
-        // object_only > predicates — the SAME priority id_by_value's lookup uses).
+        // Step 3: assign unified ids 1..=N in canonical TermValue order.
         let mut value_to_id: FastMap<TermValue, PackTermId> = FastMap::default();
-        let mut next_id: PackTermId = 1;
-        for section in [&shared, &subject_only, &object_only, &predicates] {
-            for v in section {
-                let id = next_id;
-                next_id += 1;
-                value_to_id.entry(v.clone()).or_insert(id);
-            }
+        for (i, v) in values.iter().enumerate() {
+            value_to_id.insert(v.clone(), (i + 1) as PackTermId);
         }
 
         EncodedDict {
-            n_shared: shared.len() as u64,
-            n_subject_only: subject_only.len() as u64,
-            n_object_only: object_only.len() as u64,
-            n_predicates: predicates.len() as u64,
-            shared_bytes: encode_section(&shared, &value_to_id),
-            subject_only_bytes: encode_section(&subject_only, &value_to_id),
-            object_only_bytes: encode_section(&object_only, &value_to_id),
-            predicates_bytes: encode_section(&predicates, &value_to_id),
+            n_terms: values.len() as u64,
+            values_bytes: encode_values(&values, &value_to_id),
         }
     }
 
@@ -879,35 +773,11 @@ impl PackDict {
         EncodedDict::from_bytes(bytes)?.decode()
     }
 
-    /// The number of terms in the `shared` section.
-    #[must_use]
-    pub fn n_shared(&self) -> u64 {
-        self.n_shared
-    }
-
-    /// The number of terms in the `subject_only` section.
-    #[must_use]
-    pub fn n_subject_only(&self) -> u64 {
-        self.n_subject_only
-    }
-
-    /// The number of terms in the `object_only` section (including closure-added
-    /// auxiliary values).
-    #[must_use]
-    pub fn n_object_only(&self) -> u64 {
-        self.n_object_only
-    }
-
-    /// The number of terms in the `predicates` section.
-    #[must_use]
-    pub fn n_predicates(&self) -> u64 {
-        self.n_predicates
-    }
-
-    /// The total number of unified ids this dictionary mints.
+    /// The total number of unified ids this dictionary mints — one per distinct
+    /// [`TermValue`] the dataset references, in ANY role.
     #[must_use]
     pub fn n_terms(&self) -> u64 {
-        self.n_shared + self.n_subject_only + self.n_object_only + self.n_predicates
+        self.entries.len() as u64
     }
 
     /// `true` iff at least one dictionary entry is an RDF 1.2 triple term (quoted
@@ -915,9 +785,8 @@ impl PackDict {
     /// (`terms.iter().any(|t| matches!(t, InternedTerm::Triple { .. }))`), but
     /// scoped to this dictionary's entries (every triple term that is reachable
     /// from a base quad, a literal datatype, another triple term, a graph name, or
-    /// — after the Task 4 amendment — an RDF 1.2 reifier/annotation side-table
-    /// reference; see [`encode`](Self::encode)). Used by
-    /// [`super::side::capabilities`].
+    /// an RDF 1.2 reifier/annotation side-table reference; see
+    /// [`encode`](Self::encode)). Used by [`super::side::capabilities`].
     #[must_use]
     pub fn has_triple_term(&self) -> bool {
         self.entries
@@ -1034,20 +903,17 @@ impl PackDict {
         }
     }
 
-    /// Binary-search a contiguous unified-id range `[first_id, first_id + count)` for
-    /// `value`, using [`term_value`](Self::term_value) as the (canonically-ordered)
-    /// comparator. `O(log count)` calls to `term_value`, each `O(term depth)`.
-    fn search_section(
-        &self,
-        first_id: PackTermId,
-        count: u64,
-        value: &TermValue,
-    ) -> Option<PackTermId> {
+    /// The unified id of `value`, searching the WHOLE dictionary (there is only
+    /// one id space — see the [module docs](self)). `None` if `value` was never
+    /// interned by [`encode`](Self::encode). `O(log n_terms)`, using
+    /// [`term_value`](Self::term_value) as the (canonically-ordered) comparator.
+    #[must_use]
+    pub fn id_by_value(&self, value: &TermValue) -> Option<PackTermId> {
         let mut lo = 0u64;
-        let mut hi = count;
+        let mut hi = self.n_terms();
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            let id = first_id + mid;
+            let id = mid + 1;
             match self.term_value(id).cmp(value) {
                 Ordering::Less => lo = mid + 1,
                 Ordering::Greater => hi = mid,
@@ -1057,43 +923,23 @@ impl PackDict {
         None
     }
 
-    /// The unified id of `value`, searching ONLY the non-predicate sections (`shared`,
-    /// `subject_only`, `object_only` — mutually exclusive by construction, so at most
-    /// one search hits). `None` if `value` has no non-predicate role in this
-    /// dictionary (it may still have a predicate-only id — see
-    /// [`predicate_id_by_value`](Self::predicate_id_by_value)). This is the lookup an
-    /// evaluator uses for a pattern's subject/object constant; see the
-    /// [module docs](self) for the full rule.
-    #[must_use]
-    pub fn id_by_value(&self, value: &TermValue) -> Option<PackTermId> {
-        self.search_section(1, self.n_shared, value)
-            .or_else(|| self.search_section(self.n_shared + 1, self.n_subject_only, value))
-            .or_else(|| {
-                self.search_section(
-                    self.n_shared + self.n_subject_only + 1,
-                    self.n_object_only,
-                    value,
-                )
-            })
-    }
-
-    /// The unified id of `value` in the `predicates` section ONLY. `None` if `value`
-    /// is never used as a predicate in this dictionary. This is the lookup an
-    /// evaluator uses for a pattern's predicate constant; see the
-    /// [module docs](self) for the full rule.
+    /// The unified id of `value` in its predicate role. Kept for
+    /// source-compatibility with callers written against an earlier
+    /// split-id-space design; this dictionary mints exactly ONE id per value
+    /// regardless of role, so this method now simply DELEGATES to
+    /// [`id_by_value`](Self::id_by_value) — the two are always equal for every
+    /// `value`, including a "pure predicate" (a value used ONLY as a predicate,
+    /// never a subject or object), which now resolves here too instead of
+    /// yielding `None`. See the [module docs](self).
     #[must_use]
     pub fn predicate_id_by_value(&self, value: &TermValue) -> Option<PackTermId> {
-        self.search_section(
-            self.n_shared + self.n_subject_only + self.n_object_only + 1,
-            self.n_predicates,
-            value,
-        )
+        self.id_by_value(value)
     }
 
     /// Validate that every decoded id reference (a literal's datatype, a triple
     /// term's `s`/`p`/`o`) falls within `1..=n_terms()`. Called once by
-    /// [`EncodedDict::decode`] after all four sections are decoded (id ranges are
-    /// only fully known once the whole dictionary is assembled).
+    /// [`EncodedDict::decode`] after the value list is fully decoded (id ranges
+    /// are only fully known once the whole dictionary is assembled).
     fn validate_references(&self) -> Result<(), PackDictError> {
         let n = self.n_terms();
         let in_range = |id: PackTermId| id >= 1 && id <= n;
@@ -1115,92 +961,6 @@ impl PackDict {
             }
         }
         Ok(())
-    }
-
-    // -- Role-id <-> unified-id conversions (pure range arithmetic; Task 3) -------
-    //
-    // Dense per-role numbering is 0-based; unified ids are 1-based. See the
-    // [module docs](self) for why the object-role range splits into two blocks
-    // (the shared prefix, then the object_only block after subject_only).
-
-    /// Subject-role dense id `r` (`0..n_shared() + n_subject_only()`) → unified id.
-    ///
-    /// # Panics
-    ///
-    /// Debug-asserts `r` is in range.
-    #[must_use]
-    pub fn subject_role_to_unified(&self, r: u64) -> PackTermId {
-        debug_assert!(r < self.n_shared + self.n_subject_only);
-        r + 1
-    }
-
-    /// The inverse of [`subject_role_to_unified`](Self::subject_role_to_unified):
-    /// `None` if `u` does not address a subject-role entry (i.e. it is a
-    /// `predicates`-only or `object_only`-only unified id).
-    #[must_use]
-    pub fn unified_to_subject_role(&self, u: PackTermId) -> Option<u64> {
-        if u >= 1 && u <= self.n_shared + self.n_subject_only {
-            Some(u - 1)
-        } else {
-            None
-        }
-    }
-
-    /// Object-role dense id `r` (`0..n_shared() + n_object_only()`) → unified id.
-    /// `r < n_shared()` addresses the shared prefix (unified `r + 1`); otherwise it
-    /// addresses the `object_only` block, which sits AFTER `subject_only` in the
-    /// unified space, so the id jumps over it.
-    ///
-    /// # Panics
-    ///
-    /// Debug-asserts `r` is in range.
-    #[must_use]
-    pub fn object_role_to_unified(&self, r: u64) -> PackTermId {
-        debug_assert!(r < self.n_shared + self.n_object_only);
-        if r < self.n_shared {
-            r + 1
-        } else {
-            self.n_shared + self.n_subject_only + (r - self.n_shared) + 1
-        }
-    }
-
-    /// The inverse of [`object_role_to_unified`](Self::object_role_to_unified):
-    /// `None` if `u` does not address an object-role entry (i.e. it is a
-    /// `subject_only`-only or `predicates`-only unified id).
-    #[must_use]
-    pub fn unified_to_object_role(&self, u: PackTermId) -> Option<u64> {
-        if u >= 1 && u <= self.n_shared {
-            Some(u - 1)
-        } else if u > self.n_shared + self.n_subject_only
-            && u <= self.n_shared + self.n_subject_only + self.n_object_only
-        {
-            Some(self.n_shared + (u - (self.n_shared + self.n_subject_only) - 1))
-        } else {
-            None
-        }
-    }
-
-    /// Predicate-role dense id `r` (`0..n_predicates()`) → unified id.
-    ///
-    /// # Panics
-    ///
-    /// Debug-asserts `r` is in range.
-    #[must_use]
-    pub fn predicate_role_to_unified(&self, r: u64) -> PackTermId {
-        debug_assert!(r < self.n_predicates);
-        self.n_shared + self.n_subject_only + self.n_object_only + r + 1
-    }
-
-    /// The inverse of [`predicate_role_to_unified`](Self::predicate_role_to_unified):
-    /// `None` if `u` does not address a predicate-role entry.
-    #[must_use]
-    pub fn unified_to_predicate_role(&self, u: PackTermId) -> Option<u64> {
-        let base = self.n_shared + self.n_subject_only + self.n_object_only;
-        if u > base && u <= base + self.n_predicates {
-            Some(u - base - 1)
-        } else {
-            None
-        }
     }
 }
 
@@ -1265,7 +1025,7 @@ mod tests {
         let dataset = build_dataset(&[(iri("s"), iri("p"), iri("o"))]);
         let encoded = PackDict::encode(&dataset);
         let dict = PackDict::open(&encoded.to_bytes()).expect("opens");
-        let id = dict.id_by_value(&iri("s")).expect("subject_only present");
+        let id = dict.id_by_value(&iri("s")).expect("present");
         assert_eq!(dict.term_value(id), iri("s"));
         assert_eq!(dict.resolve(id), TermRef::Iri("http://example.org/s"));
     }
@@ -1340,7 +1100,7 @@ mod tests {
         assert_eq!(dict.term_value(id), outer);
     }
 
-    // -- Section boundary arithmetic edge cases ----------------------------------
+    // -- Unified id-space invariants ----------------------------------------------
 
     #[test]
     fn empty_dataset_yields_empty_dictionary() {
@@ -1354,58 +1114,85 @@ mod tests {
     }
 
     #[test]
-    fn single_subject_only_term() {
-        // "s" is never an object anywhere, so it is subject_only, not shared.
+    fn every_distinct_value_gets_exactly_one_id() {
+        // "s"/"p"/"o" are three distinct terms; the unified dictionary must mint
+        // exactly three ids, one per value, regardless of role.
         let dataset = build_dataset(&[(iri("s"), iri("p"), iri("o"))]);
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
-        assert_eq!(dict.n_shared(), 0);
-        assert_eq!(dict.n_subject_only(), 1);
-        assert_eq!(dict.n_object_only(), 1);
-        assert_eq!(dict.n_predicates(), 1);
-        let id = dict.id_by_value(&iri("s")).expect("present");
-        // subject_only is the second section (after the empty shared section), so
-        // its first (only) entry is unified id 1.
-        assert_eq!(id, 1);
+        assert_eq!(dict.n_terms(), 3);
+        let mut ids: Vec<PackTermId> = [iri("s"), iri("p"), iri("o")]
+            .iter()
+            .map(|v| dict.id_by_value(v).expect("present"))
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(
+            ids,
+            vec![1, 2, 3],
+            "three distinct values, three distinct ids"
+        );
     }
 
     #[test]
-    fn shared_term_appears_once_in_shared_section() {
-        // "x" is a subject in the first triple and an object in the second: shared.
+    fn a_value_used_as_both_subject_and_object_gets_one_id() {
+        // "x" is a subject in the first triple and an object in the second; the
+        // unified dictionary must mint it exactly ONE id (no more, no less).
         let dataset = build_dataset(&[
             (iri("x"), iri("p"), iri("o1")),
             (iri("s1"), iri("p"), iri("x")),
         ]);
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
-        assert_eq!(dict.n_shared(), 1);
+        // Distinct values: x, p, o1, s1 -> 4 ids total.
+        assert_eq!(dict.n_terms(), 4);
         let id = dict.id_by_value(&iri("x")).expect("present");
-        assert_eq!(id, 1, "shared is the first section");
+        assert_eq!(dict.term_value(id), iri("x"));
     }
 
     #[test]
-    fn predicate_that_is_also_object_gets_two_ids() {
-        // "p" is used as a predicate in one triple and as an object in another: it
-        // must get a unified id from BOTH the predicates section and the
-        // object_only section.
+    fn predicate_that_is_also_object_shares_one_unified_id() {
+        // "p" is used as a predicate in one triple and as an object in another.
+        // Under the earlier split-id-space design this minted TWO distinct ids;
+        // the unified design must mint exactly ONE, resolvable via either
+        // lookup method.
         let dataset = build_dataset(&[
             (iri("s"), iri("p"), iri("o")),
             (iri("s2"), iri("about"), iri("p")),
         ]);
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
-        let non_predicate_id = dict.id_by_value(&iri("p")).expect("object-role id present");
-        let predicate_id = dict
+        let via_id_by_value = dict.id_by_value(&iri("p")).expect("present");
+        let via_predicate_id_by_value = dict
             .predicate_id_by_value(&iri("p"))
-            .expect("predicate-role id present");
-        assert_ne!(non_predicate_id, predicate_id);
-        assert_eq!(dict.term_value(non_predicate_id), iri("p"));
-        assert_eq!(dict.term_value(predicate_id), iri("p"));
+            .expect("present via the predicate-role lookup too");
+        assert_eq!(
+            via_id_by_value, via_predicate_id_by_value,
+            "id_by_value and predicate_id_by_value must agree: one unified id space"
+        );
+        assert_eq!(dict.term_value(via_id_by_value), iri("p"));
     }
 
     #[test]
-    fn graph_only_term_gets_unified_id_in_object_only() {
+    fn pure_predicate_resolves_via_id_by_value() {
+        // "q" is used ONLY as a predicate, never a subject or object. Under the
+        // earlier split-id-space design `id_by_value` returned `None` for it —
+        // exactly the seam-breaking bug this fix eliminates.
+        let dataset = build_dataset(&[(iri("s"), iri("q"), iri("o"))]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        let id = dict
+            .id_by_value(&iri("q"))
+            .expect("a pure predicate must resolve via id_by_value");
+        assert_eq!(
+            dict.predicate_id_by_value(&iri("q")),
+            Some(id),
+            "predicate_id_by_value must agree with id_by_value"
+        );
+        assert_eq!(dict.term_value(id), iri("q"));
+    }
+
+    #[test]
+    fn graph_only_term_gets_a_unified_id() {
         // "g" appears ONLY as a quad's graph-name slot — never as a subject,
-        // predicate, or object — so the graph-name amendment must still mint it a
-        // unified id (folded into `object_only`) and round-trip it via
-        // `id_by_value`/`term_value`, with no spurious predicate-role id.
+        // predicate, or object — so it must still mint a unified id and round-trip
+        // via `id_by_value`/`term_value`, agreeing with `predicate_id_by_value`.
         let mut b = RdfDatasetBuilder::new();
         let s = intern_value(&mut b, &iri("s"));
         let p = intern_value(&mut b, &iri("p"));
@@ -1415,20 +1202,18 @@ mod tests {
         let dataset = b.freeze().expect("valid dataset");
 
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
-        assert_eq!(dict.n_object_only(), 2, "\"o\" and the graph-only \"g\"");
+        assert_eq!(dict.n_terms(), 4, "s, p, o, and the graph-only g");
         let id = dict
             .id_by_value(&iri("g"))
             .expect("graph-name term present");
         assert_eq!(dict.term_value(id), iri("g"));
-        // "g" plays no predicate role anywhere, so it must not hold a predicate id.
-        assert_eq!(dict.predicate_id_by_value(&iri("g")), None);
+        assert_eq!(dict.predicate_id_by_value(&iri("g")), Some(id));
     }
 
     #[test]
     fn graph_name_that_is_also_subject_keeps_its_existing_id() {
         // "g" names the graph of the second quad AND is the subject of the first
-        // quad: it must get exactly ONE non-predicate unified id (its
-        // subject_only/shared id), not a second duplicate object_only entry.
+        // quad: it must get exactly ONE unified id, not a second duplicate entry.
         let mut b = RdfDatasetBuilder::new();
         let g = intern_value(&mut b, &iri("g"));
         let p = intern_value(&mut b, &iri("p"));
@@ -1440,11 +1225,9 @@ mod tests {
         let dataset = b.freeze().expect("valid dataset");
 
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
-        // "g" and "s2" are both subjects, never objects, so subject_only holds
-        // exactly those two — the graph-name fold-in must not have ALSO placed "g"
-        // in object_only as a duplicate entry.
-        assert_eq!(dict.n_subject_only(), 2);
-        assert_eq!(dict.n_object_only(), 2, "\"o1\" and \"o2\" only");
+        // Distinct values: g, p, o1, s2, o2 -> 5 ids total, NOT 6 (which a
+        // duplicate graph-name entry would produce).
+        assert_eq!(dict.n_terms(), 5);
         let id = dict
             .id_by_value(&iri("g"))
             .expect("present via its subject role");
@@ -1454,10 +1237,10 @@ mod tests {
     #[test]
     fn reifier_only_term_gets_unified_id_via_side_table_closure() {
         // The reifier resource and the reified triple-term both hold NO base-quad
-        // S/P/O role: the reifier binds `<< s p o >>` PURELY as a side-table row (no
+        // role: the reifier binds `<< s p o >>` PURELY as a side-table row (no
         // base quad is ever pushed — reification lives entirely in the side table).
-        // The Task 4 amendment must still fold both into the dictionary (into
-        // `object_only`, having no other role) and round-trip them.
+        // The Task 4 amendment must still fold both into the dictionary and
+        // round-trip them.
         let mut b = RdfDatasetBuilder::new();
         let s = intern_value(&mut b, &iri("s"));
         let p = intern_value(&mut b, &iri("p"));
@@ -1507,6 +1290,9 @@ mod tests {
             .id_by_value(&iri("confidence"))
             .expect("annotation predicate present via the side table");
         assert_eq!(dict.term_value(ap_id), iri("confidence"));
+        // "confidence" is used as this annotation's predicate and NOWHERE else,
+        // so it is a "pure predicate" too — must resolve identically both ways.
+        assert_eq!(dict.predicate_id_by_value(&iri("confidence")), Some(ap_id));
     }
 
     #[test]
@@ -1528,11 +1314,11 @@ mod tests {
             .id_by_value(&TermValue::Iri(RDF_REIFIES.to_owned()))
             .expect("rdf:reifies present when reifiers are non-empty");
         assert_eq!(dict.term_value(id), TermValue::Iri(RDF_REIFIES.to_owned()));
-        // It plays no predicate role anywhere, so it must not ALSO hold a
-        // predicate-section id (mirrors `graph_only_term_gets_unified_id_in_object_only`).
+        // `rdf:reifies` is itself used purely as a predicate (via `side.rs`'s
+        // synthesized reifier rows) — the predicate-role lookup must agree.
         assert_eq!(
             dict.predicate_id_by_value(&TermValue::Iri(RDF_REIFIES.to_owned())),
-            None
+            Some(id)
         );
     }
 
@@ -1552,36 +1338,6 @@ mod tests {
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
         assert_eq!(dict.id_by_value(&iri("never-interned")), None);
         assert_eq!(dict.predicate_id_by_value(&iri("never-interned")), None);
-    }
-
-    #[test]
-    fn role_conversions_round_trip_and_reject_foreign_ranges() {
-        let dataset = build_dataset(&[
-            (iri("x"), iri("p"), iri("o1")), // x: subject
-            (iri("s1"), iri("p"), iri("x")), // x: also object -> shared
-            (iri("s2"), iri("p"), iri("only-object")),
-            (iri("only-subject"), iri("p"), iri("o2")),
-        ]);
-        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
-
-        for r in 0..dict.n_shared() + dict.n_subject_only() {
-            let u = dict.subject_role_to_unified(r);
-            assert_eq!(dict.unified_to_subject_role(u), Some(r));
-        }
-        for r in 0..dict.n_shared() + dict.n_object_only() {
-            let u = dict.object_role_to_unified(r);
-            assert_eq!(dict.unified_to_object_role(u), Some(r));
-        }
-        for r in 0..dict.n_predicates() {
-            let u = dict.predicate_role_to_unified(r);
-            assert_eq!(dict.unified_to_predicate_role(u), Some(r));
-        }
-
-        // A unified id that lives purely in subject_only must not answer as an
-        // object-role id (unless it happens to also be < n_shared, which the fixture
-        // avoids by construction: subject_only ids are all > n_shared).
-        let subject_only_unified = dict.n_shared() + 1; // first subject_only id
-        assert!(dict.unified_to_object_role(subject_only_unified).is_none());
     }
 
     #[test]
@@ -1682,50 +1438,28 @@ mod tests {
             let dict = PackDict::open(&bytes).expect("round trip parses");
 
             prop_assert_eq!(dict.n_terms(), encoded.n_terms());
-            prop_assert_eq!(dict.n_shared(), encoded.n_shared);
-            prop_assert_eq!(dict.n_subject_only(), encoded.n_subject_only);
-            prop_assert_eq!(dict.n_object_only(), encoded.n_object_only);
-            prop_assert_eq!(dict.n_predicates(), encoded.n_predicates);
 
             // Ground truth: every value the dataset itself ever interned.
             let truth: HashSet<TermValue> = (0..dataset.term_count())
                 .map(|i| dataset.term_value(TermId::from_index(i as u32)))
                 .collect();
 
-            let non_predicate_bound = dict.n_shared() + dict.n_subject_only() + dict.n_object_only();
             for id in 1..=dict.n_terms() {
                 let value = dict.term_value(id);
                 // Fidelity: every resolved value must be one the dataset actually
                 // interned (no corruption, no drift).
                 prop_assert!(truth.contains(&value), "resolved value {value:?} not in dataset truth set");
 
-                // The documented lookup rule round-trips this id exactly.
-                let looked_up = if id <= non_predicate_bound {
-                    dict.id_by_value(&value)
-                } else {
-                    dict.predicate_id_by_value(&value)
-                };
-                prop_assert_eq!(looked_up, Some(id));
+                // The single unified id space round-trips this id exactly, via
+                // EITHER lookup method — they must always agree.
+                prop_assert_eq!(dict.id_by_value(&value), Some(id));
+                prop_assert_eq!(dict.predicate_id_by_value(&value), Some(id));
             }
 
             // A freshly-minted, never-interned value is absent.
             let absent = TermValue::iri("http://example.org/definitely-not-present-in-this-dict");
             prop_assert_eq!(dict.id_by_value(&absent), None);
             prop_assert_eq!(dict.predicate_id_by_value(&absent), None);
-
-            // Role-id <-> unified-id bijections over their full documented ranges.
-            for r in 0..dict.n_shared() + dict.n_subject_only() {
-                let u = dict.subject_role_to_unified(r);
-                prop_assert_eq!(dict.unified_to_subject_role(u), Some(r));
-            }
-            for r in 0..dict.n_shared() + dict.n_object_only() {
-                let u = dict.object_role_to_unified(r);
-                prop_assert_eq!(dict.unified_to_object_role(u), Some(r));
-            }
-            for r in 0..dict.n_predicates() {
-                let u = dict.predicate_role_to_unified(r);
-                prop_assert_eq!(dict.unified_to_predicate_role(u), Some(r));
-            }
         }
     }
 }
