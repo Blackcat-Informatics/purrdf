@@ -28,8 +28,8 @@ use std::sync::Arc;
 use criterion::{Criterion, criterion_group, criterion_main};
 
 use purrdf_core::{
-    InMemoryPageProvider, PagedDataset, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId,
-    TermValue,
+    DatasetView, InMemoryPageProvider, PagedDataset, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    TermId, TermValue,
 };
 use purrdf_sparql_eval::NativeSparqlEngine;
 
@@ -201,5 +201,42 @@ fn bench_cross_page_bgp(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_cross_page_bgp);
+/// Whole-dataset scan latency through the read path: the BGP bench above drives
+/// `quads_for_pattern`; this drives the streaming `DatasetView::quads` full scan over
+/// the multi-page paged backend (which materializes each page lazily and translates its
+/// quads on the fly) against the single-dataset inherent scan. Same report-only caveats:
+/// a noisy machine and strictly-more per-quad work on the paged side make any
+/// "faster/slower" assertion meaningless — this exists for comparison, not a threshold.
+fn bench_paged_full_scan(c: &mut Criterion) {
+    let corpus = corpus();
+    let single = build_page(&corpus);
+    let pages = split_pages(&corpus, PAGE_COUNT);
+    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(pages)))
+        .expect("seal pages");
+
+    // Sanity: both scans see every triple (a broken fixture would benchmark a no-op).
+    assert_eq!(single.quads().count(), corpus.len());
+    assert_eq!(
+        DatasetView::quads(&paged).count(),
+        corpus.len(),
+        "the paged scan streams every quad across all pages"
+    );
+
+    let mut group = c.benchmark_group("paged_full_scan");
+    group.bench_function("single", |bencher| {
+        bencher.iter(|| {
+            let n = criterion::black_box(&single).quads().count();
+            criterion::black_box(n);
+        });
+    });
+    group.bench_function("paged", |bencher| {
+        bencher.iter(|| {
+            let n = DatasetView::quads(criterion::black_box(&paged)).count();
+            criterion::black_box(n);
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench_cross_page_bgp, bench_paged_full_scan);
 criterion_main!(benches);

@@ -669,21 +669,22 @@ impl DatasetView for PagedDataset {
     type ProbePlan = ();
 
     fn quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        let mut out: Vec<QuadIds<GlobalTermId>> = Vec::with_capacity(self.total_quads);
-        for slot in &self.pages {
+        // Stream page-by-page: each page is materialized lazily on first touch (cached
+        // in its `OnceLock`) and its quads are translated to the shared id space on the
+        // fly. Peak extra memory is one page's translated rows, never the whole dataset.
+        self.pages.iter().flat_map(move |slot| {
             let page = self
                 .page(slot.id)
                 .expect("sealed page must re-materialize deterministically");
-            for q in page.quads() {
-                out.push(map_quad_to_global(&slot.translation, q));
-            }
-        }
-        out.into_iter()
+            page.quads()
+                .map(move |q| map_quad_to_global(&slot.translation, q))
+        })
     }
 
     fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, GlobalTermId>> + '_ {
-        // `quads()` owns its rows (the pages are materialized transiently inside it),
-        // so resolving each through the shared dictionary borrows only `self`.
+        // `quads()` yields OWNED id rows (each page is materialized behind `self`'s
+        // per-page cache, not by the caller), so resolving each through the shared
+        // dictionary borrows only `self`.
         self.quads().map(move |q| QuadRef {
             s: self.dictionary.resolve(q.s),
             p: self.dictionary.resolve(q.p),
@@ -704,20 +705,21 @@ impl DatasetView for PagedDataset {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        let mut out: Vec<QuadIds<GlobalTermId>> = Vec::new();
-        for slot in &self.pages {
-            // Skip a page that cannot possibly match a bound id (incl. a Named graph).
-            let Some((ls, lp, lo, lg)) = translate_pattern(&slot.translation, s, p, o, g) else {
-                continue;
-            };
-            let page = self
-                .page(slot.id)
-                .expect("sealed page must re-materialize deterministically");
-            for q in page.quads_for_pattern_indexed(ls, lp, lo, lg) {
-                out.push(map_quad_to_global(&slot.translation, q));
-            }
-        }
-        out.into_iter()
+        // Stream across pages, skipping any page that cannot match a bound id (incl. a
+        // Named graph) BEFORE it is materialized: `translate_pattern` returning `None`
+        // yields an empty inner iterator, so `self.page` — the only materialization —
+        // never runs for a skipped page (the lazy hook is preserved by construction).
+        self.pages.iter().flat_map(move |slot| {
+            translate_pattern(&slot.translation, s, p, o, g)
+                .into_iter()
+                .flat_map(move |(ls, lp, lo, lg)| {
+                    let page = self
+                        .page(slot.id)
+                        .expect("sealed page must re-materialize deterministically");
+                    page.quads_for_pattern_indexed(ls, lp, lo, lg)
+                        .map(move |q| map_quad_to_global(&slot.translation, q))
+                })
+        })
     }
 
     fn term_id_by_value(&self, value: &TermValue) -> Option<GlobalTermId> {
@@ -789,53 +791,50 @@ impl DatasetView for PagedDataset {
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        let mut out: Vec<QuadIds<GlobalTermId>> = Vec::new();
-        for slot in &self.pages {
+        // Stream the reifier side table page-by-page (same lazy composition as `quads`).
+        self.pages.iter().flat_map(move |slot| {
             let page = self
                 .page(slot.id)
                 .expect("sealed page must re-materialize deterministically");
-            for q in page.reifier_quads() {
-                out.push(map_quad_to_global(&slot.translation, q));
-            }
-        }
-        out.into_iter()
+            page.reifier_quads()
+                .map(move |q| map_quad_to_global(&slot.translation, q))
+        })
     }
 
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        let mut out: Vec<QuadIds<GlobalTermId>> = Vec::new();
-        for slot in &self.pages {
+        // Stream the annotation side table page-by-page.
+        self.pages.iter().flat_map(move |slot| {
             let page = self
                 .page(slot.id)
                 .expect("sealed page must re-materialize deterministically");
-            for q in page.annotation_quads() {
-                out.push(map_quad_to_global(&slot.translation, q));
-            }
-        }
-        out.into_iter()
+            page.annotation_quads()
+                .map(move |q| map_quad_to_global(&slot.translation, q))
+        })
     }
 
     fn annotations_of_with_graph(
         &self,
         reifier: GlobalTermId,
     ) -> impl Iterator<Item = (GlobalTermId, GlobalTermId, Option<GlobalTermId>)> + '_ {
-        let mut out: Vec<(GlobalTermId, GlobalTermId, Option<GlobalTermId>)> = Vec::new();
-        for slot in &self.pages {
-            // Translate the reifier to each page's local id; a page that lacks it
-            // contributes nothing.
-            let Some(local_reifier) = slot.translation.to_local(reifier) else {
-                continue;
-            };
-            let page = self
-                .page(slot.id)
-                .expect("sealed page must re-materialize deterministically");
-            for (p, o, g) in page.annotations_of_with_graph(local_reifier) {
-                out.push((
-                    slot.translation.to_global(p),
-                    slot.translation.to_global(o),
-                    g.map(|g| slot.translation.to_global(g)),
-                ));
-            }
-        }
-        out.into_iter()
+        // A page whose translation lacks the reifier is skipped BEFORE materialization
+        // (empty inner iterator), exactly as in `quads_for_pattern`.
+        self.pages.iter().flat_map(move |slot| {
+            slot.translation
+                .to_local(reifier)
+                .into_iter()
+                .flat_map(move |local_reifier| {
+                    let page = self
+                        .page(slot.id)
+                        .expect("sealed page must re-materialize deterministically");
+                    page.annotations_of_with_graph(local_reifier)
+                        .map(move |(p, o, g)| {
+                            (
+                                slot.translation.to_global(p),
+                                slot.translation.to_global(o),
+                                g.map(|g| slot.translation.to_global(g)),
+                            )
+                        })
+                })
+        })
     }
 }
