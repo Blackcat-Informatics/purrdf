@@ -45,6 +45,11 @@
 //! public face for everything this tree assembles. See [`container`]'s doc
 //! comment for the exact byte layout.
 //!
+//! [`view`] wires [`PackView`] into the [`crate::DatasetView`] seam (Task 6):
+//! [`view::PackId`] is the id newtype a `PackView`-backed read mints, and
+//! `impl DatasetView for PackView<'_>` answers every read-side query straight off
+//! the pack's decoded dictionary + borrowed sections, with no materialization step.
+//!
 //! `#[doc(hidden)]` (see [`super::pack`]'s declaration): this whole tree is an
 //! internal-codec surface, not a SemVer-guaranteed part of the crate's public API.
 
@@ -58,6 +63,10 @@ pub mod dict;
 pub mod side;
 #[doc(hidden)]
 pub mod triples;
+#[doc(hidden)]
+pub mod view;
 
 #[doc(hidden)]
 pub use container::{PackBuilder, PackError, PackView};
+#[doc(hidden)]
+pub use view::PackId;

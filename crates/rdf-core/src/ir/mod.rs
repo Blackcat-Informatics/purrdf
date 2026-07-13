@@ -70,6 +70,8 @@ pub use event_sink::RdfDatasetVisitor;
 pub use global::{GlobalDictionary, GlobalTermId};
 pub use ingest::{DatasetSink, FrozenDatasetSource};
 pub use mutable::{MutableDataset, QuadValues};
+#[doc(hidden)]
+pub use pack::{PackBuilder, PackError, PackId, PackView};
 pub use paged::{
     CountingDemandProvider, InMemoryPageProvider, PageFault, PageId, PagePart, PageProvider,
     PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable,
