@@ -4,9 +4,9 @@
 //! The per-page local↔global term-id map, [`PageTranslation`].
 //!
 //! A page is a frozen [`RdfDataset`] with its own dense, `u32`-scoped
-//! [`TermId`](crate::ir::TermId) space; a [`PagedDataset`](super::PagedDataset)
+//! [`TermId`] space; a [`PagedDataset`](super::PagedDataset)
 //! addresses terms in the shared, `u64`-scoped
-//! [`GlobalTermId`](crate::ir::GlobalTermId) space. `PageTranslation` bridges the two
+//! [`GlobalTermId`] space. `PageTranslation` bridges the two
 //! for ONE page:
 //!
 //! - `local -> global` is an `O(1)` table lookup indexed by the page's dense
@@ -15,7 +15,7 @@
 //!   side table (absent ⇒ the term does not occur on this page).
 //!
 //! The translation is built by **re-interning every page term BY VALUE** into the
-//! shared [`GlobalDictionary`](crate::ir::GlobalDictionary) (boundary G1): equal RDF
+//! shared [`GlobalDictionary`] (boundary G1): equal RDF
 //! values across pages fold onto one `GlobalTermId`, so cross-page joins unify
 //! automatically. It is NEVER a numeric offset remap — a page's local id space is
 //! meaningless outside that page (C0.8).

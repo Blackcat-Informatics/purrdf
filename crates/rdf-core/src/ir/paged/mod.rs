@@ -8,9 +8,9 @@
 //! # What a page is, and how ids compose
 //!
 //! Each page is a frozen [`RdfDataset`] with its own dense, dataset-local
-//! [`TermId`](crate::ir::TermId) space. The paged view addresses terms in the shared
-//! [`GlobalTermId`](crate::ir::GlobalTermId) space of a single
-//! [`GlobalDictionary`](crate::ir::GlobalDictionary): every page term is re-interned
+//! [`TermId`] space. The paged view addresses terms in the shared
+//! [`GlobalTermId`] space of a single
+//! [`GlobalDictionary`]: every page term is re-interned
 //! BY VALUE into that dictionary (boundary G1, in
 //! [`PageTranslation::build`](translation::PageTranslation::build)), so equal RDF
 //! values across pages collapse onto one `GlobalTermId` and cross-page joins unify
@@ -25,9 +25,9 @@
 //! correct for terms on pages that have not been re-queried. The seal pass then DROPS
 //! the materialized page (it is not kept resident); query-time access re-materializes
 //! it through the [`PageProvider`] and caches the result in the slot's
-//! [`OnceLock`]. For an [`InMemoryPageProvider`](provider::InMemoryPageProvider) the
+//! [`OnceLock`]. For an [`InMemoryPageProvider`] the
 //! re-materialize is a cheap `Arc::clone`; for a
-//! [`CountingDemandProvider`](provider::CountingDemandProvider) it is a counted
+//! [`CountingDemandProvider`] it is a counted
 //! rebuild — which is exactly what makes the lazy hook observable at query time.
 //!
 //! # Determinism
@@ -525,7 +525,7 @@ impl PagedDataset {
     ///    depends only on the live value set — not the old numbering, ingest order, or
     ///    page order — so compacting the same live set twice yields identical ids.
     /// 3. **Rebuild translations** — pass each retained page's global side through the
-    ///    old→new remap ([`PageTranslation::remap`]); local id spaces and quad tables
+    ///    old→new remap (a private [`PageTranslation`] pass); local id spaces and quad tables
     ///    are unchanged. The lazy `value_index` resets with the fresh dictionary.
     ///
     /// The result has no dead ids and a canonical global numbering, and preserves

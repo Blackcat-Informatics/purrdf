@@ -15,7 +15,7 @@
 //!
 //! The dictionary mirrors the immutable IR's interning discipline exactly, one
 //! width up: a store-once byte arena (each interned string owned ONCE), a dense
-//! [`GlobalInternedTerm`] table, a value→dense-index [`HashTable`] using fixed-key
+//! `GlobalInternedTerm` table, a value→dense-index [`HashTable`] using fixed-key
 //! ahash, and a lazily-built reverse value index. Ids are minted in insertion order,
 //! so a fixed push sequence is reproducible; no observable output depends on hash
 //! iteration order (buckets are populated in ascending-id order and reads return the
@@ -314,7 +314,7 @@ type GlobalValueIndex = HashMap<u64, Vec<GlobalTermId>, FastHasher>;
 
 /// A `u64`-scaled value-interner keyed on the dataset-independent [`TermValue`] — the
 /// global-identity twin of the frozen IR's `Interner`. Owns a store-once byte arena,
-/// a dense [`GlobalInternedTerm`] table, a value→dense-index [`HashTable`] (fixed-key
+/// a dense `GlobalInternedTerm` table, a value→dense-index [`HashTable`] (fixed-key
 /// ahash, hash/eq resolving into the arena BY VALUE), and a lazily-built reverse
 /// value index. `Send + Sync` (the lazy index rides an [`OnceLock`], like
 /// [`RdfDataset`](super::RdfDataset)).
