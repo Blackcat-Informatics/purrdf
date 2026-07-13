@@ -237,7 +237,11 @@ impl PagedDataset {
                     translation.to_global(q.o),
                     q.g.map(|g| translation.to_global(g)),
                 );
-                if let Some(&first_page) = seen.get(&key) {
+                // Single hash+probe: `insert` returns the prior page id iff this global
+                // quad was already seen (an EARLIER page — see the injectivity argument
+                // above), which is exactly the cross-page overlap we refuse. `key` is
+                // `Copy`, so it survives the move into the map for the error report.
+                if let Some(first_page) = seen.insert(key, id) {
                     return Err(PagedFreezeError::QuadOverlap(Box::new(PagedQuadOverlap {
                         first_page,
                         second_page: id,
@@ -247,7 +251,6 @@ impl PagedDataset {
                         graph: key.3.map(|g| dictionary.term_value(g)),
                     })));
                 }
-                seen.insert(key, id);
             }
             caps = caps.union(page_caps);
             total_quads += page_quads;
