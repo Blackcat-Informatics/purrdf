@@ -236,7 +236,7 @@ fn delete_insert(
     let with_value = with.map(named_node_to_value);
 
     let snap = m.freeze()?;
-    let mut ctx = EvalCtx::new(&snap);
+    let mut ctx = EvalCtx::new(&*snap);
     ctx = ctx.with_order_cache(cfg.order_cache);
     if let Some(preds) = cfg.standpoint_predicates {
         ctx = ctx.with_standpoint_predicates(preds.clone());

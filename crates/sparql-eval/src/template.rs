@@ -21,7 +21,7 @@
 //! resolved via `ctx.scratch.value_of(ctx.dataset, term)`, so the value is valid
 //! across a snapshot→mutable boundary (the UPDATE round-trip).
 
-use purrdf_core::{BlankScope, TermValue};
+use purrdf_core::{BlankScope, DatasetView, TermValue};
 use purrdf_sparql_algebra::{NamedNodePattern, TermPattern};
 
 use crate::DetHashMap;
@@ -69,12 +69,12 @@ pub(crate) fn instantiate_ground_term(
 }
 
 /// Instantiate a subject/object template term. `None` = an unbound variable.
-pub(crate) fn instantiate_term(
+pub(crate) fn instantiate_term<D: DatasetView + Sync>(
     term: &TermPattern,
-    row: &Solution,
+    row: &Solution<D::Id>,
     schema: &VarSchema,
     blanks: &mut DetHashMap<String, String>,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Option<TermValue> {
     match term {
         TermPattern::NamedNode(n) => Some(named_node_to_value(n)),
@@ -99,11 +99,11 @@ pub(crate) fn instantiate_term(
 }
 
 /// Instantiate a predicate template position. `None` = an unbound variable.
-pub(crate) fn instantiate_predicate(
+pub(crate) fn instantiate_predicate<D: DatasetView + Sync>(
     predicate: &NamedNodePattern,
-    row: &Solution,
+    row: &Solution<D::Id>,
     schema: &VarSchema,
-    ctx: &EvalCtx<'_>,
+    ctx: &EvalCtx<'_, D>,
 ) -> Option<TermValue> {
     match predicate {
         NamedNodePattern::NamedNode(n) => Some(named_node_to_value(n)),
@@ -119,10 +119,10 @@ pub(crate) fn instantiate_predicate(
 /// `bnode_counter`, later occurrences in the same row reuse it (the `blanks` map
 /// resets per row, so the counter — not the map — is what makes two rows' blanks
 /// distinct).
-pub(crate) fn fresh_blank(
+pub(crate) fn fresh_blank<D: DatasetView + Sync>(
     template_label: &str,
     blanks: &mut DetHashMap<String, String>,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> TermValue {
     mint_blank(template_label, blanks, &mut ctx.bnode_counter)
 }

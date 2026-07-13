@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use purrdf_core::{GraphMatch, TermId, TermValue};
+use purrdf_core::{DatasetView, GraphMatch, TermValue, ViewTermId};
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, NamedNodePattern,
     OrderExpression, Variable,
@@ -29,11 +29,11 @@ use crate::{DetHashMap, DetHashSet, DetHasher};
 
 /// Inline `VALUES`: one solution per binding row, each cell an interned ground term
 /// (or unbound for `UNDEF`).
-pub(crate) fn eval_values(
+pub(crate) fn eval_values<D: DatasetView + Sync>(
     variables: &[Variable],
     bindings: &[Vec<Option<purrdf_sparql_algebra::GroundTerm>>],
-    ctx: &mut EvalCtx<'_>,
-) -> Result<SolutionSeq, EvalError> {
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let schema = Arc::new(VarSchema::from_vars(variables.iter().cloned()));
     let width = schema.len();
     let mut rows = Vec::with_capacity(bindings.len());
@@ -54,11 +54,11 @@ pub(crate) fn eval_values(
 
 /// `SELECT`-list projection: restrict to `variables` in order. A projected variable
 /// absent from the inner solution yields an all-unbound column.
-pub(crate) fn eval_project(
+pub(crate) fn eval_project<D: DatasetView + Sync>(
     inner: &GraphPattern,
     variables: &[Variable],
-    ctx: &mut EvalCtx<'_>,
-) -> Result<SolutionSeq, EvalError> {
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let seq = eval(inner, ctx)?;
     let out = Arc::new(VarSchema::from_vars(variables.iter().cloned()));
     // For each projected column, the source column in the inner schema (if any).
@@ -72,25 +72,25 @@ pub(crate) fn eval_project(
 }
 
 /// `DISTINCT`: drop duplicate whole-solution rows, preserving first-seen order.
-pub(crate) fn eval_distinct(
+pub(crate) fn eval_distinct<D: DatasetView + Sync>(
     inner: &GraphPattern,
-    ctx: &mut EvalCtx<'_>,
-) -> Result<SolutionSeq, EvalError> {
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     Ok(dedup(eval(inner, ctx)?))
 }
 
 /// `REDUCED`: permitted to drop duplicates; we apply the same dedup as `DISTINCT`
 /// (a stronger-but-permitted reduction than the spec's minimum).
-pub(crate) fn eval_reduced(
+pub(crate) fn eval_reduced<D: DatasetView + Sync>(
     inner: &GraphPattern,
-    ctx: &mut EvalCtx<'_>,
-) -> Result<SolutionSeq, EvalError> {
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     Ok(dedup(eval(inner, ctx)?))
 }
 
 /// Drop duplicate rows, preserving first-seen order (SolutionTerm equality is exact
 /// RDF-term identity — see the scratch-interner promotion rule).
-fn dedup(seq: SolutionSeq) -> SolutionSeq {
+fn dedup<I: ViewTermId>(seq: SolutionSeq<I>) -> SolutionSeq<I> {
     let mut unique = DetHashMap::with_capacity_and_hasher(seq.rows.len(), DetHasher::default());
     for (ordinal, row) in seq.rows.into_iter().enumerate() {
         if let Entry::Vacant(entry) = unique.entry(row) {
@@ -109,12 +109,12 @@ fn dedup(seq: SolutionSeq) -> SolutionSeq {
 }
 
 /// `LIMIT`/`OFFSET`: skip `start` solutions then keep at most `length`.
-pub(crate) fn eval_slice(
+pub(crate) fn eval_slice<D: DatasetView + Sync>(
     inner: &GraphPattern,
     start: usize,
     length: Option<usize>,
-    ctx: &mut EvalCtx<'_>,
-) -> Result<SolutionSeq, EvalError> {
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let seq = eval(inner, ctx)?;
     let rows = seq
         .rows
@@ -129,11 +129,11 @@ pub(crate) fn eval_slice(
 }
 
 /// `ORDER BY`: stable-sort by the sort keys under SPARQL ordering (§15.1).
-pub(crate) fn eval_order_by(
+pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     inner: &GraphPattern,
     exprs: &[OrderExpression],
-    ctx: &mut EvalCtx<'_>,
-) -> Result<SolutionSeq, EvalError> {
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let seq = eval(inner, ctx)?;
     let schema = seq.schema.clone();
 
@@ -141,7 +141,7 @@ pub(crate) fn eval_order_by(
     // that `term_value_order` would otherwise re-run inside the O(n log n)
     // comparator — so the sort comparator is a cheap pure function (no `ctx`
     // borrow, no re-parsing during the sort).
-    let mut keyed: Vec<(Vec<SortKey>, Solution)> = Vec::with_capacity(seq.rows.len());
+    let mut keyed: Vec<(Vec<SortKey>, Solution<D::Id>)> = Vec::with_capacity(seq.rows.len());
     for row in seq.rows {
         let mut keys = Vec::with_capacity(exprs.len());
         for oe in exprs {
@@ -158,11 +158,11 @@ pub(crate) fn eval_order_by(
 
 /// `GRAPH name { ... }`: scope the inner pattern to a named graph (or, for a
 /// variable, every named graph in turn, binding the variable to each).
-pub(crate) fn eval_graph(
+pub(crate) fn eval_graph<D: DatasetView + Sync>(
     name: &NamedNodePattern,
     inner: &GraphPattern,
-    ctx: &mut EvalCtx<'_>,
-) -> Result<SolutionSeq, EvalError> {
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     match name {
         NamedNodePattern::NamedNode(n) => {
             match ctx.dataset.term_id_by_value(&named_node_to_value(n)) {
@@ -196,15 +196,15 @@ pub(crate) fn eval_graph(
 /// (e.g. an outer `VALUES (?g ?t) { ... }` nested inside the `GRAPH ?g { }` block,
 /// or any other pre-binding), each candidate graph must be JOINED against that
 /// existing binding — kept only when compatible — rather than blindly overwritten.
-fn eval_graph_var(
+fn eval_graph_var<D: DatasetView + Sync>(
     var: &Variable,
     inner: &GraphPattern,
-    ctx: &mut EvalCtx<'_>,
-) -> Result<SolutionSeq, EvalError> {
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     // Enumerate every named graph the dataset knows about, restricted to those the
     // active dataset admits (a `FROM NAMED` / `USING NAMED` may limit which graphs
     // `GRAPH ?g` binds to).
-    let graphs: Vec<TermId> = ctx
+    let graphs: Vec<D::Id> = ctx
         .dataset
         .named_graphs()
         .filter(|g| ctx.active_dataset.named_allows(*g))
@@ -479,20 +479,20 @@ fn literal_order(a: (&str, &str, &Option<String>), b: (&str, &str, &Option<Strin
 ///
 /// With **no** grouping variables but aggregates present, the whole input is a
 /// single group — even when empty (so `COUNT(*)` yields one row binding `0`).
-pub(crate) fn eval_group(
+pub(crate) fn eval_group<D: DatasetView + Sync>(
     inner: &GraphPattern,
     variables: &[Variable],
     aggregates: &[(Variable, AggregateExpression)],
-    ctx: &mut EvalCtx<'_>,
-) -> Result<SolutionSeq, EvalError> {
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     let seq = eval(inner, ctx)?;
     let in_schema = seq.schema.clone();
     let key_cols: Vec<Option<usize>> = variables.iter().map(|v| in_schema.index_of(v)).collect();
 
     // Partition rows into groups, keeping groups in first-seen order.
-    let mut groups: DetHashMap<Solution, (usize, Vec<usize>)> = DetHashMap::default();
+    let mut groups: DetHashMap<Solution<D::Id>, (usize, Vec<usize>)> = DetHashMap::default();
     for (idx, row) in seq.rows.iter().enumerate() {
-        let key: Solution = key_cols.iter().map(|c| c.and_then(|c| row[c])).collect();
+        let key: Solution<D::Id> = key_cols.iter().map(|c| c.and_then(|c| row[c])).collect();
         let next_ordinal = groups.len();
         match groups.entry(key) {
             Entry::Occupied(mut entry) => entry.get_mut().1.push(idx),
@@ -573,17 +573,17 @@ pub(crate) fn eval_group(
 }
 
 /// Compute one aggregate over a group's rows.
-fn eval_aggregate(
+fn eval_aggregate<D: DatasetView + Sync>(
     agg: &AggregateExpression,
     idxs: &[usize],
-    rows: &[Solution],
+    rows: &[Solution<D::Id>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_>,
-) -> Result<Option<SolutionTerm>, EvalError> {
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match agg {
         AggregateExpression::CountStar { distinct } => {
             let count = if *distinct {
-                let mut seen: DetHashSet<&Solution> = DetHashSet::default();
+                let mut seen: DetHashSet<&Solution<D::Id>> = DetHashSet::default();
                 idxs.iter().filter(|&&i| seen.insert(&rows[i])).count()
             } else {
                 idxs.len()
@@ -596,7 +596,7 @@ fn eval_aggregate(
             distinct,
         } => {
             // Collect the bound values of the expression over the group.
-            let mut values: Vec<(SolutionTerm, TermValue)> = Vec::new();
+            let mut values: Vec<(SolutionTerm<D::Id>, TermValue)> = Vec::new();
             for &i in idxs {
                 if let Some(term) = eval_expr(expression, &rows[i], schema, ctx)? {
                     let value = ctx.scratch.value_of(ctx.dataset, term);
@@ -604,7 +604,7 @@ fn eval_aggregate(
                 }
             }
             if *distinct {
-                let mut seen: DetHashSet<SolutionTerm> = DetHashSet::default();
+                let mut seen: DetHashSet<SolutionTerm<D::Id>> = DetHashSet::default();
                 values.retain(|(t, _)| seen.insert(*t));
             }
             apply_aggregate(function, &values, ctx)
@@ -613,11 +613,11 @@ fn eval_aggregate(
 }
 
 /// Apply a named aggregate to the collected group values.
-fn apply_aggregate(
+fn apply_aggregate<D: DatasetView + Sync>(
     function: &AggregateFunction,
-    values: &[(SolutionTerm, TermValue)],
-    ctx: &mut EvalCtx<'_>,
-) -> Result<Option<SolutionTerm>, EvalError> {
+    values: &[(SolutionTerm<D::Id>, TermValue)],
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match function {
         AggregateFunction::Count => Ok(Some(integer_term(ctx, values.len() as i64))),
         AggregateFunction::Sample => Ok(values.first().map(|(t, _)| *t)),
@@ -705,7 +705,10 @@ fn is_numeric_xsd(v: &XsdValue) -> bool {
 
 /// The group's extreme value (`Ordering::Less` = MIN, `Greater` = MAX) under SPARQL
 /// term ordering, returning its solution term; `None` for an empty group.
-fn extreme(values: &[(SolutionTerm, TermValue)], want: Ordering) -> Option<SolutionTerm> {
+fn extreme<I: ViewTermId>(
+    values: &[(SolutionTerm<I>, TermValue)],
+    want: Ordering,
+) -> Option<SolutionTerm<I>> {
     values
         .iter()
         .reduce(|acc, cur| {
@@ -728,7 +731,10 @@ fn lexical_of(value: &TermValue) -> Option<String> {
 }
 
 /// Intern an `xsd:integer` literal.
-fn integer_term(ctx: &mut EvalCtx<'_>, value: i64) -> SolutionTerm {
+fn integer_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: i64,
+) -> SolutionTerm<D::Id> {
     ctx.scratch.intern(
         ctx.dataset,
         TermValue::Literal {
@@ -741,7 +747,10 @@ fn integer_term(ctx: &mut EvalCtx<'_>, value: i64) -> SolutionTerm {
 }
 
 /// Intern an `xsd:string` literal.
-fn string_term(ctx: &mut EvalCtx<'_>, lexical: String) -> SolutionTerm {
+fn string_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    lexical: String,
+) -> SolutionTerm<D::Id> {
     ctx.scratch.intern(
         ctx.dataset,
         TermValue::Literal {
@@ -1069,7 +1078,12 @@ mod tests {
     }
 
     /// Helper: resolve an aggregate column via the eval scratch.
-    fn agg_lex(ds: &Arc<RdfDataset>, ctx: &EvalCtx<'_>, seq: &SolutionSeq, var: &str) -> String {
+    fn agg_lex(
+        ds: &Arc<RdfDataset>,
+        ctx: &EvalCtx<'_, Arc<RdfDataset>>,
+        seq: &SolutionSeq,
+        var: &str,
+    ) -> String {
         let col = seq.schema.index_of(&Variable::new(var)).unwrap();
         match ctx.scratch.value_of(ds, seq.rows[0][col].unwrap()) {
             TermValue::Literal { lexical_form, .. } => lexical_form,
