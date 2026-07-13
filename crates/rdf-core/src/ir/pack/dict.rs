@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! A single, unified PFC value dictionary (Task 2 of the succinct-pack-codec
-//! feature): ONE [`PackTermId`](self) (a plain `u64`, 1-based) per distinct
+//! A single, unified PFC value dictionary: ONE [`PackTermId`](self)
+//! (a plain `u64`, 1-based) per distinct
 //! [`TermValue`] scanned from an [`RdfDataset`] — REGARDLESS of which role
 //! (subject, predicate, object, graph name, literal datatype, triple-term
 //! component, reifier/annotation side-table term) it plays — PFC-compressed on
@@ -43,7 +43,7 @@
 //!   reifier resource, a reified triple-term, an annotation's
 //!   predicate/object, and any of their graph names) — see the
 //!   "auxiliary-value closure" doc on `encode` for the exact mechanism
-//!   (Task 4: [`super::side::SideTables`] is the consumer that needs every
+//!   ([`super::side::SideTables`] is the consumer that needs every
 //!   such reference to resolve to a unified id).
 //!
 //! # Lookup rule (id_by_value vs. predicate_id_by_value)
@@ -60,7 +60,7 @@
 //! # Seam for later tasks
 //!
 //! This module works entirely in raw `u64` unified ids (`PackTermId` is a plain
-//! type alias here). Task 6's `PackView`/`ViewTermId` newtype wraps these
+//! type alias here). The `PackView`/`ViewTermId` newtype wraps these
 //! `u64`s.
 
 use std::cmp::Ordering;
@@ -83,8 +83,8 @@ use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for, read_varint,
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
 /// The unified term-identity space this module mints: a plain, 1-based `u64` (id `0`
-/// is never assigned). A pure type alias, not a newtype — Task 6 wraps this in a real
-/// [`ViewTermId`](crate::ViewTermId) newtype once the outer `PackView` seam lands (see
+/// is never assigned). A pure type alias, not a newtype — the outer `PackView` seam
+/// wraps this in a real [`ViewTermId`](crate::ViewTermId) newtype once it lands (see
 /// the [module docs](self)).
 pub type PackTermId = u64;
 
@@ -544,7 +544,7 @@ const DICT_FORMAT_VERSION: u8 = 1;
 /// The output of [`PackDict::encode`]: the single PFC-encoded value-list byte
 /// block plus its term count. Self-contained and independently
 /// round-trippable via [`to_bytes`](Self::to_bytes)/[`from_bytes`](Self::from_bytes)
-/// — a later container format (Task 5) frames these bytes alongside its other
+/// — the on-disk container format frames these bytes alongside its other
 /// blocks, or a caller can treat an `EncodedDict` as a standalone dictionary
 /// file.
 #[derive(Debug, Clone)]
@@ -675,7 +675,7 @@ impl PackDict {
         let mut values: Vec<TermValue> =
             base_ids.iter().map(|&id| dataset.term_value(id)).collect();
 
-        // Step 1.5 (Task 4 amendment): RDF 1.2 side-table term closure roots. A
+        // Step 1.5: RDF 1.2 side-table term closure roots. A
         // reifier row (`reifier, triple-term, graph`) and an annotation row
         // (`reifier, predicate, object, graph`) may reference terms that hold NO
         // base-quad role at all — e.g. a reifier resource that is never itself a
@@ -1252,8 +1252,8 @@ mod tests {
         // The reifier resource and the reified triple-term both hold NO base-quad
         // role: the reifier binds `<< s p o >>` PURELY as a side-table row (no
         // base quad is ever pushed — reification lives entirely in the side table).
-        // The Task 4 amendment must still fold both into the dictionary and
-        // round-trip them.
+        // The side-table term closure must still fold both into the dictionary
+        // and round-trip them.
         let mut b = RdfDatasetBuilder::new();
         let s = intern_value(&mut b, &iri("s"));
         let p = intern_value(&mut b, &iri("p"));

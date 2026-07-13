@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Falsifiable acceptance tests for the RDF 1.2 reifier/annotation side-tables
-//! codec (`purrdf_core::ir::pack::side`, Task 4 of the succinct-pack-codec
-//! feature): `SideTablesRef::reifier_quads`/`annotation_quads`/
+//! codec (`purrdf_core::ir::pack::side`): `SideTablesRef::reifier_quads`/`annotation_quads`/
 //! `annotations_of_with_graph` must set-equal `RdfDataset`'s own
 //! `DatasetView::reifier_quads`/`annotation_quads`/`annotations_of_with_graph`
 //! — before AND after a `to_bytes`/`from_bytes` round trip — and the computed
@@ -41,7 +40,7 @@ fn build_fixture() -> Fixture {
     let triple1 = b.intern_triple(s1, p1, o1);
 
     // A second, side-table-only triple term: never a base quad's S/P/O, only
-    // reachable via `r3`'s reifier row — exercises the Task 4 closure's
+    // reachable via `r3`'s reifier row — exercises the side-table closure's
     // recursive fold-in of a triple term's own components.
     let s4 = b.intern_iri("http://example.org/s4");
     let p4 = b.intern_iri("http://example.org/p4");
@@ -274,7 +273,7 @@ fn capability_flags_match_source() {
     let fx = build_fixture();
     let side = SideTablesRef::from_bytes(&fx.side_bytes).expect("opens");
 
-    // Stand-in for what Task 6's `Triples`-derived flag would supply: whether
+    // Stand-in for what the `Triples`-derived flag would supply: whether
     // any BASE quad names a graph.
     let base_named_graphs = fx.dataset.quads().any(|q| q.g.is_some());
     assert!(base_named_graphs, "g2 owns a base quad in this fixture");

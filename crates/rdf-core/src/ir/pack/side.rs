@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! RDF 1.2 reifier/annotation side-tables (Task 4 of the succinct-pack-codec
-//! feature): a self-contained, succinct encoding of `RdfDataset`'s two side
+//! RDF 1.2 reifier/annotation side-tables: a self-contained, succinct
+//! encoding of `RdfDataset`'s two side
 //! tables — [`ReifierRow`](crate::ir::dataset::ReifierRow)s and
 //! [`AnnotationRow`](crate::ir::dataset::AnnotationRow)s — over the unified
 //! [`PackTermId`] space [`PackDict`] mints, reproducing
@@ -35,9 +35,10 @@
 //!
 //! # Row order and dedup
 //!
-//! [`PackDict::encode`]'s Task 4 amendment folds every side-table-referenced
-//! term (including `rdf:reifies`, when reifiers are non-empty) into the
-//! dictionary, so every reifier/annotation row resolves to unified ids here.
+//! [`PackDict::encode`]'s side-table term closure folds every
+//! side-table-referenced term (including `rdf:reifies`, when reifiers are
+//! non-empty) into the dictionary, so every reifier/annotation row resolves
+//! to unified ids here.
 //! `RdfDataset` already deduplicates both side tables at freeze (C0.5); this
 //! module re-sorts the translated rows into a CANONICAL order over unified ids
 //! — `(reifier_uni, triple_uni, graph_uni)` for reifier rows and
@@ -165,7 +166,7 @@ fn build_int_vector(values: &[u64]) -> IntVector {
 ///
 /// Panics if `value` was never interned — a caller-side contract violation:
 /// `dict` MUST be [`PackDict::encode`]'s output for the SAME `dataset` `value`
-/// was read from (its Task 4 side-table closure amendment guarantees every
+/// was read from (its side-table closure guarantees every
 /// such reference resolves).
 fn resolve_any(dict: &PackDict, value: &TermValue) -> PackTermId {
     dict.id_by_value(value).expect(
@@ -249,7 +250,7 @@ impl SideTables {
     /// Scan `dataset`'s reifier and annotation side-tables and build the
     /// self-contained, unified-id encoding (see the [module docs](self)).
     /// `dict` MUST be [`PackDict::encode`]'s output for this exact `dataset`
-    /// (its Task 4 side-table closure amendment guarantees every reference
+    /// (its side-table closure guarantees every reference
     /// resolves) — see [`resolve_any`].
     ///
     /// # Panics
@@ -591,8 +592,8 @@ impl<'a> SideTablesRef<'a> {
 /// - `annotations` — `true` iff `side` holds at least one annotation row.
 ///
 /// `source_locations`/`loss_records`/`lookaside` are NOT computed here — the
-/// pack format preserves none of that sidecar material, so a caller (Task 6's
-/// `DatasetView::capabilities`) sets those to `false` (or ORs in whatever ITS
+/// pack format preserves none of that sidecar material, so a caller (the
+/// `DatasetView::capabilities` seam) sets those to `false` (or ORs in whatever ITS
 /// own container format tracks) rather than this function fabricating a value
 /// for a concern side-tables/dictionary have no visibility into.
 #[must_use]

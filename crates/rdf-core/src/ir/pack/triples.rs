@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Graph-partitioned succinct bitmap-triples (Task 3 of the succinct-pack-codec
-//! feature): an HDT-style two-level adjacency (subject → predicates → objects)
+//! Graph-partitioned succinct bitmap-triples: an HDT-style two-level
+//! adjacency (subject → predicates → objects)
 //! plus FoQ ("Focus on Querying") auxiliary indexes, answering all 8
 //! `(s, p, o)` bound/unbound pattern shapes without ever decompressing a whole
 //! partition.
@@ -1183,7 +1183,7 @@ impl<'a> TriplesRef<'a> {
 
     /// Every named graph's unified id, ascending — the source for
     /// [`DatasetView::named_graphs`](crate::DatasetView::named_graphs) over a
-    /// `PackView`-backed dataset (Task 6).
+    /// `PackView`-backed dataset.
     pub fn named_graph_ids(&self) -> impl Iterator<Item = PackTermId> + '_ {
         self.graph_index.keys().copied()
     }
@@ -1191,7 +1191,7 @@ impl<'a> TriplesRef<'a> {
     /// A cheap (`O(partitions)` × `O(1)`/`O(log n)` per partition, derived only
     /// from index SIZES — never a materialized count) upper bound on
     /// [`pattern`](Self::pattern)'s row count for the same arguments. For cost
-    /// ranking only (Task 6's `cardinality_estimate`), never an exact `COUNT`.
+    /// ranking only (`cardinality_estimate`), never an exact `COUNT`.
     #[must_use]
     pub fn cardinality_upper_bound(
         &self,

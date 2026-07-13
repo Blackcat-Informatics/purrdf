@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Falsifiable acceptance tests for the graph-partitioned succinct bitmap-triples
-//! codec (`purrdf_core::ir::pack::triples`, Task 3 of the succinct-pack-codec
-//! feature): every one of the 8 `(s, p, o)` bound/unbound pattern shapes, crossed
+//! codec (`purrdf_core::ir::pack::triples`): every one of the 8 `(s, p, o)`
+//! bound/unbound pattern shapes, crossed
 //! with every [`GraphMatch`] variant, must return exactly the same SET of quads a
 //! brute-force scan over the source `RdfDataset` would — before AND after a
 //! `to_bytes`/`from_bytes` round trip.

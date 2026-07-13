@@ -92,8 +92,8 @@ name = "mutable"
 harness = false
 
 [[bench]]
-# Succinct `pack` primitives (Task 1 of the succinct-pack-codec feature):
-# `IntVector::get` and `RankSelect`'s `rank1`/`select1`, each at a few sizes.
+# Succinct `pack` primitives: `IntVector::get` and `RankSelect`'s
+# `rank1`/`select1`, each at a few sizes.
 # Report-only — no timing/speedup assertions. `make bench` lane only — excluded
 # from `make check`.
 name = "pack_bits"
@@ -109,11 +109,11 @@ name = "intern_content_id"
 harness = false
 
 [[bench]]
-# Succinct `pack` codec end-to-end harness (Task 10 of the succinct-pack-codec
-# feature): `PackBuilder::build_bytes` (encode), `PackView::from_bytes` (open),
-# `quads_for_pattern` over a `PackView` for subject/predicate/object-bound and
-# full-scan shapes, and `verify_pack` (the certified-projection RDFC-1.0
-# recompute). Report-only — no timing/speedup assertions. `make bench` lane
-# only — excluded from `make check`.
+# Succinct `pack` codec end-to-end harness: `PackBuilder::build_bytes`
+# (encode), `PackView::from_bytes` (open), `quads_for_pattern` over a
+# `PackView` for subject/predicate/object-bound and full-scan shapes, and
+# `verify_pack` (the certified-projection RDFC-1.0 recompute). Report-only —
+# no timing/speedup assertions. `make bench` lane only — excluded from
+# `make check`.
 name = "pack_query"
 harness = false

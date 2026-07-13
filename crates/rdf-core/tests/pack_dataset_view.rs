@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Falsifiable parity tests for the `PackView`-over-`DatasetView` seam (Task 6 of
-//! the succinct-pack-codec feature): every read-side query the trait exposes must
+//! Falsifiable parity tests for the `PackView`-over-`DatasetView` seam: every
+//! read-side query the trait exposes must
 //! answer IDENTICALLY (by resolved value, not by raw id — the two views mint
 //! unrelated id spaces) whether it runs over the reference `RdfDataset` or over a
 //! `PackView` opened from `PackBuilder::build_bytes(&dataset)`'s output.
@@ -665,9 +665,9 @@ fn term_id_by_value_absent_capabilities_and_term_count() {
     }
 }
 
-/// The compile-time bound Task 6 requires: `PackView` plugs into any generic
-/// `DatasetView` consumer (the SPARQL evaluator, in particular) and is
-/// thread-shareable.
+/// The compile-time bound the `DatasetView` seam requires: `PackView` plugs
+/// into any generic `DatasetView` consumer (the SPARQL evaluator, in
+/// particular) and is thread-shareable.
 #[test]
 fn pack_view_is_dataset_view_send_sync() {
     fn assert_dataset_view<T: DatasetView>() {}

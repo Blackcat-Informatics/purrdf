@@ -5,8 +5,8 @@
 // which would otherwise trip the workspace `missing_docs` lint.
 #![allow(missing_docs)]
 
-//! End-to-end latency harness for the succinct `pack` codec (Task 10 of the
-//! succinct-pack-codec feature): [`PackBuilder::build_bytes`] (encode),
+//! End-to-end latency harness for the succinct `pack` codec:
+//! [`PackBuilder::build_bytes`] (encode),
 //! [`PackView::from_bytes`] (open), [`DatasetView::quads_for_pattern`] over a
 //! [`PackView`] for a few representative pattern shapes, and [`verify_pack`] (the
 //! certified-projection RDFC-1.0 recompute). Report-only — no timing/speedup

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The certified-projection verifier (Task 7 of the succinct-pack-codec feature):
-//! an INDEPENDENT check that a pack's stored RDFC-1.0 digest genuinely matches its
+//! The certified-projection verifier: an INDEPENDENT check that a pack's
+//! stored RDFC-1.0 digest genuinely matches its
 //! own contents, on top of the per-section SHA-256 integrity
 //! [`PackView::from_bytes`] already enforces.
 //!

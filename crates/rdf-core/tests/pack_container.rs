@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Falsifiable acceptance tests for the on-disk pack container
-//! (`purrdf_core::ir::pack::container`, Task 5 of the succinct-pack-codec
-//! feature): [`PackBuilder::build_bytes`] must be byte-deterministic, its
+//! (`purrdf_core::ir::pack::container`): [`PackBuilder::build_bytes`]
+//! must be byte-deterministic, its
 //! output for a small fixture must match a committed golden file, and
 //! [`PackView::from_bytes`] must round-trip a well-formed pack while
 //! rejecting a corrupted one (a flipped section byte, a flipped magic byte)

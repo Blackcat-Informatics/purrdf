@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Demonstrates that the pack format is genuinely **mmap-able** (Task 8 of the
-//! succinct-pack-codec feature) WITHOUT putting any mmap/filesystem dependency
-//! into the published `purrdf-core` library.
+//! Demonstrates that the pack format is genuinely **mmap-able** WITHOUT
+//! putting any mmap/filesystem dependency into the published `purrdf-core`
+//! library.
 //!
 //! Per **G5** in `docs/design/purrdf-backend-contract.md` ("the shipped
 //! `PageProvider` is in-memory; durable tiers are external"): a

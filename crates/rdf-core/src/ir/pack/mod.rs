@@ -10,12 +10,12 @@
 //! `wasm32-unknown-unknown`-clean (no threads, no filesystem, no wall-clock, no
 //! RNG), and byte-deterministic.
 //!
-//! [`bits`] lands the whole primitive layer (Task 1 of the succinct-pack-codec
-//! feature): [`bits::IntVector`] (fixed-width bit-packed integers),
+//! [`bits`] lands the whole primitive layer: [`bits::IntVector`]
+//! (fixed-width bit-packed integers),
 //! [`bits::BitVec`]/[`bits::RankSelect`] (rank1/select1/rank0/select0 succinct
 //! bitmaps), and the varint/zigzag/delta-list byte helpers.
 //!
-//! [`dict`] lands the unified value dictionary (Task 2):
+//! [`dict`] lands the unified value dictionary:
 //! [`dict::PackDict`] assigns ONE unified id per distinct term value —
 //! regardless of role (subject, predicate, object, graph name, or structural
 //! reference) — scanned from an `RdfDataset`'s base quads and side tables (see
@@ -23,13 +23,13 @@
 //! and decodes into an owned, query-ready form.
 //!
 //! [`triples`] lands the graph-partitioned succinct bitmap-triples + FoQ
-//! auxiliary indexes (Task 3): [`triples::Triples::encode`] builds one
+//! auxiliary indexes: [`triples::Triples::encode`] builds one
 //! self-contained bitmap-triples structure per graph (partition 0 = default
 //! graph) from a [`dict::PackDict`] + `RdfDataset`, and
 //! [`triples::TriplesRef::from_bytes`] is the borrowed, zero-copy reader that
 //! answers all 8 `(s, p, o)` pattern shapes without decompression.
 //!
-//! [`side`] lands the RDF 1.2 reifier/annotation side-tables (Task 4):
+//! [`side`] lands the RDF 1.2 reifier/annotation side-tables:
 //! [`side::SideTables::encode`] builds a self-contained encoding of every
 //! reifier binding and statement annotation (in unified [`dict::PackTermId`]s)
 //! from a [`dict::PackDict`] + `RdfDataset`, and [`side::SideTablesRef::from_bytes`]
@@ -37,7 +37,7 @@
 //! `RdfDataset::annotation_quads`, and `RdfDataset::annotations_of_with_graph`
 //! byte-for-byte over the unified id space.
 //!
-//! [`container`] lands the on-disk pack container (Task 5): [`PackBuilder`]
+//! [`container`] lands the on-disk pack container: [`PackBuilder`]
 //! frames the dict/triples/side sections' bytes into ONE fixed-layout,
 //! mmap-friendly file with a section-directory integrity check (each section's
 //! SHA-256, plus the dataset's RDFC-1.0 canonical digest), and [`PackView`] is
@@ -45,14 +45,14 @@
 //! public face for everything this tree assembles. See [`container`]'s doc
 //! comment for the exact byte layout.
 //!
-//! [`view`] wires [`PackView`] into the [`crate::DatasetView`] seam (Task 6):
+//! [`view`] wires [`PackView`] into the [`crate::DatasetView`] seam:
 //! [`view::PackId`] is the id newtype a `PackView`-backed read mints, and
 //! `impl DatasetView for PackView<'_>` answers every read-side query straight off
 //! the pack's decoded dictionary + borrowed sections, with no materialization step.
 //!
-//! [`certify`] lands the certified-projection verifier (Task 7):
+//! [`certify`] lands the certified-projection verifier:
 //! [`certify::verify_pack`] independently reconstructs the dataset a pack claims
-//! to encode (via the Task 6 `DatasetView` seam) and recomputes its RDFC-1.0
+//! to encode (via the `DatasetView` seam) and recomputes its RDFC-1.0
 //! digest, failing closed if it disagrees with the pack's stored `rdfc_digest`
 //! header field — turning a pack into a certified read-only projection of its
 //! source dataset, on top of the per-section SHA-256 integrity `PackView::from_bytes`

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Falsifiable acceptance tests for the certified-projection verifier
-//! (`purrdf_core::ir::pack::certify`, Task 7 of the succinct-pack-codec
-//! feature): [`verify_pack`] must independently reconstruct a pack's dataset,
+//! (`purrdf_core::ir::pack::certify`): [`verify_pack`] must independently
+//! reconstruct a pack's dataset,
 //! recompute its RDFC-1.0 digest, and bind it to the SOURCE dataset's own
 //! canonical identity — catching a tampered digest header field that the
 //! per-section SHA-256 checks [`PackView::from_bytes`] already runs cannot see,

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Headline acceptance (Task 9 of the succinct-pack-codec feature): a SPARQL query
+//! Headline acceptance: a SPARQL query
 //! served DIRECTLY by the native evaluator over a [`PackView`] — the read-only
 //! succinct pack codec's [`DatasetView`] implementation, opened from
 //! [`PackBuilder::build_bytes`]'s output — returns the IDENTICAL [`SparqlResult`] as

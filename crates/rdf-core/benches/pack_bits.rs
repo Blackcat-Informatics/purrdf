@@ -6,9 +6,9 @@
 #![allow(missing_docs)]
 
 //! Report-only latency harness for the succinct `pack` primitives
-//! (`crate::ir::pack::bits`, Task 1 of the succinct-pack-codec feature):
-//! [`IntVector::get`], and [`RankSelect`]'s `rank1`/`select1`, each at a few
-//! sizes. No timing/speedup assertion — criterion's stdout summary is the report.
+//! (`crate::ir::pack::bits`): [`IntVector::get`], and [`RankSelect`]'s
+//! `rank1`/`select1`, each at a few sizes. No timing/speedup assertion —
+//! criterion's stdout summary is the report.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_core::ir::pack::bits::{BitVec, IntVector, RankSelect};

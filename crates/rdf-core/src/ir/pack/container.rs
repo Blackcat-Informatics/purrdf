@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The on-disk pack container (Task 5 of the succinct-pack-codec feature):
-//! frames [`super::dict`]/[`super::triples`]/[`super::side`]'s independently
+//! The on-disk pack container: frames
+//! [`super::dict`]/[`super::triples`]/[`super::side`]'s independently
 //! serialized byte blocks into ONE fixed-layout, mmap-friendly file, written
 //! deterministically by [`PackBuilder`] and opened zero-copy by [`PackView`].
 //!
@@ -407,7 +407,7 @@ impl PackBuilder {
     }
 
     /// A public convenience alias for [`build_bytes`](Self::build_bytes) —
-    /// the entry point Task 6's `DatasetView`-over-`PackView` seam re-exports.
+    /// the entry point the `DatasetView`-over-`PackView` seam re-exports.
     ///
     /// # Errors
     ///

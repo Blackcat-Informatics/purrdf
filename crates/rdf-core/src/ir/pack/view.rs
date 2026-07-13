@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The [`DatasetView`] seam over a [`super::container::PackView`] (Task 6 of the
-//! succinct-pack-codec feature): [`PackId`] wraps the dictionary's unified, 1-based
+//! The [`DatasetView`] seam over a [`super::container::PackView`]:
+//! [`PackId`] wraps the dictionary's unified, 1-based
 //! [`super::dict::PackTermId`] as a [`ViewTermId`], and `impl DatasetView for
 //! PackView<'_>` answers every read-side query directly from the pack's decoded
 //! dictionary + borrowed bitmap-triples + borrowed side-tables, with NO
@@ -312,9 +312,10 @@ impl DatasetView for PackView<'_> {
 }
 
 /// `PackView<'static>` implements [`DatasetView`] and is `Send + Sync` — the two
-/// properties Task 7 (RDFC digest `verify_pack`) and Task 9 (SPARQL-over-pack in
-/// `purrdf-sparql-eval`) rely on to plug a `PackView` straight into the generic
-/// evaluator. `Send`/`Sync` are auto traits with no lifetime-specific opt-out in
+/// properties the RDFC-digest verifier (`verify_pack`) and the SPARQL-over-pack
+/// evaluator (in `purrdf-sparql-eval`) rely on to plug a `PackView` straight
+/// into the generic evaluator. `Send`/`Sync` are auto traits with no
+/// lifetime-specific opt-out in
 /// this type (every field is a borrow or an owned arena), so checking the
 /// `'static` instantiation certifies every shorter-lived `PackView<'a>` too.
 /// Compile-time only: this function is never called, so it costs nothing at
