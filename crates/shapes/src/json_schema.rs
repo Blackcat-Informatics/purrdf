@@ -605,6 +605,13 @@ fn value_vocab_enum_defs(
 /// class's `{Local}Enum` `$def` key, scanning the ontology graph UNIONED with the
 /// shapes graph (range axioms commonly live shapes-side). Empty when the
 /// projection is inactive or there are no value-vocabulary classes.
+///
+/// A single `(?P, rdfs:range, ?O)` scan per dataset is performed — O(1) queries
+/// in the number of vocab classes, rather than one scan per class — filtering
+/// each matched object against `vocab_enums` by IRI string. When a predicate's
+/// `rdfs:range` is declared over multiple distinct vocab classes, the class
+/// with the lexicographically largest IRI wins, matching the deterministic
+/// last-write-wins tiebreak of a sorted-by-`class_iri` resolution.
 fn value_vocab_predicate_ranges(
     shapes: &Shapes,
     projection: Option<&ValueVocabProjection<'_>>,
@@ -619,21 +626,33 @@ fn value_vocab_predicate_ranges(
     }
     let datasets: [&RdfDataset; 2] = [proj.ontology, shapes.shapes_dataset.as_ref()];
     let range_term = Term::NamedNode(NamedNode::from(rdfs::RANGE));
-    for (class_iri, (enum_key, _def)) in vocab_enums {
-        let class_term = Term::NamedNode(NamedNode::from(class_iri.as_str()));
-        for ds in datasets {
-            for (subject, _pred, _obj) in native_quads(
-                ds,
-                None,
-                Some(&range_term),
-                Some(&class_term),
-                GraphFilter::AnyGraph,
-            ) {
-                if let Term::NamedNode(p) = subject {
-                    out.insert(p.as_str().to_owned(), enum_key.clone());
-                }
-            }
+    // predicate -> (winning class_iri, enum_key); on conflict the larger class_iri wins.
+    let mut winners: BTreeMap<String, (&str, &str)> = BTreeMap::new();
+    for ds in datasets {
+        for (subject, _pred, object) in
+            native_quads(ds, None, Some(&range_term), None, GraphFilter::AnyGraph)
+        {
+            let Term::NamedNode(p) = subject else {
+                continue;
+            };
+            let Term::NamedNode(o) = &object else {
+                continue;
+            };
+            let Some((class_iri, (enum_key, _def))) = vocab_enums.get_key_value(o.as_str()) else {
+                continue;
+            };
+            winners
+                .entry(p.as_str().to_owned())
+                .and_modify(|winner| {
+                    if class_iri.as_str() > winner.0 {
+                        *winner = (class_iri.as_str(), enum_key.as_str());
+                    }
+                })
+                .or_insert((class_iri.as_str(), enum_key.as_str()));
         }
+    }
+    for (predicate, (_class_iri, enum_key)) in winners {
+        out.insert(predicate, enum_key.to_owned());
     }
     out
 }
