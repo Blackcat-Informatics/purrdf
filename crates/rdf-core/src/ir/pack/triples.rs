@@ -504,9 +504,13 @@ fn assert_in_range(
 }
 
 /// Sum every value in `vec` (used to cross-check FoQ index bookkeeping against
-/// `sp.len()`/`so.len()`).
-fn sum_int_vector(vec: IntVectorRef<'_>) -> u64 {
-    (0..vec.len()).map(|i| vec.get(i)).sum()
+/// `sp.len()`/`so.len()`). Returns `None` on `u64` overflow rather than
+/// panicking (debug builds) or silently wrapping (release builds) — `vec`
+/// comes straight from an untrusted pack, so an adversarial vector whose
+/// values overflow when summed must fail closed instead of risking a wrapped
+/// total that coincidentally passes its caller's cross-check.
+fn sum_int_vector(vec: IntVectorRef<'_>) -> Option<u64> {
+    (0..vec.len()).try_fold(0u64, |acc, i| acc.checked_add(vec.get(i)))
 }
 
 /// Validate and, implicitly, fully decode ONE FoQ index's delta-list bytes: for
@@ -690,17 +694,17 @@ impl<'a> PartitionRef<'a> {
                 "triples: object index length disagrees with local_o",
             ));
         }
-        if sum_int_vector(pred_counts) != sp.len() as u64 {
+        if sum_int_vector(pred_counts) != Some(sp.len() as u64) {
             return Err(PackTriplesError::Malformed(
                 "triples: predicate index counts do not sum to sp.len()",
             ));
         }
-        if sum_int_vector(pred_totals) != n_triples {
+        if sum_int_vector(pred_totals) != Some(n_triples) {
             return Err(PackTriplesError::Malformed(
                 "triples: predicate index totals do not sum to n_triples",
             ));
         }
-        if sum_int_vector(obj_counts) != so.len() as u64 {
+        if sum_int_vector(obj_counts) != Some(so.len() as u64) {
             return Err(PackTriplesError::Malformed(
                 "triples: object index counts do not sum to so.len()",
             ));
@@ -1467,6 +1471,44 @@ mod tests {
         let rows_a: Vec<_> = a.pattern(None, None, None, GraphMatch::Any).collect();
         let rows_b: Vec<_> = b_ref.pattern(None, None, None, GraphMatch::Any).collect();
         assert_eq!(rows_a, rows_b);
+    }
+
+    /// `sum_int_vector` is the private cross-check helper `PartitionRef::from_bytes`
+    /// uses to verify a FoQ index's per-entry counts add up to the expected total
+    /// (e.g. `pred_counts` summing to `sp.len()`). Built directly from an
+    /// [`IntVector`]/[`IntVectorRef`] pair (rather than round-tripped through a
+    /// whole encoded pack) because a REAL pack's counts vectors are always sized
+    /// off actual (small) triple counts, so no realistic dataset can ever push
+    /// their sum past `u64::MAX` — this unit test constructs the overflow
+    /// directly, at the width-64 ceiling the format allows, to prove the helper
+    /// itself fails closed rather than panicking or wrapping. The end-to-end
+    /// byte-tamper proof that a pack whose stored counts overflow is REJECTED
+    /// (not merely that this helper returns `None`) lives in
+    /// `tests/pack_triples.rs`'s
+    /// `from_bytes_rejects_a_triples_index_whose_counts_overflow`.
+    #[test]
+    fn sum_int_vector_returns_none_on_overflow() {
+        let mut v = IntVector::with_width(64);
+        v.push(u64::MAX);
+        v.push(u64::MAX);
+        let bytes = v.to_bytes();
+        let vec_ref = IntVectorRef::from_bytes(&bytes).expect("valid int_vector encoding");
+        assert_eq!(
+            sum_int_vector(vec_ref),
+            None,
+            "two u64::MAX entries must overflow, not wrap, when summed"
+        );
+    }
+
+    #[test]
+    fn sum_int_vector_returns_some_correct_sum_when_not_overflowing() {
+        let mut v = IntVector::with_width(64);
+        v.push(3);
+        v.push(4);
+        v.push(5);
+        let bytes = v.to_bytes();
+        let vec_ref = IntVectorRef::from_bytes(&bytes).expect("valid int_vector encoding");
+        assert_eq!(sum_int_vector(vec_ref), Some(12));
     }
 
     #[test]

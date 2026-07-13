@@ -10,8 +10,9 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use purrdf_core::ir::pack::bits::{IntVector, IntVectorRef, RankSelectRef};
 use purrdf_core::ir::pack::dict::{PackDict, PackTermId};
-use purrdf_core::ir::pack::triples::{Triples, TriplesRef};
+use purrdf_core::ir::pack::triples::{PackTriplesError, Triples, TriplesRef};
 use purrdf_core::{BlankScope, GraphMatch, RdfDataset, RdfDatasetBuilder, TermId, TermValue};
 
 /// An `example.org` IRI value.
@@ -411,4 +412,128 @@ fn named_graph_ids_match_dataset_named_graphs() {
         .collect();
     assert_eq!(actual, expected);
     assert_eq!(actual, BTreeSet::from([iri("g1"), iri("g2")]));
+}
+
+/// The FoQ index cross-check gap: `PartitionRef::from_bytes` sums every
+/// `pred_counts`/`pred_totals`/`obj_counts` entry to cross-check it against
+/// `sp.len()`/`n_triples`/`so.len()`. Those entries come straight off an
+/// untrusted pack, so before this fix the summing helper used
+/// `Iterator::sum`, which PANICS on `u64` overflow in a debug build and
+/// SILENTLY WRAPS in a release build — a wrapped total could coincidentally
+/// equal the expected length, letting a corrupted FoQ index pass its
+/// cross-check (a silent wrong-answer risk), and the debug-build panic is
+/// itself a DoS on untrusted input.
+///
+/// This builds a REAL two-predicate default-graph partition through the
+/// production `Triples::encode` path, then splices the on-disk bytes of the
+/// `pred_counts` int-vector: its two genuine entries (each `1`, the real
+/// per-predicate group count) are replaced with two `u64::MAX` entries at bit
+/// width 64. Width 64 is not an out-of-format value — `IntVector::with_width`
+/// documents `0..=64` as its whole legal range, and `IntVectorRef::from_bytes`
+/// accepts the substituted bytes as a perfectly well-formed int-vector (same
+/// element count, self-consistent width/words). No genuine dataset would ever
+/// need width 64 for a `pred_counts` entry (it is bounded by the partition's
+/// own — tiny, in any realistic pack — triple count), so this is exactly the
+/// kind of adversarial-but-well-formed byte pattern the fail-closed cross-check
+/// exists to catch, not a shape `IntVectorRef`'s own parser would reject on its
+/// own. `TriplesRef::from_bytes` must reject the tampered pack with
+/// `PackTriplesError::Malformed(_)` — never panic, never silently accept.
+#[test]
+fn from_bytes_rejects_a_triples_index_whose_counts_overflow() {
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("http://example.org/overflow_s");
+    let p1 = b.intern_iri("http://example.org/overflow_p1");
+    let p2 = b.intern_iri("http://example.org/overflow_p2");
+    let o = b.intern_iri("http://example.org/overflow_o");
+    b.push_quad(s, p1, o, None);
+    b.push_quad(s, p2, o, None);
+    let dataset = b.freeze().expect("valid dataset");
+
+    let dict_bytes = PackDict::encode(&dataset).to_bytes();
+    let dict = PackDict::open(&dict_bytes).expect("dict opens");
+    let triples_bytes = Triples::encode(&dict, &dataset).to_bytes();
+
+    // Sanity: the freshly encoded pack opens cleanly before any tamper.
+    TriplesRef::from_bytes(&triples_bytes).expect("a freshly encoded pack opens");
+
+    // -- Walk the exact field sequence `PartitionRef::from_bytes` parses (the
+    // fixed on-disk layout documented in triples.rs's module docs: graph_id,
+    // n_triples, local_s/local_p/local_o, sp, bp, so, bo, pred_offsets,
+    // pred_counts, ...) purely through PUBLIC readers, to locate
+    // `pred_counts`'s exact byte span. --------------------------------------
+    let version = triples_bytes[0];
+    assert_eq!(version, 1, "triples format version");
+    let mut pos = 1usize;
+    let partition_count = u64::from_le_bytes(triples_bytes[pos..pos + 8].try_into().unwrap());
+    assert_eq!(
+        partition_count, 1,
+        "the fixture has only the default-graph partition"
+    );
+    pos += 8;
+    let plen = u64::from_le_bytes(triples_bytes[pos..pos + 8].try_into().unwrap()) as usize;
+    pos += 8;
+    let partition_start = pos;
+    let partition = &triples_bytes[partition_start..partition_start + plen];
+
+    let mut ppos = 16usize; // graph_id: u64 (8B) + n_triples: u64 (8B)
+    let local_s = IntVectorRef::from_bytes(&partition[ppos..]).expect("local_s parses");
+    ppos += local_s.serialized_len();
+    let local_p = IntVectorRef::from_bytes(&partition[ppos..]).expect("local_p parses");
+    ppos += local_p.serialized_len();
+    assert_eq!(local_p.len(), 2, "the fixture has exactly two predicates");
+    let local_o = IntVectorRef::from_bytes(&partition[ppos..]).expect("local_o parses");
+    ppos += local_o.serialized_len();
+    let sp = IntVectorRef::from_bytes(&partition[ppos..]).expect("sp parses");
+    ppos += sp.serialized_len();
+    let bp = RankSelectRef::from_bytes(&partition[ppos..]).expect("bp parses");
+    ppos += bp.serialized_len();
+    let so = IntVectorRef::from_bytes(&partition[ppos..]).expect("so parses");
+    ppos += so.serialized_len();
+    let bo = RankSelectRef::from_bytes(&partition[ppos..]).expect("bo parses");
+    ppos += bo.serialized_len();
+    let pred_offsets = IntVectorRef::from_bytes(&partition[ppos..]).expect("pred_offsets parses");
+    ppos += pred_offsets.serialized_len();
+    let pred_counts = IntVectorRef::from_bytes(&partition[ppos..]).expect("pred_counts parses");
+    let pred_counts_start = ppos;
+    let pred_counts_old_len = pred_counts.serialized_len();
+
+    assert_eq!(pred_counts.len(), 2, "one count per predicate");
+    assert_eq!(pred_counts.get(0), 1, "p1 has exactly one (s,p) group");
+    assert_eq!(pred_counts.get(1), 1, "p2 has exactly one (s,p) group");
+    assert_ne!(
+        pred_counts.width(),
+        64,
+        "the real encoder picks a tiny width for these small counts, proving the \
+         width-64 substitute below is a genuine widening, not a no-op"
+    );
+
+    // -- Splice in a substitute `pred_counts`: same 2 entries, but each
+    // `u64::MAX` at width 64 — legal per the on-disk format, unsummable
+    // without overflow. --------------------------------------------------
+    let mut tampered = IntVector::with_width(64);
+    tampered.push(u64::MAX);
+    tampered.push(u64::MAX);
+    let tampered_bytes = tampered.to_bytes();
+
+    let mut new_partition =
+        Vec::with_capacity(partition.len() - pred_counts_old_len + tampered_bytes.len());
+    new_partition.extend_from_slice(&partition[..pred_counts_start]);
+    new_partition.extend_from_slice(&tampered_bytes);
+    new_partition.extend_from_slice(&partition[pred_counts_start + pred_counts_old_len..]);
+
+    let mut new_triples_bytes = Vec::with_capacity(1 + 8 + 8 + new_partition.len());
+    new_triples_bytes.push(version);
+    new_triples_bytes.extend_from_slice(&1u64.to_le_bytes()); // partition_count
+    new_triples_bytes.extend_from_slice(&(new_partition.len() as u64).to_le_bytes());
+    new_triples_bytes.extend_from_slice(&new_partition);
+
+    let err = TriplesRef::from_bytes(&new_triples_bytes).expect_err(
+        "predicate-index counts that overflow when summed must be rejected, not panic or \
+         silently accepted via a wrapped sum",
+    );
+    assert_eq!(
+        err,
+        PackTriplesError::Malformed("triples: predicate index counts do not sum to sp.len()"),
+        "expected the pred_counts cross-check to be the one that catches this, got {err:?}"
+    );
 }
