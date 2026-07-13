@@ -10,6 +10,7 @@
 use ciborium::value::Value;
 
 use crate::model::{Diagnostic, StreamableInfo};
+pub use crate::model::ByteRange;
 use crate::reader::read_file_segments;
 use crate::wire::{
     blake3_256, canonical, content_id, header_id, hex, iter_items, map_get, unwrap_header,
@@ -32,6 +33,10 @@ pub struct FrameInventory {
     pub frame_type: String,
     /// True when both self-id and `prev` chain checks passed for this frame.
     pub valid: bool,
+    /// Stored `prev` chain-link bytes the frame claims to chain onto.
+    ///
+    /// `None` for header-derived seed frames and non-map placeholder frames.
+    pub prev: Option<Vec<u8>>,
 }
 
 /// Inventory for one segment in a possibly concatenated GTS file.
@@ -74,15 +79,6 @@ pub struct Inventory {
     pub clean_end: usize,
     /// Number of complete CBOR items parsed before any torn append.
     pub item_count: usize,
-}
-
-/// Half-open byte range `[start, end)` needed to resume replication.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ByteRange {
-    /// Start byte offset.
-    pub start: usize,
-    /// End byte offset, exclusive.
-    pub end: usize,
 }
 
 /// Result category for a replication missing-range query.
@@ -212,6 +208,7 @@ fn collect_frames(
                 id: Vec::new(),
                 frame_type: "<non-map>".to_string(),
                 valid: false,
+                prev: None,
             });
             continue;
         };
@@ -226,8 +223,11 @@ fn collect_frames(
         // Replication uses the same id/prev chain invariant as the reader, but
         // keeps scanning so callers can still identify byte ranges around bad
         // frames.
-        let prev_ok =
-            matches!(map_get(frame, "prev"), Some(Value::Bytes(prev)) if prev == &expected_prev);
+        let stored_prev = match map_get(frame, "prev") {
+            Some(Value::Bytes(prev)) => Some(prev.clone()),
+            _ => None,
+        };
+        let prev_ok = stored_prev.as_deref() == Some(expected_prev.as_slice());
         let id = stored_id.clone().unwrap_or_else(|| computed.clone());
         expected_prev = stored_id.unwrap_or(computed);
         frames.push(FrameInventory {
@@ -241,6 +241,7 @@ fn collect_frames(
                 .unwrap_or("<unknown>")
                 .to_string(),
             valid: id_ok && prev_ok,
+            prev: stored_prev,
         });
     }
     frames

@@ -191,6 +191,28 @@ pub struct StreamableInfo {
     pub head: Option<Vec<u8>>,
 }
 
+/// Half-open byte range `[start, end)` into a GTS file, shared by the
+/// replication inventory and other byte-provenance callers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ByteRange {
+    /// Start byte offset.
+    pub start: usize,
+    /// End byte offset, exclusive.
+    pub end: usize,
+}
+
+impl ByteRange {
+    /// Number of bytes spanned by this range.
+    pub fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+
+    /// Whether this range spans zero bytes.
+    pub fn is_empty(&self) -> bool {
+        self.start >= self.end
+    }
+}
+
 /// One content-addressed blob entry in a folded graph.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BlobEntry {
