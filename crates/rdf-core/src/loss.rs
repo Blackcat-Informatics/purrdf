@@ -27,6 +27,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 use crate::RdfLocation;
 
@@ -588,22 +589,34 @@ pub fn loss_matrix_json() -> String {
 /// renders) down to a `(from, to) -> codes` lookup, dropping the `note` text —
 /// mapping every `(from, to)` pair this crate knows a loss profile for to the
 /// closed set of codes that pair's conversion may drop.
-fn registry() -> BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> {
-    let mut table: BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> = BTreeMap::new();
-    for entry in &registry_entries() {
+///
+/// [`registry_entries`] is pure, compile-time-derived data (the same rows on
+/// every call), so the folded map is built once behind a [`OnceLock`] and
+/// reused for the process lifetime — `profile_for` sits on the soundness
+/// check's hot path (once per code checked), and `registered_pairs`/
+/// [`loss_matrix_json`]'s registry rendering both want the same table, so
+/// rebuilding a fresh `BTreeMap` on every call was pure wasted allocation.
+fn registry() -> &'static BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> {
+    static REGISTRY: OnceLock<BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>>> =
+        OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let mut table: BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> =
+            BTreeMap::new();
+        for entry in &registry_entries() {
+            table
+                .entry((static_str(&entry.from), static_str(&entry.to)))
+                .or_default()
+                .insert(static_str(&entry.code));
+        }
         table
-            .entry((static_str(&entry.from), static_str(&entry.to)))
-            .or_default()
-            .insert(static_str(&entry.code));
-    }
-    table
+    })
 }
 
 /// Every `(from, to)` pair with a registered loss profile: the RDF↔GTS
 /// directions, every non-identity syntax/projection transcode pair, and the
 /// `("shacl", "json-schema")` shapes projection.
 pub fn registered_pairs() -> impl Iterator<Item = (&'static str, &'static str)> {
-    registry().into_keys()
+    registry().keys().copied()
 }
 
 /// The closed set of loss codes a `from -> to` conversion may drop, per the
@@ -614,9 +627,9 @@ pub fn registered_pairs() -> impl Iterator<Item = (&'static str, &'static str)> 
 /// arbitrary pairs to check whether a profile is known.
 pub fn profile_for(from: &str, to: &str) -> BTreeSet<&'static str> {
     registry()
-        .into_iter()
+        .iter()
         .find(|((f, t), _)| *f == from && *t == to)
-        .map(|(_, codes)| codes)
+        .map(|(_, codes)| codes.clone())
         .unwrap_or_default()
 }
 
