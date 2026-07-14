@@ -443,6 +443,12 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
 /// no class extension to key a `$def` by — and are excluded from the compiled
 /// schema, but (unlike a bare exclusion) each one records a `sh:SPARQLTarget`
 /// loss on the shape's own subject rather than vanishing silently;
+/// `sh:targetNode` / `sh:targetSubjectsOf` / `sh:targetObjectsOf`-targeted
+/// shapes (`Target::Node` / `Target::SubjectsOf` / `Target::ObjectsOf`) are
+/// the same story — none of the three is a class extension, so none can key a
+/// `$def`, and each records its own loss instead of vanishing (a shape's
+/// `Target::ImplicitClass` — the shape node is itself `rdfs:Class` — IS a
+/// class extension and genuinely gets a `$def`, so it records no loss);
 /// `value-vocabulary` covers an enum-with-no-members projection and
 /// `value-vocabulary member` a dropped blank-node enum member. Mirrored here
 /// (rather than depended-on from this crate) because `purrdf-core` never
@@ -477,6 +483,24 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
         "sh:sparql",
         "A SHACL-SPARQL constraint (sh:sparql) has no closed-world JSON Schema equivalent and is \
          dropped.",
+    ),
+    (
+        "sh:targetNode",
+        "A shape targeted only via sh:targetNode selects specific focus nodes, not a class \
+         extension; it has no closed-world JSON Schema $def and its constraints are not \
+         enforced by the emitted schema.",
+    ),
+    (
+        "sh:targetObjectsOf",
+        "A shape targeted only via sh:targetObjectsOf selects focus nodes by a predicate's \
+         object position, not a class extension; no closed-world JSON Schema $def can be keyed \
+         and its constraints are not enforced.",
+    ),
+    (
+        "sh:targetSubjectsOf",
+        "A shape targeted only via sh:targetSubjectsOf selects focus nodes by a predicate's \
+         subject position, not a class extension; no closed-world JSON Schema $def can be keyed \
+         and its constraints are not enforced.",
     ),
     (
         "value-vocabulary",

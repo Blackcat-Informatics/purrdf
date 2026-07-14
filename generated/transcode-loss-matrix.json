@@ -770,6 +770,27 @@
     "note": "A SHACL-SPARQL constraint (sh:sparql) has no closed-world JSON Schema equivalent and is dropped."
   },
   {
+    "code": "sh:targetNode",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A shape targeted only via sh:targetNode selects specific focus nodes, not a class extension; it has no closed-world JSON Schema $def and its constraints are not enforced by the emitted schema."
+  },
+  {
+    "code": "sh:targetObjectsOf",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A shape targeted only via sh:targetObjectsOf selects focus nodes by a predicate's object position, not a class extension; no closed-world JSON Schema $def can be keyed and its constraints are not enforced."
+  },
+  {
+    "code": "sh:targetSubjectsOf",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A shape targeted only via sh:targetSubjectsOf selects focus nodes by a predicate's subject position, not a class extension; no closed-world JSON Schema $def can be keyed and its constraints are not enforced."
+  },
+  {
     "code": "value-vocabulary",
     "from": "shacl",
     "to": "json-schema",
