@@ -576,7 +576,7 @@ fn registry_entries() -> Vec<LossEntry> {
 /// The enumerable loss registry as deterministic JSON: every `(from, to)` pair
 /// [`registered_pairs`] reports — the RDF↔GTS directions, every non-identity
 /// syntax/projection transcode pair, and the `("shacl", "json-schema")` shapes
-/// projection — rendered from [`registry_entries`] sorted by `(from, to, code)`.
+/// projection — rendered from `registry_entries` sorted by `(from, to, code)`.
 /// Unlike a single [`LossLedger::contract`], codes are NOT assumed unique here
 /// — the same code recurs for different `(from, to)` pairs.
 ///
