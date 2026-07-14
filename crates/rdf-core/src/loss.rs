@@ -12,8 +12,10 @@
 //! ledger [`LossLedger::is_empty`].
 //!
 //! The ledger is kernel-clean (PyO3-free) and renders to byte-stable JSON sorted
-//! by code; the rendered matrix is committed at `generated/rdf-loss-matrix.json`
-//! and a drift gate in this module's tests re-derives and compares it.
+//! by code; the RDF↔GTS-only matrix ([`rdf_gts_loss_matrix_json`]) is committed at
+//! `generated/rdf-loss-matrix.json` and the full enumerable registry
+//! ([`loss_matrix_json`]) at `generated/transcode-loss-matrix.json`, each with a
+//! drift gate in this module's tests that re-derives and compares it.
 //!
 //! [`LossEntry`]/[`LossLedger`] serve two disciplines (see [`LossLedger::contract`]
 //! and [`LossLedger::record`]): a compile-time **contract** (the static ledgers
@@ -21,7 +23,7 @@
 //! conversion accumulating located losses as it runs). [`registered_pairs`] and
 //! [`profile_for`] enumerate the closed set of `(from, to)` pairs and loss codes
 //! known across BOTH disciplines, including the non-syntax `shacl`→`json-schema`
-//! shapes projection.
+//! shapes projection; [`loss_matrix_json`] renders that same enumerable registry.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -147,7 +149,7 @@ impl LossLedger {
     /// This is the stable public runtime-ledger schema downstream consumers
     /// (e.g. a `--loss-ledger` CLI flag) pin against; `schema_version` bumps
     /// only on a breaking shape change. The static contract renders
-    /// ([`loss_matrix_json`], [`transcode_loss_matrix_json`]) keep the bare
+    /// ([`rdf_gts_loss_matrix_json`], [`loss_matrix_json`]) keep the bare
     /// JSON-array shape instead (no `schema_version`), so the committed
     /// `generated/*.json` matrix artifacts stay unchanged.
     pub fn render_json(&self) -> String {
@@ -199,7 +201,13 @@ pub fn gts_to_rdf_loss_ledger() -> LossLedger {
 
 /// The combined RDF↔GTS matrix as a single deterministic, sorted-by-code JSON
 /// array — the body of the generated `generated/rdf-loss-matrix.json` artifact.
-pub fn loss_matrix_json() -> String {
+///
+/// This renders only the two direction ledgers ([`rdf_to_gts_loss_ledger`] /
+/// [`gts_to_rdf_loss_ledger`]); for the full enumerable registry of every
+/// registered `(from, to)` pair (RDF↔GTS directions plus every syntax/
+/// projection transcode pair and the shapes projection), see
+/// [`loss_matrix_json`].
+pub fn rdf_gts_loss_matrix_json() -> String {
     let mut entries: Vec<LossEntry> = Vec::new();
     entries.extend_from_slice(rdf_to_gts_loss_ledger().entries());
     entries.extend_from_slice(gts_to_rdf_loss_ledger().entries());
@@ -403,9 +411,10 @@ pub fn pair_loss_ledger(from: &str, to: &str) -> LossLedger {
 /// PROJECTION_CODECS)` pairs (via [`pair_loss_ledger`]) PLUS the non-syntax
 /// `("shacl", "json-schema")` shapes projection ([`shacl_json_schema_entries`]).
 ///
-/// This is the single source [`transcode_loss_matrix_json`] renders and
-/// [`registry`] folds in — the enumerable registry that codecs (and the shapes
-/// emitter) plug into. Order is unspecified; callers sort as needed.
+/// This is one of the sources [`registry_entries`] folds in — together with the
+/// RDF↔GTS direction ledgers — to build the enumerable registry that
+/// [`loss_matrix_json`] renders and [`registry`] indexes. Order is unspecified;
+/// callers sort as needed.
 fn transcode_and_shapes_entries() -> Vec<LossEntry> {
     let all_targets: Vec<&str> = SYNTAX_CODECS
         .iter()
@@ -425,29 +434,6 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
     }
     entries.extend(shacl_json_schema_entries());
     entries
-}
-
-/// The full transcode loss matrix as deterministic JSON.
-///
-/// Renders `transcode_and_shapes_entries` — every non-identity syntax/
-/// projection transcode pair PLUS the `("shacl", "json-schema")` shapes
-/// projection — sorted by `(from, to, code)` and rendered via `render`.
-/// Unlike a single [`LossLedger::contract`], codes are NOT assumed unique here
-/// — the same code recurs for different `(from, to)` pairs.
-///
-/// The rendered output is committed at `generated/transcode-loss-matrix.json`.
-pub fn transcode_loss_matrix_json() -> String {
-    let mut entries = transcode_and_shapes_entries();
-
-    // Sort by (from, to, code) for full determinism.
-    entries.sort_by(|a, b| {
-        a.from
-            .cmp(&b.from)
-            .then_with(|| a.to.cmp(&b.to))
-            .then_with(|| a.code.cmp(&b.code))
-    });
-
-    render(&entries, false)
 }
 
 // ── Enumerable loss registry ─────────────────────────────────────────────────
@@ -551,37 +537,65 @@ fn static_str(cow: &Cow<'static, str>) -> &'static str {
     }
 }
 
-/// The single source of truth backing [`registered_pairs`] and [`profile_for`]
-/// — and, via [`transcode_and_shapes_entries`], the same source
-/// [`transcode_loss_matrix_json`] renders — mapping every `(from, to)` pair
-/// this crate knows a loss profile for to the closed set of codes that pair's
-/// conversion may drop.
+/// The single source of truth every enumerable-registry consumer reads: the
+/// RDF↔GTS direction ledgers ([`rdf_to_gts_loss_ledger`] /
+/// [`gts_to_rdf_loss_ledger`]) plus [`transcode_and_shapes_entries`] (the full
+/// syntax/projection transcode matrix over `SYNTAX_CODECS` × `(SYNTAX_CODECS ∪
+/// PROJECTION_CODECS)` AND the non-syntax shapes pair `("shacl", "json-schema")`).
 ///
-/// Built from the RDF↔GTS direction ledgers plus
-/// [`transcode_and_shapes_entries`] (the full syntax/projection transcode
-/// matrix over `SYNTAX_CODECS` × `(SYNTAX_CODECS ∪ PROJECTION_CODECS)` AND the
-/// non-syntax shapes pair `("shacl", "json-schema")`).
+/// [`loss_matrix_json`] renders these rows (with their `note` text intact) and
+/// [`registry`] folds them into a `(from, to) -> codes` lookup table — both
+/// derive from this ONE function, so the rendered matrix and the
+/// `registered_pairs()`/`profile_for()` contract can never drift apart. Order
+/// is unspecified; callers sort as needed.
+fn registry_entries() -> Vec<LossEntry> {
+    let mut entries: Vec<LossEntry> = Vec::new();
+    entries.extend_from_slice(rdf_to_gts_loss_ledger().entries());
+    entries.extend_from_slice(gts_to_rdf_loss_ledger().entries());
+    entries.extend(transcode_and_shapes_entries());
+    entries
+}
+
+/// The enumerable loss registry as deterministic JSON: every `(from, to)` pair
+/// [`registered_pairs`] reports — the RDF↔GTS directions, every non-identity
+/// syntax/projection transcode pair, and the `("shacl", "json-schema")` shapes
+/// projection — rendered from [`registry_entries`] sorted by `(from, to, code)`.
+/// Unlike a single [`LossLedger::contract`], codes are NOT assumed unique here
+/// — the same code recurs for different `(from, to)` pairs.
+///
+/// This is the enumerator issue #104's acceptance criterion names: the set of
+/// `(from, to)` pairs this renders is exactly `registered_pairs()` (see the
+/// `loss_matrix_json_pairs_match_registered_pairs` test). The rendered output
+/// is committed at `generated/transcode-loss-matrix.json`. For the narrower
+/// RDF↔GTS-only view committed at `generated/rdf-loss-matrix.json`, see
+/// [`rdf_gts_loss_matrix_json`].
+pub fn loss_matrix_json() -> String {
+    let mut entries = registry_entries();
+
+    // Sort by (from, to, code) for full determinism.
+    entries.sort_by(|a, b| {
+        a.from
+            .cmp(&b.from)
+            .then_with(|| a.to.cmp(&b.to))
+            .then_with(|| a.code.cmp(&b.code))
+    });
+
+    render(&entries, false)
+}
+
+/// The single source of truth backing [`registered_pairs`] and [`profile_for`]
+/// — built by folding [`registry_entries`] (the same rows [`loss_matrix_json`]
+/// renders) down to a `(from, to) -> codes` lookup, dropping the `note` text —
+/// mapping every `(from, to)` pair this crate knows a loss profile for to the
+/// closed set of codes that pair's conversion may drop.
 fn registry() -> BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> {
     let mut table: BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> = BTreeMap::new();
-
-    let record = |table: &mut BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>>,
-                  entry: &LossEntry| {
+    for entry in &registry_entries() {
         table
             .entry((static_str(&entry.from), static_str(&entry.to)))
             .or_default()
             .insert(static_str(&entry.code));
-    };
-
-    for entry in rdf_to_gts_loss_ledger().entries() {
-        record(&mut table, entry);
     }
-    for entry in gts_to_rdf_loss_ledger().entries() {
-        record(&mut table, entry);
-    }
-    for entry in &transcode_and_shapes_entries() {
-        record(&mut table, entry);
-    }
-
     table
 }
 
@@ -725,7 +739,7 @@ pub fn assert_ledger_sound(ledger: &LossLedger, from: &str, to: &str) {
 /// Hand-rolled to avoid pulling serde into the kernel rlib (the crate does not
 /// depend on it). Codes are NOT assumed unique — callers sort first; this
 /// function only renders. `emit_location` gates the `location` field: the
-/// static-contract renders ([`loss_matrix_json`], [`transcode_loss_matrix_json`])
+/// static-contract renders ([`rdf_gts_loss_matrix_json`], [`loss_matrix_json`])
 /// pass `false` so the committed artifacts stay byte-identical (contract
 /// entries never carry a location anyway); [`LossLedger::render_json`] passes
 /// `true` so a runtime `record`-discipline location is visible.
@@ -837,7 +851,7 @@ mod tests {
 
     #[test]
     fn render_is_deterministic() {
-        assert_eq!(loss_matrix_json(), loss_matrix_json());
+        assert_eq!(rdf_gts_loss_matrix_json(), rdf_gts_loss_matrix_json());
         let ledger = rdf_to_gts_loss_ledger();
         assert_eq!(ledger.render_json(), ledger.render_json());
     }
@@ -887,7 +901,7 @@ mod tests {
 
     #[test]
     fn json_is_structurally_valid() {
-        let json = loss_matrix_json();
+        let json = rdf_gts_loss_matrix_json();
         // Deterministic shape: a JSON array with a trailing newline.
         assert!(json.starts_with("[\n"));
         assert!(json.ends_with("]\n"));
@@ -933,14 +947,14 @@ mod tests {
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         assert_eq!(
             committed,
-            loss_matrix_json(),
-            "generated/rdf-loss-matrix.json is stale; regenerate it from loss_matrix_json()"
+            rdf_gts_loss_matrix_json(),
+            "generated/rdf-loss-matrix.json is stale; regenerate it from rdf_gts_loss_matrix_json()"
         );
     }
 
     #[test]
-    fn transcode_loss_matrix_deterministic() {
-        assert_eq!(transcode_loss_matrix_json(), transcode_loss_matrix_json());
+    fn loss_matrix_json_deterministic() {
+        assert_eq!(loss_matrix_json(), loss_matrix_json());
     }
 
     #[test]
@@ -951,18 +965,18 @@ mod tests {
             .unwrap_or_else(|_| panic!("generated file missing: {}", path.display()));
         assert_eq!(
             on_disk,
-            transcode_loss_matrix_json(),
+            loss_matrix_json(),
             "transcode-loss-matrix.json has drifted"
         );
     }
 
-    /// The transcode matrix is backed by the same enumerable registry as
-    /// [`profile_for`] (via [`transcode_and_shapes_entries`]), so it must
-    /// enumerate the non-syntax `("shacl", "json-schema")` shapes pair too —
-    /// not just the syntax/projection codec pairs.
+    /// The registry matrix is backed by the same enumerable registry as
+    /// [`profile_for`] (via [`registry_entries`]), so it must enumerate the
+    /// non-syntax `("shacl", "json-schema")` shapes pair too — not just the
+    /// syntax/projection codec pairs.
     #[test]
     fn transcode_matrix_includes_shacl_json_schema_pair() {
-        let json = transcode_loss_matrix_json();
+        let json = loss_matrix_json();
         assert!(
             json.contains("\"from\": \"shacl\""),
             "transcode-loss-matrix.json must include the shacl->json-schema pair"
@@ -1022,8 +1036,50 @@ mod tests {
     }
 
     #[test]
-    fn loss_matrix_json_is_deterministic_across_calls() {
-        assert_eq!(loss_matrix_json(), loss_matrix_json());
+    fn rdf_gts_loss_matrix_json_is_deterministic_across_calls() {
+        assert_eq!(rdf_gts_loss_matrix_json(), rdf_gts_loss_matrix_json());
+    }
+
+    /// The issue-named enumerator: the set of `(from, to)` pairs
+    /// [`loss_matrix_json`] renders must equal `registered_pairs()` exactly —
+    /// this is the executable proof that `loss_matrix_json()` enumerates
+    /// precisely the registered pairs, no more and no fewer.
+    #[test]
+    fn loss_matrix_json_pairs_match_registered_pairs() {
+        let json = loss_matrix_json();
+        let mut rendered_pairs: BTreeSet<(String, String)> = BTreeSet::new();
+        let mut lines = json.lines();
+        while let Some(line) = lines.next() {
+            if line.trim() != "{" {
+                continue;
+            }
+            let mut from = None;
+            let mut to = None;
+            for field_line in lines.by_ref() {
+                let trimmed = field_line.trim().trim_end_matches(',');
+                if let Some(v) = trimmed.strip_prefix("\"from\": \"") {
+                    from = Some(v.trim_end_matches('"').to_owned());
+                } else if let Some(v) = trimmed.strip_prefix("\"to\": \"") {
+                    to = Some(v.trim_end_matches('"').to_owned());
+                }
+                if trimmed == "}" {
+                    break;
+                }
+            }
+            rendered_pairs.insert((
+                from.expect("every row has a `from` field"),
+                to.expect("every row has a `to` field"),
+            ));
+        }
+
+        let expected_pairs: BTreeSet<(String, String)> = registered_pairs()
+            .map(|(from, to)| (from.to_owned(), to.to_owned()))
+            .collect();
+
+        assert_eq!(
+            rendered_pairs, expected_pairs,
+            "loss_matrix_json() must enumerate exactly registered_pairs()"
+        );
     }
 
     #[test]

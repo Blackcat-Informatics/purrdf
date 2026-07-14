@@ -123,7 +123,7 @@ pub use purrdf_core::{
     check_ledger_complete, check_ledger_sound, check_provenance, dataset_diff, datasets_isomorphic,
     emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, fno_to_ntriples,
     fno_to_quads, gts_to_rdf_loss_ledger, loss_matrix_json, pair_loss_ledger, profile_for,
-    rdf_to_gts_loss_ledger, registered_pairs, rule_iri, smallvec, transcode_loss_matrix_json,
+    rdf_gts_loss_matrix_json, rdf_to_gts_loss_ledger, registered_pairs, rule_iri, smallvec,
     try_canonicalize, try_canonicalize_with,
 };
 
