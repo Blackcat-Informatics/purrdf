@@ -39,10 +39,14 @@
 //! (NOT `push_quad` — the side-table rows are a distinct structural component,
 //! not ordinary quads; see [`crate::ir::canon`]'s `Component` enum).
 
+use std::sync::Arc;
+
 use sha2::{Digest, Sha256};
 
 use crate::dataset_view::DatasetView;
-use crate::{CanonHash, RdfDatasetBuilder, RdfLiteral, TermId, TermRef, TermValue};
+use crate::{
+    CanonHash, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId, TermRef, TermValue,
+};
 
 use super::container::{PackError, PackView};
 
@@ -166,15 +170,20 @@ fn reintern<V: DatasetView>(b: &mut RdfDatasetBuilder, v: &V, id: V::Id) -> Term
     intern_value(b, &value)
 }
 
-/// Independently reconstruct an `RdfDatasetBuilder` from `view`'s
-/// [`DatasetView`] surface: every base quad, then every reifier binding, then
-/// every statement annotation — the exact three components
+/// Independently reconstruct an `RdfDatasetBuilder` from ANY [`DatasetView`]'s
+/// surface: every base quad, then every reifier binding, then every statement
+/// annotation — the exact three components
 /// [`crate::ir::canon::collect_components`] folds into the RDFC-1.0 digest (see
 /// the [module docs](self)). Each blank's original `(label, scope)` (C0.2)
 /// round-trips through [`to_value`]/[`intern_value`] unchanged; that choice is
 /// moot for the digest either way, since RDFC-1.0 canonicalizes blank labels
 /// away entirely (structure alone drives the canonical `_:c14nN` assignment).
-fn reconstruct(view: &PackView<'_>) -> RdfDatasetBuilder {
+///
+/// This is the SOLE re-intern loop: [`verify_pack`] (which reconstructs, freezes,
+/// and recomputes the digest) and the public [`dataset_from_view`] (which
+/// reconstructs and freezes into an `Arc<RdfDataset>`) both drive it, so there is
+/// exactly one place the base-quad / reifier / annotation replay lives.
+fn reconstruct<D: DatasetView>(view: &D) -> RdfDatasetBuilder {
     let mut b = RdfDatasetBuilder::new();
 
     for q in view.quads() {
@@ -205,6 +214,41 @@ fn reconstruct(view: &PackView<'_>) -> RdfDatasetBuilder {
     }
 
     b
+}
+
+// ---------------------------------------------------------------------------
+// dataset_from_view: any DatasetView -> Arc<RdfDataset>
+// ---------------------------------------------------------------------------
+
+/// Reconstruct a concrete, frozen [`Arc<RdfDataset>`] from ANY [`DatasetView`] by
+/// re-interning every term BY VALUE into a fresh [`RdfDatasetBuilder`].
+///
+/// This is the public, view-generic counterpart to [`verify_pack`]'s internal
+/// reconstruct-then-freeze: where `verify_pack` throws the reconstruction away
+/// after corroborating the digest, this HANDS IT BACK. A caller holding a read-only
+/// projection — a mmap'd [`PackView`], a paged backend, or any other `DatasetView`
+/// — that must feed a transform requiring a concrete `RdfDataset` (e.g. the
+/// reasoner) uses this to materialize one. Both entry points share the single
+/// [`reconstruct`] loop (SUBSUME, no second copy).
+///
+/// The reconstruction replays all three components the view exposes — base quads
+/// ([`DatasetView::quads`]), RDF-1.2 reifier bindings
+/// ([`DatasetView::reifier_quads`], pushed through the reifier side-table entry
+/// point, NOT `push_quad`), and statement annotations
+/// ([`DatasetView::annotation_quads`]) — so the RDF-1.2 overlay survives the round
+/// trip losslessly (a view with no side-tables simply replays zero of them). Blank
+/// `(label, scope)` identity round-trips unchanged; RDFC-1.0 isomorphism is
+/// therefore preserved (see the [module docs](self)).
+///
+/// # Errors
+///
+/// [`RdfDiagnostic`] if the reconstructed rows fail [`RdfDatasetBuilder::freeze`]'s
+/// structural validation (C0 positional constraints, id-reference validity,
+/// triple-term acyclicity) — the same fail-closed contract every builder freeze
+/// carries. For a well-formed source view this cannot trip; the `Result` exists so
+/// an untrusted or hand-assembled view fails closed rather than panicking.
+pub fn dataset_from_view<D: DatasetView>(view: &D) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    reconstruct(view).freeze()
 }
 
 // ---------------------------------------------------------------------------

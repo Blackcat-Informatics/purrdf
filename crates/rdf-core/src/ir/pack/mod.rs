@@ -77,7 +77,7 @@ pub mod triples;
 pub mod view;
 
 #[doc(hidden)]
-pub use certify::{PackDigest, pack_digest, verify_pack};
+pub use certify::{PackDigest, dataset_from_view, pack_digest, verify_pack};
 #[doc(hidden)]
 pub use container::{PackBuilder, PackError, PackView};
 #[doc(hidden)]
