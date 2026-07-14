@@ -101,6 +101,12 @@ pub struct SerializeOutcome {
     /// triples) dropped because the target format does not carry the star layer in
     /// the transcode contract. Zero for star-capable formats.
     pub statement_rows_dropped: usize,
+    /// The number of base-quad object literals whose RDF-1.2 base direction was
+    /// dropped because the target format has no direction surface (TriX / HexTuples
+    /// keep the language tag but cannot carry `--ltr` / `--rtl`). Zero for every
+    /// direction-capable format. Recorded as declared loss — never a silent drop
+    /// (CONSTITUTION P7).
+    pub directional_literals_dropped: usize,
 }
 
 /// Serialize the frozen IR to a concrete [`NativeRdfFormat`], returning the bytes and
@@ -124,11 +130,20 @@ pub fn serialize_dataset_to_format<D: DatasetView>(
     _base_iri: Option<&str>,
 ) -> Result<SerializeOutcome, RdfDiagnostic> {
     let media_type = format.media_type();
+    // A base direction is dropped independently of the star layer: RDF/XML is
+    // star-incapable yet carries direction, while TriX / HexTuples carry neither. Count
+    // the affected object literals up front for whichever branch emits.
+    let directional_literals_dropped = if format.carries_direction() {
+        0
+    } else {
+        count_directional_object_literals(dataset)
+    };
     if format.carries_star() {
         let bytes = serialize_dataset(dataset, media_type, SerializeGraph::Dataset)?;
         Ok(SerializeOutcome {
             bytes,
             statement_rows_dropped: 0,
+            directional_literals_dropped,
         })
     } else {
         let bytes = serialize_dataset_base_only(dataset, media_type, SerializeGraph::Dataset)?;
@@ -137,8 +152,28 @@ pub fn serialize_dataset_to_format<D: DatasetView>(
         Ok(SerializeOutcome {
             bytes,
             statement_rows_dropped,
+            directional_literals_dropped,
         })
     }
+}
+
+/// Count the base-quad OBJECT literals whose resolved term carries an RDF-1.2 base
+/// direction. Used to record declared loss when serializing to a format with no
+/// direction surface (TriX / HexTuples) — the drop is the realized count the caller
+/// attaches to the loss ledger, never a silent loss (CONSTITUTION P7).
+fn count_directional_object_literals<D: DatasetView>(dataset: &D) -> usize {
+    dataset
+        .quads()
+        .filter(|q| {
+            matches!(
+                dataset.resolve(q.o),
+                TermRef::Literal {
+                    direction: Some(_),
+                    ..
+                }
+            )
+        })
+        .count()
 }
 
 /// Build the first-party [`SerGraph`] from the frozen IR, applying the
@@ -588,6 +623,54 @@ mod serialize_to_format_tests {
             .expect("serialize to RDF/XML");
         // No reifiers/annotations in the dataset → nothing to drop.
         assert_eq!(out.statement_rows_dropped, 0);
+        // RDF/XML carries a base direction: nothing dropped there either.
+        assert_eq!(out.directional_literals_dropped, 0);
         assert!(text_of(&out).contains("https://example.org/s"));
+    }
+
+    // ── base-direction drop accounting (TriX / HexTuples only) ─────────────────────
+
+    /// A dataset with one base-direction object literal (`"hello"@en--ltr`).
+    fn directional_literal_dataset() -> Arc<RdfDataset> {
+        let nt = "<https://example.org/s> <https://example.org/greeting> \"hello\"@en--ltr .\n";
+        parse_dataset(nt.as_bytes(), "application/n-triples", None)
+            .expect("directional_literal_dataset parse")
+    }
+
+    #[test]
+    fn directional_literal_dropped_by_trix_and_hextuples() {
+        let ds = directional_literal_dataset();
+        for format in [NativeRdfFormat::TriX, NativeRdfFormat::HexTuples] {
+            let out = serialize_dataset_to_format(&ds, format, None)
+                .expect("serialize to a direction-incapable format");
+            assert_eq!(
+                out.directional_literals_dropped, 1,
+                "{format:?} must record the dropped base direction"
+            );
+            // The bytes still emit the language tag (only the direction is lost).
+            let text = text_of(&out);
+            assert!(text.contains("en"), "{format:?} keeps the language tag");
+        }
+    }
+
+    #[test]
+    fn directional_literal_preserved_by_direction_capable_formats() {
+        let ds = directional_literal_dataset();
+        for format in [
+            NativeRdfFormat::Turtle,
+            NativeRdfFormat::TriG,
+            NativeRdfFormat::NTriples,
+            NativeRdfFormat::NQuads,
+            NativeRdfFormat::RdfXml,
+            NativeRdfFormat::JsonLd,
+            NativeRdfFormat::YamlLd,
+        ] {
+            let out = serialize_dataset_to_format(&ds, format, None)
+                .expect("serialize to a direction-capable format");
+            assert_eq!(
+                out.directional_literals_dropped, 0,
+                "{format:?} carries the base direction — nothing dropped"
+            );
+        }
     }
 }

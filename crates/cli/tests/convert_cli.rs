@@ -390,6 +390,79 @@ fn directional_literal_per_format_behavior() {
     }
 }
 
+/// Dropping a base direction is NEVER silent: converting a directional literal to TriX
+/// or HexTuples (the only two formats with a language slot but no direction surface)
+/// records the `rdf12-direction-dropped` loss code, while a direction-capable target
+/// (N-Quads) leaves the ledger empty. Complements
+/// [`directional_literal_per_format_behavior`], which pins the emitted bytes.
+#[test]
+fn directional_literal_drop_recorded_in_loss_ledger() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "dir.nt",
+        "<http://example.org/s> <http://example.org/p> \"hello\"@en--ltr .\n",
+    );
+
+    // TriX / HexTuples: the direction is dropped, so the ledger is non-empty and names
+    // the `rdf12-direction-dropped` code. The emitted bytes still carry the language tag.
+    for dst in ["trix", "hextuples"] {
+        let out_path = path(dir, &format!("dir.{dst}"));
+        let ledger_path = path(dir, &format!("dir.{dst}.ledger.json"));
+        let o = run(&[
+            &format!("--loss-ledger={ledger_path}"),
+            "convert",
+            "--from",
+            "ntriples",
+            "--to",
+            dst,
+            &seed,
+            &out_path,
+        ]);
+        assert!(o.status.success(), "dir -> {dst}: {}", stderr(&o));
+        let ledger = std::fs::read_to_string(&ledger_path).expect("read ledger json");
+        assert!(
+            ledger.contains("rdf12-direction-dropped"),
+            "{dst} ledger must record the dropped base direction; got: {ledger}"
+        );
+        assert!(
+            ledger.contains("\"code\""),
+            "{dst} ledger must be non-empty (carry a loss entry); got: {ledger}"
+        );
+        // Bytes are unchanged: the language tag survives, only the direction is lost.
+        let out_text = std::fs::read_to_string(&out_path).expect("read output");
+        assert!(
+            out_text.contains("en") && !out_text.contains("ltr"),
+            "{dst} must keep the language tag and drop the direction; got: {out_text}"
+        );
+    }
+
+    // N-Quads carries the base direction: the ledger stays empty (no direction drop).
+    let out_path = path(dir, "dir.nq");
+    let ledger_path = path(dir, "dir.nq.ledger.json");
+    let o = run(&[
+        &format!("--loss-ledger={ledger_path}"),
+        "convert",
+        "--from",
+        "ntriples",
+        "--to",
+        "nquads",
+        &seed,
+        &out_path,
+    ]);
+    assert!(o.status.success(), "dir -> nquads: {}", stderr(&o));
+    let ledger = std::fs::read_to_string(&ledger_path).expect("read ledger json");
+    assert!(
+        !ledger.contains("rdf12-direction-dropped"),
+        "nquads preserves direction — must NOT record a drop; got: {ledger}"
+    );
+    assert!(
+        !ledger.contains("\"code\""),
+        "nquads ledger must be empty (no loss entries — direction preserved); got: {ledger}"
+    );
+}
+
 /// An extensionless input with explicit `--from`/`--to` converts correctly.
 #[test]
 fn explicit_formats_on_extensionless_input() {

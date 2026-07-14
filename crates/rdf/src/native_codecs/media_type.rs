@@ -48,6 +48,12 @@ pub enum NativeRdfFormat {
 /// `crates/rdf-core/src/loss.rs` codec name) lives in ONE [`FORMATS`] row rather than
 /// scattered `match NativeRdfFormat` arms. The behavior seam (parse / serialize) stays
 /// the `RdfCodec` vtable in [`codec`](super::codec); this table is purely the data half.
+///
+/// The independent per-format capability flags (star / direction / datasets / spans) are
+/// orthogonal boolean facts, not a state machine — collapsing them into an enum would
+/// obscure the one-fact-per-column table, so the `struct_excessive_bools` lint is
+/// intentionally allowed here.
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct FormatDescriptor {
     /// The variant this row describes.
     pub format: NativeRdfFormat,
@@ -61,6 +67,10 @@ pub(crate) struct FormatDescriptor {
     /// Whether this format carries the RDF-1.2 statement layer (see
     /// [`NativeRdfFormat::carries_star`]).
     pub carries_star: bool,
+    /// Whether this format can carry an RDF-1.2 literal base direction (see
+    /// [`NativeRdfFormat::carries_direction`]). `false` only for TriX and HexTuples,
+    /// which have a language slot but no direction surface.
+    pub carries_direction: bool,
     /// Whether this format can carry named graphs (see
     /// [`NativeRdfFormat::supports_datasets`]).
     pub supports_datasets: bool,
@@ -80,6 +90,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         media_type: "text/turtle",
         aliases: &["application/turtle", "turtle", "ttl", ".ttl"],
         carries_star: true,
+        carries_direction: true,
         supports_datasets: false,
         tokenizer_carries_spans: true,
         loss_codec_name: Some("turtle"),
@@ -89,6 +100,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         media_type: "application/trig",
         aliases: &["trig", ".trig"],
         carries_star: true,
+        carries_direction: true,
         supports_datasets: true,
         tokenizer_carries_spans: true,
         loss_codec_name: Some("trig"),
@@ -98,6 +110,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         media_type: "application/n-triples",
         aliases: &["n-triples", "ntriples", "nt", ".nt"],
         carries_star: true,
+        carries_direction: true,
         supports_datasets: false,
         tokenizer_carries_spans: true,
         loss_codec_name: Some("ntriples"),
@@ -107,6 +120,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         media_type: "application/n-quads",
         aliases: &["n-quads", "nquads", "nq", ".nq"],
         carries_star: true,
+        carries_direction: true,
         supports_datasets: true,
         tokenizer_carries_spans: true,
         loss_codec_name: Some("nquads"),
@@ -120,6 +134,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
             "rdf+xml", "rdf", "owl", "xml", "rdf/xml", "rdfxml", ".rdf", ".owl",
         ],
         carries_star: false,
+        carries_direction: true,
         supports_datasets: false,
         tokenizer_carries_spans: false,
         loss_codec_name: Some("rdfxml"),
@@ -129,6 +144,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         media_type: "application/trix",
         aliases: &["trix", ".trix"],
         carries_star: false,
+        carries_direction: false,
         supports_datasets: true,
         tokenizer_carries_spans: false,
         loss_codec_name: None,
@@ -138,6 +154,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         media_type: "application/x-hextuples",
         aliases: &["application/hex+x-ndjson", "hext", "hextuples", ".hext"],
         carries_star: false,
+        carries_direction: false,
         supports_datasets: true,
         tokenizer_carries_spans: false,
         loss_codec_name: None,
@@ -147,6 +164,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         media_type: "application/ld+json",
         aliases: &["ld+json", "jsonld", "json-ld", ".jsonld"],
         carries_star: true,
+        carries_direction: true,
         supports_datasets: true,
         tokenizer_carries_spans: false,
         loss_codec_name: Some("jsonld-star"),
@@ -156,6 +174,7 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         media_type: "application/ld+yaml",
         aliases: &["ld+yaml", "yamlld", "yaml-ld", ".yamlld"],
         carries_star: true,
+        carries_direction: true,
         supports_datasets: true,
         tokenizer_carries_spans: false,
         loss_codec_name: Some("yaml-ld-star"),
@@ -193,6 +212,14 @@ impl NativeRdfFormat {
     /// (`crates/rdf-core/src/loss.rs`) — see the drift-guard test in `native_codecs`.
     pub fn carries_star(self) -> bool {
         descriptor(self).carries_star
+    }
+
+    /// Whether this format can carry an RDF-1.2 literal base direction. Every format
+    /// except TriX and HexTuples emits the direction losslessly; those two have a
+    /// language slot but no direction surface, so they drop it as declared loss
+    /// (recorded on the loss ledger — never a silent drop; CONSTITUTION P7).
+    pub fn carries_direction(self) -> bool {
+        descriptor(self).carries_direction
     }
 
     /// Whether this format's parser can record per-statement source spans. Only the
@@ -274,6 +301,28 @@ mod tests {
     fn trix_and_hextuples_support_datasets() {
         assert!(NativeRdfFormat::TriX.supports_datasets());
         assert!(NativeRdfFormat::HexTuples.supports_datasets());
+    }
+
+    #[test]
+    fn only_trix_and_hextuples_drop_direction() {
+        // TriX / HexTuples have a language slot but no base-direction surface.
+        assert!(!NativeRdfFormat::TriX.carries_direction());
+        assert!(!NativeRdfFormat::HexTuples.carries_direction());
+        // Every other format carries the RDF-1.2 base direction losslessly.
+        for format in [
+            NativeRdfFormat::Turtle,
+            NativeRdfFormat::TriG,
+            NativeRdfFormat::NTriples,
+            NativeRdfFormat::NQuads,
+            NativeRdfFormat::RdfXml,
+            NativeRdfFormat::JsonLd,
+            NativeRdfFormat::YamlLd,
+        ] {
+            assert!(
+                format.carries_direction(),
+                "{format:?} must carry base direction"
+            );
+        }
     }
 
     #[test]

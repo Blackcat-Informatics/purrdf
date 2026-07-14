@@ -32,6 +32,11 @@ use crate::format::CliFormat;
 /// serializer dropped because the target format does not carry the star layer.
 const STATEMENT_ROWS_DROPPED_CODE: &str = "statement-rows-dropped";
 
+/// The runtime loss code recording how many base-direction object literals the
+/// serializer dropped because the target format (TriX / HexTuples) has no
+/// direction surface — it keeps the language tag but cannot carry `--ltr` / `--rtl`.
+const DIRECTION_DROPPED_CODE: &str = "rdf12-direction-dropped";
+
 /// Write `bytes` to `out`, or to stdout when `out` is `-`.
 pub(crate) fn write_out(out: &str, bytes: &[u8]) -> Result<(), CliError> {
     if out == "-" {
@@ -65,6 +70,7 @@ pub(crate) fn write_rdf<D: DatasetView>(
                 src_codec,
                 format.loss_codec_name(),
                 outcome.statement_rows_dropped,
+                outcome.directional_literals_dropped,
             ))
         }
         CliFormat::Pack => {
@@ -78,11 +84,12 @@ pub(crate) fn write_rdf<D: DatasetView>(
 }
 
 /// Combine the contract losses for `(src_codec → dst_codec)` with the realized
-/// dropped-statement-row count.
+/// dropped-row counts (RDF-1.2 statement-layer rows and base-direction literals).
 fn build_ledger(
     src_codec: Option<&str>,
     dst_codec: Option<&str>,
     statement_rows_dropped: usize,
+    directional_literals_dropped: usize,
 ) -> LossLedger {
     let mut ledger = match (src_codec, dst_codec) {
         (Some(from), Some(to)) => pair_loss_ledger(from, to),
@@ -97,6 +104,19 @@ fn build_ledger(
                 "{statement_rows_dropped} RDF-1.2 statement-layer row(s) (reifier bindings + \
                  annotation triples) were dropped because the target format does not carry the \
                  star layer"
+            )),
+            location: None,
+        });
+    }
+    if directional_literals_dropped > 0 {
+        ledger.record(LossEntry {
+            code: Cow::Borrowed(DIRECTION_DROPPED_CODE),
+            from: Cow::Owned(src_codec.unwrap_or("unknown").to_string()),
+            to: Cow::Owned(dst_codec.unwrap_or("unknown").to_string()),
+            note: Cow::Owned(format!(
+                "{directional_literals_dropped} literal base direction(s) were dropped because \
+                 the target format (TriX / HexTuples) has no direction surface — the language \
+                 tag is retained but `--ltr` / `--rtl` is lost"
             )),
             location: None,
         });
