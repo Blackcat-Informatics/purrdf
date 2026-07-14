@@ -113,10 +113,12 @@ pub struct DatasetSink {
     resolving: HashSet<EventTermId>,
     /// RAW quad rows, resolved in phase 2.
     raw_quads: Vec<EventQuad>,
-    /// RAW reifier bindings `(reifier id, triple)`, resolved in phase 2.
-    raw_reifiers: Vec<(EventTermId, EventTriple)>,
-    /// RAW annotation rows `(reifier, predicate, object)`, resolved in phase 2.
-    raw_annotations: Vec<(EventTermId, EventTermId, EventTermId)>,
+    /// RAW reifier bindings `(reifier id, triple, graph)`, resolved in phase 2. The
+    /// graph slot is `None` for a reifier declared via the graph-unaware
+    /// [`reifier`](RdfEventSink::reifier) event (or asserted in the default graph).
+    raw_reifiers: Vec<(EventTermId, EventTriple, Option<EventTermId>)>,
+    /// RAW annotation rows `(reifier, predicate, object, graph)`, resolved in phase 2.
+    raw_annotations: Vec<(EventTermId, EventTermId, EventTermId, Option<EventTermId>)>,
     /// Open scopes. [`ScopeId::DEFAULT`] is always open; [`open_scope`](Self::open_scope)
     /// adds more, [`close_scope`](Self::close_scope) removes (seals) them. Openness is
     /// determined solely by membership here, so a sealed OR never-opened scope id both
@@ -314,8 +316,7 @@ impl RdfEventSink for DatasetSink {
         reifier: EventTermId,
         triple: EventTriple,
     ) -> Result<ControlFlow<()>, EventError> {
-        self.raw_reifiers.push((reifier, triple));
-        Ok(ControlFlow::Continue(()))
+        self.reifier_in_graph(reifier, triple, None)
     }
 
     fn annotation(
@@ -324,7 +325,27 @@ impl RdfEventSink for DatasetSink {
         p: EventTermId,
         o: EventTermId,
     ) -> Result<ControlFlow<()>, EventError> {
-        self.raw_annotations.push((reifier, p, o));
+        self.annotation_in_graph(reifier, p, o, None)
+    }
+
+    fn reifier_in_graph(
+        &mut self,
+        reifier: EventTermId,
+        triple: EventTriple,
+        g: Option<EventTermId>,
+    ) -> Result<ControlFlow<()>, EventError> {
+        self.raw_reifiers.push((reifier, triple, g));
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn annotation_in_graph(
+        &mut self,
+        reifier: EventTermId,
+        p: EventTermId,
+        o: EventTermId,
+        g: Option<EventTermId>,
+    ) -> Result<ControlFlow<()>, EventError> {
+        self.raw_annotations.push((reifier, p, o, g));
         Ok(ControlFlow::Continue(()))
     }
 
@@ -388,28 +409,37 @@ impl RdfEventSink for DatasetSink {
                 .push_quad(s, p, o, g);
         }
 
-        // Reifier bindings: bind the reifier resource to the interned triple term.
+        // Reifier bindings: bind the reifier resource to the interned triple term,
+        // preserving the graph the binding was declared in.
         let raw_reifiers = std::mem::take(&mut self.raw_reifiers);
-        for (reifier, EventTriple { s, p, o }) in raw_reifiers {
+        for (reifier, EventTriple { s, p, o }, g) in raw_reifiers {
             let reifier_id = self.resolve(reifier, 0)?;
             let s = self.resolve(s, 0)?;
             let p = self.resolve(p, 0)?;
             let o = self.resolve(o, 0)?;
+            let g = match g {
+                Some(g) => Some(self.resolve(g, 0)?),
+                None => None,
+            };
             let builder = self.builder.as_mut().expect("builder present");
             let triple_term = builder.intern_triple(s, p, o);
-            builder.push_reifier(reifier_id, triple_term);
+            builder.push_reifier_in_graph(reifier_id, triple_term, g);
         }
 
-        // Annotations `(reifier, predicate, object)`.
+        // Annotations `(reifier, predicate, object, graph)`.
         let raw_annotations = std::mem::take(&mut self.raw_annotations);
-        for (r, p, v) in raw_annotations {
+        for (r, p, v, g) in raw_annotations {
             let r = self.resolve(r, 0)?;
             let p = self.resolve(p, 0)?;
             let v = self.resolve(v, 0)?;
+            let g = match g {
+                Some(g) => Some(self.resolve(g, 0)?),
+                None => None,
+            };
             self.builder
                 .as_mut()
                 .expect("builder present")
-                .push_annotation(r, p, v);
+                .push_annotation_in_graph(r, p, v, g);
         }
 
         let builder = self.builder.take().expect("builder present");
@@ -543,7 +573,7 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
                 return Ok(());
             }
         }
-        for (reifier, triple) in self.dataset.reifiers() {
+        for (reifier, triple, g) in self.dataset.reifiers_with_graph() {
             // Resolve the bound triple term to its (s, p, o) so the protocol carries a
             // reified statement, not an id-to-id binding.
             let TermRef::Triple { s, p, o } = self.dataset.resolve(triple) else {
@@ -554,15 +584,20 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
                 p: EventTermId(p.index() as u32),
                 o: EventTermId(o.index() as u32),
             };
-            if sink.reifier(EventTermId(reifier.index() as u32), event)? == ControlFlow::Break(()) {
+            let g_event = g.map(|g| EventTermId(g.index() as u32));
+            if sink.reifier_in_graph(EventTermId(reifier.index() as u32), event, g_event)?
+                == ControlFlow::Break(())
+            {
                 return Ok(());
             }
         }
-        for (reifier, p, o) in self.dataset.annotations() {
-            if sink.annotation(
+        for (reifier, p, o, g) in self.dataset.annotations_with_graph() {
+            let g_event = g.map(|g| EventTermId(g.index() as u32));
+            if sink.annotation_in_graph(
                 EventTermId(reifier.index() as u32),
                 EventTermId(p.index() as u32),
                 EventTermId(o.index() as u32),
+                g_event,
             )? == ControlFlow::Break(())
             {
                 return Ok(());
@@ -668,6 +703,51 @@ mod tests {
             quad_values(&original),
             quad_values(&rebuilt),
             "quad value sets match"
+        );
+    }
+
+    #[test]
+    fn round_trip_replay_preserves_reifier_and_annotation_graph_scope() {
+        // The reifier binding AND its annotation live in a NAMED graph, not the
+        // default graph. `FrozenDatasetSource::drive` must thread that graph slot
+        // through the `reifier_in_graph`/`annotation_in_graph` events (not the
+        // graph-unaware `reifier`/`annotation` events, which silently collapse to the
+        // default graph) — otherwise a graph-aware sink replaying this dataset loses
+        // the graph scoping.
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        let g = iri(&mut b, "g");
+        let triple = b.intern_triple(s, p, o);
+        let r = iri(&mut b, "r");
+        let ann_p = iri(&mut b, "annp");
+        b.push_quad(s, p, o, Some(g));
+        b.push_reifier_in_graph(r, triple, Some(g));
+        b.push_annotation_in_graph(r, ann_p, o, Some(g));
+        let original = b.freeze().expect("fixture freezes");
+
+        let source = FrozenDatasetSource::new(&original);
+        let mut sink = DatasetSink::new();
+        source.drive(&mut sink).expect("drive ok");
+        let rebuilt = sink.into_dataset().expect("frozen after finish");
+
+        assert!(
+            datasets_isomorphic(&original, &rebuilt),
+            "replayed dataset with a graph-scoped reifier/annotation must be isomorphic"
+        );
+        // Direct check: the rebuilt reifier/annotation rows still carry a `Some(graph)`
+        // slot, not `None` (the bug this guards against silently rewrote every graph
+        // slot to `None` on replay).
+        assert!(
+            rebuilt.reifiers_with_graph().all(|(_, _, g)| g.is_some()),
+            "reifier graph slot must survive the replay, not collapse to the default graph"
+        );
+        assert!(
+            rebuilt
+                .annotations_with_graph()
+                .all(|(_, _, _, g)| g.is_some()),
+            "annotation graph slot must survive the replay, not collapse to the default graph"
         );
     }
 

@@ -584,6 +584,37 @@ pub trait RdfEventSink {
         o: EventTermId,
     ) -> Result<ControlFlow<()>, EventError>;
 
+    /// Like [`reifier`](Self::reifier) but carries the named graph the reifier
+    /// declaration was asserted in (`None` = default graph). Defaults to ignoring the
+    /// graph and delegating to [`reifier`](Self::reifier) — additive, so an existing
+    /// sink that has no notion of graph-scoped reification needs no changes. A sink
+    /// that DOES need the graph dimension (e.g. one replaying a dataset that reifies
+    /// the SAME base triple differently in two named graphs) overrides this instead of
+    /// [`reifier`](Self::reifier).
+    fn reifier_in_graph(
+        &mut self,
+        reifier: EventTermId,
+        triple: EventTriple,
+        g: Option<EventTermId>,
+    ) -> Result<ControlFlow<()>, EventError> {
+        let _ = g;
+        self.reifier(reifier, triple)
+    }
+
+    /// Like [`annotation`](Self::annotation) but carries the named graph the
+    /// annotation was asserted in (`None` = default graph). See
+    /// [`reifier_in_graph`](Self::reifier_in_graph).
+    fn annotation_in_graph(
+        &mut self,
+        reifier: EventTermId,
+        p: EventTermId,
+        o: EventTermId,
+        g: Option<EventTermId>,
+    ) -> Result<ControlFlow<()>, EventError> {
+        let _ = g;
+        self.annotation(reifier, p, o)
+    }
+
     /// Open a fresh blank-node label namespace, returning its [`ScopeId`]. Blank-node
     /// *label* identity is namespaced per scope (see [`close_scope`](Self::close_scope));
     /// the drive-global [`EventTermId`] space is unaffected.

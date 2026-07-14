@@ -75,10 +75,21 @@ include!("lpg_prefixes.rs");
 
 /// Default-graph and named-graph node maps returned by [`build_graphs`].
 type GraphNodes = (BTreeMap<String, Value>, BTreeMap<String, Value>);
-/// Reifier lookup: base triple (s,p,o) -> reifier ids that annotate it.
-type ReifierIndex = BTreeMap<(usize, usize, usize), Vec<usize>>;
-/// Annotation lookup: reifier id -> sorted annotation (predicate, value) rows.
-type AnnotationIndex = BTreeMap<usize, Vec<(usize, usize)>>;
+/// Reifier lookup: base triple (s,p,o) in a given graph (`None` = default graph) ->
+/// reifier ids that annotate it. Graph-scoped: the SAME base triple reified by
+/// DIFFERENT reifiers in DIFFERENT named graphs must not cross-contaminate.
+type ReifierIndex = BTreeMap<(usize, usize, usize, Option<usize>), Vec<usize>>;
+/// Annotation lookup: (reifier id, graph) -> sorted annotation (predicate, value)
+/// rows. Graph-scoped alongside [`ReifierIndex`] for the same reason.
+type AnnotationIndex = BTreeMap<(usize, Option<usize>), Vec<(usize, usize)>>;
+
+/// The two graph-scoped lookup indices the node/value-object builders always
+/// consult together, bundled into one reference so a builder needing both takes one
+/// parameter instead of two (keeping argument counts under the pedantic lint cap).
+struct Indexes<'a> {
+    reifier_of: &'a ReifierIndex,
+    annotations_of: &'a AnnotationIndex,
+}
 /// Quads grouped by graph name and then by subject.
 type QuadGroups = BTreeMap<Option<usize>, BTreeMap<usize, Vec<(usize, usize)>>>;
 
@@ -258,9 +269,9 @@ fn build_context() -> Value {
 
 /// Build default-graph nodes and named-graph objects.
 fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
-    // Reifier index: base triple (s,p,o) -> reifier ids that annotate it.
+    // Reifier index: base triple (s,p,o) in graph g -> reifier ids that annotate it.
     let mut reifier_of: ReifierIndex = BTreeMap::new();
-    for &(rid, (s, p, o), _g) in &graph.reifiers {
+    for &(rid, (s, p, o), g) in &graph.reifiers {
         // A triple term is self-reifying: its `reifier` row's "reifier" is the triple
         // term itself (kind `Triple`), carrying the term's components — NOT a real
         // IRI/blank-node reifier. `term_id` has no @id for a `Triple`-kind term, so it
@@ -269,7 +280,7 @@ fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
         if graph.terms[rid].kind == SerTermKind::Triple {
             continue;
         }
-        reifier_of.entry((s, p, o)).or_default().push(rid);
+        reifier_of.entry((s, p, o, g)).or_default().push(rid);
     }
     for list in reifier_of.values_mut() {
         // Sort by the reifier's stable @id, not its input-order term id.
@@ -280,10 +291,10 @@ fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
         });
     }
 
-    // Annotation index: reifier id -> sorted annotation (predicate, value) rows.
+    // Annotation index: (reifier id, graph) -> sorted annotation (predicate, value) rows.
     let mut annotations_of: AnnotationIndex = BTreeMap::new();
-    for &(r, p, v, _g) in &graph.annotations {
-        annotations_of.entry(r).or_default().push((p, v));
+    for &(r, p, v, g) in &graph.annotations {
+        annotations_of.entry((r, g)).or_default().push((p, v));
     }
     for list in annotations_of.values_mut() {
         // Sort by stable predicate @id then stable value key, not raw term ids.
@@ -296,6 +307,11 @@ fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
             })
         });
     }
+
+    let indexes = Indexes {
+        reifier_of: &reifier_of,
+        annotations_of: &annotations_of,
+    };
 
     // Group quads by graph name (None = default graph) and then by subject.
     let mut by_graph: QuadGroups = BTreeMap::new();
@@ -312,10 +328,15 @@ fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
     // its compact `@annotation`, so emit it as a standalone node with an explicit
     // `rdf:reifies` @triple value plus its annotation properties — otherwise the reifier
     // and its annotations are silently dropped. (An asserted base triple keeps the
-    // compact `@annotation` form.) Keyed by `(s,p,o)` to match the `@annotation`
-    // attachment in `build_value_object`, which ignores graph name.
-    let asserted_base: BTreeSet<(usize, usize, usize)> =
-        graph.quads.iter().map(|&(s, p, o, _g)| (s, p, o)).collect();
+    // compact `@annotation` form.) Keyed by `(s,p,o,g)` — GRAPH-SCOPED — to match the
+    // `@annotation` attachment in `build_value_object`, which now also keys on graph
+    // name: the same base triple may be asserted in one graph and orphaned (reified
+    // without assertion) in another.
+    let asserted_base: BTreeSet<(usize, usize, usize, Option<usize>)> = graph
+        .quads
+        .iter()
+        .map(|&(s, p, o, g)| (s, p, o, g))
+        .collect();
     let mut orphan_by_graph: BTreeMap<Option<usize>, Vec<Value>> = BTreeMap::new();
     for &(rid, (s, p, o), g) in &graph.reifiers {
         // A triple term is self-reifying: its `reifier` row's "reifier" is the triple
@@ -325,8 +346,8 @@ fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
         if graph.terms[rid].kind == SerTermKind::Triple {
             continue;
         }
-        if !asserted_base.contains(&(s, p, o)) {
-            let node = build_orphan_reifier_node(graph, rid, s, p, o, &annotations_of)?;
+        if !asserted_base.contains(&(s, p, o, g)) {
+            let node = build_orphan_reifier_node(graph, rid, s, p, o, g, &indexes)?;
             orphan_by_graph.entry(g).or_default().push(node);
         }
     }
@@ -345,7 +366,7 @@ fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
         let mut nodes: Vec<Value> = Vec::new();
         if let Some(subjects) = by_graph.remove(&g) {
             for (s, pos) in subjects {
-                let node = build_node(graph, s, pos, &reifier_of, &annotations_of)?;
+                let node = build_node(graph, s, pos, g, &indexes)?;
                 nodes.push(node);
             }
         }
@@ -386,8 +407,8 @@ fn build_node(
     graph: &SerGraph,
     subject: usize,
     pos: Vec<(usize, usize)>,
-    reifier_of: &ReifierIndex,
-    annotations_of: &AnnotationIndex,
+    g: Option<usize>,
+    indexes: &Indexes<'_>,
 ) -> Result<Value, RdfDiagnostic> {
     let subject_term = &graph.terms[subject];
     let mut node = BTreeMap::new();
@@ -409,15 +430,7 @@ fn build_node(
             types.push(term_ref_value(object_term)?);
         } else {
             let key = curie(predicate_iri);
-            let value = build_value_object(
-                graph,
-                subject,
-                p,
-                o,
-                object_term,
-                reifier_of,
-                annotations_of,
-            )?;
+            let value = build_value_object(graph, subject, p, o, g, object_term, indexes)?;
             props.entry(key).or_default().push(value);
         }
     }
@@ -447,9 +460,9 @@ fn build_value_object(
     subject: usize,
     predicate: usize,
     object: usize,
+    g: Option<usize>,
     object_term: &SerTerm,
-    reifier_of: &ReifierIndex,
-    annotations_of: &AnnotationIndex,
+    indexes: &Indexes<'_>,
 ) -> Result<Value, RdfDiagnostic> {
     let mut value = if object_term.kind == SerTermKind::Triple {
         build_triple_term_value(graph, object_term)?
@@ -457,10 +470,10 @@ fn build_value_object(
         term_to_value(graph, object_term)?
     };
 
-    if let Some(reifiers) = reifier_of.get(&(subject, predicate, object)) {
+    if let Some(reifiers) = indexes.reifier_of.get(&(subject, predicate, object, g)) {
         let annotations: Result<Vec<Value>, _> = reifiers
             .iter()
-            .map(|&rid| build_annotation_node(graph, rid, annotations_of))
+            .map(|&rid| build_annotation_node(graph, rid, g, indexes))
             .collect();
         let annotations = annotations?;
         let ann_value = if annotations.len() == 1 {
@@ -580,13 +593,14 @@ fn term_to_value(graph: &SerGraph, term: &SerTerm) -> Result<Value, RdfDiagnosti
 fn build_annotation_node(
     graph: &SerGraph,
     reifier_id: usize,
-    annotations_of: &AnnotationIndex,
+    g: Option<usize>,
+    indexes: &Indexes<'_>,
 ) -> Result<Value, RdfDiagnostic> {
     let reifier_term = &graph.terms[reifier_id];
     let mut node = BTreeMap::new();
     node.insert("@id".to_string(), Value::String(term_id(reifier_term)?));
 
-    if let Some(anns) = annotations_of.get(&reifier_id) {
+    if let Some(anns) = indexes.annotations_of.get(&(reifier_id, g)) {
         let mut props: BTreeMap<String, Vec<Value>> = BTreeMap::new();
         for &(p, v) in anns {
             let p_term = &graph.terms[p];
@@ -622,9 +636,10 @@ fn build_orphan_reifier_node(
     s: usize,
     p: usize,
     o: usize,
-    annotations_of: &AnnotationIndex,
+    g: Option<usize>,
+    indexes: &Indexes<'_>,
 ) -> Result<Value, RdfDiagnostic> {
-    let Value::Object(entries) = build_annotation_node(graph, reifier_id, annotations_of)? else {
+    let Value::Object(entries) = build_annotation_node(graph, reifier_id, g, indexes)? else {
         unreachable!("build_annotation_node always returns a JSON object");
     };
     let mut node: BTreeMap<String, Value> = entries.into_iter().collect();
@@ -1136,6 +1151,13 @@ fn parse_triple_term(
     let obj = value
         .as_object()
         .ok_or_else(|| decode(format!("@triple must be an object, got {value}")))?;
+    if obj.contains_key("@annotation") {
+        return Err(decode(
+            "@annotation is not permitted inside a @triple object: a triple term \
+             carries no annotation in RDF 1.2; annotate via a separate reifier"
+                .to_string(),
+        ));
+    }
     let subject = obj
         .get("@subject")
         .ok_or_else(|| decode("@triple missing @subject".to_string()))?;

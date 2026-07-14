@@ -279,6 +279,37 @@ mod tests {
     }
 
     #[test]
+    fn annotation_directly_inside_triple_object_is_rejected() {
+        // An `@annotation` placed DIRECTLY inside the `@triple` object itself (a
+        // SIBLING of `@subject`/`@predicate`/`@object`, not nested under a component)
+        // is equally not well-formed RDF-1.2: a triple *term* carries no annotation of
+        // its own. Previously this key was read past and silently ignored rather than
+        // rejected.
+        let json = r#"{
+            "@id": "https://e/s",
+            "https://e/asserts": {
+                "@triple": {
+                    "@subject": { "@id": "https://e/s" },
+                    "@predicate": "https://e/p",
+                    "@object": { "@id": "https://e/o" },
+                    "@annotation": {
+                        "@id": "https://e/r",
+                        "https://e/confidence": { "@value": "0.9" }
+                    }
+                }
+            }
+        }"#;
+        let err = parse_dataset(json.as_bytes(), "application/ld+json", None)
+            .expect_err("@annotation directly inside a @triple object must be rejected");
+        assert_eq!(err.code, "native-jsonld-decode");
+        assert!(
+            err.message
+                .contains("not permitted inside a @triple object"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn inline_triple_term_and_real_reifier_share_base_triple_round_trips_jsonld() {
         // The SAME base triple (s,p,o) is BOTH asserted as an object-position triple
         // term (which pushes a self-reifier sentinel keyed by the Triple-kind term
@@ -357,6 +388,47 @@ mod tests {
     }
 
     #[test]
+    fn same_base_triple_reified_differently_in_two_named_graphs_round_trips_jsonld() {
+        // The SAME base triple (s,p,o) is asserted in TWO distinct named graphs, each
+        // reified by a DIFFERENT reifier with a DIFFERENT annotation value. The
+        // reifier/annotation lookup keys previously discarded the graph slot, so every
+        // reifier for (s,p,o) got attached to the value object in EVERY graph carrying
+        // that triple — fabricating reifier bindings the author never placed. Six quads
+        // go in (2 asserted triples + 2 reifier bindings + 2 annotations); the round-trip
+        // must come back isomorphic, not cross-contaminated to ~10 quads.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
+        let g1 = b.intern_iri("https://e/g1");
+        let g2 = b.intern_iri("https://e/g2");
+        let triple = b.intern_triple(s, p, o);
+        let conf = b.intern_iri("https://e/confidence");
+
+        let r1 = b.intern_iri("https://e/r1");
+        let val1 = b.intern_literal(RdfLiteral::typed(
+            "0.1",
+            "http://www.w3.org/2001/XMLSchema#decimal",
+        ));
+        b.push_quad(s, p, o, Some(g1));
+        b.push_reifier_in_graph(r1, triple, Some(g1));
+        b.push_annotation_in_graph(r1, conf, val1, Some(g1));
+
+        let r2 = b.intern_iri("https://e/r2");
+        let val2 = b.intern_literal(RdfLiteral::typed(
+            "0.9",
+            "http://www.w3.org/2001/XMLSchema#decimal",
+        ));
+        b.push_quad(s, p, o, Some(g2));
+        b.push_reifier_in_graph(r2, triple, Some(g2));
+        b.push_annotation_in_graph(r2, conf, val2, Some(g2));
+
+        let ds = b.freeze().expect("freeze");
+        assert_round_trips(&ds, "application/ld+json");
+        assert_round_trips(&ds, "application/ld+yaml");
+    }
+
+    #[test]
     fn gts_codec_backend_reaches_jsonld_and_yamlld_no_side_door() {
         // The GENERIC backend (RdfParserBackend + RdfSerializer) reaches JSON-LD/YAML-LD
         // through classify + codec_for — proving no `native_codecs::jsonld::` side-door is
@@ -365,13 +437,14 @@ mod tests {
         let s = b.intern_iri("https://e/s");
         let p = b.intern_iri("https://e/p");
         let o = b.intern_iri("https://e/o");
+        let g = b.intern_iri("https://e/g");
         let triple = b.intern_triple(s, p, o);
         let r = b.intern_iri("https://e/r");
         let conf = b.intern_iri("https://e/confidence");
         let val = b.intern_literal(RdfLiteral::simple("high"));
-        b.push_quad(s, p, o, None);
-        b.push_reifier(r, triple);
-        b.push_annotation(r, conf, val);
+        b.push_quad(s, p, o, Some(g));
+        b.push_reifier_in_graph(r, triple, Some(g));
+        b.push_annotation_in_graph(r, conf, val, Some(g));
         let ds = b.freeze().expect("freeze");
 
         let backend = GtsCodecBackend;
