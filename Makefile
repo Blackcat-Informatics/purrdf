@@ -111,7 +111,7 @@ test: ## Run the workspace test suite.
 	cargo test --workspace --locked
 
 doc: ## Build docs for the 16 publishable crates with rustdoc warnings denied.
-	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
 	@set -eu; \

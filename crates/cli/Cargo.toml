@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-cli"
+description = "PurRDF command-line interface: the `purrdf` convert/query/reason pipeline over the native codecs, pack container, SPARQL engine, and entailment closures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["rdf", "rdf-12", "sparql", "cli", "command-line"]
+categories = ["command-line-utilities"]
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "purrdf"
+path = "src/main.rs"
+
+[dependencies]
+# The native RDF text/statement codec surface: `classify`, `parse_dataset`,
+# `serialize_dataset_to_format`, and `NativeRdfFormat`. This is the format
+# authority the CLI's `--from`/`--to` routing resolves against.
+purrdf-rdf = { workspace = true }
+# The oxigraph-free kernel: the frozen `RdfDataset`/`DatasetView` model, the
+# pack container (`PackBuilder`/`PackView`/`verify_pack`/`dataset_from_view`),
+# the loss ledger, and the `SparqlResult` model.
+purrdf-core = { workspace = true }
+# The native SPARQL engine driving the `query` subcommand over any `DatasetView`.
+purrdf-sparql-eval = { workspace = true }
+# The W3C SPARQL-Results serializers (JSON/XML/CSV/TSV) for SELECT/ASK results.
+purrdf-sparql-results = { workspace = true }
+# The entailment regimes driving the `reason` subcommand's closure materialization.
+purrdf-entail = { workspace = true }
+# Zero-copy memory-mapped reads of on-disk pack files: a pack source is mmap'd
+# and handed to `PackView::from_bytes` with no materialization. Native-only —
+# this crate is never built for wasm32 (it is absent from the `make wasm`
+# `-p` allowlist), so mmap's absence there is a non-issue.
+memmap2 = { workspace = true }
+# Command-tree argument parsing (`Parser`/`Subcommand`/`ValueEnum`).
+clap = { workspace = true }
+
+[dev-dependencies]
+# Isolated temp files/dirs for the integration tests that drive the built binary.
+tempfile = { workspace = true }

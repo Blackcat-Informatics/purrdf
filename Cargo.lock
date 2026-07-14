@@ -1282,6 +1282,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-cli"
+version = "0.6.0"
+dependencies = [
+ "clap",
+ "memmap2",
+ "purrdf-core",
+ "purrdf-entail",
+ "purrdf-rdf",
+ "purrdf-sparql-eval",
+ "purrdf-sparql-results",
+ "tempfile",
+]
+
+[[package]]
 name = "purrdf-core"
 version = "0.6.0"
 dependencies = [

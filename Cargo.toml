@@ -5,6 +5,7 @@
 resolver = "2"
 members = [
     "bindings/python",
+    "crates/cli",
     "crates/entail",
     "crates/gts",
     "crates/iri",
@@ -72,6 +73,12 @@ blake3 = { version = "1", features = ["rayon"] }
 boon = "0.6"
 camino = "1"
 ciborium = "0.2"
+# Argument parsing for the `purrdf` CLI (native-only binary crate `crates/cli`).
+# `derive` supplies the `Parser`/`Subcommand`/`ValueEnum` macros the CLI models
+# its command tree with. Not a library dependency, so the wasm gate (which
+# builds `--lib` on an explicit `-p` allowlist that omits `purrdf-cli`) is
+# unaffected.
+clap = { version = "4", features = ["derive"] }
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 csv = "1"
 datatest-stable = "0.3"
