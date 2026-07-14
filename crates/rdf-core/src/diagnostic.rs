@@ -203,37 +203,6 @@ impl RdfLocation {
     }
 }
 
-/// A conversion loss recorded by an RDF adapter.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RdfLoss {
-    /// The stable machine-readable loss code.
-    pub code: String,
-    /// The human-readable description of what was lost.
-    pub message: String,
-    /// Where the loss occurred, when known.
-    pub location: Option<Box<RdfLocation>>,
-}
-
-impl RdfLoss {
-    /// A loss record from its code and message, with no location.
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-            location: None,
-        }
-    }
-
-    /// Attaches a location; an empty location is dropped rather than stored.
-    #[must_use]
-    pub fn with_location(mut self, location: RdfLocation) -> Self {
-        if !location.is_empty() {
-            self.location = Some(Box::new(location));
-        }
-        self
-    }
-}
-
 /// Structured RDF diagnostic. Callers translate this to their reporting layer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RdfDiagnostic {
@@ -247,13 +216,11 @@ pub struct RdfDiagnostic {
     pub detail: Option<String>,
     /// Where the diagnostic applies, when known.
     pub location: Option<Box<RdfLocation>>,
-    /// Conversion losses recorded alongside this diagnostic.
-    pub losses: Vec<RdfLoss>,
 }
 
 impl RdfDiagnostic {
-    /// A diagnostic from its severity, code, and message, with no detail,
-    /// location, or losses.
+    /// A diagnostic from its severity, code, and message, with no detail or
+    /// location.
     pub fn new(severity: RdfSeverity, code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             severity,
@@ -261,7 +228,6 @@ impl RdfDiagnostic {
             message: message.into(),
             detail: None,
             location: None,
-            losses: Vec::new(),
         }
     }
 
@@ -284,11 +250,6 @@ impl RdfDiagnostic {
             self.location = Some(Box::new(location));
         }
         self
-    }
-
-    /// Records a conversion loss against this diagnostic.
-    pub fn add_loss(&mut self, loss: RdfLoss) {
-        self.losses.push(loss);
     }
 }
 

@@ -112,7 +112,7 @@ pub use purrdf_core::{
     PipelineBundle, PipelineBundleError, ProvenanceError, QuadHandle, QuadIds, QuadPatternCursor,
     QuadRef, QuadValues, RdfAnnotation, RdfBlobOrigin, RdfBlobRecord, RdfBundle, RdfDataset,
     RdfDatasetBuilder, RdfDatasetVisitor, RdfDiagnostic, RdfEnvelope, RdfListError, RdfLiteral,
-    RdfLocation, RdfLookaside, RdfLookasideKind, RdfLookasideResource, RdfLoss, RdfMetadataEntry,
+    RdfLocation, RdfLookaside, RdfLookasideKind, RdfLookasideResource, RdfMetadataEntry,
     RdfMetadataValue, RdfOpaqueNodeRecord, RdfParseRequest, RdfParserBackend, RdfQuad, RdfReifier,
     RdfSegmentRecord, RdfSerializeRequest, RdfSerializer, RdfSeverity, RdfSignatureRecord,
     RdfStoreCapabilities, RdfSuppressionRecord, RdfTerm, RdfTermKind, RdfTextDirection, RdfTriple,

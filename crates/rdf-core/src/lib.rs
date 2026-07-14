@@ -98,7 +98,7 @@ pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{DatasetMut, DatasetView, GraphMatch, GraphMatchValue, ViewTermId};
 pub use describe::{Describer, describe};
-pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfLoss, RdfSeverity};
+pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
 pub use fno::{
     FnFunction, FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog,
     to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
