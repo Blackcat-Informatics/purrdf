@@ -202,7 +202,8 @@ impl Dataset {
 
     /// `parse(input, format, base?)` → a dataset of the parsed quads.
     ///
-    /// `format` is a media type or short name (turtle/ntriples/nquads/trig/rdfxml).
+    /// `format` is a media type or short name
+    /// (turtle/ntriples/nquads/trig/rdfxml/jsonld/yamlld).
     /// Ill-typed literals are preserved verbatim (RDFLib parity), not rejected.
     #[wasm_bindgen(js_name = parse)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
@@ -220,6 +221,10 @@ impl Dataset {
     /// Formats: `turtle` / `ntriples` / `nquads` / `trig` / `rdfxml` / `jsonld`
     /// (JSON-LD-star) / `yamlld` (YAML-LD-star), and their media types — all resolved
     /// through the one core registry.
+    ///
+    /// Object-position quoted-triple terms (RDF-1.2 triple terms) are preserved
+    /// through N-Quads, JSON-LD, and YAML-LD; the other text syntaxes (Turtle,
+    /// N-Triples, TriG, RDF/XML) flatten them.
     #[wasm_bindgen(js_name = serialize)]
     pub fn serialize(&self, format: &str) -> Result<String, JsError> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
@@ -404,7 +409,11 @@ mod tests {
         // unified resolver — no side-door, no special-case guard. (JsError is only
         // constructed on the error path, which panics off-wasm, so a passing test never
         // builds one.)
-        let nt = "<https://e/s> <https://e/p> <https://e/o> .\n";
+        // A literal (not just all-IRI terms) is included so term corruption — e.g. a
+        // dropped datatype or lexical-form mangling — would actually be caught by the
+        // isomorphism check below (a quad-count check alone would miss it).
+        let nt = "<https://e/s> <https://e/p> <https://e/o> .\n\
+                  <https://e/s> <https://e/label> \"value\" .\n";
         let Ok(ds) = Dataset::parse(nt, "ntriples", None) else {
             panic!("parse n-triples failed");
         };
@@ -420,11 +429,10 @@ mod tests {
             let Ok(reparsed) = Dataset::parse(&text, fmt, None) else {
                 panic!("re-parse {fmt} failed");
             };
-            assert_eq!(
-                reparsed.size(),
-                ds.size(),
-                "wasm round-trip via {fmt} preserves quad count"
-            );
+            let Ok(iso) = reparsed.isomorphic(&ds) else {
+                panic!("isomorphic {fmt} failed");
+            };
+            assert!(iso, "wasm round-trip via {fmt} preserves the graph");
         }
     }
 
