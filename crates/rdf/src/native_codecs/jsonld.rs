@@ -873,7 +873,7 @@ pub fn parse_jsonld(json_bytes: &[u8]) -> Result<Arc<RdfDataset>, RdfDiagnostic>
                     &quads,
                     &subject,
                     &predicate,
-                    graph_name.clone(),
+                    graph_name.as_ref(),
                     &v,
                     &expand,
                 )?;
@@ -971,7 +971,7 @@ fn emit_value_quad(
     quads: &std::cell::RefCell<Vec<RdfQuad>>,
     subject: &RdfTerm,
     predicate: &str,
-    graph_name: Option<RdfTerm>,
+    graph_name: Option<&RdfTerm>,
     value: &Value,
     expand: &dyn Fn(&str) -> String,
 ) -> Result<(), RdfDiagnostic> {
@@ -981,7 +981,7 @@ fn emit_value_quad(
         subject.clone(),
         predicate,
         object.clone(),
-        graph_name,
+        graph_name.cloned(),
     );
 
     if let Some(ann) = annotation {
@@ -1001,8 +1001,16 @@ fn emit_value_quad(
             // `dataset_from_quads` freeze folds it into the reifier table.
             let quoted =
                 RdfTerm::triple(RdfTriple::new(subject.clone(), predicate, object.clone()));
-            // Reifier bindings + annotations always land in the DEFAULT graph.
-            push_quad(quads, reifier.clone(), RDF_REIFIES, quoted, None);
+            // The reifier binding + its annotations land in the SAME graph as the base
+            // triple they annotate (the enclosing @graph), so a reifier on a named-graph
+            // triple round-trips into that named graph rather than the default graph.
+            push_quad(
+                quads,
+                reifier.clone(),
+                RDF_REIFIES,
+                quoted,
+                graph_name.cloned(),
+            );
 
             // The `@id` extraction above (`ann_node.get("@id")…ok_or_else`) returns Err for
             // any non-object node, so reaching here guarantees `ann_node` is a JSON object.
@@ -1022,7 +1030,13 @@ fn emit_value_quad(
                 };
                 for v in vals {
                     let (ann_object, _) = parse_value_object(&v, expand)?;
-                    push_quad(quads, reifier.clone(), &ann_predicate, ann_object, None);
+                    push_quad(
+                        quads,
+                        reifier.clone(),
+                        &ann_predicate,
+                        ann_object,
+                        graph_name.cloned(),
+                    );
                 }
             }
         }

@@ -147,11 +147,21 @@ mod tests {
         let o = b.intern_iri("https://e/o");
         b.push_quad(s, p, o, None);
         let ds = b.freeze().expect("freeze");
-        assert_round_trips(&ds, "text/turtle");
-        assert_round_trips(&ds, "application/n-triples");
-        assert_round_trips(&ds, "application/trig");
-        assert_round_trips(&ds, "application/n-quads");
-        assert_round_trips(&ds, "application/rdf+xml");
+        // Every bidirectional format round-trips a basic graph isomorphically — JSON-LD /
+        // YAML-LD alongside the FULL declared peer set (including TriX / HexTuples).
+        for media_type in [
+            "text/turtle",
+            "application/n-triples",
+            "application/trig",
+            "application/n-quads",
+            "application/rdf+xml",
+            "application/trix",
+            "application/x-hextuples",
+            "application/ld+json",
+            "application/ld+yaml",
+        ] {
+            assert_round_trips(&ds, media_type);
+        }
     }
 
     #[test]
@@ -215,6 +225,145 @@ mod tests {
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "application/ld+json");
         assert_round_trips(&ds, "application/ld+yaml");
+    }
+
+    #[test]
+    fn reifier_on_named_graph_triple_round_trips_jsonld() {
+        // A reifier binding AND its annotation live on a triple INSIDE a named graph.
+        // JSON-LD must thread the reifier/annotation graph slot, not force it to the
+        // default graph — otherwise the round-trip is not isomorphic.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
+        let g = b.intern_iri("https://e/g");
+        let triple = b.intern_triple(s, p, o);
+        let r = b.intern_iri("https://e/r");
+        let conf = b.intern_iri("https://e/confidence");
+        let val = b.intern_literal(RdfLiteral::typed(
+            "0.9",
+            "http://www.w3.org/2001/XMLSchema#decimal",
+        ));
+        b.push_quad(s, p, o, Some(g));
+        b.push_reifier_in_graph(r, triple, Some(g));
+        b.push_annotation_in_graph(r, conf, val, Some(g));
+        let ds = b.freeze().expect("freeze");
+        assert_round_trips(&ds, "application/ld+json");
+        assert_round_trips(&ds, "application/ld+yaml");
+    }
+
+    #[test]
+    fn gts_codec_backend_reaches_jsonld_and_yamlld_no_side_door() {
+        // The GENERIC backend (RdfParserBackend + RdfSerializer) reaches JSON-LD/YAML-LD
+        // through classify + codec_for — proving no `native_codecs::jsonld::` side-door is
+        // needed. A named-graph + reifier dataset exercises the star + dataset paths.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
+        let triple = b.intern_triple(s, p, o);
+        let r = b.intern_iri("https://e/r");
+        let conf = b.intern_iri("https://e/confidence");
+        let val = b.intern_literal(RdfLiteral::simple("high"));
+        b.push_quad(s, p, o, None);
+        b.push_reifier(r, triple);
+        b.push_annotation(r, conf, val);
+        let ds = b.freeze().expect("freeze");
+
+        let backend = GtsCodecBackend;
+        for media_type in ["application/ld+json", "application/ld+yaml"] {
+            // Serialize through the generic RdfSerializer.
+            let mut bytes = Vec::new();
+            backend
+                .serialize(
+                    &ds,
+                    RdfSerializeRequest {
+                        media_type,
+                        graph: SerializeGraph::Dataset,
+                        base_iri: None,
+                    },
+                    &mut bytes,
+                )
+                .expect("generic serialize");
+            // Parse back through the generic RdfParserBackend into a frozen dataset.
+            let mut sink = DatasetSink::new();
+            backend
+                .parse_into(
+                    RdfParseRequest {
+                        bytes: &bytes,
+                        media_type,
+                        base_iri: None,
+                        source_name: None,
+                    },
+                    &mut sink,
+                )
+                .expect("generic parse");
+            let reparsed = sink.into_dataset().expect("sink finished");
+            assert!(
+                datasets_isomorphic(&ds, &reparsed),
+                "GtsCodecBackend round-trip via {media_type} must be isomorphic"
+            );
+        }
+    }
+
+    #[test]
+    fn jsonld_yamlld_are_star_capable_no_rows_dropped() {
+        // JSON-LD / YAML-LD are star-capable, so `serialize_dataset_to_format` reports
+        // ZERO dropped statement rows even when the dataset carries reifiers/annotations.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
+        let triple = b.intern_triple(s, p, o);
+        let r = b.intern_iri("https://e/r");
+        let conf = b.intern_iri("https://e/confidence");
+        let val = b.intern_literal(RdfLiteral::simple("high"));
+        b.push_quad(s, p, o, None);
+        b.push_reifier(r, triple);
+        b.push_annotation(r, conf, val);
+        let ds = b.freeze().expect("freeze");
+        for format in [NativeRdfFormat::JsonLd, NativeRdfFormat::YamlLd] {
+            let outcome = serialize_dataset_to_format(&ds, format, None).expect("serialize");
+            assert_eq!(
+                outcome.statement_rows_dropped, 0,
+                "{format:?} is star-capable, so no statement rows drop"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_capabilities_stay_consistent_with_the_loss_ledger() {
+        use crate::loss::{supports_quads, supports_stars};
+
+        // The registry (FORMATS) and rdf-core::loss are two hand-maintained capability
+        // tables that MUST agree. For every loss-named format, the descriptor bool equals
+        // the independent loss.rs predicate — so neither can silently drift.
+        let mut unnamed: Vec<NativeRdfFormat> = Vec::new();
+        for descriptor in media_type::FORMATS {
+            let format = descriptor.format;
+            match format.loss_codec_name() {
+                Some(name) => {
+                    assert_eq!(
+                        format.carries_star(),
+                        supports_stars(name),
+                        "{format:?} carries_star vs loss::supports_stars({name})"
+                    );
+                    assert_eq!(
+                        format.supports_datasets(),
+                        supports_quads(name),
+                        "{format:?} supports_datasets vs loss::supports_quads({name})"
+                    );
+                }
+                None => unnamed.push(format),
+            }
+        }
+        // Exactly TriX and HexTuples carry no loss codec name, so no format silently
+        // escapes the consistency check.
+        assert_eq!(
+            unnamed,
+            vec![NativeRdfFormat::TriX, NativeRdfFormat::HexTuples],
+            "only TriX / HexTuples may lack a loss codec name"
+        );
     }
 
     #[test]

@@ -301,16 +301,80 @@ mod tests {
 
     #[test]
     fn media_type_round_trips_through_classify() {
-        for format in [
-            NativeRdfFormat::Turtle,
-            NativeRdfFormat::TriG,
-            NativeRdfFormat::NTriples,
-            NativeRdfFormat::NQuads,
-            NativeRdfFormat::RdfXml,
-            NativeRdfFormat::TriX,
-            NativeRdfFormat::HexTuples,
+        // Every variant in the registry — a table-driven loop so a new FORMATS row is
+        // covered automatically.
+        for descriptor in FORMATS {
+            assert_eq!(
+                classify(descriptor.format.media_type()).unwrap(),
+                descriptor.format
+            );
+        }
+    }
+
+    #[test]
+    fn classify_resolves_jsonld_and_yamlld() {
+        for id in [
+            "application/ld+json",
+            "ld+json",
+            "jsonld",
+            "json-ld",
+            ".jsonld",
         ] {
-            assert_eq!(classify(format.media_type()).unwrap(), format);
+            assert_eq!(classify(id).unwrap(), NativeRdfFormat::JsonLd, "id {id}");
+        }
+        for id in [
+            "application/ld+yaml",
+            "ld+yaml",
+            "yamlld",
+            "yaml-ld",
+            ".yamlld",
+        ] {
+            assert_eq!(classify(id).unwrap(), NativeRdfFormat::YamlLd, "id {id}");
+        }
+    }
+
+    #[test]
+    fn jsonld_and_yamlld_support_datasets() {
+        assert!(NativeRdfFormat::JsonLd.supports_datasets());
+        assert!(NativeRdfFormat::YamlLd.supports_datasets());
+    }
+
+    #[test]
+    fn descriptor_alias_regression_every_pre_existing_spelling_resolves() {
+        // The FormatDescriptor table refactor must not silently narrow `classify`: every
+        // spelling the pre-table `classify` accepted still resolves to its variant.
+        let cases: &[(&str, NativeRdfFormat)] = &[
+            ("text/turtle", NativeRdfFormat::Turtle),
+            ("application/turtle", NativeRdfFormat::Turtle),
+            ("turtle", NativeRdfFormat::Turtle),
+            ("ttl", NativeRdfFormat::Turtle),
+            ("application/trig", NativeRdfFormat::TriG),
+            ("trig", NativeRdfFormat::TriG),
+            ("application/n-triples", NativeRdfFormat::NTriples),
+            ("n-triples", NativeRdfFormat::NTriples),
+            ("ntriples", NativeRdfFormat::NTriples),
+            ("nt", NativeRdfFormat::NTriples),
+            ("application/n-quads", NativeRdfFormat::NQuads),
+            ("n-quads", NativeRdfFormat::NQuads),
+            ("nquads", NativeRdfFormat::NQuads),
+            ("nq", NativeRdfFormat::NQuads),
+            ("application/rdf+xml", NativeRdfFormat::RdfXml),
+            ("rdf+xml", NativeRdfFormat::RdfXml),
+            ("rdf", NativeRdfFormat::RdfXml),
+            ("owl", NativeRdfFormat::RdfXml),
+            ("xml", NativeRdfFormat::RdfXml),
+            // Absorbed from the wasm resolver so delegation drops nothing.
+            ("rdf/xml", NativeRdfFormat::RdfXml),
+            ("rdfxml", NativeRdfFormat::RdfXml),
+            ("application/trix", NativeRdfFormat::TriX),
+            ("trix", NativeRdfFormat::TriX),
+            ("application/x-hextuples", NativeRdfFormat::HexTuples),
+            ("application/hex+x-ndjson", NativeRdfFormat::HexTuples),
+            ("hext", NativeRdfFormat::HexTuples),
+            ("hextuples", NativeRdfFormat::HexTuples),
+        ];
+        for &(id, expected) in cases {
+            assert_eq!(classify(id).unwrap(), expected, "spelling {id}");
         }
     }
 }
