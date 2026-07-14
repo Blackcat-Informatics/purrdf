@@ -213,8 +213,8 @@ impl NativeRdfFormat {
 ///
 /// The input is lowercased and any `;charset=…` parameter is stripped before
 /// matching, so `text/turtle; charset=utf-8` and `Turtle` both resolve to
-/// [`NativeRdfFormat::Turtle`]. Matching scans [`FORMATS`] for a row whose canonical
-/// `media_type` OR any `alias` equals the normalized input (aliases include `.`-prefixed
+/// [`NativeRdfFormat::Turtle`]. Matching scans the internal format table for a row whose
+/// canonical `media_type` OR any `alias` equals the normalized input (aliases include `.`-prefixed
 /// file extensions, so `.jsonld` resolves too). An unrecognized media type is a HARD
 /// error (`native-codec-unsupported-format`) — there is no degraded default codec.
 pub fn classify(media_type: &str) -> Result<NativeRdfFormat, RdfDiagnostic> {
