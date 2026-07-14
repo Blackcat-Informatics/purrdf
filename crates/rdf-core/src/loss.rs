@@ -546,6 +546,119 @@ pub fn profile_for(from: &str, to: &str) -> BTreeSet<&'static str> {
         .unwrap_or_default()
 }
 
+// ── Sound + complete verification surface ────────────────────────────────────
+//
+// A runtime `record`-discipline [`LossLedger`] gives exactly three verifiable
+// promises about one conversion, and every one of them is checkable without
+// serde or any dependency beyond this module:
+//
+// - **lossless**: [`LossLedger::is_empty`] — nothing was dropped at all. No
+//   dedicated helper is needed; this is the existing method.
+// - **complete**: [`check_ledger_complete`]/[`assert_ledger_complete`] — the
+//   set of codes `ledger` actually recorded exactly matches the caller's
+//   declared `expected_codes`. A code missing from `ledger` means a
+//   construct vanished silently instead of being declared; a code `ledger`
+//   recorded that is NOT in `expected_codes` means the caller's declaration
+//   has drifted behind reality (a new/changed loss nobody updated the test
+//   for) — both directions are "incomplete" in the sense this check cares
+//   about.
+// - **sound**: [`check_ledger_sound`]/[`assert_ledger_sound`] — every code the
+//   ledger actually recorded is inside the declared [`profile_for`] contract
+//   for that `(from, to)` pair. A recorded code OUTSIDE the profile is an
+//   *unintentional* loss reaching the ledger — the live "this is a bug" case;
+//   soundness is what gives [`LossEntry::intentional`] a real, checkable
+//   meaning, rather than a field nobody verifies.
+//
+// Each check has a `Result`-returning core (composable, testable without
+// unwinding) and a panicking `assert_*` wrapper (for direct use in tests and
+// call-site invariants) — the crate's existing style for hard-fail checks
+// (e.g. [`LossLedger::contract`]'s duplicate-code assertion).
+
+/// Verify the set of codes `ledger` actually recorded exactly matches
+/// `expected_codes` — "complete" meaning every expected dropped construct is
+/// recorded (no silent loss) AND nothing outside `expected_codes` slipped in
+/// unnoticed (no undeclared drift). Order and duplicate occurrences in
+/// `ledger` are irrelevant; only the set of distinct codes is compared.
+///
+/// # Errors
+///
+/// Returns `Err` naming every code missing from `ledger` and/or every code
+/// `ledger` recorded that is not in `expected_codes`, when the two sets
+/// differ.
+pub fn check_ledger_complete(ledger: &LossLedger, expected_codes: &[&str]) -> Result<(), String> {
+    let present: BTreeSet<&str> = ledger.entries().iter().map(|e| e.code.as_ref()).collect();
+    let expected: BTreeSet<&str> = expected_codes.iter().copied().collect();
+    let missing: Vec<&str> = expected.difference(&present).copied().collect();
+    let unexpected: Vec<&str> = present.difference(&expected).copied().collect();
+    if missing.is_empty() && unexpected.is_empty() {
+        return Ok(());
+    }
+    let mut reasons = Vec::new();
+    if !missing.is_empty() {
+        reasons.push(format!("expected code(s) {missing:?} were never recorded"));
+    }
+    if !unexpected.is_empty() {
+        reasons.push(format!(
+            "ledger recorded unexpected code(s) {unexpected:?} not in expected_codes"
+        ));
+    }
+    Err(format!("loss ledger incomplete: {}", reasons.join("; ")))
+}
+
+/// Panicking wrapper over [`check_ledger_complete`]: the set of codes
+/// `ledger` recorded MUST exactly match `expected_codes`.
+///
+/// # Panics
+///
+/// Panics with the same message [`check_ledger_complete`] would return as
+/// `Err`, when the two code sets differ in either direction.
+pub fn assert_ledger_complete(ledger: &LossLedger, expected_codes: &[&str]) {
+    if let Err(message) = check_ledger_complete(ledger, expected_codes) {
+        panic!("{message}");
+    }
+}
+
+/// Verify every code `ledger` actually recorded is a member of
+/// `profile_for(from, to)` — "sound" meaning nothing surprising reached the
+/// ledger. A code outside the declared profile is flagged by name: it is an
+/// undeclared, unintentional loss (a bug), never an accepted contract.
+///
+/// # Errors
+///
+/// Returns `Err` naming every offending code (and the declared profile) when
+/// `ledger` carries at least one code outside `profile_for(from, to)`.
+pub fn check_ledger_sound(ledger: &LossLedger, from: &str, to: &str) -> Result<(), String> {
+    let profile = profile_for(from, to);
+    let offenders: BTreeSet<&str> = ledger
+        .entries()
+        .iter()
+        .map(|e| e.code.as_ref())
+        .filter(|code| !profile.contains(code))
+        .collect();
+    if offenders.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "loss ledger unsound for (\"{from}\", \"{to}\"): code(s) {offenders:?} were \
+             recorded but are not in the declared profile {profile:?} — a recorded code outside \
+             the profile is an undeclared, unintentional loss (a bug), not an accepted contract"
+        ))
+    }
+}
+
+/// Panicking wrapper over [`check_ledger_sound`]: every code `ledger`
+/// recorded MUST be a member of `profile_for(from, to)`.
+///
+/// # Panics
+///
+/// Panics with the same message [`check_ledger_sound`] would return as `Err`,
+/// when `ledger` carries at least one code outside the declared profile.
+pub fn assert_ledger_sound(ledger: &LossLedger, from: &str, to: &str) {
+    if let Err(message) = check_ledger_sound(ledger, from, to) {
+        panic!("{message}");
+    }
+}
+
 /// Render already-sorted entries to deterministic JSON: 2-space indent, fixed
 /// field order, trailing newline.
 ///
@@ -872,5 +985,94 @@ mod tests {
             profile.contains("named-graph-dropped"),
             "profile_for(\"trig\", \"turtle\") missing named-graph-dropped: {profile:?}"
         );
+    }
+
+    /// Build a hand-rolled, owned runtime [`LossEntry`] for the mechanical
+    /// helper tests below — no `RdfLocation`, since these tests exercise only
+    /// `code`/`from`/`to`, never a subject.
+    fn owned_entry(code: &str, from: &str, to: &str) -> LossEntry {
+        LossEntry {
+            code: Cow::Owned(code.to_owned()),
+            from: Cow::Owned(from.to_owned()),
+            to: Cow::Owned(to.to_owned()),
+            intentional: true,
+            note: Cow::Owned("mechanical test entry".to_owned()),
+            location: None,
+        }
+    }
+
+    #[test]
+    fn check_ledger_complete_passes_when_all_expected_codes_present() {
+        let mut ledger = LossLedger::new();
+        ledger.record(owned_entry("a", "x", "y"));
+        ledger.record(owned_entry("b", "x", "y"));
+        assert!(check_ledger_complete(&ledger, &["a", "b"]).is_ok());
+        // Order/duplicates in the ledger are irrelevant to completeness.
+        ledger.record(owned_entry("a", "x", "y"));
+        assert!(check_ledger_complete(&ledger, &["b", "a"]).is_ok());
+    }
+
+    #[test]
+    fn check_ledger_complete_flags_missing_code() {
+        let mut ledger = LossLedger::new();
+        ledger.record(owned_entry("a", "x", "y"));
+        let err =
+            check_ledger_complete(&ledger, &["a", "b"]).expect_err("code `b` was never recorded");
+        assert!(err.contains('b'), "error must name the missing code: {err}");
+    }
+
+    #[test]
+    fn check_ledger_complete_flags_unexpected_extra_code() {
+        // The other incompleteness direction: `ledger` recorded a real code
+        // that the caller's `expected_codes` never declared — a silently
+        // drifted contract, not merely a silently dropped construct.
+        let mut ledger = LossLedger::new();
+        ledger.record(owned_entry("a", "x", "y"));
+        ledger.record(owned_entry("b", "x", "y"));
+        let err = check_ledger_complete(&ledger, &["a"])
+            .expect_err("code `b` was recorded but not declared in expected_codes");
+        assert!(
+            err.contains('b'),
+            "error must name the unexpected code: {err}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "b")]
+    fn assert_ledger_complete_panics_on_missing_code() {
+        let ledger = LossLedger::new();
+        assert_ledger_complete(&ledger, &["a", "b"]);
+    }
+
+    #[test]
+    fn check_ledger_sound_passes_for_a_known_contract_ledger() {
+        // Every code the real rdf-1.2-dataset -> gts contract ledger records is,
+        // by construction, in its own declared profile.
+        let ledger = rdf_to_gts_loss_ledger();
+        assert!(check_ledger_sound(&ledger, "rdf-1.2-dataset", "gts").is_ok());
+    }
+
+    /// Soundness RED case: a ledger carrying a code OUTSIDE the declared
+    /// `("shacl", "json-schema")` profile must be flagged by name. No real
+    /// `purrdf_shapes::json_schema::compile` path produces an out-of-profile
+    /// code — that is the point of soundness — so this is a hand-built ledger.
+    #[test]
+    fn check_ledger_sound_flags_out_of_profile_code() {
+        let mut ledger = LossLedger::new();
+        ledger.record(owned_entry("not-a-real-code", "shacl", "json-schema"));
+        let err = check_ledger_sound(&ledger, "shacl", "json-schema")
+            .expect_err("`not-a-real-code` is outside the declared profile");
+        assert!(
+            err.contains("not-a-real-code"),
+            "error must name the offending code: {err}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "not-a-real-code")]
+    fn assert_ledger_sound_panics_on_out_of_profile_code() {
+        let mut ledger = LossLedger::new();
+        ledger.record(owned_entry("not-a-real-code", "shacl", "json-schema"));
+        assert_ledger_sound(&ledger, "shacl", "json-schema");
     }
 }
