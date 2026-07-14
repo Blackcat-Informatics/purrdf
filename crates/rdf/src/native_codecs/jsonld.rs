@@ -20,8 +20,10 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::NativeRdfFormat;
+use super::codec::RdfCodec;
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::serialize::build_ser_graph;
+use super::text_parse::LineParseMode;
 use crate::{
     RdfDataset, RdfDiagnostic, RdfLiteral, RdfQuad, RdfTerm, RdfTextDirection, RdfTriple,
     SerializeGraph,
@@ -116,6 +118,54 @@ fn to_json_object(map: BTreeMap<String, Value>) -> Value {
     Value::Object(map.into_iter().collect())
 }
 
+/// The JSON-LD-star codec — the registry's behavior seam for `application/ld+json`.
+///
+/// Both `serialize` and `parse` route through the SAME cores the public free functions
+/// use ([`serialize_ser_graph`] / [`parse_jsonld`]), so generic dispatch and the
+/// side-door API are one code path, two entry points. Base IRI / parse mode are ignored:
+/// JSON-LD derives its base from the document's own `@context`, and it has no
+/// line/Turtle-family tokenizer toggle.
+pub(super) struct JsonLdCodec;
+
+impl RdfCodec for JsonLdCodec {
+    fn parse(
+        &self,
+        text: &str,
+        _base_iri: Option<&str>,
+        _mode: LineParseMode,
+    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        parse_jsonld(text.as_bytes())
+    }
+
+    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+        serialize_ser_graph(graph)
+    }
+}
+
+/// The YAML-LD-star codec — the registry's behavior seam for `application/ld+yaml`.
+///
+/// Serialize walks the shared JSON-LD-star core then re-emits as YAML;
+/// parse bridges YAML→JSON ([`yamlld_to_jsonld`]) and reuses [`parse_jsonld`]. The
+/// registry path uses the bundled schema reference (the custom-`schema_url` overload
+/// stays on the public [`serialize_dataset_to_yamlld`]).
+pub(super) struct YamlLdCodec;
+
+impl RdfCodec for YamlLdCodec {
+    fn parse(
+        &self,
+        text: &str,
+        _base_iri: Option<&str>,
+        _mode: LineParseMode,
+    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        let json = yamlld_to_jsonld(text.as_bytes())?;
+        parse_jsonld(json.as_bytes())
+    }
+
+    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+        serialize_ser_graph_to_yamlld(graph, None)
+    }
+}
+
 /// Serialize the carrier dataset to a deterministic JSON-LD-star document.
 pub fn serialize_dataset_to_jsonld(dataset: &RdfDataset) -> Result<String, RdfDiagnostic> {
     // Build the same first-party graph shape the RDF text serializers walk. A
@@ -162,7 +212,22 @@ pub fn serialize_dataset_to_yamlld(
     dataset: &RdfDataset,
     schema_url: Option<&str>,
 ) -> Result<String, RdfDiagnostic> {
-    let json = serialize_dataset_to_jsonld(dataset)?;
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+    )?;
+    serialize_ser_graph_to_yamlld(&graph, schema_url)
+}
+
+/// Serialize an already-materialized [`SerGraph`] to deterministic YAML-LD-star bytes —
+/// the graph-level core shared by [`serialize_dataset_to_yamlld`] and [`YamlLdCodec`].
+fn serialize_ser_graph_to_yamlld(
+    graph: &SerGraph,
+    schema_url: Option<&str>,
+) -> Result<String, RdfDiagnostic> {
+    let json = serialize_ser_graph(graph)?;
     let value: Value =
         serde_json::from_str(&json).map_err(|e| decode(format!("parse JSON-LD for YAML: {e}")))?;
     let body =

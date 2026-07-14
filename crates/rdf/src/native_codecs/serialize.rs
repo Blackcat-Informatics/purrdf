@@ -439,10 +439,10 @@ fn direction_str(direction: RdfTextDirection) -> String {
 #[cfg(test)]
 mod serialize_to_format_tests {
     //! Coverage for the universal-transcoder helper
-    //! [`serialize_dataset_to_format`], ported onto the native codecs in.
-    //! (JSON-LD is no longer routed through this helper — it has no [`NativeRdfFormat`]
-    //! variant — so the JSON-LD drop accounting is exercised in
-    //! `crates/pipeline/src/transcode.rs` via the native `yaml_ld` serializer.)
+    //! [`serialize_dataset_to_format`], ported onto the native codecs. JSON-LD and
+    //! YAML-LD are now first-class [`NativeRdfFormat`] variants routed through this
+    //! helper, so their star-drop accounting is exercised alongside the others (they are
+    //! star-capable, so the count is 0).
     use super::*;
     use crate::{RdfDatasetBuilder, TermFactory, parse_dataset};
     use std::sync::Arc;

@@ -32,6 +32,13 @@ pub enum NativeRdfFormat {
     /// HexTuples — a line-oriented NDJSON quads serialization
     /// (`application/x-hextuples`).
     HexTuples,
+    /// JSON-LD-star — the first-party JSON-LD 1.1 + RDF-1.2-star serialization
+    /// (`application/ld+json`). Star-capable (reifier form AND object-position triple
+    /// terms) and dataset-capable (named graphs).
+    JsonLd,
+    /// YAML-LD-star — the deterministic YAML derivative of [`Self::JsonLd`]
+    /// (`application/ld+yaml`).
+    YamlLd,
 }
 
 /// The single source of truth for one format's routing + capability metadata.
@@ -134,6 +141,24 @@ pub(crate) const FORMATS: &[FormatDescriptor] = &[
         supports_datasets: true,
         tokenizer_carries_spans: false,
         loss_codec_name: None,
+    },
+    FormatDescriptor {
+        format: NativeRdfFormat::JsonLd,
+        media_type: "application/ld+json",
+        aliases: &["ld+json", "jsonld", "json-ld", ".jsonld"],
+        carries_star: true,
+        supports_datasets: true,
+        tokenizer_carries_spans: false,
+        loss_codec_name: Some("jsonld-star"),
+    },
+    FormatDescriptor {
+        format: NativeRdfFormat::YamlLd,
+        media_type: "application/ld+yaml",
+        aliases: &["ld+yaml", "yamlld", "yaml-ld", ".yamlld"],
+        carries_star: true,
+        supports_datasets: true,
+        tokenizer_carries_spans: false,
+        loss_codec_name: Some("yaml-ld-star"),
     },
 ];
 

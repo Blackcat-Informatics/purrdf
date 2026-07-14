@@ -76,7 +76,11 @@ impl RdfCodec for LineCodec {
             NativeRdfFormat::TriG => ser_model::to_trig(graph),
             NativeRdfFormat::NTriples => ser_model::to_ntriples(graph)?,
             NativeRdfFormat::NQuads => ser_model::to_nquads(graph),
-            NativeRdfFormat::RdfXml | NativeRdfFormat::TriX | NativeRdfFormat::HexTuples => {
+            NativeRdfFormat::RdfXml
+            | NativeRdfFormat::TriX
+            | NativeRdfFormat::HexTuples
+            | NativeRdfFormat::JsonLd
+            | NativeRdfFormat::YamlLd => {
                 unreachable!("LineCodec only wraps line/Turtle-family formats")
             }
         })
@@ -97,5 +101,7 @@ pub(super) fn codec_for(format: NativeRdfFormat) -> &'static dyn RdfCodec {
         NativeRdfFormat::RdfXml => &super::rdfxml::RdfXmlCodec,
         NativeRdfFormat::TriX => &super::trix::TriXCodec,
         NativeRdfFormat::HexTuples => &super::hextuples::HexTuplesCodec,
+        NativeRdfFormat::JsonLd => &super::jsonld::JsonLdCodec,
+        NativeRdfFormat::YamlLd => &super::jsonld::YamlLdCodec,
     }
 }
