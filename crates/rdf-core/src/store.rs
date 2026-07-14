@@ -17,7 +17,7 @@ pub struct RdfStoreCapabilities {
     pub annotations: bool,
     /// Whether source/location context (`RdfLocation`) is preserved.
     pub source_locations: bool,
-    /// Whether conversion loss records (`RdfLoss`) are preserved.
+    /// Whether conversion loss records are preserved.
     pub loss_records: bool,
     /// Whether structured non-triple lookaside material is preserved.
     pub lookaside: bool,

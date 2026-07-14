@@ -27,7 +27,9 @@
 //!
 //! `sh:sparql` / `sh:SPARQLTarget` constraints have no JSON Schema equivalent.
 //! They are never silently skipped: each one is dropped, recorded as a
-//! [`LossRecord`], and annotated with a `$comment` on the affected schema.
+//! [`::purrdf::loss::LossEntry`] on the compiled [`CompiledSchema::losses`]
+//! ledger, and (for node/property-level constraints) annotated with a
+//! `$comment` on the affected schema.
 //!
 //! # Value-vocabulary enum projection (opt-in, projection-only)
 //!
@@ -47,6 +49,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ::purrdf::RdfDataset;
+use ::purrdf::RdfLocation;
+use ::purrdf::loss::{LossEntry, LossLedger};
 use serde_json::{Map, Value, json};
 
 use crate::data::{GraphFilter, native_quads};
@@ -234,27 +238,34 @@ pub fn local_name(iri: &str) -> String {
     local.to_owned()
 }
 
-/// A single un-mappable SHACL construct, recorded rather than silently dropped.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LossRecord {
-    /// The SHACL construct that could not be mapped (e.g. `"sh:sparql"`).
-    pub construct: String,
-    /// The IRI (or blank-node id) of the shape that carried it.
-    pub shape_iri: String,
-    /// A human-readable reason for the drop.
-    pub reason: String,
+/// Build a runtime SHACL→JSON-Schema [`LossEntry`]: `from` is `"shacl"`, `to`
+/// is `"json-schema"`, and `location` carries `subject` — the shape/class IRI
+/// (or blank-node id) the loss concerns. Every `code` passed here MUST be one
+/// enumerated in `SHACL_JSON_SCHEMA_PROFILE` (`crates/rdf-core/src/loss.rs`)
+/// — a documented, accepted drop, never a bug — since a ledger's `intentional`
+/// JSON field is derived (not stored) as membership in that profile.
+fn loss_entry(code: &str, subject: &str, note: &str) -> LossEntry {
+    LossEntry {
+        code: code.to_owned().into(),
+        from: "shacl".into(),
+        to: "json-schema".into(),
+        note: note.to_owned().into(),
+        location: Some(Box::new(RdfLocation::default().with_subject(subject))),
+    }
 }
 
 /// The compiled artifacts: a JSON Schema document, an OpenAPI document, and the
-/// list of constructs that could not be expressed.
+/// ledger of constructs that could not be expressed.
 #[derive(Debug, Clone)]
 pub struct CompiledSchema {
     /// The JSON Schema (draft 2020-12), pretty-printed with a trailing newline.
     pub schema_json: String,
     /// The OpenAPI 3.1 document embedding the same `$defs`, same convention.
     pub openapi_json: String,
-    /// Every dropped, un-mappable construct (never silently skipped).
-    pub losses: Vec<LossRecord>,
+    /// Every dropped, un-mappable construct (never silently skipped) — a
+    /// runtime [`LossLedger`] built via [`LossLedger::record`], one entry per
+    /// occurrence (codes from `SHACL_JSON_SCHEMA_PROFILE`).
+    pub losses: LossLedger,
 }
 
 // ── Value-vocabulary projection config ───────────────────────────────────────
@@ -316,7 +327,9 @@ pub struct ValueVocabProjection<'a> {
 /// Accumulates losses while compiling so every emitter helper can record one,
 /// and carries the caller-supplied [`Namespaces`] every helper compacts with.
 struct Ctx<'ns> {
-    losses: Vec<LossRecord>,
+    /// The runtime loss ledger this compilation accumulates into (surfaced as
+    /// [`CompiledSchema::losses`]).
+    ledger: LossLedger,
     /// The set of `Namespaces::def_key` keys that WILL receive a `$def` — i.e.
     /// every `def_key(target_class)` over all non-deactivated
     /// `Target::Class(..)` shapes. This MUST use the same key function as the
@@ -350,7 +363,7 @@ impl<'ns> Ctx<'ns> {
         ns: &'ns Namespaces,
     ) -> Self {
         Self {
-            losses: Vec::new(),
+            ledger: LossLedger::new(),
             emitted_defs,
             value_vocab_enums,
             predicate_ranges,
@@ -358,12 +371,20 @@ impl<'ns> Ctx<'ns> {
         }
     }
 
-    fn record(&mut self, construct: &str, shape_iri: &str, reason: &str) {
-        self.losses.push(LossRecord {
-            construct: construct.to_owned(),
-            shape_iri: shape_iri.to_owned(),
-            reason: reason.to_owned(),
-        });
+    /// Record one runtime loss (`code` = the SHACL construct that could not be
+    /// mapped, e.g. `"sh:sparql"`; `subject` = the shape/class IRI or
+    /// blank-node id it concerns; `note` = a human-readable reason).
+    fn record(&mut self, code: &str, subject: &str, note: &str) {
+        self.ledger.record(loss_entry(code, subject, note));
+    }
+
+    /// Absorb a batch of already-built [`LossEntry`] values (e.g. the
+    /// value-vocabulary enumeration losses computed ahead of [`Ctx`]
+    /// construction) into this compilation's ledger.
+    fn record_entries(&mut self, entries: Vec<LossEntry>) {
+        for entry in entries {
+            self.ledger.record(entry);
+        }
     }
 }
 
@@ -435,23 +456,23 @@ pub fn compile_with_value_vocab(
 
     // PASS 1: compute the set of `def_key`s that WILL receive a `$def`, using
     // the EXACT same iteration AND the EXACT same key function (`ns.def_key`)
-    // as the `$defs` map built below (every `Target::Class(..)` of every
-    // non-deactivated node shape). Keying this set by bare local name instead
-    // would conflate a primary class with any non-primary class sharing its
-    // local name (e.g. `gmeow:Distribution` vs `math:Distribution` both
-    // reducing to `"Distribution"`), making one twin's presence mask the
-    // other's absence from `$defs` — a dangling `$ref`. This lets the
-    // per-property emitter decide whether a `sh:class C` ref can resolve
-    // before the `$defs` map is fully built, so it never writes a dangling
-    // `$ref`.
+    // as the `$defs` map built below (every `Target::Class(..)` AND every
+    // `Target::ImplicitClass(..)` of every non-deactivated node shape — both
+    // mint a class `$def`). Keying this set by bare local name instead would
+    // conflate a primary class with any non-primary class sharing its local
+    // name (e.g. `gmeow:Distribution` vs `math:Distribution` both reducing to
+    // `"Distribution"`), making one twin's presence mask the other's absence
+    // from `$defs` — a dangling `$ref`. This lets the per-property emitter
+    // decide whether a `sh:class C` ref can resolve before the `$defs` map is
+    // fully built, so it never writes a dangling `$ref`.
     let mut emitted_defs: BTreeSet<String> = BTreeSet::new();
     for shape in &shapes.node_shapes {
         if shape.deactivated {
             continue;
         }
         for target in &shape.targets {
-            if let Target::Class(c) = target {
-                emitted_defs.insert(ns.def_key(c.as_str()));
+            if let Some(iri) = class_def_target_iri(target) {
+                emitted_defs.insert(ns.def_key(iri));
             }
         }
     }
@@ -472,7 +493,7 @@ pub fn compile_with_value_vocab(
     let mut ctx = Ctx::new(emitted_defs, value_vocab_enums, predicate_ranges, ns);
     // Enum enumeration losses (empty vocab, blank-node member) recorded first,
     // deterministically, ahead of the per-shape losses.
-    ctx.losses.extend(vocab_losses);
+    ctx.record_entries(vocab_losses);
 
     // Build $defs: one entry per `sh:targetClass` of every active node shape,
     // keyed by the class local name; the body is the shape compiled as an object
@@ -483,14 +504,79 @@ pub fn compile_with_value_vocab(
             continue;
         }
         let body = compile_object_schema(shape, &mut ctx);
+        let shape_iri = shape.id.to_string();
         for target in &shape.targets {
-            if let Target::Class(c) = target {
-                let name = ns.def_key(c.as_str());
-                // First writer wins for a given class name; bodies are identical
-                // per shape so this only matters if two shapes target the same
-                // class (last one would otherwise clobber). Keep deterministic by
-                // not overwriting an existing identical-by-construction entry.
-                defs.entry(name).or_insert_with(|| body.clone());
+            match target {
+                Target::Class(c) => {
+                    let name = ns.def_key(c.as_str());
+                    // First writer wins for a given class name; bodies are identical
+                    // per shape so this only matters if two shapes target the same
+                    // class (last one would otherwise clobber). Keep deterministic by
+                    // not overwriting an existing identical-by-construction entry.
+                    defs.entry(name).or_insert_with(|| body.clone());
+                }
+                Target::ImplicitClass(t) => {
+                    // The shape node IS the class (`<id> a rdfs:Class`, no explicit
+                    // sh:targetClass) — genuinely representable as a `$def` keyed by
+                    // the class itself, exactly like `Target::Class`. Not lossy, so
+                    // no loss is recorded for it.
+                    let name = ns.def_key(implicit_class_iri(t));
+                    defs.entry(name).or_insert_with(|| body.clone());
+                }
+                Target::Sparql { .. } => {
+                    // SHACL-AF `sh:target`/`sh:SPARQLTarget` selects focus nodes via
+                    // an arbitrary SPARQL SELECT — there is no closed-world JSON
+                    // Schema equivalent (it is not a class extension, so no `$def`
+                    // can be keyed for it). This USED to be a silent exclusion (no
+                    // `$def`, no loss); every SPARQL-targeted shape now records the
+                    // drop instead of vanishing quietly.
+                    ctx.record(
+                        "sh:SPARQLTarget",
+                        &shape_iri,
+                        "SHACL-AF SPARQL target (sh:target/sh:SPARQLTarget) selects focus \
+                         nodes via an arbitrary SPARQL query with no closed-world JSON \
+                         Schema equivalent; the shape's SPARQL-selected instances are not \
+                         enforced by the emitted schema",
+                    );
+                }
+                Target::Node(_) => {
+                    // sh:targetNode selects specific focus nodes, not a class
+                    // extension — no closed-world JSON Schema `$def` can be keyed
+                    // for it. Record the drop instead of vanishing quietly.
+                    ctx.record(
+                        "sh:targetNode",
+                        &shape_iri,
+                        "A shape targeted only via sh:targetNode selects specific focus \
+                         nodes, not a class extension; it has no closed-world JSON Schema \
+                         $def and its constraints are not enforced by the emitted schema.",
+                    );
+                }
+                Target::SubjectsOf(_) => {
+                    // sh:targetSubjectsOf selects focus nodes by a predicate's
+                    // subject position, not a class extension — same non-representability
+                    // as sh:targetNode.
+                    ctx.record(
+                        "sh:targetSubjectsOf",
+                        &shape_iri,
+                        "A shape targeted only via sh:targetSubjectsOf selects focus nodes \
+                         by a predicate's subject position, not a class extension; no \
+                         closed-world JSON Schema $def can be keyed and its constraints are \
+                         not enforced.",
+                    );
+                }
+                Target::ObjectsOf(_) => {
+                    // sh:targetObjectsOf selects focus nodes by a predicate's object
+                    // position, not a class extension — same non-representability as
+                    // sh:targetNode.
+                    ctx.record(
+                        "sh:targetObjectsOf",
+                        &shape_iri,
+                        "A shape targeted only via sh:targetObjectsOf selects focus nodes \
+                         by a predicate's object position, not a class extension; no \
+                         closed-world JSON Schema $def can be keyed and its constraints are \
+                         not enforced.",
+                    );
+                }
             }
         }
     }
@@ -525,7 +611,7 @@ pub fn compile_with_value_vocab(
     CompiledSchema {
         schema_json: to_pretty(&schema),
         openapi_json: to_pretty(&openapi),
-        losses: ctx.losses,
+        losses: ctx.ledger,
     }
 }
 
@@ -550,9 +636,9 @@ fn value_vocab_enum_defs(
     shapes: &Shapes,
     ns: &Namespaces,
     projection: Option<&ValueVocabProjection<'_>>,
-) -> (BTreeMap<String, (String, Value)>, Vec<LossRecord>) {
+) -> (BTreeMap<String, (String, Value)>, Vec<LossEntry>) {
     let mut out: BTreeMap<String, (String, Value)> = BTreeMap::new();
-    let mut losses: Vec<LossRecord> = Vec::new();
+    let mut losses: Vec<LossEntry> = Vec::new();
     let Some(proj) = projection else {
         return (out, losses);
     };
@@ -589,11 +675,11 @@ fn value_vocab_enum_defs(
         let (members, member_losses) = members_of(&datasets, class_iri, ns);
         losses.extend(member_losses);
         if members.is_empty() {
-            losses.push(LossRecord {
-                construct: "value-vocabulary".to_owned(),
-                shape_iri: class_iri.clone(),
-                reason: "no named individuals; emitting an empty enum".to_owned(),
-            });
+            losses.push(loss_entry(
+                "value-vocabulary",
+                class_iri,
+                "no named individuals; emitting an empty enum",
+            ));
         }
         out.insert(class_iri.clone(), (key, build_enum_def(&members)));
     }
@@ -664,7 +750,7 @@ fn members_of(
     datasets: &[&RdfDataset; 2],
     class_iri: &str,
     ns: &Namespaces,
-) -> (Vec<VocabMember>, Vec<LossRecord>) {
+) -> (Vec<VocabMember>, Vec<LossEntry>) {
     let type_term = Term::NamedNode(NamedNode::from(rdf::TYPE));
     let class_term = Term::NamedNode(NamedNode::from(class_iri));
 
@@ -692,12 +778,14 @@ fn members_of(
         }
     }
 
-    let losses: Vec<LossRecord> = blank_labels
+    let losses: Vec<LossEntry> = blank_labels
         .into_iter()
-        .map(|label| LossRecord {
-            construct: "value-vocabulary member".to_owned(),
-            shape_iri: class_iri.to_owned(),
-            reason: format!("blank-node individual _:{label} cannot be an enum member; dropped"),
+        .map(|label| {
+            loss_entry(
+                "value-vocabulary member",
+                class_iri,
+                &format!("blank-node individual _:{label} cannot be an enum member; dropped"),
+            )
         })
         .collect();
 
@@ -790,15 +878,16 @@ fn assert_value_vocab_enum_keys_unambiguous(
     ns: &Namespaces,
     vocab_enums: &BTreeMap<String, (String, Value)>,
 ) {
-    // The class `$def` keys (every active target class), which enum keys must not clash with.
+    // The class `$def` keys (every active target class, explicit or implicit),
+    // which enum keys must not clash with.
     let mut class_keys: BTreeSet<String> = BTreeSet::new();
     for shape in &shapes.node_shapes {
         if shape.deactivated {
             continue;
         }
         for target in &shape.targets {
-            if let Target::Class(c) = target {
-                class_keys.insert(ns.def_key(c.as_str()));
+            if let Some(iri) = class_def_target_iri(target) {
+                class_keys.insert(ns.def_key(iri));
             }
         }
     }
@@ -820,11 +909,41 @@ fn assert_value_vocab_enum_keys_unambiguous(
     }
 }
 
-/// Enforce the keying precondition (Gap D): every active `sh:targetClass`
-/// is in a DECLARED namespace (so [`Namespaces::def_key`] yields a stable
-/// `$defs` key and [`node_def`] can rebuild its `@type` const) and those keys
-/// are collision-free. Panics with a descriptive message otherwise
-/// (build-time, fail-closed).
+/// The class IRI a `Target::ImplicitClass` carries. [`Shapes::parse_targets`]
+/// only ever constructs this variant when the shape id is itself a
+/// `NamedNode` typed `rdfs:Class`, so the wrapped term is always a
+/// `NamedNode` — anything else is a parser contract violation, not a
+/// reachable runtime state, hence the hard panic rather than a fallback.
+fn implicit_class_iri(t: &Term) -> &str {
+    match t {
+        Term::NamedNode(n) => n.as_str(),
+        other => unreachable!(
+            "Target::ImplicitClass always wraps the shape's own NamedNode id \
+             (parser invariant); got {other:?}"
+        ),
+    }
+}
+
+/// A `(key_iri, def_key_source)` pair over the class-shaped targets of one
+/// shape — `Target::Class` (an explicit `sh:targetClass`) and
+/// `Target::ImplicitClass` (the shape node is itself `rdfs:Class`) both mint a
+/// `$defs` entry keyed by [`Namespaces::def_key`], so every keying / collision
+/// guard must walk both the same way.
+fn class_def_target_iri(target: &Target) -> Option<&str> {
+    match target {
+        Target::Class(c) => Some(c.as_str()),
+        Target::ImplicitClass(t) => Some(implicit_class_iri(t)),
+        Target::SubjectsOf(_) | Target::ObjectsOf(_) | Target::Node(_) | Target::Sparql { .. } => {
+            None
+        }
+    }
+}
+
+/// Enforce the keying precondition (Gap D): every active `sh:targetClass` /
+/// implicit-class target is in a DECLARED namespace (so [`Namespaces::def_key`]
+/// yields a stable `$defs` key and [`node_def`] can rebuild its `@type` const)
+/// and those keys are collision-free. Panics with a descriptive message
+/// otherwise (build-time, fail-closed).
 fn assert_target_class_keys_are_unambiguous(shapes: &Shapes, ns: &Namespaces) {
     let mut key_to_iri: BTreeMap<String, String> = BTreeMap::new();
     for shape in &shapes.node_shapes {
@@ -832,11 +951,10 @@ fn assert_target_class_keys_are_unambiguous(shapes: &Shapes, ns: &Namespaces) {
             continue;
         }
         for target in &shape.targets {
-            if let Target::Class(c) = target {
-                let iri = c.as_str();
+            if let Some(iri) = class_def_target_iri(target) {
                 assert!(
                     ns.is_known(iri),
-                    "json_schema: sh:targetClass {iri:?} has no declared namespace prefix — \
+                    "json_schema: target class {iri:?} has no declared namespace prefix — \
                      the @type discriminator and `$defs` keys derive from a prefix CURIE; \
                      declare its prefix in the shapes document / Namespaces (and confirm \
                      OpenAPI key encoding) before introducing target classes from it"
@@ -1921,6 +2039,17 @@ mod tests {
         &schema["$defs"][name]
     }
 
+    /// Whether `ledger` carries an entry matching BOTH `code` exactly AND
+    /// `subject` exactly (the shape/class IRI `Ctx::record`/`loss_entry` stored
+    /// on `location.subject`) — never a suffix match, so no migrated assertion
+    /// is weakened relative to the pre-ledger `l.shape_iri.ends_with(..)` checks.
+    fn has_loss(ledger: &LossLedger, code: &str, subject: &str) -> bool {
+        ledger.entries().iter().any(|e| {
+            e.code == code
+                && e.location.as_ref().and_then(|l| l.subject.as_deref()) == Some(subject)
+        })
+    }
+
     /// Validate a JSON-LD instance node against the emitted `schema_json` with a
     /// trusted external JSON-Schema (draft 2020-12) validator, returning whether
     /// the instance is ACCEPTED.
@@ -2574,8 +2703,12 @@ mod tests {
             ",
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "a mixed inner must record a sh:not LossRecord, got {:?}",
+            has_loss(
+                &c.losses,
+                "sh:not",
+                "<https://example.org/meta/PersonShape>"
+            ),
+            "a mixed inner must record a sh:not loss on PersonShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -2606,8 +2739,12 @@ mod tests {
             ",
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "an undeclared-namespace inner class must record a sh:not LossRecord, got {:?}",
+            has_loss(
+                &c.losses,
+                "sh:not",
+                "<https://example.org/meta/PersonShape>"
+            ),
+            "an undeclared-namespace inner class must record a sh:not loss on PersonShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -2631,7 +2768,7 @@ mod tests {
             ",
         );
         assert!(
-            !c.losses.iter().any(|l| l.construct == "sh:not"),
+            !has_loss(&c.losses, "sh:not", "<https://example.org/meta/NoPShape>"),
             "an expressible property-shape inner must NOT record a loss, got {:?}",
             c.losses
         );
@@ -2672,8 +2809,8 @@ mod tests {
             ",
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "a bare-maxCount sh:not property inner must record a sh:not LossRecord, got {:?}",
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/MaxShape>"),
+            "a bare-maxCount sh:not property inner must record a sh:not loss on MaxShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -2722,8 +2859,8 @@ mod tests {
             ",
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "a minCount+maxCount sh:not property inner must record a sh:not LossRecord, got {:?}",
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/ExactShape>"),
+            "a minCount+maxCount sh:not property inner must record a sh:not loss on ExactShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -2758,8 +2895,8 @@ mod tests {
             ",
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "a sh:datatype sh:not property inner must record a sh:not LossRecord, got {:?}",
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/DtShape>"),
+            "a sh:datatype sh:not property inner must record a sh:not loss on DtShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -2799,8 +2936,8 @@ mod tests {
             ",
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "a sh:datatype sh:not property inner must record a sh:not LossRecord, got {:?}",
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/DtArrShape>"),
+            "a sh:datatype sh:not property inner must record a sh:not loss on DtArrShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -2841,8 +2978,8 @@ mod tests {
             ",
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "a sh:nodeKind sh:not property inner must record a sh:not LossRecord, got {:?}",
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/NkShape>"),
+            "a sh:nodeKind sh:not property inner must record a sh:not loss on NkShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -2875,8 +3012,8 @@ mod tests {
             "#,
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "a sh:languageIn sh:not property inner must record a sh:not LossRecord, got {:?}",
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/LiShape>"),
+            "a sh:languageIn sh:not property inner must record a sh:not loss on LiShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -2912,8 +3049,8 @@ mod tests {
             "#,
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "a sh:pattern sh:not property inner must record a sh:not LossRecord, got {:?}",
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/PatShape>"),
+            "a sh:pattern sh:not property inner must record a sh:not loss on PatShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -2963,8 +3100,8 @@ mod tests {
             ",
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "a sh:minInclusive sh:not property inner must record a sh:not LossRecord, got {:?}",
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/NumShape>"),
+            "a sh:minInclusive sh:not property inner must record a sh:not loss on NumShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -3004,8 +3141,12 @@ mod tests {
             "#,
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "a sh:hasValue sh:not property inner must record a sh:not LossRecord, got {:?}",
+            has_loss(
+                &c.losses,
+                "sh:not",
+                "<https://example.org/meta/HasValShape>"
+            ),
+            "a sh:hasValue sh:not property inner must record a sh:not loss on HasValShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -3056,8 +3197,8 @@ mod tests {
             "#,
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "a sh:in sh:not property inner must record a sh:not LossRecord, got {:?}",
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/InShape>"),
+            "a sh:in sh:not property inner must record a sh:not loss on InShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -3113,7 +3254,11 @@ mod tests {
             ",
         );
         assert!(
-            !c.losses.iter().any(|l| l.construct == "sh:not"),
+            !has_loss(
+                &c.losses,
+                "sh:not",
+                "<https://example.org/meta/PersonShape>"
+            ),
             "a declared-namespace class needs no NodeShape to be negated, got {:?}",
             c.losses
         );
@@ -3145,8 +3290,8 @@ mod tests {
             ",
         );
         assert!(
-            c.losses.iter().any(|l| l.construct == "sh:not"),
-            "sh:not over a non-expressible inner must record a LossRecord, got {:?}",
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/NotShape>"),
+            "sh:not over a non-expressible inner must record a loss on NotShape, got {:?}",
             c.losses
         );
         let schema = schema_of(&c);
@@ -3177,10 +3322,19 @@ mod tests {
                 ] .
             "#,
         );
-        assert!(!c.losses.is_empty(), "sh:sparql must record a LossRecord");
-        let loss = &c.losses[0];
-        assert_eq!(loss.construct, "sh:sparql");
-        assert!(loss.reason.contains("SPARQL"));
+        assert!(!c.losses.is_empty(), "sh:sparql must record a loss");
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:sparql",
+                "<https://example.org/meta/SparqlShape>"
+            ),
+            "expected a sh:sparql loss on SparqlShape, got {:?}",
+            c.losses
+        );
+        let loss = &c.losses.entries()[0];
+        assert_eq!(loss.code, "sh:sparql");
+        assert!(loss.note.contains("SPARQL"));
         // The affected schema carries a $comment noting the drop.
         let schema = schema_of(&c);
         let guarded = def(&schema, "Guarded");
@@ -3192,6 +3346,260 @@ mod tests {
             "expected a $comment noting the dropped sh:sparql, got {:?}",
             guarded["$comment"]
         );
+    }
+
+    #[test]
+    fn sparql_target_shape_records_loss_instead_of_silent_exclusion() {
+        // own-it fix: a shape targeted ONLY via SHACL-AF `sh:target`/
+        // `sh:SPARQLTarget` (an arbitrary SPARQL SELECT, not a class extension)
+        // has no closed-world JSON-Schema equivalent and used to be excluded
+        // from the compiled schema with NO recorded loss — a silent drop. It
+        // must now surface a `sh:SPARQLTarget` loss on the shape's own subject
+        // instead of vanishing quietly.
+        let c = compile_ttl(
+            r#"
+            meta:GuardedShape a sh:NodeShape ;
+                sh:target [
+                    a sh:SPARQLTarget ;
+                    sh:select "SELECT ?this WHERE { ?this <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/meta/Guarded> . }" ;
+                ] ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            "#,
+        );
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:SPARQLTarget",
+                "<https://example.org/meta/GuardedShape>"
+            ),
+            "a SPARQL-targeted shape must record a sh:SPARQLTarget loss on its own subject, got {:?}",
+            c.losses
+        );
+        // The shape carries no sh:targetClass, so (independent of the loss) it
+        // emits no $def of its own — the point is that the exclusion is now
+        // visible on the ledger rather than silent.
+        let schema = schema_of(&c);
+        assert!(
+            schema["$defs"]["GuardedShape"].is_null(),
+            "a SPARQL-only-targeted shape has no $defs entry keyed by its own id"
+        );
+    }
+
+    #[test]
+    fn target_node_shape_records_loss_instead_of_silent_exclusion() {
+        // Gap G5: a shape targeted ONLY via `sh:targetNode` selects specific
+        // focus nodes, not a class extension — it used to be silently dropped
+        // (no `$def`, no loss). It must now surface a `sh:targetNode` loss on
+        // the shape's own subject.
+        let c = compile_ttl(
+            r"
+            meta:PinnedShape a sh:NodeShape ;
+                sh:targetNode meta:pinnedInstance ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+        );
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:targetNode",
+                "<https://example.org/meta/PinnedShape>"
+            ),
+            "a sh:targetNode-only shape must record a sh:targetNode loss on its own subject, \
+             got {:?}",
+            c.losses
+        );
+        ::purrdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        let schema = schema_of(&c);
+        assert!(
+            schema["$defs"]["PinnedShape"].is_null(),
+            "a sh:targetNode-only shape has no $defs entry keyed by its own id"
+        );
+    }
+
+    #[test]
+    fn target_subjects_of_shape_records_loss_instead_of_silent_exclusion() {
+        // Gap G5: a shape targeted ONLY via `sh:targetSubjectsOf` selects focus
+        // nodes by a predicate's subject position, not a class extension — it
+        // used to be silently dropped. It must now surface a
+        // `sh:targetSubjectsOf` loss on the shape's own subject.
+        let c = compile_ttl(
+            r"
+            meta:AuthorShape a sh:NodeShape ;
+                sh:targetSubjectsOf meta:wrote ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+        );
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:targetSubjectsOf",
+                "<https://example.org/meta/AuthorShape>"
+            ),
+            "a sh:targetSubjectsOf-only shape must record a sh:targetSubjectsOf loss on its \
+             own subject, got {:?}",
+            c.losses
+        );
+        ::purrdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        let schema = schema_of(&c);
+        assert!(
+            schema["$defs"]["AuthorShape"].is_null(),
+            "a sh:targetSubjectsOf-only shape has no $defs entry keyed by its own id"
+        );
+    }
+
+    #[test]
+    fn target_objects_of_shape_records_loss_instead_of_silent_exclusion() {
+        // Gap G5: a shape targeted ONLY via `sh:targetObjectsOf` selects focus
+        // nodes by a predicate's object position, not a class extension — it
+        // used to be silently dropped. It must now surface a
+        // `sh:targetObjectsOf` loss on the shape's own subject.
+        let c = compile_ttl(
+            r"
+            meta:BookShape a sh:NodeShape ;
+                sh:targetObjectsOf meta:wrote ;
+                sh:property [ sh:path meta:title ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+        );
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:targetObjectsOf",
+                "<https://example.org/meta/BookShape>"
+            ),
+            "a sh:targetObjectsOf-only shape must record a sh:targetObjectsOf loss on its own \
+             subject, got {:?}",
+            c.losses
+        );
+        ::purrdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        let schema = schema_of(&c);
+        assert!(
+            schema["$defs"]["BookShape"].is_null(),
+            "a sh:targetObjectsOf-only shape has no $defs entry keyed by its own id"
+        );
+    }
+
+    #[test]
+    fn implicit_class_shape_emits_def_and_records_no_loss() {
+        // Gap G5: the shape id being itself an `rdfs:Class` (no explicit
+        // `sh:targetClass`) IS a genuine class extension — instances of the
+        // shape's own class — so it must emit a `$def` exactly like an
+        // explicit `sh:targetClass`, and NOT record a loss (a spurious loss
+        // here would be unsound: the construct is not actually dropped).
+        let c = compile_ttl(
+            r"
+            meta:Widget a rdfs:Class, sh:NodeShape ;
+                sh:property [ sh:path meta:serial ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+        );
+        assert!(
+            !has_loss(
+                &c.losses,
+                "sh:targetNode",
+                "<https://example.org/meta/Widget>"
+            ) && !has_loss(
+                &c.losses,
+                "sh:targetSubjectsOf",
+                "<https://example.org/meta/Widget>"
+            ) && !has_loss(
+                &c.losses,
+                "sh:targetObjectsOf",
+                "<https://example.org/meta/Widget>"
+            ) && !has_loss(
+                &c.losses,
+                "sh:SPARQLTarget",
+                "<https://example.org/meta/Widget>"
+            ),
+            "an implicit-class target is representable as a $def; it must record no target \
+             loss, got {:?}",
+            c.losses
+        );
+        ::purrdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        let schema = schema_of(&c);
+        // The class is primary-namespace, so it is keyed by its bare local name.
+        let widget = def(&schema, "Widget");
+        assert!(
+            widget.is_object(),
+            "the implicit class target must emit a $def keyed by its local name, got {schema}"
+        );
+        assert!(
+            widget["properties"]["meta:serial"].is_object(),
+            "the emitted $def must be the shape's real compiled body, not an empty stub: {widget}"
+        );
+        assert_eq!(
+            widget["required"],
+            json!(["meta:serial"]),
+            "the compiled sh:minCount 1 constraint must survive into the emitted $def: {widget}"
+        );
+        // The $def is well-formed enough to appear as a valid @type discriminator
+        // branch in the Node schema (mirrors an explicit sh:targetClass def).
+        let node_conditionals = schema["$defs"]["Node"]["allOf"]
+            .as_array()
+            .expect("Node schema has an allOf discriminator list");
+        assert!(
+            node_conditionals.iter().any(|cond| cond["then"]["$ref"]
+                .as_str()
+                .is_some_and(|r| r == "#/$defs/Widget")),
+            "the implicit-class $def must be wired into the @type discriminator, got {:?}",
+            schema["$defs"]["Node"]
+        );
+    }
+
+    #[test]
+    fn every_target_kind_either_emits_a_def_or_records_a_loss_never_silent() {
+        // Gap G5's core invariant, enforced directly: a shape targeted by any
+        // ONE of the four non-sh:targetClass/non-sh:target kinds must produce
+        // an observable outcome — either a $def (ImplicitClass) or a loss
+        // (Node, SubjectsOf, ObjectsOf) — never neither.
+        let c = compile_ttl(
+            r"
+            meta:Widget a rdfs:Class, sh:NodeShape .
+            meta:PinnedShape a sh:NodeShape ;
+                sh:targetNode meta:pinnedInstance .
+            meta:AuthorShape a sh:NodeShape ;
+                sh:targetSubjectsOf meta:wrote .
+            meta:BookShape a sh:NodeShape ;
+                sh:targetObjectsOf meta:wrote .
+            ",
+        );
+        let schema = schema_of(&c);
+
+        // ImplicitClass: a $def, no loss.
+        assert!(schema["$defs"]["Widget"].is_object());
+        assert!(!has_loss(
+            &c.losses,
+            "sh:targetNode",
+            "<https://example.org/meta/Widget>"
+        ));
+
+        // Node / SubjectsOf / ObjectsOf: a loss, no $def keyed by the shape's own id.
+        for (name, code, iri) in [
+            (
+                "PinnedShape",
+                "sh:targetNode",
+                "<https://example.org/meta/PinnedShape>",
+            ),
+            (
+                "AuthorShape",
+                "sh:targetSubjectsOf",
+                "<https://example.org/meta/AuthorShape>",
+            ),
+            (
+                "BookShape",
+                "sh:targetObjectsOf",
+                "<https://example.org/meta/BookShape>",
+            ),
+        ] {
+            assert!(
+                schema["$defs"][name].is_null(),
+                "{name} has no $def of its own (it is not a class extension)"
+            );
+            assert!(
+                has_loss(&c.losses, code, iri),
+                "{name} must record a {code} loss, got {:?}",
+                c.losses
+            );
+        }
+        ::purrdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
     }
 
     #[test]
@@ -3822,11 +4230,13 @@ mod tests {
             "an empty vocabulary emits an empty enum"
         );
         assert!(
-            compiled
-                .losses
-                .iter()
-                .any(|l| l.construct == "value-vocabulary" && l.shape_iri.ends_with("Empty")),
-            "an empty vocabulary is recorded as a loss, not silently dropped"
+            has_loss(
+                &compiled.losses,
+                "value-vocabulary",
+                "https://blackcatinformatics.ca/logic/Empty"
+            ),
+            "an empty vocabulary is recorded as a loss, not silently dropped, got {:?}",
+            compiled.losses
         );
     }
 
@@ -3845,11 +4255,13 @@ mod tests {
             "the named member survives; the blank-node member is dropped"
         );
         assert!(
-            compiled
-                .losses
-                .iter()
-                .any(|l| l.construct == "value-vocabulary member"),
-            "the dropped blank-node member is recorded as a loss"
+            has_loss(
+                &compiled.losses,
+                "value-vocabulary member",
+                "https://blackcatinformatics.ca/logic/HasBlank"
+            ),
+            "the dropped blank-node member is recorded as a loss, got {:?}",
+            compiled.losses
         );
     }
 
@@ -4070,11 +4482,22 @@ mod tests {
             "an explicit sh:class wins; the range enum $ref is suppressed"
         );
         assert!(
+            has_loss(
+                &compiled.losses,
+                "rdfs:range",
+                "<https://example.org/meta/TermShape>"
+            ),
+            "the class/range conflict must be recorded as a loss on TermShape, got {:?}",
+            compiled.losses
+        );
+        assert!(
             compiled
                 .losses
+                .entries()
                 .iter()
-                .any(|l| l.construct == "rdfs:range" && l.reason.contains("sh:class wins")),
-            "the class/range conflict is recorded as a loss"
+                .any(|e| e.code == "rdfs:range" && e.note.contains("sh:class wins")),
+            "the recorded rdfs:range loss must note that sh:class wins, got {:?}",
+            compiled.losses
         );
         assert_no_dangling_defs_refs(&schema);
     }

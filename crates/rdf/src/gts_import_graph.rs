@@ -472,8 +472,17 @@ mod tests {
             ledger
                 .entries()
                 .iter()
-                .any(|e| e.code == "bnode-scope-flatten" && e.intentional),
+                .any(|e| e.code == "bnode-scope-flatten"),
             "import_gts_graph flattens blank scope; the ledger MUST document it"
+        );
+        // `intentional` is derived as membership in `profile_for(from, to)` (see
+        // `LossLedger::render`'s `intentional` binding), so proving this is a
+        // *declared* (in-profile), not merely present, loss requires checking the
+        // gts -> rdf-1.2-dataset profile directly.
+        assert!(
+            crate::loss::profile_for("gts", "rdf-1.2-dataset").contains("bnode-scope-flatten"),
+            "gts->rdf-1.2-dataset profile must declare bnode-scope-flatten as an intentional \
+             (in-profile) loss"
         );
     }
 }

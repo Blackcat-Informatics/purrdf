@@ -40,7 +40,12 @@ impl fmt::Display for RdfSeverity {
 }
 
 /// Concrete or logical location attached to an RDF diagnostic.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
+///
+/// Every field is `Ord` (plain `Option<String>`/`Option<u32>`/`Option<usize>`),
+/// so the struct derives a total order directly — the loss ledger relies on
+/// this to sort runtime entries deterministically without a separate
+/// `display()`-string comparison.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
 pub struct RdfLocation {
     /// The source file path (physical location anchor).
     pub path: Option<String>,
@@ -50,6 +55,11 @@ pub struct RdfLocation {
     pub column: Option<u32>,
     /// A logical (non-file) location label, e.g. an adapter or stage name.
     pub logical: Option<String>,
+    /// The subject the diagnostic concerns: a shape/term IRI, a blank-node id,
+    /// or a JSON pointer into a compiled artifact. Distinct from
+    /// [`logical`](Self::logical) (an adapter/stage label): this identifies
+    /// *what* was affected, not *where in the pipeline* it happened.
+    pub subject: Option<String>,
     /// The GTS term id the diagnostic refers to.
     pub gts_term_id: Option<usize>,
     /// The GTS quad index the diagnostic refers to.
@@ -96,6 +106,14 @@ impl RdfLocation {
         self
     }
 
+    /// Attaches a subject identifier: a shape/term IRI, a blank-node id, or a
+    /// JSON pointer into a compiled artifact.
+    #[must_use]
+    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
+        self
+    }
+
     /// Attaches the GTS term id the diagnostic refers to.
     #[must_use]
     pub fn with_gts_term(mut self, term_id: usize) -> Self {
@@ -137,6 +155,7 @@ impl RdfLocation {
             && self.line.is_none()
             && self.column.is_none()
             && self.logical.is_none()
+            && self.subject.is_none()
             && self.gts_term_id.is_none()
             && self.gts_quad_index.is_none()
             && self.gts_reifier_id.is_none()
@@ -177,38 +196,10 @@ impl RdfLocation {
         if let Some(segment_index) = self.gts_segment_index {
             let _ = write!(out, " segment#{segment_index}");
         }
+        if let Some(subject) = &self.subject {
+            let _ = write!(out, " subject={subject}");
+        }
         out
-    }
-}
-
-/// A conversion loss recorded by an RDF adapter.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RdfLoss {
-    /// The stable machine-readable loss code.
-    pub code: String,
-    /// The human-readable description of what was lost.
-    pub message: String,
-    /// Where the loss occurred, when known.
-    pub location: Option<Box<RdfLocation>>,
-}
-
-impl RdfLoss {
-    /// A loss record from its code and message, with no location.
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-            location: None,
-        }
-    }
-
-    /// Attaches a location; an empty location is dropped rather than stored.
-    #[must_use]
-    pub fn with_location(mut self, location: RdfLocation) -> Self {
-        if !location.is_empty() {
-            self.location = Some(Box::new(location));
-        }
-        self
     }
 }
 
@@ -225,13 +216,11 @@ pub struct RdfDiagnostic {
     pub detail: Option<String>,
     /// Where the diagnostic applies, when known.
     pub location: Option<Box<RdfLocation>>,
-    /// Conversion losses recorded alongside this diagnostic.
-    pub losses: Vec<RdfLoss>,
 }
 
 impl RdfDiagnostic {
-    /// A diagnostic from its severity, code, and message, with no detail,
-    /// location, or losses.
+    /// A diagnostic from its severity, code, and message, with no detail or
+    /// location.
     pub fn new(severity: RdfSeverity, code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             severity,
@@ -239,7 +228,6 @@ impl RdfDiagnostic {
             message: message.into(),
             detail: None,
             location: None,
-            losses: Vec::new(),
         }
     }
 
@@ -262,11 +250,6 @@ impl RdfDiagnostic {
             self.location = Some(Box::new(location));
         }
         self
-    }
-
-    /// Records a conversion loss against this diagnostic.
-    pub fn add_loss(&mut self, loss: RdfLoss) {
-        self.losses.push(loss);
     }
 }
 

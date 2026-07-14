@@ -98,7 +98,7 @@ pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{DatasetMut, DatasetView, GraphMatch, GraphMatchValue, ViewTermId};
 pub use describe::{Describer, describe};
-pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfLoss, RdfSeverity};
+pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
 pub use fno::{
     FnFunction, FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog,
     to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
@@ -122,8 +122,10 @@ pub use lookaside::{
     RdfSuppressionRecord,
 };
 pub use loss::{
-    LossEntry, LossLedger, PROJECTION_CODECS, gts_to_rdf_loss_ledger, loss_matrix_json,
-    pair_loss_ledger, rdf_to_gts_loss_ledger, transcode_loss_matrix_json,
+    LossEntry, LossLedger, PROJECTION_CODECS, assert_ledger_complete, assert_ledger_sound,
+    check_ledger_complete, check_ledger_sound, gts_to_rdf_loss_ledger, loss_matrix_json,
+    pair_loss_ledger, profile_for, rdf_gts_loss_matrix_json, rdf_to_gts_loss_ledger,
+    registered_pairs,
 };
 pub use model::{
     RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTermKind, RdfTextDirection,

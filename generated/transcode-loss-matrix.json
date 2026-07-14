@@ -119,6 +119,13 @@
     "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
   },
   {
+    "code": "bnode-scope-flatten",
+    "from": "gts",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing per-segment blank-node scope; the distinct scopes are recovered only via the streaming-event importer."
+  },
+  {
     "code": "named-graph-dropped",
     "from": "gts",
     "to": "rdfxml",
@@ -672,6 +679,13 @@
     "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
   },
   {
+    "code": "blob-bytes-absent",
+    "from": "rdf-1.2-dataset",
+    "to": "gts",
+    "intentional": true,
+    "note": "Blob payloads are preserved as content-addressed references (the blob_id digest plus the origin file id), never materialized into the RDF IR, which must stay value-light for arbitrarily large payloads (e.g. multi-terabyte data dumps). A destination GTS carries the reference; the payload bytes are streamed origin->destination on demand (deferred materialization)."
+  },
+  {
     "code": "canonical-rdf12-projection",
     "from": "rdfxml",
     "to": "canonical-rdf12",
@@ -719,6 +733,76 @@
     "to": "owl-el",
     "intentional": true,
     "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "rdfs:range",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A predicate's rdfs:range names a value-vocabulary class that conflicts with (or is shadowed by) an explicit sh:class on the same property; the range-derived enum $ref is suppressed in favor of sh:class, and the conflict is recorded rather than silently dropped."
+  },
+  {
+    "code": "sh:SPARQLTarget",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A shape targeted only via SHACL-AF sh:target/sh:SPARQLTarget (an arbitrary SPARQL SELECT, not a class extension) has no closed-world JSON Schema equivalent; the shape is excluded from the compiled $defs."
+  },
+  {
+    "code": "sh:expression",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL-AF sh:expression node-expression constraint has no JSON Schema equivalent and is dropped."
+  },
+  {
+    "code": "sh:not",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:not negation whose inner shape is not losslessly expressible as a JSON Schema negation (or that appears at property/value position, where negating a base value schema would be vacuous) is dropped rather than emitted unsoundly."
+  },
+  {
+    "code": "sh:sparql",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL-SPARQL constraint (sh:sparql) has no closed-world JSON Schema equivalent and is dropped."
+  },
+  {
+    "code": "sh:targetNode",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A shape targeted only via sh:targetNode selects specific focus nodes, not a class extension; it has no closed-world JSON Schema $def and its constraints are not enforced by the emitted schema."
+  },
+  {
+    "code": "sh:targetObjectsOf",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A shape targeted only via sh:targetObjectsOf selects focus nodes by a predicate's object position, not a class extension; no closed-world JSON Schema $def can be keyed and its constraints are not enforced."
+  },
+  {
+    "code": "sh:targetSubjectsOf",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A shape targeted only via sh:targetSubjectsOf selects focus nodes by a predicate's subject position, not a class extension; no closed-world JSON Schema $def can be keyed and its constraints are not enforced."
+  },
+  {
+    "code": "value-vocabulary",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A value-vocabulary class projected to an enum $def has no seeded named-individual members to enumerate; the $def is emitted with an empty enum and the omission is recorded."
+  },
+  {
+    "code": "value-vocabulary member",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A value-vocabulary class's member is identified by a blank node rather than a named individual, so it has no stable CURIE to enumerate; the member is dropped from the projected enum."
   },
   {
     "code": "canonical-rdf12-projection",

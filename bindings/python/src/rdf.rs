@@ -33,14 +33,27 @@ fn normalize_rdf12_to_owl(py: Python<'_>, rdf12_ttl: &str) -> PyResult<String> {
         .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
-/// The machine-readable RDF↔GTS loss matrix as deterministic JSON (C0).
+/// The enumerable loss registry as deterministic JSON (C0): every registered
+/// `(from, to)` pair this crate knows a loss profile for — the RDF↔GTS
+/// directions, every non-identity syntax/projection transcode pair, and the
+/// `("shacl", "json-schema")` shapes projection.
 ///
-/// Mirrors the committed `generated/rdf-loss-matrix.json` artifact so Python
-/// consumers read the same enumerated, intentional conversion losses the Rust
-/// fidelity gate enforces.
+/// Mirrors the committed `generated/transcode-loss-matrix.json` artifact so
+/// Python consumers read the same enumerated, intentional conversion losses
+/// the Rust fidelity gate enforces.
 #[pyfunction]
 fn loss_matrix_json() -> String {
     loss::loss_matrix_json()
+}
+
+/// The machine-readable RDF↔GTS-only loss matrix as deterministic JSON (C0).
+///
+/// Mirrors the committed `generated/rdf-loss-matrix.json` artifact — the
+/// narrower two-direction view (RDF 1.2 dataset IR ↔ GTS transport), not the
+/// full enumerable registry (see [`loss_matrix_json`]).
+#[pyfunction]
+fn rdf_gts_loss_matrix_json() -> String {
+    loss::rdf_gts_loss_matrix_json()
 }
 
 /// Canonical, review-friendly Turtle serialization over the purrdf IR (
@@ -71,6 +84,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(project_statements_rdf12, m)?)?;
     m.add_function(wrap_pyfunction!(normalize_rdf12_to_owl, m)?)?;
     m.add_function(wrap_pyfunction!(loss_matrix_json, m)?)?;
+    m.add_function(wrap_pyfunction!(rdf_gts_loss_matrix_json, m)?)?;
     m.add_function(wrap_pyfunction!(canonicalize_turtle, m)?)?;
     // The native oxigraph Store / SPARQL / parse / canonicalize surface that
     // replaces the external `pyoxigraph` package.
