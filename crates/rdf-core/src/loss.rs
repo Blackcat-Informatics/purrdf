@@ -563,7 +563,7 @@ fn registry_entries() -> Vec<LossEntry> {
 /// Unlike a single [`LossLedger::contract`], codes are NOT assumed unique here
 /// — the same code recurs for different `(from, to)` pairs.
 ///
-/// This is the enumerator issue #104's acceptance criterion names: the set of
+/// The acceptance criterion this enumerator satisfies: the set of
 /// `(from, to)` pairs this renders is exactly `registered_pairs()` (see the
 /// `loss_matrix_json_pairs_match_registered_pairs` test). The rendered output
 /// is committed at `generated/transcode-loss-matrix.json`. For the narrower
