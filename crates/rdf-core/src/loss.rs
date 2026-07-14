@@ -431,16 +431,20 @@ pub fn transcode_loss_matrix_json() -> String {
 // ── Enumerable loss registry ─────────────────────────────────────────────────
 
 /// The SHACL → JSON Schema/OpenAPI shapes projection's closed loss profile:
-/// the exact construct labels `shapes::json_schema::Ctx::record`/the
-/// value-vocabulary `LossRecord` builders use (`crates/shapes/src/json_schema.rs`).
-/// `sh:sparql` / `sh:expression` (SHACL-AF constraints), property-level
-/// `sh:not`, and a `rdfs:range` clash with a value-vocabulary projection are
-/// recorded via `Ctx::record`; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql`
-/// in `crates/shapes/src/shapes.rs`) have no `$def` equivalent and are excluded
-/// from the compiled schema entirely; `value-vocabulary` covers an
-/// enum-with-no-members projection and `value-vocabulary member` a dropped
-/// blank-node enum member. Mirrored here (rather than depended-on from this
-/// crate) because `purrdf-core` never depends on the `shapes` crate.
+/// the exact `code`s `shapes::json_schema::Ctx::record`/the value-vocabulary
+/// `loss_entry` builders use (`crates/shapes/src/json_schema.rs`), all recorded
+/// via the shared runtime [`LossLedger`]. `sh:sparql` / `sh:expression`
+/// (SHACL-AF constraints), property-level `sh:not`, and a `rdfs:range` clash
+/// with a value-vocabulary projection are recorded via `Ctx::record`;
+/// `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
+/// `crates/shapes/src/shapes.rs`) have no `$def` equivalent — the emitter has
+/// no class extension to key a `$def` by — and are excluded from the compiled
+/// schema, but (unlike a bare exclusion) each one records a `sh:SPARQLTarget`
+/// loss on the shape's own subject rather than vanishing silently;
+/// `value-vocabulary` covers an enum-with-no-members projection and
+/// `value-vocabulary member` a dropped blank-node enum member. Mirrored here
+/// (rather than depended-on from this crate) because `purrdf-core` never
+/// depends on the `shapes` crate.
 const SHACL_JSON_SCHEMA_PROFILE: &[&str] = &[
     "rdfs:range",
     "sh:SPARQLTarget",
