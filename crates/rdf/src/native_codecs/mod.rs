@@ -206,6 +206,37 @@ mod tests {
     }
 
     #[test]
+    fn inline_triple_term_and_real_reifier_share_base_triple_round_trips_jsonld() {
+        // The SAME base triple (s,p,o) is BOTH asserted as an object-position triple
+        // term (which pushes a self-reifier sentinel keyed by the Triple-kind term
+        // itself into `graph.reifiers`) AND carries a genuine IRI reifier with an
+        // annotation. Building the JSON-LD `reifier_of` index used to sort ALL
+        // `graph.reifiers` rows for a given (s,p,o) by their `@id`, including the
+        // sentinel — but a `Triple`-kind term has no `@id`, so `term_id` returned
+        // `Err` and the comparator's `.expect(...)` panicked. `reifier_of` must skip
+        // Triple-kind sentinel rows so this collision no longer panics.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
+        let inner = b.intern_triple(s, p, o);
+        let asserts = b.intern_iri("https://e/asserts");
+        let subj = b.intern_iri("https://e/subj");
+        b.push_quad(subj, asserts, inner, None); // object-position triple term for (s,p,o)
+        let r = b.intern_iri("https://e/r");
+        let conf = b.intern_iri("https://e/confidence");
+        let val = b.intern_literal(RdfLiteral::typed(
+            "0.9",
+            "http://www.w3.org/2001/XMLSchema#decimal",
+        ));
+        b.push_reifier(r, inner); // real reifier on the SAME (s,p,o)
+        b.push_annotation(r, conf, val);
+        let ds = b.freeze().expect("freeze");
+        assert_round_trips(&ds, "application/ld+json");
+        assert_round_trips(&ds, "application/ld+yaml");
+    }
+
+    #[test]
     fn triple_valued_annotation_round_trips_jsonld() {
         // An annotation whose VALUE is itself a triple term exercises the
         // annotation-value `@triple` path (`simple_term_value`'s `Triple` arm).

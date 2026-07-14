@@ -261,6 +261,14 @@ fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
     // Reifier index: base triple (s,p,o) -> reifier ids that annotate it.
     let mut reifier_of: ReifierIndex = BTreeMap::new();
     for &(rid, (s, p, o), _g) in &graph.reifiers {
+        // A triple term is self-reifying: its `reifier` row's "reifier" is the triple
+        // term itself (kind `Triple`), carrying the term's components — NOT a real
+        // IRI/blank-node reifier. `term_id` has no @id for a `Triple`-kind term, so it
+        // must never enter the sortable reifier index; skip it here (mirrors the
+        // orphan-reifier guard below).
+        if graph.terms[rid].kind == SerTermKind::Triple {
+            continue;
+        }
         reifier_of.entry((s, p, o)).or_default().push(rid);
     }
     for list in reifier_of.values_mut() {
