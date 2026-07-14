@@ -13,7 +13,7 @@
 //! The JSON output is byte-deterministic: every map is a [`BTreeMap`] and every array is
 //! explicitly sorted, so the document does not depend on input append order.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -300,14 +300,49 @@ fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
             .push((p, o));
     }
 
+    // A reifier whose base triple is NOT asserted as a quad has no value object to carry
+    // its compact `@annotation`, so emit it as a standalone node with an explicit
+    // `rdf:reifies` @triple value plus its annotation properties — otherwise the reifier
+    // and its annotations are silently dropped. (An asserted base triple keeps the
+    // compact `@annotation` form.) Keyed by `(s,p,o)` to match the `@annotation`
+    // attachment in `build_value_object`, which ignores graph name.
+    let asserted_base: BTreeSet<(usize, usize, usize)> =
+        graph.quads.iter().map(|&(s, p, o, _g)| (s, p, o)).collect();
+    let mut orphan_by_graph: BTreeMap<Option<usize>, Vec<Value>> = BTreeMap::new();
+    for &(rid, (s, p, o), g) in &graph.reifiers {
+        // A triple term is self-reifying: its `reifier` row's "reifier" is the triple
+        // term itself (kind `Triple`), carrying the term's components — NOT a real
+        // IRI/blank-node reifier. Those are emitted as `@triple` objects where they
+        // appear; only genuine reifiers become standalone nodes here.
+        if graph.terms[rid].kind == SerTermKind::Triple {
+            continue;
+        }
+        if !asserted_base.contains(&(s, p, o)) {
+            let node = build_orphan_reifier_node(graph, rid, s, p, o, &annotations_of)?;
+            orphan_by_graph.entry(g).or_default().push(node);
+        }
+    }
+
     let mut default_nodes: BTreeMap<String, Value> = BTreeMap::new();
     let mut named_graphs: BTreeMap<String, Value> = BTreeMap::new();
 
-    for (g, subjects) in by_graph {
+    // Iterate the union of graph names carrying asserted quads OR orphan reifiers (a graph
+    // may carry only orphan reifiers, so `by_graph` alone would miss it).
+    let graph_keys: BTreeSet<Option<usize>> = by_graph
+        .keys()
+        .copied()
+        .chain(orphan_by_graph.keys().copied())
+        .collect();
+    for g in graph_keys {
         let mut nodes: Vec<Value> = Vec::new();
-        for (s, pos) in subjects {
-            let node = build_node(graph, s, pos, &reifier_of, &annotations_of)?;
-            nodes.push(node);
+        if let Some(subjects) = by_graph.remove(&g) {
+            for (s, pos) in subjects {
+                let node = build_node(graph, s, pos, &reifier_of, &annotations_of)?;
+                nodes.push(node);
+            }
+        }
+        if let Some(orphans) = orphan_by_graph.remove(&g) {
+            nodes.extend(orphans);
         }
         // Sort nodes by their @id (or lexical key for bnodes).
         nodes.sort_by_key(node_id_key);
@@ -409,7 +444,7 @@ fn build_value_object(
     annotations_of: &AnnotationIndex,
 ) -> Result<Value, RdfDiagnostic> {
     let mut value = if object_term.kind == SerTermKind::Triple {
-        build_triple_term_value(graph, object_term, reifier_of, annotations_of)?
+        build_triple_term_value(graph, object_term)?
     } else {
         term_to_value(graph, object_term)?
     };
@@ -441,43 +476,54 @@ fn build_value_object(
     Ok(value)
 }
 
-/// Render a triple term (object position) as its JSON-LD-star annotated node
-/// object, using the term's own reifier binding.
-fn build_triple_term_value(
-    graph: &SerGraph,
-    term: &SerTerm,
-    reifier_of: &ReifierIndex,
-    annotations_of: &AnnotationIndex,
-) -> Result<Value, RdfDiagnostic> {
+/// Render a triple term as its distinguishable JSON-LD-star `@triple` object, resolving
+/// its `(s,p,o)` components through the term's own self-reifier binding.
+fn build_triple_term_value(graph: &SerGraph, term: &SerTerm) -> Result<Value, RdfDiagnostic> {
     let (s, p, o) = triple_components(graph, term)
         .ok_or_else(|| parse("triple term with no components".to_string()))?;
-    build_nested_triple_node(graph, s, p, o, reifier_of, annotations_of)
+    build_nested_triple_node(graph, s, p, o)
 }
 
-/// Build the JSON-LD-star annotated node object for a quoted triple (s,p,o).
+/// Build the distinguishable JSON-LD-star `@triple` object for a quoted triple (s,p,o).
+///
+/// A triple term serializes to `{"@triple": {"@subject": …, "@predicate": "<iri>",
+/// "@object": …}}`. The reserved `@triple` key makes it unambiguous vs an `@id` node
+/// object or an `@value` literal, and every part round-trips: `@subject`/`@object` recurse
+/// through the same encoding (nested triple terms work), `@predicate` is the CURIE/IRI the
+/// parser re-expands. Keys are `BTreeMap`-ordered, so the output is byte-deterministic.
 fn build_nested_triple_node(
-    _graph: &SerGraph,
-    _s: usize,
-    _p: usize,
-    _o: usize,
-    _reifier_of: &ReifierIndex,
-    _annotations_of: &AnnotationIndex,
+    graph: &SerGraph,
+    s: usize,
+    p: usize,
+    o: usize,
 ) -> Result<Value, RdfDiagnostic> {
-    // A bare quoted-triple in object position would have to be encoded as
-    // `{"@id": s, <p-curie>: <object>}`, which (a) is indistinguishable from an
-    // ordinary node object and (b) is not parseable back: the parser's `@id`
-    // branch returns only the subject IRI and drops the predicate/object,
-    // silently corrupting the triple term. Rather than emit that lossy,
-    // ambiguous form we fail closed. The lossless, supported representation for
-    // RDF-1.2-star here is the rdf:reifies / `@annotation` form, which is
-    // unaffected by this guard. Full lossless nested-triple-term support
-    // (object-position and annotation-value triple terms) is a deferred
-    // extension requiring a distinguishable JSON-LD-star encoding.
-    Err(parse(
-        "quoted-triple object terms are not yet losslessly serializable in JSON-LD-star; \
-         use the rdf:reifies/@annotation form"
-            .to_string(),
-    ))
+    let subject = encode_triple_component(graph, s)?;
+    let object = encode_triple_component(graph, o)?;
+    let p_term = &graph.terms[p];
+    let p_iri = p_term
+        .value
+        .as_deref()
+        .ok_or_else(|| parse("triple-term predicate missing IRI".to_string()))?;
+
+    let mut triple = BTreeMap::new();
+    triple.insert("@subject".to_string(), subject);
+    triple.insert("@predicate".to_string(), Value::String(curie(p_iri)));
+    triple.insert("@object".to_string(), object);
+
+    let mut map = BTreeMap::new();
+    map.insert("@triple".to_string(), to_json_object(triple));
+    Ok(to_json_object(map))
+}
+
+/// Encode one component (subject or object) of a triple term, recursing on nested triple
+/// terms so `<<( <<( … )>> p o )>>` round-trips.
+fn encode_triple_component(graph: &SerGraph, idx: usize) -> Result<Value, RdfDiagnostic> {
+    let term = &graph.terms[idx];
+    if term.kind == SerTermKind::Triple {
+        build_triple_term_value(graph, term)
+    } else {
+        term_to_value(graph, term)
+    }
 }
 
 /// Convert a single RDF term to its JSON-LD value-object form.
@@ -558,6 +604,29 @@ fn build_annotation_node(
     Ok(to_json_object(node))
 }
 
+/// Build a standalone node for a reifier whose base triple is not asserted:
+/// `{"@id": r, "rdf:reifies": {"@triple": …}, <annotation props>}`. On re-parse the
+/// `rdf:reifies` row folds back into the RDF-1.2 statement layer with its annotations, so
+/// the reifier round-trips instead of being dropped for want of a base value object.
+fn build_orphan_reifier_node(
+    graph: &SerGraph,
+    reifier_id: usize,
+    s: usize,
+    p: usize,
+    o: usize,
+    annotations_of: &AnnotationIndex,
+) -> Result<Value, RdfDiagnostic> {
+    let Value::Object(entries) = build_annotation_node(graph, reifier_id, annotations_of)? else {
+        unreachable!("build_annotation_node always returns a JSON object");
+    };
+    let mut node: BTreeMap<String, Value> = entries.into_iter().collect();
+    node.insert(
+        curie(RDF_REIFIES),
+        build_nested_triple_node(graph, s, p, o)?,
+    );
+    Ok(to_json_object(node))
+}
+
 /// Convert a term to a value object without recursive triple-term handling.
 fn simple_term_value(graph: &SerGraph, term: &SerTerm) -> Result<Value, RdfDiagnostic> {
     match term.kind {
@@ -590,18 +659,10 @@ fn simple_term_value(graph: &SerGraph, term: &SerTerm) -> Result<Value, RdfDiagn
             }
             Ok(to_json_object(map))
         }
-        // Triple-valued annotation objects (an annotation whose value is itself a
-        // quoted triple term) have no distinguishable, losslessly parseable
-        // JSON-LD-star encoding here yet. Emitting a placeholder literal would
-        // silently corrupt RDF-1.2-star data, so we fail closed. Full lossless
-        // nested-triple-term support (both object-position and annotation-value
-        // triple terms) is a deferred extension that requires a distinguishable
-        // JSON-LD-star encoding; until then "lossless or hard-fail" wins.
-        SerTermKind::Triple => Err(parse(
-            "triple-valued annotation objects are not yet losslessly serializable; \
-             refusing to emit a lossy placeholder"
-                .to_string(),
-        )),
+        // Triple-valued annotation objects (an annotation whose value is itself a quoted
+        // triple term) serialize to the same distinguishable `@triple` object as
+        // object-position triple terms, so they round-trip losslessly.
+        SerTermKind::Triple => build_triple_term_value(graph, term),
     }
 }
 
@@ -982,6 +1043,12 @@ fn parse_value_object(
         .ok_or_else(|| decode(format!("expected value object, got {value}")))?;
     let annotation = obj.get("@annotation").cloned();
 
+    // A distinguishable `@triple` object reconstructs an RDF-1.2 triple term (recursing
+    // through `@subject`/`@object`), the inverse of `build_nested_triple_node`.
+    if let Some(triple) = obj.get("@triple") {
+        return Ok((parse_triple_term(triple, expand)?, annotation));
+    }
+
     if let Some(id) = obj.get("@id").and_then(Value::as_str) {
         return Ok((node_id_term(id, expand)?, annotation));
     }
@@ -1023,6 +1090,40 @@ fn parse_value_object(
     };
 
     Ok((RdfTerm::literal(literal), annotation))
+}
+
+/// Reconstruct an RDF-1.2 triple term from a `@triple` object — the inverse of
+/// [`build_nested_triple_node`]. `@subject`/`@object` recurse through
+/// [`parse_value_object`] (so nested triple terms round-trip); `@predicate` is a
+/// CURIE/IRI string expanded through the document `@context`.
+fn parse_triple_term(
+    value: &Value,
+    expand: &dyn Fn(&str) -> String,
+) -> Result<RdfTerm, RdfDiagnostic> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| decode(format!("@triple must be an object, got {value}")))?;
+    let subject = obj
+        .get("@subject")
+        .ok_or_else(|| decode("@triple missing @subject".to_string()))?;
+    let predicate = obj
+        .get("@predicate")
+        .and_then(Value::as_str)
+        .ok_or_else(|| decode("@triple @predicate must be a string".to_string()))?;
+    let object = obj
+        .get("@object")
+        .ok_or_else(|| decode("@triple missing @object".to_string()))?;
+
+    let (subject_term, _) = parse_value_object(subject, expand)?;
+    let predicate_iri = expand(predicate);
+    validated_iri_term(&predicate_iri)?;
+    let (object_term, _) = parse_value_object(object, expand)?;
+
+    Ok(RdfTerm::triple(RdfTriple::new(
+        subject_term,
+        &predicate_iri,
+        object_term,
+    )))
 }
 
 // ── statement-metadata downcast ─────────────────────────────────────────────────────

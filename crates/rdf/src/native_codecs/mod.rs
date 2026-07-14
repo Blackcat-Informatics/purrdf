@@ -172,6 +172,49 @@ mod tests {
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "application/n-triples");
         assert_round_trips(&ds, "text/turtle");
+        // The reifier/@annotation form also round-trips through JSON-LD/YAML-LD.
+        assert_round_trips(&ds, "application/ld+json");
+        assert_round_trips(&ds, "application/ld+yaml");
+    }
+
+    #[test]
+    fn object_position_triple_term_round_trips_jsonld() {
+        // A quad whose object is an RDF-1.2 triple term — the exact construct N-Quads
+        // round-trips (`quoted_triple_term_round_trips`). The distinguishable `@triple`
+        // encoding makes it round-trip losslessly through JSON-LD and YAML-LD too, so
+        // `carries_star == true` is honest for these formats.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
+        let inner = b.intern_triple(s, p, o);
+        let asserts = b.intern_iri("https://e/asserts");
+        b.push_quad(s, asserts, inner, None);
+        let ds = b.freeze().expect("freeze");
+        assert_round_trips(&ds, "application/ld+json");
+        assert_round_trips(&ds, "application/ld+yaml");
+    }
+
+    #[test]
+    fn triple_valued_annotation_round_trips_jsonld() {
+        // An annotation whose VALUE is itself a triple term exercises the
+        // annotation-value `@triple` path (`simple_term_value`'s `Triple` arm).
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
+        let base = b.intern_triple(s, p, o);
+        let r = b.intern_iri("https://e/r");
+        b.push_reifier(r, base);
+        let derived = b.intern_iri("https://e/derivedFrom");
+        let x = b.intern_iri("https://e/x");
+        let y = b.intern_iri("https://e/y");
+        let z = b.intern_iri("https://e/z");
+        let ann_triple = b.intern_triple(x, y, z);
+        b.push_annotation(r, derived, ann_triple);
+        let ds = b.freeze().expect("freeze");
+        assert_round_trips(&ds, "application/ld+json");
+        assert_round_trips(&ds, "application/ld+yaml");
     }
 
     #[test]
