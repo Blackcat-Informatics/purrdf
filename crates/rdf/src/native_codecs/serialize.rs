@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Frozen [`RdfDataset`] IR → native RDF text egress.
+//! Frozen [`RdfDataset`](crate::RdfDataset) IR → native RDF text egress.
 //!
 //! Builds a first-party [`SerGraph`](super::ser_model::SerGraph) from the frozen IR —
 //! interning every IR term into the graph's term table, materializing literal datatypes
@@ -23,29 +23,29 @@ use std::io::Write;
 use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
 use crate::ir::TermRef;
-use crate::{RdfDataset, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermId, TermValue};
+use crate::{DatasetView, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermValue};
 
 /// The `xsd:string` datatype IRI: a literal of this datatype with no language is a
 /// plain literal and is emitted WITHOUT an explicit `^^<…>`, so it round-trips back to
 /// the same plain form (matching the purrdf-gts native projection).
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
-/// Serialize a frozen [`RdfDataset`] to RDF text of `media_type`, honoring the
+/// Serialize a frozen [`RdfDataset`](crate::RdfDataset) to RDF text of `media_type`, honoring the
 /// [`SerializeGraph`] selection. Returns the serialized bytes.
 ///
 /// The full RDF 1.2 statement layer (reifier bindings + annotations) is emitted for
 /// every star-capable format. To serialize the base quads ONLY — for a star-incapable
 /// projection target where the statement layer is declared loss (RDF/XML, JSON-LD in
 /// the transcode contract) — use [`serialize_dataset_base_only`].
-pub fn serialize_dataset(
-    dataset: &RdfDataset,
+pub fn serialize_dataset<D: DatasetView>(
+    dataset: &D,
     media_type: &str,
     selection: SerializeGraph<'_>,
 ) -> Result<Vec<u8>, RdfDiagnostic> {
     serialize_dataset_inner(dataset, media_type, selection, true)
 }
 
-/// Serialize a frozen [`RdfDataset`] to RDF text of `media_type`, emitting ONLY the
+/// Serialize a frozen [`RdfDataset`](crate::RdfDataset) to RDF text of `media_type`, emitting ONLY the
 /// base quads and DROPPING the RDF 1.2 statement layer (reifier bindings +
 /// annotations).
 ///
@@ -54,16 +54,16 @@ pub fn serialize_dataset(
 /// declared loss (`rdf12-star-unrepresentable` / `rdf12-star-jsonld-rejected`) — the
 /// drop here is never silent (CONSTITUTION P7), it is the realized count the caller
 /// attaches to the loss ledger.
-pub fn serialize_dataset_base_only(
-    dataset: &RdfDataset,
+pub fn serialize_dataset_base_only<D: DatasetView>(
+    dataset: &D,
     media_type: &str,
     selection: SerializeGraph<'_>,
 ) -> Result<Vec<u8>, RdfDiagnostic> {
     serialize_dataset_inner(dataset, media_type, selection, false)
 }
 
-fn serialize_dataset_inner(
-    dataset: &RdfDataset,
+fn serialize_dataset_inner<D: DatasetView>(
+    dataset: &D,
     media_type: &str,
     selection: SerializeGraph<'_>,
     include_statement_layer: bool,
@@ -78,9 +78,9 @@ fn serialize_dataset_inner(
     Ok(text.into_bytes())
 }
 
-/// Serialize a frozen [`RdfDataset`] into the given writer.
-pub(crate) fn serialize_into<W: Write>(
-    dataset: &RdfDataset,
+/// Serialize a frozen [`RdfDataset`](crate::RdfDataset) into the given writer.
+pub(crate) fn serialize_into<D: DatasetView, W: Write>(
+    dataset: &D,
     media_type: &str,
     selection: SerializeGraph<'_>,
     mut output: W,
@@ -91,7 +91,7 @@ pub(crate) fn serialize_into<W: Write>(
         .map_err(|e| RdfDiagnostic::error("native-codec-write", e.to_string()))
 }
 
-/// Outcome of serializing an [`RdfDataset`] to a concrete RDF format through the
+/// Outcome of serializing an [`RdfDataset`](crate::RdfDataset) to a concrete RDF format through the
 /// native codecs (universal transcoder helper, ported onto the native path).
 #[derive(Debug, Clone)]
 pub struct SerializeOutcome {
@@ -118,8 +118,8 @@ pub struct SerializeOutcome {
 /// Graph selection follows [`SerializeGraph::Dataset`]: dataset-capable formats
 /// (N-Quads, TriG) emit all named graphs; the single-graph syntaxes (Turtle,
 /// N-Triples, RDF/XML) flatten to the default graph.
-pub fn serialize_dataset_to_format(
-    dataset: &RdfDataset,
+pub fn serialize_dataset_to_format<D: DatasetView>(
+    dataset: &D,
     format: NativeRdfFormat,
     _base_iri: Option<&str>,
 ) -> Result<SerializeOutcome, RdfDiagnostic> {
@@ -132,7 +132,8 @@ pub fn serialize_dataset_to_format(
         })
     } else {
         let bytes = serialize_dataset_base_only(dataset, media_type, SerializeGraph::Dataset)?;
-        let statement_rows_dropped = dataset.reifiers().count() + dataset.annotations().count();
+        let statement_rows_dropped =
+            dataset.reifier_quads().count() + dataset.annotation_quads().count();
         Ok(SerializeOutcome {
             bytes,
             statement_rows_dropped,
@@ -146,8 +147,8 @@ pub fn serialize_dataset_to_format(
 /// `pub(crate)` so the JSON-LD / YAML-LD codec ([`super::jsonld`]) can build the same
 /// first-party graph shape it walks (a dataset-capable `format` such as
 /// [`NativeRdfFormat::NQuads`] preserves named graphs).
-pub(crate) fn build_ser_graph(
-    dataset: &RdfDataset,
+pub(crate) fn build_ser_graph<D: DatasetView>(
+    dataset: &D,
     format: NativeRdfFormat,
     selection: SerializeGraph<'_>,
     include_statement_layer: bool,
@@ -158,7 +159,7 @@ pub(crate) fn build_ser_graph(
     // participates — matching the oxigraph backend's filter exactly.
     let mut graph = SerGraph {
         terms: Vec::new(),
-        quads: Vec::with_capacity(dataset.quad_count()),
+        quads: Vec::with_capacity(dataset.len_hint().unwrap_or(0)),
         reifiers: Vec::new(),
         annotations: Vec::new(),
     };
@@ -178,7 +179,7 @@ pub(crate) fn build_ser_graph(
                 graph.quads.push((s, p, o, g));
             }
             if include_statement_layer {
-                push_statement_rows(&mut interner, dataset, &mut graph)?;
+                push_statement_rows(&mut interner, dataset, &mut graph, false)?;
             }
         }
         SerializeGraph::Dataset | SerializeGraph::DefaultGraph => {
@@ -191,8 +192,12 @@ pub(crate) fn build_ser_graph(
                 let o = interner.intern(dataset, quad.o)?;
                 graph.quads.push((s, p, o, None));
             }
+            // A single-graph (flattened) projection drops named-graph QUADS above, so
+            // it must likewise drop graph-scoped STATEMENT ROWS — otherwise the
+            // single-graph serializers' `ensure_default_graph_projection` guard rejects
+            // a graph-scoped reifier/annotation that has no home in the default graph.
             if include_statement_layer {
-                push_statement_rows(&mut interner, dataset, &mut graph)?;
+                push_statement_rows(&mut interner, dataset, &mut graph, true)?;
             }
         }
         SerializeGraph::Named(name) => {
@@ -219,28 +224,47 @@ pub(crate) fn build_ser_graph(
     graph
         .annotations
         .extend(std::mem::take(&mut interner.annotations));
+    // Impose a canonical, value-based row order so the emitted document is
+    // byte-identical across `DatasetView` backends (whose term-table interning order —
+    // and hence quad iteration order — differs) and independent of insertion order.
+    graph.sort_canonical();
     Ok(graph)
 }
 
 /// Push the RDF 1.2 statement layer (reifier bindings + annotations) onto the graph,
 /// interning their terms. The reifier bindings land in `interner.reifiers`; the
 /// annotation triples in `interner.annotations`.
-fn push_statement_rows(
+fn push_statement_rows<D: DatasetView>(
     interner: &mut SerGraphInterner,
-    dataset: &RdfDataset,
+    dataset: &D,
     _graph: &mut SerGraph,
+    default_graph_only: bool,
 ) -> Result<(), RdfDiagnostic> {
-    for (reifier, triple, graph) in dataset.reifiers_with_graph() {
-        let reifier_id = interner.intern(dataset, reifier)?;
-        let (s, p, o) = interner.intern_triple_components(dataset, triple)?;
-        let g = graph.map(|g| interner.intern(dataset, g)).transpose()?;
+    // `reifier_quads()` yields each side-table binding as a virtual quad
+    // `(s = reifier, p = rdf:reifies, o = triple-term, g = graph)`. The `rdf:reifies`
+    // predicate id (`q.p`) is the fixed virtual edge and is not materialized here — the
+    // reifier row carries the resolved triple components directly.
+    for q in dataset.reifier_quads() {
+        // A flattened single-graph projection carries only the default graph, so a
+        // graph-scoped binding is dropped exactly as its named-graph quads are.
+        if default_graph_only && q.g.is_some() {
+            continue;
+        }
+        let reifier_id = interner.intern(dataset, q.s)?;
+        let (s, p, o) = interner.intern_triple_components(dataset, q.o)?;
+        let g = q.g.map(|g| interner.intern(dataset, g)).transpose()?;
         interner.reifiers.push((reifier_id, (s, p, o), g));
     }
-    for (reifier, predicate, object, graph) in dataset.annotations_with_graph() {
-        let r = interner.intern(dataset, reifier)?;
-        let p = interner.intern(dataset, predicate)?;
-        let o = interner.intern(dataset, object)?;
-        let g = graph.map(|g| interner.intern(dataset, g)).transpose()?;
+    // `annotation_quads()` yields each annotation as `(s = reifier, p = predicate,
+    // o = object, g = graph)`.
+    for q in dataset.annotation_quads() {
+        if default_graph_only && q.g.is_some() {
+            continue;
+        }
+        let r = interner.intern(dataset, q.s)?;
+        let p = interner.intern(dataset, q.p)?;
+        let o = interner.intern(dataset, q.o)?;
+        let g = q.g.map(|g| interner.intern(dataset, g)).transpose()?;
         interner.annotations.push((r, p, o, g));
     }
     Ok(())
@@ -272,7 +296,7 @@ impl SerGraphInterner {
     }
 
     /// Intern an IR term id into the first-party term table, returning its index.
-    fn intern(&mut self, dataset: &RdfDataset, id: TermId) -> Result<usize, RdfDiagnostic> {
+    fn intern<D: DatasetView>(&mut self, dataset: &D, id: D::Id) -> Result<usize, RdfDiagnostic> {
         let value = term_value(dataset, id);
         if let Some(&idx) = self.memo.get(&value) {
             return Ok(idx);
@@ -365,10 +389,10 @@ impl SerGraphInterner {
 
     /// Resolve a triple-term id to the `(s, p, o)` term indices of its components
     /// (interning each), for a statement-layer reifier binding.
-    fn intern_triple_components(
+    fn intern_triple_components<D: DatasetView>(
         &mut self,
-        dataset: &RdfDataset,
-        triple: TermId,
+        dataset: &D,
+        triple: D::Id,
     ) -> Result<(usize, usize, usize), RdfDiagnostic> {
         match dataset.resolve(triple) {
             TermRef::Triple { s, p, o } => {
@@ -392,7 +416,7 @@ impl SerGraphInterner {
 }
 
 /// The dataset-independent value of an IR term, for the interner memo.
-fn term_value(dataset: &RdfDataset, id: TermId) -> TermValue {
+fn term_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
     match dataset.resolve(id) {
         TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
         TermRef::Blank { label, scope } => TermValue::Blank {
@@ -419,7 +443,7 @@ fn term_value(dataset: &RdfDataset, id: TermId) -> TermValue {
 }
 
 /// Resolve an IR term id known to be an IRI (a literal datatype) to its IRI string.
-fn iri_of(dataset: &RdfDataset, id: TermId) -> Result<String, RdfDiagnostic> {
+fn iri_of<D: DatasetView>(dataset: &D, id: D::Id) -> Result<String, RdfDiagnostic> {
     match dataset.resolve(id) {
         TermRef::Iri(iri) => Ok(iri.to_owned()),
         other => Err(RdfDiagnostic::error(
@@ -444,7 +468,7 @@ mod serialize_to_format_tests {
     //! helper, so their star-drop accounting is exercised alongside the others (they are
     //! star-capable, so the count is 0).
     use super::*;
-    use crate::{RdfDatasetBuilder, TermFactory, parse_dataset};
+    use crate::{RdfDataset, RdfDatasetBuilder, TermFactory, parse_dataset};
     use std::sync::Arc;
 
     /// A star-free dataset: 1 default-graph quad + 1 named-graph quad.

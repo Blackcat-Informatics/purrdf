@@ -68,6 +68,70 @@ impl SerGraph {
             .find(|(r, _, _)| *r == rid)
             .map(|(_, spo, _)| *spo)
     }
+
+    /// Reorder the base quads and the RDF 1.2 statement layer into a **canonical,
+    /// backend-independent** order, keyed on each row's rendered term text.
+    ///
+    /// The term-table indices a [`SerGraph`] carries are assigned in the interning
+    /// order of whichever [`DatasetView`](crate::DatasetView) fed the builder, so two
+    /// backends holding the SAME dataset (e.g. the production `RdfDataset` and a
+    /// `PackView` over its pack bytes) index their terms differently and thus iterate
+    /// quads in different orders. Sorting on the *rendered value* — a pure function of
+    /// the term, identical across backends — makes the emitted document byte-identical
+    /// regardless of backend and removes the interning-order dependence from the
+    /// serializer (CONSTITUTION: serializers are deterministic).
+    ///
+    /// The lookup in [`Self::reifier`] is by id, so permuting `reifiers` never changes
+    /// which binding a quoted-triple term resolves to; the self-reifier sentinel rows
+    /// (skipped on output) are permuted harmlessly among the real reifier rows.
+    pub(crate) fn sort_canonical(&mut self) {
+        let quad_key = |&(s, p, o, g): &SerQuad| -> Vec<String> {
+            vec![
+                render_term(self, s),
+                render_term(self, p),
+                render_term(self, o),
+                g.map(|g| render_term(self, g)).unwrap_or_default(),
+            ]
+        };
+        let reifier_key = |&(r, (s, p, o), g): &SerReifierRow| -> Vec<String> {
+            vec![
+                render_term(self, r),
+                render_term(self, s),
+                render_term(self, p),
+                render_term(self, o),
+                g.map(|g| render_term(self, g)).unwrap_or_default(),
+            ]
+        };
+        let annotation_key = |&(r, p, o, g): &SerAnnotationRow| -> Vec<String> {
+            vec![
+                render_term(self, r),
+                render_term(self, p),
+                render_term(self, o),
+                g.map(|g| render_term(self, g)).unwrap_or_default(),
+            ]
+        };
+
+        // Precompute every sort key up front (all immutable borrows of `self`) so the
+        // three rewrites below hold no live borrow of `self` while reassigning its
+        // fields.
+        let mut quads: Vec<(Vec<String>, SerQuad)> =
+            self.quads.iter().map(|q| (quad_key(q), *q)).collect();
+        let mut reifiers: Vec<(Vec<String>, SerReifierRow)> =
+            self.reifiers.iter().map(|r| (reifier_key(r), *r)).collect();
+        let mut annotations: Vec<(Vec<String>, SerAnnotationRow)> = self
+            .annotations
+            .iter()
+            .map(|a| (annotation_key(a), *a))
+            .collect();
+
+        quads.sort_by(|a, b| a.0.cmp(&b.0));
+        reifiers.sort_by(|a, b| a.0.cmp(&b.0));
+        annotations.sort_by(|a, b| a.0.cmp(&b.0));
+
+        self.quads = quads.into_iter().map(|(_, q)| q).collect();
+        self.reifiers = reifiers.into_iter().map(|(_, r)| r).collect();
+        self.annotations = annotations.into_iter().map(|(_, a)| a).collect();
+    }
 }
 
 /// Crockford Base32 alphabet (the ULID rendering alphabet).
