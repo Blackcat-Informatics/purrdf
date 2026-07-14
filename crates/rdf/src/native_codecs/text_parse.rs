@@ -138,8 +138,13 @@ pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
         NativeRdfFormat::RdfXml => {
             return Err(err("RDF/XML is not a line/Turtle-family format"));
         }
-        NativeRdfFormat::TriX | NativeRdfFormat::HexTuples => {
-            return Err(err("TriX / HexTuples are not line/Turtle-family formats"));
+        NativeRdfFormat::TriX
+        | NativeRdfFormat::HexTuples
+        | NativeRdfFormat::JsonLd
+        | NativeRdfFormat::YamlLd => {
+            return Err(err(
+                "TriX / HexTuples / JSON-LD / YAML-LD are not line/Turtle-family formats",
+            ));
         }
     };
     build_gts_graph(&statements)

@@ -56,14 +56,6 @@ use crate::{
 pub(super) struct RdfXmlCodec;
 
 impl RdfCodec for RdfXmlCodec {
-    fn carries_star(&self) -> bool {
-        false
-    }
-
-    fn tokenizer_carries_spans(&self) -> bool {
-        false
-    }
-
     fn parse(
         &self,
         text: &str,

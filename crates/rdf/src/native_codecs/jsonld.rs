@@ -13,15 +13,17 @@
 //! The JSON output is byte-deterministic: every map is a [`BTreeMap`] and every array is
 //! explicitly sorted, so the document does not depend on input append order.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
 use serde_json::Value;
 
 use super::NativeRdfFormat;
+use super::codec::RdfCodec;
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::serialize::build_ser_graph;
+use super::text_parse::LineParseMode;
 use crate::{
     RdfDataset, RdfDiagnostic, RdfLiteral, RdfQuad, RdfTerm, RdfTextDirection, RdfTriple,
     SerializeGraph,
@@ -73,10 +75,21 @@ include!("lpg_prefixes.rs");
 
 /// Default-graph and named-graph node maps returned by [`build_graphs`].
 type GraphNodes = (BTreeMap<String, Value>, BTreeMap<String, Value>);
-/// Reifier lookup: base triple (s,p,o) -> reifier ids that annotate it.
-type ReifierIndex = BTreeMap<(usize, usize, usize), Vec<usize>>;
-/// Annotation lookup: reifier id -> sorted annotation (predicate, value) rows.
-type AnnotationIndex = BTreeMap<usize, Vec<(usize, usize)>>;
+/// Reifier lookup: base triple (s,p,o) in a given graph (`None` = default graph) ->
+/// reifier ids that annotate it. Graph-scoped: the SAME base triple reified by
+/// DIFFERENT reifiers in DIFFERENT named graphs must not cross-contaminate.
+type ReifierIndex = BTreeMap<(usize, usize, usize, Option<usize>), Vec<usize>>;
+/// Annotation lookup: (reifier id, graph) -> sorted annotation (predicate, value)
+/// rows. Graph-scoped alongside [`ReifierIndex`] for the same reason.
+type AnnotationIndex = BTreeMap<(usize, Option<usize>), Vec<(usize, usize)>>;
+
+/// The two graph-scoped lookup indices the node/value-object builders always
+/// consult together, bundled into one reference so a builder needing both takes one
+/// parameter instead of two (keeping argument counts under the pedantic lint cap).
+struct Indexes<'a> {
+    reifier_of: &'a ReifierIndex,
+    annotations_of: &'a AnnotationIndex,
+}
 /// Quads grouped by graph name and then by subject.
 type QuadGroups = BTreeMap<Option<usize>, BTreeMap<usize, Vec<(usize, usize)>>>;
 
@@ -114,6 +127,54 @@ fn triple_components(g: &SerGraph, term: &SerTerm) -> Option<(usize, usize, usiz
 /// Convert a sorted BTreeMap into a serde_json object value.
 fn to_json_object(map: BTreeMap<String, Value>) -> Value {
     Value::Object(map.into_iter().collect())
+}
+
+/// The JSON-LD-star codec — the registry's behavior seam for `application/ld+json`.
+///
+/// Both `serialize` and `parse` route through the SAME cores the public free functions
+/// use ([`serialize_ser_graph`] / [`parse_jsonld`]), so generic dispatch and the
+/// side-door API are one code path, two entry points. Base IRI / parse mode are ignored:
+/// JSON-LD derives its base from the document's own `@context`, and it has no
+/// line/Turtle-family tokenizer toggle.
+pub(super) struct JsonLdCodec;
+
+impl RdfCodec for JsonLdCodec {
+    fn parse(
+        &self,
+        text: &str,
+        _base_iri: Option<&str>,
+        _mode: LineParseMode,
+    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        parse_jsonld(text.as_bytes())
+    }
+
+    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+        serialize_ser_graph(graph)
+    }
+}
+
+/// The YAML-LD-star codec — the registry's behavior seam for `application/ld+yaml`.
+///
+/// Serialize walks the shared JSON-LD-star core then re-emits as YAML;
+/// parse bridges YAML→JSON ([`yamlld_to_jsonld`]) and reuses [`parse_jsonld`]. The
+/// registry path uses the bundled schema reference (the custom-`schema_url` overload
+/// stays on the public [`serialize_dataset_to_yamlld`]).
+pub(super) struct YamlLdCodec;
+
+impl RdfCodec for YamlLdCodec {
+    fn parse(
+        &self,
+        text: &str,
+        _base_iri: Option<&str>,
+        _mode: LineParseMode,
+    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        let json = yamlld_to_jsonld(text.as_bytes())?;
+        parse_jsonld(json.as_bytes())
+    }
+
+    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+        serialize_ser_graph_to_yamlld(graph, None)
+    }
 }
 
 /// Serialize the carrier dataset to a deterministic JSON-LD-star document.
@@ -162,7 +223,22 @@ pub fn serialize_dataset_to_yamlld(
     dataset: &RdfDataset,
     schema_url: Option<&str>,
 ) -> Result<String, RdfDiagnostic> {
-    let json = serialize_dataset_to_jsonld(dataset)?;
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+    )?;
+    serialize_ser_graph_to_yamlld(&graph, schema_url)
+}
+
+/// Serialize an already-materialized [`SerGraph`] to deterministic YAML-LD-star bytes —
+/// the graph-level core shared by [`serialize_dataset_to_yamlld`] and [`YamlLdCodec`].
+fn serialize_ser_graph_to_yamlld(
+    graph: &SerGraph,
+    schema_url: Option<&str>,
+) -> Result<String, RdfDiagnostic> {
+    let json = serialize_ser_graph(graph)?;
     let value: Value =
         serde_json::from_str(&json).map_err(|e| decode(format!("parse JSON-LD for YAML: {e}")))?;
     let body =
@@ -193,10 +269,18 @@ fn build_context() -> Value {
 
 /// Build default-graph nodes and named-graph objects.
 fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
-    // Reifier index: base triple (s,p,o) -> reifier ids that annotate it.
+    // Reifier index: base triple (s,p,o) in graph g -> reifier ids that annotate it.
     let mut reifier_of: ReifierIndex = BTreeMap::new();
-    for &(rid, (s, p, o), _g) in &graph.reifiers {
-        reifier_of.entry((s, p, o)).or_default().push(rid);
+    for &(rid, (s, p, o), g) in &graph.reifiers {
+        // A triple term is self-reifying: its `reifier` row's "reifier" is the triple
+        // term itself (kind `Triple`), carrying the term's components — NOT a real
+        // IRI/blank-node reifier. `term_id` has no @id for a `Triple`-kind term, so it
+        // must never enter the sortable reifier index; skip it here (mirrors the
+        // orphan-reifier guard below).
+        if graph.terms[rid].kind == SerTermKind::Triple {
+            continue;
+        }
+        reifier_of.entry((s, p, o, g)).or_default().push(rid);
     }
     for list in reifier_of.values_mut() {
         // Sort by the reifier's stable @id, not its input-order term id.
@@ -207,10 +291,10 @@ fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
         });
     }
 
-    // Annotation index: reifier id -> sorted annotation (predicate, value) rows.
+    // Annotation index: (reifier id, graph) -> sorted annotation (predicate, value) rows.
     let mut annotations_of: AnnotationIndex = BTreeMap::new();
-    for &(r, p, v, _g) in &graph.annotations {
-        annotations_of.entry(r).or_default().push((p, v));
+    for &(r, p, v, g) in &graph.annotations {
+        annotations_of.entry((r, g)).or_default().push((p, v));
     }
     for list in annotations_of.values_mut() {
         // Sort by stable predicate @id then stable value key, not raw term ids.
@@ -224,6 +308,11 @@ fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
         });
     }
 
+    let indexes = Indexes {
+        reifier_of: &reifier_of,
+        annotations_of: &annotations_of,
+    };
+
     // Group quads by graph name (None = default graph) and then by subject.
     let mut by_graph: QuadGroups = BTreeMap::new();
     for &(s, p, o, g) in &graph.quads {
@@ -235,14 +324,54 @@ fn build_graphs(graph: &SerGraph) -> Result<GraphNodes, RdfDiagnostic> {
             .push((p, o));
     }
 
+    // A reifier whose base triple is NOT asserted as a quad has no value object to carry
+    // its compact `@annotation`, so emit it as a standalone node with an explicit
+    // `rdf:reifies` @triple value plus its annotation properties — otherwise the reifier
+    // and its annotations are silently dropped. (An asserted base triple keeps the
+    // compact `@annotation` form.) Keyed by `(s,p,o,g)` — GRAPH-SCOPED — to match the
+    // `@annotation` attachment in `build_value_object`, which now also keys on graph
+    // name: the same base triple may be asserted in one graph and orphaned (reified
+    // without assertion) in another.
+    let asserted_base: BTreeSet<(usize, usize, usize, Option<usize>)> = graph
+        .quads
+        .iter()
+        .map(|&(s, p, o, g)| (s, p, o, g))
+        .collect();
+    let mut orphan_by_graph: BTreeMap<Option<usize>, Vec<Value>> = BTreeMap::new();
+    for &(rid, (s, p, o), g) in &graph.reifiers {
+        // A triple term is self-reifying: its `reifier` row's "reifier" is the triple
+        // term itself (kind `Triple`), carrying the term's components — NOT a real
+        // IRI/blank-node reifier. Those are emitted as `@triple` objects where they
+        // appear; only genuine reifiers become standalone nodes here.
+        if graph.terms[rid].kind == SerTermKind::Triple {
+            continue;
+        }
+        if !asserted_base.contains(&(s, p, o, g)) {
+            let node = build_orphan_reifier_node(graph, rid, s, p, o, g, &indexes)?;
+            orphan_by_graph.entry(g).or_default().push(node);
+        }
+    }
+
     let mut default_nodes: BTreeMap<String, Value> = BTreeMap::new();
     let mut named_graphs: BTreeMap<String, Value> = BTreeMap::new();
 
-    for (g, subjects) in by_graph {
+    // Iterate the union of graph names carrying asserted quads OR orphan reifiers (a graph
+    // may carry only orphan reifiers, so `by_graph` alone would miss it).
+    let graph_keys: BTreeSet<Option<usize>> = by_graph
+        .keys()
+        .copied()
+        .chain(orphan_by_graph.keys().copied())
+        .collect();
+    for g in graph_keys {
         let mut nodes: Vec<Value> = Vec::new();
-        for (s, pos) in subjects {
-            let node = build_node(graph, s, pos, &reifier_of, &annotations_of)?;
-            nodes.push(node);
+        if let Some(subjects) = by_graph.remove(&g) {
+            for (s, pos) in subjects {
+                let node = build_node(graph, s, pos, g, &indexes)?;
+                nodes.push(node);
+            }
+        }
+        if let Some(orphans) = orphan_by_graph.remove(&g) {
+            nodes.extend(orphans);
         }
         // Sort nodes by their @id (or lexical key for bnodes).
         nodes.sort_by_key(node_id_key);
@@ -278,8 +407,8 @@ fn build_node(
     graph: &SerGraph,
     subject: usize,
     pos: Vec<(usize, usize)>,
-    reifier_of: &ReifierIndex,
-    annotations_of: &AnnotationIndex,
+    g: Option<usize>,
+    indexes: &Indexes<'_>,
 ) -> Result<Value, RdfDiagnostic> {
     let subject_term = &graph.terms[subject];
     let mut node = BTreeMap::new();
@@ -301,15 +430,7 @@ fn build_node(
             types.push(term_ref_value(object_term)?);
         } else {
             let key = curie(predicate_iri);
-            let value = build_value_object(
-                graph,
-                subject,
-                p,
-                o,
-                object_term,
-                reifier_of,
-                annotations_of,
-            )?;
+            let value = build_value_object(graph, subject, p, o, g, object_term, indexes)?;
             props.entry(key).or_default().push(value);
         }
     }
@@ -339,20 +460,20 @@ fn build_value_object(
     subject: usize,
     predicate: usize,
     object: usize,
+    g: Option<usize>,
     object_term: &SerTerm,
-    reifier_of: &ReifierIndex,
-    annotations_of: &AnnotationIndex,
+    indexes: &Indexes<'_>,
 ) -> Result<Value, RdfDiagnostic> {
     let mut value = if object_term.kind == SerTermKind::Triple {
-        build_triple_term_value(graph, object_term, reifier_of, annotations_of)?
+        build_triple_term_value(graph, object_term)?
     } else {
         term_to_value(graph, object_term)?
     };
 
-    if let Some(reifiers) = reifier_of.get(&(subject, predicate, object)) {
+    if let Some(reifiers) = indexes.reifier_of.get(&(subject, predicate, object, g)) {
         let annotations: Result<Vec<Value>, _> = reifiers
             .iter()
-            .map(|&rid| build_annotation_node(graph, rid, annotations_of))
+            .map(|&rid| build_annotation_node(graph, rid, g, indexes))
             .collect();
         let annotations = annotations?;
         let ann_value = if annotations.len() == 1 {
@@ -376,43 +497,54 @@ fn build_value_object(
     Ok(value)
 }
 
-/// Render a triple term (object position) as its JSON-LD-star annotated node
-/// object, using the term's own reifier binding.
-fn build_triple_term_value(
-    graph: &SerGraph,
-    term: &SerTerm,
-    reifier_of: &ReifierIndex,
-    annotations_of: &AnnotationIndex,
-) -> Result<Value, RdfDiagnostic> {
+/// Render a triple term as its distinguishable JSON-LD-star `@triple` object, resolving
+/// its `(s,p,o)` components through the term's own self-reifier binding.
+fn build_triple_term_value(graph: &SerGraph, term: &SerTerm) -> Result<Value, RdfDiagnostic> {
     let (s, p, o) = triple_components(graph, term)
         .ok_or_else(|| parse("triple term with no components".to_string()))?;
-    build_nested_triple_node(graph, s, p, o, reifier_of, annotations_of)
+    build_nested_triple_node(graph, s, p, o)
 }
 
-/// Build the JSON-LD-star annotated node object for a quoted triple (s,p,o).
+/// Build the distinguishable JSON-LD-star `@triple` object for a quoted triple (s,p,o).
+///
+/// A triple term serializes to `{"@triple": {"@subject": …, "@predicate": "<iri>",
+/// "@object": …}}`. The reserved `@triple` key makes it unambiguous vs an `@id` node
+/// object or an `@value` literal, and every part round-trips: `@subject`/`@object` recurse
+/// through the same encoding (nested triple terms work), `@predicate` is the CURIE/IRI the
+/// parser re-expands. Keys are `BTreeMap`-ordered, so the output is byte-deterministic.
 fn build_nested_triple_node(
-    _graph: &SerGraph,
-    _s: usize,
-    _p: usize,
-    _o: usize,
-    _reifier_of: &ReifierIndex,
-    _annotations_of: &AnnotationIndex,
+    graph: &SerGraph,
+    s: usize,
+    p: usize,
+    o: usize,
 ) -> Result<Value, RdfDiagnostic> {
-    // A bare quoted-triple in object position would have to be encoded as
-    // `{"@id": s, <p-curie>: <object>}`, which (a) is indistinguishable from an
-    // ordinary node object and (b) is not parseable back: the parser's `@id`
-    // branch returns only the subject IRI and drops the predicate/object,
-    // silently corrupting the triple term. Rather than emit that lossy,
-    // ambiguous form we fail closed. The lossless, supported representation for
-    // RDF-1.2-star here is the rdf:reifies / `@annotation` form, which is
-    // unaffected by this guard. Full lossless nested-triple-term support
-    // (object-position and annotation-value triple terms) is a deferred
-    // extension requiring a distinguishable JSON-LD-star encoding.
-    Err(parse(
-        "quoted-triple object terms are not yet losslessly serializable in JSON-LD-star; \
-         use the rdf:reifies/@annotation form"
-            .to_string(),
-    ))
+    let subject = encode_triple_component(graph, s)?;
+    let object = encode_triple_component(graph, o)?;
+    let p_term = &graph.terms[p];
+    let p_iri = p_term
+        .value
+        .as_deref()
+        .ok_or_else(|| parse("triple-term predicate missing IRI".to_string()))?;
+
+    let mut triple = BTreeMap::new();
+    triple.insert("@subject".to_string(), subject);
+    triple.insert("@predicate".to_string(), Value::String(curie(p_iri)));
+    triple.insert("@object".to_string(), object);
+
+    let mut map = BTreeMap::new();
+    map.insert("@triple".to_string(), to_json_object(triple));
+    Ok(to_json_object(map))
+}
+
+/// Encode one component (subject or object) of a triple term, recursing on nested triple
+/// terms so `<<( <<( … )>> p o )>>` round-trips.
+fn encode_triple_component(graph: &SerGraph, idx: usize) -> Result<Value, RdfDiagnostic> {
+    let term = &graph.terms[idx];
+    if term.kind == SerTermKind::Triple {
+        build_triple_term_value(graph, term)
+    } else {
+        term_to_value(graph, term)
+    }
 }
 
 /// Convert a single RDF term to its JSON-LD value-object form.
@@ -461,13 +593,14 @@ fn term_to_value(graph: &SerGraph, term: &SerTerm) -> Result<Value, RdfDiagnosti
 fn build_annotation_node(
     graph: &SerGraph,
     reifier_id: usize,
-    annotations_of: &AnnotationIndex,
+    g: Option<usize>,
+    indexes: &Indexes<'_>,
 ) -> Result<Value, RdfDiagnostic> {
     let reifier_term = &graph.terms[reifier_id];
     let mut node = BTreeMap::new();
     node.insert("@id".to_string(), Value::String(term_id(reifier_term)?));
 
-    if let Some(anns) = annotations_of.get(&reifier_id) {
+    if let Some(anns) = indexes.annotations_of.get(&(reifier_id, g)) {
         let mut props: BTreeMap<String, Vec<Value>> = BTreeMap::new();
         for &(p, v) in anns {
             let p_term = &graph.terms[p];
@@ -490,6 +623,30 @@ fn build_annotation_node(
         }
     }
 
+    Ok(to_json_object(node))
+}
+
+/// Build a standalone node for a reifier whose base triple is not asserted:
+/// `{"@id": r, "rdf:reifies": {"@triple": …}, <annotation props>}`. On re-parse the
+/// `rdf:reifies` row folds back into the RDF-1.2 statement layer with its annotations, so
+/// the reifier round-trips instead of being dropped for want of a base value object.
+fn build_orphan_reifier_node(
+    graph: &SerGraph,
+    reifier_id: usize,
+    s: usize,
+    p: usize,
+    o: usize,
+    g: Option<usize>,
+    indexes: &Indexes<'_>,
+) -> Result<Value, RdfDiagnostic> {
+    let Value::Object(entries) = build_annotation_node(graph, reifier_id, g, indexes)? else {
+        unreachable!("build_annotation_node always returns a JSON object");
+    };
+    let mut node: BTreeMap<String, Value> = entries.into_iter().collect();
+    node.insert(
+        curie(RDF_REIFIES),
+        build_nested_triple_node(graph, s, p, o)?,
+    );
     Ok(to_json_object(node))
 }
 
@@ -525,18 +682,10 @@ fn simple_term_value(graph: &SerGraph, term: &SerTerm) -> Result<Value, RdfDiagn
             }
             Ok(to_json_object(map))
         }
-        // Triple-valued annotation objects (an annotation whose value is itself a
-        // quoted triple term) have no distinguishable, losslessly parseable
-        // JSON-LD-star encoding here yet. Emitting a placeholder literal would
-        // silently corrupt RDF-1.2-star data, so we fail closed. Full lossless
-        // nested-triple-term support (both object-position and annotation-value
-        // triple terms) is a deferred extension that requires a distinguishable
-        // JSON-LD-star encoding; until then "lossless or hard-fail" wins.
-        SerTermKind::Triple => Err(parse(
-            "triple-valued annotation objects are not yet losslessly serializable; \
-             refusing to emit a lossy placeholder"
-                .to_string(),
-        )),
+        // Triple-valued annotation objects (an annotation whose value is itself a quoted
+        // triple term) serialize to the same distinguishable `@triple` object as
+        // object-position triple terms, so they round-trip losslessly.
+        SerTermKind::Triple => build_triple_term_value(graph, term),
     }
 }
 
@@ -747,7 +896,7 @@ pub fn parse_jsonld(json_bytes: &[u8]) -> Result<Arc<RdfDataset>, RdfDiagnostic>
                     &quads,
                     &subject,
                     &predicate,
-                    graph_name.clone(),
+                    graph_name.as_ref(),
                     &v,
                     &expand,
                 )?;
@@ -845,7 +994,7 @@ fn emit_value_quad(
     quads: &std::cell::RefCell<Vec<RdfQuad>>,
     subject: &RdfTerm,
     predicate: &str,
-    graph_name: Option<RdfTerm>,
+    graph_name: Option<&RdfTerm>,
     value: &Value,
     expand: &dyn Fn(&str) -> String,
 ) -> Result<(), RdfDiagnostic> {
@@ -855,7 +1004,7 @@ fn emit_value_quad(
         subject.clone(),
         predicate,
         object.clone(),
-        graph_name,
+        graph_name.cloned(),
     );
 
     if let Some(ann) = annotation {
@@ -875,8 +1024,16 @@ fn emit_value_quad(
             // `dataset_from_quads` freeze folds it into the reifier table.
             let quoted =
                 RdfTerm::triple(RdfTriple::new(subject.clone(), predicate, object.clone()));
-            // Reifier bindings + annotations always land in the DEFAULT graph.
-            push_quad(quads, reifier.clone(), RDF_REIFIES, quoted, None);
+            // The reifier binding + its annotations land in the SAME graph as the base
+            // triple they annotate (the enclosing @graph), so a reifier on a named-graph
+            // triple round-trips into that named graph rather than the default graph.
+            push_quad(
+                quads,
+                reifier.clone(),
+                RDF_REIFIES,
+                quoted,
+                graph_name.cloned(),
+            );
 
             // The `@id` extraction above (`ann_node.get("@id")…ok_or_else`) returns Err for
             // any non-object node, so reaching here guarantees `ann_node` is a JSON object.
@@ -896,7 +1053,13 @@ fn emit_value_quad(
                 };
                 for v in vals {
                     let (ann_object, _) = parse_value_object(&v, expand)?;
-                    push_quad(quads, reifier.clone(), &ann_predicate, ann_object, None);
+                    push_quad(
+                        quads,
+                        reifier.clone(),
+                        &ann_predicate,
+                        ann_object,
+                        graph_name.cloned(),
+                    );
                 }
             }
         }
@@ -916,6 +1079,12 @@ fn parse_value_object(
         .as_object()
         .ok_or_else(|| decode(format!("expected value object, got {value}")))?;
     let annotation = obj.get("@annotation").cloned();
+
+    // A distinguishable `@triple` object reconstructs an RDF-1.2 triple term (recursing
+    // through `@subject`/`@object`), the inverse of `build_nested_triple_node`.
+    if let Some(triple) = obj.get("@triple") {
+        return Ok((parse_triple_term(triple, expand)?, annotation));
+    }
 
     if let Some(id) = obj.get("@id").and_then(Value::as_str) {
         return Ok((node_id_term(id, expand)?, annotation));
@@ -958,6 +1127,72 @@ fn parse_value_object(
     };
 
     Ok((RdfTerm::literal(literal), annotation))
+}
+
+/// Reconstruct an RDF-1.2 triple term from a `@triple` object — the inverse of
+/// [`build_nested_triple_node`]. `@subject`/`@object` recurse through
+/// [`parse_value_object`] (so nested triple term COMPONENTS round-trip: a triple term
+/// whose subject or object is itself a triple term); `@predicate` is a CURIE/IRI string
+/// expanded through the document `@context`.
+///
+/// A triple *term* carries no annotation of its own in the RDF 1.2 abstract syntax — it
+/// is a bare `(s, p, o)` value. Reification/annotation is always a SEPARATE statement
+/// about a reifier (`?r rdf:reifies <<( s p o )>>` plus annotation triples on `?r`); the
+/// native encoder never emits `@annotation` nested inside a `@triple` component (inner
+/// annotations ride separate reifier quads instead — see
+/// `object_position_triple_term_round_trips_jsonld`/`reifier_and_annotation_round_trip`
+/// in `native_codecs::tests`). So an `@annotation` found on a `@subject`/`@object`
+/// component here is not a well-formed RDF-1.2 term shape; per the no-swallowed-errors
+/// policy this is a hard failure rather than a silent drop or an ad hoc thread-through.
+fn parse_triple_term(
+    value: &Value,
+    expand: &dyn Fn(&str) -> String,
+) -> Result<RdfTerm, RdfDiagnostic> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| decode(format!("@triple must be an object, got {value}")))?;
+    if obj.contains_key("@annotation") {
+        return Err(decode(
+            "@annotation is not permitted inside a @triple object: a triple term \
+             carries no annotation in RDF 1.2; annotate via a separate reifier"
+                .to_string(),
+        ));
+    }
+    let subject = obj
+        .get("@subject")
+        .ok_or_else(|| decode("@triple missing @subject".to_string()))?;
+    let predicate = obj
+        .get("@predicate")
+        .and_then(Value::as_str)
+        .ok_or_else(|| decode("@triple @predicate must be a string".to_string()))?;
+    let object = obj
+        .get("@object")
+        .ok_or_else(|| decode("@triple missing @object".to_string()))?;
+
+    let (subject_term, subject_ann) = parse_value_object(subject, expand)?;
+    if subject_ann.is_some() {
+        return Err(decode(
+            "@annotation is not permitted inside a @triple component: a triple term \
+             carries no annotation in RDF 1.2; annotate via a separate reifier"
+                .to_string(),
+        ));
+    }
+    let predicate_iri = expand(predicate);
+    validated_iri_term(&predicate_iri)?;
+    let (object_term, object_ann) = parse_value_object(object, expand)?;
+    if object_ann.is_some() {
+        return Err(decode(
+            "@annotation is not permitted inside a @triple component: a triple term \
+             carries no annotation in RDF 1.2; annotate via a separate reifier"
+                .to_string(),
+        ));
+    }
+
+    Ok(RdfTerm::triple(RdfTriple::new(
+        subject_term,
+        &predicate_iri,
+        object_term,
+    )))
 }
 
 // ── statement-metadata downcast ─────────────────────────────────────────────────────
