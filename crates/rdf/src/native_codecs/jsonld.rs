@@ -1116,8 +1116,19 @@ fn parse_value_object(
 
 /// Reconstruct an RDF-1.2 triple term from a `@triple` object — the inverse of
 /// [`build_nested_triple_node`]. `@subject`/`@object` recurse through
-/// [`parse_value_object`] (so nested triple terms round-trip); `@predicate` is a
-/// CURIE/IRI string expanded through the document `@context`.
+/// [`parse_value_object`] (so nested triple term COMPONENTS round-trip: a triple term
+/// whose subject or object is itself a triple term); `@predicate` is a CURIE/IRI string
+/// expanded through the document `@context`.
+///
+/// A triple *term* carries no annotation of its own in the RDF 1.2 abstract syntax — it
+/// is a bare `(s, p, o)` value. Reification/annotation is always a SEPARATE statement
+/// about a reifier (`?r rdf:reifies <<( s p o )>>` plus annotation triples on `?r`); the
+/// native encoder never emits `@annotation` nested inside a `@triple` component (inner
+/// annotations ride separate reifier quads instead — see
+/// `object_position_triple_term_round_trips_jsonld`/`reifier_and_annotation_round_trip`
+/// in `native_codecs::tests`). So an `@annotation` found on a `@subject`/`@object`
+/// component here is not a well-formed RDF-1.2 term shape; per the no-swallowed-errors
+/// policy this is a hard failure rather than a silent drop or an ad hoc thread-through.
 fn parse_triple_term(
     value: &Value,
     expand: &dyn Fn(&str) -> String,
@@ -1136,10 +1147,24 @@ fn parse_triple_term(
         .get("@object")
         .ok_or_else(|| decode("@triple missing @object".to_string()))?;
 
-    let (subject_term, _) = parse_value_object(subject, expand)?;
+    let (subject_term, subject_ann) = parse_value_object(subject, expand)?;
+    if subject_ann.is_some() {
+        return Err(decode(
+            "@annotation is not permitted inside a @triple component: a triple term \
+             carries no annotation in RDF 1.2; annotate via a separate reifier"
+                .to_string(),
+        ));
+    }
     let predicate_iri = expand(predicate);
     validated_iri_term(&predicate_iri)?;
-    let (object_term, _) = parse_value_object(object, expand)?;
+    let (object_term, object_ann) = parse_value_object(object, expand)?;
+    if object_ann.is_some() {
+        return Err(decode(
+            "@annotation is not permitted inside a @triple component: a triple term \
+             carries no annotation in RDF 1.2; annotate via a separate reifier"
+                .to_string(),
+        ));
+    }
 
     Ok(RdfTerm::triple(RdfTriple::new(
         subject_term,

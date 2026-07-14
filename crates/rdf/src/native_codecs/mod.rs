@@ -206,6 +206,79 @@ mod tests {
     }
 
     #[test]
+    fn nested_triple_term_with_inner_reifier_round_trips_jsonld() {
+        // A depth-2 nested triple term: the OUTER triple term's subject is itself a
+        // triple term (the INNER one), and the inner triple carries a reifier +
+        // annotation. Every other star round-trip test in this module nests only one
+        // level deep (a triple term appearing in a quad's object position); this is
+        // the first to nest a triple term INSIDE another triple term's component,
+        // which is the only path that exercises the `encode_triple_component` /
+        // `parse_triple_term` recursion (jsonld.rs) — previously zero coverage.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://e/s");
+        let p = b.intern_iri("https://e/p");
+        let o = b.intern_iri("https://e/o");
+        let inner = b.intern_triple(s, p, o); // depth-1 triple term: <<( s p o )>>
+        let p2 = b.intern_iri("https://e/p2");
+        let o2 = b.intern_iri("https://e/o2");
+        let outer = b.intern_triple(inner, p2, o2); // depth-2: subject is itself a triple term
+        let subj = b.intern_iri("https://e/subj");
+        let asserts = b.intern_iri("https://e/asserts");
+        b.push_quad(subj, asserts, outer, None); // assert the nested term in object position
+
+        // Reifier + annotation live on the INNER triple, not the outer one.
+        let r = b.intern_iri("https://e/r");
+        let conf = b.intern_iri("https://e/confidence");
+        let val = b.intern_literal(RdfLiteral::typed(
+            "0.9",
+            "http://www.w3.org/2001/XMLSchema#decimal",
+        ));
+        b.push_reifier(r, inner);
+        b.push_annotation(r, conf, val);
+
+        let ds = b.freeze().expect("freeze");
+        assert_round_trips(&ds, "application/ld+json");
+        assert_round_trips(&ds, "application/ld+yaml");
+    }
+
+    #[test]
+    fn annotation_inside_triple_component_is_rejected() {
+        // The RDF 1.2 abstract syntax gives a triple *term* no annotation of its own —
+        // annotation/reification is always a SEPARATE statement about a reifier
+        // (`?r rdf:reifies <<( s p o )>>` plus annotation triples on `?r`). purrdf's own
+        // encoder never emits `@annotation` nested inside a `@triple` component (see
+        // `nested_triple_term_with_inner_reifier_round_trips_jsonld` above, where the
+        // inner triple's annotation rides a separate reifier quad instead). So a
+        // hand-authored document with `@annotation` under a `@triple` component's
+        // `@subject`/`@object` is not a well-formed RDF-1.2 term shape and must hard-fail
+        // rather than silently drop the annotation.
+        let json = r#"{
+            "@id": "https://e/s",
+            "https://e/asserts": {
+                "@triple": {
+                    "@subject": {
+                        "@id": "https://e/s",
+                        "@annotation": {
+                            "@id": "https://e/r",
+                            "https://e/confidence": { "@value": "0.9" }
+                        }
+                    },
+                    "@predicate": "https://e/p",
+                    "@object": { "@id": "https://e/o" }
+                }
+            }
+        }"#;
+        let err = parse_dataset(json.as_bytes(), "application/ld+json", None)
+            .expect_err("@annotation inside a @triple component must be rejected");
+        assert_eq!(err.code, "native-jsonld-decode");
+        assert!(
+            err.message
+                .contains("not permitted inside a @triple component"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn inline_triple_term_and_real_reifier_share_base_triple_round_trips_jsonld() {
         // The SAME base triple (s,p,o) is BOTH asserted as an object-position triple
         // term (which pushes a self-reifier sentinel keyed by the Triple-kind term
