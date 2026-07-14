@@ -239,16 +239,16 @@ pub fn local_name(iri: &str) -> String {
 }
 
 /// Build a runtime SHACL→JSON-Schema [`LossEntry`]: `from` is `"shacl"`, `to`
-/// is `"json-schema"`, `intentional` is always `true` (a documented, accepted
-/// drop — never a bug), and `location` carries `subject` — the shape/class
-/// IRI (or blank-node id) the loss concerns, exactly matching the profile
-/// codes enumerated in `SHACL_JSON_SCHEMA_PROFILE` (`crates/rdf-core/src/loss.rs`).
+/// is `"json-schema"`, and `location` carries `subject` — the shape/class IRI
+/// (or blank-node id) the loss concerns. Every `code` passed here MUST be one
+/// enumerated in `SHACL_JSON_SCHEMA_PROFILE` (`crates/rdf-core/src/loss.rs`)
+/// — a documented, accepted drop, never a bug — since a ledger's `intentional`
+/// JSON field is derived (not stored) as membership in that profile.
 fn loss_entry(code: &str, subject: &str, note: &str) -> LossEntry {
     LossEntry {
         code: code.to_owned().into(),
         from: "shacl".into(),
         to: "json-schema".into(),
-        intentional: true,
         note: note.to_owned().into(),
         location: Some(Box::new(RdfLocation::default().with_subject(subject))),
     }

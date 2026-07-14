@@ -71,10 +71,6 @@ pub struct LossEntry {
     pub from: Cow<'static, str>,
     /// Target representation (e.g. `"gts"`).
     pub to: Cow<'static, str>,
-    /// `true` = a known, accepted conversion loss (the only kind this ledger
-    /// records). A `false` value would mark an *unintentional* loss, which the
-    /// fidelity gate treats as a bug rather than a documented contract.
-    pub intentional: bool,
     /// Human-readable explanation of what is dropped and why.
     pub note: Cow<'static, str>,
     /// Where the loss occurred, when known. `None` for every contract entry;
@@ -172,7 +168,6 @@ pub fn rdf_to_gts_loss_ledger() -> LossLedger {
         code: Cow::Borrowed("blob-bytes-absent"),
         from: Cow::Borrowed("rdf-1.2-dataset"),
         to: Cow::Borrowed("gts"),
-        intentional: true,
         note: Cow::Borrowed(
             "Blob payloads are preserved as content-addressed references (the blob_id digest \
              plus the origin file id), never materialized into the RDF IR, which must stay \
@@ -190,7 +185,6 @@ pub fn gts_to_rdf_loss_ledger() -> LossLedger {
         code: Cow::Borrowed("bnode-scope-flatten"),
         from: Cow::Borrowed("gts"),
         to: Cow::Borrowed("rdf-1.2-dataset"),
-        intentional: true,
         note: Cow::Borrowed(
             "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing \
              per-segment blank-node scope; the distinct scopes are recovered only via the \
@@ -320,7 +314,6 @@ pub fn pair_loss_ledger(from: &str, to: &str) -> LossLedger {
         code: Cow::Borrowed(code),
         from: Cow::Borrowed(from),
         to: Cow::Borrowed(to),
-        intentional: true,
         note: Cow::Borrowed(note),
         location: None,
     };
@@ -511,7 +504,6 @@ fn shacl_json_schema_entries() -> Vec<LossEntry> {
             code: Cow::Borrowed(code),
             from: Cow::Borrowed("shacl"),
             to: Cow::Borrowed("json-schema"),
-            intentional: true,
             note: Cow::Borrowed(note),
             location: None,
         })
@@ -653,8 +645,9 @@ pub fn profile_for(from: &str, to: &str) -> BTreeSet<&'static str> {
 //   ledger actually recorded is inside the declared [`profile_for`] contract
 //   for that `(from, to)` pair. A recorded code OUTSIDE the profile is an
 //   *unintentional* loss reaching the ledger — the live "this is a bug" case;
-//   soundness is what gives [`LossEntry::intentional`] a real, checkable
-//   meaning, rather than a field nobody verifies.
+//   this is also the exact definition the rendered `"intentional"` JSON field
+//   derives from (see [`render`]) — `intentional` is never stored, only
+//   computed as membership in [`profile_for`].
 //
 // Each check has a `Result`-returning core (composable, testable without
 // unwinding) and a panicking `assert_*` wrapper (for direct use in tests and
@@ -763,7 +756,13 @@ fn render(entries: &[LossEntry], emit_location: bool) -> String {
         push_field(&mut out, "code", entry.code.as_ref(), false);
         push_field(&mut out, "from", entry.from.as_ref(), false);
         push_field(&mut out, "to", entry.to.as_ref(), false);
-        push_bool_field(&mut out, "intentional", entry.intentional);
+        // `intentional` is not stored — it is 100% derivable from soundness's own
+        // definition (see `check_ledger_sound`): a recorded code is intentional
+        // iff it is a member of the declared profile for its `(from, to)` pair.
+        // Deriving here (rather than trusting a caller-set bool) makes the two
+        // impossible to drift apart.
+        let intentional = profile_for(&entry.from, &entry.to).contains(entry.code.as_ref());
+        push_bool_field(&mut out, "intentional", intentional);
         let location = emit_location.then_some(entry.location.as_deref()).flatten();
         push_field(&mut out, "note", entry.note.as_ref(), location.is_none());
         if let Some(location) = location {
@@ -881,14 +880,66 @@ mod tests {
         assert_eq!(codes.len(), EXPECTED_CODES.len(), "unexpected extra codes");
     }
 
+    /// `intentional` is not a stored field; it is derived at render time as
+    /// membership in [`profile_for`] (see `render`'s `intentional` binding).
+    /// This is the falsifiable proof of that derivation: every code either
+    /// direction ledger actually contains is, by construction, a member of
+    /// its own declared profile — so the derived value renders `true` for
+    /// every entry in these two static ledgers — and the rendered JSON
+    /// reflects it.
     #[test]
     fn every_recorded_loss_is_intentional() {
         for entry in rdf_to_gts_loss_ledger().entries() {
-            assert!(entry.intentional, "{} not marked intentional", entry.code);
+            assert!(
+                profile_for(&entry.from, &entry.to).contains(entry.code.as_ref()),
+                "{} not in its own declared profile",
+                entry.code
+            );
         }
         for entry in gts_to_rdf_loss_ledger().entries() {
-            assert!(entry.intentional, "{} not marked intentional", entry.code);
+            assert!(
+                profile_for(&entry.from, &entry.to).contains(entry.code.as_ref()),
+                "{} not in its own declared profile",
+                entry.code
+            );
         }
+        // And the rendered JSON must reflect the derivation: every entry in
+        // the combined RDF<->GTS matrix renders `"intentional": true`.
+        let json = rdf_gts_loss_matrix_json();
+        assert_eq!(
+            json.matches("\"intentional\": true").count(),
+            EXPECTED_CODES.len(),
+            "every in-profile code must render intentional: true: {json}"
+        );
+        assert_eq!(
+            json.matches("\"intentional\": false").count(),
+            0,
+            "no code in these static ledgers is out-of-profile: {json}"
+        );
+    }
+
+    /// The falsifiable-teeth half of the derivation: an entry whose code is
+    /// deliberately OUTSIDE its own `(from, to)` profile must render
+    /// `"intentional": false`. Driving this through the real production
+    /// `render`/`rdf_gts_loss_matrix_json` path would require inventing a
+    /// bogus static contract entry (there is no natural out-of-profile
+    /// contract entry — that is the point of the registry), so this exercises
+    /// the render helper directly with a synthetic runtime entry instead,
+    /// mirroring `check_ledger_sound_flags_out_of_profile_code` below.
+    #[test]
+    fn render_computes_intentional_false_for_out_of_profile_code() {
+        let entry = LossEntry {
+            code: Cow::Borrowed("not-a-real-code"),
+            from: Cow::Borrowed("shacl"),
+            to: Cow::Borrowed("json-schema"),
+            note: Cow::Borrowed("synthetic entry for the intentional-derivation test"),
+            location: None,
+        };
+        let json = render(&[entry], false);
+        assert!(
+            json.contains("\"intentional\": false"),
+            "an out-of-profile code must render intentional: false: {json}"
+        );
     }
 
     #[test]
@@ -1104,7 +1155,6 @@ mod tests {
             code: Cow::Owned("runtime-code-1".to_owned()),
             from: Cow::Owned("some-runtime-from".to_owned()),
             to: Cow::Owned("some-runtime-to".to_owned()),
-            intentional: true,
             note: Cow::Owned("a runtime-recorded loss, owned end to end".to_owned()),
             location: Some(Box::new(
                 RdfLocation::logical("shapes:compile").with_subject("ex:Cat"),
@@ -1180,7 +1230,6 @@ mod tests {
             code: Cow::Owned(code.to_owned()),
             from: Cow::Owned(from.to_owned()),
             to: Cow::Owned(to.to_owned()),
-            intentional: true,
             note: Cow::Owned("mechanical test entry".to_owned()),
             location: None,
         }

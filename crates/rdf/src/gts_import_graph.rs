@@ -472,7 +472,7 @@ mod tests {
             ledger
                 .entries()
                 .iter()
-                .any(|e| e.code == "bnode-scope-flatten" && e.intentional),
+                .any(|e| e.code == "bnode-scope-flatten"),
             "import_gts_graph flattens blank scope; the ledger MUST document it"
         );
     }
