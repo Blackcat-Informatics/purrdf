@@ -18,6 +18,25 @@ use crate::ledger;
 use crate::sink;
 use crate::source;
 
+/// Resolve a [`CliRegime`] to its library [`Regime`], rejecting the regimes the CLI
+/// cannot materialize.
+///
+/// OWL-Direct needs the query's class expressions, RIF needs a parsed rule set, and
+/// D (datatype) entailment is a spec-inherent materialization boundary — the CLI has
+/// no way to supply those inputs, so they map to the exit-3
+/// [`CliError::UnsupportedRegime`] path. Shared by `reason` and `convert
+/// --entailment` so both reject identically.
+pub(crate) fn resolve_materializable_regime(regime: CliRegime) -> Result<Regime, CliError> {
+    let regime = regime.to_native();
+    if matches!(regime, Regime::OwlDirect | Regime::Rif | Regime::D) {
+        return Err(CliError::UnsupportedRegime(format!(
+            "entailment regime `{regime:?}` cannot be materialized by the CLI: it needs inputs \
+             (query class expressions or a rule set) the CLI has no way to supply"
+        )));
+    }
+    Ok(regime)
+}
+
 /// Run the `reason` subcommand.
 pub(crate) fn run(
     regime: CliRegime,
@@ -25,17 +44,7 @@ pub(crate) fn run(
     output: &str,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
-    let regime = regime.to_native();
-
-    // These regimes are not materialize-and-match: they need the query's class
-    // expressions (OWL-Direct), a parsed rule set (RIF), or are a spec-inherent
-    // materialization boundary (D). The CLI cannot supply those inputs.
-    if matches!(regime, Regime::OwlDirect | Regime::Rif | Regime::D) {
-        return Err(CliError::UnsupportedRegime(format!(
-            "entailment regime `{regime:?}` cannot be materialized by the CLI: it needs inputs \
-             (query class expressions or a rule set) the CLI has no way to supply"
-        )));
-    }
+    let regime = resolve_materializable_regime(regime)?;
 
     let source_format = format::resolve(None, input)?;
     let dataset = source::load_dataset(input, source_format, None)?;

@@ -95,6 +95,19 @@ pub(crate) enum Command {
         /// Output format override; inferred from the output extension when omitted.
         #[arg(long, value_enum)]
         to: Option<CliRdfFormat>,
+        /// Base IRI for resolving relative IRIs while parsing the input; also
+        /// threaded into the serializer as its base.
+        #[arg(long, value_name = "IRI")]
+        base: Option<String>,
+        /// Materialize an entailment regime's closure in memory before
+        /// serializing (applied before `--canonical`).
+        #[arg(long, value_enum, value_name = "REGIME")]
+        entailment: Option<CliRegime>,
+        /// Emit RDFC-1.0 canonical N-Quads instead of `--to`. This overrides the
+        /// target format (canonical output is always N-Quads), so `--to` may be
+        /// omitted; combine with `--entailment` to canonicalize the closure.
+        #[arg(long)]
+        canonical: bool,
         /// Input path `IN`, or `-` for stdin (which requires `--from`).
         #[arg(value_name = "IN", default_value = "-")]
         input: String,

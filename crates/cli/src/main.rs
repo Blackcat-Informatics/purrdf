@@ -49,9 +49,23 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Command::Convert {
             from,
             to,
+            base,
+            entailment,
+            canonical,
             input,
             output,
-        } => convert::run(*from, *to, input, output, &ledger_target),
+        } => convert::run(
+            &convert::ConvertOptions {
+                from: *from,
+                to: *to,
+                base: base.as_deref(),
+                entailment: *entailment,
+                canonical: *canonical,
+            },
+            input,
+            output,
+            &ledger_target,
+        ),
         Command::Query {
             data,
             results_format,
