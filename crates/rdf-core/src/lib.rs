@@ -122,8 +122,10 @@ pub use lookaside::{
     RdfSuppressionRecord,
 };
 pub use loss::{
-    LossEntry, LossLedger, PROJECTION_CODECS, gts_to_rdf_loss_ledger, loss_matrix_json,
-    pair_loss_ledger, rdf_to_gts_loss_ledger, transcode_loss_matrix_json,
+    LossEntry, LossLedger, PROJECTION_CODECS, assert_ledger_complete, assert_ledger_sound,
+    check_ledger_complete, check_ledger_sound, gts_to_rdf_loss_ledger, loss_matrix_json,
+    pair_loss_ledger, profile_for, rdf_to_gts_loss_ledger, registered_pairs,
+    transcode_loss_matrix_json,
 };
 pub use model::{
     RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTermKind, RdfTextDirection,

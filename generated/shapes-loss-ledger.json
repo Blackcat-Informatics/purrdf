@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "losses": [
+    {
+      "code": "sh:SPARQLTarget",
+      "from": "shacl",
+      "to": "json-schema",
+      "intentional": true,
+      "note": "SHACL-AF SPARQL target (sh:target/sh:SPARQLTarget) selects focus nodes via an arbitrary SPARQL query with no closed-world JSON Schema equivalent; the shape's SPARQL-selected instances are not enforced by the emitted schema",
+      "location": "<unknown> subject=<https://example.org/SparqlTargetedShape>"
+    },
+    {
+      "code": "sh:expression",
+      "from": "shacl",
+      "to": "json-schema",
+      "intentional": true,
+      "note": "SHACL-AF expression constraint has no JSON Schema equivalent",
+      "location": "<unknown> subject=<https://example.org/GuardedShape>"
+    },
+    {
+      "code": "sh:not",
+      "from": "shacl",
+      "to": "json-schema",
+      "intentional": true,
+      "note": "property-level sh:not has no lossless value-schema projection",
+      "location": "<unknown> subject=<https://example.org/GuardedShape>"
+    },
+    {
+      "code": "sh:not",
+      "from": "shacl",
+      "to": "json-schema",
+      "intentional": true,
+      "note": "sh:not inner shape is not losslessly expressible in the object projection; omitted rather than emitting a base-negating (vacuous) not",
+      "location": "<unknown> subject=<https://example.org/GuardedShape>"
+    },
+    {
+      "code": "sh:sparql",
+      "from": "shacl",
+      "to": "json-schema",
+      "intentional": true,
+      "note": "SPARQL-AF constraint has no JSON Schema equivalent",
+      "location": "<unknown> subject=<https://example.org/GuardedShape>"
+    },
+    {
+      "code": "sh:sparql",
+      "from": "shacl",
+      "to": "json-schema",
+      "intentional": true,
+      "note": "SPARQL-AF constraint has no JSON Schema equivalent",
+      "location": "<unknown> subject=<https://example.org/GuardedShape>"
+    }
+  ]
+}

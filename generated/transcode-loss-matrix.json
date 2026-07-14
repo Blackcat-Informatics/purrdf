@@ -721,6 +721,55 @@
     "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
   },
   {
+    "code": "rdfs:range",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A predicate's rdfs:range names a value-vocabulary class that conflicts with (or is shadowed by) an explicit sh:class on the same property; the range-derived enum $ref is suppressed in favor of sh:class, and the conflict is recorded rather than silently dropped."
+  },
+  {
+    "code": "sh:SPARQLTarget",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A shape targeted only via SHACL-AF sh:target/sh:SPARQLTarget (an arbitrary SPARQL SELECT, not a class extension) has no closed-world JSON Schema equivalent; the shape is excluded from the compiled $defs."
+  },
+  {
+    "code": "sh:expression",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL-AF sh:expression node-expression constraint has no JSON Schema equivalent and is dropped."
+  },
+  {
+    "code": "sh:not",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:not negation whose inner shape is not losslessly expressible as a JSON Schema negation (or that appears at property/value position, where negating a base value schema would be vacuous) is dropped rather than emitted unsoundly."
+  },
+  {
+    "code": "sh:sparql",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL-SPARQL constraint (sh:sparql) has no closed-world JSON Schema equivalent and is dropped."
+  },
+  {
+    "code": "value-vocabulary",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A value-vocabulary class projected to an enum $def has no seeded named-individual members to enumerate; the $def is emitted with an empty enum and the omission is recorded."
+  },
+  {
+    "code": "value-vocabulary member",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A value-vocabulary class's member is identified by a blank node rather than a named individual, so it has no stable CURIE to enumerate; the member is dropped from the projected enum."
+  },
+  {
     "code": "canonical-rdf12-projection",
     "from": "trig",
     "to": "canonical-rdf12",

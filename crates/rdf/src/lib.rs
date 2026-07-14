@@ -119,11 +119,12 @@ pub use purrdf_core::{
     SSSOM_DEFAULT_VALIDATION_TYPES, SegmentUnitMap, SerializeGraph, SmallVec, SparqlEngine,
     SparqlRequest, SparqlResult, SssomDiagnostic, SssomMapping, SssomMappingSet, SssomMeta,
     TermFactory, TermId, TermRef, TermValue, UnitCatalog, UnitId, UnitInterner, UnitMetadata,
-    canonicalize, canonicalize_with, check_provenance, dataset_diff, datasets_isomorphic,
+    assert_ledger_complete, assert_ledger_sound, canonicalize, canonicalize_with,
+    check_ledger_complete, check_ledger_sound, check_provenance, dataset_diff, datasets_isomorphic,
     emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, fno_to_ntriples,
-    fno_to_quads, gts_to_rdf_loss_ledger, loss_matrix_json, pair_loss_ledger,
-    rdf_to_gts_loss_ledger, rule_iri, smallvec, transcode_loss_matrix_json, try_canonicalize,
-    try_canonicalize_with,
+    fno_to_quads, gts_to_rdf_loss_ledger, loss_matrix_json, pair_loss_ledger, profile_for,
+    rdf_to_gts_loss_ledger, registered_pairs, rule_iri, smallvec, transcode_loss_matrix_json,
+    try_canonicalize, try_canonicalize_with,
 };
 
 // Shared USTAR (tar) codec: byte-deterministic writer + reader used by both the

@@ -139,9 +139,17 @@ impl LossLedger {
         self.entries.is_empty()
     }
 
-    /// Render the ledger as deterministic JSON: entries sorted by
+    /// Render the ledger as deterministic, versioned JSON: a top-level object
+    /// `{ "schema_version": 1, "losses": [ ... ] }`, entries sorted by
     /// `(from, to, code, location)`, 2-space indented, with a trailing
     /// newline. A `location` field is emitted per entry when present.
+    ///
+    /// This is the stable public runtime-ledger schema downstream consumers
+    /// (e.g. a `--loss-ledger` CLI flag) pin against; `schema_version` bumps
+    /// only on a breaking shape change. The static contract renders
+    /// ([`loss_matrix_json`], [`transcode_loss_matrix_json`]) keep the bare
+    /// JSON-array shape instead (no `schema_version`), so the committed
+    /// `generated/*.json` matrix artifacts stay unchanged.
     pub fn render_json(&self) -> String {
         let mut sorted = self.entries.clone();
         sorted.sort_by(|a, b| {
@@ -151,7 +159,7 @@ impl LossLedger {
                 .then_with(|| a.code.cmp(&b.code))
                 .then_with(|| a.location.cmp(&b.location))
         });
-        render(&sorted, true)
+        render_versioned(&sorted)
     }
 }
 
@@ -390,16 +398,15 @@ pub fn pair_loss_ledger(from: &str, to: &str) -> LossLedger {
     LossLedger::contract(entries)
 }
 
-/// The full transcode loss matrix as deterministic JSON.
+/// Every [`LossEntry`] the transcode matrix and the shapes-projection profile
+/// contribute: all non-identity `(from ∈ SYNTAX_CODECS) × (to ∈ SYNTAX_CODECS ∪
+/// PROJECTION_CODECS)` pairs (via [`pair_loss_ledger`]) PLUS the non-syntax
+/// `("shacl", "json-schema")` shapes projection ([`shacl_json_schema_entries`]).
 ///
-/// Iterates all `(from ∈ SYNTAX_CODECS) × (to ∈ SYNTAX_CODECS ∪
-/// PROJECTION_CODECS)` pairs, skips identity pairs, collects every non-empty
-/// [`LossEntry`], sorts by `(from, to, code)`, and renders via [`render`].
-/// Unlike a single [`LossLedger::contract`], codes are NOT assumed unique here
-/// — the same code recurs for different `(from, to)` pairs.
-///
-/// The rendered output is committed at `generated/transcode-loss-matrix.json`.
-pub fn transcode_loss_matrix_json() -> String {
+/// This is the single source [`transcode_loss_matrix_json`] renders and
+/// [`registry`] folds in — the enumerable registry that codecs (and the shapes
+/// emitter) plug into. Order is unspecified; callers sort as needed.
+fn transcode_and_shapes_entries() -> Vec<LossEntry> {
     let all_targets: Vec<&str> = SYNTAX_CODECS
         .iter()
         .chain(PROJECTION_CODECS.iter())
@@ -416,6 +423,21 @@ pub fn transcode_loss_matrix_json() -> String {
             entries.extend_from_slice(ledger.entries());
         }
     }
+    entries.extend(shacl_json_schema_entries());
+    entries
+}
+
+/// The full transcode loss matrix as deterministic JSON.
+///
+/// Renders `transcode_and_shapes_entries` — every non-identity syntax/
+/// projection transcode pair PLUS the `("shacl", "json-schema")` shapes
+/// projection — sorted by `(from, to, code)` and rendered via `render`.
+/// Unlike a single [`LossLedger::contract`], codes are NOT assumed unique here
+/// — the same code recurs for different `(from, to)` pairs.
+///
+/// The rendered output is committed at `generated/transcode-loss-matrix.json`.
+pub fn transcode_loss_matrix_json() -> String {
+    let mut entries = transcode_and_shapes_entries();
 
     // Sort by (from, to, code) for full determinism.
     entries.sort_by(|a, b| {
@@ -431,12 +453,12 @@ pub fn transcode_loss_matrix_json() -> String {
 // ── Enumerable loss registry ─────────────────────────────────────────────────
 
 /// The SHACL → JSON Schema/OpenAPI shapes projection's closed loss profile:
-/// the exact `code`s `shapes::json_schema::Ctx::record`/the value-vocabulary
-/// `loss_entry` builders use (`crates/shapes/src/json_schema.rs`), all recorded
-/// via the shared runtime [`LossLedger`]. `sh:sparql` / `sh:expression`
-/// (SHACL-AF constraints), property-level `sh:not`, and a `rdfs:range` clash
-/// with a value-vocabulary projection are recorded via `Ctx::record`;
-/// `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
+/// each `(code, note)` pair `shapes::json_schema::Ctx::record`/the
+/// value-vocabulary `loss_entry` builders use (`crates/shapes/src/json_schema.rs`),
+/// all recorded via the shared runtime [`LossLedger`]. `sh:sparql` /
+/// `sh:expression` (SHACL-AF constraints), property-level `sh:not`, and a
+/// `rdfs:range` clash with a value-vocabulary projection are recorded via
+/// `Ctx::record`; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
 /// `crates/shapes/src/shapes.rs`) have no `$def` equivalent — the emitter has
 /// no class extension to key a `$def` by — and are excluded from the compiled
 /// schema, but (unlike a bare exclusion) each one records a `sh:SPARQLTarget`
@@ -444,16 +466,70 @@ pub fn transcode_loss_matrix_json() -> String {
 /// `value-vocabulary` covers an enum-with-no-members projection and
 /// `value-vocabulary member` a dropped blank-node enum member. Mirrored here
 /// (rather than depended-on from this crate) because `purrdf-core` never
-/// depends on the `shapes` crate.
-const SHACL_JSON_SCHEMA_PROFILE: &[&str] = &[
-    "rdfs:range",
-    "sh:SPARQLTarget",
-    "sh:expression",
-    "sh:not",
-    "sh:sparql",
-    "value-vocabulary",
-    "value-vocabulary member",
+/// depends on the `shapes` crate. The note text is behavioral (what is
+/// dropped and why), never an issue/PR reference or a minted IRI.
+const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
+    (
+        "rdfs:range",
+        "A predicate's rdfs:range names a value-vocabulary class that conflicts with (or is \
+         shadowed by) an explicit sh:class on the same property; the range-derived enum $ref is \
+         suppressed in favor of sh:class, and the conflict is recorded rather than silently \
+         dropped.",
+    ),
+    (
+        "sh:SPARQLTarget",
+        "A shape targeted only via SHACL-AF sh:target/sh:SPARQLTarget (an arbitrary SPARQL \
+         SELECT, not a class extension) has no closed-world JSON Schema equivalent; the shape is \
+         excluded from the compiled $defs.",
+    ),
+    (
+        "sh:expression",
+        "A SHACL-AF sh:expression node-expression constraint has no JSON Schema equivalent and is \
+         dropped.",
+    ),
+    (
+        "sh:not",
+        "A sh:not negation whose inner shape is not losslessly expressible as a JSON Schema \
+         negation (or that appears at property/value position, where negating a base value \
+         schema would be vacuous) is dropped rather than emitted unsoundly.",
+    ),
+    (
+        "sh:sparql",
+        "A SHACL-SPARQL constraint (sh:sparql) has no closed-world JSON Schema equivalent and is \
+         dropped.",
+    ),
+    (
+        "value-vocabulary",
+        "A value-vocabulary class projected to an enum $def has no seeded named-individual \
+         members to enumerate; the $def is emitted with an empty enum and the omission is \
+         recorded.",
+    ),
+    (
+        "value-vocabulary member",
+        "A value-vocabulary class's member is identified by a blank node rather than a named \
+         individual, so it has no stable CURIE to enumerate; the member is dropped from the \
+         projected enum.",
+    ),
 ];
+
+/// Build the runtime-shaped [`LossEntry`] rows for the
+/// `("shacl", "json-schema")` shapes profile from [`SHACL_JSON_SCHEMA_PROFILE`]
+/// — one contract entry per declared `(code, note)` pair, `location: None`
+/// (the registry enumerates the closed set of possible codes, not a specific
+/// occurrence).
+fn shacl_json_schema_entries() -> Vec<LossEntry> {
+    SHACL_JSON_SCHEMA_PROFILE
+        .iter()
+        .map(|&(code, note)| LossEntry {
+            code: Cow::Borrowed(code),
+            from: Cow::Borrowed("shacl"),
+            to: Cow::Borrowed("json-schema"),
+            intentional: true,
+            note: Cow::Borrowed(note),
+            location: None,
+        })
+        .collect()
+}
 
 /// Extract the `&'static str` payload of a **contract**-discipline
 /// [`LossEntry`] field (one built via [`Cow::Borrowed`]).
@@ -475,14 +551,16 @@ fn static_str(cow: &Cow<'static, str>) -> &'static str {
     }
 }
 
-/// The single source of truth backing [`registered_pairs`] and [`profile_for`]:
-/// every `(from, to)` pair this crate knows a loss profile for, mapped to the
-/// closed set of codes that pair's conversion may drop.
+/// The single source of truth backing [`registered_pairs`] and [`profile_for`]
+/// — and, via [`transcode_and_shapes_entries`], the same source
+/// [`transcode_loss_matrix_json`] renders — mapping every `(from, to)` pair
+/// this crate knows a loss profile for to the closed set of codes that pair's
+/// conversion may drop.
 ///
-/// Built from the RDF↔GTS direction ledgers, the full syntax/projection
-/// transcode matrix ([`pair_loss_ledger`] over `SYNTAX_CODECS` ×
-/// `(SYNTAX_CODECS ∪ PROJECTION_CODECS)`), and the non-syntax shapes pair
-/// `("shacl", "json-schema")` ([`SHACL_JSON_SCHEMA_PROFILE`]).
+/// Built from the RDF↔GTS direction ledgers plus
+/// [`transcode_and_shapes_entries`] (the full syntax/projection transcode
+/// matrix over `SYNTAX_CODECS` × `(SYNTAX_CODECS ∪ PROJECTION_CODECS)` AND the
+/// non-syntax shapes pair `("shacl", "json-schema")`).
 fn registry() -> BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> {
     let mut table: BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> = BTreeMap::new();
 
@@ -500,27 +578,9 @@ fn registry() -> BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> 
     for entry in gts_to_rdf_loss_ledger().entries() {
         record(&mut table, entry);
     }
-
-    let all_targets: Vec<&str> = SYNTAX_CODECS
-        .iter()
-        .chain(PROJECTION_CODECS.iter())
-        .copied()
-        .collect();
-    for &from in SYNTAX_CODECS {
-        for &to in &all_targets {
-            if from == to {
-                continue;
-            }
-            for entry in pair_loss_ledger(from, to).entries() {
-                record(&mut table, entry);
-            }
-        }
+    for entry in &transcode_and_shapes_entries() {
+        record(&mut table, entry);
     }
-
-    table.insert(
-        ("shacl", "json-schema"),
-        SHACL_JSON_SCHEMA_PROFILE.iter().copied().collect(),
-    );
 
     table
 }
@@ -692,6 +752,24 @@ fn render(entries: &[LossEntry], emit_location: bool) -> String {
     out
 }
 
+/// Wrap an already-sorted runtime ledger's [`render`] output (with locations)
+/// in the versioned envelope `{ "schema_version": 1, "losses": [ ... ] }` —
+/// the schema [`LossLedger::render_json`] exposes. `schema_version` is a plain
+/// integer bumped only on a breaking shape change to this envelope.
+fn render_versioned(entries: &[LossEntry]) -> String {
+    let array = render(entries, true);
+    let mut out = String::from("{\n  \"schema_version\": 1,\n  \"losses\": ");
+    for (i, line) in array.lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
+            out.push_str("  ");
+        }
+        out.push_str(line);
+    }
+    out.push_str("\n}\n");
+    out
+}
+
 /// Append `  "key": "value",\n` (or no trailing comma when `last`).
 fn push_field(out: &mut String, key: &str, value: &str, last: bool) {
     out.push_str("    \"");
@@ -740,9 +818,9 @@ mod tests {
     use std::path::PathBuf;
 
     /// The intentional loss codes this ledger is required to enumerate.
-    /// `direction-dropped` was retired by  (`Term.direction`) and
-    /// `multi-reifier-collapsed` by  (reifier-id-keyed
-    /// `Graph.reifiers`); both now round-trip losslessly.
+    /// `direction-dropped` was retired once `Term.direction` round-tripped
+    /// losslessly, and `multi-reifier-collapsed` once reifier-id-keyed
+    /// `Graph.reifiers` did the same; neither is an accepted loss any more.
     const EXPECTED_CODES: [&str; 2] = ["blob-bytes-absent", "bnode-scope-flatten"];
 
     fn matrix_codes() -> Vec<String> {
@@ -878,6 +956,26 @@ mod tests {
         );
     }
 
+    /// The transcode matrix is backed by the same enumerable registry as
+    /// [`profile_for`] (via [`transcode_and_shapes_entries`]), so it must
+    /// enumerate the non-syntax `("shacl", "json-schema")` shapes pair too —
+    /// not just the syntax/projection codec pairs.
+    #[test]
+    fn transcode_matrix_includes_shacl_json_schema_pair() {
+        let json = transcode_loss_matrix_json();
+        assert!(
+            json.contains("\"from\": \"shacl\""),
+            "transcode-loss-matrix.json must include the shacl->json-schema pair"
+        );
+        assert!(json.contains("\"to\": \"json-schema\""));
+        for (code, _) in SHACL_JSON_SCHEMA_PROFILE {
+            assert!(
+                json.contains(&format!("\"code\": \"{code}\"")),
+                "transcode-loss-matrix.json missing shapes-profile code `{code}`"
+            );
+        }
+    }
+
     #[test]
     fn pair_loss_identity_is_empty() {
         assert!(pair_loss_ledger("turtle", "turtle").is_empty());
@@ -966,6 +1064,24 @@ mod tests {
         assert!(
             registered_pairs().any(|(from, to)| from == "shacl" && to == "json-schema"),
             "registered_pairs() must include (\"shacl\", \"json-schema\")"
+        );
+    }
+
+    /// `registered_pairs()` must yield the SAME ordered sequence across two
+    /// independent calls (it is backed by a `BTreeMap`, so this is order, not
+    /// merely set-equality) — callers rendering it directly (e.g. a diagnostic
+    /// listing) must not observe run-to-run reordering.
+    #[test]
+    fn registered_pairs_order_is_stable_across_calls() {
+        let first: Vec<(&str, &str)> = registered_pairs().collect();
+        let second: Vec<(&str, &str)> = registered_pairs().collect();
+        assert_eq!(
+            first, second,
+            "registered_pairs() must return a stable, deterministic order"
+        );
+        assert!(
+            first.contains(&("shacl", "json-schema")),
+            "registered_pairs() must include (\"shacl\", \"json-schema\"): {first:?}"
         );
     }
 
