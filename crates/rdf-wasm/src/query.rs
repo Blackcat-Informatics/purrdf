@@ -492,14 +492,6 @@ fn serialize_graph_result(
     graph: &std::sync::Arc<purrdf::RdfDataset>,
     format: &str,
 ) -> Result<String, JsError> {
-    let normalized = format.trim().to_ascii_lowercase();
-    if matches!(
-        normalized.as_str(),
-        "jsonld" | "json-ld" | "application/ld+json"
-    ) {
-        return purrdf::native_codecs::jsonld::serialize_dataset_to_jsonld(graph)
-            .map_err(|e| diag_to_err(&e));
-    }
     let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
     let bytes = serialize_dataset(graph, media_type, SerializeGraph::Dataset)
         .map_err(|e| diag_to_err(&e))?;

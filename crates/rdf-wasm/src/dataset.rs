@@ -217,23 +217,12 @@ impl Dataset {
 
     /// `serialize(format)` → the dataset rendered in `format` (a UTF-8 string).
     ///
-    /// Formats: `turtle` / `ntriples` / `nquads` / `trig` / `rdfxml` (their media types
-    /// too) plus `jsonld` (JSON-LD-star). Note: a quoted-triple term appearing as a quad
-    /// object currently round-trips only through N-Quads (a serializer limitation for
-    /// the other text formats).
+    /// Formats: `turtle` / `ntriples` / `nquads` / `trig` / `rdfxml` / `jsonld`
+    /// (JSON-LD-star) / `yamlld` (YAML-LD-star), and their media types — all resolved
+    /// through the one core registry.
     #[wasm_bindgen(js_name = serialize)]
     pub fn serialize(&self, format: &str) -> Result<String, JsError> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        // JSON-LD rides the separate first-party codec path (it is not a
-        // `NativeRdfFormat`), so route it before the media-type resolution.
-        let normalized = format.trim().to_ascii_lowercase();
-        if matches!(
-            normalized.as_str(),
-            "jsonld" | "json-ld" | "application/ld+json"
-        ) {
-            return purrdf::native_codecs::jsonld::serialize_dataset_to_jsonld(&frozen)
-                .map_err(|e| diag_to_err(&e));
-        }
         let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
         let bytes = serialize_dataset(&frozen, media_type, SerializeGraph::Dataset)
             .map_err(|e| diag_to_err(&e))?;
@@ -407,6 +396,36 @@ mod tests {
     fn empty_dataset_has_zero_size() {
         let ds = Dataset::new().unwrap();
         assert_eq!(ds.size(), 0);
+    }
+
+    #[test]
+    fn jsonld_and_yamlld_round_trip_through_the_wasm_surface() {
+        // The wasm parse + serialize surface reaches JSON-LD and YAML-LD through the one
+        // unified resolver — no side-door, no special-case guard. (JsError is only
+        // constructed on the error path, which panics off-wasm, so a passing test never
+        // builds one.)
+        let nt = "<https://e/s> <https://e/p> <https://e/o> .\n";
+        let Ok(ds) = Dataset::parse(nt, "ntriples", None) else {
+            panic!("parse n-triples failed");
+        };
+        for fmt in [
+            "jsonld",
+            "application/ld+json",
+            "yamlld",
+            "application/ld+yaml",
+        ] {
+            let Ok(text) = ds.serialize(fmt) else {
+                panic!("serialize {fmt} failed");
+            };
+            let Ok(reparsed) = Dataset::parse(&text, fmt, None) else {
+                panic!("re-parse {fmt} failed");
+            };
+            assert_eq!(
+                reparsed.size(),
+                ds.size(),
+                "wasm round-trip via {fmt} preserves quad count"
+            );
+        }
     }
 
     #[test]
