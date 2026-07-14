@@ -564,6 +564,55 @@ mod tests {
     }
 
     #[test]
+    fn yamlld_adversarial_scalar_round_trips() {
+        // The "Norway problem": YAML's implicit-typing resolver reinterprets bare
+        // scalars like `true`, `no`, `~`, `1.0`, `0755`, or `2020-01-01` as
+        // bool/null/number/timestamp on re-parse unless the emitter quotes them.
+        // Every lexical form below is exactly one of those adversarial tokens; the
+        // round-trip bar is LOSSLESS (`assert_round_trips` requires isomorphism), so
+        // the JSON->YAML bridge must force-quote them rather than let serde_yaml's
+        // default resolver re-coerce the type.
+        let adversarial = [
+            "true",
+            "false",
+            "null",
+            "~",
+            "no",
+            "yes",
+            "on",
+            "off",
+            "1.0",
+            "0755",
+            "0x1A",
+            "1_000",
+            "",
+            "2020-01-01",
+        ];
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://e/s");
+        for (i, scalar) in adversarial.iter().enumerate() {
+            // The scalar as a plain literal — implied xsd:string (no datatype IRI).
+            let p_plain = b.intern_iri(&format!("https://e/plain{i}"));
+            let plain = b.intern_literal(RdfLiteral::simple(*scalar));
+            b.push_quad(s, p_plain, plain, None);
+
+            // The same scalar as an EXPLICIT (non-numeric, non-boolean) xsd:string
+            // typed literal — the lexical form must survive verbatim either way.
+            let p_typed = b.intern_iri(&format!("https://e/typed{i}"));
+            let typed = b.intern_literal(RdfLiteral::typed(
+                *scalar,
+                "http://www.w3.org/2001/XMLSchema#string",
+            ));
+            b.push_quad(s, p_typed, typed, None);
+        }
+        let ds = b.freeze().expect("freeze");
+        // JSON-LD as a control: JSON has no ambiguous bare-scalar resolver, so this
+        // must always pass and isolates any failure to the YAML bridge.
+        assert_round_trips(&ds, "application/ld+json");
+        assert_round_trips(&ds, "application/ld+yaml");
+    }
+
+    #[test]
     fn backend_parses_into_event_sink() {
         let mut sink = DatasetSink::new();
         GtsCodecBackend
