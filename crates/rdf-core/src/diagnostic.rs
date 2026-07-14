@@ -40,7 +40,12 @@ impl fmt::Display for RdfSeverity {
 }
 
 /// Concrete or logical location attached to an RDF diagnostic.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
+///
+/// Every field is `Ord` (plain `Option<String>`/`Option<u32>`/`Option<usize>`),
+/// so the struct derives a total order directly — the loss ledger relies on
+/// this to sort runtime entries deterministically without a separate
+/// `display()`-string comparison.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
 pub struct RdfLocation {
     /// The source file path (physical location anchor).
     pub path: Option<String>,
@@ -50,6 +55,11 @@ pub struct RdfLocation {
     pub column: Option<u32>,
     /// A logical (non-file) location label, e.g. an adapter or stage name.
     pub logical: Option<String>,
+    /// The subject the diagnostic concerns: a shape/term IRI, a blank-node id,
+    /// or a JSON pointer into a compiled artifact. Distinct from
+    /// [`logical`](Self::logical) (an adapter/stage label): this identifies
+    /// *what* was affected, not *where in the pipeline* it happened.
+    pub subject: Option<String>,
     /// The GTS term id the diagnostic refers to.
     pub gts_term_id: Option<usize>,
     /// The GTS quad index the diagnostic refers to.
@@ -96,6 +106,14 @@ impl RdfLocation {
         self
     }
 
+    /// Attaches a subject identifier: a shape/term IRI, a blank-node id, or a
+    /// JSON pointer into a compiled artifact.
+    #[must_use]
+    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
+        self
+    }
+
     /// Attaches the GTS term id the diagnostic refers to.
     #[must_use]
     pub fn with_gts_term(mut self, term_id: usize) -> Self {
@@ -137,6 +155,7 @@ impl RdfLocation {
             && self.line.is_none()
             && self.column.is_none()
             && self.logical.is_none()
+            && self.subject.is_none()
             && self.gts_term_id.is_none()
             && self.gts_quad_index.is_none()
             && self.gts_reifier_id.is_none()
@@ -176,6 +195,9 @@ impl RdfLocation {
         }
         if let Some(segment_index) = self.gts_segment_index {
             let _ = write!(out, " segment#{segment_index}");
+        }
+        if let Some(subject) = &self.subject {
+            let _ = write!(out, " subject={subject}");
         }
         out
     }

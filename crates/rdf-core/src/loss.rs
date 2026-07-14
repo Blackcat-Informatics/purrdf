@@ -14,6 +14,19 @@
 //! The ledger is kernel-clean (PyO3-free) and renders to byte-stable JSON sorted
 //! by code; the rendered matrix is committed at `generated/rdf-loss-matrix.json`
 //! and a drift gate in this module's tests re-derives and compares it.
+//!
+//! [`LossEntry`]/[`LossLedger`] serve two disciplines (see [`LossLedger::contract`]
+//! and [`LossLedger::record`]): a compile-time **contract** (the static ledgers
+//! and the transcode matrix in this module) and a runtime **record** (an actual
+//! conversion accumulating located losses as it runs). [`registered_pairs`] and
+//! [`profile_for`] enumerate the closed set of `(from, to)` pairs and loss codes
+//! known across BOTH disciplines, including the non-syntax `shacl`→`json-schema`
+//! shapes projection.
+
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::RdfLocation;
 
 /// In-band machine code: a `CONSTRUCT` whose `WHERE` bound an RDF-1.2 reifier (via
 /// an `rdf:reifies` triple pattern) but whose template drops that reifier — the
@@ -32,24 +45,39 @@ pub const LOSS_ANNOTATION_LAYER_DROPPED: &str = "annotation-layer-dropped";
 /// standpoint scope is lost. Emitted in addition to the annotation-layer code, never alone.
 pub const LOSS_STANDPOINT_SCOPE_DROPPED: &str = "standpoint-scope-dropped";
 
-/// One enumerated, intentional conversion loss between two representations.
+/// One enumerated conversion loss between two representations.
 ///
-/// Entries are `&'static` because the ledger is a compiled-in contract, not
-/// runtime data: every code is a stable, reviewed promise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Two construction disciplines share this type:
+///
+/// - **contract** (compile-time): built via [`LossLedger::contract`] from
+///   `&'static str` literals wrapped in [`Cow::Borrowed`] — zero-alloc. Every
+///   `code` in a contract ledger is unique (a duplicate panics at
+///   construction); this is the reviewed, stable promise rendered into the
+///   committed `generated/rdf-loss-matrix.json` / `generated/transcode-loss-matrix.json`
+///   artifacts.
+/// - **record** (runtime): built via [`LossLedger::record`] while an actual
+///   conversion runs, using owned (`Cow::Owned`) strings. Duplicates are
+///   expected — the same code can fire many times over one input — and each
+///   entry MAY carry a [`location`](Self::location) pinpointing where the loss
+///   occurred.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LossEntry {
     /// Stable machine code, kebab-case (e.g. `direction-dropped`).
-    pub code: &'static str,
+    pub code: Cow<'static, str>,
     /// Source representation (e.g. `"rdf-1.2-dataset"`).
-    pub from: &'static str,
+    pub from: Cow<'static, str>,
     /// Target representation (e.g. `"gts"`).
-    pub to: &'static str,
+    pub to: Cow<'static, str>,
     /// `true` = a known, accepted conversion loss (the only kind this ledger
     /// records). A `false` value would mark an *unintentional* loss, which the
     /// fidelity gate treats as a bug rather than a documented contract.
     pub intentional: bool,
     /// Human-readable explanation of what is dropped and why.
-    pub note: &'static str,
+    pub note: Cow<'static, str>,
+    /// Where the loss occurred, when known. `None` for every contract entry;
+    /// `record`-discipline entries MAY set this to pinpoint the shape/term/
+    /// subject the loss concerns.
+    pub location: Option<Box<RdfLocation>>,
 }
 
 /// An ordered, deterministic set of [`LossEntry`] for one conversion direction
@@ -63,13 +91,14 @@ pub struct LossLedger {
 }
 
 impl LossLedger {
-    /// Build a ledger from arbitrary entries, sorting by `code` for determinism.
+    /// Build a **contract** ledger from static entries, sorting by `code` for
+    /// determinism.
     ///
-    /// Panics on a duplicate `code`: the ledger is a compiled-in contract and a
-    /// collision is a programming error (hard-fail, per the no-optionality
-    /// doctrine), not a runtime condition to tolerate.
-    fn from_entries(mut entries: Vec<LossEntry>) -> Self {
-        entries.sort_by(|a, b| a.code.cmp(b.code));
+    /// Panics on a duplicate `code`: a contract ledger is a compiled-in
+    /// promise and a collision is a programming error (hard-fail, per the
+    /// no-optionality doctrine), not a runtime condition to tolerate.
+    pub fn contract(mut entries: Vec<LossEntry>) -> Self {
+        entries.sort_by(|a, b| a.code.cmp(&b.code));
         for pair in entries.windows(2) {
             assert_ne!(
                 pair[0].code, pair[1].code,
@@ -80,7 +109,27 @@ impl LossLedger {
         Self { entries }
     }
 
-    /// The ledger entries, sorted by `code`.
+    /// An empty **runtime** ledger, ready to accumulate losses via
+    /// [`Self::record`] as a conversion proceeds.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append a runtime loss entry.
+    ///
+    /// Unlike [`Self::contract`], duplicates are expected (the same code can
+    /// fire many times over one input) and are never rejected; ordering for
+    /// [`Self::render_json`] is computed at render time, not at insertion.
+    pub fn record(&mut self, entry: LossEntry) {
+        self.entries.push(entry);
+    }
+
+    /// The ledger entries.
+    ///
+    /// For a [`Self::contract`] ledger this is sorted by `code` (the
+    /// construction-time order). For a [`Self::record`]-built ledger this is
+    /// insertion order; use [`Self::render_json`] for the canonical
+    /// `(from, to, code, location)` sort.
     pub fn entries(&self) -> &[LossEntry] {
         &self.entries
     }
@@ -90,38 +139,53 @@ impl LossLedger {
         self.entries.is_empty()
     }
 
-    /// Render the ledger as deterministic JSON: a sorted-by-code array of
-    /// objects, 2-space indented, with a trailing newline.
+    /// Render the ledger as deterministic JSON: entries sorted by
+    /// `(from, to, code, location)`, 2-space indented, with a trailing
+    /// newline. A `location` field is emitted per entry when present.
     pub fn render_json(&self) -> String {
-        render_entries(&self.entries)
+        let mut sorted = self.entries.clone();
+        sorted.sort_by(|a, b| {
+            a.from
+                .cmp(&b.from)
+                .then_with(|| a.to.cmp(&b.to))
+                .then_with(|| a.code.cmp(&b.code))
+                .then_with(|| a.location.cmp(&b.location))
+        });
+        render(&sorted, true)
     }
 }
 
 /// The intentional losses incurred projecting the RDF 1.2 dataset IR → GTS.
 pub fn rdf_to_gts_loss_ledger() -> LossLedger {
-    LossLedger::from_entries(vec![LossEntry {
-        code: "blob-bytes-absent",
-        from: "rdf-1.2-dataset",
-        to: "gts",
+    LossLedger::contract(vec![LossEntry {
+        code: Cow::Borrowed("blob-bytes-absent"),
+        from: Cow::Borrowed("rdf-1.2-dataset"),
+        to: Cow::Borrowed("gts"),
         intentional: true,
-        note: "Blob payloads are preserved as content-addressed references (the blob_id digest \
-               plus the origin file id), never materialized into the RDF IR, which must stay \
-               value-light for arbitrarily large payloads (e.g. multi-terabyte data dumps). A \
-               destination GTS carries the reference; the payload bytes are streamed \
-               origin->destination on demand (deferred materialization).",
+        note: Cow::Borrowed(
+            "Blob payloads are preserved as content-addressed references (the blob_id digest \
+             plus the origin file id), never materialized into the RDF IR, which must stay \
+             value-light for arbitrarily large payloads (e.g. multi-terabyte data dumps). A \
+             destination GTS carries the reference; the payload bytes are streamed \
+             origin->destination on demand (deferred materialization).",
+        ),
+        location: None,
     }])
 }
 
 /// The intentional losses incurred reading GTS → the RDF 1.2 dataset IR.
 pub fn gts_to_rdf_loss_ledger() -> LossLedger {
-    LossLedger::from_entries(vec![LossEntry {
-        code: "bnode-scope-flatten",
-        from: "gts",
-        to: "rdf-1.2-dataset",
+    LossLedger::contract(vec![LossEntry {
+        code: Cow::Borrowed("bnode-scope-flatten"),
+        from: Cow::Borrowed("gts"),
+        to: Cow::Borrowed("rdf-1.2-dataset"),
         intentional: true,
-        note: "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing \
-               per-segment blank-node scope; the distinct scopes are recovered only via the \
-               streaming-event importer.",
+        note: Cow::Borrowed(
+            "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing \
+             per-segment blank-node scope; the distinct scopes are recovered only via the \
+             streaming-event importer.",
+        ),
+        location: None,
     }])
 }
 
@@ -131,7 +195,8 @@ pub fn loss_matrix_json() -> String {
     let mut entries: Vec<LossEntry> = Vec::new();
     entries.extend_from_slice(rdf_to_gts_loss_ledger().entries());
     entries.extend_from_slice(gts_to_rdf_loss_ledger().entries());
-    LossLedger::from_entries(entries).render_json()
+    let ledger = LossLedger::contract(entries);
+    render(ledger.entries(), false)
 }
 
 /// Syntax codecs: serialization formats that carry RDF triples/quads faithfully
@@ -232,110 +297,88 @@ pub fn pair_loss_ledger(from: &str, to: &str) -> LossLedger {
         return LossLedger::default();
     }
 
+    // Build a contract entry for this `(from, to)` pair from `&'static str`
+    // literals — zero-alloc, per the contract discipline (see [`LossEntry`]).
+    let entry = |code: &'static str, note: &'static str| LossEntry {
+        code: Cow::Borrowed(code),
+        from: Cow::Borrowed(from),
+        to: Cow::Borrowed(to),
+        intentional: true,
+        note: Cow::Borrowed(note),
+        location: None,
+    };
+
     let mut entries: Vec<LossEntry> = Vec::new();
 
     if is_projection(to) {
         if supports_quads(from) {
-            entries.push(LossEntry {
-                code: "named-graph-dropped",
-                from,
-                to,
-                intentional: true,
-                note: "The target syntax has no named-graph construct; quads are folded into the \
-                       default graph and graph names are dropped.",
-            });
+            entries.push(entry(
+                "named-graph-dropped",
+                "The target syntax has no named-graph construct; quads are folded into the \
+                 default graph and graph names are dropped.",
+            ));
         }
         let proj_entry = match to {
-            "owl-dl" => LossEntry {
-                code: "owl-dl-projection",
-                from,
-                to,
-                intentional: true,
-                note: "Projection to OWL 2 DL: rules and constructs outside the decidable DL \
-                       fragment are dropped; the result is a sound view.",
-            },
-            "owl-el" => LossEntry {
-                code: "owl-el-projection",
-                from,
-                to,
-                intentional: true,
-                note: "Projection to the OWL 2 EL profile: constructs outside EL are dropped; \
-                       the result is a sound, PTIME-decidable view.",
-            },
-            "datalog" => LossEntry {
-                code: "datalog-projection",
-                from,
-                to,
-                intentional: true,
-                note: "Projection to Datalog: non-rule axioms and existentials outside the \
-                       Datalog fragment are dropped.",
-            },
-            "n3" => LossEntry {
-                code: "n3-projection",
-                from,
-                to,
-                intentional: true,
-                note: "Projection to Notation3 rules: validation-only and non-rule constructs \
-                       are dropped.",
-            },
-            "nemo" => LossEntry {
-                code: "nemo-projection",
-                from,
-                to,
-                intentional: true,
-                note: "Projection to Nemo existential rules: constructs outside the supported \
-                       rule fragment are dropped.",
-            },
-            "gufo" => LossEntry {
-                code: "gufo-projection",
-                from,
-                to,
-                intentional: true,
-                note: "Projection to gUFO foundational classes: structure without a gUFO \
-                       correspondence is dropped.",
-            },
-            "canonical-rdf12" => LossEntry {
-                code: "canonical-rdf12-projection",
-                from,
-                to,
-                intentional: true,
-                note: "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure \
-                       is dropped.",
-            },
+            "owl-dl" => entry(
+                "owl-dl-projection",
+                "Projection to OWL 2 DL: rules and constructs outside the decidable DL \
+                 fragment are dropped; the result is a sound view.",
+            ),
+            "owl-el" => entry(
+                "owl-el-projection",
+                "Projection to the OWL 2 EL profile: constructs outside EL are dropped; \
+                 the result is a sound, PTIME-decidable view.",
+            ),
+            "datalog" => entry(
+                "datalog-projection",
+                "Projection to Datalog: non-rule axioms and existentials outside the \
+                 Datalog fragment are dropped.",
+            ),
+            "n3" => entry(
+                "n3-projection",
+                "Projection to Notation3 rules: validation-only and non-rule constructs \
+                 are dropped.",
+            ),
+            "nemo" => entry(
+                "nemo-projection",
+                "Projection to Nemo existential rules: constructs outside the supported \
+                 rule fragment are dropped.",
+            ),
+            "gufo" => entry(
+                "gufo-projection",
+                "Projection to gUFO foundational classes: structure without a gUFO \
+                 correspondence is dropped.",
+            ),
+            "canonical-rdf12" => entry(
+                "canonical-rdf12-projection",
+                "Projection to the canonical RDF-1.2 logic form: non-logic RDF structure \
+                 is dropped.",
+            ),
             _ => unreachable!("unhandled projection codec `{to}`"),
         };
         entries.push(proj_entry);
     } else {
         // to is a syntax codec
         if supports_quads(from) && !supports_quads(to) {
-            entries.push(LossEntry {
-                code: "named-graph-dropped",
-                from,
-                to,
-                intentional: true,
-                note: "The target syntax has no named-graph construct; quads are folded into the \
-                       default graph and graph names are dropped.",
-            });
+            entries.push(entry(
+                "named-graph-dropped",
+                "The target syntax has no named-graph construct; quads are folded into the \
+                 default graph and graph names are dropped.",
+            ));
         }
         if supports_stars(from) && !supports_stars(to) {
             let star_entry = match to {
-                "rdfxml" => LossEntry {
-                    code: "rdf12-star-unrepresentable",
-                    from,
-                    to,
-                    intentional: true,
-                    note: "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying \
-                           triples and their annotations are dropped.",
-                },
-                "jsonld" => LossEntry {
-                    code: "rdf12-star-jsonld-rejected",
-                    from,
-                    to,
-                    intentional: true,
-                    note: "The JSON-LD 1.1 serializer rejects RDF-1.2 quoted triples; reifying \
-                           triples and their annotations are dropped (use jsonld-star or \
-                           yaml-ld-star to retain them).",
-                },
+                "rdfxml" => entry(
+                    "rdf12-star-unrepresentable",
+                    "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying \
+                     triples and their annotations are dropped.",
+                ),
+                "jsonld" => entry(
+                    "rdf12-star-jsonld-rejected",
+                    "The JSON-LD 1.1 serializer rejects RDF-1.2 quoted triples; reifying \
+                     triples and their annotations are dropped (use jsonld-star or \
+                     yaml-ld-star to retain them).",
+                ),
                 _ => unreachable!(
                     "supports_stars(from)=true but supports_stars({to})=false for unhandled target"
                 ),
@@ -344,39 +387,16 @@ pub fn pair_loss_ledger(from: &str, to: &str) -> LossLedger {
         }
     }
 
-    LossLedger::from_entries(entries)
-}
-
-/// Render a slice of [`LossEntry`] values to deterministic JSON.
-///
-/// Unlike [`render_entries`] this function does NOT assume codes are unique —
-/// the transcode matrix can have the same code for different (from, to) pairs.
-/// Entries are rendered in the order supplied; callers must pre-sort.
-fn render_entries_sorted_by_pair(entries: &[LossEntry]) -> String {
-    let mut out = String::from("[\n");
-    for (i, entry) in entries.iter().enumerate() {
-        out.push_str("  {\n");
-        push_field(&mut out, "code", entry.code, false);
-        push_field(&mut out, "from", entry.from, false);
-        push_field(&mut out, "to", entry.to, false);
-        push_bool_field(&mut out, "intentional", entry.intentional);
-        push_field(&mut out, "note", entry.note, true);
-        out.push_str("  }");
-        if i + 1 < entries.len() {
-            out.push(',');
-        }
-        out.push('\n');
-    }
-    out.push_str("]\n");
-    out
+    LossLedger::contract(entries)
 }
 
 /// The full transcode loss matrix as deterministic JSON.
 ///
 /// Iterates all `(from ∈ SYNTAX_CODECS) × (to ∈ SYNTAX_CODECS ∪
 /// PROJECTION_CODECS)` pairs, skips identity pairs, collects every non-empty
-/// [`LossEntry`], sorts by `(from, to, code)`, and renders via
-/// `render_entries_sorted_by_pair`.
+/// [`LossEntry`], sorts by `(from, to, code)`, and renders via [`render`].
+/// Unlike a single [`LossLedger::contract`], codes are NOT assumed unique here
+/// — the same code recurs for different `(from, to)` pairs.
 ///
 /// The rendered output is committed at `generated/transcode-loss-matrix.json`.
 pub fn transcode_loss_matrix_json() -> String {
@@ -400,27 +420,151 @@ pub fn transcode_loss_matrix_json() -> String {
     // Sort by (from, to, code) for full determinism.
     entries.sort_by(|a, b| {
         a.from
-            .cmp(b.from)
-            .then(a.to.cmp(b.to))
-            .then(a.code.cmp(b.code))
+            .cmp(&b.from)
+            .then_with(|| a.to.cmp(&b.to))
+            .then_with(|| a.code.cmp(&b.code))
     });
 
-    render_entries_sorted_by_pair(&entries)
+    render(&entries, false)
 }
 
-/// Render a sorted slice of entries to deterministic JSON.
+// ── Enumerable loss registry ─────────────────────────────────────────────────
+
+/// The SHACL → JSON Schema/OpenAPI shapes projection's closed loss profile:
+/// the exact construct labels `shapes::json_schema::Ctx::record`/the
+/// value-vocabulary `LossRecord` builders use (`crates/shapes/src/json_schema.rs`).
+/// `sh:sparql` / `sh:expression` (SHACL-AF constraints), property-level
+/// `sh:not`, and a `rdfs:range` clash with a value-vocabulary projection are
+/// recorded via `Ctx::record`; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql`
+/// in `crates/shapes/src/shapes.rs`) have no `$def` equivalent and are excluded
+/// from the compiled schema entirely; `value-vocabulary` covers an
+/// enum-with-no-members projection and `value-vocabulary member` a dropped
+/// blank-node enum member. Mirrored here (rather than depended-on from this
+/// crate) because `purrdf-core` never depends on the `shapes` crate.
+const SHACL_JSON_SCHEMA_PROFILE: &[&str] = &[
+    "rdfs:range",
+    "sh:SPARQLTarget",
+    "sh:expression",
+    "sh:not",
+    "sh:sparql",
+    "value-vocabulary",
+    "value-vocabulary member",
+];
+
+/// Extract the `&'static str` payload of a **contract**-discipline
+/// [`LossEntry`] field (one built via [`Cow::Borrowed`]).
+///
+/// The registry only ever enumerates contract entries (the direction ledgers
+/// and [`pair_loss_ledger`]); a `Cow::Owned` reaching here would mean a
+/// runtime `record`-discipline entry leaked into the static registry, which is
+/// a programming error — hard-fail, per the no-optionality doctrine.
+///
+/// Takes `&Cow<'static, str>` rather than `&str` on purpose (this is NOT the
+/// usual over-indirection `clippy::ptr_arg` warns about): the whole point is
+/// to inspect which *variant* the caller built, which a plain `&str` cannot
+/// distinguish.
+#[allow(clippy::ptr_arg)]
+fn static_str(cow: &Cow<'static, str>) -> &'static str {
+    match cow {
+        Cow::Borrowed(s) => s,
+        Cow::Owned(_) => unreachable!("registry codes are always static contract literals"),
+    }
+}
+
+/// The single source of truth backing [`registered_pairs`] and [`profile_for`]:
+/// every `(from, to)` pair this crate knows a loss profile for, mapped to the
+/// closed set of codes that pair's conversion may drop.
+///
+/// Built from the RDF↔GTS direction ledgers, the full syntax/projection
+/// transcode matrix ([`pair_loss_ledger`] over `SYNTAX_CODECS` ×
+/// `(SYNTAX_CODECS ∪ PROJECTION_CODECS)`), and the non-syntax shapes pair
+/// `("shacl", "json-schema")` ([`SHACL_JSON_SCHEMA_PROFILE`]).
+fn registry() -> BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> {
+    let mut table: BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> = BTreeMap::new();
+
+    let record = |table: &mut BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>>,
+                  entry: &LossEntry| {
+        table
+            .entry((static_str(&entry.from), static_str(&entry.to)))
+            .or_default()
+            .insert(static_str(&entry.code));
+    };
+
+    for entry in rdf_to_gts_loss_ledger().entries() {
+        record(&mut table, entry);
+    }
+    for entry in gts_to_rdf_loss_ledger().entries() {
+        record(&mut table, entry);
+    }
+
+    let all_targets: Vec<&str> = SYNTAX_CODECS
+        .iter()
+        .chain(PROJECTION_CODECS.iter())
+        .copied()
+        .collect();
+    for &from in SYNTAX_CODECS {
+        for &to in &all_targets {
+            if from == to {
+                continue;
+            }
+            for entry in pair_loss_ledger(from, to).entries() {
+                record(&mut table, entry);
+            }
+        }
+    }
+
+    table.insert(
+        ("shacl", "json-schema"),
+        SHACL_JSON_SCHEMA_PROFILE.iter().copied().collect(),
+    );
+
+    table
+}
+
+/// Every `(from, to)` pair with a registered loss profile: the RDF↔GTS
+/// directions, every non-identity syntax/projection transcode pair, and the
+/// `("shacl", "json-schema")` shapes projection.
+pub fn registered_pairs() -> impl Iterator<Item = (&'static str, &'static str)> {
+    registry().into_keys()
+}
+
+/// The closed set of loss codes a `from -> to` conversion may drop, per the
+/// enumerable registry.
+///
+/// Empty when the pair is unregistered (an identity pair, or one this crate
+/// has no declared profile for) — never a panic, since callers may probe
+/// arbitrary pairs to check whether a profile is known.
+pub fn profile_for(from: &str, to: &str) -> BTreeSet<&'static str> {
+    registry()
+        .into_iter()
+        .find(|((f, t), _)| *f == from && *t == to)
+        .map(|(_, codes)| codes)
+        .unwrap_or_default()
+}
+
+/// Render already-sorted entries to deterministic JSON: 2-space indent, fixed
+/// field order, trailing newline.
 ///
 /// Hand-rolled to avoid pulling serde into the kernel rlib (the crate does not
-/// depend on it). Fields are emitted in a fixed order; strings are JSON-escaped.
-fn render_entries(entries: &[LossEntry]) -> String {
+/// depend on it). Codes are NOT assumed unique — callers sort first; this
+/// function only renders. `emit_location` gates the `location` field: the
+/// static-contract renders ([`loss_matrix_json`], [`transcode_loss_matrix_json`])
+/// pass `false` so the committed artifacts stay byte-identical (contract
+/// entries never carry a location anyway); [`LossLedger::render_json`] passes
+/// `true` so a runtime `record`-discipline location is visible.
+fn render(entries: &[LossEntry], emit_location: bool) -> String {
     let mut out = String::from("[\n");
     for (i, entry) in entries.iter().enumerate() {
         out.push_str("  {\n");
-        push_field(&mut out, "code", entry.code, false);
-        push_field(&mut out, "from", entry.from, false);
-        push_field(&mut out, "to", entry.to, false);
+        push_field(&mut out, "code", entry.code.as_ref(), false);
+        push_field(&mut out, "from", entry.from.as_ref(), false);
+        push_field(&mut out, "to", entry.to.as_ref(), false);
         push_bool_field(&mut out, "intentional", entry.intentional);
-        push_field(&mut out, "note", entry.note, true);
+        let location = emit_location.then_some(entry.location.as_deref()).flatten();
+        push_field(&mut out, "note", entry.note.as_ref(), location.is_none());
+        if let Some(location) = location {
+            push_field(&mut out, "location", &location.display(), true);
+        }
         out.push_str("  }");
         if i + 1 < entries.len() {
             out.push(',');
@@ -542,7 +686,8 @@ mod tests {
         assert!(!rdf_to_gts_loss_ledger().is_empty());
         assert!(!gts_to_rdf_loss_ledger().is_empty());
         assert!(LossLedger::default().is_empty());
-        assert!(LossLedger::from_entries(vec![]).is_empty());
+        assert!(LossLedger::contract(vec![]).is_empty());
+        assert!(LossLedger::new().is_empty());
     }
 
     #[test]
@@ -659,5 +804,69 @@ mod tests {
     #[should_panic(expected = "projection")]
     fn pair_loss_panics_on_projection_source() {
         let _ = pair_loss_ledger("owl-dl", "turtle");
+    }
+
+    #[test]
+    fn loss_matrix_json_is_deterministic_across_calls() {
+        assert_eq!(loss_matrix_json(), loss_matrix_json());
+    }
+
+    #[test]
+    fn runtime_ledger_records_owned_entries_with_location() {
+        let mut ledger = LossLedger::new();
+        assert!(ledger.is_empty());
+
+        ledger.record(LossEntry {
+            code: Cow::Owned("runtime-code-1".to_owned()),
+            from: Cow::Owned("some-runtime-from".to_owned()),
+            to: Cow::Owned("some-runtime-to".to_owned()),
+            intentional: true,
+            note: Cow::Owned("a runtime-recorded loss, owned end to end".to_owned()),
+            location: Some(Box::new(
+                RdfLocation::logical("shapes:compile").with_subject("ex:Cat"),
+            )),
+        });
+        assert!(!ledger.is_empty());
+
+        let rendered = ledger.render_json();
+        assert_eq!(
+            rendered,
+            ledger.render_json(),
+            "render_json must be deterministic"
+        );
+        assert!(
+            rendered.contains("\"location\":"),
+            "location field missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("subject=ex:Cat"),
+            "subject not present in rendered location: {rendered}"
+        );
+    }
+
+    #[test]
+    fn registered_pairs_includes_shacl_json_schema() {
+        assert!(
+            registered_pairs().any(|(from, to)| from == "shacl" && to == "json-schema"),
+            "registered_pairs() must include (\"shacl\", \"json-schema\")"
+        );
+    }
+
+    #[test]
+    fn profile_for_shacl_json_schema_includes_sparql() {
+        let profile = profile_for("shacl", "json-schema");
+        assert!(
+            profile.contains("sh:sparql"),
+            "profile_for(\"shacl\", \"json-schema\") missing sh:sparql: {profile:?}"
+        );
+    }
+
+    #[test]
+    fn profile_for_trig_turtle_includes_named_graph_dropped() {
+        let profile = profile_for("trig", "turtle");
+        assert!(
+            profile.contains("named-graph-dropped"),
+            "profile_for(\"trig\", \"turtle\") missing named-graph-dropped: {profile:?}"
+        );
     }
 }
