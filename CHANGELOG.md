@@ -4,134 +4,166 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
-## [0.5.0] - 2026-07-11
+## [0.6.0] - 2026-07-14
 
-### Breaking Changes
+### Bug Fixes
 
-- **npm/wasm SELECT rows are now single-owner streams.** `SelectResult.rows` is
-  a `QueryBindingRows` iterable rather than an array. This prevents the raw wasm
-  layer from cloning every row and term before the package wrapper materializes
-  them. Consume an indexed row with `result.rows.take(index)`, iterate remaining
-  rows with `for...of`, or explicitly materialize them with
-  `result.rows.toArray()`. Each row can be consumed once. `rows.length` and
-  `result.rowCount` are the original total; `rows.remaining` is the unconsumed
-  count. Call `result.free()` when abandoning unconsumed rows.
-- **The raw wasm cloning getter was removed.** Replace `raw.rows` with
-  `raw.rowCount`, `raw.takeRow(index)`, or `raw.nextRow()`. Move cells from a raw
-  row with `row.takeValue(index)`; the non-consuming `row.get(variable)` remains
-  available when cloning one individual term is intentional.
+- **gts:** Keep original authorship signatures bound across repacks
+- **rdf:** Fail closed instead of panicking when verifying poison packs
+- **rdf:** Anchor compaction projection to the provenance predicate vocabulary
+- **gts:** Make the packaging signature a required compaction parameter
+- **paged:** Enforce G3 quad-disjointness across the side tables
+- **core:** Unify the pack dictionary to one id per term value for DatasetView compatibility
+- **core:** Reject a literal datatype id that does not reference an IRI in the pack decoder
+- **core:** Fail closed in verify_pack when a reconstructed dataset is structurally invalid
+- **core:** Fail closed on FoQ index count-sum overflow in the pack decoder
+- **shapes:** Sh:in enum members match the instance projector encoding
+- **sparql-eval:** Make the fork-join parallel-safety gate registry-aware
+- **gts:** Hard-fail the event bridge on a dangling term reference
+- **gts:** Fire StreamingSink::frame before a frame's rows
 
-Before:
+### Documentation
 
-```js
-const result = engine.select(dataset, query);
-const first = result.rows[0];
-const allRows = result.rows;
-```
+- **design:** Author the PurRDF backend contract (C-clauses + paged G-clauses)
+- **paged:** Fix rustdoc intra-doc link errors denied by the doc gate
+- **core:** Document the pack backend + add the pack_query criterion bench
+- **gts:** Fix rustdoc private-intra-doc-link errors denied by the doc gate
+- **shapes:** Document the value-vocabulary enum projection
+- **gts,rdf:** Demote private intra-doc links to code spans for the doc gate
+- **sparql-eval:** Fix private intra-doc link denied by the doc gate
+- **sparql-eval:** Broaden user_fn module doc to both function kinds
+- **gts,rdf:** Demote private intra-doc links denied by the workspace doc gate
+- **sparql-eval:** Drop plan-id process-flow refs from native-fn tests
+- **core:** Describe the pack module by behavior, dropping plan task refs
+- **core:** Reword residual plan-task phrasing in pack module docs
+- **gts:** Add the §7.7 streaming-fold cross-reference and repair the rustdoc doc gate
+- **gts:** Correct GtsEventSink provenance-ordering doc after the frame fix
+- **gts:** Drop public-to-private intra-doc links tripping the doc gate
 
-After:
+### Features
 
-```js
-const result = engine.select(dataset, query);
-const first = result.rows.take(0);
-const remainingRows = result.rows.toArray();
+- **gts:** Deterministic in-band pack dictionaries for the zstd dct codec
+- **gts:** In-band zstd dct codec with finalized pack dictionaries
+- **gts:** Train and pin an in-band pack dictionary in streamable compaction
+- **gts:** Bind detached signatures under an MMR root with a packaging head sig
+- **rdf:** CompactionCertificate and verify_compaction refold-equivalence API
+- **rdf:** Witness the suppression-compaction commuting square on both digests
+- **gts:** Compress compaction blobs against the pinned in-band dict
+- **core:** Make DatasetView an unsealed, id-agnostic read seam
+- **core:** Add GlobalTermId + GlobalDictionary u64 identity layer
+- **core:** Add PagedDataset — id-agnostic demand-paged DatasetView over a u64 dictionary
+- **sparql-eval:** Generify the evaluator over D: DatasetView
+- **sparql-eval:** Make the binding layer id-generic over D::Id
+- **core:** Add freeze-refusal + deterministic compaction to PagedDataset
+- **paged:** Add from_parts warm-restart constructor for PagedDataset
+- **core:** Id-agnostic DatasetView seam + paged u64 backend served by the evaluator
+- **gts:** Certified signature-preserving compaction with in-band dict codec
+- **core:** Succinct rank/select + bit-packed IntVector primitives for the pack codec
+- **core:** Four-section PFC value dictionary for the pack codec
+- **core:** Graph-partitioned succinct bitmap-triples with FoQ all-pattern indexes
+- **core:** RDF 1.2 reifier + annotation side-tables for the pack codec
+- **core:** Deterministic pack container framing + zero-copy PackView reader
+- **core:** Implement DatasetView for PackView (PackId, all-pattern query seam)
+- **core:** Certified read-only projection — verify_pack recomputes the RDFC-1.0 digest
+- **shapes:** Project value vocabularies to enum $defs (projection-only)
+- **shapes:** Resolve sh:class / rdfs:range value-vocab refs to enum $defs
+- **sparql-eval:** Native Rust-closure user-function registry + dispatch
+- **sparql-eval:** Native Rust-closure user-function registry
+- **shapes:** Project value vocabularies to enum $defs (projection-only)
+- **gts:** Two-inventory replication diff, splice reconstruction, and diff_json
+- **gts:** Surface per-frame provenance (content-id + byte range) on the streaming read path
+- **gts:** Stream GTS frames into an RdfEventSink with per-frame provenance
+- **gts:** Two-inventory diff/splice fetch-list + streaming RdfEventSink bridge on a shared decode core
+- **core:** Read-only succinct HDTQ-style pack codec as a DatasetView backend
 
-// For bounded-memory processing, stream instead:
-for (const row of engine.select(dataset, query).rows) {
-  consume(row);
-}
-```
+### Other
 
-Python query-result classes and the C ABI function signatures are unchanged.
+- **shapes:** Apply rustfmt to json_schema.rs
+- **sparql-eval:** Rustfmt the native-scorer test helper
 
 ### Performance
 
-- **Core IR:** the common provenance-free freeze path sorts quads directly;
-  provenance remapping uses a dense vector; interners use fixed-key `ahash`; and
-  borrowed IRI, blank, literal, and structural triple lookup avoids temporary
-  `TermValue` trees. On the deterministic 3,200-quad fixture, allocated bytes
-  fell from 1,312,246 to 1,211,366 (7.7%) and peak live bytes from 471,104 to
-  415,296 (11.8%).
-- **SPARQL and XSD:** parser tokens move out of the cursor, whitespace and fixed
-  temporal fields avoid intermediate collections, DISTINCT/GROUP BY own keys
-  and rows once, and graph-result serialization writes ID-native terms directly
-  to the output buffer.
-- **Reasoning:** SPARQL, entailment, and OWL concept interners store canonical
-  values once. RIF joins use subject/predicate/object postings, choose the
-  smallest available candidate set, and backtrack one reusable binding buffer.
-- **SHACL and ShEx:** deterministic term sorting renders one key per value, and
-  ShEx structural expressions and predicate-direction maps compile once per
-  validation engine rather than once per focus node.
-- **GTS:** canonical CBOR map keys are sorted by borrowed encoded keys and values
-  stream directly to writers and BLAKE3. On the deterministic 2,000-quad
-  snapshot, allocations fell from 32,040 to 14,027 (56.2%) and allocated bytes
-  from 2,277,740 to 982,840 (56.8%).
-- **Visualization and slices:** incoming statement references are counted in one
-  pass. Slice ownership parses each RDF artifact once, walks ID-native terms once,
-  and reuses the catalog's parsed manifest projection.
-- **Bindings:** Python moves SELECT rows while sharing one immutable variable
-  array; wasm moves rows, cells, strings, and nested triple terms; C pattern
-  cursors no longer allocate a result-sized `Vec<QuadIds>`.
+- **paged:** Fold the G3 seal probe into a single map insert
+- **paged:** Stream the paged read path instead of collecting a Vec
+- **shapes:** Scan rdfs:range once per dataset for value-vocab $ref mapping
+- **shapes:** Compute first_literal via single-pass running minimum
+- **sparql-eval:** Lend native-fn args as &[&TermValue], drop per-call deep clone
+- **gts:** Drop the streaming bridge's iri_map at each segment close
+- **gts:** Hash the streaming decode maps with the fixed-key ahash policy
 
-### Rust API
+### Refactor
 
-- Added `RdfDataset::quads_for_pattern_cursor` and `QuadPatternCursor`, an
-  `Arc`-pinned owned iterator over the same selected quad index and residual
-  filter used by borrowed pattern queries. It remains valid after other dataset
-  handles are dropped and does not collect matching rows.
-- Added borrowed dataset term writers and borrowed term lookup methods for
-  allocation-sensitive crate consumers.
+- **shapes:** Panic! directly for value-vocab enum-key twin guard
+- **gts:** Hoist ByteRange to a shared model type and record FrameInventory.prev
+- **gts:** Extract shared per-segment decode core and subsume the GTS import sink onto it
+- **gts:** Bound the streaming decode core to one segment's memory
 
-### Compatibility
+### Testing
 
-- RDF, SPARQL, SHACL, ShEx, visualization, and GTS semantic ordering remains
-  deterministic. Graph serialization is byte-equal to the prior owned path, and
-  every frozen GTS item re-encodes byte-for-byte.
-- The optimization evidence above uses allocation counters, exact bytes, and
-  bounded candidate-work assertions. No wall-clock claim is made from the shared
-  high-contention development host.
+- **gts:** Freeze in-band dict-compaction vectors with drift guards and docs
+- **rdf:** Exercise the pack/tail seam chain across the boundary
+- **gts:** Re-freeze the streamable-compacted vector to the current format
+- **gts:** Assert the streamable-compacted pack pins no dct header entry
+- **sparql-eval:** Prove SPARQL served directly over a multi-page PagedDataset
+- **paged:** Cover property paths, aggregates, and subqueries on the paged backend
+- **core:** Demonstrate mmap-able zero-copy PackView over a memory-mapped file
+- **sparql-eval:** SPARQL-over-pack end-to-end parity with RdfDataset
+- **shapes:** Prove value-vocab enum round-trip and open-validator decoupling
+- **shapes:** Cover value-vocab class-key clash guard and multi-range tiebreak
+- **sparql-eval:** Native scorer push-down + determinism (FILTER/ORDER BY/NaN/parallel)
+- **gts:** Assert the streaming decode core's memory is bounded per segment
+- **rdf:** Actually exercise GTS base-direction preservation on the sink path
+
+## [0.5.0] - 2026-07-12
+
+### Bug Fixes
+
+- **shapes:** Key JSON-Schema $defs resolution set by def_key so cross-namespace local-name twins never dangle a $ref
+- **wasm:** Free empty SELECT result handle without iteration
+- **serialize:** Emit RDF 1.2 triple terms as non-asserting <<>>
+
+### Documentation
+
+- **conformance:** Record expanded Python parity suite
+- **shapes:** Correct resolve_id doc to match variant-specific lookup
+
+### Other
+
+- Optimize Rust ownership and hot paths for 0.5.0
+
+### Performance
+
+- **core:** Remove owned lookup and freeze overhead
+- **query:** Move parser tokens and stream results
+- **reasoning:** Store terms once and index RIF joins
+- **validation:** Cache sort keys and compile ShEx once
+- **gts:** Stream deterministic CBOR without value clones
+- **viz:** Linearize projection and ownership analysis
+- **bindings:** Stream result ownership across FFI
+- **reasoning:** Reuse RIF chase frontier index across fixpoint iterations
+- **query:** Bound parser reparse fork to the braced block
+
+### Testing
+
+- **bench:** Cover SPARQL graph serialization and DISTINCT allocation paths
+- **bench:** Cover SHACL canonical sort and ShEx prepared-shape paths
 
 ## [0.4.3] - 2026-07-10
 
 ### Bug Fixes
 
-- **rdf:** Complete deterministic viz semantics
-- **rdf:** Make RDF visualization graph-readable
-- **rdf:** Refine visualization routing and labels
-- **rdf:** Make dense visualization routes traceable
-- **wasm:** Accept npm 12 pack output
-- **rdf:** Address visualization review findings
+- **ci:** Serialize SPARQL conformance tallies
 
-### Documentation
+### Other
 
-- **rdf:** Qualify visualization projection link
-
-### Features
-
-- **rdf:** Add statement incidence viz projection
-- **rdf:** Add renderer-neutral viz scenes
-- **rdf:** Add deterministic layered viz layout
-- **rdf:** Emit semantic RDF 1.2 SVG
-- **wasm:** Expose RDF visualization exports
-- **rdf:** Publish generated visualization samples
-
-### Performance
-
-- **rdf:** Reuse visualization projection scratch state
+- Add semantic RDF 1.2 visualization exports
 
 ## [0.4.2] - 2026-07-10
-
-### Bug Fixes
-
-- Refresh lockfile for RIF parser
-
-### Features
-
-- Expose entailed SPARQL and RIF parsing
 
 ### Other
 
 - Harden npm wasm RDF 1.2 toolkit
+- Expose entailed SPARQL and RIF parsing
 
 ## [0.4.1] - 2026-07-09
 
@@ -661,3 +693,5 @@ Python query-result classes and the C ABI function signatures are unchanged.
 ### Other
 
 - First commit
+
+
