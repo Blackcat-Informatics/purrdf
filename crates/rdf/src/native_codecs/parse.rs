@@ -154,7 +154,7 @@ pub fn parse_dataset_with(
 
     let format = classify(media_type)?;
 
-    if super::codec::codec_for(format).tokenizer_carries_spans() {
+    if format.tokenizer_carries_spans() {
         // Line/Turtle family: UTF-8 is only required by the text tokenizer, so validate
         // it here where the span-carrying pipeline consumes it.
         let text = std::str::from_utf8(bytes)

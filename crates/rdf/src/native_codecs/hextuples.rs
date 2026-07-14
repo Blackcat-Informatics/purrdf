@@ -36,14 +36,6 @@ use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral
 pub(super) struct HexTuplesCodec;
 
 impl RdfCodec for HexTuplesCodec {
-    fn carries_star(&self) -> bool {
-        false
-    }
-
-    fn tokenizer_carries_spans(&self) -> bool {
-        false
-    }
-
     fn parse(
         &self,
         text: &str,

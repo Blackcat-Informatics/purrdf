@@ -28,22 +28,13 @@ use super::span::NoSpans;
 use super::text_parse::LineParseMode;
 use crate::{RdfDataset, RdfDiagnostic};
 
-/// One RDF text format's parse + serialize behavior, plus the two capability predicates
-/// the dispatch sites branch on. Object-safe so [`codec_for`] can hand back a
-/// `&'static dyn RdfCodec` — a COLD dispatch boundary (the media-type router), never the
-/// tokenizer hot loop, so the one indirect call it adds is not on any measured path.
+/// One RDF text format's parse + serialize behavior. Object-safe so [`codec_for`] can
+/// hand back a `&'static dyn RdfCodec` — a COLD dispatch boundary (the media-type
+/// router), never the tokenizer hot loop, so the one indirect call it adds is not on any
+/// measured path. The DATA capability predicates (`carries_star` /
+/// `tokenizer_carries_spans` / `supports_datasets`) live on [`NativeRdfFormat`] itself,
+/// backed by the [`FORMATS`](super::media_type::FORMATS) table, not on this behavior seam.
 pub(super) trait RdfCodec {
-    /// Whether this format carries the RDF-1.2 statement layer (quoted-triple reifiers +
-    /// annotations) under the transcode loss contract. Star-capable formats emit it;
-    /// star-incapable formats drop it as declared loss. Kept aligned with the loss
-    /// ledger (`crates/rdf-core/src/loss.rs`).
-    fn carries_star(&self) -> bool;
-
-    /// Whether this format's parser can record per-statement source spans. Only the
-    /// line/Turtle-family text tokenizer does; the others return an empty span table
-    /// (physical-location fallback by design).
-    fn tokenizer_carries_spans(&self) -> bool;
-
     /// Parse `text` into the frozen IR on the hot (span-free) path. `mode` is honored
     /// only by [`LineCodec`] (the N-Triples/N-Quads chunk-parallel toggle); the
     /// standalone codecs ignore it. Every implementor is panic-guarded, matching the
@@ -65,16 +56,6 @@ pub(super) trait RdfCodec {
 pub(super) struct LineCodec(pub(super) NativeRdfFormat);
 
 impl RdfCodec for LineCodec {
-    fn carries_star(&self) -> bool {
-        // Every format `LineCodec` wraps (Turtle / N-Triples / N-Quads / TriG) is
-        // star-capable; the standalone codecs are the star-incapable ones.
-        true
-    }
-
-    fn tokenizer_carries_spans(&self) -> bool {
-        true
-    }
-
     fn parse(
         &self,
         text: &str,

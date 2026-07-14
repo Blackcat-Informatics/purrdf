@@ -124,7 +124,7 @@ pub fn serialize_dataset_to_format(
     _base_iri: Option<&str>,
 ) -> Result<SerializeOutcome, RdfDiagnostic> {
     let media_type = format.media_type();
-    if super::codec::codec_for(format).carries_star() {
+    if format.carries_star() {
         let bytes = serialize_dataset(dataset, media_type, SerializeGraph::Dataset)?;
         Ok(SerializeOutcome {
             bytes,
