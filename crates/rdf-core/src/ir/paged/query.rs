@@ -9,7 +9,7 @@
 //! publish any internally-computed rows as a complete result.
 
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 
 use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, FallibleDatasetView, GraphMatch, ViewOperationStatus};
@@ -262,11 +262,28 @@ pub struct PagedQueryView<'dataset> {
 
 impl std::fmt::Debug for PagedQueryView<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PagedQueryView")
+        let mut debug = f.debug_struct("PagedQueryView");
+        debug
             .field("dataset", &self.dataset)
-            .field("limits", &self.limits)
-            .field("status", &self.operation_status())
-            .finish_non_exhaustive()
+            .field("limits", &self.limits);
+        match self.state.try_lock() {
+            Ok(state) => {
+                debug
+                    .field("evidence", &state.evidence)
+                    .field("error", &state.error);
+            }
+            Err(TryLockError::WouldBlock) => {
+                debug.field("state", &"<locked>");
+            }
+            Err(TryLockError::Poisoned(error)) => {
+                let state = error.into_inner();
+                debug
+                    .field("evidence", &state.evidence)
+                    .field("error", &state.error)
+                    .field("state_poisoned", &true);
+            }
+        }
+        debug.finish_non_exhaustive()
     }
 }
 
@@ -683,5 +700,87 @@ impl DatasetView for PagedQueryView<'_> {
                     })
                 })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    use crate::ir::RdfDatasetBuilder;
+
+    use super::super::PageProvider;
+    use super::*;
+
+    struct MutableGenerationProvider {
+        page: Arc<RdfDataset>,
+        generation: AtomicU64,
+        generation_reads: AtomicUsize,
+    }
+
+    impl PageProvider for MutableGenerationProvider {
+        fn page_count(&self) -> usize {
+            1
+        }
+
+        fn generation(&self) -> PageGeneration {
+            self.generation_reads.fetch_add(1, Ordering::Relaxed);
+            PageGeneration(self.generation.load(Ordering::Relaxed))
+        }
+
+        fn materialize(&self, _page: PageId) -> Result<PageMaterialization, PageFault> {
+            Ok(PageMaterialization::new(
+                self.page.clone(),
+                PageGeneration(self.generation.load(Ordering::Relaxed)),
+                11,
+            ))
+        }
+    }
+
+    fn page() -> Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/s");
+        let predicate = builder.intern_iri("http://example.org/p");
+        let object = builder.intern_iri("http://example.org/o");
+        builder.push_quad(subject, predicate, object, None);
+        builder.freeze().expect("valid test page")
+    }
+
+    #[test]
+    fn debug_is_non_blocking_and_has_no_operational_side_effects() {
+        let provider = Arc::new(MutableGenerationProvider {
+            page: page(),
+            generation: AtomicU64::new(1),
+            generation_reads: AtomicUsize::new(0),
+        });
+        let paged = PagedDataset::from_provider(provider.clone()).expect("seal generation one");
+        let generation_reads_after_seal = provider.generation_reads.load(Ordering::Relaxed);
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+
+        let state = view.state();
+        let locked_debug = format!("{view:?}");
+        assert!(locked_debug.contains("<locked>"));
+        drop(state);
+        assert_eq!(
+            provider.generation_reads.load(Ordering::Relaxed),
+            generation_reads_after_seal,
+            "formatting while locked must not query the provider"
+        );
+
+        provider.generation.store(2, Ordering::Relaxed);
+        let unlocked_debug = format!("{view:?}");
+        assert!(unlocked_debug.contains("evidence"));
+        assert!(unlocked_debug.contains("error: None"));
+        assert_eq!(
+            provider.generation_reads.load(Ordering::Relaxed),
+            generation_reads_after_seal,
+            "formatting while unlocked must not query the provider"
+        );
+
+        provider.generation.store(1, Ordering::Relaxed);
+        assert!(matches!(
+            view.operation_status(),
+            ViewOperationStatus::Ready { .. }
+        ));
     }
 }
