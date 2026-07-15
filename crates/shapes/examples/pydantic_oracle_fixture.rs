@@ -59,6 +59,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                         "minLength": 2
                     },
                     "ex:name": { "type": "string", "minLength": 1 },
+                    "ex:nullableCount": {
+                        "type": ["integer", "null"],
+                        "minimum": 0
+                    },
+                    "ex:nullableName": {
+                        "type": ["string", "null"],
+                        "minLength": 2,
+                        "pattern": "^[A-Z]"
+                    },
+                    "ex:nullableTags": {
+                        "type": ["array", "null"],
+                        "items": { "type": "string" },
+                        "minItems": 1
+                    },
                     "ex:path": { "$ref": "#/$defs/path~1with~0token" },
                     "ex:score": { "type": "number", "minimum": 0, "maximum": 1 },
                     "ex:tags": {

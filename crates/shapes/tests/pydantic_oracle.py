@@ -196,6 +196,9 @@ def main() -> None:
                 "ex:color": "ex:red",
                 "ex:label": "Al",
                 "ex:name": "Alice",
+                "ex:nullableCount": 2,
+                "ex:nullableName": "Name",
+                "ex:nullableTags": ["one"],
                 "ex:path": "mapped:value",
                 "ex:score": 0.75,
                 "ex:tags": ["one", "two"],
@@ -205,8 +208,38 @@ def main() -> None:
             dumped = person.model_dump(mode="json", by_alias=True, exclude_none=True)
             assert dumped == person_payload
 
+            nullable_payload = dict(person_payload)
+            nullable_payload.update(
+                {
+                    "ex:nullableCount": None,
+                    "ex:nullableName": None,
+                    "ex:nullableTags": None,
+                }
+            )
+            nullable_person = models.Person.model_validate(nullable_payload)
+            nullable_dump = nullable_person.model_dump(mode="json", by_alias=True)
+            assert nullable_dump["ex:nullableCount"] is None
+            assert nullable_dump["ex:nullableName"] is None
+            assert nullable_dump["ex:nullableTags"] is None
+
             _assert_rejects(models.Person, {"ex:age": -1, "ex:name": "Alice"})
             _assert_rejects(models.Person, {"ex:age": 1, "ex:name": ""})
+            _assert_rejects(
+                models.Person,
+                {"ex:age": 1, "ex:name": "Alice", "ex:nullableCount": -1},
+            )
+            _assert_rejects(
+                models.Person,
+                {"ex:age": 1, "ex:name": "Alice", "ex:nullableName": "n"},
+            )
+            _assert_rejects(
+                models.Person,
+                {"ex:age": 1, "ex:name": "Alice", "ex:nullableTags": []},
+            )
+            _assert_rejects(
+                models.Person,
+                {"ex:age": 1, "ex:name": "Alice", "ex:when": 0},
+            )
             _assert_rejects(
                 models.Person,
                 {"ex:age": 1, "ex:name": "Alice", "ex:path": "wrong"},

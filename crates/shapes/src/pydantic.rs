@@ -553,7 +553,10 @@ impl<'a> Renderer<'a> {
                     let kind = kind.as_str().ok_or_else(|| {
                         PydanticError::new(format!("{path}/type/{index} must be a string"))
                     })?;
-                    resolved.push(self.resolve_type_name(kind, object, path)?);
+                    let mut branch = object.clone();
+                    branch.insert("type".to_owned(), Value::String(kind.to_owned()));
+                    let base = self.resolve_type_name(kind, &branch, path)?;
+                    resolved.push(apply_constraints(base, &branch));
                 }
                 Ok(join_union(resolved))
             }
@@ -575,9 +578,9 @@ impl<'a> Renderer<'a> {
             "integer" => Ok("StrictInt".to_owned()),
             "number" => Ok("StrictFloat | StrictInt".to_owned()),
             "string" => Ok(match object.get("format").and_then(Value::as_str) {
-                Some("date-time") => "datetime".to_owned(),
-                Some("date") => "date".to_owned(),
-                Some("time") => "time".to_owned(),
+                Some("date-time") => temporal_type("datetime"),
+                Some("date") => temporal_type("date"),
+                Some("time") => temporal_type("time"),
                 _ => "StrictStr".to_owned(),
             }),
             "array" => {
@@ -856,17 +859,34 @@ impl<'a> Renderer<'a> {
                 ),
             );
         }
+        if is_temporal_format(object) {
+            for keyword in ["minLength", "maxLength", "pattern"] {
+                if object.contains_key(keyword) {
+                    self.record(
+                        "keyword-validation-dropped",
+                        &format!("{path}/{keyword}"),
+                        "A JSON Schema lexical string assertion cannot run after the generated \
+                         Pydantic temporal parser; the exact assertion remains on \
+                         model_json_schema()",
+                    );
+                }
+            }
+        }
         if has_runtime_constraints(object) {
             let type_is_union = object.get("type").is_some_and(Value::is_array);
             let constraints_are_distributed =
                 object.contains_key("anyOf") || object.contains_key("oneOf");
             let type_is_missing = !object.contains_key("type");
-            if type_is_union || (type_is_missing && !constraints_are_distributed) {
+            let union_is_shadowed = type_is_union
+                && ["$ref", "enum", "const"]
+                    .iter()
+                    .any(|keyword| object.contains_key(*keyword));
+            if union_is_shadowed || (type_is_missing && !constraints_are_distributed) {
                 self.record(
                     "keyword-validation-dropped",
                     path,
                     "Type-conditional JSON Schema assertions cannot be attached safely to this \
-                     untyped or multi-type Pydantic carrier; they remain on \
+                     untyped or shadowed multi-type Pydantic carrier; they remain on \
                      model_json_schema()",
                 );
             }
@@ -962,12 +982,18 @@ impl<'a> Renderer<'a> {
         out.push_str("from enum import StrEnum\n");
         out.push_str("from typing import Annotated, Any, ClassVar, ForwardRef, Literal, Never\n\n");
         out.push_str("from pydantic import (\n");
-        out.push_str("    ConfigDict,\n    Field,\n    RootModel,\n");
+        out.push_str("    BeforeValidator,\n    ConfigDict,\n    Field,\n    RootModel,\n");
         out.push_str("    StrictBool,\n    StrictFloat,\n    StrictInt,\n    StrictStr,\n");
         out.push_str(")\n");
         out.push_str("from typing_extensions import NotRequired, Required, TypedDict\n\n");
         writeln!(out, "from .{BASE_MODULE} import {BASE_CLASS}\n\n")
             .expect("writing generated Python to a String cannot fail");
+        out.push_str("def _purrdf_temporal_input(value: Any) -> Any:\n");
+        out.push_str("    if not isinstance(value, str):\n");
+        out.push_str(
+            "        raise ValueError(\"temporal values require a JSON string carrier\")\n",
+        );
+        out.push_str("    return value\n\n\n");
         writeln!(out, "_PURRDF_DEFS = {defs_literal}\n")
             .expect("writing generated Python to a String cannot fail");
 
@@ -1098,7 +1124,7 @@ fn apply_constraints(base: String, object: &Map<String, Value>) -> String {
                 arguments.push(format!("{pydantic}={value}"));
             }
         }
-    } else if declared_type == Some("string") {
+    } else if declared_type == Some("string") && !is_temporal_format(object) {
         for (keyword, pydantic) in [("minLength", "min_length"), ("maxLength", "max_length")] {
             if let Some(value) = object.get(keyword).and_then(Value::as_u64) {
                 arguments.push(format!("{pydantic}={value}"));
@@ -1115,6 +1141,29 @@ fn apply_constraints(base: String, object: &Map<String, Value>) -> String {
     }
 }
 
+fn temporal_type(kind: &str) -> String {
+    format!("Annotated[{kind}, BeforeValidator(_purrdf_temporal_input)]")
+}
+
+fn is_temporal_format(object: &Map<String, Value>) -> bool {
+    matches!(
+        object.get("format").and_then(Value::as_str),
+        Some("date-time" | "date" | "time")
+    )
+}
+
+fn has_schema_type(object: &Map<String, Value>, expected: &str) -> bool {
+    match object.get("type") {
+        Some(Value::String(kind)) => kind == expected,
+        Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind.as_str() == Some(expected)),
+        _ => false,
+    }
+}
+
+fn has_numeric_schema_type(object: &Map<String, Value>) -> bool {
+    has_schema_type(object, "integer") || has_schema_type(object, "number")
+}
+
 fn branch_with_parent_constraints(branch: &Value, parent: &Map<String, Value>) -> (Value, bool) {
     let Some(branch_object) = branch.as_object() else {
         return (branch.clone(), false);
@@ -1122,7 +1171,6 @@ fn branch_with_parent_constraints(branch: &Value, parent: &Map<String, Value>) -
     let nested_composition = branch_object.contains_key("anyOf")
         || branch_object.contains_key("oneOf")
         || branch_object.contains_key("allOf");
-    let declared_type = branch_object.get("type").and_then(Value::as_str);
     let mut augmented = branch_object.clone();
     let mut conflict = false;
 
@@ -1131,13 +1179,14 @@ fn branch_with_parent_constraints(branch: &Value, parent: &Map<String, Value>) -
             continue;
         };
         let applies = nested_composition
-            || match declared_type {
-                Some("string") => matches!(key, "minLength" | "maxLength" | "pattern" | "format"),
-                Some("array") => matches!(key, "minItems" | "maxItems"),
-                Some("integer" | "number") => matches!(
-                    key,
-                    "minimum" | "maximum" | "exclusiveMinimum" | "exclusiveMaximum" | "multipleOf"
-                ),
+            || match key {
+                "minLength" | "maxLength" | "pattern" | "format" => {
+                    has_schema_type(branch_object, "string")
+                }
+                "minItems" | "maxItems" => has_schema_type(branch_object, "array"),
+                "minimum" | "maximum" | "exclusiveMinimum" | "exclusiveMaximum" | "multipleOf" => {
+                    has_numeric_schema_type(branch_object)
+                }
                 _ => false,
             };
         if !applies {
@@ -1601,6 +1650,7 @@ fn reserved_type_names() -> BTreeSet<&'static str> {
         BASE_CLASS,
         "Annotated",
         "Any",
+        "BeforeValidator",
         "ClassVar",
         "ConfigDict",
         "Field",
@@ -1741,6 +1791,56 @@ mod tests {
     }
 
     #[test]
+    fn union_types_distribute_constraints_to_matching_branches() {
+        let schema = json!({
+            "$defs": {
+                "Holder": {
+                    "type": "object",
+                    "properties": {
+                        "ex:choice": {
+                            "anyOf": [
+                                { "type": ["string", "null"] },
+                                { "type": "integer" }
+                            ],
+                            "minLength": 2
+                        },
+                        "ex:count": {
+                            "type": ["integer", "null"],
+                            "minimum": 0
+                        },
+                        "ex:label": {
+                            "type": ["string", "null"],
+                            "minLength": 2,
+                            "pattern": "^[A-Z]"
+                        },
+                        "ex:score": {
+                            "type": ["number", "null"],
+                            "maximum": 1
+                        },
+                        "ex:tags": {
+                            "type": ["array", "null"],
+                            "items": { "type": "string" },
+                            "minItems": 1
+                        }
+                    }
+                }
+            }
+        });
+        let out = emit_pydantic(&compiled(&schema), &config()).expect("emit");
+        assert!(out.losses.is_empty(), "{}", out.losses.render_json());
+        let models = std::str::from_utf8(&out.artifacts["example_models/models.py"]).unwrap();
+        assert!(
+            models.contains("choice: Annotated[StrictStr, Field(min_length=2)] | None | StrictInt")
+        );
+        assert!(models.contains("count: Annotated[StrictInt, Field(ge=0)] | None"));
+        assert!(models.contains(
+            "label: Annotated[StrictStr, Field(min_length=2, pattern=\"^[A-Z]\")] | None"
+        ));
+        assert!(models.contains("score: Annotated[StrictFloat | StrictInt, Field(le=1)] | None"));
+        assert!(models.contains("tags: Annotated[list[StrictStr], Field(min_length=1)] | None"));
+    }
+
+    #[test]
     fn consumes_the_public_shacl_compiler_surface() {
         let turtle = r"
             @prefix ex:  <https://example.org/> .
@@ -1834,6 +1934,11 @@ mod tests {
                         "ex:odd": { "uniqueItems": true, "type": "array" },
                         "ex:one": {
                             "oneOf": [{ "type": "integer" }, { "type": "number" }]
+                        },
+                        "ex:temporal": {
+                            "type": "string",
+                            "format": "date-time",
+                            "minLength": 20
                         }
                     }
                 }
@@ -1869,6 +1974,14 @@ mod tests {
             2,
             "both allOf and anyOf-with-siblings are ledgered as intersections"
         );
+        assert!(out.losses.entries().iter().any(|entry| {
+            entry.code.as_ref() == "keyword-validation-dropped"
+                && entry
+                    .location
+                    .as_ref()
+                    .and_then(|location| location.subject.as_deref())
+                    == Some("#/$defs/Lossy/properties/ex:temporal/minLength")
+        }));
         assert!(
             out.losses
                 .entries()
