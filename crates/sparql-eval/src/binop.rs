@@ -148,7 +148,8 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    if !crate::parallel::is_parallel_safe_pattern(left, ctx.user_functions)
+    if crate::parallel::sequential_operation_required()
+        || !crate::parallel::is_parallel_safe_pattern(left, ctx.user_functions)
         || !crate::parallel::is_parallel_safe_pattern(right, ctx.user_functions)
     {
         let l = eval(left, ctx)?;

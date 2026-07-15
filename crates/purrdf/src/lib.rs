@@ -206,6 +206,11 @@ mod tests {
         let pack = PackBuilder::build_bytes(&empty).expect("pack empty dataset");
         let restored = restore_pack(&pack).expect("restore empty dataset");
         assert_eq!(restored.quad_count(), 0);
+
+        // Fallible lazy query execution is reachable from the umbrella alone.
+        let limits = PagedQueryLimits::new(1, 1024);
+        assert_eq!(limits.max_pages, 1);
+        let _: Option<sparql::CompleteSparqlResult<PagedQueryEvidence>> = None;
     }
 
     #[test]
