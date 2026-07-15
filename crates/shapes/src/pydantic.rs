@@ -576,7 +576,9 @@ impl<'a> Renderer<'a> {
             "null" => Ok("None".to_owned()),
             "boolean" => Ok("StrictBool".to_owned()),
             "integer" => Ok("StrictInt".to_owned()),
-            "number" => Ok("StrictFloat | StrictInt".to_owned()),
+            "number" => {
+                Ok("Annotated[StrictFloat, Field(allow_inf_nan=False)] | StrictInt".to_owned())
+            }
             "string" => Ok(match object.get("format").and_then(Value::as_str) {
                 Some("date-time") => temporal_type("datetime"),
                 Some("date") => temporal_type("date"),
@@ -847,16 +849,34 @@ impl<'a> Renderer<'a> {
                 "Pydantic list annotations cannot enforce JSON Schema contains cardinality",
             );
         }
-        if let Some(format) = object.get("format").and_then(Value::as_str)
-            && !matches!(format, "date-time" | "date" | "time")
-        {
+        if let Some(format) = object.get("format").and_then(Value::as_str) {
+            let note = if matches!(format, "date-time" | "date" | "time") {
+                format!(
+                    "JSON Schema format {format:?} maps to a standard-library temporal type, but \
+                     Pydantic's parser is not byte-identical to JSON Schema format validation; \
+                     the exact assertion remains on model_json_schema()"
+                )
+            } else {
+                format!(
+                    "JSON Schema format {format:?} is retained on model_json_schema() while the \
+                     runtime carrier is a strict string"
+                )
+            };
             self.record(
                 "format-validation-widened",
                 &format!("{path}/format"),
-                &format!(
-                    "JSON Schema format {format:?} is retained on model_json_schema() while the \
-                     runtime carrier is a strict string"
-                ),
+                &note,
+            );
+        }
+        if let Some(pattern) = object.get("pattern").and_then(Value::as_str)
+            && !runtime_pattern_supported(pattern)
+        {
+            self.record(
+                "keyword-validation-dropped",
+                &format!("{path}/pattern"),
+                "The JSON Schema pattern uses syntax unsupported by Pydantic's Rust regex \
+                 engine; it remains exact on model_json_schema() and is not installed as a \
+                 runtime Field constraint",
             );
         }
         if is_temporal_format(object) {
@@ -1129,7 +1149,9 @@ fn apply_constraints(base: String, object: &Map<String, Value>) -> String {
                 arguments.push(format!("{pydantic}={value}"));
             }
         }
-        if let Some(pattern) = object.get("pattern").and_then(Value::as_str) {
+        if let Some(pattern) = object.get("pattern").and_then(Value::as_str)
+            && runtime_pattern_supported(pattern)
+        {
             arguments.push(format!("pattern={}", python_string(pattern)));
         }
     }
@@ -1149,6 +1171,10 @@ fn is_temporal_format(object: &Map<String, Value>) -> bool {
         object.get("format").and_then(Value::as_str),
         Some("date-time" | "date" | "time")
     )
+}
+
+fn runtime_pattern_supported(pattern: &str) -> bool {
+    regex::Regex::new(pattern).is_ok()
 }
 
 fn has_schema_type(object: &Map<String, Value>, expected: &str) -> bool {
@@ -1303,7 +1329,7 @@ fn render_base(docstring: &str) -> String {
     writeln!(out, "class {BASE_CLASS}(BaseModel):")
         .expect("writing generated Python to a String cannot fail");
     out.push_str("    model_config = ConfigDict(\n");
-    out.push_str("        populate_by_name=True,\n");
+    out.push_str("        populate_by_name=False,\n");
     out.push_str("    )\n");
     finish_text(out)
 }
@@ -1725,7 +1751,6 @@ mod tests {
                             "items": { "type": "string" },
                             "minItems": 1
                         },
-                        "ex:when": { "type": "string", "format": "date-time" },
                         "ex:value": {
                             "anyOf": [
                                 { "type": "string" },
@@ -1768,6 +1793,8 @@ mod tests {
 
         let models = std::str::from_utf8(&first.artifacts["example_models/models.py"])
             .expect("generated Python is UTF-8");
+        let base = std::str::from_utf8(&first.artifacts["example_models/_base.py"])
+            .expect("generated Python is UTF-8");
         assert!(models.contains("class Color(RootModel["));
         assert!(models.contains("class _ColorValue(StrEnum):"));
         assert!(models.contains("class Person(PurrdfBaseModel):"));
@@ -1777,6 +1804,8 @@ mod tests {
         assert!(models.contains("default=None, alias=\"@id\""));
         assert!(models.contains("\"$ref\": \"#/$defs/Color\""));
         assert!(!models.contains("super().model_json_schema"));
+        assert!(base.contains("populate_by_name=False"));
+        assert!(!base.contains("populate_by_name=True"));
         assert!(!models.contains("blackcatinformatics.ca"));
         assert!(!models.contains("gmeow"));
     }
@@ -1836,7 +1865,10 @@ mod tests {
         assert!(models.contains(
             "label: Annotated[StrictStr, Field(min_length=2, pattern=\"^[A-Z]\")] | None"
         ));
-        assert!(models.contains("score: Annotated[StrictFloat | StrictInt, Field(le=1)] | None"));
+        assert!(models.contains(
+            "score: Annotated[Annotated[StrictFloat, Field(allow_inf_nan=False)] | StrictInt, \
+             Field(le=1)] | None"
+        ));
         assert!(models.contains("tags: Annotated[list[StrictStr], Field(min_length=1)] | None"));
     }
 
@@ -1935,6 +1967,10 @@ mod tests {
                         "ex:one": {
                             "oneOf": [{ "type": "integer" }, { "type": "number" }]
                         },
+                        "ex:lookahead": {
+                            "type": "string",
+                            "pattern": "^(?=A)A"
+                        },
                         "ex:temporal": {
                             "type": "string",
                             "format": "date-time",
@@ -1981,6 +2017,22 @@ mod tests {
                     .as_ref()
                     .and_then(|location| location.subject.as_deref())
                     == Some("#/$defs/Lossy/properties/ex:temporal/minLength")
+        }));
+        assert!(out.losses.entries().iter().any(|entry| {
+            entry.code.as_ref() == "format-validation-widened"
+                && entry
+                    .location
+                    .as_ref()
+                    .and_then(|location| location.subject.as_deref())
+                    == Some("#/$defs/Lossy/properties/ex:temporal/format")
+        }));
+        assert!(out.losses.entries().iter().any(|entry| {
+            entry.code.as_ref() == "keyword-validation-dropped"
+                && entry
+                    .location
+                    .as_ref()
+                    .and_then(|location| location.subject.as_deref())
+                    == Some("#/$defs/Lossy/properties/ex:lookahead/pattern")
         }));
         assert!(
             out.losses

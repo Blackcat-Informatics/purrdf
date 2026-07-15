@@ -184,6 +184,7 @@ def main() -> None:
                 "ex:age": 42,
                 "ex:color": "ex:red",
                 "ex:label": "Al",
+                "ex:lookahead": "A",
                 "ex:name": "Alice",
                 "ex:nullableCount": 2,
                 "ex:nullableName": "Name",
@@ -215,6 +216,16 @@ def main() -> None:
 
             _assert_rejects(models.Person, {"ex:age": -1, "ex:name": "Alice"})
             _assert_rejects(models.Person, {"ex:age": 1, "ex:name": ""})
+            _assert_rejects(models.Person, {"ex:age": 1, "name": "Alice"})
+            for non_json_number in [float("nan"), float("inf"), float("-inf")]:
+                _assert_rejects(
+                    models.Person,
+                    {
+                        "ex:age": 1,
+                        "ex:name": "Alice",
+                        "ex:score": non_json_number,
+                    },
+                )
             _assert_rejects(
                 models.Person,
                 {"ex:age": 1, "ex:name": "Alice", "ex:nullableCount": -1},

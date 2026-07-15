@@ -3,7 +3,7 @@
 
 //! Emit the deterministic package consumed by the dev-only Pydantic oracle.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
 use purrdf::loss::LossLedger;
@@ -57,6 +57,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                         ],
                         "minLength": 2
+                    },
+                    "ex:lookahead": {
+                        "type": "string",
+                        "pattern": "^(?=A)A"
                     },
                     "ex:name": { "type": "string", "minLength": 1 },
                     "ex:nullableCount": {
@@ -112,9 +116,34 @@ fn main() -> Result<(), Box<dyn Error>> {
         "Caller-owned oracle model documentation.",
     )?;
     let package = emit_pydantic(&compiled, &config)?;
-    if !package.losses.is_empty() {
+    let observed_losses: BTreeSet<(&str, &str)> = package
+        .losses
+        .entries()
+        .iter()
+        .map(|entry| {
+            (
+                entry.code.as_ref(),
+                entry
+                    .location
+                    .as_ref()
+                    .and_then(|location| location.subject.as_deref())
+                    .unwrap_or("<missing>"),
+            )
+        })
+        .collect();
+    let expected_losses = BTreeSet::from([
+        (
+            "format-validation-widened",
+            "#/$defs/Person/properties/ex:when/format",
+        ),
+        (
+            "keyword-validation-dropped",
+            "#/$defs/Person/properties/ex:lookahead/pattern",
+        ),
+    ]);
+    if observed_losses != expected_losses {
         return Err(format!(
-            "oracle fixture unexpectedly incurred losses: {}",
+            "oracle fixture loss contract disagrees: {}",
             package.losses.render_json()
         )
         .into());
