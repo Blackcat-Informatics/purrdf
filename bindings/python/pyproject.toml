@@ -52,6 +52,7 @@ dev = [
   "SPARQLWrapper",
   "sssom",
   "jsonschema>=4,<5",
+  "pydantic>=2,<3",
 ]
 
 # uv-only: resolve the opt-in `rdflib` extra's `purrdf-rdflib` from the in-repo
