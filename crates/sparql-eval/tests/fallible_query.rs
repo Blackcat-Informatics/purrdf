@@ -600,6 +600,53 @@ fn identical_executions_have_identical_results_status_and_evidence() {
 }
 
 #[test]
+fn cold_and_warm_bgp_planning_have_identical_demand_paging_evidence() {
+    let pages = [
+        build_page(&[("a", "p", "x"), ("y", "q", "b")]),
+        build_page(&[
+            ("c0", "r", "d0"),
+            ("c1", "r", "d1"),
+            ("c2", "r", "d2"),
+            ("c3", "r", "d3"),
+            ("c4", "r", "d4"),
+        ]),
+    ];
+    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
+        vec![(pages[0].clone(), 20), (pages[1].clone(), 50)],
+        PageGeneration(43),
+    )))
+    .expect("seal pages");
+    let engine = NativeSparqlEngine::new();
+    let query = request(
+        "SELECT * WHERE { \
+         <http://example.org/a> <http://example.org/q> <http://example.org/b> . \
+         ?s <http://example.org/r> ?o \
+         }",
+    );
+
+    let mut expected = None;
+    for _ in 0..2 {
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        let complete = engine
+            .query_fallible_view(&view, query)
+            .expect("complete empty execution");
+        let (_, rows) = solution_parts(complete.result);
+        assert!(rows.is_empty());
+        assert_eq!(complete.evidence.requested_pages, vec![PageId(0)]);
+        assert_eq!(complete.evidence.consumed_pages, 1);
+        assert_eq!(complete.evidence.consumed_bytes, 20);
+        if let Some(expected) = &expected {
+            assert_eq!(
+                &complete.evidence, expected,
+                "warming the BGP-order cache must not change provider demand"
+            );
+        } else {
+            expected = Some(complete.evidence);
+        }
+    }
+}
+
+#[test]
 fn resident_and_pack_views_keep_the_ordinary_byte_identical_result_path() {
     let resident = build_page(&[("a", "p", "b"), ("b", "q", "c")]);
     let pack_bytes = PackBuilder::build_bytes(&resident).expect("build pack");

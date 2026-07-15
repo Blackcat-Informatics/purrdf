@@ -615,10 +615,19 @@ impl DatasetView for PagedQueryView<'_> {
             else {
                 continue;
             };
-            let Some(page) = self.page(slot.id) else {
-                break;
-            };
-            total += page.cardinality_estimate(local_s, local_p, local_o, local_g);
+            let index = usize::try_from(slot.id.0).expect("page id fits usize");
+            let estimate = self.pages[index]
+                .materialization
+                .get()
+                .and_then(|result| result.as_ref().ok())
+                .map_or(slot.quad_count, |page| {
+                    page.cardinality_estimate(local_s, local_p, local_o, local_g)
+                });
+            // Planning must not materialize provider pages: doing so would consume
+            // operation budgets and make requested-page evidence depend on whether
+            // the evaluator's BGP-order cache is warm. The sealed quad count is a
+            // valid upper bound until this operation has already admitted the page.
+            total = total.saturating_add(estimate);
         }
         total
     }

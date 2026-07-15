@@ -157,6 +157,20 @@ fn provider_failure_after_seal_is_sticky_and_never_panics() {
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
 
     assert_eq!(
+        view.cardinality_estimate(None, None, None, GraphMatch::Any),
+        1
+    );
+    assert_eq!(
+        provider.calls.load(Ordering::Relaxed),
+        1,
+        "planning uses only seal-time metadata"
+    );
+    let planning_evidence = ready_evidence(view.operation_status());
+    assert!(planning_evidence.requested_pages.is_empty());
+    assert_eq!(planning_evidence.consumed_pages, 0);
+    assert_eq!(planning_evidence.consumed_bytes, 0);
+
+    assert_eq!(
         view.quads().count(),
         0,
         "query-time cancellation yields no row"
@@ -355,6 +369,10 @@ fn every_read_path_shares_one_operation_cache_and_evidence() {
         view.cardinality_estimate(None, None, None, GraphMatch::Any),
         1
     );
+    let planning_evidence = ready_evidence(view.operation_status());
+    assert!(planning_evidence.requested_pages.is_empty());
+    assert_eq!(planning_evidence.consumed_pages, 0);
+    assert_eq!(planning_evidence.consumed_bytes, 0);
     assert_eq!(view.quads().count(), 1);
     assert_eq!(view.reifier_quads().count(), 1);
     assert_eq!(view.annotation_quads().count(), 1);
