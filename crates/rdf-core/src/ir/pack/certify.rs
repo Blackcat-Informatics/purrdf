@@ -229,7 +229,7 @@ fn reconstruct<D: DatasetView>(view: &D) -> RdfDatasetBuilder {
 /// projection — a mmap'd [`PackView`], a paged backend, or any other `DatasetView`
 /// — that must feed a transform requiring a concrete `RdfDataset` (e.g. the
 /// reasoner) uses this to materialize one. Both entry points share the single
-/// [`reconstruct`] loop (SUBSUME, no second copy).
+/// `reconstruct` loop (SUBSUME, no second copy).
 ///
 /// The reconstruction replays all three components the view exposes — base quads
 /// ([`DatasetView::quads`]), RDF-1.2 reifier bindings
