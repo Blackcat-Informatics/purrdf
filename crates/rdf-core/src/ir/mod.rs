@@ -68,9 +68,9 @@ pub use pack::{
     restore_pack, verify_pack,
 };
 pub use paged::{
-    CountingDemandProvider, InMemoryPageProvider, PageFault, PageId, PagePart, PageProvider,
-    PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable,
-    SubsetPageProvider,
+    CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind, PageGeneration, PageId,
+    PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
+    PagedQuadOverlap, PagedQuadTable, SubsetPageProvider,
 };
 pub use pipeline_bundle::{HandleEntry, HandleKey, PipelineBundle, PipelineBundleError};
 pub use term::{BlankScope, TermId, TermValue};

@@ -1,92 +1,265 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The demand-paging hook for the reference [`PagedDataset`](super::PagedDataset):
-//! [`PageProvider`], the page identity [`PageId`], the materialization error
-//! [`PageFault`], and two reference providers ([`InMemoryPageProvider`],
-//! [`CountingDemandProvider`]).
+//! Demand-paging contracts for [`PagedDataset`](super::PagedDataset).
 //!
-//! A [`PageProvider`] is the sole source of a page's frozen [`RdfDataset`]. It MUST
-//! be **deterministic** — the same [`PageId`] materializes byte-identical quads on
-//! every call — and `Send + Sync`, so a [`PagedDataset`](super::PagedDataset) can be
-//! queried from any thread and its per-page id translation stays stable across
-//! re-materialization. Nothing here touches `std::fs`/`thread`/`time`/rng: the two
-//! reference providers keep their pages (or page thunks) in memory, so the layer is
-//! `wasm32-unknown-unknown`-clean.
+//! A provider identifies one immutable snapshot with [`PageGeneration`] and returns
+//! each page's dataset, generation, and byte charge together in a single
+//! [`PageMaterialization`]. Keeping those facts atomic is what lets a query refuse a
+//! generation change or enforce an exact byte budget without treating an unavailable
+//! page as an absent RDF fact.
+//!
+//! Nothing here touches `std::fs`, threads, clocks, or randomness. Durable storage,
+//! cancellation sources, and deadlines belong to provider implementations outside
+//! PurRDF; this module only carries their typed outcomes and remains
+//! `wasm32-unknown-unknown` compatible.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::ir::RdfDataset;
+use crate::ir::{RdfDataset, TermId, TermRef};
 
 /// A dense page ordinal. Pages of a [`PagedDataset`](super::PagedDataset) are
-/// numbered `0..page_count` and iterated in ascending `PageId` order, which is the
-/// backbone of the paged view's determinism (page order, then in-page frozen order).
+/// numbered `0..page_count` and iterated in ascending [`PageId`] order.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct PageId(pub u32);
 
-/// A page could not be materialized: the [`PageProvider`] failed to produce the
-/// frozen [`RdfDataset`] for [`page`](PageFault::page). Carries a human-readable
-/// [`message`](PageFault::message) for diagnostics.
-#[derive(Debug)]
+/// The immutable provider snapshot to which page translations and byte metadata
+/// belong.
+///
+/// A provider must change this value whenever any page's RDF value, local term-id
+/// layout, or charged byte length changes. It need not be consecutive; equality is
+/// the only semantic operation PurRDF performs.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct PageGeneration(pub u64);
+
+impl PageGeneration {
+    /// The generation used by the in-memory reference providers unless a caller
+    /// supplies another value.
+    pub const INITIAL: Self = Self(0);
+}
+
+impl std::fmt::Display for PageGeneration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// The typed reason a provider could not produce a valid page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PageFaultKind {
+    /// The provider failed to materialize the page for an implementation-specific
+    /// reason such as I/O, authentication, or a missing object.
+    Provider,
+    /// The materialized page belongs to a different immutable snapshot.
+    StaleGeneration {
+        /// The generation captured for the paged dataset or query operation.
+        expected: PageGeneration,
+        /// The generation returned by the provider.
+        actual: PageGeneration,
+    },
+    /// The caller or host cancelled the operation.
+    Cancelled,
+    /// A host-owned deadline expired. PurRDF itself never reads a clock.
+    DeadlineExceeded,
+    /// The provider returned data or metadata that violates the sealed page
+    /// contract.
+    InvalidData,
+}
+
+impl PageFaultKind {
+    /// A stable diagnostic label for this fault category.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Provider => "provider failure",
+            Self::StaleGeneration { .. } => "stale generation",
+            Self::Cancelled => "cancelled",
+            Self::DeadlineExceeded => "deadline exceeded",
+            Self::InvalidData => "invalid page data",
+        }
+    }
+}
+
+/// A page could not be materialized as part of the requested snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageFault {
-    /// The page whose materialization failed.
+    /// The logical page whose materialization failed.
     pub page: PageId,
-    /// A human-readable description of the failure.
+    /// The typed failure category.
+    pub kind: PageFaultKind,
+    /// Provider-supplied or contract-supplied diagnostic detail.
     pub message: String,
+}
+
+impl PageFault {
+    /// Construct a provider/materialization failure.
+    pub fn provider(page: PageId, message: impl Into<String>) -> Self {
+        Self {
+            page,
+            kind: PageFaultKind::Provider,
+            message: message.into(),
+        }
+    }
+
+    /// Construct a snapshot-generation mismatch.
+    #[must_use]
+    pub fn stale_generation(
+        page: PageId,
+        expected: PageGeneration,
+        actual: PageGeneration,
+    ) -> Self {
+        Self {
+            page,
+            kind: PageFaultKind::StaleGeneration { expected, actual },
+            message: format!(
+                "page belongs to generation {actual}, but generation {expected} was requested"
+            ),
+        }
+    }
+
+    /// Construct a host-reported cancellation.
+    pub fn cancelled(page: PageId, message: impl Into<String>) -> Self {
+        Self {
+            page,
+            kind: PageFaultKind::Cancelled,
+            message: message.into(),
+        }
+    }
+
+    /// Construct a host-reported deadline failure.
+    pub fn deadline_exceeded(page: PageId, message: impl Into<String>) -> Self {
+        Self {
+            page,
+            kind: PageFaultKind::DeadlineExceeded,
+            message: message.into(),
+        }
+    }
+
+    /// Construct an invalid/corrupt page-data failure.
+    pub fn invalid_data(page: PageId, message: impl Into<String>) -> Self {
+        Self {
+            page,
+            kind: PageFaultKind::InvalidData,
+            message: message.into(),
+        }
+    }
 }
 
 impl std::fmt::Display for PageFault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "page fault materializing page {}: {}",
-            self.page.0, self.message
+            "{} materializing page {}: {}",
+            self.kind.label(),
+            self.page.0,
+            self.message
         )
     }
 }
 
 impl std::error::Error for PageFault {}
 
-/// The demand-paging hook: the lazy materialization boundary between a
-/// [`PagedDataset`](super::PagedDataset) and the frozen [`RdfDataset`] pages that
-/// compose it.
+/// One atomic page-materialization result.
+///
+/// `generation` certifies which immutable snapshot produced `dataset`; `byte_len`
+/// is the deterministic charge applied when a query first admits this page. A
+/// durable provider should report the actual bytes it had to materialize. Reference
+/// in-memory providers use a stable, platform-independent logical RDF size.
+#[derive(Debug, Clone)]
+pub struct PageMaterialization {
+    /// The frozen page dataset.
+    pub dataset: Arc<RdfDataset>,
+    /// The immutable snapshot that produced the page.
+    pub generation: PageGeneration,
+    /// The provider-defined deterministic byte charge for this page.
+    pub byte_len: u64,
+}
+
+impl PageMaterialization {
+    /// Construct a materialization with provider-reported metadata.
+    #[must_use]
+    pub const fn new(dataset: Arc<RdfDataset>, generation: PageGeneration, byte_len: u64) -> Self {
+        Self {
+            dataset,
+            generation,
+            byte_len,
+        }
+    }
+
+    /// Construct the deterministic reference charge used for an in-memory page.
+    #[must_use]
+    pub fn in_memory(dataset: Arc<RdfDataset>, generation: PageGeneration) -> Self {
+        let byte_len = logical_rdf_byte_len(&dataset);
+        Self::new(dataset, generation, byte_len)
+    }
+}
+
+/// The demand-paging boundary between a [`PagedDataset`](super::PagedDataset) and
+/// its frozen [`RdfDataset`] pages.
 ///
 /// # Contract
 ///
-/// - **Deterministic.** [`materialize`](PageProvider::materialize) called twice with
-///   the same [`PageId`] MUST yield a dataset with byte-identical quads (and term
-///   table), so the per-page [`PageTranslation`](super::PageTranslation) built once at
-///   seal time stays valid across every later re-materialization.
-/// - **`Send + Sync`.** The provider is shared behind an `Arc` and read from the query
-///   path; it must be thread-safe.
+/// - [`generation`](PageProvider::generation) identifies the provider's current
+///   immutable snapshot. It changes whenever page content, local term ids, or byte
+///   charges change.
+/// - [`materialize`](PageProvider::materialize) returns dataset, generation, and byte
+///   charge atomically. Repeated calls for the same page and generation must return
+///   RDF-value-identical datasets with identical local term layout and byte charge.
+/// - The trait is `Send + Sync`; callers may share a provider across query operations.
 pub trait PageProvider: Send + Sync {
-    /// The number of pages this provider can materialize. `PageId(0..page_count)` are
-    /// exactly the valid page ordinals.
+    /// The number of dense pages in the current snapshot.
     fn page_count(&self) -> usize;
 
-    /// Materialize one page into its frozen [`RdfDataset`], or report a
-    /// [`PageFault`] (e.g. an out-of-range `page`). Must be deterministic per the
-    /// trait contract.
-    fn materialize(&self, page: PageId) -> Result<Arc<RdfDataset>, PageFault>;
+    /// The provider's current immutable snapshot generation.
+    fn generation(&self) -> PageGeneration;
+
+    /// Materialize one page or return a typed operational failure.
+    fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault>;
 }
 
-/// The trivial reference provider: every page is already resident in memory, so
-/// [`materialize`](PageProvider::materialize) is an infallible `Arc::clone` (an
-/// out-of-range `PageId` is the only failure).
+/// The trivial reference provider: every page is already resident in memory.
 #[derive(Debug)]
 pub struct InMemoryPageProvider {
-    pages: Box<[Arc<RdfDataset>]>,
+    generation: PageGeneration,
+    pages: Box<[PageMaterialization]>,
 }
 
 impl InMemoryPageProvider {
-    /// Wrap an ordered collection of frozen pages. Page `i` is materialized by
-    /// `PageId(i)`.
+    /// Wrap frozen pages at [`PageGeneration::INITIAL`] using the deterministic
+    /// reference byte charge.
     #[must_use]
     pub fn new(pages: Vec<Arc<RdfDataset>>) -> Self {
-        Self {
-            pages: pages.into_boxed_slice(),
-        }
+        Self::with_generation(pages, PageGeneration::INITIAL)
+    }
+
+    /// Wrap frozen pages at an explicit generation using the deterministic reference
+    /// byte charge.
+    #[must_use]
+    pub fn with_generation(pages: Vec<Arc<RdfDataset>>, generation: PageGeneration) -> Self {
+        let pages = pages
+            .into_iter()
+            .map(|dataset| PageMaterialization::in_memory(dataset, generation))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Self { generation, pages }
+    }
+
+    /// Wrap frozen pages with explicit deterministic byte charges.
+    ///
+    /// This is useful for tests and for in-memory mirrors that must preserve the
+    /// accounting of an external store. The tuple order defines dense page ids.
+    #[must_use]
+    pub fn with_byte_lengths(
+        pages: Vec<(Arc<RdfDataset>, u64)>,
+        generation: PageGeneration,
+    ) -> Self {
+        let pages = pages
+            .into_iter()
+            .map(|(dataset, byte_len)| PageMaterialization::new(dataset, generation, byte_len))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Self { generation, pages }
     }
 }
 
@@ -95,38 +268,29 @@ impl PageProvider for InMemoryPageProvider {
         self.pages.len()
     }
 
-    fn materialize(&self, page: PageId) -> Result<Arc<RdfDataset>, PageFault> {
+    fn generation(&self) -> PageGeneration {
+        self.generation
+    }
+
+    fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
         let index = usize::try_from(page.0).expect("page id fits usize");
-        self.pages
-            .get(index)
-            .map(Arc::clone)
-            .ok_or_else(|| PageFault {
+        self.pages.get(index).cloned().ok_or_else(|| {
+            PageFault::provider(
                 page,
-                message: format!("page index {index} out of range 0..{}", self.pages.len()),
-            })
+                format!("page index {index} out of range 0..{}", self.pages.len()),
+            )
+        })
     }
 }
 
-/// A provider that exposes a SUBSET of another provider's pages under fresh, dense
-/// [`PageId`]s — the page-eviction primitive behind
-/// [`PagedDataset::with_pages`](super::PagedDataset::with_pages) /
-/// [`drop_page`](super::PagedDataset::drop_page).
-///
-/// `indices[new_id]` is the ORIGINAL page id in `inner` that new dense page `new_id`
-/// re-materializes, so the pruned dataset keeps dense `0..kept` page ordinals (the
-/// [`PagedDataset`](super::PagedDataset) invariant) while its retained per-page
-/// translations still address the ORIGINAL — now oversized — dictionary. Holds only
-/// an `Arc` and a boxed slice, so it stays `Send + Sync` and `wasm32`-clean.
+/// A provider exposing a subset of another provider's pages under fresh dense ids.
 pub struct SubsetPageProvider {
-    /// The backing provider whose pages are being subset.
     inner: Arc<dyn PageProvider>,
-    /// `indices[new_id] = original PageId`; its length is the pruned page count.
     indices: Box<[PageId]>,
 }
 
 impl std::fmt::Debug for SubsetPageProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `dyn PageProvider` is not `Debug`; summarize by the retained id map.
         f.debug_struct("SubsetPageProvider")
             .field("indices", &self.indices)
             .finish_non_exhaustive()
@@ -134,9 +298,7 @@ impl std::fmt::Debug for SubsetPageProvider {
 }
 
 impl SubsetPageProvider {
-    /// Expose exactly `indices` (each an original page id in `inner`) as dense pages
-    /// `0..indices.len()`. Order is preserved: new page `i` materializes
-    /// `inner`'s `indices[i]`.
+    /// Expose `indices` from `inner` as pages `0..indices.len()` in the given order.
     #[must_use]
     pub fn new(inner: Arc<dyn PageProvider>, indices: Vec<PageId>) -> Self {
         Self {
@@ -151,33 +313,36 @@ impl PageProvider for SubsetPageProvider {
         self.indices.len()
     }
 
-    fn materialize(&self, page: PageId) -> Result<Arc<RdfDataset>, PageFault> {
+    fn generation(&self) -> PageGeneration {
+        self.inner.generation()
+    }
+
+    fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
         let index = usize::try_from(page.0).expect("page id fits usize");
         let Some(&original) = self.indices.get(index) else {
-            return Err(PageFault {
+            return Err(PageFault::provider(
                 page,
-                message: format!(
+                format!(
                     "subset page index {index} out of range 0..{}",
                     self.indices.len()
                 ),
-            });
+            ));
         };
-        self.inner.materialize(original)
+        self.inner.materialize(original).map_err(|mut fault| {
+            // The composed dataset exposes dense subset ids, so diagnostics must name
+            // the page requested by its caller rather than leak the backing ordinal.
+            fault.page = page;
+            fault
+        })
     }
 }
 
-/// A reference provider that OBSERVES demand: each [`materialize`](PageProvider::materialize)
-/// call increments an atomic hit counter, so a test can assert exactly which pages
-/// were pulled and when.
-///
-/// It holds a rebuild thunk per page (`Fn() -> Arc<RdfDataset>`), so a re-materialize
-/// is a genuine counted rebuild rather than a cached `Arc::clone` — this is what lets
-/// a test watch the lazy hook fire AT QUERY TIME (a
-/// [`PagedDataset`](super::PagedDataset) drops the sealed page and re-materializes on
-/// first query). The counter is an [`AtomicUsize`], which is `wasm32`-clean.
+/// A reference provider that observes demand by rebuilding each requested page and
+/// incrementing an atomic hit counter.
 pub struct CountingDemandProvider {
     #[allow(clippy::type_complexity)]
     thunks: Box<[Box<dyn Fn() -> Arc<RdfDataset> + Send + Sync>]>,
+    generation: PageGeneration,
     hits: AtomicUsize,
 }
 
@@ -185,24 +350,33 @@ impl std::fmt::Debug for CountingDemandProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CountingDemandProvider")
             .field("page_count", &self.thunks.len())
+            .field("generation", &self.generation)
             .field("hits", &self.hits.load(Ordering::Relaxed))
             .finish()
     }
 }
 
 impl CountingDemandProvider {
-    /// Wrap one rebuild thunk per page. Thunk `i` is invoked (and the hit counter
-    /// bumped) each time `PageId(i)` is materialized. Each thunk MUST be deterministic
-    /// per the [`PageProvider`] contract.
+    /// Wrap one deterministic rebuild thunk per page at the initial generation.
     #[must_use]
     pub fn new(thunks: Vec<Box<dyn Fn() -> Arc<RdfDataset> + Send + Sync>>) -> Self {
+        Self::with_generation(thunks, PageGeneration::INITIAL)
+    }
+
+    /// Wrap one deterministic rebuild thunk per page at an explicit generation.
+    #[must_use]
+    pub fn with_generation(
+        thunks: Vec<Box<dyn Fn() -> Arc<RdfDataset> + Send + Sync>>,
+        generation: PageGeneration,
+    ) -> Self {
         Self {
             thunks: thunks.into_boxed_slice(),
+            generation,
             hits: AtomicUsize::new(0),
         }
     }
 
-    /// The number of [`materialize`](PageProvider::materialize) calls served so far.
+    /// The number of materialization calls served so far.
     #[must_use]
     pub fn hits(&self) -> usize {
         self.hits.load(Ordering::Relaxed)
@@ -214,15 +388,78 @@ impl PageProvider for CountingDemandProvider {
         self.thunks.len()
     }
 
-    fn materialize(&self, page: PageId) -> Result<Arc<RdfDataset>, PageFault> {
-        let index = usize::try_from(page.0).expect("page id fits usize");
-        let thunk = self.thunks.get(index).ok_or_else(|| PageFault {
-            page,
-            message: format!("page index {index} out of range 0..{}", self.thunks.len()),
-        })?;
-        // Count the demand BEFORE rebuilding so a test observing `hits()` sees the
-        // pull even if the rebuild itself is trivial.
-        self.hits.fetch_add(1, Ordering::Relaxed);
-        Ok(thunk())
+    fn generation(&self) -> PageGeneration {
+        self.generation
     }
+
+    fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
+        let index = usize::try_from(page.0).expect("page id fits usize");
+        let thunk = self.thunks.get(index).ok_or_else(|| {
+            PageFault::provider(
+                page,
+                format!("page index {index} out of range 0..{}", self.thunks.len()),
+            )
+        })?;
+        self.hits.fetch_add(1, Ordering::Relaxed);
+        Ok(PageMaterialization::in_memory(thunk(), self.generation))
+    }
+}
+
+/// A platform-independent logical size for reference in-memory accounting.
+///
+/// The charge covers every term's value bytes plus fixed-width structural ids, base
+/// quads, reifier rows, and annotation rows. It deliberately excludes Rust object
+/// layout and lazy indexes, whose sizes differ by target and query history.
+fn logical_rdf_byte_len(dataset: &RdfDataset) -> u64 {
+    let mut total = 0_u64;
+    for index in 0..dataset.term_count() {
+        let id = TermId::from_index(u32::try_from(index).expect("term count fits u32"));
+        let term_len = match dataset.resolve(id) {
+            TermRef::Iri(iri) => 1_u64 + len_u64(iri.len()),
+            TermRef::Blank { label, .. } => 1_u64 + len_u64(label.len()) + 4,
+            TermRef::Literal {
+                lexical,
+                language,
+                direction,
+                ..
+            } => {
+                1_u64
+                    + len_u64(lexical.len())
+                    + 4
+                    + 1
+                    + language.map_or(0, |tag| len_u64(tag.len()))
+                    + 1
+                    + u64::from(direction.is_some())
+            }
+            TermRef::Triple { .. } => 1_u64 + 12,
+        };
+        total = total
+            .checked_add(term_len)
+            .expect("logical page size fits u64");
+    }
+
+    let row_bytes = len_u64(dataset.quad_count())
+        .checked_mul(16)
+        .and_then(|bytes| {
+            bytes.checked_add(
+                len_u64(dataset.reifier_quads().count())
+                    .checked_mul(12)
+                    .expect("reifier table size fits u64"),
+            )
+        })
+        .and_then(|bytes| {
+            bytes.checked_add(
+                len_u64(dataset.annotation_quads().count())
+                    .checked_mul(16)
+                    .expect("annotation table size fits u64"),
+            )
+        })
+        .expect("logical page size fits u64");
+    total
+        .checked_add(row_bytes)
+        .expect("logical page size fits u64")
+}
+
+fn len_u64(value: usize) -> u64 {
+    u64::try_from(value).expect("logical page size fits u64")
 }

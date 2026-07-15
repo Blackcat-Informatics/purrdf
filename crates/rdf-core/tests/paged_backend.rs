@@ -19,7 +19,8 @@
 use std::sync::Arc;
 
 use purrdf_core::{
-    CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PageId, PagedDataset,
+    CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PageFault,
+    PageFaultKind, PageGeneration, PageId, PageMaterialization, PageProvider, PagedDataset,
     PagedFreezeError, PagedQuadTable, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermRef,
     TermValue, render_canonical_turtle,
 };
@@ -281,8 +282,8 @@ fn lazy_hook_fires_on_demand() {
         Box::new(lazy_page1),
         Box::new(lazy_page2),
     ]));
-    let paged = PagedDataset::from_provider(provider.clone() as Arc<dyn purrdf_core::PageProvider>)
-        .expect("seal pages");
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
 
     // The seal pass materializes each page exactly once.
     let hits_after_construction = provider.hits();
@@ -493,6 +494,7 @@ fn freeze_refuses_non_quad_disjoint_pages() {
             assert_eq!(o.graph, None, "default-graph quad");
         }
         PagedFreezeError::Page(fault) => panic!("expected QuadOverlap, got page fault: {fault}"),
+        other => panic!("expected QuadOverlap, got: {other}"),
     }
 
     // The disjoint construction (distinct global quads) is the normal path and Oks.
@@ -548,6 +550,7 @@ fn freeze_refuses_non_disjoint_side_tables() {
             assert_eq!(o.object, iri("high"));
         }
         PagedFreezeError::Page(fault) => panic!("expected QuadOverlap, got page fault: {fault}"),
+        other => panic!("expected QuadOverlap, got: {other}"),
     }
 
     // (2) Reifier overlap: the shared reifier binding `r rdf:reifies <<(a b c)>>` (over
@@ -590,6 +593,7 @@ fn freeze_refuses_non_disjoint_side_tables() {
             );
         }
         PagedFreezeError::Page(fault) => panic!("expected QuadOverlap, got page fault: {fault}"),
+        other => panic!("expected QuadOverlap, got: {other}"),
     }
 }
 
@@ -741,7 +745,7 @@ fn from_parts_reconstitutes_without_materializing_pages() {
     let raw = split_pages(&corpus, 3);
     let eager = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(raw.clone())))
         .expect("seal pages");
-    let (dictionary, parts) = eager.to_parts();
+    let (dictionary, generation, parts) = eager.to_parts();
     assert_eq!(parts.len(), 3, "one part per page");
 
     // Rebuild from those parts over a COUNTING provider serving the SAME page contents.
@@ -757,9 +761,11 @@ fn from_parts_reconstitutes_without_materializing_pages() {
     ]));
     let warm = PagedDataset::from_parts(
         dictionary,
-        counting.clone() as Arc<dyn purrdf_core::PageProvider>,
+        counting.clone() as Arc<dyn PageProvider>,
+        generation,
         parts,
-    );
+    )
+    .expect("matching warm snapshot");
     assert_eq!(
         counting.hits(),
         0,
@@ -780,12 +786,183 @@ fn from_parts_reconstitutes_without_materializing_pages() {
     );
 }
 
+struct MismatchedGenerationProvider {
+    page: Arc<RdfDataset>,
+    current: PageGeneration,
+    materialized: PageGeneration,
+}
+
+impl PageProvider for MismatchedGenerationProvider {
+    fn page_count(&self) -> usize {
+        1
+    }
+
+    fn generation(&self) -> PageGeneration {
+        self.current
+    }
+
+    fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
+        if page != PageId(0) {
+            return Err(PageFault::provider(page, "page out of range"));
+        }
+        Ok(PageMaterialization::new(
+            self.page.clone(),
+            self.materialized,
+            17,
+        ))
+    }
+}
+
+#[test]
+fn seal_rejects_a_typed_generation_mismatch() {
+    let provider = Arc::new(MismatchedGenerationProvider {
+        page: build_page(&[(iri("s"), iri("p"), iri("o"))]),
+        current: PageGeneration(7),
+        materialized: PageGeneration(8),
+    });
+    let error = PagedDataset::from_provider(provider).expect_err("stale page must not seal");
+    match error {
+        PagedFreezeError::Page(PageFault {
+            page: PageId(0),
+            kind:
+                PageFaultKind::StaleGeneration {
+                    expected: PageGeneration(7),
+                    actual: PageGeneration(8),
+                },
+            ..
+        }) => {}
+        other => panic!("expected a typed stale-generation page fault, got: {other}"),
+    }
+}
+
+#[test]
+fn warm_restart_rejects_generation_and_page_count_mismatches() {
+    let pages = vec![
+        build_page(&[(iri("s0"), iri("p"), iri("o0"))]),
+        build_page(&[(iri("s1"), iri("p"), iri("o1"))]),
+    ];
+    let generation = PageGeneration(12);
+    let eager = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
+        vec![(pages[0].clone(), 31), (pages[1].clone(), 47)],
+        generation,
+    )))
+    .expect("seal certified pages");
+    let (dictionary, certified_generation, parts) = eager.to_parts();
+
+    let stale_provider = Arc::new(InMemoryPageProvider::with_generation(
+        pages.clone(),
+        PageGeneration(13),
+    ));
+    let stale = PagedDataset::from_parts(
+        dictionary.clone(),
+        stale_provider,
+        certified_generation,
+        parts.clone(),
+    )
+    .expect_err("warm metadata from another generation must be rejected");
+    assert!(matches!(
+        stale,
+        PagedFreezeError::GenerationMismatch {
+            expected: PageGeneration(12),
+            actual: PageGeneration(13)
+        }
+    ));
+
+    let short_provider = Arc::new(InMemoryPageProvider::with_generation(
+        vec![pages[0].clone()],
+        generation,
+    ));
+    let short = PagedDataset::from_parts(dictionary, short_provider, certified_generation, parts)
+        .expect_err("warm metadata with a different page count must be rejected");
+    assert!(matches!(
+        short,
+        PagedFreezeError::PageCountMismatch {
+            metadata: 2,
+            provider: 1
+        }
+    ));
+}
+
+#[test]
+fn snapshot_and_byte_metadata_survive_selection_and_compaction() {
+    let generation = PageGeneration(23);
+    let pages = reclaim_pages();
+    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
+        vec![
+            (pages[0].clone(), 101),
+            (pages[1].clone(), 202),
+            (pages[2].clone(), 303),
+        ],
+        generation,
+    )))
+    .expect("seal metadata-bearing pages");
+    let (_, sealed_generation, sealed_parts) = paged.to_parts();
+    assert_eq!(sealed_generation, generation);
+    assert_eq!(
+        sealed_parts
+            .iter()
+            .map(|part| part.byte_len)
+            .collect::<Vec<_>>(),
+        vec![101, 202, 303]
+    );
+
+    let selected = paged.with_pages(&[PageId(2), PageId(0)]);
+    let (_, selected_generation, selected_parts) = selected.to_parts();
+    assert_eq!(selected_generation, generation);
+    assert_eq!(
+        selected_parts
+            .iter()
+            .map(|part| part.byte_len)
+            .collect::<Vec<_>>(),
+        vec![303, 101]
+    );
+
+    let compacted = selected.compact();
+    let (_, compacted_generation, compacted_parts) = compacted.to_parts();
+    assert_eq!(compacted_generation, generation);
+    assert_eq!(
+        compacted_parts
+            .iter()
+            .map(|part| part.byte_len)
+            .collect::<Vec<_>>(),
+        vec![303, 101]
+    );
+    assert_eq!(compacted.quads().count(), 2, "metadata remains usable");
+}
+
+#[test]
+fn provider_fault_categories_remain_distinct() {
+    let page = PageId(4);
+    let expected = PageGeneration(1);
+    let actual = PageGeneration(2);
+    assert_eq!(
+        PageFault::provider(page, "I/O").kind,
+        PageFaultKind::Provider
+    );
+    assert_eq!(
+        PageFault::stale_generation(page, expected, actual).kind,
+        PageFaultKind::StaleGeneration { expected, actual }
+    );
+    assert_eq!(
+        PageFault::cancelled(page, "cancelled by host").kind,
+        PageFaultKind::Cancelled
+    );
+    assert_eq!(
+        PageFault::deadline_exceeded(page, "host deadline elapsed").kind,
+        PageFaultKind::DeadlineExceeded
+    );
+    assert_eq!(
+        PageFault::invalid_data(page, "corrupt payload").kind,
+        PageFaultKind::InvalidData
+    );
+}
+
 /// The paged dataset and its provider must be thread-shareable.
 #[test]
 fn paged_dataset_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<PagedDataset>();
-    assert_send_sync::<Arc<dyn purrdf_core::PageProvider>>();
+    assert_send_sync::<Arc<dyn PageProvider>>();
     assert_send_sync::<CountingDemandProvider>();
     assert_send_sync::<InMemoryPageProvider>();
 }

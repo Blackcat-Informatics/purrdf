@@ -49,8 +49,8 @@ use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::ir::{GlobalDictionary, GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
 
 pub use provider::{
-    CountingDemandProvider, InMemoryPageProvider, PageFault, PageId, PageProvider,
-    SubsetPageProvider,
+    CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind, PageGeneration, PageId,
+    PageMaterialization, PageProvider, SubsetPageProvider,
 };
 pub use translation::PageTranslation;
 
@@ -74,6 +74,8 @@ struct PageSlot {
     /// This page's quad count, captured at seal time so a page-subset dataset can sum
     /// its own `total_quads` without re-materializing.
     quad_count: usize,
+    /// The deterministic provider-reported byte charge captured at seal time.
+    byte_len: u64,
 }
 
 /// Why sealing a provider into a [`PagedDataset`] failed.
@@ -87,6 +89,21 @@ struct PageSlot {
 pub enum PagedFreezeError {
     /// A page could not be materialized by the provider.
     Page(PageFault),
+    /// The provider changed snapshots while sealing, or a warm-restart certificate
+    /// names a different generation from the provider's current snapshot.
+    GenerationMismatch {
+        /// The generation captured by sealing or stored with the warm metadata.
+        expected: PageGeneration,
+        /// The provider's observed generation.
+        actual: PageGeneration,
+    },
+    /// Warm metadata and the provider describe different numbers of pages.
+    PageCountMismatch {
+        /// The number of persisted page metadata records.
+        metadata: usize,
+        /// The number of pages exposed by the provider.
+        provider: usize,
+    },
     /// Two pages carry the SAME global quad — the pages are not quad-disjoint, so the
     /// seal refuses rather than collapse the duplicate. Boxed to keep the enum (and
     /// therefore the seal `Result`) small.
@@ -150,6 +167,16 @@ impl std::fmt::Display for PagedFreezeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Page(fault) => write!(f, "{fault}"),
+            Self::GenerationMismatch { expected, actual } => write!(
+                f,
+                "paged snapshot generation mismatch: metadata/seal generation {expected}, \
+                 provider generation {actual}"
+            ),
+            Self::PageCountMismatch { metadata, provider } => write!(
+                f,
+                "paged snapshot page-count mismatch: {metadata} metadata records, \
+                 {provider} provider pages"
+            ),
             Self::QuadOverlap(o) => write!(
                 f,
                 "pages {} and {} are not quad-disjoint in the {} stream: the global quad \
@@ -171,7 +198,9 @@ impl std::error::Error for PagedFreezeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Page(fault) => Some(fault),
-            Self::QuadOverlap(_) => None,
+            Self::GenerationMismatch { .. }
+            | Self::PageCountMismatch { .. }
+            | Self::QuadOverlap(_) => None,
         }
     }
 }
@@ -185,9 +214,10 @@ impl std::error::Error for PagedFreezeError {
 /// [`GlobalDictionary`] and per-page translations reloads a [`PagedDataset`] from these
 /// parts WITHOUT re-scanning every page (the warm-restart path), where
 /// [`from_provider`](PagedDataset::from_provider) would eagerly re-materialize all of
-/// them. `capabilities` and `quad_count` are the page's seal-time metadata, kept so the
-/// reconstituted dataset answers [`capabilities`](DatasetView::capabilities) and
-/// [`len_hint`](DatasetView::len_hint) without a materialization.
+/// them. `capabilities`, `quad_count`, and `byte_len` are the page's seal-time
+/// metadata, kept so the reconstituted dataset answers
+/// [`capabilities`](DatasetView::capabilities) and [`len_hint`](DatasetView::len_hint)
+/// without a materialization.
 #[derive(Debug, Clone)]
 pub struct PagePart {
     /// The page's local↔global term-id map (as built at its original seal).
@@ -196,6 +226,8 @@ pub struct PagePart {
     pub capabilities: RdfStoreCapabilities,
     /// The page's quad count, captured at seal time.
     pub quad_count: usize,
+    /// The provider-reported byte charge, captured at seal time.
+    pub byte_len: u64,
 }
 
 /// A reference, in-memory, demand-paged dataset composing many frozen
@@ -211,6 +243,9 @@ pub struct PagedDataset {
     pages: Box<[PageSlot]>,
     /// The demand-paging hook. Shared (`Arc`) so the dataset stays `Send + Sync`.
     provider: Arc<dyn PageProvider>,
+    /// The immutable provider snapshot to which the dictionary, translations, and
+    /// per-page metadata belong.
+    generation: PageGeneration,
     /// The OR of every page's capabilities (an honest composite: a flag is on iff
     /// some page surfaces it).
     caps: RdfStoreCapabilities,
@@ -226,6 +261,7 @@ impl std::fmt::Debug for PagedDataset {
             .field("page_count", &self.pages.len())
             .field("term_count", &self.dictionary.len())
             .field("total_quads", &self.total_quads)
+            .field("generation", &self.generation)
             .field("caps", &self.caps)
             // `dictionary`, `pages`, and the `dyn` `provider` are intentionally
             // summarized above rather than dumped.
@@ -255,9 +291,13 @@ impl PagedDataset {
     ///
     /// # Errors
     ///
-    /// [`PagedFreezeError::Page`] if a page cannot be materialized;
-    /// [`PagedFreezeError::QuadOverlap`] if two pages share a global quad.
+    /// [`PagedFreezeError::Page`] if a page cannot be materialized or reports the
+    /// wrong generation; [`PagedFreezeError::GenerationMismatch`] if the provider
+    /// changes snapshots during the seal; [`PagedFreezeError::PageCountMismatch`] if
+    /// its page count changes; or [`PagedFreezeError::QuadOverlap`] if two pages share
+    /// a global quad.
     pub fn from_provider(provider: Arc<dyn PageProvider>) -> Result<Self, PagedFreezeError> {
+        let generation = provider.generation();
         let page_count = provider.page_count();
         let mut dictionary = GlobalDictionary::new();
         let mut caps = RdfStoreCapabilities::plain_rdf();
@@ -284,7 +324,16 @@ impl PagedDataset {
         let mut seen_annotation: HashMap<GlobalQuad, PageId> = HashMap::new();
         for i in 0..page_count {
             let id = PageId(u32::try_from(i).expect("page count fits u32"));
-            let page = provider.materialize(id)?;
+            let materialization = provider.materialize(id)?;
+            if materialization.generation != generation {
+                return Err(PageFault::stale_generation(
+                    id,
+                    generation,
+                    materialization.generation,
+                )
+                .into());
+            }
+            let page = materialization.dataset;
             // Boundary G1: fold this page's terms into the shared dictionary BY VALUE.
             // This must happen for every page before any query so the dictionary is
             // complete (value lookups are correct for terms on not-yet-requeried
@@ -341,12 +390,28 @@ impl PagedDataset {
                 resident: OnceLock::new(),
                 caps: page_caps,
                 quad_count: page_quads,
+                byte_len: materialization.byte_len,
+            });
+        }
+        let current_generation = provider.generation();
+        if current_generation != generation {
+            return Err(PagedFreezeError::GenerationMismatch {
+                expected: generation,
+                actual: current_generation,
+            });
+        }
+        let current_page_count = provider.page_count();
+        if current_page_count != page_count {
+            return Err(PagedFreezeError::PageCountMismatch {
+                metadata: page_count,
+                provider: current_page_count,
             });
         }
         Ok(Self {
             dictionary,
             pages: pages.into_boxed_slice(),
             provider,
+            generation,
             caps,
             total_quads,
         })
@@ -376,23 +441,31 @@ impl PagedDataset {
     /// dataset (e.g. [`to_parts`](Self::to_parts)) whose pages were disjoint; the read
     /// path relies on that invariant exactly as `from_provider`'s output does.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `parts.len()` disagrees with `provider.page_count()` — the parts and
-    /// the provider must describe the SAME pages `0..page_count`.
-    #[must_use]
+    /// Returns [`PagedFreezeError::PageCountMismatch`] if the metadata and provider
+    /// page counts differ, or [`PagedFreezeError::GenerationMismatch`] if the
+    /// provider no longer exposes the certified snapshot. No page is materialized.
     pub fn from_parts(
         dictionary: GlobalDictionary,
         provider: Arc<dyn PageProvider>,
+        generation: PageGeneration,
         parts: Vec<PagePart>,
-    ) -> Self {
-        assert_eq!(
-            parts.len(),
-            provider.page_count(),
-            "from_parts: {} parts but the provider has {} pages",
-            parts.len(),
-            provider.page_count()
-        );
+    ) -> Result<Self, PagedFreezeError> {
+        let provider_page_count = provider.page_count();
+        if parts.len() != provider_page_count {
+            return Err(PagedFreezeError::PageCountMismatch {
+                metadata: parts.len(),
+                provider: provider_page_count,
+            });
+        }
+        let provider_generation = provider.generation();
+        if generation != provider_generation {
+            return Err(PagedFreezeError::GenerationMismatch {
+                expected: generation,
+                actual: provider_generation,
+            });
+        }
         let mut caps = RdfStoreCapabilities::plain_rdf();
         let mut total_quads = 0usize;
         let mut pages: Vec<PageSlot> = Vec::with_capacity(parts.len());
@@ -407,15 +480,17 @@ impl PagedDataset {
                 resident: OnceLock::new(),
                 caps: part.capabilities,
                 quad_count: part.quad_count,
+                byte_len: part.byte_len,
             });
         }
-        Self {
+        Ok(Self {
             dictionary,
             pages: pages.into_boxed_slice(),
             provider,
+            generation,
             caps,
             total_quads,
-        }
+        })
     }
 
     /// Decompose this dataset into its shared [`GlobalDictionary`] and per-page
@@ -425,7 +500,7 @@ impl PagedDataset {
     /// persist these parts and later reload via [`from_parts`](Self::from_parts) without
     /// the eager re-scan. Pages are returned in ascending [`PageId`] order.
     #[must_use]
-    pub fn to_parts(&self) -> (GlobalDictionary, Vec<PagePart>) {
+    pub fn to_parts(&self) -> (GlobalDictionary, PageGeneration, Vec<PagePart>) {
         let parts = self
             .pages
             .iter()
@@ -433,9 +508,10 @@ impl PagedDataset {
                 translation: slot.translation.clone(),
                 capabilities: slot.caps,
                 quad_count: slot.quad_count,
+                byte_len: slot.byte_len,
             })
             .collect();
-        (self.dictionary.clone(), parts)
+        (self.dictionary.clone(), self.generation, parts)
     }
 
     /// Produce a variant retaining `keep` (each an existing [`PageId`]) as fresh dense
@@ -473,6 +549,7 @@ impl PagedDataset {
                 resident: OnceLock::new(),
                 caps: slot.caps,
                 quad_count: slot.quad_count,
+                byte_len: slot.byte_len,
             });
         }
         let indices: Vec<PageId> = keep.to_vec();
@@ -480,6 +557,7 @@ impl PagedDataset {
             dictionary,
             pages: pages.into_boxed_slice(),
             provider: Arc::new(SubsetPageProvider::new(self.provider.clone(), indices)),
+            generation: self.generation,
             caps,
             total_quads,
         }
@@ -565,12 +643,14 @@ impl PagedDataset {
                 resident: OnceLock::new(),
                 caps: slot.caps,
                 quad_count: slot.quad_count,
+                byte_len: slot.byte_len,
             })
             .collect();
         Self {
             dictionary,
             pages: pages.into_boxed_slice(),
             provider: self.provider.clone(),
+            generation: self.generation,
             caps: self.caps,
             total_quads: self.total_quads,
         }
@@ -586,6 +666,12 @@ impl PagedDataset {
     #[must_use]
     pub fn dictionary(&self) -> &GlobalDictionary {
         &self.dictionary
+    }
+
+    /// The immutable provider snapshot certified by this paged dataset.
+    #[must_use]
+    pub const fn generation(&self) -> PageGeneration {
+        self.generation
     }
 
     /// The [`PageTranslation`] of a page, by ordinal. `None` if `id` is out of range.
@@ -606,8 +692,50 @@ impl PagedDataset {
         if let Some(ds) = slot.resident.get() {
             return Ok(ds);
         }
-        let ds = self.provider.materialize(id)?;
-        let _ = slot.resident.set(ds);
+        let materialization = self.provider.materialize(id)?;
+        if materialization.generation != self.generation {
+            return Err(PageFault::stale_generation(
+                id,
+                self.generation,
+                materialization.generation,
+            ));
+        }
+        if materialization.byte_len != slot.byte_len {
+            return Err(PageFault::invalid_data(
+                id,
+                format!(
+                    "byte charge changed from sealed {} to materialized {}",
+                    slot.byte_len, materialization.byte_len
+                ),
+            ));
+        }
+        if materialization.dataset.term_count() != slot.translation.term_count() {
+            return Err(PageFault::invalid_data(
+                id,
+                format!(
+                    "term count changed from sealed {} to materialized {}",
+                    slot.translation.term_count(),
+                    materialization.dataset.term_count()
+                ),
+            ));
+        }
+        if materialization.dataset.quad_count() != slot.quad_count {
+            return Err(PageFault::invalid_data(
+                id,
+                format!(
+                    "quad count changed from sealed {} to materialized {}",
+                    slot.quad_count,
+                    materialization.dataset.quad_count()
+                ),
+            ));
+        }
+        if materialization.dataset.capabilities() != slot.caps {
+            return Err(PageFault::invalid_data(
+                id,
+                "page capabilities changed after sealing",
+            ));
+        }
+        let _ = slot.resident.set(materialization.dataset);
         Ok(slot
             .resident
             .get()
