@@ -23,7 +23,8 @@
 //! conversion accumulating located losses as it runs). [`registered_pairs`] and
 //! [`profile_for`] enumerate the closed set of `(from, to)` pairs and loss codes
 //! known across BOTH disciplines, including the non-syntax `shacl`→`json-schema`
-//! shapes projection and the bidirectional RDF 1.2 dataset↔OKF profile;
+//! shapes projection, the `json-schema`→`pydantic-v2` code-generation profile,
+//! and the bidirectional RDF 1.2 dataset↔OKF profile;
 //! [`loss_matrix_json`] renders that same enumerable registry.
 
 use std::borrow::Cow;
@@ -590,6 +591,62 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
     ),
 ];
 
+/// The JSON Schema → Pydantic v2 emitter's closed loss profile.  The emitter
+/// preserves the source validation schema on Pydantic's JSON-schema surface,
+/// but a Python annotation cannot enforce every JSON Schema vocabulary rule at
+/// model-validation time.  Each runtime widening is therefore explicit and
+/// located rather than hidden behind `Any` or a permissive scalar.
+const JSON_SCHEMA_PYDANTIC_PROFILE: &[(&str, &str)] = &[
+    (
+        "array-contains-validation-dropped",
+        "JSON Schema contains/minContains/maxContains constraints have no direct Pydantic v2 \
+         field-annotation equivalent; the generated model validates the array container and \
+         item type but does not enforce the contains predicate at runtime.",
+    ),
+    (
+        "conditional-validation-dropped",
+        "JSON Schema if/then/else dependent validation has no direct Pydantic v2 type-annotation \
+         equivalent; the conditional is preserved in model_json_schema() but is not enforced by \
+         model validation.",
+    ),
+    (
+        "format-validation-widened",
+        "A JSON Schema string format has no exact dependency-free Pydantic v2 standard-library \
+         type; the generated runtime annotation accepts a strict string while \
+         model_json_schema() retains the format.",
+    ),
+    (
+        "inline-object-validation-widened",
+        "An inline JSON Schema object cannot be represented as a reusable generated BaseModel \
+         without inventing a public class identity; runtime validation accepts a strict mapping \
+         while model_json_schema() retains the complete object schema.",
+    ),
+    (
+        "intersection-validation-widened",
+        "JSON Schema allOf intersection semantics have no exact Pydantic v2 union-style type \
+         annotation; runtime validation uses the representable branch information while \
+         model_json_schema() retains the complete intersection.",
+    ),
+    (
+        "keyword-validation-dropped",
+        "A JSON Schema assertion keyword outside the emitter's closed annotation grammar cannot \
+         be enforced by the generated Pydantic v2 runtime type; it remains present on \
+         model_json_schema() and is recorded at its schema location.",
+    ),
+    (
+        "negation-validation-dropped",
+        "JSON Schema not has no direct Pydantic v2 type-annotation equivalent; the generated \
+         runtime annotation validates the positive carrier type while model_json_schema() \
+         retains the negation.",
+    ),
+    (
+        "one-of-validation-widened",
+        "Pydantic v2 unions implement any-branch semantics and cannot enforce JSON Schema one's \
+         exactly-one matching rule; runtime validation uses a union while model_json_schema() \
+         retains oneOf.",
+    ),
+];
+
 /// Build the runtime-shaped [`LossEntry`] rows for the
 /// `("shacl", "json-schema")` shapes profile from [`SHACL_JSON_SCHEMA_PROFILE`]
 /// — one contract entry per declared `(code, note)` pair, `location: None`
@@ -602,6 +659,21 @@ fn shacl_json_schema_entries() -> Vec<LossEntry> {
             code: Cow::Borrowed(code),
             from: Cow::Borrowed("shacl"),
             to: Cow::Borrowed("json-schema"),
+            note: Cow::Borrowed(note),
+            location: None,
+        })
+        .collect()
+}
+
+/// Build the static contract rows for the
+/// `("json-schema", "pydantic-v2")` projection profile.
+fn json_schema_pydantic_entries() -> Vec<LossEntry> {
+    JSON_SCHEMA_PYDANTIC_PROFILE
+        .iter()
+        .map(|&(code, note)| LossEntry {
+            code: Cow::Borrowed(code),
+            from: Cow::Borrowed("json-schema"),
+            to: Cow::Borrowed("pydantic-v2"),
             note: Cow::Borrowed(note),
             location: None,
         })
@@ -648,6 +720,7 @@ fn registry_entries() -> Vec<LossEntry> {
     entries.extend_from_slice(rdf_to_okf_loss_ledger().entries());
     entries.extend_from_slice(okf_to_rdf_loss_ledger().entries());
     entries.extend(transcode_and_shapes_entries());
+    entries.extend(json_schema_pydantic_entries());
     entries
 }
 
@@ -1157,6 +1230,19 @@ mod tests {
     }
 
     #[test]
+    fn transcode_matrix_includes_json_schema_pydantic_pair() {
+        let json = loss_matrix_json();
+        assert!(json.contains("\"from\": \"json-schema\""));
+        assert!(json.contains("\"to\": \"pydantic-v2\""));
+        for (code, _) in JSON_SCHEMA_PYDANTIC_PROFILE {
+            assert!(
+                json.contains(&format!("\"code\": \"{code}\"")),
+                "transcode-loss-matrix.json missing Pydantic-profile code `{code}`"
+            );
+        }
+    }
+
+    #[test]
     fn pair_loss_identity_is_empty() {
         assert!(pair_loss_ledger("turtle", "turtle").is_empty());
         assert!(pair_loss_ledger("gts", "gts").is_empty());
@@ -1288,6 +1374,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn registered_pairs_includes_json_schema_pydantic() {
+        assert!(
+            registered_pairs().any(|(from, to)| from == "json-schema" && to == "pydantic-v2"),
+            "registered_pairs() must include (\"json-schema\", \"pydantic-v2\")"
+        );
+    }
+
     /// `registered_pairs()` must yield the SAME ordered sequence across two
     /// independent calls (it is backed by a `BTreeMap`, so this is order, not
     /// merely set-equality) — callers rendering it directly (e.g. a diagnostic
@@ -1313,6 +1407,16 @@ mod tests {
             profile.contains("sh:sparql"),
             "profile_for(\"shacl\", \"json-schema\") missing sh:sparql: {profile:?}"
         );
+    }
+
+    #[test]
+    fn profile_for_json_schema_pydantic_is_closed() {
+        let profile = profile_for("json-schema", "pydantic-v2");
+        let expected: BTreeSet<&str> = JSON_SCHEMA_PYDANTIC_PROFILE
+            .iter()
+            .map(|(code, _)| *code)
+            .collect();
+        assert_eq!(profile, expected);
     }
 
     #[test]
