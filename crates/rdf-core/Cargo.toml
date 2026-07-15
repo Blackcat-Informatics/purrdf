@@ -117,3 +117,11 @@ harness = false
 # `make check`.
 name = "pack_query"
 harness = false
+
+[[bench]]
+# Internal, non-shipped comparison of the pack codec's FoQ posting indexes with
+# a pointerless bitmap wavelet-matrix candidate over the existing Sp/So
+# sequences. Measures bytes, deterministic build cost, and the three
+# unbound-subject query shapes; no winner is asserted.
+name = "pack_index_compare"
+harness = false
