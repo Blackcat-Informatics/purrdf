@@ -55,9 +55,9 @@
     ></div>
 
     <p class="jsonld-note" role="note">
-      Note: JSON-LD is <strong>serialize-only</strong> here — the parse codec
-      accepts turtle, N-Triples, N-Quads, TriG, and RDF/XML, and rejects JSON-LD
-      as input by design.
+      Note: JSON-LD is a <strong>first-class bidirectional</strong> codec here — it
+      both parses and serializes, and its JSON-LD-star <code>@triple</code> encoding
+      round-trips object-position quoted triples losslessly.
     </p>
 
     <nav class="tabs" aria-label="Console panes">
@@ -84,6 +84,7 @@
             <option value="nquads">N-Quads</option>
             <option value="trig">TriG</option>
             <option value="rdfxml">RDF/XML</option>
+            <option value="jsonld">JSON-LD</option>
           </select>
         </div>
         <div class="field">
@@ -171,6 +172,7 @@
                 <option value="nquads">N-Quads</option>
                 <option value="trig">TriG</option>
                 <option value="rdfxml">RDF/XML</option>
+                <option value="jsonld">JSON-LD</option>
               </select>
             </div>
             <div class="field">
@@ -187,6 +189,7 @@
                 <option value="nquads">N-Quads</option>
                 <option value="trig">TriG</option>
                 <option value="rdfxml">RDF/XML</option>
+                <option value="jsonld">JSON-LD</option>
               </select>
             </div>
             <div class="field">
