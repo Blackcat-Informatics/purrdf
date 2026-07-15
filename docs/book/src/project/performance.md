@@ -32,7 +32,7 @@ shipped layout is whichever wins.
 
 | Layer | What it measures | How to run |
 | --- | --- | --- |
-| **Rust criterion suites** | Native engine hot paths — IR layout, copy-on-write mutation, codecs, SPARQL lexing/evaluation/planning, SHACL validation, entailment chase, GTS authoring, IRI parsing. | `make bench` |
+| **Rust criterion suites** | Native engine hot paths — IR layout, copy-on-write mutation, pack index alternatives, codecs, SPARQL lexing/evaluation/planning, SHACL validation, entailment chase, GTS authoring, IRI parsing. | `make bench` |
 | **Python compat harness** | `purrdf.compat.rdflib` (the native-backed drop-in) vs. the real rdflib 7.x on parse, serialize, SPARQL, and triple-pattern iteration, over a deterministic `example.org` corpus. | `make bench-python` |
 
 Both layers are report-only: they are never part of `make check`, and no test
@@ -57,6 +57,7 @@ planner decisions can be audited without running the query
 ```sh
 make bench                              # the default criterion set
 cargo bench -p purrdf-iri --bench parse # a single package's bench
+cargo bench -p purrdf-core --bench pack_index_compare # pack index experiment
 make bench-python                       # the rdflib comparison harness
 ```
 
