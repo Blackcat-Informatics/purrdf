@@ -27,7 +27,7 @@ const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
 enum StrictNumber {
     Signed(i64),
     Unsigned(u64),
-    Decimal(f64),
+    Decimal(String),
 }
 
 impl StrictNumber {
@@ -35,7 +35,7 @@ impl StrictNumber {
         match self {
             Self::Signed(value) => value.to_string(),
             Self::Unsigned(value) => value.to_string(),
-            Self::Decimal(value) => value.to_string(),
+            Self::Decimal(value) => value.clone(),
         }
     }
 
@@ -50,8 +50,11 @@ impl StrictNumber {
         let number = match self {
             Self::Signed(value) => serde_json::Number::from(*value),
             Self::Unsigned(value) => serde_json::Number::from(*value),
-            Self::Decimal(value) => serde_json::Number::from_f64(*value)
-                .ok_or_else(|| OkfError::new("OKF YAML contains a non-finite number"))?,
+            Self::Decimal(value) => {
+                serde_json::from_str::<serde_json::Number>(value).map_err(|error| {
+                    OkfError::new(format!("invalid OKF decimal `{value}`: {error}"))
+                })?
+            }
         };
         Ok(serde_json::Value::Number(number))
     }
@@ -149,7 +152,13 @@ impl<'de> Visitor<'de> for StrictValueVisitor {
                 "non-finite YAML numbers are not valid OKF values",
             ));
         }
-        Ok(StrictValue::Number(StrictNumber::Decimal(value)))
+        let lexical = value.to_string();
+        let parsed = purrdf_xsd::parse_by_iri(&lexical, XSD_DECIMAL)
+            .map_err(E::custom)?
+            .ok_or_else(|| E::custom("internal OKF decimal datatype is not recognized"))?;
+        Ok(StrictValue::Number(StrictNumber::Decimal(
+            parsed.canonical_lexical(),
+        )))
     }
 
     fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
@@ -197,10 +206,10 @@ struct ParsedDocument {
 }
 
 #[derive(Clone, Debug)]
-struct MarkdownLink {
-    text: String,
-    target: String,
-    ordinal: usize,
+pub(super) struct MarkdownLink {
+    pub(super) text: String,
+    pub(super) target: String,
+    pub(super) ordinal: usize,
 }
 
 type ParsedFrontmatter = (BTreeMap<String, StrictValue>, String);
@@ -516,6 +525,19 @@ fn build_event_graph(
                 }
                 "timestamp" => {
                     let text = scalar(value, key, &document.path)?;
+                    purrdf_xsd::parse_by_iri(&text, XSD_DATETIME)
+                        .map_err(|error| {
+                            document_error(
+                                &document.path,
+                                format!("invalid timestamp `{text}`: {error}"),
+                            )
+                        })?
+                        .ok_or_else(|| {
+                            document_error(
+                                &document.path,
+                                "internal OKF timestamp datatype is not recognized",
+                            )
+                        })?;
                     graph.quad_literal(subject, predicate, &text, XSD_DATETIME)?;
                 }
                 "type" | "title" | "description" => {
@@ -686,7 +708,10 @@ fn document_error(path: &str, detail: impl fmt::Display) -> OkfError {
     OkfError::new(format!("{path}: {detail}"))
 }
 
-fn extract_markdown_links(body: &str, path: &str) -> Result<Vec<MarkdownLink>, OkfError> {
+pub(super) fn extract_markdown_links(
+    body: &str,
+    path: &str,
+) -> Result<Vec<MarkdownLink>, OkfError> {
     let bytes = body.as_bytes();
     let mut links = Vec::new();
     let mut cursor = 0;
@@ -805,7 +830,10 @@ fn unescape_markdown(value: &str) -> String {
     out
 }
 
-fn resolve_link_path(source_path: &str, target: &str) -> Result<Option<String>, OkfError> {
+pub(super) fn resolve_link_path(
+    source_path: &str,
+    target: &str,
+) -> Result<Option<String>, OkfError> {
     let target = target.split('#').next().unwrap_or(target);
     if target.is_empty()
         || target.starts_with('/')
@@ -952,6 +980,20 @@ mod tests {
         let error =
             lift_okf_bundle(&bundle, &config(), &mut sink).expect_err("dangling link must fail");
         assert!(error.to_string().contains("dangling Markdown link"));
+        assert!(sink.dataset().is_none());
+    }
+
+    #[test]
+    fn invalid_timestamp_hard_fails_before_driving_the_sink() {
+        let bundle = OkfBundle::from_documents([(
+            "concept.md",
+            "---\ntype: Concept\ntimestamp: yesterday\n---\nbody\n",
+        )])
+        .expect("bundle");
+        let mut sink = DatasetSink::new();
+        let error = lift_okf_bundle(&bundle, &config(), &mut sink)
+            .expect_err("invalid xsd:dateTime must fail");
+        assert!(error.detail().contains("invalid timestamp"));
         assert!(sink.dataset().is_none());
     }
 

@@ -26,6 +26,9 @@ loss ledger) and adds what the kernel deliberately leaves out:
 - **Native text codecs** — first-party parsers/serializers for Turtle, TriG,
   N-Triples, N-Quads, and RDF/XML, plus JSON-LD (star) and YAML-LD; parsing
   can optionally record a source-position span table for diagnostics.
+- **Native OKF codec** — bidirectional Open Knowledge Format Markdown bundles
+  over the RDF event seams, with caller-owned vocabulary, deterministic YAML,
+  and an always-computed loss ledger.
 - **RDF 1.2 statement layer** — reifier bindings and annotations survive every
   star-capable round-trip; star-incapable projections drop them *loudly*, with
   the realized count handed to the loss ledger.
@@ -91,6 +94,45 @@ the structural triple term.
 
 Malformed input is a typed `RdfDiagnostic` with a source location where the
 codec can provide one — never a silent partial parse.
+
+### Open Knowledge Format bundles
+
+OKF uses a deterministic in-memory bundle so the same API works on native and
+`wasm32-unknown-unknown` targets. PurRDF never chooses a directory, archive, or
+vocabulary for the caller: filesystem materialization is outside the codec, and
+the namespace, document base, and recognized frontmatter keys are mandatory.
+
+```rust
+use purrdf_rdf::{
+    DatasetSink, OkfBundle, OkfConfig, lift_okf_bundle, write_okf_bundle,
+};
+
+let config = OkfConfig::new(
+    "https://example.org/okf#",
+    "https://example.org/doc/",
+    ["type", "title"],
+)?;
+let bundle = OkfBundle::from_documents([(
+    "concept.md",
+    "---\ntype: Concept\ntitle: Example\n---\nBody.\n",
+)])?;
+
+let mut sink = DatasetSink::new();
+let read = lift_okf_bundle(&bundle, &config, &mut sink)?;
+assert!(read.losses.is_empty());
+let dataset = sink.into_dataset().expect("the lift finished the sink");
+
+let written = write_okf_bundle(&dataset, &config)?;
+assert!(written.losses.is_empty());
+assert_eq!(written.documents, 1);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The reader drives any `RdfEventSink`; the writer is itself an
+`RdfDatasetVisitor`. Relative Markdown links preserve their exact RDF 1.2
+reifier and occurrence annotations. RDF rows outside the configured OKF
+profile are omitted only with deterministic, source-located `LossLedger`
+entries; ambiguous profile data hard-fails.
 
 ## Part of PurRDF
 

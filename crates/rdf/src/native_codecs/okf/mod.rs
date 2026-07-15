@@ -11,11 +11,13 @@
 //! default and mints no vocabulary IRI.
 
 mod reader;
+mod writer;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 pub use reader::lift_okf_bundle;
+pub use writer::{OkfWriteOutcome, OkfWriter, write_okf_bundle};
 
 use crate::LossLedger;
 
@@ -220,6 +222,11 @@ impl OkfConfig {
 
     pub(super) fn recognizes(&self, key: &str) -> bool {
         self.recognized_keys.contains(key)
+    }
+
+    pub(super) fn key_for_predicate<'a>(&'a self, iri: &str) -> Option<&'a str> {
+        let local = iri.strip_prefix(&self.namespace)?;
+        self.recognized_keys.get(local).map(String::as_str)
     }
 }
 

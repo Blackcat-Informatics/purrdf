@@ -91,6 +91,10 @@ pub mod viz;
 pub use dataset_io::dataset_from_bytes;
 pub use gts_import_graph::import_gts_graph;
 pub use gts_import_sink::import_gts_events;
+pub use native_codecs::okf::{
+    OkfBundle, OkfConfig, OkfError, OkfReadOutcome, OkfWriteOutcome, OkfWriter, lift_okf_bundle,
+    write_okf_bundle,
+};
 pub use native_codecs::{
     GtsCodecBackend, NativeRdfFormat, ParseOptions, SerializeOutcome, SpanTable, classify,
     parse_dataset, parse_dataset_with, serialize_dataset, serialize_dataset_base_only,

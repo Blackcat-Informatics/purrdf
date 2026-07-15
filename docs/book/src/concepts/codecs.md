@@ -38,6 +38,22 @@ let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
     .expect("serializes");
 ```
 
+## Open Knowledge Format bundles
+
+The native OKF codec maps caller-profiled RDF 1.2 datasets to agent-facing
+Markdown files with YAML frontmatter and lifts them back through the RDF event
+seam. OKF is an in-memory bundle API rather than another media type: callers
+choose how to store the files, so the same code remains deterministic and
+wasm-clean.
+
+`OkfConfig::new` requires the vocabulary namespace, document base IRI, and
+recognized frontmatter keys. There is no built-in ontology or namespace. Use
+`lift_okf_bundle` to drive an `RdfEventSink`, or `write_okf_bundle` (backed by
+`OkfWriter`, an `RdfDatasetVisitor`) to project a frozen dataset. Both directions
+always return a loss ledger. A lossless profile yields an empty ledger; named
+graphs, non-profile/OWL rows, and unrelated reifier or annotation rows are
+pinpointed explicitly when writing.
+
 ## Byte determinism
 
 Every serializer is **byte-deterministic**: the same dataset always produces
