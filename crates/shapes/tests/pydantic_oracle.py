@@ -183,6 +183,7 @@ def main() -> None:
                 "ex:address": {"ex:city": "E", "ex:postalCode": "A1"},
                 "ex:age": 42,
                 "ex:color": "ex:red",
+                "ex:friend": {"ex:age": 39, "ex:name": "Bob"},
                 "ex:label": "Al",
                 "ex:lookahead": "A",
                 "ex:name": "Alice",
