@@ -775,14 +775,14 @@ fn find_unescaped(bytes: &[u8], mut cursor: usize, needle: u8) -> Option<usize> 
 fn find_closing_paren(bytes: &[u8], mut cursor: usize) -> Option<usize> {
     let mut depth = 1usize;
     while cursor < bytes.len() {
-        if escaped(bytes, cursor) {
-            cursor += 1;
-        } else if bytes[cursor] == b'(' {
-            depth += 1;
-        } else if bytes[cursor] == b')' {
-            depth -= 1;
-            if depth == 0 {
-                return Some(cursor);
+        if !escaped(bytes, cursor) {
+            if bytes[cursor] == b'(' {
+                depth += 1;
+            } else if bytes[cursor] == b')' {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(cursor);
+                }
             }
         }
         cursor += 1;
@@ -981,6 +981,14 @@ mod tests {
             lift_okf_bundle(&bundle, &config(), &mut sink).expect_err("dangling link must fail");
         assert!(error.to_string().contains("dangling Markdown link"));
         assert!(sink.dataset().is_none());
+    }
+
+    #[test]
+    fn escaped_destination_character_does_not_hide_closing_parenthesis() {
+        let links = extract_markdown_links("See [literal](schema.md\\)).\n", "concept.md")
+            .expect("escaped destination character");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "schema.md)");
     }
 
     #[test]
