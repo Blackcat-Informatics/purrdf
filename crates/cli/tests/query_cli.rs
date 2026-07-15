@@ -448,6 +448,43 @@ fn corrupt_pack_fails_closed() {
     );
 }
 
+/// `--entailment` shares the exit-3 unsupported-regime boundary with `reason`
+/// (`crates/cli/src/reason.rs::resolve_materializable_regime`, wired into `query` via
+/// `crates/cli/src/query.rs`): `owl-direct`, `rif`, and `d` each need inputs (query class
+/// expressions or a rule set) the CLI cannot materialize, so `query --entailment` on any
+/// of them must exit code **3**, not merely fail.
+#[test]
+fn entailment_boundary_regimes_exit_three() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+    let query = "SELECT ?o WHERE { ?s <http://example.org/knows> ?o }";
+
+    for regime in ["owl-direct", "rif", "d"] {
+        let out = run(&[
+            "query",
+            "--data",
+            &ttl,
+            "--entailment",
+            regime,
+            "--results-format",
+            "json",
+            query,
+        ]);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "query --entailment {regime} must exit code 3 (unsupported-regime boundary); stderr:\n{}",
+            stderr(&out)
+        );
+        assert!(
+            stderr(&out).contains("cannot be materialized"),
+            "query --entailment {regime} must explain it cannot be materialized; got:\n{}",
+            stderr(&out)
+        );
+    }
+}
+
 /// A SELECT piped through stdout is stable enough to run as a process smoke (the binary
 /// spawns, reads the file, and writes results) — a belt-and-suspenders check that the
 /// query path does not deadlock on a captured stdout pipe.
