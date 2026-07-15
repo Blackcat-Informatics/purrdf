@@ -96,6 +96,19 @@ and hands `PackView::from_bytes` the resulting borrowed slice. See the
 [the backend contract](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/design/purrdf-backend-contract.md)
 for the full contract.
 
+## The columnar Parquet codec
+
+`purrdf::columnar` exposes the bidirectional SQL/DataFrame interchange path.
+It maps any `DatasetView` plus a content-addressed blob store to five standard
+Parquet files (`terms`, `quads`, `reifiers`, `annotations`, and `blobs`) and
+reads that exact profile back without Arrow or a general Parquet runtime. The
+mapping retains RDF 1.2 triple terms, reifiers, annotations, graph scope,
+directional literals, blank-node scope, and explicitly empty named graphs.
+
+The files are byte-deterministic and readable by engines such as DuckDB. See
+the [normative columnar schema](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/COLUMNAR.md)
+for every field and the deliberately narrow Parquet profile.
+
 ## Conformance
 
 The codecs are gated by the W3C `rdf-tests` syntax corpus, vendored and frozen

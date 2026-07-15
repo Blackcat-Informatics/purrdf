@@ -39,6 +39,7 @@ crates=(
   purrdf-xsd
   purrdf-gts
   purrdf-core
+  purrdf-columnar
   purrdf-entail
   purrdf-sparql-algebra
   purrdf-sparql-results

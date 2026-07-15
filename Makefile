@@ -111,7 +111,7 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 test: ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-doc: ## Build docs for the 16 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 17 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -165,7 +165,7 @@ rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-cor
 wasm: ## Prove the release crates build for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo check --locked --target wasm32-unknown-unknown --lib \
-			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-gts -p purrdf-core \
+			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
 			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
 			-p purrdf-validate -p purrdf -p purrdf-wasm; \

@@ -12,6 +12,7 @@
 //! | Module | Sub-crate(s) |
 //! |---|---|
 //! | (root) | [`purrdf_rdf`] — core types, codecs, GTS/text adapters |
+//! | [`columnar`] | [`purrdf_columnar`] (five-table Parquet codec) |
 //! | [`gts`] | [`purrdf_gts`] (container engine) + the [`purrdf_rdf`] GTS adapter |
 //! | [`sparql`] | [`purrdf_sparql_eval`] + [`purrdf_sparql_algebra`] + [`purrdf_sparql_results`] |
 //! | [`shapes`] | [`purrdf_shapes`] (SHACL) |
@@ -73,6 +74,11 @@ pub mod profile;
 pub use profile::{OntologyProfile, ReifierVocab};
 pub mod reasoning;
 pub use reasoning::{QueryEntailment, ReasoningError, query_with_entailment};
+
+/// Bidirectional, byte-deterministic five-table Parquet codec.
+pub mod columnar {
+    pub use purrdf_columnar::*;
+}
 
 // ── consumer-config types, surfaced directly ────────────────────────────────
 // A consumer parameterizes an emitter without reaching into a sub-crate.
@@ -175,6 +181,8 @@ mod tests {
 
     #[test]
     fn facade_exposes_the_completed_umbrella() {
+        assert_eq!(columnar::Table::ALL.len(), 5);
+
         // gts: the container engine (its `model`) and the rdf-level adapter
         // (`read_graph`) are both reachable under the one `gts` module.
         assert!(!format!("{:?}", gts::model::TermKind::Iri).is_empty());

@@ -1255,6 +1255,7 @@ dependencies = [
 name = "purrdf"
 version = "0.6.0"
 dependencies = [
+ "purrdf-columnar",
  "purrdf-entail",
  "purrdf-events",
  "purrdf-gts",
@@ -1293,6 +1294,17 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "tempfile",
+]
+
+[[package]]
+name = "purrdf-columnar"
+version = "0.6.0"
+dependencies = [
+ "criterion",
+ "pretty_assertions",
+ "proptest",
+ "purrdf-core",
+ "structured-zstd",
 ]
 
 [[package]]

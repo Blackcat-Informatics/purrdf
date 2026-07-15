@@ -22,6 +22,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf` | Umbrella facade (RDF surface at root; `slice`/`shapes` as modules) |
 | `purrdf-rdf` (`crates/rdf`) | Native text/XML/JSON-LD codecs, GTS adapters, describe, canonicalization |
 | `purrdf-core` (`crates/rdf-core`) | Interned IR kernel, diagnostics, store traits, provenance, RDFC-1.0 |
+| `purrdf-columnar` (`crates/columnar`) | Bidirectional five-table Parquet codec for RDF 1.2 + blobs |
 | `purrdf-gts` (`crates/gts`) | GTS container engine (CBOR log, BLAKE3, COSE) |
 | `purrdf-sparql-{algebra,eval,results}` | SPARQL 1.1/1.2 parser, evaluator, results |
 | `purrdf-shapes` (`crates/shapes`) | SHACL validation (full Core + SHACL-SPARQL + SHACL-AF) and SHACL Rules (`sh:rule` inference) |
@@ -39,7 +40,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 * **Kernel ring-fence.** `purrdf-core` must never depend on oxigraph or PyO3.
   `purrdf-iri`, `purrdf-xsd`, and `purrdf-events` must keep **zero runtime
   dependencies**.
-* **Everything is wasm-able.** Every release crate (all 15 published crates,
+* **Everything is wasm-able.** Every release crate (all 17 published crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls

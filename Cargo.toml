@@ -6,6 +6,7 @@ resolver = "2"
 members = [
     "bindings/python",
     "crates/cli",
+    "crates/columnar",
     "crates/entail",
     "crates/gts",
     "crates/iri",
@@ -45,6 +46,7 @@ homepage = "https://blackcatinformatics.ca/purrdf/"
 [workspace.dependencies]
 # --- internal crates (paths are relative to the WORKSPACE ROOT) ---
 purrdf = { path = "crates/purrdf", version = "0.6.0" }
+purrdf-columnar = { path = "crates/columnar", version = "0.6.0" }
 purrdf-core = { path = "crates/rdf-core", version = "0.6.0" }
 purrdf-entail = { path = "crates/entail", version = "0.6.0" }
 purrdf-events = { path = "crates/rdf-events", version = "0.6.0" }
