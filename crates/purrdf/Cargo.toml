@@ -26,6 +26,7 @@ crate-type = ["rlib"]
 path = "src/lib.rs"
 
 [dependencies]
+purrdf-columnar = { workspace = true }
 purrdf-rdf = { workspace = true }
 purrdf-slice = { workspace = true }
 purrdf-shapes = { workspace = true }

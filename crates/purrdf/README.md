@@ -118,6 +118,7 @@ let schema = purrdf::shex::parse_shexc(
 | Module | Sub-crate(s) |
 | --- | --- |
 | (root) | [`purrdf-rdf`](https://crates.io/crates/purrdf-rdf) — core types, codecs, GTS/text adapters |
+| `columnar` | [`purrdf-columnar`](https://crates.io/crates/purrdf-columnar) (five-table Parquet codec) |
 | `gts` | [`purrdf-gts`](https://crates.io/crates/purrdf-gts) + the RDF-level GTS adapter |
 | `sparql` | [`purrdf-sparql-algebra`](https://crates.io/crates/purrdf-sparql-algebra) + [`purrdf-sparql-eval`](https://crates.io/crates/purrdf-sparql-eval) + [`purrdf-sparql-results`](https://crates.io/crates/purrdf-sparql-results) |
 | `shapes` | [`purrdf-shapes`](https://crates.io/crates/purrdf-shapes) (SHACL) |

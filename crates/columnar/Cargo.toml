@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-columnar"
+description = "PurRDF's byte-deterministic, bidirectional five-table Parquet codec for RDF 1.2 datasets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-columnar"
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["rdf", "rdf-12", "parquet", "columnar", "duckdb"]
+categories = ["encoding", "data-structures", "wasm"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_columnar"
+
+[dependencies]
+purrdf-core = { workspace = true }
+structured-zstd = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+pretty_assertions = { workspace = true }
+proptest = { workspace = true }
+
+[[bench]]
+# End-to-end fixed-schema writer/reader latency over a representative RDF 1.2
+# dataset and blob store. Report-only; no performance winner is asserted.
+name = "codec"
+harness = false

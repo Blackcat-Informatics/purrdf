@@ -17,6 +17,11 @@ Copied from `gmeow-ontology`:
 - SHACL/shape validation: `shacl` copied as `shapes`
 - Carrier IR and dataset/slice wrappers: `slice`
 - Python package sources under `python/src/purrdf`
+- The normalized five-table Parquet projection in
+  `crates/pipeline/src/stages/parquet.rs` was used as the migration reference for
+  `purrdf-columnar`; PurRDF replaces its Arrow/Snappy writer-only path with the
+  first-party bidirectional RDF 1.2-complete codec documented in
+  `docs/COLUMNAR.md`.
 
 Copied from `gmeow-gts`:
 

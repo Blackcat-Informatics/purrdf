@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -111,7 +111,7 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 test: ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-doc: ## Build docs for the 16 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 17 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -136,7 +136,10 @@ book: book-samples ## Build The PurRDF Book (mdBook user guide) into docs/book/b
 	mdbook build docs/book
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes -p purrdf-wasm
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-shapes -p purrdf-wasm
+
+columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
+	bash scripts/check-columnar-oracle.sh
 
 bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NOT a test gate). See docs/BENCHMARKS.md.
 	cd bindings/python && uv run maturin develop && uv run python benchmarks/bench_compat.py
@@ -165,7 +168,7 @@ rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-cor
 wasm: ## Prove the release crates build for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo check --locked --target wasm32-unknown-unknown --lib \
-			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-gts -p purrdf-core \
+			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
 			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
 			-p purrdf-validate -p purrdf -p purrdf-wasm; \

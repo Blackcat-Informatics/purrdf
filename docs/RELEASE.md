@@ -72,6 +72,7 @@ Use that same publisher configuration for these crates:
 - `purrdf-xsd`
 - `purrdf-gts`
 - `purrdf-core`
+- `purrdf-columnar`
 - `purrdf-entail`
 - `purrdf-sparql-algebra`
 - `purrdf-sparql-results`
@@ -89,11 +90,11 @@ be configured. Bootstrap publishes for new crate records therefore use an
 explicit token. After those crate records exist, enable the Trusted Publisher
 entries above and use the GitHub release workflow for future releases.
 
-`purrdf-python`, `purrdf-sparql-conformance`, `purrdf-entail`, and `purrdf-capi`
+`purrdf-python`, `purrdf-sparql-conformance`, `purrdf-cli`, and `purrdf-capi`
 remain workspace crates, but they are not in this crates.io release lane.
 `purrdf-python` is the PyPI extension package under `bindings/python`, the
-conformance harness is an internal W3C fixture runner, `purrdf-entail` is an
-internal PurRDF entailment/reasoning crate with no publishable dependents, and
+conformance harness is an internal W3C fixture runner, `purrdf-cli` is the
+native command-line package, and
 the C ABI is a native artifact that should get a separate release lane if/when it
 is shipped.
 
