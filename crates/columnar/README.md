@@ -25,6 +25,10 @@ The exact schema and invariants are documented in
 [`docs/COLUMNAR.md`](../../docs/COLUMNAR.md). Most applications should access
 this crate as `purrdf::columnar` through the umbrella `purrdf` crate.
 
+`make columnar-oracle` writes a production-surface ZSTD fixture and asks the
+DuckDB CLI to read every file, verify representative row counts, and confirm
+that annotated text and raw payloads surface as `VARCHAR` and `BLOB`.
+
 ## License
 
 Licensed under either of

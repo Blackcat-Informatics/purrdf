@@ -540,7 +540,8 @@ fn build_blobs_table(blobs: &ContentStore) -> Result<TableData, ColumnarError> {
 #[cfg(test)]
 mod tests {
     use purrdf_core::{
-        BlankScope, ContentStore, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection,
+        BlankScope, ContentStore, PackBuilder, PackView, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+        RdfTextDirection,
     };
 
     use super::*;
@@ -613,5 +614,72 @@ mod tests {
             assert_eq!(read_table(bytes, table).unwrap().row_count, 0);
         }
         assert!(written.losses.is_empty());
+    }
+
+    #[test]
+    fn pack_view_and_native_dataset_emit_identical_files() {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_blank("subject", BlankScope(9));
+        let predicate = builder.intern_iri("https://example.org/p");
+        let object = builder.intern_literal(RdfLiteral::simple("object"));
+        let graph = builder.intern_iri("https://example.org/graph");
+        builder.push_quad(subject, predicate, object, Some(graph));
+        let triple = builder.intern_triple(subject, predicate, object);
+        let reifier = builder.intern_iri("https://example.org/reifier");
+        builder.push_reifier_in_graph(reifier, triple, Some(graph));
+        builder.push_annotation(reifier, predicate, object);
+        let dataset = builder.freeze().unwrap();
+        let blobs = ContentStore::new();
+        let pack_bytes = PackBuilder::build_bytes(&dataset).unwrap();
+        let pack = PackView::from_bytes(&pack_bytes).unwrap();
+        let native = write(&*dataset, &blobs, Compression::Zstd).unwrap();
+        let packed = write(&pack, &blobs, Compression::Zstd).unwrap();
+        assert_eq!(packed, native);
+    }
+
+    #[test]
+    fn term_and_quad_ingest_order_do_not_change_bytes() {
+        fn build(reverse: bool) -> std::sync::Arc<RdfDataset> {
+            let mut builder = RdfDatasetBuilder::new();
+            let (subject, second_subject, predicate, object, graph, reifier) = if reverse {
+                let reifier = builder.intern_iri("https://example.org/reifier");
+                let graph = builder.intern_iri("https://example.org/graph");
+                let object = builder.intern_literal(RdfLiteral::simple("object"));
+                let predicate = builder.intern_iri("https://example.org/p");
+                let second_subject = builder.intern_iri("https://example.org/second");
+                let subject = builder.intern_blank("subject", BlankScope(4));
+                (subject, second_subject, predicate, object, graph, reifier)
+            } else {
+                let subject = builder.intern_blank("subject", BlankScope(4));
+                let second_subject = builder.intern_iri("https://example.org/second");
+                let predicate = builder.intern_iri("https://example.org/p");
+                let object = builder.intern_literal(RdfLiteral::simple("object"));
+                let graph = builder.intern_iri("https://example.org/graph");
+                let reifier = builder.intern_iri("https://example.org/reifier");
+                (subject, second_subject, predicate, object, graph, reifier)
+            };
+            let rows = [
+                (subject, predicate, object, None),
+                (second_subject, predicate, subject, Some(graph)),
+            ];
+            for &(s, p, o, g) in if reverse {
+                rows.iter().rev().collect::<Vec<_>>()
+            } else {
+                rows.iter().collect()
+            } {
+                builder.push_quad(s, p, o, g);
+            }
+            let triple = builder.intern_triple(subject, predicate, object);
+            builder.push_reifier_in_graph(reifier, triple, Some(graph));
+            builder.push_annotation(reifier, predicate, object);
+            builder.freeze().unwrap()
+        }
+
+        let blobs = ContentStore::new();
+        for compression in [Compression::Uncompressed, Compression::Zstd] {
+            let forward = write(&*build(false), &blobs, compression).unwrap();
+            let reverse = write(&*build(true), &blobs, compression).unwrap();
+            assert_eq!(forward, reverse);
+        }
     }
 }
