@@ -73,7 +73,7 @@ pub fn write<D: DatasetView>(
 
     Ok(ColumnarWrite {
         files: ParquetFiles::from_array(files),
-        losses: LossLedger::new(),
+        losses: LossLedger::default(),
     })
 }
 

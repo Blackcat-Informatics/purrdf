@@ -62,7 +62,7 @@ pub fn read(files: &ParquetFiles) -> Result<ColumnarRead, ColumnarError> {
     Ok(ColumnarRead {
         dataset,
         blobs: content_store,
-        losses: LossLedger::new(),
+        losses: LossLedger::default(),
     })
 }
 
