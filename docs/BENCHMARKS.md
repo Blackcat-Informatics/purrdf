@@ -30,6 +30,8 @@ They live under `crates/*/benches/`:
 - `crates/rdf-core/benches/mutable.rs` — copy-on-write mutation paths.
 - `crates/rdf-core/benches/intern_content_id.rs` — content-addressing
   recognition cost for ordinary vs. genuine content-id IRIs.
+- `crates/rdf-core/benches/pack_index_compare.rs` — the shipped pack codec's
+  FoQ posting indexes vs. an internal bitmap wavelet-matrix candidate.
 - `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput.
 - `crates/sparql-algebra/benches/tokenize.rs` — SPARQL/Turtle lexer hot path
   (`IRIREF`, string literals, comments).
@@ -67,6 +69,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/rdf-core/benches/ir_layout.rs` | AoS / SoA / predicate-adjacency IR layout trade-offs (latency, allocations, peak RSS). |
 | `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR. |
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
+| `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
 | `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
@@ -78,6 +81,77 @@ Additional benches are run package-by-package, e.g.
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
+
+### Pack FoQ vs. bitmap wavelet matrix
+
+The pack-index comparison is an internal format-selection experiment; the
+wavelet matrix is not part of the library API or pack wire format. It stores one
+rank/select bitmap per alphabet bit over each existing `Sp` and `So` sequence.
+The FoQ comparand reproduces the shipped bit-packed offsets/counts and
+delta-varint posting data. Both candidates retain the same `Sp`/`Bp`/`So`/`Bo`
+adjacency, so the index-only and adjacency-plus-index totals are reported
+separately.
+
+Each deterministic row emits four `example.org` triples. The row contains a
+dense predicate and object, bounded cyclic predicate/object families, and a
+unique long-tail object. This supplies dense and sparse bindings for `(?,p,?)`,
+`(?,?,o)`, and `(?,p,o)` without RNG. Tests compare both candidates with a plain
+vector oracle and the real `PackView` results. The closed-form space model is
+checked against materialized encodings at alphabet-width boundaries before it
+is used for the 100-million and 1-billion-triple rows below.
+
+Run the correctness test, a short timing sample, or the one-pass space/query
+smoke mode with:
+
+```sh
+cargo test -p purrdf-core --test pack_index_compare --locked
+cargo bench -p purrdf-core --bench pack_index_compare --locked -- --quick
+cargo bench -p purrdf-core --bench pack_index_compare --locked -- --test
+```
+
+#### Representative space result
+
+These exact encoded byte counts use the workload above. “Total” is the shared
+adjacency plus the selected index; dictionary and outer pack framing are common
+and excluded.
+
+| triples | FoQ index | wavelet index | FoQ total | wavelet total |
+| ---: | ---: | ---: | ---: | ---: |
+| 65,536 | 280,221 | 263,162 | 490,485 | 473,426 |
+| 262,144 | 1,102,389 | 1,139,034 | 2,008,717 | 2,045,362 |
+| 1,048,576 | 4,480,461 | 4,912,570 | 8,367,653 | 8,799,762 |
+| 100,000,000 | 489,959,547 | 571,486,284 | 935,662,769 | 1,017,189,506 |
+| 1,000,000,000 | 5,284,861,054 | 6,230,470,670 | 10,116,892,394 | 11,062,502,010 |
+
+For this distribution, the wavelet index is last smaller at 61,182 rows
+(244,728 triples) and first larger at 61,183 rows (244,732 triples). At the two
+requested large scales it uses 16.6% and 17.9% more index bytes; including the
+shared adjacency, the complete structure is 8.7% and 9.3% larger. This result
+applies to the concrete rank-directory bitmap representation measured here, not
+to an RRR entropy-coded representation.
+
+#### Representative timing result
+
+This `--quick` snapshot was taken on 2026-07-14 with `rustc 1.96.1`, Linux
+7.1.3, and an AMD Ryzen AI MAX+ 395 (16 cores / 32 threads). The query fixture is
+262,144 triples. “Production” is the real `PackView` FoQ path; the isolated
+columns remove dictionary/view overhead and are the direct index comparison.
+Values are Criterion point estimates rounded to three significant figures.
+
+| operation | production FoQ | isolated FoQ | isolated wavelet | wavelet / FoQ |
+| --- | ---: | ---: | ---: | ---: |
+| build complete pack / index | 336 ms | 12.5 ms | 7.21 ms | 0.58× |
+| `(?,p,?)`, dense | 5.22 ms | 3.76 ms | 31.3 ms | 8.31× |
+| `(?,?,o)`, dense | 671 µs | 76.3 µs | 45.0 ms | 590× |
+| `(?,p,o)`, dense | 658 µs | 162 µs | 70.5 ms | 436× |
+| `(?,p,?)`, sparse | 3.13 µs | 2.19 µs | 13.2 µs | 6.01× |
+| `(?,?,o)`, sparse | 79.6 ns | 13.6 ns | 431 ns | 31.7× |
+| `(?,p,o)`, sparse | 247 ns | 144 ns | 11.7 µs | 81.4× |
+
+The bitmap wavelet matrix builds its isolated indexes about 42% faster, but it
+is larger at the target scales and regresses every measured query shape. The
+measured production decision is therefore to retain both FoQ posting indexes;
+pack bytes and decoding behavior remain unchanged.
 
 ## Python compat harness (`bench_compat.py`)
 
