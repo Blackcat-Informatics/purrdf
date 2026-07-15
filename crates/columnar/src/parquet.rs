@@ -29,6 +29,12 @@ const CODEC_UNCOMPRESSED: i32 = 0;
 const CODEC_ZSTD: i32 = 6;
 const PAGE_TYPE_DATA_V2: i32 = 3;
 
+// The fixed profile keeps one decoded table resident at a time. Bound both the
+// column slots and their uncompressed value bytes so hostile metadata cannot
+// turn a small compressed input into an allocator-sized request.
+const MAX_DECODED_TABLE_BYTES: usize = 256 * 1024 * 1024;
+const MAX_INITIAL_ROW_CAPACITY: usize = 65_536;
+
 /// Page compression selected for one deterministic five-table write.
 ///
 /// This is a runtime value, never a Cargo feature: both modes are always
@@ -143,6 +149,22 @@ impl ColumnValues {
         }
         Ok(out)
     }
+
+    fn plain_len(&self) -> Result<usize, ColumnarError> {
+        match self {
+            Self::Int64(values) => values
+                .len()
+                .saturating_sub(self.null_count())
+                .checked_mul(size_of::<i64>())
+                .ok_or_else(table_budget_overflow),
+            Self::ByteArray(values) => values.iter().flatten().try_fold(0usize, |total, value| {
+                total
+                    .checked_add(size_of::<i32>())
+                    .and_then(|total| total.checked_add(value.len()))
+                    .ok_or_else(table_budget_overflow)
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,66 +176,126 @@ pub(crate) struct TableData {
 
 impl TableData {
     pub(crate) fn new(table: Table, columns: Vec<ColumnValues>) -> Result<Self, ColumnarError> {
-        let schema = table.schema();
-        if columns.len() != schema.columns.len() {
-            return Err(ColumnarError::malformed(
-                "table columns",
-                format!(
-                    "{} has {} columns, expected {}",
-                    table.name(),
-                    columns.len(),
-                    schema.columns.len()
-                ),
-            ));
-        }
-        let row_count = columns.first().map_or(0, ColumnValues::len);
-        if row_count > i32::MAX as usize {
-            return Err(ColumnarError::LimitExceeded {
-                context: "Parquet row count",
-                value: row_count as u64,
-                maximum: i32::MAX as u64,
-            });
-        }
-        for (column, expected) in columns.iter().zip(schema.columns) {
-            if column.len() != row_count {
-                return Err(ColumnarError::malformed(
-                    "table columns",
-                    format!(
-                        "{}.{} has {} rows, expected {row_count}",
-                        table.name(),
-                        expected.name,
-                        column.len()
-                    ),
-                ));
-            }
-            if column.physical_type() != expected.physical_type {
-                return Err(ColumnarError::malformed(
-                    "table columns",
-                    format!(
-                        "{}.{} has physical type {:?}, expected {:?}",
-                        table.name(),
-                        expected.name,
-                        column.physical_type(),
-                        expected.physical_type
-                    ),
-                ));
-            }
-            if expected.repetition == Repetition::Required && column.null_count() != 0 {
-                return Err(ColumnarError::malformed(
-                    "table columns",
-                    format!(
-                        "required column {}.{} contains null",
-                        table.name(),
-                        expected.name
-                    ),
-                ));
-            }
-        }
+        let row_count = validate_table_columns(table, &columns)?;
+        validate_decoded_table_budget(table, row_count, plain_columns_len(&columns)?)?;
         Ok(Self {
             table,
             columns,
             row_count,
         })
+    }
+}
+
+fn validate_table_columns(table: Table, columns: &[ColumnValues]) -> Result<usize, ColumnarError> {
+    let schema = table.schema();
+    if columns.len() != schema.columns.len() {
+        return Err(ColumnarError::malformed(
+            "table columns",
+            format!(
+                "{} has {} columns, expected {}",
+                table.name(),
+                columns.len(),
+                schema.columns.len()
+            ),
+        ));
+    }
+    let row_count = columns.first().map_or(0, ColumnValues::len);
+    if row_count > i32::MAX as usize {
+        return Err(ColumnarError::LimitExceeded {
+            context: "Parquet row count",
+            value: row_count as u64,
+            maximum: i32::MAX as u64,
+        });
+    }
+    for (column, expected) in columns.iter().zip(schema.columns) {
+        if column.len() != row_count {
+            return Err(ColumnarError::malformed(
+                "table columns",
+                format!(
+                    "{}.{} has {} rows, expected {row_count}",
+                    table.name(),
+                    expected.name,
+                    column.len()
+                ),
+            ));
+        }
+        if column.physical_type() != expected.physical_type {
+            return Err(ColumnarError::malformed(
+                "table columns",
+                format!(
+                    "{}.{} has physical type {:?}, expected {:?}",
+                    table.name(),
+                    expected.name,
+                    column.physical_type(),
+                    expected.physical_type
+                ),
+            ));
+        }
+        if expected.repetition == Repetition::Required && column.null_count() != 0 {
+            return Err(ColumnarError::malformed(
+                "table columns",
+                format!(
+                    "required column {}.{} contains null",
+                    table.name(),
+                    expected.name
+                ),
+            ));
+        }
+    }
+    Ok(row_count)
+}
+
+fn plain_columns_len(columns: &[ColumnValues]) -> Result<usize, ColumnarError> {
+    columns.iter().try_fold(0usize, |total, column| {
+        total
+            .checked_add(column.plain_len()?)
+            .ok_or_else(table_budget_overflow)
+    })
+}
+
+fn validate_decoded_table_budget(
+    table: Table,
+    row_count: usize,
+    uncompressed_bytes: usize,
+) -> Result<(), ColumnarError> {
+    let bytes_per_row = table
+        .schema()
+        .columns
+        .iter()
+        .try_fold(0usize, |total, column| {
+            let slot = match column.physical_type {
+                PhysicalType::Int64 => size_of::<Option<i64>>(),
+                PhysicalType::ByteArray => size_of::<Option<Vec<u8>>>(),
+            };
+            total.checked_add(slot).ok_or_else(table_budget_overflow)
+        })?;
+    let decoded_bytes = bytes_per_row
+        .checked_mul(row_count)
+        .and_then(|slots| slots.checked_add(uncompressed_bytes))
+        .ok_or_else(table_budget_overflow)?;
+    if decoded_bytes > MAX_DECODED_TABLE_BYTES {
+        return Err(ColumnarError::LimitExceeded {
+            context: "decoded Parquet table bytes",
+            value: decoded_bytes as u64,
+            maximum: MAX_DECODED_TABLE_BYTES as u64,
+        });
+    }
+    Ok(())
+}
+
+fn table_budget_overflow() -> ColumnarError {
+    ColumnarError::LimitExceeded {
+        context: "decoded Parquet table bytes",
+        value: u64::MAX,
+        maximum: MAX_DECODED_TABLE_BYTES as u64,
+    }
+}
+
+pub(crate) const fn bounded_row_capacity(row_count: usize) -> usize {
+    if row_count < MAX_INITIAL_ROW_CAPACITY {
+        row_count
+    } else {
+        MAX_INITIAL_ROW_CAPACITY
     }
 }
 
@@ -261,6 +343,22 @@ pub(crate) fn write_table(
         }
     }
 
+    let total_uncompressed = columns.iter().try_fold(0i64, |total, column| {
+        total
+            .checked_add(column.total_uncompressed_size)
+            .ok_or_else(|| {
+                ColumnarError::malformed(
+                    "row group metadata",
+                    "uncompressed byte total overflows i64",
+                )
+            })
+    })?;
+    validate_decoded_table_budget(
+        data.table,
+        data.row_count,
+        nonnegative_usize(total_uncompressed, "row group uncompressed byte size")?,
+    )?;
+
     let footer = encode_file_metadata(data, &columns);
     let footer_len = u32::try_from(footer.len()).map_err(|_| ColumnarError::LimitExceeded {
         context: "Parquet footer length",
@@ -274,13 +372,14 @@ pub(crate) fn write_table(
 }
 
 fn validate_table_data(data: &TableData) -> Result<(), ColumnarError> {
-    let rebuilt = TableData::new(data.table, data.columns.clone())?;
-    if rebuilt.row_count != data.row_count {
+    let row_count = validate_table_columns(data.table, &data.columns)?;
+    validate_decoded_table_budget(data.table, row_count, plain_columns_len(&data.columns)?)?;
+    if row_count != data.row_count {
         return Err(ColumnarError::malformed(
             "table row count",
             format!(
                 "stored row count {} disagrees with columns {}",
-                data.row_count, rebuilt.row_count
+                data.row_count, row_count
             ),
         ));
     }
@@ -306,12 +405,13 @@ fn encode_column(
         Vec::new()
     };
     let plain = values.encode_plain()?;
+    let plain_len = plain.len();
     let compressed_values = match compression {
-        Compression::Uncompressed => plain.clone(),
+        Compression::Uncompressed => plain,
         Compression::Zstd => compress_slice_to_vec(&plain, CompressionLevel::Level(3)),
     };
     let uncompressed_page_size = checked_i32_len(
-        definitions.len().checked_add(plain.len()).ok_or_else(|| {
+        definitions.len().checked_add(plain_len).ok_or_else(|| {
             ColumnarError::malformed("Parquet page size", "length addition overflows usize")
         })?,
         "Parquet uncompressed page size",
@@ -563,6 +663,32 @@ pub(crate) fn read_table(bytes: &[u8], table: Table) -> Result<TableData, Column
     }
 
     let row_group = &metadata.row_groups[0];
+    let declared_uncompressed_total =
+        row_group.columns.iter().try_fold(0i64, |total, column| {
+            total
+                .checked_add(column.metadata.total_uncompressed_size)
+                .ok_or_else(|| {
+                    ColumnarError::malformed(
+                        "row group metadata",
+                        "uncompressed byte total overflows i64",
+                    )
+                })
+        })?;
+    if row_group.total_byte_size != declared_uncompressed_total {
+        return Err(ColumnarError::malformed(
+            "row group metadata",
+            "total_byte_size disagrees with column chunks",
+        ));
+    }
+    validate_decoded_table_budget(
+        table,
+        row_count,
+        nonnegative_usize(
+            declared_uncompressed_total,
+            "row group uncompressed byte size",
+        )?,
+    )?;
+
     let mut cursor = PARQUET_MAGIC.len();
     let mut decoded = Vec::with_capacity(row_group.columns.len());
     let mut uncompressed_total = 0i64;
@@ -609,7 +735,6 @@ pub(crate) fn read_table(bytes: &[u8], table: Table) -> Result<TableData, Column
         let page = page_region
             .get(..page_len)
             .ok_or_else(|| ColumnarError::truncated("column page", page_len, page_region.len()))?;
-        decoded.push(decode_page(page, &header, schema, row_count, compression)?);
 
         let computed_uncompressed = i64::try_from(header.header_len)
             .expect("header length fits i64")
@@ -638,6 +763,9 @@ pub(crate) fn read_table(bytes: &[u8], table: Table) -> Result<TableData, Column
                 ),
             ));
         }
+        // Validate every metadata cross-reference before allocating the decoded
+        // column or entering the decompressor.
+        decoded.push(decode_page(page, &header, schema, row_count, compression)?);
         uncompressed_total += computed_uncompressed;
         compressed_total += computed_compressed;
         cursor = cursor.checked_add(page_len).ok_or_else(|| {
@@ -650,7 +778,7 @@ pub(crate) fn read_table(bytes: &[u8], table: Table) -> Result<TableData, Column
             format!("pages end at {cursor}, footer begins at {footer_start}"),
         ));
     }
-    if row_group.total_byte_size != uncompressed_total {
+    if declared_uncompressed_total != uncompressed_total {
         return Err(ColumnarError::malformed(
             "row group metadata",
             "total_byte_size disagrees with column chunks",
@@ -1315,6 +1443,13 @@ fn decode_page(
                 "smaller than definition-level section",
             )
         })?;
+    if plain_len > MAX_DECODED_TABLE_BYTES {
+        return Err(ColumnarError::LimitExceeded {
+            context: "uncompressed Parquet page value bytes",
+            value: plain_len as u64,
+            maximum: MAX_DECODED_TABLE_BYTES as u64,
+        });
+    }
     let plain = match compression {
         Compression::Uncompressed => {
             if encoded_values.len() != plain_len {
@@ -1361,7 +1496,7 @@ fn decode_page(
 
 fn decode_definition_levels(bytes: &[u8], row_count: usize) -> Result<Vec<bool>, ColumnarError> {
     let mut pos = 0usize;
-    let mut levels = Vec::with_capacity(row_count);
+    let mut levels = Vec::with_capacity(bounded_row_capacity(row_count));
     while levels.len() < row_count {
         let header = read_varint(bytes, &mut pos)
             .map_err(|error| ColumnarError::malformed("definition-level RLE", error.to_string()))?;
@@ -1409,7 +1544,7 @@ fn decode_plain(
     let mut pos = 0usize;
     match physical_type {
         PhysicalType::Int64 => {
-            let mut values = Vec::with_capacity(definitions.len());
+            let mut values = Vec::with_capacity(bounded_row_capacity(definitions.len()));
             for &present in definitions {
                 if !present {
                     values.push(None);
@@ -1435,7 +1570,7 @@ fn decode_plain(
             Ok(ColumnValues::Int64(values))
         }
         PhysicalType::ByteArray => {
-            let mut values = Vec::with_capacity(definitions.len());
+            let mut values = Vec::with_capacity(bounded_row_capacity(definitions.len()));
             for &present in definitions {
                 if !present {
                     values.push(None);
@@ -1586,5 +1721,50 @@ mod tests {
         let mut encoded = encode_definition_levels([true, true, false].into_iter());
         encoded.push(0);
         assert!(decode_definition_levels(&encoded, 3).is_err());
+    }
+
+    #[test]
+    fn decoded_table_budget_rejects_adversarial_row_counts() {
+        assert!(matches!(
+            validate_decoded_table_budget(Table::Quads, i32::MAX as usize, 0),
+            Err(ColumnarError::LimitExceeded {
+                context: "decoded Parquet table bytes",
+                ..
+            })
+        ));
+        assert_eq!(bounded_row_capacity(usize::MAX), 65_536);
+    }
+
+    #[test]
+    fn oversized_zstd_output_is_rejected_before_allocation() {
+        let oversized = MAX_DECODED_TABLE_BYTES + 1;
+        let header = ParsedPageHeader {
+            page_type: PAGE_TYPE_DATA_V2,
+            uncompressed_page_size: i32::try_from(oversized).unwrap(),
+            compressed_page_size: 0,
+            data_v2: ParsedDataPageV2 {
+                num_values: 1,
+                num_nulls: 0,
+                num_rows: 1,
+                encoding: ENCODING_PLAIN,
+                definition_levels_byte_length: 0,
+                repetition_levels_byte_length: 0,
+                is_compressed: true,
+            },
+            header_len: 0,
+        };
+        assert!(matches!(
+            decode_page(
+                &[],
+                &header,
+                &Table::Quads.schema().columns[0],
+                1,
+                Compression::Zstd,
+            ),
+            Err(ColumnarError::LimitExceeded {
+                context: "uncompressed Parquet page value bytes",
+                ..
+            })
+        ));
     }
 }

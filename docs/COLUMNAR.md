@@ -100,3 +100,13 @@ The reader is intentionally not a general Parquet engine. It accepts this exact
 schema and encoding profile and fails closed on structural drift, unsupported
 features, malformed references, invalid RDF positions, decompression size
 mismatches, or trailing data.
+
+## Decode safety budget
+
+Before allocating a decoded column or entering Zstd, the reader cross-checks the
+row-group, column-chunk, and page sizes and estimates the table's resident column
+slots plus uncompressed value bytes. That fixed-profile working set may not
+exceed 256 MiB per table. Metadata-derived vectors initially reserve at most
+65,536 rows, and the public reader decodes and releases one physical table at a
+time. Inputs beyond the ceiling fail with `ColumnarError::LimitExceeded`; the
+writer applies the same budget so it cannot emit files its paired reader rejects.

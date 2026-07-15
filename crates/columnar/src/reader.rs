@@ -14,7 +14,7 @@ use purrdf_core::{
 
 use crate::error::ColumnarError;
 use crate::files::ParquetFiles;
-use crate::parquet::{ColumnValues, TableData, read_table};
+use crate::parquet::{ColumnValues, TableData, bounded_row_capacity, read_table};
 use crate::schema::Table;
 
 type QuadRow = (usize, usize, usize, Option<usize>);
@@ -42,21 +42,30 @@ pub struct ColumnarRead {
 ///
 /// # Errors
 ///
-/// Returns [`ColumnarError`] for malformed Parquet, schema/profile drift, invalid
-/// UTF-8 or RDF term records, non-canonical ordering, invalid references, blob
-/// digest mismatches, or RDF positional violations.
+/// Returns [`ColumnarError`] for malformed Parquet, schema/profile drift, safety
+/// budget exhaustion, invalid UTF-8 or RDF term records, non-canonical ordering,
+/// invalid references, blob digest mismatches, or RDF positional violations.
 pub fn read(files: &ParquetFiles) -> Result<ColumnarRead, ColumnarError> {
-    let terms = read_table(files.get(Table::Terms), Table::Terms)?;
-    let quads = read_table(files.get(Table::Quads), Table::Quads)?;
-    let reifiers = read_table(files.get(Table::Reifiers), Table::Reifiers)?;
-    let annotations = read_table(files.get(Table::Annotations), Table::Annotations)?;
-    let blobs = read_table(files.get(Table::Blobs), Table::Blobs)?;
-
-    let dictionary = Dictionary::decode(&terms)?;
-    let quad_rows = decode_quad_rows(&quads, &dictionary.named_graphs)?;
-    let reifier_rows = decode_reifier_rows(&reifiers, &dictionary.named_graphs)?;
-    let annotation_rows = decode_quad_rows(&annotations, &dictionary.named_graphs)?;
-    let content_store = decode_blobs(&blobs)?;
+    let dictionary = {
+        let terms = read_table(files.get(Table::Terms), Table::Terms)?;
+        Dictionary::decode(&terms)?
+    };
+    let quad_rows = {
+        let quads = read_table(files.get(Table::Quads), Table::Quads)?;
+        decode_quad_rows(&quads, &dictionary.named_graphs)?
+    };
+    let reifier_rows = {
+        let reifiers = read_table(files.get(Table::Reifiers), Table::Reifiers)?;
+        decode_reifier_rows(&reifiers, &dictionary.named_graphs)?
+    };
+    let annotation_rows = {
+        let annotations = read_table(files.get(Table::Annotations), Table::Annotations)?;
+        decode_quad_rows(&annotations, &dictionary.named_graphs)?
+    };
+    let content_store = {
+        let blobs = read_table(files.get(Table::Blobs), Table::Blobs)?;
+        decode_blobs(&blobs)?
+    };
     let dataset = reconstruct_dataset(&dictionary, &quad_rows, &reifier_rows, &annotation_rows)?;
 
     Ok(ColumnarRead {
@@ -99,7 +108,7 @@ impl Dictionary {
         ensure_strict_order(&values, "term dictionary order")?;
 
         let named_column = int_column(data, 10)?;
-        let mut named_graphs = Vec::with_capacity(values.len());
+        let mut named_graphs = Vec::with_capacity(bounded_row_capacity(values.len()));
         for (row, value) in values.iter().enumerate() {
             let flag = required_i64(named_column, row, "terms.named_graph")?;
             let named = match flag {
@@ -145,7 +154,7 @@ fn parse_term_records(data: &TableData) -> Result<Vec<TermRecord>, ColumnarError
     let triple_subjects = int_column(data, 7)?;
     let triple_predicates = int_column(data, 8)?;
     let triple_objects = int_column(data, 9)?;
-    let mut records = Vec::with_capacity(data.row_count);
+    let mut records = Vec::with_capacity(bounded_row_capacity(data.row_count));
 
     for row in 0..data.row_count {
         let id = required_i64(ids, row, "terms.id")?;
@@ -418,7 +427,7 @@ fn decode_quad_rows(
     let second = int_column(data, 1)?;
     let third = int_column(data, 2)?;
     let graphs = int_column(data, 3)?;
-    let mut rows = Vec::with_capacity(data.row_count);
+    let mut rows = Vec::with_capacity(bounded_row_capacity(data.row_count));
     for row in 0..data.row_count {
         rows.push((
             required_term_ref(first, row, named_graphs.len(), "row first term")?,
@@ -440,7 +449,7 @@ fn decode_reifier_rows(
     let predicates = int_column(data, 2)?;
     let objects = int_column(data, 3)?;
     let graphs = int_column(data, 4)?;
-    let mut rows = Vec::with_capacity(data.row_count);
+    let mut rows = Vec::with_capacity(bounded_row_capacity(data.row_count));
     for row in 0..data.row_count {
         rows.push((
             required_term_ref(reifiers, row, named_graphs.len(), "reifiers.reifier")?,
