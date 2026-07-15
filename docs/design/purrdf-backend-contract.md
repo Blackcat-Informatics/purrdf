@@ -14,8 +14,9 @@ The contract has two families of clauses:
 - **C-clauses** describe the term-identity model and the read/write traits over a
   single dataset (`DatasetView`, `DatasetMut`, `RdfStoreCapabilities`).
 - **G-clauses** describe the paged storage layer: a global, durable dictionary
-  generation and the deterministic, value-boundary rules by which quad-disjoint
-  pages compose into one logical dataset.
+  generation, the deterministic value-boundary rules by which quad-disjoint pages
+  compose into one logical dataset, and the completeness boundary for providers
+  that can fail after sealing.
 
 All example IRIs use `example.org`. PurRDF mints no vocabulary IRIs; every
 vocabulary term is caller-supplied configuration.
@@ -120,8 +121,12 @@ The graph slot is stored as `g: Option<TermId>` where `None` is the default
 graph. Because `Option<TermId>` alone cannot distinguish *any graph* from *the
 default graph*, the read view uses the dedicated three-way `GraphMatch` enum, which
 is deliberately exhaustive (a quad's graph is either the default or exactly one
-named graph). All `DatasetView` methods are infallible for a frozen, validated
-dataset.
+named graph). All `DatasetView` methods have an infallible iterator shape. For a
+frozen, validated resident dataset, that shape is also an operational guarantee. A
+lazy backend whose storage can fail keeps the same shape but additionally implements
+`FallibleDatasetView`; its iterators stop at the first fault and its operation status
+becomes failed. Such a view is complete only through the guarded execution boundary
+described by G7, never from iterator exhaustion alone.
 
 ### C4 — `DatasetMut` mutates by value, not by id
 
@@ -230,10 +235,14 @@ two that share a base quad. The refusal names which stream the duplicate is in.
 ### G4 — a `PageProvider` is deterministic and thread-safe
 
 A `PageProvider` supplies page contents to the paged layer on demand. It must be
-**deterministic**: the same `PageId` always yields byte-identical quads. It must
-also be `Send + Sync`, so the paged layer can be shared and read concurrently.
-Determinism at this seam is what lets the composed dataset's egress order and
-serialization be reproducible.
+**deterministic within one `PageGeneration`**: repeated successful materializations
+of the same `PageId` return an RDF-value-identical frozen dataset with the same
+local term layout and byte charge. Dataset, generation, and charge are returned
+atomically as one `PageMaterialization`; failure is a typed `PageFault`, not an
+empty page. A provider changes its generation whenever page values, local term ids,
+or byte charges change. It must also be `Send + Sync`, so the paged layer can be
+shared across operations. Determinism at this seam is what makes query evidence,
+egress order, and serialization reproducible.
 
 ### G5 — the shipped `PageProvider` is in-memory; durable tiers are external
 
@@ -243,7 +252,9 @@ published crate, because every published crate must stay
 `wasm32-unknown-unknown`-clean: no filesystem, no threads, no wall-clock, no RNG.
 The in-memory provider satisfies the G4 contract on every target, including
 wasm32; a consumer that needs persistence implements the same deterministic,
-`Send + Sync` `PageProvider` seam against its own storage tier.
+`Send + Sync` `PageProvider` seam against its own storage tier. Cancellation
+tokens, deadlines, filesystem I/O, key management, and clocks remain host-owned;
+the provider only reports their typed outcomes to PurRDF.
 
 ### G6 — two construction paths: eager seal vs warm restart
 
@@ -258,8 +269,10 @@ wasm32; a consumer that needs persistence implements the same deterministic,
   `GlobalDictionary` and per-page `PagePart`s (`to_parts` is the inverse) WITHOUT
   materializing any page — construction is `O(page count)`, not `O(all content)`. A
   store that has already sealed once and persisted its dictionary and translations
-  reloads through this path. It does NOT re-verify G3 (it cannot without reading the
-  pages); the caller warrants the parts came from a previously-disjoint seal.
+  reloads through this path. The persisted generation and page count must match the
+  provider before construction succeeds. It does NOT re-verify G3 (it cannot without
+  reading the pages); the caller warrants the parts came from a previously-disjoint
+  seal.
 
 The reference `PagedDataset` is a **demonstrator** backend: `from_provider`'s eager
 seal means it does not itself build a dictionary incrementally at ingest. A consumer
@@ -267,6 +280,59 @@ whose working set exceeds what a single eager scan can afford builds its index
 incrementally at ingest and reaches the evaluator either through `from_parts` (a warm
 restart from that persisted index) or by implementing `DatasetView` directly (C1) —
 the id-agnostic read seam serves the evaluator over any backend, not only this one.
+
+### G7 — infallible and operationally fallible query surfaces are distinct
+
+The ordinary `DatasetView` query entry points are for views whose reads cannot fail
+after construction. This includes `RdfDataset`, an opened and validated `PackView`,
+and a `PagedDataset` whose provider guarantees infallible re-materialization (the
+shipped `InMemoryPageProvider`). They return the ordinary complete `SparqlResult`
+or a query diagnostic and retain the evaluator's parallel fast path.
+
+A `PagedDataset` backed by storage that can fail after sealing MUST instead create a
+fresh operation-local `PagedQueryView` with `PagedDataset::query_view(limits)` and
+pass it to `query_fallible_view` or `query_prepared_fallible_view`. These entry points
+sample `FallibleDatasetView::operation_status` before evaluation and after result
+materialization. Only a final ready checkpoint produces `CompleteSparqlResult`.
+Provider failure, snapshot drift, budget exhaustion, cancellation, deadline, or
+invalid data produces `FallibleSparqlError::Operational`; any internal partial rows
+are discarded. PurRDF intentionally exposes no partial-result mode.
+
+Directly passing an operationally fallible provider-backed `PagedDataset` to an
+ordinary query entry point violates this contract: iterator exhaustion is not proof
+that unavailable pages contained no RDF facts.
+
+### G8 — page and byte evidence is exact, operation-local, and deterministic
+
+`PagedQueryLimits` applies inclusive ceilings to distinct pages admitted by one
+operation. Equality with either ceiling succeeds; zero is a valid hard limit.
+The view checks the page ceiling, then the byte ceiling, before asking the provider
+to materialize a first-seen page. A cached re-read consumes no additional page or
+bytes.
+
+`PagedQueryEvidence` records the sealed generation, every first page request in
+evaluation order (including a refused or failed request), the number of pages
+successfully validated and admitted, and the sum of their sealed byte charges.
+Failed or refused pages are requested but not consumed. The guarded evaluator runs
+the operation sequentially, so the same snapshot, query, provider state, and limits
+produce the same request order, totals, and terminal status. A genuinely empty
+answer is therefore distinguishable from operational incompleteness: it is wrapped
+in `CompleteSparqlResult` with final ready evidence.
+
+### G9 — every operation is bound to its sealed snapshot
+
+The provider generation, page count, per-page translation, capabilities, quad count,
+and byte charge are certified at the eager seal or supplied by a checked warm
+restart. On each first page admission, the guarded view verifies provider generation
+before and after materialization and verifies the returned generation, byte charge,
+term layout and values, quad count, and capabilities against the seal metadata.
+Status checkpoints also verify generation even when a query reads no page.
+
+The first operational failure is sticky and no later read yields data. Provider,
+stale-generation, cancellation, deadline, and invalid-data failures remain distinct;
+page-budget and byte-budget exhaustion are separate query errors. PurRDF never reads
+a wall clock: a host enforces cancellation or a deadline and reports the corresponding
+typed `PageFault` from `materialize`.
 
 ---
 

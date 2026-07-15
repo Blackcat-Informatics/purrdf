@@ -5,9 +5,11 @@
 //!
 //! [`NativeSparqlEngine`] is the single required impl of the `purrdf-core`
 //! `SparqlEngine` seam — the native replacement for the oxigraph-family
-//! `spareval` on the query path. Its `Dataset` is the concrete frozen
-//! [`RdfDataset`]: the evaluator needs `term_id_by_value` (P4), which is an
-//! inherent method on the dataset rather than part of the `DatasetView` trait.
+//! `spareval` on the query path. Ordinary query entry points accept operationally
+//! infallible [`DatasetView`] backends such as [`RdfDataset`] and validated pack
+//! views. Lazy backends that can fail during execution use the distinct
+//! [`FallibleDatasetView`] entry points, which return a completeness certificate or
+//! a typed operational failure with evidence.
 //!
 //! The [`PlanCache`] memoizes parsing so the static generated query corpus compiles
 //! to algebra once, not per run. Full cost-based planning is out of scope here; the
@@ -191,9 +193,13 @@ impl NativeSparqlEngine {
         self.query_prepared_view(&**dataset, prepared, substitutions)
     }
 
-    /// [`Self::query_prepared`] over any [`DatasetView`] backend whose id type is the
-    /// production [`TermId`](purrdf_core::TermId). The concrete [`Self::query_prepared`] is a thin wrapper
-    /// that derefs its `Arc<RdfDataset>` and calls this.
+    /// [`Self::query_prepared`] over any operationally infallible [`DatasetView`]
+    /// backend. The concrete [`Self::query_prepared`] is a thin wrapper that derefs its
+    /// `Arc<RdfDataset>` and calls this.
+    ///
+    /// Do not use this entry point for a lazy view whose backing storage can fail after
+    /// construction: iterator exhaustion would then be indistinguishable from missing
+    /// data. Use [`Self::query_prepared_fallible_view`] for that contract.
     ///
     /// # Errors
     ///

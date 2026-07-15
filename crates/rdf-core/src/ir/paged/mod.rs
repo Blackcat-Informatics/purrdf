@@ -30,12 +30,24 @@
 //! [`CountingDemandProvider`] it is a counted
 //! rebuild — which is exactly what makes the lazy hook observable at query time.
 //!
+//! # Infallible and fallible query surfaces
+//!
+//! Direct use of `PagedDataset` as a [`DatasetView`] requires a provider that cannot
+//! fail after sealing, such as [`InMemoryPageProvider`]. If provider materialization
+//! can fail, drift generations, be cancelled, reach a deadline, or exceed a resource
+//! budget, construct a fresh [`PagedQueryView`] with [`PagedDataset::query_view`] for
+//! each execution and use an evaluator entry point that accepts
+//! [`FallibleDatasetView`](crate::FallibleDatasetView). Only its final ready status is
+//! a completeness certificate; iterator exhaustion alone is not.
+//!
 //! # Determinism
 //!
 //! Pages iterate in ascending [`PageId`] order and each page yields in its frozen
 //! in-page order, so every egress (`quads`, `quads_for_pattern`, the reifier/
 //! annotation views) is deterministic. Pages are quad-disjoint (G3, enforced at
-//! freeze in a later task), so no cross-page dedup is needed.
+//! freeze), so no cross-page dedup is needed. A [`PagedQueryView`] additionally
+//! records first page requests in evaluation order and charges each admitted page
+//! exactly once.
 
 pub mod provider;
 pub mod query;
@@ -232,10 +244,14 @@ pub struct PagePart {
     pub byte_len: u64,
 }
 
-/// A reference, in-memory, demand-paged dataset composing many frozen
-/// [`RdfDataset`] pages into one logical [`DatasetView`] keyed on
-/// [`GlobalTermId`]. See the [module docs](self) for the id-composition and
-/// seal-then-lazy contracts.
+/// A reference demand-paged dataset composing many frozen [`RdfDataset`] pages into
+/// one logical [`DatasetView`] keyed on [`GlobalTermId`].
+///
+/// Direct `DatasetView` reads carry the infallible-provider contract. For a provider
+/// that can fail after sealing, start each operation with [`Self::query_view`] and
+/// execute it through a [`FallibleDatasetView`](crate::FallibleDatasetView)-aware
+/// boundary. See the [module docs](self) for the id-composition, seal-then-lazy, and
+/// completeness contracts.
 pub struct PagedDataset {
     /// The shared value-interner: the single global id space over all pages. Its own
     /// reverse value index answers [`term_id_by_value`](DatasetView::term_id_by_value)

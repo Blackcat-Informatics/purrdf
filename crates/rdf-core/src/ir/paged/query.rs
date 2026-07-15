@@ -272,6 +272,12 @@ impl std::fmt::Debug for PagedQueryView<'_> {
 
 impl PagedDataset {
     /// Start a fresh operation-scoped fallible view with explicit resource limits.
+    ///
+    /// Use the returned view only through an execution boundary that checks
+    /// [`FallibleDatasetView::operation_status`] before and after evaluation. Passing
+    /// it to an ordinary `DatasetView`-only query entry point would discard its
+    /// completeness signal. Construct a new view for every operation; caches,
+    /// evidence, limits, and the first sticky error are operation-local.
     #[must_use]
     pub fn query_view(&self, limits: PagedQueryLimits) -> PagedQueryView<'_> {
         PagedQueryView::new(self, limits)

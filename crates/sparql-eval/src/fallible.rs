@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Public result boundary for operationally fallible SPARQL execution.
+//!
+//! Ordinary resident and validated-pack queries keep returning
+//! `Result<SparqlResult, RdfDiagnostic>`. A lazy view whose reads can fail instead
+//! uses [`FallibleSparqlResult`]: only a final ready checkpoint yields
+//! [`CompleteSparqlResult`], while either an ordinary query diagnostic or a typed
+//! operational root cause carries the evidence accumulated by that execution.
+//! Internal partial rows never cross this boundary.
 
 use purrdf_core::{RdfDiagnostic, SparqlResult};
 

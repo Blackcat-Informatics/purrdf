@@ -207,6 +207,12 @@ impl PageMaterialization {
 ///   charge atomically. Repeated calls for the same page and generation must return
 ///   RDF-value-identical datasets with identical local term layout and byte charge.
 /// - The trait is `Send + Sync`; callers may share a provider across query operations.
+///
+/// A provider may succeed during sealing and fail on a later materialization. Query
+/// such a provider through [`PagedDataset::query_view`](super::PagedDataset::query_view)
+/// and a [`FallibleDatasetView`](crate::FallibleDatasetView)-aware execution boundary.
+/// Direct `DatasetView` use of `PagedDataset` is reserved for providers that guarantee
+/// infallible re-materialization after sealing.
 pub trait PageProvider: Send + Sync {
     /// The number of dense pages in the current snapshot.
     fn page_count(&self) -> usize;
