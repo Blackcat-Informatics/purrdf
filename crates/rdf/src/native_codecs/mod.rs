@@ -33,6 +33,8 @@ mod serialize;
 // validate / pipeline consumers share, so all three call it here (the codec previously
 // lived in `purrdf-pipeline::stages::yaml_ld`, above `rdf` and `validate`).
 pub mod jsonld;
+/// Native in-memory Open Knowledge Format Markdown-bundle codec.
+pub mod okf;
 // First-party N-Triples / N-Quads / Turtle / TriG text parser: lowers
 // directly to the in-memory GtsGraph the statement-layer fold consumes, replacing the
 // purrdf-gts text codecs for the line/Turtle family.

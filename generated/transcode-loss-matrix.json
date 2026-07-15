@@ -616,6 +616,13 @@
     "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
   },
   {
+    "code": "okf-navigation-page-dropped",
+    "from": "okf",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A frontmatter-less index.md navigation page has no OKF concept subject and is omitted from the RDF profile; its path is recorded on the runtime loss entry."
+  },
+  {
     "code": "canonical-rdf12-projection",
     "from": "owl-rdf12",
     "to": "canonical-rdf12",
@@ -684,6 +691,34 @@
     "to": "gts",
     "intentional": true,
     "note": "Blob payloads are preserved as content-addressed references (the blob_id digest plus the origin file id), never materialized into the RDF IR, which must stay value-light for arbitrarily large payloads (e.g. multi-terabyte data dumps). A destination GTS carries the reference; the payload bytes are streamed origin->destination on demand (deferred materialization)."
+  },
+  {
+    "code": "named-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "okf",
+    "intentional": true,
+    "note": "OKF documents have no named-graph placement; a quad asserted outside the default graph cannot be represented in Markdown frontmatter or body text."
+  },
+  {
+    "code": "okf-annotation-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "okf",
+    "intentional": true,
+    "note": "An RDF 1.2 annotation outside the exact caller-configured OKF Markdown-link profile has no OKF representation and is omitted from the bundle."
+  },
+  {
+    "code": "okf-non-profile-quad-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "okf",
+    "intentional": true,
+    "note": "An RDF statement outside the caller-configured OKF profile, including an OWL axiom, has no Markdown/frontmatter field and is omitted from the bundle."
+  },
+  {
+    "code": "okf-reifier-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "okf",
+    "intentional": true,
+    "note": "An RDF 1.2 reifier outside the exact caller-configured OKF Markdown-link profile has no OKF representation and is omitted from the bundle."
   },
   {
     "code": "canonical-rdf12-projection",
