@@ -975,6 +975,62 @@ fn unsupported_entailment_regime_exits_three() {
     }
 }
 
+/// A downstream consumer closing its end of the stdout pipe early (the ubiquitous
+/// `purrdf … | head` idiom) must NOT surface as a runtime failure: `write_out`
+/// (`crates/cli/src/sink.rs`) treats a `BrokenPipe` write error on stdout as a clean
+/// success. Drives this through a real shell pipe (not a simulated close) so the OS
+/// actually delivers the short write / EPIPE: a large (>64 KiB, past the pipe buffer)
+/// N-Triples output piped into `head -c 5`, which reads a few bytes and exits,
+/// closing its end of the pipe while `purrdf` is still writing. Assert `purrdf`
+/// itself (via `PIPESTATUS[0]`, not the pipeline's overall status) exits 0 and prints
+/// no "Broken pipe" text to stderr — falsifiable: reverting the `sink.rs` fix makes
+/// this fail with a nonzero `PIPESTATUS[0]` and a "Broken pipe" stderr message.
+#[test]
+fn stdout_broken_pipe_exits_clean() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+
+    // A big-enough N-Triples source (well past the OS pipe buffer, typically 64 KiB
+    // on Linux) so `purrdf` is still mid-write when `head -c 5` closes its end.
+    let mut big = String::new();
+    for i in 0..20_000 {
+        writeln!(
+            big,
+            "<http://example.org/s{i}> <http://example.org/p> <http://example.org/o{i}> ."
+        )
+        .expect("write into String is infallible");
+    }
+    let seed = write_file(dir, "big.nt", &big);
+
+    let purrdf_bin = env!("CARGO_BIN_EXE_purrdf");
+    let stderr_path = path(dir, "purrdf.stderr");
+    // `PIPESTATUS[0]` is the FIRST command's (purrdf's) exit status, independent of
+    // `head`'s own (which is what a bare `$?` would give). Redirect purrdf's stderr
+    // to a file so it is inspectable after the shell exits (Output::stderr would
+    // otherwise capture the whole pipeline's, mixed with `head`'s).
+    let script = format!(
+        "{purrdf_bin:?} convert --from ntriples --to ntriples {seed:?} - 2> {stderr_path:?} | \
+         head -c 5 > /dev/null; exit \"${{PIPESTATUS[0]}}\""
+    );
+    let out = Command::new("bash")
+        .arg("-c")
+        .arg(&script)
+        .output()
+        .expect("spawn bash to drive the real pipe");
+
+    let purrdf_stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+    assert!(
+        out.status.success(),
+        "purrdf must exit 0 when stdout's downstream reader closes early; \
+         PIPESTATUS[0]={:?}, purrdf stderr: {purrdf_stderr}",
+        out.status.code()
+    );
+    assert!(
+        !purrdf_stderr.to_lowercase().contains("broken pipe"),
+        "purrdf must not report BrokenPipe as an error; stderr: {purrdf_stderr}"
+    );
+}
+
 /// `--canonical` overrides `--to`: even with `--to turtle` requested, the output is
 /// RDFC-1.0 canonical N-Quads (documented precedence).
 #[test]

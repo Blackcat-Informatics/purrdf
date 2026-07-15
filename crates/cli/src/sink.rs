@@ -38,12 +38,21 @@ const STATEMENT_ROWS_DROPPED_CODE: &str = "statement-rows-dropped";
 const DIRECTION_DROPPED_CODE: &str = "rdf12-direction-dropped";
 
 /// Write `bytes` to `out`, or to stdout when `out` is `-`.
+///
+/// A downstream consumer that closes its end of the pipe early (the ubiquitous
+/// `purrdf … | head` / `| grep -q` idiom) makes the stdout write fail with
+/// [`std::io::ErrorKind::BrokenPipe`]. Standard Unix filters exit 0 silently on a
+/// downstream EPIPE, so that one error kind is treated as a clean success here; every
+/// other error (including on a file target) still propagates.
 pub(crate) fn write_out(out: &str, bytes: &[u8]) -> Result<(), CliError> {
     if out == "-" {
         let stdout = std::io::stdout();
         let mut handle = stdout.lock();
-        handle.write_all(bytes)?;
-        handle.flush()?;
+        if let Err(error) = handle.write_all(bytes).and_then(|()| handle.flush())
+            && error.kind() != std::io::ErrorKind::BrokenPipe
+        {
+            return Err(error.into());
+        }
     } else {
         std::fs::write(out, bytes)?;
     }
