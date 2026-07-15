@@ -90,6 +90,37 @@ fn chunk_size_for(len: usize) -> usize {
     (len / (threads * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
 }
 
+std::thread_local! {
+    /// Production operation-scope override used by fallible lazy views. Their page
+    /// request order and exact budget boundary are observable evidence, so no
+    /// evaluator fork may race requests while this flag is set.
+    static FORCE_SEQUENTIAL_OPERATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Force every evaluator fork gate to remain sequential on the current thread until
+/// the returned guard is dropped. Nested scopes restore the previous value.
+#[must_use]
+pub(crate) fn force_sequential_operation() -> SequentialOperationGuard {
+    let previous = FORCE_SEQUENTIAL_OPERATION.with(|cell| cell.replace(true));
+    SequentialOperationGuard { previous }
+}
+
+/// Whether the current operation requires deterministic sequential evaluation.
+pub(crate) fn sequential_operation_required() -> bool {
+    FORCE_SEQUENTIAL_OPERATION.with(std::cell::Cell::get)
+}
+
+/// RAII restoration for [`force_sequential_operation`].
+pub(crate) struct SequentialOperationGuard {
+    previous: bool,
+}
+
+impl Drop for SequentialOperationGuard {
+    fn drop(&mut self) {
+        FORCE_SEQUENTIAL_OPERATION.with(|cell| cell.set(self.previous));
+    }
+}
+
 #[cfg(test)]
 std::thread_local! {
     /// Test-only override for [`should_parallelize`], so a bench/test can force
@@ -157,6 +188,9 @@ impl Drop for ForceChunkSizeGuard {
 /// parallel rather than sequentially. Small inputs stay sequential because
 /// rayon thread hand-off cost would dominate the actual work.
 pub(crate) fn should_parallelize(work_items: usize) -> bool {
+    if sequential_operation_required() {
+        return false;
+    }
     #[cfg(test)]
     if let Some(forced) = FORCE_PARALLEL.with(std::cell::Cell::get) {
         return forced;
@@ -686,6 +720,31 @@ mod tests {
         }
         // Guard dropped: back to the real threshold.
         assert!(!should_parallelize(1));
+    }
+
+    #[test]
+    fn fallible_operation_scope_overrides_forced_parallelism() {
+        assert!(!sequential_operation_required());
+        let _parallel = force_parallel_for_test(true);
+        assert!(should_parallelize(0), "test seam forces parallel first");
+        {
+            let _sequential = force_sequential_operation();
+            assert!(sequential_operation_required());
+            assert!(
+                !should_parallelize(usize::MAX),
+                "operation completeness takes precedence over every fork gate"
+            );
+            let _nested = force_sequential_operation();
+            assert!(
+                sequential_operation_required(),
+                "nested scope remains active"
+            );
+        }
+        assert!(!sequential_operation_required());
+        assert!(
+            should_parallelize(0),
+            "dropping the operation guard restores the prior test override"
+        );
     }
 
     // ---- is_parallel_safe ----------------------------------------------------

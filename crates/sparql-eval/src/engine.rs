@@ -17,8 +17,8 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetView, GraphMatch, MutableDataset, RdfDataset, RdfDiagnostic, SparqlEngine,
-    SparqlRequest, SparqlResult, TermValue,
+    DatasetView, FallibleDatasetView, GraphMatch, MutableDataset, RdfDataset, RdfDiagnostic,
+    SparqlEngine, SparqlRequest, SparqlResult, TermValue, ViewOperationStatus,
 };
 use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
 
@@ -29,6 +29,7 @@ use crate::eval::{
     evaluate_query,
 };
 use crate::update::{GraphResolver, eval_update};
+use crate::{CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult};
 
 /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
 #[derive(Debug)]
@@ -206,6 +207,68 @@ impl NativeSparqlEngine {
         let mut ctx = self.eval_ctx(dataset);
         let outcome = evaluate_with_substitutions(prepared, substitutions, &mut ctx)?;
         Ok(materialize(outcome, &ctx))
+    }
+
+    /// Evaluate a prepared query over an operationally fallible view and return a
+    /// result only after the view supplies a final ready checkpoint.
+    ///
+    /// Evaluation is sequential inside this operation so page-request order and exact
+    /// budget boundaries are deterministic. The ordinary resident/pack entry points
+    /// remain unchanged and retain their parallel fast path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FallibleSparqlError::Operational`] when either checkpoint or any
+    /// lazy read fails. That root cause takes precedence over an evaluator diagnostic,
+    /// and all internal partial rows are discarded. Returns
+    /// [`FallibleSparqlError::Query`] only when the view remains ready and ordinary
+    /// evaluation fails.
+    pub fn query_prepared_fallible_view<D>(
+        &self,
+        dataset: &D,
+        prepared: &PreparedQuery,
+        substitutions: &[(String, TermValue)],
+    ) -> FallibleSparqlResult<D::Error, D::Evidence>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        preflight_fallible_view(dataset)?;
+        let evaluation = {
+            let _sequential = crate::parallel::force_sequential_operation();
+            let mut ctx = self.eval_ctx(dataset);
+            match evaluate_with_substitutions(prepared, substitutions, &mut ctx) {
+                Ok(outcome) => Ok(materialize(outcome, &ctx)),
+                Err(diagnostic) => Err(diagnostic),
+            }
+        };
+        finish_fallible_query(dataset, evaluation)
+    }
+
+    /// Parse and execute one request over an operationally fallible view.
+    ///
+    /// This is the convenience sibling of
+    /// [`query_prepared_fallible_view`](Self::query_prepared_fallible_view). Parsing
+    /// still uses the engine's memoizing plan cache; execution applies the same
+    /// preflight/final completeness checkpoints and deterministic sequential scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed [`FallibleSparqlError`] carrying evidence for either an
+    /// operational root cause or an ordinary parse/evaluation diagnostic.
+    pub fn query_fallible_view<D>(
+        &self,
+        dataset: &D,
+        request: SparqlRequest<'_>,
+    ) -> FallibleSparqlResult<D::Error, D::Evidence>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        preflight_fallible_view(dataset)?;
+        let prepared = match self.prepare_query(request.query, request.base_iri) {
+            Ok(prepared) => prepared,
+            Err(diagnostic) => return finish_fallible_query(dataset, Err(diagnostic)),
+        };
+        self.query_prepared_fallible_view(dataset, &prepared, request.substitutions)
     }
 
     /// A fresh engine with an empty plan cache and no `LOAD` resolver.
@@ -506,6 +569,39 @@ impl NativeSparqlEngine {
         let mut ctx = self.eval_ctx(dataset).with_user_functions(registry);
         let outcome = evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?;
         Ok(materialize(outcome, &ctx))
+    }
+}
+
+fn preflight_fallible_view<D>(dataset: &D) -> Result<(), FallibleSparqlError<D::Error, D::Evidence>>
+where
+    D: FallibleDatasetView + Sync,
+{
+    match dataset.operation_status() {
+        ViewOperationStatus::Ready { .. } => Ok(()),
+        ViewOperationStatus::Failed { error, evidence } => {
+            Err(FallibleSparqlError::Operational { error, evidence })
+        }
+    }
+}
+
+fn finish_fallible_query<D>(
+    dataset: &D,
+    evaluation: Result<SparqlResult, RdfDiagnostic>,
+) -> FallibleSparqlResult<D::Error, D::Evidence>
+where
+    D: FallibleDatasetView + Sync,
+{
+    match dataset.operation_status() {
+        ViewOperationStatus::Failed { error, evidence } => {
+            Err(FallibleSparqlError::Operational { error, evidence })
+        }
+        ViewOperationStatus::Ready { evidence } => match evaluation {
+            Ok(result) => Ok(CompleteSparqlResult { result, evidence }),
+            Err(diagnostic) => Err(FallibleSparqlError::Query {
+                diagnostic,
+                evidence,
+            }),
+        },
     }
 }
 

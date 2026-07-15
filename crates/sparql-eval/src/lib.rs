@@ -57,6 +57,7 @@ pub mod engine;
 pub mod error;
 pub mod eval;
 mod expr;
+mod fallible;
 mod list_fn;
 mod modifier;
 pub(crate) mod parallel;
@@ -79,6 +80,7 @@ pub use error::EvalError;
 pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,
 };
+pub use fallible::{CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult};
 // Re-exported so engine hosts can configure the extension-function namespace set
 // (see [`NativeSparqlEngine::with_parser_options`]) without depending on the
 // front-end crate directly.
