@@ -58,6 +58,46 @@ cargo build -p purrdf-shapes
 cargo test -p purrdf-shapes
 ```
 
+## Pydantic v2 packages
+
+The Rust emitter consumes the same in-memory `CompiledSchema` produced by the
+SHACL-to-JSON-Schema compiler. It returns deterministic package bytes and never
+reads or writes the filesystem. Package identity and all module docstrings are
+required caller input:
+
+```rust,ignore
+use purrdf_shapes::{PydanticConfig, emit_pydantic};
+
+let config = PydanticConfig::new(
+    "example_models",
+    "Models for the caller's public package.",
+    "Generated validation models for the caller's schema.",
+)?;
+let package = emit_pydantic(&compiled_schema, &config)?;
+
+assert!(package.artifacts.contains_key("example_models/models.py"));
+assert_eq!(
+    package.model_paths.get("Person").map(String::as_str),
+    Some("example_models.models.Person"),
+);
+```
+
+Generated classes validate the representable JSON Schema subset and expose the
+originating definition through Pydantic v2's standard
+`model_json_schema(by_alias=True)` surface. Assertions without an exact
+Pydantic runtime annotation remain in that schema and are recorded, with JSON
+pointer locations, in `package.losses`; the source SHACL-to-JSON-Schema losses
+remain separately available on `CompiledSchema::losses`. The checked
+`json-schema` → `pydantic-v2` loss profile makes every widening auditable.
+
+The dev-only executable oracle imports an emitted package, compares its live
+`model_json_schema()` output with the source definitions, and probes validation
+and alias round trips:
+
+```bash
+make pydantic-oracle
+```
+
 ---
 
 ## Python extension

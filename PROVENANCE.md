@@ -22,6 +22,13 @@ Copied from `gmeow-ontology`:
   `purrdf-columnar`; PurRDF replaces its Arrow/Snappy writer-only path with the
   first-party bidirectional RDF 1.2-complete codec documented in
   `docs/COLUMNAR.md`.
+- The deterministic `$defs` transliteration in
+  `crates/pipeline/src/stages/pydantic.rs` at
+  `6cfd86d0ac9450e8cfdc1ae0c54acfea326b186e` was used as the migration reference
+  for `purrdf-shapes::pydantic`. PurRDF removes its repository, ontology,
+  namespace, slice-routing, and fixed-package coupling; the carrier API consumes
+  `CompiledSchema` in memory, takes package prose from the caller, and records
+  runtime projection gaps on the shared closed loss ledger.
 
 Copied from `gmeow-gts`:
 
