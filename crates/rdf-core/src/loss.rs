@@ -23,7 +23,8 @@
 //! conversion accumulating located losses as it runs). [`registered_pairs`] and
 //! [`profile_for`] enumerate the closed set of `(from, to)` pairs and loss codes
 //! known across BOTH disciplines, including the non-syntax `shacl`→`json-schema`
-//! shapes projection; [`loss_matrix_json`] renders that same enumerable registry.
+//! shapes projection and the bidirectional RDF 1.2 dataset↔OKF profile;
+//! [`loss_matrix_json`] renders that same enumerable registry.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -189,6 +190,79 @@ pub fn gts_to_rdf_loss_ledger() -> LossLedger {
             "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing \
              per-segment blank-node scope; the distinct scopes are recovered only via the \
              streaming-event importer.",
+        ),
+        location: None,
+    }])
+}
+
+/// The closed loss contract for projecting an arbitrary RDF 1.2 dataset to an
+/// OKF Markdown bundle.
+///
+/// OKF is a deliberately narrow authoring profile. Profile quads in the default
+/// graph and its derived Markdown-link statement layer are representable; named
+/// graph placement, other RDF/OWL statements, and unrelated RDF 1.2
+/// reifier/annotation rows are not. The native OKF writer records only the codes
+/// that occur for the dataset being written, while this contract enumerates every
+/// code it is permitted to record.
+pub fn rdf_to_okf_loss_ledger() -> LossLedger {
+    LossLedger::contract(vec![
+        LossEntry {
+            code: Cow::Borrowed("named-graph-dropped"),
+            from: Cow::Borrowed("rdf-1.2-dataset"),
+            to: Cow::Borrowed("okf"),
+            note: Cow::Borrowed(
+                "OKF documents have no named-graph placement; a quad asserted outside the \
+                 default graph cannot be represented in Markdown frontmatter or body text.",
+            ),
+            location: None,
+        },
+        LossEntry {
+            code: Cow::Borrowed("okf-annotation-dropped"),
+            from: Cow::Borrowed("rdf-1.2-dataset"),
+            to: Cow::Borrowed("okf"),
+            note: Cow::Borrowed(
+                "An RDF 1.2 annotation outside the exact caller-configured OKF Markdown-link \
+                 profile has no OKF representation and is omitted from the bundle.",
+            ),
+            location: None,
+        },
+        LossEntry {
+            code: Cow::Borrowed("okf-non-profile-quad-dropped"),
+            from: Cow::Borrowed("rdf-1.2-dataset"),
+            to: Cow::Borrowed("okf"),
+            note: Cow::Borrowed(
+                "An RDF statement outside the caller-configured OKF profile, including an \
+                 OWL axiom, has no Markdown/frontmatter field and is omitted from the bundle.",
+            ),
+            location: None,
+        },
+        LossEntry {
+            code: Cow::Borrowed("okf-reifier-dropped"),
+            from: Cow::Borrowed("rdf-1.2-dataset"),
+            to: Cow::Borrowed("okf"),
+            note: Cow::Borrowed(
+                "An RDF 1.2 reifier outside the exact caller-configured OKF Markdown-link \
+                 profile has no OKF representation and is omitted from the bundle.",
+            ),
+            location: None,
+        },
+    ])
+}
+
+/// The closed loss contract for lifting an OKF Markdown bundle into an RDF 1.2
+/// event stream.
+///
+/// Frontmatter-less `index.md` files are navigation-only pages: their body is not
+/// attached to an OKF concept and therefore does not enter the RDF profile. The
+/// reader records each skipped page with this code and a file location.
+pub fn okf_to_rdf_loss_ledger() -> LossLedger {
+    LossLedger::contract(vec![LossEntry {
+        code: Cow::Borrowed("okf-navigation-page-dropped"),
+        from: Cow::Borrowed("okf"),
+        to: Cow::Borrowed("rdf-1.2-dataset"),
+        note: Cow::Borrowed(
+            "A frontmatter-less index.md navigation page has no OKF concept subject and is \
+             omitted from the RDF profile; its path is recorded on the runtime loss entry.",
         ),
         location: None,
     }])
@@ -556,7 +630,9 @@ fn static_str(cow: &Cow<'static, str>) -> &'static str {
 
 /// The single source of truth every enumerable-registry consumer reads: the
 /// RDF↔GTS direction ledgers ([`rdf_to_gts_loss_ledger`] /
-/// [`gts_to_rdf_loss_ledger`]) plus [`transcode_and_shapes_entries`] (the full
+/// [`gts_to_rdf_loss_ledger`]), RDF↔OKF direction ledgers
+/// ([`rdf_to_okf_loss_ledger`] / [`okf_to_rdf_loss_ledger`]), plus
+/// [`transcode_and_shapes_entries`] (the full
 /// syntax/projection transcode matrix over `SYNTAX_CODECS` × `(SYNTAX_CODECS ∪
 /// PROJECTION_CODECS)` AND the non-syntax shapes pair `("shacl", "json-schema")`).
 ///
@@ -569,6 +645,8 @@ fn registry_entries() -> Vec<LossEntry> {
     let mut entries: Vec<LossEntry> = Vec::new();
     entries.extend_from_slice(rdf_to_gts_loss_ledger().entries());
     entries.extend_from_slice(gts_to_rdf_loss_ledger().entries());
+    entries.extend_from_slice(rdf_to_okf_loss_ledger().entries());
+    entries.extend_from_slice(okf_to_rdf_loss_ledger().entries());
     entries.extend(transcode_and_shapes_entries());
     entries
 }
@@ -1244,6 +1322,26 @@ mod tests {
             profile.contains("named-graph-dropped"),
             "profile_for(\"trig\", \"turtle\") missing named-graph-dropped: {profile:?}"
         );
+    }
+
+    #[test]
+    fn okf_direction_profiles_are_closed_and_registered() {
+        let write_profile = profile_for("rdf-1.2-dataset", "okf");
+        assert_eq!(
+            write_profile,
+            BTreeSet::from([
+                "named-graph-dropped",
+                "okf-annotation-dropped",
+                "okf-non-profile-quad-dropped",
+                "okf-reifier-dropped",
+            ])
+        );
+        assert_eq!(
+            profile_for("okf", "rdf-1.2-dataset"),
+            BTreeSet::from(["okf-navigation-page-dropped"])
+        );
+        assert!(check_ledger_sound(&rdf_to_okf_loss_ledger(), "rdf-1.2-dataset", "okf").is_ok());
+        assert!(check_ledger_sound(&okf_to_rdf_loss_ledger(), "okf", "rdf-1.2-dataset").is_ok());
     }
 
     /// Build a hand-rolled, owned runtime [`LossEntry`] for the mechanical

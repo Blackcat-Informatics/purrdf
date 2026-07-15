@@ -54,10 +54,34 @@ pub trait RdfDatasetVisitor {
         let _ = (reifier, triple);
     }
 
+    /// Like [`reifier`](Self::reifier), but carries the named graph in which the
+    /// reifier binding was asserted (`None` = default graph). The default keeps
+    /// existing visitors source-compatible by delegating to the graph-unaware
+    /// callback. A projection whose fidelity depends on graph placement overrides
+    /// this method.
+    fn reifier_in_graph(&mut self, reifier: TermId, triple: TermId, graph: Option<TermId>) {
+        let _ = graph;
+        self.reifier(reifier, triple);
+    }
+
     /// A `(reifier, predicate, object)` statement annotation. All three ids were
     /// declared earlier.
     fn annotation(&mut self, reifier: TermId, predicate: TermId, object: TermId) {
         let _ = (reifier, predicate, object);
+    }
+
+    /// Like [`annotation`](Self::annotation), but carries the named graph in which
+    /// the annotation was asserted (`None` = default graph). The default delegates
+    /// to the graph-unaware callback for compatibility.
+    fn annotation_in_graph(
+        &mut self,
+        reifier: TermId,
+        predicate: TermId,
+        object: TermId,
+        graph: Option<TermId>,
+    ) {
+        let _ = graph;
+        self.annotation(reifier, predicate, object);
     }
 }
 
@@ -75,11 +99,11 @@ impl RdfDataset {
         for quad in self.quads() {
             sink.quad(quad);
         }
-        for (reifier, triple) in self.reifiers() {
-            sink.reifier(reifier, triple);
+        for (reifier, triple, graph) in self.reifiers_with_graph() {
+            sink.reifier_in_graph(reifier, triple, graph);
         }
-        for (reifier, predicate, object) in self.annotations() {
-            sink.annotation(reifier, predicate, object);
+        for (reifier, predicate, object, graph) in self.annotations_with_graph() {
+            sink.annotation_in_graph(reifier, predicate, object, graph);
         }
     }
 }
@@ -177,6 +201,50 @@ mod tests {
         assert_eq!(sink.quads, ds.quads().collect::<Vec<_>>());
         assert_eq!(sink.reifiers, ds.reifiers().collect::<Vec<_>>());
         assert_eq!(sink.annotations, ds.annotations().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn emit_preserves_reifier_and_annotation_graph_slots() {
+        #[derive(Default)]
+        struct GraphAwareSink {
+            reifiers: Vec<(TermId, TermId, Option<TermId>)>,
+            annotations: Vec<(TermId, TermId, TermId, Option<TermId>)>,
+        }
+
+        impl RdfDatasetVisitor for GraphAwareSink {
+            fn reifier_in_graph(&mut self, reifier: TermId, triple: TermId, graph: Option<TermId>) {
+                self.reifiers.push((reifier, triple, graph));
+            }
+
+            fn annotation_in_graph(
+                &mut self,
+                reifier: TermId,
+                predicate: TermId,
+                object: TermId,
+                graph: Option<TermId>,
+            ) {
+                self.annotations.push((reifier, predicate, object, graph));
+            }
+        }
+
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let graph = iri(&mut b, "graph");
+        let triple = b.intern_triple(s, p, o);
+        let reifier = iri(&mut b, "reifier");
+        let annotation_predicate = iri(&mut b, "confidence");
+        b.push_reifier_in_graph(reifier, triple, Some(graph));
+        b.push_annotation_in_graph(reifier, annotation_predicate, o, Some(graph));
+        let ds = b.freeze().expect("valid");
+
+        let mut sink = GraphAwareSink::default();
+        ds.emit(&mut sink);
+
+        assert_eq!(sink.reifiers, vec![(reifier, triple, Some(graph))]);
+        assert_eq!(
+            sink.annotations,
+            vec![(reifier, annotation_predicate, o, Some(graph))]
+        );
     }
 
     #[test]
