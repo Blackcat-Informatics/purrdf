@@ -28,10 +28,18 @@ use crate::source;
 /// --entailment` so both reject identically.
 pub(crate) fn resolve_materializable_regime(regime: CliRegime) -> Result<Regime, CliError> {
     let regime = regime.to_native();
-    if matches!(regime, Regime::OwlDirect | Regime::Rif | Regime::D) {
+    // Each boundary regime is unsupported for a DIFFERENT spec-inherent reason; name it.
+    let reason = match regime {
+        Regime::OwlDirect => Some(
+            "it needs the query's class expressions, which materialization alone cannot supply",
+        ),
+        Regime::Rif => Some("it needs a parsed RIF rule set, which the CLI has no way to supply"),
+        Regime::D => Some("datatype (D) entailment is a spec-inherent materialization boundary"),
+        Regime::Simple | Regime::Rdf | Regime::Rdfs | Regime::OwlRl => None,
+    };
+    if let Some(reason) = reason {
         return Err(CliError::UnsupportedRegime(format!(
-            "entailment regime `{regime:?}` cannot be materialized by the CLI: it needs inputs \
-             (query class expressions or a rule set) the CLI has no way to supply"
+            "entailment regime `{regime:?}` cannot be materialized by the CLI: {reason}"
         )));
     }
     Ok(regime)
@@ -40,6 +48,7 @@ pub(crate) fn resolve_materializable_regime(regime: CliRegime) -> Result<Regime,
 /// Run the `reason` subcommand.
 pub(crate) fn run(
     regime: CliRegime,
+    base: Option<&str>,
     input: &str,
     output: &str,
     ledger_target: &LedgerTarget,
@@ -47,12 +56,12 @@ pub(crate) fn run(
     let regime = resolve_materializable_regime(regime)?;
 
     let source_format = format::resolve(None, input)?;
-    let dataset = source::load_dataset(input, source_format, None)?;
+    let dataset = source::load_dataset(input, source_format, base)?;
 
     let closure = materialize(&dataset, regime)?;
 
     let target_format = format::resolve(None, output)?;
     let src_codec = source_format.loss_codec_name();
-    let ledger = sink::write_rdf(&*closure, output, target_format, None, src_codec)?;
+    let ledger = sink::write_rdf(&*closure, output, target_format, base, src_codec)?;
     ledger::surface(ledger_target, &ledger)
 }

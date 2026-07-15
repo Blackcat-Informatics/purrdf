@@ -142,6 +142,10 @@ pub(crate) enum Command {
         /// The entailment regime to close under.
         #[arg(long, value_enum)]
         regime: CliRegime,
+        /// Base IRI for resolving relative IRIs while parsing the input; also
+        /// threaded into the serializer as its base.
+        #[arg(long, value_name = "IRI")]
+        base: Option<String>,
         /// Input path `IN`, or `-` for stdin (which requires a recognizable format).
         #[arg(value_name = "IN", default_value = "-")]
         input: String,
