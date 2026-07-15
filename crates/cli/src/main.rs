@@ -68,9 +68,18 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         ),
         Command::Query {
             data,
+            base,
+            entailment,
             results_format,
             query,
-        } => query::run(data, *results_format, query, &ledger_target),
+        } => query::run(
+            data,
+            base.as_deref(),
+            *entailment,
+            *results_format,
+            query,
+            &ledger_target,
+        ),
         Command::Reason {
             regime,
             input,

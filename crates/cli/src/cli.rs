@@ -26,6 +26,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use purrdf_entail::Regime;
+use purrdf_rdf::NativeRdfFormat;
 use purrdf_sparql_results::SparqlResultsFormat;
 
 use crate::format::CliFormat;
@@ -118,12 +119,21 @@ pub(crate) enum Command {
     /// Evaluate a SPARQL query over an RDF or pack data source.
     Query {
         /// Data-source path (format inferred from its extension). A pack file is
-        /// queried zero-copy.
+        /// queried zero-copy (unless `--entailment` forces materialization).
         #[arg(long)]
         data: String,
-        /// SPARQL-results serialization for SELECT/ASK results.
-        #[arg(long, value_enum, default_value_t = ResultsFormat::Json)]
-        results_format: ResultsFormat,
+        /// Base IRI for resolving relative IRIs while parsing the data AND in the
+        /// query text.
+        #[arg(long, value_name = "IRI")]
+        base: Option<String>,
+        /// Materialize an entailment regime's closure in memory before querying
+        /// (the query then runs over the closure, not the raw view).
+        #[arg(long, value_enum, value_name = "REGIME")]
+        entailment: Option<CliRegime>,
+        /// Result serialization: a SPARQL-results format (json/xml/csv/tsv) for
+        /// SELECT/ASK, or an RDF syntax (turtle/trig/…) for CONSTRUCT/DESCRIBE.
+        #[arg(long, value_enum, default_value_t = QueryFormat::Json)]
+        results_format: QueryFormat,
         /// The SPARQL query text.
         query: String,
     },
@@ -201,9 +211,18 @@ impl CliRdfFormat {
     }
 }
 
-/// The SPARQL-results serialization choices `--results-format` accepts.
+/// The `--results-format` choices the `query` subcommand accepts: a SUPERSET of the
+/// four W3C SPARQL-results serializations (for SELECT solutions / ASK booleans) and
+/// the nine native RDF syntaxes (for CONSTRUCT / DESCRIBE graphs).
+///
+/// The result SHAPE selects which half is legal: a SELECT/ASK result serializes
+/// through a SPARQL-results format, a CONSTRUCT/DESCRIBE graph through an RDF syntax.
+/// A shape/format-kind mismatch (e.g. a graph with `csv`, or solutions with
+/// `turtle`) is a hard error at emit time. [`Self::to_results_format`] and
+/// [`Self::to_rdf_format`] project a choice into whichever half it names.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ResultsFormat {
+pub(crate) enum QueryFormat {
+    // --- SPARQL-results serializations (SELECT solutions / ASK boolean) ---
     /// SPARQL Results JSON.
     #[value(name = "json")]
     Json,
@@ -216,16 +235,83 @@ pub(crate) enum ResultsFormat {
     /// SPARQL Results TSV.
     #[value(name = "tsv")]
     Tsv,
+    // --- Native RDF syntaxes (CONSTRUCT / DESCRIBE graph) ---
+    /// Turtle.
+    #[value(name = "turtle", alias = "ttl")]
+    Turtle,
+    /// TriG.
+    #[value(name = "trig")]
+    Trig,
+    /// N-Triples.
+    #[value(name = "ntriples", alias = "nt", alias = "n-triples")]
+    Ntriples,
+    /// N-Quads.
+    #[value(name = "nquads", alias = "nq", alias = "n-quads")]
+    Nquads,
+    /// RDF/XML. (`xml` names the SPARQL-results format, so RDF/XML aliases `rdf`.)
+    #[value(name = "rdfxml", alias = "rdf")]
+    Rdfxml,
+    /// TriX.
+    #[value(name = "trix")]
+    Trix,
+    /// HexTuples.
+    #[value(name = "hextuples", alias = "hext")]
+    Hextuples,
+    /// JSON-LD.
+    #[value(name = "jsonld", alias = "json-ld")]
+    Jsonld,
+    /// YAML-LD.
+    #[value(name = "yamlld", alias = "yaml-ld")]
+    Yamlld,
 }
 
-impl ResultsFormat {
-    /// The library [`SparqlResultsFormat`] this choice maps to.
-    pub(crate) fn to_native(self) -> SparqlResultsFormat {
+impl QueryFormat {
+    /// The [`SparqlResultsFormat`] this choice names, or `None` when it names an
+    /// RDF syntax (a graph target).
+    pub(crate) fn to_results_format(self) -> Option<SparqlResultsFormat> {
         match self {
-            Self::Json => SparqlResultsFormat::Json,
-            Self::Xml => SparqlResultsFormat::Xml,
-            Self::Csv => SparqlResultsFormat::Csv,
-            Self::Tsv => SparqlResultsFormat::Tsv,
+            Self::Json => Some(SparqlResultsFormat::Json),
+            Self::Xml => Some(SparqlResultsFormat::Xml),
+            Self::Csv => Some(SparqlResultsFormat::Csv),
+            Self::Tsv => Some(SparqlResultsFormat::Tsv),
+            _ => None,
+        }
+    }
+
+    /// The [`NativeRdfFormat`] this choice names, or `None` when it names a
+    /// SPARQL-results format (a solutions/boolean target).
+    pub(crate) fn to_rdf_format(self) -> Option<NativeRdfFormat> {
+        use NativeRdfFormat as N;
+        match self {
+            Self::Turtle => Some(N::Turtle),
+            Self::Trig => Some(N::TriG),
+            Self::Ntriples => Some(N::NTriples),
+            Self::Nquads => Some(N::NQuads),
+            Self::Rdfxml => Some(N::RdfXml),
+            Self::Trix => Some(N::TriX),
+            Self::Hextuples => Some(N::HexTuples),
+            Self::Jsonld => Some(N::JsonLd),
+            Self::Yamlld => Some(N::YamlLd),
+            _ => None,
+        }
+    }
+
+    /// The canonical CLI token that names this choice (for diagnostics).
+    pub(crate) fn token(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Xml => "xml",
+            Self::Csv => "csv",
+            Self::Tsv => "tsv",
+            Self::Turtle => "turtle",
+            Self::Trig => "trig",
+            Self::Ntriples => "ntriples",
+            Self::Nquads => "nquads",
+            Self::Rdfxml => "rdfxml",
+            Self::Trix => "trix",
+            Self::Hextuples => "hextuples",
+            Self::Jsonld => "jsonld",
+            Self::Yamlld => "yamlld",
         }
     }
 }
