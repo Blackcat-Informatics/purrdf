@@ -20,6 +20,11 @@
 )]
 #![forbid(unsafe_code)]
 
+mod compact;
+pub mod error;
+mod parquet;
 pub mod schema;
 
+pub use error::ColumnarError;
+pub use parquet::Compression;
 pub use schema::{ColumnSchema, PhysicalType, Repetition, Table, TableSchema};
