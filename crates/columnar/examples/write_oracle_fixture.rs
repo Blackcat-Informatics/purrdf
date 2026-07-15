@@ -50,5 +50,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (table, bytes) in encoded.files.iter() {
         fs::write(output.join(table.file_name()), bytes)?;
     }
+
+    let empty_output = output.join("empty");
+    fs::create_dir_all(&empty_output)?;
+    let empty = RdfDatasetBuilder::new().freeze()?;
+    let empty_encoded = write(&*empty, &ContentStore::new(), Compression::Uncompressed)?;
+    for (table, bytes) in empty_encoded.files.iter() {
+        fs::write(empty_output.join(table.file_name()), bytes)?;
+    }
     Ok(())
 }

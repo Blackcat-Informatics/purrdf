@@ -41,4 +41,17 @@ if [[ "${types}" != $'BIGINT,VARCHAR\nBLOB' ]]; then
   exit 1
 fi
 
-echo "OK: DuckDB read all five PurRDF columnar files with expected rows and types"
+empty_counts="$(duckdb -csv -noheader -c "
+SELECT
+  (SELECT count(*) FROM read_parquet('${tmp}/empty/terms.parquet')),
+  (SELECT count(*) FROM read_parquet('${tmp}/empty/quads.parquet')),
+  (SELECT count(*) FROM read_parquet('${tmp}/empty/reifiers.parquet')),
+  (SELECT count(*) FROM read_parquet('${tmp}/empty/annotations.parquet')),
+  (SELECT count(*) FROM read_parquet('${tmp}/empty/blobs.parquet'));
+")"
+if [[ "${empty_counts}" != "0,0,0,0,0" ]]; then
+  echo "ERROR: DuckDB observed unexpected rows in empty columnar files: ${empty_counts}" >&2
+  exit 1
+fi
+
+echo "OK: DuckDB read populated and empty PurRDF columnar files with expected rows and types"
