@@ -92,23 +92,9 @@ def _rewrite_refs(value: Any, model_paths: dict[str, str]) -> Any:
     return rewritten
 
 
-def _definition_surface(schema: dict[str, Any], class_name: str) -> dict[str, Any]:
-    definitions = schema.get("$defs", {})
-    ref = schema.get("$ref")
-    if ref == f"#/$defs/{class_name}":
-        return definitions[class_name]
+def _definition_surface(schema: dict[str, Any]) -> dict[str, Any]:
     surface = dict(schema)
     surface.pop("$defs", None)
-    if isinstance(ref, str) and ref.startswith("#/$defs/"):
-        target = ref.removeprefix("#/$defs/")
-        if target in definitions:
-            # Pydantic represents a RootModel[StrEnum]/TypedDict as a local ref
-            # plus our exact json_schema_extra siblings. In draft 2020-12 those
-            # siblings are conjunctive; inline the local target to compare the
-            # semantic surface with the originating definition.
-            merged = dict(definitions[target])
-            merged.update({key: value for key, value in surface.items() if key != "$ref"})
-            surface = merged
     return surface
 
 
@@ -172,9 +158,7 @@ def main() -> None:
                         f"expected={json.dumps(expected_defs, indent=2, sort_keys=True)}\n"
                         f"actual={json.dumps(live_schema.get('$defs'), indent=2, sort_keys=True)}"
                     )
-                actual = _definition_surface(
-                    live_schema, class_name
-                )
+                actual = _definition_surface(live_schema)
                 expected = _rewrite_refs(source_defs[source_key], model_paths)
                 actual = _normalize_inferred_types(actual, expected)
                 if actual != expected:
@@ -212,6 +196,8 @@ def main() -> None:
             person = models.Person.model_validate(person_payload)
             dumped = person.model_dump(mode="json", by_alias=True, exclude_none=True)
             assert dumped == person_payload
+            alias = models.PersonAlias.model_validate(person_payload)
+            assert alias.model_dump(mode="json", by_alias=True, exclude_none=True) == person_payload
 
             nullable_payload = dict(person_payload)
             nullable_payload.update(
@@ -286,7 +272,7 @@ def main() -> None:
         finally:
             sys.path.remove(str(root))
 
-    print("Pydantic oracle: 5 live model schemas agree; validation/alias probes pass")
+    print("Pydantic oracle: 6 live model schemas agree; validation/alias probes pass")
 
 
 if __name__ == "__main__":

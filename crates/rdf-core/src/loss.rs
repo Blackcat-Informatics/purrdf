@@ -617,15 +617,16 @@ const JSON_SCHEMA_PYDANTIC_PROFILE: &[(&str, &str)] = &[
     ),
     (
         "inline-object-validation-widened",
-        "An inline JSON Schema object cannot be represented as a reusable generated BaseModel \
-         without inventing a public class identity; runtime validation accepts a strict mapping \
-         while model_json_schema() retains the complete object schema.",
+        "A Pydantic model or TypedDict with named properties cannot enforce a JSON \
+         Schema-valued additionalProperties assertion on every arbitrary extra value; named \
+         fields and extra-key policy remain enforced while model_json_schema() retains the \
+         complete object schema.",
     ),
     (
         "intersection-validation-widened",
-        "JSON Schema allOf intersection semantics have no exact Pydantic v2 union-style type \
-         annotation; runtime validation uses the representable branch information while \
-         model_json_schema() retains the complete intersection.",
+        "JSON Schema allOf, or anyOf combined conjunctively with structural siblings, has no \
+         exact general Pydantic v2 type annotation; runtime validation uses the representable \
+         branch information while model_json_schema() retains the complete intersection.",
     ),
     (
         "keyword-validation-dropped",
@@ -641,8 +642,8 @@ const JSON_SCHEMA_PYDANTIC_PROFILE: &[(&str, &str)] = &[
     ),
     (
         "one-of-validation-widened",
-        "Pydantic v2 unions implement any-branch semantics and cannot enforce JSON Schema one's \
-         exactly-one matching rule; runtime validation uses a union while model_json_schema() \
+        "Pydantic v2 unions implement any-branch semantics and cannot enforce JSON Schema \
+         oneOf's exactly-one matching rule; runtime validation uses a union while model_json_schema() \
          retains oneOf.",
     ),
 ];

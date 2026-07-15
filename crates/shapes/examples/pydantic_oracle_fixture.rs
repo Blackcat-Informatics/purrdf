@@ -85,6 +85,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 },
                 "required": ["ex:age", "ex:name"]
             },
+            "PersonAlias": {
+                "$ref": "#/$defs/Person"
+            },
             "State": {
                 "title": "State",
                 "enum": [
