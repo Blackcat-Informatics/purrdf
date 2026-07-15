@@ -175,13 +175,16 @@ purrdf query --data people.ttl --entailment rdfs \
 ## `reason`
 
 ```text
-purrdf reason --regime <R> [--base <IRI>] [IN] [OUT]
+purrdf reason --regime <R> [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
 ```
 
-Materialize an entailment regime's closure over the source graph and write it out
-(the output format is inferred from `OUT`'s extension).
+Materialize an entailment regime's closure over the source graph and write it out.
 
 - `--regime <R>` — the entailment regime to close under.
+- `--from <F>` / `--to <F>` — input/output format overrides; inferred from the
+  `IN`/`OUT` extension when omitted. `IN`/`OUT` default to `-` (stdin/stdout); a
+  path of `-` has no extension, so it **requires** the matching explicit
+  `--from`/`--to`.
 - `--base <IRI>` — base IRI for the input parse, also threaded into the serializer.
 
 **Supported (materializable) regimes:**
@@ -207,8 +210,8 @@ with a distinct diagnostic:
 # Materialize the RDFS closure and write it as N-Triples.
 purrdf reason --regime rdfs people.ttl closure.nt
 
-# OWL 2 RL closure from stdin to stdout.
-cat ontology.ttl | purrdf reason --regime owl-rl - closure.ttl
+# OWL 2 RL closure from stdin to stdout (explicit formats required for `-`).
+cat ontology.ttl | purrdf reason --regime owl-rl --from ttl --to nt - -
 
 # The unsupported boundary: exits 3 with an explanatory message.
 purrdf reason --regime owl-direct people.ttl out.ttl

@@ -6,12 +6,17 @@
 //! Map the requested regime to its library [`Regime`], reject the regimes the CLI
 //! cannot materialize (they need inputs it has no way to supply), load the source
 //! as a concrete dataset, compute the entailment closure, and write it through the
-//! [`sink`] to the output (whose format is inferred from its
-//! extension). The resulting loss ledger is surfaced under `--loss-ledger`.
+//! [`sink`] to the output. Both `--from`/`--to` are resolved up front (mirroring
+//! `convert`): an explicit choice always wins, otherwise the format is inferred
+//! from the input/output path's extension; `-` (stdin/stdout) has no extension and
+//! REQUIRES the explicit override. Resolving both before `load_dataset`/
+//! `materialize` runs means an unresolvable output format fails fast, not after
+//! the source has already been loaded and closed over. The resulting loss ledger
+//! is surfaced under `--loss-ledger`.
 
 use purrdf_entail::{Regime, materialize};
 
-use crate::cli::{CliRegime, LedgerTarget};
+use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget};
 use crate::error::CliError;
 use crate::format;
 use crate::ledger;
@@ -48,6 +53,8 @@ pub(crate) fn resolve_materializable_regime(regime: CliRegime) -> Result<Regime,
 /// Run the `reason` subcommand.
 pub(crate) fn run(
     regime: CliRegime,
+    from: Option<CliRdfFormat>,
+    to: Option<CliRdfFormat>,
     base: Option<&str>,
     input: &str,
     output: &str,
@@ -55,12 +62,16 @@ pub(crate) fn run(
 ) -> Result<(), CliError> {
     let regime = resolve_materializable_regime(regime)?;
 
-    let source_format = format::resolve(None, input)?;
+    // Resolve BOTH formats up front (before touching the source) so an
+    // unresolvable OUT fails fast rather than after the (potentially
+    // expensive) load + materialize work has already run.
+    let source_format = format::resolve(from, input)?;
+    let target_format = format::resolve(to, output)?;
+
     let dataset = source::load_dataset(input, source_format, base)?;
 
     let closure = materialize(&dataset, regime)?;
 
-    let target_format = format::resolve(None, output)?;
     let src_codec = source_format.loss_codec_name();
     let ledger = sink::write_rdf(&*closure, output, target_format, base, src_codec)?;
     ledger::surface(ledger_target, &ledger)

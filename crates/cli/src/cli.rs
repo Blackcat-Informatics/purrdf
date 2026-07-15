@@ -142,14 +142,20 @@ pub(crate) enum Command {
         /// The entailment regime to close under.
         #[arg(long, value_enum)]
         regime: CliRegime,
+        /// Input format override; inferred from the input extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Output format override; inferred from the output extension when omitted.
+        #[arg(long, value_enum)]
+        to: Option<CliRdfFormat>,
         /// Base IRI for resolving relative IRIs while parsing the input; also
         /// threaded into the serializer as its base.
         #[arg(long, value_name = "IRI")]
         base: Option<String>,
-        /// Input path `IN`, or `-` for stdin (which requires a recognizable format).
+        /// Input path `IN`, or `-` for stdin (which requires `--from`).
         #[arg(value_name = "IN", default_value = "-")]
         input: String,
-        /// Output path `OUT` (format inferred from its extension), or `-` for stdout.
+        /// Output path `OUT`, or `-` for stdout (which requires `--to`).
         #[arg(value_name = "OUT", default_value = "-")]
         output: String,
     },

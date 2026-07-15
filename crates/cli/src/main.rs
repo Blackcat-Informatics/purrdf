@@ -82,9 +82,19 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         ),
         Command::Reason {
             regime,
+            from,
+            to,
             base,
             input,
             output,
-        } => reason::run(*regime, base.as_deref(), input, output, &ledger_target),
+        } => reason::run(
+            *regime,
+            *from,
+            *to,
+            base.as_deref(),
+            input,
+            output,
+            &ledger_target,
+        ),
     }
 }

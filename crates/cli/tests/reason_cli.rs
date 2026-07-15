@@ -318,6 +318,85 @@ fn pack_input_is_reconstructed_and_reasoned() {
     );
 }
 
+/// `reason --from --to - -` reads a Turtle fixture from stdin and writes N-Triples to
+/// stdout — the gap this module exists to close: `-`/`-` (the documented default) is
+/// otherwise unreachable without `--from`/`--to`. Asserts exit 0 and the RDFS-inferred
+/// `rdf:type` triple in the captured stdout.
+#[test]
+fn stdin_to_stdout_with_from_and_to() {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let input = concat!(
+        "@prefix ex: <http://example.org/> .\n",
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+        "ex:Dog rdfs:subClassOf ex:Animal .\n",
+        "ex:rex a ex:Dog .\n",
+    );
+
+    let mut child = purrdf()
+        .args([
+            "reason", "--regime", "rdfs", "--from", "ttl", "--to", "nt", "-", "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the built purrdf binary");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(input.as_bytes())
+        .expect("write fixture to stdin");
+    let out = child.wait_with_output().expect("wait for purrdf");
+
+    assert!(
+        out.status.success(),
+        "stdin->stdout reason failed: {}",
+        stderr(&out)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/rex> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "stdin->stdout reason must infer `ex:rex a ex:Animal` on stdout; got: {text}"
+    );
+}
+
+/// `reason --to nt <fixture.ttl> -` reads a file and writes N-Triples to stdout: the
+/// file->stdout half of the same gap (`OUT` defaults to `-`, which requires `--to`).
+#[test]
+fn file_to_stdout_with_to() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+
+    let o = run(&["reason", "--regime", "rdfs", &seed, "-", "--to", "nt"]);
+    assert!(
+        o.status.success(),
+        "file->stdout reason failed: {}",
+        stderr(&o)
+    );
+    let text = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/rex> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "file->stdout reason must infer `ex:rex a ex:Animal` on stdout; got: {text}"
+    );
+}
+
 /// A `reason` run twice produces byte-identical output: the closure and serializer are
 /// deterministic.
 #[test]
