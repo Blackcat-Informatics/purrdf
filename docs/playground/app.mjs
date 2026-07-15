@@ -373,8 +373,6 @@ async function doSerializeAll() {
       let badge;
       if (failed) {
         badge = el("span", { class: "badge badge-warn", text: "unsupported" });
-      } else if (entry.outputOnly) {
-        badge = el("span", { class: "badge badge-info", text: "output only" });
       } else if (entry.roundtrips) {
         badge = el("span", { class: "badge badge-ok", text: "round-trips" });
       } else {
@@ -425,10 +423,10 @@ async function doSerializeAll() {
     const note = $("serialize-note");
     if (res.hasQuotedObject) {
       const survivors = SER_ORDER.filter(
-        (f) => f !== "jsonld" && res.formats[f].text != null && res.formats[f].roundtrips,
+        (f) => res.formats[f].text != null && res.formats[f].roundtrips,
       );
       const degraders = SER_ORDER.filter(
-        (f) => f !== "jsonld" && res.formats[f].text != null && !res.formats[f].roundtrips,
+        (f) => res.formats[f].text != null && !res.formats[f].roundtrips,
       );
       note.textContent =
         "This graph carries a quoted triple in object position. " +

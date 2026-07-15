@@ -199,6 +199,13 @@ mod tests {
 
         // validate: the SARIF reporting boundary is reachable through the facade.
         assert_eq!(validate::SARIF_VERSION, "2.1.0");
+
+        // The supported umbrella also exposes the succinct dataset-pack cache
+        // boundary; downstreams never need to depend on purrdf-core directly.
+        let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let pack = PackBuilder::build_bytes(&empty).expect("pack empty dataset");
+        let restored = restore_pack(&pack).expect("restore empty dataset");
+        assert_eq!(restored.quad_count(), 0);
     }
 
     #[test]

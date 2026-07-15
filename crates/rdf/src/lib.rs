@@ -126,6 +126,10 @@ pub use purrdf_core::{
     rdf_gts_loss_matrix_json, rdf_to_gts_loss_ledger, registered_pairs, rule_iri, smallvec,
     try_canonicalize, try_canonicalize_with,
 };
+pub use purrdf_core::{
+    PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,
+    restore_pack, verify_pack,
+};
 
 // Shared USTAR (tar) codec: byte-deterministic writer + reader used by both the
 // snapshot stage (writer) and the validate path (reader). Unconditional — no

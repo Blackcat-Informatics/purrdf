@@ -16,9 +16,9 @@ import {
 
 const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
 
-/** The 5 codecs that can PARSE. */
-const PARSE_FORMATS = ["turtle", "ntriples", "nquads", "trig", "rdfxml"];
-/** The 6 codecs that can SERIALIZE (jsonld is output-only). */
+/** The 6 codecs that can PARSE (JSON-LD is a first-class bidirectional codec). */
+const PARSE_FORMATS = ["turtle", "ntriples", "nquads", "trig", "rdfxml", "jsonld"];
+/** The 6 codecs that can SERIALIZE. */
 const SERIALIZE_FORMATS = [
   "turtle",
   "ntriples",
@@ -136,8 +136,8 @@ const HANDLERS = {
     const formats = {};
     for (const f of SERIALIZE_FORMATS) {
       const entry = {};
-      // A serializer can HARD-FAIL for a given graph (e.g. JSON-LD cannot
-      // losslessly encode a quoted-triple object term). Surface that per-format
+      // A serializer can HARD-FAIL for a given graph (a format that cannot
+      // losslessly encode a construct surfaces the error). Surface that per-format
       // error visibly instead of aborting the whole differential.
       let text = null;
       try {
@@ -146,10 +146,7 @@ const HANDLERS = {
         entry.error = String(e?.message ?? e);
       }
       entry.text = text;
-      if (f === "jsonld") {
-        entry.outputOnly = true;
-        entry.roundtrips = null; // JSON-LD cannot be re-parsed by this codec.
-      } else if (text != null) {
+      if (text != null) {
         // Honest round-trip fidelity: re-parse and confirm graph identity.
         try {
           const back = Dataset.parse(text, f);

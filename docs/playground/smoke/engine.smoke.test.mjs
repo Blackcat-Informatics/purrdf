@@ -96,23 +96,28 @@ test("serialize a plain graph to all 6 formats (Round-trip pane)", () => {
     assert.equal(typeof text, "string");
     assert.ok(text.length > 0, `empty serialization for ${f}`);
   }
-  // JSON-LD is OUTPUT-ONLY: the parse codec must reject it as input.
+  // JSON-LD is a first-class bidirectional codec: it round-trips as input, too.
   const jsonld = ds.serialize("jsonld");
-  assert.throws(() => Dataset.parse(jsonld, "jsonld"), "jsonld parse must throw");
+  const back = Dataset.parse(jsonld, "jsonld");
+  assert.ok(ds.isomorphic(back), "JSON-LD round-trip must be isomorphic");
 });
 
-test("preloaded (quoted-triple) doc: 5 text formats serialize; JSON-LD hard-fails", () => {
+test("preloaded (quoted-triple) doc: all 6 formats serialize; JSON-LD round-trips", () => {
   const ds = Dataset.parse(PRELOADED, "turtle");
-  for (const f of ["turtle", "ntriples", "nquads", "trig", "rdfxml"]) {
+  for (const f of SERIALIZE_FORMATS) {
     const text = ds.serialize(f);
     assert.ok(text.length > 0, `empty serialization for ${f}`);
   }
-  // Documented limitation: a quoted-triple object term is not losslessly
-  // encodable in JSON-LD — the serializer hard-fails (surfaced, never silent).
-  assert.throws(
-    () => ds.serialize("jsonld"),
-    "JSON-LD serialize must hard-fail for a quoted-triple object term",
+  // JSON-LD-star losslessly encodes the object-position quoted triple via its
+  // distinguishable `@triple` form, so the round-trip preserves it (surfaced,
+  // never silently dropped).
+  const jsonld = ds.serialize("jsonld");
+  const back = Dataset.parse(jsonld, "jsonld");
+  assert.ok(
+    back.quads().some((q) => q.object.termType === "Quad"),
+    "JSON-LD must preserve the quoted triple in object position",
   );
+  assert.ok(ds.isomorphic(back), "JSON-LD round-trip must be isomorphic");
 });
 
 test("N-Quads round-trips the object-position quoted triple", () => {

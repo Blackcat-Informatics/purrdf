@@ -23,9 +23,10 @@ BINARYEN_VERSION := 130
 # HARD size ceiling (bytes) for the optimized npm artifact
 # crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm (release +simd128 build, wasm-opt
 # -Oz). `make wasm-pkg-size` (and both CI and the npm release) fail if the built
-# artifact exceeds this. RDF 1.2 semantic projection, deterministic layout, and
-# SVG export measure 3_733_561 bytes; 3_900_000 keeps ~4%
-# headroom. The artifact's size is a joint function of
+# artifact exceeds this. The shipped bundle — RDF 1.2 model, SPARQL/SHACL/ShEx
+# engines, the native format registry (now including JSON-LD/YAML-LD),
+# deterministic layout, and SVG export — measures 4_040_355 bytes; 4_444_391
+# keeps ~10% headroom. The artifact's size is a joint function of
 # rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
 # (pinned via BINARYEN_VERSION), so a moved number is attributable.
 #
@@ -35,7 +36,7 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 3900000
+WASM_SIZE_BUDGET_BYTES := 4444391
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
