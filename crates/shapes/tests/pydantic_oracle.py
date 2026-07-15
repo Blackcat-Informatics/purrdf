@@ -160,6 +160,11 @@ def main() -> None:
             for source_key, import_path in model_paths.items():
                 class_name = import_path.rsplit(".", 1)[1]
                 model = getattr(models, class_name)
+                native_schema = super(model, model).model_json_schema(by_alias=True)
+                if not isinstance(native_schema, dict):
+                    raise AssertionError(
+                        f"{source_key} cannot produce a native Pydantic JSON Schema"
+                    )
                 live_schema = model.model_json_schema(by_alias=True)
                 if live_schema.get("$defs") != expected_defs:
                     raise AssertionError(

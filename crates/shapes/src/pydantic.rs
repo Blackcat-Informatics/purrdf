@@ -1030,7 +1030,6 @@ fn append_schema_surface(out: &mut String, schema_literal: &str) {
     .expect("writing generated Python to a String cannot fail");
     out.push_str("\n    @classmethod\n");
     out.push_str("    def model_json_schema(cls, **kwargs: Any) -> Any:\n");
-    out.push_str("        super().model_json_schema(**kwargs)\n");
     out.push_str("        schema = deepcopy(cls.__purrdf_schema__)\n");
     out.push_str("        if isinstance(schema, dict):\n");
     out.push_str("            schema[\"$defs\"] = deepcopy(_PURRDF_DEFS)\n");
@@ -1777,6 +1776,7 @@ mod tests {
         assert!(models.contains("Field(alias=\"ex:age\")"));
         assert!(models.contains("default=None, alias=\"@id\""));
         assert!(models.contains("\"$ref\": \"#/$defs/Color\""));
+        assert!(!models.contains("super().model_json_schema"));
         assert!(!models.contains("blackcatinformatics.ca"));
         assert!(!models.contains("gmeow"));
     }
