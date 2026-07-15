@@ -123,12 +123,14 @@ and excluded.
 | 100,000,000 | 489,959,547 | 571,486,284 | 935,662,769 | 1,017,189,506 |
 | 1,000,000,000 | 5,284,861,054 | 6,230,470,670 | 10,116,892,394 | 11,062,502,010 |
 
-For this distribution, the wavelet index is last smaller at 61,182 rows
-(244,728 triples) and first larger at 61,183 rows (244,732 triples). At the two
-requested large scales it uses 16.6% and 17.9% more index bytes; including the
-shared adjacency, the complete structure is 8.7% and 9.3% larger. This result
-applies to the concrete rank-directory bitmap representation measured here, not
-to an RRR entropy-coded representation.
+At small sizes, 64-bit word rounding causes narrow ordering oscillations: an
+exact scan through 1,048,576 rows finds 68 flips. The final flip in that scan is
+from smaller to larger at 61,183 rows (244,732 triples); the wavelet index stays
+larger through the rest of the scan and at both target-scale model points. At
+the two requested large scales it uses 16.6% and 17.9% more index bytes;
+including the shared adjacency, the complete structure is 8.7% and 9.3% larger.
+This result applies to the concrete rank-directory bitmap representation
+measured here, not to an RRR entropy-coded representation.
 
 #### Representative timing result
 

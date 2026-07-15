@@ -622,9 +622,8 @@ fn wavelet_space(len: u64, max_value: u64) -> u64 {
 }
 
 fn cycle_delta_space(rows: u64, cycle: u64, position_offset: u64) -> u64 {
-    (0..rows.min(cycle))
-        .map(|residue| cycle_list_space(rows, cycle, residue, position_offset))
-        .sum()
+    let lists = rows.min(cycle);
+    unique_delta_space(lists, position_offset) + (rows - lists) * varint_space(3 * cycle)
 }
 
 fn cycle_list_space(rows: u64, cycle: u64, residue: u64, position_offset: u64) -> u64 {

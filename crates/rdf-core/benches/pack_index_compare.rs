@@ -95,20 +95,23 @@ fn report_space_curve() {
         );
     }
 
-    let mut lower = 28_415u64;
-    let mut upper = 65_536u64;
-    assert!(reference_space(lower).wavelet_index < reference_space(lower).foq_index);
-    assert!(reference_space(upper).wavelet_index > reference_space(upper).foq_index);
-    while lower + 1 < upper {
-        let middle = lower + (upper - lower) / 2;
-        if reference_space(middle).wavelet_index <= reference_space(middle).foq_index {
-            lower = middle;
-        } else {
-            upper = middle;
+    let mut previous = reference_space(1)
+        .wavelet_index
+        .cmp(&reference_space(1).foq_index);
+    let mut flip_count = 0u64;
+    let mut last_flip = None;
+    for rows in 2..=1_048_576 {
+        let space = reference_space(rows);
+        let ordering = space.wavelet_index.cmp(&space.foq_index);
+        if ordering != previous {
+            flip_count += 1;
+            last_flip = Some((rows, previous, ordering));
+            previous = ordering;
         }
     }
+    let (last_rows, last_previous, last_current) = last_flip.expect("the ordering changes");
     eprintln!(
-        "pack-index-crossover last-wavelet-smaller-rows={lower} first-wavelet-larger-rows={upper}"
+        "pack-index-ordering-scan max-rows=1048576 flips={flip_count} last-rows={last_rows} last-previous={last_previous:?} last-current={last_current:?}"
     );
 }
 
