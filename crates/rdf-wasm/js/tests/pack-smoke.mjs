@@ -14,9 +14,11 @@ import { fileURLToPath } from "node:url";
 import { parsePackument } from "./npm-pack-output.mjs";
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const MAX_TARBALL_BYTES = 1_400_000;
-// The RDF 1.2 model, layout, and SVG renderer are shipped in the wasm package.
-// The measured unpacked artifact is 3_858_572 bytes; retain about 5% headroom.
+// The RDF 1.2 model, layout, SVG renderer, and packed-dataset restoration are
+// shipped in the wasm package. Sizes track the optimized wasm artifact (see the
+// Makefile WASM_SIZE_BUDGET_BYTES note); each ceiling is the measured size plus
+// ~10% headroom. The measured gzipped tarball is 1_472_225 bytes.
+const MAX_TARBALL_BYTES = 1_619_448;
 const MAX_UNPACKED_BYTES = 4_050_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TIMEOUT_MS = 180_000;
