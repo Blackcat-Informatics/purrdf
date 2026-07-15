@@ -85,23 +85,29 @@ struct SourceRows<Id> {
     named_graphs: Vec<Id>,
 }
 
-impl<Id: Copy> SourceRows<Id> {
+impl<Id: purrdf_core::ViewTermId> SourceRows<Id> {
     fn collect<D>(view: &D) -> Self
     where
         D: DatasetView<Id = Id>,
     {
+        let quads: Vec<_> = view.quads().collect();
+        let reifiers: Vec<_> = view.reifier_quads().collect();
+        let annotations: Vec<_> = view.annotation_quads().collect();
+        let mut named_graphs: BTreeSet<_> = view.named_graphs().collect();
+        named_graphs.extend(quads.iter().filter_map(|quad| quad.g));
+        named_graphs.extend(reifiers.iter().filter_map(|quad| quad.g));
+        named_graphs.extend(annotations.iter().filter_map(|quad| quad.g));
         Self {
-            quads: view.quads().collect(),
-            reifiers: view.reifier_quads().collect(),
-            annotations: view.annotation_quads().collect(),
-            named_graphs: view.named_graphs().collect(),
+            quads,
+            reifiers,
+            annotations,
+            named_graphs: named_graphs.into_iter().collect(),
         }
     }
 
     fn resolve_all<D>(&self, resolver: &mut Resolver<'_, D>) -> Result<(), ColumnarError>
     where
         D: DatasetView<Id = Id>,
-        Id: purrdf_core::ViewTermId,
     {
         for quad in &self.quads {
             resolve_quad(resolver, quad, true)?;

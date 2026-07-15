@@ -69,11 +69,6 @@ impl CompactWriter {
             .expect("field headers are written only inside a struct") = id;
     }
 
-    pub(crate) fn i16_field(&mut self, id: i16, value: i16) {
-        self.field_header(id, TYPE_I16);
-        write_varint(&mut self.bytes, zigzag_encode(i64::from(value)));
-    }
-
     pub(crate) fn i32_field(&mut self, id: i16, value: i32) {
         self.field_header(id, TYPE_I32);
         write_varint(&mut self.bytes, zigzag_encode(i64::from(value)));
@@ -222,13 +217,6 @@ impl<'a> CompactReader<'a> {
         }
         state.last_field = id;
         Ok(Some(CompactField { id, field_type }))
-    }
-
-    pub(crate) fn read_i16(&mut self, field: CompactField) -> Result<i16, ColumnarError> {
-        Self::expect_type(field, TYPE_I16, "compact i16")?;
-        let value = self.read_signed("compact i16")?;
-        i16::try_from(value)
-            .map_err(|_| ColumnarError::malformed("compact i16", "value exceeds i16"))
     }
 
     pub(crate) fn read_i32(&mut self, field: CompactField) -> Result<i32, ColumnarError> {
@@ -504,8 +492,7 @@ mod tests {
             writer.string_field(4, "meow");
             writer.list_i32_field(5, &[0, 3, -9]);
             writer.struct_field(21, |writer| {
-                writer.i16_field(1, 7);
-                writer.bool_field(2, false);
+                writer.bool_field(1, false);
             });
         });
 
@@ -525,8 +512,6 @@ mod tests {
         let field = reader.next_field(&mut root).unwrap().unwrap();
         assert_eq!(field.id, 21, "long-form field id survives");
         let mut nested = CompactReader::expect_struct(field).unwrap();
-        let field = reader.next_field(&mut nested).unwrap().unwrap();
-        assert_eq!(reader.read_i16(field).unwrap(), 7);
         let field = reader.next_field(&mut nested).unwrap().unwrap();
         assert!(!reader.read_bool(field).unwrap());
         assert!(reader.next_field(&mut nested).unwrap().is_none());

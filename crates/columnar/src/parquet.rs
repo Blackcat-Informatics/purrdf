@@ -265,7 +265,7 @@ pub(crate) fn write_table(
     let footer_len = u32::try_from(footer.len()).map_err(|_| ColumnarError::LimitExceeded {
         context: "Parquet footer length",
         value: footer.len() as u64,
-        maximum: u32::MAX as u64,
+        maximum: u64::from(u32::MAX),
     })?;
     out.extend_from_slice(&footer);
     out.extend_from_slice(&footer_len.to_le_bytes());
@@ -396,7 +396,7 @@ fn encode_file_metadata(data: &TableData, columns: &[EncodedColumn]) -> Vec<u8> 
             Some(column) => write_schema_element(writer, column),
         });
         writer.i64_field(3, data.row_count as i64);
-        writer.list_struct_field(4, row_groups, |writer, _| {
+        writer.list_struct_field(4, row_groups, |writer, ()| {
             writer.list_struct_field(1, columns, write_column_chunk);
             writer.i64_field(
                 2,

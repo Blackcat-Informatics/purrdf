@@ -24,11 +24,13 @@ mod compact;
 pub mod error;
 mod files;
 mod parquet;
+mod reader;
 pub mod schema;
 mod writer;
 
 pub use error::ColumnarError;
 pub use files::ParquetFiles;
 pub use parquet::Compression;
+pub use reader::{ColumnarRead, read};
 pub use schema::{ColumnSchema, PhysicalType, Repetition, Table, TableSchema};
 pub use writer::{ColumnarWrite, write};
