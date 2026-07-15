@@ -70,7 +70,8 @@ pub use pack::{
 pub use paged::{
     CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind, PageGeneration, PageId,
     PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
-    PagedQuadOverlap, PagedQuadTable, SubsetPageProvider,
+    PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
+    PagedQueryView, SubsetPageProvider,
 };
 pub use pipeline_bundle::{HandleEntry, HandleKey, PipelineBundle, PipelineBundleError};
 pub use term::{BlankScope, TermId, TermValue};

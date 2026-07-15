@@ -38,6 +38,7 @@
 //! freeze in a later task), so no cross-page dedup is needed.
 
 pub mod provider;
+pub mod query;
 pub mod translation;
 
 use std::collections::{BTreeSet, HashMap};
@@ -52,6 +53,7 @@ pub use provider::{
     CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind, PageGeneration, PageId,
     PageMaterialization, PageProvider, SubsetPageProvider,
 };
+pub use query::{PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView};
 pub use translation::PageTranslation;
 
 /// One page of a [`PagedDataset`]: its [`PageId`], the local↔global

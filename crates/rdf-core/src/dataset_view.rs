@@ -472,6 +472,76 @@ pub trait DatasetView {
     }
 }
 
+/// An atomic checkpoint of an operationally fallible dataset view.
+///
+/// [`Ready`](Self::Ready) means no operational failure has been observed *at this
+/// checkpoint*. It becomes a completeness certificate only when an execution engine
+/// samples it after evaluation has stopped. [`Failed`](Self::Failed) carries both the
+/// sticky root cause and the deterministic evidence accumulated before that failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ViewOperationStatus<Error, Evidence> {
+    /// The view has not observed an operational failure.
+    Ready {
+        /// Deterministic resource/request evidence accumulated so far.
+        evidence: Evidence,
+    },
+    /// The operation has irreversibly failed; further reads yield no data.
+    Failed {
+        /// The first operational root cause observed by the view.
+        error: Error,
+        /// Deterministic resource/request evidence at the failure boundary.
+        evidence: Evidence,
+    },
+}
+
+impl<Error, Evidence> ViewOperationStatus<Error, Evidence> {
+    /// Borrow the evidence carried by either status variant.
+    #[must_use]
+    pub const fn evidence(&self) -> &Evidence {
+        match self {
+            Self::Ready { evidence } | Self::Failed { evidence, .. } => evidence,
+        }
+    }
+
+    /// Borrow the sticky operational error, if one has occurred.
+    #[must_use]
+    pub const fn error(&self) -> Option<&Error> {
+        match self {
+            Self::Ready { .. } => None,
+            Self::Failed { error, .. } => Some(error),
+        }
+    }
+}
+
+/// A [`DatasetView`] whose backing data can fail during lazy reads.
+///
+/// Implementations preserve the infallible iterator shape required by the evaluator:
+/// the first operational failure becomes sticky, every iterator stops yielding, and
+/// [`operation_status`](Self::operation_status) exposes that root cause. An execution
+/// boundary must sample the status before evaluation and again after all evaluation
+/// and result materialization; it may publish a result as complete only when the final
+/// checkpoint is [`ViewOperationStatus::Ready`]. Internal partial rows are never a
+/// completeness signal.
+pub trait FallibleDatasetView: DatasetView {
+    /// The typed operational root cause.
+    type Error: std::error::Error + Clone + Send + Sync + 'static;
+    /// Deterministic request and resource evidence.
+    type Evidence: Clone + std::fmt::Debug + PartialEq + Eq + Send + Sync + 'static;
+
+    /// Take an atomic checkpoint of current operational status and evidence.
+    fn operation_status(&self) -> ViewOperationStatus<Self::Error, Self::Evidence>;
+}
+
+impl<T: FallibleDatasetView> FallibleDatasetView for Arc<T> {
+    type Error = T::Error;
+    type Evidence = T::Evidence;
+
+    #[inline]
+    fn operation_status(&self) -> ViewOperationStatus<Self::Error, Self::Evidence> {
+        (**self).operation_status()
+    }
+}
+
 /// The **write companion** to [`DatasetView`] — the mutation surface a copy-on-write
 /// or backed-by-store dataset exposes (purrdf P5; backend contract C4).
 ///
