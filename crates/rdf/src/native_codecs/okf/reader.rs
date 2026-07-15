@@ -12,8 +12,8 @@ use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 
 use super::{
     MAX_OKF_FRONTMATTER_BYTES, MAX_OKF_LINKS_PER_DOCUMENT, MAX_OKF_YAML_DEPTH, MAX_OKF_YAML_NODES,
-    OkfBundle, OkfConfig, OkfError, OkfReadOutcome, minted_document_iri, validate_absolute_iri,
-    validate_relative_markdown_path,
+    OkfBundle, OkfConfig, OkfError, OkfReadOutcome, decimal_lexical_from_f64, minted_document_iri,
+    validate_absolute_iri, validate_relative_markdown_path,
 };
 use crate::{LossEntry, LossLedger, RdfLocation};
 
@@ -147,12 +147,7 @@ impl<'de> Visitor<'de> for StrictValueVisitor {
     where
         E: de::Error,
     {
-        if !value.is_finite() {
-            return Err(E::custom(
-                "non-finite YAML numbers are not valid OKF values",
-            ));
-        }
-        let lexical = value.to_string();
+        let lexical = decimal_lexical_from_f64(value).map_err(E::custom)?;
         let parsed = purrdf_xsd::parse_by_iri(&lexical, XSD_DECIMAL)
             .map_err(E::custom)?
             .ok_or_else(|| E::custom("internal OKF decimal datatype is not recognized"))?;

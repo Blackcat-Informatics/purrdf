@@ -74,6 +74,78 @@ impl fmt::Display for OkfError {
 
 impl std::error::Error for OkfError {}
 
+pub(super) fn decimal_lexical_from_f64(value: f64) -> Result<String, OkfError> {
+    if !value.is_finite() {
+        return Err(OkfError::new(
+            "non-finite YAML numbers are not valid OKF values",
+        ));
+    }
+    expand_decimal_exponent(&value.to_string())
+}
+
+fn expand_decimal_exponent(lexical: &str) -> Result<String, OkfError> {
+    let Some(exponent_offset) = lexical.find(['e', 'E']) else {
+        return Ok(lexical.to_owned());
+    };
+    let (mantissa, exponent) = lexical.split_at(exponent_offset);
+    let exponent = exponent[1..].parse::<i32>().map_err(|error| {
+        OkfError::new(format!(
+            "invalid internal OKF decimal exponent `{lexical}`: {error}"
+        ))
+    })?;
+    let (sign, unsigned) = if let Some(unsigned) = mantissa.strip_prefix('-') {
+        ("-", unsigned)
+    } else {
+        ("", mantissa.strip_prefix('+').unwrap_or(mantissa))
+    };
+    if unsigned.is_empty()
+        || unsigned.matches('.').count() > 1
+        || !unsigned
+            .bytes()
+            .all(|byte| byte == b'.' || byte.is_ascii_digit())
+    {
+        return Err(OkfError::new(format!(
+            "invalid internal OKF decimal mantissa `{lexical}`"
+        )));
+    }
+
+    let digits_before_decimal = unsigned.find('.').unwrap_or(unsigned.len());
+    let digits: String = unsigned.chars().filter(|ch| *ch != '.').collect();
+    if digits.is_empty() {
+        return Err(OkfError::new(format!(
+            "invalid internal OKF decimal mantissa `{lexical}`"
+        )));
+    }
+    let decimal_position = i64::try_from(digits_before_decimal)
+        .map_err(|_| OkfError::new("internal OKF decimal position overflow"))?
+        .checked_add(i64::from(exponent))
+        .ok_or_else(|| OkfError::new("internal OKF decimal exponent overflow"))?;
+
+    let mut expanded = String::with_capacity(sign.len() + digits.len() + 2);
+    expanded.push_str(sign);
+    if decimal_position <= 0 {
+        expanded.push_str("0.");
+        let zeros = usize::try_from(-decimal_position)
+            .map_err(|_| OkfError::new("internal OKF decimal padding overflow"))?;
+        expanded.extend(std::iter::repeat_n('0', zeros));
+        expanded.push_str(&digits);
+        return Ok(expanded);
+    }
+
+    let decimal_position = usize::try_from(decimal_position)
+        .map_err(|_| OkfError::new("internal OKF decimal position overflow"))?;
+    if decimal_position >= digits.len() {
+        expanded.push_str(&digits);
+        expanded.extend(std::iter::repeat_n('0', decimal_position - digits.len()));
+    } else {
+        let (integer, fraction) = digits.split_at(decimal_position);
+        expanded.push_str(integer);
+        expanded.push('.');
+        expanded.push_str(fraction);
+    }
+    Ok(expanded)
+}
+
 /// Mandatory caller-owned OKF vocabulary and frontmatter profile.
 ///
 /// There is intentionally no [`Default`] implementation. The caller must choose
@@ -439,4 +511,25 @@ fn percent_encode_path(path: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand_decimal_exponent;
+
+    #[test]
+    fn exponent_form_expands_to_xsd_decimal_lexical_space() {
+        assert_eq!(
+            expand_decimal_exponent("1e-5").expect("small exponent"),
+            "0.00001"
+        );
+        assert_eq!(
+            expand_decimal_exponent("1.25E+20").expect("large exponent"),
+            "125000000000000000000"
+        );
+        assert_eq!(
+            expand_decimal_exponent("-1.25e-3").expect("signed exponent"),
+            "-0.00125"
+        );
+    }
 }

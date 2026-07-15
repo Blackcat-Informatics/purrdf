@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_yaml::Value as YamlValue;
 
 use super::reader::{extract_markdown_links, resolve_link_path};
-use super::{OkfBundle, OkfConfig, OkfError, minted_document_iri};
+use super::{OkfBundle, OkfConfig, OkfError, decimal_lexical_from_f64, minted_document_iri};
 use crate::{
     BlankScope, LossEntry, LossLedger, QuadIds, RdfDataset, RdfDatasetVisitor, RdfLocation,
     RdfTextDirection, TermId, TermRef,
@@ -834,12 +834,12 @@ impl<'a> Projector<'a> {
                         "OKF decimal `{parsed}` is not finite"
                     )));
                 }
-                let round_trip =
-                    parse_known_xsd(&value.to_string(), XSD_DECIMAL).map_err(|error| {
-                        OkfError::new(format!(
-                            "OKF decimal `{parsed}` cannot round-trip through YAML: {error}"
-                        ))
-                    })?;
+                let yaml_lexical = decimal_lexical_from_f64(value)?;
+                let round_trip = parse_known_xsd(&yaml_lexical, XSD_DECIMAL).map_err(|error| {
+                    OkfError::new(format!(
+                        "OKF decimal `{parsed}` cannot round-trip through YAML: {error}"
+                    ))
+                })?;
                 let original = parse_known_xsd(&parsed, XSD_DECIMAL)?;
                 if !purrdf_xsd::value_eq(&original, &round_trip) {
                     return Err(OkfError::new(format!(
@@ -1104,6 +1104,8 @@ mod tests {
                 "active",
                 "count",
                 "ratio",
+                "small",
+                "large",
                 "producer",
             ],
         )
@@ -1118,7 +1120,7 @@ mod tests {
             ),
             (
                 "concepts/table.md",
-                "---\ntype: Table\ntitle: Events\nresource: https://example.org/data/events\ntags:\n- stable\n- analytics\ntimestamp: 2026-07-15T01:02:03Z\nactive: true\ncount: 7\nratio: 0.625\nproducer:\n  name: fixture\n  ranks: [1, 2]\n---\nSee [Schema](schema.md) and [Schema again](schema.md#columns). External [site](https://example.net/).\n",
+                "---\ntype: Table\ntitle: Events\nresource: https://example.org/data/events\ntags:\n- stable\n- analytics\ntimestamp: 2026-07-15T01:02:03Z\nactive: true\ncount: 7\nratio: 0.625\nsmall: 1e-5\nlarge: 1e20\nproducer:\n  name: fixture\n  ranks: [1, 2]\n---\nSee [Schema](schema.md) and [Schema again](schema.md#columns). External [site](https://example.net/).\n",
             ),
         ])
         .expect("valid bundle")
@@ -1162,6 +1164,8 @@ mod tests {
             .expect("table document");
         assert!(table.contains("resource: https://example.org/data/events"));
         assert!(table.contains("ratio: 0.625"));
+        assert!(table.contains("small: 0.00001"));
+        assert!(table.contains("large: 1e20"));
         assert!(table.contains("- analytics\n- stable"));
     }
 
