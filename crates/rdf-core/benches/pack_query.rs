@@ -19,7 +19,7 @@ use std::sync::Arc;
 use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, PackBuilder, PackView, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, verify_pack,
+    RdfLiteral, restore_pack, verify_pack,
 };
 
 /// Number of subject "rows" generated. Each row emits four quads (see
@@ -85,6 +85,18 @@ fn bench_from_bytes(c: &mut Criterion) {
     let mut group = c.benchmark_group("pack_query_from_bytes");
     group.bench_function("from_bytes", |b| {
         b.iter(|| std::hint::black_box(PackView::from_bytes(&bytes).expect("pack opens")));
+    });
+    group.finish();
+}
+
+/// Restore: open an already-built pack and materialize the complete frozen
+/// `RdfDataset` without passing through an RDF text serialization.
+fn bench_restore_pack(c: &mut Criterion) {
+    let ds = build_dataset();
+    let bytes = PackBuilder::build_bytes(&ds).expect("representative dataset packs");
+    let mut group = c.benchmark_group("pack_query_restore");
+    group.bench_function("restore_pack", |b| {
+        b.iter(|| std::hint::black_box(restore_pack(&bytes).expect("pack restores")));
     });
     group.finish();
 }
@@ -160,6 +172,7 @@ criterion_group!(
     benches,
     bench_build_bytes,
     bench_from_bytes,
+    bench_restore_pack,
     bench_quads_for_pattern,
     bench_verify_pack
 );

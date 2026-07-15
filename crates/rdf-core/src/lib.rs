@@ -114,10 +114,9 @@ pub use ir::{
     SubsetPageProvider, TermId, TermRef, TermValue, ValidatedRdfDatasetBuilder, canonicalize,
     canonicalize_with, dataset_diff, datasets_isomorphic, try_canonicalize, try_canonicalize_with,
 };
-#[doc(hidden)]
 pub use ir::{
     PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,
-    verify_pack,
+    restore_pack, verify_pack,
 };
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,

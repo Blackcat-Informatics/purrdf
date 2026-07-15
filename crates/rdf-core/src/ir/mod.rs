@@ -42,15 +42,8 @@ pub mod ingest;
 // `GlobalTermId`, plus the `PageProvider` demand-paging hook and per-page
 // `PageTranslation` local↔global id map.
 pub mod paged;
-// The succinct, dependency-free bit-packing / rank-select / varint codec kernel
-// (pack): fixed-width `IntVector`, rank/select bitmaps, and varint/zigzag/delta
-// helpers for the FoQ inverted-list and value-dictionary encoders.
-// `#[doc(hidden)]`: this is an internal-codec surface, not a SemVer-
-// guaranteed part of the crate's public API — it is `pub` only so this crate's own
-// `benches/pack_bits.rs` (a separate compilation unit) can reach it, matching the
-// `#[doc(hidden)] pub` bench-only-surface convention already used in
-// `purrdf-rdf::native_codecs::parse_dataset_forced_sequential`.
-#[doc(hidden)]
+// The succinct, dependency-free dataset pack. Its builder/view/restore surface is
+// public; the bit-packing implementation modules remain doc-hidden.
 pub mod pack;
 pub mod term;
 pub mod validate;
@@ -70,10 +63,9 @@ pub use event_sink::RdfDatasetVisitor;
 pub use global::{GlobalDictionary, GlobalTermId};
 pub use ingest::{DatasetSink, FrozenDatasetSource};
 pub use mutable::{MutableDataset, QuadValues};
-#[doc(hidden)]
 pub use pack::{
     PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,
-    verify_pack,
+    restore_pack, verify_pack,
 };
 pub use paged::{
     CountingDemandProvider, InMemoryPageProvider, PageFault, PageId, PagePart, PageProvider,

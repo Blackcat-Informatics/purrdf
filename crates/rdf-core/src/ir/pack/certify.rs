@@ -251,6 +251,34 @@ pub fn dataset_from_view<D: DatasetView>(view: &D) -> Result<Arc<RdfDataset>, Rd
     reconstruct(view).freeze()
 }
 
+/// Open a succinct dataset pack and restore its complete RDF 1.2 value into a
+/// concrete, frozen [`Arc<RdfDataset>`].
+///
+/// This is the cache-ingress convenience counterpart to
+/// [`PackBuilder::build_bytes`](super::container::PackBuilder::build_bytes): it
+/// performs [`PackView::from_bytes`]'s fail-closed container and section checks,
+/// then drives the single [`dataset_from_view`] reconstruction loop. Base quads,
+/// reifier bindings, and statement annotations are all restored; no RDF text is
+/// serialized or parsed along the way.
+///
+/// The stored RDFC-1.0 header digest is not independently recomputed here. A
+/// caller that needs a certified identity rather than structural restoration
+/// should call [`verify_pack`] as well. Content-addressed caches normally verify
+/// the complete pack blob against their own manifest digest before calling this
+/// function, avoiding a redundant canonicalization on the hot restore path.
+///
+/// # Errors
+///
+/// Returns any [`PackError`] produced while opening the container. A
+/// cross-section role error discovered while freezing the reconstruction is
+/// reported as [`PackError::Malformed`].
+pub fn restore_pack(bytes: &[u8]) -> Result<Arc<RdfDataset>, PackError> {
+    let view = PackView::from_bytes(bytes)?;
+    dataset_from_view(&view).map_err(|_| {
+        PackError::Malformed("restore_pack: reconstructed dataset failed structural validation")
+    })
+}
+
 // ---------------------------------------------------------------------------
 // verify_pack / pack_digest
 // ---------------------------------------------------------------------------

@@ -58,8 +58,9 @@
 //! source dataset, on top of the per-section SHA-256 integrity `PackView::from_bytes`
 //! already enforces.
 //!
-//! `#[doc(hidden)]` (see [`super::pack`]'s declaration): this whole tree is an
-//! internal-codec surface, not a SemVer-guaranteed part of the crate's public API.
+//! The stable consumer surface is the small set re-exported from this module:
+//! [`PackBuilder`], [`PackView`], [`restore_pack`], [`verify_pack`], and their
+//! supporting identity/error types. The encoding primitives remain doc-hidden.
 
 #[doc(hidden)]
 pub mod bits;
@@ -77,7 +78,7 @@ pub mod triples;
 pub mod view;
 
 #[doc(hidden)]
-pub use certify::{PackDigest, dataset_from_view, pack_digest, verify_pack};
+pub use certify::{PackDigest, dataset_from_view, pack_digest, restore_pack, verify_pack};
 #[doc(hidden)]
 pub use container::{PackBuilder, PackError, PackView};
 #[doc(hidden)]

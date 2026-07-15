@@ -16,7 +16,7 @@
 //! trip. The same rich fixture (`example.org` only) exercises every seam the pack
 //! codec claims to unify.
 
-use purrdf_core::{PackBuilder, PackView, dataset_from_view, datasets_isomorphic};
+use purrdf_core::{PackBuilder, PackView, dataset_from_view, datasets_isomorphic, restore_pack};
 use purrdf_rdf::{NativeRdfFormat, serialize_dataset_to_format};
 
 mod common;
@@ -67,4 +67,20 @@ fn dataset_from_view_roundtrips_the_full_fixture() {
         !source_nq.is_empty(),
         "non-vacuous: the fixture is non-empty"
     );
+}
+
+/// The byte-oriented convenience surface used by persistent caches must restore
+/// the same complete RDF 1.2 dataset as the generic view reconstruction.
+#[test]
+fn restore_pack_roundtrips_the_full_fixture() {
+    let source = build_fixture();
+    let bytes = PackBuilder::build_bytes(&source).expect("pack build");
+    let restored = restore_pack(&bytes).expect("pack restores");
+
+    assert!(
+        datasets_isomorphic(&restored, &source),
+        "restore_pack must preserve the source dataset"
+    );
+    assert_eq!(restored.reifiers().count(), source.reifiers().count());
+    assert_eq!(restored.annotations().count(), source.annotations().count());
 }
