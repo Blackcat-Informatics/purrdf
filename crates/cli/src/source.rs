@@ -73,6 +73,29 @@ pub(crate) fn read_bytes(path: &str) -> Result<Vec<u8>, CliError> {
     }
 }
 
+/// Open a DISK pack `path` read-only, mmap it, and verify its integrity.
+///
+/// This is the mmap seam factored out of the pack arms of [`run_over_input`] and
+/// [`load_dataset`] so a caller that only needs the verified bytes (not a
+/// `PackView`) — e.g. `convert`'s pack→pack byte passthrough — can borrow them
+/// without materializing a `Vec<u8>` copy of the pack. Callers on **stdin** cannot
+/// use this (there is no file to map); they must fall back to [`read_bytes`] +
+/// [`verify_pack`].
+///
+/// SAFETY / caveat: identical to the pack arms above — a read-only mapping of a
+/// file this process does not mutate (nor tolerates concurrent external mutation
+/// of) for the brief lifetime of the mapping, which the caller holds alive only as
+/// long as it needs the borrowed bytes.
+pub(crate) fn verified_pack_mmap(path: &str) -> Result<memmap2::Mmap, CliError> {
+    let file = File::open(path)?;
+    // SAFETY: see the module docs and the identical comment on the pack arms of
+    // `run_over_input` / `load_dataset` — a read-only, non-concurrently-mutated
+    // mapping confined to the caller's use of the returned `Mmap`.
+    let mmap = unsafe { memmap2::Mmap::map(&file)? };
+    verify_pack(&mmap[..])?;
+    Ok(mmap)
+}
+
 /// Open `path` as the concrete view its `format` implies and run `op` over it.
 ///
 /// The text arm parses into an `RdfDataset`; the pack arm mmaps the file (or reads
@@ -97,15 +120,7 @@ pub(crate) fn run_over_input<Op: ViewOp>(
                 let view = PackView::from_bytes(&bytes)?;
                 op.run(&view)
             } else {
-                let file = File::open(path)?;
-                // SAFETY: `file` is opened read-only just above and this process
-                // does not mutate it (nor tolerate concurrent external mutation)
-                // for the brief lifetime of the mapping, which is confined to
-                // this call and dropped before the function returns. This is the
-                // documented external-consumer mmap seam (see the module docs and
-                // `crates/rdf-core/tests/pack_mmap.rs`).
-                let mmap = unsafe { memmap2::Mmap::map(&file)? };
-                verify_pack(&mmap[..])?;
+                let mmap = verified_pack_mmap(path)?;
                 let view = PackView::from_bytes(&mmap[..])?;
                 op.run(&view)
             }
@@ -136,11 +151,7 @@ pub(crate) fn load_dataset(
                 let view = PackView::from_bytes(&bytes)?;
                 Ok(dataset_from_view(&view)?)
             } else {
-                let file = File::open(path)?;
-                // SAFETY: identical to `run_over_input`'s pack arm — a read-only,
-                // non-concurrently-mutated mapping confined to this call.
-                let mmap = unsafe { memmap2::Mmap::map(&file)? };
-                verify_pack(&mmap[..])?;
+                let mmap = verified_pack_mmap(path)?;
                 let view = PackView::from_bytes(&mmap[..])?;
                 Ok(dataset_from_view(&view)?)
             }

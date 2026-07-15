@@ -86,12 +86,19 @@ pub(crate) fn run(
         return run_with_transforms(source_format, options, input, output, ledger_target);
     }
 
-    // Pack → pack: a verified byte passthrough (no decode/re-encode churn).
+    // Pack → pack: a verified byte passthrough (no decode/re-encode churn). A DISK
+    // pack is mmap-borrowed (no `Vec<u8>` copy of the pack contents); stdin has no
+    // file to map, so it still buffers into a `Vec`.
     let target_format = format::resolve(options.to, output)?;
     if matches!(source_format, CliFormat::Pack) && matches!(target_format, CliFormat::Pack) {
-        let bytes = source::read_bytes(input)?;
-        verify_pack(&bytes)?;
-        sink::write_out(output, &bytes)?;
+        if input == "-" {
+            let bytes = source::read_bytes(input)?;
+            verify_pack(&bytes)?;
+            sink::write_out(output, &bytes)?;
+        } else {
+            let mmap = source::verified_pack_mmap(input)?;
+            sink::write_out(output, &mmap[..])?;
+        }
         return ledger::surface(ledger_target, &LossLedger::new());
     }
 

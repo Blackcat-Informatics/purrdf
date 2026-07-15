@@ -637,6 +637,67 @@ fn pack_to_trig_equals_direct_dataset_to_trig() {
     );
 }
 
+/// A DISK pack → pack conversion is a verified byte passthrough: the output file is
+/// byte-identical to the input pack (`convert` mmap-borrows the disk pack rather than
+/// re-encoding it — see `crates/cli/src/convert.rs`'s pack→pack branch and
+/// `crates/cli/src/source.rs::verified_pack_mmap`).
+#[test]
+fn disk_pack_to_pack_is_byte_identical_passthrough() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(dir, "seedC.nq", SEED_C);
+
+    let pack_in = path(dir, "in.purrpck");
+    let pack_out = path(dir, "out.purrpck");
+
+    assert!(
+        run(&[
+            "convert", "--from", "nquads", "--to", "pack", &seed, &pack_in
+        ])
+        .status
+        .success(),
+        "seeding the source pack must succeed"
+    );
+
+    let o = run(&["convert", &pack_in, &pack_out]);
+    assert!(
+        o.status.success(),
+        "pack -> pack passthrough must exit 0: {}",
+        stderr(&o)
+    );
+
+    assert_eq!(
+        std::fs::read(&pack_out).expect("read passthrough output"),
+        std::fs::read(&pack_in).expect("read source pack"),
+        "pack -> pack must be a byte-identical passthrough of the input pack"
+    );
+}
+
+/// A truncated/garbage `.purrpck` fed to `convert`'s pack→pack passthrough fails closed
+/// (exit non-zero): `verified_pack_mmap` runs the pack integrity verifier before any
+/// bytes are written to the output.
+#[test]
+fn disk_pack_to_pack_corrupt_input_fails_closed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let bad = write_file(dir, "bad.purrpck", "not a pack file at all — pure garbage");
+    let out = path(dir, "out.purrpck");
+
+    let o = run(&["convert", &bad, &out]);
+    assert!(
+        !o.status.success(),
+        "a corrupt pack must fail closed (exit non-zero)"
+    );
+    assert!(
+        !stderr(&o).is_empty(),
+        "the pack-integrity failure must print a diagnostic to stderr"
+    );
+    assert!(
+        !Path::new(&out).exists(),
+        "a failed passthrough must not leave a partial output file"
+    );
+}
+
 /// A large N-Triples ingress (5000 `example.org` triples) converts to N-Quads with every
 /// triple present and the exact count preserved (correctness at volume, not zero-copy).
 #[test]
