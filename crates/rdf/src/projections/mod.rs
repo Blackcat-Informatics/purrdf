@@ -9,11 +9,17 @@
 //! engine runs unchanged in native, WebAssembly, Python, and C hosts.
 
 mod error;
+mod lpg;
 mod package;
 mod term;
 mod util;
 
 pub use error::{ProjectionError, ProjectionErrorKind};
+pub use lpg::{
+    LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgGraphContext, LpgLabel, LpgLiftOutcome,
+    LpgNode, LpgProjection, LpgProperty, LpgPropertyAtom, LpgRdfQuad, LpgReifier, lift_lpg,
+    project_lpg,
+};
 pub use package::{ProjectionLimits, ProjectionPackage};
 pub use term::{ProjectionDirection, ProjectionTerm};
 pub use util::{

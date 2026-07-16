@@ -108,9 +108,11 @@ pub use native_quads::{
     flat_rdf_quads_from_dataset,
 };
 pub use projections::{
+    LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgGraphContext, LpgLabel, LpgLiftOutcome,
+    LpgNode, LpgProjection, LpgProperty, LpgPropertyAtom, LpgRdfQuad, LpgReifier,
     ProjectionDirection, ProjectionError, ProjectionErrorKind, ProjectionLimits, ProjectionPackage,
     ProjectionTerm, escape_cypher_identifier, escape_cypher_string, escape_xml_attribute,
-    escape_xml_text, stable_identifier, validate_absolute_iri,
+    escape_xml_text, lift_lpg, project_lpg, stable_identifier, validate_absolute_iri,
 };
 pub use purrdf_core::{
     ArtifactId, ArtifactIndex, ArtifactInterner, ArtifactRecord, AssertionOccurrence, Attribution,

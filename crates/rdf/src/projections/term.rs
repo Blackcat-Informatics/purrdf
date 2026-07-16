@@ -2,50 +2,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::collections::BTreeSet;
-use std::io;
 
 use purrdf_core::{BlankScope, DatasetView, RdfTextDirection, TermRef, TermValue};
 use serde::{Deserialize, Serialize};
 
+use super::util::canonical_json_bounded;
 use super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
 
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-
-struct LimitedJsonBytes {
-    bytes: Vec<u8>,
-    limit: usize,
-    exceeded: bool,
-}
-
-impl LimitedJsonBytes {
-    fn new(limit: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            limit,
-            exceeded: false,
-        }
-    }
-}
-
-impl io::Write for LimitedJsonBytes {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        if self
-            .bytes
-            .len()
-            .checked_add(buffer.len())
-            .is_none_or(|length| length > self.limit)
-        {
-            self.exceeded = true;
-            return Err(io::Error::other("projection JSON byte limit exceeded"));
-        }
-        self.bytes.extend_from_slice(buffer);
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
 
 /// Portable RDF 1.2 literal base direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -144,12 +108,6 @@ impl ProjectionTerm {
         depth: usize,
         active: &mut BTreeSet<D::Id>,
     ) -> Result<Self, ProjectionError> {
-        if depth > limits.max_term_depth() {
-            return Err(ProjectionError::limit(format!(
-                "RDF triple term exceeds the configured depth limit of {}",
-                limits.max_term_depth()
-            )));
-        }
         if !active.insert(id) {
             return Err(ProjectionError::term("cyclic triple-term component graph"));
         }
@@ -181,6 +139,7 @@ impl ProjectionTerm {
                 })
             }
             TermRef::Triple { s, p, o } => {
+                Self::validate_depth(limits, depth)?;
                 let subject = Self::from_view_inner(view, s, limits, depth + 1, active)?;
                 let predicate = Self::from_view_inner(view, p, limits, depth + 1, active)?;
                 if !matches!(predicate, Self::Iri { .. }) {
@@ -221,7 +180,6 @@ impl ProjectionTerm {
         limits: ProjectionLimits,
         depth: usize,
     ) -> Result<Self, ProjectionError> {
-        Self::validate_depth(limits, depth)?;
         Ok(match value {
             TermValue::Iri(value) => Self::Iri {
                 value: value.clone(),
@@ -241,11 +199,14 @@ impl ProjectionTerm {
                 language: language.clone(),
                 direction: direction.map(Into::into),
             },
-            TermValue::Triple { s, p, o } => Self::Triple {
-                subject: Box::new(Self::from_term_value_inner(s, limits, depth + 1)?),
-                predicate: Box::new(Self::from_term_value_inner(p, limits, depth + 1)?),
-                object: Box::new(Self::from_term_value_inner(o, limits, depth + 1)?),
-            },
+            TermValue::Triple { s, p, o } => {
+                Self::validate_depth(limits, depth)?;
+                Self::Triple {
+                    subject: Box::new(Self::from_term_value_inner(s, limits, depth + 1)?),
+                    predicate: Box::new(Self::from_term_value_inner(p, limits, depth + 1)?),
+                    object: Box::new(Self::from_term_value_inner(o, limits, depth + 1)?),
+                }
+            }
         })
     }
 
@@ -298,19 +259,7 @@ impl ProjectionTerm {
     /// error if the data-model serialization itself reports a failure.
     pub fn to_canonical_json(&self, limits: ProjectionLimits) -> Result<Vec<u8>, ProjectionError> {
         self.validate(limits)?;
-        let mut output = LimitedJsonBytes::new(limits.max_artifact_bytes());
-        if let Err(error) = serde_json::to_writer(&mut output, self) {
-            if output.exceeded {
-                return Err(ProjectionError::limit(format!(
-                    "canonical term JSON exceeds the {}-byte limit",
-                    limits.max_artifact_bytes()
-                )));
-            }
-            return Err(ProjectionError::syntax(format!(
-                "serialize term JSON: {error}"
-            )));
-        }
-        Ok(output.bytes)
+        canonical_json_bounded(self, limits, "canonical term JSON")
     }
 
     /// Parse and validate canonical tagged JSON bytes.
@@ -367,7 +316,6 @@ impl ProjectionTerm {
         limits: ProjectionLimits,
         depth: usize,
     ) -> Result<(), ProjectionError> {
-        Self::validate_depth(limits, depth)?;
         match self {
             Self::Iri { value } => validate_absolute_iri(value, "term IRI")
                 .map_err(|error| ProjectionError::term(error.message())),
@@ -417,6 +365,12 @@ impl ProjectionTerm {
                 predicate,
                 object,
             } => {
+                Self::validate_depth(limits, depth)?;
+                if matches!(subject.as_ref(), Self::Literal { .. }) {
+                    return Err(ProjectionError::term(
+                        "triple-term subject must not be a literal",
+                    ));
+                }
                 subject.validate_inner(limits, depth + 1)?;
                 let Self::Iri { value } = predicate.as_ref() else {
                     return Err(ProjectionError::term(
@@ -522,18 +476,25 @@ mod tests {
         let leaf = ProjectionTerm::Iri {
             value: "http://example.org/x".to_owned(),
         };
-        let nested = ProjectionTerm::Triple {
+        let depth_one = ProjectionTerm::Triple {
             subject: Box::new(ProjectionTerm::Triple {
                 subject: Box::new(leaf.clone()),
                 predicate: Box::new(leaf.clone()),
                 object: Box::new(leaf.clone()),
             }),
             predicate: Box::new(leaf.clone()),
+            object: Box::new(leaf.clone()),
+        };
+        let depth_two = ProjectionTerm::Triple {
+            subject: Box::new(depth_one.clone()),
+            predicate: Box::new(leaf.clone()),
             object: Box::new(leaf),
         };
         let shallow = ProjectionLimits::new(8, 8_192, 32_768, 65_536, 1).expect("limits");
-        assert!(nested.to_canonical_json(shallow).is_err());
-        assert!(nested.to_term_value(shallow).is_err());
+        assert!(depth_one.to_canonical_json(shallow).is_ok());
+        assert!(depth_one.to_term_value(shallow).is_ok());
+        assert!(depth_two.to_canonical_json(shallow).is_err());
+        assert!(depth_two.to_term_value(shallow).is_err());
     }
 
     #[test]
@@ -565,5 +526,21 @@ mod tests {
             error.kind(),
             super::super::ProjectionErrorKind::ResourceLimit
         );
+
+        let literal_subject = ProjectionTerm::Triple {
+            subject: Box::new(ProjectionTerm::Literal {
+                lexical: "bad".to_owned(),
+                datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                language: None,
+                direction: None,
+            }),
+            predicate: Box::new(ProjectionTerm::Iri {
+                value: "http://example.org/p".to_owned(),
+            }),
+            object: Box::new(ProjectionTerm::Iri {
+                value: "http://example.org/o".to_owned(),
+            }),
+        };
+        assert!(literal_subject.validate(limits()).is_err());
     }
 }
