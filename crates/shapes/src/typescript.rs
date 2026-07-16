@@ -23,6 +23,7 @@
 //! source [`CompiledSchema`], retained by the caller alongside the reversible
 //! `$defs` key → exported type-name map.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Write as _};
@@ -606,20 +607,19 @@ impl<'a> Renderer<'a> {
         depth: usize,
     ) -> Result<String, TypeScriptError> {
         ensure_depth(depth, path)?;
+        let empty = Map::new();
         let properties = object
             .get("properties")
             .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&empty);
         let required = required_names(object, path)?;
         let pattern_properties = object
             .get("patternProperties")
             .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&empty);
 
         let mut field_types = BTreeMap::new();
-        for (property, schema) in &properties {
+        for (property, schema) in properties {
             let property_path = format!("{path}/properties/{}", pointer_escape(property));
             field_types.insert(
                 property.clone(),
@@ -630,7 +630,7 @@ impl<'a> Renderer<'a> {
         for property in required.difference(&property_names) {
             field_types.insert(
                 property.clone(),
-                self.render_required_only_property(object, &pattern_properties, path, depth + 1)?,
+                self.render_required_only_property(object, pattern_properties, path, depth + 1)?,
             );
         }
 
@@ -652,7 +652,7 @@ impl<'a> Renderer<'a> {
         }
 
         let mut index_types = Vec::new();
-        for (pattern, schema) in &pattern_properties {
+        for (pattern, schema) in pattern_properties {
             index_types.push(self.render_schema(
                 schema,
                 &format!("{path}/patternProperties/{}", pointer_escape(pattern)),
@@ -1251,7 +1251,7 @@ fn validate_keyword_values(object: &Map<String, Value>, path: &str) -> Result<()
         for (property, names) in dependencies {
             let names = names.as_array().ok_or_else(|| {
                 TypeScriptError::new(format!(
-                    "{path}/dependentRequired/{}/ must be an array",
+                    "{path}/dependentRequired/{} must be an array",
                     pointer_escape(property)
                 ))
             })?;
@@ -1683,7 +1683,12 @@ fn normalize_prose(label: &str, value: &str) -> Result<String, TypeScriptError> 
 fn write_doc_comment(output: &mut String, depth: usize, text: &str, tag: Option<&str>) {
     let pad = indentation(depth);
     writeln!(output, "{pad}/**").expect("writing TypeScript to a String cannot fail");
-    for line in text.replace("*/", "* /").lines() {
+    let sanitized = if text.contains("*/") {
+        Cow::Owned(text.replace("*/", "* /"))
+    } else {
+        Cow::Borrowed(text)
+    };
+    for line in sanitized.lines() {
         if line.is_empty() {
             writeln!(output, "{pad} *").expect("writing TypeScript to a String cannot fail");
         } else {
@@ -2126,6 +2131,14 @@ mod tests {
             (
                 json!({ "$defs": { "Broken": { "required": [7] } } }),
                 "required/0 must be a string",
+            ),
+            (
+                json!({
+                    "$defs": {
+                        "Broken": { "dependentRequired": { "ex:value": true } }
+                    }
+                }),
+                "dependentRequired/ex:value must be an array",
             ),
             (
                 json!({ "$defs": { "Broken": { "anyOf": [] } } }),
