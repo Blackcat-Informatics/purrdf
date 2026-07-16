@@ -52,6 +52,7 @@ dev = [
   "SPARQLWrapper",
   "sssom",
   "jsonschema>=4,<5",
+  "linkml==1.11.1",
   "pydantic>=2,<3",
 ]
 

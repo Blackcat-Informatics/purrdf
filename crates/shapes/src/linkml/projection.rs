@@ -1245,7 +1245,9 @@ impl Renderer<'_> {
                 .as_array()
                 .ok_or_else(|| LinkmlError::new(format!("{path}/prefixItems must be an array")))?;
             let mut branches = prefix_items.clone();
-            branches.push(object.get("items").cloned().unwrap_or(Value::Bool(true)));
+            if let Some(items) = object.get("items") {
+                branches.push(items.clone());
+            }
             let mut synthetic = Map::new();
             synthetic.insert("anyOf".to_owned(), Value::Array(branches));
             Value::Object(synthetic)
