@@ -17,8 +17,9 @@ mod util;
 pub use error::{ProjectionError, ProjectionErrorKind};
 pub use lpg::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgGraphContext, LpgLabel, LpgLiftOutcome,
-    LpgNode, LpgProjection, LpgProperty, LpgPropertyAtom, LpgRdfQuad, LpgReifier, lift_lpg,
-    project_lpg,
+    LpgNode, LpgPackageProjection, LpgProjection, LpgProperty, LpgPropertyAtom, LpgRdfQuad,
+    LpgReifier, lift_lpg, project_lpg, project_lpg_csv, project_neo4j_csv, read_lpg_csv,
+    read_neo4j_csv, write_lpg_csv, write_neo4j_csv,
 };
 pub use package::{ProjectionLimits, ProjectionPackage};
 pub use term::{ProjectionDirection, ProjectionTerm};

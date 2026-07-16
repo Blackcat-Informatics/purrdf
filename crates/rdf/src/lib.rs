@@ -109,10 +109,12 @@ pub use native_quads::{
 };
 pub use projections::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgGraphContext, LpgLabel, LpgLiftOutcome,
-    LpgNode, LpgProjection, LpgProperty, LpgPropertyAtom, LpgRdfQuad, LpgReifier,
-    ProjectionDirection, ProjectionError, ProjectionErrorKind, ProjectionLimits, ProjectionPackage,
-    ProjectionTerm, escape_cypher_identifier, escape_cypher_string, escape_xml_attribute,
-    escape_xml_text, lift_lpg, project_lpg, stable_identifier, validate_absolute_iri,
+    LpgNode, LpgPackageProjection, LpgProjection, LpgProperty, LpgPropertyAtom, LpgRdfQuad,
+    LpgReifier, ProjectionDirection, ProjectionError, ProjectionErrorKind, ProjectionLimits,
+    ProjectionPackage, ProjectionTerm, escape_cypher_identifier, escape_cypher_string,
+    escape_xml_attribute, escape_xml_text, lift_lpg, project_lpg, project_lpg_csv,
+    project_neo4j_csv, read_lpg_csv, read_neo4j_csv, stable_identifier, validate_absolute_iri,
+    write_lpg_csv, write_neo4j_csv,
 };
 pub use purrdf_core::{
     ArtifactId, ArtifactIndex, ArtifactInterner, ArtifactRecord, AssertionOccurrence, Attribution,
