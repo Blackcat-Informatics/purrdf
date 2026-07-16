@@ -62,7 +62,7 @@ pub mod gts_view;
 // The native RDF text codecs (S3): the codec-only `GtsCodecBackend`
 // over the `purrdf-gts` Turtle/TriG/NT/NQ/RDF-XML codecs, oxigraph-free.
 pub mod native_codecs;
-/// Deterministic graph/tabular projection foundations and codecs.
+/// Deterministic graph/tabular/research-object projection foundations and codecs.
 pub mod projections;
 // Oxigraph-free `RdfQuad` ⇄ `RdfDataset` conversions: the native twins of
 // the oxigraph-quad helpers, available to every Rust consumer without pulling the

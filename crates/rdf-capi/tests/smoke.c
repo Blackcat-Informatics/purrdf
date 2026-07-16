@@ -95,7 +95,7 @@ int main(void) {
     purrdf_buffer_free(gts);
     purrdf_dataset_free(restored);
 
-    /* deterministic graph/tabular projection round-trip + explicit ledger */
+    /* deterministic graph/tabular/research-object carrier surface + explicit ledger */
     const char *projection_config =
         "{\"profile\":\"lpg-csv\",\"config\":{\"rdf_type\":"
         "\"https://example.org/type\",\"limits\":{\"max_artifacts\":16,"

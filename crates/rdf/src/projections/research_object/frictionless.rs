@@ -490,10 +490,12 @@ fn encode_resource(
         }
     }
     if paths.is_empty() {
-        return Err(ProjectionError::integrity(format!(
-            "Frictionless resource `{}` requires a path or absolute URL",
-            resource.id
-        )));
+        // `native_name` is the caller-bounded relative identity obtained by
+        // removing `entity_base_iri`. Data Package permits the same safe value
+        // as both resource name and path, which keeps identifier-only resources
+        // from stricter citation carriers usable without fabricating an IRI.
+        validate_data_path(native_name)?;
+        paths.push(Value::String(native_name.to_owned()));
     }
     object.insert("path".to_owned(), Value::Array(paths));
 

@@ -43,10 +43,11 @@ loss ledger) and adds what the kernel deliberately leaves out:
   semantic scene, deterministic layout, statement table, and self-contained SVG
   whose embedded JSON preserves assertions, triple terms, reifiers, annotations,
   graph context, dialect diagnostics, and element-to-model identities.
-- **Graph and tabular carriers** — deterministic LPG CSV, Neo4j CSV,
-  openCypher, GraphML, exact CSVW, OBO Graphs 0.3.2, and SKOS views over one
-  caller-configured, resource-bounded archive API with an always-computed loss
-  ledger.
+- **Graph, tabular, and research-object carriers** — deterministic LPG CSV,
+  Neo4j CSV, openCypher, GraphML, exact CSVW, OBO Graphs 0.3.2, SKOS,
+  Croissant 1.1, RO-Crate 1.3, DataCite 4.6, DCAT 3, and Frictionless Data
+  Package v1 over one caller-configured, resource-bounded archive API with an
+  always-computed loss ledger.
 
 The crate is PyO3-free and oxigraph-free (like the whole workspace), keeps
 reporting structured but SARIF-free — callers translate `RdfDiagnostic`s into
@@ -138,11 +139,11 @@ reifier and occurrence annotations. RDF rows outside the configured OKF
 profile are omitted only with deterministic, source-located `LossLedger`
 entries; ambiguous profile data hard-fails.
 
-### Graph and tabular projection archives
+### Graph, tabular, and research-object projection archives
 
-All seven profiles use the same canonical USTAR package surface and strict,
-profile-tagged configuration. PurRDF does not choose vocabulary, identity, or
-resource limits for the caller.
+All twelve profiles use the same canonical USTAR package surface and strict,
+profile-tagged configuration. PurRDF does not choose vocabulary, identity,
+profile context, or resource limits for the caller.
 
 | Profile | Project | Lift | Contract |
 | --- | :---: | :---: | --- |
@@ -153,6 +154,11 @@ resource limits for the caller.
 | `csvw-exact` | yes | yes | Lossless RDF 1.2 tables and CSVW metadata |
 | `obo-graphs` | yes | no | OBO Graphs 0.3.2 view with located losses |
 | `skos` | yes | no | SKOS Turtle view with located losses |
+| `croissant-1.1` | yes | yes | Croissant 1.1 through the shared research-object model |
+| `ro-crate-1.3` | yes | yes | RO-Crate 1.3 flattened JSON-LD graph |
+| `datacite-4.6` | yes | yes | Namespace-aware DataCite Metadata Schema 4.6 XML |
+| `dcat-3` | yes | yes | DCAT 3 over the native offline JSON-LD engine |
+| `frictionless-data-package-1` | yes | yes | Frictionless Data Package v1 JSON |
 
 The LPG carriers include exact RDF sideband for reconstruction, while their
 native property-graph interpretation remains a semantic lowering and is
@@ -160,6 +166,12 @@ therefore ledgered. `csvw-exact` preserves terms, graph placement, recursive
 triple terms, reifier bindings, annotations, language, direction, and datatype
 with an empty ledger. OBO Graphs and SKOS are structurally write-only:
 `LiftProfile` has no variants for them.
+
+The five research-object codecs share one typed semantic pivot. Their mandatory
+configuration supplies every RDF role and identity plus each native context,
+schema, controlled value, or profile identity. JSON-LD context interpretation
+is offline and caller-complete; native readers reject drift and record every
+unsupported construct in a located runtime ledger.
 
 ```rust
 use purrdf_rdf::{
@@ -186,6 +198,8 @@ assert_eq!(lifted.dataset.quad_count(), 1);
 
 The runnable version is
 [`examples/projection_archive.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/projection_archive.rs).
+All five research-object round trips are runnable in
+[`examples/research_object_roundtrip.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/research_object_roundtrip.rs).
 
 ## Part of PurRDF
 

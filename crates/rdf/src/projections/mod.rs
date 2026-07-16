@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Deterministic, caller-configured RDF 1.2 graph and tabular projections.
+//! Deterministic, caller-configured RDF 1.2 graph, tabular, and research-object projections.
 //!
 //! Projection codecs share one bounded in-memory package, one durable RDF term
 //! representation, one typed error surface, and one set of escaping/identity
@@ -19,6 +19,11 @@
 //! | CSVW exact | RDF ↔ carrier | Lossless RDF 1.2 term, quad, reifier, and annotation tables |
 //! | OBO Graphs 0.3.2 | RDF → view | Deliberately write-only and loss-ledgered |
 //! | SKOS Turtle | RDF → view | Deliberately write-only and loss-ledgered |
+//! | Croissant 1.1 | RDF ↔ carrier | Shared research-object model with located profile losses |
+//! | RO-Crate 1.3 | RDF ↔ carrier | Shared research-object model with located profile losses |
+//! | DataCite 4.6 | RDF ↔ carrier | Shared research-object model with located profile losses |
+//! | DCAT 3 | RDF ↔ carrier | Shared research-object model with located profile losses |
+//! | Frictionless Data Package v1 | RDF ↔ carrier | Shared research-object model with located profile losses |
 //!
 //! [`project_archive`] provides the profile-tagged production entry point.
 //! [`lift_archive`] accepts only [`LiftProfile`], so the type system cannot pretend
@@ -34,9 +39,10 @@
 //! checksums, padding, and trailer. Readers enforce configured size/count/depth
 //! bounds and reject any archive whose canonical re-encoding differs.
 //!
-//! See `examples/projection_archive.rs` in the repository for a runnable Rust
-//! project/write/lift example. Matching examples are provided for the CLI, Python,
-//! WebAssembly, and C surfaces.
+//! See `examples/projection_archive.rs` and
+//! `examples/research_object_roundtrip.rs` in the repository for runnable Rust
+//! project/write/lift examples. Matching examples are provided for the CLI,
+//! Python, WebAssembly, and C surfaces.
 
 mod carrier;
 mod csvw;

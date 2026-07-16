@@ -518,7 +518,6 @@ mod tests {
     const FRICTIONLESS_CONFIG: &[u8] = include_bytes!(
         "../../tests/fixtures/research-objects/carrier/frictionless-data-package-1.json"
     );
-
     fn limits() -> ProjectionLimits {
         ProjectionLimits::new(16, 1_000_000, 4_000_000, 5_000_000, 16).expect("limits")
     }
@@ -678,6 +677,31 @@ mod tests {
             let rewritten = project_archive(lifted.dataset.as_ref(), project_profile, &config)
                 .expect("rewrite lifted profile");
             assert_eq!(first.archive, rewritten.archive, "{project_profile}");
+
+            for (target_profile, target_lift, target_config_bytes) in cases {
+                let target_config = ProjectionConfig::from_json(target_config_bytes)
+                    .expect("target tagged profile config");
+                let transcoded =
+                    project_archive(lifted.dataset.as_ref(), target_profile, &target_config)
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "{project_profile} -> {target_profile} project failed: {error:?}"
+                            )
+                        });
+                let transcoded_lift =
+                    lift_archive(&transcoded.archive, target_lift, &target_config)
+                        .expect("cross-profile lift");
+                let stable = project_archive(
+                    transcoded_lift.dataset.as_ref(),
+                    target_profile,
+                    &target_config,
+                )
+                .expect("cross-profile stable rewrite");
+                assert_eq!(
+                    transcoded.archive, stable.archive,
+                    "{project_profile} -> {target_profile} must stabilize"
+                );
+            }
         }
     }
 }

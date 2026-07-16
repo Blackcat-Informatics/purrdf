@@ -1269,9 +1269,13 @@ fn write_datacite(
     ledger: &mut LossLedger,
 ) -> Result<Vec<u8>, ProjectionError> {
     let dataset = &model.dataset;
-    let identifier = dataset.identifiers.first().ok_or_else(|| {
-        ProjectionError::integrity("DataCite 4.6 requires at least one caller/document identifier")
-    })?;
+    // The dataset identity is mandatory caller/document data and is therefore
+    // a valid primary identifier when the source profile has no separate
+    // identifier field. No DOI or other value is synthesized here.
+    let identifier = dataset
+        .identifiers
+        .first()
+        .map_or_else(|| dataset.id.clone(), value_lexical);
     if dataset.titles.is_empty() {
         return Err(ProjectionError::integrity(
             "DataCite 4.6 requires at least one title",
@@ -1322,7 +1326,7 @@ fn write_datacite(
         &format!(
             "<identifier identifierType=\"{}\">{}</identifier>",
             escape_xml_attribute(config.controlled().identifier_type())?,
-            escape_xml_text(&value_lexical(identifier))?
+            escape_xml_text(&identifier)?
         ),
     )?;
     output.line(1, "<creators>")?;

@@ -16,13 +16,14 @@ import { parsePackument } from "./npm-pack-output.mjs";
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // The wasm package ships the RDF 1.2 model, SPARQL/SHACL/ShEx engines, the
 // native format registry (Turtle/N-Quads/TriG/JSON-LD/YAML-LD/…), layout, the
-// SVG renderer, and all seven graph/tabular projection profiles. Both ceilings
-// track the optimized wasm artifact (see the Makefile WASM_SIZE_BUDGET_BYTES
-// note); each is the measured size plus 5% headroom. The projection/lift carrier
-// is the capability responsible for this reviewed increase. Measured: gzipped
-// tarball 1_858_285 bytes; unpacked 5_372_942 bytes.
-const MAX_TARBALL_BYTES = 1_951_200;
-const MAX_UNPACKED_BYTES = 5_641_590;
+// SVG renderer, and all twelve graph/tabular/research-object projection
+// profiles. Both ceilings track the optimized wasm artifact (see the Makefile
+// WASM_SIZE_BUDGET_BYTES note); each is the measured size plus about 3%
+// headroom. The five strict bidirectional research-object codecs are the
+// capability responsible for this reviewed increase. Measured: gzipped tarball
+// 2_116_853 bytes; unpacked 6_185_306 bytes.
+const MAX_TARBALL_BYTES = 2_181_000;
+const MAX_UNPACKED_BYTES = 6_371_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TIMEOUT_MS = 180_000;
 const SMOKE_TIMEOUT_MS = 60_000;

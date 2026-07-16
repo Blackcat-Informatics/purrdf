@@ -68,12 +68,12 @@ int main(void) {
 }
 ```
 
-`purrdf_project` and `purrdf_lift` add deterministic graph/tabular carrier
+`purrdf_project` and `purrdf_lift` add deterministic graph/tabular/research-object carrier
 archives to this same handle model. Project returns independent archive and
 loss-ledger buffers; lift returns a dataset plus a ledger buffer. The compiled
 `crates/rdf-capi/examples/projection_roundtrip.c` example demonstrates the full
 ownership/free order. Profiles and configuration are described in
-[Graph & Tabular Projections](../concepts/projections.md).
+[Graph, Tabular & Research-Object Projections](../concepts/projections.md).
 
 ## The ABI contract
 

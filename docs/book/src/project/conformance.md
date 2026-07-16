@@ -35,6 +35,7 @@ committed block is stale).
 | Syntax codecs | W3C rdf-tests (Turtle/TriG/N-Triples/N-Quads/RDF-XML) |
 | CSVW | W3C RDF-conversion and metadata-validation manifests plus a locked independent implementation |
 | OBO Graphs | official OBO Graphs 0.3.2 JSON Schema plus corruption probes |
+| Research-object carriers | five adversarial native fixtures, a 5×5 stable semantic-transcode matrix, and the vendored Frictionless Data Package v1 schema |
 | RDFC-1.0 | W3C rdf-canon fixtures |
 | SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + entailment suites |
 | SHACL | W3C data-shapes + DASH SHACL-AF/rules + a first-party frozen corpus |

@@ -76,7 +76,7 @@ const names = engine.select(
 console.log(names.rows.take(0)?.message.value);
 ```
 
-## Graph and tabular projection archives
+## Graph, tabular, and research-object projection archives
 
 Projection and lift run entirely in memory through the native Rust engine. The
 caller supplies strict profile-tagged JSON; PurRDF does not fabricate vocabulary,
@@ -110,9 +110,12 @@ const roundTrip = lifted.takeDataset();
 console.log(roundTrip?.size, JSON.parse(projected.lossLedgerJson));
 ```
 
-`lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`, and `csvw-exact` are
-bidirectional. `obo-graphs` and `skos` are write-only, loss-ledgered views and
-are excluded from the `LiftProfile` TypeScript union. Archives are canonical
+`lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`, `csvw-exact`,
+`croissant-1.1`, `ro-crate-1.3`, `datacite-4.6`, `dcat-3`, and
+`frictionless-data-package-1` are bidirectional. `obo-graphs` and `skos` are
+write-only, loss-ledgered views and are excluded from the `LiftProfile`
+TypeScript union. Research-object contexts, vocabularies, identities, and
+profiles are mandatory caller configuration. Archives are canonical
 deterministic USTAR bytes. Package/lift objects own wasm memory; call `free()`
 when finished, and remember that `takeDataset()` transfers its dataset exactly
 once. A runnable Node example is
@@ -130,7 +133,7 @@ once. A runnable Node example is
 - `Dataset.canonicalize()` / `Dataset.isomorphic(other)` — RDFC-1.0 canonical N-Quads
   and RDF graph-identity (isomorphism under blank-node relabeling).
 - `Dataset.project(profile, configJson)` / `liftProjection(archive, profile,
-  configJson)` — canonical graph/tabular USTAR carriers with structured,
+  configJson)` — canonical graph/tabular/research-object USTAR carriers with structured,
   always-computed loss-ledger JSON.
 - `Dataset.visualModel(options?)` / `visualExport(options?)` /
   `visualSvg(options?)` — the renderer-neutral RDF 1.2 model, complete semantic

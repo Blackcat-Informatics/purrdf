@@ -3,12 +3,12 @@ SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinform
 SPDX-License-Identifier: CC-BY-4.0
 -->
 
-# Graph & Tabular Projections
+# Graph, Tabular & Research-Object Projections
 
-PurRDF projects an RDF 1.2 dataset into graph and tabular carrier formats without
-making any of those formats the semantic authority. One Rust engine implements
-the mapping, packages its artifacts as canonical USTAR, and is exposed unchanged
-through Rust, the CLI, Python, WebAssembly, and C.
+PurRDF projects an RDF 1.2 dataset into graph, tabular, and research-object
+carrier formats without making any of those formats the semantic authority. One
+Rust engine implements the mapping, packages its artifacts as canonical USTAR,
+and is exposed unchanged through Rust, the CLI, Python, WebAssembly, and C.
 
 Every operation has four non-negotiable properties:
 
@@ -30,6 +30,11 @@ Every operation has four non-negotiable properties:
 | `csvw-exact` | CSVW metadata plus RDF 1.2 tables | RDF ↔ carrier | lossless |
 | `obo-graphs` | OBO Graphs 0.3.2 JSON | RDF → view | located, closed loss ledger |
 | `skos` | SKOS Turtle | RDF → view | located, closed loss ledger |
+| `croissant-1.1` | `croissant.json` | RDF ↔ carrier | shared model; profile loss is located |
+| `ro-crate-1.3` | `ro-crate-metadata.json` | RDF ↔ carrier | shared model; profile loss is located |
+| `datacite-4.6` | `datacite.xml` | RDF ↔ carrier | shared model; profile loss is located |
+| `dcat-3` | `dcat.jsonld` | RDF ↔ carrier | shared model; profile loss is located |
+| `frictionless-data-package-1` | `datapackage.json` | RDF ↔ carrier | shared model; profile loss is located |
 
 The type distinction between `ProjectionProfile` and `LiftProfile` matters:
 OBO Graphs and SKOS cannot even be named as lift profiles. They are useful views,
@@ -66,6 +71,39 @@ The `csvw-exact` archive profile uses that machinery to carry RDF 1.2 without
 loss. Its canonical tables preserve terms, quads, named graph placement,
 recursive triple terms, reifier bindings, annotations, datatypes, language,
 direction, and blank-node scope. A valid exact round trip has an empty ledger.
+
+## Research-object carriers
+
+Croissant 1.1, RO-Crate 1.3, DataCite Metadata Schema 4.6, DCAT 3, and
+Frictionless Data Package v1 are adapters over one typed `ResearchObjectModel`.
+The model covers dataset identity and description, identifiers and dates,
+agents, licenses, resources and checksums, activities, record sets, and fields.
+It is the N-to-N semantic pivot: a document can be lifted to caller-vocabulary
+RDF and projected into any other profile without a format-pair implementation.
+
+The three JSON-LD profiles are completely offline. Croissant, RO-Crate, and
+DCAT configuration supplies both the exact accepted/emitted `@context` JSON and
+the complete term-to-absolute-IRI definition map. PurRDF never dereferences a
+context URL, follows `@import`, or supplies a vocabulary. Expanded graphs are
+validated through the same native RDF 1.2 JSON-LD engine used elsewhere.
+
+DataCite configuration supplies the namespace, schema location,
+XML-Schema-instance IRI, controlled values, and common RDF roles. Its reader is
+namespace-aware and rejects DTD/entity input. A separate identifier is used when
+present; otherwise the mandatory caller/document dataset identity is the
+primary identifier, so no DOI is synthesized. Frictionless configuration
+supplies the exact package profile and package name. A resource without a
+separate locator uses its caller-bounded relative entity identity as the safe
+Data Package path; no new IRI is created.
+
+Each native reader accepts the complete profile form emitted by PurRDF and
+rejects duplicate members, dangling references, unsafe relative paths,
+incorrect context/profile identity, ambiguous cardinality, and resource-limit
+excesses. Format-specific constructs outside the shared model are represented
+by stable, location-bearing ledger entries. The committed adversarial fixtures
+exercise a non-empty reverse ledger for every profile; a 5×5 metamorphic matrix
+proves the shared semantic intersection stabilizes through every source/target
+pair.
 
 ## OBO Graphs and SKOS views
 
@@ -111,6 +149,14 @@ The bounds apply on both write and read. They cover member count, one-member
 bytes, total body bytes, encoded archive bytes, records, and recursive RDF term
 depth. They are trust-boundary policy and must be chosen by the application.
 
+Research-object configurations add a mandatory `common` object containing the
+complete `roles`, `identity`, and bounded `policy` maps. Profile-specific
+vocabulary roles, context data, schema identity, controlled values, and native
+profile identity are also mandatory. Complete runnable `example.org`
+configurations for all five profiles are under
+`crates/rdf/tests/fixtures/research-objects/carrier/`; they are examples, never
+library defaults.
+
 ## Rust archive API
 
 ```rust,ignore
@@ -139,8 +185,8 @@ assert_eq!(lifted.dataset.quad_count(), 1);
 `ProjectionArchive` contains the profile, USTAR bytes, and loss ledger.
 `ProjectionLift` contains the reconstructed immutable dataset and its lift
 ledger. Lower-level APIs expose the typed LPG, CSVW, OBO, SKOS, and in-memory
-artifact models when an application needs to inspect or materialize individual
-members instead of the unified archive.
+research-object/artifact models when an application needs to inspect or
+materialize individual members instead of the unified archive.
 
 ## Other production surfaces
 
@@ -156,6 +202,7 @@ The surface names follow the same profile/config/archive contract:
 Runnable examples live at:
 
 - `crates/rdf/examples/projection_archive.rs`
+- `crates/rdf/examples/research_object_roundtrip.rs`
 - `crates/cli/examples/projection-roundtrip.sh`
 - `bindings/python/examples/projection_roundtrip.py`
 - `crates/rdf-wasm/js/examples/projection-roundtrip.mjs`
@@ -180,5 +227,6 @@ cargo bench -p purrdf-rdf --bench projections -- --quick
 ```
 
 The benchmark is report-only. It measures RDF-to-LPG mapping, every LPG carrier
-write/read path, exact CSVW write/read, OBO Graphs and SKOS projection, and
-reports allocation observations over deterministic fixtures.
+write/read path, exact CSVW write/read, OBO Graphs and SKOS projection, the
+shared research-object model, and all five research-object write/read paths. It
+also reports allocation observations over deterministic fixtures.
