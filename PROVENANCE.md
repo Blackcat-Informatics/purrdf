@@ -37,8 +37,22 @@ Copied from `gmeow-ontology`:
   TypeScript/GraphQL model are not reused architecture. The replacement
   `purrdf-shapes::linkml` API consumes `CompiledSchema`, requires all identity
   and vocabulary from the caller, preserves a canonical LinkML 1.11 document,
-  and records projection gaps through the closed loss ledger; the legacy model
-  is intended for deletion after consumer rollover.
+  and records projection gaps through the closed loss ledger. The legacy model
+  is intended for deletion once this replacement is integrated, not
+  preservation as a downstream contract.
+- The legacy `render_typescript` path in
+  `crates/pipeline/src/stages/schemas.rs` at
+  `c91195e0c300cad9c9a32c8580c2910a6fd48fc1` was used only as evidence of the
+  consumer artifact to replace. Its LinkML-coupled private model, normalized
+  property identifiers, all-optional fields, local-name runtime enums, scalar
+  fallbacks, and fixed downstream identity are deliberately discarded. The
+  replacement `purrdf-shapes::typescript` projection consumes
+  `CompiledSchema`, preserves exact JSON property names and requiredness,
+  requires caller-owned package identity and prose, exposes a reversible type
+  map, and locates every non-projectable assertion on a closed loss ledger. The
+  old renderer and its shared private schema model are intended for deletion
+  once this replacement is integrated; no downstream type contract is being
+  preserved.
 
 Copied from `gmeow-gts`:
 

@@ -183,6 +183,46 @@ impl Error for TypeScriptError {}
 /// Source-stage losses remain on [`CompiledSchema::losses`]. The returned
 /// ledger describes only the `json-schema` → `typescript-7.0` projection.
 ///
+/// # Example
+///
+/// ```
+/// use purrdf::loss::LossLedger;
+/// use purrdf_shapes::json_schema::CompiledSchema;
+/// use purrdf_shapes::{
+///     TYPESCRIPT_DECLARATION_PATH, TypeScriptConfig, emit_typescript,
+/// };
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let compiled = CompiledSchema {
+///     schema_json: r#"{
+///       "$defs": {
+///         "Person": {
+///           "type": "object",
+///           "properties": { "name": { "type": "string" } },
+///           "required": ["name"]
+///         }
+///       }
+///     }"#.to_owned(),
+///     openapi_json: "{}\n".to_owned(),
+///     losses: LossLedger::new(),
+/// };
+/// let config = TypeScriptConfig::new(
+///     "example-schema-types",
+///     "Schema types published by the caller.",
+///     "Declarations generated from the caller's compiled schema.",
+/// )?;
+/// let package = emit_typescript(&compiled, &config)?;
+/// let declaration = std::str::from_utf8(
+///     &package.artifacts[TYPESCRIPT_DECLARATION_PATH],
+/// )?;
+///
+/// assert!(declaration.contains("export type Person"));
+/// assert_eq!(package.type_names["Person"], "Person");
+/// assert!(package.losses.is_empty());
+/// # Ok(())
+/// # }
+/// ```
+///
 /// # Errors
 ///
 /// Returns [`TypeScriptError`] when the schema is malformed or too large, lacks
