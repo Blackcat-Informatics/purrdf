@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use oxilangtag::LanguageTag;
 use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -2063,19 +2064,7 @@ fn link_property(
 }
 
 fn valid_language_tag(value: &str) -> bool {
-    let mut parts = value.split('-');
-    let Some(primary) = parts.next() else {
-        return false;
-    };
-    if !(primary.len() >= 2
-        && primary.len() <= 8
-        && primary.bytes().all(|byte| byte.is_ascii_alphabetic()))
-    {
-        return false;
-    }
-    parts.all(|part| {
-        !part.is_empty() && part.len() <= 8 && part.bytes().all(|byte| byte.is_ascii_alphanumeric())
-    })
+    LanguageTag::parse(value).is_ok()
 }
 
 fn expand_datatype(
@@ -2680,5 +2669,40 @@ fn normalize_annotation_value(value: &Value, context: &DocumentContext) -> Value
                 .collect(),
         ),
         _ => value.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn language_tags_follow_the_rfc_5646_grammar() {
+        for valid in [
+            "sl-1996",
+            "x-private",
+            "i-klingon",
+            "zh-cmn-Hans-CN",
+            "de-DE-u-co-phonebk",
+            "en-a-bbb-x-a-ccc",
+        ] {
+            assert!(valid_language_tag(valid), "rejected valid tag {valid:?}");
+        }
+
+        for invalid in [
+            "",
+            "x",
+            "x-",
+            "en-",
+            "en--US",
+            "en-u",
+            "en-US-abc",
+            "en-abcdefghi",
+        ] {
+            assert!(
+                !valid_language_tag(invalid),
+                "accepted invalid tag {invalid:?}"
+            );
+        }
     }
 }

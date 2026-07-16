@@ -175,4 +175,38 @@ mod tests {
         );
         assert_eq!(rows[1].cells[1].string_value, "done");
     }
+
+    #[test]
+    fn rfc_5646_private_use_language_flows_through_metadata() {
+        let metadata_iri = "http://example.org/language-metadata.json";
+        let table_iri = "http://example.org/language.csv";
+        let metadata = br#"{
+            "@context":"http://www.w3.org/ns/csvw",
+            "url":"http://example.org/language.csv",
+            "tableSchema":{"columns":[{
+                "name":"label","titles":"label","lang":"x-private"
+            }]}
+        }"#;
+        let config = config(CsvwMode::Standard);
+        let input = CsvwInput::new(
+            CsvwAction::Metadata {
+                metadata_iri: metadata_iri.to_owned(),
+            },
+            BTreeMap::from([
+                (metadata_iri.to_owned(), metadata.to_vec()),
+                (table_iri.to_owned(), b"label\nHello\n".to_vec()),
+            ]),
+            config.limits(),
+        )
+        .expect("input");
+
+        let outcome = read_csvw(&input, &config).expect("private-use language tag");
+        assert!(outcome.warnings.is_empty());
+        assert_eq!(
+            outcome.group.tables[0].rows[0].cells[0].values[0]
+                .language
+                .as_deref(),
+            Some("x-private")
+        );
+    }
 }
