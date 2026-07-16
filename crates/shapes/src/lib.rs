@@ -30,6 +30,7 @@ pub(crate) mod prebinding;
 pub mod pydantic;
 pub mod report;
 pub mod rules;
+mod schema_catalog;
 pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
