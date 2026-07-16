@@ -19,6 +19,10 @@ use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
 use serde_yaml::Value as YamlValue;
 
+use crate::json_schema::CompiledSchema;
+
+mod projection;
+
 /// The exact LinkML metamodel version carried by this codec.
 pub const LINKML_METAMODEL_VERSION: &str = "1.11.0";
 
@@ -242,6 +246,24 @@ pub fn write_linkml(document: &LinkmlDocument) -> Result<String, LinkmlError> {
     let mut canonical = serialized.trim_end_matches('\n').to_owned();
     canonical.push('\n');
     Ok(canonical)
+}
+
+/// Project one compiled SHACL-derived JSON Schema to deterministic LinkML 1.11.
+///
+/// Source-stage losses remain on [`CompiledSchema::losses`]. The returned
+/// ledger covers only this projection step, `json-schema` → `linkml-1.11`.
+/// Every emitted identity and vocabulary IRI comes from [`LinkmlConfig`].
+///
+/// # Errors
+///
+/// Returns [`LinkmlError`] when the compiled schema is malformed, a reference
+/// is external or dangling, a required-property declaration is inconsistent,
+/// or source names collide after deterministic LinkML normalization.
+pub fn emit_linkml(
+    compiled: &CompiledSchema,
+    config: &LinkmlConfig,
+) -> Result<LinkmlPackage, LinkmlError> {
+    projection::emit(compiled, config)
 }
 
 fn validate_document(value: &Value) -> Result<(), LinkmlError> {
