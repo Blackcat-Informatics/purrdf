@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: CC0-1.0
+
+@prefix ex: <https://example.org/> .
+
+ex:alice ex:knows ex:bob ;
+    ex:name "Alice"@en .

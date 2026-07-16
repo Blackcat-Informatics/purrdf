@@ -76,6 +76,48 @@ const names = engine.select(
 console.log(names.rows.take(0)?.message.value);
 ```
 
+## Graph and tabular projection archives
+
+Projection and lift run entirely in memory through the native Rust engine. The
+caller supplies strict profile-tagged JSON; PurRDF does not fabricate vocabulary,
+identity, or resource limits.
+
+```js
+import { Dataset, liftProjection, ready } from "@blackcatinformatics/purrdf";
+
+await ready();
+const config = JSON.stringify({
+  profile: "lpg-csv",
+  config: {
+    rdf_type: "https://example.org/type",
+    limits: {
+      max_artifacts: 16,
+      max_artifact_bytes: 1_000_000,
+      max_total_bytes: 4_000_000,
+      max_archive_bytes: 5_000_000,
+      max_term_depth: 16,
+    },
+    max_records: 1_000,
+  },
+});
+const dataset = Dataset.parse(
+  "@prefix ex: <https://example.org/> . ex:alice ex:knows ex:bob .",
+  "turtle",
+);
+const projected = dataset.project("lpg-csv", config);
+const lifted = liftProjection(projected.archive, "lpg-csv", config);
+const roundTrip = lifted.takeDataset();
+console.log(roundTrip?.size, JSON.parse(projected.lossLedgerJson));
+```
+
+`lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`, and `csvw-exact` are
+bidirectional. `obo-graphs` and `skos` are write-only, loss-ledgered views and
+are excluded from the `LiftProfile` TypeScript union. Archives are canonical
+deterministic USTAR bytes. Package/lift objects own wasm memory; call `free()`
+when finished, and remember that `takeDataset()` transfers its dataset exactly
+once. A runnable Node example is
+[`projection-roundtrip.mjs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-wasm/js/examples/projection-roundtrip.mjs).
+
 ## API surface
 
 - `ready(bytesOrUrl?)` — one-time async wasm instantiation.
@@ -87,6 +129,9 @@ console.log(names.rows.take(0)?.message.value);
   Formats: `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml` (`serialize` also `jsonld`).
 - `Dataset.canonicalize()` / `Dataset.isomorphic(other)` — RDFC-1.0 canonical N-Quads
   and RDF graph-identity (isomorphism under blank-node relabeling).
+- `Dataset.project(profile, configJson)` / `liftProjection(archive, profile,
+  configJson)` — canonical graph/tabular USTAR carriers with structured,
+  always-computed loss-ledger JSON.
 - `Dataset.visualModel(options?)` / `visualExport(options?)` /
   `visualSvg(options?)` — the renderer-neutral RDF 1.2 model, complete semantic
   scene and deterministic geometry, or self-contained SVG paired with that export.

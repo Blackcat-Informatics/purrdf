@@ -30,6 +30,13 @@ pub struct PyRdfDataset {
     inner: Arc<RdfDataset>,
 }
 
+impl PyRdfDataset {
+    /// Wrap an already-validated native dataset without reparsing bytes.
+    pub(crate) fn from_arc(inner: Arc<RdfDataset>) -> Self {
+        Self { inner }
+    }
+}
+
 #[pymethods]
 impl PyRdfDataset {
     /// Build a frozen dataset by parsing RDF `data` (bytes or str) in `format`.

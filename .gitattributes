@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Preserve the revision-pinned W3C CSVW corpus byte-for-byte. Some normative
+# fixtures intentionally exercise CRLF and trailing-whitespace behavior.
+crates/rdf/tests/fixtures/csvw-w3c/** -text -diff
+
+# Preserve the pinned OBO Graphs schema and upstream license evidence byte-for-byte.
+crates/rdf/tests/fixtures/obographs-0.3.2/README.upstream.md -text -diff
+crates/rdf/tests/fixtures/obographs-0.3.2/pom.upstream.xml -text -diff
+crates/rdf/tests/fixtures/obographs-0.3.2/obographs-schema.json -text -diff
+crates/rdf/tests/fixtures/obographs-0.3.2/subschemas/** -text -diff

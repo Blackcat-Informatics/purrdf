@@ -86,6 +86,7 @@ pub mod graph;
 pub mod gts;
 pub mod handles;
 pub mod parse;
+pub mod projection;
 pub mod query;
 pub mod rowcursor;
 pub mod serialize;

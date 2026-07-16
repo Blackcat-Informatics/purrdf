@@ -67,6 +67,7 @@ mod codec;
 mod convert;
 mod dataset;
 mod factory;
+mod projection;
 mod query;
 pub mod shacl;
 mod stream;
@@ -74,6 +75,7 @@ mod term;
 
 pub use dataset::Dataset;
 pub use factory::DataFactory;
+pub use projection::{ProjectionLift, ProjectionPackage, lift_projection};
 pub use query::{QueryEngine, QueryResult, SelectResult, SelectRow};
 pub use stream::Sink;
 pub use term::{Quad, Term};

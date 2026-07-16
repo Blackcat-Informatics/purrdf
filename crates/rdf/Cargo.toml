@@ -47,6 +47,15 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 ciborium = { workspace = true }
+# RFC 4180 / CSVW / LPG tabular encoding. Always-on and pure Rust so every
+# projection reader/writer follows one deterministic path on native and wasm.
+csv = { workspace = true }
+# CSVW string/duration format validation. Already workspace-pinned and present in
+# the SPARQL tree; the direct edge keeps one standards parser on native and wasm.
+regex = { workspace = true }
+# RFC 5646 well-formedness for every CSVW language-bearing metadata path.
+# Always-on, allocation-free, no_std, and wasm-clean.
+oxilangtag = { workspace = true }
 # Store-once interning on the native text-codec hot path (fixed-key hashing +
 # raw hash table indices into the owned term Vec), matching the purrdf-core
 # `ir::builder` pattern.
@@ -143,4 +152,10 @@ harness = false
 # Renderer-neutral RDF 1.2 projection, scene, and deterministic layered layout.
 # Report-only; excluded from check.
 name = "viz_layout"
+harness = false
+
+[[bench]]
+# Graph/tabular projection mapping plus deterministic carrier write/read paths.
+# Reports both Criterion throughput and one-shot allocation count/bytes.
+name = "projections"
 harness = false

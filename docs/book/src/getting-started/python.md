@@ -84,8 +84,19 @@ from purrdf import gts_to_sqlite, gts_to_duckdb, gts_to_parquet
 These project a [GTS container](../gts.md) into SQLite, DuckDB, or Parquet
 tables.
 
+## Graph and tabular archives
+
+`purrdf.project(data, format=..., profile=..., config=...)` returns canonical
+USTAR bytes and structured loss records. `purrdf.lift(archive, profile=...,
+config=...)` reconstructs RDF for the five bidirectional profiles. The same
+strict configuration and deterministic Rust code paths are used in every host;
+see [Graph & Tabular Projections](../concepts/projections.md) for profiles and a
+complete example.
+
 ## Next steps
 
 - [rdflib Compatibility](../interop/rdflib.md) — the drop-in story in depth.
 - [Validation](../validation/shacl.md) — SHACL and ShEx from Python.
 - [GTS Graph Transport](../gts.md) — the container format the exports read.
+- [Graph & Tabular Projections](../concepts/projections.md) — LPG, CSVW, OBO
+  Graphs, and SKOS archives.

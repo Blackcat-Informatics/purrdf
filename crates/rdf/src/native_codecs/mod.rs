@@ -167,6 +167,32 @@ mod tests {
     }
 
     #[test]
+    fn jsonld_and_yamlld_emit_empty_context_and_absolute_iris() {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("https://example.org/alice");
+        let predicate = builder.intern_iri("https://schema.org/name");
+        let object = builder.intern_literal(RdfLiteral::simple("Alice"));
+        builder.push_quad(subject, predicate, object, None);
+        let dataset = builder.freeze().expect("freeze");
+
+        let json = jsonld::serialize_dataset_to_jsonld(&dataset).expect("JSON-LD");
+        assert_eq!(
+            json,
+            "{\n  \"@context\": {},\n  \"@graph\": [\n    {\n      \"@id\": \"https://example.org/alice\",\n      \"https://schema.org/name\": {\n        \"@value\": \"Alice\"\n      }\n    }\n  ]\n}"
+        );
+        assert_round_trips(&dataset, "application/ld+json");
+
+        let yaml = jsonld::serialize_dataset_to_yamlld(&dataset, None).expect("YAML-LD");
+        let yaml_as_json = jsonld::yamlld_to_jsonld(yaml.as_bytes()).expect("YAML to JSON");
+        let expected: serde_json::Value = serde_json::from_str(&json).expect("expected JSON");
+        let actual: serde_json::Value = serde_json::from_str(&yaml_as_json).expect("actual JSON");
+        assert_eq!(actual, expected);
+        assert!(!yaml.contains("schema:"));
+        assert!(yaml.contains("https://schema.org/name"));
+        assert_round_trips(&dataset, "application/ld+yaml");
+    }
+
+    #[test]
     fn reifier_and_annotation_round_trip() {
         let mut b = RdfDatasetBuilder::new();
         let s = b.intern_iri("https://e/s");

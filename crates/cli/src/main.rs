@@ -3,14 +3,16 @@
 
 //! The `purrdf` command-line interface.
 //!
-//! A single `Source → [transform] → Sink` pipeline exposed as three subcommands:
+//! A single `Source → [transform] → Sink` pipeline exposed as five subcommands:
 //!
 //! * `convert` — transcode RDF between the native syntaxes and the pack container;
 //! * `query` — evaluate a SPARQL query over an RDF or pack source;
-//! * `reason` — materialize an entailment regime's closure over a source graph.
+//! * `reason` — materialize an entailment regime's closure over a source graph;
+//! * `project` — materialize a deterministic graph/tabular carrier archive;
+//! * `lift` — reconstruct RDF from a strict bidirectional carrier.
 //!
 //! plus the global `--loss-ledger` flag, which surfaces the machine-readable
-//! transcode loss ledger for whichever conversion ran.
+//! loss ledger for a conversion, projection, or lift.
 //!
 //! Exit codes: clap rejects a malformed command line with **2**; the pipeline maps
 //! its own failures the same way — usage errors → **2**, an unsupported entailment
@@ -23,6 +25,7 @@ mod convert;
 mod error;
 mod format;
 mod ledger;
+mod projection;
 mod query;
 mod reason;
 mod sink;
@@ -90,6 +93,38 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         } => reason::run(
             *regime,
             *from,
+            *to,
+            base.as_deref(),
+            input,
+            output,
+            &ledger_target,
+        ),
+        Command::Project {
+            profile,
+            config,
+            from,
+            base,
+            input,
+            output,
+        } => projection::run_project(
+            *profile,
+            config,
+            *from,
+            base.as_deref(),
+            input,
+            output,
+            &ledger_target,
+        ),
+        Command::Lift {
+            profile,
+            config,
+            to,
+            base,
+            input,
+            output,
+        } => projection::run_lift(
+            *profile,
+            config,
             *to,
             base.as_deref(),
             input,

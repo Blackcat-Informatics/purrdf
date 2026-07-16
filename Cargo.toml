@@ -108,6 +108,10 @@ memchr = "2"
 # dev-dependency demonstrating the mmap seam. Not wasm32-relevant (mmap has no
 # meaning there); `make wasm` builds `--lib` only, so this never reaches it.
 memmap2 = "0.9"
+# Allocation-free RFC 5646 language-tag parser for CSVW metadata. Its default
+# `std` feature is disabled; the always-on no_std parser has no dependencies and
+# follows the same native/wasm path.
+oxilangtag = { version = "0.1.6", default-features = false }
 petgraph = { version = "0.8", default-features = false }
 pretty_assertions = "1"
 proptest = "1"

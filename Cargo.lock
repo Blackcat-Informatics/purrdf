@@ -1139,6 +1139,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "oxilangtag"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d3b4eb570abd4a1dcb062c31fd37b832264d9dc7292c3e69acfe926c87b063f"
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1293,6 +1299,7 @@ dependencies = [
  "purrdf-rdf",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "serde_json",
  "tempfile",
 ]
 
@@ -1393,9 +1400,11 @@ dependencies = [
  "ahash",
  "ciborium",
  "criterion",
+ "csv",
  "ed25519-dalek",
  "hashbrown 0.15.5",
  "memchr",
+ "oxilangtag",
  "pretty_assertions",
  "proptest",
  "purrdf-core",
@@ -1406,6 +1415,7 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-xsd",
  "rayon",
+ "regex",
  "roxmltree",
  "serde",
  "serde_json",

@@ -95,6 +95,47 @@ int main(void) {
     purrdf_buffer_free(gts);
     purrdf_dataset_free(restored);
 
+    /* deterministic graph/tabular projection round-trip + explicit ledger */
+    const char *projection_config =
+        "{\"profile\":\"lpg-csv\",\"config\":{\"rdf_type\":"
+        "\"https://example.org/type\",\"limits\":{\"max_artifacts\":16,"
+        "\"max_artifact_bytes\":1000000,\"max_total_bytes\":4000000,"
+        "\"max_archive_bytes\":5000000,\"max_term_depth\":16},"
+        "\"max_records\":1000}}";
+    PurrdfBuffer *projection = NULL;
+    PurrdfBuffer *project_ledger = NULL;
+    rc = purrdf_project(dataset, "lpg-csv",
+                        (const uint8_t *)projection_config,
+                        strlen(projection_config), &projection, &project_ledger,
+                        &error);
+    CHECK(rc == PURRDF_STATUS_OK && projection != NULL && project_ledger != NULL,
+          "project");
+    const uint8_t *projection_bytes = NULL;
+    size_t projection_len = 0;
+    purrdf_buffer_data(projection, &projection_bytes, &projection_len);
+    CHECK(projection_len > 0, "projection archive bytes present");
+    const uint8_t *ledger_bytes = NULL;
+    size_t ledger_len = 0;
+    purrdf_buffer_data(project_ledger, &ledger_bytes, &ledger_len);
+    const char *ledger_prefix = "{\n  \"schema_version\": 1,";
+    CHECK(ledger_len >= strlen(ledger_prefix) &&
+              memcmp(ledger_bytes, ledger_prefix, strlen(ledger_prefix)) == 0,
+          "projection ledger JSON present");
+    PurrdfDataset *projection_restored = NULL;
+    PurrdfBuffer *lift_ledger = NULL;
+    rc = purrdf_lift(projection_bytes, projection_len, "lpg-csv",
+                     (const uint8_t *)projection_config, strlen(projection_config),
+                     &projection_restored, &lift_ledger, &error);
+    CHECK(rc == PURRDF_STATUS_OK && projection_restored != NULL && lift_ledger != NULL,
+          "lift");
+    size_t projection_restored_count = 0;
+    purrdf_dataset_quad_count(projection_restored, &projection_restored_count);
+    CHECK(projection_restored_count == 1, "projection round-trip preserves the quad");
+    purrdf_buffer_free(lift_ledger);
+    purrdf_dataset_free(projection_restored);
+    purrdf_buffer_free(project_ledger);
+    purrdf_buffer_free(projection);
+
     /* SPARQL JSON */
     PurrdfBuffer *json = NULL;
     rc = purrdf_query_json(dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, &json,

@@ -33,6 +33,9 @@ They live under `crates/*/benches/`:
 - `crates/rdf-core/benches/pack_index_compare.rs` — the shipped pack codec's
   FoQ posting indexes vs. an internal bitmap wavelet-matrix candidate.
 - `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput.
+- `crates/rdf/benches/projections.rs` — RDF-to-LPG mapping, all four LPG
+  carrier writers/readers, exact CSVW write/read, OBO Graphs, and SKOS, with
+  per-operation allocation observations.
 - `crates/sparql-algebra/benches/tokenize.rs` — SPARQL/Turtle lexer hot path
   (`IRIREF`, string literals, comments).
 - `crates/sparql-eval/benches/query_eval.rs` — end-to-end SPARQL SELECT
@@ -71,6 +74,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
 | `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers. |
+| `crates/rdf/benches/projections.rs` | Graph/tabular mapping and carrier throughput plus allocation counts over deterministic RDF, OBO, and SKOS fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
 | `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | Planner regression watch: cost-based BGP ordering vs. the retired structural heuristic. |
@@ -81,6 +85,60 @@ Additional benches are run package-by-package, e.g.
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
+
+### Graph and tabular projections
+
+`crates/rdf/benches/projections.rs` builds three deterministic `example.org`
+datasets without RNG: a 600-quad general graph, a 600-quad OBO/OWL graph, and an
+800-quad SKOS source graph. The canonical LPG projection contains 408 nodes plus
+edges. Criterion measures the complete mapping/serialization/parser operations;
+fixture construction stays outside the timed loops. A counting global allocator
+also reports calls and requested bytes for representative single operations.
+Those counts are cumulative allocation traffic, not retained or peak memory.
+
+Run it with:
+
+```sh
+cargo bench -p purrdf-rdf --bench projections --locked
+cargo bench -p purrdf-rdf --bench projections --locked -- --quick
+```
+
+The following `--quick` snapshot was measured on 2026-07-16 with rustc 1.96.1,
+Linux 7.1.3, and an AMD Ryzen AI MAX+ 395. Values are Criterion point estimates
+from one report-only run and are rounded; they are observations, not gates or
+performance promises.
+
+| Operation | Input/output elements | Time | Throughput |
+| --- | ---: | ---: | ---: |
+| RDF → canonical LPG | 600 quads | 3.44 ms | 174 Kquad/s |
+| generic CSV write | 408 nodes + edges | 2.00 ms | 204 Kelem/s |
+| generic CSV read | 408 nodes + edges | 4.77 ms | 85.5 Kelem/s |
+| Neo4j CSV write | 408 nodes + edges | 2.62 ms | 156 Kelem/s |
+| Neo4j CSV read | 408 nodes + edges | 6.10 ms | 66.9 Kelem/s |
+| openCypher write | 408 nodes + edges | 4.73 ms | 86.3 Kelem/s |
+| openCypher read | 408 nodes + edges | 9.66 ms | 42.2 Kelem/s |
+| GraphML write | 408 nodes + edges | 4.73 ms | 86.2 Kelem/s |
+| GraphML read | 408 nodes + edges | 14.4 ms | 28.3 Kelem/s |
+| exact CSVW write | 600 quads | 1.79 ms | 335 Kquad/s |
+| exact CSVW read | 600 quads | 3.36 ms | 179 Kquad/s |
+| OBO Graphs view | 600 quads | 611 µs | 982 Kquad/s |
+| SKOS view | 800 quads | 1.41 ms | 569 Kquad/s |
+
+Representative one-operation allocation traffic from the same run:
+
+| Operation | Allocation calls | Requested bytes |
+| --- | ---: | ---: |
+| RDF → canonical LPG | 49,106 | 4,819,500 |
+| generic CSV write | 29,893 | 2,841,024 |
+| generic CSV read | 67,092 | 6,577,230 |
+| exact CSVW write | 22,695 | 2,616,210 |
+| exact CSVW read | 39,960 | 4,307,718 |
+| OBO Graphs view | 17,295 | 2,328,323 |
+| SKOS view | 38,273 | 4,129,381 |
+
+This baseline makes carrier/parser and allocation regressions visible without
+asserting that any format should outrun another; their grammars and validation
+work differ materially.
 
 ### Pack FoQ vs. bitmap wavelet matrix
 

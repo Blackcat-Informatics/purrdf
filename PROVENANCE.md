@@ -68,6 +68,21 @@ Copied from `gmeow-ontology`:
   are intended for deletion when gmeow integrates this replacement; that
   consumer cutover is not yet complete and no downstream type contract is being
   preserved.
+- The legacy graph/tabular writers in `crates/pipeline/src/stages/lpg.rs` and
+  `crates/pipeline/src/stages/export.rs` at
+  `d7745068f59b6dee187ab6b806bd2c04c9a1280a` were used solely as migration
+  evidence for outputs that PurRDF must subsume and replace. Their private
+  carrier structs, hardcoded GMEOW graph/vocabulary identity, local-name and
+  prefix shortening, fixed filenames, coupled pipeline context, writer-only
+  behavior, and ad hoc layouts are deliberately discarded rather than retained
+  as reusable models. The replacement `purrdf-rdf::projections` surface uses one
+  caller-configured canonical LPG model with four strict adapters, a standards
+  CSVW engine plus exact RDF 1.2 profile, and typed OBO Graphs 0.3.2 and SKOS
+  views. It requires caller-owned identity, vocabulary, limits, and policy;
+  produces deterministic bounded archives; and computes closed located loss
+  ledgers on every path. The legacy types and writers are intended for deletion
+  when gmeow integrates these replacements. That consumer cutover is not yet
+  complete, and no downstream type or byte-layout contract is being preserved.
 
 Copied from `gmeow-gts`:
 

@@ -62,6 +62,8 @@ pub mod gts_view;
 // The native RDF text codecs (S3): the codec-only `GtsCodecBackend`
 // over the `purrdf-gts` Turtle/TriG/NT/NQ/RDF-XML codecs, oxigraph-free.
 pub mod native_codecs;
+/// Deterministic graph/tabular projection foundations and codecs.
+pub mod projections;
 // Oxigraph-free `RdfQuad` ⇄ `RdfDataset` conversions: the native twins of
 // the oxigraph-quad helpers, available to every Rust consumer without pulling the
 // oxigraph Store adapter.
@@ -105,6 +107,30 @@ pub use native_quads::{
     dataset_from_quads, flat_dataset_from_quad_sources, flat_dataset_from_quads,
     flat_rdf_quads_from_dataset,
 };
+pub use projections::{
+    CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig, CsvwContext, CsvwDatatype,
+    CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection, CsvwExactReadOutcome, CsvwForeignKey,
+    CsvwInheritedProperties, CsvwInput, CsvwMappedTableGroup, CsvwMode, CsvwNaturalLanguage,
+    CsvwNumericFormat, CsvwRdfTableMapping, CsvwReadOutcome, CsvwReference, CsvwRow, CsvwSchema,
+    CsvwTable, CsvwTableDirection, CsvwTableGroup, CsvwTextDirection, CsvwTransformation, CsvwTrim,
+    CsvwValue, CsvwVocabulary, CsvwWarning, CsvwWarningKind, CsvwWriteOutcome, CsvwWritePlan,
+    LiftProfile, LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgGraphContext, LpgLabel,
+    LpgLiftOutcome, LpgNode, LpgPackageProjection, LpgProjection, LpgProperty, LpgPropertyAtom,
+    LpgRdfQuad, LpgReifier, OboDomainRangeAxiom, OboEdge, OboEquivalentNodesSet,
+    OboExistentialRestriction, OboGraph, OboGraphDocument, OboGraphsConfig, OboGraphsProjection,
+    OboGraphsVocabulary, OboLogicalDefinitionAxiom, OboMeta, OboMetadataRoles, OboNode,
+    OboNodeType, OboOwlRoles, OboPropertyChainAxiom, OboPropertyType, OboPropertyValue,
+    OboRdfRoles, OboSynonym, OboXref, ProjectionArchive, ProjectionConfig, ProjectionDirection,
+    ProjectionError, ProjectionErrorKind, ProjectionLift, ProjectionLimits, ProjectionPackage,
+    ProjectionProfile, ProjectionTerm, SkosClassRoles, SkosConfig, SkosDocumentationRoles,
+    SkosGraphSelection, SkosLabelRoles, SkosProjection, SkosRelationRoles, SkosSourceRoles,
+    SkosTargetRoles, escape_cypher_identifier, escape_cypher_string, escape_xml_attribute,
+    escape_xml_text, lift_archive, lift_lpg, project_archive, project_csvw, project_csvw_exact,
+    project_lpg, project_lpg_csv, project_lpg_cypher, project_lpg_graphml, project_neo4j_csv,
+    project_obo_graphs, project_skos, read_csvw, read_csvw_exact, read_lpg_csv, read_lpg_cypher,
+    read_lpg_graphml, read_neo4j_csv, stable_identifier, validate_absolute_iri, write_csvw,
+    write_lpg_csv, write_lpg_cypher, write_lpg_graphml, write_neo4j_csv,
+};
 pub use purrdf_core::{
     ArtifactId, ArtifactIndex, ArtifactInterner, ArtifactRecord, AssertionOccurrence, Attribution,
     AttributionRole, BlankScope, BudgetExceeded, BundleError, Bytes, CanonHash, Canonicalized,
@@ -130,9 +156,10 @@ pub use purrdf_core::{
     canonicalize_with, check_ledger_complete, check_ledger_sound, check_provenance, dataset_diff,
     datasets_isomorphic, emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term,
     fno_to_ntriples, fno_to_quads, gts_to_rdf_loss_ledger, loss_matrix_json,
-    okf_to_rdf_loss_ledger, pair_loss_ledger, profile_for, rdf_gts_loss_matrix_json,
-    rdf_to_gts_loss_ledger, rdf_to_okf_loss_ledger, registered_pairs, rule_iri, smallvec,
-    try_canonicalize, try_canonicalize_with,
+    lpg_to_rdf_loss_ledger, okf_to_rdf_loss_ledger, pair_loss_ledger, profile_for,
+    rdf_gts_loss_matrix_json, rdf_to_gts_loss_ledger, rdf_to_lpg_loss_ledger,
+    rdf_to_obo_graphs_loss_ledger, rdf_to_okf_loss_ledger, rdf_to_skos_loss_ledger,
+    registered_pairs, rule_iri, smallvec, try_canonicalize, try_canonicalize_with,
 };
 pub use purrdf_core::{
     PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,

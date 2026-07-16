@@ -5,6 +5,10 @@ import {
   ready,
   DataFactory,
   Dataset,
+  liftProjection,
+  type ProjectionLift,
+  type ProjectionLossLedger,
+  type ProjectionPackage,
   QueryEngine,
   type DirectionalLanguage,
   type Literal,
@@ -51,6 +55,40 @@ const stream: AsyncIterableIterator<Quad> = matched.toStream();
 const serialized: string = matched.serialize("nquads");
 const canonical: string = matched.canonicalize();
 const same: boolean = matched.isomorphic(Dataset.parse(serialized, "nquads"));
+const projection: ProjectionPackage = matched.project("lpg-csv", JSON.stringify({
+  profile: "lpg-csv",
+  config: {
+    rdf_type: "https://example.org/type",
+    limits: {
+      max_artifacts: 16,
+      max_artifact_bytes: 1_000_000,
+      max_total_bytes: 4_000_000,
+      max_archive_bytes: 5_000_000,
+      max_term_depth: 16,
+    },
+    max_records: 1_000,
+  },
+}));
+const projectionLedger: ProjectionLossLedger = JSON.parse(projection.lossLedgerJson);
+const projectionLift: ProjectionLift = liftProjection(
+  projection.archive,
+  "lpg-csv",
+  JSON.stringify({
+    profile: "lpg-csv",
+    config: {
+      rdf_type: "https://example.org/type",
+      limits: {
+        max_artifacts: 16,
+        max_artifact_bytes: 1_000_000,
+        max_total_bytes: 4_000_000,
+        max_archive_bytes: 5_000_000,
+        max_term_depth: 16,
+      },
+      max_records: 1_000,
+    },
+  }),
+);
+const projectedDataset: Dataset | undefined = projectionLift.takeDataset();
 const visualModel: VisualModel = matched.visualModel({ mode: "compact" });
 const visualExport: VisualExport = matched.visualExport({
   mode: "incidence",
@@ -90,6 +128,8 @@ if (result.kind === "ask") {
 void stream;
 void canonical;
 void same;
+void projectionLedger;
+void projectedDataset;
 void visualModel;
 void visualExport;
 void visualSvg;

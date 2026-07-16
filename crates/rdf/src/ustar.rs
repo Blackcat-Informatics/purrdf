@@ -35,6 +35,26 @@ const LONGLINK_NAME: &str = "././@LongLink";
 /// Returns `Err(String)` if a USTAR header cannot be constructed (unexpected for
 /// well-formed inputs).
 pub fn write_archive(members: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
+    write_archive_borrowed(
+        members
+            .iter()
+            .map(|(name, data)| (name.as_str(), data.as_slice())),
+    )
+}
+
+/// Write a byte-deterministic USTAR archive from borrowed `(name, bytes)` members.
+///
+/// This is the allocation-conscious form of [`write_archive`]: package codecs can
+/// archive an existing ordered map without cloning every member first. Member order
+/// remains caller-defined and therefore observable; callers that require canonical
+/// order must supply a sorted iterator.
+///
+/// # Errors
+///
+/// Returns `Err(String)` if a USTAR header cannot be constructed.
+pub fn write_archive_borrowed<'a>(
+    members: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+) -> Result<Vec<u8>, String> {
     let mut out: Vec<u8> = Vec::new();
     for (name, data) in members {
         if name.len() > 100 {
@@ -54,61 +74,140 @@ pub fn write_archive(members: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// Read a byte-deterministic USTAR archive, returning `(name, bytes)` members.
+/// One borrowed regular-file member from a USTAR archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArchiveMember<'a> {
+    /// Member path.
+    pub name: &'a str,
+    /// Unpadded member body.
+    pub data: &'a [u8],
+}
+
+/// Allocation-free iterator over regular-file members in a USTAR archive.
+#[derive(Debug)]
+pub struct ArchiveMembers<'a> {
+    tar: &'a [u8],
+    offset: usize,
+    long_name: Option<&'a str>,
+    done: bool,
+}
+
+/// Iterate over borrowed regular-file members without cloning their bodies.
+///
+/// This is the resource-bounded reader seam used by projection packages: callers can
+/// validate each path and body length before allocating owned storage.
+pub fn archive_members(tar: &[u8]) -> ArchiveMembers<'_> {
+    ArchiveMembers {
+        tar,
+        offset: 0,
+        long_name: None,
+        done: false,
+    }
+}
+
+impl<'a> ArchiveMembers<'a> {
+    fn fail(&mut self, message: impl Into<String>) -> Option<Result<ArchiveMember<'a>, String>> {
+        self.done = true;
+        Some(Err(message.into()))
+    }
+}
+
+impl<'a> Iterator for ArchiveMembers<'a> {
+    type Item = Result<ArchiveMember<'a>, String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.done {
+                return None;
+            }
+            let Some(header_end) = self.offset.checked_add(512) else {
+                return self.fail("USTAR archive: header offset overflow");
+            };
+            if header_end > self.tar.len() {
+                if self.offset == self.tar.len() {
+                    self.done = true;
+                    return None;
+                }
+                return self.fail("USTAR archive: truncated header");
+            }
+
+            let tar = self.tar;
+            let header = &tar[self.offset..header_end];
+            if header.iter().all(|&byte| byte == 0) {
+                self.done = true;
+                return None;
+            }
+            let typeflag = header[156];
+            let Some(size) = parse_octal(&header[124..136]) else {
+                return self.fail("USTAR archive: unreadable size field");
+            };
+            let Some(body_end) = header_end.checked_add(size) else {
+                return self.fail("USTAR archive: member body offset overflow");
+            };
+            if body_end > tar.len() {
+                return self.fail("USTAR archive: member body overruns archive");
+            }
+            let body = &tar[header_end..body_end];
+            let pad = (512 - size % 512) % 512;
+            let Some(next_offset) = body_end.checked_add(pad) else {
+                return self.fail("USTAR archive: padded member offset overflow");
+            };
+            if next_offset > tar.len() {
+                return self.fail("USTAR archive: member padding overruns archive");
+            }
+            self.offset = next_offset;
+
+            match typeflag {
+                b'L' => {
+                    let Some(name_bytes) = body.strip_suffix(&[0]) else {
+                        return self.fail("USTAR archive: LongLink name is not NUL-terminated");
+                    };
+                    let Ok(name) = std::str::from_utf8(name_bytes) else {
+                        return self.fail("USTAR archive: LongLink name is not UTF-8");
+                    };
+                    self.long_name = Some(name);
+                }
+                b'0' | 0 => {
+                    let name = if let Some(name) = self.long_name.take() {
+                        name
+                    } else {
+                        let name_bytes = &header[..100];
+                        let end = name_bytes
+                            .iter()
+                            .position(|&byte| byte == 0)
+                            .unwrap_or(name_bytes.len());
+                        let Ok(name) = std::str::from_utf8(&name_bytes[..end]) else {
+                            return self.fail("USTAR archive: member name is not UTF-8");
+                        };
+                        name
+                    };
+                    return Some(Ok(ArchiveMember { name, data: body }));
+                }
+                _ => {
+                    self.long_name = None;
+                }
+            }
+        }
+    }
+}
+
+/// Read a byte-deterministic USTAR archive, returning owned `(name, bytes)` members.
 ///
 /// Handles regular-file records (`'0'` / `\0`) and GNU LongLink (`'L'`) records.
-/// Overflow and bounds guards (`checked_add`, `<= tar.len()`) are enforced.
+/// Overflow and bounds guards are enforced. Projection readers should prefer
+/// [`archive_members`] so they can apply caller limits before cloning member bodies.
 ///
 /// # Errors
 ///
 /// Returns `Err(String)` if the archive is structurally malformed (unreadable size
 /// field or a body that overruns the archive).
 pub fn read_archive(tar: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
-    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut i = 0usize;
-    let mut long_name: Option<String> = None;
-
-    while i + 512 <= tar.len() {
-        let header = &tar[i..i + 512];
-        if header.iter().all(|&b| b == 0) {
-            break; // trailing zero block(s) — end of archive
-        }
-        let typeflag = header[156];
-        let size = parse_octal(&header[124..136])
-            .ok_or_else(|| "USTAR archive: unreadable size field".to_string())?;
-        i += 512;
-        let body_end = i
-            .checked_add(size)
-            .filter(|end| *end <= tar.len())
-            .ok_or_else(|| "USTAR archive: member body overruns archive".to_string())?;
-        let body = &tar[i..body_end];
-        // Advance past the 512-padded body.
-        i = body_end + (512 - size % 512) % 512;
-
-        match typeflag {
-            b'L' => {
-                // GNU LongLink: the body is the full path, NUL-terminated.
-                let name = String::from_utf8_lossy(body)
-                    .trim_end_matches('\0')
-                    .to_string();
-                long_name = Some(name);
-            }
-            b'0' | 0 => {
-                let name = long_name.take().unwrap_or_else(|| {
-                    let nb = &header[0..100];
-                    let end = nb.iter().position(|&b| b == 0).unwrap_or(nb.len());
-                    String::from_utf8_lossy(&nb[..end]).to_string()
-                });
-                out.push((name, body.to_vec()));
-            }
-            _ => {
-                // Non-file records (other than LongLink) are not emitted by the
-                // writer; skip defensively and clear any pending long name.
-                long_name = None;
-            }
-        }
-    }
-    Ok(out)
+    archive_members(tar)
+        .map(|member| {
+            let member = member?;
+            Ok((member.name.to_owned(), member.data.to_vec()))
+        })
+        .collect()
 }
 
 /// A single USTAR 512-byte header with the given `typeflag` (`b'0'` regular file,
@@ -233,5 +332,16 @@ mod tests {
         assert_eq!(&raw[0..LONGLINK_NAME.len()], LONGLINK_NAME.as_bytes());
         let got = read_archive(&raw).expect("read_archive");
         assert_eq!(got, members, "long name must round-trip exactly");
+    }
+
+    #[test]
+    fn borrowed_reader_rejects_truncated_padding() {
+        let raw = write_archive(&[("a".to_owned(), b"body".to_vec())]).expect("archive");
+        let truncated = &raw[..700];
+        let error = archive_members(truncated)
+            .next()
+            .expect("one result")
+            .expect_err("padding must be complete");
+        assert!(error.contains("padding overruns"));
     }
 }

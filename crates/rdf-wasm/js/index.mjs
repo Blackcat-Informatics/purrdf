@@ -21,6 +21,9 @@
 import init, {
   DataFactory,
   Dataset,
+  liftProjection,
+  ProjectionLift,
+  ProjectionPackage,
   Quad,
   QueryEngine,
   shaclEntail,
@@ -330,6 +333,9 @@ export async function streamToDataset(quadStream) {
 export {
   DataFactory,
   Dataset,
+  liftProjection,
+  ProjectionLift,
+  ProjectionPackage,
   Quad,
   QueryEngine,
   shaclEntail,

@@ -21,6 +21,7 @@ pub use purrdf::*;
 mod py_gts;
 mod py_gts_dataset;
 mod py_gts_view;
+mod py_projection;
 mod py_shex;
 mod py_slice;
 mod py_sssom;

@@ -69,10 +69,6 @@ pub struct StatementMetadataVocab<'a> {
     pub q_object_literal: &'a str,
 }
 
-// Longest-namespace-first prefix table of well-known PUBLIC namespaces
-// (mirrors `src/purrdf_tools/config.py`).
-include!("lpg_prefixes.rs");
-
 /// Default-graph and named-graph node maps returned by [`build_graphs`].
 type GraphNodes = (BTreeMap<String, Value>, BTreeMap<String, Value>);
 /// Reifier lookup: base triple (s,p,o) in a given graph (`None` = default graph) ->
@@ -252,19 +248,13 @@ fn serialize_ser_graph_to_yamlld(
     Ok(header + &body)
 }
 
-/// Build the JSON-LD `@context` from the public prefix registry.
+/// Build the deliberately empty JSON-LD `@context`.
 ///
-/// No `@vocab` is emitted: PurRDF mints no vocabulary namespace of its own,
-/// and the emitter always writes CURIEs or absolute IRIs (never
-/// vocab-relative terms), so a default vocabulary would be pure fabrication.
+/// PurRDF owns no vocabulary or prefix policy. Every emitted predicate, datatype,
+/// triple-term predicate, and reifier predicate is therefore an absolute source IRI;
+/// callers may compact the document under their own context after serialization.
 fn build_context() -> Value {
-    let mut ctx = BTreeMap::new();
-    for (prefix, namespace) in PREFIXES_BY_LEN.iter().rev() {
-        // Reverse gives prefix-name order for deterministic insertion, but
-        // BTreeMap sorts by key anyway.
-        ctx.insert(prefix.to_string(), Value::String(namespace.to_string()));
-    }
-    to_json_object(ctx)
+    to_json_object(BTreeMap::new())
 }
 
 /// Build default-graph nodes and named-graph objects.
@@ -429,7 +419,7 @@ fn build_node(
         if predicate_iri == RDF_TYPE {
             types.push(term_ref_value(object_term)?);
         } else {
-            let key = curie(predicate_iri);
+            let key = absolute_iri(predicate_iri);
             let value = build_value_object(graph, subject, p, o, g, object_term, indexes)?;
             props.entry(key).or_default().push(value);
         }
@@ -510,8 +500,8 @@ fn build_triple_term_value(graph: &SerGraph, term: &SerTerm) -> Result<Value, Rd
 /// A triple term serializes to `{"@triple": {"@subject": …, "@predicate": "<iri>",
 /// "@object": …}}`. The reserved `@triple` key makes it unambiguous vs an `@id` node
 /// object or an `@value` literal, and every part round-trips: `@subject`/`@object` recurse
-/// through the same encoding (nested triple terms work), `@predicate` is the CURIE/IRI the
-/// parser re-expands. Keys are `BTreeMap`-ordered, so the output is byte-deterministic.
+/// through the same encoding (nested triple terms work), and `@predicate` is the full
+/// source IRI. Keys are `BTreeMap`-ordered, so the output is byte-deterministic.
 fn build_nested_triple_node(
     graph: &SerGraph,
     s: usize,
@@ -528,7 +518,7 @@ fn build_nested_triple_node(
 
     let mut triple = BTreeMap::new();
     triple.insert("@subject".to_string(), subject);
-    triple.insert("@predicate".to_string(), Value::String(curie(p_iri)));
+    triple.insert("@predicate".to_string(), Value::String(absolute_iri(p_iri)));
     triple.insert("@object".to_string(), object);
 
     let mut map = BTreeMap::new();
@@ -578,7 +568,7 @@ fn term_to_value(graph: &SerGraph, term: &SerTerm) -> Result<Value, RdfDiagnosti
                     map.insert("@language".to_string(), Value::String(lang.clone()));
                 }
             } else if datatype != XSD_STRING {
-                map.insert("@type".to_string(), Value::String(curie(&datatype)));
+                map.insert("@type".to_string(), Value::String(absolute_iri(&datatype)));
             }
             Ok(to_json_object(map))
         }
@@ -610,7 +600,7 @@ fn build_annotation_node(
                 .ok_or_else(|| parse("annotation predicate missing IRI".to_string()))?;
             let v_term = &graph.terms[v];
             let value = simple_term_value(graph, v_term)?;
-            props.entry(curie(p_iri)).or_default().push(value);
+            props.entry(absolute_iri(p_iri)).or_default().push(value);
         }
         for (key, mut values) in props {
             values.sort_by(cmp_value);
@@ -644,7 +634,7 @@ fn build_orphan_reifier_node(
     };
     let mut node: BTreeMap<String, Value> = entries.into_iter().collect();
     node.insert(
-        curie(RDF_REIFIES),
+        absolute_iri(RDF_REIFIES),
         build_nested_triple_node(graph, s, p, o)?,
     );
     Ok(to_json_object(node))
@@ -678,7 +668,7 @@ fn simple_term_value(graph: &SerGraph, term: &SerTerm) -> Result<Value, RdfDiagn
                     map.insert("@language".to_string(), Value::String(lang.clone()));
                 }
             } else if datatype != XSD_STRING {
-                map.insert("@type".to_string(), Value::String(curie(&datatype)));
+                map.insert("@type".to_string(), Value::String(absolute_iri(&datatype)));
             }
             Ok(to_json_object(map))
         }
@@ -702,7 +692,7 @@ fn term_id(term: &SerTerm) -> Result<String, RdfDiagnostic> {
         SerTermKind::Iri => Ok(term
             .value
             .as_deref()
-            .map_or_else(|| "_:missing-iri".to_string(), curie)),
+            .map_or_else(|| "_:missing-iri".to_string(), absolute_iri)),
         SerTermKind::Bnode => Ok(format!(
             "_:{}",
             term.value.as_deref().unwrap_or("missing-bnode")
@@ -739,13 +729,8 @@ fn term_sort_key(graph: &SerGraph, term: &SerTerm) -> String {
     }
 }
 
-/// Compact an IRI to a CURIE using the longest matching prefix.
-fn curie(iri: &str) -> String {
-    for (prefix, ns) in PREFIXES_BY_LEN {
-        if let Some(rest) = iri.strip_prefix(ns) {
-            return format!("{prefix}:{rest}");
-        }
-    }
+/// Preserve a source IRI verbatim at the vocabulary-free serialization boundary.
+fn absolute_iri(iri: &str) -> String {
     iri.to_string()
 }
 
@@ -1132,8 +1117,8 @@ fn parse_value_object(
 /// Reconstruct an RDF-1.2 triple term from a `@triple` object — the inverse of
 /// [`build_nested_triple_node`]. `@subject`/`@object` recurse through
 /// [`parse_value_object`] (so nested triple term COMPONENTS round-trip: a triple term
-/// whose subject or object is itself a triple term); `@predicate` is a CURIE/IRI string
-/// expanded through the document `@context`.
+/// whose subject or object is itself a triple term); `@predicate` is an IRI string
+/// expanded through the document `@context` when caller-authored input uses one.
 ///
 /// A triple *term* carries no annotation of its own in the RDF 1.2 abstract syntax — it
 /// is a bare `(s, p, o)` value. Reification/annotation is always a SEPARATE statement

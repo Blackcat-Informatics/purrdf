@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -25,8 +25,10 @@ BINARYEN_VERSION := 130
 # -Oz). `make wasm-pkg-size` (and both CI and the npm release) fail if the built
 # artifact exceeds this. The shipped bundle — RDF 1.2 model, SPARQL/SHACL/ShEx
 # engines, the native format registry (now including JSON-LD/YAML-LD),
-# deterministic layout, and SVG export — measures 4_040_355 bytes; 4_444_391
-# keeps ~10% headroom. The artifact's size is a joint function of
+# deterministic layout, SVG export, and all seven graph/tabular projection
+# profiles — measures 5_232_746 bytes; 5_494_384 keeps 5% headroom. The
+# projection/lift carrier is the capability responsible for this reviewed
+# increase. The artifact's size is a joint function of
 # rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
 # (pinned via BINARYEN_VERSION), so a moved number is attributable.
 #
@@ -36,7 +38,7 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 4444391
+WASM_SIZE_BUDGET_BYTES := 5494384
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -140,6 +142,17 @@ bench: ## Run criterion benchmarks (report-only; never a gate).
 
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
 	bash scripts/check-columnar-oracle.sh
+
+csvw-conformance: ## Run every pinned W3C CSVW RDF and validation manifest case.
+	cargo test -p purrdf-rdf --test csvw_w3c --locked
+
+csvw-oracle: ## Validate canonical CSVW output with the locked independent csvw 4.1.0 implementation.
+	bash scripts/check-csvw-oracle.sh
+
+obographs-oracle: ## Validate deterministic output against the pinned official OBO Graphs 0.3.2 schema.
+	bash scripts/check-obographs-schema-oracle.sh
+
+projection-oracles: csvw-conformance csvw-oracle obographs-oracle ## Run graph/tabular conformance and independent corruption oracles.
 
 pydantic-oracle: ## Execute emitted Pydantic v2 models and compare model_json_schema() with CompiledSchema.
 	uv sync --project bindings/python --locked --no-install-project

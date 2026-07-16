@@ -96,6 +96,8 @@ Rust code paths work in native and wasm hosts.
 
 - [The Interned Dataset IR](../concepts/interned-dataset.md) — how the IR works
   and why it is fast.
+- [Graph & Tabular Projections](../concepts/projections.md) — deterministic LPG,
+  CSVW, OBO Graphs, and SKOS carriers through the umbrella crate.
 - [SPARQL: Querying](../sparql/querying.md) — running queries over a frozen
   dataset.
 - [docs.rs/purrdf](https://docs.rs/purrdf) — the full API reference.
