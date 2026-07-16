@@ -98,6 +98,87 @@ and alias round trips:
 make pydantic-oracle
 ```
 
+## LinkML 1.11 schemas
+
+The LinkML emitter projects `CompiledSchema` directly to one fixed LinkML
+metamodel dialect (`metamodel_version: 1.11.0`). It is an in-memory Rust API:
+PurRDF does not shell out, select behavior with a feature flag, read a repository,
+or invent a schema identity. The caller supplies the schema IRI, name,
+description, default prefix, and complete prefix map; there is deliberately no
+`Default` configuration.
+
+```rust,ignore
+use std::collections::BTreeMap;
+use purrdf_shapes::{LinkmlConfig, emit_linkml, parse_linkml, write_linkml};
+
+let config = LinkmlConfig::new(
+    "https://example.org/schema/linkml",
+    "Example-Schema",
+    "Schema documentation owned by the caller.",
+    "ex",
+    BTreeMap::from([
+        ("ex".into(), "https://example.org/".into()),
+        ("linkml".into(), "https://w3id.org/linkml/".into()),
+    ]),
+)?;
+let package = emit_linkml(&compiled_schema, &config)?;
+
+let parsed = parse_linkml(&package.yaml)?;
+assert_eq!(write_linkml(&parsed)?, package.yaml);
+assert_eq!(
+    package.element_names.get("Person").map(String::as_str),
+    Some("Person"),
+);
+```
+
+`LinkmlPackage` returns the validated document tree, canonical YAML, a
+reversible source-`$defs`-key to LinkML-element map, and the always-computed
+`json-schema` → `linkml-1.11` loss ledger. The YAML writer sorts every mapping
+and emits exactly one trailing newline. The reader preserves every
+JSON-compatible LinkML field, including metamodel extensions PurRDF does not
+author, while rejecting duplicate keys, YAML tags, non-string mapping keys,
+non-finite numbers, and resource-limit violations. Thus read → write and write
+→ read → write are stable without pretending YAML-only semantics can cross a
+language-neutral boundary.
+
+The projection grammar is:
+
+| JSON Schema input | LinkML 1.11 representation |
+|---|---|
+| object `$defs` | named `classes` with caller-prefix-derived `class_uri` |
+| scalar `$defs` | named `types` |
+| string and `{"@id": ...}` enum `$defs` | named `enums` and `permissible_values` |
+| `properties` | class-scoped `attributes`; the exact JSON key remains the attribute key and `alias` |
+| local `$ref` | class, type, or enum `range`; class aliases use `is_a` |
+| inline object | deterministic synthesized class with `inlined: true` |
+| `required` | attribute `required` |
+| homogeneous array | `multivalued`, item range, ordered/unique flags, and min/max cardinality |
+| `anyOf` / `allOf` / `oneOf` / `not` | `any_of` / `all_of` / `exactly_one_of` / `none_of` |
+| `pattern`, `minimum`, `maximum` | `pattern`, `minimum_value`, `maximum_value` |
+| `additionalProperties` | LinkML 1.11 `extra_slots`, including a typed `range_expression` |
+| titles and descriptions | the corresponding LinkML element fields |
+
+Every schema assertion passes through the same closed capability audit used by
+the renderer. A construct that LinkML cannot express is never silently ignored:
+it produces a stable code and JSON Pointer location. The profile covers
+conditional/dependency/contains/unevaluated rules, tuple widening, string and
+property counts, exclusive and multiple-of bounds, format differences,
+non-scalar enum carriers, and a closed catch-all. Malformed values,
+external/dynamic/dangling references, inconsistent `required` declarations,
+unknown caller prefixes, reserved names, and normalized-name collisions hard
+fail instead of entering the ledger. Source SHACL → JSON Schema losses remain
+separate on `CompiledSchema::losses`.
+
+The production emitter has no Python dependency and remains wasm-clean. The
+dev-only oracle pins the official `linkml` and `linkml-runtime` packages to
+1.11.1, loads the emitted YAML through `SchemaDefinition` and `SchemaView`,
+regenerates JSON Schema, compares the exact fixture's `$defs` and accept/reject
+corpus, and probes every lossy family:
+
+```bash
+make linkml-oracle
+```
+
 ---
 
 ## Python extension
