@@ -42,8 +42,8 @@ help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
 
 metadata: ## Regenerate + verify workspace metadata and generated artifacts.
-	cargo metadata --no-deps
-	bash scripts/check-generated.sh
+	cargo metadata --no-deps --format-version 1 >/dev/null
+	bash scripts/check-generated.sh --write
 
 fmt: ## Auto-format the workspace.
 	cargo fmt --all

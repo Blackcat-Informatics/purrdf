@@ -25,6 +25,7 @@
 //! known across BOTH disciplines, including the non-syntax `shacl`→`json-schema`
 //! shapes projection, the `json-schema`→`pydantic-v2` code-generation profile,
 //! the `json-schema`→`linkml-1.11` schema projection,
+//! the `json-schema`→`typescript-7.0` declaration projection,
 //! and the bidirectional RDF 1.2 dataset↔OKF profile;
 //! [`loss_matrix_json`] renders that same enumerable registry.
 
@@ -733,6 +734,123 @@ const JSON_SCHEMA_LINKML_PROFILE: &[(&str, &str)] = &[
     ),
 ];
 
+/// The JSON Schema → TypeScript 7.0 declaration emitter's closed loss profile.
+/// The emitter targets the fixed `strict` + `exactOptionalPropertyTypes`
+/// assignability relation over JSON values. TypeScript declarations preserve
+/// the representable carrier graph, while every JSON Schema assertion without
+/// an exact structural type expression is widened or omitted explicitly at its
+/// JSON Pointer location.
+const JSON_SCHEMA_TYPESCRIPT_PROFILE: &[(&str, &str)] = &[
+    (
+        "additional-properties-validation-widened",
+        "TypeScript uses structural object compatibility and index signatures apply to every \
+         string key, so it cannot constrain only JSON object properties not named by the schema. \
+         Named properties retain their exact declarations while the extra-property policy or \
+         value schema is widened.",
+    ),
+    (
+        "array-cardinality-validation-widened",
+        "A JSON Schema minItems/maxItems assertion exceeds the declaration emitter's fixed \
+         tuple-expansion budget. Item and tuple-prefix carriers remain, while exact length \
+         validation is widened to keep declaration size bounded deterministically.",
+    ),
+    (
+        "array-contains-validation-dropped",
+        "JSON Schema contains/minContains/maxContains assertions quantify matching array \
+         elements and have no TypeScript assignability equivalent. Item and cardinality \
+         declarations remain while the contains predicate and match count are omitted.",
+    ),
+    (
+        "conditional-validation-dropped",
+        "JSON Schema if/then/else validates one branch according to runtime instance content; a \
+         general conditional relationship has no finite TypeScript declaration equivalent. \
+         Independently representable carrier constraints remain.",
+    ),
+    (
+        "dependency-validation-dropped",
+        "JSON Schema dependentRequired/dependentSchemas assertions impose cross-property runtime \
+         relationships that a general structural TypeScript declaration cannot enforce. \
+         Individual property declarations remain.",
+    ),
+    (
+        "integer-validation-widened",
+        "TypeScript has one number type and cannot distinguish all JSON integers from fractional \
+         numbers. The generated declaration retains the number carrier while integer-only \
+         validation is widened.",
+    ),
+    (
+        "keyword-validation-dropped",
+        "A JSON Schema assertion outside the emitter's closed TypeScript 7.0 capability table has \
+         no sound declaration projection. The assertion is omitted and recorded at its schema \
+         location rather than disappearing silently.",
+    ),
+    (
+        "negation-validation-dropped",
+        "General JSON Schema not is a set complement over instance validation. TypeScript's \
+         Exclude utility distributes over union members and cannot express that general \
+         complement, so the positive carrier remains while negation is omitted.",
+    ),
+    (
+        "numeric-validation-dropped",
+        "JSON Schema minimum/maximum/exclusive bounds and multipleOf are runtime numeric \
+         predicates with no exact TypeScript number-type expression. The numeric carrier remains \
+         while the predicate is omitted.",
+    ),
+    (
+        "object-literal-validation-widened",
+        "A JSON Schema object-valued const or enum member requires exact key membership. \
+         TypeScript can preserve every named literal field but structural compatibility still \
+         accepts values with additional fields outside fresh-object checks.",
+    ),
+    (
+        "one-of-validation-widened",
+        "A TypeScript union implements any-branch assignability and cannot generally enforce JSON \
+         Schema oneOf's exactly-one matching rule. Branch declarations remain as a union while \
+         overlap exclusivity is widened.",
+    ),
+    (
+        "pattern-properties-validation-dropped",
+        "Arbitrary JSON Schema patternProperties regular expressions have no equivalent key-space \
+         expression in TypeScript. Named and additional-property declarations remain while \
+         regex-selected property validation is omitted.",
+    ),
+    (
+        "property-count-validation-dropped",
+        "JSON Schema minProperties/maxProperties count runtime object keys; TypeScript structural \
+         declarations express named requiredness but cannot bound the total property count.",
+    ),
+    (
+        "property-name-validation-dropped",
+        "JSON Schema propertyNames validates every runtime object key with a schema, which a \
+         general TypeScript string-key declaration cannot express. Property value declarations \
+         remain while key validation is omitted.",
+    ),
+    (
+        "string-validation-dropped",
+        "JSON Schema minLength/maxLength, pattern, format, and content assertions are runtime \
+         predicates without a general TypeScript string-type equivalent. The string carrier \
+         remains while the predicate is omitted.",
+    ),
+    (
+        "tuple-array-validation-widened",
+        "A JSON Schema prefixItems tuple exceeds the declaration emitter's fixed tuple-expansion \
+         budget. The common item carrier remains while position-specific validation beyond the \
+         budget is widened deterministically.",
+    ),
+    (
+        "unevaluated-validation-dropped",
+        "JSON Schema unevaluatedProperties/unevaluatedItems depends on applicator evaluation state \
+         that TypeScript's structural type system does not expose. Representable local \
+         declarations remain while the unevaluated assertion is omitted.",
+    ),
+    (
+        "unique-items-validation-dropped",
+        "JSON Schema uniqueItems compares runtime array values for equality; TypeScript array and \
+         tuple declarations cannot require pairwise-distinct elements. Item and length \
+         declarations remain while uniqueness is omitted.",
+    ),
+];
+
 /// Build the runtime-shaped [`LossEntry`] rows for the
 /// `("shacl", "json-schema")` shapes profile from [`SHACL_JSON_SCHEMA_PROFILE`]
 /// — one contract entry per declared `(code, note)` pair, `location: None`
@@ -775,6 +893,21 @@ fn json_schema_linkml_entries() -> Vec<LossEntry> {
             code: Cow::Borrowed(code),
             from: Cow::Borrowed("json-schema"),
             to: Cow::Borrowed("linkml-1.11"),
+            note: Cow::Borrowed(note),
+            location: None,
+        })
+        .collect()
+}
+
+/// Build the static contract rows for the
+/// `("json-schema", "typescript-7.0")` projection profile.
+fn json_schema_typescript_entries() -> Vec<LossEntry> {
+    JSON_SCHEMA_TYPESCRIPT_PROFILE
+        .iter()
+        .map(|&(code, note)| LossEntry {
+            code: Cow::Borrowed(code),
+            from: Cow::Borrowed("json-schema"),
+            to: Cow::Borrowed("typescript-7.0"),
             note: Cow::Borrowed(note),
             location: None,
         })
@@ -824,6 +957,7 @@ fn registry_entries() -> Vec<LossEntry> {
     entries.extend(transcode_and_shapes_entries());
     entries.extend(json_schema_pydantic_entries());
     entries.extend(json_schema_linkml_entries());
+    entries.extend(json_schema_typescript_entries());
     entries
 }
 
@@ -1360,6 +1494,19 @@ mod tests {
     }
 
     #[test]
+    fn transcode_matrix_includes_json_schema_typescript_pair() {
+        let json = loss_matrix_json();
+        assert!(json.contains("\"from\": \"json-schema\""));
+        assert!(json.contains("\"to\": \"typescript-7.0\""));
+        for (code, _) in JSON_SCHEMA_TYPESCRIPT_PROFILE {
+            assert!(
+                json.contains(&format!("\"code\": \"{code}\"")),
+                "transcode-loss-matrix.json missing TypeScript-profile code `{code}`"
+            );
+        }
+    }
+
+    #[test]
     fn pair_loss_identity_is_empty() {
         assert!(pair_loss_ledger("turtle", "turtle").is_empty());
         assert!(pair_loss_ledger("gts", "gts").is_empty());
@@ -1507,6 +1654,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn registered_pairs_includes_json_schema_typescript() {
+        assert!(
+            registered_pairs().any(|(from, to)| from == "json-schema" && to == "typescript-7.0"),
+            "registered_pairs() must include (\"json-schema\", \"typescript-7.0\")"
+        );
+    }
+
     /// `registered_pairs()` must yield the SAME ordered sequence across two
     /// independent calls (it is backed by a `BTreeMap`, so this is order, not
     /// merely set-equality) — callers rendering it directly (e.g. a diagnostic
@@ -1548,6 +1703,16 @@ mod tests {
     fn profile_for_json_schema_linkml_is_closed() {
         let profile = profile_for("json-schema", "linkml-1.11");
         let expected: BTreeSet<&str> = JSON_SCHEMA_LINKML_PROFILE
+            .iter()
+            .map(|(code, _)| *code)
+            .collect();
+        assert_eq!(profile, expected);
+    }
+
+    #[test]
+    fn profile_for_json_schema_typescript_is_closed() {
+        let profile = profile_for("json-schema", "typescript-7.0");
+        let expected: BTreeSet<&str> = JSON_SCHEMA_TYPESCRIPT_PROFILE
             .iter()
             .map(|(code, _)| *code)
             .collect();
