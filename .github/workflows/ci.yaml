@@ -184,6 +184,9 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm run check
 
+      - name: TypeScript emitter schema oracle
+        run: node crates/shapes/tests/typescript_oracle.mjs
+
   benchmarks:
     runs-on: ubuntu-latest
     timeout-minutes: 120
