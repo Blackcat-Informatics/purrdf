@@ -3,6 +3,7 @@
 
 //! Emit exact and lossy packages for the dev-only GraphQL.js coercion oracle.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::error::Error;
 
@@ -233,7 +234,11 @@ fn lossy_schema() -> Value {
 }
 
 fn validates(schema: &Value, definition: &str, instance: &Value) -> Result<bool, Box<dyn Error>> {
-    let escaped = definition.replace('~', "~0").replace('/', "~1");
+    let escaped = if definition.contains('~') || definition.contains('/') {
+        Cow::Owned(definition.replace('~', "~0").replace('/', "~1"))
+    } else {
+        Cow::Borrowed(definition)
+    };
     let wrapper = json!({
         "$schema": schema["$schema"],
         "$defs": schema["$defs"],
