@@ -236,6 +236,105 @@ different schemas project to the same declaration. The retained
 surface. The production emitter has no JavaScript dependency, performs no
 filesystem I/O, and remains wasm-clean; TypeScript is dev-only oracle tooling.
 
+## GraphQL September 2025 SDL
+
+`emit_graphql` projects `CompiledSchema` into the fixed
+`graphql-september-2025` dialect. `GraphqlConfig` requires the caller's schema
+name, package and module prose, and non-built-in fallback-scalar name; it has no
+`Default` implementation. The output is a deterministic type-system fragment,
+not an executable GraphQL service: PurRDF emits no operation roots, resolvers,
+pagination, authorization, federation, or application directives.
+
+The compiling [`graphql_package` example](./examples/graphql_package.rs) shows
+configuration, artifact access, the typed name map, and the value codec:
+
+```rust,ignore
+use purrdf_shapes::{
+    GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig, emit_graphql,
+};
+
+let config = GraphqlConfig::new(
+    "ExampleSchema",
+    "GraphQL schema package owned by the caller.",
+    "Types generated from the caller's compiled schema.",
+    "JsonCarrier",
+)?;
+let package = emit_graphql(&compiled_schema, &config)?;
+let graphql_value = package.encode_input("Person", &source_json)?;
+let source_value = package.decode_output("Person", &graphql_value)?;
+
+let sdl = &package.artifacts[GRAPHQL_SCHEMA_PATH];
+let name_map = &package.artifacts[GRAPHQL_NAME_MAP_PATH];
+assert_eq!(package.names.definitions["Person"].input_type, "PersonInput");
+```
+
+Each structural object has a paired output `type` and input `input` object.
+The emitter directly represents booleans, strings, numbers, the exact signed
+32-bit `Int` domain, explicit nullability, finite `const`/`enum` value sets,
+closed named fields, required fields, homogeneous lists, local direct
+`#/$defs/...` references, aliases, descriptions, and deterministic inline
+object helpers. Types, helpers, and the fallback scalar share one global
+collision-checked namespace; fields and enum symbols are collision-checked in
+their GraphQL-local namespaces. The canonical `name-map.json` and identical
+typed `GraphqlNameMap` retain every source definition key, JSON property key,
+and finite JSON value alongside its GraphQL representation.
+
+`GraphqlPackage::encode_input` translates source JSON property names and
+finite values into GraphQL input names and enum symbols.
+`GraphqlPackage::decode_output` reverses present response fields and symbols;
+it permits GraphQL's normal partial field selection and does not invent omitted
+fields. Unknown definitions, keys, values, symbols, or incompatible carriers
+fail. This generated codec is the bidirectional boundary. Arbitrary GraphQL SDL
+does not define one unique JSON Schema acceptance relation, so PurRDF does not
+claim or provide a general SDL-to-JSON-Schema reader.
+
+GraphQL coercion cannot represent every JSON Schema assertion. Every semantic
+difference is intentional, stable-coded, and located at its source JSON
+Pointer on the closed `json-schema` → `graphql-september-2025` loss ledger:
+
+| Boundary | Closed loss codes |
+|---|---|
+| fixed input fields and object-key rules | `additional-properties-validation-narrowed`, `pattern-properties-validation-changed`, `property-name-validation-changed`, `property-count-validation-dropped` |
+| requiredness, null, and recursive inputs | `nullable-presence-validation-widened`, `recursive-input-nullability-relaxed` |
+| lists and positional/evaluation rules | `singleton-list-coercion-widened`, `array-cardinality-validation-dropped`, `array-contains-validation-dropped`, `unique-items-validation-dropped`, `tuple-array-validation-delegated`, `unevaluated-validation-dropped` |
+| scalar domains and predicates | `integer-domain-validation-delegated`, `numeric-validation-dropped`, `string-validation-dropped` |
+| applicators and cross-field rules | `conditional-validation-dropped`, `dependency-validation-dropped`, `intersection-validation-delegated`, `union-validation-delegated`, `one-of-validation-delegated`, `negation-validation-delegated` |
+| caller/runtime validation boundary | `custom-scalar-validation-delegated`, `keyword-validation-delegated` |
+
+The fallback scalar is only declared in SDL. Its `parseValue`, `parseLiteral`,
+and serialization behavior belongs to the caller, and every use that delegates
+source validation is ledgered. A package with an empty ledger is exact for the
+represented source acceptance relation; a non-empty ledger is never silently
+treated as validation.
+
+Emission hard-fails invalid caller names or prose, built-in fallback-scalar
+names, malformed keyword values, `$id` rebasing, external, indirect, or
+dangling `$ref`, `$dynamicRef`/`$recursiveRef`, pure-alias cycles,
+unsatisfiable closed required fields, and any generated type, field, helper,
+scalar, or enum name collision. The value codec likewise rejects unmapped or
+structurally incompatible values. Fixed platform-independent limits make
+resource behavior deterministic:
+
+| Resource | Limit |
+|---|---:|
+| input `schema_json`, each emitted artifact, or one codec JSON value | 16 MiB |
+| definitions, fields in one object, or values in one finite set | 65,536 |
+| schema-expression or codec-value depth | 128 |
+| generated or caller-supplied GraphQL name | 255 bytes |
+
+The dev-only oracle uses `boon` as the draft 2020-12 source classifier and the
+locked official GraphQL.js 16.14.0 implementation to build the generated SDL
+and execute real variable coercion. It checks lossless agreement, every closed
+loss family and location, codec/name-map agreement, and deliberate corruption
+failures:
+
+```bash
+make graphql-oracle
+```
+
+GraphQL.js is not a release dependency. The production emitter and codec are
+filesystem-free Rust and remain wasm-clean.
+
 ---
 
 ## Python extension

@@ -180,6 +180,30 @@ mod tests {
     }
 
     #[test]
+    fn facade_exposes_graphql_package_and_value_codec() {
+        let compiled = shapes::json_schema::CompiledSchema {
+            schema_json: "{\"$defs\":{\"Note\":{\"type\":\"string\"}}}\n".to_owned(),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        };
+        let config = shapes::GraphqlConfig::new(
+            "FacadeSchema",
+            "Caller-owned package documentation.",
+            "Caller-owned module documentation.",
+            "JsonCarrier",
+        )
+        .expect("valid GraphQL configuration");
+        let package = shapes::emit_graphql(&compiled, &config).expect("GraphQL package emits");
+        assert!(package.losses.is_empty());
+        assert!(package.artifacts.contains_key(shapes::GRAPHQL_SCHEMA_PATH));
+        assert!(
+            package
+                .artifacts
+                .contains_key(shapes::GRAPHQL_NAME_MAP_PATH)
+        );
+    }
+
+    #[test]
     fn facade_exposes_the_completed_umbrella() {
         assert_eq!(columnar::Table::ALL.len(), 5);
 

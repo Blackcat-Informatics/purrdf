@@ -53,6 +53,21 @@ Copied from `gmeow-ontology`:
   old renderer and its shared private schema model are intended for deletion
   once this replacement is integrated; no downstream type contract is being
   preserved.
+- The legacy `render_graphql` path in
+  `crates/pipeline/src/stages/schemas.rs` at
+  `c91195e0c300cad9c9a32c8580c2910a6fd48fc1` was likewise used only as
+  migration evidence for a consumer artifact that PurRDF must subsume and
+  replace. Its output-only, LinkML-coupled private model, fabricated `id`/`iri`
+  fields, normalized names without a reverse map, all-nullable fields, broad
+  scalar collapse, and fixed GMEOW identity are deliberately discarded. The
+  replacement `purrdf-shapes::graphql` projection consumes `CompiledSchema`,
+  requires caller-owned identity, prose, and fallback-scalar name, emits paired
+  output/input GraphQL September 2025 SDL, retains a canonical reversible name
+  map and value codec, and locates every coercion difference on a closed loss
+  ledger verified against GraphQL.js. The old renderer and shared legacy model
+  are intended for deletion when gmeow integrates this replacement; that
+  consumer cutover is not yet complete and no downstream type contract is being
+  preserved.
 
 Copied from `gmeow-gts`:
 
@@ -82,5 +97,8 @@ Cutover staging:
 
 - `../gmeow-ontology/.worktrees/purrdf-cutover` exists on branch
   `paudley/purrdf-cutover`.
+- The downstream cutover is still in progress. Legacy consumer models and
+  renderers are migration evidence to delete as their PurRDF replacements are
+  integrated, not compatibility surfaces to preserve.
 - See `docs/CUTOVER.md` for the publish order, local gates, and dependency
   replacement rules.
