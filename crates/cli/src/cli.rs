@@ -26,7 +26,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use purrdf_entail::Regime;
-use purrdf_rdf::NativeRdfFormat;
+use purrdf_rdf::{LiftProfile, NativeRdfFormat, ProjectionProfile};
 use purrdf_sparql_results::SparqlResultsFormat;
 
 use crate::format::CliFormat;
@@ -85,7 +85,7 @@ impl Cli {
     }
 }
 
-/// The three pipeline subcommands.
+/// The five pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
     /// Convert RDF between syntaxes, and to/from the native pack container.
@@ -159,6 +159,157 @@ pub(crate) enum Command {
         #[arg(value_name = "OUT", default_value = "-")]
         output: String,
     },
+    /// Project RDF into a deterministic graph/tabular USTAR carrier.
+    Project {
+        /// Closed projection carrier profile.
+        #[arg(long, value_enum)]
+        profile: CliProjectionProfile,
+        /// Profile-tagged mandatory JSON configuration path, or `-` for stdin.
+        #[arg(long, value_name = "PATH")]
+        config: String,
+        /// Input RDF/pack format override; inferred from the input extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Base IRI for resolving relative IRIs while parsing input RDF.
+        #[arg(long, value_name = "IRI")]
+        base: Option<String>,
+        /// Input path `IN`, or `-` for stdin (which requires `--from`).
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+        /// Canonical USTAR output path `OUT`, or `-` for stdout.
+        #[arg(value_name = "OUT", default_value = "-")]
+        output: String,
+    },
+    /// Lift a strict bidirectional graph/tabular USTAR carrier into RDF.
+    Lift {
+        /// Bidirectional carrier profile; OBO Graphs and SKOS are intentionally absent.
+        #[arg(long, value_enum)]
+        profile: CliLiftProfile,
+        /// Profile-tagged mandatory JSON configuration path, or `-` for stdin.
+        #[arg(long, value_name = "PATH")]
+        config: String,
+        /// Native RDF output syntax.
+        #[arg(long, value_enum)]
+        to: CliNativeRdfFormat,
+        /// Base IRI threaded to the native RDF serializer.
+        #[arg(long, value_name = "IRI")]
+        base: Option<String>,
+        /// Canonical USTAR input path `IN`, or `-` for stdin.
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+        /// RDF output path `OUT`, or `-` for stdout.
+        #[arg(value_name = "OUT", default_value = "-")]
+        output: String,
+    },
+}
+
+/// Projection profiles accepted by `purrdf project`.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliProjectionProfile {
+    /// Generic deterministic LPG CSV.
+    LpgCsv,
+    /// Neo4j Admin Import CSV.
+    Neo4jCsv,
+    /// Closed deterministic openCypher.
+    OpenCypher,
+    /// GraphML 1.0.
+    Graphml,
+    /// Exact lossless RDF 1.2 CSVW.
+    CsvwExact,
+    /// OBO Graphs 0.3.2 JSON view.
+    OboGraphs,
+    /// SKOS Turtle concept-scheme view.
+    Skos,
+}
+
+impl CliProjectionProfile {
+    /// Convert to the library's closed profile enum.
+    pub(crate) const fn to_profile(self) -> ProjectionProfile {
+        match self {
+            Self::LpgCsv => ProjectionProfile::LpgCsv,
+            Self::Neo4jCsv => ProjectionProfile::Neo4jCsv,
+            Self::OpenCypher => ProjectionProfile::OpenCypher,
+            Self::Graphml => ProjectionProfile::Graphml,
+            Self::CsvwExact => ProjectionProfile::CsvwExact,
+            Self::OboGraphs => ProjectionProfile::OboGraphs,
+            Self::Skos => ProjectionProfile::Skos,
+        }
+    }
+}
+
+/// Bidirectional profiles accepted by `purrdf lift`.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliLiftProfile {
+    /// Generic deterministic LPG CSV.
+    LpgCsv,
+    /// Neo4j Admin Import CSV.
+    Neo4jCsv,
+    /// Closed deterministic openCypher.
+    OpenCypher,
+    /// GraphML 1.0.
+    Graphml,
+    /// Exact lossless RDF 1.2 CSVW.
+    CsvwExact,
+}
+
+impl CliLiftProfile {
+    /// Convert to the library's write/read profile enum.
+    pub(crate) const fn to_profile(self) -> LiftProfile {
+        match self {
+            Self::LpgCsv => LiftProfile::LpgCsv,
+            Self::Neo4jCsv => LiftProfile::Neo4jCsv,
+            Self::OpenCypher => LiftProfile::OpenCypher,
+            Self::Graphml => LiftProfile::Graphml,
+            Self::CsvwExact => LiftProfile::CsvwExact,
+        }
+    }
+}
+
+/// Native RDF output syntaxes accepted by `purrdf lift`.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliNativeRdfFormat {
+    /// Turtle.
+    #[value(alias = "ttl")]
+    Turtle,
+    /// TriG.
+    Trig,
+    /// N-Triples.
+    #[value(alias = "nt", alias = "n-triples")]
+    Ntriples,
+    /// N-Quads.
+    #[value(alias = "nq", alias = "n-quads")]
+    Nquads,
+    /// RDF/XML.
+    #[value(alias = "rdf", alias = "xml")]
+    Rdfxml,
+    /// TriX.
+    Trix,
+    /// HexTuples.
+    #[value(alias = "hext")]
+    Hextuples,
+    /// JSON-LD.
+    #[value(alias = "json-ld")]
+    Jsonld,
+    /// YAML-LD.
+    #[value(alias = "yaml-ld")]
+    Yamlld,
+}
+
+impl CliNativeRdfFormat {
+    /// Convert to the native codec enum.
+    pub(crate) const fn to_native(self) -> NativeRdfFormat {
+        match self {
+            Self::Turtle => NativeRdfFormat::Turtle,
+            Self::Trig => NativeRdfFormat::TriG,
+            Self::Ntriples => NativeRdfFormat::NTriples,
+            Self::Nquads => NativeRdfFormat::NQuads,
+            Self::Rdfxml => NativeRdfFormat::RdfXml,
+            Self::Trix => NativeRdfFormat::TriX,
+            Self::Hextuples => NativeRdfFormat::HexTuples,
+            Self::Jsonld => NativeRdfFormat::JsonLd,
+            Self::Yamlld => NativeRdfFormat::YamlLd,
+        }
+    }
 }
 
 /// The input/output format choices `--from`/`--to` accept: the nine native RDF

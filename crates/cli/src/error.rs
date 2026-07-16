@@ -77,6 +77,12 @@ impl From<PackError> for CliError {
     }
 }
 
+impl From<purrdf_rdf::ProjectionError> for CliError {
+    fn from(error: purrdf_rdf::ProjectionError) -> Self {
+        Self::Runtime(error.to_string())
+    }
+}
+
 impl From<std::io::Error> for CliError {
     fn from(error: std::io::Error) -> Self {
         Self::Runtime(error.to_string())

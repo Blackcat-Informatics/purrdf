@@ -22,6 +22,7 @@ use purrdf::handles::{
     PurrdfDataset, purrdf_dataset_free, purrdf_dataset_quad_count, purrdf_dataset_term_count,
 };
 use purrdf::parse::purrdf_parse;
+use purrdf::projection::{purrdf_lift, purrdf_project};
 use purrdf::query::{purrdf_query, purrdf_query_json};
 use purrdf::rowcursor::{
     PurrdfRowCursor, purrdf_rowcursor_free, purrdf_rowcursor_next, purrdf_rowcursor_term,
@@ -172,6 +173,133 @@ fn status_discriminants_are_frozen() {
     assert_eq!(PurrdfStatus::CursorExhausted as i32, 9);
     assert_eq!(PurrdfStatus::GtsError as i32, 10);
     assert_eq!(PurrdfStatus::Panic as i32, 100);
+}
+
+#[test]
+fn projection_archive_and_ledger_round_trip_through_owned_c_handles() {
+    const CONFIG: &str = r#"{
+      "profile": "lpg-csv",
+      "config": {
+        "rdf_type": "https://example.org/type",
+        "limits": {
+          "max_artifacts": 16,
+          "max_artifact_bytes": 1000000,
+          "max_total_bytes": 4000000,
+          "max_archive_bytes": 5000000,
+          "max_term_depth": 16
+        },
+        "max_records": 1000
+      }
+    }"#;
+
+    unsafe {
+        let dataset = parse(
+            "text/turtle",
+            "@prefix ex: <https://example.org/> . ex:s ex:p ex:o .",
+        );
+        let profile = CString::new("lpg-csv").unwrap();
+        let mut archive: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut project_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_project(
+                dataset,
+                profile.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                &raw mut archive,
+                &raw mut project_ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        let archive_bytes = buffer_bytes(archive);
+        let ledger_bytes = buffer_bytes(project_ledger);
+        assert!(!archive_bytes.is_empty());
+        let ledger = String::from_utf8(ledger_bytes).expect("ledger JSON");
+        assert!(ledger.starts_with("{\n  \"schema_version\": 1,"));
+
+        let mut lifted: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut lift_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_lift(
+                archive_bytes.as_ptr(),
+                archive_bytes.len(),
+                profile.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                &raw mut lifted,
+                &raw mut lift_ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        let mut count = 0;
+        assert_eq!(
+            purrdf_dataset_quad_count(lifted, &raw mut count),
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(count, 1);
+        let lift_ledger_bytes = buffer_bytes(lift_ledger);
+        let lift_ledger_json = String::from_utf8(lift_ledger_bytes).expect("lift ledger");
+        assert!(lift_ledger_json.starts_with("{\n  \"schema_version\": 1,"));
+
+        purrdf_buffer_free(lift_ledger);
+        purrdf_dataset_free(lifted);
+        purrdf_buffer_free(project_ledger);
+        purrdf_buffer_free(archive);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn projection_c_surface_rejects_write_only_lift_and_aliasing_outputs() {
+    const CONFIG: &str = r#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"max_records":1000}}"#;
+    unsafe {
+        let dataset = parse("text/turtle", "<http://a> <http://b> <http://c> .");
+        let profile = CString::new("lpg-csv").unwrap();
+        let mut output: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_project(
+                dataset,
+                profile.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                &raw mut output,
+                &raw mut output,
+                &raw mut error,
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert!(!error.is_null());
+        purrdf_error_free(error);
+
+        let skos = CString::new("skos").unwrap();
+        let bytes = [0_u8; 1];
+        let mut lifted: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        error = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_lift(
+                bytes.as_ptr(),
+                bytes.len(),
+                skos.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                &raw mut lifted,
+                &raw mut ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert!(lifted.is_null());
+        assert!(ledger.is_null());
+        assert!(!error.is_null());
+        purrdf_error_free(error);
+        purrdf_dataset_free(dataset);
+    }
 }
 
 #[test]

@@ -378,6 +378,7 @@ export class Dataset implements Iterable<Quad> {
     graph?: Term | null,
   ): Dataset;
   quads(): Quad[];
+  project(profile: ProjectionProfile, configJson: string): ProjectionPackage;
   visualModel(options?: VisualizationOptions | null): VisualModel;
   visualExport(options?: VisualizationOptions | null): VisualExport;
   visualSvg(options?: VisualizationOptions | null): VisualSvgDocument;
@@ -387,6 +388,44 @@ export class Dataset implements Iterable<Quad> {
   isomorphic(other: Dataset): boolean;
   toStream(): AsyncIterableIterator<Quad>;
   [Symbol.iterator](): IterableIterator<Quad>;
+  free(): void;
+}
+
+export type ProjectionProfile =
+  | "lpg-csv"
+  | "neo4j-csv"
+  | "open-cypher"
+  | "graphml"
+  | "csvw-exact"
+  | "obo-graphs"
+  | "skos";
+
+export type LiftProfile = Exclude<ProjectionProfile, "obo-graphs" | "skos">;
+
+export interface ProjectionLossLedger {
+  schema_version: 1;
+  losses: Array<{
+    code: string;
+    from: string;
+    to: string;
+    intentional: boolean;
+    note: string;
+    location?: string;
+  }>;
+}
+
+export class ProjectionPackage {
+  private constructor();
+  readonly profile: ProjectionProfile;
+  readonly archive: Uint8Array;
+  readonly lossLedgerJson: string;
+  free(): void;
+}
+
+export class ProjectionLift {
+  private constructor();
+  readonly lossLedgerJson: string;
+  takeDataset(): Dataset | undefined;
   free(): void;
 }
 
@@ -414,6 +453,11 @@ export function datasetToStream(dataset: Dataset): AsyncIterableIterator<Quad>;
 export function streamToDataset(
   quadStream: AsyncIterable<Quad> | Iterable<Quad>,
 ): Promise<Dataset>;
+export function liftProjection(
+  archive: Uint8Array,
+  profile: LiftProfile,
+  configJson: string,
+): ProjectionLift;
 export function shaclEntail(shapesTtl: string, dataNt: string): string;
 export function shaclValidateToSarif(shapesTtl: string, dataNt: string): string;
 export function version(): string;

@@ -23,6 +23,7 @@ mod convert;
 mod error;
 mod format;
 mod ledger;
+mod projection;
 mod query;
 mod reason;
 mod sink;
@@ -90,6 +91,38 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         } => reason::run(
             *regime,
             *from,
+            *to,
+            base.as_deref(),
+            input,
+            output,
+            &ledger_target,
+        ),
+        Command::Project {
+            profile,
+            config,
+            from,
+            base,
+            input,
+            output,
+        } => projection::run_project(
+            *profile,
+            config,
+            *from,
+            base.as_deref(),
+            input,
+            output,
+            &ledger_target,
+        ),
+        Command::Lift {
+            profile,
+            config,
+            to,
+            base,
+            input,
+            output,
+        } => projection::run_lift(
+            *profile,
+            config,
             *to,
             base.as_deref(),
             input,

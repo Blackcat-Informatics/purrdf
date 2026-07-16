@@ -47,3 +47,5 @@ clap = { workspace = true }
 [dev-dependencies]
 # Isolated temp files/dirs for the integration tests that drive the built binary.
 tempfile = { workspace = true }
+# Parse the machine-readable runtime ledger in projection CLI integration tests.
+serde_json = { workspace = true }

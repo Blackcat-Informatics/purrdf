@@ -27,7 +27,7 @@ fn run(args: &[&str]) -> (i32, String, String) {
 fn top_level_help_lists_all_subcommands() {
     let (code, stdout, _) = run(&["--help"]);
     assert_eq!(code, 0, "`--help` exits 0");
-    for subcommand in ["convert", "query", "reason"] {
+    for subcommand in ["convert", "query", "reason", "project", "lift"] {
         assert!(
             stdout.contains(subcommand),
             "top-level help must list `{subcommand}`; got:\n{stdout}"
@@ -37,6 +37,49 @@ fn top_level_help_lists_all_subcommands() {
         stdout.contains("--loss-ledger"),
         "top-level help must mention the global --loss-ledger flag"
     );
+}
+
+#[test]
+fn project_and_lift_help_enumerate_truthful_profiles() {
+    let (code, project, _) = run(&["project", "--help"]);
+    assert_eq!(code, 0, "`project --help` exits 0");
+    for value in [
+        "lpg-csv",
+        "neo4j-csv",
+        "open-cypher",
+        "graphml",
+        "csvw-exact",
+        "obo-graphs",
+        "skos",
+    ] {
+        assert!(
+            project.contains(value),
+            "project help must enumerate `{value}`; got:\n{project}"
+        );
+    }
+    for field in ["--profile", "--config", "--from", "IN", "OUT"] {
+        assert!(project.contains(field), "project help missing `{field}`");
+    }
+
+    let (code, lift, _) = run(&["lift", "--help"]);
+    assert_eq!(code, 0, "`lift --help` exits 0");
+    for value in [
+        "lpg-csv",
+        "neo4j-csv",
+        "open-cypher",
+        "graphml",
+        "csvw-exact",
+    ] {
+        assert!(
+            lift.contains(value),
+            "lift help must enumerate `{value}`; got:\n{lift}"
+        );
+    }
+    assert!(!lift.contains("obo-graphs"));
+    assert!(!lift.contains("skos"));
+    for field in ["--profile", "--config", "--to", "IN", "OUT"] {
+        assert!(lift.contains(field), "lift help missing `{field}`");
+    }
 }
 
 #[test]

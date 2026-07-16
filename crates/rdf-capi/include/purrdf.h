@@ -627,6 +627,50 @@ int32_t purrdf_parse(const uint8_t *bytes,
                      PurrdfError **out_error);
 
 /**
+ * Project a frozen RDF dataset into a canonical deterministic USTAR carrier.
+ *
+ * `profile` is a NUL-terminated projection profile name. `config_json` is the
+ * mandatory profile-tagged configuration and must be valid for `config_len`
+ * bytes. On success, `*out_archive` and `*out_loss_ledger_json` are independent
+ * caller-owned buffers released with `purrdf_buffer_free`. The loss ledger is
+ * always computed and uses PurRDF's versioned canonical JSON schema.
+ *
+ * # Safety
+ * `dataset` must be a live handle; `profile` must be a valid C string;
+ * `config_json` must be readable for `config_len` bytes; the two output pointers
+ * must be non-null, distinct, and writable. `out_error` may be null or writable.
+ */
+int32_t purrdf_project(const PurrdfDataset *dataset,
+                       const char *profile,
+                       const uint8_t *config_json,
+                       size_t config_len,
+                       PurrdfBuffer **out_archive,
+                       PurrdfBuffer **out_loss_ledger_json,
+                       PurrdfError **out_error);
+
+/**
+ * Lift a canonical USTAR carrier into a fresh frozen RDF dataset.
+ *
+ * Only the closed bidirectional profiles are accepted; OBO Graphs and SKOS
+ * fail as invalid arguments instead of pretending to round-trip. On success,
+ * `*out_dataset` is released with `purrdf_dataset_free` and
+ * `*out_loss_ledger_json` with `purrdf_buffer_free`.
+ *
+ * # Safety
+ * `archive` and `config_json` must be readable for their respective lengths;
+ * `profile` must be a valid C string; output pointers must be non-null and
+ * writable. `out_error` may be null or writable.
+ */
+int32_t purrdf_lift(const uint8_t *archive,
+                    size_t archive_len,
+                    const char *profile,
+                    const uint8_t *config_json,
+                    size_t config_len,
+                    PurrdfDataset **out_dataset,
+                    PurrdfBuffer **out_loss_ledger_json,
+                    PurrdfError **out_error);
+
+/**
  * Execute a SPARQL query. The result shape is reported in `*out_kind`:
  * `0` = SELECT → `*out_rows` is a `PurrdfRowCursor` (free with
  * `purrdf_rowcursor_free`); `1` = CONSTRUCT/DESCRIBE → `*out_graph` is a

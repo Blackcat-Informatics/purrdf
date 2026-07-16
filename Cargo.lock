@@ -1293,6 +1293,7 @@ dependencies = [
  "purrdf-rdf",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "serde_json",
  "tempfile",
 ]
 

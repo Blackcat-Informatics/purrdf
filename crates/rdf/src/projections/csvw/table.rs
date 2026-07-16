@@ -984,7 +984,7 @@ fn validate_number_against_pattern(value: &str, pattern: &str) -> Result<(), Str
         .filter(|character| *character == '0')
         .count();
 
-    let (integral, decimal) = value.split_once('.').map_or((value, ""), |parts| parts);
+    let (integral, decimal) = value.split_once('.').unwrap_or((value, ""));
     let decimal = decimal
         .split_once(['e', 'E'])
         .map_or(decimal, |(decimal, _)| decimal);

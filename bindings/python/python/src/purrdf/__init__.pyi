@@ -24,6 +24,49 @@ def canonicalize_turtle(
     turtle_bytes: bytes, extra_prefixes: list[tuple[str, str]] = ...
 ) -> bytes: ...
 
+# ── Deterministic graph/tabular projection carriers ────────────────────────────
+
+class ProjectionLoss:
+    @property
+    def code(self) -> str: ...
+    @property
+    def source(self) -> str: ...
+    @property
+    def target(self) -> str: ...
+    @property
+    def note(self) -> str: ...
+    @property
+    def location(self) -> str | None: ...
+
+class ProjectionPackage:
+    @property
+    def profile(self) -> str: ...
+    @property
+    def archive(self) -> bytes: ...
+    @property
+    def losses(self) -> list[ProjectionLoss]: ...
+
+class ProjectionLift:
+    @property
+    def dataset(self) -> RdfDataset: ...
+    @property
+    def losses(self) -> list[ProjectionLoss]: ...
+
+def project(
+    data: bytes | str,
+    *,
+    format: RdfFormat,
+    profile: str,
+    config: bytes | str,
+) -> ProjectionPackage: ...
+
+def lift(
+    archive: bytes,
+    *,
+    profile: str,
+    config: bytes | str,
+) -> ProjectionLift: ...
+
 # ── Serialization / canonicalization enums ──────────────────────────────────────
 
 class RdfFormat:

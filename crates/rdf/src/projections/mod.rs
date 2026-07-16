@@ -8,6 +8,7 @@
 //! primitives. Filesystem and network access stay outside this module, so the same
 //! engine runs unchanged in native, WebAssembly, Python, and C hosts.
 
+mod carrier;
 mod csvw;
 mod error;
 mod lpg;
@@ -17,6 +18,10 @@ mod skos;
 mod term;
 mod util;
 
+pub use carrier::{
+    LiftProfile, ProjectionArchive, ProjectionConfig, ProjectionLift, ProjectionProfile,
+    lift_archive, project_archive,
+};
 pub use csvw::{
     CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig, CsvwContext, CsvwDatatype,
     CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection, CsvwExactReadOutcome, CsvwForeignKey,
