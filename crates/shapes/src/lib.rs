@@ -37,6 +37,7 @@ pub mod shapes;
 pub mod sparql;
 pub mod term;
 pub mod text_ingest;
+pub mod typescript;
 
 pub use json_schema::{Namespaces, ValueVocab, ValueVocabProjection, compile_with_value_vocab};
 pub use linkml::{
@@ -45,6 +46,10 @@ pub use linkml::{
 };
 pub use pydantic::{PydanticConfig, PydanticError, PydanticPackage, emit_pydantic};
 pub use rules::{apply_rules, entail_dataset};
+pub use typescript::{
+    TYPESCRIPT_DECLARATION_PATH, TYPESCRIPT_DIALECT, TypeScriptConfig, TypeScriptError,
+    TypeScriptPackage, emit_typescript,
+};
 
 /// Crate version string for cache/toolchain salt parity with Python package
 /// versions (`metadata.version("purrdf-shapes")`).
