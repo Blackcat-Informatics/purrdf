@@ -391,8 +391,7 @@ fn parse_datacite(
         ProjectionError::syntax(format!("DataCite XML is not UTF-8: {error}"))
             .at_path(DATACITE_ARTIFACT)
     })?;
-    let upper = text.to_ascii_uppercase();
-    if upper.contains("<!DOCTYPE") || upper.contains("<!ENTITY") {
+    if text.contains("<!DOCTYPE") || text.contains("<!ENTITY") {
         return Err(ProjectionError::syntax(
             "DataCite profile forbids DTD and entity declarations",
         )
@@ -1969,6 +1968,9 @@ mod tests {
             1,
         );
         assert!(read_datacite(&package(dtd, &config), &config).is_err());
+
+        let malformed_mixed_case = input.replacen("?>\n", "?>\n<!doctype resource>\n", 1);
+        assert!(read_datacite(&package(malformed_mixed_case, &config), &config).is_err());
 
         let duplicate = input.replace(
             "  <creators>",
