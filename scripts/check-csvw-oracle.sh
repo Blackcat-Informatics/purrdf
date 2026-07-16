@@ -14,4 +14,4 @@ trap 'rm -rf "${tmp}"' EXIT
 
 cargo run --quiet --locked -p purrdf-rdf --example write_csvw_oracle_fixture -- "${tmp}"
 UV_CACHE_DIR="${UV_CACHE_DIR:-${TMPDIR:-/tmp}/purrdf-csvw-uv-cache}" \
-  uv run --no-project --script scripts/csvw_oracle.py "${tmp}"
+  uv run --no-project --locked --script scripts/csvw_oracle.py "${tmp}"

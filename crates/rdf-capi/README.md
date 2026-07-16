@@ -31,6 +31,35 @@ make capi-header                # regenerate the committed include/purrdf.h afte
 The committed header `include/purrdf.h` **is the ABI contract**; CI fails if it
 drifts from the crate (`make capi-check`).
 
+## Graph and tabular projection carriers
+
+`purrdf_project` and `purrdf_lift` expose the same canonical archive engine as
+Rust, Python, WebAssembly, and the CLI. `purrdf_project` accepts all seven
+profiles; `purrdf_lift` accepts only the five structurally bidirectional ones:
+
+| Profile | Project | Lift |
+| --- | :---: | :---: |
+| `lpg-csv` | yes | yes |
+| `neo4j-csv` | yes | yes |
+| `open-cypher` | yes | yes |
+| `graphml` | yes | yes |
+| `csvw-exact` | yes | yes |
+| `obo-graphs` | yes | no |
+| `skos` | yes | no |
+
+Configuration is mandatory profile-tagged JSON with caller-owned vocabulary,
+identity, limits, and policy. Projection returns two independent caller-owned
+`PurrdfBuffer` handles: canonical deterministic USTAR bytes and the versioned
+loss-ledger JSON. Lift returns a caller-owned `PurrdfDataset` plus an independent
+ledger buffer. Free every buffer with `purrdf_buffer_free` and the dataset with
+`purrdf_dataset_free`.
+
+The complete compiled
+[`projection_roundtrip.c`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/examples/projection_roundtrip.c)
+example parses Turtle, projects LPG CSV, writes the archive, lifts it, verifies
+the quad count, and releases every handle. `make capi-check` compiles and
+executes that example against the generated shared library and committed header.
+
 ## ABI contract (every entry point)
 
 - **No unwinding across the boundary.** Every function runs inside

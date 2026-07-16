@@ -72,6 +72,8 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SHACL | W3C data-shapes, `core/` + `sparql/` + `af/` | **126 / 126** · 0 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **69 / 69** frozen expected reports |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
+| CSVW | W3C CSVW manifests, `crates/rdf/tests/fixtures/csvw-w3c/` | **270 / 270** RDF cases · **282 / 282** validation cases · 0 xfail; production output also accepted by locked `csvw==4.1.0` |
+| OBO Graphs view | official OBO Graphs 0.3.2 JSON Schema | production advanced-object fixture accepted; deliberate node/chain corruptions rejected |
 | SPARQL 1.1/1.2 | full W3C sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **797** pass · 5 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the 5 non-passes are upstream-errata fixtures with non-canonical XSD lexicals) |
 | Entailment (RDFS / OWL-RL / OWL-Direct / RIF) | native `purrdf-entail` reasoners | RDFS + OWL-RL forward chase, open-world OWL-Direct via the ALCOIQ tableau, RIF-Core rule engine, and RDF-axiomatic predicate typing; **70/70** W3C entailment cases pass (only `D`-datatype entailment remains a boundary, unexercised by the corpus) |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
@@ -99,6 +101,12 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 - `crates/rdf/tests/corpus/w3c/` — the W3C rdf-tests syntax corpus (Turtle,
   TriG, N-Triples, N-Quads, RDF/XML) driving the native-codec round-trip gate.
 - `crates/rdf/tests/fixtures/rdfc/` — the W3C rdf-canon (RDFC-1.0) vectors.
+- `crates/rdf/tests/fixtures/csvw-w3c/` — the revision-pinned W3C CSVW RDF
+  conversion and metadata-validation manifests. The harness asserts exact case
+  and expected-result inventories with an empty XFAIL ledger.
+- `crates/rdf/tests/fixtures/obographs-0.3.2/` — the official OBO Graphs 0.3.2
+  JSON Schema closure, license/provenance evidence, and pinned hashes used by
+  the independent production-output oracle.
 - `crates/iri/tests/` — the IRI/URI validity vectors and RFC 3986 §5.4
   resolution examples.
 - `bindings/python/tests/rdflib_suite/vendor/` — rdflib 7.6's own tests,
@@ -118,6 +126,7 @@ cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture   # W3C SHACL 
 cargo test -p purrdf-shapes --test conformance         # the 69-case frozen corpus
 cargo test -p purrdf-sparql-conformance                # W3C SPARQL
 cargo test -p purrdf-rdf                               # RDFC-1.0 + codec goldens
+make projection-oracles                               # W3C CSVW + independent CSVW/OBO checks
 cargo test -p purrdf-gts                               # GTS vectors
 cd bindings/python && uv run pytest tests/test_rdflib_suite.py -q   # rdflib drop-in gate
 ```

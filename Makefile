@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -142,6 +142,17 @@ bench: ## Run criterion benchmarks (report-only; never a gate).
 
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
 	bash scripts/check-columnar-oracle.sh
+
+csvw-conformance: ## Run every pinned W3C CSVW RDF and validation manifest case.
+	cargo test -p purrdf-rdf --test csvw_w3c --locked
+
+csvw-oracle: ## Validate canonical CSVW output with the locked independent csvw 4.1.0 implementation.
+	bash scripts/check-csvw-oracle.sh
+
+obographs-oracle: ## Validate deterministic output against the pinned official OBO Graphs 0.3.2 schema.
+	bash scripts/check-obographs-schema-oracle.sh
+
+projection-oracles: csvw-conformance csvw-oracle obographs-oracle ## Run graph/tabular conformance and independent corruption oracles.
 
 pydantic-oracle: ## Execute emitted Pydantic v2 models and compare model_json_schema() with CompiledSchema.
 	uv sync --project bindings/python --locked --no-install-project

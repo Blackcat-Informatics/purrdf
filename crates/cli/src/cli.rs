@@ -3,7 +3,7 @@
 
 //! The clap command tree: the `purrdf` binary's argument model.
 //!
-//! One pipeline, three subcommands ([`Command`]), and one global flag
+//! One pipeline, five subcommands ([`Command`]), and one global flag
 //! (`--loss-ledger`). The format / regime / results-format choices are modeled as
 //! [`clap::ValueEnum`] wrappers so `--help` enumerates the legal values and clap
 //! validates them at parse time, and each wrapper carries a total conversion into
@@ -36,7 +36,7 @@ use crate::format::CliFormat;
 #[command(
     name = "purrdf",
     version,
-    about = "PurRDF: convert, query, and reason over RDF 1.2 data and native packs",
+    about = "PurRDF: convert, query, reason, project, and lift RDF 1.2 data",
     propagate_version = true
 )]
 pub(crate) struct Cli {
@@ -44,7 +44,7 @@ pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) cmd: Command,
 
-    /// Surface the transcode loss ledger: bare writes it to stderr,
+    /// Surface the conversion/projection loss ledger: bare writes it to stderr,
     /// `--loss-ledger=PATH` writes it to PATH.
     //
     // `Option<Option<PathBuf>>` is clap's idiom for an optional-value flag (the

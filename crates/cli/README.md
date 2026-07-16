@@ -20,7 +20,7 @@ text/XML/JSON codecs, the pack container, the SPARQL 1.2 evaluator, and the
 entailment closures — so anything the CLI does, it does with byte-for-byte the
 same behavior as the Rust, Python, WebAssembly, and C surfaces.
 
-Every invocation is one `Source → [transform] → Sink` pipeline, exposed as three
+Every invocation is one `Source → [transform] → Sink` pipeline, exposed as five
 subcommands:
 
 | Subcommand | Pipeline |
@@ -28,9 +28,11 @@ subcommands:
 | [`convert`](#convert) | transcode RDF between syntaxes and the native pack container |
 | [`query`](#query) | evaluate a SPARQL query over an RDF or pack data source |
 | [`reason`](#reason) | materialize an entailment regime's closure over a source graph |
+| [`project`](#project) | materialize a deterministic graph/tabular USTAR carrier |
+| [`lift`](#lift) | reconstruct RDF from a strict bidirectional carrier |
 
 A single global flag, [`--loss-ledger`](#the-loss-ledger), surfaces the
-machine-readable transcode-loss record for whichever conversion ran.
+machine-readable loss record for a conversion, projection, or lift.
 
 > **This tool mints no vocabulary.** PurRDF is a carrier, not an ontology: every
 > IRI in your data is yours. The `example.org` IRIs below are illustrative
@@ -218,11 +220,84 @@ purrdf reason --regime owl-direct people.ttl out.ttl
 echo $?   # 3
 ```
 
+## `project`
+
+```text
+purrdf project --profile <P> --config <PATH> [--from <F>] [--base <IRI>] [IN] [OUT]
+```
+
+Project an RDF syntax or verified pack source into one canonical USTAR archive.
+The mandatory JSON configuration is tagged with the same profile and supplies
+all vocabulary, package identity, resource limits, and processing policy. A
+profile/config mismatch, an unknown field, or a breached limit is a hard error.
+
+| Profile | Native view | Liftable |
+| --- | --- | :---: |
+| `lpg-csv` | Generic nodes/edges CSV | yes |
+| `neo4j-csv` | Neo4j Admin Import CSV | yes |
+| `open-cypher` | Closed deterministic `CREATE` grammar | yes |
+| `graphml` | GraphML 1.0 | yes |
+| `csvw-exact` | Exact RDF 1.2 CSVW table group | yes |
+| `obo-graphs` | OBO Graphs 0.3.2 JSON | no |
+| `skos` | SKOS Turtle concept-scheme view | no |
+
+A minimal generic LPG configuration is:
+
+```json
+{
+  "profile": "lpg-csv",
+  "config": {
+    "rdf_type": "https://example.org/type",
+    "limits": {
+      "max_artifacts": 16,
+      "max_artifact_bytes": 1000000,
+      "max_total_bytes": 4000000,
+      "max_archive_bytes": 5000000,
+      "max_term_depth": 16
+    },
+    "max_records": 1000
+  }
+}
+```
+
+```sh
+purrdf --loss-ledger=project.loss.json project \
+  --profile lpg-csv --config lpg.json --from turtle \
+  graph.ttl graph.tar
+```
+
+The archive bytes are deterministic for the same dataset and configuration.
+LPG profiles retain exact RDF sideband for reconstruction, while the semantic
+lowering into a property graph remains visible in the ledger. `csvw-exact` is
+lossless. OBO Graphs and SKOS are intentionally lossy views.
+
+## `lift`
+
+```text
+purrdf lift --profile <P> --config <PATH> --to <F> [--base <IRI>] [IN] [OUT]
+```
+
+Lift one canonical archive into a native RDF syntax. Only `lpg-csv`,
+`neo4j-csv`, `open-cypher`, `graphml`, and `csvw-exact` are accepted; the CLI
+does not offer OBO Graphs or SKOS as pretend reverse mappings. The reader
+rejects non-canonical USTAR, unexpected members, malformed carrier data,
+sideband inconsistencies, and resource-limit violations.
+
+```sh
+purrdf --loss-ledger=lift.loss.json lift \
+  --profile lpg-csv --config lpg.json --to nquads \
+  graph.tar restored.nq
+```
+
+Configuration and archive input may independently use `-`, but not
+simultaneously because stdin cannot supply both byte streams. A complete
+runnable round trip lives in `examples/projection-roundtrip.sh`.
+
 ## The loss ledger
 
-`--loss-ledger` is a global flag that surfaces the machine-readable transcode-loss
-record for whichever conversion ran. The ledger is **always computed**; the flag
-only controls where (if anywhere) it is written, via three states:
+`--loss-ledger` is a global flag that surfaces the machine-readable loss record
+for a conversion, projection, or lift. The ledger is **always computed**; the
+flag only controls where (if anywhere) it is written, via three states:
 
 | Form | Effect |
 |---|---|
@@ -233,13 +308,12 @@ only controls where (if anywhere) it is written, via three states:
 The `=PATH` spelling is required (the bare form takes no value), so the flag never
 swallows a following subcommand or query string.
 
-The ledger records two kinds of loss when a target syntax cannot carry what the
-source held: the **contract** losses inherent to a `(source-codec → target-codec)`
-pair, and the **realized** counts the serializer actually dropped — RDF 1.2
-statement-layer rows (reifier bindings + annotation triples) when the target has no
-star layer, and literal base directions when the target (TriX / HexTuples) has no
-direction surface. A pack target, a `pack → pack` passthrough, and RDFC-1.0
-canonical N-Quads are lossless, so their ledgers are empty.
+For syntax conversion, the ledger records both the **contract** losses inherent
+to a `(source-codec → target-codec)` pair and the **realized** counts the
+serializer actually dropped. Projection ledgers use the same versioned schema
+but add stable source locations for graph/tabular semantic lowering. A pack
+target, a `pack → pack` passthrough, RDFC-1.0 canonical N-Quads, and
+`csvw-exact` are lossless, so their ledgers are empty.
 
 ```sh
 # Convert to a star-incapable syntax and inspect what was dropped, on stderr.

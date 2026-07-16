@@ -42,6 +42,49 @@ quads = purrdf.parse(
 `purrdf.to_rdf_xml` converters. All codecs are first-party with
 byte-deterministic output.
 
+## Project graph and tabular carriers
+
+`purrdf.project` and `purrdf.lift` are thin calls into the same Rust projection
+engine used by every other surface. Configuration is mandatory, strict JSON:
+PurRDF supplies no vocabulary, identity IRI, or resource-limit default.
+
+```python
+import json
+import purrdf
+
+config = json.dumps({
+    "profile": "lpg-csv",
+    "config": {
+        "rdf_type": "https://example.org/type",
+        "limits": {
+            "max_artifacts": 16,
+            "max_artifact_bytes": 1_000_000,
+            "max_total_bytes": 4_000_000,
+            "max_archive_bytes": 5_000_000,
+            "max_term_depth": 16,
+        },
+        "max_records": 1_000,
+    },
+})
+package = purrdf.project(
+    "@prefix ex: <https://example.org/> . ex:alice ex:knows ex:bob .",
+    format=purrdf.RdfFormat.TURTLE,
+    profile="lpg-csv",
+    config=config,
+)
+lifted = purrdf.lift(package.archive, profile="lpg-csv", config=config)
+assert lifted.dataset.quad_count() == 1
+print([(loss.code, loss.location) for loss in package.losses])
+```
+
+Project profiles are `lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`,
+`csvw-exact`, `obo-graphs`, and `skos`. The first five are liftable;
+OBO Graphs and SKOS are deliberately write-only, ledgered views. Returned
+archives are canonical deterministic USTAR bytes and every result carries its
+always-computed structured loss records. See the runnable
+[`projection_roundtrip.py`](https://github.com/Blackcat-Informatics/purrdf/blob/main/bindings/python/examples/projection_roundtrip.py)
+file-producing example.
+
 ## Validate with SHACL
 
 The SHACL engine lives at `purrdf.shapes` (mirroring the Rust crate; `purrdf.shacl`

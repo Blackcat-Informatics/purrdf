@@ -18,4 +18,4 @@ cargo run --quiet --locked -p purrdf-rdf --example write_obographs_oracle_fixtur
   "${tmp}/second.json"
 cmp "${tmp}/first.json" "${tmp}/second.json"
 UV_CACHE_DIR="${UV_CACHE_DIR:-${TMPDIR:-/tmp}/purrdf-obographs-uv-cache}" \
-  uv run --no-project --script scripts/obographs_schema_oracle.py "${tmp}/first.json"
+  uv run --no-project --locked --script scripts/obographs_schema_oracle.py "${tmp}/first.json"

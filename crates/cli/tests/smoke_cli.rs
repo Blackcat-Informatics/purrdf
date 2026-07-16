@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! End-to-end smoke of the three subcommands, driving the built `purrdf` binary
+//! End-to-end smoke of the three core RDF subcommands, driving the built `purrdf` binary
 //! over `example.org` fixtures written to a temp dir:
+//!
+//! The two graph/tabular carrier commands have their own production smoke in
+//! `projection_cli.rs`.
 //!
 //! * `convert --from ttl --to nt` produces the expected N-Triples;
 //! * `query --results-format json` returns a row, and the SAME query over a pack

@@ -76,6 +76,10 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
   flat N-Quads for the graph; `Dataset.isomorphic(other)` decides RDF graph
   equality under blank-node relabeling (an exact oracle backed by full RDFC-1.0
   canonicalization).
+- **Graph/tabular carriers** — `Dataset.project(profile, configJson)` returns
+  canonical USTAR bytes and loss-ledger JSON; `liftProjection(...)` reconstructs
+  RDF for the bidirectional profiles. See
+  [Graph & Tabular Projections](../concepts/projections.md).
 - **SPARQL** — `QueryEngine` keeps the native plan cache alive across calls and
   exposes typed `select` / `ask` / `construct` / `describe`, atomic `update`,
   and `queryRaw` serialization. `Dataset.query(...)` remains the compatibility

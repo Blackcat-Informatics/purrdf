@@ -150,3 +150,9 @@ harness = false
 # Report-only; excluded from check.
 name = "viz_layout"
 harness = false
+
+[[bench]]
+# Graph/tabular projection mapping plus deterministic carrier write/read paths.
+# Reports both Criterion throughput and one-shot allocation count/bytes.
+name = "projections"
+harness = false

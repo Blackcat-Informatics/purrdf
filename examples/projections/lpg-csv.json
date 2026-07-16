@@ -1,0 +1,14 @@
+{
+  "profile": "lpg-csv",
+  "config": {
+    "rdf_type": "https://example.org/type",
+    "limits": {
+      "max_artifacts": 16,
+      "max_artifact_bytes": 1000000,
+      "max_total_bytes": 4000000,
+      "max_archive_bytes": 5000000,
+      "max_term_depth": 16
+    },
+    "max_records": 1000
+  }
+}

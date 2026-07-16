@@ -1,12 +1,42 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Deterministic, caller-configured RDF 1.2 projection foundations.
+//! Deterministic, caller-configured RDF 1.2 graph and tabular projections.
 //!
 //! Projection codecs share one bounded in-memory package, one durable RDF term
 //! representation, one typed error surface, and one set of escaping/identity
 //! primitives. Filesystem and network access stay outside this module, so the same
 //! engine runs unchanged in native, WebAssembly, Python, and C hosts.
+//!
+//! # Profiles and fidelity
+//!
+//! | Profile | Direction | Fidelity contract |
+//! | --- | --- | --- |
+//! | Generic LPG CSV | RDF ↔ carrier | Canonical LPG view plus exact RDF sideband; semantic lowering is located in the loss ledger |
+//! | Neo4j Admin Import CSV | RDF ↔ carrier | Same canonical LPG authority and ledger as generic CSV |
+//! | openCypher | RDF ↔ carrier | Strict reader accepts the complete grammar emitted by PurRDF |
+//! | GraphML 1.0 | RDF ↔ carrier | Strict namespaced XML reader; exact RDF sideband remains authoritative |
+//! | CSVW exact | RDF ↔ carrier | Lossless RDF 1.2 term, quad, reifier, and annotation tables |
+//! | OBO Graphs 0.3.2 | RDF → view | Deliberately write-only and loss-ledgered |
+//! | SKOS Turtle | RDF → view | Deliberately write-only and loss-ledgered |
+//!
+//! [`project_archive`] provides the profile-tagged production entry point.
+//! [`lift_archive`] accepts only [`LiftProfile`], so the type system cannot pretend
+//! that the two lossy views round-trip. Every operation computes a deterministic
+//! [`purrdf_core::LossLedger`]; deciding whether to display it is a host concern.
+//!
+//! # Configuration and packages
+//!
+//! [`ProjectionConfig`] has no default. The caller supplies every semantic role,
+//! identity IRI, and [`ProjectionLimits`]; unknown JSON fields and a mismatch
+//! between the requested profile and tagged configuration are hard errors. Package
+//! members are lexically ordered inside canonical USTAR bytes, with fixed headers,
+//! checksums, padding, and trailer. Readers enforce configured size/count/depth
+//! bounds and reject any archive whose canonical re-encoding differs.
+//!
+//! See `examples/projection_archive.rs` in the repository for a runnable Rust
+//! project/write/lift example. Matching examples are provided for the CLI, Python,
+//! WebAssembly, and C surfaces.
 
 mod carrier;
 mod csvw;

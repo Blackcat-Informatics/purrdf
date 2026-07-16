@@ -366,6 +366,8 @@ fn lift_lpg_package(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use purrdf_core::{RdfDatasetBuilder, datasets_isomorphic};
 
     use super::*;
@@ -390,7 +392,7 @@ mod tests {
         ProjectionConfig::CsvwExact(
             CsvwConfig::new(
                 "https://example.org/metadata",
-                CsvwContext::new("https://example.org/context", Default::default())
+                CsvwContext::new("https://example.org/context", BTreeMap::default())
                     .expect("context"),
                 "https://example.org/group",
                 CsvwVocabulary::new(

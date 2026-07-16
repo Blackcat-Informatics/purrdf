@@ -84,4 +84,39 @@ fn c_abi_smoke() {
         .status()
         .expect("failed to run the C smoke binary");
     assert!(run.success(), "C smoke binary returned a failure exit code");
+
+    // Compile and run the public projection example too, so its documented
+    // ownership/free order and additive project/lift declarations cannot drift.
+    let example_c = format!("{manifest}/examples/projection_roundtrip.c");
+    let example_bin = profile_dir.join("purrdf_c_projection_example");
+    let example_archive = profile_dir.join("purrdf_c_projection_example.tar");
+    let _ = std::fs::remove_file(&example_archive);
+    let compile_example = Command::new(&cc)
+        .arg(&example_c)
+        .arg("-std=c11")
+        .arg(format!("-I{header_dir}"))
+        .arg(format!("-L{}", profile_dir.display()))
+        .arg("-lpurrdf")
+        .arg("-o")
+        .arg(&example_bin)
+        .status()
+        .expect("failed to compile the C projection example");
+    assert!(
+        compile_example.success(),
+        "C projection example failed to compile/link"
+    );
+    let run_example = Command::new(&example_bin)
+        .arg(&example_archive)
+        .env(loader_path_var, &profile_dir)
+        .status()
+        .expect("failed to run the C projection example");
+    assert!(
+        run_example.success(),
+        "C projection example returned a failure exit code"
+    );
+    assert!(
+        std::fs::metadata(&example_archive).is_ok_and(|metadata| metadata.len() > 0),
+        "C projection example did not materialize its archive"
+    );
+    let _ = std::fs::remove_file(example_archive);
 }

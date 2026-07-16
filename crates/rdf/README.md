@@ -43,6 +43,10 @@ loss ledger) and adds what the kernel deliberately leaves out:
   semantic scene, deterministic layout, statement table, and self-contained SVG
   whose embedded JSON preserves assertions, triple terms, reifiers, annotations,
   graph context, dialect diagnostics, and element-to-model identities.
+- **Graph and tabular carriers** — deterministic LPG CSV, Neo4j CSV,
+  openCypher, GraphML, exact CSVW, OBO Graphs 0.3.2, and SKOS views over one
+  caller-configured, resource-bounded archive API with an always-computed loss
+  ledger.
 
 The crate is PyO3-free and oxigraph-free (like the whole workspace), keeps
 reporting structured but SARIF-free — callers translate `RdfDiagnostic`s into
@@ -133,6 +137,55 @@ The reader drives any `RdfEventSink`; the writer is itself an
 reifier and occurrence annotations. RDF rows outside the configured OKF
 profile are omitted only with deterministic, source-located `LossLedger`
 entries; ambiguous profile data hard-fails.
+
+### Graph and tabular projection archives
+
+All seven profiles use the same canonical USTAR package surface and strict,
+profile-tagged configuration. PurRDF does not choose vocabulary, identity, or
+resource limits for the caller.
+
+| Profile | Project | Lift | Contract |
+| --- | :---: | :---: | --- |
+| `lpg-csv` | yes | yes | Generic nodes/edges CSV over the canonical LPG model |
+| `neo4j-csv` | yes | yes | Neo4j Admin Import CSV over the same model |
+| `open-cypher` | yes | yes | Injection-safe closed `CREATE` grammar |
+| `graphml` | yes | yes | GraphML 1.0 with strict XML validation |
+| `csvw-exact` | yes | yes | Lossless RDF 1.2 tables and CSVW metadata |
+| `obo-graphs` | yes | no | OBO Graphs 0.3.2 view with located losses |
+| `skos` | yes | no | SKOS Turtle view with located losses |
+
+The LPG carriers include exact RDF sideband for reconstruction, while their
+native property-graph interpretation remains a semantic lowering and is
+therefore ledgered. `csvw-exact` preserves terms, graph placement, recursive
+triple terms, reifier bindings, annotations, language, direction, and datatype
+with an empty ledger. OBO Graphs and SKOS are structurally write-only:
+`LiftProfile` has no variants for them.
+
+```rust
+use purrdf_rdf::{
+    LiftProfile, LpgConfig, ProjectionConfig, ProjectionLimits,
+    ProjectionProfile, lift_archive, parse_dataset, project_archive,
+};
+
+let dataset = parse_dataset(
+    b"<https://example.org/alice> <https://example.org/knows> <https://example.org/bob> .",
+    "text/turtle",
+    None,
+)?;
+let limits = ProjectionLimits::new(16, 1_000_000, 4_000_000, 5_000_000, 16)?;
+let config = ProjectionConfig::LpgCsv(LpgConfig::new(
+    "https://example.org/type",
+    limits,
+    1_000,
+)?);
+let projected = project_archive(dataset.as_ref(), ProjectionProfile::LpgCsv, &config)?;
+let lifted = lift_archive(&projected.archive, LiftProfile::LpgCsv, &config)?;
+assert_eq!(lifted.dataset.quad_count(), 1);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The runnable version is
+[`examples/projection_archive.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/projection_archive.rs).
 
 ## Part of PurRDF
 
