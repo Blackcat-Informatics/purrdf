@@ -789,7 +789,7 @@ fn group_property_columns(nodes: &[&LpgNode]) -> Result<BTreeMap<String, String>
     Ok(columns)
 }
 
-fn native_property_cell(
+pub(super) fn native_property_cell(
     properties: &[LpgProperty],
     iri: &str,
     config: &LpgConfig,
@@ -975,7 +975,7 @@ fn insert_token(
     Ok(())
 }
 
-fn native_labels(labels: &[LpgLabel]) -> Result<Vec<String>, ProjectionError> {
+pub(super) fn native_labels(labels: &[LpgLabel]) -> Result<Vec<String>, ProjectionError> {
     labels
         .iter()
         .map(|label| label_token(&label.value))
@@ -984,15 +984,15 @@ fn native_labels(labels: &[LpgLabel]) -> Result<Vec<String>, ProjectionError> {
         .map(Iterator::collect)
 }
 
-fn label_token(iri: &str) -> Result<String, ProjectionError> {
+pub(super) fn label_token(iri: &str) -> Result<String, ProjectionError> {
     stable_identifier("RdfLabel", iri.as_bytes())
 }
 
-fn relationship_token(iri: &str) -> Result<String, ProjectionError> {
+pub(super) fn relationship_token(iri: &str) -> Result<String, ProjectionError> {
     stable_identifier("RdfEdge", iri.as_bytes())
 }
 
-fn property_token(iri: &str) -> Result<String, ProjectionError> {
+pub(super) fn property_token(iri: &str) -> Result<String, ProjectionError> {
     stable_identifier("RdfProp", iri.as_bytes())
 }
 

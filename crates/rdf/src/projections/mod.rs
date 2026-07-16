@@ -18,8 +18,9 @@ pub use error::{ProjectionError, ProjectionErrorKind};
 pub use lpg::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgGraphContext, LpgLabel, LpgLiftOutcome,
     LpgNode, LpgPackageProjection, LpgProjection, LpgProperty, LpgPropertyAtom, LpgRdfQuad,
-    LpgReifier, lift_lpg, project_lpg, project_lpg_csv, project_neo4j_csv, read_lpg_csv,
-    read_neo4j_csv, write_lpg_csv, write_neo4j_csv,
+    LpgReifier, lift_lpg, project_lpg, project_lpg_csv, project_lpg_cypher, project_lpg_graphml,
+    project_neo4j_csv, read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv,
+    write_lpg_csv, write_lpg_cypher, write_lpg_graphml, write_neo4j_csv,
 };
 pub use package::{ProjectionLimits, ProjectionPackage};
 pub use term::{ProjectionDirection, ProjectionTerm};

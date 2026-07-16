@@ -113,8 +113,9 @@ pub use projections::{
     LpgReifier, ProjectionDirection, ProjectionError, ProjectionErrorKind, ProjectionLimits,
     ProjectionPackage, ProjectionTerm, escape_cypher_identifier, escape_cypher_string,
     escape_xml_attribute, escape_xml_text, lift_lpg, project_lpg, project_lpg_csv,
-    project_neo4j_csv, read_lpg_csv, read_neo4j_csv, stable_identifier, validate_absolute_iri,
-    write_lpg_csv, write_neo4j_csv,
+    project_lpg_cypher, project_lpg_graphml, project_neo4j_csv, read_lpg_csv, read_lpg_cypher,
+    read_lpg_graphml, read_neo4j_csv, stable_identifier, validate_absolute_iri, write_lpg_csv,
+    write_lpg_cypher, write_lpg_graphml, write_neo4j_csv,
 };
 pub use purrdf_core::{
     ArtifactId, ArtifactIndex, ArtifactInterner, ArtifactRecord, AssertionOccurrence, Attribution,
