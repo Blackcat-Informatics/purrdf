@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle pydantic-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -140,6 +140,10 @@ bench: ## Run criterion benchmarks (report-only; never a gate).
 
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
 	bash scripts/check-columnar-oracle.sh
+
+pydantic-oracle: ## Execute emitted Pydantic v2 models and compare model_json_schema() with CompiledSchema.
+	uv sync --project bindings/python --locked --no-install-project
+	uv run --project bindings/python --no-sync python crates/shapes/tests/pydantic_oracle.py
 
 bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NOT a test gate). See docs/BENCHMARKS.md.
 	cd bindings/python && uv run maturin develop && uv run python benchmarks/bench_compat.py

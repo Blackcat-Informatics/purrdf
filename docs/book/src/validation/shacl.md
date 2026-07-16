@@ -44,6 +44,24 @@ so shapes can constrain the RDF 1.2 reifier metadata attached to statements
 draft is dated 2026-06-02. **This is not a claim of full SHACL 1.2
 conformance** — it is one draft feature, explicitly scoped and tested.
 
+## Pydantic v2 projection
+
+`purrdf-shapes` can transliterate a compiled SHACL-derived JSON Schema into a
+deterministic, typed Pydantic v2 package entirely in memory. The public
+`emit_pydantic` function consumes `CompiledSchema`; `PydanticConfig` requires the
+caller to supply the package name and package/module prose, so the library does
+not invent a vocabulary, namespace, or downstream brand.
+
+Every `$defs` entry gets a stable import path, JSON property names remain exact
+through Pydantic aliases, and generated classes expose the originating
+definition through `model_json_schema(by_alias=True)`. Pydantic runtime
+annotations enforce the representable portion. A JSON Schema assertion with no
+exact runtime annotation remains visible on that schema surface and produces a
+located entry in the always-computed `json-schema` → `pydantic-v2`
+`LossLedger`; a lossless input yields an empty ledger. The renderer itself has no
+Python dependency and stays wasm-clean. A dev-only Python oracle executes the
+generated code and checks the live reverse/schema surface.
+
 ## From Python
 
 ```python
