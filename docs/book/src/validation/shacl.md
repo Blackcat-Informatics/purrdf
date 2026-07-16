@@ -88,6 +88,41 @@ official LinkML 1.11.1 Python packages only as a differential oracle:
 make linkml-oracle
 ```
 
+## TypeScript 7.0 projection
+
+`emit_typescript` projects the same `CompiledSchema` into deterministic
+TypeScript 7.0 declarations. The caller supplies the package name and all
+package/module prose through `TypeScriptConfig`. The returned package contains
+one `index.d.ts`, a reversible `$defs`-key to exported-type map, and a located
+`json-schema` → `typescript-7.0` loss ledger; PurRDF invents no consumer
+identity or vocabulary.
+
+The fixed declaration dialect uses `strict` plus
+`exactOptionalPropertyTypes`. Type aliases preserve JSON primitives and
+literals, required versus optional fields, explicit `null`, local recursive
+references, unions, intersections, homogeneous arrays, and bounded tuples.
+There are no runtime enums, mergeable interfaces, branded pseudo-validators,
+or `any` escape hatches. Invalid keywords, open/dangling references, and name
+collisions fail before bytes are emitted.
+
+Runtime assertions outside TypeScript structural assignability are never
+silently erased: integer, numeric/string predicate, closure, pattern-property,
+dependency, conditional, negation, contains/unique, evaluation-state, and
+bounded-expansion gaps receive stable codes and JSON Pointer locations. CI
+classifies instances independently with a draft 2020-12 validator and compiles
+the generated declarations with the locked TypeScript 7.0.2 compiler, including
+fresh-literal and through-variable probes:
+
+```bash
+make typescript-oracle
+```
+
+The projection intentionally has no arbitrary TypeScript reader. TypeScript
+declarations do not define a unique runtime JSON acceptance relation, and the
+projection is many-to-one. The retained `CompiledSchema` plus the reversible
+name map remains the authoritative reverse surface. TypeScript is only a
+dev-time oracle dependency; the Rust emitter is filesystem-free and wasm-clean.
+
 ## From Python
 
 ```python

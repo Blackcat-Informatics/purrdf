@@ -145,6 +145,12 @@ fn validate_schema(
         }
     }
 
+    if object.contains_key("$id") {
+        return Err(SchemaCatalogError::new(format!(
+            "{path}/$id cannot rebase a closed generated package"
+        )));
+    }
+
     if let Some(reference) = object.get("$ref") {
         let reference = reference
             .as_str()
@@ -315,6 +321,40 @@ mod tests {
             let error = CompiledSchemaCatalog::parse(&compiled(&schema))
                 .expect_err("open reference must fail");
             assert!(error.to_string().contains(keyword), "{error}");
+        }
+
+        for schema in [
+            json!({
+                "$defs": {
+                    "Holder": {
+                        "$id": "nested.json",
+                        "$ref": "#/$defs/Target"
+                    },
+                    "Target": true
+                }
+            }),
+            json!({
+                "$defs": {
+                    "Holder": {
+                        "properties": {
+                            "nested": {
+                                "$id": "nested.json",
+                                "$ref": "#/$defs/Target"
+                            }
+                        }
+                    },
+                    "Target": true
+                }
+            }),
+        ] {
+            let error = CompiledSchemaCatalog::parse(&compiled(&schema))
+                .expect_err("resource rebasing must fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("$id cannot rebase a closed generated package"),
+                "{error}"
+            );
         }
     }
 }

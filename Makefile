@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle pydantic-oracle linkml-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle pydantic-oracle linkml-oracle typescript-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -42,8 +42,8 @@ help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
 
 metadata: ## Regenerate + verify workspace metadata and generated artifacts.
-	cargo metadata --no-deps
-	bash scripts/check-generated.sh
+	cargo metadata --no-deps --format-version 1 >/dev/null
+	bash scripts/check-generated.sh --write
 
 fmt: ## Auto-format the workspace.
 	cargo fmt --all
@@ -148,6 +148,10 @@ pydantic-oracle: ## Execute emitted Pydantic v2 models and compare model_json_sc
 linkml-oracle: ## Validate emitted LinkML through the locked official 1.11 toolchain.
 	uv sync --project bindings/python --locked --no-install-project
 	uv run --project bindings/python --no-sync python crates/shapes/tests/linkml_oracle.py
+
+typescript-oracle: ## Compile emitted declarations with TypeScript 7.0 and compare assignability with CompiledSchema.
+	npm --prefix crates/rdf-wasm/js ci --ignore-scripts --no-audit --no-fund
+	node crates/shapes/tests/typescript_oracle.mjs
 
 bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NOT a test gate). See docs/BENCHMARKS.md.
 	cd bindings/python && uv run maturin develop && uv run python benchmarks/bench_compat.py

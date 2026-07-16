@@ -179,6 +179,63 @@ corpus, and probes every lossy family:
 make linkml-oracle
 ```
 
+## TypeScript 7.0 declarations
+
+`emit_typescript` projects `CompiledSchema` directly into one deterministic
+`index.d.ts` artifact. `TypeScriptConfig` requires the caller's package name and
+package/module prose; no downstream identity or vocabulary is fabricated. The
+result includes the declaration bytes, an exact source-`$defs`-key to exported
+type-name map, and the always-computed `json-schema` → `typescript-7.0` loss
+ledger.
+
+```rust,ignore
+use purrdf_shapes::{
+    TYPESCRIPT_DECLARATION_PATH, TypeScriptConfig, emit_typescript,
+};
+
+let config = TypeScriptConfig::new(
+    "example-schema-types",
+    "Types published by the caller.",
+    "Declarations generated from the caller's compiled schema.",
+)?;
+let package = emit_typescript(&compiled_schema, &config)?;
+let declaration = std::str::from_utf8(
+    &package.artifacts[TYPESCRIPT_DECLARATION_PATH],
+)?;
+
+assert!(declaration.contains("export type Person"));
+assert_eq!(package.type_names.get("Person").map(String::as_str), Some("Person"));
+```
+
+The closed dialect is TypeScript 7.0 under `strict` and
+`exactOptionalPropertyTypes`. It represents JSON primitives and literals, exact
+required-versus-optional fields, explicit JSON `null`, local recursive
+references, `anyOf` unions, `allOf` intersections, homogeneous arrays, and
+bounded tuples. It emits type aliases rather than runtime enums or mergeable
+interfaces and never uses `any`. Malformed keyword values, external/dynamic or
+dangling references, reserved names, and normalized-name collisions fail
+closed.
+
+TypeScript's structural assignability cannot encode every runtime JSON Schema
+assertion. Integer subsets, numeric/string predicates, object closure with
+named fields, regex-selected properties, dependencies, conditionals,
+negation, contains/uniqueness, evaluation state, and expansion-budget
+widenings are therefore classified at their JSON Pointer locations by the
+closed loss profile. The compiler oracle checks both fresh literals and values
+passed through variables, so excess-property checks cannot hide structural
+widening:
+
+```bash
+make typescript-oracle
+```
+
+There is deliberately no general TypeScript → JSON Schema reader. Arbitrary
+TypeScript declarations have no unique runtime acceptance relation, and many
+different schemas project to the same declaration. The retained
+`CompiledSchema`, paired with `type_names`, is the authoritative reverse
+surface. The production emitter has no JavaScript dependency, performs no
+filesystem I/O, and remains wasm-clean; TypeScript is dev-only oracle tooling.
+
 ---
 
 ## Python extension

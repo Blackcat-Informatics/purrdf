@@ -294,6 +294,132 @@
     "note": "Pydantic v2 unions implement any-branch semantics and cannot enforce JSON Schema oneOf's exactly-one matching rule; runtime validation uses a union while model_json_schema() retains oneOf."
   },
   {
+    "code": "additional-properties-validation-widened",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "TypeScript uses structural object compatibility and index signatures apply to every string key, so it cannot constrain only JSON object properties not named by the schema. Named properties retain their exact declarations while the extra-property policy or value schema is widened."
+  },
+  {
+    "code": "array-cardinality-validation-widened",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "A JSON Schema minItems/maxItems assertion exceeds the declaration emitter's fixed tuple-expansion budget. Item and tuple-prefix carriers remain, while exact length validation is widened to keep declaration size bounded deterministically."
+  },
+  {
+    "code": "array-contains-validation-dropped",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "JSON Schema contains/minContains/maxContains assertions quantify matching array elements and have no TypeScript assignability equivalent. Item and cardinality declarations remain while the contains predicate and match count are omitted."
+  },
+  {
+    "code": "conditional-validation-dropped",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "JSON Schema if/then/else validates one branch according to runtime instance content; a general conditional relationship has no finite TypeScript declaration equivalent. Independently representable carrier constraints remain."
+  },
+  {
+    "code": "dependency-validation-dropped",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "JSON Schema dependentRequired/dependentSchemas assertions impose cross-property runtime relationships that a general structural TypeScript declaration cannot enforce. Individual property declarations remain."
+  },
+  {
+    "code": "integer-validation-widened",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "TypeScript has one number type and cannot distinguish all JSON integers from fractional numbers. The generated declaration retains the number carrier while integer-only validation is widened."
+  },
+  {
+    "code": "keyword-validation-dropped",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "A JSON Schema assertion outside the emitter's closed TypeScript 7.0 capability table has no sound declaration projection. The assertion is omitted and recorded at its schema location rather than disappearing silently."
+  },
+  {
+    "code": "negation-validation-dropped",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "General JSON Schema not is a set complement over instance validation. TypeScript's Exclude utility distributes over union members and cannot express that general complement, so the positive carrier remains while negation is omitted."
+  },
+  {
+    "code": "numeric-validation-dropped",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "JSON Schema minimum/maximum/exclusive bounds and multipleOf are runtime numeric predicates with no exact TypeScript number-type expression; integer const/enum values outside the IEEE-754 safe range also have no exact TypeScript number literal. The numeric carrier or closest literal remains while the predicate or excess precision is omitted."
+  },
+  {
+    "code": "object-literal-validation-widened",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "A JSON Schema object-valued const or enum member requires exact key membership. TypeScript can preserve every named literal field but structural compatibility still accepts values with additional fields outside fresh-object checks."
+  },
+  {
+    "code": "one-of-validation-widened",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "A TypeScript union implements any-branch assignability and cannot generally enforce JSON Schema oneOf's exactly-one matching rule. Branch declarations remain as a union while overlap exclusivity is widened."
+  },
+  {
+    "code": "pattern-properties-validation-dropped",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "Arbitrary JSON Schema patternProperties regular expressions have no equivalent key-space expression in TypeScript. Named and additional-property declarations remain while regex-selected property validation is omitted."
+  },
+  {
+    "code": "property-count-validation-dropped",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "JSON Schema minProperties/maxProperties count runtime object keys; TypeScript structural declarations express named requiredness but cannot bound the total property count."
+  },
+  {
+    "code": "property-name-validation-dropped",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "JSON Schema propertyNames validates every runtime object key with a schema, which a general TypeScript string-key declaration cannot express. Property value declarations remain while key validation is omitted."
+  },
+  {
+    "code": "string-validation-dropped",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "JSON Schema minLength/maxLength, pattern, format, and content assertions are runtime predicates without a general TypeScript string-type equivalent. The string carrier remains while the predicate is omitted."
+  },
+  {
+    "code": "tuple-array-validation-widened",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "A JSON Schema prefixItems tuple exceeds the declaration emitter's fixed tuple-expansion budget. The common item carrier remains while position-specific validation beyond the budget is widened deterministically."
+  },
+  {
+    "code": "unevaluated-validation-dropped",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "JSON Schema unevaluatedProperties/unevaluatedItems depends on applicator evaluation state that TypeScript's structural type system does not expose. Representable local declarations remain while the unevaluated assertion is omitted."
+  },
+  {
+    "code": "unique-items-validation-dropped",
+    "from": "json-schema",
+    "to": "typescript-7.0",
+    "intentional": true,
+    "note": "JSON Schema uniqueItems compares runtime array values for equality; TypeScript array and tuple declarations cannot require pairwise-distinct elements. Item and length declarations remain while uniqueness is omitted."
+  },
+  {
     "code": "canonical-rdf12-projection",
     "from": "jsonld",
     "to": "canonical-rdf12",

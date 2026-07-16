@@ -138,5 +138,7 @@ is single-sourced in `[workspace.package]`. `purrdf-capi` and
 ## 7. Provenance
 
 This repo was extracted from `gmeow-ontology` and `gmeow-gts` — see
-[`PROVENANCE.md`](./PROVENANCE.md) for source commits. The downstream
-`gmeow-ontology` cutover onto these crates is complete.
+[`PROVENANCE.md`](./PROVENANCE.md) for source commits. PurRDF's replacement
+surfaces are being completed here, but the downstream `gmeow-ontology` cutover
+is not yet complete. Its legacy models are migration evidence only and should
+be deleted as each PurRDF replacement is integrated.
