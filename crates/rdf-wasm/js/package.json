@@ -43,6 +43,7 @@
     "typecheck": "tsc -p tsconfig.types.json"
   },
   "devDependencies": {
+    "graphql": "16.14.0",
     "typescript": "7.0.2"
   },
   "engines": {

@@ -26,6 +26,7 @@
 //! shapes projection, the `json-schema`→`pydantic-v2` code-generation profile,
 //! the `json-schema`→`linkml-1.11` schema projection,
 //! the `json-schema`→`typescript-7.0` declaration projection,
+//! the `json-schema`→`graphql-september-2025` type-system projection,
 //! and the bidirectional RDF 1.2 dataset↔OKF profile;
 //! [`loss_matrix_json`] renders that same enumerable registry.
 
@@ -853,6 +854,154 @@ const JSON_SCHEMA_TYPESCRIPT_PROFILE: &[(&str, &str)] = &[
     ),
 ];
 
+/// The JSON Schema → GraphQL September 2025 type-system emitter's closed loss
+/// profile. GraphQL separates input and output types and defines variable
+/// coercion independently of JSON Schema validation. The emitter preserves the
+/// representable carrier graph and records every remaining difference at its
+/// JSON Pointer location; custom scalars are caller-owned behavior and are
+/// never treated as an implicit exact validator.
+const JSON_SCHEMA_GRAPHQL_PROFILE: &[(&str, &str)] = &[
+    (
+        "additional-properties-validation-narrowed",
+        "GraphQL input objects reject every field not declared by the input type before resolver \
+         execution. A JSON Schema object that permits additional properties therefore accepts \
+         source keys that the generated GraphQL input type rejects; named fields remain \
+         available and the narrowing is recorded on the object schema.",
+    ),
+    (
+        "array-cardinality-validation-dropped",
+        "GraphQL list types have no minimum- or maximum-length expression. The generated list \
+         retains its item carrier while JSON Schema minItems/maxItems validation is omitted.",
+    ),
+    (
+        "array-contains-validation-dropped",
+        "JSON Schema contains/minContains/maxContains quantifies matching array elements. \
+         GraphQL list input coercion has no corresponding predicate, so the item carrier remains \
+         while contains validation is omitted.",
+    ),
+    (
+        "conditional-validation-dropped",
+        "JSON Schema if/then/else chooses validation constraints from runtime instance content. \
+         GraphQL input object definitions cannot express that conditional relationship; \
+         independently representable fields remain while the conditional is omitted.",
+    ),
+    (
+        "custom-scalar-validation-delegated",
+        "GraphQL SDL declares a custom scalar name but does not define its parseValue, \
+         parseLiteral, or serialization behavior. Validation carried by the caller-named \
+         fallback scalar is therefore delegated to application code and is not an exact \
+         self-contained SDL projection.",
+    ),
+    (
+        "dependency-validation-dropped",
+        "JSON Schema dependentRequired/dependentSchemas imposes cross-field validation. GraphQL \
+         input object definitions express each field independently and cannot enforce those \
+         dependencies, so the relationship is omitted.",
+    ),
+    (
+        "integer-domain-validation-delegated",
+        "GraphQL Int accepts only signed 32-bit integers. A JSON Schema integer domain that is \
+         not exactly that domain is carried through the caller-named fallback scalar, whose \
+         integer acceptance behavior is application-defined.",
+    ),
+    (
+        "intersection-validation-delegated",
+        "General JSON Schema allOf is an intersection of validation sets. GraphQL has no input \
+         intersection type, so a non-mergeable intersection is carried through the \
+         caller-named fallback scalar and its validation is delegated.",
+    ),
+    (
+        "keyword-validation-delegated",
+        "A JSON Schema assertion outside the emitter's closed GraphQL capability table has no \
+         sound SDL expression. Its value is carried through the caller-named fallback scalar \
+         and the assertion is recorded rather than silently treated as enforced.",
+    ),
+    (
+        "negation-validation-delegated",
+        "JSON Schema not is a complement of an instance-validation set. GraphQL input types have \
+         no complement operator, so the value is carried through the caller-named fallback \
+         scalar and negation validation is delegated.",
+    ),
+    (
+        "nullable-presence-validation-widened",
+        "GraphQL uses one nullable field form for both omission and an explicit null. JSON Schema \
+         can distinguish required nullable properties from optional non-null properties; either \
+         source distinction must be widened when represented by a nullable GraphQL input field.",
+    ),
+    (
+        "numeric-validation-dropped",
+        "GraphQL Int and Float types do not express JSON Schema bounds, exclusive bounds, or \
+         multipleOf. The built-in numeric carrier remains while those runtime predicates are \
+         omitted.",
+    ),
+    (
+        "one-of-validation-delegated",
+        "JSON Schema oneOf requires exactly one branch to validate. GraphQL has no input union \
+         with exactly-one validation semantics, so a non-finite oneOf is carried through the \
+         caller-named fallback scalar and exclusivity is delegated.",
+    ),
+    (
+        "pattern-properties-validation-changed",
+        "JSON Schema patternProperties can admit dynamic regex-selected keys and can add \
+         conjunctive validation to declared keys. GraphQL input objects instead expose a fixed \
+         field set with one type per field, so dynamic keys are narrowed while overlapping \
+         declared-field validation may be widened.",
+    ),
+    (
+        "property-count-validation-dropped",
+        "JSON Schema minProperties/maxProperties counts runtime object keys. GraphQL input object \
+         definitions express field requiredness but cannot bound the total supplied-field count.",
+    ),
+    (
+        "property-name-validation-changed",
+        "JSON Schema propertyNames validates every runtime key, including declared properties. \
+         GraphQL input objects expose only a fixed declared field set: unknown names are narrowed, \
+         while a source property-name rule that rejects a generated declared field is not \
+         enforced and may widen acceptance.",
+    ),
+    (
+        "recursive-input-nullability-relaxed",
+        "GraphQL forbids an unbroken cycle of singular non-null input-object fields because no \
+         finite value can satisfy it. The emitter makes one deterministic cycle edge nullable \
+         and records that required/non-null source constraint at the field location.",
+    ),
+    (
+        "singleton-list-coercion-widened",
+        "GraphQL variable coercion accepts a non-list value for list input and wraps it as a \
+         single-element list. JSON Schema array validation rejects that same non-array value, so \
+         every generated list input has this explicit coercion widening.",
+    ),
+    (
+        "string-validation-dropped",
+        "GraphQL String has no length, regular-expression, format, or content assertion. The \
+         string carrier remains while JSON Schema string predicates are omitted.",
+    ),
+    (
+        "tuple-array-validation-delegated",
+        "JSON Schema prefixItems and closed tuple tails assign schemas by array position. GraphQL \
+         lists are homogeneous, so a non-homogeneous tuple is carried through the caller-named \
+         fallback scalar and position-specific validation is delegated.",
+    ),
+    (
+        "unevaluated-validation-dropped",
+        "JSON Schema unevaluatedProperties/unevaluatedItems depends on applicator evaluation \
+         state that GraphQL input coercion does not expose. Representable local fields and items \
+         remain while the unevaluated assertion is omitted.",
+    ),
+    (
+        "union-validation-delegated",
+        "General JSON Schema anyOf and type unions define input-value unions. GraphQL has no \
+         input union type, so a non-finite union is carried through the caller-named fallback \
+         scalar and branch validation is delegated.",
+    ),
+    (
+        "unique-items-validation-dropped",
+        "JSON Schema uniqueItems compares runtime array values for equality. GraphQL list input \
+         coercion cannot require pairwise-distinct elements, so item validation remains while \
+         uniqueness is omitted.",
+    ),
+];
+
 /// Build the runtime-shaped [`LossEntry`] rows for the
 /// `("shacl", "json-schema")` shapes profile from [`SHACL_JSON_SCHEMA_PROFILE`]
 /// — one contract entry per declared `(code, note)` pair, `location: None`
@@ -916,6 +1065,21 @@ fn json_schema_typescript_entries() -> Vec<LossEntry> {
         .collect()
 }
 
+/// Build the static contract rows for the
+/// `("json-schema", "graphql-september-2025")` projection profile.
+fn json_schema_graphql_entries() -> Vec<LossEntry> {
+    JSON_SCHEMA_GRAPHQL_PROFILE
+        .iter()
+        .map(|&(code, note)| LossEntry {
+            code: Cow::Borrowed(code),
+            from: Cow::Borrowed("json-schema"),
+            to: Cow::Borrowed("graphql-september-2025"),
+            note: Cow::Borrowed(note),
+            location: None,
+        })
+        .collect()
+}
+
 /// Extract the `&'static str` payload of a **contract**-discipline
 /// [`LossEntry`] field (one built via [`Cow::Borrowed`]).
 ///
@@ -960,6 +1124,7 @@ fn registry_entries() -> Vec<LossEntry> {
     entries.extend(json_schema_pydantic_entries());
     entries.extend(json_schema_linkml_entries());
     entries.extend(json_schema_typescript_entries());
+    entries.extend(json_schema_graphql_entries());
     entries
 }
 
@@ -1509,6 +1674,19 @@ mod tests {
     }
 
     #[test]
+    fn transcode_matrix_includes_json_schema_graphql_pair() {
+        let json = loss_matrix_json();
+        assert!(json.contains("\"from\": \"json-schema\""));
+        assert!(json.contains("\"to\": \"graphql-september-2025\""));
+        for (code, _) in JSON_SCHEMA_GRAPHQL_PROFILE {
+            assert!(
+                json.contains(&format!("\"code\": \"{code}\"")),
+                "transcode-loss-matrix.json missing GraphQL-profile code `{code}`"
+            );
+        }
+    }
+
+    #[test]
     fn pair_loss_identity_is_empty() {
         assert!(pair_loss_ledger("turtle", "turtle").is_empty());
         assert!(pair_loss_ledger("gts", "gts").is_empty());
@@ -1664,6 +1842,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn registered_pairs_includes_json_schema_graphql() {
+        assert!(
+            registered_pairs()
+                .any(|(from, to)| { from == "json-schema" && to == "graphql-september-2025" })
+        );
+    }
+
     /// `registered_pairs()` must yield the SAME ordered sequence across two
     /// independent calls (it is backed by a `BTreeMap`, so this is order, not
     /// merely set-equality) — callers rendering it directly (e.g. a diagnostic
@@ -1715,6 +1901,16 @@ mod tests {
     fn profile_for_json_schema_typescript_is_closed() {
         let profile = profile_for("json-schema", "typescript-7.0");
         let expected: BTreeSet<&str> = JSON_SCHEMA_TYPESCRIPT_PROFILE
+            .iter()
+            .map(|(code, _)| *code)
+            .collect();
+        assert_eq!(profile, expected);
+    }
+
+    #[test]
+    fn profile_for_json_schema_graphql_is_closed() {
+        let profile = profile_for("json-schema", "graphql-september-2025");
+        let expected: BTreeSet<&str> = JSON_SCHEMA_GRAPHQL_PROFILE
             .iter()
             .map(|(code, _)| *code)
             .collect();
