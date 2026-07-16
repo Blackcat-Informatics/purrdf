@@ -24,6 +24,7 @@
 //! [`profile_for`] enumerate the closed set of `(from, to)` pairs and loss codes
 //! known across BOTH disciplines, including the non-syntax `shacl`→`json-schema`
 //! shapes projection, the `json-schema`→`pydantic-v2` code-generation profile,
+//! the `json-schema`→`linkml-1.11` schema projection,
 //! and the bidirectional RDF 1.2 dataset↔OKF profile;
 //! [`loss_matrix_json`] renders that same enumerable registry.
 
@@ -648,6 +649,90 @@ const JSON_SCHEMA_PYDANTIC_PROFILE: &[(&str, &str)] = &[
     ),
 ];
 
+/// The JSON Schema → LinkML 1.11 emitter's closed loss profile. LinkML carries
+/// the representable schema structure directly, while each JSON Schema
+/// assertion without an exact LinkML 1.11 metamodel expression is widened or
+/// omitted explicitly at its JSON Pointer location.
+const JSON_SCHEMA_LINKML_PROFILE: &[(&str, &str)] = &[
+    (
+        "additional-properties-validation-widened",
+        "LinkML 1.11 has no per-class equivalent for JSON Schema's \
+         additionalProperties policy or schema. Named attributes retain their constraints, but \
+         acceptance of unlisted object keys is widened and recorded on the object schema.",
+    ),
+    (
+        "array-contains-validation-dropped",
+        "JSON Schema contains/minContains/maxContains assertions have no LinkML 1.11 slot \
+         expression. List item and cardinality constraints remain, while the contains predicate \
+         and its match-count bounds are omitted.",
+    ),
+    (
+        "conditional-validation-dropped",
+        "JSON Schema if/then/else conditional validation has no LinkML 1.11 expression. \
+         Independently representable carrier constraints remain, while the conditional \
+         relationship is omitted.",
+    ),
+    (
+        "dependency-validation-dropped",
+        "JSON Schema dependentRequired/dependentSchemas validation has no LinkML 1.11 \
+         expression. Attribute constraints remain, while cross-property dependencies are \
+         omitted.",
+    ),
+    (
+        "exclusive-bound-validation-widened",
+        "LinkML 1.11 exposes inclusive minimum_value/maximum_value bounds but no exclusive \
+         numeric bounds. An exclusive JSON Schema bound is projected as the corresponding \
+         inclusive bound, widening acceptance at the boundary value.",
+    ),
+    (
+        "format-validation-widened",
+        "A JSON Schema format does not have an exact, uniformly enforced LinkML 1.11 \
+         equivalent. The scalar carrier remains constrained and the format name is retained \
+         when representable, while validation semantics are widened.",
+    ),
+    (
+        "keyword-validation-dropped",
+        "A JSON Schema assertion outside the emitter's closed LinkML 1.11 capability table has \
+         no sound projection. The assertion is omitted and recorded at its schema location \
+         rather than disappearing silently.",
+    ),
+    (
+        "multiple-of-validation-dropped",
+        "JSON Schema multipleOf has no LinkML 1.11 numeric expression. The numeric carrier and \
+         other representable bounds remain, while divisibility validation is omitted.",
+    ),
+    (
+        "non-scalar-enum-validation-widened",
+        "LinkML 1.11 permissible values are scalar identifiers and cannot encode arbitrary JSON \
+         object or array enum members. The representable carrier remains, while non-scalar \
+         membership validation is widened.",
+    ),
+    (
+        "property-count-validation-dropped",
+        "JSON Schema minProperties/maxProperties assertions have no LinkML 1.11 class \
+         expression. Named attributes and their requiredness remain, while total property-count \
+         validation is omitted.",
+    ),
+    (
+        "string-length-validation-dropped",
+        "JSON Schema minLength/maxLength assertions have no LinkML 1.11 slot expression. The \
+         string carrier and representable pattern remain, while code-point length validation is \
+         omitted.",
+    ),
+    (
+        "tuple-array-validation-widened",
+        "LinkML 1.11 lists are homogeneous and cannot preserve JSON Schema prefixItems or \
+         position-specific item schemas. The list is projected to a sound common item carrier, \
+         widening position-specific validation.",
+    ),
+    (
+        "unevaluated-validation-dropped",
+        "JSON Schema unevaluatedProperties/unevaluatedItems assertions depend on applicator \
+         evaluation state that LinkML 1.11 does not expose. Representable local constraints \
+         remain, while the unevaluated assertion is omitted.",
+    ),
+];
+
 /// Build the runtime-shaped [`LossEntry`] rows for the
 /// `("shacl", "json-schema")` shapes profile from [`SHACL_JSON_SCHEMA_PROFILE`]
 /// — one contract entry per declared `(code, note)` pair, `location: None`
@@ -681,6 +766,21 @@ fn json_schema_pydantic_entries() -> Vec<LossEntry> {
         .collect()
 }
 
+/// Build the static contract rows for the
+/// `("json-schema", "linkml-1.11")` projection profile.
+fn json_schema_linkml_entries() -> Vec<LossEntry> {
+    JSON_SCHEMA_LINKML_PROFILE
+        .iter()
+        .map(|&(code, note)| LossEntry {
+            code: Cow::Borrowed(code),
+            from: Cow::Borrowed("json-schema"),
+            to: Cow::Borrowed("linkml-1.11"),
+            note: Cow::Borrowed(note),
+            location: None,
+        })
+        .collect()
+}
+
 /// Extract the `&'static str` payload of a **contract**-discipline
 /// [`LossEntry`] field (one built via [`Cow::Borrowed`]).
 ///
@@ -707,7 +807,8 @@ fn static_str(cow: &Cow<'static, str>) -> &'static str {
 /// ([`rdf_to_okf_loss_ledger`] / [`okf_to_rdf_loss_ledger`]), plus
 /// [`transcode_and_shapes_entries`] (the full
 /// syntax/projection transcode matrix over `SYNTAX_CODECS` × `(SYNTAX_CODECS ∪
-/// PROJECTION_CODECS)` AND the non-syntax shapes pair `("shacl", "json-schema")`).
+/// PROJECTION_CODECS)` and the non-syntax shapes pair `("shacl", "json-schema")`),
+/// and the standalone JSON Schema emitter profiles.
 ///
 /// [`loss_matrix_json`] renders these rows (with their `note` text intact) and
 /// [`registry`] folds them into a `(from, to) -> codes` lookup table — both
@@ -722,13 +823,15 @@ fn registry_entries() -> Vec<LossEntry> {
     entries.extend_from_slice(okf_to_rdf_loss_ledger().entries());
     entries.extend(transcode_and_shapes_entries());
     entries.extend(json_schema_pydantic_entries());
+    entries.extend(json_schema_linkml_entries());
     entries
 }
 
 /// The enumerable loss registry as deterministic JSON: every `(from, to)` pair
 /// [`registered_pairs`] reports — the RDF↔GTS directions, every non-identity
-/// syntax/projection transcode pair, and the `("shacl", "json-schema")` shapes
-/// projection — rendered from `registry_entries` sorted by `(from, to, code)`.
+/// syntax/projection transcode pair, the shapes projection, and schema-language
+/// emitter profiles — rendered from `registry_entries` sorted by
+/// `(from, to, code)`.
 /// Unlike a single [`LossLedger::contract`], codes are NOT assumed unique here
 /// — the same code recurs for different `(from, to)` pairs.
 ///
@@ -781,8 +884,8 @@ fn registry() -> &'static BTreeMap<(&'static str, &'static str), BTreeSet<&'stat
 }
 
 /// Every `(from, to)` pair with a registered loss profile: the RDF↔GTS
-/// directions, every non-identity syntax/projection transcode pair, and the
-/// `("shacl", "json-schema")` shapes projection.
+/// directions, every non-identity syntax/projection transcode pair, the shapes
+/// projection, and schema-language emitter profiles.
 pub fn registered_pairs() -> impl Iterator<Item = (&'static str, &'static str)> {
     registry().keys().copied()
 }
@@ -1244,6 +1347,19 @@ mod tests {
     }
 
     #[test]
+    fn transcode_matrix_includes_json_schema_linkml_pair() {
+        let json = loss_matrix_json();
+        assert!(json.contains("\"from\": \"json-schema\""));
+        assert!(json.contains("\"to\": \"linkml-1.11\""));
+        for (code, _) in JSON_SCHEMA_LINKML_PROFILE {
+            assert!(
+                json.contains(&format!("\"code\": \"{code}\"")),
+                "transcode-loss-matrix.json missing LinkML-profile code `{code}`"
+            );
+        }
+    }
+
+    #[test]
     fn pair_loss_identity_is_empty() {
         assert!(pair_loss_ledger("turtle", "turtle").is_empty());
         assert!(pair_loss_ledger("gts", "gts").is_empty());
@@ -1383,6 +1499,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn registered_pairs_includes_json_schema_linkml() {
+        assert!(
+            registered_pairs().any(|(from, to)| from == "json-schema" && to == "linkml-1.11"),
+            "registered_pairs() must include (\"json-schema\", \"linkml-1.11\")"
+        );
+    }
+
     /// `registered_pairs()` must yield the SAME ordered sequence across two
     /// independent calls (it is backed by a `BTreeMap`, so this is order, not
     /// merely set-equality) — callers rendering it directly (e.g. a diagnostic
@@ -1414,6 +1538,16 @@ mod tests {
     fn profile_for_json_schema_pydantic_is_closed() {
         let profile = profile_for("json-schema", "pydantic-v2");
         let expected: BTreeSet<&str> = JSON_SCHEMA_PYDANTIC_PROFILE
+            .iter()
+            .map(|(code, _)| *code)
+            .collect();
+        assert_eq!(profile, expected);
+    }
+
+    #[test]
+    fn profile_for_json_schema_linkml_is_closed() {
+        let profile = profile_for("json-schema", "linkml-1.11");
+        let expected: BTreeSet<&str> = JSON_SCHEMA_LINKML_PROFILE
             .iter()
             .map(|(code, _)| *code)
             .collect();

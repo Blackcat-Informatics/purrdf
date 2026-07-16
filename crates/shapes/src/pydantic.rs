@@ -31,6 +31,10 @@ use ::purrdf::loss::{LossEntry, LossLedger};
 use serde_json::{Map, Value};
 
 use crate::json_schema::CompiledSchema;
+use crate::schema_catalog::{
+    CompiledSchemaCatalog, definition_path, pointer_escape, reference_key, schema_array_keywords,
+    schema_map_keywords, schema_single_keywords,
+};
 
 const MODELS_MODULE: &str = "models";
 const BASE_MODULE: &str = "_base";
@@ -162,33 +166,15 @@ pub fn emit_pydantic(
     compiled: &CompiledSchema,
     config: &PydanticConfig,
 ) -> Result<PydanticPackage, PydanticError> {
-    let document: Value = serde_json::from_str(&compiled.schema_json).map_err(|error| {
-        PydanticError::new(format!(
-            "CompiledSchema.schema_json is not valid JSON: {error}"
-        ))
-    })?;
-    let root = document.as_object().ok_or_else(|| {
-        PydanticError::new("CompiledSchema.schema_json root must be a JSON object")
-    })?;
-    let defs = root
-        .get("$defs")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            PydanticError::new("CompiledSchema.schema_json must contain an object-valued `$defs`")
-        })?;
+    let catalog = CompiledSchemaCatalog::parse(compiled)
+        .map_err(|error| PydanticError::new(error.to_string()))?;
+    let defs = catalog.definitions();
 
     let names = definition_names(defs)?;
-    for (key, definition) in defs {
-        validate_references(
-            definition,
-            defs,
-            &format!("#/$defs/{}", pointer_escape(key)),
-        )?;
-    }
 
     let mut renderer = Renderer::new(&names);
     for (key, definition) in defs {
-        renderer.audit_schema(definition, &format!("#/$defs/{}", pointer_escape(key)));
+        renderer.audit_schema(definition, &definition_path(key));
     }
 
     let mut definitions = Vec::with_capacity(defs.len());
@@ -265,76 +251,6 @@ fn definition_names(defs: &Map<String, Value>) -> Result<BTreeMap<String, String
         names.insert(key.clone(), name);
     }
     Ok(names)
-}
-
-fn validate_references(
-    value: &Value,
-    defs: &Map<String, Value>,
-    path: &str,
-) -> Result<(), PydanticError> {
-    let Value::Object(object) = value else {
-        return if value.is_boolean() {
-            Ok(())
-        } else {
-            Err(PydanticError::new(format!(
-                "{path} must be an object or boolean JSON Schema"
-            )))
-        };
-    };
-
-    for keyword in ["$dynamicRef", "$recursiveRef"] {
-        if object.contains_key(keyword) {
-            return Err(PydanticError::new(format!(
-                "{path}/{keyword} cannot be translated to a closed generated package"
-            )));
-        }
-    }
-
-    if let Some(reference) = object.get("$ref") {
-        let reference = reference
-            .as_str()
-            .ok_or_else(|| PydanticError::new(format!("{path}/$ref must be a string")))?;
-        let key = reference_key(reference).ok_or_else(|| {
-            PydanticError::new(format!(
-                "{path}/$ref is external or not a direct #/$defs reference: {reference:?}"
-            ))
-        })?;
-        if !defs.contains_key(&key) {
-            return Err(PydanticError::new(format!(
-                "{path}/$ref targets missing $defs key {key:?}"
-            )));
-        }
-    }
-    for keyword in schema_map_keywords() {
-        if let Some(children) = object.get(*keyword) {
-            let children = children
-                .as_object()
-                .ok_or_else(|| PydanticError::new(format!("{path}/{keyword} must be an object")))?;
-            for (key, child) in children {
-                validate_references(
-                    child,
-                    defs,
-                    &format!("{path}/{keyword}/{}", pointer_escape(key)),
-                )?;
-            }
-        }
-    }
-    for keyword in schema_array_keywords() {
-        if let Some(children) = object.get(*keyword) {
-            let children = children
-                .as_array()
-                .ok_or_else(|| PydanticError::new(format!("{path}/{keyword} must be an array")))?;
-            for (index, child) in children.iter().enumerate() {
-                validate_references(child, defs, &format!("{path}/{keyword}/{index}"))?;
-            }
-        }
-    }
-    for keyword in schema_single_keywords() {
-        if let Some(child) = object.get(*keyword) {
-            validate_references(child, defs, &format!("{path}/{keyword}"))?;
-        }
-    }
-    Ok(())
 }
 
 struct Renderer<'a> {
@@ -1248,36 +1164,6 @@ fn runtime_constraint_keys() -> &'static [&'static str] {
     ]
 }
 
-fn schema_map_keywords() -> &'static [&'static str] {
-    &[
-        "$defs",
-        "properties",
-        "patternProperties",
-        "dependentSchemas",
-    ]
-}
-
-fn schema_array_keywords() -> &'static [&'static str] {
-    &["allOf", "anyOf", "oneOf", "prefixItems"]
-}
-
-fn schema_single_keywords() -> &'static [&'static str] {
-    &[
-        "items",
-        "additionalItems",
-        "unevaluatedItems",
-        "additionalProperties",
-        "unevaluatedProperties",
-        "propertyNames",
-        "contains",
-        "not",
-        "if",
-        "then",
-        "else",
-        "contentSchema",
-    ]
-}
-
 fn enum_object_schema(member: &Map<String, Value>) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
@@ -1406,35 +1292,6 @@ fn rewrite_references(
         }
     }
     Ok(Value::Object(rewritten))
-}
-
-fn reference_key(reference: &str) -> Option<String> {
-    let encoded = reference.strip_prefix("#/$defs/")?;
-    if encoded.contains('/') {
-        return None;
-    }
-    pointer_unescape(encoded)
-}
-
-fn pointer_escape(value: &str) -> String {
-    value.replace('~', "~0").replace('/', "~1")
-}
-
-fn pointer_unescape(value: &str) -> Option<String> {
-    let mut out = String::with_capacity(value.len());
-    let mut chars = value.chars();
-    while let Some(ch) = chars.next() {
-        if ch != '~' {
-            out.push(ch);
-            continue;
-        }
-        match chars.next()? {
-            '0' => out.push('~'),
-            '1' => out.push('/'),
-            _ => return None,
-        }
-    }
-    Some(out)
 }
 
 fn python_value(value: &Value) -> String {

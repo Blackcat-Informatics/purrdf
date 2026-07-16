@@ -29,6 +29,16 @@ Copied from `gmeow-ontology`:
   namespace, slice-routing, and fixed-package coupling; the carrier API consumes
   `CompiledSchema` in memory, takes package prose from the caller, and records
   runtime projection gaps on the shared closed loss ledger.
+- The legacy LinkML YAML model in
+  `crates/pipeline/src/stages/schemas.rs` at
+  `c91195e0c300cad9c9a32c8580c2910a6fd48fc1` was used solely as migration
+  evidence for behavior that PurRDF must subsume and replace. Its private
+  OWL/FoldView structures, fixed identity, shallow range mapping, and coupled
+  TypeScript/GraphQL model are not reused architecture. The replacement
+  `purrdf-shapes::linkml` API consumes `CompiledSchema`, requires all identity
+  and vocabulary from the caller, preserves a canonical LinkML 1.11 document,
+  and records projection gaps through the closed loss ledger; the legacy model
+  is intended for deletion after consumer rollover.
 
 Copied from `gmeow-gts`:
 

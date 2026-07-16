@@ -62,6 +62,32 @@ located entry in the always-computed `json-schema` → `pydantic-v2`
 Python dependency and stays wasm-clean. A dev-only Python oracle executes the
 generated code and checks the live reverse/schema surface.
 
+## LinkML 1.11 projection
+
+The same `CompiledSchema` carrier can be projected to canonical LinkML 1.11
+with `emit_linkml`. `LinkmlConfig` requires the caller's schema IRI, name,
+description, default prefix, and complete prefix map, so PurRDF never mints a
+consumer vocabulary or identity. The returned `LinkmlPackage` includes the
+typed document, deterministic YAML, a reversible `$defs`-key mapping, and a
+located `json-schema` → `linkml-1.11` loss ledger.
+
+Classes and exact property aliases, types, enums, local references, inline
+objects, requiredness, homogeneous arrays, patterns, inclusive bounds, and
+LinkML boolean expressions are represented directly. Every unsupported
+assertion is classified by a closed capability table; malformed inputs,
+external/dynamic/dangling references, prefix mistakes, and deterministic-name
+collisions fail closed. `parse_linkml` and `write_linkml` preserve all
+JSON-compatible metamodel fields and provide byte-stable read/write round trips
+while rejecting YAML-only tags, duplicate keys, non-string keys, and non-finite
+numbers.
+
+The Rust production path has no LinkML-toolkit dependency. CI uses the locked
+official LinkML 1.11.1 Python packages only as a differential oracle:
+
+```bash
+make linkml-oracle
+```
+
 ## From Python
 
 ```python

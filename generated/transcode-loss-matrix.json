@@ -147,6 +147,97 @@
     "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
   },
   {
+    "code": "additional-properties-validation-widened",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "LinkML 1.11 has no per-class equivalent for JSON Schema's additionalProperties policy or schema. Named attributes retain their constraints, but acceptance of unlisted object keys is widened and recorded on the object schema."
+  },
+  {
+    "code": "array-contains-validation-dropped",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "JSON Schema contains/minContains/maxContains assertions have no LinkML 1.11 slot expression. List item and cardinality constraints remain, while the contains predicate and its match-count bounds are omitted."
+  },
+  {
+    "code": "conditional-validation-dropped",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "JSON Schema if/then/else conditional validation has no LinkML 1.11 expression. Independently representable carrier constraints remain, while the conditional relationship is omitted."
+  },
+  {
+    "code": "dependency-validation-dropped",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "JSON Schema dependentRequired/dependentSchemas validation has no LinkML 1.11 expression. Attribute constraints remain, while cross-property dependencies are omitted."
+  },
+  {
+    "code": "exclusive-bound-validation-widened",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "LinkML 1.11 exposes inclusive minimum_value/maximum_value bounds but no exclusive numeric bounds. An exclusive JSON Schema bound is projected as the corresponding inclusive bound, widening acceptance at the boundary value."
+  },
+  {
+    "code": "format-validation-widened",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "A JSON Schema format does not have an exact, uniformly enforced LinkML 1.11 equivalent. The scalar carrier remains constrained and the format name is retained when representable, while validation semantics are widened."
+  },
+  {
+    "code": "keyword-validation-dropped",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "A JSON Schema assertion outside the emitter's closed LinkML 1.11 capability table has no sound projection. The assertion is omitted and recorded at its schema location rather than disappearing silently."
+  },
+  {
+    "code": "multiple-of-validation-dropped",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "JSON Schema multipleOf has no LinkML 1.11 numeric expression. The numeric carrier and other representable bounds remain, while divisibility validation is omitted."
+  },
+  {
+    "code": "non-scalar-enum-validation-widened",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "LinkML 1.11 permissible values are scalar identifiers and cannot encode arbitrary JSON object or array enum members. The representable carrier remains, while non-scalar membership validation is widened."
+  },
+  {
+    "code": "property-count-validation-dropped",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "JSON Schema minProperties/maxProperties assertions have no LinkML 1.11 class expression. Named attributes and their requiredness remain, while total property-count validation is omitted."
+  },
+  {
+    "code": "string-length-validation-dropped",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "JSON Schema minLength/maxLength assertions have no LinkML 1.11 slot expression. The string carrier and representable pattern remain, while code-point length validation is omitted."
+  },
+  {
+    "code": "tuple-array-validation-widened",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "LinkML 1.11 lists are homogeneous and cannot preserve JSON Schema prefixItems or position-specific item schemas. The list is projected to a sound common item carrier, widening position-specific validation."
+  },
+  {
+    "code": "unevaluated-validation-dropped",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "JSON Schema unevaluatedProperties/unevaluatedItems assertions depend on applicator evaluation state that LinkML 1.11 does not expose. Representable local constraints remain, while the unevaluated assertion is omitted."
+  },
+  {
     "code": "array-contains-validation-dropped",
     "from": "json-schema",
     "to": "pydantic-v2",

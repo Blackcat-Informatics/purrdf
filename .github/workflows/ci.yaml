@@ -272,6 +272,9 @@ jobs:
       - name: Pydantic emitter schema oracle
         run: make pydantic-oracle
 
+      - name: LinkML emitter schema oracle
+        run: make linkml-oracle
+
   # The single conformance matrix: runs the native Rust W3C
   # harnesses (RDFC-1.0, IRI, syntax codecs, SPARQL-eval subset, SHACL, shexTest)
   # AND the Python rdflib drop-in gate together, printing ONE scoreboard with
