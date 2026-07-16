@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<resource xmlns="https://example.org/datacite/4.6" xmlns:xsi="https://example.org/xml-schema-instance" xsi:schemaLocation="https://example.org/datacite/4.6 https://example.org/datacite/4.6/schema.xsd">
+  <identifier identifierType="DOI">https://doi.org/10.0000/cats</identifier>
+  <creators>
+    <creator>
+      <creatorName nameType="Personal" xml:lang="en">Alice &amp; Co.</creatorName>
+      <nameIdentifier nameIdentifierScheme="IRI" schemeURI="https://example.org/schemes/iri">https://example.org/agents/alice</nameIdentifier>
+    </creator>
+    <creator>
+      <creatorName nameType="Personal">Bob</creatorName>
+      <nameIdentifier nameIdentifierScheme="IRI" schemeURI="https://example.org/schemes/iri">https://example.org/agents/bob</nameIdentifier>
+    </creator>
+  </creators>
+  <titles>
+    <title>Cats &amp; Data</title>
+    <title xml:lang="fr">Chats</title>
+  </titles>
+  <publisher publisherIdentifier="https://example.org/agents/publisher" publisherIdentifierScheme="IRI" schemeURI="https://example.org/schemes/iri">Example Press</publisher>
+  <publicationYear>2026</publicationYear>
+  <resourceType resourceTypeGeneral="Dataset">Dataset</resourceType>
+  <subjects>
+    <subject>cats</subject>
+    <subject>vision</subject>
+  </subjects>
+  <dates>
+    <date dateType="Available">2026-01-02</date>
+    <date dateType="Updated">2026-02-03</date>
+  </dates>
+  <alternateIdentifiers>
+    <alternateIdentifier alternateIdentifierType="DOI">CAT-DATA-1</alternateIdentifier>
+  </alternateIdentifiers>
+  <relatedIdentifiers>
+    <relatedIdentifier relatedIdentifierType="URL" relationType="IsCompiledBy">https://example.org/activities/build</relatedIdentifier>
+    <relatedIdentifier relatedIdentifierType="URL" relationType="IsIdenticalTo">https://example.org/datasets/cats/home</relatedIdentifier>
+    <relatedIdentifier relatedIdentifierType="URL" relationType="HasMetadata">https://example.org/record-sets/train</relatedIdentifier>
+    <relatedIdentifier relatedIdentifierType="URL" relationType="HasPart">https://example.org/resources/train.csv</relatedIdentifier>
+  </relatedIdentifiers>
+  <version>1.0</version>
+  <rightsList>
+    <rights rightsURI="https://example.org/licenses/open">https://example.org/licenses/open</rights>
+    <rights>Attribution required</rights>
+  </rightsList>
+  <descriptions>
+    <description descriptionType="Abstract" xml:lang="en">A compact DataCite fixture.</description>
+  </descriptions>
+</resource>

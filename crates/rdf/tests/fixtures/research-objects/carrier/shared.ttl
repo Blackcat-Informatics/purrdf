@@ -1,0 +1,41 @@
+@prefix role: <https://example.org/rdf/> .
+@prefix data: <https://example.org/datasets/> .
+@prefix entity: <https://example.org/entities/> .
+
+data:cats
+    <https://example.org/rdf/role-0> <https://example.org/rdf/role-1> ;
+    <https://example.org/rdf/role-2> "Cat Faces"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-3> "A shared research-object carrier fixture."^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-4> <https://doi.org/10.0000/cats> ;
+    <https://example.org/rdf/role-5> "1.0"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-6> "2026-01-02T03:04:05Z"^^<https://example.org/rdf/role-51> ;
+    <https://example.org/rdf/role-8> <https://example.org/datasets/cats/home> ;
+    <https://example.org/rdf/role-9> "cats"^^<https://example.org/rdf/role-49>, "vision"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-10> <https://example.org/licenses/open> ;
+    <https://example.org/rdf/role-11> entity:agents/alice ;
+    <https://example.org/rdf/role-12> entity:agents/publisher ;
+    <https://example.org/rdf/role-13> <https://example.org/entities/files/train.csv> .
+
+entity:agents/alice
+    <https://example.org/rdf/role-0> <https://example.org/rdf/role-16> ;
+    <https://example.org/rdf/role-17> "Alice"^^<https://example.org/rdf/role-49> .
+
+entity:agents/publisher
+    <https://example.org/rdf/role-0> <https://example.org/rdf/role-16> ;
+    <https://example.org/rdf/role-17> "Example Press"^^<https://example.org/rdf/role-49> .
+
+<https://example.org/entities/files/train.csv>
+    <https://example.org/rdf/role-0> <https://example.org/rdf/role-18> ;
+    <https://example.org/rdf/role-19> "Training data"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-20> "One tiny table."^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-21> "data/train.csv"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-22> <https://example.org/files/train.csv> ;
+    <https://example.org/rdf/role-23> "text/csv"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-24> <https://example.org/formats/csv> ;
+    <https://example.org/rdf/role-25> "42"^^<https://example.org/rdf/role-50> ;
+    <https://example.org/rdf/role-26> entity:checksums/train .
+
+entity:checksums/train
+    <https://example.org/rdf/role-0> <https://example.org/rdf/role-27> ;
+    <https://example.org/rdf/role-28> "sha256"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-29> "0123456789abcdef"^^<https://example.org/rdf/role-49> .

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +28,15 @@ _CONFIG = """{
 
 _TURTLE = b"@prefix ex: <https://example.org/> .\nex:s ex:p ex:o .\n"
 _RUST_ARCHIVE_SHA256 = "656066450fa23c55976f5434840169452c36324b943435e2f7ae55f8e9b6ef4e"
+_REPO = Path(__file__).resolve().parents[3]
+_RESEARCH_FIXTURES = _REPO / "crates/rdf/tests/fixtures/research-objects/carrier"
+_RESEARCH_PROFILES = (
+    "croissant-1.1",
+    "ro-crate-1.3",
+    "datacite-4.6",
+    "dcat-3",
+    "frictionless-data-package-1",
+)
 
 
 def test_project_matches_rust_bytes_and_returns_immutable_structured_losses() -> None:
@@ -75,3 +85,25 @@ def test_lift_returns_a_frozen_dataset_and_write_only_profiles_fail_typed() -> N
 
     with pytest.raises(ValueError, match="not a bidirectional"):
         purrdf.lift(package.archive, profile="skos", config=_CONFIG)
+
+
+def test_all_research_object_profiles_execute_through_the_shared_carrier() -> None:
+    source = (_RESEARCH_FIXTURES / "shared.ttl").read_bytes()
+    for profile in _RESEARCH_PROFILES:
+        config = (_RESEARCH_FIXTURES / f"{profile}.json").read_bytes()
+        first = purrdf.project(
+            source,
+            format=purrdf.RdfFormat.TURTLE,
+            profile=profile,
+            config=config,
+        )
+        second = purrdf.project(
+            source,
+            format=purrdf.RdfFormat.TURTLE,
+            profile=profile,
+            config=config,
+        )
+        assert first.profile == profile
+        assert first.archive == second.archive
+        lifted = purrdf.lift(first.archive, profile=profile, config=config)
+        assert lifted.dataset.quad_count() > 0

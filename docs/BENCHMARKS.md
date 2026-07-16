@@ -34,7 +34,8 @@ They live under `crates/*/benches/`:
   FoQ posting indexes vs. an internal bitmap wavelet-matrix candidate.
 - `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput.
 - `crates/rdf/benches/projections.rs` — RDF-to-LPG mapping, all four LPG
-  carrier writers/readers, exact CSVW write/read, OBO Graphs, and SKOS, with
+  carrier writers/readers, exact CSVW write/read, OBO Graphs, SKOS, the shared
+  research-object model, and all five research-object carriers, with
   per-operation allocation observations.
 - `crates/sparql-algebra/benches/tokenize.rs` — SPARQL/Turtle lexer hot path
   (`IRIREF`, string literals, comments).
@@ -74,7 +75,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
 | `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers. |
-| `crates/rdf/benches/projections.rs` | Graph/tabular mapping and carrier throughput plus allocation counts over deterministic RDF, OBO, and SKOS fixtures. |
+| `crates/rdf/benches/projections.rs` | Graph, tabular, and research-object mapping/carrier throughput plus allocation counts over deterministic fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
 | `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | Planner regression watch: cost-based BGP ordering vs. the retired structural heuristic. |
@@ -86,15 +87,17 @@ Additional benches are run package-by-package, e.g.
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
 
-### Graph and tabular projections
+### Graph, tabular, and research-object projections
 
-`crates/rdf/benches/projections.rs` builds three deterministic `example.org`
-datasets without RNG: a 600-quad general graph, a 600-quad OBO/OWL graph, and an
-800-quad SKOS source graph. The canonical LPG projection contains 408 nodes plus
-edges. Criterion measures the complete mapping/serialization/parser operations;
-fixture construction stays outside the timed loops. A counting global allocator
-also reports calls and requested bytes for representative single operations.
-Those counts are cumulative allocation traffic, not retained or peak memory.
+`crates/rdf/benches/projections.rs` builds four deterministic `example.org`
+datasets without RNG: a 600-quad general graph, a 600-quad OBO/OWL graph, an
+800-quad SKOS source graph, and a 29-quad research-object intersection. The
+canonical LPG projection contains 408 nodes plus edges. Criterion measures the
+complete mapping/serialization/parser operations; fixture construction and
+strict profile-config parsing stay outside the timed loops. A counting global
+allocator also reports calls and requested bytes for representative single
+operations. Those counts are cumulative allocation traffic, not retained or
+peak memory.
 
 Run it with:
 
@@ -123,6 +126,17 @@ performance promises.
 | exact CSVW read | 600 quads | 3.36 ms | 179 Kquad/s |
 | OBO Graphs view | 600 quads | 611 µs | 982 Kquad/s |
 | SKOS view | 800 quads | 1.41 ms | 569 Kquad/s |
+| research-object common model | 29 quads | 27.59 µs | 1.051 Mquad/s |
+| Croissant 1.1 write | 29 quads | 32.94 µs | 881 Kquad/s |
+| Croissant 1.1 read | 29 quads | 69.83 µs | 415 Kquad/s |
+| RO-Crate 1.3 write | 29 quads | 38.25 µs | 758 Kquad/s |
+| RO-Crate 1.3 read | 29 quads | 72.14 µs | 402 Kquad/s |
+| DataCite 4.6 write | 29 quads | 29.63 µs | 979 Kquad/s |
+| DataCite 4.6 read | 29 quads | 45.34 µs | 640 Kquad/s |
+| DCAT 3 write | 29 quads | 68.16 µs | 425 Kquad/s |
+| DCAT 3 read | 29 quads | 115.38 µs | 251 Kquad/s |
+| Frictionless Data Package v1 write | 29 quads | 31.69 µs | 915 Kquad/s |
+| Frictionless Data Package v1 read | 29 quads | 60.43 µs | 480 Kquad/s |
 
 Representative one-operation allocation traffic from the same run:
 
@@ -135,6 +149,17 @@ Representative one-operation allocation traffic from the same run:
 | exact CSVW read | 39,960 | 4,307,718 |
 | OBO Graphs view | 17,295 | 2,328,323 |
 | SKOS view | 38,273 | 4,129,381 |
+| research-object common model | 898 | 81,277 |
+| Croissant 1.1 write | 1,039 | 102,291 |
+| Croissant 1.1 read | 2,437 | 277,705 |
+| RO-Crate 1.3 write | 1,111 | 110,849 |
+| RO-Crate 1.3 read | 2,637 | 294,742 |
+| DataCite 4.6 write | 1,017 | 100,560 |
+| DataCite 4.6 read | 1,493 | 216,383 |
+| DCAT 3 write | 2,109 | 261,230 |
+| DCAT 3 read | 3,524 | 435,850 |
+| Frictionless Data Package v1 write | 1,025 | 99,013 |
+| Frictionless Data Package v1 read | 2,183 | 259,794 |
 
 This baseline makes carrier/parser and allocation regressions visible without
 asserting that any format should outrun another; their grammars and validation

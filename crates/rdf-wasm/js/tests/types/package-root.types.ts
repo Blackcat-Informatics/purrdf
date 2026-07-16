@@ -70,6 +70,10 @@ const projection: ProjectionPackage = matched.project("lpg-csv", JSON.stringify(
   },
 }));
 const projectionLedger: ProjectionLossLedger = JSON.parse(projection.lossLedgerJson);
+const researchProjection: ProjectionPackage = matched.project(
+  "frictionless-data-package-1",
+  "{}",
+);
 const projectionLift: ProjectionLift = liftProjection(
   projection.archive,
   "lpg-csv",
@@ -129,6 +133,7 @@ void stream;
 void canonical;
 void same;
 void projectionLedger;
+void researchProjection;
 void projectedDataset;
 void visualModel;
 void visualExport;

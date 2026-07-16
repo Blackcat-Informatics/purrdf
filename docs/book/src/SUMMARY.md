@@ -19,7 +19,7 @@ SPDX-License-Identifier: CC-BY-4.0
 - [The Interned Dataset IR](concepts/interned-dataset.md)
 - [RDF 1.2 Features](concepts/rdf12.md)
 - [RDF 1.2 Visualization](concepts/visualization.md)
-- [Graph & Tabular Projections](concepts/projections.md)
+- [Graph, Tabular & Research-Object Projections](concepts/projections.md)
 - [Codecs & Determinism](concepts/codecs.md)
 - [Canonicalization & Diff](concepts/canonicalization.md)
 

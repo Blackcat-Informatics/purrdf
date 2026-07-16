@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! In-memory graph/tabular projection carrier bindings.
+//! In-memory graph, tabular, and research-object projection carrier bindings.
 
 use purrdf::ir::MutableDataset;
 use purrdf::{LiftProfile, ProjectionConfig, ProjectionProfile, lift_archive, project_archive};
@@ -64,7 +64,7 @@ impl ProjectionLift {
 
 #[wasm_bindgen]
 impl Dataset {
-    /// Project this dataset into a deterministic graph/tabular USTAR package.
+    /// Project this dataset into a deterministic graph, tabular, or research-object USTAR package.
     #[wasm_bindgen(js_name = project)]
     pub fn project(&self, profile: &str, config_json: &str) -> Result<ProjectionPackage, JsError> {
         let profile = profile
@@ -123,6 +123,32 @@ mod tests {
         "max_records": 1000
       }
     }"#;
+    const RESEARCH_SOURCE: &str =
+        include_str!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl");
+    const RESEARCH_CONFIGS: &[(&str, &str)] = &[
+        (
+            "croissant-1.1",
+            include_str!("../../rdf/tests/fixtures/research-objects/carrier/croissant-1.1.json"),
+        ),
+        (
+            "ro-crate-1.3",
+            include_str!("../../rdf/tests/fixtures/research-objects/carrier/ro-crate-1.3.json"),
+        ),
+        (
+            "datacite-4.6",
+            include_str!("../../rdf/tests/fixtures/research-objects/carrier/datacite-4.6.json"),
+        ),
+        (
+            "dcat-3",
+            include_str!("../../rdf/tests/fixtures/research-objects/carrier/dcat-3.json"),
+        ),
+        (
+            "frictionless-data-package-1",
+            include_str!(
+                "../../rdf/tests/fixtures/research-objects/carrier/frictionless-data-package-1.json"
+            ),
+        ),
+    ];
 
     #[test]
     fn wasm_projection_shim_is_deterministic_and_round_trips() {
@@ -142,5 +168,19 @@ mod tests {
         let lifted_dataset = lifted.take_dataset().expect("dataset");
         assert_eq!(lifted_dataset.size(), 1);
         assert!(lifted.take_dataset().is_none());
+    }
+
+    #[test]
+    fn wasm_projection_shim_executes_every_research_object_profile() {
+        for &(profile, config) in RESEARCH_CONFIGS {
+            let dataset = Dataset::parse(RESEARCH_SOURCE, "turtle", None).expect("parse source");
+            let first = dataset.project(profile, config).expect("project profile");
+            let second = dataset.project(profile, config).expect("repeat profile");
+            assert_eq!(first.profile, profile);
+            assert_eq!(first.archive, second.archive);
+            let mut lifted =
+                lift_projection(&first.archive, profile, config).expect("lift profile");
+            assert!(lifted.take_dataset().is_some());
+        }
     }
 }

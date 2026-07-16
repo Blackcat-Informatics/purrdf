@@ -159,7 +159,7 @@ pub(crate) enum Command {
         #[arg(value_name = "OUT", default_value = "-")]
         output: String,
     },
-    /// Project RDF into a deterministic graph/tabular USTAR carrier.
+    /// Project RDF into a deterministic graph, tabular, or research-object USTAR carrier.
     Project {
         /// Closed projection carrier profile.
         #[arg(long, value_enum)]
@@ -180,7 +180,7 @@ pub(crate) enum Command {
         #[arg(value_name = "OUT", default_value = "-")]
         output: String,
     },
-    /// Lift a strict bidirectional graph/tabular USTAR carrier into RDF.
+    /// Lift a strict bidirectional graph, tabular, or research-object carrier into RDF.
     Lift {
         /// Bidirectional carrier profile; OBO Graphs and SKOS are intentionally absent.
         #[arg(long, value_enum)]
@@ -220,6 +220,21 @@ pub(crate) enum CliProjectionProfile {
     OboGraphs,
     /// SKOS Turtle concept-scheme view.
     Skos,
+    /// Croissant 1.1 research-object package.
+    #[value(name = "croissant-1.1")]
+    Croissant11,
+    /// RO-Crate 1.3 research-object package.
+    #[value(name = "ro-crate-1.3")]
+    RoCrate13,
+    /// DataCite Metadata Schema 4.6 package.
+    #[value(name = "datacite-4.6")]
+    DataCite46,
+    /// DCAT 3 research-object package.
+    #[value(name = "dcat-3")]
+    Dcat3,
+    /// Frictionless Data Package v1.
+    #[value(name = "frictionless-data-package-1")]
+    FrictionlessDataPackage1,
 }
 
 impl CliProjectionProfile {
@@ -233,6 +248,11 @@ impl CliProjectionProfile {
             Self::CsvwExact => ProjectionProfile::CsvwExact,
             Self::OboGraphs => ProjectionProfile::OboGraphs,
             Self::Skos => ProjectionProfile::Skos,
+            Self::Croissant11 => ProjectionProfile::Croissant11,
+            Self::RoCrate13 => ProjectionProfile::RoCrate13,
+            Self::DataCite46 => ProjectionProfile::DataCite46,
+            Self::Dcat3 => ProjectionProfile::Dcat3,
+            Self::FrictionlessDataPackage1 => ProjectionProfile::FrictionlessDataPackage1,
         }
     }
 }
@@ -250,6 +270,21 @@ pub(crate) enum CliLiftProfile {
     Graphml,
     /// Exact lossless RDF 1.2 CSVW.
     CsvwExact,
+    /// Croissant 1.1 research-object package.
+    #[value(name = "croissant-1.1")]
+    Croissant11,
+    /// RO-Crate 1.3 research-object package.
+    #[value(name = "ro-crate-1.3")]
+    RoCrate13,
+    /// DataCite Metadata Schema 4.6 package.
+    #[value(name = "datacite-4.6")]
+    DataCite46,
+    /// DCAT 3 research-object package.
+    #[value(name = "dcat-3")]
+    Dcat3,
+    /// Frictionless Data Package v1.
+    #[value(name = "frictionless-data-package-1")]
+    FrictionlessDataPackage1,
 }
 
 impl CliLiftProfile {
@@ -261,6 +296,11 @@ impl CliLiftProfile {
             Self::OpenCypher => LiftProfile::OpenCypher,
             Self::Graphml => LiftProfile::Graphml,
             Self::CsvwExact => LiftProfile::CsvwExact,
+            Self::Croissant11 => LiftProfile::Croissant11,
+            Self::RoCrate13 => LiftProfile::RoCrate13,
+            Self::DataCite46 => LiftProfile::DataCite46,
+            Self::Dcat3 => LiftProfile::Dcat3,
+            Self::FrictionlessDataPackage1 => LiftProfile::FrictionlessDataPackage1,
         }
     }
 }

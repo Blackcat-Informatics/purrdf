@@ -56,6 +56,32 @@ fn lpg_config() -> &'static [u8] {
 }
 
 const TURTLE: &[u8] = b"@prefix ex: <https://example.org/> .\nex:s ex:p ex:o .\n";
+const RESEARCH_SOURCE: &[u8] =
+    include_bytes!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl");
+const RESEARCH_CONFIGS: &[(&str, &[u8])] = &[
+    (
+        "croissant-1.1",
+        include_bytes!("../../rdf/tests/fixtures/research-objects/carrier/croissant-1.1.json"),
+    ),
+    (
+        "ro-crate-1.3",
+        include_bytes!("../../rdf/tests/fixtures/research-objects/carrier/ro-crate-1.3.json"),
+    ),
+    (
+        "datacite-4.6",
+        include_bytes!("../../rdf/tests/fixtures/research-objects/carrier/datacite-4.6.json"),
+    ),
+    (
+        "dcat-3",
+        include_bytes!("../../rdf/tests/fixtures/research-objects/carrier/dcat-3.json"),
+    ),
+    (
+        "frictionless-data-package-1",
+        include_bytes!(
+            "../../rdf/tests/fixtures/research-objects/carrier/frictionless-data-package-1.json"
+        ),
+    ),
+];
 
 #[test]
 fn project_is_byte_deterministic_and_lift_round_trips_with_ledgers() {
@@ -238,4 +264,62 @@ fn malformed_config_archive_and_double_stdin_fail_closed() {
     );
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("cannot both read from stdin"));
+}
+
+#[test]
+fn all_research_object_profiles_project_lift_and_repeat_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write(&dir.path().join("research.ttl"), RESEARCH_SOURCE);
+    for &(profile, config_bytes) in RESEARCH_CONFIGS {
+        let config = write(&dir.path().join(format!("{profile}.json")), config_bytes);
+        let first = dir.path().join(format!("{profile}-first.tar"));
+        let second = dir.path().join(format!("{profile}-second.tar"));
+        let first_path = first.to_str().expect("first archive path");
+        let second_path = second.to_str().expect("second archive path");
+
+        for output in [first_path, second_path] {
+            let result = run(&[
+                "project",
+                "--profile",
+                profile,
+                "--config",
+                &config,
+                &input,
+                output,
+            ]);
+            assert!(
+                result.status.success(),
+                "{profile} project failed: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        assert_eq!(
+            std::fs::read(&first).expect("first archive"),
+            std::fs::read(&second).expect("second archive"),
+            "{profile} archive bytes"
+        );
+
+        let lifted = run(&[
+            "lift",
+            "--profile",
+            profile,
+            "--config",
+            &config,
+            "--to",
+            "nquads",
+            first_path,
+            "-",
+        ]);
+        assert!(
+            lifted.status.success(),
+            "{profile} lift failed: {}",
+            String::from_utf8_lossy(&lifted.stderr)
+        );
+        assert!(
+            String::from_utf8(lifted.stdout)
+                .expect("lifted N-Quads")
+                .contains("https://example.org/datasets/cats"),
+            "{profile} lifted dataset identity"
+        );
+    }
 }

@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import builtins
-from typing import IO, Any, TypedDict, overload
+from typing import IO, Any, Literal, TypedDict, overload
 
 # ── Statement codec (bindings/python/src/rdf.rs) ────────────────────────────────
 
@@ -24,7 +24,34 @@ def canonicalize_turtle(
     turtle_bytes: bytes, extra_prefixes: list[tuple[str, str]] = ...
 ) -> bytes: ...
 
-# ── Deterministic graph/tabular projection carriers ────────────────────────────
+# ── Deterministic graph/tabular/research-object projection carriers ────────────
+
+type ProjectionProfile = Literal[
+    "lpg-csv",
+    "neo4j-csv",
+    "open-cypher",
+    "graphml",
+    "csvw-exact",
+    "obo-graphs",
+    "skos",
+    "croissant-1.1",
+    "ro-crate-1.3",
+    "datacite-4.6",
+    "dcat-3",
+    "frictionless-data-package-1",
+]
+type LiftProfile = Literal[
+    "lpg-csv",
+    "neo4j-csv",
+    "open-cypher",
+    "graphml",
+    "csvw-exact",
+    "croissant-1.1",
+    "ro-crate-1.3",
+    "datacite-4.6",
+    "dcat-3",
+    "frictionless-data-package-1",
+]
 
 class ProjectionLoss:
     @property
@@ -56,14 +83,14 @@ def project(
     data: bytes | str,
     *,
     format: RdfFormat,
-    profile: str,
+    profile: ProjectionProfile,
     config: bytes | str,
 ) -> ProjectionPackage: ...
 
 def lift(
     archive: bytes,
     *,
-    profile: str,
+    profile: LiftProfile,
     config: bytes | str,
 ) -> ProjectionLift: ...
 

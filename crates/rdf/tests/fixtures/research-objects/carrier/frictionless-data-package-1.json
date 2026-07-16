@@ -1,0 +1,80 @@
+{
+  "profile": "frictionless-data-package-1",
+  "config": {
+    "common": {
+      "roles": {
+        "rdf-type": "https://example.org/rdf/role-0",
+        "dataset-class": "https://example.org/rdf/role-1",
+        "title": "https://example.org/rdf/role-2",
+        "description": "https://example.org/rdf/role-3",
+        "identifier": "https://example.org/rdf/role-4",
+        "version": "https://example.org/rdf/role-5",
+        "issued": "https://example.org/rdf/role-6",
+        "modified": "https://example.org/rdf/role-7",
+        "landing-page": "https://example.org/rdf/role-8",
+        "keyword": "https://example.org/rdf/role-9",
+        "license": "https://example.org/rdf/role-10",
+        "creator": "https://example.org/rdf/role-11",
+        "publisher": "https://example.org/rdf/role-12",
+        "has-resource": "https://example.org/rdf/role-13",
+        "has-activity": "https://example.org/rdf/role-14",
+        "has-record-set": "https://example.org/rdf/role-15",
+        "agent-class": "https://example.org/rdf/role-16",
+        "agent-name": "https://example.org/rdf/role-17",
+        "resource-class": "https://example.org/rdf/role-18",
+        "resource-name": "https://example.org/rdf/role-19",
+        "resource-description": "https://example.org/rdf/role-20",
+        "resource-path": "https://example.org/rdf/role-21",
+        "resource-url": "https://example.org/rdf/role-22",
+        "media-type": "https://example.org/rdf/role-23",
+        "format": "https://example.org/rdf/role-24",
+        "byte-size": "https://example.org/rdf/role-25",
+        "checksum": "https://example.org/rdf/role-26",
+        "checksum-class": "https://example.org/rdf/role-27",
+        "checksum-algorithm": "https://example.org/rdf/role-28",
+        "checksum-value": "https://example.org/rdf/role-29",
+        "activity-class": "https://example.org/rdf/role-30",
+        "activity-name": "https://example.org/rdf/role-31",
+        "instrument": "https://example.org/rdf/role-32",
+        "actor": "https://example.org/rdf/role-33",
+        "object": "https://example.org/rdf/role-34",
+        "result": "https://example.org/rdf/role-35",
+        "end-time": "https://example.org/rdf/role-36",
+        "workflow": "https://example.org/rdf/role-37",
+        "record-set-class": "https://example.org/rdf/role-38",
+        "record-set-name": "https://example.org/rdf/role-39",
+        "record-set-description": "https://example.org/rdf/role-40",
+        "has-field": "https://example.org/rdf/role-41",
+        "has-row": "https://example.org/rdf/role-42",
+        "field-class": "https://example.org/rdf/role-43",
+        "field-name": "https://example.org/rdf/role-44",
+        "field-data-type": "https://example.org/rdf/role-45",
+        "json-datatype": "https://example.org/rdf/role-46",
+        "rdf-lang-string": "https://example.org/rdf/role-47",
+        "rdf-dir-lang-string": "https://example.org/rdf/role-48",
+        "xsd-string": "https://example.org/rdf/role-49",
+        "xsd-non-negative-integer": "https://example.org/rdf/role-50",
+        "xsd-date-time": "https://example.org/rdf/role-51"
+      },
+      "identity": {
+        "dataset_iri": "https://example.org/datasets/cats",
+        "entity_base_iri": "https://example.org/entities/"
+      },
+      "policy": {
+        "limits": {
+          "max_artifacts": 8,
+          "max_artifact_bytes": 1000000,
+          "max_total_bytes": 2000000,
+          "max_archive_bytes": 3000000,
+          "max_term_depth": 16
+        },
+        "max_records": 10000,
+        "max_entities": 2000,
+        "max_values": 8000,
+        "max_json_depth": 16
+      }
+    },
+    "package_profile": "https://example.org/profiles/data-package-v1",
+    "package_name": "cat-faces"
+  }
+}

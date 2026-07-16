@@ -42,7 +42,7 @@ quads = purrdf.parse(
 `purrdf.to_rdf_xml` converters. All codecs are first-party with
 byte-deterministic output.
 
-## Project graph and tabular carriers
+## Project graph, tabular, and research-object carriers
 
 `purrdf.project` and `purrdf.lift` are thin calls into the same Rust projection
 engine used by every other surface. Configuration is mandatory, strict JSON:
@@ -78,10 +78,12 @@ print([(loss.code, loss.location) for loss in package.losses])
 ```
 
 Project profiles are `lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`,
-`csvw-exact`, `obo-graphs`, and `skos`. The first five are liftable;
-OBO Graphs and SKOS are deliberately write-only, ledgered views. Returned
-archives are canonical deterministic USTAR bytes and every result carries its
-always-computed structured loss records. See the runnable
+`csvw-exact`, `obo-graphs`, `skos`, `croissant-1.1`, `ro-crate-1.3`,
+`datacite-4.6`, `dcat-3`, and `frictionless-data-package-1`. Only OBO Graphs
+and SKOS are deliberately write-only, ledgered views. Returned archives are
+canonical deterministic USTAR bytes and every result carries its always-computed
+structured loss records. Research-object contexts, vocabularies, identities,
+and profiles are all mandatory caller configuration. See the runnable
 [`projection_roundtrip.py`](https://github.com/Blackcat-Informatics/purrdf/blob/main/bindings/python/examples/projection_roundtrip.py)
 file-producing example.
 

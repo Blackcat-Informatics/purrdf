@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Unified deterministic archive surface for graph and tabular projections.
+//! Unified deterministic archive surface for graph, tabular, and research-object projections.
 
 use std::fmt;
 use std::str::FromStr;
@@ -11,10 +11,13 @@ use purrdf_core::{DatasetView, LossLedger, RdfDataset};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CsvwConfig, LpgConfig, OboGraphsConfig, ProjectionError, ProjectionLimits, ProjectionPackage,
-    SkosConfig, lift_lpg, project_csvw_exact, project_lpg_csv, project_lpg_cypher,
-    project_lpg_graphml, project_neo4j_csv, project_obo_graphs, project_skos, read_csvw_exact,
-    read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv,
+    CroissantConfig, CsvwConfig, DataCiteConfig, DcatConfig, FrictionlessConfig, LpgConfig,
+    OboGraphsConfig, ProjectionError, ProjectionLimits, ProjectionPackage, RoCrateConfig,
+    SkosConfig, lift_lpg, project_croissant, project_csvw_exact, project_datacite, project_dcat,
+    project_frictionless, project_lpg_csv, project_lpg_cypher, project_lpg_graphml,
+    project_neo4j_csv, project_obo_graphs, project_ro_crate, project_skos, read_croissant,
+    read_csvw_exact, read_datacite, read_dcat, read_frictionless, read_lpg_csv, read_lpg_cypher,
+    read_lpg_graphml, read_neo4j_csv, read_ro_crate,
 };
 
 const OBO_GRAPHS_PATH: &str = "obo-graphs.json";
@@ -38,6 +41,21 @@ pub enum ProjectionProfile {
     OboGraphs,
     /// SKOS Turtle concept-scheme view (write-only).
     Skos,
+    /// Croissant 1.1 research-object package.
+    #[serde(rename = "croissant-1.1")]
+    Croissant11,
+    /// RO-Crate 1.3 research-object package.
+    #[serde(rename = "ro-crate-1.3")]
+    RoCrate13,
+    /// DataCite Metadata Schema 4.6 package.
+    #[serde(rename = "datacite-4.6")]
+    DataCite46,
+    /// DCAT 3 research-object package.
+    #[serde(rename = "dcat-3")]
+    Dcat3,
+    /// Frictionless Data Package v1.
+    #[serde(rename = "frictionless-data-package-1")]
+    FrictionlessDataPackage1,
 }
 
 impl ProjectionProfile {
@@ -51,14 +69,28 @@ impl ProjectionProfile {
             Self::CsvwExact => "csvw-exact",
             Self::OboGraphs => "obo-graphs",
             Self::Skos => "skos",
+            Self::Croissant11 => "croissant-1.1",
+            Self::RoCrate13 => "ro-crate-1.3",
+            Self::DataCite46 => "datacite-4.6",
+            Self::Dcat3 => "dcat-3",
+            Self::FrictionlessDataPackage1 => "frictionless-data-package-1",
         }
     }
 
-    /// Whether this carrier has a strict package reader and exact RDF lift path.
+    /// Whether this carrier has a strict package reader and RDF lift path.
     pub const fn is_bidirectional(self) -> bool {
         matches!(
             self,
-            Self::LpgCsv | Self::Neo4jCsv | Self::OpenCypher | Self::Graphml | Self::CsvwExact
+            Self::LpgCsv
+                | Self::Neo4jCsv
+                | Self::OpenCypher
+                | Self::Graphml
+                | Self::CsvwExact
+                | Self::Croissant11
+                | Self::RoCrate13
+                | Self::DataCite46
+                | Self::Dcat3
+                | Self::FrictionlessDataPackage1
         )
     }
 }
@@ -81,6 +113,11 @@ impl FromStr for ProjectionProfile {
             "csvw-exact" => Ok(Self::CsvwExact),
             "obo-graphs" => Ok(Self::OboGraphs),
             "skos" => Ok(Self::Skos),
+            "croissant-1.1" => Ok(Self::Croissant11),
+            "ro-crate-1.3" => Ok(Self::RoCrate13),
+            "datacite-4.6" => Ok(Self::DataCite46),
+            "dcat-3" => Ok(Self::Dcat3),
+            "frictionless-data-package-1" => Ok(Self::FrictionlessDataPackage1),
             other => Err(ProjectionError::configuration(format!(
                 "unknown projection profile `{other}`"
             ))),
@@ -105,6 +142,21 @@ pub enum LiftProfile {
     Graphml,
     /// Exact, lossless RDF 1.2 CSVW package.
     CsvwExact,
+    /// Croissant 1.1 research-object package.
+    #[serde(rename = "croissant-1.1")]
+    Croissant11,
+    /// RO-Crate 1.3 research-object package.
+    #[serde(rename = "ro-crate-1.3")]
+    RoCrate13,
+    /// DataCite Metadata Schema 4.6 package.
+    #[serde(rename = "datacite-4.6")]
+    DataCite46,
+    /// DCAT 3 research-object package.
+    #[serde(rename = "dcat-3")]
+    Dcat3,
+    /// Frictionless Data Package v1.
+    #[serde(rename = "frictionless-data-package-1")]
+    FrictionlessDataPackage1,
 }
 
 impl LiftProfile {
@@ -121,6 +173,11 @@ impl LiftProfile {
             Self::OpenCypher => ProjectionProfile::OpenCypher,
             Self::Graphml => ProjectionProfile::Graphml,
             Self::CsvwExact => ProjectionProfile::CsvwExact,
+            Self::Croissant11 => ProjectionProfile::Croissant11,
+            Self::RoCrate13 => ProjectionProfile::RoCrate13,
+            Self::DataCite46 => ProjectionProfile::DataCite46,
+            Self::Dcat3 => ProjectionProfile::Dcat3,
+            Self::FrictionlessDataPackage1 => ProjectionProfile::FrictionlessDataPackage1,
         }
     }
 }
@@ -141,6 +198,11 @@ impl FromStr for LiftProfile {
             "open-cypher" => Ok(Self::OpenCypher),
             "graphml" => Ok(Self::Graphml),
             "csvw-exact" => Ok(Self::CsvwExact),
+            "croissant-1.1" => Ok(Self::Croissant11),
+            "ro-crate-1.3" => Ok(Self::RoCrate13),
+            "datacite-4.6" => Ok(Self::DataCite46),
+            "dcat-3" => Ok(Self::Dcat3),
+            "frictionless-data-package-1" => Ok(Self::FrictionlessDataPackage1),
             other => Err(ProjectionError::configuration(format!(
                 "profile `{other}` is not a bidirectional projection carrier"
             ))),
@@ -176,6 +238,21 @@ pub enum ProjectionConfig {
     OboGraphs(Box<OboGraphsConfig>),
     /// SKOS concept-scheme configuration.
     Skos(Box<SkosConfig>),
+    /// Croissant 1.1 configuration.
+    #[serde(rename = "croissant-1.1")]
+    Croissant11(Box<CroissantConfig>),
+    /// RO-Crate 1.3 configuration.
+    #[serde(rename = "ro-crate-1.3")]
+    RoCrate13(Box<RoCrateConfig>),
+    /// DataCite Metadata Schema 4.6 configuration.
+    #[serde(rename = "datacite-4.6")]
+    DataCite46(Box<DataCiteConfig>),
+    /// DCAT 3 configuration.
+    #[serde(rename = "dcat-3")]
+    Dcat3(Box<DcatConfig>),
+    /// Frictionless Data Package v1 configuration.
+    #[serde(rename = "frictionless-data-package-1")]
+    FrictionlessDataPackage1(Box<FrictionlessConfig>),
 }
 
 impl ProjectionConfig {
@@ -213,6 +290,11 @@ impl ProjectionConfig {
             Self::CsvwExact(_) => ProjectionProfile::CsvwExact,
             Self::OboGraphs(_) => ProjectionProfile::OboGraphs,
             Self::Skos(_) => ProjectionProfile::Skos,
+            Self::Croissant11(_) => ProjectionProfile::Croissant11,
+            Self::RoCrate13(_) => ProjectionProfile::RoCrate13,
+            Self::DataCite46(_) => ProjectionProfile::DataCite46,
+            Self::Dcat3(_) => ProjectionProfile::Dcat3,
+            Self::FrictionlessDataPackage1(_) => ProjectionProfile::FrictionlessDataPackage1,
         }
     }
 
@@ -226,6 +308,11 @@ impl ProjectionConfig {
             Self::CsvwExact(config) => config.limits(),
             Self::OboGraphs(config) => config.limits(),
             Self::Skos(config) => config.limits(),
+            Self::Croissant11(config) => config.common().limits(),
+            Self::RoCrate13(config) => config.common().limits(),
+            Self::DataCite46(config) => config.common().limits(),
+            Self::Dcat3(config) => config.common().limits(),
+            Self::FrictionlessDataPackage1(config) => config.common().limits(),
         }
     }
 
@@ -306,6 +393,26 @@ pub fn project_archive<D: DatasetView>(
                 ProjectionPackage::from_artifacts(config.limits(), [(SKOS_PATH, outcome.turtle)])?;
             (package, outcome.loss_ledger)
         }
+        ProjectionConfig::Croissant11(config) => {
+            let outcome = project_croissant(view, config)?;
+            (outcome.package, outcome.loss_ledger)
+        }
+        ProjectionConfig::RoCrate13(config) => {
+            let outcome = project_ro_crate(view, config)?;
+            (outcome.package, outcome.loss_ledger)
+        }
+        ProjectionConfig::DataCite46(config) => {
+            let outcome = project_datacite(view, config)?;
+            (outcome.package, outcome.loss_ledger)
+        }
+        ProjectionConfig::Dcat3(config) => {
+            let outcome = project_dcat(view, config)?;
+            (outcome.package, outcome.loss_ledger)
+        }
+        ProjectionConfig::FrictionlessDataPackage1(config) => {
+            let outcome = project_frictionless(view, config)?;
+            (outcome.package, outcome.loss_ledger)
+        }
     };
     Ok(ProjectionArchive {
         profile,
@@ -349,8 +456,33 @@ pub fn lift_archive(
                 loss_ledger: outcome.loss_ledger,
             })
         }
+        (LiftProfile::Croissant11, ProjectionConfig::Croissant11(config)) => {
+            lift_research_object_package(read_croissant(&package, config)?)
+        }
+        (LiftProfile::RoCrate13, ProjectionConfig::RoCrate13(config)) => {
+            lift_research_object_package(read_ro_crate(&package, config)?)
+        }
+        (LiftProfile::DataCite46, ProjectionConfig::DataCite46(config)) => {
+            lift_research_object_package(read_datacite(&package, config)?)
+        }
+        (LiftProfile::Dcat3, ProjectionConfig::Dcat3(config)) => {
+            lift_research_object_package(read_dcat(&package, config)?)
+        }
+        (
+            LiftProfile::FrictionlessDataPackage1,
+            ProjectionConfig::FrictionlessDataPackage1(config),
+        ) => lift_research_object_package(read_frictionless(&package, config)?),
         _ => unreachable!("profile/config equality was checked before dispatch"),
     }
+}
+
+fn lift_research_object_package(
+    outcome: super::ResearchObjectReadOutcome,
+) -> Result<ProjectionLift, ProjectionError> {
+    Ok(ProjectionLift {
+        dataset: outcome.dataset,
+        loss_ledger: outcome.loss_ledger,
+    })
 }
 
 fn lift_lpg_package(
@@ -373,6 +505,19 @@ mod tests {
     use super::*;
     use crate::{CsvwContext, CsvwMode, CsvwVocabulary};
 
+    const RESEARCH_SOURCE: &[u8] =
+        include_bytes!("../../tests/fixtures/research-objects/carrier/shared.ttl");
+    const CROISSANT_CONFIG: &[u8] =
+        include_bytes!("../../tests/fixtures/research-objects/carrier/croissant-1.1.json");
+    const RO_CRATE_CONFIG: &[u8] =
+        include_bytes!("../../tests/fixtures/research-objects/carrier/ro-crate-1.3.json");
+    const DATACITE_CONFIG: &[u8] =
+        include_bytes!("../../tests/fixtures/research-objects/carrier/datacite-4.6.json");
+    const DCAT_CONFIG: &[u8] =
+        include_bytes!("../../tests/fixtures/research-objects/carrier/dcat-3.json");
+    const FRICTIONLESS_CONFIG: &[u8] = include_bytes!(
+        "../../tests/fixtures/research-objects/carrier/frictionless-data-package-1.json"
+    );
     fn limits() -> ProjectionLimits {
         ProjectionLimits::new(16, 1_000_000, 4_000_000, 5_000_000, 16).expect("limits")
     }
@@ -466,5 +611,97 @@ mod tests {
         );
         assert!("skos".parse::<LiftProfile>().is_err());
         assert!("obo-graphs".parse::<LiftProfile>().is_err());
+    }
+
+    #[test]
+    fn every_research_object_profile_uses_the_unified_stable_carrier() {
+        let dataset = crate::parse_dataset(RESEARCH_SOURCE, "text/turtle", None)
+            .expect("shared research-object source");
+        let cases = [
+            (
+                ProjectionProfile::Croissant11,
+                LiftProfile::Croissant11,
+                CROISSANT_CONFIG,
+            ),
+            (
+                ProjectionProfile::RoCrate13,
+                LiftProfile::RoCrate13,
+                RO_CRATE_CONFIG,
+            ),
+            (
+                ProjectionProfile::DataCite46,
+                LiftProfile::DataCite46,
+                DATACITE_CONFIG,
+            ),
+            (ProjectionProfile::Dcat3, LiftProfile::Dcat3, DCAT_CONFIG),
+            (
+                ProjectionProfile::FrictionlessDataPackage1,
+                LiftProfile::FrictionlessDataPackage1,
+                FRICTIONLESS_CONFIG,
+            ),
+        ];
+
+        for (project_profile, lift_profile, bytes) in cases {
+            assert!(project_profile.is_bidirectional());
+            assert_eq!(
+                project_profile.as_str().parse::<ProjectionProfile>(),
+                Ok(project_profile)
+            );
+            assert_eq!(
+                lift_profile.as_str().parse::<LiftProfile>(),
+                Ok(lift_profile)
+            );
+            assert_eq!(
+                serde_json::to_string(&project_profile).expect("serialize project profile"),
+                format!("\"{}\"", project_profile.as_str())
+            );
+            assert_eq!(
+                serde_json::to_string(&lift_profile).expect("serialize lift profile"),
+                format!("\"{}\"", lift_profile.as_str())
+            );
+            let config = ProjectionConfig::from_json(bytes).expect("tagged profile config");
+            assert_eq!(config.profile(), project_profile);
+            let encoded = config.to_json().expect("serialize config");
+            assert_eq!(
+                ProjectionConfig::from_json(&encoded).expect("reparse config"),
+                config
+            );
+
+            let first = project_archive(dataset.as_ref(), project_profile, &config)
+                .expect("project shared intersection");
+            let second = project_archive(dataset.as_ref(), project_profile, &config)
+                .expect("repeat shared intersection");
+            assert_eq!(first.archive, second.archive, "{project_profile}");
+
+            let lifted = lift_archive(&first.archive, lift_profile, &config).expect("lift profile");
+            let rewritten = project_archive(lifted.dataset.as_ref(), project_profile, &config)
+                .expect("rewrite lifted profile");
+            assert_eq!(first.archive, rewritten.archive, "{project_profile}");
+
+            for (target_profile, target_lift, target_config_bytes) in cases {
+                let target_config = ProjectionConfig::from_json(target_config_bytes)
+                    .expect("target tagged profile config");
+                let transcoded =
+                    project_archive(lifted.dataset.as_ref(), target_profile, &target_config)
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "{project_profile} -> {target_profile} project failed: {error:?}"
+                            )
+                        });
+                let transcoded_lift =
+                    lift_archive(&transcoded.archive, target_lift, &target_config)
+                        .expect("cross-profile lift");
+                let stable = project_archive(
+                    transcoded_lift.dataset.as_ref(),
+                    target_profile,
+                    &target_config,
+                )
+                .expect("cross-profile stable rewrite");
+                assert_eq!(
+                    transcoded.archive, stable.archive,
+                    "{project_profile} -> {target_profile} must stabilize"
+                );
+            }
+        }
     }
 }

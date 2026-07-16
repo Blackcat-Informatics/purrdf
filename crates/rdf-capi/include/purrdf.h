@@ -634,6 +634,8 @@ int32_t purrdf_parse(const uint8_t *bytes,
  * bytes. On success, `*out_archive` and `*out_loss_ledger_json` are independent
  * caller-owned buffers released with `purrdf_buffer_free`. The loss ledger is
  * always computed and uses PurRDF's versioned canonical JSON schema.
+ * Research-object profiles are `croissant-1.1`, `ro-crate-1.3`,
+ * `datacite-4.6`, `dcat-3`, and `frictionless-data-package-1`.
  *
  * # Safety
  * `dataset` must be a live handle; `profile` must be a valid C string;
@@ -652,8 +654,9 @@ int32_t purrdf_project(const PurrdfDataset *dataset,
  * Lift a canonical USTAR carrier into a fresh frozen RDF dataset.
  *
  * Only the closed bidirectional profiles are accepted; OBO Graphs and SKOS
- * fail as invalid arguments instead of pretending to round-trip. On success,
- * `*out_dataset` is released with `purrdf_dataset_free` and
+ * fail as invalid arguments instead of pretending to round-trip. All five
+ * research-object profiles are bidirectional. On success, `*out_dataset` is
+ * released with `purrdf_dataset_free` and
  * `*out_loss_ledger_json` with `purrdf_buffer_free`.
  *
  * # Safety

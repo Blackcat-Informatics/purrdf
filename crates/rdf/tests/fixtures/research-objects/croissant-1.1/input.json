@@ -1,0 +1,75 @@
+{
+  "@context": "https://example.org/context/croissant-1.1",
+  "@id": "https://example.org/datasets/cats",
+  "@type": "sc:Dataset",
+  "conformsTo": { "@id": "https://example.org/profiles/croissant-1.1" },
+  "name": [
+    { "@value": "Cat Faces", "@language": "en" },
+    "Cats"
+  ],
+  "description": "A compact adversarial Croissant fixture.",
+  "identifier": { "@id": "https://doi.org/10.0000/example" },
+  "version": "1.0",
+  "datePublished": {
+    "@value": "2026-01-02",
+    "@type": "https://example.org/datatypes/date"
+  },
+  "url": { "@id": "https://example.org/datasets/cats/home" },
+  "keywords": ["vision", "cats"],
+  "license": { "@id": "https://example.org/licenses/open" },
+  "creator": {
+    "@id": "agents/alice",
+    "@type": "sc:Person",
+    "name": "Alice"
+  },
+  "distribution": {
+    "@id": "files/train.csv",
+    "@type": "cr:FileObject",
+    "name": "Training data",
+    "description": "One tiny table.",
+    "path": "data/train.csv",
+    "contentUrl": { "@id": "https://example.org/files/train.csv" },
+    "encodingFormat": "text/csv",
+    "format": { "@id": "https://example.org/formats/csv" },
+    "contentSize": 42,
+    "sha256": "0123456789abcdef",
+    "content": "inline bytes are deliberately omitted"
+  },
+  "activity": {
+    "@id": "actions/build",
+    "@type": "sc:CreateAction",
+    "name": "Build dataset",
+    "agent": { "@id": "agents/alice" },
+    "object": { "@id": "https://example.org/datasets/cats" },
+    "result": { "@id": "files/train.csv" },
+    "endTime": {
+      "@value": "2026-01-03T04:05:06Z",
+      "@type": "https://example.org/datatypes/dateTime"
+    }
+  },
+  "recordSet": {
+    "@id": "records/train",
+    "@type": "cr:RecordSet",
+    "name": "Training rows",
+    "description": "Inline example rows.",
+    "field": [
+      {
+        "@id": "fields/id",
+        "@type": "cr:Field",
+        "name": "id",
+        "dataType": { "@id": "https://example.org/datatypes/integer" }
+      },
+      {
+        "@id": "fields/label",
+        "@type": "cr:Field",
+        "name": "label",
+        "dataType": { "@id": "https://example.org/datatypes/string" }
+      }
+    ],
+    "records": [
+      { "id": 2, "label": "calico" },
+      { "id": 1, "label": "black" }
+    ]
+  },
+  "citation": "unknown member is deliberately ledgered"
+}

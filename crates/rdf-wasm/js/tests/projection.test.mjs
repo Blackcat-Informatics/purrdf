@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -59,4 +60,28 @@ test("write-only profiles and mismatched tagged config fail explicitly", () => {
     () => liftProjection(new Uint8Array(), "skos", CONFIG),
     /not a bidirectional/,
   );
+});
+
+test("all research-object profiles execute through the shared WASM carrier", async () => {
+  const fixture = (name) => new URL(
+    `../../../rdf/tests/fixtures/research-objects/carrier/${name}`,
+    import.meta.url,
+  );
+  const source = await readFile(fixture("shared.ttl"), "utf8");
+  for (const profile of [
+    "croissant-1.1",
+    "ro-crate-1.3",
+    "datacite-4.6",
+    "dcat-3",
+    "frictionless-data-package-1",
+  ]) {
+    const config = await readFile(fixture(`${profile}.json`), "utf8");
+    const dataset = Dataset.parse(source, "turtle");
+    const first = dataset.project(profile, config);
+    const second = dataset.project(profile, config);
+    assert.equal(first.profile, profile);
+    assert.deepEqual(first.archive, second.archive);
+    const lifted = liftProjection(first.archive, profile, config);
+    assert.ok(lifted.takeDataset().size > 0);
+  }
 });

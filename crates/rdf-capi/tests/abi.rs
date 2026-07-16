@@ -254,6 +254,89 @@ fn projection_archive_and_ledger_round_trip_through_owned_c_handles() {
 }
 
 #[test]
+fn every_research_object_profile_executes_through_the_c_abi() {
+    const SOURCE: &str =
+        include_str!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl");
+    const CONFIGS: &[(&str, &str)] = &[
+        (
+            "croissant-1.1",
+            include_str!("../../rdf/tests/fixtures/research-objects/carrier/croissant-1.1.json"),
+        ),
+        (
+            "ro-crate-1.3",
+            include_str!("../../rdf/tests/fixtures/research-objects/carrier/ro-crate-1.3.json"),
+        ),
+        (
+            "datacite-4.6",
+            include_str!("../../rdf/tests/fixtures/research-objects/carrier/datacite-4.6.json"),
+        ),
+        (
+            "dcat-3",
+            include_str!("../../rdf/tests/fixtures/research-objects/carrier/dcat-3.json"),
+        ),
+        (
+            "frictionless-data-package-1",
+            include_str!(
+                "../../rdf/tests/fixtures/research-objects/carrier/frictionless-data-package-1.json"
+            ),
+        ),
+    ];
+
+    unsafe {
+        let dataset = parse("text/turtle", SOURCE);
+        for &(profile, config) in CONFIGS {
+            let profile = CString::new(profile).expect("profile C string");
+            let mut archive: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut project_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            assert_eq!(
+                purrdf_project(
+                    dataset,
+                    profile.as_ptr(),
+                    config.as_ptr(),
+                    config.len(),
+                    &raw mut archive,
+                    &raw mut project_ledger,
+                    &raw mut error,
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(error.is_null());
+            let archive_bytes = buffer_bytes(archive);
+            assert!(!archive_bytes.is_empty());
+            purrdf_buffer_free(project_ledger);
+            purrdf_buffer_free(archive);
+
+            let mut lifted: *mut PurrdfDataset = std::ptr::null_mut();
+            let mut lift_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+            assert_eq!(
+                purrdf_lift(
+                    archive_bytes.as_ptr(),
+                    archive_bytes.len(),
+                    profile.as_ptr(),
+                    config.as_ptr(),
+                    config.len(),
+                    &raw mut lifted,
+                    &raw mut lift_ledger,
+                    &raw mut error,
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(error.is_null());
+            let mut count = 0;
+            assert_eq!(
+                purrdf_dataset_quad_count(lifted, &raw mut count),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(count > 0);
+            purrdf_buffer_free(lift_ledger);
+            purrdf_dataset_free(lifted);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
 fn projection_c_surface_rejects_write_only_lift_and_aliasing_outputs() {
     const CONFIG: &str = r#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"max_records":1000}}"#;
     unsafe {

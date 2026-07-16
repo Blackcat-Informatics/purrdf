@@ -3,7 +3,7 @@
 
 #![allow(missing_docs)]
 
-//! Graph/tabular mapping and carrier benchmarks over deterministic fixed datasets.
+//! Graph, tabular, and research-object carrier benchmarks over deterministic fixed datasets.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -12,13 +12,15 @@ use std::sync::Arc;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_rdf::{
-    CsvwConfig, CsvwContext, CsvwMode, CsvwVocabulary, LpgConfig, OboGraphsConfig,
-    OboGraphsVocabulary, OboMetadataRoles, OboOwlRoles, OboRdfRoles, ProjectionLimits, RdfDataset,
-    RdfDatasetBuilder, RdfLiteral, SkosClassRoles, SkosConfig, SkosDocumentationRoles,
-    SkosGraphSelection, SkosLabelRoles, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles,
-    project_csvw_exact, project_lpg, project_obo_graphs, project_skos, read_csvw_exact,
-    read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, write_lpg_csv,
-    write_lpg_cypher, write_lpg_graphml, write_neo4j_csv,
+    CsvwConfig, CsvwContext, CsvwMode, CsvwVocabulary, LiftProfile, LpgConfig, OboGraphsConfig,
+    OboGraphsVocabulary, OboMetadataRoles, OboOwlRoles, OboRdfRoles, ProjectionConfig,
+    ProjectionLimits, ProjectionProfile, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    ResearchObjectConfig, SkosClassRoles, SkosConfig, SkosDocumentationRoles, SkosGraphSelection,
+    SkosLabelRoles, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles, lift_archive,
+    parse_dataset, project_archive, project_csvw_exact, project_lpg, project_obo_graphs,
+    project_research_object, project_skos, read_csvw_exact, read_lpg_csv, read_lpg_cypher,
+    read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher, write_lpg_graphml,
+    write_neo4j_csv,
 };
 
 thread_local! {
@@ -60,6 +62,37 @@ const OBO: &str = "http://www.geneontology.org/formats/oboInOwl#";
 const SKOS_SOURCE: &str = "https://example.org/bench/source-skos#";
 const SKOS_TARGET: &str = "http://www.w3.org/2004/02/skos/core#";
 const ROWS: usize = 200;
+const RESEARCH_SOURCE: &[u8] =
+    include_bytes!("../tests/fixtures/research-objects/carrier/shared.ttl");
+const RESEARCH_CONFIGS: [(ProjectionProfile, LiftProfile, &[u8]); 5] = [
+    (
+        ProjectionProfile::Croissant11,
+        LiftProfile::Croissant11,
+        include_bytes!("../tests/fixtures/research-objects/carrier/croissant-1.1.json"),
+    ),
+    (
+        ProjectionProfile::RoCrate13,
+        LiftProfile::RoCrate13,
+        include_bytes!("../tests/fixtures/research-objects/carrier/ro-crate-1.3.json"),
+    ),
+    (
+        ProjectionProfile::DataCite46,
+        LiftProfile::DataCite46,
+        include_bytes!("../tests/fixtures/research-objects/carrier/datacite-4.6.json"),
+    ),
+    (
+        ProjectionProfile::Dcat3,
+        LiftProfile::Dcat3,
+        include_bytes!("../tests/fixtures/research-objects/carrier/dcat-3.json"),
+    ),
+    (
+        ProjectionProfile::FrictionlessDataPackage1,
+        LiftProfile::FrictionlessDataPackage1,
+        include_bytes!(
+            "../tests/fixtures/research-objects/carrier/frictionless-data-package-1.json"
+        ),
+    ),
+];
 
 fn limits() -> ProjectionLimits {
     ProjectionLimits::new(64, 16_000_000, 64_000_000, 72_000_000, 16).expect("limits")
@@ -328,6 +361,17 @@ fn skos_config() -> SkosConfig {
     .expect("SKOS config")
 }
 
+fn research_common(config: &ProjectionConfig) -> &ResearchObjectConfig {
+    match config {
+        ProjectionConfig::Croissant11(config) => config.common(),
+        ProjectionConfig::RoCrate13(config) => config.common(),
+        ProjectionConfig::DataCite46(config) => config.common(),
+        ProjectionConfig::Dcat3(config) => config.common(),
+        ProjectionConfig::FrictionlessDataPackage1(config) => config.common(),
+        _ => panic!("research-object benchmark received a non-research profile"),
+    }
+}
+
 fn allocation_snapshot() -> (u64, u64) {
     (ALLOCATIONS.with(Cell::get), ALLOCATED_BYTES.with(Cell::get))
 }
@@ -352,12 +396,31 @@ fn benchmark(c: &mut Criterion) {
     let csvw_config = csvw_config();
     let obo_config = obo_config();
     let skos_config = skos_config();
+    let research_dataset =
+        parse_dataset(RESEARCH_SOURCE, "text/turtle", None).expect("research-object dataset");
+    let research_configs: Vec<_> = RESEARCH_CONFIGS
+        .iter()
+        .map(|&(profile, lift, bytes)| {
+            (
+                profile,
+                lift,
+                ProjectionConfig::from_json(bytes).expect("research-object config"),
+            )
+        })
+        .collect();
     let lpg = project_lpg(graph_dataset.as_ref(), &lpg_config).expect("LPG projection");
     let generic = write_lpg_csv(&lpg.graph, &lpg_config).expect("generic CSV");
     let neo4j = write_neo4j_csv(&lpg.graph, &lpg_config).expect("Neo4j CSV");
     let cypher = write_lpg_cypher(&lpg.graph, &lpg_config).expect("openCypher");
     let graphml = write_lpg_graphml(&lpg.graph, &lpg_config).expect("GraphML");
     let csvw = project_csvw_exact(graph_dataset.as_ref(), &csvw_config).expect("CSVW");
+    let research_archives: Vec<_> = research_configs
+        .iter()
+        .map(|(profile, _, config)| {
+            project_archive(research_dataset.as_ref(), *profile, config)
+                .expect("research-object projection")
+        })
+        .collect();
 
     // Warm all paths before taking one-shot allocation deltas.
     let _ = read_lpg_csv(&generic, &lpg_config).expect("generic read");
@@ -367,6 +430,15 @@ fn benchmark(c: &mut Criterion) {
     let _ = read_csvw_exact(&csvw.package, &csvw_config).expect("CSVW read");
     let _ = project_obo_graphs(obo_dataset.as_ref(), &obo_config).expect("OBO Graphs");
     let _ = project_skos(skos_dataset.as_ref(), &skos_config).expect("SKOS");
+    let _ = project_research_object(
+        research_dataset.as_ref(),
+        research_configs[0].0.as_str(),
+        research_common(&research_configs[0].2),
+    )
+    .expect("research-object model");
+    for ((_, lift, config), archive) in research_configs.iter().zip(&research_archives) {
+        let _ = lift_archive(&archive.archive, *lift, config).expect("research-object lift");
+    }
 
     black_box(report_allocations("rdf_to_lpg", || {
         project_lpg(graph_dataset.as_ref(), &lpg_config).expect("LPG")
@@ -389,6 +461,27 @@ fn benchmark(c: &mut Criterion) {
     black_box(report_allocations("skos_write", || {
         project_skos(skos_dataset.as_ref(), &skos_config).expect("SKOS write")
     }));
+    black_box(report_allocations("research_common_model", || {
+        project_research_object(
+            research_dataset.as_ref(),
+            research_configs[0].0.as_str(),
+            research_common(&research_configs[0].2),
+        )
+        .expect("research-object model")
+    }));
+    for ((profile, lift, config), archive) in research_configs.iter().zip(&research_archives) {
+        black_box(report_allocations(
+            &format!("{}_write", profile.as_str()),
+            || {
+                project_archive(research_dataset.as_ref(), *profile, config)
+                    .expect("research-object write")
+            },
+        ));
+        black_box(report_allocations(
+            &format!("{}_read", profile.as_str()),
+            || lift_archive(&archive.archive, *lift, config).expect("research-object read"),
+        ));
+    }
 
     {
         let mut mapping = c.benchmark_group("projection_mapping");
@@ -481,6 +574,46 @@ fn benchmark(c: &mut Criterion) {
             });
         });
         views.finish();
+    }
+
+    {
+        let mut research = c.benchmark_group("research_object_carriers");
+        research.throughput(Throughput::Elements(research_dataset.quad_count() as u64));
+        research.bench_function("common_model", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_research_object(
+                        black_box(research_dataset.as_ref()),
+                        black_box(research_configs[0].0.as_str()),
+                        black_box(research_common(&research_configs[0].2)),
+                    )
+                    .expect("research-object model"),
+                );
+            });
+        });
+        for ((profile, lift, config), archive) in research_configs.iter().zip(&research_archives) {
+            research.bench_function(format!("{}_write", profile.as_str()), |bencher| {
+                bencher.iter(|| {
+                    black_box(
+                        project_archive(
+                            black_box(research_dataset.as_ref()),
+                            *profile,
+                            black_box(config),
+                        )
+                        .expect("research-object write"),
+                    );
+                });
+            });
+            research.bench_function(format!("{}_read", profile.as_str()), |bencher| {
+                bencher.iter(|| {
+                    black_box(
+                        lift_archive(black_box(&archive.archive), *lift, black_box(config))
+                            .expect("research-object read"),
+                    );
+                });
+            });
+        }
+        research.finish();
     }
 }
 

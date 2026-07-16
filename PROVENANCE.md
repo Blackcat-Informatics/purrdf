@@ -83,6 +83,21 @@ Copied from `gmeow-ontology`:
   ledgers on every path. The legacy types and writers are intended for deletion
   when gmeow integrates these replacements. That consumer cutover is not yet
   complete, and no downstream type or byte-layout contract is being preserved.
+- The legacy research-object stage in
+  `crates/pipeline/src/stages/research_objects.rs` at
+  `154921ddce1797b220877598f75d838e2075dc42` was used solely as migration
+  evidence for value correspondences that PurRDF must subsume and replace. Its
+  worked-example store/model, fixed GMEOW vocabulary and identities,
+  placeholder DOI generation, filesystem-bound graph loading, declared-loss
+  strings, Python/rdflib/ElementTree byte-parity targets, and writer-only
+  Croissant/RO-Crate/DataCite/DCAT/Frictionless outputs are deliberately
+  discarded. The replacement `purrdf-rdf::projections::research_object` surface
+  uses one typed caller-vocabulary semantic pivot, five strict bidirectional
+  versioned codecs, offline JSON-LD interpretation, deterministic bounded USTAR
+  carriers, and closed located runtime loss ledgers. The legacy types and stage
+  are intended for deletion when gmeow integrates the replacement; that
+  consumer cutover is not yet complete, and no legacy type or byte-layout
+  contract is preserved.
 
 Copied from `gmeow-gts`:
 
