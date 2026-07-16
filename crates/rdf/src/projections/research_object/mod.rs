@@ -5,6 +5,7 @@
 
 mod config;
 mod croissant;
+mod datacite;
 mod json;
 mod mapping;
 mod model;
@@ -17,6 +18,10 @@ pub use config::{
 pub use croissant::{
     CROISSANT_ARTIFACT, CROISSANT_PROFILE, CROISSANT_ROLES, CroissantConfig, CroissantRole,
     CroissantVocabulary, project_croissant, read_croissant,
+};
+pub use datacite::{
+    DATACITE_ARTIFACT, DATACITE_PROFILE, DataCiteConfig, DataCiteControlledValues,
+    project_datacite, read_datacite,
 };
 pub use json::{OfflineJsonLdContext, ResearchObjectPackageProjection, ResearchObjectReadOutcome};
 pub use mapping::{ResearchObjectProjection, lift_research_object, project_research_object};

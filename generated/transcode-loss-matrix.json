@@ -1337,6 +1337,13 @@
     "note": "Research-object metadata profiles do not retain RDF named-graph placement; mapped statement content may remain in the native document."
   },
   {
+    "code": "research-object-profile-field-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "croissant-1.1",
+    "intentional": true,
+    "note": "A field represented by the common research-object semantic pivot has no slot in the selected native profile and is omitted with its entity location recorded."
+  },
+  {
     "code": "research-object-reifier-dropped",
     "from": "rdf-1.2-dataset",
     "to": "croissant-1.1",
@@ -1393,6 +1400,13 @@
     "note": "Research-object metadata profiles do not retain RDF named-graph placement; mapped statement content may remain in the native document."
   },
   {
+    "code": "research-object-profile-field-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "datacite-4.6",
+    "intentional": true,
+    "note": "A field represented by the common research-object semantic pivot has no slot in the selected native profile and is omitted with its entity location recorded."
+  },
+  {
     "code": "research-object-reifier-dropped",
     "from": "rdf-1.2-dataset",
     "to": "datacite-4.6",
@@ -1449,6 +1463,13 @@
     "note": "Research-object metadata profiles do not retain RDF named-graph placement; mapped statement content may remain in the native document."
   },
   {
+    "code": "research-object-profile-field-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "dcat-3",
+    "intentional": true,
+    "note": "A field represented by the common research-object semantic pivot has no slot in the selected native profile and is omitted with its entity location recorded."
+  },
+  {
     "code": "research-object-reifier-dropped",
     "from": "rdf-1.2-dataset",
     "to": "dcat-3",
@@ -1503,6 +1524,13 @@
     "to": "frictionless-data-package-1",
     "intentional": true,
     "note": "Research-object metadata profiles do not retain RDF named-graph placement; mapped statement content may remain in the native document."
+  },
+  {
+    "code": "research-object-profile-field-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "frictionless-data-package-1",
+    "intentional": true,
+    "note": "A field represented by the common research-object semantic pivot has no slot in the selected native profile and is omitted with its entity location recorded."
   },
   {
     "code": "research-object-reifier-dropped",
@@ -1699,6 +1727,13 @@
     "to": "ro-crate-1.3",
     "intentional": true,
     "note": "Research-object metadata profiles do not retain RDF named-graph placement; mapped statement content may remain in the native document."
+  },
+  {
+    "code": "research-object-profile-field-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "ro-crate-1.3",
+    "intentional": true,
+    "note": "A field represented by the common research-object semantic pivot has no slot in the selected native profile and is omitted with its entity location recorded."
   },
   {
     "code": "research-object-reifier-dropped",

@@ -349,6 +349,8 @@ pub const LOSS_RESEARCH_UNMAPPED_STATEMENT_DROPPED: &str =
     "research-object-unmapped-statement-dropped";
 /// RDF→research-object loss code: a literal facet is absent from the target profile.
 pub const LOSS_RESEARCH_LITERAL_FIDELITY_DROPPED: &str = "research-object-literal-fidelity-dropped";
+/// RDF→research-object loss code: a common pivot field is absent from the target profile.
+pub const LOSS_RESEARCH_PROFILE_FIELD_DROPPED: &str = "research-object-profile-field-dropped";
 /// Research-object→RDF loss code: an unrecognized native member is omitted.
 pub const LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED: &str = "research-object-unknown-member-dropped";
 /// Research-object→RDF loss code: a known but unsupported value shape is omitted.
@@ -530,6 +532,10 @@ const RDF_RESEARCH_OBJECT_PROFILE: &[(&str, &str)] = &[
     (
         LOSS_RESEARCH_NAMED_GRAPH_DROPPED,
         "Research-object metadata profiles do not retain RDF named-graph placement; mapped statement content may remain in the native document.",
+    ),
+    (
+        LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
+        "A field represented by the common research-object semantic pivot has no slot in the selected native profile and is omitted with its entity location recorded.",
     ),
     (
         LOSS_RESEARCH_REIFIER_DROPPED,
