@@ -7,6 +7,7 @@ mod config;
 mod croissant;
 mod datacite;
 mod dcat;
+mod frictionless;
 mod json;
 mod mapping;
 mod model;
@@ -27,6 +28,10 @@ pub use datacite::{
 pub use dcat::{
     DCAT_ARTIFACT, DCAT_PROFILE, DCAT_ROLES, DcatConfig, DcatRole, DcatVocabulary, project_dcat,
     read_dcat,
+};
+pub use frictionless::{
+    FRICTIONLESS_ARTIFACT, FRICTIONLESS_PROFILE, FrictionlessConfig, project_frictionless,
+    read_frictionless,
 };
 pub use json::{OfflineJsonLdContext, ResearchObjectPackageProjection, ResearchObjectReadOutcome};
 pub use mapping::{ResearchObjectProjection, lift_research_object, project_research_object};

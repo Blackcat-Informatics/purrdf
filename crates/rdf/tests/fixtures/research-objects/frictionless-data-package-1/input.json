@@ -1,0 +1,40 @@
+{
+  "profile": "https://example.org/profiles/data-package-v1",
+  "name": "cat-faces",
+  "id": "https://example.org/datasets/cats",
+  "title": "Cat Faces",
+  "description": "A compact adversarial Data Package fixture.",
+  "homepage": "https://example.org/datasets/cats/home",
+  "created": "2026-01-02T03:04:05Z",
+  "version": "1.0",
+  "keywords": ["vision", "cats"],
+  "licenses": [
+    {"path": "https://example.org/licenses/open"}
+  ],
+  "contributors": [
+    {
+      "title": "Alice",
+      "path": "https://example.org/entities/agents/alice",
+      "role": "author"
+    }
+  ],
+  "resources": [
+    {
+      "name": "files/train.csv",
+      "path": ["data/train.csv", "https://example.org/files/train.csv"],
+      "title": "Training data",
+      "description": "One tiny table.",
+      "format": "https://example.org/formats/csv",
+      "mediatype": "text/csv",
+      "bytes": 42,
+      "hash": "sha256:0123456789abcdef",
+      "schema": {"fields": [{"name": "id", "type": "integer"}]},
+      "x-resource-extension": "ledger me"
+    },
+    {
+      "name": "inline/preview",
+      "data": [{"id": 1, "label": "black"}]
+    }
+  ],
+  "x-package-extension": "ledger me too"
+}
