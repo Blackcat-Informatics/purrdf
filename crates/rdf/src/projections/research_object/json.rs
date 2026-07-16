@@ -400,12 +400,32 @@ pub(super) fn normalize_lifted_jsonld(
 }
 
 pub(super) fn json_pointer(parent: &str, member: &str) -> String {
-    let escaped = member.replace('~', "~0").replace('/', "~1");
+    let escaped = escape_json_pointer_member(member);
     if parent.is_empty() {
         format!("/{escaped}")
     } else {
         format!("{parent}/{escaped}")
     }
+}
+
+fn escape_json_pointer_member(member: &str) -> Cow<'_, str> {
+    let escape_count = member
+        .bytes()
+        .filter(|byte| matches!(byte, b'~' | b'/'))
+        .count();
+    if escape_count == 0 {
+        return Cow::Borrowed(member);
+    }
+
+    let mut escaped = String::with_capacity(member.len() + escape_count);
+    for character in member.chars() {
+        match character {
+            '~' => escaped.push_str("~0"),
+            '/' => escaped.push_str("~1"),
+            _ => escaped.push(character),
+        }
+    }
+    Cow::Owned(escaped)
 }
 
 #[cfg(test)]
@@ -450,5 +470,16 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn json_pointer_borrows_clean_members_and_escapes_rfc6901_tokens() {
+        assert!(matches!(
+            escape_json_pointer_member("plain"),
+            Cow::Borrowed("plain")
+        ));
+        assert_eq!(escape_json_pointer_member("a~/b"), "a~0~1b");
+        assert_eq!(json_pointer("", "plain"), "/plain");
+        assert_eq!(json_pointer("/items/0", "a~/b"), "/items/0/a~0~1b");
     }
 }
