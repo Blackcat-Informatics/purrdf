@@ -79,11 +79,13 @@ pub use obo_graphs::{
 };
 pub use package::{ProjectionLimits, ProjectionPackage};
 pub use research_object::{
-    RESEARCH_ROLES, ResearchActivity, ResearchAgent, ResearchChecksum, ResearchDataset,
-    ResearchField, ResearchObjectConfig, ResearchObjectIdentity, ResearchObjectModel,
-    ResearchObjectPolicy, ResearchObjectProjection, ResearchObjectRoles, ResearchRecordSet,
+    CROISSANT_ARTIFACT, CROISSANT_PROFILE, CROISSANT_ROLES, CroissantConfig, CroissantRole,
+    CroissantVocabulary, OfflineJsonLdContext, RESEARCH_ROLES, ResearchActivity, ResearchAgent,
+    ResearchChecksum, ResearchDataset, ResearchField, ResearchObjectConfig, ResearchObjectIdentity,
+    ResearchObjectModel, ResearchObjectPackageProjection, ResearchObjectPolicy,
+    ResearchObjectProjection, ResearchObjectReadOutcome, ResearchObjectRoles, ResearchRecordSet,
     ResearchResource, ResearchRole, ResearchText, ResearchValue, lift_research_object,
-    project_research_object,
+    project_croissant, project_research_object, read_croissant,
 };
 pub use skos::{
     SkosClassRoles, SkosConfig, SkosDocumentationRoles, SkosGraphSelection, SkosLabelRoles,

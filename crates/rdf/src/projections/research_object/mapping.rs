@@ -442,7 +442,22 @@ impl<'a> Projector<'a> {
                     datatype,
                     language,
                     direction,
-                } => ResearchText::new(lexical, datatype, language, direction),
+                } => {
+                    let datatype = if direction.is_some() {
+                        self.config
+                            .roles()
+                            .iri(ResearchRole::RdfDirLangString)
+                            .to_owned()
+                    } else if language.is_some() {
+                        self.config
+                            .roles()
+                            .iri(ResearchRole::RdfLangString)
+                            .to_owned()
+                    } else {
+                        datatype
+                    };
+                    ResearchText::new(lexical, datatype, language, direction)
+                }
                 other => Err(ProjectionError::integrity(format!(
                     "research-object role `{role:?}` requires a literal, got `{}`",
                     term_label(&other)
@@ -502,12 +517,21 @@ impl<'a> Projector<'a> {
                 datatype,
                 language,
                 direction,
-            } => Some(ResearchValue::Text(ResearchText::new(
-                lexical.clone(),
-                datatype.clone(),
-                language.clone(),
-                *direction,
-            )?)),
+            } => {
+                let datatype = if direction.is_some() {
+                    self.config.roles().iri(ResearchRole::RdfDirLangString)
+                } else if language.is_some() {
+                    self.config.roles().iri(ResearchRole::RdfLangString)
+                } else {
+                    datatype
+                };
+                Some(ResearchValue::Text(ResearchText::new(
+                    lexical.clone(),
+                    datatype.to_owned(),
+                    language.clone(),
+                    *direction,
+                )?))
+            }
             ProjectionTerm::Blank { .. } => self
                 .entity_id(term)?
                 .map(|value| ResearchValue::Iri { value }),

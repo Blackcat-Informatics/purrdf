@@ -108,6 +108,10 @@ pub enum ResearchRole {
     FieldDataType,
     /// Canonical JSON row datatype.
     JsonDatatype,
+    /// RDF language-string datatype.
+    RdfLangString,
+    /// RDF 1.2 directional-language-string datatype.
+    RdfDirLangString,
     /// XML Schema string datatype.
     XsdString,
     /// XML Schema non-negative-integer datatype.
@@ -165,6 +169,8 @@ pub const RESEARCH_ROLES: &[ResearchRole] = &[
     ResearchRole::FieldName,
     ResearchRole::FieldDataType,
     ResearchRole::JsonDatatype,
+    ResearchRole::RdfLangString,
+    ResearchRole::RdfDirLangString,
     ResearchRole::XsdString,
     ResearchRole::XsdNonNegativeInteger,
     ResearchRole::XsdDateTime,
