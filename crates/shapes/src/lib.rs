@@ -22,6 +22,7 @@ pub mod constraints;
 pub mod data;
 pub mod engine;
 pub mod expression;
+pub mod graphql;
 pub mod instance;
 pub mod json_schema;
 pub mod linkml;
@@ -39,6 +40,11 @@ pub mod term;
 pub mod text_ingest;
 pub mod typescript;
 
+pub use graphql::{
+    GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig,
+    GraphqlDefinitionMap, GraphqlEnumValueMap, GraphqlError, GraphqlNameMap, GraphqlPackage,
+    emit_graphql,
+};
 pub use json_schema::{Namespaces, ValueVocab, ValueVocabProjection, compile_with_value_vocab};
 pub use linkml::{
     LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, emit_linkml, parse_linkml,
