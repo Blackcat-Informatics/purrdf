@@ -294,10 +294,44 @@ fn validate_unguarded_reference_cycles(
             (key.clone(), references)
         })
         .collect::<BTreeMap<_, _>>();
-    let mut active = Vec::new();
     let mut complete = BTreeSet::new();
     for key in definitions.keys() {
-        visit_unguarded_references(key, &graph, &mut active, &mut complete)?;
+        if complete.contains(key) {
+            continue;
+        }
+        let mut active = Vec::new();
+        let mut active_positions = BTreeMap::new();
+        let mut stack = vec![(key.clone(), false)];
+        while let Some((current, exiting)) = stack.pop() {
+            if exiting {
+                let removed_position = active_positions.remove(&current);
+                debug_assert_eq!(removed_position, Some(active.len().saturating_sub(1)));
+                let removed = active.pop();
+                debug_assert_eq!(removed.as_deref(), Some(current.as_str()));
+                complete.insert(current);
+                continue;
+            }
+            if complete.contains(&current) {
+                continue;
+            }
+            if let Some(start) = active_positions.get(&current).copied() {
+                let mut cycle = active[start..].to_vec();
+                cycle.push(current);
+                return Err(TypeScriptError::new(format!(
+                    "CompiledSchema contains an unguarded recursive TypeScript alias cycle: {}",
+                    cycle.join(" -> ")
+                )));
+            }
+
+            active_positions.insert(current.clone(), active.len());
+            active.push(current.clone());
+            stack.push((current.clone(), true));
+            if let Some(references) = graph.get(&current) {
+                for reference in references.iter().rev() {
+                    stack.push((reference.clone(), false));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -395,36 +429,6 @@ fn join_unguarded_intersection(
     } else {
         UnguardedRelation::Universal
     }
-}
-
-fn visit_unguarded_references(
-    key: &str,
-    graph: &BTreeMap<String, BTreeSet<String>>,
-    active: &mut Vec<String>,
-    complete: &mut BTreeSet<String>,
-) -> Result<(), TypeScriptError> {
-    if complete.contains(key) {
-        return Ok(());
-    }
-    if let Some(start) = active.iter().position(|candidate| candidate == key) {
-        let mut cycle = active[start..].to_vec();
-        cycle.push(key.to_owned());
-        return Err(TypeScriptError::new(format!(
-            "CompiledSchema contains an unguarded recursive TypeScript alias cycle: {}",
-            cycle.join(" -> ")
-        )));
-    }
-
-    active.push(key.to_owned());
-    if let Some(references) = graph.get(key) {
-        for reference in references {
-            visit_unguarded_references(reference, graph, active, complete)?;
-        }
-    }
-    let removed = active.pop();
-    debug_assert_eq!(removed.as_deref(), Some(key));
-    complete.insert(key.to_owned());
-    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -2220,6 +2224,21 @@ mod tests {
         assert!(source.contains("export type Always = JsonValue;"));
         assert!(source.contains("readonly \"children\"?: readonly (Alias)[];"));
         assert!(source.contains("export type Bottom = never;"));
+    }
+
+    #[test]
+    fn long_unguarded_alias_chains_are_checked_without_recursion() {
+        const DEFINITION_COUNT: usize = 8_192;
+        let mut definitions = Map::new();
+        for index in 0..DEFINITION_COUNT {
+            let definition = if index + 1 == DEFINITION_COUNT {
+                Value::Bool(true)
+            } else {
+                json!({ "$ref": format!("#/$defs/Node{}", index + 1) })
+            };
+            definitions.insert(format!("Node{index}"), definition);
+        }
+        validate_unguarded_reference_cycles(&definitions).expect("long alias chain is acyclic");
     }
 
     #[test]
