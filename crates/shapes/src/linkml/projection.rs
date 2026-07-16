@@ -123,7 +123,7 @@ fn element_infos(
     let mut reverse = BTreeMap::<String, String>::new();
     for key in definitions.keys() {
         let name = element_name(key);
-        if reserved_element_names().contains(name.as_str()) {
+        if reserved_element_names().contains(&name.as_str()) {
             return Err(LinkmlError::new(format!(
                 "$defs key {key:?} normalizes to reserved LinkML element name {name:?}"
             )));
@@ -263,8 +263,8 @@ fn element_name(raw: &str) -> String {
     output
 }
 
-fn reserved_element_names() -> BTreeSet<&'static str> {
-    BTreeSet::from([
+fn reserved_element_names() -> &'static [&'static str] {
+    &[
         "Any",
         "Boolean",
         "Date",
@@ -284,7 +284,7 @@ fn reserved_element_names() -> BTreeSet<&'static str> {
         "Time",
         "Uri",
         "Uriorcurie",
-    ])
+    ]
 }
 
 fn fnv1a(bytes: &[u8]) -> u64 {
@@ -316,7 +316,7 @@ impl<'a> Renderer<'a> {
             used_names.insert(info.name.clone(), definition_path(key));
         }
         for reserved in reserved_element_names() {
-            used_names.insert(reserved.to_owned(), "LinkML imported type".to_owned());
+            used_names.insert((*reserved).to_owned(), "LinkML imported type".to_owned());
         }
         Self {
             config,
@@ -986,10 +986,10 @@ impl Renderer<'_> {
                     property
                         .strip_prefix(namespace)
                         .filter(|local| is_linkml_identifier(local))
-                        .map(|local| (namespace.len(), format!("{prefix}:{local}")))
+                        .map(|local| (namespace.len(), prefix, local))
                 })
-                .max_by_key(|(length, _)| *length)
-                .map(|(_, curie)| curie)
+                .max_by_key(|(length, _, _)| *length)
+                .map(|(_, prefix, local)| format!("{prefix}:{local}"))
                 .ok_or_else(|| {
                     LinkmlError::new(format!(
                         "absolute JSON property {property:?} is outside every caller-supplied LinkML prefix namespace"
@@ -2191,6 +2191,42 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("cannot be empty")
+        );
+    }
+
+    #[test]
+    fn absolute_property_uses_the_longest_matching_caller_prefix() {
+        let config = LinkmlConfig::new(
+            "https://example.org/schema",
+            "Example-Schema",
+            "Caller-owned longest-prefix fixture.",
+            "ex",
+            BTreeMap::from([
+                ("ex".to_owned(), "https://example.org/".to_owned()),
+                (
+                    "people".to_owned(),
+                    "https://example.org/people/".to_owned(),
+                ),
+                ("linkml".to_owned(), "https://w3id.org/linkml/".to_owned()),
+            ]),
+        )
+        .expect("valid config");
+        let schema = json!({
+            "$defs": {
+                "Person": {
+                    "type": "object",
+                    "properties": {
+                        "https://example.org/people/name": { "type": "string" }
+                    }
+                }
+            }
+        });
+
+        let output = emit(&compiled(&schema), &config).expect("emit absolute property");
+        assert_eq!(
+            output.document.as_value()["classes"]["Person"]["attributes"]["https://example.org/people/name"]
+                ["slot_uri"],
+            "people:name"
         );
     }
 }
