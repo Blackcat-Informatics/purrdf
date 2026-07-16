@@ -8,6 +8,7 @@ mod croissant;
 mod json;
 mod mapping;
 mod model;
+mod ro_crate;
 
 pub use config::{
     RESEARCH_ROLES, ResearchObjectConfig, ResearchObjectIdentity, ResearchObjectPolicy,
@@ -22,4 +23,8 @@ pub use mapping::{ResearchObjectProjection, lift_research_object, project_resear
 pub use model::{
     ResearchActivity, ResearchAgent, ResearchChecksum, ResearchDataset, ResearchField,
     ResearchObjectModel, ResearchRecordSet, ResearchResource, ResearchText, ResearchValue,
+};
+pub use ro_crate::{
+    RO_CRATE_ARTIFACT, RO_CRATE_PROFILE, RO_CRATE_ROLES, RoCrateConfig, RoCrateRole,
+    RoCrateVocabulary, project_ro_crate, read_ro_crate,
 };

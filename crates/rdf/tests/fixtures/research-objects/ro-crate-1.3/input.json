@@ -1,0 +1,95 @@
+{
+  "@context": "https://example.org/context/ro-crate-1.3",
+  "@graph": [
+    {
+      "@id": "records/train",
+      "@type": "RecordSet",
+      "name": "Training rows",
+      "description": "Two inline rows.",
+      "field": [
+        { "@id": "fields/id" },
+        { "@id": "fields/label" }
+      ],
+      "records": [
+        { "id": 2, "label": "calico" },
+        { "id": 1, "label": "black" }
+      ]
+    },
+    {
+      "@id": "ro-crate-metadata.json",
+      "@type": "CreativeWork",
+      "conformsTo": { "@id": "https://example.org/profiles/ro-crate-1.3" },
+      "about": { "@id": "./" }
+    },
+    {
+      "@id": "files/train.csv",
+      "@type": "File",
+      "name": "Training data",
+      "description": "One tiny table.",
+      "path": "data/train.csv",
+      "contentUrl": { "@id": "https://example.org/files/train.csv" },
+      "encodingFormat": "text/csv",
+      "format": { "@id": "https://example.org/formats/csv" },
+      "contentSize": 42,
+      "checksum": {
+        "checksumAlgorithm": "sha256",
+        "checksumValue": "0123456789abcdef"
+      },
+      "content": "inline payload is deliberately omitted"
+    },
+    {
+      "@id": "./",
+      "@type": "Dataset",
+      "name": [
+        { "@value": "Cat Faces", "@language": "en" },
+        "Cats"
+      ],
+      "description": "An adversarial flattened RO-Crate fixture.",
+      "identifier": { "@id": "https://doi.org/10.0000/example" },
+      "version": "1.0",
+      "datePublished": {
+        "@value": "2026-01-02",
+        "@type": "https://example.org/datatypes/date"
+      },
+      "url": { "@id": "https://example.org/datasets/cats/home" },
+      "keywords": ["vision", "cats"],
+      "license": { "@id": "https://example.org/licenses/open" },
+      "creator": { "@id": "agents/alice" },
+      "hasPart": { "@id": "files/train.csv" },
+      "mentions": [
+        { "@id": "actions/build" },
+        { "@id": "records/train" }
+      ],
+      "citation": "unknown member is deliberately ledgered"
+    },
+    {
+      "@id": "fields/label",
+      "@type": "FormalParameter",
+      "name": "label",
+      "dataType": { "@id": "https://example.org/datatypes/string" }
+    },
+    {
+      "@id": "actions/build",
+      "@type": "CreateAction",
+      "name": "Build dataset",
+      "agent": { "@id": "agents/alice" },
+      "object": { "@id": "./" },
+      "result": { "@id": "files/train.csv" },
+      "endTime": {
+        "@value": "2026-01-03T04:05:06Z",
+        "@type": "https://example.org/datatypes/dateTime"
+      }
+    },
+    {
+      "@id": "agents/alice",
+      "@type": "Person",
+      "name": "Alice"
+    },
+    {
+      "@id": "fields/id",
+      "@type": "FormalParameter",
+      "name": "id",
+      "dataType": { "@id": "https://example.org/datatypes/integer" }
+    }
+  ]
+}
