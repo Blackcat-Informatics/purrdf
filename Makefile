@@ -4,7 +4,7 @@
 CARGO_TARGET_DIR ?= target
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle pydantic-oracle linkml-oracle typescript-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -152,6 +152,10 @@ linkml-oracle: ## Validate emitted LinkML through the locked official 1.11 toolc
 typescript-oracle: ## Compile emitted declarations with TypeScript 7.0 and compare assignability with CompiledSchema.
 	npm --prefix crates/rdf-wasm/js ci --ignore-scripts --no-audit --no-fund
 	node crates/shapes/tests/typescript_oracle.mjs
+
+graphql-oracle: ## Validate emitted SDL and variable coercion with locked GraphQL.js and boon.
+	npm --prefix crates/rdf-wasm/js ci --ignore-scripts --no-audit --no-fund
+	node crates/shapes/tests/graphql_oracle.mjs
 
 bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NOT a test gate). See docs/BENCHMARKS.md.
 	cd bindings/python && uv run maturin develop && uv run python benchmarks/bench_compat.py

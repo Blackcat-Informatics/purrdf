@@ -187,6 +187,9 @@ jobs:
       - name: TypeScript emitter schema oracle
         run: node crates/shapes/tests/typescript_oracle.mjs
 
+      - name: GraphQL emitter schema oracle
+        run: node crates/shapes/tests/graphql_oracle.mjs
+
   benchmarks:
     runs-on: ubuntu-latest
     timeout-minutes: 120
