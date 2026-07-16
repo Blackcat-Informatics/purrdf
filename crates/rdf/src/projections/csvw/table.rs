@@ -53,7 +53,12 @@ fn parse_table(
     let source = std::str::from_utf8(bytes).map_err(|error| {
         ProjectionError::syntax(format!("CSVW table is not UTF-8: {error}")).at_path(&table.url)
     })?;
-    let records = logical_records(source, table.dialect.quote_char, table.dialect.double_quote)?;
+    let records = logical_records(
+        source,
+        &table.dialect.line_terminators,
+        table.dialect.quote_char,
+        table.dialect.double_quote,
+    )?;
     let mut headers: Vec<(usize, Vec<String>)> = Vec::new();
     let mut data = Vec::new();
     let mut eligible_index = 0usize;
@@ -156,43 +161,60 @@ struct LogicalRecord<'a> {
     text: &'a str,
 }
 
-fn logical_records(
-    source: &str,
+fn logical_records<'a>(
+    source: &'a str,
+    line_terminators: &[String],
     quote: Option<char>,
     double_quote: bool,
-) -> Result<Vec<LogicalRecord<'_>>, ProjectionError> {
+) -> Result<Vec<LogicalRecord<'a>>, ProjectionError> {
+    if line_terminators.iter().any(String::is_empty) {
+        return Err(ProjectionError::configuration(
+            "CSVW line terminators must not be empty",
+        ));
+    }
     let mut records = Vec::new();
     let mut in_quotes = false;
     let mut start = 0usize;
     let mut source_number = 1usize;
-    let mut record_source = 1usize;
-    let mut chars = source.char_indices().peekable();
-    while let Some((index, character)) = chars.next() {
-        if Some(character) == quote {
-            if in_quotes && double_quote && chars.peek().is_some_and(|(_, next)| *next == character)
-            {
-                let _ = chars.next();
-            } else {
-                in_quotes = !in_quotes;
+    let mut index = 0usize;
+    while index < source.len() {
+        let remainder = &source[index..];
+        let character = remainder
+            .chars()
+            .next()
+            .expect("a non-empty string has a first character");
+        let character_len = character.len_utf8();
+        if quote.is_some() && !double_quote && character == '\\' {
+            index += character_len;
+            if let Some(escaped) = source[index..].chars().next() {
+                index += escaped.len_utf8();
             }
             continue;
         }
-        if character == '\n' {
-            source_number += 1;
-            if !in_quotes {
-                let end = if index > start && source.as_bytes()[index - 1] == b'\r' {
-                    index - 1
-                } else {
-                    index
-                };
-                records.push(LogicalRecord {
-                    source_number: record_source,
-                    text: &source[start..end],
-                });
-                start = index + 1;
-                record_source = source_number;
+        if Some(character) == quote {
+            if in_quotes && double_quote && source[index + character_len..].starts_with(character) {
+                index += character_len * 2;
+            } else {
+                in_quotes = !in_quotes;
+                index += character_len;
             }
+            continue;
         }
+        if !in_quotes
+            && let Some(terminator) = line_terminators
+                .iter()
+                .find(|terminator| remainder.starts_with(terminator.as_str()))
+        {
+            records.push(LogicalRecord {
+                source_number,
+                text: &source[start..index],
+            });
+            index += terminator.len();
+            start = index;
+            source_number += 1;
+            continue;
+        }
+        index += character_len;
     }
     if in_quotes {
         return Err(ProjectionError::syntax(
@@ -201,7 +223,7 @@ fn logical_records(
     }
     if start < source.len() || source.is_empty() {
         records.push(LogicalRecord {
-            source_number: record_source,
+            source_number,
             text: &source[start..],
         });
     }
@@ -216,7 +238,14 @@ fn parse_record(record: &str, table: &CsvwTable) -> Result<Vec<String>, Projecti
         .has_headers(false)
         .flexible(true)
         .delimiter(delimiter)
+        // Logical records have already been split using the caller's dialect.
+        // 0xFF cannot occur in the validated UTF-8 source, so CR/LF that are not
+        // declared terminators remain ordinary cell data here.
+        .terminator(csv::Terminator::Any(0xFF))
         .double_quote(table.dialect.double_quote)
+        .escape(
+            (table.dialect.quote_char.is_some() && !table.dialect.double_quote).then_some(b'\\'),
+        )
         .trim(csv::Trim::None);
     if let Some(quote) = table.dialect.quote_char {
         builder.quote(u8::try_from(u32::from(quote)).map_err(|_| {
@@ -1459,4 +1488,72 @@ fn key_tuple(row: &CsvwRow, indices: &[usize]) -> Option<Vec<String>> {
             (!cell.is_null).then(|| cell.string_value.clone())
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record_pairs<'a>(records: &[LogicalRecord<'a>]) -> Vec<(usize, &'a str)> {
+        records
+            .iter()
+            .map(|record| (record.source_number, record.text))
+            .collect()
+    }
+
+    #[test]
+    fn logical_records_honor_declared_terminators_outside_quotes() {
+        let terminators = vec!["\r".to_owned()];
+        let records = logical_records(
+            "name,note\rAlice,\"first\nline\rand second\"\rBob,done\r",
+            &terminators,
+            Some('"'),
+            true,
+        )
+        .expect("records");
+
+        assert_eq!(
+            record_pairs(&records),
+            vec![
+                (1, "name,note"),
+                (2, "Alice,\"first\nline\rand second\""),
+                (3, "Bob,done"),
+            ]
+        );
+    }
+
+    #[test]
+    fn logical_records_honor_escape_and_declared_priority() {
+        let escaped = logical_records(
+            "header\r\"a\\\"b\rc\"\rtail",
+            &["\r".to_owned()],
+            Some('"'),
+            false,
+        )
+        .expect("escaped records");
+        assert_eq!(
+            record_pairs(&escaped),
+            vec![(1, "header"), (2, "\"a\\\"b\rc\""), (3, "tail")]
+        );
+
+        let overlapping = logical_records(
+            "a<><>b<>c␞d",
+            &["<><>".to_owned(), "<>".to_owned(), "␞".to_owned()],
+            None,
+            true,
+        )
+        .expect("overlapping records");
+        assert_eq!(
+            record_pairs(&overlapping),
+            vec![(1, "a"), (2, "b"), (3, "c"), (4, "d")]
+        );
+    }
+
+    #[test]
+    fn logical_records_reject_empty_terminators() {
+        assert!(
+            logical_records("row", &[String::new()], Some('"'), true).is_err(),
+            "an empty terminator cannot make forward progress"
+        );
+    }
 }

@@ -130,4 +130,49 @@ mod tests {
         .expect("expected RDF");
         assert!(datasets_isomorphic(&outcome.dataset, &expected));
     }
+
+    #[test]
+    fn custom_record_dialect_preserves_quoted_line_data_and_source_numbers() {
+        let metadata_iri = "http://example.org/metadata.json";
+        let table_iri = "http://example.org/custom.csv";
+        let metadata = br#"{
+            "@context":"http://www.w3.org/ns/csvw",
+            "url":"http://example.org/custom.csv",
+            "dialect":{"lineTerminators":"\r","doubleQuote":false},
+            "tableSchema":{"columns":[
+                {"name":"name","titles":"name"},
+                {"name":"note","titles":"note"}
+            ]}
+        }"#;
+        let table = b"name,note\rAlice,\"first\\\" quote\nand\rcontinued\"\rBob,done\r";
+        let config = config(CsvwMode::Standard);
+        let input = CsvwInput::new(
+            CsvwAction::Metadata {
+                metadata_iri: metadata_iri.to_owned(),
+            },
+            BTreeMap::from([
+                (metadata_iri.to_owned(), metadata.to_vec()),
+                (table_iri.to_owned(), table.to_vec()),
+            ]),
+            config.limits(),
+        )
+        .expect("input");
+
+        let outcome = read_csvw(&input, &config).expect("custom CSVW dialect");
+        assert!(
+            outcome.warnings.is_empty(),
+            "unexpected warnings: {:#?}",
+            outcome.warnings
+        );
+        let rows = &outcome.group.tables[0].rows;
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].number, rows[0].source_number), (1, 2));
+        assert_eq!((rows[1].number, rows[1].source_number), (2, 3));
+        assert_eq!(rows[0].cells[0].string_value, "Alice");
+        assert_eq!(
+            rows[0].cells[1].string_value,
+            "first\" quote\nand\rcontinued"
+        );
+        assert_eq!(rows[1].cells[1].string_value, "done");
+    }
 }
