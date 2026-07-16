@@ -1,0 +1,107 @@
+{
+  "@context": {
+    "@vocab": "https://example.org/dcat/"
+  },
+  "@graph": [
+    {
+      "@id": "https://example.org/datasets/cats",
+      "@type": "Dataset",
+      "conformsTo": [{ "@id": "https://example.org/profiles/dcat-3" }],
+      "title": [
+        { "@value": "Cat Faces", "@language": "en" },
+        { "@value": "Cats", "@type": "https://example.org/rdf/role-49" }
+      ],
+      "description": [{ "@value": "An adversarial DCAT fixture.", "@type": "https://example.org/rdf/role-49" }],
+      "identifier": [{ "@id": "https://doi.org/10.0000/cats" }],
+      "version": [{ "@value": "1.0", "@type": "https://example.org/rdf/role-49" }],
+      "issued": [{ "@value": "2026-01-02", "@type": "https://example.org/datatypes/date" }],
+      "modified": [{ "@value": "2026-02-03", "@type": "https://example.org/datatypes/date" }],
+      "landingPage": [{ "@id": "https://example.org/datasets/cats/home" }],
+      "keyword": [
+        { "@value": "cats", "@type": "https://example.org/rdf/role-49" },
+        { "@value": "vision", "@type": "https://example.org/rdf/role-49" }
+      ],
+      "license": [{ "@id": "https://example.org/licenses/open" }],
+      "creator": [{ "@id": "https://example.org/agents/alice" }],
+      "publisher": [{ "@id": "https://example.org/agents/publisher" }],
+      "distribution": [{ "@id": "https://example.org/resources/train.csv" }],
+      "activity": [{ "@id": "https://example.org/activities/build" }],
+      "recordSet": [{ "@id": "https://example.org/record-sets/train" }],
+      "https://example.org/dcat/unknownMember": [{ "@value": "ignored" }]
+    },
+    {
+      "@id": "https://example.org/agents/alice",
+      "@type": "Agent",
+      "agentName": [{ "@value": "Alice", "@type": "https://example.org/rdf/role-49" }]
+    },
+    {
+      "@id": "https://example.org/agents/publisher",
+      "@type": "Agent",
+      "agentName": [{ "@value": "Example Press", "@type": "https://example.org/rdf/role-49" }]
+    },
+    {
+      "@id": "https://example.org/resources/train.csv",
+      "@type": "Distribution",
+      "title": [{ "@value": "Training data", "@type": "https://example.org/rdf/role-49" }],
+      "description": [{ "@value": "One tiny table.", "@type": "https://example.org/rdf/role-49" }],
+      "path": [{ "@value": "data/train.csv" }],
+      "downloadURL": [{ "@id": "https://example.org/files/train.csv" }],
+      "mediaType": [{ "@value": "text/csv", "@type": "https://example.org/rdf/role-49" }],
+      "format": [{ "@id": "https://example.org/formats/csv" }],
+      "byteSize": [{ "@value": "42", "@type": "https://example.org/rdf/role-50" }],
+      "checksum": [{ "@id": "_:fixture-checksum" }]
+    },
+    {
+      "@id": "_:fixture-checksum",
+      "@type": "Checksum",
+      "algorithm": [{ "@value": "sha256", "@type": "https://example.org/rdf/role-49" }],
+      "checksumValue": [{ "@value": "0123456789abcdef", "@type": "https://example.org/rdf/role-49" }]
+    },
+    {
+      "@id": "https://example.org/activities/build",
+      "@type": "Activity",
+      "title": [{ "@value": "Build dataset", "@type": "https://example.org/rdf/role-49" }],
+      "instrument": [{ "@id": "https://example.org/workflows/build" }],
+      "agent": [{ "@id": "https://example.org/agents/alice" }],
+      "object": [{ "@id": "https://example.org/datasets/cats" }],
+      "result": [{ "@id": "https://example.org/resources/train.csv" }],
+      "endTime": [{ "@value": "2026-01-03T04:05:06Z", "@type": "https://example.org/rdf/role-51" }],
+      "workflow": [{ "@id": "https://example.org/workflows/build" }]
+    },
+    {
+      "@id": "https://example.org/record-sets/train",
+      "@type": "RecordSet",
+      "title": [{ "@value": "Training rows", "@type": "https://example.org/rdf/role-49" }],
+      "description": [{ "@value": "Two inline rows.", "@type": "https://example.org/rdf/role-49" }],
+      "field": [
+        { "@id": "https://example.org/fields/id" },
+        { "@id": "https://example.org/fields/label" }
+      ],
+      "records": [
+        { "@value": "{\"id\":1,\"label\":\"black\"}", "@type": "https://example.org/rdf/role-46" },
+        { "@value": "{\"id\":2,\"label\":\"calico\"}", "@type": "https://example.org/rdf/role-46" }
+      ]
+    },
+    {
+      "@id": "https://example.org/fields/id",
+      "@type": "Field",
+      "title": [{ "@value": "id", "@type": "https://example.org/rdf/role-49" }],
+      "dataType": [{ "@id": "https://example.org/datatypes/integer" }]
+    },
+    {
+      "@id": "https://example.org/fields/label",
+      "@type": "Field",
+      "title": [{ "@value": "label", "@type": "https://example.org/rdf/role-49" }],
+      "dataType": [{ "@id": "https://example.org/datatypes/string" }]
+    },
+    {
+      "@id": "https://example.org/graphs/extra",
+      "@graph": [
+        {
+          "@id": "https://example.org/extra/node",
+          "https://example.org/dcat/namedGraphNote": [{ "@value": "extra graph material" }]
+        }
+      ]
+    }
+  ]
+}

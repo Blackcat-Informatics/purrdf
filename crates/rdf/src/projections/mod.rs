@@ -80,15 +80,17 @@ pub use obo_graphs::{
 pub use package::{ProjectionLimits, ProjectionPackage};
 pub use research_object::{
     CROISSANT_ARTIFACT, CROISSANT_PROFILE, CROISSANT_ROLES, CroissantConfig, CroissantRole,
-    CroissantVocabulary, DATACITE_ARTIFACT, DATACITE_PROFILE, DataCiteConfig,
-    DataCiteControlledValues, OfflineJsonLdContext, RESEARCH_ROLES, RO_CRATE_ARTIFACT,
-    RO_CRATE_PROFILE, RO_CRATE_ROLES, ResearchActivity, ResearchAgent, ResearchChecksum,
-    ResearchDataset, ResearchField, ResearchObjectConfig, ResearchObjectIdentity,
-    ResearchObjectModel, ResearchObjectPackageProjection, ResearchObjectPolicy,
-    ResearchObjectProjection, ResearchObjectReadOutcome, ResearchObjectRoles, ResearchRecordSet,
-    ResearchResource, ResearchRole, ResearchText, ResearchValue, RoCrateConfig, RoCrateRole,
-    RoCrateVocabulary, lift_research_object, project_croissant, project_datacite,
-    project_research_object, project_ro_crate, read_croissant, read_datacite, read_ro_crate,
+    CroissantVocabulary, DATACITE_ARTIFACT, DATACITE_PROFILE, DCAT_ARTIFACT, DCAT_PROFILE,
+    DCAT_ROLES, DataCiteConfig, DataCiteControlledValues, DcatConfig, DcatRole, DcatVocabulary,
+    OfflineJsonLdContext, RESEARCH_ROLES, RO_CRATE_ARTIFACT, RO_CRATE_PROFILE, RO_CRATE_ROLES,
+    ResearchActivity, ResearchAgent, ResearchChecksum, ResearchDataset, ResearchField,
+    ResearchObjectConfig, ResearchObjectIdentity, ResearchObjectModel,
+    ResearchObjectPackageProjection, ResearchObjectPolicy, ResearchObjectProjection,
+    ResearchObjectReadOutcome, ResearchObjectRoles, ResearchRecordSet, ResearchResource,
+    ResearchRole, ResearchText, ResearchValue, RoCrateConfig, RoCrateRole, RoCrateVocabulary,
+    lift_research_object, project_croissant, project_datacite, project_dcat,
+    project_research_object, project_ro_crate, read_croissant, read_datacite, read_dcat,
+    read_ro_crate,
 };
 pub use skos::{
     SkosClassRoles, SkosConfig, SkosDocumentationRoles, SkosGraphSelection, SkosLabelRoles,
