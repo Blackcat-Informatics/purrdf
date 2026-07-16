@@ -13,6 +13,7 @@ mod error;
 mod lpg;
 mod obo_graphs;
 mod package;
+mod skos;
 mod term;
 mod util;
 
@@ -41,6 +42,10 @@ pub use obo_graphs::{
     project_obo_graphs,
 };
 pub use package::{ProjectionLimits, ProjectionPackage};
+pub use skos::{
+    SkosClassRoles, SkosConfig, SkosDocumentationRoles, SkosGraphSelection, SkosLabelRoles,
+    SkosProjection, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles, project_skos,
+};
 pub use term::{ProjectionDirection, ProjectionTerm};
 pub use util::{
     escape_cypher_identifier, escape_cypher_string, escape_xml_attribute, escape_xml_text,
