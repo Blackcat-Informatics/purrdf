@@ -941,10 +941,11 @@ const JSON_SCHEMA_GRAPHQL_PROFILE: &[(&str, &str)] = &[
          caller-named fallback scalar and exclusivity is delegated.",
     ),
     (
-        "pattern-properties-validation-narrowed",
-        "JSON Schema patternProperties can admit runtime keys selected by a regular expression. \
-         GraphQL input object fields are a fixed finite name set and reject those dynamic keys, \
-         so the accepted object key space is narrowed.",
+        "pattern-properties-validation-changed",
+        "JSON Schema patternProperties can admit dynamic regex-selected keys and can add \
+         conjunctive validation to declared keys. GraphQL input objects instead expose a fixed \
+         field set with one type per field, so dynamic keys are narrowed while overlapping \
+         declared-field validation may be widened.",
     ),
     (
         "property-count-validation-dropped",
@@ -952,10 +953,11 @@ const JSON_SCHEMA_GRAPHQL_PROFILE: &[(&str, &str)] = &[
          definitions express field requiredness but cannot bound the total supplied-field count.",
     ),
     (
-        "property-name-validation-narrowed",
-        "JSON Schema propertyNames can validate an open runtime key space. GraphQL input objects \
-         expose only their declared finite field set and reject all other names, narrowing any \
-         source key space that remains open after the property-name assertion.",
+        "property-name-validation-changed",
+        "JSON Schema propertyNames validates every runtime key, including declared properties. \
+         GraphQL input objects expose only a fixed declared field set: unknown names are narrowed, \
+         while a source property-name rule that rejects a generated declared field is not \
+         enforced and may widen acceptance.",
     ),
     (
         "recursive-input-nullability-relaxed",

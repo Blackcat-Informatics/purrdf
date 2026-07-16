@@ -785,17 +785,17 @@ impl<'a> Planner<'a> {
         if let Some(patterns) = object.get("patternProperties").and_then(Value::as_object) {
             for pattern in patterns.keys() {
                 self.record(
-                    "pattern-properties-validation-narrowed",
+                    "pattern-properties-validation-changed",
                     &format!("{path}/patternProperties/{}", pointer_escape(pattern)),
-                    "GraphQL input object fields cannot be selected by a runtime key regex",
+                    "GraphQL fixed fields cannot preserve regex-selected dynamic or overlapping keys",
                 );
             }
         }
         if object.contains_key("propertyNames") {
             self.record(
-                "property-name-validation-narrowed",
+                "property-name-validation-changed",
                 &format!("{path}/propertyNames"),
-                "GraphQL input objects expose a fixed finite property-name set",
+                "GraphQL fixed fields do not apply the source schema to each runtime key name",
             );
         }
         for keyword in ["minProperties", "maxProperties"] {
@@ -2403,9 +2403,9 @@ mod tests {
             "nullable-presence-validation-widened",
             "numeric-validation-dropped",
             "one-of-validation-delegated",
-            "pattern-properties-validation-narrowed",
+            "pattern-properties-validation-changed",
             "property-count-validation-dropped",
-            "property-name-validation-narrowed",
+            "property-name-validation-changed",
             "recursive-input-nullability-relaxed",
             "singleton-list-coercion-widened",
             "string-validation-dropped",
