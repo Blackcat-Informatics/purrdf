@@ -1421,13 +1421,16 @@ dependencies = [
  "criterion",
  "proptest",
  "purrdf-gts",
+ "purrdf-iri",
  "purrdf-rdf",
  "purrdf-slice",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-xsd",
  "regex",
+ "serde",
  "serde_json",
+ "serde_yaml_ng",
  "smallvec",
 ]
 

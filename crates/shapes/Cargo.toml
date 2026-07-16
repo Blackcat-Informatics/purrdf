@@ -48,6 +48,13 @@ purrdf-xsd = { workspace = true }
 # serde_json's default BTreeMap-backed Map so object keys serialize sorted for
 # deterministic, byte-stable output.
 serde_json = { workspace = true }
+# Canonical LinkML 1.11 YAML codec. Both dependencies are always-on: the
+# reader/writer is one production behavior on native and wasm targets.
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+# Validate caller-supplied schema and prefix IRIs with the workspace's
+# zero-dependency RFC 3987 implementation.
+purrdf-iri = { workspace = true }
 # Shared PyO3-free RDF 1.2 kernel and native GTS/text-codec boundary.
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.

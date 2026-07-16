@@ -24,6 +24,7 @@ pub mod engine;
 pub mod expression;
 pub mod instance;
 pub mod json_schema;
+pub mod linkml;
 pub mod model;
 pub mod path;
 pub(crate) mod prebinding;
@@ -38,6 +39,9 @@ pub mod term;
 pub mod text_ingest;
 
 pub use json_schema::{Namespaces, ValueVocab, ValueVocabProjection, compile_with_value_vocab};
+pub use linkml::{
+    LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, parse_linkml, write_linkml,
+};
 pub use pydantic::{PydanticConfig, PydanticError, PydanticPackage, emit_pydantic};
 pub use rules::{apply_rules, entail_dataset};
 
