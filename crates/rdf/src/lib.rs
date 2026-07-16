@@ -108,14 +108,21 @@ pub use native_quads::{
     flat_rdf_quads_from_dataset,
 };
 pub use projections::{
+    CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig, CsvwContext, CsvwDatatype,
+    CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection, CsvwExactReadOutcome, CsvwForeignKey,
+    CsvwInheritedProperties, CsvwInput, CsvwMappedTableGroup, CsvwMode, CsvwNaturalLanguage,
+    CsvwNumericFormat, CsvwRdfTableMapping, CsvwReadOutcome, CsvwReference, CsvwRow, CsvwSchema,
+    CsvwTable, CsvwTableDirection, CsvwTableGroup, CsvwTextDirection, CsvwTransformation, CsvwTrim,
+    CsvwValue, CsvwVocabulary, CsvwWarning, CsvwWarningKind, CsvwWriteOutcome, CsvwWritePlan,
     LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgGraphContext, LpgLabel, LpgLiftOutcome,
     LpgNode, LpgPackageProjection, LpgProjection, LpgProperty, LpgPropertyAtom, LpgRdfQuad,
     LpgReifier, ProjectionDirection, ProjectionError, ProjectionErrorKind, ProjectionLimits,
     ProjectionPackage, ProjectionTerm, escape_cypher_identifier, escape_cypher_string,
-    escape_xml_attribute, escape_xml_text, lift_lpg, project_lpg, project_lpg_csv,
-    project_lpg_cypher, project_lpg_graphml, project_neo4j_csv, read_lpg_csv, read_lpg_cypher,
-    read_lpg_graphml, read_neo4j_csv, stable_identifier, validate_absolute_iri, write_lpg_csv,
-    write_lpg_cypher, write_lpg_graphml, write_neo4j_csv,
+    escape_xml_attribute, escape_xml_text, lift_lpg, project_csvw, project_csvw_exact, project_lpg,
+    project_lpg_csv, project_lpg_cypher, project_lpg_graphml, project_neo4j_csv, read_csvw,
+    read_csvw_exact, read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv,
+    stable_identifier, validate_absolute_iri, write_csvw, write_lpg_csv, write_lpg_cypher,
+    write_lpg_graphml, write_neo4j_csv,
 };
 pub use purrdf_core::{
     ArtifactId, ArtifactIndex, ArtifactInterner, ArtifactRecord, AssertionOccurrence, Attribution,

@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Preserve the revision-pinned W3C CSVW corpus byte-for-byte. Some normative
+# fixtures intentionally exercise CRLF and trailing-whitespace behavior.
+crates/rdf/tests/fixtures/csvw-w3c/** -text -diff

@@ -1407,6 +1407,7 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-xsd",
  "rayon",
+ "regex",
  "roxmltree",
  "serde",
  "serde_json",

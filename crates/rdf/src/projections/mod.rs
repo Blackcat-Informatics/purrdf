@@ -8,12 +8,22 @@
 //! primitives. Filesystem and network access stay outside this module, so the same
 //! engine runs unchanged in native, WebAssembly, Python, and C hosts.
 
+mod csvw;
 mod error;
 mod lpg;
 mod package;
 mod term;
 mod util;
 
+pub use csvw::{
+    CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig, CsvwContext, CsvwDatatype,
+    CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection, CsvwExactReadOutcome, CsvwForeignKey,
+    CsvwInheritedProperties, CsvwInput, CsvwMappedTableGroup, CsvwMode, CsvwNaturalLanguage,
+    CsvwNumericFormat, CsvwRdfTableMapping, CsvwReadOutcome, CsvwReference, CsvwRow, CsvwSchema,
+    CsvwTable, CsvwTableDirection, CsvwTableGroup, CsvwTextDirection, CsvwTransformation, CsvwTrim,
+    CsvwValue, CsvwVocabulary, CsvwWarning, CsvwWarningKind, CsvwWriteOutcome, CsvwWritePlan,
+    project_csvw, project_csvw_exact, read_csvw, read_csvw_exact, write_csvw,
+};
 pub use error::{ProjectionError, ProjectionErrorKind};
 pub use lpg::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgGraphContext, LpgLabel, LpgLiftOutcome,
