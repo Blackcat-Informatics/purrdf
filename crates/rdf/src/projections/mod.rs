@@ -44,6 +44,7 @@ mod error;
 mod lpg;
 mod obo_graphs;
 mod package;
+mod research_object;
 mod skos;
 mod term;
 mod util;
@@ -77,6 +78,13 @@ pub use obo_graphs::{
     project_obo_graphs,
 };
 pub use package::{ProjectionLimits, ProjectionPackage};
+pub use research_object::{
+    RESEARCH_ROLES, ResearchActivity, ResearchAgent, ResearchChecksum, ResearchDataset,
+    ResearchField, ResearchObjectConfig, ResearchObjectIdentity, ResearchObjectModel,
+    ResearchObjectPolicy, ResearchObjectProjection, ResearchObjectRoles, ResearchRecordSet,
+    ResearchResource, ResearchRole, ResearchText, ResearchValue, lift_research_object,
+    project_research_object,
+};
 pub use skos::{
     SkosClassRoles, SkosConfig, SkosDocumentationRoles, SkosGraphSelection, SkosLabelRoles,
     SkosProjection, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles, project_skos,

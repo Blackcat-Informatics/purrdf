@@ -1,5 +1,145 @@
 [
   {
+    "code": "research-object-inline-payload-dropped",
+    "from": "croissant-1.1",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "Inline resource payload bytes are outside the RDF metadata pivot and are omitted; only their described resource metadata is retained."
+  },
+  {
+    "code": "research-object-local-id-resolved",
+    "from": "croissant-1.1",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A profile-local entity identifier is resolved beneath the caller-supplied entity base; its original relative spelling remains in mapped path metadata where available."
+  },
+  {
+    "code": "research-object-order-dropped",
+    "from": "croissant-1.1",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "Native array or XML element order without declared semantic meaning has no RDF slot and is canonicalized into set order."
+  },
+  {
+    "code": "research-object-unknown-member-dropped",
+    "from": "croissant-1.1",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "An unrecognized native JSON member or XML element is outside the closed research-object mapping and is omitted with its source location recorded."
+  },
+  {
+    "code": "research-object-unsupported-value-dropped",
+    "from": "croissant-1.1",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A recognized native member used a value shape outside the supported semantic mapping and is omitted with its source location recorded."
+  },
+  {
+    "code": "research-object-inline-payload-dropped",
+    "from": "datacite-4.6",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "Inline resource payload bytes are outside the RDF metadata pivot and are omitted; only their described resource metadata is retained."
+  },
+  {
+    "code": "research-object-local-id-resolved",
+    "from": "datacite-4.6",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A profile-local entity identifier is resolved beneath the caller-supplied entity base; its original relative spelling remains in mapped path metadata where available."
+  },
+  {
+    "code": "research-object-order-dropped",
+    "from": "datacite-4.6",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "Native array or XML element order without declared semantic meaning has no RDF slot and is canonicalized into set order."
+  },
+  {
+    "code": "research-object-unknown-member-dropped",
+    "from": "datacite-4.6",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "An unrecognized native JSON member or XML element is outside the closed research-object mapping and is omitted with its source location recorded."
+  },
+  {
+    "code": "research-object-unsupported-value-dropped",
+    "from": "datacite-4.6",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A recognized native member used a value shape outside the supported semantic mapping and is omitted with its source location recorded."
+  },
+  {
+    "code": "research-object-inline-payload-dropped",
+    "from": "dcat-3",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "Inline resource payload bytes are outside the RDF metadata pivot and are omitted; only their described resource metadata is retained."
+  },
+  {
+    "code": "research-object-local-id-resolved",
+    "from": "dcat-3",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A profile-local entity identifier is resolved beneath the caller-supplied entity base; its original relative spelling remains in mapped path metadata where available."
+  },
+  {
+    "code": "research-object-order-dropped",
+    "from": "dcat-3",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "Native array or XML element order without declared semantic meaning has no RDF slot and is canonicalized into set order."
+  },
+  {
+    "code": "research-object-unknown-member-dropped",
+    "from": "dcat-3",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "An unrecognized native JSON member or XML element is outside the closed research-object mapping and is omitted with its source location recorded."
+  },
+  {
+    "code": "research-object-unsupported-value-dropped",
+    "from": "dcat-3",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A recognized native member used a value shape outside the supported semantic mapping and is omitted with its source location recorded."
+  },
+  {
+    "code": "research-object-inline-payload-dropped",
+    "from": "frictionless-data-package-1",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "Inline resource payload bytes are outside the RDF metadata pivot and are omitted; only their described resource metadata is retained."
+  },
+  {
+    "code": "research-object-local-id-resolved",
+    "from": "frictionless-data-package-1",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A profile-local entity identifier is resolved beneath the caller-supplied entity base; its original relative spelling remains in mapped path metadata where available."
+  },
+  {
+    "code": "research-object-order-dropped",
+    "from": "frictionless-data-package-1",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "Native array or XML element order without declared semantic meaning has no RDF slot and is canonicalized into set order."
+  },
+  {
+    "code": "research-object-unknown-member-dropped",
+    "from": "frictionless-data-package-1",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "An unrecognized native JSON member or XML element is outside the closed research-object mapping and is omitted with its source location recorded."
+  },
+  {
+    "code": "research-object-unsupported-value-dropped",
+    "from": "frictionless-data-package-1",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A recognized native member used a value shape outside the supported semantic mapping and is omitted with its source location recorded."
+  },
+  {
     "code": "canonical-rdf12-projection",
     "from": "gts",
     "to": "canonical-rdf12",
@@ -1162,6 +1302,230 @@
     "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
   },
   {
+    "code": "research-object-annotation-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "croissant-1.1",
+    "intentional": true,
+    "note": "An RDF 1.2 statement annotation has no native research-object metadata slot and is omitted."
+  },
+  {
+    "code": "research-object-blank-identity-resolved",
+    "from": "rdf-1.2-dataset",
+    "to": "croissant-1.1",
+    "intentional": true,
+    "note": "A blank-node entity identity is resolved to a deterministic data IRI under the caller-supplied entity base; blank scope is not carried by the native profile."
+  },
+  {
+    "code": "research-object-empty-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "croissant-1.1",
+    "intentional": true,
+    "note": "An explicitly empty named graph has no research-object metadata representation and is omitted."
+  },
+  {
+    "code": "research-object-literal-fidelity-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "croissant-1.1",
+    "intentional": true,
+    "note": "An RDF literal language, direction, or datatype facet absent from the selected native profile is omitted while its lexical value is retained."
+  },
+  {
+    "code": "research-object-named-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "croissant-1.1",
+    "intentional": true,
+    "note": "Research-object metadata profiles do not retain RDF named-graph placement; mapped statement content may remain in the native document."
+  },
+  {
+    "code": "research-object-reifier-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "croissant-1.1",
+    "intentional": true,
+    "note": "An RDF 1.2 reifier binding has no native research-object metadata construct and is omitted."
+  },
+  {
+    "code": "research-object-triple-term-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "croissant-1.1",
+    "intentional": true,
+    "note": "An RDF 1.2 quoted triple term has no native research-object scalar or reference representation and is omitted."
+  },
+  {
+    "code": "research-object-unmapped-statement-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "croissant-1.1",
+    "intentional": true,
+    "note": "An RDF statement outside the complete caller-configured research-object role map is omitted from the native document."
+  },
+  {
+    "code": "research-object-annotation-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "datacite-4.6",
+    "intentional": true,
+    "note": "An RDF 1.2 statement annotation has no native research-object metadata slot and is omitted."
+  },
+  {
+    "code": "research-object-blank-identity-resolved",
+    "from": "rdf-1.2-dataset",
+    "to": "datacite-4.6",
+    "intentional": true,
+    "note": "A blank-node entity identity is resolved to a deterministic data IRI under the caller-supplied entity base; blank scope is not carried by the native profile."
+  },
+  {
+    "code": "research-object-empty-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "datacite-4.6",
+    "intentional": true,
+    "note": "An explicitly empty named graph has no research-object metadata representation and is omitted."
+  },
+  {
+    "code": "research-object-literal-fidelity-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "datacite-4.6",
+    "intentional": true,
+    "note": "An RDF literal language, direction, or datatype facet absent from the selected native profile is omitted while its lexical value is retained."
+  },
+  {
+    "code": "research-object-named-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "datacite-4.6",
+    "intentional": true,
+    "note": "Research-object metadata profiles do not retain RDF named-graph placement; mapped statement content may remain in the native document."
+  },
+  {
+    "code": "research-object-reifier-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "datacite-4.6",
+    "intentional": true,
+    "note": "An RDF 1.2 reifier binding has no native research-object metadata construct and is omitted."
+  },
+  {
+    "code": "research-object-triple-term-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "datacite-4.6",
+    "intentional": true,
+    "note": "An RDF 1.2 quoted triple term has no native research-object scalar or reference representation and is omitted."
+  },
+  {
+    "code": "research-object-unmapped-statement-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "datacite-4.6",
+    "intentional": true,
+    "note": "An RDF statement outside the complete caller-configured research-object role map is omitted from the native document."
+  },
+  {
+    "code": "research-object-annotation-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "dcat-3",
+    "intentional": true,
+    "note": "An RDF 1.2 statement annotation has no native research-object metadata slot and is omitted."
+  },
+  {
+    "code": "research-object-blank-identity-resolved",
+    "from": "rdf-1.2-dataset",
+    "to": "dcat-3",
+    "intentional": true,
+    "note": "A blank-node entity identity is resolved to a deterministic data IRI under the caller-supplied entity base; blank scope is not carried by the native profile."
+  },
+  {
+    "code": "research-object-empty-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "dcat-3",
+    "intentional": true,
+    "note": "An explicitly empty named graph has no research-object metadata representation and is omitted."
+  },
+  {
+    "code": "research-object-literal-fidelity-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "dcat-3",
+    "intentional": true,
+    "note": "An RDF literal language, direction, or datatype facet absent from the selected native profile is omitted while its lexical value is retained."
+  },
+  {
+    "code": "research-object-named-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "dcat-3",
+    "intentional": true,
+    "note": "Research-object metadata profiles do not retain RDF named-graph placement; mapped statement content may remain in the native document."
+  },
+  {
+    "code": "research-object-reifier-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "dcat-3",
+    "intentional": true,
+    "note": "An RDF 1.2 reifier binding has no native research-object metadata construct and is omitted."
+  },
+  {
+    "code": "research-object-triple-term-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "dcat-3",
+    "intentional": true,
+    "note": "An RDF 1.2 quoted triple term has no native research-object scalar or reference representation and is omitted."
+  },
+  {
+    "code": "research-object-unmapped-statement-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "dcat-3",
+    "intentional": true,
+    "note": "An RDF statement outside the complete caller-configured research-object role map is omitted from the native document."
+  },
+  {
+    "code": "research-object-annotation-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "frictionless-data-package-1",
+    "intentional": true,
+    "note": "An RDF 1.2 statement annotation has no native research-object metadata slot and is omitted."
+  },
+  {
+    "code": "research-object-blank-identity-resolved",
+    "from": "rdf-1.2-dataset",
+    "to": "frictionless-data-package-1",
+    "intentional": true,
+    "note": "A blank-node entity identity is resolved to a deterministic data IRI under the caller-supplied entity base; blank scope is not carried by the native profile."
+  },
+  {
+    "code": "research-object-empty-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "frictionless-data-package-1",
+    "intentional": true,
+    "note": "An explicitly empty named graph has no research-object metadata representation and is omitted."
+  },
+  {
+    "code": "research-object-literal-fidelity-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "frictionless-data-package-1",
+    "intentional": true,
+    "note": "An RDF literal language, direction, or datatype facet absent from the selected native profile is omitted while its lexical value is retained."
+  },
+  {
+    "code": "research-object-named-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "frictionless-data-package-1",
+    "intentional": true,
+    "note": "Research-object metadata profiles do not retain RDF named-graph placement; mapped statement content may remain in the native document."
+  },
+  {
+    "code": "research-object-reifier-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "frictionless-data-package-1",
+    "intentional": true,
+    "note": "An RDF 1.2 reifier binding has no native research-object metadata construct and is omitted."
+  },
+  {
+    "code": "research-object-triple-term-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "frictionless-data-package-1",
+    "intentional": true,
+    "note": "An RDF 1.2 quoted triple term has no native research-object scalar or reference representation and is omitted."
+  },
+  {
+    "code": "research-object-unmapped-statement-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "frictionless-data-package-1",
+    "intentional": true,
+    "note": "An RDF statement outside the complete caller-configured research-object role map is omitted from the native document."
+  },
+  {
     "code": "blob-bytes-absent",
     "from": "rdf-1.2-dataset",
     "to": "gts",
@@ -1302,6 +1666,62 @@
     "note": "An RDF 1.2 reifier outside the exact caller-configured OKF Markdown-link profile has no OKF representation and is omitted from the bundle."
   },
   {
+    "code": "research-object-annotation-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "ro-crate-1.3",
+    "intentional": true,
+    "note": "An RDF 1.2 statement annotation has no native research-object metadata slot and is omitted."
+  },
+  {
+    "code": "research-object-blank-identity-resolved",
+    "from": "rdf-1.2-dataset",
+    "to": "ro-crate-1.3",
+    "intentional": true,
+    "note": "A blank-node entity identity is resolved to a deterministic data IRI under the caller-supplied entity base; blank scope is not carried by the native profile."
+  },
+  {
+    "code": "research-object-empty-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "ro-crate-1.3",
+    "intentional": true,
+    "note": "An explicitly empty named graph has no research-object metadata representation and is omitted."
+  },
+  {
+    "code": "research-object-literal-fidelity-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "ro-crate-1.3",
+    "intentional": true,
+    "note": "An RDF literal language, direction, or datatype facet absent from the selected native profile is omitted while its lexical value is retained."
+  },
+  {
+    "code": "research-object-named-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "ro-crate-1.3",
+    "intentional": true,
+    "note": "Research-object metadata profiles do not retain RDF named-graph placement; mapped statement content may remain in the native document."
+  },
+  {
+    "code": "research-object-reifier-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "ro-crate-1.3",
+    "intentional": true,
+    "note": "An RDF 1.2 reifier binding has no native research-object metadata construct and is omitted."
+  },
+  {
+    "code": "research-object-triple-term-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "ro-crate-1.3",
+    "intentional": true,
+    "note": "An RDF 1.2 quoted triple term has no native research-object scalar or reference representation and is omitted."
+  },
+  {
+    "code": "research-object-unmapped-statement-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "ro-crate-1.3",
+    "intentional": true,
+    "note": "An RDF statement outside the complete caller-configured research-object role map is omitted from the native document."
+  },
+  {
     "code": "skos-annotation-dropped",
     "from": "rdf-1.2-dataset",
     "to": "skos",
@@ -1391,6 +1811,41 @@
     "to": "owl-el",
     "intentional": true,
     "note": "Projection to the OWL 2 EL profile: constructs outside EL are dropped; the result is a sound, PTIME-decidable view."
+  },
+  {
+    "code": "research-object-inline-payload-dropped",
+    "from": "ro-crate-1.3",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "Inline resource payload bytes are outside the RDF metadata pivot and are omitted; only their described resource metadata is retained."
+  },
+  {
+    "code": "research-object-local-id-resolved",
+    "from": "ro-crate-1.3",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A profile-local entity identifier is resolved beneath the caller-supplied entity base; its original relative spelling remains in mapped path metadata where available."
+  },
+  {
+    "code": "research-object-order-dropped",
+    "from": "ro-crate-1.3",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "Native array or XML element order without declared semantic meaning has no RDF slot and is canonicalized into set order."
+  },
+  {
+    "code": "research-object-unknown-member-dropped",
+    "from": "ro-crate-1.3",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "An unrecognized native JSON member or XML element is outside the closed research-object mapping and is omitted with its source location recorded."
+  },
+  {
+    "code": "research-object-unsupported-value-dropped",
+    "from": "ro-crate-1.3",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A recognized native member used a value shape outside the supported semantic mapping and is omitted with its source location recorded."
   },
   {
     "code": "rdfs:range",

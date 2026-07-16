@@ -332,6 +332,44 @@ pub const LOSS_SKOS_REIFIER_DROPPED: &str = "skos-reifier-dropped";
 /// RDF→SKOS loss code: a statement annotation is outside the concept view.
 pub const LOSS_SKOS_ANNOTATION_DROPPED: &str = "skos-annotation-dropped";
 
+/// RDF→research-object loss code: source named-graph placement is not carried.
+pub const LOSS_RESEARCH_NAMED_GRAPH_DROPPED: &str = "research-object-named-graph-dropped";
+/// RDF→research-object loss code: an explicitly empty named graph is not carried.
+pub const LOSS_RESEARCH_EMPTY_GRAPH_DROPPED: &str = "research-object-empty-graph-dropped";
+/// RDF→research-object loss code: a blank identity is resolved under caller policy.
+pub const LOSS_RESEARCH_BLANK_IDENTITY_RESOLVED: &str = "research-object-blank-identity-resolved";
+/// RDF→research-object loss code: an RDF 1.2 triple term is not representable.
+pub const LOSS_RESEARCH_TRIPLE_TERM_DROPPED: &str = "research-object-triple-term-dropped";
+/// RDF→research-object loss code: a reifier binding is not representable.
+pub const LOSS_RESEARCH_REIFIER_DROPPED: &str = "research-object-reifier-dropped";
+/// RDF→research-object loss code: a statement annotation is not representable.
+pub const LOSS_RESEARCH_ANNOTATION_DROPPED: &str = "research-object-annotation-dropped";
+/// RDF→research-object loss code: a statement is outside caller-configured roles.
+pub const LOSS_RESEARCH_UNMAPPED_STATEMENT_DROPPED: &str =
+    "research-object-unmapped-statement-dropped";
+/// RDF→research-object loss code: a literal facet is absent from the target profile.
+pub const LOSS_RESEARCH_LITERAL_FIDELITY_DROPPED: &str = "research-object-literal-fidelity-dropped";
+/// Research-object→RDF loss code: an unrecognized native member is omitted.
+pub const LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED: &str = "research-object-unknown-member-dropped";
+/// Research-object→RDF loss code: a known but unsupported value shape is omitted.
+pub const LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED: &str =
+    "research-object-unsupported-value-dropped";
+/// Research-object→RDF loss code: inline payload bytes are outside metadata RDF.
+pub const LOSS_RESEARCH_INLINE_PAYLOAD_DROPPED: &str = "research-object-inline-payload-dropped";
+/// Research-object→RDF loss code: document order has no RDF semantic slot.
+pub const LOSS_RESEARCH_ORDER_DROPPED: &str = "research-object-order-dropped";
+/// Research-object→RDF loss code: a local identifier is resolved under caller policy.
+pub const LOSS_RESEARCH_LOCAL_ID_RESOLVED: &str = "research-object-local-id-resolved";
+
+/// Versioned research-object codec names governed by the shared semantic pivot.
+pub const RESEARCH_OBJECT_CODECS: &[&str] = &[
+    "croissant-1.1",
+    "ro-crate-1.3",
+    "datacite-4.6",
+    "dcat-3",
+    "frictionless-data-package-1",
+];
+
 const RDF_LPG_PROFILE: &[(&str, &str)] = &[
     (
         LOSS_LPG_ANNOTATION_SIDEBAND,
@@ -472,6 +510,64 @@ const RDF_SKOS_PROFILE: &[(&str, &str)] = &[
     ),
 ];
 
+const RDF_RESEARCH_OBJECT_PROFILE: &[(&str, &str)] = &[
+    (
+        LOSS_RESEARCH_ANNOTATION_DROPPED,
+        "An RDF 1.2 statement annotation has no native research-object metadata slot and is omitted.",
+    ),
+    (
+        LOSS_RESEARCH_BLANK_IDENTITY_RESOLVED,
+        "A blank-node entity identity is resolved to a deterministic data IRI under the caller-supplied entity base; blank scope is not carried by the native profile.",
+    ),
+    (
+        LOSS_RESEARCH_EMPTY_GRAPH_DROPPED,
+        "An explicitly empty named graph has no research-object metadata representation and is omitted.",
+    ),
+    (
+        LOSS_RESEARCH_LITERAL_FIDELITY_DROPPED,
+        "An RDF literal language, direction, or datatype facet absent from the selected native profile is omitted while its lexical value is retained.",
+    ),
+    (
+        LOSS_RESEARCH_NAMED_GRAPH_DROPPED,
+        "Research-object metadata profiles do not retain RDF named-graph placement; mapped statement content may remain in the native document.",
+    ),
+    (
+        LOSS_RESEARCH_REIFIER_DROPPED,
+        "An RDF 1.2 reifier binding has no native research-object metadata construct and is omitted.",
+    ),
+    (
+        LOSS_RESEARCH_TRIPLE_TERM_DROPPED,
+        "An RDF 1.2 quoted triple term has no native research-object scalar or reference representation and is omitted.",
+    ),
+    (
+        LOSS_RESEARCH_UNMAPPED_STATEMENT_DROPPED,
+        "An RDF statement outside the complete caller-configured research-object role map is omitted from the native document.",
+    ),
+];
+
+const RESEARCH_OBJECT_RDF_PROFILE: &[(&str, &str)] = &[
+    (
+        LOSS_RESEARCH_INLINE_PAYLOAD_DROPPED,
+        "Inline resource payload bytes are outside the RDF metadata pivot and are omitted; only their described resource metadata is retained.",
+    ),
+    (
+        LOSS_RESEARCH_LOCAL_ID_RESOLVED,
+        "A profile-local entity identifier is resolved beneath the caller-supplied entity base; its original relative spelling remains in mapped path metadata where available.",
+    ),
+    (
+        LOSS_RESEARCH_ORDER_DROPPED,
+        "Native array or XML element order without declared semantic meaning has no RDF slot and is canonicalized into set order.",
+    ),
+    (
+        LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
+        "An unrecognized native JSON member or XML element is outside the closed research-object mapping and is omitted with its source location recorded.",
+    ),
+    (
+        LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
+        "A recognized native member used a value shape outside the supported semantic mapping and is omitted with its source location recorded.",
+    ),
+];
+
 fn contract_profile(
     from: &'static str,
     to: &'static str,
@@ -513,6 +609,35 @@ pub fn rdf_to_obo_graphs_loss_ledger() -> LossLedger {
 /// Closed RDF 1.2 dataset→SKOS concept-scheme view contract.
 pub fn rdf_to_skos_loss_ledger() -> LossLedger {
     contract_profile("rdf-1.2-dataset", "skos", RDF_SKOS_PROFILE)
+}
+
+/// Closed RDF 1.2 dataset→versioned research-object projection contract.
+///
+/// # Panics
+///
+/// Panics when `profile` is not one of [`RESEARCH_OBJECT_CODECS`]; callers use
+/// closed profile enums, so an unknown value is a programming error.
+pub fn rdf_to_research_object_loss_ledger(profile: &str) -> LossLedger {
+    let profile = canonical_research_object_codec(profile);
+    contract_profile("rdf-1.2-dataset", profile, RDF_RESEARCH_OBJECT_PROFILE)
+}
+
+/// Closed versioned research-object→RDF 1.2 interpretation contract.
+///
+/// # Panics
+///
+/// Panics when `profile` is not one of [`RESEARCH_OBJECT_CODECS`].
+pub fn research_object_to_rdf_loss_ledger(profile: &str) -> LossLedger {
+    let profile = canonical_research_object_codec(profile);
+    contract_profile(profile, "rdf-1.2-dataset", RESEARCH_OBJECT_RDF_PROFILE)
+}
+
+fn canonical_research_object_codec(profile: &str) -> &'static str {
+    RESEARCH_OBJECT_CODECS
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == profile)
+        .unwrap_or_else(|| panic!("unknown research-object codec `{profile}`"))
 }
 
 /// The combined RDF↔GTS matrix as a single deterministic, sorted-by-code JSON
@@ -1348,7 +1473,8 @@ fn static_str(cow: &Cow<'static, str>) -> &'static str {
 /// [`gts_to_rdf_loss_ledger`]), RDF↔OKF direction ledgers
 /// ([`rdf_to_okf_loss_ledger`] / [`okf_to_rdf_loss_ledger`]), RDF↔LPG
 /// ([`rdf_to_lpg_loss_ledger`] / [`lpg_to_rdf_loss_ledger`]), RDF→OBO Graphs
-/// ([`rdf_to_obo_graphs_loss_ledger`]), RDF→SKOS ([`rdf_to_skos_loss_ledger`]), plus
+/// ([`rdf_to_obo_graphs_loss_ledger`]), RDF→SKOS ([`rdf_to_skos_loss_ledger`]),
+/// every bidirectional versioned research-object profile, plus
 /// [`transcode_and_shapes_entries`] (the full
 /// syntax/projection transcode matrix over `SYNTAX_CODECS` × `(SYNTAX_CODECS ∪
 /// PROJECTION_CODECS)` and the non-syntax shapes pair `("shacl", "json-schema")`),
@@ -1369,6 +1495,10 @@ fn registry_entries() -> Vec<LossEntry> {
     entries.extend_from_slice(lpg_to_rdf_loss_ledger().entries());
     entries.extend_from_slice(rdf_to_obo_graphs_loss_ledger().entries());
     entries.extend_from_slice(rdf_to_skos_loss_ledger().entries());
+    for profile in RESEARCH_OBJECT_CODECS {
+        entries.extend_from_slice(rdf_to_research_object_loss_ledger(profile).entries());
+        entries.extend_from_slice(research_object_to_rdf_loss_ledger(profile).entries());
+    }
     entries.extend(transcode_and_shapes_entries());
     entries.extend(json_schema_pydantic_entries());
     entries.extend(json_schema_linkml_entries());
@@ -1998,6 +2128,45 @@ mod tests {
                     "transcode matrix missing {from}->{to} code {code}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn research_object_direction_profiles_are_closed_and_registered() {
+        for profile in RESEARCH_OBJECT_CODECS {
+            for (from, to, ledger, declared) in [
+                (
+                    "rdf-1.2-dataset",
+                    *profile,
+                    rdf_to_research_object_loss_ledger(profile),
+                    RDF_RESEARCH_OBJECT_PROFILE,
+                ),
+                (
+                    *profile,
+                    "rdf-1.2-dataset",
+                    research_object_to_rdf_loss_ledger(profile),
+                    RESEARCH_OBJECT_RDF_PROFILE,
+                ),
+            ] {
+                let expected: BTreeSet<&str> = declared.iter().map(|(code, _)| *code).collect();
+                assert_eq!(profile_for(from, to), expected);
+                assert_eq!(ledger.entries().len(), expected.len());
+                assert_ledger_sound(&ledger, from, to);
+                assert!(registered_pairs().any(|pair| pair == (from, to)));
+            }
+        }
+    }
+
+    #[test]
+    fn transcode_matrix_includes_every_research_object_direction() {
+        let json = loss_matrix_json();
+        for profile in RESEARCH_OBJECT_CODECS {
+            assert!(json.contains(&format!(
+                "\"from\": \"rdf-1.2-dataset\",\n    \"to\": \"{profile}\""
+            )));
+            assert!(json.contains(&format!(
+                "\"from\": \"{profile}\",\n    \"to\": \"rdf-1.2-dataset\""
+            )));
         }
     }
 
