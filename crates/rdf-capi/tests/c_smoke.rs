@@ -114,9 +114,21 @@ fn c_abi_smoke() {
         run_example.success(),
         "C projection example returned a failure exit code"
     );
+    let example_metadata =
+        std::fs::metadata(&example_archive).expect("C projection example archive metadata");
     assert!(
-        std::fs::metadata(&example_archive).is_ok_and(|metadata| metadata.len() > 0),
+        example_metadata.len() > 0,
         "C projection example did not materialize its archive"
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert_eq!(
+            example_metadata.permissions().mode() & 0o777,
+            0o600,
+            "C projection example archive permissions are not owner-only"
+        );
+    }
     let _ = std::fs::remove_file(example_archive);
 }

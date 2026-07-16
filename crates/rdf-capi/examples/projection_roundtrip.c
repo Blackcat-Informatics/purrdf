@@ -1,15 +1,56 @@
 /* SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> */
 /* SPDX-License-Identifier: MIT OR Apache-2.0 */
 
+#if !defined(_WIN32)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "purrdf.h"
 
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 static void print_error(const char *operation, PurrdfError *error) {
     const char *message = error == NULL ? "no diagnostic" : purrdf_error_message(error);
     fprintf(stderr, "%s failed: %s\n", operation, message == NULL ? "no diagnostic" : message);
+}
+
+static FILE *open_private_output(const char *path) {
+#if defined(_WIN32)
+    int descriptor = _open(path, _O_BINARY | _O_WRONLY | _O_CREAT | _O_TRUNC,
+                           _S_IREAD | _S_IWRITE);
+    if (descriptor == -1) {
+        return NULL;
+    }
+    FILE *file = _fdopen(descriptor, "wb");
+    if (file == NULL) {
+        (void)_close(descriptor);
+    }
+#else
+    int descriptor = open(path, O_WRONLY | O_CREAT | O_TRUNC,
+                          S_IRUSR | S_IWUSR);
+    if (descriptor == -1) {
+        return NULL;
+    }
+    if (fchmod(descriptor, S_IRUSR | S_IWUSR) != 0) {
+        (void)close(descriptor);
+        return NULL;
+    }
+    FILE *file = fdopen(descriptor, "wb");
+    if (file == NULL) {
+        (void)close(descriptor);
+    }
+#endif
+    return file;
 }
 
 int main(int argc, char **argv) {
@@ -52,7 +93,7 @@ int main(int argc, char **argv) {
         fputs("archive buffer access failed\n", stderr);
         goto cleanup;
     }
-    FILE *file = fopen(argv[1], "wb");
+    FILE *file = open_private_output(argv[1]);
     if (file == NULL) {
         fputs("archive write failed\n", stderr);
         goto cleanup;
