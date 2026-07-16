@@ -140,6 +140,153 @@
     "note": "A recognized native member used a value shape outside the supported semantic mapping and is omitted with its source location recorded."
   },
   {
+    "code": "additional-properties-schema-widened",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema-valued additionalProperties assertion constrains arbitrary object members, while SHACL Core closure can only reject unlisted direct predicates. Named properties remain constrained and the arbitrary-value schema is widened."
+  },
+  {
+    "code": "annotation-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema title, description, comment, example, default, deprecation marker, or native documentation annotation has no exact validation meaning in the imported SHACL shape and is omitted."
+  },
+  {
+    "code": "array-contains-validation-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Schema contains/minContains/maxContains assertions quantify matching array members; the imported SHACL property retains item and total-cardinality constraints but cannot express that independent match count exactly."
+  },
+  {
+    "code": "boolean-schema-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A standalone true or false schema has no class-targeted SHACL shape identity. The definition is omitted rather than inventing a caller vocabulary term."
+  },
+  {
+    "code": "conditional-validation-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Schema if/then/else validation chooses constraints from runtime object content. SHACL Core has no equivalent conditional constraint, so independently representable constraints remain and the conditional relationship is omitted."
+  },
+  {
+    "code": "content-validation-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "String contentEncoding/contentMediaType/contentSchema assertions describe or validate an embedded representation. SHACL Core constrains the RDF literal itself and cannot reproduce that nested content contract."
+  },
+  {
+    "code": "dependency-validation-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "dependentRequired/dependentSchemas or an equivalent native cross-field dependency has no exact SHACL Core property-shape expression. Individual properties remain while the dependency is omitted."
+  },
+  {
+    "code": "enum-metadata-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema enum member's generated symbol, title, description, or other parallel metadata is not part of SHACL membership semantics and is omitted while the finite values remain."
+  },
+  {
+    "code": "format-validation-widened",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A string format without one exact caller-identifiable RDF datatype is imported as its scalar carrier. PurRDF does not mint or guess a datatype IRI, so format validation is widened and recorded."
+  },
+  {
+    "code": "multiple-of-validation-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A numeric multipleOf assertion has no SHACL Core numeric facet. Datatype and range bounds remain while divisibility validation is omitted."
+  },
+  {
+    "code": "non-object-definition-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A top-level schema definition describes a scalar, array, finite value set, or alias rather than a class-shaped object. Without a caller-supplied class/property use site it cannot become a top-level SHACL node shape and is omitted."
+  },
+  {
+    "code": "numeric-lexical-form-normalized",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A JSON/native numeric value carries numeric value but not the original RDF literal lexical form or derived XSD datatype. The importer uses the canonical configured numeric carrier, so that lexical distinction is normalized."
+  },
+  {
+    "code": "object-key-validation-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "patternProperties/propertyNames or an equivalent native dynamic-key rule constrains JSON member names. Direct SHACL predicate paths retain named properties, but the dynamic key-space rule is omitted."
+  },
+  {
+    "code": "property-count-validation-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "minProperties/maxProperties counts JSON object members independently of named predicates. SHACL property shapes retain named requiredness but cannot bound the total predicate count with a Core constraint."
+  },
+  {
+    "code": "schema-applicator-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema logical applicator cannot be lowered to an equivalent finite SHACL and/or/xone/not shape at its position. Independently representable constraints remain and the applicator is omitted."
+  },
+  {
+    "code": "schema-identity-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema document identifier, anchor, dialect declaration, generated package identity, or native module identity is not a SHACL vocabulary term. Caller-owned class and property IRIs remain; the carrier identity is omitted."
+  },
+  {
+    "code": "tuple-validation-widened",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Position-specific prefixItems/additionalItems or an equivalent tuple type has no direct RDF multi-value ordering contract on one predicate. Common item/cardinality constraints remain and positional validation is widened."
+  },
+  {
+    "code": "unevaluated-validation-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "unevaluatedProperties/unevaluatedItems depends on schema-applicator evaluation state that SHACL Core does not expose. Local closure, named properties, and item constraints remain while the evaluation-state assertion is omitted."
+  },
+  {
+    "code": "unique-items-validation-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "uniqueItems constrains duplicate JSON array members. RDF predicate values are a set in the data model, so the serialized-array assertion has no distinct imported SHACL constraint and is omitted."
+  },
+  {
+    "code": "unknown-keyword-dropped",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A valid extension or assertion outside the fixed importer capability table has no reviewed SHACL interpretation. It is omitted with a located entry rather than silently ignored or guessed."
+  },
+  {
+    "code": "value-term-kind-widened",
+    "from": "graphql-september-2025",
+    "to": "shacl",
+    "intentional": true,
+    "note": "The schema carrier admits values whose RDF term kind or exact datatype cannot be recovered uniquely. The importer retains the representable scalar/node carrier and records the unresolved term-kind distinction."
+  },
+  {
     "code": "canonical-rdf12-projection",
     "from": "gts",
     "to": "canonical-rdf12",
@@ -595,6 +742,153 @@
     "note": "Pydantic v2 unions implement any-branch semantics and cannot enforce JSON Schema oneOf's exactly-one matching rule; runtime validation uses a union while model_json_schema() retains oneOf."
   },
   {
+    "code": "additional-properties-schema-widened",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema-valued additionalProperties assertion constrains arbitrary object members, while SHACL Core closure can only reject unlisted direct predicates. Named properties remain constrained and the arbitrary-value schema is widened."
+  },
+  {
+    "code": "annotation-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema title, description, comment, example, default, deprecation marker, or native documentation annotation has no exact validation meaning in the imported SHACL shape and is omitted."
+  },
+  {
+    "code": "array-contains-validation-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Schema contains/minContains/maxContains assertions quantify matching array members; the imported SHACL property retains item and total-cardinality constraints but cannot express that independent match count exactly."
+  },
+  {
+    "code": "boolean-schema-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A standalone true or false schema has no class-targeted SHACL shape identity. The definition is omitted rather than inventing a caller vocabulary term."
+  },
+  {
+    "code": "conditional-validation-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Schema if/then/else validation chooses constraints from runtime object content. SHACL Core has no equivalent conditional constraint, so independently representable constraints remain and the conditional relationship is omitted."
+  },
+  {
+    "code": "content-validation-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "String contentEncoding/contentMediaType/contentSchema assertions describe or validate an embedded representation. SHACL Core constrains the RDF literal itself and cannot reproduce that nested content contract."
+  },
+  {
+    "code": "dependency-validation-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "dependentRequired/dependentSchemas or an equivalent native cross-field dependency has no exact SHACL Core property-shape expression. Individual properties remain while the dependency is omitted."
+  },
+  {
+    "code": "enum-metadata-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema enum member's generated symbol, title, description, or other parallel metadata is not part of SHACL membership semantics and is omitted while the finite values remain."
+  },
+  {
+    "code": "format-validation-widened",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A string format without one exact caller-identifiable RDF datatype is imported as its scalar carrier. PurRDF does not mint or guess a datatype IRI, so format validation is widened and recorded."
+  },
+  {
+    "code": "multiple-of-validation-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A numeric multipleOf assertion has no SHACL Core numeric facet. Datatype and range bounds remain while divisibility validation is omitted."
+  },
+  {
+    "code": "non-object-definition-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A top-level schema definition describes a scalar, array, finite value set, or alias rather than a class-shaped object. Without a caller-supplied class/property use site it cannot become a top-level SHACL node shape and is omitted."
+  },
+  {
+    "code": "numeric-lexical-form-normalized",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A JSON/native numeric value carries numeric value but not the original RDF literal lexical form or derived XSD datatype. The importer uses the canonical configured numeric carrier, so that lexical distinction is normalized."
+  },
+  {
+    "code": "object-key-validation-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "patternProperties/propertyNames or an equivalent native dynamic-key rule constrains JSON member names. Direct SHACL predicate paths retain named properties, but the dynamic key-space rule is omitted."
+  },
+  {
+    "code": "property-count-validation-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "minProperties/maxProperties counts JSON object members independently of named predicates. SHACL property shapes retain named requiredness but cannot bound the total predicate count with a Core constraint."
+  },
+  {
+    "code": "schema-applicator-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema logical applicator cannot be lowered to an equivalent finite SHACL and/or/xone/not shape at its position. Independently representable constraints remain and the applicator is omitted."
+  },
+  {
+    "code": "schema-identity-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema document identifier, anchor, dialect declaration, generated package identity, or native module identity is not a SHACL vocabulary term. Caller-owned class and property IRIs remain; the carrier identity is omitted."
+  },
+  {
+    "code": "tuple-validation-widened",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Position-specific prefixItems/additionalItems or an equivalent tuple type has no direct RDF multi-value ordering contract on one predicate. Common item/cardinality constraints remain and positional validation is widened."
+  },
+  {
+    "code": "unevaluated-validation-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "unevaluatedProperties/unevaluatedItems depends on schema-applicator evaluation state that SHACL Core does not expose. Local closure, named properties, and item constraints remain while the evaluation-state assertion is omitted."
+  },
+  {
+    "code": "unique-items-validation-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "uniqueItems constrains duplicate JSON array members. RDF predicate values are a set in the data model, so the serialized-array assertion has no distinct imported SHACL constraint and is omitted."
+  },
+  {
+    "code": "unknown-keyword-dropped",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A valid extension or assertion outside the fixed importer capability table has no reviewed SHACL interpretation. It is omitted with a located entry rather than silently ignored or guessed."
+  },
+  {
+    "code": "value-term-kind-widened",
+    "from": "json-schema",
+    "to": "shacl",
+    "intentional": true,
+    "note": "The schema carrier admits values whose RDF term kind or exact datatype cannot be recovered uniquely. The importer retains the representable scalar/node carrier and records the unresolved term-kind distinction."
+  },
+  {
     "code": "additional-properties-validation-widened",
     "from": "json-schema",
     "to": "typescript-7.0",
@@ -987,6 +1281,153 @@
     "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
   },
   {
+    "code": "additional-properties-schema-widened",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema-valued additionalProperties assertion constrains arbitrary object members, while SHACL Core closure can only reject unlisted direct predicates. Named properties remain constrained and the arbitrary-value schema is widened."
+  },
+  {
+    "code": "annotation-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema title, description, comment, example, default, deprecation marker, or native documentation annotation has no exact validation meaning in the imported SHACL shape and is omitted."
+  },
+  {
+    "code": "array-contains-validation-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Schema contains/minContains/maxContains assertions quantify matching array members; the imported SHACL property retains item and total-cardinality constraints but cannot express that independent match count exactly."
+  },
+  {
+    "code": "boolean-schema-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A standalone true or false schema has no class-targeted SHACL shape identity. The definition is omitted rather than inventing a caller vocabulary term."
+  },
+  {
+    "code": "conditional-validation-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Schema if/then/else validation chooses constraints from runtime object content. SHACL Core has no equivalent conditional constraint, so independently representable constraints remain and the conditional relationship is omitted."
+  },
+  {
+    "code": "content-validation-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "String contentEncoding/contentMediaType/contentSchema assertions describe or validate an embedded representation. SHACL Core constrains the RDF literal itself and cannot reproduce that nested content contract."
+  },
+  {
+    "code": "dependency-validation-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "dependentRequired/dependentSchemas or an equivalent native cross-field dependency has no exact SHACL Core property-shape expression. Individual properties remain while the dependency is omitted."
+  },
+  {
+    "code": "enum-metadata-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema enum member's generated symbol, title, description, or other parallel metadata is not part of SHACL membership semantics and is omitted while the finite values remain."
+  },
+  {
+    "code": "format-validation-widened",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A string format without one exact caller-identifiable RDF datatype is imported as its scalar carrier. PurRDF does not mint or guess a datatype IRI, so format validation is widened and recorded."
+  },
+  {
+    "code": "multiple-of-validation-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A numeric multipleOf assertion has no SHACL Core numeric facet. Datatype and range bounds remain while divisibility validation is omitted."
+  },
+  {
+    "code": "non-object-definition-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A top-level schema definition describes a scalar, array, finite value set, or alias rather than a class-shaped object. Without a caller-supplied class/property use site it cannot become a top-level SHACL node shape and is omitted."
+  },
+  {
+    "code": "numeric-lexical-form-normalized",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A JSON/native numeric value carries numeric value but not the original RDF literal lexical form or derived XSD datatype. The importer uses the canonical configured numeric carrier, so that lexical distinction is normalized."
+  },
+  {
+    "code": "object-key-validation-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "patternProperties/propertyNames or an equivalent native dynamic-key rule constrains JSON member names. Direct SHACL predicate paths retain named properties, but the dynamic key-space rule is omitted."
+  },
+  {
+    "code": "property-count-validation-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "minProperties/maxProperties counts JSON object members independently of named predicates. SHACL property shapes retain named requiredness but cannot bound the total predicate count with a Core constraint."
+  },
+  {
+    "code": "schema-applicator-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema logical applicator cannot be lowered to an equivalent finite SHACL and/or/xone/not shape at its position. Independently representable constraints remain and the applicator is omitted."
+  },
+  {
+    "code": "schema-identity-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema document identifier, anchor, dialect declaration, generated package identity, or native module identity is not a SHACL vocabulary term. Caller-owned class and property IRIs remain; the carrier identity is omitted."
+  },
+  {
+    "code": "tuple-validation-widened",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Position-specific prefixItems/additionalItems or an equivalent tuple type has no direct RDF multi-value ordering contract on one predicate. Common item/cardinality constraints remain and positional validation is widened."
+  },
+  {
+    "code": "unevaluated-validation-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "unevaluatedProperties/unevaluatedItems depends on schema-applicator evaluation state that SHACL Core does not expose. Local closure, named properties, and item constraints remain while the evaluation-state assertion is omitted."
+  },
+  {
+    "code": "unique-items-validation-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "uniqueItems constrains duplicate JSON array members. RDF predicate values are a set in the data model, so the serialized-array assertion has no distinct imported SHACL constraint and is omitted."
+  },
+  {
+    "code": "unknown-keyword-dropped",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A valid extension or assertion outside the fixed importer capability table has no reviewed SHACL interpretation. It is omitted with a located entry rather than silently ignored or guessed."
+  },
+  {
+    "code": "value-term-kind-widened",
+    "from": "linkml-1.11",
+    "to": "shacl",
+    "intentional": true,
+    "note": "The schema carrier admits values whose RDF term kind or exact datatype cannot be recovered uniquely. The importer retains the representable scalar/node carrier and records the unresolved term-kind distinction."
+  },
+  {
     "code": "lpg-edge-id-dropped",
     "from": "lpg",
     "to": "rdf-1.2-dataset",
@@ -1300,6 +1741,153 @@
     "to": "rdfxml",
     "intentional": true,
     "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
+  },
+  {
+    "code": "additional-properties-schema-widened",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema-valued additionalProperties assertion constrains arbitrary object members, while SHACL Core closure can only reject unlisted direct predicates. Named properties remain constrained and the arbitrary-value schema is widened."
+  },
+  {
+    "code": "annotation-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema title, description, comment, example, default, deprecation marker, or native documentation annotation has no exact validation meaning in the imported SHACL shape and is omitted."
+  },
+  {
+    "code": "array-contains-validation-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Schema contains/minContains/maxContains assertions quantify matching array members; the imported SHACL property retains item and total-cardinality constraints but cannot express that independent match count exactly."
+  },
+  {
+    "code": "boolean-schema-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A standalone true or false schema has no class-targeted SHACL shape identity. The definition is omitted rather than inventing a caller vocabulary term."
+  },
+  {
+    "code": "conditional-validation-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Schema if/then/else validation chooses constraints from runtime object content. SHACL Core has no equivalent conditional constraint, so independently representable constraints remain and the conditional relationship is omitted."
+  },
+  {
+    "code": "content-validation-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "String contentEncoding/contentMediaType/contentSchema assertions describe or validate an embedded representation. SHACL Core constrains the RDF literal itself and cannot reproduce that nested content contract."
+  },
+  {
+    "code": "dependency-validation-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "dependentRequired/dependentSchemas or an equivalent native cross-field dependency has no exact SHACL Core property-shape expression. Individual properties remain while the dependency is omitted."
+  },
+  {
+    "code": "enum-metadata-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema enum member's generated symbol, title, description, or other parallel metadata is not part of SHACL membership semantics and is omitted while the finite values remain."
+  },
+  {
+    "code": "format-validation-widened",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A string format without one exact caller-identifiable RDF datatype is imported as its scalar carrier. PurRDF does not mint or guess a datatype IRI, so format validation is widened and recorded."
+  },
+  {
+    "code": "multiple-of-validation-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A numeric multipleOf assertion has no SHACL Core numeric facet. Datatype and range bounds remain while divisibility validation is omitted."
+  },
+  {
+    "code": "non-object-definition-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A top-level schema definition describes a scalar, array, finite value set, or alias rather than a class-shaped object. Without a caller-supplied class/property use site it cannot become a top-level SHACL node shape and is omitted."
+  },
+  {
+    "code": "numeric-lexical-form-normalized",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A JSON/native numeric value carries numeric value but not the original RDF literal lexical form or derived XSD datatype. The importer uses the canonical configured numeric carrier, so that lexical distinction is normalized."
+  },
+  {
+    "code": "object-key-validation-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "patternProperties/propertyNames or an equivalent native dynamic-key rule constrains JSON member names. Direct SHACL predicate paths retain named properties, but the dynamic key-space rule is omitted."
+  },
+  {
+    "code": "property-count-validation-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "minProperties/maxProperties counts JSON object members independently of named predicates. SHACL property shapes retain named requiredness but cannot bound the total predicate count with a Core constraint."
+  },
+  {
+    "code": "schema-applicator-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema logical applicator cannot be lowered to an equivalent finite SHACL and/or/xone/not shape at its position. Independently representable constraints remain and the applicator is omitted."
+  },
+  {
+    "code": "schema-identity-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema document identifier, anchor, dialect declaration, generated package identity, or native module identity is not a SHACL vocabulary term. Caller-owned class and property IRIs remain; the carrier identity is omitted."
+  },
+  {
+    "code": "tuple-validation-widened",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Position-specific prefixItems/additionalItems or an equivalent tuple type has no direct RDF multi-value ordering contract on one predicate. Common item/cardinality constraints remain and positional validation is widened."
+  },
+  {
+    "code": "unevaluated-validation-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "unevaluatedProperties/unevaluatedItems depends on schema-applicator evaluation state that SHACL Core does not expose. Local closure, named properties, and item constraints remain while the evaluation-state assertion is omitted."
+  },
+  {
+    "code": "unique-items-validation-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "uniqueItems constrains duplicate JSON array members. RDF predicate values are a set in the data model, so the serialized-array assertion has no distinct imported SHACL constraint and is omitted."
+  },
+  {
+    "code": "unknown-keyword-dropped",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A valid extension or assertion outside the fixed importer capability table has no reviewed SHACL interpretation. It is omitted with a located entry rather than silently ignored or guessed."
+  },
+  {
+    "code": "value-term-kind-widened",
+    "from": "pydantic-v2",
+    "to": "shacl",
+    "intentional": true,
+    "note": "The schema carrier admits values whose RDF term kind or exact datatype cannot be recovered uniquely. The importer retains the representable scalar/node carrier and records the unresolved term-kind distinction."
   },
   {
     "code": "research-object-annotation-dropped",
@@ -2154,6 +2742,153 @@
     "to": "rdfxml",
     "intentional": true,
     "note": "RDF/XML has no triple-term (RDF-1.2 quoted triple) syntax; reifying triples and their annotations are dropped."
+  },
+  {
+    "code": "additional-properties-schema-widened",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema-valued additionalProperties assertion constrains arbitrary object members, while SHACL Core closure can only reject unlisted direct predicates. Named properties remain constrained and the arbitrary-value schema is widened."
+  },
+  {
+    "code": "annotation-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema title, description, comment, example, default, deprecation marker, or native documentation annotation has no exact validation meaning in the imported SHACL shape and is omitted."
+  },
+  {
+    "code": "array-contains-validation-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Schema contains/minContains/maxContains assertions quantify matching array members; the imported SHACL property retains item and total-cardinality constraints but cannot express that independent match count exactly."
+  },
+  {
+    "code": "boolean-schema-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A standalone true or false schema has no class-targeted SHACL shape identity. The definition is omitted rather than inventing a caller vocabulary term."
+  },
+  {
+    "code": "conditional-validation-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Schema if/then/else validation chooses constraints from runtime object content. SHACL Core has no equivalent conditional constraint, so independently representable constraints remain and the conditional relationship is omitted."
+  },
+  {
+    "code": "content-validation-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "String contentEncoding/contentMediaType/contentSchema assertions describe or validate an embedded representation. SHACL Core constrains the RDF literal itself and cannot reproduce that nested content contract."
+  },
+  {
+    "code": "dependency-validation-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "dependentRequired/dependentSchemas or an equivalent native cross-field dependency has no exact SHACL Core property-shape expression. Individual properties remain while the dependency is omitted."
+  },
+  {
+    "code": "enum-metadata-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema enum member's generated symbol, title, description, or other parallel metadata is not part of SHACL membership semantics and is omitted while the finite values remain."
+  },
+  {
+    "code": "format-validation-widened",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A string format without one exact caller-identifiable RDF datatype is imported as its scalar carrier. PurRDF does not mint or guess a datatype IRI, so format validation is widened and recorded."
+  },
+  {
+    "code": "multiple-of-validation-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A numeric multipleOf assertion has no SHACL Core numeric facet. Datatype and range bounds remain while divisibility validation is omitted."
+  },
+  {
+    "code": "non-object-definition-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A top-level schema definition describes a scalar, array, finite value set, or alias rather than a class-shaped object. Without a caller-supplied class/property use site it cannot become a top-level SHACL node shape and is omitted."
+  },
+  {
+    "code": "numeric-lexical-form-normalized",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A JSON/native numeric value carries numeric value but not the original RDF literal lexical form or derived XSD datatype. The importer uses the canonical configured numeric carrier, so that lexical distinction is normalized."
+  },
+  {
+    "code": "object-key-validation-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "patternProperties/propertyNames or an equivalent native dynamic-key rule constrains JSON member names. Direct SHACL predicate paths retain named properties, but the dynamic key-space rule is omitted."
+  },
+  {
+    "code": "property-count-validation-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "minProperties/maxProperties counts JSON object members independently of named predicates. SHACL property shapes retain named requiredness but cannot bound the total predicate count with a Core constraint."
+  },
+  {
+    "code": "schema-applicator-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema logical applicator cannot be lowered to an equivalent finite SHACL and/or/xone/not shape at its position. Independently representable constraints remain and the applicator is omitted."
+  },
+  {
+    "code": "schema-identity-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A schema document identifier, anchor, dialect declaration, generated package identity, or native module identity is not a SHACL vocabulary term. Caller-owned class and property IRIs remain; the carrier identity is omitted."
+  },
+  {
+    "code": "tuple-validation-widened",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "Position-specific prefixItems/additionalItems or an equivalent tuple type has no direct RDF multi-value ordering contract on one predicate. Common item/cardinality constraints remain and positional validation is widened."
+  },
+  {
+    "code": "unevaluated-validation-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "unevaluatedProperties/unevaluatedItems depends on schema-applicator evaluation state that SHACL Core does not expose. Local closure, named properties, and item constraints remain while the evaluation-state assertion is omitted."
+  },
+  {
+    "code": "unique-items-validation-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "uniqueItems constrains duplicate JSON array members. RDF predicate values are a set in the data model, so the serialized-array assertion has no distinct imported SHACL constraint and is omitted."
+  },
+  {
+    "code": "unknown-keyword-dropped",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "A valid extension or assertion outside the fixed importer capability table has no reviewed SHACL interpretation. It is omitted with a located entry rather than silently ignored or guessed."
+  },
+  {
+    "code": "value-term-kind-widened",
+    "from": "typescript-7.0",
+    "to": "shacl",
+    "intentional": true,
+    "note": "The schema carrier admits values whose RDF term kind or exact datatype cannot be recovered uniquely. The importer retains the representable scalar/node carrier and records the unresolved term-kind distinction."
   },
   {
     "code": "canonical-rdf12-projection",
