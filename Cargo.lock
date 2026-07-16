@@ -1393,6 +1393,7 @@ dependencies = [
  "ahash",
  "ciborium",
  "criterion",
+ "csv",
  "ed25519-dalek",
  "hashbrown 0.15.5",
  "memchr",

@@ -847,6 +847,48 @@
     "note": "The target syntax has no named-graph construct; quads are folded into the default graph and graph names are dropped."
   },
   {
+    "code": "lpg-edge-id-dropped",
+    "from": "lpg",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A native LPG edge id has no RDF statement identity unless caller configuration maps it to a reifier; an unmapped edge id is omitted while the edge statement is retained."
+  },
+  {
+    "code": "lpg-edge-type-interpreted",
+    "from": "lpg",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A native LPG edge type is interpreted as an RDF predicate under mandatory caller mapping."
+  },
+  {
+    "code": "lpg-label-interpreted",
+    "from": "lpg",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A native LPG label is interpreted as an RDF class under mandatory caller mapping."
+  },
+  {
+    "code": "lpg-node-id-interpreted",
+    "from": "lpg",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A native LPG node id without canonical RDF identity sideband is interpreted as an RDF IRI or blank node under mandatory caller policy."
+  },
+  {
+    "code": "lpg-property-key-interpreted",
+    "from": "lpg",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A native LPG property key is interpreted as an RDF predicate under mandatory caller mapping."
+  },
+  {
+    "code": "lpg-value-interpreted",
+    "from": "lpg",
+    "to": "rdf-1.2-dataset",
+    "intentional": true,
+    "note": "A native LPG scalar or list without canonical RDF term sideband is interpreted as one or more RDF terms under mandatory caller policy."
+  },
+  {
     "code": "canonical-rdf12-projection",
     "from": "nquads",
     "to": "canonical-rdf12",
@@ -1127,6 +1169,111 @@
     "note": "Blob payloads are preserved as content-addressed references (the blob_id digest plus the origin file id), never materialized into the RDF IR, which must stay value-light for arbitrarily large payloads (e.g. multi-terabyte data dumps). A destination GTS carries the reference; the payload bytes are streamed origin->destination on demand (deferred materialization)."
   },
   {
+    "code": "lpg-annotation-sideband",
+    "from": "rdf-1.2-dataset",
+    "to": "lpg",
+    "intentional": true,
+    "note": "An RDF 1.2 statement annotation has no native property-graph semantics. Its exact term, predicate, object, and graph remain in the canonical RDF sideband for reversal."
+  },
+  {
+    "code": "lpg-blank-scope-sideband",
+    "from": "rdf-1.2-dataset",
+    "to": "lpg",
+    "intentional": true,
+    "note": "A blank node's RDF label scope has no native property-graph equivalent. Exact label and scope remain in the canonical RDF identity sideband."
+  },
+  {
+    "code": "lpg-edge-semantics-lowered",
+    "from": "rdf-1.2-dataset",
+    "to": "lpg",
+    "intentional": true,
+    "note": "An RDF predicate/object statement is lowered to an LPG edge or property. Full RDF term identity remains in sideband, but an LPG consumer does not inherit RDF semantics."
+  },
+  {
+    "code": "lpg-literal-semantics-lowered",
+    "from": "rdf-1.2-dataset",
+    "to": "lpg",
+    "intentional": true,
+    "note": "An RDF literal is lowered to an LPG property value. Lexical form, datatype, language, and RDF 1.2 base direction remain in sideband for exact reversal."
+  },
+  {
+    "code": "lpg-named-graph-sideband",
+    "from": "rdf-1.2-dataset",
+    "to": "lpg",
+    "intentional": true,
+    "note": "Property graphs have no RDF named-graph slot. Exact graph placement remains in sideband but is invisible to native LPG graph semantics."
+  },
+  {
+    "code": "lpg-reifier-sideband",
+    "from": "rdf-1.2-dataset",
+    "to": "lpg",
+    "intentional": true,
+    "note": "An RDF 1.2 reifier binding has no native property-graph construct. It remains in canonical structural sideband for exact reversal."
+  },
+  {
+    "code": "lpg-triple-term-sideband",
+    "from": "rdf-1.2-dataset",
+    "to": "lpg",
+    "intentional": true,
+    "note": "An RDF 1.2 quoted triple term has no native LPG scalar or node kind. Its recursive RDF value remains in canonical structural sideband."
+  },
+  {
+    "code": "lpg-type-semantics-lowered",
+    "from": "rdf-1.2-dataset",
+    "to": "lpg",
+    "intentional": true,
+    "note": "An rdf:type statement is lowered to an LPG label under caller-supplied vocabulary. Exact RDF identity remains in sideband, while native label semantics are implementation-defined."
+  },
+  {
+    "code": "obo-annotation-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "obo-graphs-0.3.2",
+    "intentional": true,
+    "note": "An RDF 1.2 statement annotation outside an exact configured OBO metadata slot has no OBO Graphs representation and is omitted."
+  },
+  {
+    "code": "obo-blank-identity-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "obo-graphs-0.3.2",
+    "intentional": true,
+    "note": "A blank-node resource has no stable OBO node id; profile statements rooted at that blank node are omitted rather than assigned a fabricated IRI."
+  },
+  {
+    "code": "obo-literal-fidelity-widened",
+    "from": "rdf-1.2-dataset",
+    "to": "obo-graphs-0.3.2",
+    "intentional": true,
+    "note": "An RDF literal facet not carried by the selected OBO Graphs scalar field is widened to the representable lexical value, with the source location recorded."
+  },
+  {
+    "code": "obo-named-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "obo-graphs-0.3.2",
+    "intentional": true,
+    "note": "OBO Graphs 0.3.2 has no RDF named-graph placement; the selected graph content may remain while its graph-name slot is omitted."
+  },
+  {
+    "code": "obo-non-profile-statement-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "obo-graphs-0.3.2",
+    "intentional": true,
+    "note": "An RDF statement outside the mandatory caller-configured OBO/OWL role profile has no OBO Graphs object and is omitted."
+  },
+  {
+    "code": "obo-reifier-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "obo-graphs-0.3.2",
+    "intentional": true,
+    "note": "An RDF 1.2 reifier binding outside an exact OBO axiom-metadata mapping has no OBO Graphs representation and is omitted."
+  },
+  {
+    "code": "obo-triple-term-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "obo-graphs-0.3.2",
+    "intentional": true,
+    "note": "An RDF 1.2 quoted triple term has no OBO Graphs 0.3.2 term kind and is omitted from the view."
+  },
+  {
     "code": "named-graph-dropped",
     "from": "rdf-1.2-dataset",
     "to": "okf",
@@ -1153,6 +1300,48 @@
     "to": "okf",
     "intentional": true,
     "note": "An RDF 1.2 reifier outside the exact caller-configured OKF Markdown-link profile has no OKF representation and is omitted from the bundle."
+  },
+  {
+    "code": "skos-annotation-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "skos",
+    "intentional": true,
+    "note": "An RDF 1.2 statement annotation has no configured SKOS concept-view role and is omitted."
+  },
+  {
+    "code": "skos-blank-identity-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "skos",
+    "intentional": true,
+    "note": "A blank-node resource cannot serve as a stable concept identity under the configured SKOS view and is omitted rather than assigned a fabricated IRI."
+  },
+  {
+    "code": "skos-named-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "skos",
+    "intentional": true,
+    "note": "The selected SKOS concept-scheme view does not carry source named-graph placement; the mapped statement may remain while its graph-name slot is omitted."
+  },
+  {
+    "code": "skos-non-profile-statement-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "skos",
+    "intentional": true,
+    "note": "An RDF statement outside the caller-configured SKOS concept, label, hierarchy, note, mapping, membership, and top-concept roles is omitted from the view."
+  },
+  {
+    "code": "skos-reifier-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "skos",
+    "intentional": true,
+    "note": "An RDF 1.2 reifier binding has no configured SKOS concept-view role and is omitted."
+  },
+  {
+    "code": "skos-triple-term-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "skos",
+    "intentional": true,
+    "note": "An RDF 1.2 quoted triple term is outside the SKOS concept-view term surface and is omitted."
   },
   {
     "code": "canonical-rdf12-projection",

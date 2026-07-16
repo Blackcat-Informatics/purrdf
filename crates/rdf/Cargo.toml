@@ -47,6 +47,9 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 ciborium = { workspace = true }
+# RFC 4180 / CSVW / LPG tabular encoding. Always-on and pure Rust so every
+# projection reader/writer follows one deterministic path on native and wasm.
+csv = { workspace = true }
 # Store-once interning on the native text-codec hot path (fixed-key hashing +
 # raw hash table indices into the owned term Vec), matching the purrdf-core
 # `ir::builder` pattern.

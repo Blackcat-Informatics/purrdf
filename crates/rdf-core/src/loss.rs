@@ -27,7 +27,8 @@
 //! the `json-schema`→`linkml-1.11` schema projection,
 //! the `json-schema`→`typescript-7.0` declaration projection,
 //! the `json-schema`→`graphql-september-2025` type-system projection,
-//! and the bidirectional RDF 1.2 dataset↔OKF profile;
+//! the bidirectional RDF 1.2 dataset↔OKF profile, the bidirectional RDF↔LPG
+//! semantic lowering, and the OBO Graphs/SKOS views;
 //! [`loss_matrix_json`] renders that same enumerable registry.
 
 use std::borrow::Cow;
@@ -270,6 +271,248 @@ pub fn okf_to_rdf_loss_ledger() -> LossLedger {
         ),
         location: None,
     }])
+}
+
+/// RDF→LPG loss code: an RDF predicate/object statement becomes a native property
+/// graph edge or property whose target data model has no RDF model-theoretic meaning.
+pub const LOSS_LPG_EDGE_SEMANTICS_LOWERED: &str = "lpg-edge-semantics-lowered";
+/// RDF→LPG loss code: `rdf:type` becomes an LPG label.
+pub const LOSS_LPG_TYPE_SEMANTICS_LOWERED: &str = "lpg-type-semantics-lowered";
+/// RDF→LPG loss code: an RDF literal becomes an LPG property value.
+pub const LOSS_LPG_LITERAL_SEMANTICS_LOWERED: &str = "lpg-literal-semantics-lowered";
+/// RDF→LPG loss code: blank-node identity/scope moves to RDF sideband.
+pub const LOSS_LPG_BLANK_SCOPE_SIDEBAND: &str = "lpg-blank-scope-sideband";
+/// RDF→LPG loss code: named-graph placement moves to RDF sideband.
+pub const LOSS_LPG_NAMED_GRAPH_SIDEBAND: &str = "lpg-named-graph-sideband";
+/// RDF→LPG loss code: an RDF 1.2 triple term moves to structural sideband.
+pub const LOSS_LPG_TRIPLE_TERM_SIDEBAND: &str = "lpg-triple-term-sideband";
+/// RDF→LPG loss code: an RDF 1.2 reifier binding moves to structural sideband.
+pub const LOSS_LPG_REIFIER_SIDEBAND: &str = "lpg-reifier-sideband";
+/// RDF→LPG loss code: an RDF 1.2 annotation moves to structural sideband.
+pub const LOSS_LPG_ANNOTATION_SIDEBAND: &str = "lpg-annotation-sideband";
+
+/// LPG→RDF loss code: a native node identifier is interpreted under caller policy.
+pub const LOSS_LPG_NODE_ID_INTERPRETED: &str = "lpg-node-id-interpreted";
+/// LPG→RDF loss code: a native LPG label is interpreted as an RDF class.
+pub const LOSS_LPG_LABEL_INTERPRETED: &str = "lpg-label-interpreted";
+/// LPG→RDF loss code: a native edge type is interpreted as an RDF predicate.
+pub const LOSS_LPG_EDGE_TYPE_INTERPRETED: &str = "lpg-edge-type-interpreted";
+/// LPG→RDF loss code: a native property key is interpreted as an RDF predicate.
+pub const LOSS_LPG_PROPERTY_KEY_INTERPRETED: &str = "lpg-property-key-interpreted";
+/// LPG→RDF loss code: a native scalar/list value is interpreted as an RDF term.
+pub const LOSS_LPG_VALUE_INTERPRETED: &str = "lpg-value-interpreted";
+/// LPG→RDF loss code: native edge identity has no RDF statement identity by itself.
+pub const LOSS_LPG_EDGE_ID_DROPPED: &str = "lpg-edge-id-dropped";
+
+/// RDF→OBO Graphs loss code: named-graph placement is absent from OBO Graphs.
+pub const LOSS_OBO_NAMED_GRAPH_DROPPED: &str = "obo-named-graph-dropped";
+/// RDF→OBO Graphs loss code: a statement outside the configured OBO/OWL profile is omitted.
+pub const LOSS_OBO_NON_PROFILE_STATEMENT_DROPPED: &str = "obo-non-profile-statement-dropped";
+/// RDF→OBO Graphs loss code: blank-node identity cannot be retained as a stable OBO id.
+pub const LOSS_OBO_BLANK_IDENTITY_DROPPED: &str = "obo-blank-identity-dropped";
+/// RDF→OBO Graphs loss code: a literal facet exceeds the OBO Graphs scalar surface.
+pub const LOSS_OBO_LITERAL_FIDELITY_WIDENED: &str = "obo-literal-fidelity-widened";
+/// RDF→OBO Graphs loss code: an RDF 1.2 triple term has no OBO Graphs term slot.
+pub const LOSS_OBO_TRIPLE_TERM_DROPPED: &str = "obo-triple-term-dropped";
+/// RDF→OBO Graphs loss code: a reifier binding is not retained.
+pub const LOSS_OBO_REIFIER_DROPPED: &str = "obo-reifier-dropped";
+/// RDF→OBO Graphs loss code: a statement annotation is not retained.
+pub const LOSS_OBO_ANNOTATION_DROPPED: &str = "obo-annotation-dropped";
+
+/// RDF→SKOS loss code: named-graph placement is absent from the selected SKOS view.
+pub const LOSS_SKOS_NAMED_GRAPH_DROPPED: &str = "skos-named-graph-dropped";
+/// RDF→SKOS loss code: a statement outside the configured concept profile is omitted.
+pub const LOSS_SKOS_NON_PROFILE_STATEMENT_DROPPED: &str = "skos-non-profile-statement-dropped";
+/// RDF→SKOS loss code: a blank-node resource lacks stable concept identity.
+pub const LOSS_SKOS_BLANK_IDENTITY_DROPPED: &str = "skos-blank-identity-dropped";
+/// RDF→SKOS loss code: an RDF 1.2 triple term is outside the concept view.
+pub const LOSS_SKOS_TRIPLE_TERM_DROPPED: &str = "skos-triple-term-dropped";
+/// RDF→SKOS loss code: a reifier binding is outside the concept view.
+pub const LOSS_SKOS_REIFIER_DROPPED: &str = "skos-reifier-dropped";
+/// RDF→SKOS loss code: a statement annotation is outside the concept view.
+pub const LOSS_SKOS_ANNOTATION_DROPPED: &str = "skos-annotation-dropped";
+
+const RDF_LPG_PROFILE: &[(&str, &str)] = &[
+    (
+        LOSS_LPG_ANNOTATION_SIDEBAND,
+        "An RDF 1.2 statement annotation has no native property-graph semantics. Its exact term, \
+         predicate, object, and graph remain in the canonical RDF sideband for reversal.",
+    ),
+    (
+        LOSS_LPG_BLANK_SCOPE_SIDEBAND,
+        "A blank node's RDF label scope has no native property-graph equivalent. Exact label and \
+         scope remain in the canonical RDF identity sideband.",
+    ),
+    (
+        LOSS_LPG_EDGE_SEMANTICS_LOWERED,
+        "An RDF predicate/object statement is lowered to an LPG edge or property. Full RDF term \
+         identity remains in sideband, but an LPG consumer does not inherit RDF semantics.",
+    ),
+    (
+        LOSS_LPG_LITERAL_SEMANTICS_LOWERED,
+        "An RDF literal is lowered to an LPG property value. Lexical form, datatype, language, and \
+         RDF 1.2 base direction remain in sideband for exact reversal.",
+    ),
+    (
+        LOSS_LPG_NAMED_GRAPH_SIDEBAND,
+        "Property graphs have no RDF named-graph slot. Exact graph placement remains in sideband \
+         but is invisible to native LPG graph semantics.",
+    ),
+    (
+        LOSS_LPG_REIFIER_SIDEBAND,
+        "An RDF 1.2 reifier binding has no native property-graph construct. It remains in canonical \
+         structural sideband for exact reversal.",
+    ),
+    (
+        LOSS_LPG_TRIPLE_TERM_SIDEBAND,
+        "An RDF 1.2 quoted triple term has no native LPG scalar or node kind. Its recursive RDF \
+         value remains in canonical structural sideband.",
+    ),
+    (
+        LOSS_LPG_TYPE_SEMANTICS_LOWERED,
+        "An rdf:type statement is lowered to an LPG label under caller-supplied vocabulary. Exact \
+         RDF identity remains in sideband, while native label semantics are implementation-defined.",
+    ),
+];
+
+const LPG_RDF_PROFILE: &[(&str, &str)] = &[
+    (
+        LOSS_LPG_EDGE_ID_DROPPED,
+        "A native LPG edge id has no RDF statement identity unless caller configuration maps it to \
+         a reifier; an unmapped edge id is omitted while the edge statement is retained.",
+    ),
+    (
+        LOSS_LPG_EDGE_TYPE_INTERPRETED,
+        "A native LPG edge type is interpreted as an RDF predicate under mandatory caller mapping.",
+    ),
+    (
+        LOSS_LPG_LABEL_INTERPRETED,
+        "A native LPG label is interpreted as an RDF class under mandatory caller mapping.",
+    ),
+    (
+        LOSS_LPG_NODE_ID_INTERPRETED,
+        "A native LPG node id without canonical RDF identity sideband is interpreted as an RDF IRI \
+         or blank node under mandatory caller policy.",
+    ),
+    (
+        LOSS_LPG_PROPERTY_KEY_INTERPRETED,
+        "A native LPG property key is interpreted as an RDF predicate under mandatory caller mapping.",
+    ),
+    (
+        LOSS_LPG_VALUE_INTERPRETED,
+        "A native LPG scalar or list without canonical RDF term sideband is interpreted as one or \
+         more RDF terms under mandatory caller policy.",
+    ),
+];
+
+const RDF_OBO_GRAPHS_PROFILE: &[(&str, &str)] = &[
+    (
+        LOSS_OBO_ANNOTATION_DROPPED,
+        "An RDF 1.2 statement annotation outside an exact configured OBO metadata slot has no OBO \
+         Graphs representation and is omitted.",
+    ),
+    (
+        LOSS_OBO_BLANK_IDENTITY_DROPPED,
+        "A blank-node resource has no stable OBO node id; profile statements rooted at that blank \
+         node are omitted rather than assigned a fabricated IRI.",
+    ),
+    (
+        LOSS_OBO_LITERAL_FIDELITY_WIDENED,
+        "An RDF literal facet not carried by the selected OBO Graphs scalar field is widened to the \
+         representable lexical value, with the source location recorded.",
+    ),
+    (
+        LOSS_OBO_NAMED_GRAPH_DROPPED,
+        "OBO Graphs 0.3.2 has no RDF named-graph placement; the selected graph content may remain \
+         while its graph-name slot is omitted.",
+    ),
+    (
+        LOSS_OBO_NON_PROFILE_STATEMENT_DROPPED,
+        "An RDF statement outside the mandatory caller-configured OBO/OWL role profile has no OBO \
+         Graphs object and is omitted.",
+    ),
+    (
+        LOSS_OBO_REIFIER_DROPPED,
+        "An RDF 1.2 reifier binding outside an exact OBO axiom-metadata mapping has no OBO Graphs \
+         representation and is omitted.",
+    ),
+    (
+        LOSS_OBO_TRIPLE_TERM_DROPPED,
+        "An RDF 1.2 quoted triple term has no OBO Graphs 0.3.2 term kind and is omitted from the view.",
+    ),
+];
+
+const RDF_SKOS_PROFILE: &[(&str, &str)] = &[
+    (
+        LOSS_SKOS_ANNOTATION_DROPPED,
+        "An RDF 1.2 statement annotation has no configured SKOS concept-view role and is omitted.",
+    ),
+    (
+        LOSS_SKOS_BLANK_IDENTITY_DROPPED,
+        "A blank-node resource cannot serve as a stable concept identity under the configured SKOS \
+         view and is omitted rather than assigned a fabricated IRI.",
+    ),
+    (
+        LOSS_SKOS_NAMED_GRAPH_DROPPED,
+        "The selected SKOS concept-scheme view does not carry source named-graph placement; the \
+         mapped statement may remain while its graph-name slot is omitted.",
+    ),
+    (
+        LOSS_SKOS_NON_PROFILE_STATEMENT_DROPPED,
+        "An RDF statement outside the caller-configured SKOS concept, label, hierarchy, note, \
+         mapping, membership, and top-concept roles is omitted from the view.",
+    ),
+    (
+        LOSS_SKOS_REIFIER_DROPPED,
+        "An RDF 1.2 reifier binding has no configured SKOS concept-view role and is omitted.",
+    ),
+    (
+        LOSS_SKOS_TRIPLE_TERM_DROPPED,
+        "An RDF 1.2 quoted triple term is outside the SKOS concept-view term surface and is omitted.",
+    ),
+];
+
+fn contract_profile(
+    from: &'static str,
+    to: &'static str,
+    profile: &'static [(&'static str, &'static str)],
+) -> LossLedger {
+    LossLedger::contract(
+        profile
+            .iter()
+            .map(|&(code, note)| LossEntry {
+                code: Cow::Borrowed(code),
+                from: Cow::Borrowed(from),
+                to: Cow::Borrowed(to),
+                note: Cow::Borrowed(note),
+                location: None,
+            })
+            .collect(),
+    )
+}
+
+/// Closed RDF 1.2 dataset→canonical LPG semantic-lowering contract.
+pub fn rdf_to_lpg_loss_ledger() -> LossLedger {
+    contract_profile("rdf-1.2-dataset", "lpg", RDF_LPG_PROFILE)
+}
+
+/// Closed canonical/native LPG→RDF 1.2 interpretation contract.
+pub fn lpg_to_rdf_loss_ledger() -> LossLedger {
+    contract_profile("lpg", "rdf-1.2-dataset", LPG_RDF_PROFILE)
+}
+
+/// Closed RDF 1.2 dataset→OBO Graphs 0.3.2 view contract.
+pub fn rdf_to_obo_graphs_loss_ledger() -> LossLedger {
+    contract_profile(
+        "rdf-1.2-dataset",
+        "obo-graphs-0.3.2",
+        RDF_OBO_GRAPHS_PROFILE,
+    )
+}
+
+/// Closed RDF 1.2 dataset→SKOS concept-scheme view contract.
+pub fn rdf_to_skos_loss_ledger() -> LossLedger {
+    contract_profile("rdf-1.2-dataset", "skos", RDF_SKOS_PROFILE)
 }
 
 /// The combined RDF↔GTS matrix as a single deterministic, sorted-by-code JSON
@@ -1103,7 +1346,9 @@ fn static_str(cow: &Cow<'static, str>) -> &'static str {
 /// The single source of truth every enumerable-registry consumer reads: the
 /// RDF↔GTS direction ledgers ([`rdf_to_gts_loss_ledger`] /
 /// [`gts_to_rdf_loss_ledger`]), RDF↔OKF direction ledgers
-/// ([`rdf_to_okf_loss_ledger`] / [`okf_to_rdf_loss_ledger`]), plus
+/// ([`rdf_to_okf_loss_ledger`] / [`okf_to_rdf_loss_ledger`]), RDF↔LPG
+/// ([`rdf_to_lpg_loss_ledger`] / [`lpg_to_rdf_loss_ledger`]), RDF→OBO Graphs
+/// ([`rdf_to_obo_graphs_loss_ledger`]), RDF→SKOS ([`rdf_to_skos_loss_ledger`]), plus
 /// [`transcode_and_shapes_entries`] (the full
 /// syntax/projection transcode matrix over `SYNTAX_CODECS` × `(SYNTAX_CODECS ∪
 /// PROJECTION_CODECS)` and the non-syntax shapes pair `("shacl", "json-schema")`),
@@ -1120,6 +1365,10 @@ fn registry_entries() -> Vec<LossEntry> {
     entries.extend_from_slice(gts_to_rdf_loss_ledger().entries());
     entries.extend_from_slice(rdf_to_okf_loss_ledger().entries());
     entries.extend_from_slice(okf_to_rdf_loss_ledger().entries());
+    entries.extend_from_slice(rdf_to_lpg_loss_ledger().entries());
+    entries.extend_from_slice(lpg_to_rdf_loss_ledger().entries());
+    entries.extend_from_slice(rdf_to_obo_graphs_loss_ledger().entries());
+    entries.extend_from_slice(rdf_to_skos_loss_ledger().entries());
     entries.extend(transcode_and_shapes_entries());
     entries.extend(json_schema_pydantic_entries());
     entries.extend(json_schema_linkml_entries());
@@ -1185,8 +1434,8 @@ fn registry() -> &'static BTreeMap<(&'static str, &'static str), BTreeSet<&'stat
 }
 
 /// Every `(from, to)` pair with a registered loss profile: the RDF↔GTS
-/// directions, every non-identity syntax/projection transcode pair, the shapes
-/// projection, and schema-language emitter profiles.
+/// directions, graph/tabular/view profiles, every non-identity syntax/projection
+/// transcode pair, the shapes projection, and schema-language emitter profiles.
 pub fn registered_pairs() -> impl Iterator<Item = (&'static str, &'static str)> {
     registry().keys().copied()
 }
@@ -1683,6 +1932,72 @@ mod tests {
                 json.contains(&format!("\"code\": \"{code}\"")),
                 "transcode-loss-matrix.json missing GraphQL-profile code `{code}`"
             );
+        }
+    }
+
+    #[test]
+    fn graph_and_tabular_projection_contracts_are_closed_and_registered() {
+        let contracts = [
+            (
+                "rdf-1.2-dataset",
+                "lpg",
+                rdf_to_lpg_loss_ledger(),
+                RDF_LPG_PROFILE,
+            ),
+            (
+                "lpg",
+                "rdf-1.2-dataset",
+                lpg_to_rdf_loss_ledger(),
+                LPG_RDF_PROFILE,
+            ),
+            (
+                "rdf-1.2-dataset",
+                "obo-graphs-0.3.2",
+                rdf_to_obo_graphs_loss_ledger(),
+                RDF_OBO_GRAPHS_PROFILE,
+            ),
+            (
+                "rdf-1.2-dataset",
+                "skos",
+                rdf_to_skos_loss_ledger(),
+                RDF_SKOS_PROFILE,
+            ),
+        ];
+
+        for (from, to, ledger, declared) in contracts {
+            let expected: BTreeSet<&str> = declared.iter().map(|(code, _)| *code).collect();
+            assert_eq!(ledger.entries().len(), expected.len());
+            assert_eq!(profile_for(from, to), expected);
+            for entry in ledger.entries() {
+                assert_eq!(entry.from, from);
+                assert_eq!(entry.to, to);
+                assert!(entry.location.is_none());
+            }
+            assert_ledger_sound(&ledger, from, to);
+        }
+    }
+
+    #[test]
+    fn transcode_matrix_includes_graph_and_tabular_projection_pairs() {
+        let json = loss_matrix_json();
+        for (from, to, profile) in [
+            ("rdf-1.2-dataset", "lpg", RDF_LPG_PROFILE),
+            ("lpg", "rdf-1.2-dataset", LPG_RDF_PROFILE),
+            (
+                "rdf-1.2-dataset",
+                "obo-graphs-0.3.2",
+                RDF_OBO_GRAPHS_PROFILE,
+            ),
+            ("rdf-1.2-dataset", "skos", RDF_SKOS_PROFILE),
+        ] {
+            assert!(json.contains(&format!("\"from\": \"{from}\"")));
+            assert!(json.contains(&format!("\"to\": \"{to}\"")));
+            for (code, _) in profile {
+                assert!(
+                    json.contains(&format!("\"code\": \"{code}\"")),
+                    "transcode matrix missing {from}->{to} code {code}"
+                );
+            }
         }
     }
 
