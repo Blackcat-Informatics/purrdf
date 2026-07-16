@@ -251,6 +251,7 @@ pub fn emit_typescript(
     }
 
     let type_names = definition_names(definitions)?;
+    validate_unguarded_reference_cycles(definitions)?;
     let (declaration, losses) = {
         let mut renderer = Renderer::new(&type_names);
         for (key, definition) in definitions {
@@ -277,6 +278,152 @@ pub fn emit_typescript(
         type_names,
         losses,
     })
+}
+
+fn validate_unguarded_reference_cycles(
+    definitions: &Map<String, Value>,
+) -> Result<(), TypeScriptError> {
+    let graph = definitions
+        .iter()
+        .map(|(key, definition)| {
+            let references = match unguarded_relation(definition) {
+                UnguardedRelation::Never | UnguardedRelation::Universal => BTreeSet::new(),
+                UnguardedRelation::Specific(references) => references,
+            };
+            (key.clone(), references)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut active = Vec::new();
+    let mut complete = BTreeSet::new();
+    for key in definitions.keys() {
+        visit_unguarded_references(key, &graph, &mut active, &mut complete)?;
+    }
+    Ok(())
+}
+
+enum UnguardedRelation {
+    Never,
+    Universal,
+    Specific(BTreeSet<String>),
+}
+
+fn unguarded_relation(schema: &Value) -> UnguardedRelation {
+    let Value::Object(object) = schema else {
+        return if schema == &Value::Bool(false) {
+            UnguardedRelation::Never
+        } else {
+            UnguardedRelation::Universal
+        };
+    };
+
+    let mut conjuncts = Vec::new();
+    if object.contains_key("type") || has_object_shape(object) || has_array_shape(object) {
+        conjuncts.push(UnguardedRelation::Specific(BTreeSet::new()));
+    }
+    if let Some(reference) = object
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(reference_key)
+    {
+        conjuncts.push(UnguardedRelation::Specific(BTreeSet::from([reference])));
+    }
+    if let Some(values) = object.get("enum").and_then(Value::as_array) {
+        if values.is_empty() {
+            conjuncts.push(UnguardedRelation::Never);
+        } else {
+            conjuncts.push(UnguardedRelation::Specific(BTreeSet::new()));
+        }
+    }
+    if object.contains_key("const") {
+        conjuncts.push(UnguardedRelation::Specific(BTreeSet::new()));
+    }
+    if let Some(branches) = object.get("allOf").and_then(Value::as_array) {
+        conjuncts.push(join_unguarded_intersection(
+            branches.iter().map(unguarded_relation),
+        ));
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        if let Some(branches) = object.get(keyword).and_then(Value::as_array) {
+            conjuncts.push(join_unguarded_union(
+                branches.iter().map(unguarded_relation),
+            ));
+        }
+    }
+    join_unguarded_intersection(conjuncts)
+}
+
+fn join_unguarded_union(
+    relations: impl IntoIterator<Item = UnguardedRelation>,
+) -> UnguardedRelation {
+    let mut references = BTreeSet::new();
+    let mut has_specific = false;
+    for relation in relations {
+        match relation {
+            UnguardedRelation::Never => {}
+            UnguardedRelation::Universal => return UnguardedRelation::Universal,
+            UnguardedRelation::Specific(current) => {
+                has_specific = true;
+                references.extend(current);
+            }
+        }
+    }
+    if has_specific {
+        UnguardedRelation::Specific(references)
+    } else {
+        UnguardedRelation::Never
+    }
+}
+
+fn join_unguarded_intersection(
+    relations: impl IntoIterator<Item = UnguardedRelation>,
+) -> UnguardedRelation {
+    let mut references = BTreeSet::new();
+    let mut has_specific = false;
+    for relation in relations {
+        match relation {
+            UnguardedRelation::Never => return UnguardedRelation::Never,
+            UnguardedRelation::Universal => {}
+            UnguardedRelation::Specific(current) => {
+                has_specific = true;
+                references.extend(current);
+            }
+        }
+    }
+    if has_specific {
+        UnguardedRelation::Specific(references)
+    } else {
+        UnguardedRelation::Universal
+    }
+}
+
+fn visit_unguarded_references(
+    key: &str,
+    graph: &BTreeMap<String, BTreeSet<String>>,
+    active: &mut Vec<String>,
+    complete: &mut BTreeSet<String>,
+) -> Result<(), TypeScriptError> {
+    if complete.contains(key) {
+        return Ok(());
+    }
+    if let Some(start) = active.iter().position(|candidate| candidate == key) {
+        let mut cycle = active[start..].to_vec();
+        cycle.push(key.to_owned());
+        return Err(TypeScriptError::new(format!(
+            "CompiledSchema contains an unguarded recursive TypeScript alias cycle: {}",
+            cycle.join(" -> ")
+        )));
+    }
+
+    active.push(key.to_owned());
+    if let Some(references) = graph.get(key) {
+        for reference in references {
+            visit_unguarded_references(reference, graph, active, complete)?;
+        }
+    }
+    let removed = active.pop();
+    debug_assert_eq!(removed.as_deref(), Some(key));
+    complete.insert(key.to_owned());
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1935,11 +2082,66 @@ mod tests {
                 json!({ "$defs": { "Broken": { "$dynamicRef": "#/$defs/Broken" } } }),
                 "cannot be translated to a closed generated package",
             ),
+            (
+                json!({
+                    "$defs": {
+                        "Broken": {
+                            "$id": "nested.json",
+                            "$ref": "#/$defs/Target"
+                        },
+                        "Target": true
+                    }
+                }),
+                "$id cannot rebase a closed generated package",
+            ),
+            (
+                json!({ "$defs": { "Broken": { "$ref": "#/$defs/Broken" } } }),
+                "unguarded recursive TypeScript alias cycle: Broken -> Broken",
+            ),
+            (
+                json!({
+                    "$defs": {
+                        "Alpha": { "anyOf": [{ "$ref": "#/$defs/Beta" }] },
+                        "Beta": { "allOf": [{ "$ref": "#/$defs/Alpha" }] }
+                    }
+                }),
+                "unguarded recursive TypeScript alias cycle: Alpha -> Beta -> Alpha",
+            ),
         ] {
             let error = emit_typescript(&compiled(&schema), &config())
                 .expect_err("malformed schema must fail");
             assert!(error.to_string().contains(expected), "{error}");
         }
+    }
+
+    #[test]
+    fn reference_cycles_guarded_by_carriers_remain_supported() {
+        let schema = json!({
+            "$defs": {
+                "Alias": { "$ref": "#/$defs/Node" },
+                "Always": {
+                    "anyOf": [{ "$ref": "#/$defs/Always" }, true]
+                },
+                "Node": {
+                    "type": "object",
+                    "properties": {
+                        "children": {
+                            "type": "array",
+                            "items": { "$ref": "#/$defs/Alias" }
+                        }
+                    }
+                },
+                "Bottom": {
+                    "allOf": [{ "$ref": "#/$defs/Bottom" }, false]
+                }
+            }
+        });
+        let package = emit_typescript(&compiled(&schema), &config()).expect("guarded cycle emits");
+        let source = declaration(&package);
+        assert!(source.contains("export type Alias = Node;"));
+        assert!(source.contains("export type Always = JsonValue;"));
+        assert!(source.contains("readonly \"children\"?: readonly (Alias)[];"));
+        assert!(source.contains("export type Bottom = never;"));
     }
 
     #[test]
