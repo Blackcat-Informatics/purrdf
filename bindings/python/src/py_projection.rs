@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Thin Python wrappers over the unified projection archive surface.
+//! Thin Python wrappers over the unified graph, tabular, and research-object archive surface.
 
 use std::sync::Arc;
 
@@ -133,7 +133,7 @@ impl PyProjectionLift {
     }
 }
 
-/// Project RDF bytes into a deterministic graph/tabular USTAR package.
+/// Project RDF bytes into a deterministic graph, tabular, or research-object USTAR package.
 #[pyfunction(name = "project")]
 #[pyo3(signature = (data, *, format, profile, config))]
 fn project_py(

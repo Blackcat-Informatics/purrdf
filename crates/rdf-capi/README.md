@@ -31,11 +31,11 @@ make capi-header                # regenerate the committed include/purrdf.h afte
 The committed header `include/purrdf.h` **is the ABI contract**; CI fails if it
 drifts from the crate (`make capi-check`).
 
-## Graph and tabular projection carriers
+## Graph, tabular, and research-object projection carriers
 
 `purrdf_project` and `purrdf_lift` expose the same canonical archive engine as
-Rust, Python, WebAssembly, and the CLI. `purrdf_project` accepts all seven
-profiles; `purrdf_lift` accepts only the five structurally bidirectional ones:
+Rust, Python, WebAssembly, and the CLI. `purrdf_project` accepts all twelve
+profiles; `purrdf_lift` accepts the ten structurally bidirectional ones:
 
 | Profile | Project | Lift |
 | --- | :---: | :---: |
@@ -46,6 +46,11 @@ profiles; `purrdf_lift` accepts only the five structurally bidirectional ones:
 | `csvw-exact` | yes | yes |
 | `obo-graphs` | yes | no |
 | `skos` | yes | no |
+| `croissant-1.1` | yes | yes |
+| `ro-crate-1.3` | yes | yes |
+| `datacite-4.6` | yes | yes |
+| `dcat-3` | yes | yes |
+| `frictionless-data-package-1` | yes | yes |
 
 Configuration is mandatory profile-tagged JSON with caller-owned vocabulary,
 identity, limits, and policy. Projection returns two independent caller-owned

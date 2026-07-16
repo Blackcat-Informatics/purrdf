@@ -51,6 +51,11 @@ fn project_and_lift_help_enumerate_truthful_profiles() {
         "csvw-exact",
         "obo-graphs",
         "skos",
+        "croissant-1.1",
+        "ro-crate-1.3",
+        "datacite-4.6",
+        "dcat-3",
+        "frictionless-data-package-1",
     ] {
         assert!(
             project.contains(value),
@@ -69,6 +74,11 @@ fn project_and_lift_help_enumerate_truthful_profiles() {
         "open-cypher",
         "graphml",
         "csvw-exact",
+        "croissant-1.1",
+        "ro-crate-1.3",
+        "datacite-4.6",
+        "dcat-3",
+        "frictionless-data-package-1",
     ] {
         assert!(
             lift.contains(value),

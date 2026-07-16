@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `project` and `lift` graph/tabular carrier pipelines.
+//! `project` and `lift` graph, tabular, and research-object carrier pipelines.
 
 use purrdf_core::{DatasetView, LossLedger};
 use purrdf_rdf::{ProjectionArchive, ProjectionConfig, lift_archive, project_archive};

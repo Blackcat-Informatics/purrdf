@@ -398,7 +398,12 @@ export type ProjectionProfile =
   | "graphml"
   | "csvw-exact"
   | "obo-graphs"
-  | "skos";
+  | "skos"
+  | "croissant-1.1"
+  | "ro-crate-1.3"
+  | "datacite-4.6"
+  | "dcat-3"
+  | "frictionless-data-package-1";
 
 export type LiftProfile = Exclude<ProjectionProfile, "obo-graphs" | "skos">;
 
