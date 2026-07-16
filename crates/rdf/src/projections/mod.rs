@@ -11,6 +11,7 @@
 mod csvw;
 mod error;
 mod lpg;
+mod obo_graphs;
 mod package;
 mod term;
 mod util;
@@ -31,6 +32,13 @@ pub use lpg::{
     LpgReifier, lift_lpg, project_lpg, project_lpg_csv, project_lpg_cypher, project_lpg_graphml,
     project_neo4j_csv, read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv,
     write_lpg_csv, write_lpg_cypher, write_lpg_graphml, write_neo4j_csv,
+};
+pub use obo_graphs::{
+    OboDomainRangeAxiom, OboEdge, OboEquivalentNodesSet, OboExistentialRestriction, OboGraph,
+    OboGraphDocument, OboGraphsConfig, OboGraphsProjection, OboGraphsVocabulary,
+    OboLogicalDefinitionAxiom, OboMeta, OboMetadataRoles, OboNode, OboNodeType, OboOwlRoles,
+    OboPropertyChainAxiom, OboPropertyType, OboPropertyValue, OboRdfRoles, OboSynonym, OboXref,
+    project_obo_graphs,
 };
 pub use package::{ProjectionLimits, ProjectionPackage};
 pub use term::{ProjectionDirection, ProjectionTerm};

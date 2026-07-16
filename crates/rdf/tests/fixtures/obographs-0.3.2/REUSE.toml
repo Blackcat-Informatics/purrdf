@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+version = 1
+
+# The pinned upstream repository carries no standalone copyright notice or
+# per-file header. Its exact Maven POM, retained here, declares BSD-3-Clause.
+[[annotations]]
+path = [
+  "README.upstream.md",
+  "pom.upstream.xml",
+  "obographs-schema.json",
+  "subschemas/*.json",
+]
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "BSD-3-Clause"
