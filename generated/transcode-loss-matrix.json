@@ -354,7 +354,7 @@
     "from": "json-schema",
     "to": "typescript-7.0",
     "intentional": true,
-    "note": "JSON Schema minimum/maximum/exclusive bounds and multipleOf are runtime numeric predicates with no exact TypeScript number-type expression. The numeric carrier remains while the predicate is omitted."
+    "note": "JSON Schema minimum/maximum/exclusive bounds and multipleOf are runtime numeric predicates with no exact TypeScript number-type expression; integer const/enum values outside the IEEE-754 safe range also have no exact TypeScript number literal. The numeric carrier or closest literal remains while the predicate or excess precision is omitted."
   },
   {
     "code": "object-literal-validation-widened",

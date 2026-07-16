@@ -793,8 +793,10 @@ const JSON_SCHEMA_TYPESCRIPT_PROFILE: &[(&str, &str)] = &[
     (
         "numeric-validation-dropped",
         "JSON Schema minimum/maximum/exclusive bounds and multipleOf are runtime numeric \
-         predicates with no exact TypeScript number-type expression. The numeric carrier remains \
-         while the predicate is omitted.",
+         predicates with no exact TypeScript number-type expression; integer const/enum values \
+         outside the IEEE-754 safe range also have no exact TypeScript number literal. The \
+         numeric carrier or closest literal remains while the predicate or excess precision is \
+         omitted.",
     ),
     (
         "object-literal-validation-widened",

@@ -925,13 +925,15 @@ impl<'a> Renderer<'a> {
             }
         }
         if has_kind(JsonKind::Array) {
-            for keyword in ["contains", "minContains", "maxContains"] {
-                if object.contains_key(keyword) {
-                    self.record(
-                        "array-contains-validation-dropped",
-                        &format!("{path}/{keyword}"),
-                        "TypeScript cannot quantify elements matching an array predicate",
-                    );
+            if object.contains_key("contains") {
+                for keyword in ["contains", "minContains", "maxContains"] {
+                    if object.contains_key(keyword) {
+                        self.record(
+                            "array-contains-validation-dropped",
+                            &format!("{path}/{keyword}"),
+                            "TypeScript cannot quantify elements matching an array predicate",
+                        );
+                    }
                 }
             }
             if object.get("uniqueItems") == Some(&Value::Bool(true)) {
@@ -992,7 +994,9 @@ impl<'a> Renderer<'a> {
                 "TypeScript has no general JSON value-set complement",
             );
         }
-        if object.contains_key("if") {
+        let has_active_conditional = object.contains_key("if")
+            && (object.contains_key("then") || object.contains_key("else"));
+        if has_active_conditional {
             for keyword in ["if", "then", "else"] {
                 if object.contains_key(keyword) {
                     self.record(
@@ -1012,22 +1016,12 @@ impl<'a> Renderer<'a> {
                 );
             }
         }
-        if object.get("const").is_some_and(Value::is_object) {
-            self.record(
-                "object-literal-validation-widened",
-                &format!("{path}/const"),
-                "TypeScript object literal types cannot close structural compatibility",
-            );
+        if let Some(value) = object.get("const") {
+            self.audit_literal(value, &format!("{path}/const"), depth + 1)?;
         }
         if let Some(values) = object.get("enum").and_then(Value::as_array) {
             for (index, value) in values.iter().enumerate() {
-                if value.is_object() {
-                    self.record(
-                        "object-literal-validation-widened",
-                        &format!("{path}/enum/{index}"),
-                        "TypeScript object literal types cannot close structural compatibility",
-                    );
-                }
+                self.audit_literal(value, &format!("{path}/enum/{index}"), depth + 1)?;
             }
         }
         if object.contains_key("additionalItems") {
@@ -1051,6 +1045,9 @@ impl<'a> Renderer<'a> {
         }
 
         for keyword in schema_map_keywords() {
+            if *keyword == "$defs" {
+                continue;
+            }
             if let Some(children) = object.get(*keyword).and_then(Value::as_object) {
                 for (key, child) in children {
                     self.audit_schema(
@@ -1069,9 +1066,51 @@ impl<'a> Renderer<'a> {
             }
         }
         for keyword in schema_single_keywords() {
+            if matches!(*keyword, "if" | "then" | "else") && !has_active_conditional {
+                continue;
+            }
             if let Some(child) = object.get(*keyword) {
                 self.audit_schema(child, &format!("{path}/{keyword}"), depth + 1)?;
             }
+        }
+        Ok(())
+    }
+
+    fn audit_literal(
+        &mut self,
+        value: &Value,
+        path: &str,
+        depth: usize,
+    ) -> Result<(), TypeScriptError> {
+        ensure_depth(depth, path)?;
+        match value {
+            Value::Number(number) if integer_exceeds_typescript_exact_range(number) => {
+                self.record(
+                    "numeric-validation-dropped",
+                    path,
+                    "TypeScript number literals cannot preserve this exact JSON integer",
+                );
+            }
+            Value::Array(values) => {
+                for (index, value) in values.iter().enumerate() {
+                    self.audit_literal(value, &format!("{path}/{index}"), depth + 1)?;
+                }
+            }
+            Value::Object(object) => {
+                self.record(
+                    "object-literal-validation-widened",
+                    path,
+                    "TypeScript object literal types cannot close structural compatibility",
+                );
+                for (key, value) in object {
+                    self.audit_literal(
+                        value,
+                        &format!("{path}/{}", pointer_escape(key)),
+                        depth + 1,
+                    )?;
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
         }
         Ok(())
     }
@@ -1360,14 +1399,40 @@ fn nonnegative_usize(
     keyword: &str,
     path: &str,
 ) -> Result<usize, TypeScriptError> {
-    let value = object.get(keyword).and_then(Value::as_u64).ok_or_else(|| {
-        TypeScriptError::new(format!("{path}/{keyword} must be a non-negative integer"))
-    })?;
-    usize::try_from(value).map_err(|_| {
-        TypeScriptError::new(format!(
-            "{path}/{keyword} exceeds this platform's index range"
-        ))
-    })
+    let value = object
+        .get(keyword)
+        .expect("nonnegative_usize is called only for a present keyword");
+    // Only values through the fixed tuple budget affect emitted structure.
+    // Saturating larger integers keeps native and wasm32 behavior identical.
+    let over_budget = MAX_TUPLE_EXPANSION + 1;
+    if let Some(value) = value.as_u64() {
+        return Ok(usize::try_from(value.min(over_budget as u64))
+            .expect("the fixed expansion-budget sentinel fits every supported usize"));
+    }
+    if let Some(value) = value.as_f64()
+        && value >= 0.0
+        && value.fract() == 0.0
+    {
+        return Ok(if value > over_budget as f64 {
+            over_budget
+        } else {
+            value as usize
+        });
+    }
+    Err(TypeScriptError::new(format!(
+        "{path}/{keyword} must be a non-negative integer"
+    )))
+}
+
+fn integer_exceeds_typescript_exact_range(number: &serde_json::Number) -> bool {
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    if let Some(value) = number.as_i64() {
+        !(-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&value)
+    } else {
+        number
+            .as_u64()
+            .is_some_and(|value| value > MAX_SAFE_INTEGER as u64)
+    }
 }
 
 fn render_array_relation(
@@ -2176,22 +2241,85 @@ mod tests {
     }
 
     #[test]
-    fn then_and_else_without_if_do_not_claim_a_conditional_loss() {
+    fn inactive_schema_keywords_do_not_claim_losses() {
         let schema = json!({
             "$defs": {
+                "ContainsBoundsOnly": {
+                    "type": "array",
+                    "minContains": 1,
+                    "maxContains": 2
+                },
+                "IfOnly": {
+                    "if": { "type": "integer", "minimum": 2 }
+                },
                 "IgnoredBranches": {
                     "then": { "type": "integer" },
                     "else": { "pattern": "x" }
+                },
+                "NestedDefinitions": {
+                    "$defs": {
+                        "Inert": { "type": "string", "pattern": "x" }
+                    }
                 }
             }
         });
         let package = emit_typescript(&compiled(&schema), &config()).expect("emits");
         assert!(
-            !package
-                .losses
-                .entries()
-                .iter()
-                .any(|entry| entry.code == "conditional-validation-dropped")
+            package.losses.is_empty(),
+            "{}",
+            package.losses.render_json()
         );
+    }
+
+    #[test]
+    fn literal_trees_and_portable_array_bounds_are_audited_exactly() {
+        let schema = json!({
+            "$defs": {
+                "IntegralFloatBounds": {
+                    "type": "array",
+                    "minItems": 1.0,
+                    "maxItems": 2.0
+                },
+                "LargeBound": {
+                    "type": "array",
+                    "minItems": 4_294_967_296_u64
+                },
+                "NestedLiterals": {
+                    "enum": [[{
+                        "state": "open",
+                        "sequence": [9_007_199_254_740_993_u64]
+                    }]]
+                }
+            }
+        });
+        let package = emit_typescript(&compiled(&schema), &config()).expect("emits");
+        let source = declaration(&package);
+        assert!(source.contains(
+            "export type IntegralFloatBounds = (readonly [JsonValue] | readonly [JsonValue, \
+             JsonValue]);"
+        ));
+        for (code, location) in [
+            (
+                "array-cardinality-validation-widened",
+                "#/$defs/LargeBound/minItems",
+            ),
+            (
+                "object-literal-validation-widened",
+                "#/$defs/NestedLiterals/enum/0/0",
+            ),
+            (
+                "numeric-validation-dropped",
+                "#/$defs/NestedLiterals/enum/0/0/sequence/0",
+            ),
+        ] {
+            assert!(package.losses.entries().iter().any(|entry| {
+                entry.code == code
+                    && entry
+                        .location
+                        .as_ref()
+                        .and_then(|value| value.subject.as_deref())
+                        == Some(location)
+            }));
+        }
     }
 }

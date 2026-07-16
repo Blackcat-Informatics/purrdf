@@ -218,6 +218,9 @@ fn lossy_schema() -> Value {
                 "items": false
             },
             "Negated": { "not": { "type": "boolean" } },
+            "NestedObjectLiteral": {
+                "const": [{ "state": "open" }]
+            },
             "NumericRule": { "type": "number", "minimum": 0 },
             "ObjectLiteral": { "enum": [{ "state": "open" }] },
             "OneOfExclusive": {
@@ -258,6 +261,9 @@ fn lossy_schema() -> Value {
                 "type": "array",
                 "items": { "type": "string" },
                 "uniqueItems": true
+            },
+            "UnsafeIntegerLiteral": {
+                "const": 9_007_199_254_740_993_u64
             },
             "UnknownRule": { "unsupportedAssertion": true }
         }
@@ -762,6 +768,19 @@ fn lossy_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, 
         probe(
             schema,
             &package,
+            "nested-object-literal-variable-extra",
+            "NestedObjectLiteral",
+            json!([{"state": "open", "extra": true}]),
+            "variable",
+            false,
+            Some((
+                "object-literal-validation-widened",
+                "#/$defs/NestedObjectLiteral/const/0",
+            )),
+        )?,
+        probe(
+            schema,
+            &package,
             "numeric-minimum",
             "NumericRule",
             json!(-1),
@@ -901,6 +920,19 @@ fn lossy_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, 
             Some((
                 "unique-items-validation-dropped",
                 "#/$defs/UniqueItems/uniqueItems",
+            )),
+        )?,
+        probe(
+            schema,
+            &package,
+            "unsafe-integer-literal",
+            "UnsafeIntegerLiteral",
+            json!(9_007_199_254_740_992_u64),
+            "fresh",
+            false,
+            Some((
+                "numeric-validation-dropped",
+                "#/$defs/UnsafeIntegerLiteral/const",
             )),
         )?,
         probe(
