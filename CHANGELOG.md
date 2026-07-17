@@ -4,6 +4,174 @@ All notable changes to the PurRDF crate suite are recorded here. The suite
 ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
 bump may carry breaking changes and a patch bump is bugfix-only.
 
+## [0.7.0] - 2026-07-17
+
+### Benchmarks
+
+- **core:** Measure wavelet indexes against pack FoQ
+- **shapes:** Measure LinkML imports
+
+### Bug Fixes
+
+- **shapes:** Record losses for non-class shape targets instead of dropping silently
+- **capi:** Regenerate the ABI header for the 0.6 version bump
+- **rdf:** Skip triple-term self-reifier sentinels in the JSON-LD reifier index
+- **rdf:** Graph-scope reifier/annotation identity end-to-end
+- **rdf:** Record TriX/HexTuples base-direction drop in the loss ledger
+- **cli:** Reach reason stdin/stdout via --from/--to + fail-fast format resolve
+- **cli:** Treat stdout BrokenPipe as a clean exit, not a runtime error
+- **wasm,playground:** Honest size re-baseline + JSON-LD bidirectional round-trip
+- **rdf-core:** Keep page planning metadata-only
+- **rdf-core:** Make paged view debug inert
+- **columnar:** Support published loss ledger API
+- **columnar:** Bound untrusted decode allocations
+- **rdf:** Scan escaped OKF link destinations
+- **rdf:** Normalize exponent-form OKF decimals
+- **shapes:** Enforce constrained schema unions
+- **shapes:** Align Pydantic loss contracts
+- **shapes:** Enforce JSON carrier fidelity
+- **shapes:** Harden TypeScript reference closure
+- **shapes:** Close TypeScript loss-audit gaps
+- **shapes:** Bound TypeScript alias-cycle scans
+- **shapes:** Describe GraphQL key validation bidirectionally
+- **capi:** Restrict projection output permissions
+- **rdf:** Honor CSVW record dialects
+- **rdf:** Validate CSVW BCP 47 tags
+
+### CI & Build
+
+- **wasm:** Raise size budget for packed-dataset restoration
+- **wasm:** Raise npm tarball size ceiling for packed-dataset restoration
+
+### Documentation
+
+- **core:** Drop stale issue-number token from loss_matrix_json doc comment
+- **core:** Unlink private registry_entries from public loss_matrix_json doc
+- **rdf:** Unlink classify from the private FORMATS table for rustdoc
+- **cli:** Add the purrdf CLI README; fix a private intra-doc link
+- **query:** Define paged completeness contract
+- **shapes:** Document Pydantic projection
+- **shapes:** Document LinkML projection
+- **shapes:** Define TypeScript projection contract
+- **shapes:** Define the GraphQL carrier boundary
+- **rdf:** Complete projection adoption surface
+- **conformance:** Refresh projection parity count
+- Refresh conformance parity count
+- **shapes:** Complete schema reverse surface
+- Keep issue tracking out of provenance
+
+### Features
+
+- **core:** Unify the runtime loss ledger and add an enumerable codec-pair registry
+- **shapes:** Record schema-projection losses on the unified LossLedger
+- **core:** Add reusable ledger soundness + completeness verification helpers
+- **core:** Enumerate the codec-pair registry and pin the runtime-ledger schema
+- **core:** Make loss_matrix_json the enumerable codec-pair registry
+- **core:** Unified loss-ledger surface for all codecs
+- **rdf:** Register JSON-LD/YAML-LD as first-class native format variants
+- **rdf:** Lossless JSON-LD-star triple-term encoding + orphan-reifier fix
+- **rdf:** Lossless nested triple terms + reject annotations inside a @triple
+- **rdf:** Unify JSON-LD/YAML-LD into the native format registry
+- **rdf:** Make the native serializer generic over DatasetView
+- **rdf-core:** Public DatasetView-generic pack reconstructor
+- **cli:** Add the purrdf CLI crate (convert/query/reason core)
+- **cli:** Convert --base/--entailment/--canonical + full matrix tests
+- **cli:** Query --base/--entailment + CONSTRUCT/DESCRIBE RDF sink
+- **cli:** Reason --base + per-regime boundary diagnostics + tests
+- **cli:** The purrdf CLI — convert / query / reason
+- **rdf:** Expose packed dataset restoration
+- **rdf-core:** Certify paged provider snapshots
+- **rdf-core:** Add fallible paged query views
+- **sparql:** Certify complete fallible query results
+- Certify fallible paged SPARQL execution
+- **columnar:** Define five-table Parquet contract
+- **columnar:** Implement deterministic Parquet kernel
+- **columnar:** Project RDF datasets to five tables
+- **columnar:** Reconstruct RDF from five tables
+- **columnar:** Add deterministic bidirectional Parquet codec
+- **rdf:** Define OKF loss contracts
+- **rdf:** Lift OKF bundles into event sinks
+- **rdf:** Write deterministic OKF bundles
+- **rdf:** Add native bidirectional OKF codec
+- **core:** Register Pydantic projection losses
+- **shapes:** Emit Pydantic v2 packages
+- **core:** Register LinkML loss profile
+- **shapes:** Add canonical LinkML codec
+- **shapes:** Project schemas to LinkML
+- **shapes:** Add canonical LinkML 1.11 projection
+- **core:** Register TypeScript projection losses
+- **shapes:** Emit TypeScript declarations
+- **shapes:** Emit deterministic TypeScript declarations
+- **core:** Register GraphQL loss profile
+- **shapes:** Emit deterministic GraphQL SDL
+- **shapes:** Emit deterministic GraphQL SDL
+- **rdf:** Add projection carrier foundations
+- **rdf:** Add canonical LPG mapping
+- **rdf:** Add LPG CSV adapters
+- **rdf:** Add LPG graph carriers
+- **rdf:** Add bidirectional CSVW projections
+- **rdf:** Add OBO Graphs projection
+- **rdf:** Add deterministic SKOS projection
+- **projections:** Expose deterministic carrier surfaces
+- **rdf:** Add graph and tabular projections
+- **rdf:** Add research-object semantic pivot
+- **rdf:** Add Croissant 1.1 codec
+- **rdf:** Add RO-Crate 1.3 codec
+- **rdf:** Add DataCite 4.6 codec
+- **rdf:** Add DCAT 3 codec
+- **rdf:** Add Frictionless Data Package codec
+- **rdf:** Expose research-object carrier surfaces
+- **rdf:** Complete research-object carrier integration
+- **rdf:** Add bidirectional research-object codecs
+- **core:** Register schema to SHACL loss profiles
+- **shapes:** Import JSON Schema as SHACL
+- **shapes:** Import LinkML as SHACL
+- **shapes:** Import generated schema packages
+- **shapes:** Import schemas as SHACL
+
+### Other
+
+- Expose packed dataset restoration
+- Emit caller-configured Pydantic v2 packages
+
+### Performance
+
+- **core:** Memoize the codec-pair loss registry behind OnceLock
+- **cli:** Mmap-borrow disk pack→pack passthrough instead of heap-buffering
+- **shapes:** Avoid duplicate Pydantic schema work
+- **shapes:** Avoid LinkML projection allocations
+- **shapes:** Avoid TypeScript render copies
+- **shapes:** Avoid redundant GraphQL oracle escaping
+- **rdf:** Avoid clean JSON pointer allocation
+- **rdf:** Avoid DataCite XML uppercase copy
+- **shapes:** Reduce schema import allocations
+
+### Refactor
+
+- **core:** Remove the dead RdfLoss diagnostic type
+- **core:** Derive loss-entry intentional from profile membership
+- **rdf:** Single FormatDescriptor table as the format metadata source of truth
+- **wasm:** Route the wasm format resolver through the one core registry
+- **shapes:** Share compiled schema catalog
+
+### Testing
+
+- **rdf:** Assert bnode-scope-flatten is an in-profile loss
+- **rdf:** Production-surface tests for JSON-LD/YAML-LD + named-graph reifier fix
+- **rdf:** Pin YAML-LD adversarial-scalar literals against the Norway problem
+- **wasm:** Assert isomorphism on the JSON-LD/YAML-LD round-trip + fix stale docs
+- **cli:** Pin --loss-ledger surfacing tri-state + universal-sink invariant
+- **cli,rdf:** Pin query --entailment exit-3 boundary + dedup pack test fixture
+- **sparql:** Cover fallible query guarantees
+- **columnar:** Prove backend and DuckDB interoperability
+- **columnar:** Cover empty files in DuckDB oracle
+- **shapes:** Execute Pydantic schema oracle
+- **shapes:** Exercise recursive Pydantic refs
+- **shapes:** Add official LinkML oracle
+- **shapes:** Add TypeScript compiler oracle
+- **shapes:** Verify GraphQL coercion with GraphQL.js
+- **cli:** Tolerate early stdin closure
+
 ## [0.6.0] - 2026-07-14
 
 ### Bug Fixes
