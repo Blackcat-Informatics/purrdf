@@ -58,6 +58,44 @@ cargo build -p purrdf-shapes
 cargo test -p purrdf-shapes
 ```
 
+## Schema → SHACL imports
+
+The schema-projection family is bidirectional. `SchemaImportConfig` requires a
+caller-owned `Namespaces` table and a complete scalar-to-RDF-datatype map; it
+has no default and PurRDF never fabricates a vocabulary IRI. Every reader
+returns `ImportedShapes`, containing deterministically ordered SHACL shapes and
+an always-computed reverse `LossLedger`:
+
+| Source | Production reverse boundary |
+|---|---|
+| JSON Schema draft 2020-12 | `import_json_schema` or `import_compiled_schema` |
+| LinkML 1.11 | `parse_linkml` + `import_linkml` for native documents; `import_linkml_package` for a verified emitted package |
+| Pydantic v2 | `import_pydantic_package` over an intact PurRDF-emitted package |
+| TypeScript 7.0 | `import_typescript_package` over an intact PurRDF-emitted package |
+| GraphQL September 2025 | `import_graphql_package` over an intact PurRDF-emitted package |
+
+JSON Schema is the shared semantic pivot, so CURIE expansion, datatype
+selection, constraint lowering, fixed resource limits, and located losses have
+one implementation. Malformed structures, open/dangling references, ambiguous
+identities, and generated-package drift fail closed. Valid source semantics
+without an exact SHACL representation remain visible as closed-profile loss
+entries at native JSON Pointer paths.
+
+Arbitrary Python, TypeScript, and GraphQL SDL are not accepted as inverse
+formats: those languages do not determine one unique JSON validation relation.
+The three verified generated-package readers retain the exact source schema and
+re-emit the complete artifacts, maps, identity, dialect, and forward ledger
+before importing. LinkML is different: it has a native document reader, and
+carrier identity/documentation fields can be ledgered even when the
+validation-bearing SHACL recompiles byte-exactly.
+
+The runnable example exercises all five public reverse directions with only an
+`example.org` caller vocabulary (plus the standard XSD and LinkML namespaces):
+
+```bash
+cargo run -p purrdf-shapes --example schema_reverse --locked
+```
+
 ## Pydantic v2 packages
 
 The Rust emitter consumes the same in-memory `CompiledSchema` produced by the
@@ -97,6 +135,11 @@ and alias round trips:
 ```bash
 make pydantic-oracle
 ```
+
+`import_pydantic_package` is the schema reverse API. It verifies the fixed
+`pydantic-v2` dialect, every generated file, the model-path map, and the forward
+loss ledger against deterministic re-emission before the retained source schema
+can enter the shared SHACL importer. Mutated or stale packages fail closed.
 
 ## LinkML 1.11 schemas
 
@@ -140,6 +183,12 @@ author, while rejecting duplicate keys, YAML tags, non-string mapping keys,
 non-finite numbers, and resource-limit violations. Thus read → write and write
 → read → write are stable without pretending YAML-only semantics can cross a
 language-neutral boundary.
+
+`import_linkml` interprets any validated native `LinkmlDocument` through the
+shared SHACL import model. `import_linkml_package` additionally verifies that an
+emitted package's canonical YAML and reversible element map still match its
+typed document. Native metamodel annotations and schema identity are ledgered
+instead of being mistaken for SHACL validation terms.
 
 The projection grammar is:
 
@@ -231,10 +280,12 @@ make typescript-oracle
 
 There is deliberately no general TypeScript → JSON Schema reader. Arbitrary
 TypeScript declarations have no unique runtime acceptance relation, and many
-different schemas project to the same declaration. The retained
-`CompiledSchema`, paired with `type_names`, is the authoritative reverse
-surface. The production emitter has no JavaScript dependency, performs no
-filesystem I/O, and remains wasm-clean; TypeScript is dev-only oracle tooling.
+different schemas project to the same declaration. `import_typescript_package`
+is the authoritative reverse surface: it verifies the fixed dialect, retained
+source schema, declaration bytes, reversible `type_names`, and forward ledger
+before importing SHACL. The production path has no JavaScript dependency,
+performs no filesystem I/O, and remains wasm-clean; TypeScript is dev-only
+oracle tooling.
 
 ## GraphQL September 2025 SDL
 
@@ -284,7 +335,10 @@ finite values into GraphQL input names and enum symbols.
 `GraphqlPackage::decode_output` reverses present response fields and symbols;
 it permits GraphQL's normal partial field selection and does not invent omitted
 fields. Unknown definitions, keys, values, symbols, or incompatible carriers
-fail. This generated codec is the bidirectional boundary. Arbitrary GraphQL SDL
+fail. This generated codec is the value boundary;
+`import_graphql_package` is the schema reverse boundary. The importer verifies
+the SDL, canonical and typed name/value maps, package identity, retained source
+schema, and forward ledger by deterministic re-emission. Arbitrary GraphQL SDL
 does not define one unique JSON Schema acceptance relation, so PurRDF does not
 claim or provide a general SDL-to-JSON-Schema reader.
 

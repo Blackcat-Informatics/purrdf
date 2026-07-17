@@ -71,6 +71,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes, `core/` + `sparql/` + `af/` | **126 / 126** · 0 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **69 / 69** frozen expected reports |
+| Schema → SHACL | first-party exact/lossy/corruption/resource suites + locked language oracles | **5 / 5** production directions; exact emitted-schema recompilation or located closed-profile losses; no deferred reader |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
 | CSVW | W3C CSVW manifests, `crates/rdf/tests/fixtures/csvw-w3c/` | **270 / 270** RDF cases · **282 / 282** validation cases · 0 xfail; production output also accepted by locked `csvw==4.1.0` |
 | OBO Graphs view | official OBO Graphs 0.3.2 JSON Schema | production advanced-object fixture accepted; deliberate node/chain corruptions rejected |
@@ -97,6 +98,12 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   byte-frozen expected reports, covering purrdf-specific behavior (reifier
   shapes, path forms, property pairs, qualified shapes, SHACL-AF
   `sh:expression`).
+- `crates/shapes/src/schema_import.rs`, `crates/shapes/src/linkml/importer.rs`,
+  and the Pydantic/TypeScript/GraphQL module tests — the five schema → SHACL
+  reverse contracts, including deterministic exact recompilation, complete
+  located loss profiles, corruption failures, fixed resource limits, and
+  arbitrary-input panic guards. `crates/shapes/examples/schema_reverse.rs`
+  exercises the public facade end to end.
 - `crates/sparql-conformance/` — the W3C SPARQL 1.1 harness plus first-party
   extension-function and standpoint suites.
 - `crates/rdf/tests/corpus/w3c/` — the W3C rdf-tests syntax corpus (Turtle,
@@ -129,6 +136,8 @@ cargo test -p purrdf-iri                               # IRI + RFC 3986 resoluti
 cargo test -p purrdf-shex                              # all four ShEx suites
 cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture   # W3C SHACL scoreboard
 cargo test -p purrdf-shapes --test conformance         # the 69-case frozen corpus
+cargo run -p purrdf-shapes --example schema_reverse --locked        # all five schema readers
+make pydantic-oracle linkml-oracle typescript-oracle graphql-oracle # independent schema runtimes
 cargo test -p purrdf-sparql-conformance                # W3C SPARQL
 cargo test -p purrdf-rdf                               # RDFC-1.0 + codec goldens
 make projection-oracles                               # W3C CSVW + independent CSVW/OBO checks
@@ -222,6 +231,15 @@ issue, so the matrix stays honest:
   first-party fixtures under `vectors/shacl/af/rules/`, discovered by
   `crates/shapes/tests/rules_conformance.rs`, with the derived graph compared to
   the expected inferred graph by RDFC-1.0 isomorphism.
+
+  **Schema-import bidirectionality sign-off.** JSON Schema draft 2020-12 and
+  LinkML 1.11 have native readers. Pydantic v2, TypeScript 7.0, and GraphQL
+  September 2025 reverse only intact PurRDF-emitted packages because arbitrary
+  source in those languages has no unique JSON acceptance relation. All five
+  share caller-owned namespace/datatype configuration, deterministic lowering,
+  fixed resource limits, and closed reverse-loss profiles. Supported emitted
+  SHACL schemas recompile byte-exactly; accepted carrier-only or
+  non-representable semantics are located and ledgered, never silently skipped.
 
   **SHACL-AF completeness sign-off.** Every SHACL-AF component is now
   implemented, with nothing remaining out of scope: SPARQL-based constraints and

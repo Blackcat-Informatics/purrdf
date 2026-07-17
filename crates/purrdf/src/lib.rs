@@ -204,6 +204,41 @@ mod tests {
     }
 
     #[test]
+    fn facade_exposes_all_schema_reverse_entry_points() {
+        let _: fn(
+            &str,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::SchemaImportError> = shapes::import_json_schema;
+        let _: fn(
+            &shapes::json_schema::CompiledSchema,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::SchemaImportError> =
+            shapes::import_compiled_schema;
+        let _: fn(
+            &shapes::LinkmlDocument,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::LinkmlError> = shapes::import_linkml;
+        let _: fn(
+            &shapes::LinkmlPackage,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::LinkmlError> = shapes::import_linkml_package;
+        let _: fn(
+            &shapes::PydanticPackage,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::PydanticError> =
+            shapes::import_pydantic_package;
+        let _: fn(
+            &shapes::TypeScriptPackage,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::TypeScriptError> =
+            shapes::import_typescript_package;
+        let _: fn(
+            &shapes::GraphqlPackage,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::GraphqlError> = shapes::import_graphql_package;
+    }
+
+    #[test]
     fn facade_exposes_the_completed_umbrella() {
         assert_eq!(columnar::Table::ALL.len(), 5);
 

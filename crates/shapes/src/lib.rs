@@ -10,6 +10,13 @@
 //! (`sh:sparql`/`sh:SPARQLConstraint`) and targets (`sh:SPARQLTarget`) are
 //! implemented in the [`sparql`] module on the native `purrdf-sparql-eval`
 //! engine.
+//!
+//! The crate also owns the bidirectional schema boundary. [`import_json_schema`]
+//! and [`import_linkml`] read native documents; [`import_pydantic_package`],
+//! [`import_typescript_package`], and [`import_graphql_package`] verify intact
+//! PurRDF-generated packages before lowering through the same deterministic
+//! schema-import engine. Every reader requires caller-owned namespace and
+//! datatype configuration and returns an always-computed reverse loss ledger.
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]

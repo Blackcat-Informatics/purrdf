@@ -44,6 +44,33 @@ so shapes can constrain the RDF 1.2 reifier metadata attached to statements
 draft is dated 2026-06-02. **This is not a claim of full SHACL 1.2
 conformance** — it is one draft feature, explicitly scoped and tested.
 
+## Schema → SHACL imports
+
+The schema-projection surface is bidirectional. `SchemaImportConfig` requires
+the caller's namespace table and the complete RDF datatype mapping for JSON
+scalars; there is no default vocabulary. The five production reverse directions
+are JSON Schema draft 2020-12 (`import_json_schema`), native LinkML 1.11
+(`import_linkml`), and verified PurRDF-emitted Pydantic v2, TypeScript 7.0, and
+GraphQL September 2025 packages (`import_*_package`). All five lower through one
+ordered JSON-Schema semantic model and return typed shapes plus an
+always-computed, located reverse `LossLedger`.
+
+Malformed values, open or dangling references, identity collisions, generated
+artifact/map drift, and resource-limit exhaustion fail closed. Valid source
+constructs without an exact SHACL interpretation are ledgered at their native
+JSON Pointer. Arbitrary Python, TypeScript, and GraphQL SDL are intentionally
+outside the inverse boundary because none defines one unique runtime JSON
+acceptance relation. LinkML does have a native reader; its schema identity and
+documentation can therefore appear as losses even when the validation-bearing
+SHACL recompiles byte-exactly.
+
+The executable example constructs caller-owned `example.org` configuration and
+exercises all five paths:
+
+```bash
+cargo run -p purrdf-shapes --example schema_reverse --locked
+```
+
 ## Pydantic v2 projection
 
 `purrdf-shapes` can transliterate a compiled SHACL-derived JSON Schema into a
@@ -61,6 +88,8 @@ located entry in the always-computed `json-schema` → `pydantic-v2`
 `LossLedger`; a lossless input yields an empty ledger. The renderer itself has no
 Python dependency and stays wasm-clean. A dev-only Python oracle executes the
 generated code and checks the live reverse/schema surface.
+`import_pydantic_package` separately verifies the retained source schema,
+generated files, model map, dialect, and forward ledger before importing SHACL.
 
 ## LinkML 1.11 projection
 
@@ -80,6 +109,10 @@ collisions fail closed. `parse_linkml` and `write_linkml` preserve all
 JSON-compatible metamodel fields and provide byte-stable read/write round trips
 while rejecting YAML-only tags, duplicate keys, non-string keys, and non-finite
 numbers.
+
+`import_linkml` consumes that validated native document; the emitted-package
+variant `import_linkml_package` first verifies canonical YAML and the reversible
+element map. Both use the same caller-owned SHACL import configuration.
 
 The Rust production path has no LinkML-toolkit dependency. CI uses the locked
 official LinkML 1.11.1 Python packages only as a differential oracle:
@@ -119,9 +152,11 @@ make typescript-oracle
 
 The projection intentionally has no arbitrary TypeScript reader. TypeScript
 declarations do not define a unique runtime JSON acceptance relation, and the
-projection is many-to-one. The retained `CompiledSchema` plus the reversible
-name map remains the authoritative reverse surface. TypeScript is only a
-dev-time oracle dependency; the Rust emitter is filesystem-free and wasm-clean.
+projection is many-to-one. `import_typescript_package` is the authoritative
+reverse surface: it deterministically verifies the retained source schema,
+declaration, reversible name map, dialect, and forward ledger. TypeScript is
+only a dev-time oracle dependency; the Rust emitter/importer is filesystem-free
+and wasm-clean.
 
 ## GraphQL September 2025 projection
 
@@ -150,8 +185,10 @@ finite JSON values.
 `GraphqlPackage::encode_input` maps source JSON keys and finite values to input
 field names and enum symbols. `decode_output` performs the inverse for fields
 present in a GraphQL response, without inventing omitted selections. Unknown or
-incompatible values fail. This package codec is the precise reverse boundary;
-arbitrary GraphQL SDL has no unique JSON Schema acceptance relation and is not
+incompatible values fail. This package codec is the precise value boundary;
+`import_graphql_package` is the schema reverse boundary and verifies the SDL,
+typed/canonical maps, identity, retained source schema, and forward ledger.
+Arbitrary GraphQL SDL has no unique JSON Schema acceptance relation and is not
 accepted as an inverse format.
 
 GraphQL variable coercion differs from JSON Schema validation at these closed
