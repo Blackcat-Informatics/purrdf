@@ -24,12 +24,14 @@ fn run_with_stdin(args: &[&str], stdin: &[u8]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn purrdf");
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(stdin)
-        .expect("write stdin");
+    let write_result = child.stdin.take().expect("stdin").write_all(stdin);
+    if let Err(error) = write_result {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "write stdin: {error}"
+        );
+    }
     child.wait_with_output().expect("wait")
 }
 
