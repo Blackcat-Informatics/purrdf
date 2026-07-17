@@ -32,6 +32,9 @@ They live under `crates/*/benches/`:
   recognition cost for ordinary vs. genuine content-id IRIs.
 - `crates/rdf-core/benches/pack_index_compare.rs` — the shipped pack codec's
   FoQ posting indexes vs. an internal bitmap wavelet-matrix candidate.
+- `crates/rdf-core/benches/purremb.rs` — `.purremb` validation, resident
+  reopen, target and prefix access, exact/two-stage retrieval, streaming write,
+  binary64 access, and a one-million-chunk catalog.
 - `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput.
 - `crates/rdf/benches/projections.rs` — RDF-to-LPG mapping, all four LPG
   carrier writers/readers, exact CSVW write/read, OBO Graphs, SKOS, the shared
@@ -75,6 +78,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR. |
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
+| `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, allocation observations, and a one-million-chunk hierarchy. |
 | `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers. |
 | `crates/rdf/benches/projections.rs` | Graph, tabular, and research-object mapping/carrier throughput plus allocation counts over deterministic fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
@@ -87,6 +91,111 @@ Additional benches are run package-by-package, e.g.
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
+
+### PURREMB companion format
+
+`crates/rdf-core/benches/purremb.rs` constructs three deterministic fixtures
+without RNG, wall-clock values, local paths, or process-specific canonical
+input:
+
+- a 16,384-row x 384-coordinate binary32 matrix (27,267,328-byte artifact)
+  with one stored matrix and raw-32, deterministic-L2-64, and
+  deterministic-L2-384 Matryoshka spaces;
+- a 4,096-row x 128-coordinate binary64 matrix (4,722,368-byte artifact); and
+- exactly 1,000,000 digest-only chunk subjects distributed across 4,096
+  retained document shards (217,642,688-byte artifact).
+
+The binary32 coordinates are a pure function of each `TargetId`. Coordinates
+after position 64 are correlated with the leading 64 coordinates, giving the
+fixture a deliberate nested-space shape. The retrieval comparison excludes the
+query row, obtains 128 candidates by an exact scan of the normalized
+64-coordinate prefix, and reranks those candidates in the normalized
+384-coordinate space. It reports recall@10 against an exact full-space top 10.
+This measures the two-stage access pattern, not an ANN implementation: opaque
+ANN engines and their quality remain outside the format.
+
+“Full validation” times the complete structural-open, section/root hashing,
+typed-identity, finite-scalar, and projection-recomputation path. The bytes are
+already resident and the harness does not flush the operating-system page
+cache, so this is a cold-validation-code-path proxy, not disk or object-store
+latency. “Resident prevalidated reopen” applies a certificate to the same
+immutable allocation and still performs structural validation. The streaming
+measurement preallocates its output buffer and clones typed input during
+Criterion's untimed batch setup; the timed operation includes canonical
+metadata encoding, layout, matrix streaming, all integrity/projection hashes,
+and backpatching. A setup assertion requires its bytes to equal the unordered
+builder output exactly.
+
+The benchmark's counting allocator reports allocation calls, cumulative
+requested bytes, retained-byte deltas, and the maximum live-byte delta observed
+during selected operations. “Peak working bytes” is an in-process allocator
+high-water observation, not peak RSS, mapped-file residency, kernel page cache,
+or a memory budget. Structural `EmbeddingView::from_bytes` remains borrowed;
+full relation-completeness verification intentionally builds temporary relation
+catalogs for the million-chunk fixture. The streaming observation includes the
+27.3 MB caller-owned `Vec` sink; matrix processing itself retains one row buffer
+and its digest states, and a file or network sink need not retain output bytes.
+
+Run the exact fixtures, a timed short sample, or a reduced-catalog smoke pass
+with:
+
+```sh
+cargo bench -p purrdf-core --bench purremb --locked -- --test
+cargo bench -p purrdf-core --bench purremb --locked -- --quick
+PURREMB_CATALOG_SUBJECTS=10000 \
+  cargo bench -p purrdf-core --bench purremb --locked -- --test
+```
+
+The environment override is for local smoke testing only. Reported results use
+the one-million default.
+
+#### Representative PURREMB result
+
+This `--quick` snapshot was measured on 2026-07-17 with rustc 1.96.1, Linux
+7.1.3, and an AMD Ryzen AI MAX+ 395 (16 cores / 32 threads). The host reports
+768 KiB L1d, 512 KiB L1i, 16 MiB L2, and 64 MiB L3 in aggregate. The 27.3 MB
+binary32 artifact fits within aggregate L3 while the 217.6 MB chunk catalog does
+not; both were resident in process memory. Values are Criterion point estimates
+from one report-only run and are rounded. Sub-nanosecond target-by-row timing is
+an optimized tight-loop observation, not an end-to-end request latency.
+
+| Operation | Fixture | Time | Throughput where meaningful |
+| --- | --- | ---: | ---: |
+| full validation | 16,384 x 384 `f32` | 76.6 ms | 340 MiB/s |
+| resident prevalidated reopen | 16,384 x 384 `f32` | 4.07 ms | 6.24 GiB/s |
+| target by matrix row | 16,384 targets | 0.635 ns | — |
+| target by `TargetId` | 16,384 targets | 33.5 ns | — |
+| raw 32-coordinate prefix borrow | `f32` | 4.44 ns | — |
+| deterministic-L2 64-coordinate prefix iteration | `f32` | 226 ns | — |
+| native aligned 384-coordinate row borrow | `f32` | 1.29 ns | — |
+| exact normalized 384-coordinate scan | 16,384 rows | 12.9 ms | 1.27 Mrow/s |
+| exact 64-prefix candidates + 384-prefix rerank | 16,384 rows, 128 candidates | 4.00 ms | 4.10 Mrow/s |
+| canonical streaming write | 27,267,328 bytes | 69.8 ms | 373 MiB/s |
+| full validation | 4,096 x 128 `f64` | 7.74 ms | 582 MiB/s |
+| native aligned 128-coordinate row borrow | `f64` | 1.28 ns | — |
+| target by `TargetId` | 1,000,000 chunks | 42.9 ns | — |
+| one document's relation range | 1,000,000 chunks / 4,096 documents | 492 ns | — |
+
+The correlated synthetic Matryoshka fixture reported recall@10 = 1.000 after
+64-coordinate retrieval and 384-coordinate reranking. That result demonstrates
+the guard-correct two-stage path for this generator; it is not a model-quality
+claim and must not be generalized to independently trained or uncorrelated
+embeddings.
+
+Representative allocator observations from the same run:
+
+| Operation | Allocation calls | Requested bytes | Retained bytes | Peak working bytes |
+| --- | ---: | ---: | ---: | ---: |
+| build verified `f32` fixture plus retained input rows | 147,746 | 123,609,845 | 54,793,658 | 82,063,846 |
+| full verification of relation-free `f32` fixture | 2 | 48 | 0 | 40 |
+| complete canonical streaming write | 133 | 35,939,982 | 27,267,328 | 32,777,324 |
+| build verified `f64` fixture | 37,113 | 17,756,475 | 4,722,368 | 9,447,684 |
+| build one-million-chunk catalog | 5,028,985 | 1,895,285,731 | 217,642,688 | 548,434,988 |
+| full verification of one-million-chunk catalog | 22 | 210,884,640 | 0 | 139,581,696 |
+
+These observations are report-only. They establish reproducible workloads and
+make regressions visible; they do not impose latency, throughput, recall, or
+memory thresholds.
 
 ### SHACL schema import
 

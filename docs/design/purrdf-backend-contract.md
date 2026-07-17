@@ -408,6 +408,74 @@ on an mmap crate, gated off the wasm32 target, and confined to
 
 ---
 
+## E-clauses — deterministic embedding companions
+
+`.purremb` is a derived companion to one exact pack, not another
+`DatasetView`. It carries model-specific vectors and lookup accelerators while
+keeping the pack and its RDF identity authoritative and byte-for-byte
+unchanged.
+
+### E0 — source attachment is exact and independently certifiable
+
+Every companion names both the complete source-pack SHA-256 and the pack's
+independently recomputed RDFC digest. Exact verification checks the source byte
+length, digest, and pack structure. Certified verification additionally calls
+the pack verifier, compares the RDFC digest, checks the dataset target, and
+validates every recognized source-local ordinal. Failure in either mode is a
+hard mismatch. Equal RDF content never substitutes for unequal source bytes
+because ordinals and byte attachment belong to the exact pack.
+
+### E1 — vector meaning is a complete contract
+
+A `VectorSpaceId` commits to the model, inference engine, tokenizer, execution
+settings, subject projection, preprocessing, chunking, pooling, normalization,
+truncation, scalar type, metric, dimension, and prefix postprocessing. Matching
+dimensions alone do not establish compatibility. Fixed and Matryoshka families
+share one rule: each effective leading prefix has a distinct identity, and a
+matrix lookup is valid only for the exact `(TargetSetId, VectorSpaceId)` pair.
+
+### E2 — text corpora and RDF 1.2 are first-class targets
+
+Corpus targets form a content-addressed corpus–document–chunk hierarchy. Text
+bytes stay external; the companion retains exact content digests, logical
+identities, byte and Unicode-scalar spans, chunking contracts, hierarchy edges,
+and family-scoped token spans. RDF targets use the single RDF 1.2 identity model
+for datasets, graphs, statements, reifier bindings, annotations, directional
+literals, blank nodes, and recursive triple terms. RDF-star input does not gain
+a parallel identity dialect.
+
+### E3 — the widest exact matrix is authoritative
+
+PURREMB v1 stores finite, little-endian `f32` or `f64` rows, preserving signed
+zero and rejecting NaN and infinity. A Matryoshka family stores its widest
+matrix once. Shorter raw prefixes are zero-copy strided row views;
+deterministic-L2 prefixes are calculated on demand using the specified fold.
+Approximate indexes are opaque, rebuildable, guarded derivatives bound to one
+exact matrix projection. Index bytes, loss contracts, and metadata never alter
+source, target, family, matrix, projection, or RDF identity.
+
+### E4 — borrowing and verification remain portable
+
+`EmbeddingView` borrows a stable `&[u8]`; it owns no file, mapping, thread,
+clock, RNG, model runtime, or ANN engine. Heap buffers, caller-owned immutable
+mmaps, and WebAssembly linear memory use the same parser and accessors.
+Structural open proves bounds and relationships. Full verification adds section
+hashes, typed identities, finite-scalar scans, and projection digests, returning
+a resident certificate tied to the exact allocation, range, length, and root.
+The certificate assumes the underlying bytes remain immutable.
+
+### E5 — deterministic framing is the interoperability boundary
+
+Canonical writers sort all sets and records, use checked little-endian framing,
+align every section to 64 bytes, require minimal zero padding, and bind the
+directory and section hashes into one artifact root. The unordered builder and
+bounded-memory sorted stream writer produce identical bytes from equal logical
+input. Extension material is caller-supplied, byte-preserved, and either
+understood or rejected according to its critical flag; PurRDF supplies no
+vocabulary or policy defaults.
+
+---
+
 ## Determinism & wasm
 
 Determinism in PurRDF comes from **id-sorting and BTree egress** and from applying

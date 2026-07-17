@@ -129,3 +129,11 @@ harness = false
 # unbound-subject query shapes; no winner is asserted.
 name = "pack_index_compare"
 harness = false
+
+[[bench]]
+# Deterministic `.purremb` substantial-fixture harness: full validation and
+# resident reopen, target/relation and prefix access, exact/coarse+rerank
+# retrieval, bounded-memory streaming output, f64 access, and a one-million-
+# chunk catalog. Report-only — no latency or recall threshold is asserted.
+name = "purremb"
+harness = false
