@@ -81,19 +81,19 @@ impl SectionKey {
 
 /// One fully encoded section supplied to the canonical file assembler.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SectionPayload {
+pub(super) struct SectionPayload {
     /// Section key written into the directory.
-    pub key: SectionKey,
+    pub(super) key: SectionKey,
     /// Exact v1 directory flags.
-    pub flags: u32,
+    pub(super) flags: u32,
     /// Exact section body, excluding file-level alignment padding.
-    pub bytes: Vec<u8>,
+    pub(super) bytes: Vec<u8>,
 }
 
 impl SectionPayload {
     /// Constructs an encoded section payload.
     #[must_use]
-    pub fn new(kind: u32, instance: u32, flags: u32, bytes: Vec<u8>) -> Self {
+    pub(super) fn new(kind: u32, instance: u32, flags: u32, bytes: Vec<u8>) -> Self {
         Self {
             key: SectionKey::new(kind, instance),
             flags,
@@ -104,19 +104,19 @@ impl SectionPayload {
 
 /// A section whose length is known before its bytes are streamed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SectionDescriptor {
+pub(super) struct SectionDescriptor {
     /// Section key written into the directory.
-    pub key: SectionKey,
+    pub(super) key: SectionKey,
     /// Exact v1 directory flags.
-    pub flags: u32,
+    pub(super) flags: u32,
     /// Exact section length, excluding file-level padding.
-    pub length: u64,
+    pub(super) length: u64,
 }
 
 impl SectionDescriptor {
     /// Constructs a section descriptor.
     #[must_use]
-    pub const fn new(kind: u32, instance: u32, flags: u32, length: u64) -> Self {
+    pub(super) const fn new(kind: u32, instance: u32, flags: u32, length: u64) -> Self {
         Self {
             key: SectionKey::new(kind, instance),
             flags,
@@ -127,7 +127,7 @@ impl SectionDescriptor {
 
 /// One planned directory entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DirectoryEntry {
+pub(super) struct DirectoryEntry {
     key: SectionKey,
     flags: u32,
     offset: u64,
@@ -138,38 +138,26 @@ pub struct DirectoryEntry {
 impl DirectoryEntry {
     /// Section key.
     #[must_use]
-    pub const fn key(self) -> SectionKey {
+    pub(super) const fn key(self) -> SectionKey {
         self.key
-    }
-
-    /// Directory flags.
-    #[must_use]
-    pub const fn flags(self) -> u32 {
-        self.flags
     }
 
     /// Absolute section offset.
     #[must_use]
-    pub const fn offset(self) -> u64 {
+    pub(super) const fn offset(self) -> u64 {
         self.offset
     }
 
     /// Exact section length.
     #[must_use]
-    pub const fn length(self) -> u64 {
+    pub(super) const fn length(self) -> u64 {
         self.length
-    }
-
-    /// Plain section SHA-256, once supplied.
-    #[must_use]
-    pub const fn sha256(self) -> Option<[u8; 32]> {
-        self.sha256
     }
 }
 
 /// Canonical offsets and directory state for one PURREMB file.
 #[derive(Debug, Clone)]
-pub struct FileLayout {
+pub(super) struct FileLayout {
     source_exact_digest: ContentDigest,
     entries: Vec<DirectoryEntry>,
     directory_length: u64,
@@ -183,7 +171,7 @@ impl FileLayout {
     ///
     /// Descriptors may arrive in any order; this function sorts them by
     /// `(kind, instance)` and rejects every noncanonical cardinality or flag.
-    pub fn plan(
+    pub(super) fn plan(
         source_exact_digest: ContentDigest,
         mut descriptors: Vec<SectionDescriptor>,
     ) -> Result<Self, EmbeddingError> {
@@ -233,31 +221,31 @@ impl FileLayout {
 
     /// Planned entries in canonical order.
     #[must_use]
-    pub fn entries(&self) -> &[DirectoryEntry] {
+    pub(super) fn entries(&self) -> &[DirectoryEntry] {
         &self.entries
     }
 
     /// Offset of the first section.
     #[must_use]
-    pub const fn first_section_offset(&self) -> u64 {
+    pub(super) const fn first_section_offset(&self) -> u64 {
         self.first_section_offset
     }
 
     /// Offset of the fixed trailer.
     #[must_use]
-    pub const fn trailer_offset(&self) -> u64 {
+    pub(super) const fn trailer_offset(&self) -> u64 {
         self.trailer_offset
     }
 
     /// Exact final file length.
     #[must_use]
-    pub const fn file_length(&self) -> u64 {
+    pub(super) const fn file_length(&self) -> u64 {
         self.file_length
     }
 
     /// Finds a planned directory entry.
     #[must_use]
-    pub fn entry(&self, key: SectionKey) -> Option<DirectoryEntry> {
+    pub(super) fn entry(&self, key: SectionKey) -> Option<DirectoryEntry> {
         self.entries
             .binary_search_by_key(&key, |entry| entry.key)
             .ok()
@@ -265,7 +253,7 @@ impl FileLayout {
     }
 
     /// Supplies the plain SHA-256 for one planned section.
-    pub fn set_section_digest(
+    pub(super) fn set_section_digest(
         &mut self,
         key: SectionKey,
         digest: [u8; 32],
@@ -279,7 +267,7 @@ impl FileLayout {
     }
 
     /// Encodes the populated canonical directory.
-    pub fn directory_bytes(&self) -> Result<Vec<u8>, EmbeddingError> {
+    pub(super) fn directory_bytes(&self) -> Result<Vec<u8>, EmbeddingError> {
         let capacity = usize::try_from(self.directory_length)
             .map_err(|_| EmbeddingError::ArithmeticOverflow("directory allocation"))?;
         let mut output = Vec::with_capacity(capacity);
@@ -305,19 +293,19 @@ impl FileLayout {
 
     /// Encodes the canonical header with a zero artifact-root field.
     #[must_use]
-    pub fn header_zero_root(&self) -> [u8; PURREMB_HEADER_LENGTH as usize] {
-        self.header_with_root(ArtifactRoot::from_raw([0; 32]))
+    pub(super) fn header_zero_root(&self) -> [u8; PURREMB_HEADER_LENGTH as usize] {
+        self.header(ArtifactRoot::from_raw([0; 32]))
     }
 
     /// Computes the artifact root after every section digest has been supplied.
-    pub fn artifact_root(&self) -> Result<ArtifactRoot, EmbeddingError> {
+    pub(super) fn artifact_root(&self) -> Result<ArtifactRoot, EmbeddingError> {
         let directory = self.directory_bytes()?;
         Ok(derive_artifact_root(&self.header_zero_root(), &directory))
     }
 
     /// Encodes the final header.
     #[must_use]
-    pub fn header_with_root(&self, root: ArtifactRoot) -> [u8; PURREMB_HEADER_LENGTH as usize] {
+    pub(super) fn header(&self, root: ArtifactRoot) -> [u8; PURREMB_HEADER_LENGTH as usize] {
         let mut output = [0u8; PURREMB_HEADER_LENGTH as usize];
         output[0..8].copy_from_slice(&PURREMB_MAGIC);
         put_u32(&mut output, 8, PURREMB_VERSION);
@@ -341,7 +329,7 @@ impl FileLayout {
 
     /// Encodes the final fixed trailer.
     #[must_use]
-    pub fn trailer_with_root(&self, root: ArtifactRoot) -> [u8; PURREMB_TRAILER_LENGTH as usize] {
+    pub(super) fn trailer(&self, root: ArtifactRoot) -> [u8; PURREMB_TRAILER_LENGTH as usize] {
         let mut output = [0u8; PURREMB_TRAILER_LENGTH as usize];
         output[0..8].copy_from_slice(&PURREMB_TRAILER_MAGIC);
         put_u32(&mut output, 8, PURREMB_VERSION);
@@ -362,7 +350,7 @@ pub struct EncodedArtifact {
 }
 
 /// Assembles a canonical PURREMB file from fully encoded section bodies.
-pub fn encode_artifact(
+pub(super) fn encode_artifact(
     source_exact_digest: ContentDigest,
     mut sections: Vec<SectionPayload>,
 ) -> Result<EncodedArtifact, EmbeddingError> {
@@ -390,7 +378,7 @@ pub fn encode_artifact(
     let file_len = usize::try_from(layout.file_length())
         .map_err(|_| EmbeddingError::ArithmeticOverflow("file allocation"))?;
     let mut output = vec![0u8; file_len];
-    output[..PURREMB_HEADER_LENGTH as usize].copy_from_slice(&layout.header_with_root(root));
+    output[..PURREMB_HEADER_LENGTH as usize].copy_from_slice(&layout.header(root));
     let directory = layout.directory_bytes()?;
     let directory_end = PURREMB_HEADER_LENGTH as usize + directory.len();
     output[PURREMB_HEADER_LENGTH as usize..directory_end].copy_from_slice(&directory);
@@ -416,7 +404,7 @@ pub fn encode_artifact(
 
     let trailer_offset = usize::try_from(layout.trailer_offset())
         .map_err(|_| EmbeddingError::ArithmeticOverflow("trailer offset"))?;
-    output[trailer_offset..].copy_from_slice(&layout.trailer_with_root(root));
+    output[trailer_offset..].copy_from_slice(&layout.trailer(root));
     Ok(EncodedArtifact {
         bytes: output,
         root,
@@ -424,7 +412,7 @@ pub fn encode_artifact(
 }
 
 /// Checked `align_up` for the normative power-of-two alignments.
-pub fn checked_align_up(value: u64, alignment: u64) -> Result<u64, EmbeddingError> {
+pub(super) fn checked_align_up(value: u64, alignment: u64) -> Result<u64, EmbeddingError> {
     if alignment == 0 || !alignment.is_power_of_two() {
         return Err(EmbeddingError::Malformed("alignment is not a power of two"));
     }

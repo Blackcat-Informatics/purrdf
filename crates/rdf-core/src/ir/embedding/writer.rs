@@ -562,7 +562,7 @@ impl<W: Write + Seek> EmbeddingStreamWriter<W> {
             return Err(EmbeddingError::Missing("streamed MATRIX_DATA section").into());
         }
         let root = self.layout.artifact_root()?;
-        write_at(&mut self.output, 0, &self.layout.header_with_root(root))?;
+        write_at(&mut self.output, 0, &self.layout.header(root))?;
         write_at(
             &mut self.output,
             u64::from(PURREMB_HEADER_LENGTH),
@@ -571,7 +571,7 @@ impl<W: Write + Seek> EmbeddingStreamWriter<W> {
         write_at(
             &mut self.output,
             self.layout.trailer_offset(),
-            &self.layout.trailer_with_root(root),
+            &self.layout.trailer(root),
         )?;
         self.output
             .seek(SeekFrom::Start(self.layout.file_length()))?;

@@ -107,6 +107,9 @@ pub use fno::{
     to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
 };
 pub use hash::{FastHasher, FastMap, FastSet, IdSet};
+/// Deterministic embedding companions bound to exact PurRDF packs.
+pub use ir::embedding;
+pub use ir::embedding::*;
 pub use ir::{
     BlankScope, BudgetExceeded, CanonHash, Canonicalized, CountingDemandProvider, DatasetDiff,
     DatasetSink, FrozenDatasetSource, GlobalDictionary, GlobalTermId, GtsBundle, HandleEntry,
@@ -119,9 +122,6 @@ pub use ir::{
     ValidatedRdfDatasetBuilder, canonicalize, canonicalize_with, dataset_diff, datasets_isomorphic,
     try_canonicalize, try_canonicalize_with,
 };
-/// Deterministic embedding companions bound to exact PurRDF packs.
-pub use ir::embedding;
-pub use ir::embedding::*;
 pub use ir::{
     PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,
     restore_pack, verify_pack,
