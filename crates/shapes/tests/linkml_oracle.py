@@ -138,6 +138,24 @@ def _assert_reference_closure(document: dict[str, Any]) -> None:
     walk(definitions)
 
 
+def _assert_reverse(payload: dict[str, Any], expected_shape_ids: list[str]) -> None:
+    reverse = payload["reverse"]
+    if reverse["shape_ids"] != expected_shape_ids:
+        raise AssertionError(
+            f"unexpected reverse SHACL shapes: {reverse['shape_ids']!r}"
+        )
+    _assert_reference_closure(reverse["schema"])
+    losses = reverse["losses"]["losses"]
+    if not all(entry["from"] == "linkml-1.11" for entry in losses):
+        raise AssertionError("reverse ledger contains a foreign source format")
+    if not all(entry["to"] == "shacl" for entry in losses):
+        raise AssertionError("reverse ledger contains a foreign target format")
+    if not all(entry["intentional"] for entry in losses):
+        raise AssertionError("reverse fixture contains an unregistered loss")
+    if not all(" subject=#/" in entry["location"] for entry in losses):
+        raise AssertionError("reverse loss was not remapped to a native LinkML path")
+
+
 def _assert_exact(payload: dict[str, Any]) -> None:
     source = payload["schema"]
     element_names = payload["element_names"]
@@ -213,6 +231,10 @@ def _assert_exact(payload: dict[str, Any]) -> None:
         generated,
         probes,
     )
+    _assert_reverse(
+        payload,
+        ["<https://example.org/Address>", "<https://example.org/Person>"],
+    )
 
 
 def _assert_lossy(payload: dict[str, Any]) -> None:
@@ -283,6 +305,7 @@ def _assert_lossy(payload: dict[str, Any]) -> None:
         raise AssertionError("source string length unexpectedly accepted a short label")
     if not _is_valid(generated, "Lossy", {"ex:label": "x"}):
         raise AssertionError("recorded string-length drop is not observable")
+    _assert_reverse(payload, ["<https://example.org/Lossy>"])
 
 
 def main() -> None:
@@ -296,7 +319,7 @@ def main() -> None:
     _assert_lossy(payload["lossy"])
     print(
         "LinkML oracle: exact $defs and 16 instance probes agree; "
-        "18 located losses and representable widening probes pass"
+        "18 located losses, reverse SHACL imports, and representable widening probes pass"
     )
 
 

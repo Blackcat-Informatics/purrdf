@@ -9,10 +9,10 @@ use std::error::Error;
 
 use boon::{Compiler, Schemas};
 use purrdf::loss::{LossLedger, check_ledger_complete, check_ledger_sound};
-use purrdf_shapes::json_schema::CompiledSchema;
+use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
 use purrdf_shapes::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig, GraphqlPackage,
-    emit_graphql,
+    SchemaDatatypeMap, SchemaImportConfig, emit_graphql, import_graphql_package,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -42,6 +42,7 @@ const CLOSED_PROFILE: [&str; 23] = [
     "union-validation-delegated",
     "unique-items-validation-dropped",
 ];
+const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +91,50 @@ fn config() -> Result<GraphqlConfig, Box<dyn Error>> {
         "Type-system definitions checked against source JSON Schema acceptance.",
         "JsonCarrier",
     )?)
+}
+
+fn import_config() -> Result<SchemaImportConfig, Box<dyn Error>> {
+    let namespaces = Namespaces::new(
+        "ex",
+        &[("ex".to_owned(), "https://example.org/".to_owned())],
+    )?;
+    let datatypes = SchemaDatatypeMap::new(
+        format!("{XSD}string"),
+        format!("{XSD}boolean"),
+        format!("{XSD}integer"),
+        format!("{XSD}decimal"),
+        format!("{XSD}dateTime"),
+        format!("{XSD}date"),
+        format!("{XSD}time"),
+        format!("{XSD}anyURI"),
+    )?;
+    Ok(SchemaImportConfig::new(namespaces, datatypes))
+}
+
+fn reverse_evidence(
+    package: &GraphqlPackage,
+    config: &SchemaImportConfig,
+) -> Result<Value, Box<dyn Error>> {
+    let imported = import_graphql_package(package, config)?;
+    check_ledger_sound(&imported.losses, GRAPHQL_DIALECT, "shacl")?;
+    let repeated = import_graphql_package(package, config)?;
+    if imported.losses.render_json() != repeated.losses.render_json() {
+        return Err("GraphQL reverse ledger is not deterministic".into());
+    }
+    let first = purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces());
+    let second = purrdf_shapes::json_schema::compile(&repeated.shapes, config.namespaces());
+    if first.schema_json != second.schema_json {
+        return Err("GraphQL reverse shapes are not byte-deterministic".into());
+    }
+    Ok(json!({
+        "losses": serde_json::from_str::<Value>(&imported.losses.render_json())?,
+        "shapeIds": imported
+            .shapes
+            .node_shapes
+            .iter()
+            .map(|shape| shape.id.to_string())
+            .collect::<Vec<_>>(),
+    }))
 }
 
 fn exact_schema() -> Value {
@@ -737,6 +782,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "closedProfile": CLOSED_PROFILE,
         "exact": exact_fixture(&exact_schema, &exact_package)?,
         "lossy": lossy_fixture(&lossy_schema, &lossy_package)?,
+        "reverse": reverse_evidence(&exact_package, &import_config()?)?,
     });
     println!("{}", serde_json::to_string(&output)?);
     Ok(())

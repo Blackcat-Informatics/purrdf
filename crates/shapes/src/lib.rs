@@ -10,6 +10,13 @@
 //! (`sh:sparql`/`sh:SPARQLConstraint`) and targets (`sh:SPARQLTarget`) are
 //! implemented in the [`sparql`] module on the native `purrdf-sparql-eval`
 //! engine.
+//!
+//! The crate also owns the bidirectional schema boundary. [`import_json_schema`]
+//! and [`import_linkml`] read native documents; [`import_pydantic_package`],
+//! [`import_typescript_package`], and [`import_graphql_package`] verify intact
+//! PurRDF-generated packages before lowering through the same deterministic
+//! schema-import engine. Every reader requires caller-owned namespace and
+//! datatype configuration and returns an always-computed reverse loss ledger.
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
@@ -33,6 +40,7 @@ pub mod pydantic;
 pub mod report;
 pub mod rules;
 mod schema_catalog;
+pub mod schema_import;
 pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
@@ -43,18 +51,25 @@ pub mod typescript;
 pub use graphql::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig,
     GraphqlDefinitionMap, GraphqlEnumValueMap, GraphqlError, GraphqlNameMap, GraphqlPackage,
-    emit_graphql,
+    emit_graphql, import_graphql_package,
 };
 pub use json_schema::{Namespaces, ValueVocab, ValueVocabProjection, compile_with_value_vocab};
 pub use linkml::{
-    LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, emit_linkml, parse_linkml,
-    write_linkml,
+    LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, emit_linkml, import_linkml,
+    import_linkml_package, parse_linkml, write_linkml,
 };
-pub use pydantic::{PydanticConfig, PydanticError, PydanticPackage, emit_pydantic};
+pub use pydantic::{
+    PYDANTIC_DIALECT, PydanticConfig, PydanticError, PydanticPackage, emit_pydantic,
+    import_pydantic_package,
+};
 pub use rules::{apply_rules, entail_dataset};
+pub use schema_import::{
+    ImportedShapes, SchemaDatatypeMap, SchemaImportConfig, SchemaImportError,
+    import_compiled_schema, import_json_schema,
+};
 pub use typescript::{
     TYPESCRIPT_DECLARATION_PATH, TYPESCRIPT_DIALECT, TypeScriptConfig, TypeScriptError,
-    TypeScriptPackage, emit_typescript,
+    TypeScriptPackage, emit_typescript, import_typescript_package,
 };
 
 /// Crate version string for cache/toolchain salt parity with Python package

@@ -6,10 +6,59 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
-use purrdf::loss::LossLedger;
-use purrdf_shapes::json_schema::CompiledSchema;
-use purrdf_shapes::{PydanticConfig, emit_pydantic};
-use serde_json::json;
+use purrdf::loss::{LossLedger, check_ledger_sound};
+use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
+use purrdf_shapes::{
+    PYDANTIC_DIALECT, PydanticConfig, PydanticPackage, SchemaDatatypeMap, SchemaImportConfig,
+    emit_pydantic, import_pydantic_package,
+};
+use serde_json::{Value, json};
+
+const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+
+fn import_config() -> Result<SchemaImportConfig, Box<dyn Error>> {
+    let namespaces = Namespaces::new(
+        "ex",
+        &[("ex".to_owned(), "https://example.org/".to_owned())],
+    )?;
+    let datatypes = SchemaDatatypeMap::new(
+        format!("{XSD}string"),
+        format!("{XSD}boolean"),
+        format!("{XSD}integer"),
+        format!("{XSD}decimal"),
+        format!("{XSD}dateTime"),
+        format!("{XSD}date"),
+        format!("{XSD}time"),
+        format!("{XSD}anyURI"),
+    )?;
+    Ok(SchemaImportConfig::new(namespaces, datatypes))
+}
+
+fn reverse_evidence(
+    package: &PydanticPackage,
+    config: &SchemaImportConfig,
+) -> Result<Value, Box<dyn Error>> {
+    let imported = import_pydantic_package(package, config)?;
+    check_ledger_sound(&imported.losses, PYDANTIC_DIALECT, "shacl")?;
+    let repeated = import_pydantic_package(package, config)?;
+    if imported.losses.render_json() != repeated.losses.render_json() {
+        return Err("Pydantic reverse ledger is not deterministic".into());
+    }
+    let first = purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces());
+    let second = purrdf_shapes::json_schema::compile(&repeated.shapes, config.namespaces());
+    if first.schema_json != second.schema_json {
+        return Err("Pydantic reverse shapes are not byte-deterministic".into());
+    }
+    Ok(json!({
+        "losses": serde_json::from_str::<Value>(&imported.losses.render_json())?,
+        "shape_ids": imported
+            .shapes
+            .node_shapes
+            .iter()
+            .map(|shape| shape.id.to_string())
+            .collect::<Vec<_>>(),
+    }))
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let schema = json!({
@@ -116,6 +165,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         "Caller-owned oracle model documentation.",
     )?;
     let package = emit_pydantic(&compiled, &config)?;
+    let mut reverse_schema = schema.clone();
+    reverse_schema["$defs"]
+        .as_object_mut()
+        .ok_or("oracle schema has no $defs")?
+        .remove("Empty");
+    let reverse_package = emit_pydantic(
+        &CompiledSchema {
+            schema_json: format!("{}\n", serde_json::to_string_pretty(&reverse_schema)?),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        },
+        &config,
+    )?;
+    let reverse = reverse_evidence(&reverse_package, &import_config()?)?;
     let observed_losses: BTreeSet<(&str, &str)> = package
         .losses
         .entries()
@@ -157,6 +220,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output = json!({
         "artifacts": artifacts,
         "model_paths": package.model_paths,
+        "reverse": reverse,
         "schema": schema,
     });
     println!("{}", serde_json::to_string(&output)?);

@@ -28,7 +28,12 @@ Copied from `gmeow-ontology`:
   for `purrdf-shapes::pydantic`. PurRDF removes its repository, ontology,
   namespace, slice-routing, and fixed-package coupling; the carrier API consumes
   `CompiledSchema` in memory, takes package prose from the caller, and records
-  runtime projection gaps on the shared closed loss ledger.
+  runtime projection gaps on the shared closed loss ledger. The verified
+  `import_pydantic_package` reverse path retains the exact source schema and
+  rejects artifact/model-map drift. The legacy implementation is disposable
+  migration material, intended for deletion when gmeow integrates this
+  replacement; the consumer cutover is not yet complete and no downstream type
+  contract is preserved.
 - The legacy LinkML YAML model in
   `crates/pipeline/src/stages/schemas.rs` at
   `c91195e0c300cad9c9a32c8580c2910a6fd48fc1` was used solely as migration
@@ -37,9 +42,10 @@ Copied from `gmeow-ontology`:
   TypeScript/GraphQL model are not reused architecture. The replacement
   `purrdf-shapes::linkml` API consumes `CompiledSchema`, requires all identity
   and vocabulary from the caller, preserves a canonical LinkML 1.11 document,
-  and records projection gaps through the closed loss ledger. The legacy model
-  is intended for deletion once this replacement is integrated, not
-  preservation as a downstream contract.
+  reads native LinkML back into SHACL, verifies emitted packages, and records
+  projection/import gaps through direction-specific closed loss ledgers. The
+  legacy model is intended for deletion once this replacement is integrated,
+  not preservation as a downstream contract.
 - The legacy `render_typescript` path in
   `crates/pipeline/src/stages/schemas.rs` at
   `c91195e0c300cad9c9a32c8580c2910a6fd48fc1` was used only as evidence of the
@@ -49,10 +55,10 @@ Copied from `gmeow-ontology`:
   replacement `purrdf-shapes::typescript` projection consumes
   `CompiledSchema`, preserves exact JSON property names and requiredness,
   requires caller-owned package identity and prose, exposes a reversible type
-  map, and locates every non-projectable assertion on a closed loss ledger. The
-  old renderer and its shared private schema model are intended for deletion
-  once this replacement is integrated; no downstream type contract is being
-  preserved.
+  map, verifies intact packages before reverse SHACL import, and locates every
+  non-projectable assertion on a closed loss ledger. The old renderer and its
+  shared private schema model are intended for deletion once this replacement
+  is integrated; no downstream type contract is being preserved.
 - The legacy `render_graphql` path in
   `crates/pipeline/src/stages/schemas.rs` at
   `c91195e0c300cad9c9a32c8580c2910a6fd48fc1` was likewise used only as
@@ -63,11 +69,15 @@ Copied from `gmeow-ontology`:
   replacement `purrdf-shapes::graphql` projection consumes `CompiledSchema`,
   requires caller-owned identity, prose, and fallback-scalar name, emits paired
   output/input GraphQL September 2025 SDL, retains a canonical reversible name
-  map and value codec, and locates every coercion difference on a closed loss
-  ledger verified against GraphQL.js. The old renderer and shared legacy model
-  are intended for deletion when gmeow integrates this replacement; that
-  consumer cutover is not yet complete and no downstream type contract is being
-  preserved.
+  map and value codec, verifies intact packages before reverse SHACL import, and
+  locates every coercion difference on a closed loss ledger verified against
+  GraphQL.js. The old renderer and shared legacy model are intended for deletion
+  when gmeow integrates this replacement; that consumer cutover is not yet
+  complete and no downstream type contract is being preserved.
+
+The five schema-language reverse paths are therefore PurRDF replacements, not
+compatibility layers around gmeow's private models. They share one deterministic
+schema-to-SHACL engine and caller-owned vocabulary boundary.
 - The legacy graph/tabular writers in `crates/pipeline/src/stages/lpg.rs` and
   `crates/pipeline/src/stages/export.rs` at
   `d7745068f59b6dee187ab6b806bd2c04c9a1280a` were used solely as migration

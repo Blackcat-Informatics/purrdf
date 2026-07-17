@@ -27,6 +27,7 @@
 //! the `json-schema`→`linkml-1.11` schema projection,
 //! the `json-schema`→`typescript-7.0` declaration projection,
 //! the `json-schema`→`graphql-september-2025` type-system projection,
+//! all five fixed schema-language→`shacl` interpretation profiles,
 //! the bidirectional RDF 1.2 dataset↔OKF profile, the bidirectional RDF↔LPG
 //! semantic lowering, and the OBO Graphs/SKOS views;
 //! [`loss_matrix_json`] renders that same enumerable registry.
@@ -53,6 +54,16 @@ pub const LOSS_ANNOTATION_LAYER_DROPPED: &str = "annotation-layer-dropped";
 /// predicates was the caller-configured standpoint `accordingTo` predicate — the
 /// standpoint scope is lost. Emitted in addition to the annotation-layer code, never alone.
 pub const LOSS_STANDPOINT_SCOPE_DROPPED: &str = "standpoint-scope-dropped";
+
+/// Fixed schema-language carriers that the shapes engine can interpret as
+/// SHACL. Order is canonical and used by the enumerable loss registry.
+pub const SCHEMA_IMPORT_CODECS: &[&str] = &[
+    "json-schema",
+    "linkml-1.11",
+    "pydantic-v2",
+    "typescript-7.0",
+    "graphql-september-2025",
+];
 
 /// One enumerated conversion loss between two representations.
 ///
@@ -638,12 +649,32 @@ pub fn research_object_to_rdf_loss_ledger(profile: &str) -> LossLedger {
     contract_profile(profile, "rdf-1.2-dataset", RESEARCH_OBJECT_RDF_PROFILE)
 }
 
+/// Closed schema-language→SHACL interpretation contract.
+///
+/// # Panics
+///
+/// Panics when `source` is not one of [`SCHEMA_IMPORT_CODECS`]. Public import
+/// APIs use fixed dialect identifiers, so an unknown value is a programming
+/// error rather than a runtime fallback.
+pub fn schema_to_shacl_loss_ledger(source: &str) -> LossLedger {
+    let source = canonical_schema_import_codec(source);
+    contract_profile(source, "shacl", SCHEMA_SHACL_PROFILE)
+}
+
 fn canonical_research_object_codec(profile: &str) -> &'static str {
     RESEARCH_OBJECT_CODECS
         .iter()
         .copied()
         .find(|candidate| *candidate == profile)
         .unwrap_or_else(|| panic!("unknown research-object codec `{profile}`"))
+}
+
+fn canonical_schema_import_codec(source: &str) -> &'static str {
+    SCHEMA_IMPORT_CODECS
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == source)
+        .unwrap_or_else(|| panic!("unknown schema import codec `{source}`"))
 }
 
 /// The combined RDF↔GTS matrix as a single deterministic, sorted-by-code JSON
@@ -1376,6 +1407,137 @@ const JSON_SCHEMA_GRAPHQL_PROFILE: &[(&str, &str)] = &[
     ),
 ];
 
+/// Closed reverse profile shared by the five fixed schema-language carriers
+/// interpreted as SHACL. The adapters normalize their native document or
+/// verified generated-package contract into one ordered schema model before
+/// lowering, so the semantic loss families are deliberately identical across
+/// sources. Locations retain the native source path or JSON Pointer.
+const SCHEMA_SHACL_PROFILE: &[(&str, &str)] = &[
+    (
+        "additional-properties-schema-widened",
+        "A schema-valued additionalProperties assertion constrains arbitrary object members, \
+         while SHACL Core closure can only reject unlisted direct predicates. Named properties \
+         remain constrained and the arbitrary-value schema is widened.",
+    ),
+    (
+        "annotation-dropped",
+        "A schema title, description, comment, example, default, deprecation marker, or native \
+         documentation annotation has no exact validation meaning in the imported SHACL shape \
+         and is omitted.",
+    ),
+    (
+        "array-contains-validation-dropped",
+        "Schema contains/minContains/maxContains assertions quantify matching array members; \
+         the imported SHACL property retains item and total-cardinality constraints but cannot \
+         express that independent match count exactly.",
+    ),
+    (
+        "boolean-schema-dropped",
+        "A standalone true or false schema has no class-targeted SHACL shape identity. The \
+         definition is omitted rather than inventing a caller vocabulary term.",
+    ),
+    (
+        "conditional-validation-dropped",
+        "Schema if/then/else validation chooses constraints from runtime object content. SHACL \
+         Core has no equivalent conditional constraint, so independently representable \
+         constraints remain and the conditional relationship is omitted.",
+    ),
+    (
+        "content-validation-dropped",
+        "String contentEncoding/contentMediaType/contentSchema assertions describe or validate \
+         an embedded representation. SHACL Core constrains the RDF literal itself and cannot \
+         reproduce that nested content contract.",
+    ),
+    (
+        "dependency-validation-dropped",
+        "dependentRequired/dependentSchemas or an equivalent native cross-field dependency has \
+         no exact SHACL Core property-shape expression. Individual properties remain while the \
+         dependency is omitted.",
+    ),
+    (
+        "enum-metadata-dropped",
+        "A schema enum member's generated symbol, title, description, or other parallel metadata \
+         is not part of SHACL membership semantics and is omitted while the finite values remain.",
+    ),
+    (
+        "format-validation-widened",
+        "A string format without one exact caller-identifiable RDF datatype is imported as its \
+         scalar carrier. PurRDF does not mint or guess a datatype IRI, so format validation is \
+         widened and recorded.",
+    ),
+    (
+        "multiple-of-validation-dropped",
+        "A numeric multipleOf assertion has no SHACL Core numeric facet. Datatype and range \
+         bounds remain while divisibility validation is omitted.",
+    ),
+    (
+        "non-object-definition-dropped",
+        "A top-level schema definition describes a scalar, array, finite value set, or alias \
+         rather than a class-shaped object. Without a caller-supplied class/property use site it \
+         cannot become a top-level SHACL node shape and is omitted.",
+    ),
+    (
+        "numeric-lexical-form-normalized",
+        "A JSON/native numeric value carries numeric value but not the original RDF literal \
+         lexical form or derived XSD datatype. The importer uses the canonical configured \
+         numeric carrier, so that lexical distinction is normalized.",
+    ),
+    (
+        "object-key-validation-dropped",
+        "patternProperties/propertyNames or an equivalent native dynamic-key rule constrains \
+         JSON member names. Direct SHACL predicate paths retain named properties, but the \
+         dynamic key-space rule is omitted.",
+    ),
+    (
+        "property-count-validation-dropped",
+        "minProperties/maxProperties counts JSON object members independently of named \
+         predicates. SHACL property shapes retain named requiredness but cannot bound the total \
+         predicate count with a Core constraint.",
+    ),
+    (
+        "schema-applicator-dropped",
+        "A schema logical applicator cannot be lowered to an equivalent finite SHACL \
+         and/or/xone/not shape at its position. Independently representable constraints remain \
+         and the applicator is omitted.",
+    ),
+    (
+        "schema-identity-dropped",
+        "A schema document identifier, anchor, dialect declaration, generated package identity, \
+         or native module identity is not a SHACL vocabulary term. Caller-owned class and \
+         property IRIs remain; the carrier identity is omitted.",
+    ),
+    (
+        "tuple-validation-widened",
+        "Position-specific prefixItems/additionalItems or an equivalent tuple type has no direct \
+         RDF multi-value ordering contract on one predicate. Common item/cardinality constraints \
+         remain and positional validation is widened.",
+    ),
+    (
+        "unevaluated-validation-dropped",
+        "unevaluatedProperties/unevaluatedItems depends on schema-applicator evaluation state \
+         that SHACL Core does not expose. Local closure, named properties, and item constraints \
+         remain while the evaluation-state assertion is omitted.",
+    ),
+    (
+        "unique-items-validation-dropped",
+        "uniqueItems constrains duplicate JSON array members. RDF predicate values are a set in \
+         the data model, so the serialized-array assertion has no distinct imported SHACL \
+         constraint and is omitted.",
+    ),
+    (
+        "unknown-keyword-dropped",
+        "A valid extension or assertion outside the fixed importer capability table has no \
+         reviewed SHACL interpretation. It is omitted with a located entry rather than silently \
+         ignored or guessed.",
+    ),
+    (
+        "value-term-kind-widened",
+        "The schema carrier admits values whose RDF term kind or exact datatype cannot be \
+         recovered uniquely. The importer retains the representable scalar/node carrier and \
+         records the unresolved term-kind distinction.",
+    ),
+];
+
 /// Build the runtime-shaped [`LossEntry`] rows for the
 /// `("shacl", "json-schema")` shapes profile from [`SHACL_JSON_SCHEMA_PROFILE`]
 /// — one contract entry per declared `(code, note)` pair, `location: None`
@@ -1454,6 +1616,20 @@ fn json_schema_graphql_entries() -> Vec<LossEntry> {
         .collect()
 }
 
+/// Build static contract rows for one fixed schema-language→SHACL importer.
+fn schema_shacl_entries(source: &'static str) -> Vec<LossEntry> {
+    SCHEMA_SHACL_PROFILE
+        .iter()
+        .map(|&(code, note)| LossEntry {
+            code: Cow::Borrowed(code),
+            from: Cow::Borrowed(source),
+            to: Cow::Borrowed("shacl"),
+            note: Cow::Borrowed(note),
+            location: None,
+        })
+        .collect()
+}
+
 /// Extract the `&'static str` payload of a **contract**-discipline
 /// [`LossEntry`] field (one built via [`Cow::Borrowed`]).
 ///
@@ -1510,6 +1686,9 @@ fn registry_entries() -> Vec<LossEntry> {
     entries.extend(json_schema_linkml_entries());
     entries.extend(json_schema_typescript_entries());
     entries.extend(json_schema_graphql_entries());
+    for source in SCHEMA_IMPORT_CODECS {
+        entries.extend(schema_shacl_entries(source));
+    }
     entries
 }
 
@@ -2072,6 +2251,24 @@ mod tests {
     }
 
     #[test]
+    fn transcode_matrix_includes_every_schema_shacl_pair() {
+        let json = loss_matrix_json();
+        for source in SCHEMA_IMPORT_CODECS {
+            assert!(
+                json.contains(&format!("\"from\": \"{source}\"")),
+                "transcode-loss-matrix.json missing {source}->shacl source"
+            );
+        }
+        assert!(json.contains("\"to\": \"shacl\""));
+        for (code, _) in SCHEMA_SHACL_PROFILE {
+            assert!(
+                json.contains(&format!("\"code\": \"{code}\"")),
+                "transcode-loss-matrix.json missing schema-import code `{code}`"
+            );
+        }
+    }
+
+    #[test]
     fn graph_and_tabular_projection_contracts_are_closed_and_registered() {
         let contracts = [
             (
@@ -2405,6 +2602,31 @@ mod tests {
             .map(|(code, _)| *code)
             .collect();
         assert_eq!(profile, expected);
+    }
+
+    #[test]
+    fn schema_shacl_profiles_are_closed_and_registered() {
+        let expected: BTreeSet<&str> = SCHEMA_SHACL_PROFILE.iter().map(|(code, _)| *code).collect();
+        for source in SCHEMA_IMPORT_CODECS {
+            let contract = schema_to_shacl_loss_ledger(source);
+            let contract_codes = contract
+                .entries()
+                .iter()
+                .map(|entry| entry.code.as_ref())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(contract_codes, expected, "contract drift for {source}");
+            assert_eq!(
+                profile_for(source, "shacl"),
+                expected,
+                "registry drift for {source}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown schema import codec")]
+    fn schema_shacl_contract_rejects_unknown_source() {
+        let _ = schema_to_shacl_loss_ledger("python-source");
     }
 
     #[test]
