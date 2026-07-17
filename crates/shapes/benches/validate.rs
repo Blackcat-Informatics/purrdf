@@ -14,12 +14,16 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_shapes::engine::validate_graphs;
-use purrdf_shapes::{Namespaces, SchemaDatatypeMap, SchemaImportConfig, import_json_schema};
+use purrdf_shapes::{
+    LinkmlConfig, LinkmlDocument, Namespaces, SchemaDatatypeMap, SchemaImportConfig, emit_linkml,
+    import_json_schema, import_linkml,
+};
 use serde_json::{Map, Value, json};
 
 thread_local! {
@@ -54,6 +58,7 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 
 const IMPORT_CLASSES: usize = 128;
 const IMPORT_PROPERTIES_PER_CLASS: usize = 8;
+const LINKML: &str = "https://w3id.org/linkml/";
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
 /// Read every `corpus/<case>/{data.nt, shapes.ttl}` pair, sorted by case name.
@@ -242,6 +247,26 @@ fn allocation_snapshot() -> (u64, u64) {
     (ALLOCATIONS.with(Cell::get), ALLOCATED_BYTES.with(Cell::get))
 }
 
+fn linkml_import_fixture(config: &SchemaImportConfig) -> LinkmlDocument {
+    let imported = import_json_schema(&schema_import_fixture(), config)
+        .expect("benchmark source schema imports");
+    let compiled = purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces());
+    let linkml_config = LinkmlConfig::new(
+        "https://example.org/bench/schema",
+        "BenchSchema",
+        "Representative LinkML import benchmark fixture.",
+        "ex",
+        BTreeMap::from([
+            ("ex".to_owned(), "https://example.org/bench/".to_owned()),
+            ("linkml".to_owned(), LINKML.to_owned()),
+        ]),
+    )
+    .expect("benchmark LinkML configuration");
+    emit_linkml(&compiled, &linkml_config)
+        .expect("benchmark LinkML fixture emits")
+        .document
+}
+
 fn bench_schema_import(c: &mut Criterion) {
     let schema = schema_import_fixture();
     let config = schema_import_config();
@@ -278,10 +303,53 @@ fn bench_schema_import(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_linkml_import(c: &mut Criterion) {
+    let config = schema_import_config();
+    let document = linkml_import_fixture(&config);
+    let expected_shapes = document
+        .as_value()
+        .get("classes")
+        .and_then(Value::as_object)
+        .map(Map::len)
+        .expect("benchmark LinkML fixture has classes");
+
+    let warm = import_linkml(&document, &config).expect("benchmark LinkML imports");
+    assert_eq!(warm.shapes.node_shapes.len(), expected_shapes);
+    drop(warm);
+
+    let before = allocation_snapshot();
+    let observed = import_linkml(&document, &config).expect("allocation probe imports");
+    let after = allocation_snapshot();
+    assert_eq!(observed.shapes.node_shapes.len(), expected_shapes);
+    println!(
+        "[shacl_linkml_import] source_classes={IMPORT_CLASSES} source_properties={} imported_shapes={expected_shapes} allocations={} allocated_bytes={}",
+        IMPORT_CLASSES * IMPORT_PROPERTIES_PER_CLASS,
+        after.0 - before.0,
+        after.1 - before.1
+    );
+    black_box(observed);
+
+    let mut group = c.benchmark_group("shacl_linkml_import");
+    group.sample_size(20);
+    group.throughput(Throughput::Elements(
+        u64::try_from(IMPORT_CLASSES * IMPORT_PROPERTIES_PER_CLASS).expect("fixture size fits u64"),
+    ));
+    group.bench_function("from_128_class_1024_property_schema", |bencher| {
+        bencher.iter(|| {
+            let imported = import_linkml(black_box(&document), black_box(&config))
+                .expect("benchmark LinkML imports");
+            assert_eq!(imported.shapes.node_shapes.len(), expected_shapes);
+            black_box(imported);
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_validate,
     bench_validate_large,
-    bench_schema_import
+    bench_schema_import,
+    bench_linkml_import
 );
 criterion_main!(benches);

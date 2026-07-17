@@ -50,8 +50,8 @@ They live under `crates/*/benches/`:
   anti-join cost with and without the `exists_memo` decorrelation path.
 - `crates/sparql-eval/benches/lateral_service.rs` — variable-endpoint
   `SERVICE ?g` evaluated as a LATERAL join vs. a fixed-IRI `SERVICE <ep>`.
-- `crates/shapes/benches/validate.rs` — SHACL validation plus shared JSON Schema
-  import/lowering throughput and one-operation allocation traffic.
+- `crates/shapes/benches/validate.rs` — SHACL validation plus JSON Schema and
+  LinkML import/lowering throughput and one-operation allocation traffic.
 - `crates/entail/benches/chase.rs` — RDFS forward-materialization chase scaling.
 - `crates/gts/benches/authoring.rs` — GTS container authoring.
 - `crates/rdf-wasm/benches/query_engine_reuse.rs` — package-root
@@ -82,7 +82,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | Planner regression watch: cost-based BGP ordering vs. the retired structural heuristic. |
 | `crates/sparql-eval/benches/exists_decorrelation.rs` | `FILTER NOT EXISTS` inner-pattern re-evaluation and index-rebuild cost with/without memoization. |
 | `crates/sparql-eval/benches/lateral_service.rs` | `SERVICE ?g` LATERAL substitute-and-forward cost as the number of distinct endpoint bindings grows. |
-| `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
+| `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
 | `crates/entail/benches/chase.rs` | RDFS semi-naive materialization scaling on subclass chains. |
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
@@ -97,6 +97,13 @@ local references. Fixture construction and caller-owned namespace/datatype
 configuration remain outside the timed loop; Criterion measures the complete
 JSON parse, validation, ordered lowering, and loss-ledger path.
 
+The `shacl_linkml_import` group derives one canonical LinkML 1.11 document from
+the same source fixture before timing begins. It measures native document
+validation, class/slot/type traversal, shared schema lowering, and reverse-loss
+construction. Both groups assert the imported shape count in their warmup,
+allocation probe, and measured loop so a failed or vacuous import cannot appear
+as a speedup.
+
 A counting global allocator also prints calls and requested bytes for one
 warmed import. Those counters represent cumulative allocation traffic, not
 retained or peak memory, and the benchmark is report-only: neither timing nor
@@ -105,6 +112,8 @@ allocation output is a CI threshold or performance promise.
 ```sh
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_schema_import
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_schema_import --quick
+cargo bench -p purrdf-shapes --bench validate --locked -- shacl_linkml_import
+cargo bench -p purrdf-shapes --bench validate --locked -- shacl_linkml_import --quick
 ```
 
 ### Graph, tabular, and research-object projections
