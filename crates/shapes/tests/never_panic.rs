@@ -12,7 +12,10 @@
 use proptest::prelude::*;
 use purrdf_shapes::engine::parse_shapes;
 use purrdf_shapes::json_schema::Namespaces;
-use purrdf_shapes::{SchemaDatatypeMap, SchemaImportConfig, import_json_schema};
+use purrdf_shapes::{
+    LinkmlDocument, SchemaDatatypeMap, SchemaImportConfig, import_json_schema, import_linkml,
+    parse_linkml,
+};
 use serde_json::{Map, Number, Value};
 
 fn arbitrary_bytes() -> impl Strategy<Value = Vec<u8>> {
@@ -97,5 +100,35 @@ proptest! {
     fn import_json_schema_never_panics(value in arbitrary_json()) {
         let input = serde_json::to_string(&value).expect("JSON value serializes");
         let _ = import_json_schema(&input, &schema_import_config());
+    }
+
+    #[test]
+    fn parse_linkml_never_panics(data in arbitrary_bytes()) {
+        if let Ok(text) = std::str::from_utf8(&data) {
+            let _ = parse_linkml(text);
+        }
+    }
+
+    #[test]
+    fn import_linkml_never_panics(section in 0_usize..4, value in arbitrary_json()) {
+        let mut document = serde_json::json!({
+            "id": "https://example.org/schema/linkml",
+            "name": "Generated-Schema",
+            "metamodel_version": "1.11.0",
+            "prefixes": {
+                "ex": "https://example.org/",
+                "linkml": "https://w3id.org/linkml/"
+            },
+            "default_prefix": "ex",
+            "classes": {},
+            "enums": {},
+            "slots": {},
+            "types": {}
+        });
+        let section_name = ["classes", "enums", "slots", "types"][section];
+        document[section_name]["Generated"] = value;
+        if let Ok(document) = LinkmlDocument::from_value(document) {
+            let _ = import_linkml(&document, &schema_import_config());
+        }
     }
 }

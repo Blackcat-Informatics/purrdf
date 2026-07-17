@@ -8,7 +8,10 @@ use std::error::Error;
 
 use purrdf::loss::{LossLedger, check_ledger_sound};
 use purrdf_shapes::json_schema::CompiledSchema;
-use purrdf_shapes::{LinkmlConfig, emit_linkml, parse_linkml, write_linkml};
+use purrdf_shapes::{
+    ImportedShapes, LinkmlConfig, LinkmlPackage, Namespaces, SchemaDatatypeMap, SchemaImportConfig,
+    emit_linkml, import_linkml_package, parse_linkml, write_linkml,
+};
 use serde_json::{Value, json};
 
 fn compiled(schema: &Value) -> Result<CompiledSchema, serde_json::Error> {
@@ -30,6 +33,58 @@ fn config() -> Result<LinkmlConfig, Box<dyn Error>> {
             ("linkml".to_owned(), "https://w3id.org/linkml/".to_owned()),
         ]),
     )?)
+}
+
+fn import_config() -> Result<SchemaImportConfig, Box<dyn Error>> {
+    let namespaces = Namespaces::new(
+        "ex",
+        &[("ex".to_owned(), "https://example.org/".to_owned())],
+    )?;
+    let xsd = "http://www.w3.org/2001/XMLSchema#";
+    let datatypes = SchemaDatatypeMap::new(
+        format!("{xsd}string"),
+        format!("{xsd}boolean"),
+        format!("{xsd}integer"),
+        format!("{xsd}decimal"),
+        format!("{xsd}dateTime"),
+        format!("{xsd}date"),
+        format!("{xsd}time"),
+        format!("{xsd}anyURI"),
+    )?;
+    Ok(SchemaImportConfig::new(namespaces, datatypes))
+}
+
+fn reverse_payload(
+    package: &LinkmlPackage,
+    config: &SchemaImportConfig,
+) -> Result<Value, Box<dyn Error>> {
+    let imported = import_linkml_package(package, config)?;
+    check_ledger_sound(&imported.losses, "linkml-1.11", "shacl")?;
+    let repeated = import_linkml_package(package, config)?;
+    if imported.losses.render_json() != repeated.losses.render_json() {
+        return Err("LinkML reverse ledger is not deterministic".into());
+    }
+
+    let compile_imported = |value: &ImportedShapes| {
+        purrdf_shapes::json_schema::compile(&value.shapes, config.namespaces())
+    };
+    let compiled = compile_imported(&imported);
+    let repeated_compiled = compile_imported(&repeated);
+    if compiled.schema_json != repeated_compiled.schema_json {
+        return Err("LinkML reverse shapes are not byte-deterministic".into());
+    }
+
+    let shape_ids = imported
+        .shapes
+        .node_shapes
+        .iter()
+        .map(|shape| shape.id.to_string())
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "losses": serde_json::from_str::<Value>(&imported.losses.render_json())?,
+        "schema": serde_json::from_str::<Value>(&compiled.schema_json)?,
+        "shape_ids": shape_ids,
+    }))
 }
 
 fn exact_schema() -> Value {
@@ -139,6 +194,7 @@ fn lossy_schema() -> Value {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let config = config()?;
+    let import_config = import_config()?;
     let exact_schema = exact_schema();
     let lossy_schema = lossy_schema();
     let exact = emit_linkml(&compiled(&exact_schema)?, &config)?;
@@ -253,12 +309,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output = json!({
         "exact": {
             "element_names": exact.element_names,
+            "reverse": reverse_payload(&exact, &import_config)?,
             "schema": exact_schema,
             "yaml": exact.yaml,
         },
         "lossy": {
             "element_names": lossy.element_names,
             "losses": serde_json::from_str::<Value>(&lossy.losses.render_json())?,
+            "reverse": reverse_payload(&lossy, &import_config)?,
             "schema": lossy_schema,
             "yaml": lossy.yaml,
         }

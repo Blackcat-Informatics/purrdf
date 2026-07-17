@@ -44,7 +44,7 @@ pub(super) fn emit(
         .map_err(|error| LinkmlError::new(error.to_string()))?;
     let definitions = catalog.definitions();
     let elements = element_infos(definitions)?;
-    let element_names = elements
+    let element_names: BTreeMap<String, String> = elements
         .iter()
         .map(|(key, info)| (key.clone(), info.name.clone()))
         .collect();
@@ -110,7 +110,9 @@ pub(super) fn emit(
     let yaml = write_linkml(&document)?;
     Ok(LinkmlPackage {
         document,
+        canonical_yaml: yaml.clone(),
         yaml,
+        canonical_element_names: element_names.clone(),
         element_names,
         losses: renderer.ledger,
     })
@@ -235,7 +237,7 @@ fn is_alias_only(object: &Map<String, Value>) -> bool {
             .all(|key| key == "$ref" || is_annotation_keyword(key))
 }
 
-fn element_name(raw: &str) -> String {
+pub(super) fn element_name(raw: &str) -> String {
     let mut output = String::new();
     let mut capitalize = true;
     for character in raw.chars() {

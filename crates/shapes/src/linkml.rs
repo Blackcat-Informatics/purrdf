@@ -20,7 +20,9 @@ use serde_json::{Map, Number, Value};
 use serde_yaml::Value as YamlValue;
 
 use crate::json_schema::CompiledSchema;
+use crate::schema_import::{ImportedShapes, SchemaImportConfig};
 
+mod importer;
 mod projection;
 
 /// The exact LinkML metamodel version carried by this codec.
@@ -30,6 +32,7 @@ const LINKML_PREFIX: &str = "linkml";
 const MAX_LINKML_YAML_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LINKML_YAML_DEPTH: usize = 256;
 const MAX_LINKML_YAML_NODES: usize = 1_000_000;
+const MAX_LINKML_STRING_BYTES: usize = 16 * 1024 * 1024;
 
 /// Caller-owned identity and vocabulary configuration for LinkML emission.
 ///
@@ -179,6 +182,8 @@ pub struct LinkmlPackage {
     pub element_names: BTreeMap<String, String>,
     /// JSON Schema assertions not represented exactly in LinkML 1.11.
     pub losses: LossLedger,
+    canonical_yaml: String,
+    canonical_element_names: BTreeMap<String, String>,
 }
 
 /// A malformed LinkML configuration, document, or projection input.
@@ -266,7 +271,42 @@ pub fn emit_linkml(
     projection::emit(compiled, config)
 }
 
+/// Import one validated native LinkML 1.11 document as SHACL shapes.
+///
+/// Every accepted native construct without an exact SHACL interpretation is
+/// returned in the always-computed `linkml-1.11` → `shacl` loss ledger. Element
+/// and slot identities come only from the document's caller-supplied prefix
+/// map; scalar RDF datatypes come only from [`SchemaImportConfig`].
+///
+/// # Errors
+///
+/// Returns [`LinkmlError`] for malformed native class/slot/type/enum
+/// structures, unknown or cyclic references, identity collisions, or a shared
+/// schema-import failure.
+pub fn import_linkml(
+    document: &LinkmlDocument,
+    config: &SchemaImportConfig,
+) -> Result<ImportedShapes, LinkmlError> {
+    importer::import_document(document, config, None)
+}
+
+/// Import a deterministic PurRDF-emitted LinkML package as SHACL shapes after
+/// verifying its YAML bytes and source-definition → element-name map.
+///
+/// # Errors
+///
+/// Returns [`LinkmlError`] when the package artifacts or reversible element
+/// map drift from the validated document, or when [`import_linkml`] fails.
+pub fn import_linkml_package(
+    package: &LinkmlPackage,
+    config: &SchemaImportConfig,
+) -> Result<ImportedShapes, LinkmlError> {
+    importer::import_package(package, config)
+}
+
 fn validate_document(value: &Value) -> Result<(), LinkmlError> {
+    let mut nodes = 0;
+    validate_json_value(value, 0, &mut nodes, "#")?;
     let root = value
         .as_object()
         .ok_or_else(|| LinkmlError::new("LinkML document root must be a mapping"))?;
@@ -337,6 +377,55 @@ fn validate_document(value: &Value) -> Result<(), LinkmlError> {
     }
 
     Ok(())
+}
+
+fn validate_json_value(
+    value: &Value,
+    depth: usize,
+    nodes: &mut usize,
+    path: &str,
+) -> Result<(), LinkmlError> {
+    if depth > MAX_LINKML_YAML_DEPTH {
+        return Err(LinkmlError::new(format!(
+            "LinkML document at {path} exceeds depth {MAX_LINKML_YAML_DEPTH}"
+        )));
+    }
+    *nodes = nodes
+        .checked_add(1)
+        .ok_or_else(|| LinkmlError::new("LinkML document node count overflow"))?;
+    if *nodes > MAX_LINKML_YAML_NODES {
+        return Err(LinkmlError::new(format!(
+            "LinkML document exceeds {MAX_LINKML_YAML_NODES} nodes"
+        )));
+    }
+    match value {
+        Value::String(value) if value.len() > MAX_LINKML_STRING_BYTES => Err(LinkmlError::new(
+            format!("LinkML string at {path} exceeds {MAX_LINKML_STRING_BYTES} bytes"),
+        )),
+        Value::Array(values) => {
+            for (index, child) in values.iter().enumerate() {
+                validate_json_value(child, depth + 1, nodes, &format!("{path}/{index}"))?;
+            }
+            Ok(())
+        }
+        Value::Object(values) => {
+            for (key, child) in values {
+                if key.len() > MAX_LINKML_STRING_BYTES {
+                    return Err(LinkmlError::new(format!(
+                        "LinkML key at {path} exceeds {MAX_LINKML_STRING_BYTES} bytes"
+                    )));
+                }
+                validate_json_value(
+                    child,
+                    depth + 1,
+                    nodes,
+                    &format!("{path}/{}", key.replace('~', "~0").replace('/', "~1")),
+                )?;
+            }
+            Ok(())
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => Ok(()),
+    }
 }
 
 fn validate_prefixes(prefixes: &BTreeMap<String, String>) -> Result<(), LinkmlError> {
@@ -875,6 +964,22 @@ x-value: .nan
         let mut value = valid_value();
         value["imports"] = json!([7]);
         assert!(LinkmlDocument::from_value(value).is_err());
+    }
+
+    #[test]
+    fn programmatic_documents_enforce_the_same_depth_limit_as_yaml() {
+        let mut nested = Value::Null;
+        for _ in 0..=MAX_LINKML_YAML_DEPTH {
+            nested = Value::Array(vec![nested]);
+        }
+        let mut value = valid_value();
+        value["x-too-deep"] = nested;
+        assert!(
+            LinkmlDocument::from_value(value)
+                .expect_err("over-depth document")
+                .to_string()
+                .contains("exceeds depth")
+        );
     }
 
     #[test]

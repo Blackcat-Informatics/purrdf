@@ -48,8 +48,8 @@ pub use graphql::{
 };
 pub use json_schema::{Namespaces, ValueVocab, ValueVocabProjection, compile_with_value_vocab};
 pub use linkml::{
-    LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, emit_linkml, parse_linkml,
-    write_linkml,
+    LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, emit_linkml, import_linkml,
+    import_linkml_package, parse_linkml, write_linkml,
 };
 pub use pydantic::{PydanticConfig, PydanticError, PydanticPackage, emit_pydantic};
 pub use rules::{apply_rules, entail_dataset};
