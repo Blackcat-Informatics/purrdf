@@ -33,6 +33,7 @@ pub mod pydantic;
 pub mod report;
 pub mod rules;
 mod schema_catalog;
+pub mod schema_import;
 pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
@@ -52,6 +53,10 @@ pub use linkml::{
 };
 pub use pydantic::{PydanticConfig, PydanticError, PydanticPackage, emit_pydantic};
 pub use rules::{apply_rules, entail_dataset};
+pub use schema_import::{
+    ImportedShapes, SchemaDatatypeMap, SchemaImportConfig, SchemaImportError,
+    import_compiled_schema, import_json_schema,
+};
 pub use typescript::{
     TYPESCRIPT_DECLARATION_PATH, TYPESCRIPT_DIALECT, TypeScriptConfig, TypeScriptError,
     TypeScriptPackage, emit_typescript,

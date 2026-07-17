@@ -221,6 +221,69 @@ impl Namespaces {
         &self.primary_ns
     }
 
+    /// Expand one caller-declared CURIE, or validate and retain an absolute
+    /// IRI. A caller-declared prefix wins over the RFC scheme interpretation,
+    /// so `ex:Term` expands through `ex` while an undeclared `urn:...` remains
+    /// an absolute IRI.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value is neither an absolute IRI nor a valid
+    /// CURIE using the caller's prefix table.
+    pub fn expand_iri(&self, value: &str) -> Result<String, String> {
+        if let Some((prefix, local)) = value.split_once(':')
+            && let Some(namespace) = self
+                .prefixes
+                .iter()
+                .find_map(|(candidate, namespace)| (candidate == prefix).then_some(namespace))
+        {
+            if local.is_empty() {
+                return Err(format!("CURIE {value:?} must have a non-empty local part"));
+            }
+            let expanded = format!("{namespace}{local}");
+            let parsed = purrdf_iri::parse(&expanded).map_err(|error| {
+                format!("expanded CURIE {value:?} is not an absolute IRI: {error}")
+            })?;
+            if !parsed.has_scheme() {
+                return Err(format!("expanded CURIE {value:?} is not an absolute IRI"));
+            }
+            return Ok(expanded);
+        }
+        let parsed = purrdf_iri::parse(value).map_err(|error| {
+            format!("IRI value {value:?} is neither absolute nor a caller-declared CURIE: {error}")
+        })?;
+        if !parsed.has_scheme() {
+            return Err(format!(
+                "IRI value {value:?} is neither absolute nor a caller-declared CURIE"
+            ));
+        }
+        Ok(value.to_owned())
+    }
+
+    /// Recover the caller-owned class IRI represented by one compiled `$defs`
+    /// key: colon-free keys belong to the primary namespace, while CURIE or
+    /// absolute-IRI keys use [`Self::expand_iri`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty key or an invalid/unknown qualified key.
+    pub fn class_iri_for_def_key(&self, key: &str) -> Result<String, String> {
+        if key.is_empty() {
+            return Err("JSON Schema $defs key cannot be empty when used as a class".to_owned());
+        }
+        if key.contains(':') {
+            self.expand_iri(key)
+        } else {
+            let iri = format!("{}{key}", self.primary_ns);
+            let parsed = purrdf_iri::parse(&iri)
+                .map_err(|error| format!("class key {key:?} does not form a valid IRI: {error}"))?;
+            if !parsed.has_scheme() {
+                return Err(format!("class key {key:?} does not form an absolute IRI"));
+            }
+            Ok(iri)
+        }
+    }
+
     /// Whether an IRI is in a declared namespace (i.e. [`Self::compact_iri`]
     /// would compact it to a `prefix:Local` CURIE rather than returning it
     /// verbatim).
