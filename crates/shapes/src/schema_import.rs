@@ -9,6 +9,7 @@
 //! drift between five readers. Accepted omissions are always recorded on a
 //! closed source-language → `shacl` loss profile.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
@@ -389,8 +390,12 @@ fn definition_path(key: &str) -> String {
     format!("#/$defs/{}", pointer_escape(key))
 }
 
-fn pointer_escape(value: &str) -> String {
-    value.replace('~', "~0").replace('/', "~1")
+fn pointer_escape(value: &str) -> Cow<'_, str> {
+    if value.contains('~') || value.contains('/') {
+        Cow::Owned(value.replace('~', "~0").replace('/', "~1"))
+    } else {
+        Cow::Borrowed(value)
+    }
 }
 
 fn fnv1a(bytes: &[u8]) -> u64 {

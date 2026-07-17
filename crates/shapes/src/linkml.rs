@@ -10,6 +10,7 @@
 //! byte-stable YAML representation while preserving fields the emitter does
 //! not author.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -419,12 +420,20 @@ fn validate_json_value(
                     child,
                     depth + 1,
                     nodes,
-                    &format!("{path}/{}", key.replace('~', "~0").replace('/', "~1")),
+                    &format!("{path}/{}", pointer_escape(key)),
                 )?;
             }
             Ok(())
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => Ok(()),
+    }
+}
+
+fn pointer_escape(value: &str) -> Cow<'_, str> {
+    if value.contains('~') || value.contains('/') {
+        Cow::Owned(value.replace('~', "~0").replace('/', "~1"))
+    } else {
+        Cow::Borrowed(value)
     }
 }
 

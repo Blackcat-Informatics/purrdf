@@ -9,7 +9,10 @@ use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
 use serde_json::{Map, Value};
 
-use super::{LinkmlDocument, LinkmlError, LinkmlPackage, parse_linkml, projection, write_linkml};
+use super::{
+    LinkmlDocument, LinkmlError, LinkmlPackage, parse_linkml, pointer_escape, projection,
+    write_linkml,
+};
 use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_schema_value_from};
 use crate::term::Term;
 
@@ -266,21 +269,27 @@ impl NativeImporter {
         });
         self.ignored_class_names.clone_from(&ignored_class_names);
 
-        for (name, _) in self.enums.clone() {
+        let enum_names = self.enums.keys().cloned().collect::<Vec<_>>();
+        for name in enum_names {
             let identity = self.identity(&name)?.to_owned();
             let schema = self.enum_schema(&name)?;
             self.map_location(&definition_path(&identity), &element_path("enums", &name));
             definitions.insert(identity, schema);
         }
-        for (name, _) in self.types.clone() {
+        let mut visiting = BTreeSet::new();
+        let type_names = self.types.keys().cloned().collect::<Vec<_>>();
+        for name in type_names {
+            visiting.clear();
             let identity = self.identity(&name)?.to_owned();
-            let schema = self.type_schema(&name, &mut BTreeSet::new(), 0)?;
+            let schema = self.type_schema(&name, &mut visiting, 0)?;
             self.map_location(&definition_path(&identity), &element_path("types", &name));
             definitions.insert(identity, schema);
         }
-        for (name, _) in self.classes.clone() {
+        let class_names = self.classes.keys().cloned().collect::<Vec<_>>();
+        for name in class_names {
+            visiting.clear();
             let identity = self.identity(&name)?.to_owned();
-            let schema = self.class_schema(&name, &mut BTreeSet::new(), 0)?;
+            let schema = self.class_schema(&name, &mut visiting, 0)?;
             if ignored_class_names.contains(&name) {
                 continue;
             }
@@ -288,7 +297,8 @@ impl NativeImporter {
             definitions.insert(identity, schema);
         }
 
-        for (name, _) in self.slots.clone() {
+        let slot_names = self.slots.keys().cloned().collect::<Vec<_>>();
+        for name in slot_names {
             if !self.used_slots.contains(&name) {
                 self.record(
                     "non-object-definition-dropped",
@@ -1606,10 +1616,6 @@ fn element_path(section: &str, name: &str) -> String {
 
 fn definition_path(key: &str) -> String {
     format!("#/$defs/{}", pointer_escape(key))
-}
-
-fn pointer_escape(value: &str) -> String {
-    value.replace('~', "~0").replace('/', "~1")
 }
 
 fn remap_location(subject: &str, mappings: &BTreeMap<String, String>) -> String {
