@@ -9,7 +9,7 @@ use crate::{ContentDigest, PackBuilder, RdfDataset, verify_pack};
 
 use super::contract::{
     ArtifactIdentity, ArtifactIdentityKind, EmbeddingFamily, EmbeddingFamilyContract, TlvWireType,
-    push_tlv,
+    canonical_tlv, push_tlv,
 };
 use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
@@ -197,11 +197,14 @@ impl CanonicalMetadataInput {
         let canonical_indexes = canonical_indexes(self.indexes)?;
         validate_matrix_and_index_references(
             self.source,
-            &families,
-            &canonical_targets,
-            &canonical_sets,
-            &canonical_bindings,
-            &canonical_indexes,
+            TypedCatalog {
+                families: &families,
+                targets: &canonical_targets,
+                target_sets: &canonical_sets,
+                spans: &canonical_spans,
+                bindings: &canonical_bindings,
+                indexes: &canonical_indexes,
+            },
             matrices,
         )?;
         let external_bindings = encode_external_bindings_canonical(&canonical_bindings)?;
@@ -1556,7 +1559,292 @@ fn validate_relation_references(
             ));
         }
     }
+    validate_relation_completeness(relations, targets)
+}
+
+type BuiltinEdge = (TargetId, RelationKind, TargetId);
+
+fn validate_relation_completeness(
+    relations: &[TargetRelation],
+    targets: &[EmbeddingTarget],
+) -> Result<(), EmbeddingError> {
+    let edges = relations
+        .iter()
+        .filter(|relation| relation.kind != RelationKind::Extension)
+        .map(|relation| (relation.subject, relation.kind, relation.object))
+        .collect::<Vec<_>>();
+    let mut incoming = edges
+        .iter()
+        .map(|(subject, kind, object)| (*object, *kind, *subject))
+        .collect::<Vec<_>>();
+    incoming.sort_unstable();
+
+    for target in targets {
+        match target.kind {
+            TargetKind::Corpus | TargetKind::RdfDataset | TargetKind::Extension => {}
+            TargetKind::Document => {
+                require_edge_count(&incoming, target.id, RelationKind::CorpusDocument, 1)?;
+                if let Some(parent) = retained_target_id(target, 1)? {
+                    require_edge(&edges, parent, RelationKind::CorpusDocument, target.id)?;
+                }
+            }
+            TargetKind::Chunk => {
+                require_edge_count(&incoming, target.id, RelationKind::DocumentChunk, 1)?;
+                if let Some(parent) = retained_target_id(target, 1)? {
+                    require_edge(&edges, parent, RelationKind::DocumentChunk, target.id)?;
+                }
+            }
+            TargetKind::RdfGraph => {
+                require_edge_count(&incoming, target.id, RelationKind::DatasetGraph, 1)?;
+                if let Some(dataset) = retained_target_id(target, 1)? {
+                    require_edge(&edges, dataset, RelationKind::DatasetGraph, target.id)?;
+                    match retained_u32(target, 2)?
+                        .ok_or(EmbeddingError::Missing("retained RDF graph form"))?
+                    {
+                        0 => require_edge_count(&edges, target.id, RelationKind::GraphName, 0)?,
+                        1 => {
+                            let name = retained_target_id(target, 3)?
+                                .ok_or(EmbeddingError::Missing("retained RDF graph name"))?;
+                            require_edge_count(&edges, target.id, RelationKind::GraphName, 1)?;
+                            require_edge(&edges, target.id, RelationKind::GraphName, name)?;
+                            validate_term_position(targets, name, &[1, 2], "RDF graph name")?;
+                        }
+                        value => {
+                            return Err(EmbeddingError::UnsupportedCode {
+                                field: "RDF graph form",
+                                value,
+                            });
+                        }
+                    }
+                } else if edge_count(&edges, target.id, RelationKind::GraphName) > 1 {
+                    return Err(EmbeddingError::Duplicate("RDF graph name relation"));
+                }
+            }
+            TargetKind::RdfStatement => {
+                require_edge_count(&incoming, target.id, RelationKind::GraphStatement, 1)?;
+                for kind in [
+                    RelationKind::StatementSubject,
+                    RelationKind::StatementPredicate,
+                    RelationKind::StatementObject,
+                ] {
+                    require_edge_count(&edges, target.id, kind, 1)?;
+                }
+                if let Some(graph) = retained_target_id(target, 1)? {
+                    require_edge(&edges, graph, RelationKind::GraphStatement, target.id)?;
+                    let subject = retained_required_target_id(target, 2, "statement subject")?;
+                    let predicate = retained_required_target_id(target, 3, "statement predicate")?;
+                    let object = retained_required_target_id(target, 4, "statement object")?;
+                    require_edge(&edges, target.id, RelationKind::StatementSubject, subject)?;
+                    require_edge(
+                        &edges,
+                        target.id,
+                        RelationKind::StatementPredicate,
+                        predicate,
+                    )?;
+                    require_edge(&edges, target.id, RelationKind::StatementObject, object)?;
+                    validate_term_position(targets, subject, &[1, 2, 4], "RDF subject")?;
+                    validate_term_position(targets, predicate, &[1], "RDF predicate")?;
+                }
+            }
+            TargetKind::RdfReifier => {
+                require_edge_count(&incoming, target.id, RelationKind::StatementReifier, 1)?;
+                require_edge_count(&edges, target.id, RelationKind::ReifierTerm, 1)?;
+                if retained_target_id(target, 1)?.is_some() {
+                    let graph = retained_required_target_id(target, 1, "reifier graph")?;
+                    let statement = retained_required_target_id(target, 2, "reified statement")?;
+                    let term = retained_required_target_id(target, 3, "reifier term")?;
+                    require_edge(&edges, statement, RelationKind::StatementReifier, target.id)?;
+                    require_edge(&edges, target.id, RelationKind::ReifierTerm, term)?;
+                    validate_term_position(targets, term, &[1, 2], "RDF reifier term")?;
+                    require_composite_graph(targets, statement, graph, "reifier statement graph")?;
+                }
+            }
+            TargetKind::RdfAnnotation => {
+                require_edge_count(&incoming, target.id, RelationKind::ReifierAnnotation, 1)?;
+                require_edge_count(&edges, target.id, RelationKind::AnnotationPredicate, 1)?;
+                require_edge_count(&edges, target.id, RelationKind::AnnotationObject, 1)?;
+                if retained_target_id(target, 1)?.is_some() {
+                    let graph = retained_required_target_id(target, 1, "annotation graph")?;
+                    let reifier = retained_required_target_id(target, 2, "annotation reifier")?;
+                    let predicate = retained_required_target_id(target, 3, "annotation predicate")?;
+                    let object = retained_required_target_id(target, 4, "annotation object")?;
+                    require_edge(&edges, reifier, RelationKind::ReifierAnnotation, target.id)?;
+                    require_edge(
+                        &edges,
+                        target.id,
+                        RelationKind::AnnotationPredicate,
+                        predicate,
+                    )?;
+                    require_edge(&edges, target.id, RelationKind::AnnotationObject, object)?;
+                    validate_term_position(targets, predicate, &[1], "annotation predicate")?;
+                    require_composite_graph(targets, reifier, graph, "annotation reifier graph")?;
+                }
+            }
+            TargetKind::RdfTerm => validate_triple_term_relations(&edges, targets, target)?,
+        }
+    }
     Ok(())
+}
+
+fn validate_triple_term_relations(
+    edges: &[BuiltinEdge],
+    targets: &[EmbeddingTarget],
+    target: &EmbeddingTarget,
+) -> Result<(), EmbeddingError> {
+    let kinds = [
+        RelationKind::TripleTermSubject,
+        RelationKind::TripleTermPredicate,
+        RelationKind::TripleTermObject,
+    ];
+    let counts = kinds.map(|kind| edge_count(edges, target.id, kind));
+    match retained_u32(target, 1)? {
+        Some(4) => {
+            for (tag, kind) in (2..=4).zip(kinds) {
+                require_edge_count(edges, target.id, kind, 1)?;
+                let component = retained_required_target_id(target, tag, "triple-term component")?;
+                require_edge(edges, target.id, kind, component)?;
+                if tag == 2 {
+                    validate_term_position(targets, component, &[1, 2, 4], "triple subject")?;
+                } else if tag == 3 {
+                    validate_term_position(targets, component, &[1], "triple predicate")?;
+                }
+            }
+        }
+        Some(_) => {
+            if counts != [0, 0, 0] {
+                return Err(EmbeddingError::Malformed(
+                    "non-triple RDF term has triple-component relations",
+                ));
+            }
+        }
+        None => {
+            if counts.iter().any(|count| *count > 1)
+                || !(counts == [0, 0, 0] || counts == [1, 1, 1])
+            {
+                return Err(EmbeddingError::Malformed(
+                    "digest-only triple-term relation coverage",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn retained_required_target_id(
+    target: &EmbeddingTarget,
+    tag: u16,
+    context: &'static str,
+) -> Result<TargetId, EmbeddingError> {
+    retained_target_id(target, tag)?.ok_or(EmbeddingError::Missing(context))
+}
+
+fn retained_target_id(
+    target: &EmbeddingTarget,
+    tag: u16,
+) -> Result<Option<TargetId>, EmbeddingError> {
+    let Some(value) = retained_field(target, tag, TlvWireType::Digest32)? else {
+        return Ok(None);
+    };
+    let digest: [u8; 32] = value
+        .try_into()
+        .map_err(|_| EmbeddingError::MalformedTlv("target reference is not 32 bytes"))?;
+    Ok(Some(TargetId::from_raw(digest)))
+}
+
+fn retained_u32(target: &EmbeddingTarget, tag: u16) -> Result<Option<u32>, EmbeddingError> {
+    let Some(value) = retained_field(target, tag, TlvWireType::U32)? else {
+        return Ok(None);
+    };
+    let bytes: [u8; 4] = value
+        .try_into()
+        .map_err(|_| EmbeddingError::MalformedTlv("target u32 is not four bytes"))?;
+    Ok(Some(u32::from_le_bytes(bytes)))
+}
+
+fn retained_field(
+    target: &EmbeddingTarget,
+    tag: u16,
+    wire_type: TlvWireType,
+) -> Result<Option<&[u8]>, EmbeddingError> {
+    let Some(identity) = target.canonical_identity.as_deref() else {
+        return Ok(None);
+    };
+    let entry = canonical_tlv(identity)?
+        .find(|entry| entry.tag == tag)
+        .ok_or(EmbeddingError::Missing("retained target identity field"))?;
+    if entry.wire_type != wire_type || !entry.critical {
+        return Err(EmbeddingError::MalformedTlv(
+            "retained target field has the wrong framing",
+        ));
+    }
+    Ok(Some(entry.value))
+}
+
+fn validate_term_position(
+    targets: &[EmbeddingTarget],
+    id: TargetId,
+    allowed_forms: &[u32],
+    context: &'static str,
+) -> Result<(), EmbeddingError> {
+    let term = find_target(targets, id)?;
+    if term.kind != TargetKind::RdfTerm {
+        return Err(EmbeddingError::Malformed(context));
+    }
+    if let Some(form) = retained_u32(term, 1)?
+        && !allowed_forms.contains(&form)
+    {
+        return Err(EmbeddingError::Malformed(context));
+    }
+    Ok(())
+}
+
+fn require_composite_graph(
+    targets: &[EmbeddingTarget],
+    composite: TargetId,
+    expected_graph: TargetId,
+    context: &'static str,
+) -> Result<(), EmbeddingError> {
+    let target = find_target(targets, composite)?;
+    if let Some(actual_graph) = retained_target_id(target, 1)?
+        && actual_graph != expected_graph
+    {
+        return Err(EmbeddingError::Malformed(context));
+    }
+    Ok(())
+}
+
+fn require_edge(
+    edges: &[BuiltinEdge],
+    subject: TargetId,
+    kind: RelationKind,
+    object: TargetId,
+) -> Result<(), EmbeddingError> {
+    if edges.binary_search(&(subject, kind, object)).is_err() {
+        return Err(EmbeddingError::MissingReference(
+            "required built-in target relation",
+        ));
+    }
+    Ok(())
+}
+
+fn require_edge_count(
+    edges: &[BuiltinEdge],
+    target: TargetId,
+    kind: RelationKind,
+    expected: usize,
+) -> Result<(), EmbeddingError> {
+    if edge_count(edges, target, kind) != expected {
+        return Err(EmbeddingError::Malformed(
+            "built-in target relation cardinality",
+        ));
+    }
+    Ok(())
+}
+
+fn edge_count(edges: &[BuiltinEdge], target: TargetId, kind: RelationKind) -> usize {
+    let start = edges.partition_point(|edge| (edge.0, edge.1) < (target, kind));
+    let end = edges.partition_point(|edge| (edge.0, edge.1) <= (target, kind));
+    end - start
 }
 
 fn validate_token_span_references(
@@ -1565,28 +1853,39 @@ fn validate_token_span_references(
     targets: &[EmbeddingTarget],
 ) -> Result<(), EmbeddingError> {
     for span in spans {
-        find_family(families, span.family_id)?;
+        let family = find_family(families, span.family_id)?;
         let kind = find_target(targets, span.target_id)?.kind;
         if !matches!(kind, TargetKind::Document | TargetKind::Chunk) {
             return Err(EmbeddingError::Malformed(
                 "token span target is not a document or chunk",
             ));
         }
+        if !family_stage_applied(family, 10)? && (span.left_truncated || span.right_truncated) {
+            return Err(EmbeddingError::Malformed(
+                "token-span truncation flags disagree with family contract",
+            ));
+        }
     }
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct TypedCatalog<'a> {
+    families: &'a [EmbeddingFamily],
+    targets: &'a [EmbeddingTarget],
+    target_sets: &'a [TargetSet],
+    spans: &'a [TokenSpan],
+    bindings: &'a [ExternalBinding],
+    indexes: &'a [DerivedIndex],
+}
+
 fn validate_matrix_and_index_references(
     source: CertifiedPurrpckSource,
-    families: &[EmbeddingFamily],
-    targets: &[EmbeddingTarget],
-    target_sets: &[TargetSet],
-    bindings: &[ExternalBinding],
-    indexes: &[DerivedIndex],
+    catalog: TypedCatalog<'_>,
     matrices: Option<&[MatrixCommitment]>,
 ) -> Result<(), EmbeddingError> {
-    let needs_matrices = !indexes.is_empty()
-        || bindings.iter().any(|binding| {
+    let needs_matrices = !catalog.indexes.is_empty()
+        || catalog.bindings.iter().any(|binding| {
             matches!(
                 binding.scope,
                 ExternalScope::Matrix(_) | ExternalScope::Projection(_) | ExternalScope::Index(_)
@@ -1598,20 +1897,34 @@ fn validate_matrix_and_index_references(
         ));
     }
     let matrices = matrices.unwrap_or(&[]);
-    validate_matrix_catalog(families, target_sets, matrices)?;
-    for binding in bindings {
+    validate_matrix_catalog(catalog.families, catalog.target_sets, matrices)?;
+    validate_matrix_subject_contracts(
+        catalog.families,
+        catalog.targets,
+        catalog.target_sets,
+        catalog.spans,
+        matrices,
+    )?;
+    for binding in catalog.bindings {
         validate_external_scope(
             binding.scope,
             source,
-            families,
-            targets,
-            target_sets,
+            catalog.families,
+            catalog.targets,
+            catalog.target_sets,
             matrices,
-            indexes,
+            catalog.indexes,
         )?;
     }
-    for index in indexes {
-        validate_index_references(source, families, target_sets, matrices, bindings, index)?;
+    for index in catalog.indexes {
+        validate_index_references(
+            source,
+            catalog.families,
+            catalog.target_sets,
+            matrices,
+            catalog.bindings,
+            index,
+        )?;
     }
     Ok(())
 }
@@ -1665,6 +1978,84 @@ fn validate_matrix_catalog(
         }
     }
     Ok(())
+}
+
+fn validate_matrix_subject_contracts(
+    families: &[EmbeddingFamily],
+    targets: &[EmbeddingTarget],
+    target_sets: &[TargetSet],
+    spans: &[TokenSpan],
+    matrices: &[MatrixCommitment],
+) -> Result<(), EmbeddingError> {
+    for matrix in matrices {
+        let family = find_family(families, matrix.family_id)?;
+        let target_set = find_target_set(target_sets, matrix.target_set_id)?;
+        for target_id in &target_set.targets {
+            let target = find_target(targets, *target_id)?;
+            if matches!(target.kind, TargetKind::Document | TargetKind::Chunk)
+                && spans
+                    .binary_search_by_key(&(family.id, target.id), |span| {
+                        (span.family_id, span.target_id)
+                    })
+                    .is_err()
+            {
+                return Err(EmbeddingError::MissingReference(
+                    "matrix text-subject token span",
+                ));
+            }
+            if target.kind == TargetKind::Chunk {
+                if !family_stage_applied(family, 7)? {
+                    return Err(EmbeddingError::Malformed(
+                        "chunk matrix uses a family without applied chunking",
+                    ));
+                }
+                if let Some(chunking) = retained_field(target, 2, TlvWireType::Digest32)?
+                    && chunking != family.chunking_id.as_bytes()
+                {
+                    return Err(EmbeddingError::Malformed(
+                        "chunk target uses a different family chunking contract",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn family_stage_applied(
+    family: &EmbeddingFamily,
+    contract_tag: u16,
+) -> Result<bool, EmbeddingError> {
+    let stage = canonical_tlv(&family.canonical_contract)?
+        .find(|entry| entry.tag == contract_tag)
+        .ok_or(EmbeddingError::Missing("family stage contract"))?;
+    if stage.wire_type != TlvWireType::Block {
+        return Err(EmbeddingError::MalformedTlv(
+            "family stage contract has the wrong wire type",
+        ));
+    }
+    let applied = canonical_tlv(stage.value)?
+        .find(|entry| entry.tag == 1)
+        .ok_or(EmbeddingError::Missing("family stage applied marker"))?;
+    if applied.wire_type != TlvWireType::U32 || applied.value.len() != 4 {
+        return Err(EmbeddingError::MalformedTlv(
+            "family stage applied marker is malformed",
+        ));
+    }
+    let value = u32::from_le_bytes(
+        applied
+            .value
+            .try_into()
+            .map_err(|_| EmbeddingError::MalformedTlv("stage applied marker width"))?,
+    );
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        value => Err(EmbeddingError::UnsupportedCode {
+            field: "family stage applied marker",
+            value,
+        }),
+    }
 }
 
 fn validate_external_scope(

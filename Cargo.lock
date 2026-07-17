@@ -1326,6 +1326,7 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "purrdf-events",
+ "purrdf-iri",
  "sha2",
  "smallvec",
  "tempfile",

@@ -30,6 +30,10 @@ path = "src/lib.rs"
 name = "purrdf_core"
 
 [dependencies]
+# Zero-dependency RFC 3987 validation for canonical RDF-term targets. The IRI
+# leaf has no edge back to the core, remains wasm-clean, and prevents malformed
+# or relative identifiers from entering persistent PURREMB target identity.
+purrdf-iri = { workspace = true }
 # The permissive RDF 1.2 ingestion protocol: this crate provides
 # the `DatasetSink` adapter that folds an `RdfEventSink` event stream into a frozen
 # `RdfDataset`, plus the frozen-IR-replay `FrozenDatasetSource`. The protocol crate

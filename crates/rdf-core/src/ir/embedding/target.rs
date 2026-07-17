@@ -921,7 +921,7 @@ mod tests {
             manifest_media_type: "application/example".to_owned(),
             logical_id_digest: ContentDigest::of(b"corpus-id"),
         };
-        let retained = corpus.clone().into_target(true).expect("retained target");
+        let retained = corpus.into_target(true).expect("retained target");
         let digest_only =
             EmbeddingTarget::from_digest(retained.kind, retained.identity_digest, None)
                 .expect("digest target");
