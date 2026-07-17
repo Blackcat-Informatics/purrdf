@@ -338,6 +338,20 @@ if (process.argv.includes("--self-test")) {
   process.exit(0);
 }
 const manifest = fixtureManifest();
+if (!manifest.reverse.shapeIds.includes("<https://example.org/Person>")) {
+  throw new Error(`TypeScript reverse import lost Person: ${manifest.reverse.shapeIds}`);
+}
+if (
+  !manifest.reverse.losses.losses.every(
+    (entry) =>
+      entry.from === "typescript-7.0" &&
+      entry.to === "shacl" &&
+      entry.intentional === true &&
+      lossSubject(entry).startsWith("#/"),
+  )
+) {
+  throw new Error("TypeScript reverse package has an unsound or unlocated loss");
+}
 if (manifest.exact.losses.losses.length !== 0) {
   throw new Error("exact TypeScript oracle fixture has a non-empty loss ledger");
 }
@@ -360,7 +374,8 @@ try {
     `TypeScript oracle: compiler ${compilerVersion}; ` +
       `${manifest.exact.probes.length} exact boon probes and ` +
       `${manifest.exact.compilerProbes.length} optional/null/undefined probes agree; ` +
-      `${divergenceCount} divergences map to the complete 18-code loss profile`,
+      `${divergenceCount} divergences map to the complete 18-code loss profile; ` +
+      "verified reverse SHACL import passes",
   );
 } finally {
   rmSync(directory, { recursive: true, force: true });

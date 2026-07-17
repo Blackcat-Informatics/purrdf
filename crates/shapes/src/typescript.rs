@@ -19,9 +19,10 @@
 //! An arbitrary TypeScript → JSON Schema reader is semantically undefined:
 //! conditional/generic/ambient TypeScript declarations have no unique runtime
 //! acceptance relation, and many distinct JSON Schemas intentionally project to
-//! the same declaration. The authoritative reverse surface is therefore the
-//! source [`CompiledSchema`], retained by the caller alongside the reversible
-//! `$defs` key → exported type-name map.
+//! the same declaration. A [`TypeScriptPackage`] emitted by PurRDF therefore
+//! retains its exact source schema and verifies it against the declaration and
+//! reversible type-name map; [`import_typescript_package`] is the authoritative
+//! reverse surface.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,6 +38,7 @@ use crate::schema_catalog::{
     CompiledSchemaCatalog, definition_path, pointer_escape, reference_key, schema_array_keywords,
     schema_map_keywords, schema_single_keywords,
 };
+use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_json_schema_from};
 
 /// Fixed loss-registry target and compiler-dialect identifier.
 pub const TYPESCRIPT_DIALECT: &str = "typescript-7.0";
@@ -145,6 +147,8 @@ impl TypeScriptConfig {
 /// Deterministic generated declaration package and its projection losses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeScriptPackage {
+    /// Fixed generated-package dialect.
+    pub dialect: String,
     /// Caller-owned package identifier copied from [`TypeScriptConfig`].
     pub package_name: String,
     /// Relative package paths → exact file bytes, sorted by path.
@@ -154,6 +158,17 @@ pub struct TypeScriptPackage {
     /// JSON Schema assertions not represented exactly by TypeScript 7.0
     /// assignability.
     pub losses: LossLedger,
+    source_schema_json: String,
+    config: TypeScriptConfig,
+}
+
+impl TypeScriptPackage {
+    /// Exact immutable source JSON Schema bytes retained for verified reverse
+    /// import.
+    #[must_use]
+    pub fn source_schema_json(&self) -> &str {
+        &self.source_schema_json
+    }
 }
 
 /// A malformed TypeScript configuration, input schema, or declaration graph.
@@ -274,11 +289,68 @@ pub fn emit_typescript(
         declaration.into_bytes(),
     );
     Ok(TypeScriptPackage {
+        dialect: TYPESCRIPT_DIALECT.to_owned(),
         package_name: config.package_name.clone(),
         artifacts,
         type_names,
         losses,
+        source_schema_json: compiled.schema_json.clone(),
+        config: config.clone(),
     })
+}
+
+/// Import a deterministic PurRDF-emitted TypeScript 7.0 package as SHACL.
+///
+/// Arbitrary TypeScript declarations are intentionally not parsed because
+/// structural/generic/conditional types do not define a unique runtime JSON
+/// acceptance relation. The emitted package instead carries the exact source
+/// schema used for this verified inverse.
+///
+/// # Errors
+///
+/// Returns [`TypeScriptError`] when the dialect, package identity, source
+/// schema, declaration artifact, type-name map, or forward loss ledger differs
+/// from deterministic re-emission, or when shared schema import fails.
+pub fn import_typescript_package(
+    package: &TypeScriptPackage,
+    config: &SchemaImportConfig,
+) -> Result<ImportedShapes, TypeScriptError> {
+    if package.dialect != TYPESCRIPT_DIALECT {
+        return Err(TypeScriptError::new(format!(
+            "TypeScript package dialect must be {TYPESCRIPT_DIALECT:?}, got {:?}",
+            package.dialect
+        )));
+    }
+    {
+        let retained = CompiledSchema {
+            schema_json: package.source_schema_json.clone(),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        };
+        let expected = emit_typescript(&retained, &package.config)?;
+        if package.package_name != expected.package_name {
+            return Err(TypeScriptError::new(
+                "TypeScript package identity differs from deterministic re-emission",
+            ));
+        }
+        if package.artifacts != expected.artifacts {
+            return Err(TypeScriptError::new(
+                "TypeScript package artifacts differ from deterministic re-emission",
+            ));
+        }
+        if package.type_names != expected.type_names {
+            return Err(TypeScriptError::new(
+                "TypeScript package type map differs from deterministic re-emission",
+            ));
+        }
+        if package.losses.render_json() != expected.losses.render_json() {
+            return Err(TypeScriptError::new(
+                "TypeScript package forward loss ledger differs from deterministic re-emission",
+            ));
+        }
+    }
+    import_json_schema_from(TYPESCRIPT_DIALECT, &package.source_schema_json, config)
+        .map_err(|error| TypeScriptError::new(format!("TypeScript package import: {error}")))
 }
 
 fn validate_unguarded_reference_cycles(
@@ -1868,8 +1940,12 @@ fn finish_text(mut text: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_schema::Namespaces;
+    use crate::schema_import::SchemaDatatypeMap;
     use ::purrdf::loss::{check_ledger_complete, check_ledger_sound};
     use serde_json::json;
+
+    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
     fn compiled(schema: &Value) -> CompiledSchema {
         CompiledSchema {
@@ -1889,6 +1965,40 @@ mod tests {
             "Caller-owned module documentation.",
         )
         .expect("valid config")
+    }
+
+    fn import_config() -> SchemaImportConfig {
+        let namespaces = Namespaces::new(
+            "ex",
+            &[("ex".to_owned(), "https://example.org/".to_owned())],
+        )
+        .expect("namespaces");
+        let datatypes = SchemaDatatypeMap::new(
+            format!("{XSD}string"),
+            format!("{XSD}boolean"),
+            format!("{XSD}integer"),
+            format!("{XSD}decimal"),
+            format!("{XSD}dateTime"),
+            format!("{XSD}date"),
+            format!("{XSD}time"),
+            format!("{XSD}anyURI"),
+        )
+        .expect("datatypes");
+        SchemaImportConfig::new(namespaces, datatypes)
+    }
+
+    fn compile_turtle(body: &str) -> CompiledSchema {
+        let source = format!(
+            r"
+            @prefix ex:  <https://example.org/> .
+            @prefix sh:  <http://www.w3.org/ns/shacl#> .
+            @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+            {body}
+            "
+        );
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&source).expect("parse");
+        let shapes = crate::shapes::from_dataset(&dataset).expect("shapes");
+        crate::json_schema::compile(&shapes, import_config().namespaces())
     }
 
     fn declaration(package: &TypeScriptPackage) -> &str {
@@ -1991,6 +2101,100 @@ mod tests {
                 .split(|character: char| !character.is_ascii_alphanumeric())
                 .any(|token| token == "any")
         );
+    }
+
+    #[test]
+    fn emitted_package_imports_byte_exactly_and_corruption_fails_closed() {
+        let compiled = compile_turtle(
+            r#"
+            ex:PersonShape a sh:NodeShape ;
+                sh:targetClass ex:Person ;
+                sh:closed true ;
+                sh:property [
+                    sh:path ex:name ;
+                    sh:datatype xsd:string ;
+                    sh:minCount 1 ;
+                    sh:maxCount 1 ;
+                    sh:pattern "^[A-Z]"
+                ] ;
+                sh:property [
+                    sh:path ex:friend ;
+                    sh:class ex:Person ;
+                    sh:maxCount 1
+                ] ;
+                sh:property [
+                    sh:path ex:state ;
+                    sh:maxCount 1 ;
+                    sh:in ( ex:active "inactive" )
+                ] .
+            "#,
+        );
+        let package = emit_typescript(&compiled, &config()).expect("emit");
+        assert_eq!(package.source_schema_json(), compiled.schema_json);
+        let imported = import_typescript_package(&package, &import_config()).expect("import");
+        assert!(
+            imported.losses.is_empty(),
+            "{}",
+            imported.losses.render_json()
+        );
+        let recompiled =
+            crate::json_schema::compile(&imported.shapes, import_config().namespaces());
+        assert_eq!(recompiled.schema_json, compiled.schema_json);
+
+        let repeated = import_typescript_package(&package, &import_config()).expect("repeat");
+        let repeated = crate::json_schema::compile(&repeated.shapes, import_config().namespaces());
+        assert_eq!(repeated.schema_json, recompiled.schema_json);
+
+        let mut bad = package.clone();
+        bad.dialect = "typescript-8.0".to_owned();
+        assert!(import_typescript_package(&bad, &import_config()).is_err());
+
+        let mut bad = package.clone();
+        bad.package_name = "@example/drift".to_owned();
+        assert!(import_typescript_package(&bad, &import_config()).is_err());
+
+        let mut bad = package.clone();
+        bad.artifacts
+            .get_mut(TYPESCRIPT_DECLARATION_PATH)
+            .expect("declaration")
+            .extend_from_slice(b"// drift\n");
+        assert!(import_typescript_package(&bad, &import_config()).is_err());
+
+        let mut bad = package;
+        *bad.type_names.values_mut().next().expect("type name") = "Missing".to_owned();
+        assert!(import_typescript_package(&bad, &import_config()).is_err());
+    }
+
+    #[test]
+    fn verified_package_imports_alias_recursive_nullable_and_finite_schema() {
+        let schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "Alias": { "$ref": "#/$defs/Person" },
+                "Choice": { "enum": ["ex:open", "ex:closed"] },
+                "Person": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "ex:choice": { "$ref": "#/$defs/Choice" },
+                        "ex:friend": { "$ref": "#/$defs/Person" },
+                        "ex:maybe": { "type": ["string", "null"] }
+                    }
+                }
+            }
+        });
+        let package = emit_typescript(&compiled(&schema), &config()).expect("emit");
+        let imported = import_typescript_package(&package, &import_config()).expect("import");
+        check_ledger_sound(&imported.losses, TYPESCRIPT_DIALECT, "shacl")
+            .expect("sound reverse ledger");
+        assert_eq!(imported.shapes.node_shapes.len(), 1);
+        assert!(imported.losses.entries().iter().all(|entry| {
+            entry
+                .location
+                .as_ref()
+                .and_then(|location| location.subject.as_deref())
+                .is_some_and(|subject| subject.starts_with("#/"))
+        }));
     }
 
     #[test]

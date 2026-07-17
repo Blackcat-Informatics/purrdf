@@ -215,6 +215,20 @@ const manifest = fixtureManifest();
 if (manifest.dialect !== "graphql-september-2025") {
   throw new Error(`GraphQL dialect drift: ${manifest.dialect}`);
 }
+if (!manifest.reverse.shapeIds.includes("<https://example.org/Person>")) {
+  throw new Error(`GraphQL reverse import lost Person: ${manifest.reverse.shapeIds}`);
+}
+if (
+  !manifest.reverse.losses.losses.every(
+    (entry) =>
+      entry.from === "graphql-september-2025" &&
+      entry.to === "shacl" &&
+      entry.intentional === true &&
+      lossSubject(entry).startsWith("#/"),
+  )
+) {
+  throw new Error("GraphQL reverse package has an unsound or unlocated loss");
+}
 if (manifest.exact.losses.losses.length !== 0) {
   throw new Error("exact GraphQL oracle fixture has a non-empty loss ledger");
 }
@@ -239,5 +253,6 @@ console.log(
   `GraphQL oracle: GraphQL.js ${graphqlVersion}; ` +
     `${exactResults.length} exact boon/variable-coercion probes agree; ` +
     `${divergenceCount} located divergences cover the complete ${profile.size}-code profile; ` +
-    `${codecCount} probes exercise the production value codec`,
+    `${codecCount} probes exercise the production value codec; ` +
+    "verified reverse SHACL import passes",
 );

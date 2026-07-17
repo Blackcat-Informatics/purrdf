@@ -17,10 +17,12 @@
 //! Pydantic runtime-annotation equivalent remain on that schema surface and are
 //! also recorded, at their JSON-pointer location, on [`PydanticPackage::losses`].
 //!
-//! This is a code generator, so a source-language reader is not meaningful.
-//! Pydantic itself supplies the executable reverse surface through
-//! `model_json_schema()`; the dev-only oracle exercises that surface against the
-//! source [`CompiledSchema`].
+//! Arbitrary Python source has no unique JSON Schema acceptance relation, so it
+//! is not treated as an inverse format. A [`PydanticPackage`] emitted by PurRDF
+//! retains and verifies its exact source schema, artifact set, and reversible
+//! model map; [`import_pydantic_package`] is the deterministic reverse surface.
+//! Pydantic's live `model_json_schema()` remains an independent oracle for the
+//! generated runtime models.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -35,10 +37,14 @@ use crate::schema_catalog::{
     CompiledSchemaCatalog, definition_path, pointer_escape, reference_key, schema_array_keywords,
     schema_map_keywords, schema_single_keywords,
 };
+use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_json_schema_from};
 
 const MODELS_MODULE: &str = "models";
 const BASE_MODULE: &str = "_base";
 const BASE_CLASS: &str = "PurrdfBaseModel";
+
+/// Fixed generated-package dialect and reverse-loss source identifier.
+pub const PYDANTIC_DIALECT: &str = "pydantic-v2";
 
 /// Caller-owned configuration for a generated Pydantic package.
 ///
@@ -120,6 +126,8 @@ impl PydanticConfig {
 /// Deterministic generated Pydantic package and its runtime-projection losses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PydanticPackage {
+    /// Fixed generated-package dialect.
+    pub dialect: String,
     /// Relative package paths → exact file bytes, sorted by path.
     pub artifacts: BTreeMap<String, Vec<u8>>,
     /// Source `$defs` key → importable generated model path, sorted by key.
@@ -127,6 +135,17 @@ pub struct PydanticPackage {
     /// JSON Schema assertions preserved on `model_json_schema()` but not exactly
     /// enforced by Pydantic runtime annotations.
     pub losses: LossLedger,
+    source_schema_json: String,
+    config: PydanticConfig,
+}
+
+impl PydanticPackage {
+    /// Exact immutable source JSON Schema bytes retained for verified reverse
+    /// import.
+    #[must_use]
+    pub fn source_schema_json(&self) -> &str {
+        &self.source_schema_json
+    }
 }
 
 /// A malformed emitter configuration or input schema.
@@ -227,10 +246,63 @@ pub fn emit_pydantic(
     artifacts.insert(format!("{package_path}/py.typed"), Vec::new());
 
     Ok(PydanticPackage {
+        dialect: PYDANTIC_DIALECT.to_owned(),
         artifacts,
         model_paths,
         losses: renderer.ledger,
+        source_schema_json: compiled.schema_json.clone(),
+        config: config.clone(),
     })
+}
+
+/// Import a deterministic PurRDF-emitted Pydantic v2 package as SHACL shapes.
+///
+/// Arbitrary Python source is intentionally outside this API: Python classes
+/// and validators do not define one reversible JSON Schema acceptance
+/// relation. This function verifies the fixed package dialect, exact retained
+/// source schema, complete artifact bytes, model map, and forward loss ledger
+/// before using the shared schema importer.
+///
+/// # Errors
+///
+/// Returns [`PydanticError`] when any package field has drifted from a fresh
+/// deterministic emission or when the retained source schema cannot be
+/// imported with the caller's [`SchemaImportConfig`].
+pub fn import_pydantic_package(
+    package: &PydanticPackage,
+    config: &SchemaImportConfig,
+) -> Result<ImportedShapes, PydanticError> {
+    if package.dialect != PYDANTIC_DIALECT {
+        return Err(PydanticError::new(format!(
+            "Pydantic package dialect must be {PYDANTIC_DIALECT:?}, got {:?}",
+            package.dialect
+        )));
+    }
+    {
+        let retained = CompiledSchema {
+            schema_json: package.source_schema_json.clone(),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        };
+        let expected = emit_pydantic(&retained, &package.config)?;
+        if package.artifacts != expected.artifacts {
+            return Err(PydanticError::new(
+                "Pydantic package artifacts differ from deterministic re-emission",
+            ));
+        }
+        if package.model_paths != expected.model_paths {
+            return Err(PydanticError::new(
+                "Pydantic package model map differs from deterministic re-emission",
+            ));
+        }
+        if package.losses.render_json() != expected.losses.render_json() {
+            return Err(PydanticError::new(
+                "Pydantic package forward loss ledger differs from deterministic re-emission",
+            ));
+        }
+    }
+    import_json_schema_from(PYDANTIC_DIALECT, &package.source_schema_json, config)
+        .map_err(|error| PydanticError::new(format!("Pydantic package import: {error}")))
 }
 
 fn definition_names(defs: &Map<String, Value>) -> Result<BTreeMap<String, String>, PydanticError> {
@@ -895,7 +967,7 @@ impl<'a> Renderer<'a> {
         self.ledger.record(LossEntry {
             code: code.to_owned().into(),
             from: "json-schema".into(),
-            to: "pydantic-v2".into(),
+            to: PYDANTIC_DIALECT.into(),
             note: note.to_owned().into(),
             location: Some(Box::new(
                 RdfLocation::logical("pydantic-emitter").with_subject(path),
@@ -1557,8 +1629,12 @@ fn reserved_type_names() -> BTreeSet<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_schema::Namespaces;
+    use crate::schema_import::SchemaDatatypeMap;
     use ::purrdf::loss::check_ledger_sound;
     use serde_json::json;
+
+    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
     fn compiled(schema: &Value) -> CompiledSchema {
         CompiledSchema {
@@ -1578,6 +1654,40 @@ mod tests {
             "Caller model documentation.",
         )
         .expect("valid config")
+    }
+
+    fn import_config() -> SchemaImportConfig {
+        let namespaces = Namespaces::new(
+            "ex",
+            &[("ex".to_owned(), "https://example.org/".to_owned())],
+        )
+        .expect("namespaces");
+        let datatypes = SchemaDatatypeMap::new(
+            format!("{XSD}string"),
+            format!("{XSD}boolean"),
+            format!("{XSD}integer"),
+            format!("{XSD}decimal"),
+            format!("{XSD}dateTime"),
+            format!("{XSD}date"),
+            format!("{XSD}time"),
+            format!("{XSD}anyURI"),
+        )
+        .expect("datatypes");
+        SchemaImportConfig::new(namespaces, datatypes)
+    }
+
+    fn compile_turtle(body: &str) -> CompiledSchema {
+        let source = format!(
+            r"
+            @prefix ex:  <https://example.org/> .
+            @prefix sh:  <http://www.w3.org/ns/shacl#> .
+            @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+            {body}
+            "
+        );
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&source).expect("parse");
+        let shapes = crate::shapes::from_dataset(&dataset).expect("shapes");
+        crate::json_schema::compile(&shapes, import_config().namespaces())
     }
 
     fn lossless_schema() -> Value {
@@ -1668,6 +1778,155 @@ mod tests {
     }
 
     #[test]
+    fn emitted_package_imports_byte_exactly_and_corruption_fails_closed() {
+        let compiled = compile_turtle(
+            r#"
+            ex:PersonShape a sh:NodeShape ;
+                sh:targetClass ex:Person ;
+                sh:closed true ;
+                sh:property [
+                    sh:path ex:name ;
+                    sh:datatype xsd:string ;
+                    sh:minCount 1 ;
+                    sh:maxCount 1 ;
+                    sh:pattern "^[A-Z]"
+                ] ;
+                sh:property [
+                    sh:path ex:friend ;
+                    sh:class ex:Person ;
+                    sh:maxCount 1
+                ] ;
+                sh:property [
+                    sh:path ex:state ;
+                    sh:maxCount 1 ;
+                    sh:in ( ex:active "inactive" )
+                ] .
+            "#,
+        );
+        let package = emit_pydantic(&compiled, &config()).expect("emit");
+        assert_eq!(package.source_schema_json(), compiled.schema_json);
+        let imported = import_pydantic_package(&package, &import_config()).expect("import");
+        assert!(
+            imported.losses.is_empty(),
+            "{}",
+            imported.losses.render_json()
+        );
+        let recompiled =
+            crate::json_schema::compile(&imported.shapes, import_config().namespaces());
+        assert_eq!(recompiled.schema_json, compiled.schema_json);
+
+        let repeated = import_pydantic_package(&package, &import_config()).expect("repeat");
+        let repeated = crate::json_schema::compile(&repeated.shapes, import_config().namespaces());
+        assert_eq!(repeated.schema_json, recompiled.schema_json);
+
+        let mut bad = package.clone();
+        bad.dialect = "pydantic-v3".to_owned();
+        assert!(import_pydantic_package(&bad, &import_config()).is_err());
+
+        let mut bad = package.clone();
+        bad.artifacts
+            .values_mut()
+            .next()
+            .expect("artifact")
+            .extend_from_slice(b"# drift\n");
+        assert!(import_pydantic_package(&bad, &import_config()).is_err());
+
+        let mut bad = package;
+        *bad.model_paths.values_mut().next().expect("model path") =
+            "oracle_models.models.Missing".to_owned();
+        assert!(import_pydantic_package(&bad, &import_config()).is_err());
+    }
+
+    #[test]
+    fn verified_package_imports_recursive_nullable_and_finite_schema() {
+        let schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "Choice": { "enum": ["ex:open", "ex:closed"] },
+                "Person": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "ex:choice": { "$ref": "#/$defs/Choice" },
+                        "ex:friend": { "$ref": "#/$defs/Person" },
+                        "ex:maybe": { "type": ["string", "null"] }
+                    }
+                }
+            }
+        });
+        let package = emit_pydantic(&compiled(&schema), &config()).expect("emit");
+        let imported = import_pydantic_package(&package, &import_config()).expect("import");
+        check_ledger_sound(&imported.losses, PYDANTIC_DIALECT, "shacl")
+            .expect("sound reverse ledger");
+        assert_eq!(imported.shapes.node_shapes.len(), 1);
+        assert!(imported.losses.entries().iter().all(|entry| {
+            entry
+                .location
+                .as_ref()
+                .and_then(|location| location.subject.as_deref())
+                .is_some_and(|subject| subject.starts_with("#/"))
+        }));
+    }
+
+    #[test]
+    fn generated_packages_propagate_shared_import_resource_limits() {
+        let schema = json!({
+            "$defs": {
+                "ResourceHolder": {
+                    "type": "object",
+                    "x-resource-probe": vec![Value::Null; 1_000_000]
+                }
+            }
+        });
+        let compiled = CompiledSchema {
+            schema_json: serde_json::to_string(&schema).expect("compact resource fixture"),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        };
+
+        let package = emit_pydantic(&compiled, &config()).expect("Pydantic emits annotation");
+        assert!(
+            import_pydantic_package(&package, &import_config())
+                .expect_err("Pydantic shared node limit")
+                .to_string()
+                .contains("node limit")
+        );
+        drop(package);
+
+        let typescript_config = crate::typescript::TypeScriptConfig::new(
+            "@example/resource-probe",
+            "Caller package.",
+            "Caller module.",
+        )
+        .expect("TypeScript config");
+        let package = crate::typescript::emit_typescript(&compiled, &typescript_config)
+            .expect("TypeScript emits annotation");
+        assert!(
+            crate::typescript::import_typescript_package(&package, &import_config())
+                .expect_err("TypeScript shared node limit")
+                .to_string()
+                .contains("node limit")
+        );
+        drop(package);
+
+        let graphql_config = crate::graphql::GraphqlConfig::new(
+            "ResourceProbe",
+            "Caller package.",
+            "Caller module.",
+            "JsonCarrier",
+        )
+        .expect("GraphQL config");
+        let package = crate::graphql::emit_graphql(&compiled, &graphql_config)
+            .expect("GraphQL emits annotation");
+        assert!(
+            crate::graphql::import_graphql_package(&package, &import_config())
+                .expect_err("GraphQL shared node limit")
+                .to_string()
+                .contains("node limit")
+        );
+    }
+
+    #[test]
     fn caller_docstrings_are_the_only_module_prose() {
         let out = emit_pydantic(&compiled(&lossless_schema()), &config()).expect("emit");
         let init = std::str::from_utf8(&out.artifacts["example_models/__init__.py"]).unwrap();
@@ -1749,7 +2008,7 @@ mod tests {
         ";
         let dataset = crate::text_ingest::parse_turtle_to_dataset(turtle).expect("parse SHACL");
         let shapes = crate::shapes::from_dataset(&dataset).expect("type SHACL");
-        let namespaces = crate::json_schema::Namespaces::new(
+        let namespaces = Namespaces::new(
             "ex",
             &[("ex".to_owned(), "https://example.org/".to_owned())],
         )

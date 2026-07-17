@@ -44,14 +44,17 @@ pub mod typescript;
 pub use graphql::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig,
     GraphqlDefinitionMap, GraphqlEnumValueMap, GraphqlError, GraphqlNameMap, GraphqlPackage,
-    emit_graphql,
+    emit_graphql, import_graphql_package,
 };
 pub use json_schema::{Namespaces, ValueVocab, ValueVocabProjection, compile_with_value_vocab};
 pub use linkml::{
     LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, emit_linkml, import_linkml,
     import_linkml_package, parse_linkml, write_linkml,
 };
-pub use pydantic::{PydanticConfig, PydanticError, PydanticPackage, emit_pydantic};
+pub use pydantic::{
+    PYDANTIC_DIALECT, PydanticConfig, PydanticError, PydanticPackage, emit_pydantic,
+    import_pydantic_package,
+};
 pub use rules::{apply_rules, entail_dataset};
 pub use schema_import::{
     ImportedShapes, SchemaDatatypeMap, SchemaImportConfig, SchemaImportError,
@@ -59,7 +62,7 @@ pub use schema_import::{
 };
 pub use typescript::{
     TYPESCRIPT_DECLARATION_PATH, TYPESCRIPT_DIALECT, TypeScriptConfig, TypeScriptError,
-    TypeScriptPackage, emit_typescript,
+    TypeScriptPackage, emit_typescript, import_typescript_package,
 };
 
 /// Crate version string for cache/toolchain salt parity with Python package

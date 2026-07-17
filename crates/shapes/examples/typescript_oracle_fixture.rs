@@ -8,9 +8,10 @@ use std::error::Error;
 
 use boon::{Compiler, Schemas};
 use purrdf::loss::{LossLedger, check_ledger_complete, check_ledger_sound};
-use purrdf_shapes::json_schema::CompiledSchema;
+use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
 use purrdf_shapes::{
-    TYPESCRIPT_DECLARATION_PATH, TypeScriptConfig, TypeScriptPackage, emit_typescript,
+    SchemaDatatypeMap, SchemaImportConfig, TYPESCRIPT_DECLARATION_PATH, TYPESCRIPT_DIALECT,
+    TypeScriptConfig, TypeScriptPackage, emit_typescript, import_typescript_package,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -35,6 +36,7 @@ const CLOSED_PROFILE: [&str; 18] = [
     "unevaluated-validation-dropped",
     "unique-items-validation-dropped",
 ];
+const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,6 +90,50 @@ fn config() -> Result<TypeScriptConfig, Box<dyn Error>> {
         "Caller-owned TypeScript differential-oracle fixture.",
         "Declarations checked against the source JSON Schema acceptance relation.",
     )?)
+}
+
+fn import_config() -> Result<SchemaImportConfig, Box<dyn Error>> {
+    let namespaces = Namespaces::new(
+        "ex",
+        &[("ex".to_owned(), "https://example.org/".to_owned())],
+    )?;
+    let datatypes = SchemaDatatypeMap::new(
+        format!("{XSD}string"),
+        format!("{XSD}boolean"),
+        format!("{XSD}integer"),
+        format!("{XSD}decimal"),
+        format!("{XSD}dateTime"),
+        format!("{XSD}date"),
+        format!("{XSD}time"),
+        format!("{XSD}anyURI"),
+    )?;
+    Ok(SchemaImportConfig::new(namespaces, datatypes))
+}
+
+fn reverse_evidence(
+    package: &TypeScriptPackage,
+    config: &SchemaImportConfig,
+) -> Result<Value, Box<dyn Error>> {
+    let imported = import_typescript_package(package, config)?;
+    check_ledger_sound(&imported.losses, TYPESCRIPT_DIALECT, "shacl")?;
+    let repeated = import_typescript_package(package, config)?;
+    if imported.losses.render_json() != repeated.losses.render_json() {
+        return Err("TypeScript reverse ledger is not deterministic".into());
+    }
+    let first = purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces());
+    let second = purrdf_shapes::json_schema::compile(&repeated.shapes, config.namespaces());
+    if first.schema_json != second.schema_json {
+        return Err("TypeScript reverse shapes are not byte-deterministic".into());
+    }
+    Ok(json!({
+        "losses": serde_json::from_str::<Value>(&imported.losses.render_json())?,
+        "shapeIds": imported
+            .shapes
+            .node_shapes
+            .iter()
+            .map(|shape| shape.id.to_string())
+            .collect::<Vec<_>>(),
+    }))
 }
 
 fn exact_schema() -> Value {
@@ -963,9 +1009,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let lossy_schema = lossy_schema();
     let exact_package = emit_typescript(&compiled(&exact_schema)?, &config)?;
     let lossy_package = emit_typescript(&compiled(&lossy_schema)?, &config)?;
+    let mut reverse_schema = exact_schema.clone();
+    let reverse_definitions = reverse_schema["$defs"]
+        .as_object_mut()
+        .ok_or("oracle schema has no $defs")?;
+    reverse_definitions.remove("Empty");
+    // The differential fixture's Tree deliberately uses bare JSON field names.
+    // They have no caller-supplied RDF property identity, so the verified
+    // reverse fixture excludes that definition instead of inventing one.
+    reverse_definitions.remove("Tree");
+    let reverse_package = emit_typescript(&compiled(&reverse_schema)?, &config)?;
+    let reverse = reverse_evidence(&reverse_package, &import_config()?)?;
     let output = json!({
         "exact": exact_fixture(&exact_schema, exact_package)?,
         "lossy": lossy_fixture(&lossy_schema, lossy_package)?,
+        "reverse": reverse,
     });
     println!("{}", serde_json::to_string(&output)?);
     Ok(())

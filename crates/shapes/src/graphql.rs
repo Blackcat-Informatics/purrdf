@@ -13,6 +13,12 @@
 //! as singleton-list coercion, fixed input-field sets, custom-scalar behavior,
 //! and required/null presence are recorded on [`GraphqlPackage::losses`] at
 //! their source JSON Pointer locations.
+//!
+//! Arbitrary SDL is not an inverse format: resolver behavior, custom scalars,
+//! and output selection do not define one JSON acceptance relation. Emitted
+//! packages retain their exact source schema and verify it against the SDL and
+//! canonical name/value map before [`import_graphql_package`] lowers it to
+//! SHACL.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -28,6 +34,7 @@ use crate::schema_catalog::{
     CompiledSchemaCatalog, definition_path, pointer_escape, reference_key, schema_array_keywords,
     schema_map_keywords, schema_single_keywords,
 };
+use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_json_schema_from};
 
 /// Fixed GraphQL language revision used by the emitter and loss registry.
 pub const GRAPHQL_DIALECT: &str = "graphql-september-2025";
@@ -167,12 +174,21 @@ pub struct GraphqlPackage {
     pub names: GraphqlNameMap,
     /// JSON Schema assertions not represented exactly by GraphQL coercion.
     pub losses: LossLedger,
+    source_schema_json: String,
+    config: GraphqlConfig,
     source_definitions: BTreeMap<String, Value>,
     representations: BTreeMap<String, Representation>,
     reference_targets: BTreeMap<String, String>,
 }
 
 impl GraphqlPackage {
+    /// Exact immutable source JSON Schema bytes retained for verified reverse
+    /// import.
+    #[must_use]
+    pub fn source_schema_json(&self) -> &str {
+        &self.source_schema_json
+    }
+
     /// Translate one source JSON value into the generated GraphQL input naming
     /// and finite-enum transport representation.
     ///
@@ -313,6 +329,8 @@ pub fn emit_graphql(
         artifacts,
         names,
         losses: planner.ledger,
+        source_schema_json: compiled.schema_json.clone(),
+        config: config.clone(),
         source_definitions: definitions
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
@@ -320,6 +338,60 @@ pub fn emit_graphql(
         representations: planner.representations,
         reference_targets: planner.reference_targets,
     })
+}
+
+/// Import a deterministic PurRDF-emitted GraphQL September 2025 package as
+/// SHACL shapes.
+///
+/// This verified inverse uses the exact retained JSON Schema. Arbitrary SDL is
+/// intentionally outside the API because GraphQL custom scalars, resolvers,
+/// and output selection do not define a unique runtime JSON validation model.
+///
+/// # Errors
+///
+/// Returns [`GraphqlError`] when the dialect, package identity, retained source
+/// schema, SDL/name-map artifacts, typed name/value map, or forward ledger
+/// differs from deterministic re-emission, or when shared schema import fails.
+pub fn import_graphql_package(
+    package: &GraphqlPackage,
+    config: &SchemaImportConfig,
+) -> Result<ImportedShapes, GraphqlError> {
+    if package.names.dialect != GRAPHQL_DIALECT {
+        return Err(GraphqlError::new(format!(
+            "GraphQL package dialect must be {GRAPHQL_DIALECT:?}, got {:?}",
+            package.names.dialect
+        )));
+    }
+    {
+        let retained = CompiledSchema {
+            schema_json: package.source_schema_json.clone(),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        };
+        let expected = emit_graphql(&retained, &package.config)?;
+        if package.schema_name != expected.schema_name {
+            return Err(GraphqlError::new(
+                "GraphQL package identity differs from deterministic re-emission",
+            ));
+        }
+        if package.artifacts != expected.artifacts {
+            return Err(GraphqlError::new(
+                "GraphQL package artifacts differ from deterministic re-emission",
+            ));
+        }
+        if package.names != expected.names {
+            return Err(GraphqlError::new(
+                "GraphQL package typed name map differs from deterministic re-emission",
+            ));
+        }
+        if package.losses.render_json() != expected.losses.render_json() {
+            return Err(GraphqlError::new(
+                "GraphQL package forward loss ledger differs from deterministic re-emission",
+            ));
+        }
+    }
+    import_json_schema_from(GRAPHQL_DIALECT, &package.source_schema_json, config)
+        .map_err(|error| GraphqlError::new(format!("GraphQL package import: {error}")))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2188,9 +2260,13 @@ fn finish_text(mut text: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json_schema::Namespaces;
+    use crate::schema_import::SchemaDatatypeMap;
     use ::purrdf::loss::{check_ledger_complete, check_ledger_sound};
     use proptest::prelude::*;
     use serde_json::json;
+
+    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
     fn compiled(schema: &Value) -> CompiledSchema {
         CompiledSchema {
@@ -2211,6 +2287,40 @@ mod tests {
             "JsonCarrier",
         )
         .expect("valid config")
+    }
+
+    fn import_config() -> SchemaImportConfig {
+        let namespaces = Namespaces::new(
+            "ex",
+            &[("ex".to_owned(), "https://example.org/".to_owned())],
+        )
+        .expect("namespaces");
+        let datatypes = SchemaDatatypeMap::new(
+            format!("{XSD}string"),
+            format!("{XSD}boolean"),
+            format!("{XSD}integer"),
+            format!("{XSD}decimal"),
+            format!("{XSD}dateTime"),
+            format!("{XSD}date"),
+            format!("{XSD}time"),
+            format!("{XSD}anyURI"),
+        )
+        .expect("datatypes");
+        SchemaImportConfig::new(namespaces, datatypes)
+    }
+
+    fn compile_turtle(body: &str) -> CompiledSchema {
+        let source = format!(
+            r"
+            @prefix ex:  <https://example.org/> .
+            @prefix sh:  <http://www.w3.org/ns/shacl#> .
+            @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+            {body}
+            "
+        );
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&source).expect("parse");
+        let shapes = crate::shapes::from_dataset(&dataset).expect("shapes");
+        crate::json_schema::compile(&shapes, import_config().namespaces())
     }
 
     fn sdl(package: &GraphqlPackage) -> &str {
@@ -2320,6 +2430,105 @@ mod tests {
         .expect("name map is JSON");
         assert_eq!(artifact["dialect"], GRAPHQL_DIALECT);
         assert_eq!(artifact["schema_name"], "ExampleSchema");
+    }
+
+    #[test]
+    fn emitted_package_imports_byte_exactly_and_corruption_fails_closed() {
+        let compiled = compile_turtle(
+            r#"
+            ex:PersonShape a sh:NodeShape ;
+                sh:targetClass ex:Person ;
+                sh:closed true ;
+                sh:property [
+                    sh:path ex:name ;
+                    sh:datatype xsd:string ;
+                    sh:minCount 1 ;
+                    sh:maxCount 1 ;
+                    sh:pattern "^[A-Z]"
+                ] ;
+                sh:property [
+                    sh:path ex:friend ;
+                    sh:class ex:Person ;
+                    sh:maxCount 1
+                ] ;
+                sh:property [
+                    sh:path ex:state ;
+                    sh:maxCount 1 ;
+                    sh:in ( ex:active "inactive" )
+                ] .
+            "#,
+        );
+        let package = emit_graphql(&compiled, &config()).expect("emit");
+        assert_eq!(package.source_schema_json(), compiled.schema_json);
+        let imported = import_graphql_package(&package, &import_config()).expect("import");
+        assert!(
+            imported.losses.is_empty(),
+            "{}",
+            imported.losses.render_json()
+        );
+        let recompiled =
+            crate::json_schema::compile(&imported.shapes, import_config().namespaces());
+        assert_eq!(recompiled.schema_json, compiled.schema_json);
+
+        let repeated = import_graphql_package(&package, &import_config()).expect("repeat");
+        let repeated = crate::json_schema::compile(&repeated.shapes, import_config().namespaces());
+        assert_eq!(repeated.schema_json, recompiled.schema_json);
+
+        let mut bad = package.clone();
+        bad.names.dialect = "graphql-future".to_owned();
+        assert!(import_graphql_package(&bad, &import_config()).is_err());
+
+        let mut bad = package.clone();
+        bad.schema_name = "Drift".to_owned();
+        assert!(import_graphql_package(&bad, &import_config()).is_err());
+
+        let mut bad = package.clone();
+        bad.artifacts
+            .get_mut(GRAPHQL_SCHEMA_PATH)
+            .expect("SDL")
+            .extend_from_slice(b"# drift\n");
+        assert!(import_graphql_package(&bad, &import_config()).is_err());
+
+        let mut bad = package;
+        bad.names
+            .fields
+            .values_mut()
+            .next()
+            .expect("field map")
+            .insert("ex:drift".to_owned(), "drift".to_owned());
+        assert!(import_graphql_package(&bad, &import_config()).is_err());
+    }
+
+    #[test]
+    fn verified_package_imports_alias_recursive_nullable_and_finite_schema() {
+        let schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "Alias": { "$ref": "#/$defs/Person" },
+                "Choice": { "enum": [true, { "state": "open" }] },
+                "Person": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "ex:choice": { "$ref": "#/$defs/Choice" },
+                        "ex:friend": { "$ref": "#/$defs/Person" },
+                        "ex:maybe": { "type": ["string", "null"] }
+                    }
+                }
+            }
+        });
+        let package = emit_graphql(&compiled(&schema), &config()).expect("emit");
+        let imported = import_graphql_package(&package, &import_config()).expect("import");
+        check_ledger_sound(&imported.losses, GRAPHQL_DIALECT, "shacl")
+            .expect("sound reverse ledger");
+        assert_eq!(imported.shapes.node_shapes.len(), 1);
+        assert!(imported.losses.entries().iter().all(|entry| {
+            entry
+                .location
+                .as_ref()
+                .and_then(|location| location.subject.as_deref())
+                .is_some_and(|subject| subject.starts_with("#/"))
+        }));
     }
 
     #[test]

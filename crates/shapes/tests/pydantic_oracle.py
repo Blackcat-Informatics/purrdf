@@ -125,6 +125,18 @@ def _normalize_inferred_types(actual: Any, expected: Any) -> Any:
 
 def main() -> None:
     payload = _fixture()
+    reverse = payload["reverse"]
+    if reverse["shape_ids"] != ["<https://example.org/Person>"]:
+        raise AssertionError(f"unexpected reverse SHACL shapes: {reverse['shape_ids']!r}")
+    reverse_losses = reverse["losses"]["losses"]
+    if not all(
+        entry["from"] == "pydantic-v2"
+        and entry["to"] == "shacl"
+        and entry["intentional"]
+        and " subject=#/" in entry["location"]
+        for entry in reverse_losses
+    ):
+        raise AssertionError("Pydantic reverse package has an unsound or unlocated loss")
     with tempfile.TemporaryDirectory(prefix="purrdf-pydantic-oracle-") as directory:
         root = Path(directory)
         for relative, text in payload["artifacts"].items():
@@ -284,7 +296,10 @@ def main() -> None:
         finally:
             sys.path.remove(str(root))
 
-    print("Pydantic oracle: 6 live model schemas agree; validation/alias probes pass")
+    print(
+        "Pydantic oracle: 6 live model schemas agree; validation/alias probes and "
+        "verified reverse SHACL import pass"
+    )
 
 
 if __name__ == "__main__":
