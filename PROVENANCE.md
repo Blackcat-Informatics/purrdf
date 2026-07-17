@@ -77,9 +77,7 @@ Copied from `gmeow-ontology`:
 
 The five schema-language reverse paths are therefore PurRDF replacements, not
 compatibility layers around gmeow's private models. They share one deterministic
-schema-to-SHACL engine and caller-owned vocabulary boundary; gmeow's later
-deletion and rollover is tracked by
-[`gmeow-ontology#1571`](https://github.com/Blackcat-Informatics/gmeow-ontology/issues/1571).
+schema-to-SHACL engine and caller-owned vocabulary boundary.
 - The legacy graph/tabular writers in `crates/pipeline/src/stages/lpg.rs` and
   `crates/pipeline/src/stages/export.rs` at
   `d7745068f59b6dee187ab6b806bd2c04c9a1280a` were used solely as migration
