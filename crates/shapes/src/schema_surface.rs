@@ -165,6 +165,7 @@ pub(crate) struct SurfaceProperty {
     pub(crate) iri: String,
     pub(crate) kind: OntologyPropertyKind,
     pub(crate) ranges: Vec<OntologyExpression>,
+    pub(crate) datatype_iris: BTreeSet<String>,
     pub(crate) functional: bool,
     pub(crate) provenance: Vec<SchemaCoverageProvenance>,
 }
@@ -451,6 +452,7 @@ pub(crate) fn build(
         properties,
         &shape_classes,
         explicit_classes,
+        &datatypes,
         &supertypes,
     )
 }
@@ -977,6 +979,7 @@ fn assemble_surface(
     properties: BTreeMap<String, PropertyFacts>,
     shape_classes: &BTreeMap<String, ShapeClassInfo>,
     explicit_classes: BTreeSet<String>,
+    datatypes: &BTreeSet<String>,
     supertypes: &BTreeMap<String, BTreeSet<String>>,
 ) -> Result<SchemaSurface, SchemaCompileError> {
     let eligible_classes: Vec<String> = explicit_classes
@@ -1016,6 +1019,11 @@ fn assemble_surface(
 
     for (property_iri, facts) in properties {
         let kind = facts.kind(&property_iri)?;
+        let mut datatype_iris = BTreeSet::new();
+        for range in &facts.ranges {
+            range.expression.named_members(&mut datatype_iris);
+        }
+        datatype_iris.retain(|iri| datatypes.contains(iri));
         let mut class_rows = Vec::new();
         let mut outcomes = BTreeSet::new();
         let base_provenance: Vec<SchemaCoverageProvenance> = facts
@@ -1081,6 +1089,7 @@ fn assemble_surface(
                             .iter()
                             .map(|range| range.expression.clone())
                             .collect(),
+                        datatype_iris: datatype_iris.clone(),
                         functional: !facts.functional.is_empty(),
                         provenance: base_provenance.clone(),
                     },

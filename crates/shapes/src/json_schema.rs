@@ -1413,7 +1413,7 @@ fn ontology_property_schema(property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value 
         let mut conjuncts: Vec<Value> = property
             .ranges
             .iter()
-            .map(|range| range_expression_schema(range, property.kind, ctx))
+            .map(|range| range_expression_schema(range, property, ctx))
             .collect();
         if conjuncts.len() == 1 {
             conjuncts.pop().expect("one range expression")
@@ -1446,27 +1446,27 @@ fn ontology_property_schema(property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value 
 
 fn range_expression_schema(
     expression: &OntologyExpression,
-    kind: OntologyPropertyKind,
+    property: &SurfaceProperty,
     ctx: &Ctx<'_>,
 ) -> Value {
     match expression {
-        OntologyExpression::Named(iri) => named_range_schema(iri, kind, ctx),
+        OntologyExpression::Named(iri) => named_range_schema(iri, property, ctx),
         OntologyExpression::Union(members) => json!({
             "anyOf": members
                 .iter()
-                .map(|member| range_expression_schema(member, kind, ctx))
+                .map(|member| range_expression_schema(member, property, ctx))
                 .collect::<Vec<_>>()
         }),
         OntologyExpression::Intersection(members) => json!({
             "allOf": members
                 .iter()
-                .map(|member| range_expression_schema(member, kind, ctx))
+                .map(|member| range_expression_schema(member, property, ctx))
                 .collect::<Vec<_>>()
         }),
     }
 }
 
-fn named_range_schema(iri: &str, kind: OntologyPropertyKind, ctx: &Ctx<'_>) -> Value {
+fn named_range_schema(iri: &str, property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value {
     if let Some(enum_key) = ctx.value_vocab_enums.get(iri) {
         return json!({ "$ref": format!("#/$defs/{enum_key}") });
     }
@@ -1483,7 +1483,10 @@ fn named_range_schema(iri: &str, kind: OntologyPropertyKind, ctx: &Ctx<'_>) -> V
             "required": ["@value", "@language"]
         });
     }
-    if kind == OntologyPropertyKind::Datatype || iri.starts_with(XSD_NS) {
+    if property.kind == OntologyPropertyKind::Datatype
+        || property.datatype_iris.contains(iri)
+        || iri.starts_with(XSD_NS)
+    {
         return datatype_value_schema(iri);
     }
     let key = ctx.ns.def_key(iri);
@@ -1494,7 +1497,7 @@ fn named_range_schema(iri: &str, kind: OntologyPropertyKind, ctx: &Ctx<'_>) -> V
                 { "$ref": format!("#/$defs/{key}") }
             ]
         })
-    } else if kind == OntologyPropertyKind::Annotation {
+    } else if property.kind == OntologyPropertyKind::Annotation {
         general_rdf_value_schema()
     } else {
         node_ref_schema()
@@ -3581,6 +3584,53 @@ mod tests {
             &json!({
                 "@type": "meta:Holder",
                 "meta:target": { "meta:name": "complete value" }
+            })
+        ));
+    }
+
+    #[test]
+    fn generic_properties_preserve_declared_custom_datatype_ranges() {
+        let compilation = compile_ontology(
+            "",
+            r"
+                meta:Holder a owl:Class .
+                meta:Related a owl:Class .
+                meta:Code a rdfs:Datatype .
+                meta:Token a owl:DataRange .
+                meta:code a rdf:Property ;
+                    rdfs:domain meta:Holder ; rdfs:range meta:Code .
+                meta:token a rdf:Property ;
+                    rdfs:domain meta:Holder ; rdfs:range meta:Token .
+                meta:mixed a rdf:Property ;
+                    rdfs:domain meta:Holder ;
+                    rdfs:range [ owl:unionOf ( meta:Code meta:Related ) ] .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let holder = def(&schema, "Holder");
+        for property in ["meta:code", "meta:token"] {
+            assert!(
+                holder["properties"][property]
+                    .to_string()
+                    .contains("string"),
+                "{property} retains its declared literal carrier"
+            );
+        }
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:code": "C-1",
+                "meta:token": "T-1",
+                "meta:mixed": "literal branch"
+            })
+        ));
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:mixed": { "@id": "https://example.org/meta/related-1" }
             })
         ));
     }
