@@ -3,6 +3,7 @@
 
 //! Capability-driven JSON Schema to LinkML 1.11 projection.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ::purrdf::RdfLocation;
@@ -383,7 +384,12 @@ fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, L
     if config.slot_rehomes().contains(source) {
         let mut reasons = vec![LinkmlSlotReason::CallerRehome];
         let local = sanitized_local(trailing_local(source), &mut reasons);
-        let direct_name = bounded_curie(config.default_prefix(), &local, source, &mut reasons)?;
+        let direct_name = bounded_curie(
+            config.default_prefix(),
+            local.as_ref(),
+            source,
+            &mut reasons,
+        )?;
         return Ok(SlotNameSeed {
             source_kind: SlotSourceKind::Bare,
             source_name: source.to_owned(),
@@ -411,7 +417,7 @@ fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, L
         }
         let mut reasons = Vec::new();
         let local = sanitized_local(local, &mut reasons);
-        let direct_name = bounded_curie(prefix, &local, source, &mut reasons)?;
+        let direct_name = bounded_curie(prefix, local.as_ref(), source, &mut reasons)?;
         return Ok(SlotNameSeed {
             source_kind: SlotSourceKind::RegisteredCurie,
             source_name: source.to_owned(),
@@ -448,7 +454,7 @@ fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, L
             (config.default_prefix(), trailing_local(source))
         };
         let local = sanitized_local(local, &mut reasons);
-        let direct_name = bounded_curie(prefix, &local, source, &mut reasons)?;
+        let direct_name = bounded_curie(prefix, local.as_ref(), source, &mut reasons)?;
         return Ok(SlotNameSeed {
             source_kind: SlotSourceKind::AbsoluteIri,
             source_name: source.to_owned(),
@@ -474,7 +480,12 @@ fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, L
 
     let mut reasons = vec![LinkmlSlotReason::BareName];
     let local = sanitized_local(trailing_local(source), &mut reasons);
-    let direct_name = bounded_curie(config.default_prefix(), &local, source, &mut reasons)?;
+    let direct_name = bounded_curie(
+        config.default_prefix(),
+        local.as_ref(),
+        source,
+        &mut reasons,
+    )?;
     Ok(SlotNameSeed {
         source_kind: SlotSourceKind::Bare,
         source_name: source.to_owned(),
@@ -507,12 +518,16 @@ fn trailing_local(source: &str) -> &str {
     source.rsplit(['#', '/', ':']).next().unwrap_or(source)
 }
 
-fn sanitized_local(source: &str, reasons: &mut Vec<LinkmlSlotReason>) -> String {
+fn sanitized_local<'a>(source: &'a str, reasons: &mut Vec<LinkmlSlotReason>) -> Cow<'a, str> {
+    if is_linkml_identifier(source) {
+        return Cow::Borrowed(source);
+    }
+
     let mut output = String::with_capacity(source.len().saturating_add(1));
     let mut characters = source.chars();
     let Some(first) = characters.next() else {
         push_reason(reasons, LinkmlSlotReason::InvalidInitialCharacter);
-        return "_".to_owned();
+        return Cow::Owned("_".to_owned());
     };
 
     if is_linkml_start(first) {
@@ -534,7 +549,7 @@ fn sanitized_local(source: &str, reasons: &mut Vec<LinkmlSlotReason>) -> String 
         }
     }
     debug_assert!(is_linkml_identifier(&output));
-    output
+    Cow::Owned(output)
 }
 
 fn bounded_curie(
@@ -2435,6 +2450,33 @@ mod tests {
             ]),
         )
         .expect("valid config")
+    }
+
+    #[test]
+    fn sanitizer_borrows_valid_locals_and_owns_replacements() {
+        let mut valid_reasons = Vec::new();
+        let valid = sanitized_local("already_valid", &mut valid_reasons);
+        assert!(matches!(valid, Cow::Borrowed("already_valid")));
+        assert!(valid_reasons.is_empty());
+
+        let mut invalid_reasons = Vec::new();
+        let invalid = sanitized_local("9 bad", &mut invalid_reasons);
+        assert!(matches!(invalid, Cow::Owned(ref value) if value == "_9_bad"));
+        assert_eq!(
+            invalid_reasons,
+            vec![
+                LinkmlSlotReason::InvalidCharacter,
+                LinkmlSlotReason::InvalidInitialCharacter,
+            ]
+        );
+
+        let mut empty_reasons = Vec::new();
+        let empty = sanitized_local("", &mut empty_reasons);
+        assert!(matches!(empty, Cow::Owned(ref value) if value == "_"));
+        assert_eq!(
+            empty_reasons,
+            vec![LinkmlSlotReason::InvalidInitialCharacter]
+        );
     }
 
     #[test]
