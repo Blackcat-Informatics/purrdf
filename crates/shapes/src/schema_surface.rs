@@ -269,8 +269,8 @@ struct PropertyRelation {
 pub(crate) fn build(
     request: &SchemaCompileRequest<'_>,
 ) -> Result<SchemaSurface, SchemaCompileError> {
-    let mut rows = dataset_rows(request.ontology());
-    rows.extend(dataset_rows(request.shapes().shapes_dataset.as_ref()));
+    let union = RdfDataset::union(&[request.ontology(), request.shapes().shapes_dataset.as_ref()]);
+    let mut rows = dataset_rows(&union);
     rows.sort_by(|left, right| {
         left.subject_key
             .cmp(&right.subject_key)
@@ -1494,6 +1494,37 @@ mod tests {
         )
         .expect_err("cyclic RDF list must fail");
         assert!(matches!(cyclic, SchemaCompileError::InvalidOntology { .. }));
+    }
+
+    #[test]
+    fn ontology_and_shapes_blank_nodes_are_standardized_apart() {
+        let surface = surface(
+            r"
+                _:shared rdf:first ex:ShapeOnly ; rdf:rest rdf:nil .
+            ",
+            r"
+                ex:A a owl:Class .
+                ex:B a owl:Class .
+                ex:Holder a owl:Class .
+                ex:choice a owl:ObjectProperty ;
+                    rdfs:domain ex:Holder ;
+                    rdfs:range [ owl:unionOf _:shared ] .
+                _:shared rdf:first ex:A ; rdf:rest _:tail .
+                _:tail rdf:first ex:B ; rdf:rest rdf:nil .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        )
+        .expect("same-label blanks from separate datasets remain independent");
+
+        assert_eq!(
+            surface.classes["https://example.org/schema/Holder"].properties
+                ["https://example.org/schema/choice"]
+                .ranges,
+            vec![OntologyExpression::Union(vec![
+                OntologyExpression::Named("https://example.org/schema/A".to_owned()),
+                OntologyExpression::Named("https://example.org/schema/B".to_owned()),
+            ])]
+        );
     }
 
     #[test]
