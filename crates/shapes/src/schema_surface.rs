@@ -545,6 +545,20 @@ fn enforce_limit(
     }
 }
 
+fn coverage_cell_count(
+    property_count: usize,
+    eligible_class_count: usize,
+    external_shaped_cells: usize,
+    limit: usize,
+) -> Result<usize, SchemaCompileError> {
+    let observed = property_count
+        .checked_mul(eligible_class_count)
+        .and_then(|cells| cells.checked_add(external_shaped_cells))
+        .unwrap_or(usize::MAX);
+    enforce_limit("class/property coverage cells", observed, limit)?;
+    Ok(observed)
+}
+
 fn parse_expression(
     term: &Term,
     objects: &ObjectIndex,
@@ -759,17 +773,31 @@ fn propagate_property_facts(
         expression_seeds[index * 2 + 1].clone_from(&facts.ranges);
         functional_seeds[index].clone_from(&facts.functional);
     }
-    let effective_expressions = propagate_sets(&expression_graph, expression_seeds);
-    let effective_functionality = propagate_sets(&functional_graph, functional_seeds);
-    for (index, name) in names.iter().enumerate() {
+    let effective_expressions = propagate_sets(
+        &expression_graph,
+        expression_seeds,
+        "propagated ontology expressions",
+    )?;
+    let effective_functionality = propagate_sets(
+        &functional_graph,
+        functional_seeds,
+        "propagated functionality facts",
+    )?;
+    let mut effective_expressions = effective_expressions.into_iter();
+    let mut effective_functionality = effective_functionality.into_iter();
+    for name in &names {
         let facts = properties
             .get_mut(name)
             .expect("property index was built from this map");
-        facts.domains.clone_from(&effective_expressions[index * 2]);
-        facts
-            .ranges
-            .clone_from(&effective_expressions[index * 2 + 1]);
-        facts.functional.clone_from(&effective_functionality[index]);
+        facts.domains = effective_expressions
+            .next()
+            .expect("each property has one propagated domain set");
+        facts.ranges = effective_expressions
+            .next()
+            .expect("each property has one propagated range set");
+        facts.functional = effective_functionality
+            .next()
+            .expect("each property has one propagated functionality set");
     }
     Ok(())
 }
@@ -863,7 +891,7 @@ fn class_supertypes(
         .iter()
         .map(|name| BTreeSet::from([name.clone()]))
         .collect();
-    let effective = propagate_sets(&graph, seeds);
+    let effective = propagate_sets(&graph, seeds, "propagated class memberships")?;
     Ok(names.into_iter().zip(effective).collect())
 }
 
@@ -872,16 +900,35 @@ fn class_supertypes(
 fn propagate_sets<T: Clone + Ord>(
     graph: &[BTreeSet<usize>],
     seeds: Vec<BTreeSet<T>>,
-) -> Vec<BTreeSet<T>> {
+    resource: &'static str,
+) -> Result<Vec<BTreeSet<T>>, SchemaCompileError> {
+    propagate_sets_with_limit(graph, seeds, resource, MAX_SCHEMA_RELATIONS)
+}
+
+fn propagate_sets_with_limit<T: Clone + Ord>(
+    graph: &[BTreeSet<usize>],
+    seeds: Vec<BTreeSet<T>>,
+    resource: &'static str,
+    limit: usize,
+) -> Result<Vec<BTreeSet<T>>, SchemaCompileError> {
     debug_assert_eq!(graph.len(), seeds.len());
     if graph.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let components = strongly_connected_components(graph);
     let component_count = components.iter().copied().max().map_or(0, |max| max + 1);
     let mut values = vec![BTreeSet::new(); component_count];
+    let mut materialized = 0_usize;
     for (node, facts) in seeds.into_iter().enumerate() {
-        values[components[node]].extend(facts);
+        for fact in facts {
+            insert_propagated_fact(
+                &mut values[components[node]],
+                fact,
+                &mut materialized,
+                resource,
+                limit,
+            )?;
+        }
     }
 
     let mut dag = vec![BTreeSet::new(); component_count];
@@ -906,9 +953,17 @@ fn propagate_sets<T: Clone + Ord>(
     let mut visited = 0_usize;
     while let Some(component) = ready.pop_first() {
         visited += 1;
-        let inherited = values[component].clone();
+        let inherited: Vec<T> = values[component].iter().cloned().collect();
         for &destination in &dag[component] {
-            values[destination].extend(inherited.iter().cloned());
+            for fact in &inherited {
+                insert_propagated_fact(
+                    &mut values[destination],
+                    fact.clone(),
+                    &mut materialized,
+                    resource,
+                    limit,
+                )?;
+            }
             indegree[destination] -= 1;
             if indegree[destination] == 0 {
                 ready.insert(destination);
@@ -916,10 +971,30 @@ fn propagate_sets<T: Clone + Ord>(
         }
     }
     debug_assert_eq!(visited, component_count, "component graph is acyclic");
-    components
+    let output_entries = components.iter().fold(0_usize, |total, &component| {
+        total.saturating_add(values[component].len())
+    });
+    enforce_limit(resource, output_entries, limit)?;
+    Ok(components
         .into_iter()
         .map(|component| values[component].clone())
-        .collect()
+        .collect())
+}
+
+fn insert_propagated_fact<T: Ord>(
+    destination: &mut BTreeSet<T>,
+    fact: T,
+    materialized: &mut usize,
+    resource: &'static str,
+    limit: usize,
+) -> Result<(), SchemaCompileError> {
+    if destination.get(&fact).is_none() {
+        let observed = materialized.saturating_add(1);
+        enforce_limit(resource, observed, limit)?;
+        destination.insert(fact);
+        *materialized = observed;
+    }
+    Ok(())
 }
 
 /// Iterative Kosaraju decomposition. Iteration avoids recursion depth depending
@@ -987,6 +1062,12 @@ fn assemble_surface(
         .filter(|class| request.namespaces().is_caller_owned(class))
         .collect();
     let shaped_classes: BTreeSet<String> = shape_classes.keys().cloned().collect();
+    let eligible_class_set: BTreeSet<&str> = eligible_classes.iter().map(String::as_str).collect();
+    let external_shaped_classes: Vec<&str> = shaped_classes
+        .iter()
+        .map(String::as_str)
+        .filter(|class| !eligible_class_set.contains(class))
+        .collect();
     let represented_classes: BTreeSet<String> = match request.mode() {
         SchemaSurfaceMode::ShapedOnly => shaped_classes.clone(),
         SchemaSurfaceMode::OntologyComplete => eligible_classes
@@ -1010,10 +1091,14 @@ fn assemble_surface(
         })
         .collect();
     let mut report_properties = Vec::with_capacity(properties.len());
-    let potential_cells = properties.len().saturating_mul(eligible_classes.len());
-    enforce_limit(
-        "class/property coverage cells",
-        potential_cells,
+    let external_shaped_cells = external_shaped_classes
+        .iter()
+        .map(|class| shape_classes[*class].direct_properties.len())
+        .fold(0_usize, usize::saturating_add);
+    coverage_cell_count(
+        properties.len(),
+        eligible_classes.len(),
+        external_shaped_cells,
         MAX_SCHEMA_RELATIONS,
     )?;
 
@@ -1111,16 +1196,14 @@ fn assemble_surface(
         // A shaped class may intentionally live outside the caller-owned
         // ontology boundary; retain its direct-shape audit row because legacy
         // compilation still emits it.
-        for class_iri in
-            shaped_classes.difference(&eligible_classes.iter().cloned().collect::<BTreeSet<_>>())
-        {
+        for &class_iri in &external_shaped_classes {
             if shape_classes[class_iri]
                 .direct_properties
                 .contains(&property_iri)
             {
                 outcomes.insert(SchemaCoverageStatus::HasShape);
                 class_rows.push(SchemaClassPropertyCoverage {
-                    class_iri: class_iri.clone(),
+                    class_iri: class_iri.to_owned(),
                     synthesized_open_class: false,
                     status: SchemaCoverageStatus::HasShape,
                     precision: SchemaCoveragePrecision::Exact,
@@ -1534,6 +1617,62 @@ mod tests {
                 OntologyExpression::Named("https://example.org/schema/B".to_owned()),
             ])]
         );
+    }
+
+    #[test]
+    fn propagation_and_coverage_preflights_enforce_exact_small_limits() {
+        let chain = vec![
+            BTreeSet::from([1_usize]),
+            BTreeSet::from([2_usize]),
+            BTreeSet::new(),
+        ];
+        let seeds = vec![
+            BTreeSet::from([0_u8]),
+            BTreeSet::from([1_u8]),
+            BTreeSet::from([2_u8]),
+        ];
+        let transitive = propagate_sets_with_limit(&chain, seeds, "test facts", 5)
+            .expect_err("transitive extension must stop at the limit");
+        assert!(matches!(
+            transitive,
+            SchemaCompileError::LimitExceeded {
+                resource: "test facts",
+                limit: 5,
+                observed: 6
+            }
+        ));
+
+        let cycle = vec![
+            BTreeSet::from([1_usize]),
+            BTreeSet::from([2_usize]),
+            BTreeSet::from([0_usize]),
+        ];
+        let seeds = vec![
+            BTreeSet::from([0_u8]),
+            BTreeSet::from([1_u8]),
+            BTreeSet::from([2_u8]),
+        ];
+        let output = propagate_sets_with_limit(&cycle, seeds, "test facts", 8)
+            .expect_err("per-node output cloning must stop at the limit");
+        assert!(matches!(
+            output,
+            SchemaCompileError::LimitExceeded {
+                resource: "test facts",
+                limit: 8,
+                observed: 9
+            }
+        ));
+
+        let coverage = coverage_cell_count(2, 3, 1, 6)
+            .expect_err("external shaped rows count toward coverage");
+        assert!(matches!(
+            coverage,
+            SchemaCompileError::LimitExceeded {
+                resource: "class/property coverage cells",
+                limit: 6,
+                observed: 7
+            }
+        ));
     }
 
     #[test]
