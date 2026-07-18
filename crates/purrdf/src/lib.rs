@@ -180,6 +180,14 @@ mod tests {
     }
 
     #[test]
+    fn facade_exposes_purremb_at_the_root() {
+        assert!(matches!(
+            EmbeddingView::from_bytes(b"not a PURREMB artifact"),
+            Err(EmbeddingError::Truncated)
+        ));
+    }
+
+    #[test]
     fn facade_exposes_graphql_package_and_value_codec() {
         let compiled = shapes::json_schema::CompiledSchema {
             schema_json: "{\"$defs\":{\"Note\":{\"type\":\"string\"}}}\n".to_owned(),

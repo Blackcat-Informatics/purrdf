@@ -9,44 +9,109 @@ The sole sanctioned exception is the ``capi`` feature on ``purrdf-capi``:
 ``capi`` and hard-errors if the crate does not declare it, so the C-ABI header
 regeneration/drift gate (``make capi-header``/``capi-check`` and the CI ``capi``
 job) cannot run without that marker. It gates no code — the whole C-ABI surface
-is always compiled. The allowlist is keyed on the exact ``(package, feature)``
-pair, so any *other* feature on ``purrdf-capi`` — and any feature on any other
-crate — still fails this gate.
+is always compiled. The gate requires exactly ``purrdf-capi:capi = []``, rejects
+every other feature declaration, and rejects feature predicates in Rust
+``cfg``/``cfg_attr`` invocations.
 """
 
 import json
+import os
+import re
 import subprocess
 import sys
+from pathlib import Path
 
-# Exact per-package allowlist of permitted feature names. Keep this as tight as
-# the cargo-c requirement demands and no tighter — do NOT broaden it to unblock
-# ordinary optionality (that is exactly what this gate exists to forbid).
-ALLOWED_FEATURES = {
-    "purrdf-capi": {"capi"},
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Exact per-package feature maps. The value matters as much as the name: cargo-c
+# needs the marker to exist, but anything in its expansion would make it
+# semantic. Keep this as tight as the cargo-c requirement demands and no tighter.
+EXPECTED_FEATURES = {
+    "purrdf-capi": {"capi": []},
 }
+
+CFG_INVOCATION = re.compile(r"(?:#\s*!?\s*\[\s*cfg(?:_attr)?|\bcfg\s*!)\s*\(")
+FEATURE_PREDICATE = re.compile(r"\bfeature\s*=")
+IGNORED_SOURCE_DIRS = {".git", ".worktrees", "target"}
+
+
+def feature_cfg_offsets(source: str):
+    """Yield offsets of feature predicates inside Rust cfg invocations."""
+    for invocation in CFG_INVOCATION.finditer(source):
+        opening = source.find("(", invocation.start(), invocation.end())
+        depth = 0
+        for offset in range(opening, len(source)):
+            char = source[offset]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    body = source[opening + 1 : offset]
+                    if predicate := FEATURE_PREDICATE.search(body):
+                        yield opening + 1 + predicate.start()
+                    break
+
+
+def rust_sources():
+    for directory, subdirectories, filenames in os.walk(REPO_ROOT):
+        subdirectories[:] = sorted(
+            name for name in subdirectories if name not in IGNORED_SOURCE_DIRS
+        )
+        for filename in sorted(filenames):
+            if filename.endswith(".rs"):
+                yield Path(directory, filename)
 
 
 def main() -> int:
     metadata = json.loads(
         subprocess.check_output(
             ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
+            cwd=REPO_ROOT,
             text=True,
         )
     )
-    offenders = []
-    for package in metadata["packages"]:
-        declared = set(package.get("features", {}))
-        disallowed = declared - ALLOWED_FEATURES.get(package["name"], set())
-        if disallowed:
-            offenders.append(f"{package['name']}: {', '.join(sorted(disallowed))}")
+    package_by_id = {package["id"]: package for package in metadata["packages"]}
+    packages = [package_by_id[package_id] for package_id in metadata["workspace_members"]]
 
-    if offenders:
+    offenders = []
+    seen_expected_packages = set()
+    for package in packages:
+        name = package["name"]
+        declared = package.get("features", {})
+        expected = EXPECTED_FEATURES.get(name, {})
+        if name in EXPECTED_FEATURES:
+            seen_expected_packages.add(name)
+        if declared != expected:
+            offenders.append(
+                f"{name}: declared {json.dumps(declared, sort_keys=True)}; "
+                f"expected {json.dumps(expected, sort_keys=True)}"
+            )
+
+    for missing in sorted(EXPECTED_FEATURES.keys() - seen_expected_packages):
+        offenders.append(f"{missing}: package missing from workspace")
+
+    cfg_offenders = []
+    for path in rust_sources():
+        source = path.read_text(encoding="utf-8")
+        for offset in feature_cfg_offsets(source):
+            line = source.count("\n", 0, offset) + 1
+            cfg_offenders.append(f"{path.relative_to(REPO_ROOT)}:{line}")
+
+    if offenders or cfg_offenders:
         print(
-            "First-party workspace crates must not declare Cargo features "
-            "(except the allowlisted purrdf-capi:capi cargo-c marker).",
+            "First-party workspace crates must declare no Cargo features "
+            "except the exact empty purrdf-capi:capi cargo-c marker.",
             file=sys.stderr,
         )
-        print("\n".join(offenders), file=sys.stderr)
+        if offenders:
+            print("\n".join(offenders), file=sys.stderr)
+        if cfg_offenders:
+            print(
+                "Rust cfg(feature = ...) use is forbidden:\n"
+                + "\n".join(cfg_offenders),
+                file=sys.stderr,
+            )
         return 1
     return 0
 

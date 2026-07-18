@@ -3,13 +3,10 @@
 
 //! The immutable, value-interned RDF 1.2 dataset IR (C1).
 //!
-//! This module tree realizes the normative C0 semantic contract from
-//! `docs/design/819-rdf-ir-dataflow.md`. Task 2 (C1.a) landed the **interning
-//! half** (typed term ids in [`term`] and the `intern_*` entry points in
-//! [`builder`]); Task 3 (C1.b) completes C1 with the quad/reifier/annotation/
-//! location builder methods, the validate-then-freeze path ([`validate`]), and the
-//! frozen, infallible, zero-allocation [`dataset`] iteration surface. The
-//! GTS-bundle bridge arrives in later tasks (C2+).
+//! Typed term IDs and the [`builder`] interning entry points feed the
+//! quad/reifier/annotation/location builder methods, the validate-then-freeze
+//! path ([`validate`]), and the frozen, infallible, zero-allocation [`dataset`]
+//! iteration surface.
 
 pub mod builder;
 pub mod bundle;
@@ -24,6 +21,8 @@ pub mod canon;
 // equality oracle for importer equivalence — explicitly NOT oxigraph.
 pub mod compare;
 pub mod dataset;
+/// Deterministic, mmap-native embedding companions bound to exact pack bytes.
+pub mod embedding;
 // The copy-on-write, suppression-delta mutable dataset + `DatasetMut` impl (P5).
 pub mod mutable;
 // Evented, ID-addressed OUTPUT of a frozen dataset (C6): the dual of the
@@ -59,6 +58,7 @@ pub use dataset::{
     QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, RdfDataset, RdfDatasetIter,
     TermRef,
 };
+pub use embedding::*;
 pub use event_sink::RdfDatasetVisitor;
 pub use global::{GlobalDictionary, GlobalTermId};
 pub use ingest::{DatasetSink, FrozenDatasetSource};

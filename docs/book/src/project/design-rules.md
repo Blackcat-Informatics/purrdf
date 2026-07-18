@@ -12,13 +12,17 @@ convention. The canonical statement is
 [AGENTS.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/AGENTS.md)
 in the repository; this chapter explains the *why*.
 
-## No Cargo features, ever
+## No semantic Cargo features, ever
 
-The workspace has **zero feature flags**, and a CI script gates it. PurRDF is
-a data carrier, and optionality changes semantics per consumer — two builds of
-"the same version" that parse or serialize differently would defeat the whole
-point. No `[features]`, no optional dependencies, no `cfg`-gated behavior
-differences. Every consumer gets the same byte-identical semantics.
+The workspace has **zero semantic feature flags**. Its sole feature declaration
+is the empty `purrdf-capi:capi = []` compatibility marker that `cargo-c`
+unconditionally enables when building the C ABI. The marker gates no code and
+must never appear in `cfg(feature = ...)`; CI verifies its exact empty shape and
+scans Rust sources for feature-gated behavior. PurRDF is a data carrier, and
+optionality changes semantics per consumer — two builds of "the same version"
+that parse or serialize differently would defeat the whole point. No other
+`[features]`, no optional dependencies, and no feature-gated behavior. Every
+consumer gets the same byte-identical semantics.
 
 ## PurRDF is NOT an ontology — it mints no vocabulary IRIs
 

@@ -112,6 +112,72 @@ and hands `PackView::from_bytes` the resulting borrowed slice. See the
 [the backend contract](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/design/purrdf-backend-contract.md)
 for the full contract.
 
+## Deterministic embedding companions
+
+`.purremb` is the mmap-native companion for embedding projections over one
+exact `.purrpck`. It does not modify the pack or RDF canonical identity. Its
+sorted section directory binds finite dense `f32` or `f64` matrices to the
+source pack's exact SHA-256, an independently verified RDFC digest, complete
+model and processing contracts, stable target sets, and per-section plus
+whole-artifact integrity evidence. `EmbeddingBuilder` accepts unordered rows;
+`EmbeddingStreamWriter` accepts canonical rows with bounded matrix working memory;
+both produce the same canonical bytes.
+
+Two subject families are first class. Large text collections use a
+corpus–document–chunk hierarchy: UTF-8 text remains external while target
+records retain content digests, logical identities, byte and Unicode-scalar
+coordinates, chunking contracts, and family-scoped token spans. RDF data uses
+one RDF 1.2 model for datasets, default and named graphs, statements, reifier
+bindings, annotations, directional literals, blank nodes, and recursive triple
+terms. Source-local pack ordinals are verified lookup hints, never identity.
+
+Matryoshka families store only their widest dense matrix. Each declared leading
+prefix is a distinct `VectorSpaceId` and `ProjectionId`, so a coarse prefix
+cannot be silently compared with or substituted for the full space. Raw prefix
+rows are zero-copy strided views; deterministic L2 prefixes are calculated on
+demand. Approximate indexes remain opaque, rebuildable derived artifacts bound
+to one exact prefix projection. They never replace the authoritative matrix.
+
+Construction follows one evidence path. First obtain a
+`CertifiedPurrpckSource` by building or independently verifying the exact source
+pack; arbitrary digest claims cannot construct this type. For a corpus, derive
+`CorpusTarget`, `DocumentTarget::from_content`, and
+`TextChunkTarget::from_document` records, add the required hierarchy relations,
+and add a `TokenSpan` for every document or chunk placed in a family matrix. For
+RDF, derive dataset, graph, statement, reifier, annotation, and term targets
+from that verified RDF 1.2 dataset. RDF-star triple terms use
+`RdfTermTarget::Triple`; they do not enter a separate identity system.
+
+An `EmbeddingFamilyContract` defines the complete generation pipeline. A
+Matryoshka contract lists its allowed leading dimensions, while its
+`MatrixInput` carries rows only at the widest dimension and one
+`ProjectionSpec` per declared space. Consumers resolve an exact
+`(TargetSetId, VectorSpaceId)` through `effective_matrix` and must call
+`require_compatible_vector_spaces` before comparing rows from independent
+inputs.
+
+Large collections shard at artifact boundaries: each `.purremb` names its own
+exact source pack and local target set, while equal family contracts retain the
+same `FamilyId` and `VectorSpaceId`. Corpus manifests and
+`ExternalBinding::from_bytes` bind external text or other exact artifacts;
+`ExternalBinding::from_purrpck` adds independently certified RDF evidence.
+Bindings carry caller-supplied roles and media types. PurRDF does not invent a
+policy or ontology vocabulary for them.
+
+`EmbeddingView::from_bytes` borrows any stable byte slice, whether heap-owned,
+memory-mapped by the caller, or WebAssembly linear memory. Structural opening,
+full artifact verification, exact source verification, and certified source
+verification are explicit states of evidence rather than access gates. Callers
+that mmap files must keep the backing bytes immutable while a view or resident
+verification certificate exists.
+
+Embeddings and ANN structures are sensitive derived content: model inversion,
+membership inference, similarity probing, digest dictionary attacks, and index
+structure can disclose source properties. Container hashes detect corruption
+and stale attachment; they do not authenticate an author, encrypt content, or
+grant access. See the byte-exact [PURREMB v1
+specification](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/PURREMB.md).
+
 ## The columnar Parquet codec
 
 `purrdf::columnar` exposes the bidirectional SQL/DataFrame interchange path.

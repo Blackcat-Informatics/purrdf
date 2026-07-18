@@ -41,8 +41,8 @@ pub use purrdf_core::{
 };
 
 pub mod gts;
-// Streamable-compaction certificates (GTS-SPEC §10.1/§10.2, Task
-// 5): content projection + refold digest, `verify_compaction`, `compose`, and
+// Streamable-compaction certificates (GTS-SPEC §10.1/§10.2): content
+// projection + refold digest, `verify_compaction`, `compose`, and
 // the certifying authoring wrapper `compact_and_certify`.
 pub mod gts_certify;
 mod gts_core;
@@ -58,6 +58,9 @@ mod gts_verify;
 // `purrdf` surface and the lower `purrdf-sparql-eval` engine share one CBD authority;
 // re-exported here for existing `purrdf::describe::*` callers.
 pub use purrdf_core::describe;
+/// Deterministic embedding companions bound to exact PurRDF packs.
+pub use purrdf_core::embedding;
+pub use purrdf_core::embedding::*;
 pub mod gts_view;
 // The native RDF text codecs (S3): the codec-only `GtsCodecBackend`
 // over the `purrdf-gts` Turtle/TriG/NT/NQ/RDF-XML codecs, oxigraph-free.
@@ -77,11 +80,11 @@ pub mod gts_compose;
 // The native OWL ↔ RDF 1.2 statement codec is fully oxigraph-free (it folds over the
 // native flat-quad stream).
 pub mod statements;
-// Shared corpus-classification helpers ( Task 2): the pure corpus
+// Shared corpus-classification helpers: the pure corpus
 // enumeration / classification helpers the native golden-capture binary
 // (src/bin/capture_sparql_goldens.rs) uses. Oxigraph-free.
 pub mod capture_support;
-// Canonical, review-friendly Turtle serializer over the IR (Task 9): the
+// Canonical, review-friendly Turtle serializer over the IR: the
 // native replacement for rdflib `longturtle` in `purrdf normalize`. Oxigraph-free.
 pub mod turtle_normalize;
 /// Statement-centric RDF 1.2 visualization projection and SVG export support.

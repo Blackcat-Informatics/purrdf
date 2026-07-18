@@ -33,10 +33,12 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 
 ## 2. Hard constraints (violating these fails CI or review)
 
-* **NO Cargo features, ever.** The workspace has zero feature flags and
-  `scripts/check-no-features.py` gates CI. PurRDF is a carrier; optionality
-  changes semantics per consumer, which is forbidden. Do not add `[features]`,
-  optional deps, or `cfg`-gated behavior differences.
+* **NO semantic Cargo features, ever.** The sole exception is the empty,
+  non-semantic `purrdf-capi:capi = []` marker that `cargo-c` requires. It gates
+  no code and must never appear in `cfg(feature = ...)`; CI checks both facts
+  with `scripts/check-no-features.py`. PurRDF is a carrier; optionality changes
+  semantics per consumer, which is forbidden. Do not add any other feature,
+  optional dependency, or feature-gated behavior.
 * **Kernel ring-fence.** `purrdf-core` must never depend on oxigraph or PyO3.
   `purrdf-iri`, `purrdf-xsd`, and `purrdf-events` must keep **zero runtime
   dependencies**.
@@ -130,7 +132,7 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (15 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (17 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
 is single-sourced in `[workspace.package]`. `purrdf-capi` and
 `purrdf-sparql-conformance` are never published.
