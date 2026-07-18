@@ -8,8 +8,8 @@ use std::error::Error;
 
 use purrdf_shapes::{
     GraphqlConfig, LinkmlConfig, Namespaces, PydanticConfig, SchemaCompileRequest,
-    SchemaSurfaceMode, TypeScriptConfig, compile_schema, emit_graphql, emit_linkml, emit_pydantic,
-    emit_typescript,
+    SchemaSurfaceMode, TYPESCRIPT_DECLARATION_PATH, TypeScriptConfig, compile_schema, emit_graphql,
+    emit_linkml, emit_pydantic, emit_typescript,
 };
 
 const EX: &str = "https://example.org/schema/";
@@ -22,12 +22,13 @@ const PREFIXES: &str = r"
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 ";
 
-fn artifact_contains(artifacts: &BTreeMap<String, Vec<u8>>, needle: &[u8]) -> bool {
-    artifacts.values().any(|artifact| {
-        artifact
-            .windows(needle.len())
-            .any(|window| window == needle)
-    })
+fn generated_definition_block<'a>(source: &'a str, start: &str, next: &str) -> Option<&'a str> {
+    let offset = source.find(start)?;
+    let tail = &source[offset..];
+    let end = tail[start.len()..]
+        .find(next)
+        .map_or(tail.len(), |next_offset| start.len() + next_offset);
+    Some(&tail[..end])
 }
 
 fn definition_keys(schema: &str) -> Result<BTreeSet<String>, Box<dyn Error>> {
@@ -123,19 +124,47 @@ ex:resentMessageId a owl:DatatypeProperty ;
         )?,
     )?;
 
-    let property = b"ex:resentMessageId";
-    let reaches_every_carrier = linkml
-        .yaml
-        .as_bytes()
-        .windows(property.len())
-        .any(|w| w == property)
-        && artifact_contains(&typescript.artifacts, property)
-        && graphql
-            .names
-            .fields
-            .values()
-            .any(|fields| fields.contains_key("ex:resentMessageId"))
-        && artifact_contains(&pydantic.artifacts, property);
+    let declarations = std::str::from_utf8(
+        typescript
+            .artifacts
+            .get(TYPESCRIPT_DECLARATION_PATH)
+            .ok_or("TypeScript declaration artifact is missing")?,
+    )?;
+    let email_type = typescript
+        .type_names
+        .get("EmailMessage")
+        .ok_or("TypeScript EmailMessage type is missing")?;
+    let email_declaration = generated_definition_block(
+        declarations,
+        &format!("export type {email_type} = "),
+        "\nexport type ",
+    )
+    .ok_or("TypeScript EmailMessage declaration is missing")?;
+    let email_fields = graphql
+        .names
+        .fields
+        .get("#/$defs/EmailMessage")
+        .ok_or("GraphQL EmailMessage field map is missing")?;
+    let models = std::str::from_utf8(
+        pydantic
+            .artifacts
+            .get("example_ontology/models.py")
+            .ok_or("Pydantic models artifact is missing")?,
+    )?;
+    let email_model = pydantic
+        .model_paths
+        .get("EmailMessage")
+        .and_then(|path| path.rsplit('.').next())
+        .ok_or("Pydantic EmailMessage model is missing")?;
+    let email_model =
+        generated_definition_block(models, &format!("class {email_model}("), "\nclass ")
+            .ok_or("Pydantic EmailMessage definition is missing")?;
+    let reaches_every_carrier = linkml.document.as_value()["classes"]["EmailMessage"]["attributes"]
+        ["ex:resentMessageId"]
+        .is_object()
+        && email_declaration.contains("ex:resentMessageId")
+        && email_fields.contains_key("ex:resentMessageId")
+        && email_model.contains("alias=\"ex:resentMessageId\"");
     if !reaches_every_carrier {
         return Err("ontology-only property did not reach every language carrier".into());
     }

@@ -100,6 +100,15 @@ fn pydantic_config() -> PydanticConfig {
     .expect("Pydantic config")
 }
 
+fn generated_definition_block<'a>(source: &'a str, start: &str, next: &str) -> &'a str {
+    let offset = source.find(start).expect("generated definition start");
+    let tail = &source[offset..];
+    let end = tail[start.len()..]
+        .find(next)
+        .map_or(tail.len(), |next_offset| start.len() + next_offset);
+    &tail[..end]
+}
+
 #[test]
 fn ontology_property_surface_reaches_every_language_emitter() {
     let compilation = compiled_surface();
@@ -120,24 +129,32 @@ fn ontology_property_surface_reaches_every_language_emitter() {
     let typescript = emit_typescript(compiled, &typescript_config()).expect("TypeScript emission");
     let declarations = std::str::from_utf8(&typescript.artifacts[TYPESCRIPT_DECLARATION_PATH])
         .expect("UTF-8 TypeScript");
-    assert!(declarations.contains("ex:resentDate"));
-    assert!(declarations.contains("ex:resentMessageId"));
+    let email_type = &typescript.type_names["EmailMessage"];
+    let email_declaration = generated_definition_block(
+        declarations,
+        &format!("export type {email_type} = "),
+        "\nexport type ",
+    );
+    assert!(email_declaration.contains("ex:resentDate"));
+    assert!(email_declaration.contains("ex:resentMessageId"));
 
     let graphql = emit_graphql(compiled, &graphql_config()).expect("GraphQL emission");
     assert!(graphql.artifacts[GRAPHQL_SCHEMA_PATH].is_ascii());
-    assert!(graphql.names.fields.values().any(|fields| {
-        fields.contains_key("ex:resentDate") && fields.contains_key("ex:resentMessageId")
-    }));
+    let email_fields = &graphql.names.fields["#/$defs/EmailMessage"];
+    assert!(email_fields.contains_key("ex:resentDate"));
+    assert!(email_fields.contains_key("ex:resentMessageId"));
 
     let pydantic = emit_pydantic(compiled, &pydantic_config()).expect("Pydantic emission");
-    let python = pydantic
-        .artifacts
-        .values()
-        .filter_map(|artifact| std::str::from_utf8(artifact).ok())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(python.contains("ex:resentDate"));
-    assert!(python.contains("ex:resentMessageId"));
+    let models = std::str::from_utf8(&pydantic.artifacts["example_ontology/models.py"])
+        .expect("UTF-8 Pydantic models");
+    let email_model = pydantic.model_paths["EmailMessage"]
+        .rsplit('.')
+        .next()
+        .expect("generated model name");
+    let email_model =
+        generated_definition_block(models, &format!("class {email_model}("), "\nclass ");
+    assert!(email_model.contains("alias=\"ex:resentDate\""));
+    assert!(email_model.contains("alias=\"ex:resentMessageId\""));
 
     assert_eq!(
         compilation.coverage.properties.len(),
