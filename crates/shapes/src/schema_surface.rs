@@ -245,8 +245,10 @@ type ObjectIndex = BTreeMap<String, BTreeMap<String, Vec<Term>>>;
 #[derive(Debug, Clone)]
 struct TripleRow {
     subject: Term,
+    subject_key: String,
     predicate: String,
     object: Term,
+    object_key: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -270,11 +272,10 @@ pub(crate) fn build(
     let mut rows = dataset_rows(request.ontology());
     rows.extend(dataset_rows(request.shapes().shapes_dataset.as_ref()));
     rows.sort_by(|left, right| {
-        left.subject
-            .to_string()
-            .cmp(&right.subject.to_string())
+        left.subject_key
+            .cmp(&right.subject_key)
             .then_with(|| left.predicate.cmp(&right.predicate))
-            .then_with(|| left.object.to_string().cmp(&right.object.to_string()))
+            .then_with(|| left.object_key.cmp(&right.object_key))
     });
     rows.dedup_by(|left, right| {
         left.subject == right.subject
@@ -457,10 +458,16 @@ pub(crate) fn build(
 fn dataset_rows(dataset: &RdfDataset) -> Vec<TripleRow> {
     native_quads(dataset, None, None, None, GraphFilter::AnyGraph)
         .into_iter()
-        .map(|(subject, predicate, object)| TripleRow {
-            subject,
-            predicate: predicate.into_string(),
-            object,
+        .map(|(subject, predicate, object)| {
+            let subject_key = subject.to_string();
+            let object_key = object.to_string();
+            TripleRow {
+                subject,
+                subject_key,
+                predicate: predicate.into_string(),
+                object,
+                object_key,
+            }
         })
         .collect()
 }
@@ -469,7 +476,7 @@ fn object_index(rows: &[TripleRow]) -> ObjectIndex {
     let mut index: ObjectIndex = BTreeMap::new();
     for row in rows {
         index
-            .entry(row.subject.to_string())
+            .entry(row.subject_key.clone())
             .or_default()
             .entry(row.predicate.clone())
             .or_default()
