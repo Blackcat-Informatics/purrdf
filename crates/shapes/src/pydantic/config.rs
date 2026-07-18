@@ -52,6 +52,14 @@ impl PydanticModuleConfig {
         let path = path.into();
         let docstring = docstring.into();
         validate_dotted_path(&path, "Pydantic module path")?;
+        if path
+            .split('.')
+            .any(|component| component.eq_ignore_ascii_case("__init__"))
+        {
+            return Err(PydanticError::new(format!(
+                "Pydantic module path {path:?} contains reserved package initializer component \"__init__\""
+            )));
+        }
         let root = path
             .split('.')
             .next()
@@ -1019,6 +1027,25 @@ mod tests {
             .join(".");
         assert!(PydanticModuleConfig::new(deep, "docs").is_err());
         assert!(PydanticConfig::new("con", "package docs", "model docs").is_err());
+    }
+
+    #[test]
+    fn module_paths_reject_initializer_components_at_every_position() {
+        for path in [
+            "__init__",
+            "__INIT__.models",
+            "domain.__init__.people",
+            "domain.people.__INIT__",
+        ] {
+            let error = PydanticModuleConfig::new(path, "docs")
+                .expect_err("package initializer component must be reserved");
+            assert!(
+                error
+                    .to_string()
+                    .contains("reserved package initializer component"),
+                "{path}: {error}"
+            );
+        }
     }
 
     #[test]
