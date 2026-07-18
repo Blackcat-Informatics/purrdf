@@ -35,6 +35,9 @@ const DEFAULT_MAX_TERMS: usize = 4_096;
 const DEFAULT_MAX_NESTING: usize = 64;
 const DEFAULT_MAX_EXPANSION_WORK: usize = 262_144;
 const DEFAULT_MAX_DEFINITION_COMPLEXITY: usize = 131_072;
+const MAX_JSON_LD_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
+const MAX_JSON_LD_DOCUMENT_DEPTH: usize = 128;
+const MAX_JSON_LD_DOCUMENT_VALUES: usize = 4_194_304;
 
 /// Fixed resource ceilings for context decoding and compilation.
 ///
@@ -589,6 +592,29 @@ impl CompiledJsonLdContext {
         self.active.terms.get(term)
     }
 
+    /// Compile the term-scoped context attached to `term` over this active context.
+    ///
+    /// Returns `None` when the term has no scoped context. Offline registry and base-URL
+    /// state are retained; protected definitions may be overridden as required by the
+    /// JSON-LD 1.1 scoped-context algorithm.
+    pub fn scoped_context(&self, term: &str) -> Result<Option<Self>, RdfDiagnostic> {
+        let Some(definition) = self.term(term) else {
+            return Ok(None);
+        };
+        compiler::compile_scoped(self, definition)
+    }
+
+    /// Apply a node-local context over this compiled active context.
+    pub fn apply_local_context(&self, context: &Value) -> Result<Self, RdfDiagnostic> {
+        compiler::apply_context(self, context, self.base_iri(), false)
+    }
+
+    /// Active context inherited by a nested node object under `@propagate` rules.
+    #[must_use]
+    pub fn child_context(&self) -> Self {
+        compiler::child_context(self)
+    }
+
     /// Expand an IRI, compact IRI, term, or keyword under this active context.
     ///
     /// `vocab` selects vocabulary-relative term expansion; `document_relative`
@@ -711,6 +737,18 @@ fn canonicalize(value: &Value) -> Value {
         }
         scalar => scalar.clone(),
     }
+}
+
+pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, RdfDiagnostic> {
+    parse_strict_json(
+        bytes,
+        StrictJsonLimits {
+            bytes: MAX_JSON_LD_DOCUMENT_BYTES,
+            depth: MAX_JSON_LD_DOCUMENT_DEPTH,
+            values: MAX_JSON_LD_DOCUMENT_VALUES,
+        },
+        "JSON-LD document",
+    )
 }
 
 fn validate_absolute_iri(iri: &str, description: &str) -> Result<(), RdfDiagnostic> {

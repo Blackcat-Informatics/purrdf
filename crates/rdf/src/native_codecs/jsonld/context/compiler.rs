@@ -143,6 +143,75 @@ pub(super) fn compile(
     })
 }
 
+pub(super) fn compile_scoped(
+    parent: &CompiledJsonLdContext,
+    definition: &JsonLdTermDefinition,
+) -> Result<Option<CompiledJsonLdContext>, RdfDiagnostic> {
+    let Some(context) = definition.scoped_context.as_ref() else {
+        return Ok(None);
+    };
+    apply_context(
+        parent,
+        context,
+        definition.scoped_context_base.as_deref(),
+        true,
+    )
+    .map(Some)
+}
+
+pub(super) fn apply_context(
+    parent: &CompiledJsonLdContext,
+    context: &Value,
+    base_url: Option<&str>,
+    override_protected: bool,
+) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
+    let limits = JsonLdContextLimits::default();
+    let mut compiler = Compiler {
+        registry: &parent.registry,
+        limits,
+        initial_base: parent.active.base_iri.clone(),
+        budget: Budget::default(),
+        remote_stack: Vec::new(),
+        remote_cache: BTreeMap::new(),
+        override_protected,
+    };
+    compiler.charge_value(context, 0)?;
+    let mut active = parent.active.clone();
+    compiler.process_context(
+        &mut active,
+        context,
+        base_url.or(parent.active.base_iri.as_deref()),
+        false,
+        0,
+    )?;
+    let inverse = build_inverse_context(&active);
+    Ok(CompiledJsonLdContext {
+        canonical_context: canonicalize(context),
+        active,
+        inverse,
+        registry: parent.registry.clone(),
+    })
+}
+
+pub(super) fn child_context(parent: &CompiledJsonLdContext) -> CompiledJsonLdContext {
+    let active = if parent.active.propagate {
+        parent.active.clone()
+    } else {
+        parent
+            .active
+            .previous_context
+            .as_deref()
+            .cloned()
+            .unwrap_or_else(|| parent.active.clone())
+    };
+    CompiledJsonLdContext {
+        canonical_context: parent.canonical_context.clone(),
+        inverse: build_inverse_context(&active),
+        active,
+        registry: parent.registry.clone(),
+    }
+}
+
 fn extract_context(value: &Value) -> Result<&Value, RdfDiagnostic> {
     match value {
         Value::Object(object) if object.contains_key("@context") => object
