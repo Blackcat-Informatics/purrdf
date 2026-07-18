@@ -37,7 +37,8 @@ They live under `crates/*/benches/`:
   binary64 access, and a one-million-chunk catalog.
 - `crates/rdf-core/benches/purremb_alloc.rs` — one-shot allocation traffic and
   live-byte high-water probes over the same deterministic `.purremb` fixtures.
-- `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput.
+- `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput,
+  including separate context compilation and expanded/caller/derived paths.
 - `crates/rdf/benches/projections.rs` — RDF-to-LPG mapping, all four LPG
   carrier writers/readers, exact CSVW write/read, OBO Graphs, SKOS, the shared
   research-object model, and all five research-object carriers, with
@@ -84,7 +85,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
 | `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, and a one-million-chunk hierarchy. |
 | `crates/rdf-core/benches/purremb_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for PURREMB fixture construction, verification, and streaming. |
-| `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers. |
+| `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers; JSON-LD context compilation and expanded/caller/derived modes are reported separately. |
 | `crates/rdf/benches/projections.rs` | Graph, tabular, and research-object mapping/carrier throughput plus allocation counts over deterministic fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |

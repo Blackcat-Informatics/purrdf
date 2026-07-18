@@ -12,7 +12,10 @@
 //! serializer exercise dataset-capable paths.
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use purrdf_rdf::native_codecs::jsonld::{parse_jsonld, serialize_dataset_to_jsonld};
+use purrdf_rdf::native_codecs::jsonld::{
+    CompiledJsonLdContext, JsonLdSerializeOptions, parse_jsonld, serialize_dataset_to_jsonld,
+    serialize_dataset_to_jsonld_with_options,
+};
 use purrdf_rdf::{
     ParseOptions, SerializeGraph, parse_dataset, parse_dataset_with, serialize_dataset,
 };
@@ -225,12 +228,84 @@ fn bench_jsonld_expanded(c: &mut Criterion) {
     group.finish();
 }
 
+/// Configured context compilation and caller/derived serialization are measured
+/// separately so context reuse is visible rather than hidden in codec throughput.
+fn bench_jsonld_configured(c: &mut Criterion) {
+    use std::sync::Arc;
+
+    {
+        let mut compile = c.benchmark_group("jsonld_context_compile");
+        compile.bench_function("prefixes", |bencher| {
+            bencher.iter(|| {
+                let context = CompiledJsonLdContext::from_prefixes(black_box([
+                    ("ex", "https://example.org/"),
+                    ("p", "https://example.org/p/"),
+                    ("o", "https://example.org/o/"),
+                ]))
+                .expect("compile context");
+                black_box(context);
+            });
+        });
+        compile.finish();
+    }
+
+    let context = Arc::new(
+        CompiledJsonLdContext::from_prefixes([
+            ("ex", "https://example.org/"),
+            ("p", "https://example.org/p/"),
+            ("o", "https://example.org/o/"),
+        ])
+        .expect("compile context"),
+    );
+    let caller = JsonLdSerializeOptions::compiled(context);
+    let derived = JsonLdSerializeOptions::derived();
+    let mut group = c.benchmark_group("jsonld_configured");
+    for rows in [JSONLD_SMALL_ROWS, JSONLD_LARGE_ROWS] {
+        let dataset = jsonld_fixture::build_dataset(rows);
+        for (mode, options) in [("caller", &caller), ("derived", &derived)] {
+            let prepared = serialize_dataset_to_jsonld_with_options(&dataset, options)
+                .expect("prepare configured JSON-LD");
+            group.bench_with_input(
+                BenchmarkId::new(format!("serialize_{mode}"), rows),
+                &dataset,
+                |bencher, value| {
+                    bencher.iter(|| {
+                        black_box(
+                            serialize_dataset_to_jsonld_with_options(black_box(value), options)
+                                .expect("configured JSON-LD serialization"),
+                        );
+                    });
+                },
+            );
+            group.bench_with_input(
+                BenchmarkId::new(format!("parse_{mode}"), rows),
+                &prepared,
+                |bencher, text| {
+                    bencher.iter(|| {
+                        black_box(
+                            parse_jsonld(black_box(text.as_bytes()))
+                                .expect("configured JSON-LD parse"),
+                        );
+                    });
+                },
+            );
+            eprintln!(
+                "[jsonld_configured] mode={mode} rows={rows} quads={} output_bytes={}",
+                dataset.quad_count(),
+                prepared.len()
+            );
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_parse_nquads,
     bench_parse_nquads_parallel_vs_sequential,
     bench_parse_nquads_span_tracking,
     bench_serialize_nquads,
-    bench_jsonld_expanded
+    bench_jsonld_expanded,
+    bench_jsonld_configured
 );
 criterion_main!(benches);

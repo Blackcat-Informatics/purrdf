@@ -13,7 +13,10 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
-use purrdf_rdf::native_codecs::jsonld::{parse_jsonld, serialize_dataset_to_jsonld};
+use purrdf_rdf::native_codecs::jsonld::{
+    CompiledJsonLdContext, JsonLdSerializeOptions, parse_jsonld, serialize_dataset_to_jsonld,
+    serialize_dataset_to_jsonld_with_options,
+};
 
 #[path = "support/jsonld.rs"]
 mod fixture;
@@ -148,6 +151,42 @@ fn probe(rows: usize) {
     );
     black_box(parsed);
     black_box(json);
+
+    let caller = JsonLdSerializeOptions::compiled(std::sync::Arc::new(
+        CompiledJsonLdContext::from_prefixes([
+            ("ex", "https://example.org/"),
+            ("p", "https://example.org/p/"),
+            ("o", "https://example.org/o/"),
+        ])
+        .expect("compile context"),
+    ));
+    for (mode, options) in [
+        ("caller", caller),
+        ("derived", JsonLdSerializeOptions::derived()),
+    ] {
+        let before = reset_peak();
+        let json = serialize_dataset_to_jsonld_with_options(&dataset, &options)
+            .expect("configured JSON-LD serialization");
+        let after = snapshot();
+        report(
+            &format!("serialize_{mode}_rows_{rows}"),
+            before,
+            after,
+            json.len(),
+        );
+
+        let before = reset_peak();
+        let parsed = parse_jsonld(json.as_bytes()).expect("configured JSON-LD parse");
+        let after = snapshot();
+        report(
+            &format!("parse_{mode}_rows_{rows}"),
+            before,
+            after,
+            json.len(),
+        );
+        black_box(parsed);
+        black_box(json);
+    }
 }
 
 fn main() {

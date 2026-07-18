@@ -434,11 +434,11 @@ fn jsonld_to_yaml(json: &str, schema_url: Option<&str>) -> Result<String, RdfDia
     Ok(header + &body)
 }
 
-/// Build the deliberately empty JSON-LD `@context`.
+/// Build the deliberately empty JSON-LD `@context` for the byte-frozen legacy route.
 ///
-/// PurRDF owns no vocabulary or prefix policy. Every emitted predicate, datatype,
-/// triple-term predicate, and reifier predicate is therefore an absolute source IRI;
-/// callers may compact the document under their own context after serialization.
+/// Configured serializers compact through the caller's context or an explicitly
+/// selected deterministic derived context. No-options entry points retain this exact
+/// expanded representation for compatibility.
 fn build_context() -> Value {
     to_json_object(BTreeMap::new())
 }

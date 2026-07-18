@@ -73,6 +73,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **69 / 69** frozen expected reports |
 | Schema → SHACL | first-party exact/lossy/corruption/resource suites + locked language oracles | **5 / 5** production directions; exact emitted-schema recompilation or located closed-profile losses; no deferred reader |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
+| JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC + first-party RDF 1.2 vectors | **73 / 73** applicable toRDF · **13 / 13** exact compaction · 0 gaps; frozen provenance and checksums |
 | CSVW | W3C CSVW manifests, `crates/rdf/tests/fixtures/csvw-w3c/` | **270 / 270** RDF cases · **282 / 282** validation cases · 0 xfail; production output also accepted by locked `csvw==4.1.0` |
 | OBO Graphs view | official OBO Graphs 0.3.2 JSON Schema | production advanced-object fixture accepted; deliberate node/chain corruptions rejected |
 | Research-object carriers | five adversarial native fixtures plus shared semantic matrix | **5 / 5** native fixtures import with non-empty located ledgers · **25 / 25** shared-semantic source/target paths stabilize; Frictionless output validates against the vendored Data Package v1 schema |
@@ -108,6 +109,8 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   extension-function and standpoint suites.
 - `crates/rdf/tests/corpus/w3c/` — the W3C rdf-tests syntax corpus (Turtle,
   TriG, N-Triples, N-Quads, RDF/XML) driving the native-codec round-trip gate.
+- `crates/rdf/tests/fixtures/jsonld-w3c-rec/` — the revision-pinned W3C JSON-LD 1.1
+  REC vectors and manifest subset used by the shared context-lens harness.
 - `crates/rdf/tests/fixtures/rdfc/` — the W3C rdf-canon (RDFC-1.0) vectors.
 - `crates/rdf/tests/fixtures/csvw-w3c/` — the revision-pinned W3C CSVW RDF
   conversion and metadata-validation manifests. The harness asserts exact case
