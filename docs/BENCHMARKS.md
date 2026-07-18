@@ -57,6 +57,8 @@ They live under `crates/*/benches/`:
   `SERVICE ?g` evaluated as a LATERAL join vs. a fixed-IRI `SERVICE <ep>`.
 - `crates/shapes/benches/validate.rs` — SHACL validation plus JSON Schema and
   LinkML import/lowering throughput and one-operation allocation traffic.
+- `crates/shapes/benches/schema_surface.rs` — complete ontology-aware schema
+  compilation for shaped-only, sparse, and dense property surfaces.
 - `crates/entail/benches/chase.rs` — RDFS forward-materialization chase scaling.
 - `crates/gts/benches/authoring.rs` — GTS container authoring.
 - `crates/rdf-wasm/benches/query_engine_reuse.rs` — package-root
@@ -90,6 +92,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/sparql-eval/benches/exists_decorrelation.rs` | `FILTER NOT EXISTS` inner-pattern re-evaluation and index-rebuild cost with/without memoization. |
 | `crates/sparql-eval/benches/lateral_service.rs` | `SERVICE ?g` LATERAL substitute-and-forward cost as the number of distinct endpoint bindings grows. |
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
+| `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense ontology-complete class/property relation plus JSON Schema/OpenAPI emission. |
 | `crates/entail/benches/chase.rs` | RDFS semi-naive materialization scaling on subclass chains. |
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
@@ -234,6 +237,24 @@ cargo bench -p purrdf-shapes --bench validate --locked -- shacl_schema_import
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_schema_import --quick
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_linkml_import
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_linkml_import --quick
+```
+
+### SHACL ontology schema surface
+
+The `shacl_schema_surface` group keeps namespace configuration and parsed RDF
+fixtures outside the timed loop. Each iteration measures the complete public
+compilation contract: RDFC-1.0 input identities, property catalog, SCC-condensed
+OWL/RDFS propagation, coverage manifest, JSON Schema, and OpenAPI. Three fixed
+fixtures distinguish 128 shaped classes with 128 properties, a sparse 256 by
+256 ontology relation, and a dense domainless 128 by 256 relation. Inputs are
+generated deterministically without RNG, time, or filesystem data.
+
+The suite is report-only and carries no latency threshold. Run its compile and
+single-sample smoke forms with:
+
+```sh
+cargo bench -p purrdf-shapes --bench schema_surface --locked --no-run
+cargo bench -p purrdf-shapes --bench schema_surface --locked -- --test
 ```
 
 ### Graph, tabular, and research-object projections

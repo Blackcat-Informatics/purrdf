@@ -11,12 +11,15 @@
 //! implemented in the [`sparql`] module on the native `purrdf-sparql-eval`
 //! engine.
 //!
-//! The crate also owns the bidirectional schema boundary. [`import_json_schema`]
-//! and [`import_linkml`] read native documents; [`import_pydantic_package`],
-//! [`import_typescript_package`], and [`import_graphql_package`] verify intact
-//! PurRDF-generated packages before lowering through the same deterministic
-//! schema-import engine. Every reader requires caller-owned namespace and
-//! datatype configuration and returns an always-computed reverse loss ledger.
+//! The crate also owns the bidirectional schema boundary. [`compile_schema`]
+//! explicitly selects shaped-only or ontology-complete developer-schema
+//! projection and returns a deterministic coverage manifest plus cache key.
+//! [`import_json_schema`] and [`import_linkml`] read native documents;
+//! [`import_pydantic_package`], [`import_typescript_package`], and
+//! [`import_graphql_package`] verify intact PurRDF-generated packages before
+//! lowering through the same deterministic schema-import engine. Every reader
+//! requires caller-owned namespace and datatype configuration and returns an
+//! always-computed reverse loss ledger.
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
@@ -41,6 +44,7 @@ pub mod report;
 pub mod rules;
 mod schema_catalog;
 pub mod schema_import;
+mod schema_surface;
 pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
@@ -53,7 +57,12 @@ pub use graphql::{
     GraphqlDefinitionMap, GraphqlEnumValueMap, GraphqlError, GraphqlNameMap, GraphqlPackage,
     emit_graphql, import_graphql_package,
 };
-pub use json_schema::{Namespaces, ValueVocab, ValueVocabProjection, compile_with_value_vocab};
+pub use json_schema::{
+    Namespaces, SchemaClassPropertyCoverage, SchemaCompilation, SchemaCompilationInput,
+    SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,
+    SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus, SchemaPropertyCoverage,
+    SchemaSurfaceMode, ValueVocab, ValueVocabProjection, compile_schema, compile_with_value_vocab,
+};
 pub use linkml::{
     LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, emit_linkml, import_linkml,
     import_linkml_package, parse_linkml, write_linkml,

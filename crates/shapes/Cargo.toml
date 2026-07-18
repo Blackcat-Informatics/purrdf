@@ -87,3 +87,7 @@ harness = false
 [[bench]]
 name = "canonical_sort"
 harness = false
+
+[[bench]]
+name = "schema_surface"
+harness = false
