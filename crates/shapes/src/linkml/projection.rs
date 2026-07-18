@@ -1317,21 +1317,7 @@ impl Renderer<'_> {
         properties: &Map<String, Value>,
         path: &str,
     ) -> Result<Vec<PlannedSlot>, LinkmlError> {
-        if properties.len() > MAX_LINKML_SLOTS_PER_CLASS {
-            return Err(LinkmlError::new(format!(
-                "{path}/properties contains {} slots, exceeding the per-class limit of {MAX_LINKML_SLOTS_PER_CLASS}",
-                properties.len()
-            )));
-        }
-        self.total_slots = self
-            .total_slots
-            .checked_add(properties.len())
-            .ok_or_else(|| LinkmlError::new("LinkML source slot count overflow"))?;
-        if self.total_slots > MAX_LINKML_TOTAL_SLOTS {
-            return Err(LinkmlError::new(format!(
-                "{path}/properties raises the document slot count above the {MAX_LINKML_TOTAL_SLOTS}-slot limit"
-            )));
-        }
+        self.total_slots = checked_slot_total(self.total_slots, properties.len(), path)?;
 
         let mut classified = Vec::with_capacity(properties.len());
         for source_name in properties.keys() {
@@ -1535,18 +1521,12 @@ impl Renderer<'_> {
     }
 
     fn ensure_report_capacity(&self, source_path: &str) -> Result<(), LinkmlError> {
-        let rows = self
+        let current = self
             .slot_renames
             .len()
             .checked_add(self.slot_diagnostics.len())
-            .and_then(|count| count.checked_add(1))
             .ok_or_else(|| LinkmlError::new("LinkML slot-report row count overflow"))?;
-        if rows > MAX_LINKML_REPORT_ROWS {
-            return Err(LinkmlError::new(format!(
-                "{source_path} raises the slot-report count above the {MAX_LINKML_REPORT_ROWS}-row limit"
-            )));
-        }
-        Ok(())
+        checked_report_rows(current, source_path).map(|_| ())
     }
 
     fn element_curie(&self, name: &str) -> String {
@@ -2200,6 +2180,39 @@ impl Renderer<'_> {
     }
 }
 
+fn checked_slot_total(
+    current: usize,
+    class_slots: usize,
+    path: &str,
+) -> Result<usize, LinkmlError> {
+    if class_slots > MAX_LINKML_SLOTS_PER_CLASS {
+        return Err(LinkmlError::new(format!(
+            "{path}/properties contains {class_slots} slots, exceeding the per-class limit of {MAX_LINKML_SLOTS_PER_CLASS}"
+        )));
+    }
+    let total = current
+        .checked_add(class_slots)
+        .ok_or_else(|| LinkmlError::new("LinkML source slot count overflow"))?;
+    if total > MAX_LINKML_TOTAL_SLOTS {
+        return Err(LinkmlError::new(format!(
+            "{path}/properties raises the document slot count above the {MAX_LINKML_TOTAL_SLOTS}-slot limit"
+        )));
+    }
+    Ok(total)
+}
+
+fn checked_report_rows(current: usize, source_path: &str) -> Result<usize, LinkmlError> {
+    let rows = current
+        .checked_add(1)
+        .ok_or_else(|| LinkmlError::new("LinkML slot-report row count overflow"))?;
+    if rows > MAX_LINKML_REPORT_ROWS {
+        return Err(LinkmlError::new(format!(
+            "{source_path} raises the slot-report count above the {MAX_LINKML_REPORT_ROWS}-row limit"
+        )));
+    }
+    Ok(rows)
+}
+
 fn extra_slots(allowed: bool, range_expression: Option<Map<String, Value>>) -> Value {
     let mut extra = Map::new();
     extra.insert("allowed".to_owned(), Value::Bool(allowed));
@@ -2396,6 +2409,7 @@ mod tests {
 
     use super::*;
     use ::purrdf::loss::check_ledger_sound;
+    use proptest::prelude::*;
     use serde_json::json;
 
     fn compiled(schema: &Value) -> CompiledSchema {
@@ -2455,6 +2469,7 @@ mod tests {
         );
 
         for (source, expected) in [
+            ("http://outside.example/name", "ex:name"),
             ("urn:example:part", "ex:part"),
             ("did:example:123", "ex:_123"),
             ("mailto:cat@example.org", "ex:cat_example.org"),
@@ -2487,6 +2502,25 @@ mod tests {
         let unknown = slot_name_seed(&config, "@unknown").expect("unknown at-name seed");
         assert_eq!(unknown.direct_name, "ex:_unknown");
         assert_eq!(unknown.disposition, LinkmlSlotDisposition::IdentityRehomed);
+
+        for (source, expected) in [
+            ("", "ex:_"),
+            ("ex:9 cats", "ex:_9_cats"),
+            ("ex:cat🐈", "ex:cat_"),
+            ("https://outside.example/", "ex:_"),
+        ] {
+            assert_eq!(
+                slot_name_seed(&config, source)
+                    .expect("edge-case seed")
+                    .direct_name,
+                expected
+            );
+        }
+        assert!(
+            !slot_name_seed(&config, "ex:Δelta")
+                .expect("Unicode NCName seed")
+                .requires_rename()
+        );
 
         let rehome_config = config
             .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))
@@ -2909,6 +2943,11 @@ mod tests {
         );
         assert!(renamed.slot_diagnostics.is_empty());
 
+        let source = compiled(&schema);
+        let source_bytes = source.schema_json.clone();
+        let _ = emit(&source, &config()).expect("source immutability probe emits");
+        assert_eq!(source.schema_json, source_bytes);
+
         let skipped = emit(
             &compiled(&schema),
             &config().with_sanitize_policy(SanitizePolicy::Skip),
@@ -3043,6 +3082,94 @@ mod tests {
     }
 
     #[test]
+    fn reserved_carriers_and_semantic_identity_collisions_are_explicit() {
+        for reserved in ["@annotation", "@id", "@language", "@type", "@value"] {
+            let seed = slot_name_seed(&config(), reserved).expect("reserved seed");
+            assert_eq!(seed.source_kind, SlotSourceKind::Reserved);
+            assert!(!seed.requires_rename());
+            assert_eq!(seed.emitted_slot_uri, None);
+        }
+
+        for properties in [
+            json!({
+                "name": { "type": "string" },
+                "ex:name": { "type": "string" }
+            }),
+            json!({
+                "ex:name": { "type": "string" },
+                "https://example.org/name": { "type": "string" }
+            }),
+        ] {
+            let schema = json!({
+                "$defs": {
+                    "Collision": {
+                        "type": "object",
+                        "properties": properties
+                    }
+                }
+            });
+            assert!(
+                emit(&compiled(&schema), &config())
+                    .expect_err("semantic identity collision")
+                    .detail()
+                    .contains("same caller-vocabulary slot identity")
+            );
+        }
+
+        let rehome = config()
+            .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))
+            .expect("re-home config");
+        let schema = json!({
+            "$defs": {
+                "Collision": {
+                    "type": "object",
+                    "properties": {
+                        "definition": { "type": "string" },
+                        "skos:definition": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &rehome).expect("re-home collision allocates");
+        let renamed = output
+            .slot_renames
+            .iter()
+            .find(|row| row.source_name == "skos:definition")
+            .expect("re-home report");
+        assert!(renamed.reasons.contains(&LinkmlSlotReason::Collision));
+        assert_ne!(renamed.emitted_slot_uri, "ex:definition");
+    }
+
+    #[test]
+    fn sanitizer_collisions_have_one_lexical_direct_owner() {
+        let schema = json!({
+            "$defs": {
+                "Collision": {
+                    "type": "object",
+                    "properties": {
+                        "ex:a/b": { "type": "string" },
+                        "ex:a?b": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &config()).expect("sanitizer collision emits");
+        assert_eq!(output.slot_renames.len(), 2);
+        let slash = output
+            .slot_renames
+            .iter()
+            .find(|row| row.source_name == "ex:a/b")
+            .expect("slash row");
+        let question = output
+            .slot_renames
+            .iter()
+            .find(|row| row.source_name == "ex:a?b")
+            .expect("question row");
+        assert_eq!(slash.new_slot_name, "ex:a_b");
+        assert!(question.reasons.contains(&LinkmlSlotReason::Collision));
+    }
+
+    #[test]
     fn nested_unsafe_slots_keep_requiredness_and_use_the_same_planner() {
         let schema = json!({
             "$defs": {
@@ -3074,5 +3201,142 @@ mod tests {
         assert_eq!(nested["alias"], "ex:nested/value");
         assert_eq!(nested["required"], true);
         assert_eq!(nested["slot_uri"], "ex:nested/value");
+    }
+
+    #[test]
+    fn every_slot_resource_limit_fails_before_unbounded_work() {
+        let oversized_schema = CompiledSchema {
+            schema_json: " ".repeat(MAX_LINKML_SOURCE_SCHEMA_BYTES + 1),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        };
+        assert!(
+            emit(&oversized_schema, &config())
+                .expect_err("source byte bound")
+                .detail()
+                .contains("source exceeds")
+        );
+
+        let oversized_key = "x".repeat(MAX_LINKML_SOURCE_KEY_BYTES + 1);
+        assert!(
+            slot_name_seed(&config(), &oversized_key)
+                .expect_err("source key bound")
+                .detail()
+                .contains("property name exceeds")
+        );
+        assert!(
+            checked_slot_total(0, MAX_LINKML_SLOTS_PER_CLASS + 1, "#/$defs/Large")
+                .expect_err("per-class bound")
+                .detail()
+                .contains("per-class limit")
+        );
+        assert!(
+            checked_slot_total(MAX_LINKML_TOTAL_SLOTS, 1, "#/$defs/Large")
+                .expect_err("total bound")
+                .detail()
+                .contains("document slot count")
+        );
+        assert!(
+            checked_report_rows(MAX_LINKML_REPORT_ROWS, "#/$defs/Large/properties/ex:x")
+                .expect_err("report bound")
+                .detail()
+                .contains("slot-report count")
+        );
+
+        let config = config();
+        let elements = BTreeMap::new();
+        let renderer = Renderer::new(&config, &elements);
+        let mut seed = slot_name_seed(&config, "ex:a/b").expect("unsafe seed");
+        let mut used_names =
+            BTreeMap::from([(seed.direct_name.clone(), "safe direct owner".to_owned())]);
+        for ordinal in 0..MAX_SLOT_COLLISION_ATTEMPTS {
+            used_names.insert(
+                collision_name(&seed.direct_name, &seed.source_name, ordinal)
+                    .expect("bounded collision candidate"),
+                format!("candidate {ordinal}"),
+            );
+        }
+        assert!(
+            renderer
+                .allocate_slot_name(
+                    &mut seed,
+                    &used_names,
+                    &BTreeMap::new(),
+                    "#/$defs/Large/properties/ex:a~1b",
+                )
+                .expect_err("collision bound")
+                .detail()
+                .contains("collision allocator")
+        );
+    }
+
+    #[test]
+    fn safe_input_matches_the_committed_byte_golden() {
+        let schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "Safe": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "@id": { "type": "string" },
+                        "ex:name": { "type": "string", "pattern": "^[A-Z]" }
+                    },
+                    "required": ["ex:name"]
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &config()).expect("safe fixture emits");
+        assert!(output.slot_renames.is_empty());
+        assert!(output.slot_diagnostics.is_empty());
+        assert!(output.losses.is_empty());
+        assert_eq!(
+            output.element_names,
+            BTreeMap::from([("Safe".to_owned(), "Safe".to_owned())])
+        );
+        assert_eq!(
+            output.yaml,
+            include_str!("../../tests/linkml_safe.golden.yaml")
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn ncname_sanitizer_is_total_valid_and_deterministic(source in any::<String>()) {
+            let mut first_reasons = Vec::new();
+            let first = sanitized_local(&source, &mut first_reasons);
+            let mut second_reasons = Vec::new();
+            let second = sanitized_local(&source, &mut second_reasons);
+            prop_assert!(is_linkml_identifier(&first));
+            prop_assert_eq!(first, second);
+            prop_assert_eq!(first_reasons, second_reasons);
+        }
+
+        #[test]
+        fn slot_planning_is_independent_of_property_insertion_order(
+            names in proptest::collection::btree_set("[A-Za-z0-9_ /?.-]{1,24}", 1..24)
+        ) {
+            let mut forward = Map::new();
+            for name in &names {
+                forward.insert(format!("ex:{name}"), json!({ "type": "string" }));
+            }
+            let mut reverse = Map::new();
+            for name in names.iter().rev() {
+                reverse.insert(format!("ex:{name}"), json!({ "type": "string" }));
+            }
+            let source = |properties| json!({
+                "$defs": {
+                    "Order": {
+                        "type": "object",
+                        "properties": properties
+                    }
+                }
+            });
+            let left = emit(&compiled(&source(forward)), &config());
+            let right = emit(&compiled(&source(reverse)), &config());
+            prop_assert_eq!(left, right);
+        }
     }
 }

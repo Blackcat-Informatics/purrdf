@@ -308,6 +308,99 @@ def _assert_lossy(payload: dict[str, Any]) -> None:
     _assert_reverse(payload, ["<https://example.org/Lossy>"])
 
 
+def _assert_renamed(payload: dict[str, Any]) -> None:
+    schema = _load(payload["yaml"])
+    view = SchemaView(schema)
+    if sorted(view.all_classes()) != ["Carrier"]:
+        raise AssertionError(f"unexpected renamed classes: {sorted(view.all_classes())}")
+
+    reports = payload["slot_renames"]
+    if len(reports) != 7:
+        raise AssertionError(f"unexpected rename report size: {len(reports)}")
+    ordered = sorted(
+        reports,
+        key=lambda row: (row["source_class"], row["source_path"], row["source_name"]),
+    )
+    if reports != ordered:
+        raise AssertionError("rename report is not in canonical source order")
+    if payload["slot_diagnostics"]:
+        raise AssertionError("default rename fixture unexpectedly returned skip diagnostics")
+
+    by_source = {row["source_name"]: row for row in reports}
+    for source, row in by_source.items():
+        slot = view.induced_slot(row["new_slot_name"], "Carrier")
+        if str(slot.slot_uri) != row["emitted_slot_uri"]:
+            raise AssertionError(
+                f"{source!r} slot_uri drifted: {slot.slot_uri!r} != "
+                f"{row['emitted_slot_uri']!r}"
+            )
+        if row["disposition"] == "identity-preserved":
+            if row["old_slot_uri"] != row["emitted_slot_uri"]:
+                raise AssertionError(f"{source!r} lost its original semantic identity")
+        elif row["disposition"] == "identity-rehomed":
+            if row["old_slot_uri"] is not None:
+                raise AssertionError(f"{source!r} falsely claims a source semantic identity")
+            if row["new_slot_name"] != row["emitted_slot_uri"]:
+                raise AssertionError(f"{source!r} re-home is not explicit")
+        else:
+            raise AssertionError(f"unexpected rename disposition: {row!r}")
+
+    expected_uris = {
+        "custom:alpha/beta": "custom:alpha/beta",
+        "did:example:123": "did:example:123",
+        "ex:a/b": "ex:a/b",
+        "https://outside.example/path/external": (
+            "https://outside.example/path/external"
+        ),
+        "mailto:cat@example.org": "mailto:cat@example.org",
+        "skos:definition": "ex:definition",
+        "urn:example:part": "urn:example:part",
+    }
+    observed_uris = {
+        source: row["emitted_slot_uri"] for source, row in by_source.items()
+    }
+    if observed_uris != expected_uris:
+        raise AssertionError(f"renamed identity map drifted: {observed_uris!r}")
+
+    generated = _generate(schema)
+    _assert_reference_closure(generated)
+    properties = generated["$defs"]["Carrier"]["properties"]
+    expected_names = set(by_source)
+    if set(properties) != expected_names:
+        raise AssertionError(
+            f"official generator slot names drifted: {sorted(properties)!r}"
+        )
+    if generated["$defs"]["Carrier"].get("required") != ["ex:a/b"]:
+        raise AssertionError("renamed required slot drifted")
+
+    losses = payload["losses"]["losses"]
+    if len(losses) != 1 or losses[0]["code"] != "slot-identity-rehomed":
+        raise AssertionError(f"unexpected renamed losses: {losses!r}")
+    if not losses[0]["intentional"]:
+        raise AssertionError("identity re-home is not registered")
+
+    reverse_properties = payload["reverse"]["schema"]["$defs"]["Carrier"][
+        "properties"
+    ]
+    expected_reverse = {
+        "@annotation",
+        "@id",
+        "@type",
+        "custom:alpha/beta",
+        "did:example:123",
+        "ex:a/b",
+        "ex:definition",
+        "https://outside.example/path/external",
+        "mailto:cat@example.org",
+        "urn:example:part",
+    }
+    if set(reverse_properties) != expected_reverse:
+        raise AssertionError(
+            f"reverse predicate identities drifted: {sorted(reverse_properties)!r}"
+        )
+    _assert_reverse(payload, ["<https://example.org/Carrier>"])
+
+
 def main() -> None:
     if importlib.metadata.version("linkml") != LINKML_PACKAGE_VERSION:
         raise AssertionError("linkml package version is not locked to 1.11.1")
@@ -317,9 +410,11 @@ def main() -> None:
     payload = _fixture()
     _assert_exact(payload["exact"])
     _assert_lossy(payload["lossy"])
+    _assert_renamed(payload["renamed"])
     print(
         "LinkML oracle: exact $defs and 16 instance probes agree; "
-        "18 located losses, reverse SHACL imports, and representable widening probes pass"
+        "18 located losses, 7 verified slot renames, reverse SHACL imports, "
+        "and representable widening probes pass"
     )
 
 
