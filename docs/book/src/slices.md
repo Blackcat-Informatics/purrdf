@@ -77,13 +77,20 @@ Two native interchange codecs live in the kernel:
 - **SSSOM** — [Simple Standard for Sharing Ontological
   Mappings](https://mapping-commons.github.io/sssom/) mapping-set TSV support
   (`SssomMappingSet`, `SssomMapping`, with typed diagnostics), for carrying
-  cross-vocabulary mappings alongside your data.
+  cross-vocabulary mappings alongside your data. `SssomSetComment` models
+  set-level ordinary comments and provenance as a lossless document envelope,
+  independently of YAML-like header metadata. Newly appended provenance uses
+  the interoperable metadata-to-table position; parsed after-table comments are
+  retained as an explicit extension. Raw Unicode comment lines and their order
+  are preserved, while physical line endings serialize deterministically as LF.
 - **FnO** — a [Function Ontology](https://fno.io/) function-catalog codec
   (`FnoCatalog`, `fno_to_quads`, `fno_to_ntriples`), used by the slice
   emitters to describe function catalogs as RDF.
 
 As with everything else in the toolkit, these are codecs for *caller* data —
-PurRDF does not define mappings or functions of its own.
+PurRDF does not define mappings or functions of its own. SSSOM envelope comments
+also remain caller-neutral projection data: they do not mint RDF predicates,
+change mapping validation, or alter the RDF projection.
 
 ## Related
 

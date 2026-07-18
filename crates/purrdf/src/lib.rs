@@ -188,6 +188,24 @@ mod tests {
     }
 
     #[test]
+    fn facade_exposes_typed_sssom_document_envelope() {
+        let layout = SssomColumnLayout::new(["subject_id", "object_id"])
+            .expect("valid facade column layout");
+        let mut set =
+            SssomMappingSet::new(SssomMeta::default(), Vec::new()).with_column_layout(layout);
+        set.append_provenance("facade provenance")
+            .expect("valid facade provenance");
+
+        let comment: &SssomSetComment = &set.set_comments[0];
+        assert_eq!(comment.kind(), SssomCommentKind::Provenance);
+        assert_eq!(comment.placement(), SssomCommentPlacement::BeforeTable);
+
+        let invalid: Result<SssomSetComment, SssomCommentError> =
+            SssomSetComment::from_raw("ordinary", SssomCommentPlacement::AfterTable);
+        assert_eq!(invalid, Err(SssomCommentError::MissingMarker));
+    }
+
+    #[test]
     fn facade_exposes_graphql_package_and_value_codec() {
         let compiled = shapes::json_schema::CompiledSchema {
             schema_json: "{\"$defs\":{\"Note\":{\"type\":\"string\"}}}\n".to_owned(),
