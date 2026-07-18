@@ -13,6 +13,17 @@
 //! The JSON output is byte-deterministic: every map is a [`BTreeMap`] and every array is
 //! explicitly sorted, so the document does not depend on input append order.
 
+/// Compiled JSON-LD 1.1 contexts, immutable offline registries, and configured
+/// serialization options shared by every JSON-LD/YAML-LD surface.
+pub mod context;
+
+pub use context::{
+    CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextLimits,
+    JsonLdContextRegistry, JsonLdDirection, JsonLdNullable, JsonLdSerializeMode,
+    JsonLdSerializeOptions, JsonLdTermDefinition, JsonLdTermSelection, JsonLdTermSelectionKind,
+    JsonLdTypeMapping,
+};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
