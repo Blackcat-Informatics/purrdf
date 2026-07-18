@@ -11,8 +11,9 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::io::{Read, Write};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use structured_zstd::decoding::{FrameDecoder, errors::FrameDecoderError};
+use structured_zstd::decoding::{FrameDecoder, errors::FrameDecoderError, read_frame_header_info};
 use structured_zstd::encoding::{CompressionLevel, StreamingEncoder, compress_to_vec};
 
 /// A catalog entry (§5, §8.5).
@@ -139,8 +140,32 @@ fn decode_one(codec: &Codec, data: &[u8]) -> Result<Vec<u8>, CodecError> {
 
 const RSYNCABLE_BLOCK_SIZE: usize = 65_536;
 
+/// Run a zstd encode that may panic on an internal encoder invariant
+/// (structured-zstd `huff0_encoder.rs` "internal error"); on unwind, degrade
+/// per the caller. Deterministic: a given input either always encodes or
+/// always degrades. Mirrors the panic-totalization pattern in
+/// `crates/rdf/src/native_codecs/parse.rs`.
+///
+/// `AssertUnwindSafe` is sound here: the input slice is untouched by the
+/// encode, and the poisoned encoder/buffers are dropped on unwind, so no
+/// shared mutable state crosses the catch boundary. On `wasm32` (panic=abort)
+/// `catch_unwind` compiles cleanly but does not catch — the guard is a
+/// compile-clean no-op there; the panic is a native-producer concern.
+fn guarded_encode<T>(f: impl FnOnce() -> T, on_panic: impl FnOnce() -> T) -> T {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(v) => v,
+        Err(_) => on_panic(),
+    }
+}
+
 fn encode_zstd(data: &[u8], level: Option<i32>) -> Vec<u8> {
-    compress_to_vec(data, zstd_level(level))
+    // `Uncompressed` produces a valid Zstandard frame the existing
+    // `FrameDecoder` already round-trips, and it cannot itself build a
+    // Huffman table — so the fallback can never re-trip this guard.
+    guarded_encode(
+        || compress_to_vec(data, zstd_level(level)),
+        || compress_to_vec(data, CompressionLevel::Uncompressed),
+    )
 }
 
 fn encode_zstd_with_dict(
@@ -151,10 +176,27 @@ fn encode_zstd_with_dict(
     let mut enc = StreamingEncoder::new(Vec::<u8>::new(), zstd_level(level));
     enc.set_dictionary_from_bytes(dict)
         .map_err(|e| CodecError::Failed(format!("zstd dictionary load failed: {e}")))?;
-    Write::write_all(&mut enc, data)
-        .map_err(|e| CodecError::Failed(format!("zstd dict encode failed: {e}")))?;
-    enc.finish()
-        .map_err(|e| CodecError::Failed(format!("zstd dict encode failed: {e}")))
+    // Unlike `encode_zstd`, a dict-primed encode has no safe raw-literals
+    // degrade: the reader registers this dictionary against the frame, and
+    // the mismatch test (`zstd_dict_codec_rejects_a_mismatched_dictionary`)
+    // shows the decoder refuses a dict/frame mismatch outright — a
+    // dict-less fallback frame could be silently undecodable, strictly
+    // worse than the panic it would replace. Returning `Err` keeps encoding
+    // total (no panic escapes this function) without ever emitting
+    // undecodable bytes.
+    guarded_encode(
+        move || {
+            Write::write_all(&mut enc, data)
+                .map_err(|e| CodecError::Failed(format!("zstd dict encode failed: {e}")))?;
+            enc.finish()
+                .map_err(|e| CodecError::Failed(format!("zstd dict encode failed: {e}")))
+        },
+        || {
+            Err(CodecError::Failed(
+                "zstd dict encode aborted (huff0 internal error)".into(),
+            ))
+        },
+    )
 }
 
 fn encode_zstd_rsyncable(data: &[u8], level: Option<i32>) -> Vec<u8> {
@@ -266,6 +308,70 @@ pub fn decode_chain_with_decrypt(
         }
     }
     Ok(current.into_owned())
+}
+
+/// A zstd block's on-wire kind, read from its 3-byte `Block_Header` (RFC 8878
+/// §3.1.1.2) without decompressing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockKind {
+    /// `Block_Type` 0: the block body is the literal, uncompressed bytes.
+    Raw,
+    /// `Block_Type` 1: the block body is a single byte repeated `Block_Size` times.
+    Rle,
+    /// `Block_Type` 2: the block body is Huffman/FSE-compressed (the normal path).
+    Compressed,
+}
+
+/// The block types in a zstd frame, read from block headers WITHOUT
+/// decompressing. Lets a caller distinguish a natively-compressed frame from a
+/// raw-literals degrade. A test/inspection utility (no production degradation
+/// logging is wired in this change).
+///
+/// Parses per RFC 8878: the frame header (magic + descriptor, read via
+/// `structured_zstd::decoding::read_frame_header_info` so the magic/flag
+/// decoding never drifts from the crate's own decoder), then a sequence of
+/// 3-byte `Block_Header`s (bit0 `Last_Block`, bits1-2 `Block_Type`, bits3-23
+/// `Block_Size`) until `Last_Block`. The trailing content checksum, if any,
+/// is not consumed — it is not needed to classify block kinds.
+///
+/// # Errors
+/// `CodecError::Failed` on a malformed/truncated frame header, a truncated
+/// block, or a block declaring the reserved `Block_Type`; never panics (every
+/// slice access is checked).
+pub fn frame_block_kinds(frame: &[u8]) -> Result<Vec<BlockKind>, CodecError> {
+    let info = read_frame_header_info(frame, false)
+        .map_err(|e| CodecError::Failed(format!("zstd frame header read failed: {e}")))?;
+    let mut offset = info.header_size;
+    let mut kinds = Vec::new();
+    loop {
+        // 3-byte Block_Header (RFC 8878 §3.1.1.2), little-endian: bit0 =
+        // Last_Block, bits1-2 = Block_Type, bits3-23 = Block_Size.
+        let header = frame
+            .get(offset..offset + 3)
+            .ok_or_else(|| CodecError::Failed("zstd frame block header truncated".into()))?;
+        let raw = u32::from(header[0]) | (u32::from(header[1]) << 8) | (u32::from(header[2]) << 16);
+        let last_block = raw & 1 != 0;
+        let block_size = (raw >> 3) as usize;
+        let (kind, on_disk) = match (raw >> 1) & 0b11 {
+            0 => (BlockKind::Raw, block_size),
+            1 => (BlockKind::Rle, 1),
+            2 => (BlockKind::Compressed, block_size),
+            _ => {
+                return Err(CodecError::Failed(
+                    "zstd frame block has reserved Block_Type".into(),
+                ));
+            }
+        };
+        kinds.push(kind);
+        offset = offset
+            .checked_add(3 + on_disk)
+            .filter(|end| *end <= frame.len())
+            .ok_or_else(|| CodecError::Failed("zstd frame block body truncated".into()))?;
+        if last_block {
+            break;
+        }
+    }
+    Ok(kinds)
 }
 
 #[cfg(test)]
@@ -470,5 +576,162 @@ mod tests {
         )
         .expect_err("zstd-rsyncable + dict must be a hard error");
         assert!(matches!(err, CodecError::Failed(_)));
+    }
+
+    #[test]
+    fn guarded_encode_falls_back_to_raw_on_injected_panic() {
+        let payload = b"stable payload for the huff0 panic-fallback guard".repeat(8);
+        let encoded: Vec<u8> = guarded_encode(
+            || -> Vec<u8> { panic!("simulated huff0 internal error") },
+            || compress_to_vec(payload.as_slice(), CompressionLevel::Uncompressed),
+        );
+
+        let decoded = decode_chain(&[Codec::new("zstd", "compress")], &encoded)
+            .expect("fallback frame must decode");
+        assert_eq!(decoded, payload);
+
+        let kinds = frame_block_kinds(&encoded).expect("fallback frame block kinds parse");
+        assert!(
+            kinds.iter().all(|k| *k == BlockKind::Raw),
+            "an Uncompressed-level fallback frame must be all Raw blocks, got {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn guarded_encode_is_deterministic() {
+        let payload = b"deterministic payload for the zstd encode guard".repeat(8);
+
+        // Normal success path.
+        let a = encode_zstd(&payload, None);
+        let b = encode_zstd(&payload, None);
+        assert_eq!(a, b, "the normal success path must be deterministic");
+
+        // Forced-fallback path.
+        let fallback_a: Vec<u8> = guarded_encode(
+            || -> Vec<u8> { panic!("simulated huff0 internal error") },
+            || compress_to_vec(payload.as_slice(), CompressionLevel::Uncompressed),
+        );
+        let fallback_b: Vec<u8> = guarded_encode(
+            || -> Vec<u8> { panic!("simulated huff0 internal error") },
+            || compress_to_vec(payload.as_slice(), CompressionLevel::Uncompressed),
+        );
+        assert_eq!(
+            fallback_a, fallback_b,
+            "a forced fallback must be deterministic"
+        );
+    }
+
+    #[test]
+    fn guarded_rsyncable_falls_back_per_block() {
+        // Positive path: a multi-block rsyncable payload round-trips through decode.
+        let payload = vec![b'r'; RSYNCABLE_BLOCK_SIZE * 3 + 17];
+        let encoded = encode_chain(&["zstd-rsyncable".to_string()], &payload)
+            .expect("large rsyncable payload encodes");
+        let decoded = decode_chain(&[Codec::new("zstd-rsyncable", "compress")], &encoded)
+            .expect("large rsyncable payload decodes");
+        assert_eq!(decoded, payload);
+
+        // Direct per-block fallback: `encode_zstd_rsyncable` calls `encode_zstd` (which
+        // itself routes through `guarded_encode`) once per `RSYNCABLE_BLOCK_SIZE` chunk,
+        // so one block's guard can independently fall back without disturbing its
+        // neighbours. There is no production seam to inject a panic into one specific
+        // block without polluting the public API, so this exercises `guarded_encode`'s
+        // per-block fallback directly — the same call shape `encode_zstd_rsyncable`
+        // makes for each block — and checks that two independently-guarded blocks
+        // (one normal, one forced to fall back) still concatenate into a valid
+        // multi-frame zstd stream, exactly like `zstd_rsyncable_decodes_concatenated_frames`.
+        let block_a = b"first independent rsyncable block".repeat(4);
+        let block_b = b"second independent rsyncable block".repeat(4);
+        let encoded_a = guarded_encode(
+            || compress_to_vec(block_a.as_slice(), zstd_level(None)),
+            || compress_to_vec(block_a.as_slice(), CompressionLevel::Uncompressed),
+        );
+        let encoded_b: Vec<u8> = guarded_encode(
+            || -> Vec<u8> { panic!("simulated huff0 internal error in one block") },
+            || compress_to_vec(block_b.as_slice(), CompressionLevel::Uncompressed),
+        );
+
+        let mut concatenated = encoded_a;
+        concatenated.extend(encoded_b);
+        let decoded = decode_one(&Codec::new("zstd-rsyncable", "compress"), &concatenated)
+            .expect("concatenated normal + fallback blocks decode");
+
+        let mut expected = block_a;
+        expected.extend_from_slice(&block_b);
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn dict_encode_aborts_to_err_not_undecodable_frame() {
+        // Positive control: a normal dict-primed encode round-trips through decode
+        // with the same dictionary.
+        let owned = dict_corpus();
+        let corpus: Vec<&[u8]> = owned.iter().map(Vec::as_slice).collect();
+        let payload = dict_payload();
+        let dict = crate::dict::raw_content_dict(&corpus, 4096).expect("dict builds");
+
+        let encoded = encode_chain_with_options(
+            &["zstd".to_string()],
+            &payload,
+            EncodeOptions {
+                zstd_level: None,
+                dict: Some(&dict),
+            },
+        )
+        .expect("dict-primed zstd encodes");
+        let mut codec = Codec::new("zstd", "compress");
+        codec.dct = Some(dict);
+        let decoded = decode_chain(&[codec], &encoded).expect("dict-primed zstd decodes");
+        assert_eq!(decoded, payload);
+
+        // There is no production seam to inject a panic into `encode_zstd_with_dict`'s
+        // guarded region without adding a test-only parameter to a public function, so
+        // the panic branch is exercised at the `guarded_encode` level directly, using
+        // the SAME `on_panic` closure shape `encode_zstd_with_dict` installs: on unwind
+        // it must return `Err`, never synthesize a dict-less frame the reader could
+        // silently misdecode (see `zstd_dict_codec_rejects_a_mismatched_dictionary`
+        // above for why a dict/frame mismatch is dangerous, not just inconvenient).
+        let result: Result<Vec<u8>, CodecError> = guarded_encode(
+            || -> Result<Vec<u8>, CodecError> {
+                panic!("simulated huff0 internal error during dict encode")
+            },
+            || {
+                Err(CodecError::Failed(
+                    "zstd dict encode aborted (huff0 internal error)".into(),
+                ))
+            },
+        );
+        match result {
+            Err(CodecError::Failed(msg)) => {
+                assert!(msg.contains("huff0 internal error"));
+            }
+            other => panic!("expected Err(CodecError::Failed(_)), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn frame_block_kinds_reads_compressed_and_raw() {
+        let compressible = b"abababababababababababababababababababababababab".repeat(64);
+
+        let compressed = encode_chain(&["zstd".to_string()], &compressible).expect("zstd encodes");
+        let kinds = frame_block_kinds(&compressed).expect("compressed frame parses");
+        assert!(
+            kinds.contains(&BlockKind::Compressed),
+            "a compressible payload must produce at least one Compressed block, got {kinds:?}"
+        );
+
+        let raw = compress_to_vec(compressible.as_slice(), CompressionLevel::Uncompressed);
+        let raw_kinds = frame_block_kinds(&raw).expect("uncompressed frame parses");
+        assert!(
+            raw_kinds.iter().all(|k| *k == BlockKind::Raw),
+            "an Uncompressed-level frame must be all Raw blocks, got {raw_kinds:?}"
+        );
+
+        let err = frame_block_kinds(&[0xde, 0xad, 0xbe, 0xef])
+            .expect_err("garbage input must error, not panic");
+        assert!(matches!(err, CodecError::Failed(_)));
+
+        let err_empty = frame_block_kinds(&[]).expect_err("empty input must error, not panic");
+        assert!(matches!(err_empty, CodecError::Failed(_)));
     }
 }
