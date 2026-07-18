@@ -159,13 +159,342 @@ pub struct SssomMapping {
     pub extras: BTreeMap<String, String>,
 }
 
-/// A parsed SSSOM mapping set: header metadata + its mappings.
+/// Where a set-scoped SSSOM comment appears in the document envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SssomCommentPlacement {
+    /// After the YAML-like metadata and before the TSV column header.
+    ///
+    /// Only provenance comments with an unambiguous second `#` marker are valid
+    /// here; a single-marker line would be parsed as metadata.
+    BeforeTable,
+    /// After the final TSV mapping row (or after the column header for a
+    /// zero-row mapping set).
+    AfterTable,
+}
+
+/// The lexical kind of a set-scoped SSSOM comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SssomCommentKind {
+    /// A single-marker `#...` comment.
+    Ordinary,
+    /// A second-marker `# #...` provenance comment.
+    Provenance,
+}
+
+/// A typed set-comment construction failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SssomCommentError {
+    /// A raw comment line did not start with `#`.
+    MissingMarker,
+    /// One logical comment line contained `\r` or `\n`.
+    EmbeddedLineTerminator,
+    /// A single-marker comment was assigned to the metadata region, where it
+    /// would be ambiguous with a YAML key or value.
+    AmbiguousBeforeTable,
+    /// An ordinary-comment constructor received content beginning with `#`,
+    /// which would silently change the resulting line to provenance kind.
+    KindMismatch,
+}
+
+impl std::fmt::Display for SssomCommentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingMarker => f.write_str("a raw SSSOM set comment must start with `#`"),
+            Self::EmbeddedLineTerminator => {
+                f.write_str("a SSSOM set comment must contain exactly one logical line")
+            }
+            Self::AmbiguousBeforeTable => f.write_str(
+                "a before-table SSSOM set comment must use the unambiguous `# #` provenance marker",
+            ),
+            Self::KindMismatch => {
+                f.write_str("ordinary SSSOM set-comment content must not begin with a `#` marker")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SssomCommentError {}
+
+/// One validated, set-scoped comment in the SSSOM document envelope.
+///
+/// The exact Unicode line content is retained, excluding the physical line
+/// terminator. Fields are private so invalid marker/placement combinations cannot
+/// be constructed by assignment; use [`Self::from_raw`], [`Self::ordinary`],
+/// [`Self::provenance`], or [`Self::provenance_after_table`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SssomSetComment {
+    placement: SssomCommentPlacement,
+    raw_line: String,
+}
+
+impl SssomSetComment {
+    /// Validate and retain an exact raw comment line at `placement`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SssomCommentError`] for a missing marker, an embedded line
+    /// terminator, or a single-marker line placed before the table.
+    pub fn from_raw(
+        raw_line: impl Into<String>,
+        placement: SssomCommentPlacement,
+    ) -> Result<Self, SssomCommentError> {
+        let raw_line = raw_line.into();
+        let kind = classify_comment_line(&raw_line)?;
+        if placement == SssomCommentPlacement::BeforeTable && kind == SssomCommentKind::Ordinary {
+            return Err(SssomCommentError::AmbiguousBeforeTable);
+        }
+        Ok(Self {
+            placement,
+            raw_line,
+        })
+    }
+
+    /// Construct an ordinary after-table comment from unprefixed content.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SssomCommentError`] when `content` contains a line terminator or
+    /// begins with `#` after leading whitespace.
+    pub fn ordinary(content: impl Into<String>) -> Result<Self, SssomCommentError> {
+        let content = content.into();
+        validate_comment_content(&content)?;
+        if content.trim_start().starts_with('#') {
+            return Err(SssomCommentError::KindMismatch);
+        }
+        Self::from_raw(format!("# {content}"), SssomCommentPlacement::AfterTable)
+    }
+
+    /// Construct standard-compatible before-table provenance from unprefixed
+    /// content. Empty content produces the exact line `# #`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SssomCommentError`] when `content` contains a line terminator.
+    pub fn provenance(content: impl Into<String>) -> Result<Self, SssomCommentError> {
+        let content = content.into();
+        Self::provenance_at(&content, SssomCommentPlacement::BeforeTable)
+    }
+
+    /// Construct after-table provenance from unprefixed content. Empty content
+    /// produces the exact line `# #`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SssomCommentError`] when `content` contains a line terminator.
+    pub fn provenance_after_table(content: impl Into<String>) -> Result<Self, SssomCommentError> {
+        let content = content.into();
+        Self::provenance_at(&content, SssomCommentPlacement::AfterTable)
+    }
+
+    fn provenance_at(
+        content: &str,
+        placement: SssomCommentPlacement,
+    ) -> Result<Self, SssomCommentError> {
+        validate_comment_content(content)?;
+        let raw_line = if content.is_empty() {
+            "# #".to_owned()
+        } else {
+            format!("# # {content}")
+        };
+        Self::from_raw(raw_line, placement)
+    }
+
+    /// The comment's document placement.
+    pub const fn placement(&self) -> SssomCommentPlacement {
+        self.placement
+    }
+
+    /// The comment's kind, derived from its validated raw line.
+    pub fn kind(&self) -> SssomCommentKind {
+        classify_comment_line(&self.raw_line)
+            .expect("SssomSetComment construction validates its raw line")
+    }
+
+    /// The exact Unicode comment line, excluding its physical line terminator.
+    pub fn raw_line(&self) -> &str {
+        &self.raw_line
+    }
+}
+
+fn validate_comment_content(content: &str) -> Result<(), SssomCommentError> {
+    if content.contains(['\r', '\n']) {
+        Err(SssomCommentError::EmbeddedLineTerminator)
+    } else {
+        Ok(())
+    }
+}
+
+fn classify_comment_line(raw_line: &str) -> Result<SssomCommentKind, SssomCommentError> {
+    validate_comment_content(raw_line)?;
+    let Some(after_marker) = raw_line.strip_prefix('#') else {
+        return Err(SssomCommentError::MissingMarker);
+    };
+    if after_marker.trim_start().starts_with('#') {
+        Ok(SssomCommentKind::Provenance)
+    } else {
+        Ok(SssomCommentKind::Ordinary)
+    }
+}
+
+/// A validated TSV column declaration retained from a parsed SSSOM mapping set.
+///
+/// An empty layout means a programmatically constructed set should infer the
+/// canonical columns from its mappings. A non-empty layout preserves parsed
+/// column order, including optional or extension columns on zero-row sets.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SssomColumnLayout {
+    columns: Vec<String>,
+}
+
+/// A declared SSSOM TSV column-layout construction failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SssomColumnLayoutError {
+    /// A column name was empty.
+    EmptyName,
+    /// A column name contained a TSV or line delimiter.
+    InvalidDelimiter(String),
+    /// A column name appeared more than once.
+    DuplicateName(String),
+}
+
+impl std::fmt::Display for SssomColumnLayoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyName => f.write_str("a SSSOM TSV column name must not be empty"),
+            Self::InvalidDelimiter(name) => write!(
+                f,
+                "SSSOM TSV column name {name:?} contains a tab or line terminator"
+            ),
+            Self::DuplicateName(name) => {
+                write!(f, "duplicate SSSOM TSV column name {name:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SssomColumnLayoutError {}
+
+impl SssomColumnLayout {
+    /// Validate and retain a declared column sequence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SssomColumnLayoutError`] for an empty, duplicate, tabbed, or
+    /// multiline name.
+    pub fn new<I, S>(columns: I) -> Result<Self, SssomColumnLayoutError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut retained = Vec::new();
+        let mut seen = BTreeSet::new();
+        for column in columns {
+            let column = column.into();
+            if column.is_empty() {
+                return Err(SssomColumnLayoutError::EmptyName);
+            }
+            if column.contains(['\t', '\r', '\n']) {
+                return Err(SssomColumnLayoutError::InvalidDelimiter(column));
+            }
+            if !seen.insert(column.clone()) {
+                return Err(SssomColumnLayoutError::DuplicateName(column));
+            }
+            retained.push(column);
+        }
+        Ok(Self { columns: retained })
+    }
+
+    /// Declared columns in source order.
+    pub fn columns(&self) -> &[String] {
+        &self.columns
+    }
+
+    /// Whether the serializer should infer the canonical layout from mappings.
+    pub fn is_inferred(&self) -> bool {
+        self.columns.is_empty()
+    }
+}
+
+/// A parsed SSSOM mapping set: header metadata, mappings, and document envelope.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SssomMappingSet {
     /// The `# `-prefixed YAML header metadata.
     pub meta: SssomMeta,
     /// The mapping rows, in file order.
     pub mappings: Vec<SssomMapping>,
+    /// Parsed TSV column declaration, or an empty inferred layout for a set
+    /// constructed through [`Self::new`].
+    pub column_layout: SssomColumnLayout,
+    /// Validated set-level comments in document order within each placement.
+    pub set_comments: Vec<SssomSetComment>,
+}
+
+impl SssomMappingSet {
+    /// Construct a mapping set whose serializer infers canonical columns.
+    pub fn new(meta: SssomMeta, mappings: Vec<SssomMapping>) -> Self {
+        Self {
+            meta,
+            mappings,
+            column_layout: SssomColumnLayout::default(),
+            set_comments: Vec::new(),
+        }
+    }
+
+    /// Replace the inferred/parsed column layout with `column_layout`.
+    #[must_use]
+    pub fn with_column_layout(mut self, column_layout: SssomColumnLayout) -> Self {
+        self.column_layout = column_layout;
+        self
+    }
+
+    /// Append standard-compatible before-table mapping-set provenance.
+    ///
+    /// Mutation is atomic: an invalid value leaves the set unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SssomCommentError`] when `content` contains a line terminator.
+    pub fn append_provenance(
+        &mut self,
+        content: impl Into<String>,
+    ) -> Result<(), SssomCommentError> {
+        let comment = SssomSetComment::provenance(content)?;
+        self.set_comments.push(comment);
+        Ok(())
+    }
+
+    /// Append an ordinary after-table set comment.
+    ///
+    /// Mutation is atomic: an invalid value leaves the set unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SssomCommentError`] when `content` contains a line terminator or
+    /// begins with `#` after leading whitespace.
+    pub fn append_after_table_comment(
+        &mut self,
+        content: impl Into<String>,
+    ) -> Result<(), SssomCommentError> {
+        let comment = SssomSetComment::ordinary(content)?;
+        self.set_comments.push(comment);
+        Ok(())
+    }
+
+    /// Append after-table mapping-set provenance.
+    ///
+    /// Mutation is atomic: an invalid value leaves the set unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SssomCommentError`] when `content` contains a line terminator.
+    pub fn append_after_table_provenance(
+        &mut self,
+        content: impl Into<String>,
+    ) -> Result<(), SssomCommentError> {
+        let comment = SssomSetComment::provenance_after_table(content)?;
+        self.set_comments.push(comment);
+        Ok(())
+    }
 }
 
 /// A single validation diagnostic, mirroring the sssom-py golden record shape
@@ -252,7 +581,7 @@ pub fn parse_tsv(text: &str) -> Result<SssomMappingSet, RdfDiagnostic> {
     }
 
     let mappings = parse_body(&body, &line_numbers)?;
-    Ok(SssomMappingSet { meta, mappings })
+    Ok(SssomMappingSet::new(meta, mappings))
 }
 
 /// Parse the `#`-prefixed metadata header lines into an [`SssomMeta`].
@@ -842,6 +1171,94 @@ ex:Foo\tskos:closeMatch\tsosa:Observation\tObservation\tsemapv:ManualMappingCura
 subject_id\tpredicate_id\tobject_id\tmapping_justification\tconfidence\tcomment
 {rows}"
         )
+    }
+
+    #[test]
+    fn typed_set_comments_preserve_kind_placement_and_raw_content() {
+        let before =
+            SssomSetComment::provenance("curation —  exact  spacing ").expect("valid provenance");
+        assert_eq!(before.placement(), SssomCommentPlacement::BeforeTable);
+        assert_eq!(before.kind(), SssomCommentKind::Provenance);
+        assert_eq!(before.raw_line(), "# # curation —  exact  spacing ");
+
+        let ordinary = SssomSetComment::ordinary("plain note  ").expect("valid comment");
+        assert_eq!(ordinary.placement(), SssomCommentPlacement::AfterTable);
+        assert_eq!(ordinary.kind(), SssomCommentKind::Ordinary);
+        assert_eq!(ordinary.raw_line(), "# plain note  ");
+
+        let empty = SssomSetComment::provenance_after_table("").expect("empty provenance");
+        assert_eq!(empty.placement(), SssomCommentPlacement::AfterTable);
+        assert_eq!(empty.kind(), SssomCommentKind::Provenance);
+        assert_eq!(empty.raw_line(), "# #");
+    }
+
+    #[test]
+    fn typed_set_comments_hard_fail_ambiguous_or_multiline_values() {
+        assert_eq!(
+            SssomSetComment::from_raw("not a comment", SssomCommentPlacement::AfterTable),
+            Err(SssomCommentError::MissingMarker)
+        );
+        assert_eq!(
+            SssomSetComment::from_raw("# ordinary", SssomCommentPlacement::BeforeTable),
+            Err(SssomCommentError::AmbiguousBeforeTable)
+        );
+        assert_eq!(
+            SssomSetComment::ordinary("  # changes kind"),
+            Err(SssomCommentError::KindMismatch)
+        );
+        assert_eq!(
+            SssomSetComment::ordinary("two\nlines"),
+            Err(SssomCommentError::EmbeddedLineTerminator)
+        );
+        assert_eq!(
+            SssomSetComment::provenance("two\rlines"),
+            Err(SssomCommentError::EmbeddedLineTerminator)
+        );
+        assert_eq!(
+            SssomSetComment::provenance_after_table("two\r\nlines"),
+            Err(SssomCommentError::EmbeddedLineTerminator)
+        );
+    }
+
+    #[test]
+    fn mapping_set_comment_append_is_atomic() {
+        let mut set = SssomMappingSet::new(SssomMeta::default(), Vec::new());
+        set.append_provenance("accepted").expect("valid provenance");
+        let accepted = set.set_comments.clone();
+
+        let err = set
+            .append_after_table_comment("bad\ncomment")
+            .expect_err("multiline comment must fail");
+        assert_eq!(err, SssomCommentError::EmbeddedLineTerminator);
+        assert_eq!(set.set_comments, accepted, "failed append must not mutate");
+    }
+
+    #[test]
+    fn column_layout_retains_order_and_rejects_invalid_names() {
+        let layout = SssomColumnLayout::new(["object_id", "subject_id", "x_extension"])
+            .expect("valid declared columns");
+        assert_eq!(
+            layout.columns(),
+            &["object_id", "subject_id", "x_extension"]
+        );
+        assert!(!layout.is_inferred());
+        assert!(SssomColumnLayout::default().is_inferred());
+        assert_eq!(
+            SssomColumnLayout::new(["subject_id", "subject_id"]),
+            Err(SssomColumnLayoutError::DuplicateName(
+                "subject_id".to_owned()
+            ))
+        );
+        assert_eq!(
+            SssomColumnLayout::new([""]),
+            Err(SssomColumnLayoutError::EmptyName)
+        );
+        assert_eq!(
+            SssomColumnLayout::new(["bad\tcolumn"]),
+            Err(SssomColumnLayoutError::InvalidDelimiter(
+                "bad\tcolumn".to_owned()
+            ))
+        );
     }
 
     #[test]

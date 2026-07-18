@@ -151,7 +151,9 @@ pub use provenance::{
 };
 pub use small::{IdVec, SmallVec, smallvec};
 pub use sssom::{
-    SSSOM_DEFAULT_VALIDATION_TYPES, SssomDiagnostic, SssomMapping, SssomMappingSet, SssomMeta,
+    SSSOM_DEFAULT_VALIDATION_TYPES, SssomColumnLayout, SssomColumnLayoutError, SssomCommentError,
+    SssomCommentKind, SssomCommentPlacement, SssomDiagnostic, SssomMapping, SssomMappingSet,
+    SssomMeta, SssomSetComment,
 };
 pub use store::RdfStoreCapabilities;
 pub use turtle::{
