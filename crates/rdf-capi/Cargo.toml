@@ -58,9 +58,9 @@ purrdf-sparql-eval = { workspace = true }
 # when it builds the C-ABI target and hard-errors if the crate does not declare
 # it — so `make capi-header`/`capi-check` (and the CI `capi` gate) cannot run
 # without this marker. It carries NO conditional code: the entire C-ABI surface
-# is always compiled. `scripts/check-no-features.py` allowlists exactly this
-# `purrdf-capi: capi` pair and nothing else; every other feature on every crate
-# (including any *other* feature here) still fails the zero-features gate.
+# is always compiled. `scripts/check-no-features.py` requires exactly this empty
+# `purrdf-capi:capi = []` marker, rejects every other feature declaration, and
+# rejects any Rust `cfg(feature = ...)` use.
 [features]
 capi = []
 
