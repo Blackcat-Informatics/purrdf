@@ -480,14 +480,14 @@ fn validate_dotted_path(value: &str, role: &str) -> Result<(), PydanticError> {
             value.len()
         )));
     }
-    let components = value.split('.').collect::<Vec<_>>();
-    if components.len() > MAX_DOTTED_PATH_COMPONENTS {
+    let component_count = value.bytes().filter(|byte| *byte == b'.').count() + 1;
+    if component_count > MAX_DOTTED_PATH_COMPONENTS {
         return Err(PydanticError::new(format!(
-            "{role} {value:?} has {} components; limit is {MAX_DOTTED_PATH_COMPONENTS}",
-            components.len()
+            "{role} {value:?} has {component_count} components; limit is \
+             {MAX_DOTTED_PATH_COMPONENTS}"
         )));
     }
-    for component in components {
+    for component in value.split('.') {
         if !is_python_identifier(component) || is_python_keyword(component) {
             return Err(PydanticError::new(format!(
                 "{role} {value:?} contains invalid or keyword component {component:?}"
@@ -520,19 +520,18 @@ fn validate_module_prefixes(
         .keys()
         .map(|path| path.to_ascii_lowercase())
         .collect::<BTreeSet<_>>();
+    let mut prefix = String::new();
     for path in modules.keys() {
-        let parts = path
-            .split('.')
-            .map(str::to_ascii_lowercase)
-            .collect::<Vec<_>>();
-        for length in 1..parts.len() {
-            let prefix = parts[..length].join(".");
-            if folded.contains(&prefix) {
+        prefix.clear();
+        prefix.reserve(path.len());
+        for byte in path.bytes() {
+            if byte == b'.' && folded.contains(prefix.as_str()) {
                 return Err(PydanticError::new(format!(
                     "Pydantic module path {path:?} requires {prefix:?} to be a package, but it \
                      is also declared as a module file"
                 )));
             }
+            prefix.push(char::from(byte.to_ascii_lowercase()));
         }
     }
     Ok(())
@@ -556,16 +555,23 @@ fn validate_relative_artifacts(
         insert_artifact("__about__.py".to_owned(), &mut paths, &mut folded)?;
     }
     if let Some(modules) = modules {
+        let mut current_path = String::new();
         for module in modules.keys() {
-            let parts = module.split('.').collect::<Vec<_>>();
-            for length in 1..parts.len() {
-                insert_artifact(
-                    format!("{}/__init__.py", parts[..length].join("/")),
-                    &mut paths,
-                    &mut folded,
-                )?;
+            current_path.clear();
+            current_path.reserve(module.len());
+            for byte in module.bytes() {
+                if byte == b'.' {
+                    insert_artifact(
+                        format!("{current_path}/__init__.py"),
+                        &mut paths,
+                        &mut folded,
+                    )?;
+                    current_path.push('/');
+                } else {
+                    current_path.push(char::from(byte));
+                }
             }
-            insert_artifact(format!("{}.py", parts.join("/")), &mut paths, &mut folded)?;
+            insert_artifact(format!("{current_path}.py"), &mut paths, &mut folded)?;
         }
     }
     Ok(paths)

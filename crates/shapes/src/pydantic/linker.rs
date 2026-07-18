@@ -84,14 +84,21 @@ impl RoutedPackagePlan {
             artifact_paths.insert("__about__.py".to_owned());
         }
         let mut intermediate_packages = BTreeSet::new();
+        let mut current_path = String::new();
         for (index, module) in topology.modules().values().enumerate() {
-            let parts = module.path().split('.').collect::<Vec<_>>();
-            for length in 1..parts.len() {
-                let path = format!("{}/__init__.py", parts[..length].join("/"));
-                artifact_paths.insert(path.clone());
-                intermediate_packages.insert(path);
+            current_path.clear();
+            current_path.reserve(module.path().len());
+            for byte in module.path().bytes() {
+                if byte == b'.' {
+                    let path = format!("{current_path}/__init__.py");
+                    artifact_paths.insert(path.clone());
+                    intermediate_packages.insert(path);
+                    current_path.push('/');
+                } else {
+                    current_path.push(char::from(byte));
+                }
             }
-            let artifact_path = format!("{}.py", parts.join("/"));
+            let artifact_path = format!("{current_path}.py");
             if !artifact_paths.insert(artifact_path.clone()) {
                 return Err(PydanticError::new(format!(
                     "Pydantic linker artifact path {artifact_path:?} is not unique"
@@ -325,7 +332,13 @@ impl RoutedPackagePlan {
 }
 
 pub(super) fn relative_root_import(module_path: &str, target: &str) -> String {
-    format!("{}{}", ".".repeat(module_path.split('.').count()), target)
+    let depth = module_path.bytes().filter(|byte| *byte == b'.').count() + 1;
+    let mut import = String::with_capacity(depth + target.len());
+    for _ in 0..depth {
+        import.push('.');
+    }
+    import.push_str(target);
+    import
 }
 
 fn collect_references(
