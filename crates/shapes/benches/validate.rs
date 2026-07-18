@@ -18,8 +18,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use purrdf::loss::LossLedger;
 use purrdf_shapes::engine::validate_graphs;
+use purrdf_shapes::json_schema::CompiledSchema;
 use purrdf_shapes::{
     LinkmlConfig, LinkmlDocument, Namespaces, SchemaDatatypeMap, SchemaImportConfig, emit_linkml,
     import_json_schema, import_linkml,
@@ -60,6 +62,7 @@ const IMPORT_CLASSES: usize = 128;
 const IMPORT_PROPERTIES_PER_CLASS: usize = 8;
 const LINKML: &str = "https://w3id.org/linkml/";
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+const LINKML_EMIT_SIZES: &[usize] = &[32, 1_024, 60_000];
 
 /// Read every `corpus/<case>/{data.nt, shapes.ttl}` pair, sorted by case name.
 fn corpus_cases() -> Vec<(String, String, String)> {
@@ -345,11 +348,160 @@ fn bench_linkml_import(c: &mut Criterion) {
     group.finish();
 }
 
+#[derive(Debug, Clone, Copy)]
+enum SlotEmissionMode {
+    Safe,
+    Rename,
+    Collision,
+}
+
+impl SlotEmissionMode {
+    const ALL: [Self; 3] = [Self::Safe, Self::Rename, Self::Collision];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Safe => "safe",
+            Self::Rename => "rename",
+            Self::Collision => "collision",
+        }
+    }
+}
+
+fn linkml_emit_fixture(
+    slots: usize,
+    mode: SlotEmissionMode,
+) -> (CompiledSchema, LinkmlConfig, usize, usize) {
+    assert!(slots > 0, "benchmark fixture requires slots");
+    let mut properties = Map::new();
+    let mut required = Vec::new();
+    for index in 0..slots {
+        let name = match mode {
+            SlotEmissionMode::Safe => format!("ex:slot{index:05}"),
+            SlotEmissionMode::Rename => format!("ex:slot/{index:05}"),
+            SlotEmissionMode::Collision if index == 0 => "ex:collision_".to_owned(),
+            SlotEmissionMode::Collision => {
+                let scalar = u32::try_from(index).expect("benchmark index fits u32");
+                let marker = char::from_u32(0x0f_0000 + scalar)
+                    .expect("plane-15 private-use benchmark marker");
+                format!("ex:collision{marker}")
+            }
+        };
+        if index % 4 == 0 {
+            required.push(Value::String(name.clone()));
+        }
+        properties.insert(
+            name,
+            json!({
+                "type": "string",
+                "pattern": "^[A-Z]"
+            }),
+        );
+    }
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+            "Carrier": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": properties,
+                "required": required
+            }
+        }
+    });
+    let compiled = CompiledSchema {
+        schema_json: format!(
+            "{}\n",
+            serde_json::to_string_pretty(&schema).expect("benchmark schema serializes")
+        ),
+        openapi_json: "{}\n".to_owned(),
+        losses: LossLedger::new(),
+    };
+    let config = LinkmlConfig::new(
+        "https://example.org/bench/linkml-emission",
+        "LinkmlEmissionBench",
+        "Matched safe, rename, and collision-heavy LinkML emission fixture.",
+        "ex",
+        BTreeMap::from([
+            ("ex".to_owned(), "https://example.org/bench/".to_owned()),
+            ("linkml".to_owned(), LINKML.to_owned()),
+        ]),
+    )
+    .expect("benchmark LinkML configuration");
+    let expected_renames = match mode {
+        SlotEmissionMode::Safe => 0,
+        SlotEmissionMode::Rename => slots,
+        SlotEmissionMode::Collision => slots - 1,
+    };
+    let expected_collisions = match mode {
+        SlotEmissionMode::Collision => slots - 1,
+        SlotEmissionMode::Safe | SlotEmissionMode::Rename => 0,
+    };
+    (compiled, config, expected_renames, expected_collisions)
+}
+
+fn bench_linkml_slot_emission(c: &mut Criterion) {
+    let mut group = c.benchmark_group("linkml_slot_emission");
+    group.sample_size(10);
+    for &slots in LINKML_EMIT_SIZES {
+        for mode in SlotEmissionMode::ALL {
+            let (compiled, config, expected_renames, expected_collisions) =
+                linkml_emit_fixture(slots, mode);
+            let assert_output = |output: &purrdf_shapes::LinkmlPackage| {
+                assert_eq!(output.slot_renames.len(), expected_renames);
+                assert_eq!(
+                    output
+                        .slot_renames
+                        .iter()
+                        .filter(|rename| rename.reasons.iter().any(|reason| {
+                            *reason == purrdf_shapes::linkml::LinkmlSlotReason::Collision
+                        }))
+                        .count(),
+                    expected_collisions
+                );
+            };
+
+            let warm = emit_linkml(&compiled, &config).expect("benchmark fixture emits");
+            assert_output(&warm);
+            drop(warm);
+
+            let before = allocation_snapshot();
+            let observed = emit_linkml(&compiled, &config).expect("allocation probe emits");
+            let after = allocation_snapshot();
+            assert_output(&observed);
+            println!(
+                "[linkml_slot_emission] mode={} slots={slots} renames={expected_renames} collisions={expected_collisions} allocations={} allocated_bytes={}",
+                mode.label(),
+                after.0 - before.0,
+                after.1 - before.1
+            );
+            black_box(observed);
+
+            group.throughput(Throughput::Elements(
+                u64::try_from(slots).expect("benchmark slot count fits u64"),
+            ));
+            group.bench_with_input(
+                BenchmarkId::new(mode.label(), slots),
+                &slots,
+                |bencher, _| {
+                    bencher.iter(|| {
+                        let output = emit_linkml(black_box(&compiled), black_box(&config))
+                            .expect("benchmark fixture emits");
+                        assert_output(&output);
+                        black_box(output);
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_validate,
     bench_validate_large,
     bench_schema_import,
-    bench_linkml_import
+    bench_linkml_import,
+    bench_linkml_slot_emission
 );
 criterion_main!(benches);

@@ -3,6 +3,7 @@
 
 //! Capability-driven JSON Schema to LinkML 1.11 projection.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ::purrdf::RdfLocation;
@@ -11,7 +12,9 @@ use serde_json::{Map, Value};
 
 use super::{
     LINKML_METAMODEL_VERSION, LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage,
-    is_linkml_identifier, write_linkml,
+    LinkmlSlotDiagnostic, LinkmlSlotDisposition, LinkmlSlotReason, LinkmlSlotRename,
+    MAX_LINKML_SOURCE_KEY_BYTES, SanitizePolicy, is_linkml_identifier, is_reserved_jsonld_slot,
+    write_linkml,
 };
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
@@ -22,6 +25,12 @@ use crate::schema_catalog::{
 const LOSS_FROM: &str = "json-schema";
 const LOSS_TO: &str = "linkml-1.11";
 const LOSS_CONTEXT: &str = "shapes:linkml";
+const MAX_LINKML_SOURCE_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
+const MAX_LINKML_SLOTS_PER_CLASS: usize = 65_536;
+const MAX_LINKML_TOTAL_SLOTS: usize = 1_000_000;
+const MAX_LINKML_REPORT_ROWS: usize = 1_000_000;
+const MAX_GENERATED_SLOT_NAME_BYTES: usize = 255;
+const MAX_SLOT_COLLISION_ATTEMPTS: usize = 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ElementKind {
@@ -40,6 +49,11 @@ pub(super) fn emit(
     compiled: &CompiledSchema,
     config: &LinkmlConfig,
 ) -> Result<LinkmlPackage, LinkmlError> {
+    if compiled.schema_json.len() > MAX_LINKML_SOURCE_SCHEMA_BYTES {
+        return Err(LinkmlError::new(format!(
+            "JSON Schema source exceeds the {MAX_LINKML_SOURCE_SCHEMA_BYTES}-byte LinkML projection limit"
+        )));
+    }
     let catalog = CompiledSchemaCatalog::parse(compiled)
         .map_err(|error| LinkmlError::new(error.to_string()))?;
     let definitions = catalog.definitions();
@@ -60,6 +74,19 @@ pub(super) fn emit(
             .clone();
         renderer.render_definition(key, &info, definition)?;
     }
+    renderer.verify_rehome_hints()?;
+    renderer.slot_renames.sort_by(|left, right| {
+        left.source_class
+            .cmp(&right.source_class)
+            .then_with(|| left.source_path.cmp(&right.source_path))
+            .then_with(|| left.source_name.cmp(&right.source_name))
+    });
+    renderer.slot_diagnostics.sort_by(|left, right| {
+        left.source_class
+            .cmp(&right.source_class)
+            .then_with(|| left.source_path.cmp(&right.source_path))
+            .then_with(|| left.source_name.cmp(&right.source_name))
+    });
 
     let mut root = Map::new();
     root.insert(
@@ -114,7 +141,12 @@ pub(super) fn emit(
         yaml,
         canonical_element_names: element_names.clone(),
         element_names,
-        losses: renderer.ledger,
+        losses: renderer.ledger.clone(),
+        slot_renames: renderer.slot_renames.clone(),
+        slot_diagnostics: renderer.slot_diagnostics.clone(),
+        canonical_losses: renderer.ledger,
+        canonical_slot_renames: renderer.slot_renames,
+        canonical_slot_diagnostics: renderer.slot_diagnostics,
     })
 }
 
@@ -298,6 +330,310 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     hash
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlotSourceKind {
+    Reserved,
+    RegisteredCurie,
+    AbsoluteIri,
+    Bare,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SlotNameSeed {
+    source_kind: SlotSourceKind,
+    source_name: String,
+    direct_name: String,
+    old_slot_uri: Option<String>,
+    emitted_slot_uri: Option<String>,
+    disposition: LinkmlSlotDisposition,
+    reasons: Vec<LinkmlSlotReason>,
+}
+
+#[derive(Debug, Clone)]
+struct PlannedSlot {
+    source_name: String,
+    source_path: String,
+    emitted_name: String,
+    emitted_slot_uri: Option<String>,
+}
+
+impl SlotNameSeed {
+    fn requires_rename(&self) -> bool {
+        self.direct_name != self.source_name
+    }
+}
+
+fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, LinkmlError> {
+    if source.len() > MAX_LINKML_SOURCE_KEY_BYTES {
+        return Err(LinkmlError::new(format!(
+            "JSON property name exceeds {MAX_LINKML_SOURCE_KEY_BYTES} bytes"
+        )));
+    }
+    if is_reserved_jsonld_slot(source) {
+        return Ok(SlotNameSeed {
+            source_kind: SlotSourceKind::Reserved,
+            source_name: source.to_owned(),
+            direct_name: source.to_owned(),
+            old_slot_uri: None,
+            emitted_slot_uri: None,
+            disposition: LinkmlSlotDisposition::IdentityPreserved,
+            reasons: Vec::new(),
+        });
+    }
+
+    if config.slot_rehomes().contains(source) {
+        let mut reasons = vec![LinkmlSlotReason::CallerRehome];
+        let local = sanitized_local(trailing_local(source), &mut reasons);
+        let direct_name = bounded_curie(
+            config.default_prefix(),
+            local.as_ref(),
+            source,
+            &mut reasons,
+        )?;
+        return Ok(SlotNameSeed {
+            source_kind: SlotSourceKind::Bare,
+            source_name: source.to_owned(),
+            old_slot_uri: None,
+            emitted_slot_uri: Some(direct_name.clone()),
+            direct_name,
+            disposition: LinkmlSlotDisposition::IdentityRehomed,
+            reasons,
+        });
+    }
+
+    if let Some((prefix, local)) = source.split_once(':')
+        && config.prefixes().contains_key(prefix)
+    {
+        if is_linkml_identifier(local) && source.len() <= MAX_GENERATED_SLOT_NAME_BYTES {
+            return Ok(SlotNameSeed {
+                source_kind: SlotSourceKind::RegisteredCurie,
+                source_name: source.to_owned(),
+                direct_name: source.to_owned(),
+                old_slot_uri: Some(source.to_owned()),
+                emitted_slot_uri: Some(source.to_owned()),
+                disposition: LinkmlSlotDisposition::IdentityPreserved,
+                reasons: Vec::new(),
+            });
+        }
+        let mut reasons = Vec::new();
+        let local = sanitized_local(local, &mut reasons);
+        let direct_name = bounded_curie(prefix, local.as_ref(), source, &mut reasons)?;
+        return Ok(SlotNameSeed {
+            source_kind: SlotSourceKind::RegisteredCurie,
+            source_name: source.to_owned(),
+            direct_name,
+            old_slot_uri: Some(source.to_owned()),
+            emitted_slot_uri: Some(source.to_owned()),
+            disposition: LinkmlSlotDisposition::IdentityPreserved,
+            reasons,
+        });
+    }
+
+    if purrdf_iri::parse(source).is_ok_and(|iri| iri.has_scheme()) {
+        let matched = longest_namespace_match(config, source);
+        if let Some((prefix, local)) = matched
+            && is_linkml_identifier(local)
+            && source.len() <= MAX_GENERATED_SLOT_NAME_BYTES
+        {
+            return Ok(SlotNameSeed {
+                source_kind: SlotSourceKind::AbsoluteIri,
+                source_name: source.to_owned(),
+                direct_name: source.to_owned(),
+                old_slot_uri: Some(source.to_owned()),
+                emitted_slot_uri: Some(format!("{prefix}:{local}")),
+                disposition: LinkmlSlotDisposition::IdentityPreserved,
+                reasons: Vec::new(),
+            });
+        }
+
+        let mut reasons = Vec::new();
+        let (prefix, local) = if let Some((prefix, local)) = matched {
+            (prefix, local)
+        } else {
+            reasons.push(LinkmlSlotReason::UnmatchedNamespace);
+            (config.default_prefix(), trailing_local(source))
+        };
+        let local = sanitized_local(local, &mut reasons);
+        let direct_name = bounded_curie(prefix, local.as_ref(), source, &mut reasons)?;
+        return Ok(SlotNameSeed {
+            source_kind: SlotSourceKind::AbsoluteIri,
+            source_name: source.to_owned(),
+            direct_name,
+            old_slot_uri: Some(source.to_owned()),
+            emitted_slot_uri: Some(source.to_owned()),
+            disposition: LinkmlSlotDisposition::IdentityPreserved,
+            reasons,
+        });
+    }
+
+    if is_linkml_identifier(source) && source.len() <= MAX_GENERATED_SLOT_NAME_BYTES {
+        return Ok(SlotNameSeed {
+            source_kind: SlotSourceKind::Bare,
+            source_name: source.to_owned(),
+            direct_name: source.to_owned(),
+            old_slot_uri: None,
+            emitted_slot_uri: Some(format!("{}:{source}", config.default_prefix())),
+            disposition: LinkmlSlotDisposition::IdentityPreserved,
+            reasons: Vec::new(),
+        });
+    }
+
+    let mut reasons = vec![LinkmlSlotReason::BareName];
+    let local = sanitized_local(trailing_local(source), &mut reasons);
+    let direct_name = bounded_curie(
+        config.default_prefix(),
+        local.as_ref(),
+        source,
+        &mut reasons,
+    )?;
+    Ok(SlotNameSeed {
+        source_kind: SlotSourceKind::Bare,
+        source_name: source.to_owned(),
+        old_slot_uri: None,
+        emitted_slot_uri: Some(direct_name.clone()),
+        direct_name,
+        disposition: LinkmlSlotDisposition::IdentityRehomed,
+        reasons,
+    })
+}
+
+fn longest_namespace_match<'a>(
+    config: &'a LinkmlConfig,
+    source: &'a str,
+) -> Option<(&'a str, &'a str)> {
+    config
+        .prefixes()
+        .iter()
+        .filter_map(|(prefix, namespace)| {
+            source
+                .strip_prefix(namespace)
+                .filter(|local| !local.is_empty())
+                .map(|local| (namespace.len(), prefix.as_str(), local))
+        })
+        .min_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)))
+        .map(|(_, prefix, local)| (prefix, local))
+}
+
+fn trailing_local(source: &str) -> &str {
+    source.rsplit(['#', '/', ':']).next().unwrap_or(source)
+}
+
+fn sanitized_local<'a>(source: &'a str, reasons: &mut Vec<LinkmlSlotReason>) -> Cow<'a, str> {
+    if is_linkml_identifier(source) {
+        return Cow::Borrowed(source);
+    }
+
+    let mut output = String::with_capacity(source.len().saturating_add(1));
+    let mut characters = source.chars();
+    let Some(first) = characters.next() else {
+        push_reason(reasons, LinkmlSlotReason::InvalidInitialCharacter);
+        return Cow::Owned("_".to_owned());
+    };
+
+    if is_linkml_start(first) {
+        output.push(first);
+    } else if is_linkml_continue(first) {
+        push_reason(reasons, LinkmlSlotReason::InvalidInitialCharacter);
+        output.push('_');
+        output.push(first);
+    } else {
+        push_reason(reasons, LinkmlSlotReason::InvalidCharacter);
+        output.push('_');
+    }
+    for character in characters {
+        if is_linkml_continue(character) {
+            output.push(character);
+        } else {
+            push_reason(reasons, LinkmlSlotReason::InvalidCharacter);
+            output.push('_');
+        }
+    }
+    debug_assert!(is_linkml_identifier(&output));
+    Cow::Owned(output)
+}
+
+fn bounded_curie(
+    prefix: &str,
+    local: &str,
+    source: &str,
+    reasons: &mut Vec<LinkmlSlotReason>,
+) -> Result<String, LinkmlError> {
+    let direct = format!("{prefix}:{local}");
+    if direct.len() <= MAX_GENERATED_SLOT_NAME_BYTES {
+        return Ok(direct);
+    }
+    push_reason(reasons, LinkmlSlotReason::LengthBound);
+    let hashed = format!("{prefix}:Slot{:016x}", fnv1a(source.as_bytes()));
+    if hashed.len() > MAX_GENERATED_SLOT_NAME_BYTES {
+        return Err(LinkmlError::new(format!(
+            "LinkML prefix {prefix:?} leaves no room within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
+        )));
+    }
+    Ok(hashed)
+}
+
+fn collision_name(base: &str, source: &str, ordinal: usize) -> Result<String, LinkmlError> {
+    let (prefix, local) = base.split_once(':').ok_or_else(|| {
+        LinkmlError::new(format!(
+            "generated LinkML slot candidate {base:?} lacks a caller prefix"
+        ))
+    })?;
+    let suffix = if ordinal == 0 {
+        format!("_{:016x}", fnv1a(source.as_bytes()))
+    } else {
+        format!("_{:016x}_{ordinal}", fnv1a(source.as_bytes()))
+    };
+    let fixed = prefix
+        .len()
+        .checked_add(1)
+        .and_then(|length| length.checked_add(suffix.len()))
+        .ok_or_else(|| LinkmlError::new("generated LinkML slot-name length overflow"))?;
+    let local_budget = MAX_GENERATED_SLOT_NAME_BYTES.checked_sub(fixed).ok_or_else(|| {
+        LinkmlError::new(format!(
+            "LinkML prefix {prefix:?} leaves no room for a collision suffix within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
+        ))
+    })?;
+    if local_budget == 0 {
+        return Err(LinkmlError::new(format!(
+            "LinkML prefix {prefix:?} leaves no local-name byte within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
+        )));
+    }
+    let mut end = local.len().min(local_budget);
+    while !local.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end == 0 {
+        return Err(LinkmlError::new(format!(
+            "LinkML prefix {prefix:?} leaves no complete local-name character within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
+        )));
+    }
+    let candidate = format!("{prefix}:{}{suffix}", &local[..end]);
+    debug_assert!(candidate.len() <= MAX_GENERATED_SLOT_NAME_BYTES);
+    Ok(candidate)
+}
+
+fn push_reason(reasons: &mut Vec<LinkmlSlotReason>, reason: LinkmlSlotReason) {
+    if !reasons.contains(&reason) {
+        reasons.push(reason);
+        reasons.sort_unstable();
+    }
+}
+
+fn is_linkml_start(character: char) -> bool {
+    character == '_' || character.is_alphabetic()
+}
+
+fn is_linkml_continue(character: char) -> bool {
+    character == '_'
+        || character == '-'
+        || character == '.'
+        || character.is_alphanumeric()
+        || matches!(
+            character,
+            '\u{300}'..='\u{36f}' | '\u{203f}'..='\u{2040}' | '\u{b7}'
+        )
+}
+
 struct Renderer<'a> {
     config: &'a LinkmlConfig,
     elements: &'a BTreeMap<String, ElementInfo>,
@@ -309,6 +645,10 @@ struct Renderer<'a> {
     used_names: BTreeMap<String, String>,
     inline_classes: BTreeMap<String, String>,
     inline_enums: BTreeMap<String, String>,
+    slot_renames: Vec<LinkmlSlotRename>,
+    slot_diagnostics: Vec<LinkmlSlotDiagnostic>,
+    used_rehome_hints: BTreeSet<String>,
+    total_slots: usize,
 }
 
 impl<'a> Renderer<'a> {
@@ -331,6 +671,26 @@ impl<'a> Renderer<'a> {
             used_names,
             inline_classes: BTreeMap::new(),
             inline_enums: BTreeMap::new(),
+            slot_renames: Vec::new(),
+            slot_diagnostics: Vec::new(),
+            used_rehome_hints: BTreeSet::new(),
+            total_slots: 0,
+        }
+    }
+
+    fn verify_rehome_hints(&self) -> Result<(), LinkmlError> {
+        let unused = self
+            .config
+            .slot_rehomes()
+            .difference(&self.used_rehome_hints)
+            .cloned()
+            .collect::<Vec<_>>();
+        if unused.is_empty() {
+            Ok(())
+        } else {
+            Err(LinkmlError::new(format!(
+                "LinkML slot re-home hints were not used by any source class: {unused:?}"
+            )))
         }
     }
 
@@ -797,25 +1157,27 @@ impl Renderer<'_> {
         let properties = object_map(object, "properties", path)?;
         let required = required_names(object, properties, path)?;
         if !properties.is_empty() {
+            let source_class = source_key.unwrap_or(path);
+            let slot_plan = self.plan_class_slots(name, source_class, properties, path)?;
             let mut attributes = Map::new();
-            let mut slot_uris = BTreeMap::<String, String>::new();
-            for (property, property_schema) in properties {
-                let property_path = format!("{path}/properties/{}", pointer_escape(property));
-                let mut slot = self.render_slot_expression(property_schema, &property_path)?;
-                slot.insert("alias".to_owned(), Value::String(property.clone()));
-                if let Some(slot_uri) = self.slot_uri(property)? {
-                    if let Some(previous) = slot_uris.insert(slot_uri.clone(), property.clone()) {
-                        return Err(LinkmlError::new(format!(
-                            "{path}/properties keys {previous:?} and {property:?} derive the same caller-vocabulary slot URI {slot_uri:?}"
-                        )));
-                    }
+            for planned in slot_plan {
+                let property_schema = properties
+                    .get(&planned.source_name)
+                    .expect("class slot plan covers source properties");
+                let mut slot =
+                    self.render_slot_expression(property_schema, &planned.source_path)?;
+                slot.insert(
+                    "alias".to_owned(),
+                    Value::String(planned.source_name.clone()),
+                );
+                if let Some(slot_uri) = planned.emitted_slot_uri {
                     slot.insert("slot_uri".to_owned(), Value::String(slot_uri));
                 }
                 slot.insert(
                     "required".to_owned(),
-                    Value::Bool(required.contains(property.as_str())),
+                    Value::Bool(required.contains(planned.source_name.as_str())),
                 );
-                attributes.insert(property.clone(), Value::Object(slot));
+                attributes.insert(planned.emitted_name, Value::Object(slot));
             }
             class.insert("attributes".to_owned(), Value::Object(attributes));
         }
@@ -963,49 +1325,223 @@ impl Renderer<'_> {
         Ok(name)
     }
 
-    fn slot_uri(&self, property: &str) -> Result<Option<String>, LinkmlError> {
-        if property.starts_with('@') {
-            return Ok(None);
+    fn plan_class_slots(
+        &mut self,
+        emitted_class: &str,
+        source_class: &str,
+        properties: &Map<String, Value>,
+        path: &str,
+    ) -> Result<Vec<PlannedSlot>, LinkmlError> {
+        self.total_slots = checked_slot_total(self.total_slots, properties.len(), path)?;
+
+        let mut classified = Vec::with_capacity(properties.len());
+        for source_name in properties.keys() {
+            let source_path = format!("{path}/properties/{}", pointer_escape(source_name));
+            let seed = slot_name_seed(self.config, source_name).map_err(|error| {
+                LinkmlError::new(format!(
+                    "{source_path} in source class {source_class:?}: {error}"
+                ))
+            })?;
+            if self.config.slot_rehomes().contains(source_name) {
+                self.used_rehome_hints.insert(source_name.clone());
+            }
+            debug_assert!(
+                seed.source_kind != SlotSourceKind::Reserved || !seed.requires_rename(),
+                "reserved JSON-LD slots never enter naming policy"
+            );
+            classified.push((source_name.clone(), source_path, seed));
         }
 
-        if let Some((prefix, local)) = property.split_once(':')
-            && self.config.prefixes().contains_key(prefix)
-        {
-            if !is_linkml_identifier(local) {
+        // Safe source spellings and their resolved identities win before any
+        // generated name is allocated. This makes the relation independent of
+        // source-object traversal order and protects byte-stable safe output.
+        let mut used_names = BTreeMap::<String, String>::new();
+        let mut used_identities = BTreeMap::<String, String>::new();
+        for (source_name, source_path, seed) in &classified {
+            if seed.requires_rename() {
+                continue;
+            }
+            if let Some(previous) = used_names.insert(seed.direct_name.clone(), source_name.clone())
+            {
                 return Err(LinkmlError::new(format!(
-                    "JSON property {property:?} has a non-NCName CURIE local part"
+                    "{path}/properties keys {previous:?} and {source_name:?} use the same LinkML slot name {:?}",
+                    seed.direct_name
                 )));
             }
-            return Ok(Some(property.to_owned()));
+            if let Some(slot_uri) = seed.emitted_slot_uri.as_deref() {
+                let identity = self.expanded_slot_identity(slot_uri);
+                if let Some(previous) =
+                    used_identities.insert(identity.clone(), source_name.clone())
+                {
+                    return Err(LinkmlError::new(format!(
+                        "{source_path} and source property {previous:?} resolve to the same caller-vocabulary slot identity {identity:?}"
+                    )));
+                }
+            }
         }
 
-        if purrdf_iri::parse(property).is_ok_and(|iri| iri.has_scheme()) {
-            let compacted = self
-                .config
-                .prefixes()
-                .iter()
-                .filter_map(|(prefix, namespace)| {
-                    property
-                        .strip_prefix(namespace)
-                        .filter(|local| is_linkml_identifier(local))
-                        .map(|local| (namespace.len(), prefix, local))
-                })
-                .max_by_key(|(length, _, _)| *length)
-                .map(|(_, prefix, local)| format!("{prefix}:{local}"))
-                .ok_or_else(|| {
-                    LinkmlError::new(format!(
-                        "absolute JSON property {property:?} is outside every caller-supplied LinkML prefix namespace"
-                    ))
-                })?;
-            return Ok(Some(compacted));
-        }
+        let mut planned = Vec::with_capacity(properties.len());
+        for (source_name, source_path, mut seed) in classified {
+            if !seed.requires_rename() {
+                planned.push(PlannedSlot {
+                    source_name,
+                    source_path,
+                    emitted_name: seed.direct_name,
+                    emitted_slot_uri: seed.emitted_slot_uri,
+                });
+                continue;
+            }
 
-        let local = if is_linkml_identifier(property) {
-            property.to_owned()
-        } else {
-            element_name(property)
-        };
-        Ok(Some(format!("{}:{local}", self.config.default_prefix())))
+            match self.config.sanitize_policy() {
+                SanitizePolicy::Fail => {
+                    return Err(LinkmlError::new(format!(
+                        "{source_path} in source class {source_class:?} (emitted class {emitted_class:?}) has unsafe LinkML slot name {source_name:?} under SanitizePolicy::Fail"
+                    )));
+                }
+                SanitizePolicy::Skip => {
+                    self.ensure_report_capacity(&source_path)?;
+                    self.slot_diagnostics.push(LinkmlSlotDiagnostic {
+                        source_class: source_class.to_owned(),
+                        emitted_class: emitted_class.to_owned(),
+                        source_path: source_path.clone(),
+                        source_name,
+                        old_slot_uri: seed.old_slot_uri,
+                        new_slot_name: None,
+                        emitted_slot_uri: None,
+                        disposition: LinkmlSlotDisposition::Skipped,
+                        reasons: seed.reasons,
+                        detail: "unsafe LinkML slot omitted by caller-selected sanitize policy"
+                            .to_owned(),
+                    });
+                    self.record(
+                        "slot-name-policy-dropped",
+                        &source_path,
+                        "An unsafe JSON property is omitted by the caller-selected LinkML slot-name policy",
+                    );
+                }
+                SanitizePolicy::Rename => {
+                    if seed.disposition == LinkmlSlotDisposition::IdentityPreserved
+                        && let Some(slot_uri) = seed.emitted_slot_uri.as_deref()
+                    {
+                        let identity = self.expanded_slot_identity(slot_uri);
+                        if let Some(previous) = used_identities.get(&identity) {
+                            return Err(LinkmlError::new(format!(
+                                "{source_path} and source property {previous:?} resolve to the same caller-vocabulary slot identity {identity:?}"
+                            )));
+                        }
+                    }
+
+                    let (emitted_name, emitted_slot_uri) = self.allocate_slot_name(
+                        &mut seed,
+                        &used_names,
+                        &used_identities,
+                        &source_path,
+                    )?;
+                    used_names.insert(emitted_name.clone(), source_name.clone());
+                    if let Some(slot_uri) = emitted_slot_uri.as_deref() {
+                        used_identities
+                            .insert(self.expanded_slot_identity(slot_uri), source_name.clone());
+                    }
+
+                    let emitted_slot_uri = emitted_slot_uri.ok_or_else(|| {
+                        LinkmlError::new(format!(
+                            "{source_path} generated a renamed slot without a semantic identity"
+                        ))
+                    })?;
+                    self.ensure_report_capacity(&source_path)?;
+                    self.slot_renames.push(LinkmlSlotRename {
+                        source_class: source_class.to_owned(),
+                        emitted_class: emitted_class.to_owned(),
+                        source_path: source_path.clone(),
+                        source_name: source_name.clone(),
+                        old_slot_uri: seed.old_slot_uri,
+                        new_slot_name: emitted_name.clone(),
+                        emitted_slot_uri: emitted_slot_uri.clone(),
+                        disposition: seed.disposition,
+                        reasons: seed.reasons,
+                    });
+                    if seed.disposition == LinkmlSlotDisposition::IdentityRehomed {
+                        self.record(
+                            "slot-identity-rehomed",
+                            &source_path,
+                            "An unresolved source property token is assigned to the caller's default LinkML vocabulary",
+                        );
+                    }
+                    planned.push(PlannedSlot {
+                        source_name,
+                        source_path,
+                        emitted_name,
+                        emitted_slot_uri: Some(emitted_slot_uri),
+                    });
+                }
+            }
+        }
+        Ok(planned)
+    }
+
+    fn allocate_slot_name(
+        &self,
+        seed: &mut SlotNameSeed,
+        used_names: &BTreeMap<String, String>,
+        used_identities: &BTreeMap<String, String>,
+        source_path: &str,
+    ) -> Result<(String, Option<String>), LinkmlError> {
+        for attempt in 0..=MAX_SLOT_COLLISION_ATTEMPTS {
+            let candidate = if attempt == 0 {
+                seed.direct_name.clone()
+            } else {
+                push_reason(&mut seed.reasons, LinkmlSlotReason::Collision);
+                collision_name(&seed.direct_name, &seed.source_name, attempt - 1)?
+            };
+            if used_names.contains_key(&candidate) {
+                continue;
+            }
+            let slot_uri = if seed.disposition == LinkmlSlotDisposition::IdentityRehomed {
+                Some(candidate.clone())
+            } else {
+                seed.emitted_slot_uri.clone()
+            };
+            if slot_uri.as_deref().is_some_and(|slot_uri| {
+                used_identities.contains_key(&self.expanded_slot_identity(slot_uri))
+            }) {
+                if seed.disposition == LinkmlSlotDisposition::IdentityRehomed {
+                    continue;
+                }
+                let identity = self.expanded_slot_identity(
+                    slot_uri
+                        .as_deref()
+                        .expect("identity collision checked Some"),
+                );
+                let previous = used_identities
+                    .get(&identity)
+                    .expect("identity collision checked present");
+                return Err(LinkmlError::new(format!(
+                    "{source_path} and source property {previous:?} resolve to the same caller-vocabulary slot identity {identity:?}"
+                )));
+            }
+            return Ok((candidate, slot_uri));
+        }
+        Err(LinkmlError::new(format!(
+            "{source_path} exceeds the bounded {MAX_SLOT_COLLISION_ATTEMPTS}-attempt LinkML slot-name collision allocator"
+        )))
+    }
+
+    fn expanded_slot_identity(&self, slot_uri: &str) -> String {
+        if let Some((prefix, local)) = slot_uri.split_once(':')
+            && let Some(namespace) = self.config.prefixes().get(prefix)
+        {
+            return format!("{namespace}{local}");
+        }
+        slot_uri.to_owned()
+    }
+
+    fn ensure_report_capacity(&self, source_path: &str) -> Result<(), LinkmlError> {
+        let current = self
+            .slot_renames
+            .len()
+            .checked_add(self.slot_diagnostics.len())
+            .ok_or_else(|| LinkmlError::new("LinkML slot-report row count overflow"))?;
+        checked_report_rows(current, source_path).map(|_| ())
     }
 
     fn element_curie(&self, name: &str) -> String {
@@ -1659,6 +2195,39 @@ impl Renderer<'_> {
     }
 }
 
+fn checked_slot_total(
+    current: usize,
+    class_slots: usize,
+    path: &str,
+) -> Result<usize, LinkmlError> {
+    if class_slots > MAX_LINKML_SLOTS_PER_CLASS {
+        return Err(LinkmlError::new(format!(
+            "{path}/properties contains {class_slots} slots, exceeding the per-class limit of {MAX_LINKML_SLOTS_PER_CLASS}"
+        )));
+    }
+    let total = current
+        .checked_add(class_slots)
+        .ok_or_else(|| LinkmlError::new("LinkML source slot count overflow"))?;
+    if total > MAX_LINKML_TOTAL_SLOTS {
+        return Err(LinkmlError::new(format!(
+            "{path}/properties raises the document slot count above the {MAX_LINKML_TOTAL_SLOTS}-slot limit"
+        )));
+    }
+    Ok(total)
+}
+
+fn checked_report_rows(current: usize, source_path: &str) -> Result<usize, LinkmlError> {
+    let rows = current
+        .checked_add(1)
+        .ok_or_else(|| LinkmlError::new("LinkML slot-report row count overflow"))?;
+    if rows > MAX_LINKML_REPORT_ROWS {
+        return Err(LinkmlError::new(format!(
+            "{source_path} raises the slot-report count above the {MAX_LINKML_REPORT_ROWS}-row limit"
+        )));
+    }
+    Ok(rows)
+}
+
 fn extra_slots(allowed: bool, range_expression: Option<Map<String, Value>>) -> Value {
     let mut extra = Map::new();
     extra.insert("allowed".to_owned(), Value::Bool(allowed));
@@ -1851,8 +2420,11 @@ fn conjoin_expression(target: &mut Map<String, Value>, key: &str, values: Vec<Va
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use ::purrdf::loss::check_ledger_sound;
+    use proptest::prelude::*;
     use serde_json::json;
 
     fn compiled(schema: &Value) -> CompiledSchema {
@@ -1878,6 +2450,155 @@ mod tests {
             ]),
         )
         .expect("valid config")
+    }
+
+    #[test]
+    fn sanitizer_borrows_valid_locals_and_owns_replacements() {
+        let mut valid_reasons = Vec::new();
+        let valid = sanitized_local("already_valid", &mut valid_reasons);
+        assert!(matches!(valid, Cow::Borrowed("already_valid")));
+        assert!(valid_reasons.is_empty());
+
+        let mut invalid_reasons = Vec::new();
+        let invalid = sanitized_local("9 bad", &mut invalid_reasons);
+        assert!(matches!(invalid, Cow::Owned(ref value) if value == "_9_bad"));
+        assert_eq!(
+            invalid_reasons,
+            vec![
+                LinkmlSlotReason::InvalidCharacter,
+                LinkmlSlotReason::InvalidInitialCharacter,
+            ]
+        );
+
+        let mut empty_reasons = Vec::new();
+        let empty = sanitized_local("", &mut empty_reasons);
+        assert!(matches!(empty, Cow::Owned(ref value) if value == "_"));
+        assert_eq!(
+            empty_reasons,
+            vec![LinkmlSlotReason::InvalidInitialCharacter]
+        );
+    }
+
+    #[test]
+    fn slot_name_seed_separates_syntax_identity_and_caller_rehomes() {
+        let config = config();
+
+        let registered = slot_name_seed(&config, "ex:a/b").expect("registered CURIE seed");
+        assert_eq!(registered.direct_name, "ex:a_b");
+        assert_eq!(registered.old_slot_uri.as_deref(), Some("ex:a/b"));
+        assert_eq!(registered.emitted_slot_uri.as_deref(), Some("ex:a/b"));
+        assert_eq!(
+            registered.disposition,
+            LinkmlSlotDisposition::IdentityPreserved
+        );
+        assert_eq!(registered.reasons, vec![LinkmlSlotReason::InvalidCharacter]);
+
+        let matched =
+            slot_name_seed(&config, "https://example.org/name").expect("matched absolute IRI seed");
+        assert!(!matched.requires_rename());
+        assert_eq!(matched.emitted_slot_uri.as_deref(), Some("ex:name"));
+
+        let unmatched = slot_name_seed(&config, "https://outside.example/definition")
+            .expect("unmatched absolute IRI seed");
+        assert_eq!(unmatched.direct_name, "ex:definition");
+        assert_eq!(
+            unmatched.emitted_slot_uri.as_deref(),
+            Some("https://outside.example/definition")
+        );
+        assert_eq!(
+            unmatched.reasons,
+            vec![LinkmlSlotReason::UnmatchedNamespace]
+        );
+
+        for (source, expected) in [
+            ("http://outside.example/name", "ex:name"),
+            ("urn:example:part", "ex:part"),
+            ("did:example:123", "ex:_123"),
+            ("mailto:cat@example.org", "ex:cat_example.org"),
+            ("custom:alpha/beta", "ex:beta"),
+        ] {
+            let seed = slot_name_seed(&config, source).expect("non-HTTP absolute IRI seed");
+            assert_eq!(seed.direct_name, expected);
+            assert_eq!(seed.old_slot_uri.as_deref(), Some(source));
+            assert_eq!(seed.emitted_slot_uri.as_deref(), Some(source));
+            assert_eq!(seed.disposition, LinkmlSlotDisposition::IdentityPreserved);
+        }
+
+        let bare = slot_name_seed(&config, "9 bad").expect("bare source seed");
+        assert_eq!(bare.direct_name, "ex:_9_bad");
+        assert_eq!(bare.old_slot_uri, None);
+        assert_eq!(bare.emitted_slot_uri.as_deref(), Some("ex:_9_bad"));
+        assert_eq!(bare.disposition, LinkmlSlotDisposition::IdentityRehomed);
+        assert_eq!(
+            bare.reasons,
+            vec![
+                LinkmlSlotReason::InvalidCharacter,
+                LinkmlSlotReason::InvalidInitialCharacter,
+                LinkmlSlotReason::BareName,
+            ]
+        );
+
+        let reserved = slot_name_seed(&config, "@id").expect("reserved source seed");
+        assert_eq!(reserved.source_kind, SlotSourceKind::Reserved);
+        assert_eq!(reserved.emitted_slot_uri, None);
+        let unknown = slot_name_seed(&config, "@unknown").expect("unknown at-name seed");
+        assert_eq!(unknown.direct_name, "ex:_unknown");
+        assert_eq!(unknown.disposition, LinkmlSlotDisposition::IdentityRehomed);
+
+        for (source, expected) in [
+            ("", "ex:_"),
+            ("ex:9 cats", "ex:_9_cats"),
+            ("ex:cat🐈", "ex:cat_"),
+            ("https://outside.example/", "ex:_"),
+        ] {
+            assert_eq!(
+                slot_name_seed(&config, source)
+                    .expect("edge-case seed")
+                    .direct_name,
+                expected
+            );
+        }
+        assert!(
+            !slot_name_seed(&config, "ex:Δelta")
+                .expect("Unicode NCName seed")
+                .requires_rename()
+        );
+
+        let rehome_config = config
+            .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))
+            .expect("caller re-home config");
+        let rehomed =
+            slot_name_seed(&rehome_config, "skos:definition").expect("re-homed source seed");
+        assert_eq!(rehomed.direct_name, "ex:definition");
+        assert_eq!(rehomed.old_slot_uri, None);
+        assert_eq!(rehomed.emitted_slot_uri.as_deref(), Some("ex:definition"));
+        assert_eq!(rehomed.disposition, LinkmlSlotDisposition::IdentityRehomed);
+        assert_eq!(rehomed.reasons, vec![LinkmlSlotReason::CallerRehome]);
+    }
+
+    #[test]
+    fn slot_name_seed_has_lexical_namespace_ties_and_bounded_names() {
+        let tied = LinkmlConfig::new(
+            "https://example.org/schema",
+            "Example-Schema",
+            "Caller-owned tie fixture.",
+            "zz",
+            BTreeMap::from([
+                ("aa".to_owned(), "https://example.org/".to_owned()),
+                ("linkml".to_owned(), "https://w3id.org/linkml/".to_owned()),
+                ("zz".to_owned(), "https://example.org/".to_owned()),
+            ]),
+        )
+        .expect("valid tied config");
+        let seed = slot_name_seed(&tied, "https://example.org/name").expect("tied seed");
+        assert_eq!(seed.emitted_slot_uri.as_deref(), Some("aa:name"));
+
+        let source = format!("ex:{}", "x".repeat(MAX_GENERATED_SLOT_NAME_BYTES));
+        let bounded = slot_name_seed(&config(), &source).expect("bounded seed");
+        assert!(bounded.direct_name.len() <= MAX_GENERATED_SLOT_NAME_BYTES);
+        assert!(bounded.direct_name.starts_with("ex:Slot"));
+        assert!(bounded.reasons.contains(&LinkmlSlotReason::LengthBound));
+        assert_eq!(bounded.old_slot_uri.as_deref(), Some(source.as_str()));
     }
 
     fn exact_schema() -> Value {
@@ -2172,7 +2893,7 @@ mod tests {
                 .contains("absent")
         );
 
-        let unknown_prefix = json!({
+        let custom_scheme = json!({
             "$defs": {
                 "Broken": {
                     "type": "object",
@@ -2180,12 +2901,12 @@ mod tests {
                 }
             }
         });
-        assert!(
-            emit(&compiled(&unknown_prefix), &config())
-                .unwrap_err()
-                .to_string()
-                .contains("prefix")
+        let custom = emit(&compiled(&custom_scheme), &config()).expect("custom IRI scheme emits");
+        assert_eq!(
+            custom.document.as_value()["classes"]["Broken"]["attributes"]["ex:value"]["slot_uri"],
+            "other:value"
         );
+        assert_eq!(custom.slot_renames.len(), 1);
 
         let malformed_type = json!({ "$defs": { "Broken": { "type": [] } } });
         assert!(
@@ -2230,5 +2951,434 @@ mod tests {
                 ["slot_uri"],
             "people:name"
         );
+    }
+
+    #[test]
+    fn unsafe_slots_follow_rename_skip_and_fail_policies() {
+        let schema = json!({
+            "$defs": {
+                "Person": {
+                    "type": "object",
+                    "properties": {
+                        "ex:a/b": { "type": "string", "pattern": "^A" },
+                        "ex:safe": { "type": "integer" }
+                    },
+                    "required": ["ex:a/b"]
+                }
+            }
+        });
+
+        let renamed = emit(&compiled(&schema), &config()).expect("default rename emits");
+        let attributes = &renamed.document.as_value()["classes"]["Person"]["attributes"];
+        assert_eq!(attributes["ex:a_b"]["alias"], "ex:a/b");
+        assert_eq!(attributes["ex:a_b"]["slot_uri"], "ex:a/b");
+        assert_eq!(attributes["ex:a_b"]["required"], true);
+        assert_eq!(attributes["ex:a_b"]["pattern"], "^A");
+        assert_eq!(renamed.slot_renames.len(), 1);
+        assert_eq!(
+            renamed.slot_renames[0].audit_tuple(),
+            ("Person", Some("ex:a/b"), "ex:a_b")
+        );
+        assert_eq!(
+            renamed.slot_renames[0].disposition,
+            LinkmlSlotDisposition::IdentityPreserved
+        );
+        assert!(renamed.slot_diagnostics.is_empty());
+
+        let source = compiled(&schema);
+        let source_bytes = source.schema_json.clone();
+        let _ = emit(&source, &config()).expect("source immutability probe emits");
+        assert_eq!(source.schema_json, source_bytes);
+
+        let skipped = emit(
+            &compiled(&schema),
+            &config().with_sanitize_policy(SanitizePolicy::Skip),
+        )
+        .expect("skip emits remaining schema");
+        let attributes = &skipped.document.as_value()["classes"]["Person"]["attributes"];
+        assert!(attributes.get("ex:a_b").is_none());
+        assert_eq!(attributes["ex:safe"]["slot_uri"], "ex:safe");
+        assert!(skipped.slot_renames.is_empty());
+        assert_eq!(skipped.slot_diagnostics.len(), 1);
+        assert_eq!(
+            skipped.slot_diagnostics[0].source_path,
+            "#/$defs/Person/properties/ex:a~1b"
+        );
+        assert_eq!(
+            skipped.slot_diagnostics[0].disposition,
+            LinkmlSlotDisposition::Skipped
+        );
+        assert_eq!(
+            skipped
+                .losses
+                .entries()
+                .iter()
+                .map(|entry| entry.code.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["slot-name-policy-dropped"]
+        );
+        check_ledger_sound(&skipped.losses, LOSS_FROM, LOSS_TO).expect("skip loss is registered");
+
+        let error = emit(
+            &compiled(&schema),
+            &config().with_sanitize_policy(SanitizePolicy::Fail),
+        )
+        .expect_err("fail policy rejects unsafe source");
+        assert!(error.detail().contains("source class \"Person\""));
+        assert!(error.detail().contains("ex:a/b"));
+        assert!(error.detail().contains("#/$defs/Person/properties/ex:a~1b"));
+    }
+
+    #[test]
+    fn class_planning_reserves_safe_names_and_bounds_collision_fallback() {
+        let direct = "ex:a_b";
+        let hash_candidate = collision_name(direct, "ex:a/b", 0).expect("hash candidate");
+        let ordinal_candidate = collision_name(direct, "ex:a/b", 1).expect("ordinal candidate");
+        let schema = json!({
+            "$defs": {
+                "Collision": {
+                    "type": "object",
+                    "properties": {
+                        direct: { "type": "string" },
+                        hash_candidate.clone(): { "type": "string" },
+                        "ex:a/b": { "type": "string" }
+                    }
+                }
+            }
+        });
+
+        let output = emit(&compiled(&schema), &config()).expect("collision plan emits");
+        let attributes = output.document.as_value()["classes"]["Collision"]["attributes"]
+            .as_object()
+            .expect("attributes");
+        assert!(attributes.contains_key(direct));
+        assert!(attributes.contains_key(&hash_candidate));
+        assert_eq!(attributes[&ordinal_candidate]["alias"], "ex:a/b");
+        assert_eq!(attributes[&ordinal_candidate]["slot_uri"], "ex:a/b");
+        assert_eq!(output.slot_renames[0].new_slot_name, ordinal_candidate);
+        assert!(
+            output.slot_renames[0]
+                .reasons
+                .contains(&LinkmlSlotReason::Collision)
+        );
+    }
+
+    #[test]
+    fn rehomes_are_exact_loss_accounted_and_stale_hints_fail_closed() {
+        let configured = config()
+            .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))
+            .expect("valid exact re-home hint");
+        let schema = json!({
+            "$defs": {
+                "Term": {
+                    "type": "object",
+                    "properties": {
+                        "@id": { "type": "string" },
+                        "@unknown": { "type": "string" },
+                        "skos:definition": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &configured).expect("configured re-home emits");
+        let attributes = &output.document.as_value()["classes"]["Term"]["attributes"];
+        assert!(attributes["@id"].get("slot_uri").is_none());
+        assert_eq!(attributes["ex:definition"]["alias"], "skos:definition");
+        assert_eq!(attributes["ex:definition"]["slot_uri"], "ex:definition");
+        assert_eq!(attributes["ex:_unknown"]["alias"], "@unknown");
+        assert_eq!(output.slot_renames.len(), 2);
+        assert!(
+            output
+                .slot_renames
+                .iter()
+                .all(|rename| { rename.disposition == LinkmlSlotDisposition::IdentityRehomed })
+        );
+        assert_eq!(
+            output
+                .losses
+                .entries()
+                .iter()
+                .map(|entry| entry.code.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["slot-identity-rehomed", "slot-identity-rehomed"]
+        );
+        check_ledger_sound(&output.losses, LOSS_FROM, LOSS_TO)
+            .expect("re-home losses are registered");
+
+        let stale = config()
+            .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))
+            .expect("valid stale hint configuration");
+        let error = emit(
+            &compiled(&json!({
+                "$defs": {
+                    "Term": {
+                        "type": "object",
+                        "properties": { "ex:name": { "type": "string" } }
+                    }
+                }
+            })),
+            &stale,
+        )
+        .expect_err("unused re-home hint fails closed");
+        assert!(error.detail().contains("skos:definition"));
+    }
+
+    #[test]
+    fn reserved_carriers_and_semantic_identity_collisions_are_explicit() {
+        for reserved in ["@annotation", "@id", "@language", "@type", "@value"] {
+            let seed = slot_name_seed(&config(), reserved).expect("reserved seed");
+            assert_eq!(seed.source_kind, SlotSourceKind::Reserved);
+            assert!(!seed.requires_rename());
+            assert_eq!(seed.emitted_slot_uri, None);
+        }
+
+        for properties in [
+            json!({
+                "name": { "type": "string" },
+                "ex:name": { "type": "string" }
+            }),
+            json!({
+                "ex:name": { "type": "string" },
+                "https://example.org/name": { "type": "string" }
+            }),
+        ] {
+            let schema = json!({
+                "$defs": {
+                    "Collision": {
+                        "type": "object",
+                        "properties": properties
+                    }
+                }
+            });
+            assert!(
+                emit(&compiled(&schema), &config())
+                    .expect_err("semantic identity collision")
+                    .detail()
+                    .contains("same caller-vocabulary slot identity")
+            );
+        }
+
+        let rehome = config()
+            .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))
+            .expect("re-home config");
+        let schema = json!({
+            "$defs": {
+                "Collision": {
+                    "type": "object",
+                    "properties": {
+                        "definition": { "type": "string" },
+                        "skos:definition": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &rehome).expect("re-home collision allocates");
+        let renamed = output
+            .slot_renames
+            .iter()
+            .find(|row| row.source_name == "skos:definition")
+            .expect("re-home report");
+        assert!(renamed.reasons.contains(&LinkmlSlotReason::Collision));
+        assert_ne!(renamed.emitted_slot_uri, "ex:definition");
+    }
+
+    #[test]
+    fn sanitizer_collisions_have_one_lexical_direct_owner() {
+        let schema = json!({
+            "$defs": {
+                "Collision": {
+                    "type": "object",
+                    "properties": {
+                        "ex:a/b": { "type": "string" },
+                        "ex:a?b": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &config()).expect("sanitizer collision emits");
+        assert_eq!(output.slot_renames.len(), 2);
+        let slash = output
+            .slot_renames
+            .iter()
+            .find(|row| row.source_name == "ex:a/b")
+            .expect("slash row");
+        let question = output
+            .slot_renames
+            .iter()
+            .find(|row| row.source_name == "ex:a?b")
+            .expect("question row");
+        assert_eq!(slash.new_slot_name, "ex:a_b");
+        assert!(question.reasons.contains(&LinkmlSlotReason::Collision));
+    }
+
+    #[test]
+    fn nested_unsafe_slots_keep_requiredness_and_use_the_same_planner() {
+        let schema = json!({
+            "$defs": {
+                "Outer": {
+                    "type": "object",
+                    "properties": {
+                        "ex:child/value": {
+                            "type": "object",
+                            "properties": {
+                                "ex:nested/value": { "type": "integer" }
+                            },
+                            "required": ["ex:nested/value"]
+                        }
+                    },
+                    "required": ["ex:child/value"]
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &config()).expect("nested rename emits");
+        let outer = &output.document.as_value()["classes"]["Outer"]["attributes"]["ex:child_value"];
+        assert_eq!(outer["required"], true);
+        let nested_report = output
+            .slot_renames
+            .iter()
+            .find(|rename| rename.source_name == "ex:nested/value")
+            .expect("nested report");
+        let nested = &output.document.as_value()["classes"][&nested_report.emitted_class]["attributes"]
+            ["ex:nested_value"];
+        assert_eq!(nested["alias"], "ex:nested/value");
+        assert_eq!(nested["required"], true);
+        assert_eq!(nested["slot_uri"], "ex:nested/value");
+    }
+
+    #[test]
+    fn every_slot_resource_limit_fails_before_unbounded_work() {
+        let oversized_schema = CompiledSchema {
+            schema_json: " ".repeat(MAX_LINKML_SOURCE_SCHEMA_BYTES + 1),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        };
+        assert!(
+            emit(&oversized_schema, &config())
+                .expect_err("source byte bound")
+                .detail()
+                .contains("source exceeds")
+        );
+
+        let oversized_key = "x".repeat(MAX_LINKML_SOURCE_KEY_BYTES + 1);
+        assert!(
+            slot_name_seed(&config(), &oversized_key)
+                .expect_err("source key bound")
+                .detail()
+                .contains("property name exceeds")
+        );
+        assert!(
+            checked_slot_total(0, MAX_LINKML_SLOTS_PER_CLASS + 1, "#/$defs/Large")
+                .expect_err("per-class bound")
+                .detail()
+                .contains("per-class limit")
+        );
+        assert!(
+            checked_slot_total(MAX_LINKML_TOTAL_SLOTS, 1, "#/$defs/Large")
+                .expect_err("total bound")
+                .detail()
+                .contains("document slot count")
+        );
+        assert!(
+            checked_report_rows(MAX_LINKML_REPORT_ROWS, "#/$defs/Large/properties/ex:x")
+                .expect_err("report bound")
+                .detail()
+                .contains("slot-report count")
+        );
+
+        let config = config();
+        let elements = BTreeMap::new();
+        let renderer = Renderer::new(&config, &elements);
+        let mut seed = slot_name_seed(&config, "ex:a/b").expect("unsafe seed");
+        let mut used_names =
+            BTreeMap::from([(seed.direct_name.clone(), "safe direct owner".to_owned())]);
+        for ordinal in 0..MAX_SLOT_COLLISION_ATTEMPTS {
+            used_names.insert(
+                collision_name(&seed.direct_name, &seed.source_name, ordinal)
+                    .expect("bounded collision candidate"),
+                format!("candidate {ordinal}"),
+            );
+        }
+        assert!(
+            renderer
+                .allocate_slot_name(
+                    &mut seed,
+                    &used_names,
+                    &BTreeMap::new(),
+                    "#/$defs/Large/properties/ex:a~1b",
+                )
+                .expect_err("collision bound")
+                .detail()
+                .contains("collision allocator")
+        );
+    }
+
+    #[test]
+    fn safe_input_matches_the_committed_byte_golden() {
+        let schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "Safe": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "@id": { "type": "string" },
+                        "ex:name": { "type": "string", "pattern": "^[A-Z]" }
+                    },
+                    "required": ["ex:name"]
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &config()).expect("safe fixture emits");
+        assert!(output.slot_renames.is_empty());
+        assert!(output.slot_diagnostics.is_empty());
+        assert!(output.losses.is_empty());
+        assert_eq!(
+            output.element_names,
+            BTreeMap::from([("Safe".to_owned(), "Safe".to_owned())])
+        );
+        assert_eq!(
+            output.yaml,
+            include_str!("../../tests/linkml_safe.golden.yaml")
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn ncname_sanitizer_is_total_valid_and_deterministic(source in any::<String>()) {
+            let mut first_reasons = Vec::new();
+            let first = sanitized_local(&source, &mut first_reasons);
+            let mut second_reasons = Vec::new();
+            let second = sanitized_local(&source, &mut second_reasons);
+            prop_assert!(is_linkml_identifier(&first));
+            prop_assert_eq!(first, second);
+            prop_assert_eq!(first_reasons, second_reasons);
+        }
+
+        #[test]
+        fn slot_planning_is_independent_of_property_insertion_order(
+            names in proptest::collection::btree_set("[A-Za-z0-9_ /?.-]{1,24}", 1..24)
+        ) {
+            let mut forward = Map::new();
+            for name in &names {
+                forward.insert(format!("ex:{name}"), json!({ "type": "string" }));
+            }
+            let mut reverse = Map::new();
+            for name in names.iter().rev() {
+                reverse.insert(format!("ex:{name}"), json!({ "type": "string" }));
+            }
+            let source = |properties| json!({
+                "$defs": {
+                    "Order": {
+                        "type": "object",
+                        "properties": properties
+                    }
+                }
+            });
+            let left = emit(&compiled(&source(forward)), &config());
+            let right = emit(&compiled(&source(reverse)), &config());
+            prop_assert_eq!(left, right);
+        }
     }
 }

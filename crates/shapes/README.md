@@ -217,8 +217,10 @@ description, default prefix, and complete prefix map; there is deliberately no
 `Default` configuration.
 
 ```rust,ignore
-use std::collections::BTreeMap;
-use purrdf_shapes::{LinkmlConfig, emit_linkml, parse_linkml, write_linkml};
+use std::collections::{BTreeMap, BTreeSet};
+use purrdf_shapes::{
+    LinkmlConfig, SanitizePolicy, emit_linkml, parse_linkml, write_linkml,
+};
 
 let config = LinkmlConfig::new(
     "https://example.org/schema/linkml",
@@ -229,7 +231,12 @@ let config = LinkmlConfig::new(
         ("ex".into(), "https://example.org/".into()),
         ("linkml".into(), "https://w3id.org/linkml/".into()),
     ]),
-)?;
+)?
+.with_sanitize_policy(SanitizePolicy::Rename)
+.with_slot_rehomes(BTreeSet::from([
+    // This exact undeclared token is caller-owned shorthand, not a custom IRI.
+    "skos:definition".to_owned(),
+]))?;
 let package = emit_linkml(&compiled_schema, &config)?;
 
 let parsed = parse_linkml(&package.yaml)?;
@@ -238,12 +245,17 @@ assert_eq!(
     package.element_names.get("Person").map(String::as_str),
     Some("Person"),
 );
+for rename in &package.slot_renames {
+    let (class, old_slot_uri, new_slot_name) = rename.audit_tuple();
+    println!("{class}: {old_slot_uri:?} -> {new_slot_name}");
+}
 ```
 
 `LinkmlPackage` returns the validated document tree, canonical YAML, a
-reversible source-`$defs`-key to LinkML-element map, and the always-computed
-`json-schema` → `linkml-1.11` loss ledger. The YAML writer sorts every mapping
-and emits exactly one trailing newline. The reader preserves every
+reversible source-`$defs`-key to LinkML-element map, ordered slot rename and
+skip-diagnostic reports, and the always-computed `json-schema` → `linkml-1.11`
+loss ledger. The YAML writer sorts every mapping and emits exactly one trailing
+newline. The reader preserves every
 JSON-compatible LinkML field, including metamodel extensions PurRDF does not
 author, while rejecting duplicate keys, YAML tags, non-string mapping keys,
 non-finite numbers, and resource-limit violations. Thus read → write and write
@@ -252,9 +264,49 @@ language-neutral boundary.
 
 `import_linkml` interprets any validated native `LinkmlDocument` through the
 shared SHACL import model. `import_linkml_package` additionally verifies that an
-emitted package's canonical YAML and reversible element map still match its
-typed document. Native metamodel annotations and schema identity are ledgered
+emitted package's canonical YAML, element map, slot reports, policy losses,
+aliases, and `slot_uri` values still agree. A declared CURIE or absolute IRI
+therefore reverses to its original predicate even when its LinkML attribute name
+was changed. Native metamodel annotations and schema identity are ledgered
 instead of being mistaken for SHACL validation terms.
+
+`LinkmlConfig::new` selects `SanitizePolicy::Rename`. The renderer plans every
+class before emitting it, so an unsafe property cannot consume an already-safe
+name and insertion order cannot change collision ownership:
+
+- `Rename` emits a deterministic caller-prefixed NCName, retains the exact
+  source spelling in `alias`, and appends a `LinkmlSlotRename`. For a declared
+  CURIE only the local spelling changes; its exact original CURIE remains in
+  `slot_uri`. Every parser-valid absolute IRI (`http`, `https`, `urn`, `did`,
+  `mailto`, or another scheme) likewise remains byte-exact in `slot_uri`.
+- `Skip` omits only the unsafe property, appends a located
+  `LinkmlSlotDiagnostic`, and records `slot-name-policy-dropped`.
+- `Fail` rejects the projection with the source class, emitted class, property,
+  and JSON Pointer.
+
+An unmatched absolute IRI uses its trailing local segment under the caller's
+default prefix only for the generated attribute name; its absolute semantic
+identity is preserved. An unsafe bare token has no pre-existing RDF identity
+and is explicitly assigned one under the caller's default prefix, recorded as
+`slot-identity-rehomed`. `with_slot_rehomes` provides the same explicit
+assignment for exact unresolved tokens such as an undeclared `skos:definition`.
+Valid custom-scheme IRIs are never guessed to be unresolved CURIEs. Hints that
+target declared prefixes or the five supported JSON-LD carriers (`@annotation`,
+`@id`, `@language`, `@type`, and `@value`) are rejected, and every configured
+hint must occur in the source.
+
+Generated-name collisions receive a fixed hash suffix and bounded ordinal
+fallback. Semantic `slot_uri` collisions fail unless the colliding identity is
+being explicitly re-homed, in which case allocation chooses another reported
+caller-default identity. Source schema bytes, source-key bytes, slots per class,
+total slots, report rows, generated-name bytes, and collision attempts all have
+fixed fail-closed limits.
+
+Code that previously rewrote `properties` and `required` keys before LinkML
+emission should remove that pre-pass. Pass the shared `CompiledSchema` unchanged,
+configure any exact semantic re-homes on `LinkmlConfig`, and use
+`package.slot_renames` as the reversible migration record. This keeps every
+other emitter on the same deterministic schema carrier.
 
 The projection grammar is:
 
@@ -263,7 +315,7 @@ The projection grammar is:
 | object `$defs` | named `classes` with caller-prefix-derived `class_uri` |
 | scalar `$defs` | named `types` |
 | string and `{"@id": ...}` enum `$defs` | named `enums` and `permissible_values` |
-| `properties` | class-scoped `attributes`; the exact JSON key remains the attribute key and `alias` |
+| `properties` | class-scoped `attributes`; safe keys remain exact, while unsafe keys use the selected policy and always retain the source key in `alias` when emitted |
 | local `$ref` | class, type, or enum `range`; class aliases use `is_a` |
 | inline object | deterministic synthesized class with `inlined: true` |
 | `required` | attribute `required` |
@@ -280,15 +332,16 @@ conditional/dependency/contains/unevaluated rules, tuple widening, string and
 property counts, exclusive and multiple-of bounds, format differences,
 non-scalar enum carriers, and a closed catch-all. Malformed values,
 external/dynamic/dangling references, inconsistent `required` declarations,
-unknown caller prefixes, reserved names, and normalized-name collisions hard
-fail instead of entering the ledger. Source SHACL → JSON Schema losses remain
-separate on `CompiledSchema::losses`.
+stale/ambiguous re-home hints, semantic identity collisions, and fixed-limit
+breaches hard fail instead of entering the ledger. Source SHACL → JSON Schema
+losses remain separate on `CompiledSchema::losses`.
 
 The production emitter has no Python dependency and remains wasm-clean. The
 dev-only oracle pins the official `linkml` and `linkml-runtime` packages to
 1.11.1, loads the emitted YAML through `SchemaDefinition` and `SchemaView`,
 regenerates JSON Schema, compares the exact fixture's `$defs` and accept/reject
-corpus, and probes every lossy family:
+corpus, verifies renamed aliases and `slot_uri` values across seven identity
+forms, checks reverse predicates, and probes every lossy family:
 
 ```bash
 make linkml-oracle

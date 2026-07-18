@@ -64,8 +64,9 @@ pub use json_schema::{
     SchemaSurfaceMode, ValueVocab, ValueVocabProjection, compile_schema, compile_with_value_vocab,
 };
 pub use linkml::{
-    LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, emit_linkml, import_linkml,
-    import_linkml_package, parse_linkml, write_linkml,
+    LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, LinkmlSlotDiagnostic,
+    LinkmlSlotDisposition, LinkmlSlotReason, LinkmlSlotRename, SanitizePolicy, emit_linkml,
+    import_linkml, import_linkml_package, parse_linkml, write_linkml,
 };
 pub use pydantic::{
     PYDANTIC_DIALECT, PydanticConfig, PydanticError, PydanticPackage, emit_pydantic,

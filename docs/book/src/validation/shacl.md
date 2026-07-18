@@ -148,24 +148,40 @@ with `emit_linkml`. `LinkmlConfig` requires the caller's schema IRI, name,
 description, default prefix, and complete prefix map, so PurRDF never mints a
 consumer vocabulary or identity. The returned `LinkmlPackage` includes the
 typed document, deterministic YAML, a reversible `$defs`-key mapping, and a
-located `json-schema` → `linkml-1.11` loss ledger.
+located `json-schema` → `linkml-1.11` loss ledger. It also carries ordered,
+integrity-checked slot rename and skip-diagnostic reports.
 
 Classes and exact property aliases, types, enums, local references, inline
 objects, requiredness, homogeneous arrays, patterns, inclusive bounds, and
-LinkML boolean expressions are represented directly. Every unsupported
-assertion is classified by a closed capability table; malformed inputs,
-external/dynamic/dangling references, prefix mistakes, and deterministic-name
-collisions fail closed. `parse_linkml` and `write_linkml` preserve all
+LinkML boolean expressions are represented directly. An unsafe LinkML slot name
+uses `SanitizePolicy::Rename` by default; `Skip` omits only that slot with a
+located diagnostic/loss, and `Fail` returns a contextual error. Rename preserves
+declared CURIE and absolute-IRI identity byte-exactly in `slot_uri`; an unsafe
+bare token or exact caller re-home receives a reported identity under the
+caller-supplied default prefix. All valid IRI schemes remain absolute unless
+the caller marks that exact token, so custom schemes are not guessed from their
+spelling. Safe names reserve first and hash-plus-ordinal collision allocation is
+bounded and deterministic.
+
+Every unsupported assertion is classified by a closed capability table;
+malformed inputs, external/dynamic/dangling references, stale re-home hints,
+semantic identity collisions, and fixed-limit breaches fail closed.
+`parse_linkml` and `write_linkml` preserve all
 JSON-compatible metamodel fields and provide byte-stable read/write round trips
 while rejecting YAML-only tags, duplicate keys, non-string keys, and non-finite
 numbers.
 
 `import_linkml` consumes that validated native document; the emitted-package
 variant `import_linkml_package` first verifies canonical YAML and the reversible
-element map. Both use the same caller-owned SHACL import configuration.
+element map, slot reports, policy losses, aliases, and emitted identities. Both
+use the same caller-owned SHACL import configuration. Migration adapters should
+pass `CompiledSchema` unchanged, configure exact re-homes, and consume
+`slot_renames`; rewriting shared property/required keys is unnecessary.
 
 The Rust production path has no LinkML-toolkit dependency. CI uses the locked
-official LinkML 1.11.1 Python packages only as a differential oracle:
+official LinkML 1.11.1 Python packages only as a differential oracle. It loads
+safe, lossy, and renamed fixtures through `SchemaDefinition` and `SchemaView`,
+regenerates JSON Schema, and verifies reverse predicates:
 
 ```bash
 make linkml-oracle

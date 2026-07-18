@@ -178,6 +178,7 @@ mod tests {
     fn facade_exposes_rdf_slice_shapes_and_shex() {
         let _ = RdfDatasetBuilder::new();
         let _ = slice::rdf_query::DatasetAccumulator::new();
+        let _ = shapes::SanitizePolicy::Rename;
         let _ = shapes::report::ValidationReport {
             conforms: true,
             results: Vec::new(),

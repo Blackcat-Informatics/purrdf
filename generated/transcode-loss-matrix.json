@@ -665,6 +665,20 @@
     "note": "JSON Schema minProperties/maxProperties assertions have no LinkML 1.11 class expression. Named attributes and their requiredness remain, while total property-count validation is omitted."
   },
   {
+    "code": "slot-identity-rehomed",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "A source JSON property token without a caller-resolvable RDF identity is assigned to a concrete URI under the caller's configured LinkML default prefix. The source token, generated slot name, and assigned identity remain explicit in the projection report."
+  },
+  {
+    "code": "slot-name-policy-dropped",
+    "from": "json-schema",
+    "to": "linkml-1.11",
+    "intentional": true,
+    "note": "The caller selected LinkML slot-name skipping for a JSON property whose spelling cannot be emitted directly. The single property is omitted and its exact source location remains explicit in the projection diagnostic."
+  },
+  {
     "code": "string-length-validation-dropped",
     "from": "json-schema",
     "to": "linkml-1.11",

@@ -232,11 +232,24 @@ warmed import. Those counters represent cumulative allocation traffic, not
 retained or peak memory, and the benchmark is report-only: neither timing nor
 allocation output is a CI threshold or performance promise.
 
+The `linkml_slot_emission` group measures the forward name-planning boundary on
+matched fixtures with the same class, slot count, requiredness, and constraint
+payload. `safe` uses directly representable names, `rename` uses distinct unsafe
+locals, and `collision` gives every unsafe local one sanitized stem while a safe
+slot owns that stem. Each mode runs at 32, 1,024, and 60,000 slots (near the
+65,536 per-class limit). Schema/config construction stays outside the timed
+loop; warmup, one-operation allocation probe, and measured loop all assert the
+expected rename and collision counts. Throughput is total source slots. The
+printed allocation calls/requested bytes are traffic, not retained or peak
+memory, and no speedup claim or gate is attached to them.
+
 ```sh
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_schema_import
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_schema_import --quick
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_linkml_import
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_linkml_import --quick
+cargo bench -p purrdf-shapes --bench validate --locked -- linkml_slot_emission
+cargo bench -p purrdf-shapes --bench validate --locked -- linkml_slot_emission --quick
 ```
 
 ### SHACL ontology schema surface

@@ -1,0 +1,26 @@
+classes:
+  Safe:
+    attributes:
+      '@id':
+        alias: '@id'
+        range: string
+        required: false
+      ex:name:
+        alias: ex:name
+        pattern: ^[A-Z]
+        range: string
+        required: true
+        slot_uri: ex:name
+    class_uri: ex:Safe
+    extra_slots:
+      allowed: false
+default_prefix: ex
+description: Caller-owned exact projection fixture.
+id: https://example.org/schema
+imports:
+- linkml:types
+metamodel_version: 1.11.0
+name: Example-Schema
+prefixes:
+  ex: https://example.org/
+  linkml: https://w3id.org/linkml/
