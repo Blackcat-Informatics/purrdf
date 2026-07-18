@@ -31,6 +31,7 @@ const SOURCE_LENGTH: usize = 128;
 const CONTRACTS_HEADER_LENGTH: u64 = 96;
 const FAMILY_RECORD_LENGTH: u64 = 96;
 const SPACE_RECORD_LENGTH: u64 = 80;
+const SPACE_ID_INDEX_RECORD_LENGTH: u64 = 40;
 const TARGETS_HEADER_LENGTH: u64 = 64;
 const TARGET_RECORD_LENGTH: u64 = 96;
 const TARGET_SETS_HEADER_LENGTH: u64 = 64;
@@ -39,8 +40,9 @@ const RELATIONS_HEADER_LENGTH: u64 = 64;
 const RELATION_RECORD_LENGTH: u64 = 120;
 const TOKEN_SPANS_HEADER_LENGTH: u64 = 64;
 const TOKEN_SPAN_RECORD_LENGTH: u64 = 96;
-const EXTERNAL_BINDINGS_HEADER_LENGTH: u64 = 64;
+const EXTERNAL_BINDINGS_HEADER_LENGTH: u64 = 80;
 const EXTERNAL_BINDING_RECORD_LENGTH: u64 = 192;
+const EXTERNAL_LOOKUP_RECORD_LENGTH: u64 = 80;
 const INDEX_GUARDS_HEADER_LENGTH: u64 = 64;
 const INDEX_GUARD_RECORD_LENGTH: u64 = 336;
 
@@ -194,7 +196,7 @@ impl CanonicalMetadataInput {
         let token_spans = encode_token_spans_canonical(&canonical_spans)?;
 
         let canonical_bindings = canonical_external_bindings(self.external_bindings)?;
-        let canonical_indexes = canonical_indexes(self.indexes)?;
+        let mut canonical_indexes = canonical_indexes(self.indexes)?;
         validate_matrix_and_index_references(
             self.source,
             TypedCatalog {
@@ -209,7 +211,7 @@ impl CanonicalMetadataInput {
         )?;
         let external_bindings = encode_external_bindings_canonical(&canonical_bindings)?;
         let (index_guards, inline_index_payloads) =
-            encode_index_guards_canonical(&canonical_indexes)?;
+            encode_index_guards_canonical(&mut canonical_indexes)?;
 
         Ok(CanonicalMetadataSections {
             source_exact_digest: self.source.source_exact_digest(),
@@ -276,13 +278,24 @@ fn encode_contracts(
         "space table offset",
     )?)?;
     let space_records_length = checked_mul(space_count, SPACE_RECORD_LENGTH, "space table")?;
-    let pool_offset = align8(checked_add(
+    let space_index_offset = align8(checked_add(
         space_records_offset,
         space_records_length,
+        "space ID index offset",
+    )?)?;
+    let space_index_length =
+        checked_mul(space_count, SPACE_ID_INDEX_RECORD_LENGTH, "space ID index")?;
+    let pool_offset = align8(checked_add(
+        space_index_offset,
+        space_index_length,
         "contract pool offset",
     )?)?;
     let mut records = zero_vec(family_records_length, "family table allocation")?;
     let mut spaces = zero_vec(space_records_length, "space table allocation")?;
+    let mut space_index_entries = Vec::with_capacity(
+        usize::try_from(space_count)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("space ID index capacity"))?,
+    );
     let mut pool = Vec::new();
     let mut space_start = 0u64;
 
@@ -324,10 +337,31 @@ fn encode_contracts(
             put_u32(&mut spaces, offset + 64, space.dimension);
             put_u32(&mut spaces, offset + 68, space.postprocessing.code());
             put_u32(&mut spaces, offset + 72, space.ordinal);
+            space_index_entries.push((
+                *space.id.as_bytes(),
+                u32::try_from(space_start).map_err(|_| EmbeddingError::CountLimit {
+                    field: "effective space",
+                    value: space_start,
+                })?,
+            ));
             space_start = space_start
                 .checked_add(1)
                 .ok_or(EmbeddingError::ArithmeticOverflow("space record index"))?;
         }
+    }
+
+    space_index_entries.sort_unstable_by_key(|(id, _)| *id);
+    if space_index_entries
+        .windows(2)
+        .any(|pair| pair[0].0 == pair[1].0)
+    {
+        return Err(EmbeddingError::Duplicate("vector-space ID index"));
+    }
+    let mut space_index = zero_vec(space_index_length, "space ID index allocation")?;
+    for (index, (id, ordinal)) in space_index_entries.iter().enumerate() {
+        let offset = record_offset(index, SPACE_ID_INDEX_RECORD_LENGTH, "space ID index record")?;
+        space_index[offset..offset + 32].copy_from_slice(id);
+        put_u32(&mut space_index, offset + 32, *ordinal);
     }
 
     let pool_length = u64_len(pool.len(), "contract pool length")?;
@@ -343,8 +377,17 @@ fn encode_contracts(
     put_u64(&mut output, 40, space_records_offset);
     put_u64(&mut output, 48, pool_offset);
     put_u64(&mut output, 56, pool_length);
+    put_u32(
+        &mut output,
+        64,
+        u32::try_from(SPACE_ID_INDEX_RECORD_LENGTH).expect("fixed record length fits u32"),
+    );
+    put_u64(&mut output, 72, space_count);
+    put_u64(&mut output, 80, space_index_offset);
+    put_u64(&mut output, 88, space_index_length);
     copy_at(&mut output, CONTRACTS_HEADER_LENGTH, &records)?;
     copy_at(&mut output, space_records_offset, &spaces)?;
+    copy_at(&mut output, space_index_offset, &space_index)?;
     copy_at(&mut output, pool_offset, &pool)?;
     Ok(EncodedContracts {
         bytes: output,
@@ -941,12 +984,23 @@ fn encode_external_bindings_canonical(
         EXTERNAL_BINDING_RECORD_LENGTH,
         "external binding table",
     )?;
-    let pool_offset = align8(checked_add(
+    let lookup_offset = align8(checked_add(
         EXTERNAL_BINDINGS_HEADER_LENGTH,
         records_length,
+        "external binding lookup offset",
+    )?)?;
+    let lookup_length = checked_mul(
+        binding_count,
+        EXTERNAL_LOOKUP_RECORD_LENGTH,
+        "external binding lookup",
+    )?;
+    let pool_offset = align8(checked_add(
+        lookup_offset,
+        lookup_length,
         "external contract pool offset",
     )?)?;
     let mut records = zero_vec(records_length, "external binding table allocation")?;
+    let mut lookup_entries = Vec::with_capacity(bindings.len());
     let mut pool = Vec::new();
     for (index, binding) in bindings.iter().enumerate() {
         let offset = record_offset(
@@ -976,6 +1030,40 @@ fn encode_external_bindings_canonical(
             append_pool_block(&mut pool, pool_offset, &binding.canonical_contract)?;
         put_u64(&mut records, offset + 176, contract_offset);
         put_u64(&mut records, offset + 184, contract_length);
+        lookup_entries.push((
+            binding.scope.code(),
+            binding.scope.id(),
+            *binding.artifact_sha256.as_bytes(),
+            binding.artifact_length,
+            u32::try_from(index).map_err(|_| EmbeddingError::CountLimit {
+                field: "external binding lookup ordinal",
+                value: u64::try_from(index).unwrap_or(u64::MAX),
+            })?,
+        ));
+    }
+    lookup_entries.sort_unstable();
+    if lookup_entries.windows(2).any(|pair| {
+        pair[0].0 == pair[1].0
+            && pair[0].1 == pair[1].1
+            && pair[0].2 == pair[1].2
+            && pair[0].3 == pair[1].3
+    }) {
+        return Err(EmbeddingError::Duplicate("external binding lookup key"));
+    }
+    let mut lookup = zero_vec(lookup_length, "external binding lookup allocation")?;
+    for (index, (scope_kind, scope_id, digest, length, ordinal)) in
+        lookup_entries.iter().enumerate()
+    {
+        let offset = record_offset(
+            index,
+            EXTERNAL_LOOKUP_RECORD_LENGTH,
+            "external binding lookup record",
+        )?;
+        put_u32(&mut lookup, offset, *scope_kind);
+        lookup[offset + 4..offset + 36].copy_from_slice(scope_id);
+        lookup[offset + 36..offset + 68].copy_from_slice(digest);
+        put_u64(&mut lookup, offset + 68, *length);
+        put_u32(&mut lookup, offset + 76, *ordinal);
     }
     let pool_length = u64_len(pool.len(), "external contract pool length")?;
     let section_length = checked_add(pool_offset, pool_length, "EXTERNAL_BINDINGS section length")?;
@@ -987,7 +1075,16 @@ fn encode_external_bindings_canonical(
     put_u64(&mut output, 24, records_length);
     put_u64(&mut output, 32, pool_offset);
     put_u64(&mut output, 40, pool_length);
+    put_u32(
+        &mut output,
+        48,
+        u32::try_from(EXTERNAL_LOOKUP_RECORD_LENGTH).expect("fixed record length fits u32"),
+    );
+    put_u64(&mut output, 56, binding_count);
+    put_u64(&mut output, 64, lookup_offset);
+    put_u64(&mut output, 72, lookup_length);
     copy_at(&mut output, EXTERNAL_BINDINGS_HEADER_LENGTH, &records)?;
+    copy_at(&mut output, lookup_offset, &lookup)?;
     copy_at(&mut output, pool_offset, &pool)?;
     Ok(output)
 }
@@ -1348,8 +1445,8 @@ impl DerivedIndex {
 pub fn encode_index_guards(
     indexes: Vec<DerivedIndex>,
 ) -> Result<(Vec<u8>, Vec<Vec<u8>>), EmbeddingError> {
-    let indexes = canonical_indexes(indexes)?;
-    encode_index_guards_canonical(&indexes)
+    let mut indexes = canonical_indexes(indexes)?;
+    encode_index_guards_canonical(&mut indexes)
 }
 
 fn canonical_indexes(mut indexes: Vec<DerivedIndex>) -> Result<Vec<DerivedIndex>, EmbeddingError> {
@@ -1403,7 +1500,7 @@ fn validate_derived_index(index: &DerivedIndex) -> Result<(), EmbeddingError> {
 }
 
 fn encode_index_guards_canonical(
-    indexes: &[DerivedIndex],
+    indexes: &mut [DerivedIndex],
 ) -> Result<(Vec<u8>, Vec<Vec<u8>>), EmbeddingError> {
     let index_count = u64_len(indexes.len(), "derived index count")?;
     let records_length = checked_mul(index_count, INDEX_GUARD_RECORD_LENGTH, "index guard table")?;
@@ -1415,7 +1512,7 @@ fn encode_index_guards_canonical(
     let mut records = zero_vec(records_length, "index guard table allocation")?;
     let mut pool = Vec::new();
     let mut payloads = Vec::new();
-    for (index_number, index) in indexes.iter().enumerate() {
+    for (index_number, index) in indexes.iter_mut().enumerate() {
         let offset = record_offset(
             index_number,
             INDEX_GUARD_RECORD_LENGTH,
@@ -1439,8 +1536,8 @@ fn encode_index_guards_canonical(
             append_pool_block(&mut pool, pool_offset, &index.canonical_guard)?;
         put_u64(&mut records, offset + 296, guard_offset);
         put_u64(&mut records, offset + 304, guard_length);
-        let payload_instance = if let IndexPayloadStorage::Inline(bytes) = &index.storage {
-            payloads.push(bytes.clone());
+        let payload_instance = if let IndexPayloadStorage::Inline(bytes) = &mut index.storage {
+            payloads.push(core::mem::take(bytes));
             u32::try_from(payloads.len()).map_err(|_| EmbeddingError::CountLimit {
                 field: "inline index",
                 value: u64_len(payloads.len(), "inline index count").unwrap_or(u64::MAX),

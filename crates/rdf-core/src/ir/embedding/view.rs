@@ -7,15 +7,18 @@ use core::mem::size_of;
 
 use crate::ContentDigest;
 
-use super::contract::{PrefixPostprocessing, TlvEntryRef, TlvWireType, VectorDtype, canonical_tlv};
-use super::error::EmbeddingError;
+use super::contract::{
+    PrefixPostprocessing, TlvEntryRef, TlvWireType, VectorDtype, canonical_tlv,
+    validate_sha256_field,
+};
+use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
     ArtifactRoot, ChunkingContractId, ExternalBindingId, FamilyContractDigest, FamilyId,
     IndexGuardDigest, IndexId, MatrixContentDigest, MatrixId, ProjectionContentDigest,
     ProjectionId, TargetId, TargetIdentityDigest, TargetSetId, VectorSpaceId,
     derive_chunking_contract_id,
 };
-use super::target::TargetKind;
+use super::target::{TargetKind, validate_target_identity as validate_canonical_target_identity};
 use super::wire::{
     PURREMB_DIRECTORY_ENTRY_LENGTH, PURREMB_FILE_ALIGNMENT, PURREMB_HEADER_LENGTH, PURREMB_MAGIC,
     PURREMB_MAX_SECTION_COUNT, PURREMB_TRAILER_LENGTH, PURREMB_TRAILER_MAGIC, PURREMB_VERSION,
@@ -29,15 +32,21 @@ const SOURCE_LENGTH: usize = 128;
 const FAMILY_HEADER_LENGTH: usize = 96;
 const FAMILY_RECORD_LENGTH: usize = 96;
 const SPACE_RECORD_LENGTH: usize = 80;
+const SPACE_ID_INDEX_RECORD_LENGTH: usize = 40;
 const TARGET_HEADER_LENGTH: usize = 64;
 const TARGET_RECORD_LENGTH: usize = 96;
 const TARGET_SET_RECORD_LENGTH: usize = 64;
 const RELATION_RECORD_LENGTH: usize = 120;
 const TOKEN_SPAN_RECORD_LENGTH: usize = 96;
-const MATRIX_HEADER_LENGTH: usize = 96;
+const MATRIX_HEADER_LENGTH: usize = 160;
 const MATRIX_RECORD_LENGTH: usize = 160;
 const PROJECTION_RECORD_LENGTH: usize = 152;
+const PROJECTION_ID_INDEX_RECORD_LENGTH: usize = 40;
+const MATRIX_KEY_INDEX_RECORD_LENGTH: usize = 72;
+const EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH: usize = 72;
+const EXTERNAL_HEADER_LENGTH: usize = 80;
 const EXTERNAL_RECORD_LENGTH: usize = 192;
+const EXTERNAL_LOOKUP_RECORD_LENGTH: usize = 80;
 const INDEX_RECORD_LENGTH: usize = 336;
 
 const IDENTITY_BYTES_PRESENT: u32 = 1;
@@ -1177,6 +1186,7 @@ struct ContractsView<'a> {
     bytes: &'a [u8],
     family_count: usize,
     space_count: usize,
+    space_index_offset: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1210,12 +1220,15 @@ struct MatricesView<'a> {
     matrix_count: usize,
     projection_count: usize,
     projection_offset: usize,
+    projection_index_offset: usize,
+    effective_index_offset: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct ExternalBindingsView<'a> {
     bytes: &'a [u8],
     count: usize,
+    lookup_offset: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1373,9 +1386,15 @@ impl<'a> EmbeddingView<'a> {
     /// Finds one effective vector space by stable ID.
     #[must_use]
     pub fn vector_space(&self, id: VectorSpaceId) -> Option<EffectiveSpaceView<'a>> {
-        (0..self.contracts.space_count)
-            .filter_map(|index| self.contracts.space_at(index))
-            .find(|space| space.id() == id)
+        indexed_ordinal(
+            self.contracts.bytes,
+            self.contracts.space_index_offset,
+            SPACE_ID_INDEX_RECORD_LENGTH,
+            self.contracts.space_count,
+            id.as_bytes(),
+            32,
+        )
+        .and_then(|ordinal| self.contracts.space_at(ordinal))
     }
 
     /// Number of canonical targets.
@@ -1591,7 +1610,15 @@ impl<'a> EmbeddingView<'a> {
     /// Finds a projection by stable ID.
     #[must_use]
     pub fn projection(&self, id: ProjectionId) -> Option<ProjectionView<'a>> {
-        self.projections().find(|projection| projection.id() == id)
+        indexed_ordinal(
+            self.matrices.bytes,
+            self.matrices.projection_index_offset,
+            PROJECTION_ID_INDEX_RECORD_LENGTH,
+            self.matrices.projection_count,
+            id.as_bytes(),
+            32,
+        )
+        .and_then(|ordinal| self.projection_at(ordinal))
     }
 
     /// Finds the unique effective matrix for a target set and vector space.
@@ -1600,24 +1627,26 @@ impl<'a> EmbeddingView<'a> {
         target_set: TargetSetId,
         vector_space: VectorSpaceId,
     ) -> Result<Option<EffectiveMatrixView<'a>>, EmbeddingError> {
-        let mut found = None;
-        for projection in self.projections() {
-            if projection.vector_space_id() != vector_space {
-                continue;
-            }
-            let matrix = self
-                .matrix(projection.matrix_id())
-                .ok_or(EmbeddingError::MissingReference("projection matrix"))?;
-            if matrix.target_set_id() == target_set {
-                if found.is_some() {
-                    return Err(EmbeddingError::Duplicate(
-                        "target-set/vector-space projection",
-                    ));
-                }
-                found = Some(EffectiveMatrixView { matrix, projection });
-            }
-        }
-        Ok(found)
+        let mut key = [0u8; 64];
+        key[..32].copy_from_slice(target_set.as_bytes());
+        key[32..].copy_from_slice(vector_space.as_bytes());
+        let Some(ordinal) = indexed_composite_ordinal(
+            self.matrices.bytes,
+            self.matrices.effective_index_offset,
+            EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH,
+            self.matrices.projection_count,
+            &key,
+            64,
+        ) else {
+            return Ok(None);
+        };
+        let projection = self
+            .projection_at(ordinal)
+            .ok_or(EmbeddingError::MissingReference("effective projection"))?;
+        let matrix = self
+            .matrix(projection.matrix_id())
+            .ok_or(EmbeddingError::MissingReference("projection matrix"))?;
+        Ok(Some(EffectiveMatrixView { matrix, projection }))
     }
 
     /// Number of external-artifact bindings.
@@ -1645,12 +1674,31 @@ impl<'a> EmbeddingView<'a> {
     pub fn external_binding(&self, id: ExternalBindingId) -> Option<ExternalBindingView<'a>> {
         binary_search_records(
             self.external_bindings.bytes,
-            TARGET_HEADER_LENGTH,
+            EXTERNAL_HEADER_LENGTH,
             EXTERNAL_RECORD_LENGTH,
             self.external_bindings.count,
             id.as_bytes(),
         )
         .and_then(|index| self.external_binding_at(index))
+    }
+
+    fn external_binding_by_artifact(
+        &self,
+        scope_kind: ExternalScopeKind,
+        scope_id: [u8; 32],
+        digest: ContentDigest,
+        length: u64,
+    ) -> Option<ExternalBindingView<'a>> {
+        external_lookup_ordinal(
+            self.external_bindings.bytes,
+            self.external_bindings.lookup_offset,
+            self.external_bindings.count,
+            scope_kind as u32,
+            &scope_id,
+            digest.as_bytes(),
+            length,
+        )
+        .and_then(|ordinal| self.external_binding_at(ordinal))
     }
 
     /// Number of opaque derived-index guards.
@@ -2150,7 +2198,8 @@ impl<'a> MatricesView<'a> {
 
 impl<'a> ExternalBindingsView<'a> {
     fn binding_at(self, index: usize) -> Option<ExternalBindingView<'a>> {
-        let start = TARGET_HEADER_LENGTH.checked_add(index.checked_mul(EXTERNAL_RECORD_LENGTH)?)?;
+        let start =
+            EXTERNAL_HEADER_LENGTH.checked_add(index.checked_mul(EXTERNAL_RECORD_LENGTH)?)?;
         let record = self.bytes.get(start..start + EXTERNAL_RECORD_LENGTH)?;
         let contract = borrowed_span(
             self.bytes,
@@ -2478,7 +2527,31 @@ fn parse_contracts(bytes: &[u8]) -> Result<ContractsView<'_>, EmbeddingError> {
     )?;
     validate_zero_padding_usize(bytes, family_end, expected_space_offset)?;
     let space_end = checked_table_end(expected_space_offset, space_count, SPACE_RECORD_LENGTH)?;
-    let expected_pool_offset = align8(space_end)?;
+    let space_index_offset = align8(space_end)?;
+    require_u32(
+        bytes,
+        64,
+        SPACE_ID_INDEX_RECORD_LENGTH as u32,
+        "space ID index record size",
+    )?;
+    require_u32(bytes, 68, 0, "space ID index flags")?;
+    require_u64(bytes, 72, space_count as u64, "space ID index count")?;
+    require_u64(
+        bytes,
+        80,
+        space_index_offset as u64,
+        "space ID index offset",
+    )?;
+    let space_index_length =
+        checked_product_u64(space_count, SPACE_ID_INDEX_RECORD_LENGTH, "space ID index")?;
+    require_u64(bytes, 88, space_index_length, "space ID index length")?;
+    validate_zero_padding_usize(bytes, space_end, space_index_offset)?;
+    let space_index_end = checked_table_end(
+        space_index_offset,
+        space_count,
+        SPACE_ID_INDEX_RECORD_LENGTH,
+    )?;
+    let expected_pool_offset = align8(space_index_end)?;
     require_u64(
         bytes,
         48,
@@ -2486,7 +2559,7 @@ fn parse_contracts(bytes: &[u8]) -> Result<ContractsView<'_>, EmbeddingError> {
             .map_err(|_| EmbeddingError::ArithmeticOverflow("contract pool offset"))?,
         "contract pool offset",
     )?;
-    validate_zero_padding_usize(bytes, space_end, expected_pool_offset)?;
+    validate_zero_padding_usize(bytes, space_index_end, expected_pool_offset)?;
     let pool_length = host_usize(read_u64(bytes, 56)?, "contract pool length")?;
     let pool_end = expected_pool_offset
         .checked_add(pool_length)
@@ -2498,7 +2571,15 @@ fn parse_contracts(bytes: &[u8]) -> Result<ContractsView<'_>, EmbeddingError> {
             length: pool_length as u64,
         });
     }
-    require_zero(&bytes[64..96], "CONTRACTS reserved")?;
+    validate_id_ordinal_index(
+        bytes,
+        space_index_offset,
+        SPACE_ID_INDEX_RECORD_LENGTH,
+        space_count,
+        expected_space_offset,
+        SPACE_RECORD_LENGTH,
+        "vector-space ID index",
+    )?;
 
     let mut previous_family = None;
     let mut next_space = 0usize;
@@ -2540,6 +2621,10 @@ fn parse_contracts(bytes: &[u8]) -> Result<ContractsView<'_>, EmbeddingError> {
         if space_start != next_space || family_space_count != shape.prefix_count {
             return Err(EmbeddingError::Malformed("family space range"));
         }
+        let mut prefixes = contract_prefixes(contract)?;
+        if prefixes.len() != family_space_count {
+            return Err(EmbeddingError::Malformed("family prefix coverage"));
+        }
         for ordinal in 0..family_space_count {
             let global = space_start
                 .checked_add(ordinal)
@@ -2551,7 +2636,10 @@ fn parse_contracts(bytes: &[u8]) -> Result<ContractsView<'_>, EmbeddingError> {
             {
                 return Err(EmbeddingError::Malformed("effective space record"));
             }
-            let (dimension, postprocessing) = contract_prefix(contract, ordinal)?;
+            let prefix = prefixes
+                .next()
+                .ok_or(EmbeddingError::Missing("effective prefix"))??;
+            let (dimension, postprocessing) = contract_prefix_shape(prefix)?;
             if infallible_u32(space, 64) != dimension || infallible_u32(space, 68) != postprocessing
             {
                 return Err(EmbeddingError::Malformed(
@@ -2577,6 +2665,7 @@ fn parse_contracts(bytes: &[u8]) -> Result<ContractsView<'_>, EmbeddingError> {
         bytes,
         family_count,
         space_count,
+        space_index_offset,
     })
 }
 
@@ -2908,15 +2997,133 @@ fn parse_matrices(bytes: &[u8]) -> Result<MatricesView<'_>, EmbeddingError> {
         "projection records",
     )?;
     require_u64(bytes, 56, projection_length, "projection records length")?;
-    require_zero(&bytes[64..96], "MATRICES reserved")?;
     validate_zero_padding_usize(bytes, matrix_end, projection_offset)?;
-    if checked_table_end(
+    let projection_end = checked_table_end(
         projection_offset,
         projection_count,
         PROJECTION_RECORD_LENGTH,
+    )?;
+    let projection_index_offset = align8(projection_end)?;
+    require_u32(
+        bytes,
+        64,
+        PROJECTION_ID_INDEX_RECORD_LENGTH as u32,
+        "projection ID index record size",
+    )?;
+    require_u32(bytes, 68, 0, "projection ID index flags")?;
+    require_u64(
+        bytes,
+        72,
+        u64::try_from(projection_count)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("projection ID index count"))?,
+        "projection ID index count",
+    )?;
+    require_u64(
+        bytes,
+        80,
+        u64::try_from(projection_index_offset)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("projection ID index offset"))?,
+        "projection ID index offset",
+    )?;
+    let projection_index_length = checked_product_u64(
+        projection_count,
+        PROJECTION_ID_INDEX_RECORD_LENGTH,
+        "projection ID index",
+    )?;
+    require_u64(
+        bytes,
+        88,
+        projection_index_length,
+        "projection ID index length",
+    )?;
+    validate_zero_padding_usize(bytes, projection_end, projection_index_offset)?;
+    let projection_index_end = checked_table_end(
+        projection_index_offset,
+        projection_count,
+        PROJECTION_ID_INDEX_RECORD_LENGTH,
+    )?;
+    let matrix_key_index_offset = align8(projection_index_end)?;
+    require_u32(
+        bytes,
+        96,
+        MATRIX_KEY_INDEX_RECORD_LENGTH as u32,
+        "matrix key index record size",
+    )?;
+    require_u32(bytes, 100, 0, "matrix key index flags")?;
+    require_u64(
+        bytes,
+        104,
+        u64::try_from(matrix_count)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("matrix key index count"))?,
+        "matrix key index count",
+    )?;
+    require_u64(
+        bytes,
+        112,
+        u64::try_from(matrix_key_index_offset)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("matrix key index offset"))?,
+        "matrix key index offset",
+    )?;
+    let matrix_key_index_length = checked_product_u64(
+        matrix_count,
+        MATRIX_KEY_INDEX_RECORD_LENGTH,
+        "matrix key index",
+    )?;
+    require_u64(
+        bytes,
+        120,
+        matrix_key_index_length,
+        "matrix key index length",
+    )?;
+    validate_zero_padding_usize(bytes, projection_index_end, matrix_key_index_offset)?;
+    let matrix_key_index_end = checked_table_end(
+        matrix_key_index_offset,
+        matrix_count,
+        MATRIX_KEY_INDEX_RECORD_LENGTH,
+    )?;
+    let effective_index_offset = align8(matrix_key_index_end)?;
+    require_u32(
+        bytes,
+        128,
+        EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH as u32,
+        "effective projection index record size",
+    )?;
+    require_u32(bytes, 132, 0, "effective projection index flags")?;
+    require_u64(
+        bytes,
+        136,
+        u64::try_from(projection_count)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("effective projection index count"))?,
+        "effective projection index count",
+    )?;
+    require_u64(
+        bytes,
+        144,
+        u64::try_from(effective_index_offset)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("effective projection index offset"))?,
+        "effective projection index offset",
+    )?;
+    let effective_index_length = checked_product_u64(
+        projection_count,
+        EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH,
+        "effective projection index",
+    )?;
+    require_u64(
+        bytes,
+        152,
+        effective_index_length,
+        "effective projection index length",
+    )?;
+    validate_zero_padding_usize(bytes, matrix_key_index_end, effective_index_offset)?;
+    if checked_table_end(
+        effective_index_offset,
+        projection_count,
+        EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH,
     )? != bytes.len()
     {
-        return Err(EmbeddingError::Malformed("projection table extent"));
+        return Err(EmbeddingError::Malformed(
+            "effective projection index extent",
+        ));
     }
     let mut previous = None;
     for index in 0..matrix_count {
@@ -2945,28 +3152,36 @@ fn parse_matrices(bytes: &[u8]) -> Result<MatricesView<'_>, EmbeddingError> {
             .and_then(|value| value.checked_mul(u64::from(dtype.width())))
             .ok_or(EmbeddingError::ArithmeticOverflow("matrix byte length"))?;
         require_u64(record, 152, expected_length, "matrix data length")?;
-        for previous_index in 0..index {
-            let earlier = fixed_record(
-                bytes,
-                MATRIX_HEADER_LENGTH,
-                MATRIX_RECORD_LENGTH,
-                previous_index,
-            )?;
-            if earlier[64..128] == record[64..128] {
-                return Err(EmbeddingError::Duplicate("family/target-set matrix"));
-            }
-        }
     }
+    validate_id_ordinal_index(
+        bytes,
+        projection_index_offset,
+        PROJECTION_ID_INDEX_RECORD_LENGTH,
+        projection_count,
+        projection_offset,
+        PROJECTION_RECORD_LENGTH,
+        "projection ID index",
+    )?;
+    validate_matrix_key_index(bytes, matrix_key_index_offset, matrix_count)?;
+    validate_effective_projection_index(
+        bytes,
+        effective_index_offset,
+        projection_offset,
+        matrix_count,
+        projection_count,
+    )?;
     Ok(MatricesView {
         bytes,
         matrix_count,
         projection_count,
         projection_offset,
+        projection_index_offset,
+        effective_index_offset,
     })
 }
 
 fn parse_external_bindings(bytes: &[u8]) -> Result<ExternalBindingsView<'_>, EmbeddingError> {
-    require_minimum(bytes, TARGET_HEADER_LENGTH, "EXTERNAL_BINDINGS header")?;
+    require_minimum(bytes, EXTERNAL_HEADER_LENGTH, "EXTERNAL_BINDINGS header")?;
     require_u32(bytes, 0, 1, "EXTERNAL_BINDINGS schema version")?;
     require_u32(
         bytes,
@@ -2978,14 +3193,44 @@ fn parse_external_bindings(bytes: &[u8]) -> Result<ExternalBindingsView<'_>, Emb
     require_u64(
         bytes,
         16,
-        TARGET_HEADER_LENGTH as u64,
+        EXTERNAL_HEADER_LENGTH as u64,
         "external binding records offset",
     )?;
     let records_length =
         checked_product_u64(count, EXTERNAL_RECORD_LENGTH, "external binding records")?;
     require_u64(bytes, 24, records_length, "external binding records length")?;
-    let records_end = checked_table_end(TARGET_HEADER_LENGTH, count, EXTERNAL_RECORD_LENGTH)?;
-    let pool_offset = align8(records_end)?;
+    let records_end = checked_table_end(EXTERNAL_HEADER_LENGTH, count, EXTERNAL_RECORD_LENGTH)?;
+    let lookup_offset = align8(records_end)?;
+    require_u32(
+        bytes,
+        48,
+        EXTERNAL_LOOKUP_RECORD_LENGTH as u32,
+        "external binding lookup record size",
+    )?;
+    require_u32(bytes, 52, 0, "external binding lookup flags")?;
+    require_u64(
+        bytes,
+        56,
+        u64::try_from(count)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("external lookup count"))?,
+        "external binding lookup count",
+    )?;
+    require_u64(
+        bytes,
+        64,
+        u64::try_from(lookup_offset)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("external lookup offset"))?,
+        "external binding lookup offset",
+    )?;
+    let lookup_length = checked_product_u64(
+        count,
+        EXTERNAL_LOOKUP_RECORD_LENGTH,
+        "external binding lookup",
+    )?;
+    require_u64(bytes, 72, lookup_length, "external binding lookup length")?;
+    validate_zero_padding_usize(bytes, records_end, lookup_offset)?;
+    let lookup_end = checked_table_end(lookup_offset, count, EXTERNAL_LOOKUP_RECORD_LENGTH)?;
+    let pool_offset = align8(lookup_end)?;
     require_u64(
         bytes,
         32,
@@ -2996,12 +3241,11 @@ fn parse_external_bindings(bytes: &[u8]) -> Result<ExternalBindingsView<'_>, Emb
     if pool_offset.checked_add(pool_length) != Some(bytes.len()) {
         return Err(EmbeddingError::Malformed("binding contract pool extent"));
     }
-    require_zero(&bytes[48..64], "EXTERNAL_BINDINGS reserved")?;
-    validate_zero_padding_usize(bytes, records_end, pool_offset)?;
+    validate_zero_padding_usize(bytes, lookup_end, pool_offset)?;
     let mut previous = None;
     let mut cursor = pool_offset;
     for index in 0..count {
-        let record = fixed_record(bytes, TARGET_HEADER_LENGTH, EXTERNAL_RECORD_LENGTH, index)?;
+        let record = fixed_record(bytes, EXTERNAL_HEADER_LENGTH, EXTERNAL_RECORD_LENGTH, index)?;
         let id = array32(record, 0);
         if previous.is_some_and(|value| id <= value) {
             return Err(EmbeddingError::NonCanonicalOrder(
@@ -3042,7 +3286,12 @@ fn parse_external_bindings(bytes: &[u8]) -> Result<ExternalBindingsView<'_>, Emb
     if cursor != bytes.len() {
         return Err(EmbeddingError::Malformed("binding contract pool coverage"));
     }
-    Ok(ExternalBindingsView { bytes, count })
+    validate_external_lookup_index(bytes, lookup_offset, count)?;
+    Ok(ExternalBindingsView {
+        bytes,
+        count,
+        lookup_offset,
+    })
 }
 
 fn parse_index_guards(bytes: &[u8]) -> Result<IndexGuardsView<'_>, EmbeddingError> {
@@ -3495,13 +3744,15 @@ impl EmbeddingView<'_> {
                     }
                 }
                 IndexStorage::Detached => {
-                    let found = self.external_bindings().any(|binding| {
-                        binding.scope_kind().ok() == Some(ExternalScopeKind::Index)
-                            && binding.scope_id() == *index.id().as_bytes()
-                            && binding.artifact_sha256() == index.payload_sha256()
-                            && binding.artifact_length() == index.payload_length()
-                    });
-                    if !found {
+                    if self
+                        .external_binding_by_artifact(
+                            ExternalScopeKind::Index,
+                            *index.id().as_bytes(),
+                            index.payload_sha256(),
+                            index.payload_length(),
+                        )
+                        .is_none()
+                    {
                         return Err(EmbeddingError::MissingReference("detached index binding"));
                     }
                 }
@@ -3675,6 +3926,7 @@ fn validate_stage(bytes: &[u8]) -> Result<bool, EmbeddingError> {
             validate_schema(bytes, &RULES)?;
             require_nonempty_tlv(bytes, 2, TlvWireType::Utf8, "stage identifier")?;
             require_nonempty_tlv(bytes, 4, TlvWireType::Utf8, "stage parameter encoding")?;
+            validate_sha256_field(bytes, 5, 6, DigestKind::Contract)?;
             Ok(true)
         }
         value => Err(EmbeddingError::UnsupportedCode {
@@ -3705,6 +3957,7 @@ fn validate_metric(bytes: &[u8]) -> Result<(), EmbeddingError> {
     validate_schema(bytes, &RULES)?;
     require_nonempty_tlv(bytes, 2, TlvWireType::Utf8, "metric identifier")?;
     require_nonempty_tlv(bytes, 3, TlvWireType::Utf8, "metric parameter encoding")?;
+    validate_sha256_field(bytes, 4, 5, DigestKind::Contract)?;
     Ok(())
 }
 
@@ -3733,13 +3986,14 @@ fn validate_dimensionality(bytes: &[u8]) -> Result<ContractShape, EmbeddingError
         ));
     }
     let list = required_tlv(bytes, 3, TlvWireType::BlockList, "effective prefixes")?.value;
-    let prefix_count = block_list_count(list)?;
+    let prefixes = BlockListIter::new(list)?;
+    let prefix_count = prefixes.len();
     if (policy == 1 && prefix_count != 1) || (policy == 2 && prefix_count < 2) {
         return Err(EmbeddingError::Malformed("effective prefix count"));
     }
     let mut previous = 0;
-    for index in 0..prefix_count {
-        let block = block_list_item(list, index)?;
+    for block in prefixes {
+        let block = block?;
         const PREFIX_RULES: [FieldRule; 2] = [
             required_rule(1, TlvWireType::U32),
             required_rule(2, TlvWireType::U32),
@@ -3777,7 +4031,7 @@ fn validate_dimensionality(bytes: &[u8]) -> Result<ContractShape, EmbeddingError
     })
 }
 
-fn contract_prefix(contract: &[u8], index: usize) -> Result<(u32, u32), EmbeddingError> {
+fn contract_prefixes(contract: &[u8]) -> Result<BlockListIter<'_>, EmbeddingError> {
     let dimensionality = required_tlv(contract, 15, TlvWireType::Block, "dimensionality")?.value;
     let list = required_tlv(
         dimensionality,
@@ -3786,7 +4040,10 @@ fn contract_prefix(contract: &[u8], index: usize) -> Result<(u32, u32), Embeddin
         "effective prefixes",
     )?
     .value;
-    let prefix = block_list_item(list, index)?;
+    BlockListIter::new(list)
+}
+
+fn contract_prefix_shape(prefix: &[u8]) -> Result<(u32, u32), EmbeddingError> {
     Ok((
         tlv_u32(required_tlv(
             prefix,
@@ -3804,211 +4061,7 @@ fn contract_prefix(contract: &[u8], index: usize) -> Result<(u32, u32), Embeddin
 }
 
 fn validate_target_identity(kind: TargetKind, bytes: &[u8]) -> Result<(), EmbeddingError> {
-    match kind {
-        TargetKind::Corpus => {
-            validate_schema(
-                bytes,
-                &[
-                    required_rule(1, TlvWireType::Digest32),
-                    required_rule(2, TlvWireType::Utf8),
-                    required_rule(3, TlvWireType::Digest32),
-                ],
-            )?;
-            require_nonempty_tlv(bytes, 2, TlvWireType::Utf8, "corpus media type")?;
-        }
-        TargetKind::Document => {
-            validate_schema(
-                bytes,
-                &[
-                    required_rule(1, TlvWireType::Digest32),
-                    required_rule(2, TlvWireType::Digest32),
-                    required_rule(3, TlvWireType::Digest32),
-                    required_rule(4, TlvWireType::Utf8),
-                    required_rule(5, TlvWireType::U64),
-                    required_rule(6, TlvWireType::U64),
-                ],
-            )?;
-            require_nonempty_tlv(bytes, 4, TlvWireType::Utf8, "document media type")?;
-        }
-        TargetKind::Chunk => {
-            validate_schema(
-                bytes,
-                &[
-                    required_rule(1, TlvWireType::Digest32),
-                    required_rule(2, TlvWireType::Digest32),
-                    required_rule(3, TlvWireType::Digest32),
-                    required_rule(4, TlvWireType::U64),
-                    required_rule(5, TlvWireType::U64),
-                    required_rule(6, TlvWireType::U64),
-                    required_rule(7, TlvWireType::U64),
-                ],
-            )?;
-            let byte_start = tlv_u64(required_tlv(
-                bytes,
-                4,
-                TlvWireType::U64,
-                "chunk byte start",
-            )?)?;
-            let byte_end = tlv_u64(required_tlv(bytes, 5, TlvWireType::U64, "chunk byte end")?)?;
-            let scalar_start = tlv_u64(required_tlv(
-                bytes,
-                6,
-                TlvWireType::U64,
-                "chunk scalar start",
-            )?)?;
-            let scalar_end = tlv_u64(required_tlv(
-                bytes,
-                7,
-                TlvWireType::U64,
-                "chunk scalar end",
-            )?)?;
-            if byte_start >= byte_end || scalar_start >= scalar_end {
-                return Err(EmbeddingError::InvalidSpan {
-                    context: "chunk identity",
-                    offset: byte_start,
-                    length: byte_end.saturating_sub(byte_start),
-                });
-            }
-        }
-        TargetKind::RdfDataset => {
-            validate_schema(bytes, &[required_rule(1, TlvWireType::Digest32)])?;
-        }
-        TargetKind::RdfGraph => {
-            let form = tlv_u32(required_tlv(bytes, 2, TlvWireType::U32, "graph form")?)?;
-            let rules: &[FieldRule] = if form == 0 {
-                &[
-                    required_rule(1, TlvWireType::Digest32),
-                    required_rule(2, TlvWireType::U32),
-                ]
-            } else if form == 1 {
-                &[
-                    required_rule(1, TlvWireType::Digest32),
-                    required_rule(2, TlvWireType::U32),
-                    required_rule(3, TlvWireType::Digest32),
-                ]
-            } else {
-                return Err(EmbeddingError::UnsupportedCode {
-                    field: "RDF graph form",
-                    value: form,
-                });
-            };
-            validate_schema(bytes, rules)?;
-        }
-        TargetKind::RdfStatement | TargetKind::RdfAnnotation => {
-            validate_schema(bytes, &four_digest_rules())?;
-        }
-        TargetKind::RdfReifier => {
-            validate_schema(
-                bytes,
-                &[
-                    required_rule(1, TlvWireType::Digest32),
-                    required_rule(2, TlvWireType::Digest32),
-                    required_rule(3, TlvWireType::Digest32),
-                ],
-            )?;
-        }
-        TargetKind::RdfTerm => validate_rdf_term(bytes)?,
-        TargetKind::Extension => {
-            validate_schema(
-                bytes,
-                &[
-                    required_rule(1, TlvWireType::Utf8),
-                    required_rule(2, TlvWireType::Utf8),
-                    required_rule(3, TlvWireType::Bytes),
-                    required_rule(4, TlvWireType::Digest32),
-                ],
-            )?;
-            require_nonempty_tlv(bytes, 1, TlvWireType::Utf8, "extension target kind")?;
-            require_nonempty_tlv(bytes, 2, TlvWireType::Utf8, "extension payload encoding")?;
-        }
-    }
-    Ok(())
-}
-
-const fn four_digest_rules() -> [FieldRule; 4] {
-    [
-        required_rule(1, TlvWireType::Digest32),
-        required_rule(2, TlvWireType::Digest32),
-        required_rule(3, TlvWireType::Digest32),
-        required_rule(4, TlvWireType::Digest32),
-    ]
-}
-
-fn validate_rdf_term(bytes: &[u8]) -> Result<(), EmbeddingError> {
-    let form = tlv_u32(required_tlv(bytes, 1, TlvWireType::U32, "RDF term form")?)?;
-    match form {
-        1 => {
-            validate_schema(
-                bytes,
-                &[
-                    required_rule(1, TlvWireType::U32),
-                    required_rule(2, TlvWireType::Utf8),
-                ],
-            )?;
-            let iri = require_nonempty_tlv(bytes, 2, TlvWireType::Utf8, "RDF IRI")?;
-            validate_absolute_iri(iri)?;
-        }
-        2 => {
-            validate_schema(
-                bytes,
-                &[
-                    required_rule(1, TlvWireType::U32),
-                    required_rule(2, TlvWireType::Digest32),
-                    required_rule(3, TlvWireType::Utf8),
-                ],
-            )?;
-            let label = require_nonempty_tlv(bytes, 3, TlvWireType::Utf8, "blank label")?;
-            if label.starts_with("_:") {
-                return Err(EmbeddingError::Malformed("blank label includes prefix"));
-            }
-        }
-        3 => {
-            validate_schema(
-                bytes,
-                &[
-                    required_rule(1, TlvWireType::U32),
-                    required_rule(2, TlvWireType::Utf8),
-                    required_rule(3, TlvWireType::Utf8),
-                    optional_rule(4, TlvWireType::Utf8),
-                    required_rule(5, TlvWireType::U32),
-                ],
-            )?;
-            let datatype = require_nonempty_tlv(bytes, 3, TlvWireType::Utf8, "literal datatype")?;
-            validate_absolute_iri(datatype)?;
-            let language = optional_tlv(bytes, 4)?;
-            if let Some(language) = language {
-                validate_language(
-                    core::str::from_utf8(language.value)
-                        .map_err(|_| EmbeddingError::InvalidUtf8("language tag"))?,
-                )?;
-            }
-            let direction = tlv_u32(required_tlv(
-                bytes,
-                5,
-                TlvWireType::U32,
-                "literal direction",
-            )?)?;
-            if direction > 2 || (direction != 0 && language.is_none()) {
-                return Err(EmbeddingError::Malformed("literal direction"));
-            }
-        }
-        4 => validate_schema(
-            bytes,
-            &[
-                required_rule(1, TlvWireType::U32),
-                required_rule(2, TlvWireType::Digest32),
-                required_rule(3, TlvWireType::Digest32),
-                required_rule(4, TlvWireType::Digest32),
-            ],
-        )?,
-        value => {
-            return Err(EmbeddingError::UnsupportedCode {
-                field: "RDF term form",
-                value,
-            });
-        }
-    }
-    Ok(())
+    validate_canonical_target_identity(kind, bytes)
 }
 
 fn validate_binding_contract(bytes: &[u8]) -> Result<(), EmbeddingError> {
@@ -4049,6 +4102,7 @@ fn validate_index_guard(bytes: &[u8]) -> Result<(), EmbeddingError> {
         required_tlv(bytes, 1, TlvWireType::Block, "index artifact")?.value,
     )?;
     require_nonempty_tlv(bytes, 2, TlvWireType::Utf8, "index parameter encoding")?;
+    validate_sha256_field(bytes, 3, 4, DigestKind::Index)?;
     validate_loss_contract(required_tlv(bytes, 5, TlvWireType::Block, "loss contract")?.value)?;
     if !matches!(
         tlv_u32(required_tlv(bytes, 6, TlvWireType::U32, "index use role")?)?,
@@ -4089,6 +4143,7 @@ fn validate_loss_contract(bytes: &[u8]) -> Result<(), EmbeddingError> {
     }
     if transformed == [1] {
         require_nonempty_tlv(bytes, 3, TlvWireType::Utf8, "loss encoding")?;
+        validate_sha256_field(bytes, 4, 5, DigestKind::Index)?;
     }
     Ok(())
 }
@@ -4154,75 +4209,74 @@ fn stage_is_applied(bytes: &[u8]) -> Result<bool, EmbeddingError> {
     }
 }
 
-fn tlv_u64(entry: TlvEntryRef<'_>) -> Result<u64, EmbeddingError> {
-    read_u64(entry.value, 0).map_err(|_| EmbeddingError::MalformedTlv("invalid u64 value"))
+struct BlockListIter<'a> {
+    bytes: &'a [u8],
+    remaining: usize,
+    position: usize,
 }
 
-fn block_list_count(bytes: &[u8]) -> Result<usize, EmbeddingError> {
-    require_minimum(bytes, 8, "TLV block list")?;
-    require_u32(bytes, 4, 0, "TLV block-list reserved")?;
-    usize::try_from(read_u32(bytes, 0)?)
-        .map_err(|_| EmbeddingError::ArithmeticOverflow("TLV block-list count"))
-}
-
-fn block_list_item(bytes: &[u8], wanted: usize) -> Result<&[u8], EmbeddingError> {
-    let count = block_list_count(bytes)?;
-    if wanted >= count {
-        return Err(EmbeddingError::Missing("TLV block-list item"));
-    }
-    let mut position = 8usize;
-    for index in 0..count {
-        let length = host_usize(read_u64(bytes, position)?, "TLV block-list item length")?;
-        position = position
-            .checked_add(8)
-            .ok_or(EmbeddingError::ArithmeticOverflow("TLV block-list item"))?;
-        let end = position
-            .checked_add(length)
-            .ok_or(EmbeddingError::ArithmeticOverflow(
-                "TLV block-list item end",
-            ))?;
-        let item = bytes.get(position..end).ok_or(EmbeddingError::Truncated)?;
-        if index == wanted {
-            return Ok(item);
-        }
-        position = align8(end)?;
-    }
-    Err(EmbeddingError::Missing("TLV block-list item"))
-}
-
-fn validate_absolute_iri(value: &str) -> Result<(), EmbeddingError> {
-    let Some(colon) = value.find(':') else {
-        return Err(EmbeddingError::Malformed("RDF IRI is not absolute"));
-    };
-    let scheme = &value[..colon];
-    if scheme.is_empty()
-        || !scheme.as_bytes()[0].is_ascii_alphabetic()
-        || !scheme
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
-        || value
-            .bytes()
-            .any(|byte| byte <= b' ' || byte == b'<' || byte == b'>')
-    {
-        return Err(EmbeddingError::Malformed("invalid absolute RDF IRI"));
-    }
-    Ok(())
-}
-
-fn validate_language(value: &str) -> Result<(), EmbeddingError> {
-    if value.is_empty()
-        || value.starts_with('-')
-        || value.ends_with('-')
-        || value.contains("--")
-        || value.bytes().any(|byte| {
-            byte.is_ascii_uppercase()
-                || !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+impl<'a> BlockListIter<'a> {
+    fn new(bytes: &'a [u8]) -> Result<Self, EmbeddingError> {
+        require_minimum(bytes, 8, "TLV block list")?;
+        require_u32(bytes, 4, 0, "TLV block-list reserved")?;
+        Ok(Self {
+            bytes,
+            remaining: usize::try_from(read_u32(bytes, 0)?)
+                .map_err(|_| EmbeddingError::ArithmeticOverflow("TLV block-list count"))?,
+            position: 8,
         })
-    {
-        return Err(EmbeddingError::Malformed("invalid lowercase language tag"));
     }
-    Ok(())
 }
+
+impl<'a> Iterator for BlockListIter<'a> {
+    type Item = Result<&'a [u8], EmbeddingError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let result = (|| {
+            let length = host_usize(
+                read_u64(self.bytes, self.position)?,
+                "TLV block-list item length",
+            )?;
+            let start = self
+                .position
+                .checked_add(8)
+                .ok_or(EmbeddingError::ArithmeticOverflow("TLV block-list item"))?;
+            let end = start
+                .checked_add(length)
+                .ok_or(EmbeddingError::ArithmeticOverflow(
+                    "TLV block-list item end",
+                ))?;
+            let item = self
+                .bytes
+                .get(start..end)
+                .ok_or(EmbeddingError::Truncated)?;
+            let next = align8(end)?;
+            let padding = self.bytes.get(end..next).ok_or(EmbeddingError::Truncated)?;
+            require_zero(padding, "TLV block-list padding")?;
+            if self.remaining == 1 && next != self.bytes.len() {
+                return Err(EmbeddingError::MalformedTlv(
+                    "block-list count or final length mismatch",
+                ));
+            }
+            self.position = next;
+            Ok(item)
+        })();
+        self.remaining = self.remaining.saturating_sub(1);
+        if result.is_err() {
+            self.remaining = 0;
+        }
+        Some(result)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl ExactSizeIterator for BlockListIter<'_> {}
 
 fn validate_target_ordinal(
     kind: TargetKind,
@@ -4620,9 +4674,314 @@ fn binary_search_records(
     None
 }
 
+fn indexed_ordinal(
+    bytes: &[u8],
+    table_offset: usize,
+    record_size: usize,
+    count: usize,
+    wanted: &[u8; 32],
+    ordinal_offset: usize,
+) -> Option<usize> {
+    let index = binary_search_records(bytes, table_offset, record_size, count, wanted)?;
+    let record = fixed_record(bytes, table_offset, record_size, index).ok()?;
+    usize::try_from(infallible_u32(record, ordinal_offset)).ok()
+}
+
+fn indexed_composite_ordinal(
+    bytes: &[u8],
+    table_offset: usize,
+    record_size: usize,
+    count: usize,
+    wanted: &[u8; 64],
+    ordinal_offset: usize,
+) -> Option<usize> {
+    let mut low = 0;
+    let mut high = count;
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let record = fixed_record(bytes, table_offset, record_size, middle).ok()?;
+        match record[..64].cmp(wanted) {
+            core::cmp::Ordering::Less => low = middle + 1,
+            core::cmp::Ordering::Greater => high = middle,
+            core::cmp::Ordering::Equal => {
+                return usize::try_from(infallible_u32(record, ordinal_offset)).ok();
+            }
+        }
+    }
+    None
+}
+
+fn external_lookup_key(record: &[u8]) -> (u32, [u8; 32], [u8; 32], u64) {
+    (
+        infallible_u32(record, 0),
+        array32(record, 4),
+        array32(record, 36),
+        infallible_u64(record, 68),
+    )
+}
+
+fn external_lookup_ordinal(
+    bytes: &[u8],
+    table_offset: usize,
+    count: usize,
+    scope_kind: u32,
+    scope_id: &[u8; 32],
+    digest: &[u8; 32],
+    length: u64,
+) -> Option<usize> {
+    let wanted = (scope_kind, *scope_id, *digest, length);
+    let mut low = 0;
+    let mut high = count;
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let record =
+            fixed_record(bytes, table_offset, EXTERNAL_LOOKUP_RECORD_LENGTH, middle).ok()?;
+        match external_lookup_key(record).cmp(&wanted) {
+            core::cmp::Ordering::Less => low = middle + 1,
+            core::cmp::Ordering::Greater => high = middle,
+            core::cmp::Ordering::Equal => {
+                return usize::try_from(infallible_u32(record, 76)).ok();
+            }
+        }
+    }
+    None
+}
+
+fn validate_id_ordinal_index(
+    bytes: &[u8],
+    index_offset: usize,
+    index_record_size: usize,
+    count: usize,
+    source_offset: usize,
+    source_record_size: usize,
+    context: &'static str,
+) -> Result<(), EmbeddingError> {
+    let mut previous = None;
+    for index in 0..count {
+        let record = fixed_record(bytes, index_offset, index_record_size, index)?;
+        let key = array32(record, 0);
+        if previous.is_some_and(|value| key <= value) {
+            return Err(EmbeddingError::NonCanonicalOrder(context));
+        }
+        previous = Some(key);
+        let ordinal = usize::try_from(infallible_u32(record, 32))
+            .map_err(|_| EmbeddingError::ArithmeticOverflow(context))?;
+        if ordinal >= count {
+            return Err(EmbeddingError::Malformed(context));
+        }
+        require_zero(&record[36..], context)?;
+        let source = fixed_record(bytes, source_offset, source_record_size, ordinal)?;
+        if source[..32] != record[..32] {
+            return Err(EmbeddingError::Malformed(context));
+        }
+    }
+    for ordinal in 0..count {
+        let source = fixed_record(bytes, source_offset, source_record_size, ordinal)?;
+        let key = array32(source, 0);
+        if indexed_ordinal(bytes, index_offset, index_record_size, count, &key, 32) != Some(ordinal)
+        {
+            return Err(EmbeddingError::Malformed(context));
+        }
+    }
+    Ok(())
+}
+
+fn validate_matrix_key_index(
+    bytes: &[u8],
+    index_offset: usize,
+    count: usize,
+) -> Result<(), EmbeddingError> {
+    let context = "family/target-set matrix index";
+    let mut previous = None;
+    for index in 0..count {
+        let record = fixed_record(bytes, index_offset, MATRIX_KEY_INDEX_RECORD_LENGTH, index)?;
+        let key: [u8; 64] = record[..64]
+            .try_into()
+            .map_err(|_| EmbeddingError::Truncated)?;
+        if previous.is_some_and(|value| key <= value) {
+            return Err(EmbeddingError::NonCanonicalOrder(context));
+        }
+        previous = Some(key);
+        let ordinal = usize::try_from(infallible_u32(record, 64))
+            .map_err(|_| EmbeddingError::ArithmeticOverflow(context))?;
+        if ordinal >= count {
+            return Err(EmbeddingError::Malformed(context));
+        }
+        require_zero(&record[68..], context)?;
+        let matrix = fixed_record(bytes, MATRIX_HEADER_LENGTH, MATRIX_RECORD_LENGTH, ordinal)?;
+        if key[..32] != matrix[96..128] || key[32..] != matrix[64..96] {
+            return Err(EmbeddingError::Malformed(context));
+        }
+    }
+    for ordinal in 0..count {
+        let matrix = fixed_record(bytes, MATRIX_HEADER_LENGTH, MATRIX_RECORD_LENGTH, ordinal)?;
+        let mut key = [0u8; 64];
+        key[..32].copy_from_slice(&matrix[96..128]);
+        key[32..].copy_from_slice(&matrix[64..96]);
+        if indexed_composite_ordinal(
+            bytes,
+            index_offset,
+            MATRIX_KEY_INDEX_RECORD_LENGTH,
+            count,
+            &key,
+            64,
+        ) != Some(ordinal)
+        {
+            return Err(EmbeddingError::Malformed(context));
+        }
+    }
+    Ok(())
+}
+
+fn effective_projection_key(
+    bytes: &[u8],
+    projection_offset: usize,
+    matrix_count: usize,
+    projection_ordinal: usize,
+) -> Result<[u8; 64], EmbeddingError> {
+    let projection = fixed_record(
+        bytes,
+        projection_offset,
+        PROJECTION_RECORD_LENGTH,
+        projection_ordinal,
+    )?;
+    let matrix_id = array32(projection, 64);
+    let matrix_ordinal = binary_search_records(
+        bytes,
+        MATRIX_HEADER_LENGTH,
+        MATRIX_RECORD_LENGTH,
+        matrix_count,
+        &matrix_id,
+    )
+    .ok_or(EmbeddingError::MissingReference("projection matrix"))?;
+    let matrix = fixed_record(
+        bytes,
+        MATRIX_HEADER_LENGTH,
+        MATRIX_RECORD_LENGTH,
+        matrix_ordinal,
+    )?;
+    let mut key = [0u8; 64];
+    key[..32].copy_from_slice(&matrix[64..96]);
+    key[32..].copy_from_slice(&projection[96..128]);
+    Ok(key)
+}
+
+fn validate_effective_projection_index(
+    bytes: &[u8],
+    index_offset: usize,
+    projection_offset: usize,
+    matrix_count: usize,
+    projection_count: usize,
+) -> Result<(), EmbeddingError> {
+    let context = "target-set/vector-space projection index";
+    let mut previous = None;
+    for index in 0..projection_count {
+        let record = fixed_record(
+            bytes,
+            index_offset,
+            EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH,
+            index,
+        )?;
+        let key: [u8; 64] = record[..64]
+            .try_into()
+            .map_err(|_| EmbeddingError::Truncated)?;
+        if previous.is_some_and(|value| key <= value) {
+            return Err(EmbeddingError::NonCanonicalOrder(context));
+        }
+        previous = Some(key);
+        let ordinal = usize::try_from(infallible_u32(record, 64))
+            .map_err(|_| EmbeddingError::ArithmeticOverflow(context))?;
+        if ordinal >= projection_count {
+            return Err(EmbeddingError::Malformed(context));
+        }
+        require_zero(&record[68..], context)?;
+        if effective_projection_key(bytes, projection_offset, matrix_count, ordinal)? != key {
+            return Err(EmbeddingError::Malformed(context));
+        }
+    }
+    for ordinal in 0..projection_count {
+        let key = effective_projection_key(bytes, projection_offset, matrix_count, ordinal)?;
+        if indexed_composite_ordinal(
+            bytes,
+            index_offset,
+            EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH,
+            projection_count,
+            &key,
+            64,
+        ) != Some(ordinal)
+        {
+            return Err(EmbeddingError::Malformed(context));
+        }
+    }
+    Ok(())
+}
+
+fn validate_external_lookup_index(
+    bytes: &[u8],
+    index_offset: usize,
+    count: usize,
+) -> Result<(), EmbeddingError> {
+    let context = "external binding lookup index";
+    let mut previous = None;
+    for index in 0..count {
+        let record = fixed_record(bytes, index_offset, EXTERNAL_LOOKUP_RECORD_LENGTH, index)?;
+        let key = external_lookup_key(record);
+        if previous.is_some_and(|value| key <= value) {
+            return Err(EmbeddingError::NonCanonicalOrder(context));
+        }
+        previous = Some(key);
+        let ordinal = usize::try_from(infallible_u32(record, 76))
+            .map_err(|_| EmbeddingError::ArithmeticOverflow(context))?;
+        if ordinal >= count {
+            return Err(EmbeddingError::Malformed(context));
+        }
+        let binding = fixed_record(
+            bytes,
+            EXTERNAL_HEADER_LENGTH,
+            EXTERNAL_RECORD_LENGTH,
+            ordinal,
+        )?;
+        let source_key = (
+            infallible_u32(binding, 32),
+            array32(binding, 40),
+            array32(binding, 72),
+            infallible_u64(binding, 104),
+        );
+        if key != source_key {
+            return Err(EmbeddingError::Malformed(context));
+        }
+    }
+    for ordinal in 0..count {
+        let binding = fixed_record(
+            bytes,
+            EXTERNAL_HEADER_LENGTH,
+            EXTERNAL_RECORD_LENGTH,
+            ordinal,
+        )?;
+        if external_lookup_ordinal(
+            bytes,
+            index_offset,
+            count,
+            infallible_u32(binding, 32),
+            &array32(binding, 40),
+            &array32(binding, 72),
+            infallible_u64(binding, 104),
+        ) != Some(ordinal)
+        {
+            return Err(EmbeddingError::Malformed(context));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::contract::push_tlv;
     use super::*;
+
+    fn test_tlv(output: &mut Vec<u8>, tag: u16, wire: TlvWireType, value: &[u8]) {
+        push_tlv(output, tag, wire, true, value).expect("test TLV");
+    }
 
     #[test]
     fn portable_f32_iteration_preserves_signed_zero() {
@@ -4690,16 +5049,88 @@ mod tests {
     }
 
     #[test]
-    fn language_validation_requires_lowercase_canonical_form() {
-        assert!(validate_language("en-ca").is_ok());
-        assert!(validate_language("EN-ca").is_err());
-        assert!(validate_language("en--ca").is_err());
-    }
+    fn embedded_contract_and_index_payload_digests_are_semantic() {
+        let payload = b"parameters";
 
-    #[test]
-    fn absolute_iri_validation_requires_a_scheme() {
-        assert!(validate_absolute_iri("https://example.org/value").is_ok());
-        assert!(validate_absolute_iri("relative/path").is_err());
-        assert!(validate_absolute_iri("1bad:value").is_err());
+        let mut stage = Vec::new();
+        test_tlv(&mut stage, 1, TlvWireType::U32, &1u32.to_le_bytes());
+        test_tlv(&mut stage, 2, TlvWireType::Utf8, b"stage");
+        test_tlv(&mut stage, 3, TlvWireType::Digest32, &[1; 32]);
+        test_tlv(&mut stage, 4, TlvWireType::Utf8, b"application/example");
+        test_tlv(&mut stage, 5, TlvWireType::Bytes, payload);
+        test_tlv(
+            &mut stage,
+            6,
+            TlvWireType::Digest32,
+            ContentDigest::of(b"different").as_bytes(),
+        );
+        assert!(matches!(
+            validate_stage(&stage),
+            Err(EmbeddingError::DigestMismatch { .. })
+        ));
+
+        let mut metric = Vec::new();
+        test_tlv(
+            &mut metric,
+            1,
+            TlvWireType::U32,
+            &0x8000_0000u32.to_le_bytes(),
+        );
+        test_tlv(&mut metric, 2, TlvWireType::Utf8, b"metric");
+        test_tlv(&mut metric, 3, TlvWireType::Utf8, b"application/example");
+        test_tlv(&mut metric, 4, TlvWireType::Bytes, payload);
+        test_tlv(
+            &mut metric,
+            5,
+            TlvWireType::Digest32,
+            ContentDigest::of(b"different").as_bytes(),
+        );
+        assert!(matches!(
+            validate_metric(&metric),
+            Err(EmbeddingError::DigestMismatch { .. })
+        ));
+
+        let mut loss = Vec::new();
+        test_tlv(&mut loss, 1, TlvWireType::Bool, &[1]);
+        test_tlv(&mut loss, 2, TlvWireType::Bool, &[1]);
+        test_tlv(&mut loss, 3, TlvWireType::Utf8, b"application/example");
+        test_tlv(&mut loss, 4, TlvWireType::Bytes, payload);
+        test_tlv(
+            &mut loss,
+            5,
+            TlvWireType::Digest32,
+            ContentDigest::of(b"different").as_bytes(),
+        );
+        assert!(matches!(
+            validate_loss_contract(&loss),
+            Err(EmbeddingError::DigestMismatch { .. })
+        ));
+
+        let mut artifact = Vec::new();
+        test_tlv(&mut artifact, 1, TlvWireType::Utf8, b"implementation");
+        test_tlv(&mut artifact, 2, TlvWireType::Utf8, b"application/example");
+        test_tlv(&mut artifact, 3, TlvWireType::Digest32, &[2; 32]);
+        test_tlv(&mut artifact, 5, TlvWireType::U32, &1u32.to_le_bytes());
+        let mut exact_loss = Vec::new();
+        test_tlv(&mut exact_loss, 1, TlvWireType::Bool, &[1]);
+        test_tlv(&mut exact_loss, 2, TlvWireType::Bool, &[0]);
+        let mut guard = Vec::new();
+        test_tlv(&mut guard, 1, TlvWireType::Block, &artifact);
+        test_tlv(&mut guard, 2, TlvWireType::Utf8, b"application/example");
+        test_tlv(&mut guard, 3, TlvWireType::Bytes, payload);
+        test_tlv(
+            &mut guard,
+            4,
+            TlvWireType::Digest32,
+            ContentDigest::of(b"different").as_bytes(),
+        );
+        test_tlv(&mut guard, 5, TlvWireType::Block, &exact_loss);
+        test_tlv(&mut guard, 6, TlvWireType::U32, &1u32.to_le_bytes());
+        test_tlv(&mut guard, 7, TlvWireType::Utf8, b"application/example");
+        test_tlv(&mut guard, 9, TlvWireType::Bool, &[1]);
+        assert!(matches!(
+            validate_index_guard(&guard),
+            Err(EmbeddingError::DigestMismatch { .. })
+        ));
     }
 }

@@ -248,9 +248,9 @@ span are errors.
 | `0x0000_0006` | `TOKEN_SPANS` | exactly instance 0 | `CRITICAL` |
 | `0x0000_0007` | `MATRICES` | exactly instance 0 | `CRITICAL` |
 | `0x0000_0008` | `EXTERNAL_BINDINGS` | exactly instance 0 | `CRITICAL` |
-| `0x0000_0009` | `INDEX_GUARDS` | exactly instance 0 | `CRITICAL | DERIVED` |
+| `0x0000_0009` | `INDEX_GUARDS` | exactly instance 0 | `CRITICAL \| DERIVED` |
 | `0x0000_1000` | `MATRIX_DATA` | contiguous instances `1..=matrix_count` | `CRITICAL` |
-| `0x0000_1001` | `INDEX_PAYLOAD` | contiguous instances `1..=inline_index_count` | `CRITICAL | DERIVED` |
+| `0x0000_1001` | `INDEX_PAYLOAD` | contiguous instances `1..=inline_index_count` | `CRITICAL \| DERIVED` |
 
 The nine singleton metadata sections are always present, including when their
 record count is zero. At least one `MATRIX_DATA` section is present. An
@@ -379,9 +379,13 @@ The `CONTRACTS` section begins with this 96-byte header:
 | 28 | 4 | `space_record_size` | `80` |
 | 32 | 8 | `space_count` | at least `family_count` |
 | 40 | 8 | `space_records_offset` | `align_up(96 + family_count * 96, 8)` |
-| 48 | 8 | `tlv_pool_offset` | `align_up(space_records_offset + space_count * 80, 8)` |
+| 48 | 8 | `tlv_pool_offset` | `align_up(space_id_index_offset + space_id_index_length, 8)` |
 | 56 | 8 | `tlv_pool_length` | exact bytes through the final contract block |
-| 64 | 32 | `reserved` | zero |
+| 64 | 4 | `space_id_index_record_size` | `40` |
+| 68 | 4 | `space_id_index_flags` | zero |
+| 72 | 8 | `space_id_index_count` | equals `space_count` |
+| 80 | 8 | `space_id_index_offset` | `align_up(space_records_offset + space_count * 80, 8)` |
+| 88 | 8 | `space_id_index_length` | `space_count * 40` |
 
 The section ends exactly at `tlv_pool_offset + tlv_pool_length`. Family records
 are strictly increasing by `family_id`. Contract blocks occur in that record
@@ -421,6 +425,20 @@ Each 80-byte effective-space record is:
 Within one family range, records are strictly increasing by effective dimension,
 their ordinals are contiguous from zero, and they exactly reproduce the prefix
 declarations in the contract.
+
+The vector-space lookup table contains one 40-byte record for every effective
+space:
+
+| Offset | Width | Field |
+| ---: | ---: | --- |
+| 0 | 32 | `vector_space_id` |
+| 32 | 4 | `space_ordinal`, index into the effective-space table |
+| 36 | 4 | `reserved`, zero |
+
+Lookup records are strictly increasing by `vector_space_id`. Their ordinals are a
+complete permutation of `0..space_count`; every key MUST equal the ID in the
+referenced effective-space record. Readers therefore validate and query the
+family-grouped space table without allocating a secondary map.
 
 ### 7.2 Artifact identity block
 
@@ -515,6 +533,8 @@ dimension, and end with the stored dimension. A fixed family has exactly one
 prefix. A Matryoshka family has at least two. Every prefix produces one effective
 space record and its own `VectorSpaceId`; spaces at different dimensions or with
 different postprocessing are incompatible even when they share one stored matrix.
+There is no smaller implementation-defined prefix-count ceiling: the canonical
+`u32` block-list count and 16 MiB TLV-block limit are the only v1 bounds.
 
 ### 7.6 Complete family contract
 
@@ -1023,23 +1043,38 @@ verification and access error; it is never replaced with a fallback vector.
 
 ### 14.1 `MATRICES` section layout
 
-The section begins with this 96-byte header:
+The section begins with this 160-byte header:
 
 | Offset | Width | Field | v1 requirement |
 | ---: | ---: | --- | --- |
 | 0 | 4 | `schema_version` | `1` |
 | 4 | 4 | `matrix_record_size` | `160` |
 | 8 | 8 | `matrix_count` | at least 1 |
-| 16 | 8 | `matrix_records_offset` | `96` |
+| 16 | 8 | `matrix_records_offset` | `160` |
 | 24 | 8 | `matrix_records_length` | `matrix_count * 160` |
 | 32 | 4 | `projection_record_size` | `152` |
 | 36 | 4 | `flags` | zero |
 | 40 | 8 | `projection_count` | sum of effective spaces for all matrices |
-| 48 | 8 | `projection_records_offset` | `align_up(96 + matrix_records_length, 8)` |
+| 48 | 8 | `projection_records_offset` | `align_up(160 + matrix_records_length, 8)` |
 | 56 | 8 | `projection_records_length` | `projection_count * 152` |
-| 64 | 32 | `reserved` | zero |
+| 64 | 4 | `projection_id_index_record_size` | `40` |
+| 68 | 4 | `projection_id_index_flags` | zero |
+| 72 | 8 | `projection_id_index_count` | equals `projection_count` |
+| 80 | 8 | `projection_id_index_offset` | immediately after the projection records |
+| 88 | 8 | `projection_id_index_length` | `projection_count * 40` |
+| 96 | 4 | `matrix_key_index_record_size` | `72` |
+| 100 | 4 | `matrix_key_index_flags` | zero |
+| 104 | 8 | `matrix_key_index_count` | equals `matrix_count` |
+| 112 | 8 | `matrix_key_index_offset` | immediately after the projection-ID index |
+| 120 | 8 | `matrix_key_index_length` | `matrix_count * 72` |
+| 128 | 4 | `effective_index_record_size` | `72` |
+| 132 | 4 | `effective_index_flags` | zero |
+| 136 | 8 | `effective_index_count` | equals `projection_count` |
+| 144 | 8 | `effective_index_offset` | immediately after the matrix-key index |
+| 152 | 8 | `effective_index_length` | `projection_count * 72` |
 
-The section ends exactly after the projection table.
+All table starts are minimally aligned to 8 bytes. The section ends exactly after
+the effective-projection index.
 
 Each 160-byte matrix record is:
 
@@ -1136,6 +1171,31 @@ highest-dimension matrix. It does not materialize a duplicate prefix matrix. Ful
 verification recomputes all projection digests. A consumer compares or attaches
 an index to a `ProjectionId`, never to dimensions or family names alone.
 
+### 14.4 Canonical matrix lookup tables
+
+The projection-ID table uses 40-byte records:
+
+| Offset | Width | Field |
+| ---: | ---: | --- |
+| 0 | 32 | `projection_id` |
+| 32 | 4 | `projection_ordinal` |
+| 36 | 4 | `reserved`, zero |
+
+The matrix-key and effective-projection tables use 72-byte records:
+
+| Table | Bytes 0..32 | Bytes 32..64 | Bytes 64..68 | Bytes 68..72 |
+| --- | --- | --- | --- | --- |
+| matrix key | `family_id` | `target_set_id` | `matrix_ordinal` | zero |
+| effective projection | `target_set_id` | `vector_space_id` | `projection_ordinal` | zero |
+
+Each table is strictly increasing by its complete key, has the exact corresponding
+record count, and its ordinals form a complete permutation of the referenced
+table. Every key MUST equal fields in the referenced record. These canonical
+on-wire indexes make stable projection lookup, matrix-pair uniqueness checks, and
+effective `(target_set_id, vector_space_id)` lookup allocation-free and
+sublinear; a reader MUST reject stale, duplicate, incomplete, or reordered index
+records.
+
 ## 15. Canonical matrix writing
 
 An unordered builder performs these steps before emitting bytes:
@@ -1165,18 +1225,22 @@ writer emit identical bytes.
 
 ### 16.1 Section layout
 
-The `EXTERNAL_BINDINGS` section begins with this 64-byte header:
+The `EXTERNAL_BINDINGS` section begins with this 80-byte header:
 
 | Offset | Width | Field | v1 requirement |
 | ---: | ---: | --- | --- |
 | 0 | 4 | `schema_version` | `1` |
 | 4 | 4 | `binding_record_size` | `192` |
 | 8 | 8 | `binding_count` | may be zero |
-| 16 | 8 | `binding_records_offset` | `64` |
+| 16 | 8 | `binding_records_offset` | `80` |
 | 24 | 8 | `binding_records_length` | `binding_count * 192` |
-| 32 | 8 | `contract_pool_offset` | `align_up(64 + binding_records_length, 8)` |
+| 32 | 8 | `contract_pool_offset` | `align_up(binding_lookup_offset + binding_lookup_length, 8)` |
 | 40 | 8 | `contract_pool_length` | exact bytes through the final contract block |
-| 48 | 16 | `reserved` | zero |
+| 48 | 4 | `binding_lookup_record_size` | `80` |
+| 52 | 4 | `binding_lookup_flags` | zero |
+| 56 | 8 | `binding_lookup_count` | equals `binding_count` |
+| 64 | 8 | `binding_lookup_offset` | `align_up(80 + binding_records_length, 8)` |
+| 72 | 8 | `binding_lookup_length` | `binding_count * 80` |
 
 The section ends exactly after the contract pool. Each 192-byte binding record is:
 
@@ -1216,6 +1280,21 @@ Scope codes are:
 Other scope codes are errors. The referenced typed ID exists in the artifact,
 except that an index-scoped binding may point to the `IndexId` of the record that
 references the binding.
+
+The external-artifact lookup table contains one 80-byte record per binding:
+
+| Offset | Width | Field |
+| ---: | ---: | --- |
+| 0 | 4 | `scope_kind` |
+| 4 | 32 | `scope_id` |
+| 36 | 32 | `artifact_sha256` |
+| 68 | 8 | `artifact_length` |
+| 76 | 4 | `binding_ordinal` |
+
+Records are strictly increasing by `(scope_kind, scope_id, artifact_sha256,
+artifact_length)`. Ordinals are a complete permutation of the binding table and
+each key MUST match its referenced binding. This permits allocation-free exact
+detached-payload binding checks without scanning the binding catalog.
 
 ### 16.2 Binding contract
 

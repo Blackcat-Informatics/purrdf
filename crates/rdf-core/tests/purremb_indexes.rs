@@ -7,11 +7,12 @@ use purrdf_core::{
     AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
     CertifiedPurrpckSource, ContentDigest, DerivedIndex, DimensionalityPolicy, DistanceMetric,
     EffectivePrefix, EmbeddingBuilder, EmbeddingFamily, EmbeddingFamilyContract, EmbeddingTarget,
-    EmbeddingView, ExternalBinding, ExternalBindingContract, ExternalScope, IndexBuildDeterminism,
-    IndexCoordinates, IndexGuardContract, IndexLossContract, IndexPayloadStorage, IndexStorage,
-    IndexUseRole, MatrixCommitment, MatrixInput, MatrixRow, PURREMB_HEADER_LENGTH,
-    PrefixPostprocessing, ProjectionCommitment, ProjectionSpec, RdfDatasetBuilder,
-    SECTION_INDEX_GUARDS, SECTION_INDEX_PAYLOAD, StageImplementation, TargetSet, VectorDtype,
+    EmbeddingView, ExtensionTarget, ExternalBinding, ExternalBindingContract, ExternalScope,
+    IndexBuildDeterminism, IndexCoordinates, IndexGuardContract, IndexLossContract,
+    IndexPayloadStorage, IndexStorage, IndexUseRole, MatrixCommitment, MatrixInput, MatrixRow,
+    PURREMB_HEADER_LENGTH, PrefixPostprocessing, ProjectionCommitment, ProjectionSpec,
+    RdfDatasetBuilder, SECTION_CONTRACTS, SECTION_EXTERNAL_BINDINGS, SECTION_INDEX_GUARDS,
+    SECTION_INDEX_PAYLOAD, SECTION_TARGETS, StageImplementation, TargetSet, VectorDtype,
     derive_artifact_root, derive_matrix_content_digest, derive_matrix_id,
     derive_projection_content_digest, derive_projection_id, verify_embedding,
     verify_external_artifact, verify_external_pack,
@@ -118,6 +119,10 @@ fn stage(name: &str) -> AppliedStage {
 }
 
 fn context() -> Context {
+    context_with_metric(DistanceMetric::Cosine)
+}
+
+fn context_with_metric(metric: DistanceMetric) -> Context {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
     let (source, source_bytes) =
         CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
@@ -135,7 +140,7 @@ fn context() -> Context {
         normalization: AppliedStage::NotApplied,
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,
-        metric: DistanceMetric::Cosine,
+        metric,
         dimensionality: DimensionalityPolicy::matryoshka(vec![
             EffectivePrefix {
                 dimension: 2,
@@ -324,6 +329,51 @@ fn inline_coarse_and_full_indexes_bind_exact_prefixes() {
 }
 
 #[test]
+fn embedded_metric_and_extension_target_digests_survive_outer_resealing() {
+    let metric_parameters = b"metric-parameters-with-embedded-digest";
+    let metric_context = context_with_metric(DistanceMetric::Extension {
+        identifier: "https://example.org/metric/custom".into(),
+        parameter_encoding: "application/example".into(),
+        parameters: metric_parameters.to_vec(),
+    });
+    let mut metric_bytes = build(&metric_context, Vec::new(), Vec::new());
+    let (section, length) = section_span(&metric_bytes, SECTION_CONTRACTS, 0);
+    let relative = find_bytes(&metric_bytes[section..section + length], metric_parameters);
+    metric_bytes[section + relative] ^= 1;
+    reseal(&mut metric_bytes, &[(SECTION_CONTRACTS, 0)]);
+    assert!(EmbeddingView::from_bytes(&metric_bytes).is_err());
+
+    let context = context();
+    let extension_payload = b"extension-target-payload-with-embedded-digest";
+    let extension = ExtensionTarget {
+        kind_identifier: "https://example.org/target/custom".into(),
+        payload_encoding: "application/example".into(),
+        payload: extension_payload.to_vec(),
+    }
+    .into_target(true)
+    .expect("extension target");
+    let metadata = CanonicalMetadataInput {
+        source: context.source,
+        family_contracts: vec![context.contract.clone()],
+        targets: vec![context.target.clone(), extension],
+        target_sets: vec![context.target_set.clone()],
+        relations: Vec::new(),
+        token_spans: Vec::new(),
+        external_bindings: Vec::new(),
+        indexes: Vec::new(),
+        extensions: Vec::new(),
+    };
+    let mut builder = EmbeddingBuilder::from_typed_metadata(metadata);
+    builder.add_f32_matrix(context.matrix);
+    let mut target_bytes = builder.build().expect("extension artifact").bytes;
+    let (section, length) = section_span(&target_bytes, SECTION_TARGETS, 0);
+    let relative = find_bytes(&target_bytes[section..section + length], extension_payload);
+    target_bytes[section + relative] ^= 1;
+    reseal(&mut target_bytes, &[(SECTION_TARGETS, 0)]);
+    assert!(EmbeddingView::from_bytes(&target_bytes).is_err());
+}
+
+#[test]
 fn detached_index_requires_and_verifies_exact_external_payload() {
     let context = context();
     let payload = b"detached opaque index payload";
@@ -357,6 +407,13 @@ fn detached_index_requires_and_verifies_exact_external_payload() {
     assert!(guard.payload_bytes().is_none());
     let binding = view.external_bindings().next().expect("external binding");
     verify_external_artifact(binding, payload).expect("detached exact bytes");
+
+    let mut stale_lookup = bytes;
+    let (section, _) = section_span(&stale_lookup, SECTION_EXTERNAL_BINDINGS, 0);
+    let lookup = usize::try_from(read_u64(&stale_lookup, section + 64)).expect("lookup offset");
+    put_u32(&mut stale_lookup, section + lookup + 76, u32::MAX);
+    reseal(&mut stale_lookup, &[(SECTION_EXTERNAL_BINDINGS, 0)]);
+    assert!(EmbeddingView::from_bytes(&stale_lookup).is_err());
 }
 
 #[test]
@@ -451,7 +508,11 @@ fn every_stale_index_coordinate_and_contract_guard_is_rejected() {
         let position = guard_start + find_bytes(guard_bytes, needle);
         corrupted[position] ^= 1;
         reseal(&mut corrupted, &[(SECTION_INDEX_GUARDS, 0)]);
-        assert_reader_or_verifier_rejects(&corrupted);
+        if needle == [0xa1, 0x61, b'm', 0x10] || needle == b"loss-parameters-v1" {
+            assert!(EmbeddingView::from_bytes(&corrupted).is_err());
+        } else {
+            assert_reader_or_verifier_rejects(&corrupted);
+        }
     }
 
     let mut payload = original;

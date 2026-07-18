@@ -31,9 +31,12 @@ use super::wire::{
     encode_artifact,
 };
 
-const MATRICES_HEADER_LENGTH: u64 = 96;
+const MATRICES_HEADER_LENGTH: u64 = 160;
 const MATRIX_RECORD_LENGTH: u64 = 160;
 const PROJECTION_RECORD_LENGTH: u64 = 152;
+const PROJECTION_ID_INDEX_RECORD_LENGTH: u64 = 40;
+const MATRIX_KEY_INDEX_RECORD_LENGTH: u64 = 72;
+const EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH: u64 = 72;
 
 const D_TARGET_SET: &[u8] = b"purrdf.purremb.v1.target-set\0";
 const D_MATRIX_CONTENT: &[u8] = b"purrdf.purremb.v1.matrix-content\0";
@@ -926,8 +929,38 @@ fn encode_matrices_section(matrices: &[MatrixCommitment]) -> Result<Vec<u8>, Emb
         .ok_or(EmbeddingError::ArithmeticOverflow(
             "projection records length",
         ))?;
-    let section_length = projection_records_offset
+    let projection_index_offset = projection_records_offset
         .checked_add(projection_records_length)
+        .ok_or(EmbeddingError::ArithmeticOverflow(
+            "projection ID index offset",
+        ))?;
+    let projection_index_length = projection_count
+        .checked_mul(PROJECTION_ID_INDEX_RECORD_LENGTH)
+        .ok_or(EmbeddingError::ArithmeticOverflow(
+            "projection ID index length",
+        ))?;
+    let matrix_key_index_offset = projection_index_offset
+        .checked_add(projection_index_length)
+        .ok_or(EmbeddingError::ArithmeticOverflow(
+            "matrix key index offset",
+        ))?;
+    let matrix_key_index_length = matrix_count
+        .checked_mul(MATRIX_KEY_INDEX_RECORD_LENGTH)
+        .ok_or(EmbeddingError::ArithmeticOverflow(
+            "matrix key index length",
+        ))?;
+    let effective_index_offset = matrix_key_index_offset
+        .checked_add(matrix_key_index_length)
+        .ok_or(EmbeddingError::ArithmeticOverflow(
+            "effective projection index offset",
+        ))?;
+    let effective_index_length = projection_count
+        .checked_mul(EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH)
+        .ok_or(EmbeddingError::ArithmeticOverflow(
+            "effective projection index length",
+        ))?;
+    let section_length = effective_index_offset
+        .checked_add(effective_index_length)
         .ok_or(EmbeddingError::ArithmeticOverflow(
             "MATRICES section length",
         ))?;
@@ -953,8 +986,42 @@ fn encode_matrices_section(matrices: &[MatrixCommitment]) -> Result<Vec<u8>, Emb
     put_u64(&mut output, 40, projection_count);
     put_u64(&mut output, 48, projection_records_offset);
     put_u64(&mut output, 56, projection_records_length);
+    put_u32(
+        &mut output,
+        64,
+        u32::try_from(PROJECTION_ID_INDEX_RECORD_LENGTH).expect("fixed record length fits u32"),
+    );
+    put_u64(&mut output, 72, projection_count);
+    put_u64(&mut output, 80, projection_index_offset);
+    put_u64(&mut output, 88, projection_index_length);
+    put_u32(
+        &mut output,
+        96,
+        u32::try_from(MATRIX_KEY_INDEX_RECORD_LENGTH).expect("fixed record length fits u32"),
+    );
+    put_u64(&mut output, 104, matrix_count);
+    put_u64(&mut output, 112, matrix_key_index_offset);
+    put_u64(&mut output, 120, matrix_key_index_length);
+    put_u32(
+        &mut output,
+        128,
+        u32::try_from(EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH)
+            .expect("fixed record length fits u32"),
+    );
+    put_u64(&mut output, 136, projection_count);
+    put_u64(&mut output, 144, effective_index_offset);
+    put_u64(&mut output, 152, effective_index_length);
 
     let mut projection_index = 0u64;
+    let mut projection_id_entries = Vec::with_capacity(
+        usize::try_from(projection_count)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("projection ID index capacity"))?,
+    );
+    let mut matrix_key_entries = Vec::with_capacity(matrices.len());
+    let mut effective_entries =
+        Vec::with_capacity(usize::try_from(projection_count).map_err(|_| {
+            EmbeddingError::ArithmeticOverflow("effective projection index capacity")
+        })?);
     for (matrix_index, matrix) in matrices.iter().enumerate() {
         let matrix_index = u64::try_from(matrix_index)
             .map_err(|_| EmbeddingError::ArithmeticOverflow("matrix record index"))?;
@@ -983,6 +1050,14 @@ fn encode_matrices_section(matrices: &[MatrixCommitment]) -> Result<Vec<u8>, Emb
         put_u64(&mut output, record_offset + 136, matrix.row_count);
         put_u32(&mut output, record_offset + 144, matrix.stored_dimension);
         put_u64(&mut output, record_offset + 152, matrix.data_length()?);
+        let mut matrix_key = [0u8; 64];
+        matrix_key[..32].copy_from_slice(matrix.family_id.as_bytes());
+        matrix_key[32..].copy_from_slice(matrix.target_set_id.as_bytes());
+        matrix_key_entries.push((
+            matrix_key,
+            u32::try_from(matrix_index)
+                .map_err(|_| EmbeddingError::ArithmeticOverflow("matrix index ordinal"))?,
+        ));
 
         for projection in &matrix.projections {
             let projection_offset = projection_records_offset
@@ -1026,10 +1101,98 @@ fn encode_matrices_section(matrices: &[MatrixCommitment]) -> Result<Vec<u8>, Emb
                     matrix.dtype,
                 )?,
             );
+            let projection_ordinal = u32::try_from(projection_index)
+                .map_err(|_| EmbeddingError::ArithmeticOverflow("projection index ordinal"))?;
+            projection_id_entries.push((*projection.projection_id.as_bytes(), projection_ordinal));
+            let mut effective_key = [0u8; 64];
+            effective_key[..32].copy_from_slice(matrix.target_set_id.as_bytes());
+            effective_key[32..].copy_from_slice(projection.vector_space_id.as_bytes());
+            effective_entries.push((effective_key, projection_ordinal));
             projection_index += 1;
         }
     }
     debug_assert_eq!(projection_index, projection_count);
+
+    projection_id_entries.sort_unstable_by_key(|(key, _)| *key);
+    matrix_key_entries.sort_unstable_by_key(|(key, _)| *key);
+    effective_entries.sort_unstable_by_key(|(key, _)| *key);
+    if projection_id_entries
+        .windows(2)
+        .any(|pair| pair[0].0 == pair[1].0)
+    {
+        return Err(EmbeddingError::Duplicate("projection ID index"));
+    }
+    if matrix_key_entries
+        .windows(2)
+        .any(|pair| pair[0].0 == pair[1].0)
+    {
+        return Err(EmbeddingError::Duplicate("family/target-set matrix"));
+    }
+    if effective_entries
+        .windows(2)
+        .any(|pair| pair[0].0 == pair[1].0)
+    {
+        return Err(EmbeddingError::Duplicate(
+            "target-set/vector-space projection",
+        ));
+    }
+    for (index, (key, ordinal)) in projection_id_entries.iter().enumerate() {
+        let offset = usize::try_from(projection_index_offset)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("projection ID index offset"))?
+            .checked_add(
+                index
+                    .checked_mul(
+                        usize::try_from(PROJECTION_ID_INDEX_RECORD_LENGTH)
+                            .expect("fixed record length fits usize"),
+                    )
+                    .ok_or(EmbeddingError::ArithmeticOverflow(
+                        "projection ID index record",
+                    ))?,
+            )
+            .ok_or(EmbeddingError::ArithmeticOverflow(
+                "projection ID index record",
+            ))?;
+        output[offset..offset + 32].copy_from_slice(key);
+        put_u32(&mut output, offset + 32, *ordinal);
+    }
+    for (index, (key, ordinal)) in matrix_key_entries.iter().enumerate() {
+        let offset = usize::try_from(matrix_key_index_offset)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("matrix key index offset"))?
+            .checked_add(
+                index
+                    .checked_mul(
+                        usize::try_from(MATRIX_KEY_INDEX_RECORD_LENGTH)
+                            .expect("fixed record length fits usize"),
+                    )
+                    .ok_or(EmbeddingError::ArithmeticOverflow(
+                        "matrix key index record",
+                    ))?,
+            )
+            .ok_or(EmbeddingError::ArithmeticOverflow(
+                "matrix key index record",
+            ))?;
+        output[offset..offset + 64].copy_from_slice(key);
+        put_u32(&mut output, offset + 64, *ordinal);
+    }
+    for (index, (key, ordinal)) in effective_entries.iter().enumerate() {
+        let offset = usize::try_from(effective_index_offset)
+            .map_err(|_| EmbeddingError::ArithmeticOverflow("effective index offset"))?
+            .checked_add(
+                index
+                    .checked_mul(
+                        usize::try_from(EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH)
+                            .expect("fixed record length fits usize"),
+                    )
+                    .ok_or(EmbeddingError::ArithmeticOverflow(
+                        "effective projection index record",
+                    ))?,
+            )
+            .ok_or(EmbeddingError::ArithmeticOverflow(
+                "effective projection index record",
+            ))?;
+        output[offset..offset + 64].copy_from_slice(key);
+        put_u32(&mut output, offset + 64, *ordinal);
+    }
     Ok(output)
 }
 

@@ -5,7 +5,7 @@
 
 use crate::ContentDigest;
 
-use super::error::EmbeddingError;
+use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
     ChunkingContractId, FamilyContractDigest, FamilyId, VectorSpaceId, derive_chunking_contract_id,
     derive_family_contract_digest, derive_family_id, derive_vector_space_id,
@@ -141,6 +141,48 @@ impl<'a> Iterator for TlvIter<'a> {
 pub fn canonical_tlv(bytes: &[u8]) -> Result<TlvIter<'_>, EmbeddingError> {
     validate_tlv_block(bytes, 0)?;
     Ok(TlvIter { bytes, position: 0 })
+}
+
+/// Verifies a canonical block's embedded SHA-256 field against its payload.
+///
+/// Kind-specific schema validation remains responsible for requiring the two
+/// tags and their exact wire types. This helper supplies the semantic equality
+/// check shared by contract, target, and index validation paths.
+pub(crate) fn validate_sha256_field(
+    bytes: &[u8],
+    payload_tag: u16,
+    digest_tag: u16,
+    kind: DigestKind,
+) -> Result<(), EmbeddingError> {
+    let mut payload = None;
+    let mut stored = None;
+    for entry in canonical_tlv(bytes)? {
+        if entry.tag == payload_tag {
+            payload = Some(entry.value);
+        } else if entry.tag == digest_tag {
+            stored = Some(entry);
+        }
+    }
+    let payload = payload.ok_or(EmbeddingError::Missing("self-digest payload"))?;
+    let stored = stored.ok_or(EmbeddingError::Missing("self-digest field"))?;
+    if stored.wire_type != TlvWireType::Digest32 || !stored.critical {
+        return Err(EmbeddingError::MalformedTlv(
+            "self-digest field has wrong type or criticality",
+        ));
+    }
+    let expected: [u8; 32] = stored
+        .value
+        .try_into()
+        .map_err(|_| EmbeddingError::MalformedTlv("self-digest length"))?;
+    let actual = *ContentDigest::of(payload).as_bytes();
+    if expected != actual {
+        return Err(EmbeddingError::DigestMismatch {
+            kind,
+            expected,
+            actual,
+        });
+    }
+    Ok(())
 }
 
 /// Exact identity of a model, engine, tokenizer, or manifest.
@@ -568,7 +610,7 @@ impl DimensionalityPolicy {
         let prefixes = self.prefixes();
         let valid_count = match self {
             Self::Fixed(_) => prefixes.len() == 1,
-            Self::Matryoshka(_) => (2..=256).contains(&prefixes.len()),
+            Self::Matryoshka(_) => prefixes.len() >= 2,
         };
         if !valid_count {
             return Err(EmbeddingError::Malformed(
@@ -737,18 +779,23 @@ impl EmbeddingFamilyContract {
             .prefixes()
             .iter()
             .enumerate()
-            .map(|(ordinal, prefix)| EffectiveSpace {
-                id: derive_vector_space_id(
+            .map(|(ordinal, prefix)| {
+                Ok(EffectiveSpace {
+                    id: derive_vector_space_id(
+                        family_id,
+                        prefix.dimension,
+                        prefix.postprocessing.code(),
+                    ),
                     family_id,
-                    prefix.dimension,
-                    prefix.postprocessing.code(),
-                ),
-                family_id,
-                dimension: prefix.dimension,
-                postprocessing: prefix.postprocessing,
-                ordinal: u32::try_from(ordinal).expect("prefix count is at most 256"),
+                    dimension: prefix.dimension,
+                    postprocessing: prefix.postprocessing,
+                    ordinal: u32::try_from(ordinal).map_err(|_| EmbeddingError::CountLimit {
+                        field: "effective prefix",
+                        value: u64::try_from(ordinal).unwrap_or(u64::MAX),
+                    })?,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, EmbeddingError>>()?;
         Ok(EmbeddingFamily {
             id: family_id,
             contract_digest,
@@ -1116,6 +1163,23 @@ mod tests {
         assert_eq!(family.spaces.len(), 3);
         assert_ne!(family.spaces[0].id, family.spaces[1].id);
         assert_ne!(family.spaces[1].id, family.spaces[2].id);
+    }
+
+    #[test]
+    fn matryoshka_prefix_count_has_no_arbitrary_256_limit() {
+        let prefixes = (1..=257)
+            .map(|dimension| EffectivePrefix {
+                dimension,
+                postprocessing: PrefixPostprocessing::None,
+            })
+            .collect();
+        let family = contract(
+            DimensionalityPolicy::matryoshka(prefixes).expect("257-prefix Matryoshka policy"),
+        )
+        .derive()
+        .expect("257-prefix family derives");
+        assert_eq!(family.spaces.len(), 257);
+        assert_eq!(family.spaces.last().map(|space| space.ordinal), Some(256));
     }
 
     #[test]

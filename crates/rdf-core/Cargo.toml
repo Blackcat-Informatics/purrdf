@@ -34,6 +34,10 @@ name = "purrdf_core"
 # leaf has no edge back to the core, remains wasm-clean, and prevents malformed
 # or relative identifiers from entering persistent PURREMB target identity.
 purrdf-iri = { workspace = true }
+# Strict BCP 47 validation for canonical RDF language-tag target identities.
+# Parsing stays allocation-free and wasm-clean; canonical lowercase spelling is
+# enforced by the PURREMB target validator before the tag reaches this parser.
+oxilangtag = { workspace = true }
 # The permissive RDF 1.2 ingestion protocol: this crate provides
 # the `DatasetSink` adapter that folds an `RdfEventSink` event stream into a frozen
 # `RdfDataset`, plus the frozen-IR-replay `FrozenDatasetSource`. The protocol crate
@@ -136,4 +140,11 @@ harness = false
 # retrieval, bounded-memory streaming output, f64 access, and a one-million-
 # chunk catalog. Report-only — no latency or recall threshold is asserted.
 name = "purremb"
+harness = false
+
+[[bench]]
+# One-shot allocation/count/high-water probes over the same deterministic
+# `.purremb` fixtures. Kept in a separate process so allocator atomics cannot
+# distort the Criterion timings above.
+name = "purremb_alloc"
 harness = false

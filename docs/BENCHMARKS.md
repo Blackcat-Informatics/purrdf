@@ -35,6 +35,8 @@ They live under `crates/*/benches/`:
 - `crates/rdf-core/benches/purremb.rs` — `.purremb` validation, resident
   reopen, target and prefix access, exact/two-stage retrieval, streaming write,
   binary64 access, and a one-million-chunk catalog.
+- `crates/rdf-core/benches/purremb_alloc.rs` — one-shot allocation traffic and
+  live-byte high-water probes over the same deterministic `.purremb` fixtures.
 - `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput.
 - `crates/rdf/benches/projections.rs` — RDF-to-LPG mapping, all four LPG
   carrier writers/readers, exact CSVW write/read, OBO Graphs, SKOS, the shared
@@ -78,7 +80,8 @@ Additional benches are run package-by-package, e.g.
 | `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR. |
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
-| `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, allocation observations, and a one-million-chunk hierarchy. |
+| `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, and a one-million-chunk hierarchy. |
+| `crates/rdf-core/benches/purremb_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for PURREMB fixture construction, verification, and streaming. |
 | `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers. |
 | `crates/rdf/benches/projections.rs` | Graph, tabular, and research-object mapping/carrier throughput plus allocation counts over deterministic fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
@@ -94,9 +97,10 @@ Additional benches are run package-by-package, e.g.
 
 ### PURREMB companion format
 
-`crates/rdf-core/benches/purremb.rs` constructs three deterministic fixtures
-without RNG, wall-clock values, local paths, or process-specific canonical
-input:
+The shared `crates/rdf-core/benches/support/purremb.rs` module constructs three
+deterministic fixtures without RNG, wall-clock values, local paths, or
+process-specific canonical input. The timed and allocation processes consume
+the exact same builders:
 
 - a 16,384-row x 384-coordinate binary32 matrix (27,267,328-byte artifact)
   with one stored matrix and raw-32, deterministic-L2-64, and
@@ -126,12 +130,15 @@ metadata encoding, layout, matrix streaming, all integrity/projection hashes,
 and backpatching. A setup assertion requires its bytes to equal the unordered
 builder output exactly.
 
-The benchmark's counting allocator reports allocation calls, cumulative
-requested bytes, retained-byte deltas, and the maximum live-byte delta observed
-during selected operations. “Peak working bytes” is an in-process allocator
-high-water observation, not peak RSS, mapped-file residency, kernel page cache,
-or a memory budget. Structural `EmbeddingView::from_bytes` remains borrowed;
-full relation-completeness verification intentionally builds temporary relation
+Timed Criterion samples run in `purremb` with the normal process allocator. The
+separate `purremb_alloc` executable installs a counting allocator and reports
+allocation calls, cumulative requested bytes, retained-byte deltas, and the
+maximum live-byte delta observed during selected operations. Keeping the
+processes separate prevents the allocator's atomic accounting from changing the
+timed workloads. “Peak working bytes” is an in-process allocator high-water
+observation, not peak RSS, mapped-file residency, kernel page cache, or a memory
+budget. Structural `EmbeddingView::from_bytes` remains borrowed; full
+relation-completeness verification intentionally builds temporary relation
 catalogs for the million-chunk fixture. The streaming observation includes the
 27.3 MB caller-owned `Vec` sink; matrix processing itself retains one row buffer
 and its digest states, and a file or network sink need not retain output bytes.
@@ -142,8 +149,11 @@ with:
 ```sh
 cargo bench -p purrdf-core --bench purremb --locked -- --test
 cargo bench -p purrdf-core --bench purremb --locked -- --quick
+cargo bench -p purrdf-core --bench purremb_alloc --locked
 PURREMB_CATALOG_SUBJECTS=10000 \
   cargo bench -p purrdf-core --bench purremb --locked -- --test
+PURREMB_CATALOG_SUBJECTS=10000 \
+  cargo bench -p purrdf-core --bench purremb_alloc --locked
 ```
 
 The environment override is for local smoke testing only. Reported results use
@@ -161,20 +171,20 @@ an optimized tight-loop observation, not an end-to-end request latency.
 
 | Operation | Fixture | Time | Throughput where meaningful |
 | --- | --- | ---: | ---: |
-| full validation | 16,384 x 384 `f32` | 76.6 ms | 340 MiB/s |
-| resident prevalidated reopen | 16,384 x 384 `f32` | 4.07 ms | 6.24 GiB/s |
-| target by matrix row | 16,384 targets | 0.635 ns | — |
-| target by `TargetId` | 16,384 targets | 33.5 ns | — |
-| raw 32-coordinate prefix borrow | `f32` | 4.44 ns | — |
-| deterministic-L2 64-coordinate prefix iteration | `f32` | 226 ns | — |
-| native aligned 384-coordinate row borrow | `f32` | 1.29 ns | — |
-| exact normalized 384-coordinate scan | 16,384 rows | 12.9 ms | 1.27 Mrow/s |
-| exact 64-prefix candidates + 384-prefix rerank | 16,384 rows, 128 candidates | 4.00 ms | 4.10 Mrow/s |
-| canonical streaming write | 27,267,328 bytes | 69.8 ms | 373 MiB/s |
-| full validation | 4,096 x 128 `f64` | 7.74 ms | 582 MiB/s |
-| native aligned 128-coordinate row borrow | `f64` | 1.28 ns | — |
-| target by `TargetId` | 1,000,000 chunks | 42.9 ns | — |
-| one document's relation range | 1,000,000 chunks / 4,096 documents | 492 ns | — |
+| full validation | 16,384 x 384 `f32` | 62.1 ms | 418 MiB/s |
+| resident prevalidated reopen | 16,384 x 384 `f32` | 2.10 ms | 12.1 GiB/s |
+| target by matrix row | 16,384 targets | 0.599 ns | — |
+| target by `TargetId` | 16,384 targets | 35.3 ns | — |
+| raw 32-coordinate prefix borrow | `f32` | 4.76 ns | — |
+| deterministic-L2 64-coordinate prefix iteration | `f32` | 258 ns | — |
+| native aligned 384-coordinate row borrow | `f32` | 2.05 ns | — |
+| exact normalized 384-coordinate top-10 scan | 16,384 rows | 12.7 ms | 1.29 Mrow/s |
+| exact 64-prefix candidates + 384-prefix top-10 rerank | 16,384 rows, 128 candidates | 5.90 ms | 2.77 Mrow/s |
+| canonical streaming write | 27,267,328 bytes | 72.5 ms | 359 MiB/s |
+| full validation | 4,096 x 128 `f64` | 7.78 ms | 579 MiB/s |
+| native aligned 128-coordinate row borrow | `f64` | 1.54 ns | — |
+| target by `TargetId` | 1,000,000 chunks | 42.1 ns | — |
+| one document's relation range | 1,000,000 chunks / 4,096 documents | 497 ns | — |
 
 The correlated synthetic Matryoshka fixture reported recall@10 = 1.000 after
 64-coordinate retrieval and 384-coordinate reranking. That result demonstrates
@@ -182,7 +192,8 @@ the guard-correct two-stage path for this generator; it is not a model-quality
 claim and must not be generalized to independently trained or uncorrelated
 embeddings.
 
-Representative allocator observations from the same run:
+Representative allocator observations from the companion allocation process on
+the same revision and host:
 
 | Operation | Allocation calls | Requested bytes | Retained bytes | Peak working bytes |
 | --- | ---: | ---: | ---: | ---: |

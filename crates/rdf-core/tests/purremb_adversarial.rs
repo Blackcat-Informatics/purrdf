@@ -4,9 +4,9 @@
 //! Fail-closed PURREMB framing, integrity, and deep-corruption coverage.
 
 use purrdf_core::{
-    EmbeddingError, EmbeddingView, PURREMB_HEADER_LENGTH, SECTION_MATRICES, SECTION_MATRIX_DATA,
-    SECTION_RELATIONS, SECTION_TARGET_SETS, SECTION_TARGETS, SECTION_TOKEN_SPANS,
-    derive_artifact_root, verify_embedding,
+    EmbeddingError, EmbeddingView, PURREMB_HEADER_LENGTH, SECTION_CONTRACTS, SECTION_MATRICES,
+    SECTION_MATRIX_DATA, SECTION_RELATIONS, SECTION_TARGET_SETS, SECTION_TARGETS,
+    SECTION_TOKEN_SPANS, derive_artifact_root, verify_embedding,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -76,6 +76,13 @@ fn assert_structural_error(bytes: &[u8]) {
         EmbeddingView::from_bytes(bytes).is_err(),
         "corruption unexpectedly passed structural open"
     );
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> usize {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .expect("known fixture bytes")
 }
 
 #[test]
@@ -192,7 +199,27 @@ fn outer_and_internal_integrity_are_independently_verified() {
 }
 
 #[test]
+fn embedded_stage_digest_rejects_an_independently_resealed_payload() {
+    let mut corrupted = golden();
+    let (offset, length) = section_span(&corrupted, SECTION_CONTRACTS, 0);
+    let relative = find_bytes(
+        &corrupted[offset..offset + length],
+        &[0xa1, 0x61, b'v', 0x01],
+    );
+    corrupted[offset + relative] ^= 1;
+    reseal(&mut corrupted, &[(SECTION_CONTRACTS, 0)]);
+    assert_structural_error(&corrupted);
+}
+
+#[test]
 fn deep_catalog_and_projection_corruptions_are_rejected() {
+    let mut space_index = golden();
+    let (offset, _) = section_span(&space_index, SECTION_CONTRACTS, 0);
+    let index = usize::try_from(read_u64(&space_index, offset + 80)).expect("space index");
+    put_u32(&mut space_index, offset + index + 32, u32::MAX);
+    reseal(&mut space_index, &[(SECTION_CONTRACTS, 0)]);
+    assert_structural_error(&space_index);
+
     let mut target_set = golden();
     let (offset, _) = section_span(&target_set, SECTION_TARGET_SETS, 0);
     let row_pool = usize::try_from(read_u64(&target_set, offset + 40)).expect("row pool");
@@ -218,6 +245,16 @@ fn deep_catalog_and_projection_corruptions_are_rejected() {
     put_u32(&mut prefix, offset + projections + 128, 3);
     reseal(&mut prefix, &[(SECTION_MATRICES, 0)]);
     assert_structural_error(&prefix);
+
+    for (header_offset, ordinal_offset) in [(80usize, 32usize), (112, 64), (144, 64)] {
+        let mut stale_index = golden();
+        let (offset, _) = section_span(&stale_index, SECTION_MATRICES, 0);
+        let index = usize::try_from(read_u64(&stale_index, offset + header_offset))
+            .expect("matrix lookup index");
+        put_u32(&mut stale_index, offset + index + ordinal_offset, u32::MAX);
+        reseal(&mut stale_index, &[(SECTION_MATRICES, 0)]);
+        assert_structural_error(&stale_index);
+    }
 }
 
 #[test]

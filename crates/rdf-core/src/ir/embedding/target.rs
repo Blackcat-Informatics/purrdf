@@ -5,10 +5,12 @@
 
 use core::cmp::Ordering;
 
+use oxilangtag::LanguageTag;
+
 use crate::{ContentDigest, RdfTextDirection};
 
-use super::contract::{TlvWireType, push_tlv, validate_tlv_block};
-use super::error::EmbeddingError;
+use super::contract::{TlvEntryRef, TlvWireType, canonical_tlv, push_tlv, validate_sha256_field};
+use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
     ChunkingContractId, FamilyId, TargetId, TargetIdentityDigest, TargetSetId,
     derive_relation_role_digest, derive_target_id, derive_target_identity_digest,
@@ -73,7 +75,7 @@ impl TryFrom<u32> for TargetKind {
 }
 
 /// Canonical target plus optional retained identity bytes and pack-local ordinal.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EmbeddingTarget {
     /// Stable target identity.
     pub id: TargetId,
@@ -95,7 +97,7 @@ impl EmbeddingTarget {
         retain_identity: bool,
         source_local_ordinal: Option<u64>,
     ) -> Result<Self, EmbeddingError> {
-        validate_tlv_block(&canonical_identity, 0)?;
+        validate_target_identity(kind, &canonical_identity)?;
         validate_ordinal(kind, source_local_ordinal)?;
         let identity_digest = derive_target_identity_digest(kind.code(), &canonical_identity);
         let id = derive_target_id(kind.code(), identity_digest);
@@ -122,18 +124,6 @@ impl EmbeddingTarget {
             canonical_identity: None,
             source_local_ordinal,
         })
-    }
-}
-
-impl Ord for EmbeddingTarget {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.id.cmp(&other.id)
-    }
-}
-
-impl PartialOrd for EmbeddingTarget {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
     }
 }
 
@@ -388,18 +378,78 @@ impl RdfTermTarget {
         retain_identity: bool,
         source_local_ordinal: Option<u64>,
     ) -> Result<EmbeddingTarget, EmbeddingError> {
+        let borrowed = match &self {
+            Self::Iri(iri) => RdfTermTargetRef::Iri(iri),
+            Self::Blank {
+                dataset_id,
+                canonical_label,
+            } => RdfTermTargetRef::Blank {
+                dataset_id: *dataset_id,
+                canonical_label,
+            },
+            Self::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => RdfTermTargetRef::Literal {
+                lexical,
+                datatype,
+                language: language.as_deref(),
+                direction: *direction,
+            },
+            Self::Triple {
+                subject,
+                predicate,
+                object,
+            } => RdfTermTargetRef::Triple {
+                subject: *subject,
+                predicate: *predicate,
+                object: *object,
+            },
+        };
+        borrowed.into_target(retain_identity, source_local_ordinal)
+    }
+}
+
+/// Borrowed RDF term material used by source verification without cloning IR strings.
+pub(crate) enum RdfTermTargetRef<'a> {
+    Iri(&'a str),
+    Blank {
+        dataset_id: TargetId,
+        canonical_label: &'a str,
+    },
+    Literal {
+        lexical: &'a str,
+        datatype: &'a str,
+        language: Option<&'a str>,
+        direction: Option<RdfTextDirection>,
+    },
+    Triple {
+        subject: TargetId,
+        predicate: TargetId,
+        object: TargetId,
+    },
+}
+
+impl RdfTermTargetRef<'_> {
+    pub(crate) fn into_target(
+        self,
+        retain_identity: bool,
+        source_local_ordinal: Option<u64>,
+    ) -> Result<EmbeddingTarget, EmbeddingError> {
         let mut block = Vec::new();
         match self {
             Self::Iri(iri) => {
-                validate_absolute_iri(&iri)?;
+                validate_absolute_iri(iri)?;
                 u32_field(&mut block, 1, 1)?;
-                utf8_field(&mut block, 2, &iri)?;
+                utf8_field(&mut block, 2, iri)?;
             }
             Self::Blank {
                 dataset_id,
                 canonical_label,
             } => {
-                ensure_nonempty(&canonical_label, "canonical blank label")?;
+                ensure_nonempty(canonical_label, "canonical blank label")?;
                 if canonical_label.starts_with("_:") {
                     return Err(EmbeddingError::Malformed(
                         "canonical blank label includes the _: prefix",
@@ -407,7 +457,7 @@ impl RdfTermTarget {
                 }
                 u32_field(&mut block, 1, 2)?;
                 digest_field(&mut block, 2, dataset_id.as_bytes())?;
-                utf8_field(&mut block, 3, &canonical_label)?;
+                utf8_field(&mut block, 3, canonical_label)?;
             }
             Self::Literal {
                 lexical,
@@ -415,9 +465,9 @@ impl RdfTermTarget {
                 language,
                 direction,
             } => {
-                ensure_nonempty(&datatype, "literal datatype IRI")?;
-                validate_absolute_iri(&datatype)?;
-                if let Some(language) = &language {
+                ensure_nonempty(datatype, "literal datatype IRI")?;
+                validate_absolute_iri(datatype)?;
+                if let Some(language) = language {
                     validate_language_tag(language)?;
                 }
                 if direction.is_some() && language.is_none() {
@@ -426,10 +476,10 @@ impl RdfTermTarget {
                     ));
                 }
                 u32_field(&mut block, 1, 3)?;
-                utf8_field(&mut block, 2, &lexical)?;
-                utf8_field(&mut block, 3, &datatype)?;
+                utf8_field(&mut block, 2, lexical)?;
+                utf8_field(&mut block, 3, datatype)?;
                 if let Some(language) = language {
-                    utf8_field(&mut block, 4, &language)?;
+                    utf8_field(&mut block, 4, language)?;
                 }
                 let direction = match direction {
                     None => 0,
@@ -798,6 +848,335 @@ impl TokenSpan {
     }
 }
 
+#[derive(Clone, Copy)]
+struct TargetFieldRule {
+    tag: u16,
+    wire: TlvWireType,
+    required: bool,
+}
+
+const fn required_target_rule(tag: u16, wire: TlvWireType) -> TargetFieldRule {
+    TargetFieldRule {
+        tag,
+        wire,
+        required: true,
+    }
+}
+
+const fn optional_target_rule(tag: u16, wire: TlvWireType) -> TargetFieldRule {
+    TargetFieldRule {
+        tag,
+        wire,
+        required: false,
+    }
+}
+
+fn validate_target_schema(bytes: &[u8], rules: &[TargetFieldRule]) -> Result<(), EmbeddingError> {
+    let mut seen = 0u32;
+    for entry in canonical_tlv(bytes)? {
+        if let Some((index, rule)) = rules
+            .iter()
+            .enumerate()
+            .find(|(_, rule)| rule.tag == entry.tag)
+        {
+            if !entry.critical || entry.wire_type != rule.wire {
+                return Err(EmbeddingError::MalformedTlv(
+                    "known target field has wrong criticality or wire type",
+                ));
+            }
+            seen |= 1u32
+                .checked_shl(u32::try_from(index).unwrap_or(u32::MAX))
+                .unwrap_or(0);
+        } else if entry.tag < 0x8000 || entry.critical {
+            return Err(EmbeddingError::UnsupportedCode {
+                field: "critical or reserved target TLV tag",
+                value: u32::from(entry.tag),
+            });
+        }
+    }
+    for (index, rule) in rules.iter().enumerate() {
+        let mask = 1u32
+            .checked_shl(u32::try_from(index).unwrap_or(u32::MAX))
+            .unwrap_or(0);
+        if rule.required && seen & mask == 0 {
+            return Err(EmbeddingError::Missing("required target TLV field"));
+        }
+    }
+    Ok(())
+}
+
+/// Validates the exact semantic schema for one retained target identity.
+pub(crate) fn validate_target_identity(
+    kind: TargetKind,
+    bytes: &[u8],
+) -> Result<(), EmbeddingError> {
+    match kind {
+        TargetKind::Corpus => {
+            validate_target_schema(
+                bytes,
+                &[
+                    required_target_rule(1, TlvWireType::Digest32),
+                    required_target_rule(2, TlvWireType::Utf8),
+                    required_target_rule(3, TlvWireType::Digest32),
+                ],
+            )?;
+            required_target_text(bytes, 2, "corpus media type")?;
+        }
+        TargetKind::Document => {
+            validate_target_schema(
+                bytes,
+                &[
+                    required_target_rule(1, TlvWireType::Digest32),
+                    required_target_rule(2, TlvWireType::Digest32),
+                    required_target_rule(3, TlvWireType::Digest32),
+                    required_target_rule(4, TlvWireType::Utf8),
+                    required_target_rule(5, TlvWireType::U64),
+                    required_target_rule(6, TlvWireType::U64),
+                ],
+            )?;
+            required_target_text(bytes, 4, "document media type")?;
+        }
+        TargetKind::Chunk => {
+            validate_target_schema(
+                bytes,
+                &[
+                    required_target_rule(1, TlvWireType::Digest32),
+                    required_target_rule(2, TlvWireType::Digest32),
+                    required_target_rule(3, TlvWireType::Digest32),
+                    required_target_rule(4, TlvWireType::U64),
+                    required_target_rule(5, TlvWireType::U64),
+                    required_target_rule(6, TlvWireType::U64),
+                    required_target_rule(7, TlvWireType::U64),
+                ],
+            )?;
+            let byte_start = target_u64(required_target_tlv(
+                bytes,
+                4,
+                TlvWireType::U64,
+                "chunk byte start",
+            )?)?;
+            let byte_end = target_u64(required_target_tlv(
+                bytes,
+                5,
+                TlvWireType::U64,
+                "chunk byte end",
+            )?)?;
+            let scalar_start = target_u64(required_target_tlv(
+                bytes,
+                6,
+                TlvWireType::U64,
+                "chunk scalar start",
+            )?)?;
+            let scalar_end = target_u64(required_target_tlv(
+                bytes,
+                7,
+                TlvWireType::U64,
+                "chunk scalar end",
+            )?)?;
+            if byte_start >= byte_end || scalar_start >= scalar_end {
+                return Err(EmbeddingError::InvalidSpan {
+                    context: "chunk identity",
+                    offset: byte_start,
+                    length: byte_end.saturating_sub(byte_start),
+                });
+            }
+        }
+        TargetKind::RdfDataset => {
+            validate_target_schema(bytes, &[required_target_rule(1, TlvWireType::Digest32)])?;
+        }
+        TargetKind::RdfGraph => {
+            let form = target_u32(required_target_tlv(
+                bytes,
+                2,
+                TlvWireType::U32,
+                "RDF graph form",
+            )?)?;
+            let rules: &[TargetFieldRule] = match form {
+                0 => &[
+                    required_target_rule(1, TlvWireType::Digest32),
+                    required_target_rule(2, TlvWireType::U32),
+                ],
+                1 => &[
+                    required_target_rule(1, TlvWireType::Digest32),
+                    required_target_rule(2, TlvWireType::U32),
+                    required_target_rule(3, TlvWireType::Digest32),
+                ],
+                value => {
+                    return Err(EmbeddingError::UnsupportedCode {
+                        field: "RDF graph form",
+                        value,
+                    });
+                }
+            };
+            validate_target_schema(bytes, rules)?;
+        }
+        TargetKind::RdfStatement | TargetKind::RdfAnnotation => {
+            validate_target_schema(bytes, &four_target_digest_rules())?;
+        }
+        TargetKind::RdfReifier => validate_target_schema(
+            bytes,
+            &[
+                required_target_rule(1, TlvWireType::Digest32),
+                required_target_rule(2, TlvWireType::Digest32),
+                required_target_rule(3, TlvWireType::Digest32),
+            ],
+        )?,
+        TargetKind::RdfTerm => validate_rdf_term_identity(bytes)?,
+        TargetKind::Extension => {
+            validate_target_schema(
+                bytes,
+                &[
+                    required_target_rule(1, TlvWireType::Utf8),
+                    required_target_rule(2, TlvWireType::Utf8),
+                    required_target_rule(3, TlvWireType::Bytes),
+                    required_target_rule(4, TlvWireType::Digest32),
+                ],
+            )?;
+            required_target_text(bytes, 1, "extension target kind")?;
+            required_target_text(bytes, 2, "extension payload encoding")?;
+            validate_sha256_field(bytes, 3, 4, DigestKind::Target)?;
+        }
+    }
+    Ok(())
+}
+
+const fn four_target_digest_rules() -> [TargetFieldRule; 4] {
+    [
+        required_target_rule(1, TlvWireType::Digest32),
+        required_target_rule(2, TlvWireType::Digest32),
+        required_target_rule(3, TlvWireType::Digest32),
+        required_target_rule(4, TlvWireType::Digest32),
+    ]
+}
+
+fn validate_rdf_term_identity(bytes: &[u8]) -> Result<(), EmbeddingError> {
+    let form = target_u32(required_target_tlv(
+        bytes,
+        1,
+        TlvWireType::U32,
+        "RDF term form",
+    )?)?;
+    match form {
+        1 => {
+            validate_target_schema(
+                bytes,
+                &[
+                    required_target_rule(1, TlvWireType::U32),
+                    required_target_rule(2, TlvWireType::Utf8),
+                ],
+            )?;
+            validate_absolute_iri(required_target_text(bytes, 2, "RDF IRI")?)?;
+        }
+        2 => {
+            validate_target_schema(
+                bytes,
+                &[
+                    required_target_rule(1, TlvWireType::U32),
+                    required_target_rule(2, TlvWireType::Digest32),
+                    required_target_rule(3, TlvWireType::Utf8),
+                ],
+            )?;
+            let label = required_target_text(bytes, 3, "canonical blank label")?;
+            if label.starts_with("_:") {
+                return Err(EmbeddingError::Malformed(
+                    "canonical blank label includes the _: prefix",
+                ));
+            }
+        }
+        3 => {
+            validate_target_schema(
+                bytes,
+                &[
+                    required_target_rule(1, TlvWireType::U32),
+                    required_target_rule(2, TlvWireType::Utf8),
+                    required_target_rule(3, TlvWireType::Utf8),
+                    optional_target_rule(4, TlvWireType::Utf8),
+                    required_target_rule(5, TlvWireType::U32),
+                ],
+            )?;
+            validate_absolute_iri(required_target_text(bytes, 3, "literal datatype IRI")?)?;
+            let language = optional_target_tlv(bytes, 4)?;
+            if let Some(language) = language {
+                let language = core::str::from_utf8(language.value)
+                    .map_err(|_| EmbeddingError::InvalidUtf8("language tag"))?;
+                validate_language_tag(language)?;
+            }
+            let direction = target_u32(required_target_tlv(
+                bytes,
+                5,
+                TlvWireType::U32,
+                "literal direction",
+            )?)?;
+            if direction > 2 || (direction != 0 && language.is_none()) {
+                return Err(EmbeddingError::Malformed("literal direction"));
+            }
+        }
+        4 => validate_target_schema(
+            bytes,
+            &[
+                required_target_rule(1, TlvWireType::U32),
+                required_target_rule(2, TlvWireType::Digest32),
+                required_target_rule(3, TlvWireType::Digest32),
+                required_target_rule(4, TlvWireType::Digest32),
+            ],
+        )?,
+        value => {
+            return Err(EmbeddingError::UnsupportedCode {
+                field: "RDF term form",
+                value,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn required_target_tlv<'a>(
+    bytes: &'a [u8],
+    tag: u16,
+    wire: TlvWireType,
+    context: &'static str,
+) -> Result<TlvEntryRef<'a>, EmbeddingError> {
+    let entry = optional_target_tlv(bytes, tag)?.ok_or(EmbeddingError::Missing(context))?;
+    if entry.wire_type != wire || !entry.critical {
+        return Err(EmbeddingError::MalformedTlv(
+            "required target field has wrong type or criticality",
+        ));
+    }
+    Ok(entry)
+}
+
+fn optional_target_tlv(bytes: &[u8], tag: u16) -> Result<Option<TlvEntryRef<'_>>, EmbeddingError> {
+    Ok(canonical_tlv(bytes)?.find(|entry| entry.tag == tag))
+}
+
+fn required_target_text<'a>(
+    bytes: &'a [u8],
+    tag: u16,
+    context: &'static str,
+) -> Result<&'a str, EmbeddingError> {
+    let entry = required_target_tlv(bytes, tag, TlvWireType::Utf8, context)?;
+    if entry.value.is_empty() {
+        return Err(EmbeddingError::Missing(context));
+    }
+    core::str::from_utf8(entry.value).map_err(|_| EmbeddingError::InvalidUtf8(context))
+}
+
+fn target_u32(entry: TlvEntryRef<'_>) -> Result<u32, EmbeddingError> {
+    let bytes: [u8; 4] = entry
+        .value
+        .try_into()
+        .map_err(|_| EmbeddingError::MalformedTlv("invalid target u32"))?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn target_u64(entry: TlvEntryRef<'_>) -> Result<u64, EmbeddingError> {
+    let bytes: [u8; 8] = entry
+        .value
+        .try_into()
+        .map_err(|_| EmbeddingError::MalformedTlv("invalid target u64"))?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
 fn validate_ordinal(kind: TargetKind, ordinal: Option<u64>) -> Result<(), EmbeddingError> {
     if ordinal.is_some()
         && !matches!(
@@ -840,35 +1219,11 @@ fn four_digest_block(
 }
 
 fn validate_language_tag(language: &str) -> Result<(), EmbeddingError> {
-    let mut subtags = language.split('-');
-    let primary = subtags.next().unwrap_or_default();
-    if primary.is_empty()
-        || primary.len() > 8
-        || !primary.bytes().all(|byte| byte.is_ascii_lowercase())
-    {
-        return Err(EmbeddingError::Malformed("invalid lowercase language tag"));
-    }
-
-    let mut private_use = primary == "x";
-    let mut saw_subtag = false;
-    let mut ends_with_private_marker = private_use;
-    for subtag in subtags {
-        saw_subtag = true;
-        let alphanumeric = !subtag.is_empty()
-            && subtag
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
-        if !alphanumeric || (!private_use && subtag.len() > 8) {
-            return Err(EmbeddingError::Malformed("invalid lowercase language tag"));
-        }
-        if subtag == "x" {
-            private_use = true;
-            ends_with_private_marker = true;
-        } else {
-            ends_with_private_marker = false;
-        }
-    }
-    if (primary == "x" && !saw_subtag) || ends_with_private_marker {
+    let canonical_lowercase = !language.is_empty()
+        && language
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+    if !canonical_lowercase || LanguageTag::parse(language).is_err() {
         return Err(EmbeddingError::Malformed("invalid lowercase language tag"));
     }
     Ok(())
@@ -912,6 +1267,8 @@ fn u64_field(output: &mut Vec<u8>, tag: u16, value: u64) -> Result<(), Embedding
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]
@@ -926,6 +1283,12 @@ mod tests {
             EmbeddingTarget::from_digest(retained.kind, retained.identity_digest, None)
                 .expect("digest target");
         assert_eq!(retained.id, digest_only.id);
+        assert_ne!(retained, digest_only);
+        assert_ne!(retained.cmp(&digest_only), Ordering::Equal);
+        assert_eq!(
+            BTreeSet::from([retained.clone(), digest_only.clone()]).len(),
+            2
+        );
         assert!(retained.canonical_identity.is_some());
         assert!(digest_only.canonical_identity.is_none());
     }
@@ -1020,10 +1383,21 @@ mod tests {
 
     #[test]
     fn language_tags_use_lowercase_bcp47_shape() {
-        for valid in ["en", "zh-hant", "en-us", "x-purrdf-private-extension"] {
+        for valid in ["en", "zh-hant", "en-us", "x-purrdf-private-ext"] {
             validate_language_tag(valid).expect("valid lowercase language tag");
         }
-        for invalid in ["", "EN", "en--us", "en-abcdefghi", "x", "en-x"] {
+        for invalid in [
+            "",
+            "EN",
+            "en--us",
+            "en-abcdefghi",
+            "x",
+            "en-x",
+            "x-abcdefghi",
+            "en-x-abcdefghi",
+            "x-purrdf-private-extension",
+            "en-u",
+        ] {
             assert!(
                 validate_language_tag(invalid).is_err(),
                 "accepted {invalid:?}"
@@ -1046,5 +1420,105 @@ mod tests {
                 .into_target(true, None)
                 .is_err()
         );
+        assert!(
+            RdfTermTarget::Iri("https://example.org/%ZZ".to_owned())
+                .into_target(true, None)
+                .is_err()
+        );
+        assert!(
+            RdfTermTarget::Iri("https://[invalid.example/value".to_owned())
+                .into_target(true, None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn retained_target_identities_require_the_kind_schema() {
+        for kind in [
+            TargetKind::Corpus,
+            TargetKind::Document,
+            TargetKind::Chunk,
+            TargetKind::RdfDataset,
+            TargetKind::RdfGraph,
+            TargetKind::RdfStatement,
+            TargetKind::RdfReifier,
+            TargetKind::RdfAnnotation,
+            TargetKind::RdfTerm,
+            TargetKind::Extension,
+        ] {
+            assert!(
+                EmbeddingTarget::from_canonical_identity(kind, Vec::new(), true, None).is_err(),
+                "accepted empty identity for {kind:?}"
+            );
+        }
+
+        let mut wrong_wire = Vec::new();
+        push_tlv(&mut wrong_wire, 1, TlvWireType::Bytes, true, &[1; 32]).unwrap();
+        push_tlv(
+            &mut wrong_wire,
+            2,
+            TlvWireType::Utf8,
+            true,
+            b"application/example",
+        )
+        .unwrap();
+        push_tlv(&mut wrong_wire, 3, TlvWireType::Digest32, true, &[2; 32]).unwrap();
+        assert!(validate_target_identity(TargetKind::Corpus, &wrong_wire).is_err());
+
+        let mut noncritical = Vec::new();
+        push_tlv(&mut noncritical, 1, TlvWireType::Digest32, false, &[1; 32]).unwrap();
+        push_tlv(
+            &mut noncritical,
+            2,
+            TlvWireType::Utf8,
+            true,
+            b"application/example",
+        )
+        .unwrap();
+        push_tlv(&mut noncritical, 3, TlvWireType::Digest32, true, &[2; 32]).unwrap();
+        assert!(validate_target_identity(TargetKind::Corpus, &noncritical).is_err());
+
+        let mut unknown_reserved = CorpusTarget {
+            manifest_digest: ContentDigest::of(b"manifest"),
+            manifest_media_type: "application/example".to_owned(),
+            logical_id_digest: ContentDigest::of(b"corpus-id"),
+        }
+        .into_target(true)
+        .unwrap()
+        .canonical_identity
+        .unwrap();
+        push_tlv(
+            &mut unknown_reserved,
+            4,
+            TlvWireType::Bytes,
+            false,
+            b"unknown",
+        )
+        .unwrap();
+        assert!(validate_target_identity(TargetKind::Corpus, &unknown_reserved).is_err());
+    }
+
+    #[test]
+    fn extension_target_payload_digest_is_verified() {
+        let mut identity = Vec::new();
+        push_tlv(&mut identity, 1, TlvWireType::Utf8, true, b"example-kind").unwrap();
+        push_tlv(
+            &mut identity,
+            2,
+            TlvWireType::Utf8,
+            true,
+            b"application/example",
+        )
+        .unwrap();
+        push_tlv(&mut identity, 3, TlvWireType::Bytes, true, b"payload").unwrap();
+        push_tlv(
+            &mut identity,
+            4,
+            TlvWireType::Digest32,
+            true,
+            ContentDigest::of(b"different").as_bytes(),
+        )
+        .unwrap();
+        assert!(validate_target_identity(TargetKind::Extension, &identity).is_err());
     }
 }

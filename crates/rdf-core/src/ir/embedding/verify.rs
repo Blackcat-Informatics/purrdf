@@ -3,6 +3,7 @@
 
 //! Cryptographic, numerical, source-pack, and external-binding verification.
 
+use core::fmt;
 use std::collections::BTreeMap;
 
 use sha2::{Digest as _, Sha256};
@@ -24,7 +25,7 @@ use super::identity::{
 };
 use super::target::{
     RdfAnnotationTarget, RdfDatasetTarget, RdfGraphTarget, RdfReifierTarget, RdfStatementTarget,
-    RdfTermTarget, TargetKind,
+    RdfTermTargetRef, TargetKind,
 };
 use super::view::{EmbeddingView, ExternalBindingView, MatrixView, ProjectionView};
 use super::wire::{PURREMB_DIRECTORY_ENTRY_LENGTH, PURREMB_HEADER_LENGTH};
@@ -79,38 +80,73 @@ impl SourceVerificationReport {
 /// Opaque proof that one exact resident byte range passed full verification.
 ///
 /// The certificate cannot be constructed or deserialized by callers. It is
-/// useful only while the same allocation and byte range remain immutable.
-#[derive(Debug)]
-pub struct ResidentEmbeddingCertificate {
-    address: usize,
-    length: usize,
+/// useful only while the same allocation and byte range remain immutable. Its
+/// lifetime prevents the certified bytes from being dropped:
+///
+/// ```compile_fail,E0505
+/// use purrdf_core::{EmbeddingView, verify_embedding};
+///
+/// let bytes = vec![0_u8; 128];
+/// let certificate = {
+///     let mut view = EmbeddingView::from_bytes(&bytes).unwrap();
+///     verify_embedding(&mut view).unwrap().into_certificate()
+/// };
+/// drop(bytes);
+/// let _ = certificate;
+/// ```
+///
+/// The same lifetime also prevents mutation while the proof remains usable:
+///
+/// ```compile_fail,E0502
+/// use purrdf_core::{EmbeddingView, verify_embedding};
+///
+/// let mut bytes = vec![0_u8; 128];
+/// let certificate = {
+///     let mut view = EmbeddingView::from_bytes(&bytes).unwrap();
+///     verify_embedding(&mut view).unwrap().into_certificate()
+/// };
+/// bytes[0] = 1;
+/// let _ = certificate;
+/// ```
+pub struct ResidentEmbeddingCertificate<'a> {
+    bytes: &'a [u8],
     root: super::identity::ArtifactRoot,
 }
 
-impl ResidentEmbeddingCertificate {
-    fn new(view: &EmbeddingView<'_>) -> Self {
+impl fmt::Debug for ResidentEmbeddingCertificate<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ResidentEmbeddingCertificate")
+            .field("address", &self.bytes.as_ptr())
+            .field("length", &self.bytes.len())
+            .field("root", &self.root)
+            .finish()
+    }
+}
+
+impl<'a> ResidentEmbeddingCertificate<'a> {
+    fn new(view: &EmbeddingView<'a>) -> Self {
         Self {
-            address: view.bytes().as_ptr() as usize,
-            length: view.bytes().len(),
+            bytes: view.bytes(),
             root: view.artifact_root(),
         }
     }
 
     fn matches(&self, bytes: &[u8], root: super::identity::ArtifactRoot) -> bool {
-        self.address == bytes.as_ptr() as usize && self.length == bytes.len() && self.root == root
+        core::ptr::eq(self.bytes, bytes) && self.root == root
     }
 }
 
 /// Counts and resident proof produced by full artifact verification.
 #[derive(Debug)]
-pub struct EmbeddingVerificationReport {
-    certificate: ResidentEmbeddingCertificate,
+pub struct EmbeddingVerificationReport<'a> {
+    certificate: ResidentEmbeddingCertificate<'a>,
     section_count: usize,
     scalar_count: u64,
     projection_count: usize,
 }
 
-impl EmbeddingVerificationReport {
+impl<'a> EmbeddingVerificationReport<'a> {
     /// Number of verified directory sections.
     #[must_use]
     pub const fn section_count(&self) -> usize {
@@ -131,13 +167,13 @@ impl EmbeddingVerificationReport {
 
     /// Borrows the resident reopen certificate.
     #[must_use]
-    pub const fn certificate(&self) -> &ResidentEmbeddingCertificate {
+    pub const fn certificate(&self) -> &ResidentEmbeddingCertificate<'a> {
         &self.certificate
     }
 
     /// Consumes the report and retains only its resident reopen certificate.
     #[must_use]
-    pub fn into_certificate(self) -> ResidentEmbeddingCertificate {
+    pub fn into_certificate(self) -> ResidentEmbeddingCertificate<'a> {
         self.certificate
     }
 }
@@ -147,9 +183,9 @@ impl EmbeddingVerificationReport {
 /// Structural validation must already have succeeded through
 /// [`EmbeddingView::from_bytes`]. On success, the supplied view is marked fully
 /// verified and may expose aligned native scalar slices.
-pub fn verify_embedding(
-    view: &mut EmbeddingView<'_>,
-) -> Result<EmbeddingVerificationReport, EmbeddingError> {
+pub fn verify_embedding<'a>(
+    view: &mut EmbeddingView<'a>,
+) -> Result<EmbeddingVerificationReport<'a>, EmbeddingError> {
     verify_section_hashes_and_root(view)?;
     verify_family_identities(view)?;
     verify_target_identities(view)?;
@@ -173,7 +209,7 @@ pub fn verify_embedding(
 /// Structurally reopens the same immutable resident bytes under a prior proof.
 pub fn reopen_prevalidated<'a>(
     bytes: &'a [u8],
-    certificate: &ResidentEmbeddingCertificate,
+    certificate: &ResidentEmbeddingCertificate<'a>,
 ) -> Result<EmbeddingView<'a>, EmbeddingError> {
     let mut view = EmbeddingView::from_bytes(bytes)?;
     if !certificate.matches(bytes, view.artifact_root()) {
@@ -585,6 +621,7 @@ fn verify_source_ordinals(
     let canonical = try_canonicalize(&dataset).map_err(|_| {
         EmbeddingError::InvalidSourcePack("RDFC canonicalization budget exceeded".to_owned())
     })?;
+    let reifier_lookup = source_reifier_lookup(pack)?;
     let dataset_target = embedding.source().dataset_target_id();
     let mut checked = 0u64;
 
@@ -599,6 +636,7 @@ fn verify_source_ordinals(
             &dataset,
             &canonical.labels,
             dataset_target,
+            &reifier_lookup,
         )?;
         if expected != target.id() {
             return Err(EmbeddingError::OrdinalMismatch {
@@ -613,6 +651,20 @@ fn verify_source_ordinals(
     Ok(checked)
 }
 
+type SourceReifierLookup = BTreeMap<(PackId, Option<PackId>), QuadIds<PackId>>;
+
+fn source_reifier_lookup(pack: &PackView<'_>) -> Result<SourceReifierLookup, EmbeddingError> {
+    let mut lookup = BTreeMap::new();
+    for quad in pack.reifier_quads() {
+        if lookup.insert((quad.s, quad.g), quad).is_some() {
+            return Err(EmbeddingError::Duplicate(
+                "source reifier binding in one graph",
+            ));
+        }
+    }
+    Ok(lookup)
+}
+
 fn target_from_source_ordinal(
     kind: TargetKind,
     ordinal: u64,
@@ -620,6 +672,7 @@ fn target_from_source_ordinal(
     dataset: &RdfDataset,
     labels: &BTreeMap<TermId, Box<str>>,
     dataset_target: TargetId,
+    reifier_lookup: &SourceReifierLookup,
 ) -> Result<TargetId, EmbeddingError> {
     let mismatch = || EmbeddingError::OrdinalMismatch {
         target_kind: kind.code(),
@@ -645,7 +698,7 @@ fn target_from_source_ordinal(
         TargetKind::RdfAnnotation => {
             let index = usize::try_from(ordinal).map_err(|_| mismatch())?;
             let quad = pack.annotation_quads().nth(index).ok_or_else(mismatch)?;
-            annotation_target_id(pack, quad, dataset, labels, dataset_target)
+            annotation_target_id(pack, quad, dataset, labels, dataset_target, reifier_lookup)
         }
         _ => Err(mismatch()),
     }
@@ -672,7 +725,7 @@ fn term_value_target_id(
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
     let target = match value {
-        TermValue::Iri(iri) => RdfTermTarget::Iri(iri.clone()),
+        TermValue::Iri(iri) => RdfTermTargetRef::Iri(iri),
         TermValue::Blank { .. } => {
             let id = dataset
                 .term_id_by_value(value)
@@ -680,9 +733,9 @@ fn term_value_target_id(
             let label = labels
                 .get(&id)
                 .ok_or(EmbeddingError::MissingReference("canonical blank label"))?;
-            RdfTermTarget::Blank {
+            RdfTermTargetRef::Blank {
                 dataset_id: dataset_target,
-                canonical_label: label.to_string(),
+                canonical_label: label,
             }
         }
         TermValue::Literal {
@@ -690,13 +743,13 @@ fn term_value_target_id(
             datatype,
             language,
             direction,
-        } => RdfTermTarget::Literal {
-            lexical: lexical_form.clone(),
-            datatype: datatype.clone(),
-            language: language.clone(),
+        } => RdfTermTargetRef::Literal {
+            lexical: lexical_form,
+            datatype,
+            language: language.as_deref(),
             direction: *direction,
         },
-        TermValue::Triple { s, p, o } => RdfTermTarget::Triple {
+        TermValue::Triple { s, p, o } => RdfTermTargetRef::Triple {
             subject: term_value_target_id(s, dataset, labels, dataset_target)?,
             predicate: term_value_target_id(p, dataset, labels, dataset_target)?,
             object: term_value_target_id(o, dataset, labels, dataset_target)?,
@@ -791,21 +844,14 @@ fn annotation_target_id(
     dataset: &RdfDataset,
     labels: &BTreeMap<TermId, Box<str>>,
     dataset_target: TargetId,
+    reifier_lookup: &SourceReifierLookup,
 ) -> Result<TargetId, EmbeddingError> {
-    let mut binding = None;
-    for candidate in pack.reifier_quads() {
-        if candidate.s == quad.s && candidate.g == quad.g {
-            if binding.is_some() {
-                return Err(EmbeddingError::Malformed(
-                    "annotation reifier has multiple bindings in one graph",
-                ));
-            }
-            binding = Some(candidate);
-        }
-    }
-    let binding = binding.ok_or(EmbeddingError::MissingReference(
-        "annotation reifier binding",
-    ))?;
+    let binding =
+        *reifier_lookup
+            .get(&(quad.s, quad.g))
+            .ok_or(EmbeddingError::MissingReference(
+                "annotation reifier binding",
+            ))?;
     Ok(RdfAnnotationTarget {
         graph: graph_target_id(pack, quad.g, dataset, labels, dataset_target)?,
         reifier: reifier_target_id(pack, binding, dataset, labels, dataset_target)?,
@@ -878,19 +924,19 @@ mod tests {
 
     #[test]
     fn resident_certificate_binds_allocation_range_and_root() {
-        let bytes = [1u8, 2, 3];
+        let bytes = vec![1u8, 2, 3];
+        let other = bytes.clone();
+        let root = super::super::identity::ArtifactRoot::from_raw([9; 32]);
         let certificate = ResidentEmbeddingCertificate {
-            address: bytes.as_ptr() as usize,
-            length: bytes.len(),
-            root: super::super::identity::ArtifactRoot::from_raw([9; 32]),
+            bytes: &bytes,
+            root,
         };
-        assert!(certificate.matches(
-            &bytes,
-            super::super::identity::ArtifactRoot::from_raw([9; 32])
-        ));
+        assert!(certificate.matches(&bytes, root));
+        assert!(!certificate.matches(&other, root));
+        assert!(!certificate.matches(&bytes[1..], root));
         assert!(!certificate.matches(
-            &bytes[1..],
-            super::super::identity::ArtifactRoot::from_raw([9; 32])
+            &bytes,
+            super::super::identity::ArtifactRoot::from_raw([8; 32])
         ));
     }
 }
