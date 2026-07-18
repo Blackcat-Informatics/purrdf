@@ -1488,7 +1488,12 @@ fn named_range_schema(iri: &str, kind: OntologyPropertyKind, ctx: &Ctx<'_>) -> V
     }
     let key = ctx.ns.def_key(iri);
     if ctx.emitted_defs.contains(&key) {
-        json!({ "$ref": format!("#/$defs/{key}") })
+        json!({
+            "anyOf": [
+                node_ref_schema(),
+                { "$ref": format!("#/$defs/{key}") }
+            ]
+        })
     } else if kind == OntologyPropertyKind::Annotation {
         general_rdf_value_schema()
     } else {
@@ -3423,9 +3428,16 @@ mod tests {
             email["properties"]["meta:messageCode"]["$comment"],
             "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
         );
-        assert_eq!(
-            def(&schema, "Person")["properties"]["meta:latestMessage"]["anyOf"][0]["$ref"],
-            "#/$defs/EmailMessage"
+        let latest_message =
+            &def(&schema, "Person")["properties"]["meta:latestMessage"]["anyOf"][0]["anyOf"];
+        assert!(
+            latest_message
+                .as_array()
+                .is_some_and(|forms| forms.iter().any(|form| {
+                    form["$ref"] == "#/$defs/EmailMessage"
+                        && form.as_object().is_some_and(|object| object.len() == 1)
+                })),
+            "ontology class range retains the direct class definition reference"
         );
 
         let openapi: Value =
@@ -3524,6 +3536,53 @@ mod tests {
         assert_eq!(choice["anyOf"].as_array().map(Vec::len), Some(2));
         let both = &holder["properties"]["meta:both"]["anyOf"][0];
         assert_eq!(both["allOf"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn ontology_class_range_accepts_identifier_only_or_full_class_values() {
+        let compilation = compile_ontology(
+            r"
+                meta:HolderShape a sh:NodeShape ; sh:targetClass meta:Holder .
+                meta:RequiredShape a sh:NodeShape ; sh:targetClass meta:Required ;
+                    sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+            r"
+                meta:Holder a owl:Class .
+                meta:Required a owl:Class .
+                meta:target a owl:ObjectProperty, owl:FunctionalProperty ;
+                    rdfs:domain meta:Holder ; rdfs:range meta:Required .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let target = &def(&schema, "Holder")["properties"]["meta:target"];
+        let alternatives = target["anyOf"].as_array().expect("node or class value");
+        assert!(
+            alternatives
+                .iter()
+                .any(|form| form["$ref"] == "#/$defs/Required"),
+            "the full class definition remains directly referenced"
+        );
+        assert!(
+            alternatives
+                .iter()
+                .any(|form| form["properties"]["@id"].is_object()),
+            "the normal identifier-only node carrier remains available"
+        );
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:target": { "@id": "https://example.org/meta/required-1" }
+            })
+        ));
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:target": { "meta:name": "complete value" }
+            })
+        ));
     }
 
     #[test]
