@@ -140,9 +140,12 @@ pub(super) fn emit(
         yaml,
         canonical_element_names: element_names.clone(),
         element_names,
-        losses: renderer.ledger,
-        slot_renames: renderer.slot_renames,
-        slot_diagnostics: renderer.slot_diagnostics,
+        losses: renderer.ledger.clone(),
+        slot_renames: renderer.slot_renames.clone(),
+        slot_diagnostics: renderer.slot_diagnostics.clone(),
+        canonical_losses: renderer.ledger,
+        canonical_slot_renames: renderer.slot_renames,
+        canonical_slot_diagnostics: renderer.slot_diagnostics,
     })
 }
 

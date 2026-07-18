@@ -364,6 +364,9 @@ pub struct LinkmlPackage {
     pub slot_diagnostics: Vec<LinkmlSlotDiagnostic>,
     canonical_yaml: String,
     canonical_element_names: BTreeMap<String, String>,
+    canonical_losses: LossLedger,
+    canonical_slot_renames: Vec<LinkmlSlotRename>,
+    canonical_slot_diagnostics: Vec<LinkmlSlotDiagnostic>,
 }
 
 /// A malformed LinkML configuration, document, or projection input.

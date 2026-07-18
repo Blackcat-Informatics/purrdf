@@ -10,8 +10,8 @@ use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_
 use serde_json::{Map, Value};
 
 use super::{
-    LinkmlDocument, LinkmlError, LinkmlPackage, parse_linkml, pointer_escape, projection,
-    write_linkml,
+    LinkmlDocument, LinkmlError, LinkmlPackage, LinkmlSlotDiagnostic, LinkmlSlotDisposition,
+    LinkmlSlotRename, is_linkml_identifier, parse_linkml, pointer_escape, projection, write_linkml,
 };
 use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_schema_value_from};
 use crate::term::Term;
@@ -45,6 +45,7 @@ pub(super) fn import_package(
         ));
     }
     let visible = verify_element_names(package)?;
+    verify_slot_reports(package)?;
     import_document(&package.document, config, Some(&visible))
 }
 
@@ -142,6 +143,314 @@ fn verify_element_names(package: &LinkmlPackage) -> Result<BTreeSet<String>, Lin
         }
     }
     Ok(reverse.into_keys().collect())
+}
+
+fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
+    if package.losses != package.canonical_losses {
+        return Err(LinkmlError::new(
+            "LinkML package loss ledger differs from its retained emitted ledger",
+        ));
+    }
+    if package.slot_renames != package.canonical_slot_renames {
+        return Err(LinkmlError::new(
+            "LinkML package slot-rename report differs from its retained emitted report",
+        ));
+    }
+    if package.slot_diagnostics != package.canonical_slot_diagnostics {
+        return Err(LinkmlError::new(
+            "LinkML package slot diagnostic report differs from its retained emitted report",
+        ));
+    }
+    check_ledger_sound(&package.losses, "json-schema", "linkml-1.11").map_err(LinkmlError::new)?;
+
+    verify_report_order(&package.slot_renames, |row| {
+        (
+            row.source_class.as_str(),
+            row.source_path.as_str(),
+            row.source_name.as_str(),
+        )
+    })?;
+    verify_report_order(&package.slot_diagnostics, |row| {
+        (
+            row.source_class.as_str(),
+            row.source_path.as_str(),
+            row.source_name.as_str(),
+        )
+    })?;
+
+    let root = package
+        .document
+        .as_value()
+        .as_object()
+        .expect("LinkmlDocument validates an object root");
+    let prefixes = document_prefixes(root)?;
+    let mut report_paths = BTreeSet::new();
+    let mut expected_losses = BTreeSet::new();
+
+    for rename in &package.slot_renames {
+        if !report_paths.insert(rename.source_path.clone()) {
+            return Err(LinkmlError::new(format!(
+                "LinkML package repeats slot report location {:?}",
+                rename.source_path
+            )));
+        }
+        let class = verify_report_context(package, rename, root)?;
+        let attribute = class
+            .get("attributes")
+            .and_then(Value::as_object)
+            .and_then(|attributes| attributes.get(&rename.new_slot_name))
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                LinkmlError::new(format!(
+                    "LinkML package rename at {:?} targets missing attribute {:?} on class {:?}",
+                    rename.source_path, rename.new_slot_name, rename.emitted_class
+                ))
+            })?;
+        if rename.source_name == rename.new_slot_name {
+            return Err(LinkmlError::new(format!(
+                "LinkML package rename at {:?} does not change the source spelling",
+                rename.source_path
+            )));
+        }
+        verify_generated_slot_name(&rename.new_slot_name, &prefixes, &rename.source_path)?;
+        if attribute.get("alias").and_then(Value::as_str) != Some(rename.source_name.as_str()) {
+            return Err(LinkmlError::new(format!(
+                "LinkML package rename at {:?} does not retain source alias {:?}",
+                rename.source_path, rename.source_name
+            )));
+        }
+        if attribute.get("slot_uri").and_then(Value::as_str)
+            != Some(rename.emitted_slot_uri.as_str())
+        {
+            return Err(LinkmlError::new(format!(
+                "LinkML package rename at {:?} disagrees with emitted slot_uri {:?}",
+                rename.source_path, rename.emitted_slot_uri
+            )));
+        }
+        if rename.reasons.is_empty() {
+            return Err(LinkmlError::new(format!(
+                "LinkML package rename at {:?} has no naming reason",
+                rename.source_path
+            )));
+        }
+        match rename.disposition {
+            LinkmlSlotDisposition::IdentityPreserved => {
+                if rename.old_slot_uri.as_deref() != Some(rename.emitted_slot_uri.as_str()) {
+                    return Err(LinkmlError::new(format!(
+                        "LinkML package identity-preserving rename at {:?} does not retain its exact source slot URI",
+                        rename.source_path
+                    )));
+                }
+            }
+            LinkmlSlotDisposition::IdentityRehomed => {
+                if rename.old_slot_uri.is_some() || rename.emitted_slot_uri != rename.new_slot_name
+                {
+                    return Err(LinkmlError::new(format!(
+                        "LinkML package identity re-home at {:?} is not explicit in its generated name and URI",
+                        rename.source_path
+                    )));
+                }
+                expected_losses.insert((
+                    "slot-identity-rehomed".to_owned(),
+                    rename.source_path.clone(),
+                ));
+            }
+            LinkmlSlotDisposition::Skipped => {
+                return Err(LinkmlError::new(format!(
+                    "LinkML package rename at {:?} has skipped disposition",
+                    rename.source_path
+                )));
+            }
+        }
+    }
+
+    for diagnostic in &package.slot_diagnostics {
+        if !report_paths.insert(diagnostic.source_path.clone()) {
+            return Err(LinkmlError::new(format!(
+                "LinkML package repeats slot report location {:?}",
+                diagnostic.source_path
+            )));
+        }
+        let class = verify_diagnostic_context(package, diagnostic, root)?;
+        if diagnostic.disposition != LinkmlSlotDisposition::Skipped
+            || diagnostic.new_slot_name.is_some()
+            || diagnostic.emitted_slot_uri.is_some()
+            || diagnostic.reasons.is_empty()
+            || diagnostic.detail.trim().is_empty()
+        {
+            return Err(LinkmlError::new(format!(
+                "LinkML package diagnostic at {:?} is not a complete skipped-slot record",
+                diagnostic.source_path
+            )));
+        }
+        if class
+            .get("attributes")
+            .and_then(Value::as_object)
+            .is_some_and(|attributes| {
+                attributes.values().any(|attribute| {
+                    attribute
+                        .as_object()
+                        .and_then(|slot| slot.get("alias"))
+                        .and_then(Value::as_str)
+                        == Some(diagnostic.source_name.as_str())
+                })
+            })
+        {
+            return Err(LinkmlError::new(format!(
+                "LinkML package diagnostic at {:?} names a slot that is still emitted",
+                diagnostic.source_path
+            )));
+        }
+        expected_losses.insert((
+            "slot-name-policy-dropped".to_owned(),
+            diagnostic.source_path.clone(),
+        ));
+    }
+
+    let mut observed_losses = BTreeMap::<(String, String), usize>::new();
+    for entry in package.losses.entries() {
+        if !matches!(
+            entry.code.as_ref(),
+            "slot-identity-rehomed" | "slot-name-policy-dropped"
+        ) {
+            continue;
+        }
+        let location = entry.location.as_deref().ok_or_else(|| {
+            LinkmlError::new(format!(
+                "LinkML package loss {:?} lacks its source location",
+                entry.code
+            ))
+        })?;
+        if location.logical.as_deref() != Some("shapes:linkml") {
+            return Err(LinkmlError::new(format!(
+                "LinkML package loss {:?} has the wrong logical source",
+                entry.code
+            )));
+        }
+        let subject = location.subject.as_deref().ok_or_else(|| {
+            LinkmlError::new(format!(
+                "LinkML package loss {:?} lacks its source JSON Pointer",
+                entry.code
+            ))
+        })?;
+        *observed_losses
+            .entry((entry.code.to_string(), subject.to_owned()))
+            .or_default() += 1;
+    }
+    if observed_losses.len() != expected_losses.len()
+        || observed_losses
+            .iter()
+            .any(|(entry, count)| *count != 1 || !expected_losses.contains(entry))
+    {
+        return Err(LinkmlError::new(
+            "LinkML package slot reports disagree with the retained slot-policy loss entries",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_report_order<T, F>(rows: &[T], key: F) -> Result<(), LinkmlError>
+where
+    F: for<'a> Fn(&'a T) -> (&'a str, &'a str, &'a str),
+{
+    for pair in rows.windows(2) {
+        if key(&pair[0]) >= key(&pair[1]) {
+            return Err(LinkmlError::new(
+                "LinkML package slot report is duplicated or out of canonical order",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn verify_report_context<'a>(
+    package: &LinkmlPackage,
+    rename: &LinkmlSlotRename,
+    root: &'a Map<String, Value>,
+) -> Result<&'a Map<String, Value>, LinkmlError> {
+    verify_source_context(
+        package,
+        &rename.source_class,
+        &rename.emitted_class,
+        &rename.source_path,
+        &rename.source_name,
+        root,
+    )
+}
+
+fn verify_diagnostic_context<'a>(
+    package: &LinkmlPackage,
+    diagnostic: &LinkmlSlotDiagnostic,
+    root: &'a Map<String, Value>,
+) -> Result<&'a Map<String, Value>, LinkmlError> {
+    verify_source_context(
+        package,
+        &diagnostic.source_class,
+        &diagnostic.emitted_class,
+        &diagnostic.source_path,
+        &diagnostic.source_name,
+        root,
+    )
+}
+
+fn verify_source_context<'a>(
+    package: &LinkmlPackage,
+    source_class: &str,
+    emitted_class: &str,
+    source_path: &str,
+    source_name: &str,
+    root: &'a Map<String, Value>,
+) -> Result<&'a Map<String, Value>, LinkmlError> {
+    let suffix = format!("/properties/{}", pointer_escape(source_name));
+    if !source_path.ends_with(&suffix) {
+        return Err(LinkmlError::new(format!(
+            "LinkML package slot report path {source_path:?} does not name source property {source_name:?}"
+        )));
+    }
+    if let Some(mapped_class) = package.element_names.get(source_class) {
+        let prefix = definition_path(source_class);
+        if mapped_class != emitted_class || !source_path.starts_with(&format!("{prefix}/")) {
+            return Err(LinkmlError::new(format!(
+                "LinkML package slot report at {source_path:?} disagrees with source class {source_class:?}"
+            )));
+        }
+    } else if !source_class.starts_with("#/")
+        || !source_path.starts_with(&format!("{source_class}/"))
+    {
+        return Err(LinkmlError::new(format!(
+            "LinkML package slot report at {source_path:?} has unknown source class {source_class:?}"
+        )));
+    }
+    root.get("classes")
+        .and_then(Value::as_object)
+        .and_then(|classes| classes.get(emitted_class))
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            LinkmlError::new(format!(
+                "LinkML package slot report targets missing emitted class {emitted_class:?}"
+            ))
+        })
+}
+
+fn verify_generated_slot_name(
+    name: &str,
+    prefixes: &BTreeMap<String, String>,
+    source_path: &str,
+) -> Result<(), LinkmlError> {
+    let Some((prefix, local)) = name.split_once(':') else {
+        return Err(LinkmlError::new(format!(
+            "LinkML package generated slot name {name:?} at {source_path:?} lacks a prefix"
+        )));
+    };
+    if !prefixes.contains_key(prefix)
+        || !is_linkml_identifier(prefix)
+        || !is_linkml_identifier(local)
+    {
+        return Err(LinkmlError::new(format!(
+            "LinkML package generated slot name {name:?} at {source_path:?} is not a declared-prefix NCName"
+        )));
+    }
+    Ok(())
 }
 
 struct NativeImporter {
@@ -1915,6 +2224,105 @@ mod tests {
             .next()
             .expect("element map") = "MissingElement".to_owned();
         assert!(import_package(&bad_map, &config()).is_err());
+    }
+
+    #[test]
+    fn renamed_package_verifies_reports_and_reconstructs_source_predicates() {
+        let schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "Carrier": {
+                    "type": "object",
+                    "properties": {
+                        "ex:a/b": { "type": "string" },
+                        "https://outside.example/path/value": { "type": "integer" },
+                        "custom:value/path": { "type": "boolean" },
+                        "skos:definition": { "type": "string" }
+                    },
+                    "required": ["ex:a/b"]
+                }
+            }
+        });
+        let compiled = CompiledSchema {
+            schema_json: format!(
+                "{}\n",
+                serde_json::to_string_pretty(&schema).expect("schema serializes")
+            ),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        };
+        let linkml = linkml_config()
+            .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))
+            .expect("exact re-home config");
+        let package = emit_linkml(&compiled, &linkml).expect("renamed package");
+        assert_eq!(package.slot_renames.len(), 4);
+
+        let imported = import_package(&package, &config()).expect("verified reverse import");
+        let predicates = imported
+            .shapes
+            .node_shapes
+            .iter()
+            .flat_map(|shape| &shape.property_shapes)
+            .filter_map(|property| match &property.path {
+                Path::Predicate(predicate) => Some(predicate.as_str()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            predicates,
+            BTreeSet::from([
+                "custom:value/path",
+                "https://example.org/a/b",
+                "https://example.org/definition",
+                "https://outside.example/path/value",
+            ])
+        );
+
+        let mut bad_report = package.clone();
+        bad_report.slot_renames[0].new_slot_name.push_str("_drift");
+        assert!(
+            import_package(&bad_report, &config())
+                .expect_err("public report drift rejected")
+                .detail()
+                .contains("retained emitted report")
+        );
+
+        let mut bad_order = package.clone();
+        bad_order.slot_renames.swap(0, 1);
+        assert!(import_package(&bad_order, &config()).is_err());
+
+        let mut bad_losses = package.clone();
+        bad_losses.losses = LossLedger::new();
+        assert!(
+            import_package(&bad_losses, &config())
+                .expect_err("loss drift rejected")
+                .detail()
+                .contains("retained emitted ledger")
+        );
+
+        let mut bad_document = package;
+        let renamed = bad_document.slot_renames[0].clone();
+        let mut value = bad_document.document.as_value().clone();
+        value["classes"][&renamed.emitted_class]["attributes"][&renamed.new_slot_name]["slot_uri"] =
+            Value::String("ex:tampered".to_owned());
+        bad_document.document = LinkmlDocument::from_value(value).expect("valid tampered document");
+        bad_document.yaml = write_linkml(&bad_document.document).expect("tampered YAML");
+        bad_document.canonical_yaml.clone_from(&bad_document.yaml);
+        assert!(
+            import_package(&bad_document, &config())
+                .expect_err("slot identity drift rejected")
+                .detail()
+                .contains("disagrees with emitted slot_uri")
+        );
+
+        let skipped = emit_linkml(
+            &compiled,
+            &linkml.with_sanitize_policy(super::super::SanitizePolicy::Skip),
+        )
+        .expect("skip package");
+        let mut bad_diagnostic = skipped;
+        bad_diagnostic.slot_diagnostics[0].detail.push_str(" drift");
+        assert!(import_package(&bad_diagnostic, &config()).is_err());
     }
 
     #[test]
