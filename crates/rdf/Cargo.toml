@@ -149,6 +149,12 @@ name = "native_codecs"
 harness = false
 
 [[bench]]
+# One-shot allocation/count/retained/peak-byte baseline for expanded JSON-LD parse and
+# serialization. Separate from Criterion so allocator atomics do not perturb timing.
+name = "jsonld_alloc"
+harness = false
+
+[[bench]]
 # Renderer-neutral RDF 1.2 projection, scene, and deterministic layered layout.
 # Report-only; excluded from check.
 name = "viz_layout"

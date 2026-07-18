@@ -298,6 +298,49 @@ fn seed_c_statement_layer_roundtrips_star_capable_targets() {
     }
 }
 
+/// Freeze the CLI's no-options expanded JSON-LD/YAML-LD bytes before configurable
+/// context support is introduced.
+#[test]
+fn expanded_jsonld_and_yamlld_cli_bytes_are_frozen() {
+    const INPUT: &str = "<https://example.org/alice> <https://schema.org/name> \"Alice\" .\n";
+    const JSONLD: &str = r#"{
+  "@context": {},
+  "@graph": [
+    {
+      "@id": "https://example.org/alice",
+      "https://schema.org/name": {
+        "@value": "Alice"
+      }
+    }
+  ]
+}"#;
+    const YAMLLD: &str = concat!(
+        "# yaml-language-server: $schema=purrdf.schema.json\n",
+        "# The default reference is the bundled purrdf.schema.json; pass an explicit\n",
+        "# schema_url to point editors at a hosted copy.\n",
+        "'@context': {}\n",
+        "'@graph':\n",
+        "- '@id': https://example.org/alice\n",
+        "  https://schema.org/name:\n",
+        "    '@value': Alice\n",
+    );
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_file(dir.path(), "baseline.nq", INPUT);
+    for (format, expected) in [("jsonld", JSONLD), ("yamlld", YAMLLD)] {
+        let output = path(dir.path(), &format!("baseline.{format}"));
+        let result = run(&[
+            "convert", "--from", "nquads", "--to", format, &input, &output,
+        ]);
+        assert!(result.status.success(), "{format}: {}", stderr(&result));
+        assert_eq!(
+            std::fs::read_to_string(output).expect("read baseline output"),
+            expected,
+            "expanded {format} bytes changed"
+        );
+    }
+}
+
 /// SEED C to a `carries_star = false` target (RDF/XML, TriX, HexTuples) PROJECTS the
 /// statement layer: exit 0, base quad present, star layer gone, and the ledger records
 /// the dropped statement rows. (This is the real behavior; none of these fail-close in

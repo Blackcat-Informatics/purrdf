@@ -443,6 +443,59 @@ fn serialize_round_trips_through_ntriples() {
 }
 
 #[test]
+fn expanded_jsonld_and_yamlld_abi_bytes_are_frozen() {
+    const INPUT: &str = "<https://example.org/alice> <https://schema.org/name> \"Alice\" .";
+    const JSONLD: &str = r#"{
+  "@context": {},
+  "@graph": [
+    {
+      "@id": "https://example.org/alice",
+      "https://schema.org/name": {
+        "@value": "Alice"
+      }
+    }
+  ]
+}"#;
+    const YAMLLD: &str = concat!(
+        "# yaml-language-server: $schema=purrdf.schema.json\n",
+        "# The default reference is the bundled purrdf.schema.json; pass an explicit\n",
+        "# schema_url to point editors at a hosted copy.\n",
+        "'@context': {}\n",
+        "'@graph':\n",
+        "- '@id': https://example.org/alice\n",
+        "  https://schema.org/name:\n",
+        "    '@value': Alice\n",
+    );
+
+    unsafe {
+        let dataset = parse("text/turtle", INPUT);
+        for (media_type, expected) in [
+            ("application/ld+json", JSONLD),
+            ("application/ld+yaml", YAMLLD),
+        ] {
+            let media = CString::new(media_type).unwrap();
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut dropped = usize::MAX;
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let status = purrdf_serialize(
+                dataset,
+                media.as_ptr(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut dropped,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::Ok as i32);
+            assert!(error.is_null());
+            assert_eq!(dropped, 0);
+            assert_eq!(buffer_bytes(buffer), expected.as_bytes());
+            purrdf_buffer_free(buffer);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
 fn parse_rejects_malformed_turtle_without_aborting() {
     unsafe {
         let media = CString::new("text/turtle").unwrap();

@@ -11,10 +11,16 @@
 //! deterministic N-Quads with default and named graph rows so both parser and
 //! serializer exercise dataset-capable paths.
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use purrdf_rdf::native_codecs::jsonld::{parse_jsonld, serialize_dataset_to_jsonld};
 use purrdf_rdf::{
     ParseOptions, SerializeGraph, parse_dataset, parse_dataset_with, serialize_dataset,
 };
+
+#[path = "support/jsonld.rs"]
+mod jsonld_fixture;
+
+use jsonld_fixture::{LARGE_ROWS as JSONLD_LARGE_ROWS, SMALL_ROWS as JSONLD_SMALL_ROWS};
 
 const ROWS: usize = 2_000;
 
@@ -181,11 +187,50 @@ fn bench_serialize_nquads(c: &mut Criterion) {
     group.finish();
 }
 
+/// Pre-change expanded JSON-LD parse/serialize timing over one deterministic RDF 1.2
+/// fixture at two scales. Allocation and peak-memory metrics live in the separate
+/// `jsonld_alloc` process so allocator atomics cannot perturb Criterion timings.
+fn bench_jsonld_expanded(c: &mut Criterion) {
+    let mut group = c.benchmark_group("jsonld_expanded_baseline");
+    for rows in [JSONLD_SMALL_ROWS, JSONLD_LARGE_ROWS] {
+        let dataset = jsonld_fixture::build_dataset(rows);
+        let json = serialize_dataset_to_jsonld(&dataset).expect("prepare expanded JSON-LD");
+        group.throughput(Throughput::Elements(
+            u64::try_from(dataset.quad_count()).expect("quad count fits in u64"),
+        ));
+        group.bench_with_input(
+            BenchmarkId::new("serialize", rows),
+            &dataset,
+            |bencher, ds| {
+                bencher.iter(|| {
+                    let output = serialize_dataset_to_jsonld(black_box(ds))
+                        .expect("expanded JSON-LD serialization");
+                    black_box(output);
+                });
+            },
+        );
+        group.bench_with_input(BenchmarkId::new("parse", rows), &json, |bencher, text| {
+            bencher.iter(|| {
+                let dataset =
+                    parse_jsonld(black_box(text.as_bytes())).expect("expanded JSON-LD parse");
+                black_box(dataset);
+            });
+        });
+        eprintln!(
+            "[jsonld_baseline] rows={rows} quads={} output_bytes={}",
+            dataset.quad_count(),
+            json.len()
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_parse_nquads,
     bench_parse_nquads_parallel_vs_sequential,
     bench_parse_nquads_span_tracking,
-    bench_serialize_nquads
+    bench_serialize_nquads,
+    bench_jsonld_expanded
 );
 criterion_main!(benches);
