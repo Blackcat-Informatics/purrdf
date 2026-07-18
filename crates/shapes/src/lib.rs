@@ -69,7 +69,8 @@ pub use linkml::{
     import_linkml, import_linkml_package, parse_linkml, write_linkml,
 };
 pub use pydantic::{
-    PYDANTIC_DIALECT, PydanticConfig, PydanticError, PydanticPackage, emit_pydantic,
+    PYDANTIC_DIALECT, PydanticClassConfig, PydanticConfig, PydanticError, PydanticModuleConfig,
+    PydanticPackage, PydanticPackageTopology, PydanticVersionStamp, emit_pydantic,
     import_pydantic_package,
 };
 pub use rules::{apply_rules, entail_dataset};

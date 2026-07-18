@@ -141,6 +141,19 @@ generated code and checks the live reverse/schema surface.
 `import_pydantic_package` separately verifies the retained source schema,
 generated files, model map, dialect, and forward ledger before importing SHACL.
 
+The optional caller-owned `PydanticPackageTopology` is a total partition of
+`$defs` entries into portable dotted leaf modules. Each route carries the class
+docstring and a sorted, vocabulary-neutral `json_schema_extra` map suitable for
+documentation URLs, content digests, and other caller-defined linkage. An
+optional `PydanticVersionStamp` adds an exact PEP 440 `__version__` export.
+Routed packages share schema/runtime support modules, generate intermediate
+package initializers, use explicit symbol tables for one root-level rebuild,
+and pass the executable runtime oracle plus strict mypy. Exact route coverage,
+portable path/symbol uniqueness, and fixed input/config/output limits all fail
+closed. When both topology and version stamping are omitted, the original flat
+package bytes remain unchanged. A flat version stamp adds `__about__.py` and
+updates the `__init__.py` exports.
+
 ## LinkML 1.11 projection
 
 The same `CompiledSchema` carrier can be projected to canonical LinkML 1.11

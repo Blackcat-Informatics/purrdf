@@ -91,3 +91,7 @@ harness = false
 [[bench]]
 name = "schema_surface"
 harness = false
+
+[[bench]]
+name = "pydantic_package"
+harness = false

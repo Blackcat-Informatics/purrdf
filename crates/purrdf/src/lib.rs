@@ -252,6 +252,37 @@ mod tests {
             &shapes::GraphqlPackage,
             &shapes::SchemaImportConfig,
         ) -> Result<shapes::ImportedShapes, shapes::GraphqlError> = shapes::import_graphql_package;
+
+        let module = shapes::PydanticModuleConfig::new(
+            "domain.people",
+            "Caller-owned facade module documentation.",
+        )
+        .expect("module");
+        let class = shapes::PydanticClassConfig::new(
+            "Person",
+            "domain.people",
+            "Caller-owned facade class documentation.",
+            std::collections::BTreeMap::new(),
+        )
+        .expect("class");
+        let topology = shapes::PydanticPackageTopology::new([module], [class])
+            .expect("topology through facade");
+        let stamp = shapes::PydanticVersionStamp::new(
+            "1.2.3+facade.1",
+            "Caller-owned facade version documentation.",
+        )
+        .expect("version through facade");
+        let config = shapes::PydanticConfig::new(
+            "facade_models",
+            "Caller-owned facade package documentation.",
+            "Caller-owned facade support documentation.",
+        )
+        .expect("config through facade")
+        .with_topology(topology)
+        .expect("topology config through facade")
+        .with_version_stamp(stamp)
+        .expect("version config through facade");
+        assert_eq!(config.package_name(), "facade_models");
     }
 
     #[test]
