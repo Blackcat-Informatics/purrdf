@@ -51,6 +51,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ::purrdf::RdfDataset;
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::data::{GraphFilter, native_quads};
@@ -125,6 +126,12 @@ pub struct Namespaces {
     primary_prefix: String,
     /// The namespace `primary_prefix` resolves to.
     primary_ns: String,
+    /// Caller-declared `(prefix, namespace)` pairs in lexical prefix order.
+    /// Builtins appear here only when the caller explicitly declared or
+    /// rebound them. Ontology-complete schema projection uses this set as its
+    /// vocabulary boundary; merely knowing a W3C builtin for compaction must
+    /// never make that vocabulary caller-owned.
+    declared_prefixes: Vec<(String, String)>,
 }
 
 impl Namespaces {
@@ -139,6 +146,7 @@ impl Namespaces {
     /// Returns `Err` when `primary_prefix` resolves in neither `doc_prefixes`
     /// nor the builtins.
     pub fn new(primary_prefix: &str, doc_prefixes: &[(String, String)]) -> Result<Self, String> {
+        let declared: BTreeMap<String, String> = doc_prefixes.iter().cloned().collect();
         let mut merged: BTreeMap<String, String> = BUILTIN_PREFIXES
             .iter()
             .map(|(p, n)| ((*p).to_owned(), (*n).to_owned()))
@@ -161,6 +169,7 @@ impl Namespaces {
             prefixes,
             primary_prefix: primary_prefix.to_owned(),
             primary_ns,
+            declared_prefixes: declared.into_iter().collect(),
         })
     }
 
@@ -290,6 +299,18 @@ impl Namespaces {
     fn is_known(&self, iri: &str) -> bool {
         self.compact_iri(iri) != iri
     }
+
+    /// Whether `iri` belongs to a namespace explicitly declared by the caller.
+    ///
+    /// This deliberately differs from [`Self::is_known`]: W3C builtins are
+    /// always known for compaction, but are not caller-owned ontology surface
+    /// unless the caller explicitly supplied their prefix declaration.
+    #[must_use]
+    pub fn is_caller_owned(&self, iri: &str) -> bool {
+        self.declared_prefixes
+            .iter()
+            .any(|(_, namespace)| iri.starts_with(namespace))
+    }
 }
 
 /// The bare local name of an IRI: the substring after the last `#` or `/`.
@@ -329,6 +350,418 @@ pub struct CompiledSchema {
     /// runtime [`LossLedger`] built via [`LossLedger::record`], one entry per
     /// occurrence (codes from `SHACL_JSON_SCHEMA_PROFILE`).
     pub losses: LossLedger,
+}
+
+// ── Ontology-complete schema compilation contract ──────────────────────────
+
+/// Selects the property/class surface projected into developer schemas.
+///
+/// The legacy [`compile`] and [`compile_with_value_vocab`] entry points always
+/// use [`Self::ShapedOnly`]. Ontology-aware callers must choose explicitly;
+/// there is intentionally no `Default` implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaSurfaceMode {
+    /// Emit exactly the active SHACL target-class union.
+    ShapedOnly,
+    /// Also project caller-vocabulary OWL/RDFS properties and open carrier
+    /// classes according to the bounded theory documented by this module.
+    OntologyComplete,
+}
+
+impl SchemaSurfaceMode {
+    const fn key_byte(self) -> u8 {
+        match self {
+            Self::ShapedOnly => 0,
+            Self::OntologyComplete => 1,
+        }
+    }
+}
+
+/// Stable reason attached to one property/class coverage decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaCoverageStatus {
+    /// A direct SHACL predicate shape supplies the emitted property.
+    HasShape,
+    /// An ontology-declared property was emitted without a direct SHACL shape.
+    IncludedUnshaped,
+    /// The property is catalogued but shaped-only mode does not admit it.
+    ExcludedShapedOnly,
+    /// The property is outside the caller-declared vocabulary boundary.
+    ExcludedNamespace,
+    /// The class does not satisfy every effective `rdfs:domain` expression.
+    ExcludedDomain,
+    /// An authoritative `sh:closed` shape excludes the ontology-only property.
+    ExcludedClosedShape,
+}
+
+/// Precision of a schema-surface decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaCoveragePrecision {
+    /// The emitted structure follows a direct SHACL or exact RDF/RDFS rule.
+    Exact,
+    /// The representation is deliberately useful but weaker than the source
+    /// semantics, such as projecting forward functionality as a scalar field.
+    RepresentationApproximation,
+}
+
+/// One source axiom supporting a schema-surface decision.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct SchemaCoverageProvenance {
+    /// Subject IRI in the source axiom.
+    pub subject: String,
+    /// Predicate IRI in the source axiom.
+    pub predicate: String,
+    /// Canonical source-object rendering.
+    pub object: String,
+}
+
+/// One catalogued property's decision for one eligible class.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SchemaClassPropertyCoverage {
+    /// Existing caller-owned class IRI.
+    pub class_iri: String,
+    /// Whether ontology-complete compilation created an open carrier `$def`
+    /// because no active SHACL target shape existed for this class.
+    pub synthesized_open_class: bool,
+    /// Inclusion or exclusion reason.
+    pub status: SchemaCoverageStatus,
+    /// Semantic precision of the emitted representation or exclusion proof.
+    pub precision: SchemaCoveragePrecision,
+    /// Canonically sorted source axioms supporting this decision.
+    pub provenance: Vec<SchemaCoverageProvenance>,
+}
+
+/// Aggregate coverage for one ontology-declared property.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SchemaPropertyCoverage {
+    /// Full property IRI.
+    pub property_iri: String,
+    /// Canonically sorted RDF/OWL declaration or relationship kinds that made
+    /// the property a catalog entry.
+    pub declarations: Vec<String>,
+    /// Canonically sorted per-class decisions. The aggregate property appears
+    /// exactly once in a report even when this vector is empty.
+    pub classes: Vec<SchemaClassPropertyCoverage>,
+}
+
+/// Deterministic audit manifest for ontology property coverage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SchemaCoverageReport {
+    /// Surface mode used by the compilation.
+    pub mode: SchemaSurfaceMode,
+    /// Every catalogued property exactly once, sorted by full IRI.
+    pub properties: Vec<SchemaPropertyCoverage>,
+}
+
+impl SchemaCoverageReport {
+    /// Render canonical, pretty JSON with one trailing newline.
+    ///
+    /// Struct field order is fixed and every collection is sorted before the
+    /// report is constructed, so repeated rendering is byte-identical.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut canonical = self.clone();
+        canonical
+            .properties
+            .sort_by(|left, right| left.property_iri.cmp(&right.property_iri));
+        for property in &mut canonical.properties {
+            property.declarations.sort();
+            property.declarations.dedup();
+            property.classes.sort_by(|left, right| {
+                left.class_iri
+                    .cmp(&right.class_iri)
+                    .then_with(|| left.status.cmp(&right.status))
+                    .then_with(|| left.precision.cmp(&right.precision))
+            });
+            for class in &mut property.classes {
+                class.provenance.sort();
+                class.provenance.dedup();
+            }
+        }
+        let value = serde_json::to_value(canonical)
+            .expect("SchemaCoverageReport contains only serializable values");
+        to_pretty(&value)
+    }
+}
+
+/// Compiler-owned cache identity for one complete schema request.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SchemaCompilationKey(String);
+
+impl SchemaCompilationKey {
+    /// Lowercase SHA-256 cache-key text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SchemaCompilationKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Which graph failed canonicalization while deriving a schema cache key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaCompilationInput {
+    /// Parsed SHACL shapes graph retained by [`Shapes`].
+    Shapes,
+    /// Caller-supplied ontology graph.
+    Ontology,
+}
+
+/// Typed failures from ontology-aware schema compilation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SchemaCompileError {
+    /// RDFC-1.0 canonicalization exceeded its fixed safety budget.
+    Canonicalization {
+        /// Graph that could not be canonicalized.
+        input: SchemaCompilationInput,
+        /// Stable diagnostic from the canonicalizer.
+        message: String,
+    },
+    /// A fixed schema-surface resource ceiling was exceeded.
+    LimitExceeded {
+        /// Resource whose ceiling was exceeded.
+        resource: &'static str,
+        /// Fixed implementation ceiling.
+        limit: usize,
+        /// Observed input size.
+        observed: usize,
+    },
+    /// An OWL/RDFS axiom is structurally invalid for the supported expression
+    /// fragment.
+    InvalidOntology {
+        /// Canonical subject rendering or IRI.
+        subject: String,
+        /// Explanation of the structural violation.
+        reason: String,
+    },
+    /// An eligible class/property cannot be represented under caller namespace
+    /// and `$defs` keying rules.
+    Namespace {
+        /// Offending IRI.
+        iri: String,
+        /// Explanation of the keying/admission violation.
+        reason: String,
+    },
+    /// Two distinct ontology resources map to the same emitted key.
+    DefinitionCollision {
+        /// Colliding `$defs` key.
+        key: String,
+        /// First resource IRI.
+        first: String,
+        /// Second resource IRI.
+        second: String,
+    },
+}
+
+impl std::fmt::Display for SchemaCompileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Canonicalization { input, message } => {
+                write!(f, "failed to canonicalize {input:?} graph: {message}")
+            }
+            Self::LimitExceeded {
+                resource,
+                limit,
+                observed,
+            } => write!(
+                f,
+                "schema surface {resource} limit exceeded: observed {observed}, limit {limit}"
+            ),
+            Self::InvalidOntology { subject, reason } => {
+                write!(f, "invalid ontology expression at {subject}: {reason}")
+            }
+            Self::Namespace { iri, reason } => {
+                write!(f, "cannot project ontology resource {iri}: {reason}")
+            }
+            Self::DefinitionCollision { key, first, second } => write!(
+                f,
+                "distinct ontology resources {first} and {second} share schema definition key {key:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SchemaCompileError {}
+
+/// Complete input contract for ontology-aware schema compilation.
+///
+/// Every request owns one ontology graph and one explicit mode. Value-vocabulary
+/// projection can only be enabled through [`Self::from_value_vocab_projection`],
+/// which reuses that projection's ontology and makes a mismatched pair
+/// unrepresentable.
+#[derive(Debug, Clone, Copy)]
+pub struct SchemaCompileRequest<'a> {
+    shapes: &'a Shapes,
+    namespaces: &'a Namespaces,
+    ontology: &'a RdfDataset,
+    mode: SchemaSurfaceMode,
+    value_vocab: Option<&'a ValueVocab>,
+}
+
+impl<'a> SchemaCompileRequest<'a> {
+    /// Construct a request without value-vocabulary enum projection.
+    #[must_use]
+    pub fn new(
+        shapes: &'a Shapes,
+        namespaces: &'a Namespaces,
+        ontology: &'a RdfDataset,
+        mode: SchemaSurfaceMode,
+    ) -> Self {
+        Self {
+            shapes,
+            namespaces,
+            ontology,
+            mode,
+            value_vocab: None,
+        }
+    }
+
+    /// Construct a request using an existing co-bound value-vocabulary marker
+    /// and ontology graph.
+    #[must_use]
+    pub fn from_value_vocab_projection(
+        shapes: &'a Shapes,
+        namespaces: &'a Namespaces,
+        projection: &'a ValueVocabProjection<'a>,
+        mode: SchemaSurfaceMode,
+    ) -> Self {
+        Self {
+            shapes,
+            namespaces,
+            ontology: projection.ontology,
+            mode,
+            value_vocab: Some(projection.vocab),
+        }
+    }
+
+    /// Parsed SHACL shapes.
+    #[must_use]
+    pub fn shapes(&self) -> &Shapes {
+        self.shapes
+    }
+
+    /// Caller namespace configuration.
+    #[must_use]
+    pub fn namespaces(&self) -> &Namespaces {
+        self.namespaces
+    }
+
+    /// Exact ontology graph used for surface derivation.
+    #[must_use]
+    pub fn ontology(&self) -> &RdfDataset {
+        self.ontology
+    }
+
+    /// Explicit surface mode.
+    #[must_use]
+    pub const fn mode(&self) -> SchemaSurfaceMode {
+        self.mode
+    }
+
+    /// Caller marker used for value-vocabulary projection, when active.
+    #[must_use]
+    pub fn value_vocab(&self) -> Option<&ValueVocab> {
+        self.value_vocab
+    }
+
+    /// Derive the exact pre-compilation cache key for this request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SchemaCompileError::Canonicalization`] if either graph exceeds
+    /// the canonicalizer's fixed safety budget.
+    pub fn compilation_key(&self) -> Result<SchemaCompilationKey, SchemaCompileError> {
+        schema_compilation_key(self)
+    }
+}
+
+/// Ontology-aware compilation output.
+#[derive(Debug, Clone)]
+pub struct SchemaCompilation {
+    /// Existing schema/OpenAPI/loss artifacts.
+    pub compiled: CompiledSchema,
+    /// Complete deterministic property coverage manifest.
+    pub coverage: SchemaCoverageReport,
+    /// Exact identity of every compilation input and policy constant.
+    pub key: SchemaCompilationKey,
+}
+
+const SCHEMA_KEY_SALT: &str = "purrdf-shapes/schema-compilation-key/v1";
+const SCHEMA_POLICY_SALT: &str =
+    "rdf12;json-schema-2020-12;openapi-3.1;surface-limits-v1;owl-rdfs-fragment-v1";
+const MAX_SCHEMA_PROPERTIES: usize = 65_536;
+const MAX_SCHEMA_CLASSES: usize = 65_536;
+const MAX_SCHEMA_RELATIONS: usize = 1_048_576;
+const MAX_OWL_EXPRESSION_DEPTH: usize = 64;
+
+fn schema_compilation_key(
+    request: &SchemaCompileRequest<'_>,
+) -> Result<SchemaCompilationKey, SchemaCompileError> {
+    let shapes =
+        ::purrdf::try_canonicalize(request.shapes.shapes_dataset.as_ref()).map_err(|error| {
+            SchemaCompileError::Canonicalization {
+                input: SchemaCompilationInput::Shapes,
+                message: error.to_string(),
+            }
+        })?;
+    let ontology = ::purrdf::try_canonicalize(request.ontology).map_err(|error| {
+        SchemaCompileError::Canonicalization {
+            input: SchemaCompilationInput::Ontology,
+            message: error.to_string(),
+        }
+    })?;
+
+    let mut bytes = Vec::with_capacity(
+        shapes.nquads.len() + ontology.nquads.len() + request.namespaces.prefixes.len() * 64 + 256,
+    );
+    append_key_part(&mut bytes, "key-salt", SCHEMA_KEY_SALT.as_bytes());
+    append_key_part(&mut bytes, "policy", SCHEMA_POLICY_SALT.as_bytes());
+    append_key_part(&mut bytes, "crate-version", crate::VERSION.as_bytes());
+    append_key_part(&mut bytes, "shapes-rdfc", shapes.nquads.as_bytes());
+    append_key_part(&mut bytes, "ontology-rdfc", ontology.nquads.as_bytes());
+    append_key_part(
+        &mut bytes,
+        "primary-prefix",
+        request.namespaces.primary_prefix.as_bytes(),
+    );
+    for (prefix, namespace) in &request.namespaces.declared_prefixes {
+        append_key_part(&mut bytes, "namespace-prefix", prefix.as_bytes());
+        append_key_part(&mut bytes, "namespace-iri", namespace.as_bytes());
+    }
+    append_key_part(&mut bytes, "surface-mode", &[request.mode.key_byte()]);
+    append_key_part(
+        &mut bytes,
+        "value-vocab-marker",
+        request
+            .value_vocab
+            .map_or(&[][..], |vocab| vocab.abstract_individual_type().as_bytes()),
+    );
+    for limit in [
+        MAX_SCHEMA_PROPERTIES,
+        MAX_SCHEMA_CLASSES,
+        MAX_SCHEMA_RELATIONS,
+        MAX_OWL_EXPRESSION_DEPTH,
+    ] {
+        append_key_part(&mut bytes, "fixed-limit", &limit.to_be_bytes());
+    }
+    Ok(SchemaCompilationKey(
+        ::purrdf::ContentDigest::of(&bytes).to_hex(),
+    ))
+}
+
+fn append_key_part(bytes: &mut Vec<u8>, label: &str, value: &[u8]) {
+    bytes.extend_from_slice(&(label.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(label.as_bytes());
+    bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(value);
 }
 
 // ── Value-vocabulary projection config ───────────────────────────────────────
@@ -2273,6 +2706,191 @@ mod tests {
         );
         assert_eq!(ctx.get("xsd"), Some(&json!(XSD_NS)));
         assert_eq!(ctx.get("sh"), Some(&json!(SH_NS)));
+    }
+
+    #[test]
+    fn caller_owned_namespaces_exclude_implicit_builtins() {
+        let ns = fixture_ns();
+        assert!(ns.is_caller_owned("https://example.org/meta/Person"));
+        assert!(ns.is_caller_owned("https://blackcatinformatics.ca/logic/Claim"));
+        assert!(!ns.is_caller_owned("http://www.w3.org/2002/07/owl#DatatypeProperty"));
+
+        let explicit = Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                ("owl".to_owned(), OWL_NS.to_owned()),
+            ],
+        )
+        .expect("explicit builtin declaration is valid");
+        assert!(explicit.is_caller_owned("http://www.w3.org/2002/07/owl#DatatypeProperty"));
+    }
+
+    #[test]
+    fn schema_compilation_key_covers_every_request_input() {
+        let shapes_a_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}\nmeta:ThingShape a sh:NodeShape ; sh:targetClass meta:Thing ."
+        ))
+        .expect("shape graph A");
+        let shapes_b_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}\nmeta:ThingShape a sh:NodeShape ; sh:targetClass meta:Thing ; sh:closed true ."
+        ))
+        .expect("shape graph B");
+        let shapes_a = from_dataset(&shapes_a_dataset).expect("parse shape graph A");
+        let shapes_b = from_dataset(&shapes_b_dataset).expect("parse shape graph B");
+
+        let ontology_a = crate::text_ingest::parse_turtle_to_dataset(
+            r"
+                @prefix owl: <http://www.w3.org/2002/07/owl#> .
+                @prefix meta: <https://example.org/meta/> .
+                meta:p a owl:DatatypeProperty .
+            ",
+        )
+        .expect("ontology A");
+        let ontology_a_shuffled = crate::text_ingest::parse_turtle_to_dataset(
+            r"
+                @prefix meta: <https://example.org/meta/> .
+                @prefix owl: <http://www.w3.org/2002/07/owl#> .
+                meta:p a owl:DatatypeProperty .
+            ",
+        )
+        .expect("shuffled ontology A");
+        let ontology_b = crate::text_ingest::parse_turtle_to_dataset(
+            r"
+                @prefix owl: <http://www.w3.org/2002/07/owl#> .
+                @prefix meta: <https://example.org/meta/> .
+                meta:q a owl:DatatypeProperty .
+            ",
+        )
+        .expect("ontology B");
+
+        let shaped = SchemaCompileRequest::new(
+            &shapes_a,
+            &fixture_ns(),
+            ontology_a.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("shaped key");
+        let shuffled = SchemaCompileRequest::new(
+            &shapes_a,
+            &fixture_ns(),
+            ontology_a_shuffled.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("shuffled key");
+        assert_eq!(shaped, shuffled, "RDF load order is not key material");
+        assert_eq!(shaped.as_str().len(), 64);
+        assert!(shaped.as_str().bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+        let complete = SchemaCompileRequest::new(
+            &shapes_a,
+            &fixture_ns(),
+            ontology_a.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        )
+        .compilation_key()
+        .expect("complete key");
+        assert_ne!(shaped, complete, "surface mode is key material");
+
+        let changed_ontology = SchemaCompileRequest::new(
+            &shapes_a,
+            &fixture_ns(),
+            ontology_b.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("changed ontology key");
+        assert_ne!(
+            shaped, changed_ontology,
+            "ontology identity is key material"
+        );
+
+        let changed_shapes = SchemaCompileRequest::new(
+            &shapes_b,
+            &fixture_ns(),
+            ontology_a.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("changed shapes key");
+        assert_ne!(shaped, changed_shapes, "shapes identity is key material");
+
+        let alternate_ns = Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                ("extra".to_owned(), "https://example.org/extra/".to_owned()),
+            ],
+        )
+        .expect("alternate namespaces");
+        let changed_namespaces = SchemaCompileRequest::new(
+            &shapes_a,
+            &alternate_ns,
+            ontology_a.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("changed namespace key");
+        assert_ne!(
+            shaped, changed_namespaces,
+            "namespace config is key material"
+        );
+
+        let vocab = ValueVocab::new("https://example.org/meta/ValueVocabulary");
+        let projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: ontology_a.as_ref(),
+        };
+        let with_vocab = SchemaCompileRequest::from_value_vocab_projection(
+            &shapes_a,
+            &fixture_ns(),
+            &projection,
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("value-vocabulary key");
+        assert_ne!(
+            shaped, with_vocab,
+            "value-vocabulary marker is key material"
+        );
+    }
+
+    #[test]
+    fn coverage_report_json_canonicalizes_public_collection_order() {
+        let provenance = SchemaCoverageProvenance {
+            subject: "https://example.org/meta/p".to_owned(),
+            predicate: rdfs::RANGE.to_owned(),
+            object: "<http://www.w3.org/2001/XMLSchema#string>".to_owned(),
+        };
+        let property = |iri: &str| SchemaPropertyCoverage {
+            property_iri: iri.to_owned(),
+            declarations: vec!["rdfs:range".to_owned(), "owl:DatatypeProperty".to_owned()],
+            classes: vec![SchemaClassPropertyCoverage {
+                class_iri: "https://example.org/meta/Thing".to_owned(),
+                synthesized_open_class: false,
+                status: SchemaCoverageStatus::IncludedUnshaped,
+                precision: SchemaCoveragePrecision::Exact,
+                provenance: vec![provenance.clone()],
+            }],
+        };
+        let forward = SchemaCoverageReport {
+            mode: SchemaSurfaceMode::OntologyComplete,
+            properties: vec![
+                property("https://example.org/meta/a"),
+                property("https://example.org/meta/z"),
+            ],
+        };
+        let reverse = SchemaCoverageReport {
+            mode: SchemaSurfaceMode::OntologyComplete,
+            properties: vec![
+                property("https://example.org/meta/z"),
+                property("https://example.org/meta/a"),
+            ],
+        };
+        assert_eq!(forward.to_json(), reverse.to_json());
+        assert!(forward.to_json().ends_with('\n'));
     }
 
     #[test]

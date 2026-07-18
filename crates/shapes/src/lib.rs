@@ -53,7 +53,12 @@ pub use graphql::{
     GraphqlDefinitionMap, GraphqlEnumValueMap, GraphqlError, GraphqlNameMap, GraphqlPackage,
     emit_graphql, import_graphql_package,
 };
-pub use json_schema::{Namespaces, ValueVocab, ValueVocabProjection, compile_with_value_vocab};
+pub use json_schema::{
+    Namespaces, SchemaClassPropertyCoverage, SchemaCompilation, SchemaCompilationInput,
+    SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,
+    SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus, SchemaPropertyCoverage,
+    SchemaSurfaceMode, ValueVocab, ValueVocabProjection, compile_with_value_vocab,
+};
 pub use linkml::{
     LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, emit_linkml, import_linkml,
     import_linkml_package, parse_linkml, write_linkml,
