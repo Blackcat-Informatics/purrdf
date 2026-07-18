@@ -11,12 +11,15 @@
 //! not author.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
 use ::purrdf::loss::LossLedger;
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde::{
+    Serialize,
+    de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor},
+};
 use serde_json::{Map, Number, Value};
 use serde_yaml::Value as YamlValue;
 
@@ -34,6 +37,113 @@ const MAX_LINKML_YAML_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LINKML_YAML_DEPTH: usize = 256;
 const MAX_LINKML_YAML_NODES: usize = 1_000_000;
 const MAX_LINKML_STRING_BYTES: usize = 16 * 1024 * 1024;
+pub(super) const MAX_LINKML_SOURCE_KEY_BYTES: usize = 1024 * 1024;
+
+const RESERVED_JSONLD_SLOTS: &[&str] = &["@annotation", "@id", "@language", "@type", "@value"];
+
+/// Policy for a JSON property that cannot be used directly as a LinkML slot name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SanitizePolicy {
+    /// Emit a deterministic NCName-safe slot and report the mapping.
+    Rename,
+    /// Omit only the unsafe slot and return a located diagnostic and loss.
+    Skip,
+    /// Reject the projection with a contextual error.
+    Fail,
+}
+
+/// Semantic effect of a LinkML slot-name policy decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LinkmlSlotDisposition {
+    /// Only the LinkML attribute spelling changes; RDF identity is preserved.
+    IdentityPreserved,
+    /// Caller configuration assigns an unresolved source token a new RDF identity.
+    IdentityRehomed,
+    /// The selected policy omits the source property.
+    Skipped,
+}
+
+/// Deterministic reason contributing to a slot rename or diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LinkmlSlotReason {
+    /// The source local part contains a character outside LinkML's NCName grammar.
+    InvalidCharacter,
+    /// The source local part does not begin with an NCName start character.
+    InvalidInitialCharacter,
+    /// No caller prefix namespace can provide a directly usable source name.
+    UnmatchedNamespace,
+    /// An exact caller hint requests assignment under the default prefix.
+    CallerRehome,
+    /// A non-IRI source name requires caller-default RDF identity.
+    BareName,
+    /// The direct candidate exceeds the fixed generated-name byte limit.
+    LengthBound,
+    /// Another source slot already owns the direct candidate.
+    Collision,
+}
+
+/// One deterministic source-slot to emitted-LinkML rename record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LinkmlSlotRename {
+    /// Source `$defs` key, or the inline-class JSON Pointer.
+    pub source_class: String,
+    /// Emitted LinkML class name.
+    pub emitted_class: String,
+    /// Exact source property JSON Pointer.
+    pub source_path: String,
+    /// Exact source JSON property spelling.
+    pub source_name: String,
+    /// Resolvable source URI/CURIE before emission, when one exists.
+    pub old_slot_uri: Option<String>,
+    /// NCName-safe emitted LinkML attribute name.
+    pub new_slot_name: String,
+    /// Concrete URI/CURIE carried by the emitted `slot_uri`.
+    pub emitted_slot_uri: String,
+    /// Whether RDF identity was preserved or explicitly re-homed.
+    pub disposition: LinkmlSlotDisposition,
+    /// Ordered causes for the generated spelling.
+    pub reasons: Vec<LinkmlSlotReason>,
+}
+
+impl LinkmlSlotRename {
+    /// Required `(class, old_slot_uri, new_slot_name)` audit view.
+    #[must_use]
+    pub fn audit_tuple(&self) -> (&str, Option<&str>, &str) {
+        (
+            &self.source_class,
+            self.old_slot_uri.as_deref(),
+            &self.new_slot_name,
+        )
+    }
+}
+
+/// One located slot omitted by [`SanitizePolicy::Skip`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LinkmlSlotDiagnostic {
+    /// Source `$defs` key, or the inline-class JSON Pointer.
+    pub source_class: String,
+    /// Emitted LinkML class name.
+    pub emitted_class: String,
+    /// Exact source property JSON Pointer.
+    pub source_path: String,
+    /// Exact source JSON property spelling.
+    pub source_name: String,
+    /// Resolvable source URI/CURIE before omission, when one exists.
+    pub old_slot_uri: Option<String>,
+    /// No emitted name exists for a skipped slot.
+    pub new_slot_name: Option<String>,
+    /// No emitted URI exists for a skipped slot.
+    pub emitted_slot_uri: Option<String>,
+    /// Always [`LinkmlSlotDisposition::Skipped`].
+    pub disposition: LinkmlSlotDisposition,
+    /// Ordered causes that made the source name unsafe.
+    pub reasons: Vec<LinkmlSlotReason>,
+    /// Stable human-readable policy result.
+    pub detail: String,
+}
 
 /// Caller-owned identity and vocabulary configuration for LinkML emission.
 ///
@@ -48,6 +158,8 @@ pub struct LinkmlConfig {
     description: String,
     default_prefix: String,
     prefixes: BTreeMap<String, String>,
+    sanitize_policy: SanitizePolicy,
+    slot_rehomes: BTreeSet<String>,
 }
 
 impl LinkmlConfig {
@@ -100,6 +212,8 @@ impl LinkmlConfig {
             description,
             default_prefix,
             prefixes,
+            sanitize_policy: SanitizePolicy::Rename,
+            slot_rehomes: BTreeSet::new(),
         })
     }
 
@@ -131,6 +245,67 @@ impl LinkmlConfig {
     #[must_use]
     pub fn prefixes(&self) -> &BTreeMap<String, String> {
         &self.prefixes
+    }
+
+    /// Policy applied to a source property without a directly usable LinkML name.
+    #[must_use]
+    pub const fn sanitize_policy(&self) -> SanitizePolicy {
+        self.sanitize_policy
+    }
+
+    /// Select the unsafe-slot policy while retaining the caller-owned identity config.
+    #[must_use]
+    pub fn with_sanitize_policy(mut self, policy: SanitizePolicy) -> Self {
+        self.sanitize_policy = policy;
+        self
+    }
+
+    /// Assign exact unresolved source tokens to the caller's default prefix.
+    ///
+    /// A hint cannot target a declared CURIE or reserved JSON-LD carrier. During
+    /// emission every configured token must occur at least once; stale hints
+    /// fail closed instead of silently changing classification intent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LinkmlError`] for an empty/oversized source token, a reserved
+    /// JSON-LD carrier, or a CURIE whose prefix is already declared.
+    pub fn with_slot_rehomes(
+        mut self,
+        slot_rehomes: BTreeSet<String>,
+    ) -> Result<Self, LinkmlError> {
+        for source in &slot_rehomes {
+            if source.is_empty() {
+                return Err(LinkmlError::new(
+                    "LinkML slot re-home source token cannot be empty",
+                ));
+            }
+            if source.len() > MAX_LINKML_SOURCE_KEY_BYTES {
+                return Err(LinkmlError::new(format!(
+                    "LinkML slot re-home source token exceeds {MAX_LINKML_SOURCE_KEY_BYTES} bytes"
+                )));
+            }
+            if is_reserved_jsonld_slot(source) {
+                return Err(LinkmlError::new(format!(
+                    "LinkML slot re-home source token {source:?} is a reserved JSON-LD carrier"
+                )));
+            }
+            if let Some((prefix, _)) = source.split_once(':')
+                && self.prefixes.contains_key(prefix)
+            {
+                return Err(LinkmlError::new(format!(
+                    "LinkML slot re-home source token {source:?} uses declared prefix {prefix:?}"
+                )));
+            }
+        }
+        self.slot_rehomes = slot_rehomes;
+        Ok(self)
+    }
+
+    /// Exact source tokens assigned to the caller's default prefix.
+    #[must_use]
+    pub fn slot_rehomes(&self) -> &BTreeSet<String> {
+        &self.slot_rehomes
     }
 }
 
@@ -541,6 +716,10 @@ fn is_linkml_identifier(value: &str) -> bool {
         })
 }
 
+pub(super) fn is_reserved_jsonld_slot(value: &str) -> bool {
+    RESERVED_JSONLD_SLOTS.binary_search(&value).is_ok()
+}
+
 fn validate_yaml_value(
     value: &YamlValue,
     depth: usize,
@@ -754,6 +933,34 @@ mod tests {
         assert_eq!(config.description(), "Caller schema.");
         assert_eq!(config.default_prefix(), "ex");
         assert_eq!(config.prefixes(), &prefixes());
+        assert_eq!(config.sanitize_policy(), SanitizePolicy::Rename);
+        assert!(config.slot_rehomes().is_empty());
+
+        let configured = config
+            .clone()
+            .with_sanitize_policy(SanitizePolicy::Skip)
+            .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))
+            .expect("unresolved source token is caller-owned");
+        assert_eq!(configured.sanitize_policy(), SanitizePolicy::Skip);
+        assert_eq!(
+            configured.slot_rehomes(),
+            &BTreeSet::from(["skos:definition".to_owned()])
+        );
+        assert!(
+            config
+                .clone()
+                .with_slot_rehomes(BTreeSet::from(["ex:name".to_owned()]))
+                .expect_err("declared CURIE cannot be re-homed")
+                .detail()
+                .contains("declared prefix")
+        );
+        assert!(
+            config
+                .with_slot_rehomes(BTreeSet::from(["@id".to_owned()]))
+                .expect_err("reserved carrier cannot be re-homed")
+                .detail()
+                .contains("reserved JSON-LD")
+        );
 
         assert!(LinkmlConfig::new("/relative", "Schema", "docs", "ex", prefixes()).is_err());
         assert!(
