@@ -9,8 +9,8 @@ use std::error::Error;
 use purrdf::loss::{LossLedger, check_ledger_sound};
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
 use purrdf_shapes::{
-    PYDANTIC_DIALECT, PydanticConfig, PydanticPackage, SchemaDatatypeMap, SchemaImportConfig,
-    emit_pydantic, import_pydantic_package,
+    PYDANTIC_DIALECT, PydanticConfig, PydanticPackage, PydanticVersionStamp, SchemaDatatypeMap,
+    SchemaImportConfig, emit_pydantic, import_pydantic_package,
 };
 use serde_json::{Value, json};
 
@@ -58,6 +58,83 @@ fn reverse_evidence(
             .map(|shape| shape.id.to_string())
             .collect::<Vec<_>>(),
     }))
+}
+
+fn version_oracle() -> Value {
+    let candidates = [
+        "0",
+        "v1.2",
+        "1!2.0",
+        "1.0a1",
+        "1.0-alpha",
+        "1.0beta2",
+        "1.0b3",
+        "1.0preview2",
+        "1.0pre4",
+        "1.0c5",
+        "1.0RC1",
+        "1.0rc_",
+        "1.0-1",
+        "1.0-post2",
+        "1.0post-",
+        "1.0_post_7",
+        "1.0rev",
+        "1.0r8",
+        "1.0.dev3",
+        "1.0dev-",
+        "1.0_dev_9",
+        "1.0rc1.post2.dev3",
+        "01.002",
+        "1.0+abc.1",
+        "1.0+Ubuntu-1",
+        " \tv1.0RC1+LOCAL_1\n",
+        "",
+        "v",
+        "1..0",
+        "1.0+",
+        "1.0+abc+def",
+        "1.0++x",
+        "1.0+abc_",
+        "1.0-",
+        "1.0_",
+        "1.0..post1",
+        "1.0a..1",
+        "1!",
+        "1.0foo",
+        "1.0+naïve",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .chain([
+        format!("1.{}", "7".repeat(510)),
+        format!("1.{}", "7".repeat(511)),
+    ]);
+
+    Value::Array(
+        candidates
+            .into_iter()
+            .map(|candidate| {
+                let outcome = PydanticVersionStamp::new(
+                    candidate.clone(),
+                    "Caller-owned version oracle documentation.",
+                );
+                match outcome {
+                    Ok(stamp) => json!({
+                        "accepted": true,
+                        "is_local": stamp.is_local(),
+                        "raw": candidate,
+                        "resource_error": false,
+                    }),
+                    Err(error) => json!({
+                        "accepted": false,
+                        "error": error.to_string(),
+                        "raw": candidate,
+                        "resource_error": error.to_string().contains("limit is 512"),
+                    }),
+                }
+            })
+            .collect(),
+    )
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -222,6 +299,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "model_paths": package.model_paths,
         "reverse": reverse,
         "schema": schema,
+        "version_oracle": version_oracle(),
     });
     println!("{}", serde_json::to_string(&output)?);
     Ok(())

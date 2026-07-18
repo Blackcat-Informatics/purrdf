@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from packaging.version import InvalidVersion, Version
 from pydantic import ValidationError
 
 
@@ -123,8 +124,33 @@ def _normalize_inferred_types(actual: Any, expected: Any) -> Any:
     return normalized
 
 
+def _assert_version_oracle(cases: list[dict[str, Any]]) -> None:
+    for case in cases:
+        raw = case["raw"]
+        try:
+            parsed = Version(raw)
+            packaging_accepts = True
+        except InvalidVersion:
+            parsed = None
+            packaging_accepts = False
+        over_limit = len(raw.encode("utf-8")) > 512
+        expected = packaging_accepts and not over_limit
+        if case["accepted"] != expected:
+            raise AssertionError(
+                f"PEP 440 differential mismatch for {raw!r}: "
+                f"packaging={packaging_accepts}, purrdf={case}"
+            )
+        if case["resource_error"] != (packaging_accepts and over_limit):
+            raise AssertionError(f"version resource classification mismatch: {case}")
+        if expected:
+            assert parsed is not None
+            if case["is_local"] != (parsed.local is not None):
+                raise AssertionError(f"local-version classification mismatch: {case}")
+
+
 def main() -> None:
     payload = _fixture()
+    _assert_version_oracle(payload["version_oracle"])
     reverse = payload["reverse"]
     if reverse["shape_ids"] != ["<https://example.org/Person>"]:
         raise AssertionError(f"unexpected reverse SHACL shapes: {reverse['shape_ids']!r}")
@@ -297,8 +323,9 @@ def main() -> None:
             sys.path.remove(str(root))
 
     print(
-        "Pydantic oracle: 6 live model schemas agree; validation/alias probes and "
-        "verified reverse SHACL import pass"
+        f"Pydantic oracle: {len(payload['version_oracle'])} PEP 440 differential cases "
+        "agree; 6 live model schemas, validation/alias probes, and verified reverse "
+        "SHACL import pass"
     )
 
 

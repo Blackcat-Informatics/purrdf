@@ -39,6 +39,12 @@ use crate::schema_catalog::{
 };
 use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_json_schema_from};
 
+mod config;
+
+pub use self::config::{
+    PydanticClassConfig, PydanticModuleConfig, PydanticPackageTopology, PydanticVersionStamp,
+};
+
 const MODELS_MODULE: &str = "models";
 const BASE_MODULE: &str = "_base";
 const BASE_CLASS: &str = "PurrdfBaseModel";
@@ -55,14 +61,17 @@ pub struct PydanticConfig {
     package_name: String,
     package_docstring: String,
     models_docstring: String,
+    topology: Option<PydanticPackageTopology>,
+    version_stamp: Option<PydanticVersionStamp>,
 }
 
 impl PydanticConfig {
     /// Validate and construct an emitter configuration.
     ///
     /// `package_name` may be a dotted Python package path. Every component must
-    /// be a non-keyword ASCII Python identifier. Both docstrings must contain
-    /// non-whitespace caller text.
+    /// be a portable, non-keyword ASCII Python identifier. Both docstrings must
+    /// contain non-whitespace caller text and all values must satisfy the fixed
+    /// generated-package resource ceilings.
     ///
     /// # Errors
     ///
@@ -76,32 +85,61 @@ impl PydanticConfig {
         let package_docstring = package_docstring.into();
         let models_docstring = models_docstring.into();
 
-        if package_name.is_empty()
-            || package_name
-                .split('.')
-                .any(|part| !is_python_identifier(part) || is_python_keyword(part))
-        {
-            return Err(PydanticError::new(format!(
-                "Pydantic package name {package_name:?} is not a dotted sequence of non-keyword \
-                 ASCII Python identifiers"
-            )));
-        }
-        if package_docstring.trim().is_empty() {
-            return Err(PydanticError::new(
-                "Pydantic package docstring must be caller-supplied non-whitespace text",
-            ));
-        }
-        if models_docstring.trim().is_empty() {
-            return Err(PydanticError::new(
-                "Pydantic models-module docstring must be caller-supplied non-whitespace text",
-            ));
-        }
+        config::validate_base_config(&package_name, &package_docstring, &models_docstring)?;
 
         Ok(Self {
             package_name,
             package_docstring,
             models_docstring,
+            topology: None,
+            version_stamp: None,
         })
+    }
+
+    /// Attach a validated, total caller-owned package topology.
+    ///
+    /// Exact coverage of the emitted schema's `$defs` is checked by
+    /// [`emit_pydantic`]. This builder validates package-relative artifact paths
+    /// and aggregate configuration resources immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PydanticError`] when the combined package configuration exceeds
+    /// a fixed resource or portable-path ceiling.
+    pub fn with_topology(
+        mut self,
+        topology: PydanticPackageTopology,
+    ) -> Result<Self, PydanticError> {
+        config::validate_full_config(
+            &self.package_name,
+            &self.package_docstring,
+            &self.models_docstring,
+            Some(&topology),
+            self.version_stamp.as_ref(),
+        )?;
+        self.topology = Some(topology);
+        Ok(self)
+    }
+
+    /// Attach a caller-owned PEP 440 version source.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PydanticError`] when the combined package configuration exceeds
+    /// a fixed resource or portable-path ceiling.
+    pub fn with_version_stamp(
+        mut self,
+        version_stamp: PydanticVersionStamp,
+    ) -> Result<Self, PydanticError> {
+        config::validate_full_config(
+            &self.package_name,
+            &self.package_docstring,
+            &self.models_docstring,
+            self.topology.as_ref(),
+            Some(&version_stamp),
+        )?;
+        self.version_stamp = Some(version_stamp);
+        Ok(self)
     }
 
     /// The dotted Python package name.
@@ -120,6 +158,18 @@ impl PydanticConfig {
     #[must_use]
     pub fn models_docstring(&self) -> &str {
         &self.models_docstring
+    }
+
+    /// Caller-owned routed package topology, when configured.
+    #[must_use]
+    pub const fn topology(&self) -> Option<&PydanticPackageTopology> {
+        self.topology.as_ref()
+    }
+
+    /// Caller-owned package version source, when configured.
+    #[must_use]
+    pub const fn version_stamp(&self) -> Option<&PydanticVersionStamp> {
+        self.version_stamp.as_ref()
     }
 }
 
