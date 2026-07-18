@@ -540,8 +540,8 @@ impl SssomDiagnostic {
 /// The `#`-prefixed header (scalars + the nested `curie_map:` block) is parsed
 /// bespoke; the TSV body is parsed with the `csv` crate (tab delimiter, flexible
 /// column counts, by-name access). Unknown header scalars and unknown columns are
-/// preserved verbatim. Trailing `# #…` provenance comments after the TSV header
-/// row are ignored.
+/// preserved verbatim. Unambiguous `# #…` provenance in the leading envelope
+/// and comments in the trailing envelope are retained as typed set comments.
 ///
 /// Returns `Err(RdfDiagnostic)` only on structurally unparsable input (no TSV
 /// column-header row, a malformed `# key` line, or a body the TSV reader rejects):
@@ -561,7 +561,17 @@ pub fn parse_tsv(text: &str) -> Result<SssomMappingSet, RdfDiagnostic> {
         ));
     };
 
-    let meta = parse_header(&lines[..header_idx])?;
+    let (meta, mut set_comments) = parse_header(&lines[..header_idx])?;
+
+    // Only the final comment suffix is a trailing document envelope. Comments
+    // interleaved between mappings remain non-row annotations and are skipped,
+    // preserving the existing row-diagnostic line mapping without incorrectly
+    // moving them to the end during a subsequent serialization.
+    let table_and_suffix = &lines[header_idx..];
+    let suffix_start = table_and_suffix
+        .iter()
+        .rposition(|line| !line.starts_with('#') && !line.trim().is_empty())
+        .map_or(table_and_suffix.len(), |offset| offset + 1);
 
     // The body is the column-header row plus the data rows. `#` provenance
     // comments (PurRDF emits its trailer block right after the column header when
@@ -571,8 +581,26 @@ pub fn parse_tsv(text: &str) -> Result<SssomMappingSet, RdfDiagnostic> {
     // between data rows (passing a flat offset shifted every later row's line).
     let mut body = String::new();
     let mut line_numbers: Vec<u32> = Vec::new();
-    for (offset, line) in lines[header_idx..].iter().enumerate() {
-        if line.starts_with('#') || line.trim().is_empty() {
+    for (offset, line) in table_and_suffix.iter().enumerate() {
+        if line.starts_with('#') {
+            if offset >= suffix_start {
+                let line_no = (header_idx + offset + 1) as u32;
+                let comment = SssomSetComment::from_raw(
+                    (*line).to_owned(),
+                    SssomCommentPlacement::AfterTable,
+                )
+                .map_err(|error| {
+                    RdfDiagnostic::error(
+                        "sssom-tsv-parse",
+                        format!("invalid trailing SSSOM set comment: {error}"),
+                    )
+                    .with_location(RdfLocation::default().with_line(line_no))
+                })?;
+                set_comments.push(comment);
+            }
+            continue;
+        }
+        if line.trim().is_empty() {
             continue;
         }
         line_numbers.push((header_idx + offset + 1) as u32);
@@ -580,13 +608,19 @@ pub fn parse_tsv(text: &str) -> Result<SssomMappingSet, RdfDiagnostic> {
         body.push('\n');
     }
 
-    let mappings = parse_body(&body, &line_numbers)?;
-    Ok(SssomMappingSet::new(meta, mappings))
+    let (column_layout, mappings) = parse_body(&body, &line_numbers)?;
+    Ok(SssomMappingSet {
+        meta,
+        mappings,
+        column_layout,
+        set_comments,
+    })
 }
 
-/// Parse the `#`-prefixed metadata header lines into an [`SssomMeta`].
-fn parse_header(lines: &[&str]) -> Result<SssomMeta, RdfDiagnostic> {
+/// Parse leading metadata and unambiguous provenance comments.
+fn parse_header(lines: &[&str]) -> Result<(SssomMeta, Vec<SssomSetComment>), RdfDiagnostic> {
     let mut meta = SssomMeta::default();
+    let mut set_comments = Vec::new();
     let mut in_curie_map = false;
 
     for (offset, raw) in lines.iter().enumerate() {
@@ -596,13 +630,20 @@ fn parse_header(lines: &[&str]) -> Result<SssomMeta, RdfDiagnostic> {
         if body.trim().is_empty() {
             continue;
         }
-        // A `# #…` line is a trailer/provenance comment (the second '#' makes it
-        // YAML-invisible). PurRDF emits these
-        // after the curie_map block but still inside the leading `#` region; they
-        // are never header scalars or curie entries, so skip them outright (they
-        // do NOT close an open curie_map block — more curie entries can follow in
-        // principle, though PurRDF always writes the trailer last).
+        // A `# #…` line is unambiguous set provenance: the second marker keeps it
+        // distinct from a YAML scalar. It does not close an open curie_map block,
+        // so further indented entries remain valid.
         if body.trim_start().starts_with('#') {
+            let comment =
+                SssomSetComment::from_raw((*raw).to_owned(), SssomCommentPlacement::BeforeTable)
+                    .map_err(|error| {
+                        RdfDiagnostic::error(
+                            "sssom-tsv-parse",
+                            format!("invalid leading SSSOM set comment: {error}"),
+                        )
+                        .with_location(RdfLocation::default().with_line(line_no))
+                    })?;
+            set_comments.push(comment);
             continue;
         }
 
@@ -663,7 +704,7 @@ fn parse_header(lines: &[&str]) -> Result<SssomMeta, RdfDiagnostic> {
             }
         }
     }
-    Ok(meta)
+    Ok((meta, set_comments))
 }
 
 /// Split a `key: value` scalar at the first `": "` (or a trailing `":"`).
@@ -689,7 +730,10 @@ fn split_key_value(scalar: &str) -> Option<(&str, &str)> {
 /// order: `line_numbers[0]` is the column-header row, and data row `i` is at
 /// `line_numbers[i + 1]`. This keeps diagnostics anchored to the true source
 /// position regardless of how many `#` comment lines were filtered out upstream.
-fn parse_body(body: &str, line_numbers: &[u32]) -> Result<Vec<SssomMapping>, RdfDiagnostic> {
+fn parse_body(
+    body: &str,
+    line_numbers: &[u32],
+) -> Result<(SssomColumnLayout, Vec<SssomMapping>), RdfDiagnostic> {
     if body.trim().is_empty() {
         return Err(RdfDiagnostic::error(
             "sssom-tsv-parse",
@@ -715,6 +759,13 @@ fn parse_body(body: &str, line_numbers: &[u32]) -> Result<Vec<SssomMapping>, Rdf
         .iter()
         .map(str::to_owned)
         .collect();
+    let column_layout = SssomColumnLayout::new(columns.clone()).map_err(|error| {
+        RdfDiagnostic::error(
+            "sssom-tsv-parse",
+            format!("invalid TSV column declaration: {error}"),
+        )
+        .with_location(RdfLocation::default().with_line(header_line))
+    })?;
 
     let mut mappings = Vec::new();
     for (row_index, record) in reader.records().enumerate() {
@@ -730,7 +781,7 @@ fn parse_body(body: &str, line_numbers: &[u32]) -> Result<Vec<SssomMapping>, Rdf
         })?;
         mappings.push(parse_row(&columns, &record, line_no)?);
     }
-    Ok(mappings)
+    Ok((column_layout, mappings))
 }
 
 /// Map one TSV record onto a [`SssomMapping`] by column name.
@@ -1310,6 +1361,16 @@ ex:A\tskos:exactMatch\tex:B\tsemapv:ManualMappingCuration\t1:1
                 .map(String::as_str),
             Some("1:1")
         );
+        assert_eq!(
+            set.column_layout.columns(),
+            &[
+                "subject_id",
+                "predicate_id",
+                "object_id",
+                "mapping_justification",
+                "mapping_cardinality"
+            ]
+        );
     }
 
     #[test]
@@ -1372,10 +1433,95 @@ ex:C\tskos:exactMatch\tex:D\tsemapv:ManualMappingCuration\tNOTNUM
     }
 
     #[test]
-    fn parse_ignores_trailer_comments() {
-        let doc = format!("{CLEAN}# # REFUSED ex:Bar — out of scope\n# # provenance note\n");
+    fn parse_retains_exact_after_table_comments() {
+        let doc = format!(
+            "{CLEAN}#\n# ordinary trailer\n# # REFUSED ex:Bar —  exact spacing  \n# # provenance note\n"
+        );
         let set = parse_tsv(&doc).expect("parse");
         assert_eq!(set.mappings.len(), 1, "trailer comments are not mappings");
+        assert_eq!(set.set_comments.len(), 4);
+        assert_eq!(set.set_comments[0].raw_line(), "#");
+        assert_eq!(set.set_comments[0].kind(), SssomCommentKind::Ordinary);
+        assert_eq!(set.set_comments[1].raw_line(), "# ordinary trailer");
+        assert_eq!(
+            set.set_comments[2].raw_line(),
+            "# # REFUSED ex:Bar —  exact spacing  "
+        );
+        assert_eq!(set.set_comments[2].kind(), SssomCommentKind::Provenance);
+        assert!(
+            set.set_comments
+                .iter()
+                .all(|comment| comment.placement() == SssomCommentPlacement::AfterTable)
+        );
+    }
+
+    #[test]
+    fn parse_distinguishes_metadata_from_before_table_provenance() {
+        let doc = "\
+# mapping_set_id: https://example.org/x
+# # generated by deterministic curation
+# curie_map:
+#   ex: https://example.org/vocab/
+# # retained without closing curie_map
+#   skos: http://www.w3.org/2004/02/skos/core#
+subject_id\tpredicate_id\tobject_id
+";
+        let set = parse_tsv(doc).expect("parse");
+        assert_eq!(
+            set.meta.mapping_set_id.as_deref(),
+            Some("https://example.org/x")
+        );
+        assert_eq!(
+            set.meta.curie_map.get("skos").map(String::as_str),
+            Some("http://www.w3.org/2004/02/skos/core#")
+        );
+        assert_eq!(set.set_comments.len(), 2);
+        assert_eq!(
+            set.set_comments[0].raw_line(),
+            "# # generated by deterministic curation"
+        );
+        assert_eq!(
+            set.set_comments[1].raw_line(),
+            "# # retained without closing curie_map"
+        );
+        assert!(
+            set.set_comments
+                .iter()
+                .all(|comment| comment.placement() == SssomCommentPlacement::BeforeTable)
+        );
+    }
+
+    #[test]
+    fn parse_retains_zero_row_layout_and_trailing_envelope() {
+        let doc = "\
+# mapping_set_id: https://example.org/empty
+object_id\tx_extension\tsubject_id
+# empty mapping-set note
+";
+        let set = parse_tsv(doc).expect("parse");
+        assert!(set.mappings.is_empty());
+        assert_eq!(
+            set.column_layout.columns(),
+            &["object_id", "x_extension", "subject_id"]
+        );
+        assert_eq!(set.set_comments.len(), 1);
+        assert_eq!(set.set_comments[0].raw_line(), "# empty mapping-set note");
+        assert_eq!(
+            set.set_comments[0].placement(),
+            SssomCommentPlacement::AfterTable
+        );
+    }
+
+    #[test]
+    fn parse_rejects_duplicate_columns_at_header_line() {
+        let doc = "\
+# mapping_set_id: https://example.org/x
+subject_id\tsubject_id\tobject_id
+";
+        let err = parse_tsv(doc).expect_err("duplicate columns must fail");
+        assert_eq!(err.code, "sssom-tsv-parse");
+        assert!(err.message.contains("duplicate"), "{}", err.message);
+        assert_eq!(err.location.as_ref().and_then(|loc| loc.line), Some(2));
     }
 
     #[test]
