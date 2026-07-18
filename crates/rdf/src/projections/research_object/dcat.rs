@@ -11,8 +11,6 @@ use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
-use crate::native_codecs::jsonld::parse_jsonld;
-
 use super::super::{ProjectionError, ProjectionPackage, stable_identifier, validate_absolute_iri};
 use super::json::{
     ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json, ensure_sound,
@@ -730,85 +728,25 @@ fn graph_id(value: &Value) -> &str {
 }
 
 fn validate_semantic_jsonld(value: &Value, config: &DcatConfig) -> Result<(), ProjectionError> {
-    let expanded = expand_jsonld(value, config.context())?;
+    let mut expanded = value.clone();
+    expanded
+        .as_object_mut()
+        .expect("DCAT writer constructs an object document")
+        .remove("@context");
     let bytes = canonical_json(
         &expanded,
         config.common().limits(),
         "expanded DCAT semantic JSON-LD",
     )?;
-    parse_jsonld(&bytes).map_err(|error| {
+    crate::native_codecs::jsonld::parse_jsonld_with_context(
+        &bytes,
+        config.context().compiled_context(),
+    )
+    .map_err(|error| {
         ProjectionError::integrity(format!("validate DCAT JSON-LD semantics: {error}"))
             .at_path(DCAT_ARTIFACT)
     })?;
     Ok(())
-}
-
-fn expand_jsonld(value: &Value, context: &OfflineJsonLdContext) -> Result<Value, ProjectionError> {
-    match value {
-        Value::Array(values) => values
-            .iter()
-            .map(|value| expand_jsonld(value, context))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Value::Array),
-        Value::Object(object) => {
-            let mut expanded = Map::new();
-            for (key, value) in object {
-                if key == "@context" {
-                    expanded.insert(key.clone(), Value::Object(Map::new()));
-                    continue;
-                }
-                let expanded_key = if key.starts_with('@') {
-                    key.clone()
-                } else if let Some(iri) = context.expand(key) {
-                    iri.to_owned()
-                } else if validate_absolute_iri(key, "DCAT JSON-LD property").is_ok() {
-                    key.clone()
-                } else {
-                    return Err(ProjectionError::integrity(format!(
-                        "DCAT compact term `{key}` has no offline expansion"
-                    ))
-                    .at_path(DCAT_ARTIFACT));
-                };
-                let expanded_value = if key == "@type" {
-                    expand_type_value(value, context)?
-                } else {
-                    expand_jsonld(value, context)?
-                };
-                expanded.insert(expanded_key, expanded_value);
-            }
-            Ok(Value::Object(expanded))
-        }
-        _ => Ok(value.clone()),
-    }
-}
-
-fn expand_type_value(
-    value: &Value,
-    context: &OfflineJsonLdContext,
-) -> Result<Value, ProjectionError> {
-    match value {
-        Value::String(value) => {
-            if let Some(iri) = context.expand(value) {
-                Ok(Value::String(iri.to_owned()))
-            } else if validate_absolute_iri(value, "DCAT JSON-LD type").is_ok() {
-                Ok(Value::String(value.clone()))
-            } else {
-                Err(ProjectionError::integrity(format!(
-                    "DCAT type `{value}` has no offline expansion"
-                ))
-                .at_path(DCAT_ARTIFACT))
-            }
-        }
-        Value::Array(values) => values
-            .iter()
-            .map(|value| expand_type_value(value, context))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Value::Array),
-        _ => Err(
-            ProjectionError::integrity("DCAT @type must be a string or string array")
-                .at_path(DCAT_ARTIFACT),
-        ),
-    }
 }
 
 struct RawNode {
