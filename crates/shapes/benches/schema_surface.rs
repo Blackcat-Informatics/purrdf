@@ -3,11 +3,9 @@
 
 //! Report-only scale instrument for ontology-aware schema compilation.
 
-#![allow(missing_docs)]
-
 use std::fmt::Write as _;
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, black_box, criterion_main};
 use purrdf_shapes::json_schema::{
     Namespaces, SchemaCompileRequest, SchemaSurfaceMode, compile_schema,
 };
@@ -134,5 +132,10 @@ fn bench_schema_surface(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_schema_surface);
+/// Run the schema-surface benchmark group.
+pub fn benches() {
+    let mut criterion = Criterion::default().configure_from_args();
+    bench_schema_surface(&mut criterion);
+}
+
 criterion_main!(benches);
