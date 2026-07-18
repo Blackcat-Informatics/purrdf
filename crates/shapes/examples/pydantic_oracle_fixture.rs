@@ -9,8 +9,9 @@ use std::error::Error;
 use purrdf::loss::{LossLedger, check_ledger_sound};
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
 use purrdf_shapes::{
-    PYDANTIC_DIALECT, PydanticConfig, PydanticPackage, PydanticVersionStamp, SchemaDatatypeMap,
-    SchemaImportConfig, emit_pydantic, import_pydantic_package,
+    PYDANTIC_DIALECT, PydanticClassConfig, PydanticConfig, PydanticModuleConfig, PydanticPackage,
+    PydanticPackageTopology, PydanticVersionStamp, SchemaDatatypeMap, SchemaImportConfig,
+    emit_pydantic, import_pydantic_package,
 };
 use serde_json::{Value, json};
 
@@ -137,6 +138,67 @@ fn version_oracle() -> Value {
     )
 }
 
+fn routed_config(include_empty: bool) -> Result<PydanticConfig, Box<dyn Error>> {
+    let mut routes = vec![
+        ("Color", "catalog.enums"),
+        ("CycleLeft", "cycles.left"),
+        ("CycleRight", "cycles.right"),
+        ("Person", "domain.people"),
+        ("PersonAlias", "domain.people"),
+        ("State", "catalog.enums"),
+        ("path/with~token", "common.paths"),
+    ];
+    if include_empty {
+        routes.push(("Empty", "catalog.enums"));
+    }
+    let classes = routes
+        .into_iter()
+        .map(|(key, module)| {
+            PydanticClassConfig::new(
+                key,
+                module,
+                format!("Caller documentation for {key}."),
+                BTreeMap::from([
+                    (
+                        "definitionDigest".to_owned(),
+                        json!(format!("sha256:oracle-{key}")),
+                    ),
+                    (
+                        "docs".to_owned(),
+                        json!(format!("https://example.org/docs/{key}")),
+                    ),
+                ]),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let topology = PydanticPackageTopology::new(
+        [
+            PydanticModuleConfig::new(
+                "catalog.enums",
+                "Caller-owned enumeration module documentation.",
+            )?,
+            PydanticModuleConfig::new("common.paths", "Caller-owned path module documentation.")?,
+            PydanticModuleConfig::new("cycles.left", "Caller-owned left-cycle documentation.")?,
+            PydanticModuleConfig::new("cycles.right", "Caller-owned right-cycle documentation.")?,
+            PydanticModuleConfig::new(
+                "domain.people",
+                "Caller-owned people module documentation.",
+            )?,
+        ],
+        classes,
+    )?;
+    Ok(PydanticConfig::new(
+        "routed_oracle_models",
+        "Caller-owned routed oracle package documentation.",
+        "Caller-owned routed oracle support documentation.",
+    )?
+    .with_topology(topology)?
+    .with_version_stamp(PydanticVersionStamp::new(
+        "1.2.3+oracle.1",
+        "Caller-owned routed oracle version documentation.",
+    )?)?)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -236,12 +298,42 @@ fn main() -> Result<(), Box<dyn Error>> {
         openapi_json: "{}\n".to_owned(),
         losses: LossLedger::new(),
     };
+    let mut routed_schema = schema.clone();
+    let routed_definitions = routed_schema["$defs"]
+        .as_object_mut()
+        .ok_or("oracle schema has no $defs")?;
+    routed_definitions.insert(
+        "CycleLeft".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "ex:right": { "$ref": "#/$defs/CycleRight" }
+            }
+        }),
+    );
+    routed_definitions.insert(
+        "CycleRight".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "ex:left": { "$ref": "#/$defs/CycleLeft" }
+            }
+        }),
+    );
+    let routed_compiled = CompiledSchema {
+        schema_json: format!("{}\n", serde_json::to_string_pretty(&routed_schema)?),
+        openapi_json: "{}\n".to_owned(),
+        losses: LossLedger::new(),
+    };
     let config = PydanticConfig::new(
         "oracle_models",
         "Caller-owned oracle package documentation.",
         "Caller-owned oracle model documentation.",
     )?;
     let package = emit_pydantic(&compiled, &config)?;
+    let routed_package = emit_pydantic(&routed_compiled, &routed_config(true)?)?;
     let mut reverse_schema = schema.clone();
     reverse_schema["$defs"]
         .as_object_mut()
@@ -256,6 +348,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         &config,
     )?;
     let reverse = reverse_evidence(&reverse_package, &import_config()?)?;
+    let mut routed_reverse_schema = routed_schema.clone();
+    routed_reverse_schema["$defs"]
+        .as_object_mut()
+        .ok_or("routed oracle schema has no $defs")?
+        .remove("Empty");
+    let routed_reverse_package = emit_pydantic(
+        &CompiledSchema {
+            schema_json: format!(
+                "{}\n",
+                serde_json::to_string_pretty(&routed_reverse_schema)?
+            ),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        },
+        &routed_config(false)?,
+    )?;
+    let routed_reverse = reverse_evidence(&routed_reverse_package, &import_config()?)?;
     let observed_losses: BTreeSet<(&str, &str)> = package
         .losses
         .entries()
@@ -294,10 +403,36 @@ fn main() -> Result<(), Box<dyn Error>> {
         .into_iter()
         .map(|(path, bytes)| String::from_utf8(bytes).map(|text| (path, text)))
         .collect::<Result<_, _>>()?;
+    let routed_artifacts: BTreeMap<String, String> = routed_package
+        .artifacts
+        .into_iter()
+        .map(|(path, bytes)| String::from_utf8(bytes).map(|text| (path, text)))
+        .collect::<Result<_, _>>()?;
+    let routed_metadata = routed_package
+        .model_paths
+        .keys()
+        .map(|key| {
+            (
+                key.clone(),
+                json!({
+                    "definitionDigest": format!("sha256:oracle-{key}"),
+                    "docs": format!("https://example.org/docs/{key}"),
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let output = json!({
         "artifacts": artifacts,
         "model_paths": package.model_paths,
         "reverse": reverse,
+        "routed": {
+            "artifacts": routed_artifacts,
+            "metadata": routed_metadata,
+            "model_paths": routed_package.model_paths,
+            "reverse": routed_reverse,
+            "schema": routed_schema,
+            "version": "1.2.3+oracle.1",
+        },
         "schema": schema,
         "version_oracle": version_oracle(),
     });
