@@ -17,6 +17,7 @@ mod carrier;
 /// Compiled JSON-LD 1.1 contexts, immutable offline registries, and configured
 /// serialization options shared by every JSON-LD/YAML-LD surface.
 pub mod context;
+mod derived;
 mod expand;
 
 pub use context::{
@@ -230,6 +231,21 @@ pub fn serialize_dataset_to_jsonld_with_options(
     serialize_ser_graph_with_options(&graph, options)
 }
 
+/// Derive a deterministic, vocabulary-neutral JSON-LD context from dataset IRI slots.
+///
+/// Only reversible `#`, `/`, and URN-style `:` namespace boundaries that reduce total
+/// encoded bytes are retained. Aliases are assigned as `ns0`, `ns1`, … from sorted
+/// namespace IRIs; no `@vocab` mapping or caller vocabulary is invented.
+pub fn derive_jsonld_context(dataset: &RdfDataset) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+    )?;
+    derived::derive_context(&build_carrier(&graph, true)?)
+}
+
 /// Serialize an already-materialized [`SerGraph`] to a deterministic JSON-LD-star
 /// document.
 fn serialize_ser_graph(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
@@ -245,10 +261,10 @@ fn serialize_ser_graph_with_options(
     match options.mode() {
         JsonLdSerializeMode::Expanded => serialize_carrier_expanded(&carrier),
         JsonLdSerializeMode::Context(context) => serialize_carrier_compacted(&carrier, context),
-        JsonLdSerializeMode::Derived => Err(RdfDiagnostic::error(
-            "jsonld-derived-unavailable",
-            "derived JSON-LD context selection requires dataset derivation",
-        )),
+        JsonLdSerializeMode::Derived => {
+            let context = derived::derive_context(&carrier)?;
+            serialize_carrier_compacted(&carrier, &context)
+        }
     }
 }
 

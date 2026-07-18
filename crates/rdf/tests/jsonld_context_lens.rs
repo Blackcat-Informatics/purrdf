@@ -9,8 +9,8 @@ use std::fmt::Write as _;
 
 use proptest::prelude::*;
 use purrdf_rdf::native_codecs::jsonld::{
-    CompiledJsonLdContext, JsonLdContextRegistry, JsonLdSerializeOptions, parse_jsonld,
-    parse_jsonld_with_context, serialize_dataset_to_jsonld_with_options,
+    CompiledJsonLdContext, JsonLdContextRegistry, JsonLdSerializeOptions, derive_jsonld_context,
+    parse_jsonld, parse_jsonld_with_context, serialize_dataset_to_jsonld_with_options,
 };
 use purrdf_rdf::{
     RdfDatasetBuilder, RdfLiteral, canonical_flat_nquads, datasets_isomorphic, parse_dataset,
@@ -72,6 +72,42 @@ fn aliases_base_vocab_and_coercions_compact_and_expand_losslessly() {
         canonical_flat_nquads(&dataset).expect("canonical source"),
         canonical_flat_nquads(&reparsed).expect("canonical reparsed")
     );
+}
+
+#[test]
+fn derived_mode_uses_only_sorted_dataset_namespaces_and_round_trips() {
+    let mut source = String::new();
+    for index in 0..32 {
+        writeln!(
+            source,
+            "<https://example.org/resource/s{index}> <https://example.org/vocab/p{index}> <https://example.org/resource/o{index}> ."
+        )
+        .expect("write derived fixture");
+    }
+    writeln!(
+        source,
+        "_:blank <https://example.org/vocab/label> \"blank\" ."
+    )
+    .expect("write blank-node row");
+    let dataset = parse_nquads(&source);
+    let context = derive_jsonld_context(&dataset).expect("derive context");
+    assert_eq!(context.vocab_mapping(), None);
+    assert_eq!(
+        context.canonical_context()["ns0"]["@id"],
+        "https://example.org/resource/"
+    );
+    assert_eq!(
+        context.canonical_context()["ns1"]["@id"],
+        "https://example.org/vocab/"
+    );
+    let compacted =
+        serialize_dataset_to_jsonld_with_options(&dataset, &JsonLdSerializeOptions::derived())
+            .expect("serialize derived context");
+    assert!(compacted.contains("ns0:s0"));
+    assert!(compacted.contains("ns1:p0"));
+    assert!(!compacted.contains("@vocab"));
+    let reparsed = parse_jsonld(compacted.as_bytes()).expect("parse derived output");
+    assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 
 #[test]
