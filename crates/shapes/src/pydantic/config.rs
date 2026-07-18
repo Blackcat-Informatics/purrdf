@@ -9,7 +9,8 @@ use serde_json::Value;
 
 use super::{PydanticError, is_python_identifier, is_python_keyword};
 
-const MAX_CLASSES: usize = 65_536;
+pub(super) const MAX_DEFINITIONS: usize = 65_536;
+const MAX_CLASSES: usize = MAX_DEFINITIONS;
 const MAX_MODULES: usize = 65_536;
 const MAX_DOTTED_PATH_BYTES: usize = 255;
 const MAX_DOTTED_PATH_COMPONENTS: usize = 32;
@@ -20,6 +21,13 @@ const MAX_CONFIG_BYTES: usize = 16 * 1024 * 1024;
 const MAX_METADATA_DEPTH: usize = 128;
 const MAX_METADATA_NODES: usize = 1_000_000;
 const MAX_ARTIFACTS: usize = 131_072;
+pub(super) const MAX_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
+pub(super) const MAX_SCHEMA_DEPTH: usize = 128;
+pub(super) const MAX_SCHEMA_NODES: usize = 1_000_000;
+pub(super) const MAX_SCHEMA_STRING_BYTES: usize = 16 * 1024 * 1024;
+pub(super) const MAX_ARTIFACT_BYTES: usize = 256 * 1024 * 1024;
+pub(super) const MAX_OUTPUT_BYTES: usize = 512 * 1024 * 1024;
+pub(super) const MAX_OUTPUT_ARTIFACTS: usize = MAX_ARTIFACTS;
 
 const GENERATED_ROOT_MODULES: &[&str] = &["_base", "_schema", "__about__", "__init__"];
 
@@ -560,12 +568,6 @@ fn validate_relative_artifacts(
             insert_artifact(format!("{}.py", parts.join("/")), &mut paths, &mut folded)?;
         }
     }
-    if paths.len() > MAX_ARTIFACTS {
-        return Err(PydanticError::new(format!(
-            "Pydantic package requires {} artifacts; limit is {MAX_ARTIFACTS}",
-            paths.len()
-        )));
-    }
     Ok(paths)
 }
 
@@ -576,6 +578,11 @@ fn insert_artifact(
 ) -> Result<(), PydanticError> {
     if paths.contains(&path) {
         return Ok(());
+    }
+    if paths.len() == MAX_ARTIFACTS {
+        return Err(PydanticError::new(format!(
+            "Pydantic package exceeds the {MAX_ARTIFACTS}-artifact limit"
+        )));
     }
     if path.len() > MAX_ARTIFACT_PATH_BYTES {
         return Err(PydanticError::new(format!(
@@ -961,6 +968,24 @@ mod tests {
         .expect("shared intermediate package");
         validate_relative_artifacts(Some(topology.modules()), false)
             .expect("shared initializer is emitted once");
+    }
+
+    #[test]
+    fn artifact_count_fails_before_inserting_the_first_one_over() {
+        let mut paths = (0..MAX_ARTIFACTS)
+            .map(|index| format!("path-{index}"))
+            .collect::<BTreeSet<_>>();
+        let mut folded = paths
+            .iter()
+            .map(|path| (path.to_ascii_lowercase(), path.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let existing = paths.first().expect("full path set has an entry").clone();
+        insert_artifact(existing, &mut paths, &mut folded).expect("duplicate is not a new file");
+        let error = insert_artifact("one-over".to_owned(), &mut paths, &mut folded)
+            .expect_err("new artifact beyond the ceiling");
+        assert!(error.to_string().contains("131072-artifact limit"));
+        assert_eq!(paths.len(), MAX_ARTIFACTS);
+        assert!(!paths.contains("one-over"));
     }
 
     #[test]

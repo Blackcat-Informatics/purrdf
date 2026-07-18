@@ -41,8 +41,40 @@ pub(crate) struct CompiledSchemaCatalog {
     document: Value,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SchemaCatalogLimits {
+    pub(crate) input_bytes: usize,
+    pub(crate) definitions: usize,
+    pub(crate) depth: usize,
+    pub(crate) nodes: usize,
+    pub(crate) string_bytes: usize,
+}
+
 impl CompiledSchemaCatalog {
     pub(crate) fn parse(compiled: &CompiledSchema) -> Result<Self, SchemaCatalogError> {
+        Self::parse_inner(compiled, None)
+    }
+
+    pub(crate) fn parse_with_limits(
+        compiled: &CompiledSchema,
+        limits: SchemaCatalogLimits,
+    ) -> Result<Self, SchemaCatalogError> {
+        Self::parse_inner(compiled, Some(limits))
+    }
+
+    fn parse_inner(
+        compiled: &CompiledSchema,
+        limits: Option<SchemaCatalogLimits>,
+    ) -> Result<Self, SchemaCatalogError> {
+        if let Some(limits) = limits
+            && compiled.schema_json.len() > limits.input_bytes
+        {
+            return Err(SchemaCatalogError::new(format!(
+                "CompiledSchema.schema_json uses {} bytes; limit is {}",
+                compiled.schema_json.len(),
+                limits.input_bytes
+            )));
+        }
         let document: Value = serde_json::from_str(&compiled.schema_json).map_err(|error| {
             SchemaCatalogError::new(format!(
                 "CompiledSchema.schema_json is not valid JSON: {error}"
@@ -60,6 +92,10 @@ impl CompiledSchemaCatalog {
                 )
             })?;
 
+        if let Some(limits) = limits {
+            validate_document_limits(&document, definitions.len(), limits)?;
+        }
+
         for (key, definition) in definitions {
             validate_schema(definition, definitions, &definition_path(key))?;
         }
@@ -74,6 +110,65 @@ impl CompiledSchemaCatalog {
             .and_then(Value::as_object)
             .expect("a compiled schema catalog always has validated object-valued `$defs`")
     }
+}
+
+fn validate_document_limits(
+    document: &Value,
+    definitions: usize,
+    limits: SchemaCatalogLimits,
+) -> Result<(), SchemaCatalogError> {
+    if definitions > limits.definitions {
+        return Err(SchemaCatalogError::new(format!(
+            "CompiledSchema contains {definitions} definitions; limit is {}",
+            limits.definitions
+        )));
+    }
+
+    let mut nodes = 0usize;
+    let mut stack = vec![(document, 0usize)];
+    while let Some((value, depth)) = stack.pop() {
+        if depth > limits.depth {
+            return Err(SchemaCatalogError::new(format!(
+                "CompiledSchema exceeds JSON nesting limit {}",
+                limits.depth
+            )));
+        }
+        nodes = nodes.checked_add(1).ok_or_else(|| {
+            SchemaCatalogError::new("CompiledSchema JSON node count exceeds usize")
+        })?;
+        if nodes > limits.nodes {
+            return Err(SchemaCatalogError::new(format!(
+                "CompiledSchema contains more than {} JSON nodes",
+                limits.nodes
+            )));
+        }
+        match value {
+            Value::String(text) if text.len() > limits.string_bytes => {
+                return Err(SchemaCatalogError::new(format!(
+                    "CompiledSchema contains a {}-byte string; limit is {}",
+                    text.len(),
+                    limits.string_bytes
+                )));
+            }
+            Value::Array(values) => {
+                stack.extend(values.iter().rev().map(|child| (child, depth + 1)));
+            }
+            Value::Object(object) => {
+                for (key, child) in object.iter().rev() {
+                    if key.len() > limits.string_bytes {
+                        return Err(SchemaCatalogError::new(format!(
+                            "CompiledSchema contains a {}-byte object key; limit is {}",
+                            key.len(),
+                            limits.string_bytes
+                        )));
+                    }
+                    stack.push((child, depth + 1));
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn definition_path(key: &str) -> String {
@@ -355,6 +450,45 @@ mod tests {
                     .contains("$id cannot rebase a closed generated package"),
                 "{error}"
             );
+        }
+    }
+
+    #[test]
+    fn bounded_catalog_accepts_limits_and_rejects_each_one_over() {
+        let fixture = compiled(&json!({ "$defs": { "A": { "description": "xy" } } }));
+        let accepted = SchemaCatalogLimits {
+            input_bytes: fixture.schema_json.len(),
+            definitions: 1,
+            depth: 3,
+            nodes: 4,
+            string_bytes: 11,
+        };
+        CompiledSchemaCatalog::parse_with_limits(&fixture, accepted).expect("exact boundaries");
+
+        for limits in [
+            SchemaCatalogLimits {
+                input_bytes: fixture.schema_json.len() - 1,
+                ..accepted
+            },
+            SchemaCatalogLimits {
+                definitions: 0,
+                ..accepted
+            },
+            SchemaCatalogLimits {
+                depth: 2,
+                ..accepted
+            },
+            SchemaCatalogLimits {
+                nodes: 3,
+                ..accepted
+            },
+            SchemaCatalogLimits {
+                string_bytes: 10,
+                ..accepted
+            },
+        ] {
+            CompiledSchemaCatalog::parse_with_limits(&fixture, limits)
+                .expect_err("one-over limit must fail");
         }
     }
 }

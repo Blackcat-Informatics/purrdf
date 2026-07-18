@@ -9,6 +9,16 @@
 //! are caller configuration; PurRDF neither mints vocabulary nor fabricates a
 //! downstream brand.
 //!
+//! With only [`PydanticConfig::new`], emission retains the byte-stable flat
+//! `models.py` layout. A caller may instead attach a total
+//! [`PydanticPackageTopology`] that routes every `$defs` entry to one portable
+//! dotted leaf module, supplies its class documentation and sorted JSON metadata,
+//! and optionally attach a [`PydanticVersionStamp`]. Routed packages share one
+//! schema table and runtime base, emit intermediate initializers, and resolve the
+//! complete cross-module reference graph through explicit symbol tables. Missing,
+//! stale, unused, colliding, or over-limit configuration fails before a package is
+//! returned; PurRDF never infers ownership or assigns semantics to metadata keys.
+//!
 //! Generated models use strict Pydantic scalar carriers, aliases matching the
 //! JSON property names, and a class-owned schema hook taken from the same `$defs`
 //! input. Consequently `model_json_schema(by_alias=True)`
@@ -34,16 +44,18 @@ use serde_json::{Map, Value};
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
-    CompiledSchemaCatalog, definition_path, pointer_escape, reference_key, schema_array_keywords,
-    schema_map_keywords, schema_single_keywords,
+    CompiledSchemaCatalog, SchemaCatalogLimits, definition_path, pointer_escape, reference_key,
+    schema_array_keywords, schema_map_keywords, schema_single_keywords,
 };
 use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_json_schema_from};
 
 mod config;
+mod linker;
 
 pub use self::config::{
     PydanticClassConfig, PydanticModuleConfig, PydanticPackageTopology, PydanticVersionStamp,
 };
+use self::linker::{LinkedHelper, LinkedModule, RoutedPackagePlan, relative_root_import};
 
 const MODELS_MODULE: &str = "models";
 const BASE_MODULE: &str = "_base";
@@ -174,6 +186,10 @@ impl PydanticConfig {
 }
 
 /// Deterministic generated Pydantic package and its runtime-projection losses.
+///
+/// Artifact paths are always package-relative and sorted. [`Self::model_paths`]
+/// is the authoritative source-definition-to-import map for both flat and routed
+/// layouts; consumers do not need to reproduce name or topology normalization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PydanticPackage {
     /// Fixed generated-package dialect.
@@ -186,6 +202,7 @@ pub struct PydanticPackage {
     /// enforced by Pydantic runtime annotations.
     pub losses: LossLedger,
     source_schema_json: String,
+    source_schema_fingerprint: u64,
     config: PydanticConfig,
 }
 
@@ -220,6 +237,90 @@ impl fmt::Display for PydanticError {
 
 impl Error for PydanticError {}
 
+struct ArtifactAccumulator {
+    artifacts: BTreeMap<String, Vec<u8>>,
+    total_bytes: usize,
+    limits: ArtifactLimits,
+}
+
+#[derive(Clone, Copy)]
+struct ArtifactLimits {
+    artifact_bytes: usize,
+    output_bytes: usize,
+    artifacts: usize,
+}
+
+impl ArtifactAccumulator {
+    fn new() -> Self {
+        Self::with_limits(ArtifactLimits {
+            artifact_bytes: config::MAX_ARTIFACT_BYTES,
+            output_bytes: config::MAX_OUTPUT_BYTES,
+            artifacts: config::MAX_OUTPUT_ARTIFACTS,
+        })
+    }
+
+    fn with_limits(limits: ArtifactLimits) -> Self {
+        Self {
+            artifacts: BTreeMap::new(),
+            total_bytes: 0,
+            limits,
+        }
+    }
+
+    fn insert(&mut self, path: String, bytes: Vec<u8>) -> Result<(), PydanticError> {
+        if bytes.len() > self.limits.artifact_bytes {
+            return Err(PydanticError::new(format!(
+                "Pydantic artifact {path:?} uses {} bytes; limit is {}",
+                bytes.len(),
+                self.limits.artifact_bytes
+            )));
+        }
+        let total_bytes = self.total_bytes.checked_add(bytes.len()).ok_or_else(|| {
+            PydanticError::new("Pydantic artifact bytes exceed the platform usize range")
+        })?;
+        if total_bytes > self.limits.output_bytes {
+            return Err(PydanticError::new(format!(
+                "Pydantic artifacts use {total_bytes} bytes; limit is {}",
+                self.limits.output_bytes
+            )));
+        }
+        if self.artifacts.len() == self.limits.artifacts {
+            return Err(PydanticError::new(format!(
+                "Pydantic package exceeds the {}-artifact limit",
+                self.limits.artifacts
+            )));
+        }
+        if self.artifacts.contains_key(&path) {
+            return Err(PydanticError::new(format!(
+                "Pydantic artifact path {path:?} was emitted more than once"
+            )));
+        }
+        self.artifacts.insert(path, bytes);
+        self.total_bytes = total_bytes;
+        Ok(())
+    }
+
+    fn finish(self) -> BTreeMap<String, Vec<u8>> {
+        self.artifacts
+    }
+
+    fn relative_paths(&self, package_path: &str) -> Result<BTreeSet<String>, PydanticError> {
+        let prefix = format!("{package_path}/");
+        self.artifacts
+            .keys()
+            .map(|path| {
+                path.strip_prefix(&prefix)
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        PydanticError::new(format!(
+                            "Pydantic artifact path {path:?} is outside package {package_path:?}"
+                        ))
+                    })
+            })
+            .collect()
+    }
+}
+
 /// Emit a deterministic, filesystem-free Pydantic v2 package from one compiled
 /// SHACL-derived JSON Schema.
 ///
@@ -230,36 +331,34 @@ impl Error for PydanticError {}
 ///
 /// Returns [`PydanticError`] when `schema_json` is malformed, `$defs` is absent
 /// or malformed, a reference is external/dangling, required/property declarations
-/// disagree, or two source names collide after Python identifier normalization.
+/// disagree, two source names collide after Python identifier normalization, a
+/// routed topology is not an exact total partition, or a fixed input/configuration/
+/// output resource ceiling is exceeded. The function returns no partial package.
 pub fn emit_pydantic(
     compiled: &CompiledSchema,
     config: &PydanticConfig,
 ) -> Result<PydanticPackage, PydanticError> {
-    let catalog = CompiledSchemaCatalog::parse(compiled)
-        .map_err(|error| PydanticError::new(error.to_string()))?;
+    let catalog = CompiledSchemaCatalog::parse_with_limits(
+        compiled,
+        SchemaCatalogLimits {
+            input_bytes: config::MAX_SCHEMA_BYTES,
+            definitions: config::MAX_DEFINITIONS,
+            depth: config::MAX_SCHEMA_DEPTH,
+            nodes: config::MAX_SCHEMA_NODES,
+            string_bytes: config::MAX_SCHEMA_STRING_BYTES,
+        },
+    )
+    .map_err(|error| PydanticError::new(error.to_string()))?;
     let defs = catalog.definitions();
 
-    let names = definition_names(defs)?;
+    let routed = config.topology().is_some();
+    let names = definition_names(defs, routed)?;
 
-    let mut renderer = Renderer::new(&names);
+    let mut renderer = Renderer::new(&names, routed);
     for (key, definition) in defs {
         renderer.audit_schema(definition, &definition_path(key));
     }
 
-    let mut definitions = Vec::with_capacity(defs.len());
-    let mut exports = Vec::with_capacity(defs.len());
-    let mut model_paths = BTreeMap::new();
-    for (key, definition) in defs {
-        let class_name = names
-            .get(key)
-            .expect("definition_names covers every $defs key");
-        definitions.push(renderer.render_definition(key, class_name, definition)?);
-        exports.push(class_name.clone());
-        model_paths.insert(
-            key.clone(),
-            format!("{}.{}.{}", config.package_name, MODELS_MODULE, class_name),
-        );
-    }
     let rewritten_defs = defs
         .iter()
         .map(|(key, definition)| {
@@ -273,34 +372,147 @@ pub fn emit_pydantic(
     let defs_literal = python_value(&Value::Object(rewritten_defs));
 
     let package_path = config.package_name.replace('.', "/");
-    let mut artifacts = BTreeMap::new();
-    artifacts.insert(
-        format!("{package_path}/{BASE_MODULE}.py"),
-        render_base(config.models_docstring()).into_bytes(),
-    );
-    artifacts.insert(
-        format!("{package_path}/{MODELS_MODULE}.py"),
-        renderer
-            .finish_models(
-                config.models_docstring(),
-                &defs_literal,
-                &definitions,
-                &exports,
+    let mut artifacts = ArtifactAccumulator::new();
+    let model_paths = if let Some(topology) = config.topology() {
+        let mut plan = RoutedPackagePlan::compile(
+            defs,
+            &names,
+            topology,
+            config.package_name(),
+            config.version_stamp().is_some(),
+        )?;
+        for (key, definition) in defs {
+            let class_name = names
+                .get(key)
+                .expect("definition_names covers every $defs key");
+            let class_config = topology
+                .classes()
+                .get(key)
+                .expect("the linker validated exact topology coverage");
+            let helper_start = renderer.helpers.len();
+            let source =
+                renderer.render_definition(key, class_name, definition, Some(class_config))?;
+            let helpers = renderer.helpers[helper_start..]
+                .iter()
+                .map(|(name, source)| LinkedHelper {
+                    name: name.clone(),
+                    source: source.clone(),
+                })
+                .collect();
+            let mut private_symbols = BTreeSet::new();
+            let is_record = definition.as_object().is_some_and(is_record_definition);
+            if !is_record
+                && definition
+                    .get("enum")
+                    .and_then(Value::as_array)
+                    .is_some_and(|values| values.iter().all(Value::is_string))
+            {
+                private_symbols.insert(format!("_{class_name}Value"));
+            }
+            if !is_record {
+                private_symbols.insert(format!("_{class_name}Root"));
+            }
+            plan.attach_definition(key, source, helpers, private_symbols)?;
+        }
+        plan.validate_complete()?;
+
+        artifacts.insert(
+            format!("{package_path}/{BASE_MODULE}.py"),
+            render_routed_base(config.models_docstring()).into_bytes(),
+        )?;
+        artifacts.insert(
+            format!("{package_path}/_schema.py"),
+            render_schema_module(config.models_docstring(), &defs_literal).into_bytes(),
+        )?;
+        for path in &plan.intermediate_packages {
+            artifacts.insert(format!("{package_path}/{path}"), Vec::new())?;
+        }
+        for module in plan.modules.values() {
+            artifacts.insert(
+                format!("{package_path}/{}", module.artifact_path),
+                render_routed_module(module).into_bytes(),
+            )?;
+        }
+        artifacts.insert(
+            format!("{package_path}/__init__.py"),
+            render_routed_init(
+                config.package_docstring(),
+                &plan,
+                config.version_stamp().is_some(),
             )
             .into_bytes(),
-    );
-    artifacts.insert(
-        format!("{package_path}/__init__.py"),
-        render_init(config.package_docstring(), &exports).into_bytes(),
-    );
-    artifacts.insert(format!("{package_path}/py.typed"), Vec::new());
+        )?;
+        if let Some(version) = config.version_stamp() {
+            artifacts.insert(
+                format!("{package_path}/__about__.py"),
+                render_about(version).into_bytes(),
+            )?;
+        }
+        artifacts.insert(format!("{package_path}/py.typed"), Vec::new())?;
+
+        let emitted_paths = artifacts.relative_paths(&package_path)?;
+        if emitted_paths != plan.artifact_paths {
+            return Err(PydanticError::new(format!(
+                "Pydantic routed artifact plan drifted: planned={:?}, emitted={emitted_paths:?}",
+                plan.artifact_paths
+            )));
+        }
+        plan.model_paths
+    } else {
+        let mut definitions = Vec::with_capacity(defs.len());
+        let mut exports = Vec::with_capacity(defs.len());
+        let mut model_paths = BTreeMap::new();
+        for (key, definition) in defs {
+            let class_name = names
+                .get(key)
+                .expect("definition_names covers every $defs key");
+            definitions.push(renderer.render_definition(key, class_name, definition, None)?);
+            exports.push(class_name.clone());
+            model_paths.insert(
+                key.clone(),
+                format!("{}.{}.{}", config.package_name, MODELS_MODULE, class_name),
+            );
+        }
+        artifacts.insert(
+            format!("{package_path}/{BASE_MODULE}.py"),
+            render_base(config.models_docstring()).into_bytes(),
+        )?;
+        artifacts.insert(
+            format!("{package_path}/{MODELS_MODULE}.py"),
+            renderer
+                .finish_models(
+                    config.models_docstring(),
+                    &defs_literal,
+                    &definitions,
+                    &exports,
+                )
+                .into_bytes(),
+        )?;
+        artifacts.insert(
+            format!("{package_path}/__init__.py"),
+            if config.version_stamp().is_some() {
+                render_versioned_init(config.package_docstring(), &exports).into_bytes()
+            } else {
+                render_init(config.package_docstring(), &exports).into_bytes()
+            },
+        )?;
+        if let Some(version) = config.version_stamp() {
+            artifacts.insert(
+                format!("{package_path}/__about__.py"),
+                render_about(version).into_bytes(),
+            )?;
+        }
+        artifacts.insert(format!("{package_path}/py.typed"), Vec::new())?;
+        model_paths
+    };
 
     Ok(PydanticPackage {
         dialect: PYDANTIC_DIALECT.to_owned(),
-        artifacts,
+        artifacts: artifacts.finish(),
         model_paths,
         losses: renderer.ledger,
         source_schema_json: compiled.schema_json.clone(),
+        source_schema_fingerprint: fnv1a(compiled.schema_json.as_bytes()),
         config: config.clone(),
     })
 }
@@ -327,6 +539,11 @@ pub fn import_pydantic_package(
             "Pydantic package dialect must be {PYDANTIC_DIALECT:?}, got {:?}",
             package.dialect
         )));
+    }
+    if fnv1a(package.source_schema_json.as_bytes()) != package.source_schema_fingerprint {
+        return Err(PydanticError::new(
+            "Pydantic package retained source schema differs from its emission fingerprint",
+        ));
     }
     {
         let retained = CompiledSchema {
@@ -355,12 +572,15 @@ pub fn import_pydantic_package(
         .map_err(|error| PydanticError::new(format!("Pydantic package import: {error}")))
 }
 
-fn definition_names(defs: &Map<String, Value>) -> Result<BTreeMap<String, String>, PydanticError> {
+fn definition_names(
+    defs: &Map<String, Value>,
+    routed: bool,
+) -> Result<BTreeMap<String, String>, PydanticError> {
     let mut names = BTreeMap::new();
     let mut reverse = BTreeMap::<String, String>::new();
     for key in defs.keys() {
         let name = python_type_name(key, "SchemaModel");
-        if reserved_type_names().contains(name.as_str()) {
+        if reserved_type_names().contains(name.as_str()) || routed && name == "TypeAlias" {
             return Err(PydanticError::new(format!(
                 "$defs key {key:?} normalizes to reserved generated/import name {name:?}"
             )));
@@ -377,18 +597,20 @@ fn definition_names(defs: &Map<String, Value>) -> Result<BTreeMap<String, String
 
 struct Renderer<'a> {
     names: &'a BTreeMap<String, String>,
+    routed: bool,
     ledger: LossLedger,
-    helpers: Vec<String>,
+    helpers: Vec<(String, String)>,
     helper_by_path: BTreeMap<String, String>,
     used_names: BTreeSet<String>,
 }
 
 impl<'a> Renderer<'a> {
-    fn new(names: &'a BTreeMap<String, String>) -> Self {
+    fn new(names: &'a BTreeMap<String, String>, routed: bool) -> Self {
         let mut used_names: BTreeSet<String> = names.values().cloned().collect();
         used_names.extend(reserved_type_names().into_iter().map(str::to_owned));
         Self {
             names,
+            routed,
             ledger: LossLedger::new(),
             helpers: Vec::new(),
             helper_by_path: BTreeMap::new(),
@@ -401,6 +623,7 @@ impl<'a> Renderer<'a> {
         key: &str,
         class_name: &str,
         definition: &Value,
+        class_config: Option<&PydanticClassConfig>,
     ) -> Result<String, PydanticError> {
         let path = format!("#/$defs/{}", pointer_escape(key));
         let rewritten = rewrite_references(definition, self.names)?;
@@ -409,10 +632,10 @@ impl<'a> Renderer<'a> {
         if let Some(object) = definition.as_object()
             && is_record_definition(object)
         {
-            return self.render_record(class_name, object, &path, &schema_literal);
+            return self.render_record(class_name, object, &path, &schema_literal, class_config);
         }
 
-        self.render_root(class_name, definition, &path, &schema_literal)
+        self.render_root(class_name, definition, &path, &schema_literal, class_config)
     }
 
     fn render_record(
@@ -421,6 +644,7 @@ impl<'a> Renderer<'a> {
         definition: &Map<String, Value>,
         path: &str,
         schema_literal: &str,
+        class_config: Option<&PydanticClassConfig>,
     ) -> Result<String, PydanticError> {
         let properties = properties(definition, path)?;
         let required = required_names(definition, properties, path)?;
@@ -452,7 +676,11 @@ impl<'a> Renderer<'a> {
             let runtime_type = self.resolve_type(schema, &property_path)?;
             let mut field_args = Vec::new();
             if !required.contains(property.as_str()) {
-                field_args.push("default=None".to_owned());
+                field_args.push(if self.routed {
+                    "default=cast(Any, None)".to_owned()
+                } else {
+                    "default=None".to_owned()
+                });
             }
             if let Some(description) = schema.get("description").and_then(Value::as_str) {
                 field_args.push(format!("description={}", python_string(description)));
@@ -467,15 +695,26 @@ impl<'a> Renderer<'a> {
         }
 
         let mut out = format!("class {class_name}({BASE_CLASS}):\n");
-        if let Some(description) = definition.get("description").and_then(Value::as_str) {
+        if let Some(class_config) = class_config {
+            writeln!(out, "    {}", python_string(class_config.docstring()))
+                .expect("writing generated Python to a String cannot fail");
+        } else if let Some(description) = definition.get("description").and_then(Value::as_str) {
             writeln!(out, "    {}", python_string(description))
                 .expect("writing generated Python to a String cannot fail");
         }
         out.push_str("    model_config = ConfigDict(\n");
         writeln!(out, "        extra=\"{extra}\",")
             .expect("writing generated Python to a String cannot fail");
+        if let Some(class_config) = class_config {
+            writeln!(
+                out,
+                "        json_schema_extra={},",
+                python_mapping(class_config.json_schema_extra())
+            )
+            .expect("writing generated Python to a String cannot fail");
+        }
         out.push_str("    )\n");
-        append_schema_surface(&mut out, schema_literal);
+        append_schema_surface(&mut out, schema_literal, self.routed);
         out.push('\n');
         if !fields.is_empty() {
             out.push_str(&fields);
@@ -490,6 +729,7 @@ impl<'a> Renderer<'a> {
         definition: &Value,
         path: &str,
         schema_literal: &str,
+        class_config: Option<&PydanticClassConfig>,
     ) -> Result<String, PydanticError> {
         let mut out = String::new();
         let root_type = if let Some(values) = definition.get("enum").and_then(Value::as_array)
@@ -506,17 +746,45 @@ impl<'a> Renderer<'a> {
             self.resolve_type(definition, path)?
         };
 
-        writeln!(
-            out,
-            "class {class_name}(RootModel[ForwardRef({})]):",
-            python_string(&root_type)
-        )
-        .expect("writing generated Python to a String cannot fail");
-        if let Some(description) = definition.get("description").and_then(Value::as_str) {
+        if self.routed {
+            let root_alias = format!("_{class_name}Root");
+            writeln!(out, "if TYPE_CHECKING:")
+                .expect("writing generated Python to a String cannot fail");
+            writeln!(out, "    {root_alias}: TypeAlias = RootModel[{root_type}]")
+                .expect("writing generated Python to a String cannot fail");
+            writeln!(out, "else:").expect("writing generated Python to a String cannot fail");
+            writeln!(
+                out,
+                "    {root_alias} = RootModel[ForwardRef({})]\n",
+                python_string(&root_type)
+            )
+            .expect("writing generated Python to a String cannot fail");
+            writeln!(out, "class {class_name}({root_alias}):")
+                .expect("writing generated Python to a String cannot fail");
+        } else {
+            writeln!(
+                out,
+                "class {class_name}(RootModel[ForwardRef({})]):",
+                python_string(&root_type)
+            )
+            .expect("writing generated Python to a String cannot fail");
+        }
+        if let Some(class_config) = class_config {
+            writeln!(out, "    {}", python_string(class_config.docstring()))
+                .expect("writing generated Python to a String cannot fail");
+            out.push_str("    model_config = ConfigDict(\n");
+            writeln!(
+                out,
+                "        json_schema_extra={},",
+                python_mapping(class_config.json_schema_extra())
+            )
+            .expect("writing generated Python to a String cannot fail");
+            out.push_str("    )\n");
+        } else if let Some(description) = definition.get("description").and_then(Value::as_str) {
             writeln!(out, "    {}", python_string(description))
                 .expect("writing generated Python to a String cannot fail");
         }
-        append_schema_surface(&mut out, schema_literal);
+        append_schema_surface(&mut out, schema_literal, self.routed);
         out.push('\n');
         Ok(out)
     }
@@ -673,7 +941,8 @@ impl<'a> Renderer<'a> {
 
         let properties = properties(object, path)?;
         let required = required_names(object, properties, path)?;
-        let mut fields = Vec::with_capacity(properties.len());
+        let mut runtime_fields = Vec::with_capacity(properties.len());
+        let mut static_fields = Vec::with_capacity(properties.len());
         for (property, schema) in properties {
             let child_path = format!("{path}/properties/{}", pointer_escape(property));
             let child_type = self.resolve_type(schema, &child_path)?;
@@ -682,10 +951,14 @@ impl<'a> Renderer<'a> {
             } else {
                 "NotRequired"
             };
-            fields.push(format!(
+            runtime_fields.push(format!(
                 "{}: {marker}[ForwardRef({})]",
                 python_string(property),
                 python_string(&child_type)
+            ));
+            static_fields.push(format!(
+                "{}: {marker}[{child_type}]",
+                python_string(property)
             ));
         }
         let policy = extra_policy(object, path)?;
@@ -699,13 +972,25 @@ impl<'a> Renderer<'a> {
             );
         }
 
-        let declaration = format!(
-            "{name} = TypedDict({}, {{{}}})\n{name}.__pydantic_config__ = \
-             ConfigDict(extra=\"{policy}\")\n",
-            python_string(&name),
-            fields.join(", ")
-        );
-        self.helpers.push(declaration);
+        let declaration = if self.routed {
+            format!(
+                "if TYPE_CHECKING:\n    {name} = TypedDict({}, {{{}}})\nelse:\n    {name} = \
+                 TypedDict({}, {{{}}})\nsetattr({name}, \"__pydantic_config__\", \
+                 ConfigDict(extra=\"{policy}\"))\n",
+                python_string(&name),
+                static_fields.join(", "),
+                python_string(&name),
+                runtime_fields.join(", ")
+            )
+        } else {
+            format!(
+                "{name} = TypedDict({}, {{{}}})\n{name}.__pydantic_config__ = \
+                 ConfigDict(extra=\"{policy}\")\n",
+                python_string(&name),
+                runtime_fields.join(", ")
+            )
+        };
+        self.helpers.push((name.clone(), declaration));
         Ok(name)
     }
 
@@ -1055,7 +1340,7 @@ impl<'a> Renderer<'a> {
         writeln!(out, "_PURRDF_DEFS = {defs_literal}\n")
             .expect("writing generated Python to a String cannot fail");
 
-        for helper in &self.helpers {
+        for (_, helper) in &self.helpers {
             out.push_str(helper);
             out.push_str("\n\n");
         }
@@ -1080,14 +1365,18 @@ impl<'a> Renderer<'a> {
     }
 }
 
-fn append_schema_surface(out: &mut String, schema_literal: &str) {
+fn append_schema_surface(out: &mut String, schema_literal: &str, routed: bool) {
     writeln!(
         out,
         "    __purrdf_schema__: ClassVar[Any] = {schema_literal}"
     )
     .expect("writing generated Python to a String cannot fail");
     out.push_str("\n    @classmethod\n");
-    out.push_str("    def model_json_schema(cls, **kwargs: Any) -> Any:\n");
+    if routed {
+        out.push_str("    def model_json_schema(cls, *args: Any, **kwargs: Any) -> Any:\n");
+    } else {
+        out.push_str("    def model_json_schema(cls, **kwargs: Any) -> Any:\n");
+    }
     out.push_str("        schema = deepcopy(cls.__purrdf_schema__)\n");
     out.push_str("        if isinstance(schema, dict):\n");
     out.push_str("            schema[\"$defs\"] = deepcopy(_PURRDF_DEFS)\n");
@@ -1342,6 +1631,217 @@ fn render_base(docstring: &str) -> String {
     finish_text(out)
 }
 
+fn render_routed_base(docstring: &str) -> String {
+    let mut out = String::new();
+    out.push_str(&python_string(docstring));
+    out.push_str("\nfrom __future__ import annotations\n\n");
+    out.push_str("from datetime import date, datetime, time\n");
+    out.push_str("from enum import StrEnum\n");
+    out.push_str(
+        "from typing import Annotated, Any, ClassVar, ForwardRef, Literal, Never, TypeAlias, cast\n\n",
+    );
+    out.push_str("from pydantic import (\n");
+    out.push_str(
+        "    BaseModel,\n    BeforeValidator,\n    ConfigDict,\n    Field,\n    RootModel,\n",
+    );
+    out.push_str("    StrictBool,\n    StrictFloat,\n    StrictInt,\n    StrictStr,\n");
+    out.push_str(")\n");
+    out.push_str("from typing_extensions import NotRequired, Required, TypedDict\n\n\n");
+    writeln!(out, "class {BASE_CLASS}(BaseModel):")
+        .expect("writing generated Python to a String cannot fail");
+    out.push_str("    model_config = ConfigDict(\n");
+    out.push_str("        populate_by_name=False,\n");
+    out.push_str("    )\n\n\n");
+    out.push_str("def _purrdf_temporal_input(value: Any) -> Any:\n");
+    out.push_str("    if not isinstance(value, str):\n");
+    out.push_str("        raise ValueError(\"temporal values require a JSON string carrier\")\n");
+    out.push_str("    return value\n\n\n");
+    out.push_str("_PURRDF_RUNTIME_TYPES: dict[str, Any] = {\n");
+    for name in routed_runtime_names() {
+        writeln!(out, "    {}: {name},", python_string(name))
+            .expect("writing generated Python to a String cannot fail");
+    }
+    out.push_str("}\n\n");
+    out.push_str("__all__ = (\n");
+    for name in routed_runtime_names() {
+        writeln!(out, "    {},", python_string(name))
+            .expect("writing generated Python to a String cannot fail");
+    }
+    out.push_str("    \"_PURRDF_RUNTIME_TYPES\",\n");
+    out.push_str(")\n");
+    finish_text(out)
+}
+
+fn routed_runtime_names() -> &'static [&'static str] {
+    &[
+        BASE_CLASS,
+        "Annotated",
+        "Any",
+        "BeforeValidator",
+        "ClassVar",
+        "ConfigDict",
+        "Field",
+        "ForwardRef",
+        "Literal",
+        "Never",
+        "NotRequired",
+        "Required",
+        "RootModel",
+        "StrEnum",
+        "StrictBool",
+        "StrictFloat",
+        "StrictInt",
+        "StrictStr",
+        "TypeAlias",
+        "TypedDict",
+        "_purrdf_temporal_input",
+        "cast",
+        "date",
+        "datetime",
+        "time",
+    ]
+}
+
+fn render_schema_module(docstring: &str, defs_literal: &str) -> String {
+    let mut out = String::new();
+    out.push_str(&python_string(docstring));
+    out.push_str("\nfrom __future__ import annotations\n\n");
+    writeln!(out, "_PURRDF_DEFS = {defs_literal}")
+        .expect("writing generated Python to a String cannot fail");
+    finish_text(out)
+}
+
+fn render_routed_module(module: &LinkedModule) -> String {
+    let mut out = String::new();
+    out.push_str(&python_string(&module.docstring));
+    out.push_str("\nfrom __future__ import annotations\n\n");
+    out.push_str("from copy import deepcopy\n");
+    out.push_str("from typing import TYPE_CHECKING\n\n");
+    writeln!(
+        out,
+        "from {} import (",
+        relative_root_import(&module.path, BASE_MODULE)
+    )
+    .expect("writing generated Python to a String cannot fail");
+    for name in routed_runtime_names() {
+        writeln!(out, "    {name},").expect("writing generated Python to a String cannot fail");
+    }
+    out.push_str(")\n");
+    writeln!(
+        out,
+        "from {} import _PURRDF_DEFS\n",
+        relative_root_import(&module.path, "_schema")
+    )
+    .expect("writing generated Python to a String cannot fail");
+
+    if !module.dependencies.is_empty() {
+        out.push_str("if TYPE_CHECKING:\n");
+        for (target, symbols) in &module.dependencies {
+            writeln!(
+                out,
+                "    from {} import (",
+                relative_root_import(&module.path, target)
+            )
+            .expect("writing generated Python to a String cannot fail");
+            for symbol in symbols {
+                writeln!(out, "        {symbol},")
+                    .expect("writing generated Python to a String cannot fail");
+            }
+            out.push_str("    )\n");
+        }
+        out.push('\n');
+    }
+
+    for helper in &module.helpers {
+        out.push_str(&helper.source);
+        out.push_str("\n\n");
+    }
+    for definition in module.definitions.values() {
+        out.push_str(
+            definition
+                .source
+                .as_deref()
+                .expect("a complete linker plan has rendered definition source"),
+        );
+        out.push('\n');
+    }
+
+    let symbols = module
+        .public_symbols
+        .union(&module.private_symbols)
+        .collect::<BTreeSet<_>>();
+    out.push_str("_PURRDF_TYPES: dict[str, Any] = {\n");
+    for symbol in symbols {
+        writeln!(out, "    {}: {symbol},", python_string(symbol))
+            .expect("writing generated Python to a String cannot fail");
+    }
+    out.push_str("}\n\n");
+    out.push_str("__all__ = (\n");
+    for symbol in &module.public_symbols {
+        writeln!(out, "    {},", python_string(symbol))
+            .expect("writing generated Python to a String cannot fail");
+    }
+    out.push_str(")\n");
+    finish_text(out)
+}
+
+fn render_routed_init(docstring: &str, plan: &RoutedPackagePlan, include_version: bool) -> String {
+    let mut out = String::new();
+    out.push_str(&python_string(docstring));
+    out.push_str("\nfrom __future__ import annotations\n\n");
+    out.push_str("from typing import Any\n\n");
+    out.push_str("from ._base import _PURRDF_RUNTIME_TYPES\n");
+    if include_version {
+        out.push_str("from .__about__ import __version__\n");
+    }
+    for module in plan.modules.values() {
+        writeln!(out, "from .{} import (", module.path)
+            .expect("writing generated Python to a String cannot fail");
+        for symbol in &module.public_symbols {
+            writeln!(out, "    {symbol},")
+                .expect("writing generated Python to a String cannot fail");
+        }
+        writeln!(out, "    _PURRDF_TYPES as {},", module.namespace_alias)
+            .expect("writing generated Python to a String cannot fail");
+        out.push_str(")\n");
+    }
+
+    out.push_str("\n_REBUILD_NAMESPACE: dict[str, Any] = dict(_PURRDF_RUNTIME_TYPES)\n");
+    out.push_str("for _namespace in (\n");
+    for module in plan.modules.values() {
+        writeln!(out, "    {},", module.namespace_alias)
+            .expect("writing generated Python to a String cannot fail");
+    }
+    out.push_str("):\n");
+    out.push_str("    for _name, _symbol in _namespace.items():\n");
+    out.push_str("        if _name in _REBUILD_NAMESPACE:\n");
+    out.push_str(
+        "            raise RuntimeError(f\"duplicate generated Pydantic type symbol: {_name}\")\n",
+    );
+    out.push_str("        _REBUILD_NAMESPACE[_name] = _symbol\n");
+    out.push_str("for _model in (\n");
+    for module in plan.modules.values() {
+        for symbol in &module.public_symbols {
+            writeln!(out, "    {symbol},")
+                .expect("writing generated Python to a String cannot fail");
+        }
+    }
+    out.push_str("):\n");
+    out.push_str("    _model.model_rebuild(force=True, _types_namespace=_REBUILD_NAMESPACE)\n\n");
+    out.push_str("__all__ = (\n");
+    for module in plan.modules.values() {
+        for symbol in &module.public_symbols {
+            writeln!(out, "    {},", python_string(symbol))
+                .expect("writing generated Python to a String cannot fail");
+        }
+    }
+    if include_version {
+        out.push_str("    \"__version__\",\n");
+    }
+    out.push_str(")\n");
+    finish_text(out)
+}
+
 fn render_init(docstring: &str, exports: &[String]) -> String {
     let mut out = String::new();
     out.push_str(&python_string(docstring));
@@ -1360,6 +1860,38 @@ fn render_init(docstring: &str, exports: &[String]) -> String {
             .expect("writing generated Python to a String cannot fail");
     }
     out.push_str(")\n");
+    finish_text(out)
+}
+
+fn render_versioned_init(docstring: &str, exports: &[String]) -> String {
+    let mut out = String::new();
+    out.push_str(&python_string(docstring));
+    out.push_str("\nfrom __future__ import annotations\n\n");
+    out.push_str("from .__about__ import __version__\n\n");
+    if !exports.is_empty() {
+        writeln!(out, "from .{MODELS_MODULE} import (")
+            .expect("writing generated Python to a String cannot fail");
+        for name in exports {
+            writeln!(out, "    {name},").expect("writing generated Python to a String cannot fail");
+        }
+        out.push_str(")\n\n");
+    }
+    out.push_str("__all__ = (\n");
+    for name in exports {
+        writeln!(out, "    {},", python_string(name))
+            .expect("writing generated Python to a String cannot fail");
+    }
+    out.push_str("    \"__version__\",\n");
+    out.push_str(")\n");
+    finish_text(out)
+}
+
+fn render_about(version: &PydanticVersionStamp) -> String {
+    let mut out = String::new();
+    out.push_str(&python_string(version.module_docstring()));
+    out.push_str("\nfrom __future__ import annotations\n\n");
+    writeln!(out, "__version__ = {}", python_string(version.version()))
+        .expect("writing generated Python to a String cannot fail");
     finish_text(out)
 }
 
@@ -1440,6 +1972,17 @@ fn python_value(value: &Value) -> String {
                 .join(", ")
         ),
     }
+}
+
+fn python_mapping(values: &BTreeMap<String, Value>) -> String {
+    format!(
+        "{{{}}}",
+        values
+            .iter()
+            .map(|(key, value)| format!("{}: {}", python_string(key), python_value(value)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn python_string(value: &str) -> String {
@@ -1706,6 +2249,79 @@ mod tests {
         .expect("valid config")
     }
 
+    fn routed_config_with(
+        people_module_docstring: &str,
+        person_docstring: &str,
+        person_digest: &str,
+        version: Option<(&str, &str)>,
+        swap_routes: bool,
+    ) -> PydanticConfig {
+        let person_module = if swap_routes {
+            "vocab"
+        } else {
+            "domain.people"
+        };
+        let color_module = if swap_routes {
+            "domain.people"
+        } else {
+            "vocab"
+        };
+        let topology = PydanticPackageTopology::new(
+            [
+                PydanticModuleConfig::new("domain.people", people_module_docstring)
+                    .expect("people module"),
+                PydanticModuleConfig::new("vocab", "Caller vocabulary module documentation.")
+                    .expect("vocabulary module"),
+            ],
+            [
+                PydanticClassConfig::new(
+                    "Person",
+                    person_module,
+                    person_docstring,
+                    BTreeMap::from([
+                        ("definitionDigest".to_owned(), json!(person_digest)),
+                        ("docs".to_owned(), json!("https://example.org/docs/person")),
+                    ]),
+                )
+                .expect("Person route"),
+                PydanticClassConfig::new(
+                    "Color",
+                    color_module,
+                    "Caller Color documentation.",
+                    BTreeMap::from([
+                        ("definitionDigest".to_owned(), json!("sha256:color")),
+                        ("docs".to_owned(), json!("https://example.org/docs/color")),
+                    ]),
+                )
+                .expect("Color route"),
+            ],
+        )
+        .expect("routed topology");
+        let config = config().with_topology(topology).expect("routed config");
+        if let Some((version, module_docstring)) = version {
+            config
+                .with_version_stamp(
+                    PydanticVersionStamp::new(version, module_docstring).expect("version"),
+                )
+                .expect("versioned routed config")
+        } else {
+            config
+        }
+    }
+
+    fn routed_config(include_version: bool) -> PydanticConfig {
+        routed_config_with(
+            "Caller people module documentation.",
+            "Caller Person documentation.",
+            "sha256:person",
+            include_version.then_some((
+                "2!3.4rc1+portable.7",
+                "Caller-owned version module documentation.",
+            )),
+            false,
+        )
+    }
+
     fn import_config() -> SchemaImportConfig {
         let namespaces = Namespaces::new(
             "ex",
@@ -1789,6 +2405,222 @@ mod tests {
         assert!(PydanticConfig::new("pkg", " ", "models").is_err());
         assert!(PydanticConfig::new("pkg", "package", "\n").is_err());
         assert!(PydanticConfig::new("org.example_models", "p", "m").is_ok());
+    }
+
+    #[test]
+    fn caller_version_emits_about_and_root_export_exactly() {
+        let version = PydanticVersionStamp::new(
+            "2!3.4rc1+portable.7",
+            "Caller-owned version module documentation.",
+        )
+        .expect("version");
+        let config = config()
+            .with_version_stamp(version)
+            .expect("versioned config");
+        let package = emit_pydantic(&compiled(&lossless_schema()), &config).expect("emit");
+
+        assert_eq!(package.artifacts.len(), 5);
+        let about = std::str::from_utf8(&package.artifacts["example_models/__about__.py"])
+            .expect("about UTF-8");
+        let init = std::str::from_utf8(&package.artifacts["example_models/__init__.py"])
+            .expect("init UTF-8");
+        assert!(about.starts_with("\"Caller-owned version module documentation.\"\n"));
+        assert!(about.contains("__version__ = \"2!3.4rc1+portable.7\""));
+        assert!(init.contains("from .__about__ import __version__"));
+        assert!(init.contains("    \"__version__\","));
+        assert_eq!(
+            package.model_paths["Person"],
+            "example_models.models.Person"
+        );
+        import_pydantic_package(&package, &import_config()).expect("verified import");
+    }
+
+    #[test]
+    fn routed_package_owns_modules_metadata_symbols_and_version() {
+        let package = emit_pydantic(&compiled(&lossless_schema()), &routed_config(true))
+            .expect("emit routed package");
+        assert_eq!(
+            package
+                .artifacts
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "example_models/__about__.py",
+                "example_models/__init__.py",
+                "example_models/_base.py",
+                "example_models/_schema.py",
+                "example_models/domain/__init__.py",
+                "example_models/domain/people.py",
+                "example_models/py.typed",
+                "example_models/vocab.py",
+            ]
+        );
+        assert_eq!(
+            package.model_paths,
+            BTreeMap::from([
+                ("Color".to_owned(), "example_models.vocab.Color".to_owned(),),
+                (
+                    "Person".to_owned(),
+                    "example_models.domain.people.Person".to_owned(),
+                ),
+            ])
+        );
+
+        let schema = std::str::from_utf8(&package.artifacts["example_models/_schema.py"])
+            .expect("schema UTF-8");
+        let people = std::str::from_utf8(&package.artifacts["example_models/domain/people.py"])
+            .expect("people UTF-8");
+        let vocab = std::str::from_utf8(&package.artifacts["example_models/vocab.py"])
+            .expect("vocab UTF-8");
+        let init = std::str::from_utf8(&package.artifacts["example_models/__init__.py"])
+            .expect("init UTF-8");
+        let about = std::str::from_utf8(&package.artifacts["example_models/__about__.py"])
+            .expect("about UTF-8");
+
+        assert!(schema.contains("_PURRDF_DEFS ="));
+        assert!(!people.contains("_PURRDF_DEFS ="));
+        assert!(!vocab.contains("_PURRDF_DEFS ="));
+        assert!(people.starts_with("\"Caller people module documentation.\""));
+        assert!(people.contains("    \"Caller Person documentation.\""));
+        assert!(people.contains(
+            "json_schema_extra={\"definitionDigest\": \"sha256:person\", \"docs\": \"https://example.org/docs/person\"}"
+        ));
+        assert!(people.contains("if TYPE_CHECKING:\n    from ..vocab import (\n        Color,"));
+        assert!(people.contains("_PURRDF_TYPES: dict[str, Any] = {"));
+        assert!(vocab.contains("class _ColorValue(StrEnum):"));
+        assert!(vocab.contains("    \"Caller Color documentation.\""));
+        assert!(vocab.contains("\"_ColorValue\": _ColorValue"));
+        assert!(!people.contains("dict(globals())"));
+        assert!(!vocab.contains("dict(globals())"));
+        assert!(init.contains("from .__about__ import __version__"));
+        assert!(init.contains("_model.model_rebuild("));
+        assert!(about.contains("__version__ = \"2!3.4rc1+portable.7\""));
+        import_pydantic_package(&package, &import_config()).expect("verified routed import");
+    }
+
+    #[test]
+    fn routed_topology_requires_exact_schema_coverage() {
+        let schema = compiled(&lossless_schema());
+        let missing = PydanticPackageTopology::new(
+            [PydanticModuleConfig::new("models", "Caller models.").expect("module")],
+            [
+                PydanticClassConfig::new("Person", "models", "Caller Person.", BTreeMap::new())
+                    .expect("route"),
+            ],
+        )
+        .expect("missing topology is structurally valid");
+        let error = emit_pydantic(&schema, &config().with_topology(missing).expect("config"))
+            .expect_err("missing route");
+        assert!(error.to_string().contains("missing routes=[\"Color\"]"));
+
+        let stale = PydanticPackageTopology::new(
+            [PydanticModuleConfig::new("models", "Caller models.").expect("module")],
+            [
+                PydanticClassConfig::new("Color", "models", "Caller Color.", BTreeMap::new())
+                    .expect("route"),
+                PydanticClassConfig::new("Person", "models", "Caller Person.", BTreeMap::new())
+                    .expect("route"),
+                PydanticClassConfig::new("Stale", "models", "Caller stale class.", BTreeMap::new())
+                    .expect("route"),
+            ],
+        )
+        .expect("stale topology is structurally valid");
+        let error = emit_pydantic(&schema, &config().with_topology(stale).expect("config"))
+            .expect_err("stale route");
+        assert!(error.to_string().contains("stale routes=[\"Stale\"]"));
+    }
+
+    #[test]
+    fn routed_only_runtime_names_do_not_narrow_flat_compatibility() {
+        let schema = compiled(&json!({ "$defs": { "TypeAlias": { "type": "string" } } }));
+        emit_pydantic(&schema, &config()).expect("flat TypeAlias remains valid");
+        let topology = PydanticPackageTopology::new(
+            [PydanticModuleConfig::new("models", "Caller module.").expect("module")],
+            [
+                PydanticClassConfig::new("TypeAlias", "models", "Caller class.", BTreeMap::new())
+                    .expect("route"),
+            ],
+        )
+        .expect("topology");
+        assert!(
+            emit_pydantic(&schema, &config().with_topology(topology).expect("config")).is_err()
+        );
+    }
+
+    #[test]
+    fn routed_output_is_order_independent_and_helpers_stay_with_owners() {
+        let schema = json!({
+            "$defs": {
+                "Color": { "enum": ["red", "blue"] },
+                "Person": {
+                    "type": "object",
+                    "properties": {
+                        "color": { "$ref": "#/$defs/Color" },
+                        "address": {
+                            "type": "object",
+                            "properties": { "city": { "type": "string" } }
+                        }
+                    }
+                }
+            }
+        });
+        let first = emit_pydantic(&compiled(&schema), &routed_config(false)).expect("first");
+
+        let topology = PydanticPackageTopology::new(
+            [
+                PydanticModuleConfig::new("vocab", "Caller vocabulary module documentation.")
+                    .expect("module"),
+                PydanticModuleConfig::new("domain.people", "Caller people module documentation.")
+                    .expect("module"),
+            ],
+            [
+                routed_config(false).topology().expect("topology").classes()["Color"].clone(),
+                routed_config(false).topology().expect("topology").classes()["Person"].clone(),
+            ],
+        )
+        .expect("reordered topology");
+        let second = emit_pydantic(
+            &compiled(&schema),
+            &config().with_topology(topology).expect("config"),
+        )
+        .expect("second");
+        assert_eq!(first, second);
+
+        let people = std::str::from_utf8(&first.artifacts["example_models/domain/people.py"])
+            .expect("people UTF-8");
+        let vocab =
+            std::str::from_utf8(&first.artifacts["example_models/vocab.py"]).expect("vocab UTF-8");
+        assert!(people.contains("TypedDict("));
+        assert!(!vocab.contains("TypedDict("));
+        assert!(vocab.contains("class _ColorValue(StrEnum):"));
+        assert!(!people.contains("class _ColorValue(StrEnum):"));
+    }
+
+    #[test]
+    fn artifact_limits_accept_boundaries_and_reject_each_one_over() {
+        let limits = ArtifactLimits {
+            artifact_bytes: 4,
+            output_bytes: 6,
+            artifacts: 2,
+        };
+        let mut accepted = ArtifactAccumulator::with_limits(limits);
+        accepted
+            .insert("a.py".to_owned(), vec![0; 4])
+            .expect("artifact boundary");
+        accepted
+            .insert("b.py".to_owned(), vec![0; 2])
+            .expect("output boundary");
+        assert!(accepted.insert("c.py".to_owned(), Vec::new()).is_err());
+
+        let mut artifact_over = ArtifactAccumulator::with_limits(limits);
+        assert!(artifact_over.insert("a.py".to_owned(), vec![0; 5]).is_err());
+
+        let mut output_over = ArtifactAccumulator::with_limits(limits);
+        output_over
+            .insert("a.py".to_owned(), vec![0; 4])
+            .expect("first artifact");
+        assert!(output_over.insert("b.py".to_owned(), vec![0; 3]).is_err());
     }
 
     #[test]
@@ -1888,6 +2720,122 @@ mod tests {
     }
 
     #[test]
+    fn retained_source_and_emission_configuration_tampering_fail_closed() {
+        let package =
+            emit_pydantic(&compiled(&lossless_schema()), &routed_config(true)).expect("emit");
+
+        let mut bad_source = package.clone();
+        bad_source.source_schema_json.push('\n');
+        let error = import_pydantic_package(&bad_source, &import_config())
+            .expect_err("retained source mutation");
+        assert!(error.to_string().contains("emission fingerprint"));
+
+        let topology = routed_config(true)
+            .topology()
+            .expect("routed topology")
+            .clone();
+        let version = routed_config(true)
+            .version_stamp()
+            .expect("version stamp")
+            .clone();
+        let changed_base_configs = [
+            PydanticConfig::new(
+                "changed_models",
+                "Caller package documentation.",
+                "Caller model documentation.",
+            )
+            .expect("changed package name"),
+            PydanticConfig::new(
+                "example_models",
+                "Changed package documentation.",
+                "Caller model documentation.",
+            )
+            .expect("changed package docstring"),
+            PydanticConfig::new(
+                "example_models",
+                "Caller package documentation.",
+                "Changed support documentation.",
+            )
+            .expect("changed models docstring"),
+        ]
+        .into_iter()
+        .map(|config| {
+            config
+                .with_topology(topology.clone())
+                .expect("same topology")
+                .with_version_stamp(version.clone())
+                .expect("same version")
+        });
+        let changed_routed_configs = [
+            routed_config_with(
+                "Changed people module documentation.",
+                "Caller Person documentation.",
+                "sha256:person",
+                Some((
+                    "2!3.4rc1+portable.7",
+                    "Caller-owned version module documentation.",
+                )),
+                false,
+            ),
+            routed_config_with(
+                "Caller people module documentation.",
+                "Changed Person documentation.",
+                "sha256:person",
+                Some((
+                    "2!3.4rc1+portable.7",
+                    "Caller-owned version module documentation.",
+                )),
+                false,
+            ),
+            routed_config_with(
+                "Caller people module documentation.",
+                "Caller Person documentation.",
+                "sha256:changed",
+                Some((
+                    "2!3.4rc1+portable.7",
+                    "Caller-owned version module documentation.",
+                )),
+                false,
+            ),
+            routed_config_with(
+                "Caller people module documentation.",
+                "Caller Person documentation.",
+                "sha256:person",
+                Some((
+                    "2!3.4rc2+portable.7",
+                    "Caller-owned version module documentation.",
+                )),
+                false,
+            ),
+            routed_config_with(
+                "Caller people module documentation.",
+                "Caller Person documentation.",
+                "sha256:person",
+                Some(("2!3.4rc1+portable.7", "Changed version documentation.")),
+                false,
+            ),
+            routed_config_with(
+                "Caller people module documentation.",
+                "Caller Person documentation.",
+                "sha256:person",
+                Some((
+                    "2!3.4rc1+portable.7",
+                    "Caller-owned version module documentation.",
+                )),
+                true,
+            ),
+        ];
+        for changed in changed_base_configs.chain(changed_routed_configs) {
+            let mut bad = package.clone();
+            bad.config = changed;
+            assert!(
+                import_pydantic_package(&bad, &import_config()).is_err(),
+                "changed retained configuration must fail closed"
+            );
+        }
+    }
+
+    #[test]
     fn verified_package_imports_recursive_nullable_and_finite_schema() {
         let schema = json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1934,14 +2882,12 @@ mod tests {
             losses: LossLedger::new(),
         };
 
-        let package = emit_pydantic(&compiled, &config()).expect("Pydantic emits annotation");
         assert!(
-            import_pydantic_package(&package, &import_config())
-                .expect_err("Pydantic shared node limit")
+            emit_pydantic(&compiled, &config())
+                .expect_err("Pydantic forward node limit")
                 .to_string()
-                .contains("node limit")
+                .contains("JSON nodes")
         );
-        drop(package);
 
         let typescript_config = crate::typescript::TypeScriptConfig::new(
             "@example/resource-probe",
