@@ -95,7 +95,7 @@ impl CompiledSchemaCatalog {
             })?;
 
         if let Some(limits) = limits {
-            validate_document_limits(&document, definitions.len(), limits)?;
+            validate_definition_limit(definitions.len(), limits)?;
         }
 
         for (key, definition) in definitions {
@@ -274,7 +274,8 @@ impl<'de> Visitor<'de> for BoundedValueVisitor<'_> {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
-        let mut values = Vec::new();
+        let remaining_nodes = self.state.limits.nodes.saturating_sub(self.state.nodes);
+        let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0).min(remaining_nodes));
         while let Some(value) = sequence.next_element_seed(BoundedValueSeed {
             state: &mut *self.state,
             depth: self.depth + 1,
@@ -285,7 +286,8 @@ impl<'de> Visitor<'de> for BoundedValueVisitor<'_> {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-        let mut object = Map::new();
+        let remaining_nodes = self.state.limits.nodes.saturating_sub(self.state.nodes);
+        let mut object = Map::with_capacity(map.size_hint().unwrap_or(0).min(remaining_nodes));
         while let Some(key) = map.next_key_seed(BoundedStringSeed {
             state: &mut *self.state,
         })? {
@@ -341,8 +343,7 @@ impl<'de> Visitor<'de> for BoundedStringVisitor<'_> {
     }
 }
 
-fn validate_document_limits(
-    document: &Value,
+fn validate_definition_limit(
     definitions: usize,
     limits: SchemaCatalogLimits,
 ) -> Result<(), SchemaCatalogError> {
@@ -353,50 +354,6 @@ fn validate_document_limits(
         )));
     }
 
-    let mut nodes = 0usize;
-    let mut stack = vec![(document, 0usize)];
-    while let Some((value, depth)) = stack.pop() {
-        if depth > limits.depth {
-            return Err(SchemaCatalogError::new(format!(
-                "CompiledSchema exceeds JSON nesting limit {}",
-                limits.depth
-            )));
-        }
-        nodes = nodes.checked_add(1).ok_or_else(|| {
-            SchemaCatalogError::new("CompiledSchema JSON node count exceeds usize")
-        })?;
-        if nodes > limits.nodes {
-            return Err(SchemaCatalogError::new(format!(
-                "CompiledSchema contains more than {} JSON nodes",
-                limits.nodes
-            )));
-        }
-        match value {
-            Value::String(text) if text.len() > limits.string_bytes => {
-                return Err(SchemaCatalogError::new(format!(
-                    "CompiledSchema contains a {}-byte string; limit is {}",
-                    text.len(),
-                    limits.string_bytes
-                )));
-            }
-            Value::Array(values) => {
-                stack.extend(values.iter().rev().map(|child| (child, depth + 1)));
-            }
-            Value::Object(object) => {
-                for (key, child) in object.iter().rev() {
-                    if key.len() > limits.string_bytes {
-                        return Err(SchemaCatalogError::new(format!(
-                            "CompiledSchema contains a {}-byte object key; limit is {}",
-                            key.len(),
-                            limits.string_bytes
-                        )));
-                    }
-                    stack.push((child, depth + 1));
-                }
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-        }
-    }
     Ok(())
 }
 
