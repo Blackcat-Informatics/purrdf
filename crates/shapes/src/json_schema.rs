@@ -442,6 +442,10 @@ pub struct SchemaPropertyCoverage {
     /// Canonically sorted RDF/OWL declaration or relationship kinds that made
     /// the property a catalog entry.
     pub declarations: Vec<String>,
+    /// Distinct inclusion/exclusion outcomes represented by the class rows.
+    /// A property with no eligible class still carries one aggregate exclusion
+    /// outcome, so its absence is always explained.
+    pub outcomes: Vec<SchemaCoverageStatus>,
     /// Canonically sorted per-class decisions. The aggregate property appears
     /// exactly once in a report even when this vector is empty.
     pub classes: Vec<SchemaClassPropertyCoverage>,
@@ -470,6 +474,8 @@ impl SchemaCoverageReport {
         for property in &mut canonical.properties {
             property.declarations.sort();
             property.declarations.dedup();
+            property.outcomes.sort();
+            property.outcomes.dedup();
             property.classes.sort_by(|left, right| {
                 left.class_iri
                     .cmp(&right.class_iri)
@@ -681,6 +687,20 @@ impl<'a> SchemaCompileRequest<'a> {
     pub fn compilation_key(&self) -> Result<SchemaCompilationKey, SchemaCompileError> {
         schema_compilation_key(self)
     }
+
+    /// Derive the deterministic ontology property coverage manifest without
+    /// serializing any developer-schema artifact.
+    ///
+    /// This uses the same internal relation consumed by full compilation, so a
+    /// cache planner can inspect both the key and coverage before emission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for malformed OWL/RDFS expressions, contradictory
+    /// property kinds/ranges, or a fixed resource ceiling breach.
+    pub fn coverage_report(&self) -> Result<SchemaCoverageReport, SchemaCompileError> {
+        Ok(crate::schema_surface::build(self)?.report)
+    }
 }
 
 /// Ontology-aware compilation output.
@@ -697,10 +717,10 @@ pub struct SchemaCompilation {
 const SCHEMA_KEY_SALT: &str = "purrdf-shapes/schema-compilation-key/v1";
 const SCHEMA_POLICY_SALT: &str =
     "rdf12;json-schema-2020-12;openapi-3.1;surface-limits-v1;owl-rdfs-fragment-v1";
-const MAX_SCHEMA_PROPERTIES: usize = 65_536;
-const MAX_SCHEMA_CLASSES: usize = 65_536;
-const MAX_SCHEMA_RELATIONS: usize = 1_048_576;
-const MAX_OWL_EXPRESSION_DEPTH: usize = 64;
+pub(crate) const MAX_SCHEMA_PROPERTIES: usize = 65_536;
+pub(crate) const MAX_SCHEMA_CLASSES: usize = 65_536;
+pub(crate) const MAX_SCHEMA_RELATIONS: usize = 1_048_576;
+pub(crate) const MAX_OWL_EXPRESSION_DEPTH: usize = 64;
 
 fn schema_compilation_key(
     request: &SchemaCompileRequest<'_>,
@@ -2867,6 +2887,7 @@ mod tests {
         let property = |iri: &str| SchemaPropertyCoverage {
             property_iri: iri.to_owned(),
             declarations: vec!["rdfs:range".to_owned(), "owl:DatatypeProperty".to_owned()],
+            outcomes: vec![SchemaCoverageStatus::IncludedUnshaped],
             classes: vec![SchemaClassPropertyCoverage {
                 class_iri: "https://example.org/meta/Thing".to_owned(),
                 synthesized_open_class: false,

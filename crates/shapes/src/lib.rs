@@ -41,6 +41,7 @@ pub mod report;
 pub mod rules;
 mod schema_catalog;
 pub mod schema_import;
+mod schema_surface;
 pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
