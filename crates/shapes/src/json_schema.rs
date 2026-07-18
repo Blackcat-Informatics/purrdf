@@ -56,6 +56,9 @@ use serde_json::{Map, Value, json};
 
 use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs};
+use crate::schema_surface::{
+    OntologyExpression, OntologyPropertyKind, SchemaSurface, SurfaceClass, SurfaceProperty,
+};
 use crate::shapes::{Constraint, NodeKindValue, Path, Shape, Shapes, Target};
 use crate::term::{NamedNode, Term};
 
@@ -866,7 +869,7 @@ struct Ctx<'ns> {
     /// Predicate IRIs whose `rdfs:range` is a value-vocabulary class → that
     /// class's `{Local}Enum` `$def` key. Drives the enum `$ref` for OPEN
     /// vocabularies that carry no `sh:class`. Empty unless a projection is active.
-    predicate_ranges: BTreeMap<String, String>,
+    predicate_ranges: BTreeMap<String, Vec<String>>,
     /// The namespace table driving ALL compaction / keying decisions.
     ns: &'ns Namespaces,
 }
@@ -875,7 +878,7 @@ impl<'ns> Ctx<'ns> {
     fn new(
         emitted_defs: BTreeSet<String>,
         value_vocab_enums: BTreeMap<String, String>,
-        predicate_ranges: BTreeMap<String, String>,
+        predicate_ranges: BTreeMap<String, Vec<String>>,
         ns: &'ns Namespaces,
     ) -> Self {
         Self {
@@ -925,6 +928,45 @@ impl<'ns> Ctx<'ns> {
 /// would share a `$defs` key — see [`Namespaces::def_key`].
 pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
     compile_with_value_vocab(shapes, ns, None)
+}
+
+/// Compile an explicit ontology-aware schema request.
+///
+/// [`SchemaSurfaceMode::ShapedOnly`] delegates to the legacy emitter and is
+/// byte-identical for the same shapes/value-vocabulary inputs. The
+/// ontology-complete mode injects optional OWL/RDFS properties and synthesized
+/// open carrier classes from the same relation returned in
+/// [`SchemaCompilation::coverage`].
+///
+/// # Errors
+///
+/// Returns a typed error for unsafe canonicalization, malformed/contradictory
+/// ontology axioms, fixed resource ceiling breaches, or schema key collisions.
+pub fn compile_schema(
+    request: &SchemaCompileRequest<'_>,
+) -> Result<SchemaCompilation, SchemaCompileError> {
+    let key = request.compilation_key()?;
+    let surface = crate::schema_surface::build(request)?;
+    let projection = request.value_vocab().map(|vocab| ValueVocabProjection {
+        vocab,
+        ontology: request.ontology(),
+    });
+    let compiled = match request.mode() {
+        SchemaSurfaceMode::ShapedOnly => {
+            compile_with_value_vocab(request.shapes(), request.namespaces(), projection.as_ref())
+        }
+        SchemaSurfaceMode::OntologyComplete => compile_with_surface(
+            request.shapes(),
+            request.namespaces(),
+            projection.as_ref(),
+            &surface,
+        )?,
+    };
+    Ok(SchemaCompilation {
+        compiled,
+        coverage: surface.report,
+        key,
+    })
 }
 
 /// Compile a parsed [`Shapes`] graph, optionally projecting *value vocabularies*
@@ -1131,6 +1173,346 @@ pub fn compile_with_value_vocab(
     }
 }
 
+fn compile_with_surface(
+    shapes: &Shapes,
+    ns: &Namespaces,
+    projection: Option<&ValueVocabProjection<'_>>,
+    surface: &SchemaSurface,
+) -> Result<CompiledSchema, SchemaCompileError> {
+    let (vocab_enums, vocab_losses) = value_vocab_enum_defs(shapes, ns, projection);
+    validate_surface_keys(surface, ns, &vocab_enums)?;
+
+    let mut emitted_defs: BTreeSet<String> = surface
+        .classes
+        .keys()
+        .map(|class_iri| ns.def_key(class_iri))
+        .collect();
+    for (key, _definition) in vocab_enums.values() {
+        emitted_defs.insert(key.clone());
+    }
+    let value_vocab_enums: BTreeMap<String, String> = vocab_enums
+        .iter()
+        .map(|(class_iri, (key, _definition))| (class_iri.clone(), key.clone()))
+        .collect();
+    let predicate_ranges = value_vocab_predicate_ranges(shapes, projection, &vocab_enums);
+    let mut ctx = Ctx::new(emitted_defs, value_vocab_enums, predicate_ranges, ns);
+    ctx.record_entries(vocab_losses);
+
+    let mut defs: Map<String, Value> = Map::new();
+    for shape in &shapes.node_shapes {
+        if shape.deactivated {
+            continue;
+        }
+        let body = compile_object_schema(shape, &mut ctx);
+        let shape_iri = shape.id.to_string();
+        for target in &shape.targets {
+            match target {
+                Target::Class(class) => {
+                    let class_iri = class.as_str();
+                    let name = ns.def_key(class_iri);
+                    let augmented =
+                        augment_object_schema(body.clone(), surface.classes.get(class_iri), &ctx);
+                    defs.entry(name).or_insert(augmented);
+                }
+                Target::ImplicitClass(term) => {
+                    let class_iri = implicit_class_iri(term);
+                    let name = ns.def_key(class_iri);
+                    let augmented =
+                        augment_object_schema(body.clone(), surface.classes.get(class_iri), &ctx);
+                    defs.entry(name).or_insert(augmented);
+                }
+                Target::Sparql { .. } => ctx.record(
+                    "sh:SPARQLTarget",
+                    &shape_iri,
+                    "SHACL-AF SPARQL target (sh:target/sh:SPARQLTarget) selects focus \
+                     nodes via an arbitrary SPARQL query with no closed-world JSON \
+                     Schema equivalent; the shape's SPARQL-selected instances are not \
+                     enforced by the emitted schema",
+                ),
+                Target::Node(_) => ctx.record(
+                    "sh:targetNode",
+                    &shape_iri,
+                    "A shape targeted only via sh:targetNode selects specific focus \
+                     nodes, not a class extension; it has no closed-world JSON Schema \
+                     $def and its constraints are not enforced by the emitted schema.",
+                ),
+                Target::SubjectsOf(_) => ctx.record(
+                    "sh:targetSubjectsOf",
+                    &shape_iri,
+                    "A shape targeted only via sh:targetSubjectsOf selects focus nodes \
+                     by a predicate's subject position, not a class extension; no \
+                     closed-world JSON Schema $def can be keyed and its constraints are \
+                     not enforced.",
+                ),
+                Target::ObjectsOf(_) => ctx.record(
+                    "sh:targetObjectsOf",
+                    &shape_iri,
+                    "A shape targeted only via sh:targetObjectsOf selects focus nodes \
+                     by a predicate's object position, not a class extension; no \
+                     closed-world JSON Schema $def can be keyed and its constraints are \
+                     not enforced.",
+                ),
+            }
+        }
+    }
+
+    for (class_iri, class) in &surface.classes {
+        let key = ns.def_key(class_iri);
+        if class.synthesized_open {
+            defs.entry(key)
+                .or_insert_with(|| open_surface_class_schema(class, &ctx));
+        } else {
+            debug_assert!(
+                defs.contains_key(&key),
+                "every non-synthesized surface class has an active SHACL target"
+            );
+        }
+    }
+
+    defs.insert("Annotation".to_owned(), annotation_def());
+    let class_names: Vec<String> = defs
+        .keys()
+        .filter(|key| *key != "Annotation")
+        .cloned()
+        .collect();
+    defs.insert("Node".to_owned(), node_def(&class_names, ns));
+    for (key, definition) in vocab_enums.values() {
+        defs.insert(key.clone(), definition.clone());
+    }
+
+    Ok(CompiledSchema {
+        schema_json: to_pretty(&root_schema(&defs, ns)),
+        openapi_json: to_pretty(&openapi_doc(&defs)),
+        losses: ctx.ledger,
+    })
+}
+
+fn validate_surface_keys(
+    surface: &SchemaSurface,
+    ns: &Namespaces,
+    vocab_enums: &BTreeMap<String, (String, Value)>,
+) -> Result<(), SchemaCompileError> {
+    let mut keys: BTreeMap<String, String> = BTreeMap::new();
+    keys.insert(
+        "Annotation".to_owned(),
+        "JSON Schema reserved definition".to_owned(),
+    );
+    keys.insert(
+        "Node".to_owned(),
+        "JSON Schema reserved definition".to_owned(),
+    );
+    for class_iri in surface.classes.keys() {
+        if !ns.is_known(class_iri) {
+            return Err(SchemaCompileError::Namespace {
+                iri: class_iri.clone(),
+                reason: "class has no caller-declared prefix for discriminator/key emission"
+                    .to_owned(),
+            });
+        }
+        insert_definition_key(&mut keys, ns.def_key(class_iri), class_iri)?;
+    }
+    for (class_iri, (key, _definition)) in vocab_enums {
+        if !ns.is_known(class_iri) {
+            return Err(SchemaCompileError::Namespace {
+                iri: class_iri.clone(),
+                reason: "value-vocabulary class has no caller-declared prefix".to_owned(),
+            });
+        }
+        insert_definition_key(&mut keys, key.clone(), class_iri)?;
+    }
+    for (class_iri, class) in &surface.classes {
+        let mut property_keys: BTreeMap<String, String> = BTreeMap::new();
+        for property_iri in class.properties.keys() {
+            let key = ns.compact_iri(property_iri);
+            if let Some(first) = property_keys.insert(key.clone(), property_iri.clone())
+                && first != *property_iri
+            {
+                return Err(SchemaCompileError::DefinitionCollision {
+                    key: format!("{}::{key}", ns.def_key(class_iri)),
+                    first,
+                    second: property_iri.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn insert_definition_key(
+    keys: &mut BTreeMap<String, String>,
+    key: String,
+    resource: &str,
+) -> Result<(), SchemaCompileError> {
+    if let Some(first) = keys.insert(key.clone(), resource.to_owned())
+        && first != resource
+    {
+        return Err(SchemaCompileError::DefinitionCollision {
+            key,
+            first,
+            second: resource.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn augment_object_schema(mut body: Value, class: Option<&SurfaceClass>, ctx: &Ctx<'_>) -> Value {
+    let Some(class) = class else {
+        return body;
+    };
+    let properties = body
+        .as_object_mut()
+        .and_then(|object| object.get_mut("properties"))
+        .and_then(Value::as_object_mut)
+        .expect("compiled class object always has a properties map");
+    for property in class.properties.values() {
+        properties
+            .entry(ctx.ns.compact_iri(&property.iri))
+            .or_insert_with(|| ontology_property_schema(property, ctx));
+    }
+    body
+}
+
+fn open_surface_class_schema(class: &SurfaceClass, ctx: &Ctx<'_>) -> Value {
+    let body = json!({
+        "type": "object",
+        "properties": {
+            "@id": { "type": "string" },
+            "@type": {
+                "anyOf": [
+                    { "type": "string" },
+                    { "type": "array", "items": { "type": "string" } }
+                ]
+            },
+            "@annotation": { "$ref": "#/$defs/Annotation" }
+        }
+    });
+    augment_object_schema(body, Some(class), ctx)
+}
+
+fn ontology_property_schema(property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value {
+    let mut single = if property.ranges.is_empty() {
+        match property.kind {
+            OntologyPropertyKind::Object => node_ref_schema(),
+            OntologyPropertyKind::Datatype => general_literal_schema(),
+            OntologyPropertyKind::Generic | OntologyPropertyKind::Annotation => {
+                general_rdf_value_schema()
+            }
+        }
+    } else {
+        let mut conjuncts: Vec<Value> = property
+            .ranges
+            .iter()
+            .map(|range| range_expression_schema(range, property.kind, ctx))
+            .collect();
+        if conjuncts.len() == 1 {
+            conjuncts.pop().expect("one range expression")
+        } else {
+            json!({ "allOf": conjuncts })
+        }
+    };
+    if let Value::Object(schema) = &mut single {
+        schema.insert(
+            "$comment".to_owned(),
+            Value::String(if property.functional {
+                "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
+                    .to_owned()
+            } else {
+                "Optional OWL/RDFS-derived property; multiple values remain permitted.".to_owned()
+            }),
+        );
+    }
+    if property.functional {
+        single
+    } else {
+        json!({
+            "anyOf": [
+                single.clone(),
+                { "type": "array", "items": single }
+            ]
+        })
+    }
+}
+
+fn range_expression_schema(
+    expression: &OntologyExpression,
+    kind: OntologyPropertyKind,
+    ctx: &Ctx<'_>,
+) -> Value {
+    match expression {
+        OntologyExpression::Named(iri) => named_range_schema(iri, kind, ctx),
+        OntologyExpression::Union(members) => json!({
+            "anyOf": members
+                .iter()
+                .map(|member| range_expression_schema(member, kind, ctx))
+                .collect::<Vec<_>>()
+        }),
+        OntologyExpression::Intersection(members) => json!({
+            "allOf": members
+                .iter()
+                .map(|member| range_expression_schema(member, kind, ctx))
+                .collect::<Vec<_>>()
+        }),
+    }
+}
+
+fn named_range_schema(iri: &str, kind: OntologyPropertyKind, ctx: &Ctx<'_>) -> Value {
+    if let Some(enum_key) = ctx.value_vocab_enums.get(iri) {
+        return json!({ "$ref": format!("#/$defs/{enum_key}") });
+    }
+    if iri == "http://www.w3.org/2000/01/rdf-schema#Literal" {
+        return general_literal_schema();
+    }
+    if iri == RDF_LANG_STRING {
+        return json!({
+            "type": "object",
+            "properties": {
+                "@value": { "type": "string" },
+                "@language": { "type": "string" }
+            },
+            "required": ["@value", "@language"]
+        });
+    }
+    if kind == OntologyPropertyKind::Datatype || iri.starts_with(XSD_NS) {
+        return datatype_value_schema(iri);
+    }
+    let key = ctx.ns.def_key(iri);
+    if ctx.emitted_defs.contains(&key) {
+        json!({ "$ref": format!("#/$defs/{key}") })
+    } else if kind == OntologyPropertyKind::Annotation {
+        general_rdf_value_schema()
+    } else {
+        node_ref_schema()
+    }
+}
+
+fn general_literal_schema() -> Value {
+    json!({
+        "anyOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" },
+            typed_literal_schema(),
+            {
+                "type": "object",
+                "properties": {
+                    "@value": { "type": "string" },
+                    "@language": { "type": "string" }
+                },
+                "required": ["@value", "@language"]
+            }
+        ]
+    })
+}
+
+fn general_rdf_value_schema() -> Value {
+    json!({
+        "anyOf": [
+            general_literal_schema(),
+            node_ref_schema()
+        ]
+    })
+}
+
 /// A single value-vocabulary member: its compacted CURIE (the `enum` value id),
 /// its identifier-safe symbol name (`x-enum-varnames`), and its doc string
 /// (`x-enum-descriptions`, empty when the member carries neither `rdfs:comment`
@@ -1210,26 +1592,23 @@ fn value_vocab_enum_defs(
 ///
 /// A single `(?P, rdfs:range, ?O)` scan per dataset is performed — O(1) queries
 /// in the number of vocab classes, rather than one scan per class — filtering
-/// each matched object against `vocab_enums` by IRI string. When a predicate's
-/// `rdfs:range` is declared over multiple distinct vocab classes, the class
-/// with the lexicographically largest IRI wins, matching the deterministic
-/// last-write-wins tiebreak of a sorted-by-`class_iri` resolution.
+/// each matched object against `vocab_enums` by IRI string. Multiple ranges are
+/// retained in lexical class-IRI order because RDFS range axioms are
+/// conjunctive; discarding all but one would weaken the ontology.
 fn value_vocab_predicate_ranges(
     shapes: &Shapes,
     projection: Option<&ValueVocabProjection<'_>>,
     vocab_enums: &BTreeMap<String, (String, Value)>,
-) -> BTreeMap<String, String> {
-    let mut out: BTreeMap<String, String> = BTreeMap::new();
+) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let Some(proj) = projection else {
-        return out;
+        return BTreeMap::new();
     };
     if vocab_enums.is_empty() {
-        return out;
+        return BTreeMap::new();
     }
     let datasets: [&RdfDataset; 2] = [proj.ontology, shapes.shapes_dataset.as_ref()];
     let range_term = Term::NamedNode(NamedNode::from(rdfs::RANGE));
-    // predicate -> (winning class_iri, enum_key); on conflict the larger class_iri wins.
-    let mut winners: BTreeMap<String, (&str, &str)> = BTreeMap::new();
     for ds in datasets {
         for (subject, _pred, object) in
             native_quads(ds, None, Some(&range_term), None, GraphFilter::AnyGraph)
@@ -1243,20 +1622,14 @@ fn value_vocab_predicate_ranges(
             let Some((class_iri, (enum_key, _def))) = vocab_enums.get_key_value(o.as_str()) else {
                 continue;
             };
-            winners
-                .entry(p.as_str().to_owned())
-                .and_modify(|winner| {
-                    if class_iri.as_str() > winner.0 {
-                        *winner = (class_iri.as_str(), enum_key.as_str());
-                    }
-                })
-                .or_insert((class_iri.as_str(), enum_key.as_str()));
+            out.entry(p.as_str().to_owned())
+                .or_default()
+                .insert(class_iri.clone(), enum_key.clone());
         }
     }
-    for (predicate, (_class_iri, enum_key)) in winners {
-        out.insert(predicate, enum_key.to_owned());
-    }
-    out
+    out.into_iter()
+        .map(|(predicate, ranges)| (predicate, ranges.into_values().collect()))
+        .collect()
 }
 
 /// Enumerate the named individuals of `class_iri` (`?x rdf:type class_iri`) across
@@ -2260,18 +2633,19 @@ fn compile_property(
     // always wins. Only a property with NO `sh:class` takes the range-derived enum
     // `$ref`; a `sh:class` that coexists with a value-vocabulary range records a
     // conflict loss (the range enum is suppressed).
-    if let Some(range_key) = ctx.predicate_ranges.get(pred_iri).cloned() {
+    if let Some(range_keys) = ctx.predicate_ranges.get(pred_iri).cloned() {
         match (&class_enum_key, had_any_class) {
             (Some(class_key), _) => {
                 // A vocab `sh:class` already emitted its enum `$ref`; it wins.
-                if *class_key != range_key {
+                if range_keys.iter().any(|range_key| range_key != class_key) {
                     ctx.record(
                         "rdfs:range",
                         shape_iri,
                         &format!(
                             "predicate {pred_iri} has a value-vocabulary sh:class ({class_key}) \
-                             and a conflicting value-vocabulary rdfs:range ({range_key}); \
-                             sh:class wins, range enum suppressed"
+                             and conflicting value-vocabulary rdfs:ranges ({}); \
+                             sh:class wins, range enum suppressed",
+                            range_keys.join(", ")
                         ),
                     );
                 }
@@ -2283,13 +2657,22 @@ fn compile_property(
                     shape_iri,
                     &format!(
                         "predicate {pred_iri} has a sh:class and a value-vocabulary \
-                         rdfs:range ({range_key}); sh:class wins, range enum suppressed"
+                         rdfs:range ({}); sh:class wins, range enum suppressed",
+                        range_keys.join(", ")
                     ),
                 );
             }
             (None, false) => {
-                // Open vocabulary (no sh:class): the enum `$ref` is the value schema.
-                alts.push(json!({ "$ref": format!("#/$defs/{range_key}") }));
+                // Open vocabulary (no sh:class): every range is conjunctive.
+                let mut refs: Vec<Value> = range_keys
+                    .into_iter()
+                    .map(|range_key| json!({ "$ref": format!("#/$defs/{range_key}") }))
+                    .collect();
+                alts.push(if refs.len() == 1 {
+                    refs.pop().expect("one range ref")
+                } else {
+                    json!({ "allOf": refs })
+                });
             }
         }
     }
@@ -2545,6 +2928,29 @@ mod tests {
         let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl).expect("Turtle parse");
         let shapes = from_dataset(&dataset).expect("shape parse");
         compile(&shapes, &fixture_ns())
+    }
+
+    fn compile_ontology(
+        shapes_body: &str,
+        ontology_body: &str,
+        mode: SchemaSurfaceMode,
+    ) -> SchemaCompilation {
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> .\n{shapes_body}"
+        ))
+        .expect("shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> .\n{ontology_body}"
+        ))
+        .expect("ontology Turtle");
+        compile_schema(&SchemaCompileRequest::new(
+            &shapes,
+            &fixture_ns(),
+            ontology.as_ref(),
+            mode,
+        ))
+        .expect("ontology schema compilation")
     }
 
     fn schema_of(c: &CompiledSchema) -> Value {
@@ -2912,6 +3318,187 @@ mod tests {
         };
         assert_eq!(forward.to_json(), reverse.to_json());
         assert!(forward.to_json().ends_with('\n'));
+    }
+
+    #[test]
+    fn ontology_complete_compilation_emits_optional_open_carriers() {
+        let compilation = compile_ontology(
+            r"
+                meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person ;
+                    sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+            r"
+                meta:Person a owl:Class .
+                meta:EmailMessage a owl:Class .
+                meta:resentDate a owl:DatatypeProperty ;
+                    rdfs:domain meta:EmailMessage ; rdfs:range xsd:dateTime .
+                meta:resentMessageId a owl:DatatypeProperty ;
+                    rdfs:domain meta:EmailMessage ; rdfs:range rdfs:Literal .
+                meta:messageCode a owl:DatatypeProperty, owl:FunctionalProperty ;
+                    rdfs:domain meta:EmailMessage ; rdfs:range xsd:string .
+                meta:latestMessage a owl:ObjectProperty ;
+                    rdfs:domain meta:Person ; rdfs:range meta:EmailMessage .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let email = def(&schema, "EmailMessage");
+        assert!(
+            email.is_object(),
+            "unshaped ontology class gets a carrier $def"
+        );
+        assert!(
+            email.get("additionalProperties").is_none(),
+            "carrier remains open"
+        );
+        assert!(
+            email.get("required").is_none(),
+            "ontology properties stay optional"
+        );
+        for property in [
+            "meta:resentDate",
+            "meta:resentMessageId",
+            "meta:messageCode",
+        ] {
+            assert!(
+                email["properties"][property].is_object(),
+                "{property} must be present on the synthesized carrier"
+            );
+        }
+        assert!(
+            email["properties"]["meta:resentDate"]["anyOf"]
+                .as_array()
+                .is_some_and(|forms| forms.iter().any(|form| form["type"] == "array")),
+            "non-functional property accepts multiple values"
+        );
+        assert_eq!(
+            email["properties"]["meta:messageCode"]["$comment"],
+            "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
+        );
+        assert_eq!(
+            def(&schema, "Person")["properties"]["meta:latestMessage"]["anyOf"][0]["$ref"],
+            "#/$defs/EmailMessage"
+        );
+
+        let openapi: Value =
+            serde_json::from_str(&compilation.compiled.openapi_json).expect("OpenAPI is JSON");
+        assert_eq!(
+            openapi["components"]["schemas"]["EmailMessage"], schema["$defs"]["EmailMessage"],
+            "OpenAPI embeds the exact shared carrier definition"
+        );
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:EmailMessage",
+                "meta:resentDate": ["2026-07-17T00:00:00Z"],
+                "meta:resentMessageId": "message-1",
+                "meta:messageCode": "code-1"
+            })
+        ));
+    }
+
+    #[test]
+    fn ontology_request_shaped_only_is_legacy_byte_exact() {
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person ; \
+             sh:property [ sh:path meta:name ; sh:datatype xsd:string ] ."
+        ))
+        .expect("shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> . \
+             meta:extra a owl:DatatypeProperty ."
+        ))
+        .expect("ontology Turtle");
+        let legacy = compile(&shapes, &fixture_ns());
+        let requested = compile_schema(&SchemaCompileRequest::new(
+            &shapes,
+            &fixture_ns(),
+            ontology.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        ))
+        .expect("shaped-only request");
+        assert_eq!(legacy.schema_json, requested.compiled.schema_json);
+        assert_eq!(legacy.openapi_json, requested.compiled.openapi_json);
+        assert_eq!(
+            legacy.losses.render_json(),
+            requested.compiled.losses.render_json()
+        );
+    }
+
+    #[test]
+    fn ontology_surface_preserves_direct_shacl_and_closed_shape_authority() {
+        let compilation = compile_ontology(
+            r"
+                meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person ;
+                    sh:closed true ; sh:ignoredProperties ( meta:allowed ) ;
+                    sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+            r"
+                meta:Person a owl:Class .
+                meta:name a owl:DatatypeProperty ; rdfs:domain meta:Person ; rdfs:range rdfs:Literal .
+                meta:blocked a owl:DatatypeProperty ; rdfs:domain meta:Person .
+                meta:allowed a owl:DatatypeProperty ; rdfs:domain meta:Person .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let person = def(&schema, "Person");
+        assert_eq!(person["additionalProperties"], false);
+        assert!(person["properties"]["meta:blocked"].is_null());
+        assert_eq!(person["properties"]["meta:allowed"], true);
+        assert!(
+            person["required"]
+                .as_array()
+                .is_some_and(|required| required.contains(&json!("meta:name"))),
+            "direct SHACL minCount remains authoritative"
+        );
+    }
+
+    #[test]
+    fn ontology_range_union_and_conjunction_remain_load_bearing() {
+        let compilation = compile_ontology(
+            "",
+            r"
+                meta:A a owl:Class .
+                meta:B a owl:Class .
+                meta:Holder a owl:Class .
+                meta:choice a owl:ObjectProperty ; rdfs:domain meta:Holder ;
+                    rdfs:range [ owl:unionOf ( meta:A meta:B ) ] .
+                meta:both a owl:ObjectProperty ; rdfs:domain meta:Holder ;
+                    rdfs:range meta:A, meta:B .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let holder = def(&schema, "Holder");
+        let choice = &holder["properties"]["meta:choice"]["anyOf"][0];
+        assert_eq!(choice["anyOf"].as_array().map(Vec::len), Some(2));
+        let both = &holder["properties"]["meta:both"]["anyOf"][0];
+        assert_eq!(both["allOf"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn ontology_class_collision_is_a_typed_error() {
+        let shapes_dataset =
+            crate::text_ingest::parse_turtle_to_dataset(PREFIXES).expect("empty shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("empty shapes graph");
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> . \
+             meta:Node a owl:Class ."
+        ))
+        .expect("ontology Turtle");
+        let error = compile_schema(&SchemaCompileRequest::new(
+            &shapes,
+            &fixture_ns(),
+            ontology.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        ))
+        .expect_err("reserved Node definition must collide");
+        assert!(matches!(
+            error,
+            SchemaCompileError::DefinitionCollision { key, .. } if key == "Node"
+        ));
     }
 
     #[test]
@@ -5123,10 +5710,9 @@ mod tests {
     }
 
     #[test]
-    fn value_vocab_multi_range_picks_largest_class_iri_deterministically() {
-        // When ONE predicate declares rdfs:range over TWO distinct value-vocab
-        // classes, the winner is the class with the lexicographically LARGEST
-        // class IRI (".../logic/Beta" > ".../logic/Alpha"), not load order.
+    fn value_vocab_multi_range_is_conjunctive_and_deterministic() {
+        // Multiple rdfs:range axioms are a conjunction, retained in stable
+        // class-IRI order rather than reduced to one lexical winner.
         let forward = schema_of(&compile_vocab(
             r"
             logic:Alpha a logic:AbstractIndividualType .
@@ -5141,8 +5727,13 @@ mod tests {
         ));
         assert_eq!(
             def(&forward, "Thing")["properties"]["meta:choice"],
-            json!({ "$ref": "#/$defs/BetaEnum" }),
-            "the larger class IRI (logic:Beta) wins the multi-range tiebreak"
+            json!({
+                "allOf": [
+                    { "$ref": "#/$defs/AlphaEnum" },
+                    { "$ref": "#/$defs/BetaEnum" }
+                ]
+            }),
+            "both declared ranges remain load-bearing"
         );
 
         // Reversed triple order (Beta declared before Alpha) must yield the
@@ -5161,8 +5752,8 @@ mod tests {
         ));
         assert_eq!(
             def(&reversed, "Thing")["properties"]["meta:choice"],
-            json!({ "$ref": "#/$defs/BetaEnum" }),
-            "the winner is order-independent: still logic:Beta when declared first"
+            def(&forward, "Thing")["properties"]["meta:choice"],
+            "the conjunctive range order is independent of triple load order"
         );
     }
 

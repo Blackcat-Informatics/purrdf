@@ -58,7 +58,7 @@ pub use json_schema::{
     Namespaces, SchemaClassPropertyCoverage, SchemaCompilation, SchemaCompilationInput,
     SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,
     SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus, SchemaPropertyCoverage,
-    SchemaSurfaceMode, ValueVocab, ValueVocabProjection, compile_with_value_vocab,
+    SchemaSurfaceMode, ValueVocab, ValueVocabProjection, compile_schema, compile_with_value_vocab,
 };
 pub use linkml::{
     LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, emit_linkml, import_linkml,
