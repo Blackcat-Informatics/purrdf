@@ -1121,6 +1121,18 @@ const JSON_SCHEMA_LINKML_PROFILE: &[(&str, &str)] = &[
          validation is omitted.",
     ),
     (
+        "slot-identity-rehomed",
+        "A source JSON property token without a caller-resolvable RDF identity is assigned to a \
+         concrete URI under the caller's configured LinkML default prefix. The source token, \
+         generated slot name, and assigned identity remain explicit in the projection report.",
+    ),
+    (
+        "slot-name-policy-dropped",
+        "The caller selected LinkML slot-name skipping for a JSON property whose spelling \
+         cannot be emitted directly. The single property is omitted and its exact source \
+         location remains explicit in the projection diagnostic.",
+    ),
+    (
         "string-length-validation-dropped",
         "JSON Schema minLength/maxLength assertions have no LinkML 1.11 slot expression. The \
          string carrier and representable pattern remain, while code-point length validation is \

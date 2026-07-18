@@ -42,7 +42,7 @@ pub(super) const MAX_LINKML_SOURCE_KEY_BYTES: usize = 1024 * 1024;
 const RESERVED_JSONLD_SLOTS: &[&str] = &["@annotation", "@id", "@language", "@type", "@value"];
 
 /// Policy for a JSON property that cannot be used directly as a LinkML slot name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SanitizePolicy {
     /// Emit a deterministic NCName-safe slot and report the mapping.
@@ -54,7 +54,7 @@ pub enum SanitizePolicy {
 }
 
 /// Semantic effect of a LinkML slot-name policy decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LinkmlSlotDisposition {
     /// Only the LinkML attribute spelling changes; RDF identity is preserved.
@@ -358,6 +358,10 @@ pub struct LinkmlPackage {
     pub element_names: BTreeMap<String, String>,
     /// JSON Schema assertions not represented exactly in LinkML 1.11.
     pub losses: LossLedger,
+    /// Ordered source-slot to emitted-name mappings.
+    pub slot_renames: Vec<LinkmlSlotRename>,
+    /// Ordered located diagnostics for slots omitted by [`SanitizePolicy::Skip`].
+    pub slot_diagnostics: Vec<LinkmlSlotDiagnostic>,
     canonical_yaml: String,
     canonical_element_names: BTreeMap<String, String>,
 }
