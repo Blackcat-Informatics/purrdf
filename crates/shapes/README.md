@@ -233,9 +233,10 @@ Routed packages share one schema table and one runtime base, create required
 intermediate `__init__.py` files, rebuild cross-module references once at the
 package root, and export explicit symbol maps. Missing or stale routes,
 path/symbol collisions, malformed versions, and fixed schema/config/output
-resource-limit violations fail before any artifacts are returned. Omitting the
-topology retains the original single `models.py` layout byte-for-byte; version
-stamping is independently optional in either layout.
+resource-limit violations fail before any artifacts are returned. Omitting both
+the topology and version stamp retains the original flat package byte-for-byte.
+Version stamping is independently available in either layout; in the flat
+layout it adds `__about__.py` and updates the `__init__.py` exports.
 
 Generated classes validate the representable JSON Schema subset and expose the
 originating definition through Pydantic v2's standard

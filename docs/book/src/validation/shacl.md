@@ -150,7 +150,9 @@ Routed packages share schema/runtime support modules, generate intermediate
 package initializers, use explicit symbol tables for one root-level rebuild,
 and pass the executable runtime oracle plus strict mypy. Exact route coverage,
 portable path/symbol uniqueness, and fixed input/config/output limits all fail
-closed. Without a topology, the original flat package bytes remain unchanged.
+closed. When both topology and version stamping are omitted, the original flat
+package bytes remain unchanged. A flat version stamp adds `__about__.py` and
+updates the `__init__.py` exports.
 
 ## LinkML 1.11 projection
 
