@@ -32,6 +32,7 @@ mod sink;
 mod source;
 
 use clap::Parser;
+use purrdf_rdf::JsonLdSerializeOptions;
 
 use crate::cli::{Cli, Command};
 use crate::error::CliError;
@@ -48,6 +49,14 @@ fn main() {
 /// `--loss-ledger` target through.
 fn dispatch(cli: &Cli) -> Result<(), CliError> {
     let ledger_target = cli.ledger_target();
+    let jsonld_options = cli
+        .jsonld_options
+        .as_ref()
+        .map(|path| {
+            let bytes = std::fs::read(path)?;
+            JsonLdSerializeOptions::from_json(&bytes).map_err(CliError::from)
+        })
+        .transpose()?;
     match &cli.cmd {
         Command::Convert {
             from,
@@ -64,6 +73,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 base: base.as_deref(),
                 entailment: *entailment,
                 canonical: *canonical,
+                jsonld_options: jsonld_options.as_ref(),
             },
             input,
             output,
@@ -81,6 +91,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             *entailment,
             *results_format,
             query,
+            jsonld_options.as_ref(),
             &ledger_target,
         ),
         Command::Reason {
@@ -97,6 +108,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             base.as_deref(),
             input,
             output,
+            jsonld_options.as_ref(),
             &ledger_target,
         ),
         Command::Project {
@@ -113,6 +125,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             base.as_deref(),
             input,
             output,
+            jsonld_options.as_ref(),
             &ledger_target,
         ),
         Command::Lift {
@@ -129,6 +142,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             base.as_deref(),
             input,
             output,
+            jsonld_options.as_ref(),
             &ledger_target,
         ),
     }

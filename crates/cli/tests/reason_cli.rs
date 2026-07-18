@@ -512,3 +512,37 @@ fn pack_output_is_a_valid_pack_carrying_the_inference() {
         "the closure pack must carry the inferred `ex:rex a ex:Animal`; got: {text}"
     );
 }
+
+#[test]
+fn configured_jsonld_options_reach_reason_output() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "configured.nt",
+        "<http://example.org/a> <http://example.org/knows> <http://example.org/b> .\n",
+    );
+    let options = write_file(
+        dir,
+        "jsonld-options.json",
+        r#"{"version":1,"mode":"context","prefixes":{"ex":"http://example.org/"}}"#,
+    );
+    let output = path(dir, "closure.jsonld");
+    let result = run(&[
+        "--jsonld-options",
+        &options,
+        "reason",
+        "--regime",
+        "simple",
+        "--from",
+        "ntriples",
+        "--to",
+        "jsonld",
+        &seed,
+        &output,
+    ]);
+    assert!(result.status.success(), "reason: {}", stderr(&result));
+    let text = std::fs::read_to_string(output).expect("configured output");
+    assert!(text.contains("ex:a"));
+    assert!(text.contains("ex:knows"));
+}

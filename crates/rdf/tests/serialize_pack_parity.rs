@@ -15,7 +15,12 @@
 //! the serializer folds into its deterministic output.
 
 use purrdf_core::{DatasetView, PackBuilder, PackView};
-use purrdf_rdf::{NativeRdfFormat, serialize_dataset_to_format};
+use purrdf_rdf::{
+    CompiledJsonLdContext, JsonLdSerializeOptions, NativeRdfFormat, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_jsonld_with_context,
+    serialize_dataset_to_jsonld_with_options, serialize_dataset_to_yamlld_with_options,
+    serialize_dataset_with_jsonld_options,
+};
 
 mod common;
 use common::build_fixture;
@@ -124,4 +129,63 @@ fn pack_view_serializes_identically_to_source_dataset() {
         succeeded >= 7,
         "expected the star-capable + RDF/XML formats to serialize; only {succeeded} did"
     );
+}
+
+#[test]
+fn configured_jsonld_surfaces_accept_any_dataset_view_and_reuse_contexts() {
+    let dataset = build_fixture();
+    let pack = PackBuilder::build_bytes(&dataset).expect("pack build");
+    let view = PackView::from_bytes(&pack).expect("pack opens");
+    let compiled = CompiledJsonLdContext::from_prefixes([
+        ("ex", "http://example.org/"),
+        ("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
+        ("xsd", "http://www.w3.org/2001/XMLSchema#"),
+    ])
+    .expect("compile reusable context");
+    let options = JsonLdSerializeOptions::compiled(std::sync::Arc::new(compiled.clone()))
+        .with_yaml_schema_url("https://example.org/purrdf.schema.json")
+        .expect("schema URL");
+
+    let direct_json = serialize_dataset_to_jsonld_with_options(&view, &options)
+        .expect("configured JSON-LD from PackView");
+    assert_eq!(
+        direct_json,
+        serialize_dataset_to_jsonld_with_context(&view, &compiled)
+            .expect("compiled-context overload")
+    );
+    assert!(direct_json.contains("ex:"), "caller prefix must be used");
+
+    for format in [NativeRdfFormat::JsonLd, NativeRdfFormat::YamlLd] {
+        let source =
+            serialize_dataset_to_format_with_jsonld_options(&*dataset, format, None, &options)
+                .expect("configured source serialization");
+        let packed = serialize_dataset_to_format_with_jsonld_options(&view, format, None, &options)
+            .expect("configured PackView serialization");
+        assert_eq!(source.bytes, packed.bytes, "{format:?} DatasetView parity");
+        let generic = serialize_dataset_with_jsonld_options(
+            &view,
+            format.media_type(),
+            purrdf_rdf::SerializeGraph::Dataset,
+            &options,
+        )
+        .expect("configured generic media-type serialization");
+        assert_eq!(generic, source.bytes, "{format:?} generic parity");
+    }
+
+    let direct_yaml =
+        serialize_dataset_to_yamlld_with_options(&view, &options).expect("configured YAML-LD");
+    assert!(
+        direct_yaml.starts_with(
+            "# yaml-language-server: $schema=https://example.org/purrdf.schema.json\n"
+        )
+    );
+
+    let error = serialize_dataset_to_format_with_jsonld_options(
+        &view,
+        NativeRdfFormat::NQuads,
+        None,
+        &options,
+    )
+    .expect_err("configured options must not be ignored by another format");
+    assert_eq!(error.code, "jsonld-options-unused");
 }

@@ -44,7 +44,7 @@ use super::codec::RdfCodec;
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::serialize::build_ser_graph;
 use super::text_parse::LineParseMode;
-use crate::{RdfDataset, RdfDiagnostic, RdfQuad, RdfTerm, SerializeGraph};
+use crate::{DatasetView, RdfDataset, RdfDiagnostic, RdfQuad, RdfTerm, SerializeGraph};
 
 // Literal datatype sentinels (read off the carrier's first-class literal fields).
 const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
@@ -200,7 +200,7 @@ impl RdfCodec for YamlLdCodec {
 }
 
 /// Serialize the carrier dataset to a deterministic JSON-LD-star document.
-pub fn serialize_dataset_to_jsonld(dataset: &RdfDataset) -> Result<String, RdfDiagnostic> {
+pub fn serialize_dataset_to_jsonld<D: DatasetView>(dataset: &D) -> Result<String, RdfDiagnostic> {
     // Build the same first-party graph shape the RDF text serializers walk. A
     // dataset-capable format (N-Quads) keeps named graphs; the full RDF 1.2 statement
     // layer participates.
@@ -218,8 +218,8 @@ pub fn serialize_dataset_to_jsonld(dataset: &RdfDataset) -> Result<String, RdfDi
 /// Expanded mode is byte-identical to [`serialize_dataset_to_jsonld`]. A compiled
 /// caller context is applied through the typed RDF 1.2 carrier; derived mode is
 /// implemented by the deterministic dataset analysis layer.
-pub fn serialize_dataset_to_jsonld_with_options(
-    dataset: &RdfDataset,
+pub fn serialize_dataset_to_jsonld_with_options<D: DatasetView>(
+    dataset: &D,
     options: &JsonLdSerializeOptions,
 ) -> Result<String, RdfDiagnostic> {
     let graph = build_ser_graph(
@@ -231,12 +231,33 @@ pub fn serialize_dataset_to_jsonld_with_options(
     serialize_ser_graph_with_options(&graph, options)
 }
 
+/// Serialize a dataset through an already compiled, reusable caller context.
+///
+/// This is the allocation-light overload for callers that retain one context across
+/// many datasets. It is equivalent to context-mode [`JsonLdSerializeOptions`] without
+/// cloning the compiled context.
+pub fn serialize_dataset_to_jsonld_with_context<D: DatasetView>(
+    dataset: &D,
+    context: &CompiledJsonLdContext,
+) -> Result<String, RdfDiagnostic> {
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+    )?;
+    let carrier = build_carrier(&graph, true)?;
+    serialize_carrier_compacted(&carrier, context)
+}
+
 /// Derive a deterministic, vocabulary-neutral JSON-LD context from dataset IRI slots.
 ///
 /// Only reversible `#`, `/`, and URN-style `:` namespace boundaries that reduce total
 /// encoded bytes are retained. Aliases are assigned as `ns0`, `ns1`, … from sorted
 /// namespace IRIs; no `@vocab` mapping or caller vocabulary is invented.
-pub fn derive_jsonld_context(dataset: &RdfDataset) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
+pub fn derive_jsonld_context<D: DatasetView>(
+    dataset: &D,
+) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
     let graph = build_ser_graph(
         dataset,
         NativeRdfFormat::NQuads,
@@ -252,7 +273,7 @@ fn serialize_ser_graph(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
     serialize_carrier_expanded(&build_carrier(graph, false)?)
 }
 
-fn serialize_ser_graph_with_options(
+pub(crate) fn serialize_ser_graph_with_options(
     graph: &SerGraph,
     options: &JsonLdSerializeOptions,
 ) -> Result<String, RdfDiagnostic> {
@@ -333,8 +354,8 @@ impl IoWrite for BoundedJsonOutput {
 /// The JSON-LD-star document is re-serialized to YAML with sorted keys, block style, no
 /// anchors/aliases, and an explicit `@context`. The header carries a YAML
 /// language-server schema reference.
-pub fn serialize_dataset_to_yamlld(
-    dataset: &RdfDataset,
+pub fn serialize_dataset_to_yamlld<D: DatasetView>(
+    dataset: &D,
     schema_url: Option<&str>,
 ) -> Result<String, RdfDiagnostic> {
     let graph = build_ser_graph(
@@ -346,6 +367,41 @@ pub fn serialize_dataset_to_yamlld(
     serialize_ser_graph_to_yamlld(&graph, schema_url)
 }
 
+/// Serialize a dataset to deterministic YAML-LD under an explicitly selected mode.
+///
+/// The optional schema reference is carried by [`JsonLdSerializeOptions`] so direct,
+/// generic, CLI, and foreign-language routes all produce the same header bytes.
+pub fn serialize_dataset_to_yamlld_with_options<D: DatasetView>(
+    dataset: &D,
+    options: &JsonLdSerializeOptions,
+) -> Result<String, RdfDiagnostic> {
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+    )?;
+    serialize_ser_graph_to_yamlld_with_options(&graph, options)
+}
+
+/// Serialize a dataset to deterministic YAML-LD through an already compiled,
+/// reusable caller context.
+pub fn serialize_dataset_to_yamlld_with_context<D: DatasetView>(
+    dataset: &D,
+    context: &CompiledJsonLdContext,
+    schema_url: Option<&str>,
+) -> Result<String, RdfDiagnostic> {
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+    )?;
+    let carrier = build_carrier(&graph, true)?;
+    let json = serialize_carrier_compacted(&carrier, context)?;
+    jsonld_to_yaml(&json, schema_url)
+}
+
 /// Serialize an already-materialized [`SerGraph`] to deterministic YAML-LD-star bytes —
 /// the graph-level core shared by [`serialize_dataset_to_yamlld`] and [`YamlLdCodec`].
 fn serialize_ser_graph_to_yamlld(
@@ -353,8 +409,20 @@ fn serialize_ser_graph_to_yamlld(
     schema_url: Option<&str>,
 ) -> Result<String, RdfDiagnostic> {
     let json = serialize_ser_graph(graph)?;
+    jsonld_to_yaml(&json, schema_url)
+}
+
+pub(crate) fn serialize_ser_graph_to_yamlld_with_options(
+    graph: &SerGraph,
+    options: &JsonLdSerializeOptions,
+) -> Result<String, RdfDiagnostic> {
+    let json = serialize_ser_graph_with_options(graph, options)?;
+    jsonld_to_yaml(&json, options.yaml_schema_url())
+}
+
+fn jsonld_to_yaml(json: &str, schema_url: Option<&str>) -> Result<String, RdfDiagnostic> {
     let value: Value =
-        serde_json::from_str(&json).map_err(|e| decode(format!("parse JSON-LD for YAML: {e}")))?;
+        serde_json::from_str(json).map_err(|e| decode(format!("parse JSON-LD for YAML: {e}")))?;
     let body =
         serde_yaml::to_string(&value).map_err(|e| decode(format!("YAML-LD serialization: {e}")))?;
     let url = schema_url.unwrap_or(BUNDLED_SCHEMA_REF);

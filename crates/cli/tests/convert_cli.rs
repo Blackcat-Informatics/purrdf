@@ -341,6 +341,224 @@ fn expanded_jsonld_and_yamlld_cli_bytes_are_frozen() {
     }
 }
 
+#[test]
+fn configured_jsonld_cli_modes_registry_yaml_and_errors_share_one_schema() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let input = write_file(
+        dir,
+        "configured.nq",
+        "<https://example.org/alice> <https://schema.org/name> \"Alice\" .\n",
+    );
+    let expanded = write_file(
+        dir,
+        "expanded-options.json",
+        r#"{"version":1,"mode":"expanded"}"#,
+    );
+    let registry = write_file(
+        dir,
+        "registry-options.json",
+        r#"{
+  "version": 1,
+  "mode": "context",
+  "context": "https://example.org/context",
+  "registry": {
+    "https://example.org/context": {
+      "@context": {
+        "ex": {"@id": "https://example.org/", "@prefix": true},
+        "schema": {"@id": "https://schema.org/", "@prefix": true}
+      }
+    }
+  },
+  "yaml_schema_url": "https://example.org/purrdf.schema.json"
+}"#,
+    );
+    let prefixes = write_file(
+        dir,
+        "prefix-options.json",
+        r#"{
+  "version": 1,
+  "mode": "context",
+  "prefixes": {
+    "ex": "https://example.org/",
+    "schema": "https://schema.org/"
+  },
+  "yaml_schema_url": "https://example.org/purrdf.schema.json"
+}"#,
+    );
+    let derived = write_file(
+        dir,
+        "derived-options.json",
+        r#"{"version":1,"mode":"derived"}"#,
+    );
+
+    let legacy_path = path(dir, "legacy.jsonld");
+    let expanded_path = path(dir, "expanded.jsonld");
+    assert!(
+        run(&[
+            "convert",
+            "--from",
+            "nquads",
+            "--to",
+            "jsonld",
+            &input,
+            &legacy_path,
+        ])
+        .status
+        .success()
+    );
+    let explicit = run(&[
+        "--jsonld-options",
+        &expanded,
+        "convert",
+        "--from",
+        "nquads",
+        "--to",
+        "jsonld",
+        &input,
+        &expanded_path,
+    ]);
+    assert!(explicit.status.success(), "expanded: {}", stderr(&explicit));
+    assert_eq!(
+        std::fs::read(&legacy_path).expect("legacy output"),
+        std::fs::read(&expanded_path).expect("explicit output"),
+        "explicit expanded mode must preserve the compatibility bytes"
+    );
+
+    let compacted_path = path(dir, "compacted.jsonld");
+    let compacted = run(&[
+        "--jsonld-options",
+        &prefixes,
+        "convert",
+        "--from",
+        "nquads",
+        "--to",
+        "jsonld",
+        &input,
+        &compacted_path,
+    ]);
+    assert!(
+        compacted.status.success(),
+        "context: {}",
+        stderr(&compacted)
+    );
+    let compacted_text = std::fs::read_to_string(&compacted_path).expect("compacted output");
+    assert!(compacted_text.contains("schema:name"));
+    assert!(compacted_text.contains("ex:alice"));
+
+    let yaml_path = path(dir, "compacted.yamlld");
+    let yaml = run(&[
+        "--jsonld-options",
+        &prefixes,
+        "convert",
+        "--from",
+        "nquads",
+        "--to",
+        "yamlld",
+        &input,
+        &yaml_path,
+    ]);
+    assert!(yaml.status.success(), "YAML context: {}", stderr(&yaml));
+    assert!(
+        std::fs::read_to_string(&yaml_path)
+            .expect("YAML output")
+            .starts_with(
+                "# yaml-language-server: $schema=https://example.org/purrdf.schema.json\n"
+            )
+    );
+    assert_eq!(
+        canonical(dir, "jsonld", &compacted_path),
+        canonical(dir, "yamlld", &yaml_path),
+        "configured JSON-LD and YAML-LD must be semantically identical"
+    );
+
+    let registry_path = path(dir, "registry.jsonld");
+    let registry_result = run(&[
+        "--jsonld-options",
+        &registry,
+        "convert",
+        "--from",
+        "nquads",
+        "--to",
+        "jsonld",
+        &input,
+        &registry_path,
+    ]);
+    assert!(
+        registry_result.status.success(),
+        "registry: {}",
+        stderr(&registry_result)
+    );
+    assert!(
+        std::fs::read_to_string(registry_path)
+            .expect("registry output")
+            .contains(r#""@context": "https://example.org/context""#)
+    );
+
+    let mut repeated = String::new();
+    for index in 0..32 {
+        writeln!(
+            repeated,
+            "<https://example.org/resource/s{index}> <https://example.org/vocab/p{index}> <https://example.org/resource/o{index}> ."
+        )
+        .expect("fixture row");
+    }
+    let repeated_input = write_file(dir, "derived.nq", &repeated);
+    let derived_path = path(dir, "derived.jsonld");
+    let derived_result = run(&[
+        "--jsonld-options",
+        &derived,
+        "convert",
+        "--from",
+        "nquads",
+        "--to",
+        "jsonld",
+        &repeated_input,
+        &derived_path,
+    ]);
+    assert!(
+        derived_result.status.success(),
+        "derived: {}",
+        stderr(&derived_result)
+    );
+    let derived_text = std::fs::read_to_string(&derived_path).expect("derived output");
+    assert!(derived_text.contains("ns0:"));
+    assert!(!derived_text.contains("@vocab"));
+
+    let malformed = write_file(
+        dir,
+        "malformed-options.json",
+        r#"{"version":1,"mode":"expanded","unknown":true}"#,
+    );
+    let malformed_result = run(&[
+        "--jsonld-options",
+        &malformed,
+        "convert",
+        "--from",
+        "nquads",
+        "--to",
+        "jsonld",
+        &input,
+        &path(dir, "malformed.jsonld"),
+    ]);
+    assert_eq!(malformed_result.status.code(), Some(1));
+    assert!(stderr(&malformed_result).contains("unknown JSON-LD options member"));
+
+    let unused = run(&[
+        "--jsonld-options",
+        &expanded,
+        "convert",
+        "--from",
+        "nquads",
+        "--to",
+        "nquads",
+        &input,
+        &path(dir, "unused.nq"),
+    ]);
+    assert_eq!(unused.status.code(), Some(2));
+    assert!(stderr(&unused).contains("requires a JSON-LD or YAML-LD RDF output"));
+}
+
 /// SEED C to a `carries_star = false` target (RDF/XML, TriX, HexTuples) PROJECTS the
 /// statement layer: exit 0, base quad present, star layer gone, and the ledger records
 /// the dropped statement rows. (This is the real behavior; none of these fail-close in

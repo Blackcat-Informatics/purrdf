@@ -4,6 +4,7 @@
 //! `project` and `lift` graph, tabular, and research-object carrier pipelines.
 
 use purrdf_core::{DatasetView, LossLedger};
+use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::{ProjectionArchive, ProjectionConfig, lift_archive, project_archive};
 
 use crate::cli::{
@@ -44,8 +45,14 @@ pub(crate) fn run_project(
     base: Option<&str>,
     input: &str,
     output: &str,
+    jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
+    if jsonld_options.is_some() {
+        return Err(CliError::Usage(
+            "--jsonld-options cannot be used with projection carrier output".to_owned(),
+        ));
+    }
     let config = read_config(config_path, input)?;
     let source_format = format::resolve(from, input)?;
     let outcome = source::run_over_input(
@@ -73,8 +80,10 @@ pub(crate) fn run_lift(
     base: Option<&str>,
     input: &str,
     output: &str,
+    jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
+    sink::validate_jsonld_options(CliFormat::Rdf(to.to_native()), jsonld_options)?;
     let config = read_config(config_path, input)?;
     let archive = source::read_bytes(input)?;
     let mut outcome = lift_archive(&archive, profile.to_profile(), &config)?;
@@ -84,6 +93,7 @@ pub(crate) fn run_lift(
         CliFormat::Rdf(to.to_native()),
         base,
         None,
+        jsonld_options,
     )?;
     merge_ledger(&mut outcome.loss_ledger, &serialization_ledger);
     ledger::surface(ledger_target, &outcome.loss_ledger)

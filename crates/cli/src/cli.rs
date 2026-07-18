@@ -60,6 +60,12 @@ pub(crate) struct Cli {
         require_equals = true
     )]
     pub(crate) loss_ledger: Option<Option<PathBuf>>,
+
+    /// Versioned JSON options document for configured JSON-LD/YAML-LD output.
+    /// The selected output must be JSON-LD or YAML-LD; otherwise the option is
+    /// rejected instead of ignored.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub(crate) jsonld_options: Option<PathBuf>,
 }
 
 /// Where (if anywhere) the loss ledger should be surfaced — the decoded form of
