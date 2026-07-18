@@ -580,7 +580,7 @@ fn definition_names(
     let mut reverse = BTreeMap::<String, String>::new();
     for key in defs.keys() {
         let name = python_type_name(key, "SchemaModel");
-        if reserved_type_names().contains(name.as_str()) || routed && name == "TypeAlias" {
+        if reserved_type_names().contains(name.as_str()) || (routed && name == "TypeAlias") {
             return Err(PydanticError::new(format!(
                 "$defs key {key:?} normalizes to reserved generated/import name {name:?}"
             )));
