@@ -39,7 +39,10 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 6225000
+# Measured 6,418,213 bytes after exposing the full compiled JSON-LD context
+# engine to JavaScript (strict options/registry decoding plus reusable contexts).
+# 6,610,000 leaves 2.99% headroom for reproducible toolchain variation.
+WASM_SIZE_BUDGET_BYTES := 6610000
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'

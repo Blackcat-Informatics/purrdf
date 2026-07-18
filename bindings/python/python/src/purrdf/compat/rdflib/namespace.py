@@ -411,6 +411,8 @@ class NamespaceManager:
         self.__cache_strict: dict[str, tuple[str, URIRef, str]] = {}
         self.__strie: dict[str, Any] = {}
         self.__trie: dict[str, Any] = {}
+        self._caller_prefixes: set[str] = set()
+        self._record_caller_prefixes = False
         if bind_namespaces == "none":
             pass
         elif bind_namespaces == "core":
@@ -423,6 +425,7 @@ class NamespaceManager:
                 self.bind(prefix, ns)
         else:
             raise ValueError(f"unsupported namespace set {bind_namespaces}")
+        self._record_caller_prefixes = True
 
     @property
     def store(self) -> _SupportsStore:
@@ -592,6 +595,7 @@ class NamespaceManager:
             if replace:
                 self.store.bind(prefix, namespace, override=override)
                 insert_trie(self.__trie, str(namespace))
+                self._record_jsonld_prefix(namespace)
                 return
             if not prefix:
                 prefix = "default"
@@ -600,6 +604,7 @@ class NamespaceManager:
                 new_prefix = f"{prefix}{num}"
                 tnamespace = self.store.namespace(new_prefix)
                 if tnamespace and namespace == URIRef(tnamespace):
+                    self._record_jsonld_prefix(namespace)
                     return  # already bound to the right namespace
                 if not self.store.namespace(new_prefix):
                     break
@@ -614,6 +619,23 @@ class NamespaceManager:
             elif override or bound_prefix.startswith("_"):
                 self.store.bind(prefix, namespace, override=override)
         insert_trie(self.__trie, str(namespace))
+        self._record_jsonld_prefix(namespace)
+
+    def _record_jsonld_prefix(self, namespace: URIRef) -> None:
+        """Remember caller/document bindings separately from shipped defaults."""
+        if not self._record_caller_prefixes:
+            return
+        prefix = self.store.prefix(namespace)
+        if prefix:
+            self._caller_prefixes.add(prefix)
+
+    def jsonld_prefixes(self) -> dict[str, str]:
+        """Return caller/document prefix mappings for explicit JSON-LD compaction."""
+        return {
+            prefix: str(namespace)
+            for prefix in sorted(self._caller_prefixes)
+            if (namespace := self.store.namespace(prefix)) is not None
+        }
 
     def namespaces(self) -> list[tuple[str, URIRef]]:
         """Return the bound ``(prefix, namespace)`` pairs."""

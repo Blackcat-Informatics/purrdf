@@ -102,6 +102,19 @@ test("serialize a plain graph to all 6 formats (Round-trip pane)", () => {
   assert.ok(ds.isomorphic(back), "JSON-LD round-trip must be isomorphic");
 });
 
+test("configured JSON-LD follows the playground worker serialization path", () => {
+  const dataset = Dataset.parse(PLAIN, "turtle");
+  const text = dataset.serializeConfigured(
+    "jsonld",
+    JSON.stringify({
+      version: 1,
+      mode: "context",
+      prefixes: { ex: "http://example.org/" },
+    }),
+  );
+  assert.equal(JSON.parse(text)["@graph"][0]["@id"], "ex:alice");
+});
+
 test("preloaded (quoted-triple) doc: all 6 formats serialize; JSON-LD round-trips", () => {
   const ds = Dataset.parse(PRELOADED, "turtle");
   for (const f of SERIALIZE_FORMATS) {

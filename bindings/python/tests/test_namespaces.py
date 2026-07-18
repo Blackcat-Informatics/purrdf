@@ -242,6 +242,19 @@ def test_parse_binds_jsonld_context_prefixes(compat: ModuleType) -> None:
     assert ("ex", "http://example.org/") in {(p, str(n)) for p, n in g.namespaces()}
 
 
+def test_parse_binds_expanded_jsonld_prefix_definitions(compat: ModuleType) -> None:
+    """Expanded ``@id``/``@prefix`` definitions are rebound on the graph."""
+    jsonld = (
+        '{"@context": {"ex": {"@id": "http://example.org/", "@prefix": true}}, '
+        '"@id": "ex:s", "ex:p": {"@id": "ex:o"}}'
+    )
+    graph = compat.Graph()
+    graph.parse(data=jsonld, format="json-ld")
+    assert ("ex", "http://example.org/") in {
+        (prefix, str(namespace)) for prefix, namespace in graph.namespaces()
+    }
+
+
 def test_parse_binds_rdfxml_xmlns_prefixes(compat: ModuleType) -> None:
     """RDF/XML ``xmlns:`` prefixes are recorded on the graph (rdflib parity)."""
     rdfxml = (

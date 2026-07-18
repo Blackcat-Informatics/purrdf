@@ -26,9 +26,11 @@ use super::canon::PyCanonicalizationAlgorithm;
 use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads, read_input};
 use super::query::{build_engine, materialize_results};
 use super::term::{PyQuad, PyVariable, extract_graph_name, extract_term};
+use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::{
     BlankScope, DatasetMut, GraphMatchValue, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfQuad,
     RdfTerm, RdfTriple, SerializeGraph, SparqlEngine, SparqlRequest, TermValue, serialize_dataset,
+    serialize_dataset_with_jsonld_options,
 };
 
 /// An in-memory RDF 1.2 quad store with SPARQL. Mirrors the oxigraph Python `Store`.
@@ -197,13 +199,20 @@ impl PyStore {
     /// the oxigraph Python `Store.dump`: when `output` (a file-like with `.write`) is given
     /// the bytes are written to it and `None` is returned; otherwise the bytes are
     /// returned directly.
-    #[pyo3(signature = (output=None, format=None, *, from_graph=None))]
+    #[pyo3(signature = (output=None, format=None, *, from_graph=None, jsonld_options=None, jsonld_context=None, yaml_schema_url=None))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Python dump names graph selection and JSON-LD configuration explicitly"
+    )]
     fn dump(
         &self,
         py: Python<'_>,
         output: Option<&Bound<'_, PyAny>>,
         format: Option<PyRdfFormat>,
         from_graph: Option<&Bound<'_, PyAny>>,
+        jsonld_options: Option<&str>,
+        jsonld_context: Option<&PyCompiledJsonLdContext>,
+        yaml_schema_url: Option<&str>,
     ) -> PyResult<Option<Py<PyBytes>>> {
         let format = format.ok_or_else(|| PyValueError::new_err("dump: format is required"))?;
         let native = format.to_native();
@@ -218,6 +227,16 @@ impl PyStore {
                 // default graph). Project its triples into the default graph.
                 Some(extract_graph_name(from_graph)?)
             };
+        let configured =
+            if jsonld_options.is_some() || jsonld_context.is_some() || yaml_schema_url.is_some() {
+                Some(options_from_inputs(
+                    jsonld_options,
+                    jsonld_context,
+                    yaml_schema_url,
+                )?)
+            } else {
+                None
+            };
         let buf: Vec<u8> = py.detach(|| {
             // Serialize natively: materialize the store's quads into the IR
             // verbatim (preserving literal lexical forms) and dispatch to the codec.
@@ -230,8 +249,18 @@ impl PyStore {
             };
             let dataset = dataset_from_quads_verbatim(&quads)
                 .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))?;
-            serialize_dataset(&dataset, native.media_type(), selection)
+            if let Some(options) = &configured {
+                serialize_dataset_with_jsonld_options(
+                    &dataset,
+                    native.media_type(),
+                    selection,
+                    options,
+                )
                 .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
+            } else {
+                serialize_dataset(&dataset, native.media_type(), selection)
+                    .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
+            }
         })?;
         match output {
             Some(output) => {

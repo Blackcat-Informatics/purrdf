@@ -43,6 +43,8 @@ pub(crate) enum PyRdfFormat {
     TRIG,
     TRIX,
     HEXTUPLES,
+    JSON_LD,
+    YAML_LD,
 }
 
 impl PyRdfFormat {
@@ -56,6 +58,8 @@ impl PyRdfFormat {
             Self::TRIG => NativeRdfFormat::TriG,
             Self::TRIX => NativeRdfFormat::TriX,
             Self::HEXTUPLES => NativeRdfFormat::HexTuples,
+            Self::JSON_LD => NativeRdfFormat::JsonLd,
+            Self::YAML_LD => NativeRdfFormat::YamlLd,
         }
     }
 }
@@ -297,5 +301,7 @@ mod tests {
             PyRdfFormat::HEXTUPLES.to_native(),
             NativeRdfFormat::HexTuples
         );
+        assert_eq!(PyRdfFormat::JSON_LD.to_native(), NativeRdfFormat::JsonLd);
+        assert_eq!(PyRdfFormat::YAML_LD.to_native(), NativeRdfFormat::YamlLd);
     }
 }

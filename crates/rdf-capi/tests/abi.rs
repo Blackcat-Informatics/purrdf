@@ -28,7 +28,10 @@ use purrdf::rowcursor::{
     PurrdfRowCursor, purrdf_rowcursor_free, purrdf_rowcursor_next, purrdf_rowcursor_term,
     purrdf_rowcursor_variable_count, purrdf_rowcursor_variable_name,
 };
-use purrdf::serialize::purrdf_serialize;
+use purrdf::serialize::{
+    PurrdfJsonLdContext, purrdf_jsonld_context_compile, purrdf_jsonld_context_free,
+    purrdf_serialize, purrdf_serialize_jsonld_configured,
+};
 use purrdf::status::{PurrdfAbiVersion, PurrdfCapabilities, PurrdfStatus};
 use purrdf::term::{
     PurrdfGraphMatch, PurrdfGraphMatchKind, PurrdfStr, PurrdfTermKind, PurrdfTermView,
@@ -491,6 +494,90 @@ fn expanded_jsonld_and_yamlld_abi_bytes_are_frozen() {
             assert_eq!(buffer_bytes(buffer), expected.as_bytes());
             purrdf_buffer_free(buffer);
         }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn configured_jsonld_context_handle_reuses_bytes_and_preserves_yaml_schema() {
+    const INPUT: &str = "<https://example.org/alice> <https://schema.org/name> \"Alice\" .";
+    const OPTIONS: &str = r#"{"version":1,"mode":"context","prefixes":{"ex":"https://example.org/","schema":"https://schema.org/"}}"#;
+    unsafe {
+        let dataset = parse("text/turtle", INPUT);
+        let mut context: *mut PurrdfJsonLdContext = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_jsonld_context_compile(
+                OPTIONS.as_ptr(),
+                OPTIONS.len(),
+                &raw mut context,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(!context.is_null());
+        assert!(error.is_null());
+
+        for (media_type, schema) in [
+            ("application/ld+json", None),
+            (
+                "application/ld+yaml",
+                Some("https://example.org/purrdf.schema.json"),
+            ),
+        ] {
+            let media = CString::new(media_type).unwrap();
+            let schema = schema.map(|value| CString::new(value).unwrap());
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            assert_eq!(
+                purrdf_serialize_jsonld_configured(
+                    dataset,
+                    media.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    context,
+                    schema
+                        .as_ref()
+                        .map_or(std::ptr::null(), |value| value.as_ptr()),
+                    &raw mut buffer,
+                    &raw mut error,
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            let text = String::from_utf8(buffer_bytes(buffer)).unwrap();
+            assert!(text.contains("ex:alice"));
+            assert!(text.contains("schema:name"));
+            if let Some(schema) = schema {
+                assert!(text.starts_with(&format!(
+                    "# yaml-language-server: $schema={}\n",
+                    schema.to_str().unwrap()
+                )));
+            }
+            purrdf_buffer_free(buffer);
+        }
+
+        let media = CString::new("application/ld+json").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_serialize_jsonld_configured(
+                dataset,
+                media.as_ptr(),
+                OPTIONS.as_ptr(),
+                OPTIONS.len(),
+                context,
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut error,
+            ),
+            PurrdfStatus::SerializeError as i32
+        );
+        assert!(buffer.is_null());
+        assert!(!error.is_null());
+        let message = std::ffi::CStr::from_ptr(purrdf_error_message(error));
+        assert!(message.to_bytes().starts_with(b"provide exactly one"));
+        purrdf_error_free(error);
+
+        purrdf_jsonld_context_free(context);
+        purrdf_jsonld_context_free(std::ptr::null_mut());
         purrdf_dataset_free(dataset);
     }
 }

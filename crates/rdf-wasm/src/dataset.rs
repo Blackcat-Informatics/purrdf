@@ -13,8 +13,9 @@
 use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
 use purrdf::ir::MutableDataset;
 use purrdf::{
-    RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, TermValue, canonical_flat_nquads,
-    datasets_isomorphic, parse_dataset, serialize_dataset,
+    JsonLdSerializeOptions, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, TermValue,
+    canonical_flat_nquads, datasets_isomorphic, parse_dataset, serialize_dataset,
+    serialize_dataset_with_jsonld_options,
 };
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -27,6 +28,7 @@ use purrdf::viz::{
 
 use crate::codec::resolve_media_type;
 use crate::convert::{quad_to_quad_values, quad_values_to_quad, rdf_term_to_term_value};
+use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::term::{Quad, Term, TermInner};
 
 /// Lower an optional pattern [`Term`] to an optional [`TermValue`] (None = wildcard).
@@ -235,6 +237,33 @@ impl Dataset {
             .map_err(|e| JsError::new(&format!("serialization produced non-UTF-8 bytes: {e}")))
     }
 
+    /// Serialize JSON-LD/YAML-LD using the shared versioned options decoder.
+    #[wasm_bindgen(js_name = serializeConfigured)]
+    pub fn serialize_configured(
+        &self,
+        format: &str,
+        options_json: &str,
+    ) -> Result<String, JsError> {
+        self.serialize_with_options(format, &decode_options(options_json)?)
+    }
+
+    /// Serialize JSON-LD/YAML-LD using a reusable compiled context.
+    #[wasm_bindgen(js_name = serializeWithContext)]
+    pub fn serialize_with_context(
+        &self,
+        format: &str,
+        context: &CompiledJsonLdContext,
+        yaml_schema_url: Option<String>,
+    ) -> Result<String, JsError> {
+        let mut options = context_options(context);
+        if let Some(url) = yaml_schema_url {
+            options = options
+                .with_yaml_schema_url(&url)
+                .map_err(|error| JsError::new(&error.to_string()))?;
+        }
+        self.serialize_with_options(format, &options)
+    }
+
     /// `canonicalize()` → the dataset as canonical, flat N-Quads under RDFC-1.0
     /// (SHA-256).
     ///
@@ -373,6 +402,27 @@ impl Dataset {
             out.insert(qv.clone());
         }
         Ok(Self { inner: out })
+    }
+}
+
+impl Dataset {
+    pub(crate) fn serialize_with_options(
+        &self,
+        format: &str,
+        options: &JsonLdSerializeOptions,
+    ) -> Result<String, JsError> {
+        let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
+        let media_type = resolve_media_type(format).map_err(|error| JsError::new(&error))?;
+        let bytes = serialize_dataset_with_jsonld_options(
+            &frozen,
+            media_type,
+            SerializeGraph::Dataset,
+            options,
+        )
+        .map_err(|error| diag_to_err(&error))?;
+        String::from_utf8(bytes).map_err(|error| {
+            JsError::new(&format!("serialization produced non-UTF-8 bytes: {error}"))
+        })
     }
 }
 

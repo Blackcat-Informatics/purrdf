@@ -17,6 +17,7 @@ emit deterministic quad documents.
 
 from __future__ import annotations
 
+import json
 from typing import IO, Any
 
 import purrdf
@@ -118,9 +119,31 @@ class JsonLDSerializer(Serializer):
         encoding: str | None = None,
         **args: Any,
     ) -> None:
-        """Emit JSON-LD (store → N-Quads → ``to_json_ld``)."""
+        """Emit JSON-LD through the shared configured context engine."""
         nquads = self.store._store.dump(format=_NQ)
-        stream.write(purrdf.to_json_ld(nquads, format=_NQ).encode("utf-8"))
+        options = args.get("jsonld_options")
+        context = args.get("jsonld_context")
+        if options is not None and not isinstance(options, str):
+            options = json.dumps(options, sort_keys=True, separators=(",", ":"))
+        if options is None and context is None:
+            prefixes = self.store._nsm.jsonld_prefixes()
+            if prefixes:
+                options = json.dumps(
+                    {"version": 1, "mode": "context", "prefixes": prefixes},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+        if options is None and context is None:
+            rendered = purrdf.to_json_ld(nquads, format=_NQ)
+        else:
+            rendered = purrdf.serialize_jsonld(
+                nquads,
+                format=_NQ,
+                output_format="jsonld",
+                options_json=options,
+                context=context,
+            )
+        stream.write(rendered.encode("utf-8"))
 
 
 class XMLSerializer(Serializer):

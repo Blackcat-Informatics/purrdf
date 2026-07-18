@@ -61,6 +61,20 @@ export interface QueryRawOptions extends QueryOptions {
   readonly format?: QueryRawFormat | string | null;
 }
 
+/** Closed, versioned options document consumed by the shared Rust JSON-LD engine. */
+export type JsonLdSerializeOptions =
+  | { readonly version: 1; readonly mode: "expanded"; readonly yaml_schema_url?: string }
+  | { readonly version: 1; readonly mode: "derived"; readonly yaml_schema_url?: string }
+  | {
+      readonly version: 1;
+      readonly mode: "context";
+      readonly prefixes?: Readonly<Record<string, string>>;
+      readonly context?: unknown;
+      readonly document_iri?: string;
+      readonly registry?: Readonly<Record<string, unknown>>;
+      readonly yaml_schema_url?: string;
+    };
+
 export type QueryBindingRow = Record<string, RdfTerm | undefined>;
 
 export interface QueryBindingRows extends IterableIterator<QueryBindingRow> {
@@ -383,11 +397,23 @@ export class Dataset implements Iterable<Quad> {
   visualExport(options?: VisualizationOptions | null): VisualExport;
   visualSvg(options?: VisualizationOptions | null): VisualSvgDocument;
   serialize(format: string): string;
+  serializeConfigured(format: "jsonld" | "yamlld" | string, optionsJson: string): string;
+  serializeWithContext(
+    format: "jsonld" | "yamlld" | string,
+    context: CompiledJsonLdContext,
+    yamlSchemaUrl?: string | null,
+  ): string;
   query(sparql: string, base?: string | null): string;
   canonicalize(): string;
   isomorphic(other: Dataset): boolean;
   toStream(): AsyncIterableIterator<Quad>;
   [Symbol.iterator](): IterableIterator<Quad>;
+  free(): void;
+}
+
+export class CompiledJsonLdContext {
+  constructor(optionsJson: string);
+  canonicalContextJson(): string;
   free(): void;
 }
 
@@ -443,6 +469,21 @@ export class QueryEngine {
   describe(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
   update(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
   queryRaw(dataset: Dataset, sparql: string, options?: QueryRawOptions | null): string;
+  queryRawConfigured(
+    dataset: Dataset,
+    sparql: string,
+    base: string | null | undefined,
+    format: "jsonld" | "yamlld" | string,
+    optionsJson: string,
+  ): string;
+  queryRawWithContext(
+    dataset: Dataset,
+    sparql: string,
+    base: string | null | undefined,
+    format: "jsonld" | "yamlld" | string,
+    context: CompiledJsonLdContext,
+    yamlSchemaUrl?: string | null,
+  ): string;
   free(): void;
 }
 

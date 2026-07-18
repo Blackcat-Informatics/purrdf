@@ -130,7 +130,7 @@ const HANDLERS = {
     return { size: current.size, rows: quadsToRows(current) };
   },
 
-  serializeAll() {
+  serializeAll({ jsonldOptions = null } = {}) {
     const ds = requireCurrent();
     const quoted = hasQuotedObject(ds);
     const formats = {};
@@ -141,7 +141,15 @@ const HANDLERS = {
       // error visibly instead of aborting the whole differential.
       let text = null;
       try {
-        text = ds.serialize(f);
+        text =
+          f === "jsonld" && jsonldOptions != null
+            ? ds.serializeConfigured(
+                f,
+                typeof jsonldOptions === "string"
+                  ? jsonldOptions
+                  : JSON.stringify(jsonldOptions),
+              )
+            : ds.serialize(f);
       } catch (e) {
         entry.error = String(e?.message ?? e);
       }
