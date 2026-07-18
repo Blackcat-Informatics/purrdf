@@ -952,9 +952,11 @@ pub fn compile_schema(
         ontology: request.ontology(),
     });
     let compiled = match request.mode() {
-        SchemaSurfaceMode::ShapedOnly => {
-            compile_with_value_vocab(request.shapes(), request.namespaces(), projection.as_ref())
-        }
+        SchemaSurfaceMode::ShapedOnly => try_compile_with_value_vocab(
+            request.shapes(),
+            request.namespaces(),
+            projection.as_ref(),
+        )?,
         SchemaSurfaceMode::OntologyComplete => compile_with_surface(
             request.shapes(),
             request.namespaces(),
@@ -995,6 +997,15 @@ pub fn compile_with_value_vocab(
     ns: &Namespaces,
     projection: Option<&ValueVocabProjection<'_>>,
 ) -> CompiledSchema {
+    try_compile_with_value_vocab(shapes, ns, projection)
+        .unwrap_or_else(|error| panic!("json_schema: {error}"))
+}
+
+fn try_compile_with_value_vocab(
+    shapes: &Shapes,
+    ns: &Namespaces,
+    projection: Option<&ValueVocabProjection<'_>>,
+) -> Result<CompiledSchema, SchemaCompileError> {
     // Keying invariant (Gap D, fail-closed): every primary-namespace `$def`
     // is keyed by the class LOCAL NAME and the `@type` discriminator is
     // `<primary_prefix>:<LocalName>`. That is sound ONLY while every target
@@ -1004,13 +1015,13 @@ pub fn compile_with_value_vocab(
     // guard protects the precondition rather than widening the keys. A target
     // class from an undeclared namespace or a colliding key HARD-fails the
     // build here instead of silently mis-discriminating or clobbering a `$def`.
-    assert_target_class_keys_are_unambiguous(shapes, ns);
+    validate_target_class_keys(shapes, ns)?;
 
     // Value-vocabulary enum `$defs` (projection-only): class IRI → (enum key,
     // `$def` body). Empty when `projection` is `None`. Enum keys are guarded for
     // collisions against each other and the class `$def` keys before use.
-    let (vocab_enums, vocab_losses) = value_vocab_enum_defs(shapes, ns, projection);
-    assert_value_vocab_enum_keys_unambiguous(shapes, ns, &vocab_enums);
+    let (vocab_enums, vocab_losses) = value_vocab_enum_defs(shapes, ns, projection)?;
+    validate_value_vocab_enum_keys(shapes, ns, &vocab_enums)?;
 
     // PASS 1: compute the set of `def_key`s that WILL receive a `$def`, using
     // the EXACT same iteration AND the EXACT same key function (`ns.def_key`)
@@ -1166,11 +1177,11 @@ pub fn compile_with_value_vocab(
     let schema = root_schema(&defs, ns);
     let openapi = openapi_doc(&defs);
 
-    CompiledSchema {
+    Ok(CompiledSchema {
         schema_json: to_pretty(&schema),
         openapi_json: to_pretty(&openapi),
         losses: ctx.ledger,
-    }
+    })
 }
 
 fn compile_with_surface(
@@ -1179,7 +1190,7 @@ fn compile_with_surface(
     projection: Option<&ValueVocabProjection<'_>>,
     surface: &SchemaSurface,
 ) -> Result<CompiledSchema, SchemaCompileError> {
-    let (vocab_enums, vocab_losses) = value_vocab_enum_defs(shapes, ns, projection);
+    let (vocab_enums, vocab_losses) = value_vocab_enum_defs(shapes, ns, projection)?;
     validate_surface_keys(surface, ns, &vocab_enums)?;
 
     let mut emitted_defs: BTreeSet<String> = surface
@@ -1523,6 +1534,9 @@ struct VocabMember {
     description: String,
 }
 
+type ValueVocabDefinitions = BTreeMap<String, (String, Value)>;
+type ValueVocabDerivation = (ValueVocabDefinitions, Vec<LossEntry>);
+
 /// Derive the value-vocabulary enum `$defs`: `class IRI → (enum key, $def body)`.
 ///
 /// Enumerates value-vocabulary classes (`?V rdf:type <marker>`) and each one's
@@ -1534,11 +1548,11 @@ fn value_vocab_enum_defs(
     shapes: &Shapes,
     ns: &Namespaces,
     projection: Option<&ValueVocabProjection<'_>>,
-) -> (BTreeMap<String, (String, Value)>, Vec<LossEntry>) {
+) -> Result<ValueVocabDerivation, SchemaCompileError> {
     let mut out: BTreeMap<String, (String, Value)> = BTreeMap::new();
     let mut losses: Vec<LossEntry> = Vec::new();
     let Some(proj) = projection else {
-        return (out, losses);
+        return Ok((out, losses));
     };
 
     let datasets: [&RdfDataset; 2] = [proj.ontology, shapes.shapes_dataset.as_ref()];
@@ -1563,12 +1577,13 @@ fn value_vocab_enum_defs(
     }
 
     for class_iri in &class_iris {
-        assert!(
-            ns.is_known(class_iri),
-            "json_schema: value-vocabulary class {class_iri:?} has no declared namespace \
-             prefix — its `{{Local}}Enum` `$def` key and members derive from a prefix CURIE; \
-             declare its prefix in the shapes document / Namespaces before marking it"
-        );
+        if !ns.is_known(class_iri) {
+            return Err(SchemaCompileError::Namespace {
+                iri: class_iri.clone(),
+                reason: "value-vocabulary class has no declared namespace prefix for its enum definition key"
+                    .to_owned(),
+            });
+        }
         let key = format!("{}Enum", local_name(class_iri));
         let (members, member_losses) = members_of(&datasets, class_iri, ns);
         losses.extend(member_losses);
@@ -1582,7 +1597,7 @@ fn value_vocab_enum_defs(
         out.insert(class_iri.clone(), (key, build_enum_def(&members)));
     }
 
-    (out, losses)
+    Ok((out, losses))
 }
 
 /// Map each predicate whose `rdfs:range` is a value-vocabulary class to that
@@ -1762,40 +1777,27 @@ fn build_enum_def(members: &[VocabMember]) -> Value {
 /// (build-time, fail-closed): no two value-vocabulary classes share a
 /// `{Local}Enum` key (cross-namespace local-name twins), and no enum key clashes
 /// with a class `$def` key.
-fn assert_value_vocab_enum_keys_unambiguous(
+fn validate_value_vocab_enum_keys(
     shapes: &Shapes,
     ns: &Namespaces,
     vocab_enums: &BTreeMap<String, (String, Value)>,
-) {
+) -> Result<(), SchemaCompileError> {
     // The class `$def` keys (every active target class, explicit or implicit),
     // which enum keys must not clash with.
-    let mut class_keys: BTreeSet<String> = BTreeSet::new();
-    for shape in &shapes.node_shapes {
-        if shape.deactivated {
-            continue;
-        }
-        for target in &shape.targets {
-            if let Some(iri) = class_def_target_iri(target) {
-                class_keys.insert(ns.def_key(iri));
-            }
-        }
-    }
+    let class_keys = target_definition_keys(shapes, ns)?;
 
     let mut key_to_class: BTreeMap<String, String> = BTreeMap::new();
     for (class_iri, (key, _def)) in vocab_enums {
-        assert!(
-            !class_keys.contains(key),
-            "json_schema: value-vocabulary enum key {key:?} (from {class_iri}) collides with a \
-             class `$def` key — disambiguate before projecting"
-        );
-        if let Some(prev) = key_to_class.insert(key.clone(), class_iri.clone()) {
-            panic!(
-                "json_schema: distinct value-vocabulary classes share the enum `$def` key \
-                 {key:?} ({prev} vs {class_iri}) — cross-namespace local-name twins; \
-                 disambiguate before projecting"
-            );
+        if let Some(first) = class_keys.get(key) {
+            return Err(SchemaCompileError::DefinitionCollision {
+                key: key.clone(),
+                first: first.clone(),
+                second: class_iri.clone(),
+            });
         }
+        insert_definition_key(&mut key_to_class, key.clone(), class_iri)?;
     }
+    Ok(())
 }
 
 /// The class IRI a `Target::ImplicitClass` carries. [`Shapes::parse_targets`]
@@ -1831,35 +1833,44 @@ fn class_def_target_iri(target: &Target) -> Option<&str> {
 /// Enforce the keying precondition (Gap D): every active `sh:targetClass` /
 /// implicit-class target is in a DECLARED namespace (so [`Namespaces::def_key`]
 /// yields a stable `$defs` key and [`node_def`] can rebuild its `@type` const)
-/// and those keys are collision-free. Panics with a descriptive message
-/// otherwise (build-time, fail-closed).
-fn assert_target_class_keys_are_unambiguous(shapes: &Shapes, ns: &Namespaces) {
-    let mut key_to_iri: BTreeMap<String, String> = BTreeMap::new();
+/// and those keys are collision-free. Returns the public typed compilation
+/// error so ontology-aware callers never cross a panic boundary.
+fn validate_target_class_keys(shapes: &Shapes, ns: &Namespaces) -> Result<(), SchemaCompileError> {
+    target_definition_keys(shapes, ns).map(drop)
+}
+
+fn target_definition_keys(
+    shapes: &Shapes,
+    ns: &Namespaces,
+) -> Result<BTreeMap<String, String>, SchemaCompileError> {
+    let mut key_to_iri = BTreeMap::from([
+        (
+            "Annotation".to_owned(),
+            "JSON Schema reserved definition".to_owned(),
+        ),
+        (
+            "Node".to_owned(),
+            "JSON Schema reserved definition".to_owned(),
+        ),
+    ]);
     for shape in &shapes.node_shapes {
         if shape.deactivated {
             continue;
         }
         for target in &shape.targets {
             if let Some(iri) = class_def_target_iri(target) {
-                assert!(
-                    ns.is_known(iri),
-                    "json_schema: target class {iri:?} has no declared namespace prefix — \
-                     the @type discriminator and `$defs` keys derive from a prefix CURIE; \
-                     declare its prefix in the shapes document / Namespaces (and confirm \
-                     OpenAPI key encoding) before introducing target classes from it"
-                );
-                let key = ns.def_key(iri);
-                if let Some(prev) = key_to_iri.insert(key.clone(), iri.to_owned()) {
-                    assert_eq!(
-                        prev, iri,
-                        "json_schema: distinct target classes share the `$defs` key \
-                         {key:?} ({prev} vs {iri}) — their `$defs`/OpenAPI keys would \
-                         collide; disambiguate before keying"
-                    );
+                if !ns.is_known(iri) {
+                    return Err(SchemaCompileError::Namespace {
+                        iri: iri.to_owned(),
+                        reason: "target class has no declared namespace prefix for its discriminator and definition key"
+                            .to_owned(),
+                    });
                 }
+                insert_definition_key(&mut key_to_iri, ns.def_key(iri), iri)?;
             }
         }
     }
+    Ok(key_to_iri)
 }
 
 // ── Root envelope ────────────────────────────────────────────────────────────
@@ -2996,7 +3007,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "declare its prefix in the shapes document / Namespaces")]
+    #[should_panic(expected = "target class has no declared namespace prefix")]
     fn unknown_namespace_target_class_hard_fails() {
         // A target class from an UNDECLARED namespace has no prefix CURIE to key
         // its `$defs`/discriminator by; the keying guard must reject it loudly
@@ -3010,6 +3021,36 @@ mod tests {
                 sh:property [ sh:path meta:name ; sh:minCount 1 ] .
         ",
         );
+    }
+
+    #[test]
+    fn ontology_request_returns_typed_target_key_errors_in_both_modes() {
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}@prefix und: <https://undeclared.example/> .
+             meta:Shape a sh:NodeShape ; sh:targetClass und:Person ."
+        ))
+        .expect("shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
+        let ontology =
+            crate::text_ingest::parse_turtle_to_dataset(PREFIXES).expect("ontology Turtle");
+
+        for mode in [
+            SchemaSurfaceMode::ShapedOnly,
+            SchemaSurfaceMode::OntologyComplete,
+        ] {
+            let error = compile_schema(&SchemaCompileRequest::new(
+                &shapes,
+                &fixture_ns(),
+                ontology.as_ref(),
+                mode,
+            ))
+            .expect_err("unknown target namespace must be typed");
+            assert!(matches!(
+                error,
+                SchemaCompileError::Namespace { iri, .. }
+                    if iri == "https://undeclared.example/Person"
+            ));
+        }
     }
 
     #[test]
@@ -5562,7 +5603,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "cross-namespace local-name twins")]
+    #[should_panic(expected = "share schema definition key")]
     fn value_vocab_local_name_twins_hard_fail() {
         // Two vocab classes with the same local name in different declared
         // namespaces both key to `ColorEnum` — the collision guard must reject it.
@@ -5589,7 +5630,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "collides with a class `$def` key")]
+    #[should_panic(expected = "share schema definition key")]
     fn value_vocab_enum_key_class_def_key_clash_hard_fails() {
         // A vocab class `logic:Color` enum-keys to `ColorEnum`, which is the SAME
         // `$def` key a primary-namespace target class `meta:ColorEnum` receives
@@ -5606,6 +5647,82 @@ mod tests {
                 sh:property [ sh:path meta:name ; sh:minCount 1 ] .
         ",
         );
+    }
+
+    #[test]
+    fn ontology_request_returns_typed_value_vocab_key_errors_in_both_modes() {
+        const MARKER_IRI: &str = "https://example.org/marker/AbstractIndividualType";
+
+        let shapes_dataset =
+            crate::text_ingest::parse_turtle_to_dataset(PREFIXES).expect("empty shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("empty shapes graph");
+        let vocab = ValueVocab::new(MARKER_IRI);
+
+        let unknown = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}
+             @prefix marker: <https://example.org/marker/> .
+             @prefix und: <https://undeclared.example/> .
+             und:Color a marker:AbstractIndividualType ."
+        ))
+        .expect("unknown-namespace vocabulary Turtle");
+        let unknown_projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: unknown.as_ref(),
+        };
+        for mode in [
+            SchemaSurfaceMode::ShapedOnly,
+            SchemaSurfaceMode::OntologyComplete,
+        ] {
+            let error = compile_schema(&SchemaCompileRequest::from_value_vocab_projection(
+                &shapes,
+                &fixture_ns(),
+                &unknown_projection,
+                mode,
+            ))
+            .expect_err("unknown vocabulary namespace must be typed");
+            assert!(matches!(
+                error,
+                SchemaCompileError::Namespace { iri, .. }
+                    if iri == "https://undeclared.example/Color"
+            ));
+        }
+
+        let collision = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}
+             @prefix marker: <https://example.org/marker/> .
+             @prefix aux: <https://example.org/aux/> .
+             meta:Color a marker:AbstractIndividualType .
+             aux:Color a marker:AbstractIndividualType ."
+        ))
+        .expect("colliding vocabulary Turtle");
+        let collision_namespaces = Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                ("aux".to_owned(), "https://example.org/aux/".to_owned()),
+            ],
+        )
+        .expect("collision namespace config");
+        let collision_projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: collision.as_ref(),
+        };
+        for mode in [
+            SchemaSurfaceMode::ShapedOnly,
+            SchemaSurfaceMode::OntologyComplete,
+        ] {
+            let error = compile_schema(&SchemaCompileRequest::from_value_vocab_projection(
+                &shapes,
+                &collision_namespaces,
+                &collision_projection,
+                mode,
+            ))
+            .expect_err("colliding vocabulary keys must be typed");
+            assert!(matches!(
+                error,
+                SchemaCompileError::DefinitionCollision { key, .. } if key == "ColorEnum"
+            ));
+        }
     }
 
     // ── Referencing $ref (Task 3) ────────────────────────────────────────────
