@@ -186,6 +186,57 @@ assert_eq!(
 );
 ```
 
+Callers that need a distribution-ready package can supply a total topology,
+class documentation and arbitrary sorted JSON linkage metadata, plus an exact
+PEP 440 version. Every `$defs` key must occur exactly once and every declared
+leaf module must own a class:
+
+```rust,ignore
+use std::collections::BTreeMap;
+use purrdf_shapes::{
+    PydanticClassConfig, PydanticModuleConfig, PydanticPackageTopology,
+    PydanticVersionStamp,
+};
+use serde_json::json;
+
+let topology = PydanticPackageTopology::new(
+    [PydanticModuleConfig::new(
+        "domain.people",
+        "Caller-owned people module.",
+    )?],
+    [PydanticClassConfig::new(
+        "Person",
+        "domain.people",
+        "Caller-owned Person documentation.",
+        BTreeMap::from([
+            ("definitionDigest".to_owned(), json!("sha256:...")),
+            ("docs".to_owned(), json!("https://example.org/docs/person")),
+        ]),
+    )?],
+)?;
+let config = config
+    .with_topology(topology)?
+    .with_version_stamp(PydanticVersionStamp::new(
+        "1.2.3+portable.1",
+        "Caller-owned version module.",
+    )?)?;
+let package = emit_pydantic(&compiled_schema, &config)?;
+
+assert!(package.artifacts.contains_key("example_models/domain/people.py"));
+assert_eq!(
+    package.model_paths.get("Person").map(String::as_str),
+    Some("example_models.domain.people.Person"),
+);
+```
+
+Routed packages share one schema table and one runtime base, create required
+intermediate `__init__.py` files, rebuild cross-module references once at the
+package root, and export explicit symbol maps. Missing or stale routes,
+path/symbol collisions, malformed versions, and fixed schema/config/output
+resource-limit violations fail before any artifacts are returned. Omitting the
+topology retains the original single `models.py` layout byte-for-byte; version
+stamping is independently optional in either layout.
+
 Generated classes validate the representable JSON Schema subset and expose the
 originating definition through Pydantic v2's standard
 `model_json_schema(by_alias=True)` surface. Assertions without an exact
@@ -194,12 +245,22 @@ pointer locations, in `package.losses`; the source SHACL-to-JSON-Schema losses
 remain separately available on `CompiledSchema::losses`. The checked
 `json-schema` → `pydantic-v2` loss profile makes every widening auditable.
 
-The dev-only executable oracle imports an emitted package, compares its live
-`model_json_schema()` output with the source definitions, and probes validation
-and alias round trips:
+The dev-only executable oracle imports both flat and routed packages, runs
+strict mypy over the routed package, compares live `model_json_schema()` output
+with the source definitions, and probes validation, metadata/version linkage,
+aliases, and verified reverse round trips:
 
 ```bash
 make pydantic-oracle
+```
+
+Report-only timing and allocation instruments share the same deterministic
+32/1,024/16,384-definition fixture family across flat, rich single-module,
+40-module, and one-module-per-definition layouts:
+
+```bash
+cargo bench -p purrdf-shapes --bench pydantic_package --locked -- --noplot
+cargo run --release -p purrdf-shapes --example pydantic_allocations --locked
 ```
 
 `import_pydantic_package` is the schema reverse API. It verifies the fixed
