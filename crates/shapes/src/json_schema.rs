@@ -3136,9 +3136,16 @@ mod tests {
 
     #[test]
     fn caller_owned_namespaces_exclude_implicit_builtins() {
-        let ns = fixture_ns();
+        let ns = Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                ("aux".to_owned(), "https://example.org/aux/".to_owned()),
+            ],
+        )
+        .expect("caller namespace declarations are valid");
         assert!(ns.is_caller_owned("https://example.org/meta/Person"));
-        assert!(ns.is_caller_owned("https://blackcatinformatics.ca/logic/Claim"));
+        assert!(ns.is_caller_owned("https://example.org/aux/Claim"));
         assert!(!ns.is_caller_owned("http://www.w3.org/2002/07/owl#DatatypeProperty"));
 
         let explicit = Namespaces::new(
