@@ -58,6 +58,72 @@ cargo build -p purrdf-shapes
 cargo test -p purrdf-shapes
 ```
 
+## Ontology-complete developer schemas
+
+`compile_schema` makes the developer-schema surface an explicit choice.
+`SchemaSurfaceMode::ShapedOnly` preserves the existing active
+`sh:targetClass` union. `SchemaSurfaceMode::OntologyComplete` also emits
+caller-vocabulary classes and optional properties justified by a bounded,
+deterministic OWL/RDFS schema theory. Both modes return the same JSON Schema
+draft 2020-12 and OpenAPI 3.1 carrier, plus a coverage manifest and cache key.
+The resulting `CompiledSchema` can be passed unchanged to the LinkML 1.11,
+TypeScript 7.0, GraphQL September 2025, and Pydantic v2 emitters.
+
+The request binds parsed SHACL, the exact ontology dataset, caller-owned
+`Namespaces`, and the mode. The compiler never discovers or invents a
+vocabulary. Only IRIs under prefixes explicitly supplied to `Namespaces::new`
+are eligible for synthesized definitions and fields; builtin prefixes known for
+compaction do not become caller-owned implicitly.
+
+The supported schema theory is deliberately finite:
+
+- the property catalog is formed from direct IRI `sh:path` predicates,
+  `rdf:Property` and OWL property types, `rdfs:domain`/`rdfs:range`, and both
+  endpoints of `rdfs:subPropertyOf`, `owl:equivalentProperty`, and
+  `owl:inverseOf`; predicates seen only in instance assertions are not schema
+  declarations;
+- named classes come from class declarations, named domain/range members,
+  direct SHACL target classes, `rdfs:subClassOf`, and `owl:equivalentClass`;
+- subclass and equivalent-class closure drives domain membership. Multiple
+  effective domain axioms are conjunctive, while an `owl:unionOf` domain matches
+  any member and an `owl:intersectionOf` domain matches every member. A
+  domainless property applies to every eligible class;
+- subproperties inherit superproperty domains, ranges, and forward
+  functionality; equivalent properties propagate both ways; inverse properties
+  swap domain and range. Legal cycles are condensed before propagation;
+- multiple effective ranges are conjunctive. Union ranges become `anyOf`,
+  intersection ranges become `allOf`, and contradictory object/datatype
+  declarations fail with `SchemaCompileError`;
+- direct SHACL constraints remain authoritative. Unshaped ontology properties
+  are optional, `owl:FunctionalProperty` is represented as a scalar and marked
+  as a representation approximation, and `owl:InverseFunctionalProperty` never
+  implies scalar cardinality. An active `sh:closed` shape excludes an unshaped
+  property unless the shape or its ignored-properties list admits it;
+- an ontology class without a target shape receives an open carrier definition.
+  It is never made closed merely because PurRDF synthesized it.
+
+This is schema projection, not ABox entailment or unrestricted OWL reasoning.
+Property chains and axioms outside the fragment do not drive fields. Malformed
+union/intersection RDF lists, namespace/key collisions, incompatible property
+kinds or ranges, and fixed limit breaches fail with typed errors. The fixed
+ceilings are 65,536 properties, 65,536 classes, 1,048,576 relation or coverage
+cells, and OWL expression depth 64.
+
+Every catalogued property appears exactly once in `SchemaCoverageReport`, with
+sorted class decisions, inclusion/exclusion reasons, precision, and source
+axiom provenance. `SchemaCompileRequest::coverage_report` computes that audit
+surface without serializing language artifacts. `compilation_key` hashes the
+RDFC-1.0 identities of both input graphs together with declared namespaces,
+mode, value-vocabulary marker, compiler/policy salts, and fixed limits, so the
+key can be computed before expensive emission and used directly for caching.
+
+The runnable example compares both modes, prints the report and cache key, and
+passes the complete result through all four language emitters:
+
+```bash
+cargo run -p purrdf-shapes --example ontology_schema_surface --locked
+```
+
 ## Schema → SHACL imports
 
 The schema-projection family is bidirectional. `SchemaImportConfig` requires a

@@ -44,6 +44,56 @@ so shapes can constrain the RDF 1.2 reifier metadata attached to statements
 draft is dated 2026-06-02. **This is not a claim of full SHACL 1.2
 conformance** — it is one draft feature, explicitly scoped and tested.
 
+## Ontology-complete developer schemas
+
+The public `compile_schema` boundary accepts a `SchemaCompileRequest` that binds
+the parsed shapes, exact ontology dataset, caller-owned `Namespaces`, and an
+explicit `SchemaSurfaceMode`. `ShapedOnly` retains the active SHACL
+target-class surface. `OntologyComplete` adds existing caller-vocabulary
+classes and optional OWL/RDFS-derived properties. The result carries JSON
+Schema draft 2020-12, OpenAPI 3.1, the normal forward loss ledger, a canonical
+property-coverage report, and a deterministic pre-compilation cache key. Its
+`CompiledSchema` feeds the LinkML, TypeScript, GraphQL, and Pydantic emitters
+without a second schema-discovery pass.
+
+The bounded theory catalogs only schema evidence: direct IRI `sh:path`, RDF/OWL
+property declarations, domain/range declarations, and both endpoints of
+subproperty, equivalent-property, and inverse-property relations. A predicate
+seen only on an instance is not promoted. Class admission is likewise explicit,
+and synthesized definitions are limited to namespaces the caller supplied;
+PurRDF does not turn builtin compaction prefixes into an ontology boundary.
+
+Subclass/equivalent-class closure determines domain membership. Multiple
+domains are conjunctive; OWL union members are alternatives and intersection
+members are conjunctive. Subproperties inherit superproperty domains, ranges,
+and forward functionality, equivalent properties propagate bidirectionally,
+and inverse properties exchange domain and range. Strongly connected cycles
+are condensed deterministically. Multiple ranges remain conjunctive in emitted
+JSON Schema; union and intersection expressions map to `anyOf` and `allOf`.
+
+Direct SHACL remains authoritative. Ontology-only fields are optional;
+`owl:FunctionalProperty` gives a scalar representation with approximation
+provenance, while inverse functionality does not. Closed shapes reject
+unshaped fields unless they are directly present or ignored. Classes without a
+target shape are emitted as open carriers, never as fabricated closed models.
+This is not ABox materialization or unrestricted OWL: property chains and
+axioms outside the fragment do not create fields.
+
+`SchemaCoverageReport` accounts for every catalogued property once, including
+exclusions, with sorted per-class outcomes and source-axiom provenance.
+`SchemaCompileRequest::coverage_report` can produce it before emission. The
+request cache key binds RDFC-1.0 identities for the shapes and ontology graphs,
+caller namespaces, mode, value-vocabulary marker, compiler/policy salts, and
+the fixed ceilings: 65,536 properties, 65,536 classes, 1,048,576 relation or
+coverage cells, and expression depth 64. Malformed OWL lists, contradictory
+property kinds/ranges, key collisions, and limit exhaustion are typed failures.
+
+Run the complete two-mode and four-emitter example with:
+
+```bash
+cargo run -p purrdf-shapes --example ontology_schema_surface --locked
+```
+
 ## Schema → SHACL imports
 
 The schema-projection surface is bidirectional. `SchemaImportConfig` requires

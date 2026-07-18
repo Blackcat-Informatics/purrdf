@@ -27,7 +27,9 @@
 //!
 //! Consumer-config types are surfaced at the root ([`SliceVocab`],
 //! [`Namespaces`], [`StatementMetadataVocab`]) and unified behind a single
-//! [`OntologyProfile`] a downstream builds once (see [`profile`]).
+//! [`OntologyProfile`] a downstream builds once (see [`profile`]). The explicit
+//! ontology-aware developer-schema contract ([`SchemaCompileRequest`],
+//! [`SchemaSurfaceMode`], and [`compile_schema`]) is also available at the root.
 //!
 //! # Example
 //!
@@ -83,7 +85,12 @@ pub mod columnar {
 // ── consumer-config types, surfaced directly ────────────────────────────────
 // A consumer parameterizes an emitter without reaching into a sub-crate.
 pub use purrdf_rdf::native_codecs::jsonld::StatementMetadataVocab;
-pub use purrdf_shapes::json_schema::Namespaces;
+pub use purrdf_shapes::json_schema::{
+    Namespaces, SchemaClassPropertyCoverage, SchemaCompilation, SchemaCompilationInput,
+    SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,
+    SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus, SchemaPropertyCoverage,
+    SchemaSurfaceMode, compile_schema,
+};
 pub use purrdf_slice::SliceVocab;
 
 /// GTS: the container engine ([`purrdf_gts`]) plus the RDF-level GTS adapter
@@ -244,6 +251,16 @@ mod tests {
             &shapes::GraphqlPackage,
             &shapes::SchemaImportConfig,
         ) -> Result<shapes::ImportedShapes, shapes::GraphqlError> = shapes::import_graphql_package;
+    }
+
+    #[test]
+    fn facade_exposes_ontology_schema_compilation_contract() {
+        let _: fn(&SchemaCompileRequest<'_>) -> Result<SchemaCompilation, SchemaCompileError> =
+            compile_schema;
+        let mode = SchemaSurfaceMode::OntologyComplete;
+        assert!(matches!(mode, SchemaSurfaceMode::OntologyComplete));
+        let _: Option<SchemaCoverageReport> = None;
+        let _: Option<SchemaCompilationKey> = None;
     }
 
     #[test]

@@ -305,7 +305,7 @@ impl Namespaces {
 
     /// Whether `iri` belongs to a namespace explicitly declared by the caller.
     ///
-    /// This deliberately differs from [`Self::is_known`]: W3C builtins are
+    /// This deliberately differs from the internal compaction test: W3C builtins are
     /// always known for compaction, but are not caller-owned ontology surface
     /// unless the caller explicitly supplied their prefix declaration.
     #[must_use]
