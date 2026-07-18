@@ -45,6 +45,7 @@ pub(super) struct RoutedPackagePlan {
     pub(super) model_paths: BTreeMap<String, String>,
     pub(super) artifact_paths: BTreeSet<String>,
     pub(super) intermediate_packages: BTreeSet<String>,
+    definition_modules: BTreeMap<String, String>,
     symbol_owners: BTreeMap<String, String>,
 }
 
@@ -121,6 +122,7 @@ impl RoutedPackagePlan {
         }
 
         let mut model_paths = BTreeMap::new();
+        let mut definition_modules = BTreeMap::new();
         let mut symbol_owners = BTreeMap::new();
         for (key, class_config) in topology.classes() {
             let class_name = names.get(key).ok_or_else(|| {
@@ -155,6 +157,7 @@ impl RoutedPackagePlan {
                     source: None,
                 },
             );
+            definition_modules.insert(key.clone(), class_config.module_path().to_owned());
             model_paths.insert(
                 key.clone(),
                 format!(
@@ -202,6 +205,7 @@ impl RoutedPackagePlan {
             model_paths,
             artifact_paths,
             intermediate_packages,
+            definition_modules,
             symbol_owners,
         })
     }
@@ -213,22 +217,13 @@ impl RoutedPackagePlan {
         helpers: Vec<LinkedHelper>,
         private_symbols: BTreeSet<String>,
     ) -> Result<(), PydanticError> {
-        let module_path = self
-            .modules
-            .values()
-            .find_map(|module| {
-                module
-                    .definitions
-                    .contains_key(key)
-                    .then(|| module.path.clone())
-            })
-            .ok_or_else(|| {
-                PydanticError::new(format!(
-                    "Pydantic linker cannot attach unknown $defs key {key:?}"
-                ))
-            })?;
+        let module_path = self.definition_modules.get(key).ok_or_else(|| {
+            PydanticError::new(format!(
+                "Pydantic linker cannot attach unknown $defs key {key:?}"
+            ))
+        })?;
 
-        if self.modules[&module_path].definitions[key].source.is_some() {
+        if self.modules[module_path].definitions[key].source.is_some() {
             return Err(PydanticError::new(format!(
                 "Pydantic linker attached $defs key {key:?} more than once"
             )));
@@ -265,7 +260,7 @@ impl RoutedPackagePlan {
 
         let module = self
             .modules
-            .get_mut(&module_path)
+            .get_mut(module_path)
             .expect("located module remains present");
         module
             .definitions
@@ -439,6 +434,8 @@ mod tests {
             plan.model_paths["Person"],
             "example_models.domain.people.Person"
         );
+        assert_eq!(plan.definition_modules["Person"], "domain.people");
+        assert_eq!(plan.definition_modules["Color"], "vocab");
         assert!(plan.artifact_paths.contains("domain/__init__.py"));
         assert!(plan.artifact_paths.contains("__about__.py"));
         assert_eq!(

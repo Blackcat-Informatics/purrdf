@@ -12,7 +12,7 @@ mod pydantic_support;
 use pydantic_support::{Fixture, Mode, SIZES};
 
 fn bench_pydantic_package(c: &mut Criterion) {
-    let fixtures = SIZES
+    let mut fixtures = SIZES
         .into_iter()
         .flat_map(|definitions| {
             Mode::ALL
@@ -20,6 +20,7 @@ fn bench_pydantic_package(c: &mut Criterion) {
                 .map(move |mode| Fixture::new(definitions, mode))
         })
         .collect::<Vec<_>>();
+    fixtures.push(Fixture::maximum_high_fanout());
     let mut group = c.benchmark_group("pydantic_package_emission");
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(3));

@@ -85,24 +85,28 @@ fn main() {
     );
     for definitions in SIZES {
         for mode in Mode::ALL {
-            let fixture = Fixture::new(definitions, mode);
-            black_box(fixture.emit());
-            reset();
-            let package = black_box(fixture.emit());
-            let allocations = ALLOCATIONS.load(Ordering::Relaxed);
-            let requested_bytes = REQUESTED_BYTES.load(Ordering::Relaxed);
-            let retained_bytes = LIVE_BYTES.load(Ordering::Relaxed);
-            let peak_live_bytes = PEAK_LIVE_BYTES.load(Ordering::Relaxed);
-            ACTIVE.store(false, Ordering::Relaxed);
-            let artifact_bytes = package.artifacts.values().map(Vec::len).sum::<usize>();
-            let files = package.artifacts.len();
-            println!(
-                "{},{},{allocations},{requested_bytes},{retained_bytes},{peak_live_bytes},{artifact_bytes},{files}",
-                fixture.mode.label(),
-                fixture.definitions
-            );
-            black_box(&package);
-            drop(package);
+            measure(&Fixture::new(definitions, mode));
         }
     }
+    measure(&Fixture::maximum_high_fanout());
+}
+
+fn measure(fixture: &Fixture) {
+    black_box(fixture.emit());
+    reset();
+    let package = black_box(fixture.emit());
+    let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    let requested_bytes = REQUESTED_BYTES.load(Ordering::Relaxed);
+    let retained_bytes = LIVE_BYTES.load(Ordering::Relaxed);
+    let peak_live_bytes = PEAK_LIVE_BYTES.load(Ordering::Relaxed);
+    ACTIVE.store(false, Ordering::Relaxed);
+    let artifact_bytes = package.artifacts.values().map(Vec::len).sum::<usize>();
+    let files = package.artifacts.len();
+    println!(
+        "{},{},{allocations},{requested_bytes},{retained_bytes},{peak_live_bytes},{artifact_bytes},{files}",
+        fixture.mode.label(),
+        fixture.definitions
+    );
+    black_box(&package);
+    drop(package);
 }

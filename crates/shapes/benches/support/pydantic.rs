@@ -14,6 +14,7 @@ use purrdf_shapes::{
 use serde_json::{Map, Value, json};
 
 pub(crate) const SIZES: [usize; 3] = [32, 1_024, 16_384];
+pub(crate) const MAXIMUM_DEFINITIONS: usize = 65_536;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
@@ -51,8 +52,29 @@ pub(crate) struct Fixture {
 impl Fixture {
     pub(crate) fn new(definitions: usize, mode: Mode) -> Self {
         assert!(definitions >= 4, "fixture needs every schema shape");
-        let compiled = compiled_schema(definitions);
-        let config = config(definitions, mode);
+        Self::from_parts(
+            definitions,
+            mode,
+            compiled_schema(definitions),
+            config(definitions, mode),
+        )
+    }
+
+    pub(crate) fn maximum_high_fanout() -> Self {
+        Self::from_parts(
+            MAXIMUM_DEFINITIONS,
+            Mode::HighFanout,
+            compact_high_fanout_schema(MAXIMUM_DEFINITIONS),
+            compact_high_fanout_config(MAXIMUM_DEFINITIONS),
+        )
+    }
+
+    fn from_parts(
+        definitions: usize,
+        mode: Mode,
+        compiled: CompiledSchema,
+        config: PydanticConfig,
+    ) -> Self {
         let fixture = Self {
             definitions,
             mode,
@@ -76,6 +98,21 @@ impl Fixture {
     pub(crate) fn emit(&self) -> PydanticPackage {
         emit_pydantic(&self.compiled, &self.config).expect("validated benchmark fixture emits")
     }
+}
+
+fn compact_high_fanout_schema(definitions: usize) -> CompiledSchema {
+    let mut defs = Map::new();
+    for index in 0..definitions {
+        defs.insert(
+            definition_name(index),
+            if index == 3 {
+                high_fanout_definition(definitions)
+            } else {
+                json!({})
+            },
+        );
+    }
+    compiled(defs)
 }
 
 fn compiled_schema(definitions: usize) -> CompiledSchema {
@@ -123,6 +160,10 @@ fn compiled_schema(definitions: usize) -> CompiledSchema {
         };
         defs.insert(name, definition);
     }
+    compiled(defs)
+}
+
+fn compiled(defs: Map<String, Value>) -> CompiledSchema {
     let schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$defs": Value::Object(defs),
@@ -132,6 +173,37 @@ fn compiled_schema(definitions: usize) -> CompiledSchema {
         openapi_json: "{}\n".to_owned(),
         losses: LossLedger::new(),
     }
+}
+
+fn compact_high_fanout_config(definitions: usize) -> PydanticConfig {
+    let base = PydanticConfig::new(
+        "benchmark_models",
+        "Caller-owned benchmark package documentation.",
+        "Caller-owned benchmark support documentation.",
+    )
+    .expect("benchmark base config");
+    let modules = (0..definitions).map(|index| {
+        PydanticModuleConfig::new(compact_module_path(index), "d").expect("benchmark module")
+    });
+    let classes = (0..definitions).map(|index| {
+        PydanticClassConfig::new(
+            definition_name(index),
+            compact_module_path(index),
+            "d",
+            BTreeMap::new(),
+        )
+        .expect("benchmark class route")
+    });
+    base.with_topology(PydanticPackageTopology::new(modules, classes).expect("benchmark topology"))
+        .expect("benchmark topology config")
+        .with_version_stamp(
+            PydanticVersionStamp::new(
+                "1.2.3+benchmark.1",
+                "Caller-owned benchmark version documentation.",
+            )
+            .expect("benchmark version"),
+        )
+        .expect("benchmark version config")
 }
 
 fn high_fanout_definition(definitions: usize) -> Value {
@@ -218,4 +290,8 @@ fn module_path(mode: Mode, module: usize) -> String {
         Mode::GroupedFortyModules => format!("group.module_{module:03}"),
         Mode::HighFanout => format!("fanout.module_{module:05}"),
     }
+}
+
+fn compact_module_path(module: usize) -> String {
+    format!("m.m{module:05}")
 }
