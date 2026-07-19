@@ -3,8 +3,13 @@
 
 # Match Cargo's effective target directory, including `build.target-dir` from
 # host/workspace configuration. An explicit environment or command-line value
-# still wins through `?=`.
-CARGO_TARGET_DIR ?= $(or $(shell cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null),target)
+# bypasses discovery.
+ifeq ($(origin CARGO_TARGET_DIR), undefined)
+CARGO_TARGET_DIR := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null)
+endif
+ifeq ($(strip $(CARGO_TARGET_DIR)),)
+$(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo metadata and python3 are available)
+endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
 .PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
@@ -225,7 +230,7 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 		cargo build -p purrdf-wasm --target wasm32-unknown-unknown --release --locked
 	@# wasm-bindgen-cli must match the crate's exact wasm-bindgen pin (see [workspace.dependencies]).
 	PATH="$$HOME/.cargo/bin:$$PATH" wasm-bindgen \
-		$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm \
+		"$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm" \
 		--out-dir crates/rdf-wasm/js/pkg --target web
 	@# wasm-opt -Oz is a REQUIRED build step (roughly halves the artifact).
 	@# The --enable flags cover the post-MVP features rustc emits by default
@@ -264,7 +269,7 @@ wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WA
 	 size=$$(wc -c < "$$art" | awk '{print $$1}'); \
 	 gz=$$(gzip -9nc < "$$art" | wc -c | awk '{print $$1}'); \
 	 pct=$$(( size * 100 / budget )); \
-	 raw=$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm; \
+	 raw="$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm"; \
 	 if [ -s "$$raw" ]; then rawsz=$$(wc -c < "$$raw" | awk '{print $$1}'); reduc=$$(( (rawsz - size) * 100 / rawsz )); \
 	   ratio="cargo release wasm $$rawsz B -> optimized $$size B (-$$reduc%)"; \
 	 else ratio="cargo release wasm size unavailable (pre-opt module not on disk)"; fi; \
