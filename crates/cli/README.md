@@ -239,6 +239,7 @@ profile/config mismatch, an unknown field, or a breached limit is a hard error.
 | `graphml` | GraphML 1.0 | yes |
 | `csvw-exact` | Exact RDF 1.2 CSVW table group | yes |
 | `csvw-terms` | Caller-declared curated CSVW entity tables | no |
+| `okf-terms` | Caller-declared OKF v0.1 concept bundle | no |
 | `obo-graphs` | OBO Graphs 0.3.2 JSON | no |
 | `skos` | SKOS Turtle concept-scheme view | no |
 
@@ -276,7 +277,7 @@ purrdf --loss-ledger=project.loss.json project \
 The archive bytes are deterministic for the same dataset and configuration.
 LPG profiles retain exact RDF sideband for reconstruction, while the semantic
 lowering into a property graph remains visible in the ledger. `csvw-exact` is
-lossless. Curated CSVW terms, OBO Graphs, and SKOS are intentionally lossy views.
+lossless. Curated CSVW/OKF terms, OBO Graphs, and SKOS are intentionally lossy views.
 
 ## `lift`
 
@@ -287,10 +288,11 @@ purrdf lift --profile <P> --config <PATH> --to <F> [--base <IRI>] [IN] [OUT]
 Lift one canonical archive into a native RDF syntax. The accepted profiles are
 `lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`, `csvw-exact`,
 `croissant-1.1`, `ro-crate-1.3`, `datacite-4.6`, `dcat-3`, and
-`frictionless-data-package-1`. The CLI does not offer curated CSVW terms, OBO
-Graphs, or SKOS as pretend reverse mappings. The reader rejects non-canonical
-USTAR, unexpected members, malformed carrier data, sideband inconsistencies,
-and resource-limit violations.
+`frictionless-data-package-1`. The CLI does not offer curated CSVW terms,
+`okf-terms`, OBO Graphs, or SKOS as pretend reverse mappings;
+`purrdf lift --profile okf-terms` is rejected instead of fabricating one. The
+reader rejects non-canonical USTAR, unexpected members, malformed carrier data,
+sideband inconsistencies, and resource-limit violations.
 
 ```sh
 purrdf --loss-ledger=lift.loss.json lift \

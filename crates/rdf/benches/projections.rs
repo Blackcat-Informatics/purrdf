@@ -24,9 +24,9 @@ use purrdf_rdf::{
     parse_dataset, project_archive, project_csvw_exact, project_csvw_terms, project_lpg,
     project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher, project_lpg_cypher_to_sink,
     project_lpg_graphml, project_lpg_graphml_to_sink, project_neo4j_csv, project_neo4j_csv_to_sink,
-    project_obo_graphs, project_research_object, project_skos, read_csvw_exact, read_lpg_csv,
-    read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher,
-    write_lpg_graphml, write_neo4j_csv,
+    project_obo_graphs, project_okf_terms, project_research_object, project_skos, read_csvw_exact,
+    read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, write_lpg_csv,
+    write_lpg_cypher, write_lpg_graphml, write_neo4j_csv,
 };
 
 thread_local! {
@@ -172,6 +172,8 @@ const LARGE_ROWS_PER_GRAPH: usize = 200;
 const LARGE_QUADS: usize = LARGE_GRAPHS * LARGE_ROWS_PER_GRAPH * 3;
 const RESEARCH_SOURCE: &[u8] =
     include_bytes!("../tests/fixtures/research-objects/carrier/shared.ttl");
+const OKF_TERMS_SOURCE: &[u8] = include_bytes!("../tests/fixtures/okf-terms.trig");
+const OKF_TERMS_CONFIG: &[u8] = include_bytes!("../tests/fixtures/okf-terms.json");
 const RESEARCH_CONFIGS: [(ProjectionProfile, LiftProfile, &[u8]); 5] = [
     (
         ProjectionProfile::Croissant11,
@@ -642,6 +644,8 @@ fn benchmark(c: &mut Criterion) {
     let large_graph_dataset = large_multigraph_dataset();
     let obo_dataset = obo_dataset();
     let skos_dataset = skos_dataset();
+    let okf_terms_dataset =
+        parse_dataset(OKF_TERMS_SOURCE, "application/trig", None).expect("OKF terms dataset");
     let lpg_config = lpg_config();
     let scoped_lpg_config = scoped_lpg_config();
     let csvw_config = csvw_config();
@@ -649,6 +653,10 @@ fn benchmark(c: &mut Criterion) {
     let csvw_terms_scoped_config = scoped_csvw_terms_config();
     let obo_config = obo_config();
     let skos_config = skos_config();
+    let okf_terms_config = ProjectionConfig::from_json(OKF_TERMS_CONFIG).expect("OKF terms config");
+    let ProjectionConfig::OkfTerms(okf_terms_mapping) = &okf_terms_config else {
+        panic!("OKF benchmark config must be tagged okf-terms");
+    };
     let research_dataset =
         parse_dataset(RESEARCH_SOURCE, "text/turtle", None).expect("research-object dataset");
     let research_configs: Vec<_> = RESEARCH_CONFIGS
@@ -683,6 +691,14 @@ fn benchmark(c: &mut Criterion) {
     let _ = read_csvw_exact(&csvw.package, &csvw_config).expect("CSVW read");
     let _ = project_obo_graphs(obo_dataset.as_ref(), &obo_config).expect("OBO Graphs");
     let _ = project_skos(skos_dataset.as_ref(), &skos_config).expect("SKOS");
+    let _ = project_okf_terms(okf_terms_dataset.as_ref(), okf_terms_mapping)
+        .expect("OKF terms generation");
+    let _ = project_archive(
+        okf_terms_dataset.as_ref(),
+        ProjectionProfile::OkfTerms,
+        &okf_terms_config,
+    )
+    .expect("OKF terms archive");
     let _ = project_research_object(
         research_dataset.as_ref(),
         research_configs[0].0.as_str(),
@@ -767,6 +783,18 @@ fn benchmark(c: &mut Criterion) {
     }));
     black_box(report_allocations("skos_write", || {
         project_skos(skos_dataset.as_ref(), &skos_config).expect("SKOS write")
+    }));
+    black_box(report_allocations("okf_terms_generate", || {
+        project_okf_terms(okf_terms_dataset.as_ref(), okf_terms_mapping)
+            .expect("OKF terms generation")
+    }));
+    black_box(report_allocations("okf_terms_archive", || {
+        project_archive(
+            okf_terms_dataset.as_ref(),
+            ProjectionProfile::OkfTerms,
+            &okf_terms_config,
+        )
+        .expect("OKF terms archive")
     }));
     black_box(report_allocations("research_common_model", || {
         project_research_object(
@@ -972,6 +1000,35 @@ fn benchmark(c: &mut Criterion) {
             });
         });
         views.finish();
+    }
+
+    {
+        let mut okf = c.benchmark_group("okf_terms");
+        okf.throughput(Throughput::Elements(okf_terms_dataset.quad_count() as u64));
+        okf.bench_function("generate_17_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_okf_terms(
+                        black_box(okf_terms_dataset.as_ref()),
+                        black_box(okf_terms_mapping),
+                    )
+                    .expect("OKF terms generation"),
+                );
+            });
+        });
+        okf.bench_function("archive_17_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_archive(
+                        black_box(okf_terms_dataset.as_ref()),
+                        ProjectionProfile::OkfTerms,
+                        black_box(&okf_terms_config),
+                    )
+                    .expect("OKF terms archive"),
+                );
+            });
+        });
+        okf.finish();
     }
 
     {

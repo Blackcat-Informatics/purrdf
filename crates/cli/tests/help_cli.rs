@@ -50,6 +50,7 @@ fn project_and_lift_help_enumerate_truthful_profiles() {
         "graphml",
         "csvw-exact",
         "csvw-terms",
+        "okf-terms",
         "obo-graphs",
         "skos",
         "croissant-1.1",
@@ -89,6 +90,7 @@ fn project_and_lift_help_enumerate_truthful_profiles() {
     assert!(!lift.contains("obo-graphs"));
     assert!(!lift.contains("skos"));
     assert!(!lift.contains("csvw-terms"));
+    assert!(!lift.contains("okf-terms"));
     for field in ["--profile", "--config", "--to", "IN", "OUT"] {
         assert!(lift.contains(field), "lift help missing `{field}`");
     }

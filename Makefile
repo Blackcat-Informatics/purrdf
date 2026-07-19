@@ -1,7 +1,15 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-CARGO_TARGET_DIR ?= target
+# Match Cargo's effective target directory, including `build.target-dir` from
+# host/workspace configuration. An explicit environment or command-line value
+# bypasses discovery.
+ifeq ($(origin CARGO_TARGET_DIR), undefined)
+CARGO_TARGET_DIR := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null)
+endif
+ifeq ($(strip $(CARGO_TARGET_DIR)),)
+$(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo metadata and python3 are available)
+endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
 .PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
@@ -25,12 +33,12 @@ BINARYEN_VERSION := 130
 # -Oz). `make wasm-pkg-size` (and both CI and the npm release) fail if the built
 # artifact exceeds this. The shipped bundle — RDF 1.2 model, SPARQL/SHACL/ShEx
 # engines, the native format registry (now including JSON-LD/YAML-LD),
-# deterministic layout, SVG export, and all thirteen graph/tabular/research-object
+# deterministic layout, SVG export, and all fourteen graph/tabular/research-object
 # projection profiles and the compiled JSON-LD context/options/registry engine
-# — measures 6_902_478 bytes; 7_120_000 keeps 3.15% headroom. The always-on,
-# caller-configured curated CSVW terms mapper, closed located-loss contract, and
-# shared host dispatch are the capabilities responsible for this reviewed
-# increase. The artifact's size is a joint function of
+# — measures 7_192_673 bytes; 7_420_000 keeps 3.16% headroom. The always-on,
+# caller-configured curated CSVW and OKF terms mappers, closed located-loss
+# contracts, and shared host dispatch are the capabilities responsible for this
+# reviewed increase. The artifact's size is a joint function of
 # rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
 # (pinned via BINARYEN_VERSION), so a moved number is attributable.
 #
@@ -40,7 +48,7 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 7120000
+WASM_SIZE_BUDGET_BYTES := 7420000
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -222,7 +230,7 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 		cargo build -p purrdf-wasm --target wasm32-unknown-unknown --release --locked
 	@# wasm-bindgen-cli must match the crate's exact wasm-bindgen pin (see [workspace.dependencies]).
 	PATH="$$HOME/.cargo/bin:$$PATH" wasm-bindgen \
-		$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm \
+		"$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm" \
 		--out-dir crates/rdf-wasm/js/pkg --target web
 	@# wasm-opt -Oz is a REQUIRED build step (roughly halves the artifact).
 	@# The --enable flags cover the post-MVP features rustc emits by default
@@ -261,7 +269,7 @@ wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WA
 	 size=$$(wc -c < "$$art" | awk '{print $$1}'); \
 	 gz=$$(gzip -9nc < "$$art" | wc -c | awk '{print $$1}'); \
 	 pct=$$(( size * 100 / budget )); \
-	 raw=target/wasm32-unknown-unknown/release/purrdf_wasm.wasm; \
+	 raw="$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm"; \
 	 if [ -s "$$raw" ]; then rawsz=$$(wc -c < "$$raw" | awk '{print $$1}'); reduc=$$(( (rawsz - size) * 100 / rawsz )); \
 	   ratio="cargo release wasm $$rawsz B -> optimized $$size B (-$$reduc%)"; \
 	 else ratio="cargo release wasm size unavailable (pre-opt module not on disk)"; fi; \

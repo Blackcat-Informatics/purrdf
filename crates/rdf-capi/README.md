@@ -47,7 +47,7 @@ performs network context loading.
 ## Graph, tabular, and research-object projection carriers
 
 `purrdf_project` and `purrdf_lift` expose the same canonical archive engine as
-Rust, Python, WebAssembly, and the CLI. `purrdf_project` accepts all thirteen
+Rust, Python, WebAssembly, and the CLI. `purrdf_project` accepts all fourteen
 profiles; `purrdf_lift` accepts the ten structurally bidirectional ones:
 
 | Profile | Project | Lift |
@@ -58,6 +58,7 @@ profiles; `purrdf_lift` accepts the ten structurally bidirectional ones:
 | `graphml` | yes | yes |
 | `csvw-exact` | yes | yes |
 | `csvw-terms` | yes | no |
+| `okf-terms` | yes | no |
 | `obo-graphs` | yes | no |
 | `skos` | yes | no |
 | `croissant-1.1` | yes | yes |

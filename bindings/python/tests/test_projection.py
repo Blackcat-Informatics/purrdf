@@ -40,6 +40,8 @@ _RUST_ARCHIVE_SHA256 = "656066450fa23c55976f5434840169452c36324b943435e2f7ae55f8
 _REPO = Path(__file__).resolve().parents[3]
 _RESEARCH_FIXTURES = _REPO / "crates/rdf/tests/fixtures/research-objects/carrier"
 _CSVW_TERMS_CONFIG = _REPO / "crates/rdf/tests/fixtures/csvw-terms.json"
+_OKF_TERMS_CONFIG = _REPO / "crates/rdf/tests/fixtures/okf-terms.json"
+_OKF_TERMS_SOURCE = _REPO / "crates/rdf/tests/fixtures/okf-terms.trig"
 _RESEARCH_PROFILES = (
     "croissant-1.1",
     "ro-crate-1.3",
@@ -239,3 +241,38 @@ ex:term ex:label "Term" ; ex:other ex:value .
     assert all(loss.location is not None for loss in first.losses)
     with pytest.raises(ValueError, match="not a bidirectional"):
         purrdf.lift(first.archive, profile="csvw-terms", config=config)
+
+
+def test_curated_okf_terms_matches_the_shared_exact_bundle() -> None:
+    source = _OKF_TERMS_SOURCE.read_bytes()
+    config = _OKF_TERMS_CONFIG.read_bytes()
+    first = purrdf.project(
+        source,
+        format=purrdf.RdfFormat.TRIG,
+        profile="okf-terms",
+        config=config,
+    )
+    second = purrdf.project(
+        source,
+        format=purrdf.RdfFormat.TRIG,
+        profile="okf-terms",
+        config=config,
+    )
+    assert first.profile == "okf-terms"
+    assert first.archive == second.archive
+    assert hashlib.sha256(first.archive).hexdigest() == (
+        "f9509c34d752627e5365edbfe847b08710f1ce8b253dd7d153f2a5bc5b6282d0"
+    )
+    with tarfile.open(fileobj=io.BytesIO(first.archive), mode="r:") as archive:
+        assert [member.name for member in archive.getmembers()] == [
+            "classes/A.md",
+            "classes/index.md",
+            "index.md",
+            "properties/B.md",
+            "properties/index.md",
+        ]
+    assert [loss.code for loss in first.losses].count("named-graph-dropped") == 2
+    assert any(loss.code == "okf-non-profile-quad-dropped" for loss in first.losses)
+    assert all(loss.location is not None for loss in first.losses)
+    with pytest.raises(ValueError, match="not a bidirectional"):
+        purrdf.lift(first.archive, profile="okf-terms", config=config)

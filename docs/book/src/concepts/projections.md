@@ -29,6 +29,7 @@ Every operation has four non-negotiable properties:
 | `graphml` | GraphML 1.0 XML | RDF ↔ carrier | exact RDF sideband; strict namespace/key validation |
 | `csvw-exact` | CSVW metadata plus RDF 1.2 tables | RDF ↔ carrier | lossless |
 | `csvw-terms` | CSVW metadata plus caller-declared entity tables | RDF → view | located, closed loss ledger |
+| `okf-terms` | OKF v0.1 concept documents and indexes | RDF → view | located, closed loss ledger |
 | `obo-graphs` | OBO Graphs 0.3.2 JSON | RDF → view | located, closed loss ledger |
 | `skos` | SKOS Turtle | RDF → view | located, closed loss ledger |
 | `croissant-1.1` | `croissant.json` | RDF ↔ carrier | shared model; profile loss is located |
@@ -38,7 +39,7 @@ Every operation has four non-negotiable properties:
 | `frictionless-data-package-1` | `datapackage.json` | RDF ↔ carrier | shared model; profile loss is located |
 
 The type distinction between `ProjectionProfile` and `LiftProfile` matters:
-curated CSVW terms, OBO Graphs, and SKOS cannot even be named as lift profiles.
+curated CSVW/OKF terms, OBO Graphs, and SKOS cannot even be named as lift profiles.
 They are useful views, not pretend interchange formats.
 
 ## One canonical LPG model
@@ -306,6 +307,29 @@ and writes the canonical archive:
 cargo run -p purrdf-rdf --example csvw_terms -- /tmp/terms.tar
 ```
 
+The separate `okf-terms` profile projects caller-classified RDF resources into
+OKF v0.1 concept documents and navigation indexes. Configuration is the entire
+projection algebra: graph scope, category selectors, safe path identity, fixed
+standard-field roles, producer extensions, body/link sections, index prose,
+the in-band fidelity declaration, and resource ceilings. No vocabulary or
+category has library-owned meaning. Concept frontmatter uses the OKF standard
+key order followed by lexical extension keys; reserved `index.md` files contain
+navigation Markdown without concept frontmatter.
+
+The complete strict portable configuration is
+`crates/rdf/tests/fixtures/okf-terms.json`. It is accepted unchanged by Rust,
+the CLI, Python, WebAssembly/TypeScript, and C:
+
+```sh
+purrdf project --profile okf-terms --config okf-terms.json \
+  --from trig ontology.trig knowledge.tar
+```
+
+The profile is deliberately absent from `LiftProfile`. Bundle-to-RDF import
+remains the responsibility of the existing caller-profiled OKF codec; the
+curated generator records every source row it does not carry instead of
+claiming an inverse.
+
 ## Rust archive API
 
 ```rust,ignore
@@ -357,6 +381,7 @@ Runnable examples live at:
 
 - `crates/rdf/examples/projection_archive.rs`
 - `crates/rdf/examples/csvw_terms.rs`
+- `crates/rdf/examples/okf_terms.rs`
 - `crates/rdf/examples/research_object_roundtrip.rs`
 - `crates/cli/examples/projection-roundtrip.sh`
 - `bindings/python/examples/projection_roundtrip.py`

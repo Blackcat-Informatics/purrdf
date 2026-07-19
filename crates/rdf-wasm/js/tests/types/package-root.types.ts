@@ -92,8 +92,11 @@ const projection: ProjectionPackage = matched.project("lpg-csv", JSON.stringify(
 }));
 const projectionLedger: ProjectionLossLedger = JSON.parse(projection.lossLedgerJson);
 const curatedProfile: ProjectionProfile = "csvw-terms";
+const okfTermsProfile: ProjectionProfile = "okf-terms";
 // @ts-expect-error curated CSVW terms cannot reconstruct arbitrary source RDF
 const invalidCuratedLift: LiftProfile = "csvw-terms";
+// @ts-expect-error curated OKF terms cannot reconstruct arbitrary source RDF
+const invalidOkfTermsLift: LiftProfile = "okf-terms";
 const researchProjection: ProjectionPackage = matched.project(
   "frictionless-data-package-1",
   "{}",
@@ -164,7 +167,9 @@ void canonical;
 void same;
 void projectionLedger;
 void curatedProfile;
+void okfTermsProfile;
 void invalidCuratedLift;
+void invalidOkfTermsLift;
 void researchProjection;
 void projectedDataset;
 void visualModel;

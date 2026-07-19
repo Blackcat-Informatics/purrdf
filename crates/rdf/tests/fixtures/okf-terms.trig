@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+@prefix ex: <https://example.org/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:A ex:type ex:Class ;
+    ex:label "Alpha" ;
+    ex:description "An *important* class." ;
+    ex:tag "zeta", "alpha" ;
+    ex:updated "2026-07-19T12:34:56Z"^^xsd:dateTime ;
+    ex:active "1"^^xsd:boolean ;
+    ex:count "01"^^xsd:integer ;
+    ex:score "1.50"^^xsd:decimal ;
+    ex:note "Use **carefully**." ;
+    ex:related ex:B, <https://outside.example/External> ;
+    ex:unmapped ex:Ignored .
+
+ex:B ex:type ex:Property ;
+    ex:label "Beta" ;
+    ex:description "A linked property." .
+
+ex:source {
+    ex:A ex:tag "named-graph" .
+}
