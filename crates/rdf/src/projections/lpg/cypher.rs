@@ -66,7 +66,7 @@ where
     S: ProjectionArtifactSink,
     O: LpgProgressObserver,
 {
-    stream_lpg_cypher(graph, config, sink, observer, graph_report(graph))
+    stream_lpg_cypher(graph, config, sink, observer, graph_report(graph)?)
 }
 
 /// Project any RDF dataset view directly into the deterministic openCypher package.

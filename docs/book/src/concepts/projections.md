@@ -58,6 +58,46 @@ duplicate rows or keys, dangling endpoints, token-map inconsistencies, unknown
 Cypher statements, unsafe XML, unexpected package members, and non-canonical
 encodings all fail.
 
+### LPG scope, limits, progress, and memory
+
+Every LPG configuration contains a mandatory `scope`. `{"mode":"all"}` is the
+only way to request every graph and predicate; omission never means “all.” A
+selective scope independently controls the default graph, exact named-graph
+terms, predicate allow/deny sets, node RDF types, and native edge predicates.
+Named blank graphs retain their scope ordinal, and every selector IRI must be
+absolute.
+
+Selection is one closed RDF 1.2 operation. Node types are indexed from
+graph-selected `rdf_type` statements even when that predicate is omitted from
+the output. A retained edge retains its endpoints. Reifiers and annotations are
+retained only when their source statement survives, and annotation predicates
+obey the same predicate selector. These rules prevent a selected property graph
+from containing dangling sideband.
+
+`LpgExecutionLimits` independently bounds input records scanned, model records,
+nodes, and edges. `ProjectionLimits` bounds artifact count, one-artifact bytes,
+total artifact-body bytes, canonical USTAR bytes, and recursive RDF-term depth.
+Each bound is consumed before the corresponding model mutation or sink write;
+the first excess is a typed hard error. The engine does not paginate. Splitting
+one canonically ordered, exactly reversible carrier would make page identity and
+cross-page endpoints order-sensitive; callers instead choose a narrower scope
+or a larger explicit bound.
+
+The direct sink path retains the selected canonical LPG model because stable
+backend-independent ordering, type selection, endpoint closure, and exact RDF
+sideband require that bounded sort/index. It then emits each artifact in lexical
+path order in chunks no larger than 16 KiB, retaining neither complete artifact
+bodies nor a USTAR buffer. The archive convenience path additionally retains
+materialized artifacts and the final archive. Thus the sink path is bounded by
+the selected model plus encoder scratch and one chunk; it is not a constant-memory
+RDF-to-LPG mapper.
+
+Progress observers receive monotonic `scanning`, `building`, `writing`,
+`complete`, or `aborted` snapshots with input/model/node/edge, finished-artifact,
+body-byte, and active-path counters. A sink or observer failure aborts the active
+transaction. A sink must stage partial state, publish only on `commit_package`,
+and discard it on `abort_package`.
+
 ## CSVW
 
 The lower-level CSVW API models annotated table groups, schemas, dialects,
@@ -133,6 +173,7 @@ fail. There is no default configuration. A minimal generic LPG example is:
   "profile": "lpg-csv",
   "config": {
     "rdf_type": "https://example.org/type",
+    "scope": {"mode": "all"},
     "limits": {
       "max_artifacts": 16,
       "max_artifact_bytes": 1000000,
@@ -140,14 +181,39 @@ fail. There is no default configuration. A minimal generic LPG example is:
       "max_archive_bytes": 5000000,
       "max_term_depth": 16
     },
-    "max_records": 1000
+    "execution_limits": {
+      "max_input_records": 1000,
+      "max_model_records": 1000,
+      "max_nodes": 1000,
+      "max_edges": 1000
+    }
   }
 }
 ```
 
-The bounds apply on both write and read. They cover member count, one-member
-bytes, total body bytes, encoded archive bytes, records, and recursive RDF term
-depth. They are trust-boundary policy and must be chosen by the application.
+To retain one named graph while admitting every predicate and type, replace the
+scope object with:
+
+```json
+{
+  "mode": "select",
+  "include_default_graph": false,
+  "named_graphs": {
+    "mode": "only",
+    "include": [{"kind": "iri", "value": "https://example.org/business"}],
+    "exclude": []
+  },
+  "predicates": {"mode": "all", "deny": []},
+  "node_types": {"mode": "all", "deny": []},
+  "edge_types": {"mode": "all", "deny": []}
+}
+```
+
+The package and canonical-model bounds apply on write and read as relevant; the
+input-record bound governs RDF projection scans. Together they cover member
+count, one-member bytes, total body bytes, encoded archive bytes, input/model
+records, nodes, edges, and recursive RDF term depth. They are trust-boundary
+policy and must be chosen by the application.
 
 Research-object configurations add a mandatory `common` object containing the
 complete `roles`, `identity`, and bounded `policy` maps. Profile-specific
@@ -161,8 +227,9 @@ library defaults.
 
 ```rust,ignore
 use purrdf::{
-    LiftProfile, LpgConfig, ProjectionConfig, ProjectionLimits,
-    ProjectionProfile, lift_archive, parse_dataset, project_archive,
+    LiftProfile, LpgConfig, LpgExecutionLimits, LpgScope, ProjectionConfig,
+    ProjectionLimits, ProjectionProfile, lift_archive, parse_dataset,
+    project_archive,
 };
 
 let dataset = parse_dataset(
@@ -173,8 +240,9 @@ let dataset = parse_dataset(
 let limits = ProjectionLimits::new(16, 1_000_000, 4_000_000, 5_000_000, 16)?;
 let config = ProjectionConfig::LpgCsv(LpgConfig::new(
     "https://example.org/type",
+    LpgScope::all(),
     limits,
-    1_000,
+    LpgExecutionLimits::new(1_000, 1_000, 1_000, 1_000)?,
 )?);
 
 let package = project_archive(dataset.as_ref(), ProjectionProfile::LpgCsv, &config)?;
@@ -184,20 +252,23 @@ assert_eq!(lifted.dataset.quad_count(), 1);
 
 `ProjectionArchive` contains the profile, USTAR bytes, and loss ledger.
 `ProjectionLift` contains the reconstructed immutable dataset and its lift
-ledger. Lower-level APIs expose the typed LPG, CSVW, OBO, SKOS, and in-memory
-research-object/artifact models when an application needs to inspect or
-materialize individual members instead of the unified archive.
+ledger. `project_lpg_artifacts_to_sink` dispatches the four LPG profiles into a
+caller-owned `ProjectionArtifactSink` through the same configuration and mapping
+engine; `LpgProgressObserver` supplies structured progress. Lower-level APIs
+also expose the typed LPG, CSVW, OBO, SKOS, and in-memory research-object/artifact
+models.
 
 ## Other production surfaces
 
 The surface names follow the same profile/config/archive contract:
 
-| Host | Project | Lift |
-| --- | --- | --- |
-| CLI | `purrdf project` | `purrdf lift` |
-| Python | `purrdf.project(...)` | `purrdf.lift(...)` |
-| JavaScript | `dataset.project(...)` | `liftProjection(...)` |
-| C | `purrdf_project(...)` | `purrdf_lift(...)` |
+| Host | Materialized project | Direct LPG artifacts | Lift |
+| --- | --- | --- | --- |
+| Rust | `project_archive` | `project_lpg_artifacts_to_sink` | `lift_archive` |
+| CLI | `purrdf project` | — | `purrdf lift` |
+| Python | `purrdf.project(...)` | `purrdf.project_artifacts(...)` | `purrdf.lift(...)` |
+| JavaScript | `dataset.project(...)` | — | `liftProjection(...)` |
+| C | `purrdf_project(...)` | — | `purrdf_lift(...)` |
 
 Runnable examples live at:
 
@@ -205,6 +276,7 @@ Runnable examples live at:
 - `crates/rdf/examples/research_object_roundtrip.rs`
 - `crates/cli/examples/projection-roundtrip.sh`
 - `bindings/python/examples/projection_roundtrip.py`
+- `bindings/python/examples/projection_stream.py`
 - `crates/rdf-wasm/js/examples/projection-roundtrip.mjs`
 - `crates/rdf-capi/examples/projection_roundtrip.c`
 
@@ -226,7 +298,9 @@ make projection-oracles
 cargo bench -p purrdf-rdf --bench projections -- --quick
 ```
 
-The benchmark is report-only. It measures RDF-to-LPG mapping, every LPG carrier
-write/read path, exact CSVW write/read, OBO Graphs and SKOS projection, the
-shared research-object model, and all five research-object write/read paths. It
-also reports allocation observations over deterministic fixtures.
+The benchmark is report-only. It measures RDF-to-LPG mapping, scoped versus
+explicit-all mapping over a 20-graph carrier, materialized package versus direct
+sink output for every LPG syntax, every LPG read path, exact CSVW write/read,
+OBO Graphs and SKOS projection, the shared research-object model, and all five
+research-object write/read paths. It also reports allocation observations over
+deterministic fixtures.

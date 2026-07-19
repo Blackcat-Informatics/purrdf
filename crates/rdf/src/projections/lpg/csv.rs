@@ -118,7 +118,7 @@ where
     S: ProjectionArtifactSink,
     O: LpgProgressObserver,
 {
-    stream_lpg_csv(graph, config, sink, observer, graph_report(graph))
+    stream_lpg_csv(graph, config, sink, observer, graph_report(graph)?)
 }
 
 /// Project any RDF dataset view directly into the deterministic generic CSV package.
@@ -287,7 +287,7 @@ where
     S: ProjectionArtifactSink,
     O: LpgProgressObserver,
 {
-    stream_neo4j_csv(graph, config, sink, observer, graph_report(graph))
+    stream_neo4j_csv(graph, config, sink, observer, graph_report(graph)?)
 }
 
 fn stream_neo4j_csv<S, O>(

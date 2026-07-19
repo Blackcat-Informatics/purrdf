@@ -70,23 +70,33 @@ pub struct LpgStreamProjection {
     pub report: LpgProjectionReport,
 }
 
-pub(super) fn graph_report(graph: &LpgGraph) -> LpgProjectionReport {
-    let nested = graph
-        .nodes
-        .iter()
-        .map(|node| node.labels.len() + node.properties.len())
-        .sum::<usize>();
-    LpgProjectionReport {
+pub(super) fn graph_report(graph: &LpgGraph) -> Result<LpgProjectionReport, ProjectionError> {
+    let nested = graph.nodes.iter().try_fold(0usize, |count, node| {
+        count
+            .checked_add(node.labels.len())
+            .and_then(|value| value.checked_add(node.properties.len()))
+            .ok_or_else(|| ProjectionError::limit("LPG report record count overflow"))
+    })?;
+    let model_records = [
+        graph.nodes.len(),
+        graph.edges.len(),
+        graph.reifiers.len(),
+        graph.annotations.len(),
+        graph.named_graphs.len(),
+        nested,
+    ]
+    .into_iter()
+    .try_fold(0usize, |count, amount| {
+        count
+            .checked_add(amount)
+            .ok_or_else(|| ProjectionError::limit("LPG report record count overflow"))
+    })?;
+    Ok(LpgProjectionReport {
         input_records: 0,
-        model_records: graph.nodes.len()
-            + graph.edges.len()
-            + graph.reifiers.len()
-            + graph.annotations.len()
-            + graph.named_graphs.len()
-            + nested,
+        model_records,
         nodes: graph.nodes.len(),
         edges: graph.edges.len(),
-    }
+    })
 }
 
 /// Monotonic progress snapshot for mapping and artifact emission.

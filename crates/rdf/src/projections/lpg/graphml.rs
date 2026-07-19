@@ -84,7 +84,7 @@ where
     S: ProjectionArtifactSink,
     O: LpgProgressObserver,
 {
-    stream_lpg_graphml(graph, config, sink, observer, graph_report(graph))
+    stream_lpg_graphml(graph, config, sink, observer, graph_report(graph)?)
 }
 
 /// Project any RDF dataset view directly into deterministic GraphML 1.0.

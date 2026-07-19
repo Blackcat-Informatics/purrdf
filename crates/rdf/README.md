@@ -167,6 +167,16 @@ triple terms, reifier bindings, annotations, language, direction, and datatype
 with an empty ledger. OBO Graphs and SKOS are structurally write-only:
 `LiftProfile` has no variants for them.
 
+LPG scope is mandatory. `LpgScope::all()` explicitly requests the complete
+dataset; selective scope can include/exclude exact named graphs and predicates
+and filter node/edge types. Independent input-record, model-record, node, edge,
+artifact, body-byte, archive-byte, and term-depth limits fail before excess.
+The direct `project_lpg_artifacts_to_sink` path emits transactional chunks no
+larger than 16 KiB and reports structured progress. It retains the bounded,
+canonically sorted selected LPG model but does not retain complete artifact
+bodies or a USTAR archive; `project_archive` is the materializing convenience
+path. The engine deliberately does not paginate an exactly reversible carrier.
+
 The five research-object codecs share one typed semantic pivot. Their mandatory
 configuration supplies every RDF role and identity plus each native context,
 schema, controlled value, or profile identity. JSON-LD context interpretation
@@ -175,8 +185,9 @@ unsupported construct in a located runtime ledger.
 
 ```rust
 use purrdf_rdf::{
-    LiftProfile, LpgConfig, ProjectionConfig, ProjectionLimits,
-    ProjectionProfile, lift_archive, parse_dataset, project_archive,
+    LiftProfile, LpgConfig, LpgExecutionLimits, LpgScope, ProjectionConfig,
+    ProjectionLimits, ProjectionProfile, lift_archive, parse_dataset,
+    project_archive,
 };
 
 let dataset = parse_dataset(
@@ -187,8 +198,9 @@ let dataset = parse_dataset(
 let limits = ProjectionLimits::new(16, 1_000_000, 4_000_000, 5_000_000, 16)?;
 let config = ProjectionConfig::LpgCsv(LpgConfig::new(
     "https://example.org/type",
+    LpgScope::all(),
     limits,
-    1_000,
+    LpgExecutionLimits::new(1_000, 1_000, 1_000, 1_000)?,
 )?);
 let projected = project_archive(dataset.as_ref(), ProjectionProfile::LpgCsv, &config)?;
 let lifted = lift_archive(&projected.archive, LiftProfile::LpgCsv, &config)?;

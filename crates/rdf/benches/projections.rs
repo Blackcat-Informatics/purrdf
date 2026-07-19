@@ -13,14 +13,18 @@ use std::sync::Arc;
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_rdf::{
     CsvwConfig, CsvwContext, CsvwMode, CsvwVocabulary, LiftProfile, LpgConfig, LpgExecutionLimits,
-    LpgScope, OboGraphsConfig, OboGraphsVocabulary, OboMetadataRoles, OboOwlRoles, OboRdfRoles,
-    ProjectionConfig, ProjectionLimits, ProjectionProfile, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, ResearchObjectConfig, SkosClassRoles, SkosConfig, SkosDocumentationRoles,
-    SkosGraphSelection, SkosLabelRoles, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles,
-    lift_archive, parse_dataset, project_archive, project_csvw_exact, project_lpg,
-    project_obo_graphs, project_research_object, project_skos, read_csvw_exact, read_lpg_csv,
-    read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher,
-    write_lpg_graphml, write_neo4j_csv,
+    LpgIriSelection, LpgNamedGraphSelection, LpgPackageProjection, LpgProgress, LpgScope,
+    LpgStreamProjection, OboGraphsConfig, OboGraphsVocabulary, OboMetadataRoles, OboOwlRoles,
+    OboRdfRoles, ProjectionArtifactSink, ProjectionConfig, ProjectionError, ProjectionLimits,
+    ProjectionProfile, ProjectionTerm, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    ResearchObjectConfig, SkosClassRoles, SkosConfig, SkosDocumentationRoles, SkosGraphSelection,
+    SkosLabelRoles, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles, lift_archive,
+    parse_dataset, project_archive, project_csvw_exact, project_lpg, project_lpg_csv,
+    project_lpg_csv_to_sink, project_lpg_cypher, project_lpg_cypher_to_sink, project_lpg_graphml,
+    project_lpg_graphml_to_sink, project_neo4j_csv, project_neo4j_csv_to_sink, project_obo_graphs,
+    project_research_object, project_skos, read_csvw_exact, read_lpg_csv, read_lpg_cypher,
+    read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher, write_lpg_graphml,
+    write_neo4j_csv,
 };
 
 thread_local! {
@@ -53,6 +57,105 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
+#[derive(Debug, Default)]
+struct DiscardSink {
+    artifacts: usize,
+    bytes: usize,
+    committed: bool,
+}
+
+impl ProjectionArtifactSink for DiscardSink {
+    fn begin_package(&mut self) -> Result<(), ProjectionError> {
+        *self = Self::default();
+        Ok(())
+    }
+
+    fn begin_artifact(&mut self, _path: &str) -> Result<(), ProjectionError> {
+        self.artifacts = self
+            .artifacts
+            .checked_add(1)
+            .ok_or_else(|| ProjectionError::integrity("benchmark artifact count overflow"))?;
+        Ok(())
+    }
+
+    fn write_chunk(&mut self, chunk: &[u8]) -> Result<(), ProjectionError> {
+        self.bytes = self
+            .bytes
+            .checked_add(chunk.len())
+            .ok_or_else(|| ProjectionError::integrity("benchmark byte count overflow"))?;
+        Ok(())
+    }
+
+    fn finish_artifact(&mut self) -> Result<(), ProjectionError> {
+        Ok(())
+    }
+
+    fn commit_package(&mut self) -> Result<(), ProjectionError> {
+        self.committed = true;
+        Ok(())
+    }
+
+    fn abort_package(&mut self) {
+        *self = Self::default();
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LpgCarrier {
+    GenericCsv,
+    Neo4jCsv,
+    OpenCypher,
+    Graphml,
+}
+
+impl LpgCarrier {
+    const ALL: [Self; 4] = [
+        Self::GenericCsv,
+        Self::Neo4jCsv,
+        Self::OpenCypher,
+        Self::Graphml,
+    ];
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::GenericCsv => "generic_csv",
+            Self::Neo4jCsv => "neo4j_csv",
+            Self::OpenCypher => "open_cypher",
+            Self::Graphml => "graphml",
+        }
+    }
+
+    fn materialize(self, dataset: &RdfDataset, config: &LpgConfig) -> LpgPackageProjection {
+        match self {
+            Self::GenericCsv => project_lpg_csv(dataset, config),
+            Self::Neo4jCsv => project_neo4j_csv(dataset, config),
+            Self::OpenCypher => project_lpg_cypher(dataset, config),
+            Self::Graphml => project_lpg_graphml(dataset, config),
+        }
+        .expect("materialized LPG carrier")
+    }
+
+    fn stream(
+        self,
+        dataset: &RdfDataset,
+        config: &LpgConfig,
+    ) -> (LpgStreamProjection, DiscardSink) {
+        let mut sink = DiscardSink::default();
+        let mut observer = |_progress: &LpgProgress| Ok(());
+        let outcome = match self {
+            Self::GenericCsv => project_lpg_csv_to_sink(dataset, config, &mut sink, &mut observer),
+            Self::Neo4jCsv => project_neo4j_csv_to_sink(dataset, config, &mut sink, &mut observer),
+            Self::OpenCypher => {
+                project_lpg_cypher_to_sink(dataset, config, &mut sink, &mut observer)
+            }
+            Self::Graphml => project_lpg_graphml_to_sink(dataset, config, &mut sink, &mut observer),
+        }
+        .expect("streamed LPG carrier");
+        assert!(sink.committed);
+        (outcome, sink)
+    }
+}
+
 const EX: &str = "https://example.org/bench/";
 const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const RDFS: &str = "http://www.w3.org/2000/01/rdf-schema#";
@@ -62,6 +165,9 @@ const OBO: &str = "http://www.geneontology.org/formats/oboInOwl#";
 const SKOS_SOURCE: &str = "https://example.org/bench/source-skos#";
 const SKOS_TARGET: &str = "http://www.w3.org/2004/02/skos/core#";
 const ROWS: usize = 200;
+const LARGE_GRAPHS: usize = 20;
+const LARGE_ROWS_PER_GRAPH: usize = 200;
+const LARGE_QUADS: usize = LARGE_GRAPHS * LARGE_ROWS_PER_GRAPH * 3;
 const RESEARCH_SOURCE: &[u8] =
     include_bytes!("../tests/fixtures/research-objects/carrier/shared.ttl");
 const RESEARCH_CONFIGS: [(ProjectionProfile, LiftProfile, &[u8]); 5] = [
@@ -96,6 +202,10 @@ const RESEARCH_CONFIGS: [(ProjectionProfile, LiftProfile, &[u8]); 5] = [
 
 fn limits() -> ProjectionLimits {
     ProjectionLimits::new(64, 16_000_000, 64_000_000, 72_000_000, 16).expect("limits")
+}
+
+fn lpg_limits() -> ProjectionLimits {
+    ProjectionLimits::new(64, 128_000_000, 512_000_000, 576_000_000, 16).expect("LPG limits")
 }
 
 fn push_iri(builder: &mut RdfDatasetBuilder, subject: &str, predicate: &str, object: &str) {
@@ -137,6 +247,33 @@ fn graph_dataset() -> Arc<RdfDataset> {
         );
     }
     builder.freeze().expect("graph dataset")
+}
+
+fn large_multigraph_dataset() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(&format!("{EX}type"));
+    let relation = builder.intern_iri(&format!("{EX}relation"));
+    let label = builder.intern_iri(&format!("{EX}label"));
+    for graph_index in 0..LARGE_GRAPHS {
+        let graph = builder.intern_iri(&format!("{EX}graph-{graph_index}"));
+        for row in 0..LARGE_ROWS_PER_GRAPH {
+            let subject = builder.intern_iri(&format!("{EX}g{graph_index}-node-{row}"));
+            let object = builder.intern_iri(&format!(
+                "{EX}g{graph_index}-node-{}",
+                (row * 17 + 3) % LARGE_ROWS_PER_GRAPH
+            ));
+            let class = builder.intern_iri(&format!("{EX}Class-{}", row % 8));
+            let text = builder.intern_literal(RdfLiteral::simple(format!(
+                "Graph {graph_index} node {row}"
+            )));
+            builder.push_quad(subject, rdf_type, class, Some(graph));
+            builder.push_quad(subject, relation, object, Some(graph));
+            builder.push_quad(subject, label, text, Some(graph));
+        }
+    }
+    let dataset = builder.freeze().expect("large multi-graph dataset");
+    assert_eq!(dataset.quad_count(), LARGE_QUADS);
+    dataset
 }
 
 fn obo_dataset() -> Arc<RdfDataset> {
@@ -214,14 +351,33 @@ fn skos_dataset() -> Arc<RdfDataset> {
     builder.freeze().expect("SKOS dataset")
 }
 
-fn lpg_config() -> LpgConfig {
+fn lpg_config_with_scope(scope: LpgScope) -> LpgConfig {
     LpgConfig::new(
         format!("{EX}type"),
-        LpgScope::all(),
-        limits(),
-        LpgExecutionLimits::new(20_000, 20_000, 20_000, 20_000).expect("execution limits"),
+        scope,
+        lpg_limits(),
+        LpgExecutionLimits::new(100_000, 100_000, 100_000, 100_000).expect("execution limits"),
     )
     .expect("LPG config")
+}
+
+fn lpg_config() -> LpgConfig {
+    lpg_config_with_scope(LpgScope::all())
+}
+
+fn scoped_lpg_config() -> LpgConfig {
+    lpg_config_with_scope(LpgScope::select(
+        false,
+        LpgNamedGraphSelection::only(
+            [ProjectionTerm::Iri {
+                value: format!("{EX}graph-0"),
+            }],
+            std::iter::empty(),
+        ),
+        LpgIriSelection::all(),
+        LpgIriSelection::all(),
+        LpgIriSelection::all(),
+    ))
 }
 
 fn csvw_config() -> CsvwConfig {
@@ -396,9 +552,11 @@ fn report_allocations<T>(label: &str, operation: impl FnOnce() -> T) -> T {
 
 fn benchmark(c: &mut Criterion) {
     let graph_dataset = graph_dataset();
+    let large_graph_dataset = large_multigraph_dataset();
     let obo_dataset = obo_dataset();
     let skos_dataset = skos_dataset();
     let lpg_config = lpg_config();
+    let scoped_lpg_config = scoped_lpg_config();
     let csvw_config = csvw_config();
     let obo_config = obo_config();
     let skos_config = skos_config();
@@ -445,10 +603,34 @@ fn benchmark(c: &mut Criterion) {
     for ((_, lift, config), archive) in research_configs.iter().zip(&research_archives) {
         let _ = lift_archive(&archive.archive, *lift, config).expect("research-object lift");
     }
+    let _ = project_lpg(large_graph_dataset.as_ref(), &lpg_config).expect("large all-scope LPG");
+    let _ = project_lpg(large_graph_dataset.as_ref(), &scoped_lpg_config)
+        .expect("large selective-scope LPG");
+    for carrier in LpgCarrier::ALL {
+        let _ = carrier.materialize(large_graph_dataset.as_ref(), &lpg_config);
+        let _ = carrier.stream(large_graph_dataset.as_ref(), &lpg_config);
+    }
 
     black_box(report_allocations("rdf_to_lpg", || {
         project_lpg(graph_dataset.as_ref(), &lpg_config).expect("LPG")
     }));
+    black_box(report_allocations("lpg_large_all_scope", || {
+        project_lpg(large_graph_dataset.as_ref(), &lpg_config).expect("large all-scope LPG")
+    }));
+    black_box(report_allocations("lpg_large_one_graph", || {
+        project_lpg(large_graph_dataset.as_ref(), &scoped_lpg_config)
+            .expect("large selective-scope LPG")
+    }));
+    for carrier in LpgCarrier::ALL {
+        black_box(report_allocations(
+            &format!("{}_package", carrier.name()),
+            || carrier.materialize(large_graph_dataset.as_ref(), &lpg_config),
+        ));
+        black_box(report_allocations(
+            &format!("{}_sink", carrier.name()),
+            || carrier.stream(large_graph_dataset.as_ref(), &lpg_config),
+        ));
+    }
     black_box(report_allocations("lpg_generic_write", || {
         write_lpg_csv(&lpg.graph, &lpg_config).expect("generic write")
     }));
@@ -501,6 +683,58 @@ fn benchmark(c: &mut Criterion) {
             });
         });
         mapping.finish();
+    }
+
+    {
+        let mut scope = c.benchmark_group("lpg_scope_mapping");
+        scope.throughput(Throughput::Elements(LARGE_QUADS as u64));
+        scope.bench_function("all_20_graphs_12000_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_lpg(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&lpg_config),
+                    )
+                    .expect("large all-scope LPG"),
+                );
+            });
+        });
+        scope.bench_function("one_graph_12000_scanned_600_selected", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_lpg(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&scoped_lpg_config),
+                    )
+                    .expect("large selective-scope LPG"),
+                );
+            });
+        });
+        scope.finish();
+    }
+
+    {
+        let mut carriers = c.benchmark_group("lpg_package_vs_sink");
+        carriers.throughput(Throughput::Elements(LARGE_QUADS as u64));
+        for carrier in LpgCarrier::ALL {
+            carriers.bench_function(format!("{}_package", carrier.name()), |bencher| {
+                bencher.iter(|| {
+                    black_box(carrier.materialize(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&lpg_config),
+                    ));
+                });
+            });
+            carriers.bench_function(format!("{}_sink", carrier.name()), |bencher| {
+                bencher.iter(|| {
+                    black_box(carrier.stream(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&lpg_config),
+                    ));
+                });
+            });
+        }
+        carriers.finish();
     }
 
     {
