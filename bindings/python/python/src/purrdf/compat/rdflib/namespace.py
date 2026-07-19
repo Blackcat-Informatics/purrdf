@@ -516,6 +516,7 @@ class NamespaceManager:
                         break
                     num += 1
                 self.bind(prefix, namespace)
+                self._caller_prefixes.discard(prefix)
             self.__cache[uri] = (prefix, URIRef(namespace), name)
         return self.__cache[uri]
 
@@ -552,6 +553,7 @@ class NamespaceManager:
                         break
                     num += 1
                 self.bind(prefix, namespace)
+                self._caller_prefixes.discard(prefix)
             self.__cache_strict[uri] = (prefix, URIRef(namespace), name)
         cached = self.__cache_strict[uri]
         return cached[0], str(cached[1]), cached[2]
