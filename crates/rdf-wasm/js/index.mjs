@@ -19,6 +19,7 @@
 //     over the synchronous `Dataset.quads()` / `Sink` engine surface.
 
 import init, {
+  CompiledJsonLdContext,
   DataFactory,
   Dataset,
   liftProjection,
@@ -331,6 +332,7 @@ export async function streamToDataset(quadStream) {
 }
 
 export {
+  CompiledJsonLdContext,
   DataFactory,
   Dataset,
   liftProjection,

@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "upstream_revision": "3e7fa5377b2b3c5176eacf8bde8e01fdb7c4a062",
+  "upstream_tag": "REC-2020-07-16",
+  "expected_vector_count": 13,
+  "vectors": [
+    {
+      "id": "0005",
+      "name": "@type and prefix compaction",
+      "purpose": "Compact uses prefixes in @type",
+      "input_sha256": "497309c857317ae717e0410f4cb7cee29ee976cc5c36bd0002532faf667fa204",
+      "context_sha256": "f0f1ffe14ded2ebc2775f1422d6366114cc34e8f175cdef7000d83495ba81108",
+      "expected_sha256": "3729427a738c5beb5e54728bbbb6da55e5063b2e6254dd6b3026e65b0e75380c",
+      "input": "{\n  \"@id\": \"http://example.org/id1\",\n  \"@type\": [\"http://example.org/Type1\", \"http://example.org/Type2\"],\n  \"http://example.org/term1\": {\"@value\": \"v1\", \"@type\": \"http://example.org/datatype\"},\n  \"http://example.org/term2\": {\"@id\": \"http://example.org/id2\"}\n}",
+      "context": "{\n  \"@context\": {\n    \"ex\": \"http://example.org/\",\n    \"term1\": {\"@id\": \"ex:term1\", \"@type\": \"ex:datatype\"},\n    \"term2\": {\"@id\": \"ex:term2\", \"@type\": \"@id\"}\n  }\n}",
+      "expected": "{\n  \"@context\": {\n    \"ex\": \"http://example.org/\",\n    \"term1\": {\"@id\": \"ex:term1\", \"@type\": \"ex:datatype\"},\n    \"term2\": {\"@id\": \"ex:term2\", \"@type\": \"@id\"}\n  },\n  \"@id\": \"ex:id1\",\n  \"@type\": [\"ex:Type1\", \"ex:Type2\"],\n  \"term1\": \"v1\",\n  \"term2\": \"ex:id2\"\n}"
+    },
+    {
+      "id": "0006",
+      "name": "keep expanded object format if @type doesn't match",
+      "purpose": "Values not matching a coerced @type remain in expanded form",
+      "input_sha256": "b4a91a5867295896a252133a685f56733c0524a11fb7f30b10db6c7f6d2ade28",
+      "context_sha256": "79a9baea8fb32dc58f8dff55436cb6a8e540f536b08ec96ec6a97e9a3803a24a",
+      "expected_sha256": "481392e9b87095ed80eb2102750e4b30fe5f090423ad66b5232ddd43340a7b3b",
+      "input": "{\n  \"@id\": \"http://example.org/id1\",\n  \"@type\": [\"http://example.org/Type1\", \"http://example.org/Type2\"],\n  \"http://example.org/term1\": {\"@value\": \"v1\", \"@type\": \"http://example.org/different-datatype\"},\n  \"http://example.org/term2\": {\"@id\": \"http://example.org/id2\"}\n}\n",
+      "context": "{\n  \"@context\": {\n    \"ex\": \"http://example.org/\",\n    \"term1\": { \"@id\": \"ex:term1\", \"@type\": \"ex:datatype\" },\n    \"term2\": \"ex:term2\"\n  }\n}\n",
+      "expected": "{\n  \"@context\": {\n    \"ex\": \"http://example.org/\",\n    \"term1\": {\n      \"@id\": \"ex:term1\",\n      \"@type\": \"ex:datatype\"\n    },\n    \"term2\": \"ex:term2\"\n  },\n  \"@id\": \"ex:id1\",\n  \"@type\": [\"ex:Type1\", \"ex:Type2\"],\n  \"ex:term1\": {\"@value\": \"v1\", \"@type\": \"ex:different-datatype\"},\n  \"term2\": {\"@id\": \"ex:id2\"}\n}\n"
+    },
+    {
+      "id": "0013",
+      "name": "@value with @language",
+      "purpose": "Values with @language remain in expanded form by default",
+      "input_sha256": "ea95811783b355edb700b563964bf197b8901e34681bcb7b1f29f5529854afeb",
+      "context_sha256": "a539309efbe7be8122e34ffc7ed7e4d9f841e5b251babfb44e2d9d9d5ab2ec90",
+      "expected_sha256": "16bda288bf40d0b7d76af41dcc64b3dd0aa385bd8eb772edc7878be76f765c7f",
+      "input": "{\n  \"@id\": \"http://example.org/test\",\n  \"http://example.org/vocab#test\": {\"@value\": \"test\", \"@language\": \"en\"}\n}",
+      "context": "{\n  \"@context\": {\n    \"ex\": \"http://example.org/vocab#\"\n  }\n}",
+      "expected": "{\n  \"@context\": {\n    \"ex\": \"http://example.org/vocab#\"\n  },\n  \"@id\": \"http://example.org/test\",\n  \"ex:test\": {\"@value\": \"test\", \"@language\": \"en\"}\n}"
+    },
+    {
+      "id": "0022",
+      "name": "@list compaction of nested properties",
+      "purpose": "Compact nested properties using @list containers",
+      "input_sha256": "52a69ffa428f98807721ebe1727c98bd7a400472159c01d90a857b6249cecedd",
+      "context_sha256": "3b3e20a02005b7ae5682b949eececc60fde5dc30b52187938fd32cf5b84aab24",
+      "expected_sha256": "f806db006c4ea28e68702d84625d41bee8e9f796536548d0fe31c402b95e88ce",
+      "input": "[\n  {\n    \"@id\": \"https://example.org/ns#Game\",\n    \"@type\": [\n      \"http://www.w3.org/2002/07/owl#Class\"\n    ],\n    \"https://example.org/ns#properties\": [\n      {\n        \"@list\": [\n          {\n            \"@id\": \"https://example.org/ns#title\"\n          },\n          {\n            \"@id\": \"https://example.org/ns#slug\"\n          }\n        ]\n      }\n    ]\n  },\n  {\n    \"@id\": \"https://example.org/ns#properties\",\n    \"@type\": [\n      \"http://www.w3.org/1999/02/22-rdf-syntax-ns#Property\"\n    ]\n  },\n  {\n    \"@id\": \"https://example.org/ns#slug\",\n    \"@type\": [\n      \"http://www.w3.org/2002/07/owl#DataProperty\",\n      \"http://www.w3.org/2002/07/owl#FunctionalProperty\"\n    ]\n  },\n  {\n    \"@id\": \"https://example.org/ns#title\",\n    \"@type\": [\n      \"http://www.w3.org/2002/07/owl#DataProperty\"\n    ]\n  }\n]\n",
+      "context": "{\n  \"@context\": {\n    \"owl\": \"http://www.w3.org/2002/07/owl#\",\n    \"rdf\": \"http://www.w3.org/1999/02/22-rdf-syntax-ns#\",\n    \"ex\": \"https://example.org/ns#\",\n    \"id\": \"@id\",\n    \"type\": \"@type\",\n    \"ex:properties\": { \"@container\": \"@list\" }\n  }\n}\n",
+      "expected": "{\n  \"@context\": {\n    \"owl\": \"http://www.w3.org/2002/07/owl#\",\n    \"rdf\": \"http://www.w3.org/1999/02/22-rdf-syntax-ns#\",\n    \"ex\": \"https://example.org/ns#\",\n    \"id\": \"@id\",\n    \"type\": \"@type\",\n    \"ex:properties\": {\n        \"@container\": \"@list\"\n    }\n  },\n  \"@graph\": [\n    {\n      \"id\": \"ex:Game\",\n      \"type\": \"owl:Class\",\n      \"ex:properties\": [\n        { \"id\": \"ex:title\" },\n        { \"id\": \"ex:slug\" }\n      ]\n    },\n    {\n      \"id\": \"ex:properties\",\n      \"type\": \"rdf:Property\"\n    },\n    {\n      \"id\": \"ex:slug\",\n      \"type\": [ \"owl:DataProperty\", \"owl:FunctionalProperty\" ]\n    },\n    {\n      \"id\": \"ex:title\",\n      \"type\": \"owl:DataProperty\"\n    }\n  ]\n}\n"
+    },
+    {
+      "id": "0024",
+      "name": "most specific term matching in @list.",
+      "purpose": "The most specific term that matches all of the elements in the list, taking into account the default language, must be selected.",
+      "input_sha256": "fc2006192770aff4e78da7f7e4b556e20c4103cd46402ae458e51b9e188c8358",
+      "context_sha256": "6f77e97d1faa20c88d4e1a3e9fab9f38b08bf7bf992a257871e45e2aa950e6ed",
+      "expected_sha256": "b82b401104623efe0baebd0b0deba35429b72f37419cd4d908f379e5c74aed70",
+      "input": "{\n\n  \"@context\": {\n    \"type1\": \"http://example.com/t1\",\n    \"type2\": \"http://example.com/t2\"\n  },\n  \"@id\": \"http://example.com/id1\",\n  \"http://example.com/termLanguage\": [\n    {\n      \"@list\": [\n        { \"@value\": \"termLL0.1\", \"@language\": \"de\" },\n        { \"@value\": \"termLL0.2\", \"@language\": \"de\" }\n      ]\n    },\n    {\n      \"@list\": [\n        { \"@value\": \"termLL1.1\", \"@language\": \"en\" },\n        { \"@value\": \"termLL1.2\", \"@language\": \"en\" }\n      ]\n    },\n    {\n      \"@list\": [\n        \"termLL2.1\",\n        \"termLL2.2\"\n      ]\n    }\n  ],\n  \"http://example.com/termType\": [\n    {\n      \"@list\": [\n        { \"@value\": \"termTL0.1\", \"@type\": \"type1\" },\n        { \"@value\": \"termTL0.2\", \"@type\": \"type2\" }\n      ]\n    },\n    {\n      \"@list\": [\n        { \"@value\": \"termTL1.1\", \"@type\": \"type1\" },\n        { \"@value\": \"termTL1.2\", \"@type\": \"type1\" }\n      ]\n    },\n    {\n      \"@list\": [\n        { \"@value\": \"termTL2.1\", \"@type\": \"type2\" },\n        { \"@value\": \"termTL2.2\", \"@type\": \"type2\" }\n      ]\n    }\n  ]\n}\n",
+      "context": "{\n  \"@context\": {\n    \"type1\": \"http://example.com/t1\",\n    \"type2\": \"http://example.com/t2\",\n    \"@language\": \"de\",\n    \"termL\": { \"@id\": \"http://example.com/termLanguage\" },\n    \"termLL0\": { \"@id\": \"http://example.com/termLanguage\", \"@container\": \"@list\" },\n    \"termLL1\": { \"@id\": \"http://example.com/termLanguage\", \"@container\": \"@list\", \"@language\": \"en\" },\n    \"termLL2\": { \"@id\": \"http://example.com/termLanguage\", \"@container\": \"@list\", \"@language\": null },\n    \"termT\": { \"@id\": \"http://example.com/termType\" },\n    \"termTL0\": { \"@id\": \"http://example.com/termType\", \"@container\": \"@list\" },\n    \"termTL1\": { \"@id\": \"http://example.com/termType\", \"@container\": \"@list\", \"@type\": \"type1\" },\n    \"termTL2\": { \"@id\": \"http://example.com/termType\", \"@container\": \"@list\", \"@type\": \"type2\" }\n  }\n}\n",
+      "expected": "{\n  \"@context\": {\n    \"type1\": \"http://example.com/t1\",\n    \"type2\": \"http://example.com/t2\",\n    \"@language\": \"de\",\n    \"termL\": { \"@id\": \"http://example.com/termLanguage\" },\n    \"termLL0\": { \"@id\": \"http://example.com/termLanguage\", \"@container\": \"@list\" },\n    \"termLL1\": { \"@id\": \"http://example.com/termLanguage\", \"@container\": \"@list\", \"@language\": \"en\" },\n    \"termLL2\": { \"@id\": \"http://example.com/termLanguage\", \"@container\": \"@list\", \"@language\": null },\n    \"termT\": { \"@id\": \"http://example.com/termType\" },\n    \"termTL0\": { \"@id\": \"http://example.com/termType\", \"@container\": \"@list\" },\n    \"termTL1\": { \"@id\": \"http://example.com/termType\", \"@container\": \"@list\", \"@type\": \"type1\" },\n    \"termTL2\": { \"@id\": \"http://example.com/termType\", \"@container\": \"@list\", \"@type\": \"type2\" }\n  },\n  \"@id\": \"http://example.com/id1\",\n  \"termLL0\": [\n    \"termLL0.1\",\n    \"termLL0.2\"\n  ],\n  \"termLL1\": [\n    \"termLL1.1\",\n    \"termLL1.2\"\n  ],\n  \"termLL2\": [\n    \"termLL2.1\",\n    \"termLL2.2\"\n  ],\n  \"termTL0\": [\n    {\n      \"@type\": \"type1\",\n      \"@value\": \"termTL0.1\"\n    },\n    {\n      \"@type\": \"type2\",\n      \"@value\": \"termTL0.2\"\n    }\n  ],\n  \"termTL1\": [\n    \"termTL1.1\",\n    \"termTL1.2\"\n  ],\n  \"termTL2\": [\n    \"termTL2.1\",\n    \"termTL2.2\"\n  ]\n}\n"
+    },
+    {
+      "id": "0025",
+      "name": "Language maps",
+      "purpose": "Multiple values with different languages use language maps if property has @container: @language",
+      "input_sha256": "841bcec59394d005a7e6a42ddd7cecc6b77cd1d4ca1ee75a085ec769c9d5f719",
+      "context_sha256": "63b3ade733742cd478dff98597ed0dfbf653f9dbfc4ccd71c8aa5256ca3ada9a",
+      "expected_sha256": "d31dac5dda5a8293ad36c13d2de9b3824d64887c5857990eca2fdf05e189e288",
+      "input": "[\n  {\n    \"@id\": \"http://example.com/queen\",\n    \"http://example.com/vocab/label\":\n    [\n      {\n        \"@value\": \"The Queen\",\n        \"@language\": \"en\"\n      }, {\n        \"@value\": \"Die Königin\",\n        \"@language\": \"de\"\n      }, {\n        \"@value\": \"Ihre Majestät\",\n        \"@language\": \"de\"\n      }\n    ]\n  }\n]\n",
+      "context": "{\n  \"@context\": {\n    \"vocab\": \"http://example.com/vocab/\",\n    \"label\": {\n      \"@id\": \"vocab:label\",\n      \"@container\": \"@language\"\n    }\n  }\n}\n",
+      "expected": "{\n  \"@context\": {\n    \"vocab\": \"http://example.com/vocab/\",\n    \"label\": {\n      \"@id\": \"vocab:label\",\n      \"@container\": \"@language\"\n    }\n  },\n  \"@id\": \"http://example.com/queen\",\n  \"label\": {\n    \"en\": \"The Queen\",\n    \"de\": [ \"Die Königin\", \"Ihre Majestät\" ]\n  }\n}\n"
+    },
+    {
+      "id": "0073",
+      "name": "Mapped @id and @type",
+      "purpose": "Ensure that compaction works with mapped @id and @type",
+      "input_sha256": "4b829088afcb6de4391e9efd1724c15ea4a424758cac53f6f4f7e58b99b98d96",
+      "context_sha256": "dcabe972a3728a80aedb9455748a4d40267175abe055d487212acc0b8d901acd",
+      "expected_sha256": "49f7d3411a0d37221a7b8c2b0ff34ad3d2306a8332ad6b0ea43d48d2e7f8760c",
+      "input": "{\n  \"@context\": {\n    \"id\":      {\"@type\": \"@id\", \"@id\": \"@id\"},\n    \"type\":    {\"@type\": \"@id\", \"@id\": \"@type\"}\n  },\n  \"id\": \"http://example.org/anno9\",\n  \"type\": \"http://example.org/Annotation\"\n}\n",
+      "context": "{\n  \"@context\": {\n    \"id\":      {\"@type\": \"@id\", \"@id\": \"@id\"},\n    \"type\":    {\"@type\": \"@id\", \"@id\": \"@type\"}\n  }\n}\n",
+      "expected": "{\n  \"@context\": {\n    \"id\": {\n      \"@type\": \"@id\",\n      \"@id\": \"@id\"\n    },\n    \"type\": {\n      \"@type\": \"@id\",\n      \"@id\": \"@type\"\n    }\n  },\n  \"id\": \"http://example.org/anno9\",\n  \"type\": \"http://example.org/Annotation\"\n}\n"
+    },
+    {
+      "id": "di04",
+      "name": "simple language map with term direction",
+      "purpose": "Term selection with language maps and @direction.",
+      "input_sha256": "5c8378d4a717a2c20b10e8e1894ba2e9e2ba61f167b30bed11d03297504e438b",
+      "context_sha256": "a92c3ae2ae82fafa6e0a4d8aa5167b31927ce321e07aed4b2e043250b91008a7",
+      "expected_sha256": "d2638766e9cf71f3cde5d06c1e10ed4f29feca849208e5c9afffd46314533159",
+      "input": "[\n  {\n    \"@id\": \"http://example.com/queen\",\n    \"http://example.com/vocab/label\": [\n      {\"@value\": \"Die Königin\", \"@language\": \"de\", \"@direction\": \"ltr\"},\n      {\"@value\": \"Ihre Majestät\", \"@language\": \"de\", \"@direction\": \"ltr\"},\n      {\"@value\": \"The Queen\", \"@language\": \"en\", \"@direction\": \"ltr\"}\n    ]\n  }\n]",
+      "context": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"vocab\": \"http://example.com/vocab/\",\n    \"label\": {\n      \"@id\": \"vocab:label\",\n      \"@direction\": \"ltr\",\n      \"@container\": \"@language\"\n    }\n  }\n}",
+      "expected": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"vocab\": \"http://example.com/vocab/\",\n    \"label\": {\n      \"@id\": \"vocab:label\",\n      \"@direction\": \"ltr\",\n      \"@container\": \"@language\"\n    }\n  },\n  \"@id\": \"http://example.com/queen\",\n  \"label\": {\n    \"en\": \"The Queen\",\n    \"de\": [ \"Die Königin\", \"Ihre Majestät\" ]\n  }\n}"
+    },
+    {
+      "id": "di05",
+      "name": "simple language map with overriding term direction",
+      "purpose": "Term selection with language maps and @direction.",
+      "input_sha256": "5c8378d4a717a2c20b10e8e1894ba2e9e2ba61f167b30bed11d03297504e438b",
+      "context_sha256": "e9c40959cb941535f701c608039766b99db9e42970441a250a5d150569b12de9",
+      "expected_sha256": "0d9ea87f68973258f52ae367d67add94ea638da73e1c29f86220a8d9842ab5f2",
+      "input": "[\n  {\n    \"@id\": \"http://example.com/queen\",\n    \"http://example.com/vocab/label\": [\n      {\"@value\": \"Die Königin\", \"@language\": \"de\", \"@direction\": \"ltr\"},\n      {\"@value\": \"Ihre Majestät\", \"@language\": \"de\", \"@direction\": \"ltr\"},\n      {\"@value\": \"The Queen\", \"@language\": \"en\", \"@direction\": \"ltr\"}\n    ]\n  }\n]",
+      "context": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"@direction\": \"rtl\",\n    \"vocab\": \"http://example.com/vocab/\",\n    \"label\": {\n      \"@id\": \"vocab:label\",\n      \"@direction\": \"ltr\",\n      \"@container\": \"@language\"\n    }\n  }\n}",
+      "expected": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"@direction\": \"rtl\",\n    \"vocab\": \"http://example.com/vocab/\",\n    \"label\": {\n      \"@id\": \"vocab:label\",\n      \"@direction\": \"ltr\",\n      \"@container\": \"@language\"\n    }\n  },\n  \"@id\": \"http://example.com/queen\",\n  \"label\": {\n    \"en\": \"The Queen\",\n    \"de\": [ \"Die Königin\", \"Ihre Majestät\" ]\n  }\n}"
+    },
+    {
+      "id": "di06",
+      "name": "simple language map with overriding null direction",
+      "purpose": "Term selection with language maps and @direction.",
+      "input_sha256": "4da3deae1c839d823128b5554be1f1d20cf77c4e88b7b2b148caf82c065a48ef",
+      "context_sha256": "de683bbdd9b9ff7599e399bbb43fed6308b11492131657a66e4a36b3cbcc687b",
+      "expected_sha256": "265d0e38e649c2daf3dcc6231e4732bdf1e8638f9e26ee9fd68d8a408caeda7b",
+      "input": "[\n  {\n    \"@id\": \"http://example.com/queen\",\n    \"http://example.com/vocab/label\": [\n      {\"@value\": \"Die Königin\", \"@language\": \"de\"},\n      {\"@value\": \"Ihre Majestät\", \"@language\": \"de\"},\n      {\"@value\": \"The Queen\", \"@language\": \"en\"}\n    ]\n  }\n]",
+      "context": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"@direction\": \"rtl\",\n    \"vocab\": \"http://example.com/vocab/\",\n    \"label\": {\n      \"@id\": \"vocab:label\",\n      \"@direction\": null,\n      \"@container\": \"@language\"\n    }\n  }\n}",
+      "expected": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"@direction\": \"rtl\",\n    \"vocab\": \"http://example.com/vocab/\",\n    \"label\": {\n      \"@id\": \"vocab:label\",\n      \"@direction\": null,\n      \"@container\": \"@language\"\n    }\n  },\n  \"@id\": \"http://example.com/queen\",\n  \"label\": {\n    \"en\": \"The Queen\",\n    \"de\": [ \"Die Königin\", \"Ihre Majestät\" ]\n  }\n}"
+    },
+    {
+      "id": "la01",
+      "name": "most specific term matching in @list.",
+      "purpose": "The most specific term that matches all of the elements in the list, taking into account the default language, must be selected, without considering case of language.",
+      "input_sha256": "fc2006192770aff4e78da7f7e4b556e20c4103cd46402ae458e51b9e188c8358",
+      "context_sha256": "a705addd8789b35b8c198ae9e0612557838a97b833bb1dc0a52a16908aa3a5a9",
+      "expected_sha256": "2a791a7cb7fdd19a79fae679836769f30bddb76317dabb1f5bdd431b25ba17b7",
+      "input": "{\n\n  \"@context\": {\n    \"type1\": \"http://example.com/t1\",\n    \"type2\": \"http://example.com/t2\"\n  },\n  \"@id\": \"http://example.com/id1\",\n  \"http://example.com/termLanguage\": [\n    {\n      \"@list\": [\n        { \"@value\": \"termLL0.1\", \"@language\": \"de\" },\n        { \"@value\": \"termLL0.2\", \"@language\": \"de\" }\n      ]\n    },\n    {\n      \"@list\": [\n        { \"@value\": \"termLL1.1\", \"@language\": \"en\" },\n        { \"@value\": \"termLL1.2\", \"@language\": \"en\" }\n      ]\n    },\n    {\n      \"@list\": [\n        \"termLL2.1\",\n        \"termLL2.2\"\n      ]\n    }\n  ],\n  \"http://example.com/termType\": [\n    {\n      \"@list\": [\n        { \"@value\": \"termTL0.1\", \"@type\": \"type1\" },\n        { \"@value\": \"termTL0.2\", \"@type\": \"type2\" }\n      ]\n    },\n    {\n      \"@list\": [\n        { \"@value\": \"termTL1.1\", \"@type\": \"type1\" },\n        { \"@value\": \"termTL1.2\", \"@type\": \"type1\" }\n      ]\n    },\n    {\n      \"@list\": [\n        { \"@value\": \"termTL2.1\", \"@type\": \"type2\" },\n        { \"@value\": \"termTL2.2\", \"@type\": \"type2\" }\n      ]\n    }\n  ]\n}\n",
+      "context": "{\n  \"@context\": {\n    \"type1\": \"http://example.com/t1\",\n    \"type2\": \"http://example.com/t2\",\n    \"@language\": \"de\",\n    \"termL\": { \"@id\": \"http://example.com/termLanguage\" },\n    \"termLL0\": { \"@id\": \"http://example.com/termLanguage\", \"@container\": \"@list\" },\n    \"termLL1\": { \"@id\": \"http://example.com/termLanguage\", \"@container\": \"@list\", \"@language\": \"eN\" },\n    \"termLL2\": { \"@id\": \"http://example.com/termLanguage\", \"@container\": \"@list\", \"@language\": null },\n    \"termT\": { \"@id\": \"http://example.com/termType\" },\n    \"termTL0\": { \"@id\": \"http://example.com/termType\", \"@container\": \"@list\" },\n    \"termTL1\": { \"@id\": \"http://example.com/termType\", \"@container\": \"@list\", \"@type\": \"type1\" },\n    \"termTL2\": { \"@id\": \"http://example.com/termType\", \"@container\": \"@list\", \"@type\": \"type2\" }\n  }\n}\n",
+      "expected": "{\n  \"@context\": {\n    \"type1\": \"http://example.com/t1\",\n    \"type2\": \"http://example.com/t2\",\n    \"@language\": \"de\",\n    \"termL\": { \"@id\": \"http://example.com/termLanguage\" },\n    \"termLL0\": { \"@id\": \"http://example.com/termLanguage\", \"@container\": \"@list\" },\n    \"termLL1\": { \"@id\": \"http://example.com/termLanguage\", \"@container\": \"@list\", \"@language\": \"eN\" },\n    \"termLL2\": { \"@id\": \"http://example.com/termLanguage\", \"@container\": \"@list\", \"@language\": null },\n    \"termT\": { \"@id\": \"http://example.com/termType\" },\n    \"termTL0\": { \"@id\": \"http://example.com/termType\", \"@container\": \"@list\" },\n    \"termTL1\": { \"@id\": \"http://example.com/termType\", \"@container\": \"@list\", \"@type\": \"type1\" },\n    \"termTL2\": { \"@id\": \"http://example.com/termType\", \"@container\": \"@list\", \"@type\": \"type2\" }\n  },\n  \"@id\": \"http://example.com/id1\",\n  \"termLL0\": [\n    \"termLL0.1\",\n    \"termLL0.2\"\n  ],\n  \"termLL1\": [\n    \"termLL1.1\",\n    \"termLL1.2\"\n  ],\n  \"termLL2\": [\n    \"termLL2.1\",\n    \"termLL2.2\"\n  ],\n  \"termTL0\": [\n    {\n      \"@type\": \"type1\",\n      \"@value\": \"termTL0.1\"\n    },\n    {\n      \"@type\": \"type2\",\n      \"@value\": \"termTL0.2\"\n    }\n  ],\n  \"termTL1\": [\n    \"termTL1.1\",\n    \"termTL1.2\"\n  ],\n  \"termTL2\": [\n    \"termTL2.1\",\n    \"termTL2.2\"\n  ]\n}\n"
+    },
+    {
+      "id": "m011",
+      "name": "@language map with no @language",
+      "purpose": "index on @language",
+      "input_sha256": "812cba7d912f6af0c7458be451e3cf15b151e0f62603221cc2a53153c5f3859d",
+      "context_sha256": "0df4570d447cc6a1c489a3a99b8d6fe4b75b41577bbb601084eb48d5c3ee0562",
+      "expected_sha256": "b3f38362dc4eb28880facb3e66a531f2dfda3bb31748d6558b5219df9488f80a",
+      "input": "[\n  {\n    \"@id\": \"http://example.com/queen\",\n    \"http://example.com/vocab/label\": [\n      {\"@value\": \"The Queen\", \"@language\": \"en\"},\n      {\"@value\": \"Die Königin\", \"@language\": \"de\"},\n      {\"@value\": \"Ihre Majestät\"}\n    ]\n  }\n]",
+      "context": "{\n  \"@context\": {\n    \"vocab\": \"http://example.com/vocab/\",\n    \"label\": {\"@id\": \"vocab:label\", \"@container\": \"@language\"}\n  }\n}",
+      "expected": "{\n  \"@context\": {\n    \"vocab\": \"http://example.com/vocab/\",\n    \"label\": {\"@id\": \"vocab:label\", \"@container\": \"@language\"}\n  },\n  \"@id\": \"http://example.com/queen\",\n  \"label\": {\n    \"en\": \"The Queen\",\n    \"de\": \"Die Königin\",\n    \"@none\": \"Ihre Majestät\"\n  }\n}"
+    },
+    {
+      "id": "p002",
+      "name": "Compact IRI does not use expanded term definition in 1.1",
+      "purpose": "Terms with an expanded term definition are not used for creating compact IRIs",
+      "input_sha256": "e0966e4ffdbf909c71191034e21a759866916a43b323108d31e9e9feeef2139c",
+      "context_sha256": "eb7f94a7c3c22009158cd2dd33d1a861d3b4b6b07748dbb5219e0d984474c7d1",
+      "expected_sha256": "77def0f896876936357941594a506b67c3e2095273078406d9e1099f2cba78df",
+      "input": "{\n  \"@id\": \"http://example.org/id1\",\n  \"@type\": [\"http://example.org/Type1\", \"http://example.org/Type2\"],\n  \"http://example.org/term\": {\"@id\": \"http://example.org/id2\"}\n}\n",
+      "context": "{\n  \"@context\": {\n    \"ex\": {\"@id\": \"http://example.org/\"}\n  }\n}\n",
+      "expected": "{\n  \"@context\": {\n    \"ex\": {\"@id\": \"http://example.org/\"}\n  },\n  \"@id\": \"http://example.org/id1\",\n  \"@type\": [\"http://example.org/Type1\", \"http://example.org/Type2\"],\n  \"http://example.org/term\": {\"@id\": \"http://example.org/id2\"}\n}"
+    }
+  ]
+}

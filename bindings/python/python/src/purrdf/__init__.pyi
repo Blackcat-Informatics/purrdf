@@ -103,6 +103,14 @@ class RdfFormat:
     TRIG: RdfFormat
     TRIX: RdfFormat
     HEXTUPLES: RdfFormat
+    JSON_LD: RdfFormat
+    YAML_LD: RdfFormat
+
+class CompiledJsonLdContext:
+    def __init__(self, options_json: str) -> None: ...
+    @staticmethod
+    def from_prefixes(prefixes: dict[str, str]) -> CompiledJsonLdContext: ...
+    def canonical_context_json(self) -> str: ...
 
 class CanonicalizationAlgorithm:
     RDFC_1_0: CanonicalizationAlgorithm
@@ -269,6 +277,9 @@ class Store:
         format: RdfFormat,
         *,
         from_graph: NamedNode | BlankNode | DefaultGraph | None = ...,
+        jsonld_options: str | None = ...,
+        jsonld_context: CompiledJsonLdContext | None = ...,
+        yaml_schema_url: str | None = ...,
     ) -> None: ...
     @overload
     def dump(
@@ -277,6 +288,9 @@ class Store:
         *,
         format: RdfFormat,
         from_graph: NamedNode | BlankNode | DefaultGraph | None = ...,
+        jsonld_options: str | None = ...,
+        jsonld_context: CompiledJsonLdContext | None = ...,
+        yaml_schema_url: str | None = ...,
     ) -> bytes: ...
     def __len__(self) -> int: ...
 
@@ -309,6 +323,9 @@ class MutableDataset:
         format: RdfFormat,
         *,
         from_graph: NamedNode | BlankNode | DefaultGraph | None = ...,
+        jsonld_options: str | None = ...,
+        jsonld_context: CompiledJsonLdContext | None = ...,
+        yaml_schema_url: str | None = ...,
     ) -> None: ...
     @overload
     def dump(
@@ -317,6 +334,9 @@ class MutableDataset:
         *,
         format: RdfFormat,
         from_graph: NamedNode | BlankNode | DefaultGraph | None = ...,
+        jsonld_options: str | None = ...,
+        jsonld_context: CompiledJsonLdContext | None = ...,
+        yaml_schema_url: str | None = ...,
     ) -> bytes: ...
     # Engine configuration kwargs: as on `Store.query` / `Store.update`.
     def query(
@@ -429,7 +449,23 @@ def snapshot_content_id_native(data: bytes, *, format: RdfFormat) -> str: ...
 # RDF bytes ↔ JSON-LD-star / RDF/XML through the purrdf-gts codec set. The compat
 # `Graph.serialize`/`parse` route these formats here; serialize takes RDF bytes in
 # `format` and returns the text form, parse takes the text and returns N-Quads bytes.
-def to_json_ld(data: bytes, *, format: RdfFormat) -> str: ...
+def to_json_ld(
+    data: bytes,
+    *,
+    format: RdfFormat,
+    options_json: str | None = ...,
+    context: CompiledJsonLdContext | None = ...,
+) -> str: ...
+
+def serialize_jsonld(
+    data: bytes,
+    *,
+    format: RdfFormat,
+    output_format: str,
+    options_json: str | None = ...,
+    context: CompiledJsonLdContext | None = ...,
+    yaml_schema_url: str | None = ...,
+) -> str: ...
 
 # `statement_vocab` is the caller-supplied statement-metadata vocabulary
 # (keys: class/subject/predicate/object/objectLiteral, each an absolute IRI).
@@ -544,6 +580,14 @@ class RdfDataset:
     def quad_count(self) -> int: ...
     def term_count(self) -> int: ...
     def __len__(self) -> int: ...
+    def serialize_jsonld(
+        self,
+        output_format: str,
+        *,
+        options_json: str | None = ...,
+        context: CompiledJsonLdContext | None = ...,
+        yaml_schema_url: str | None = ...,
+    ) -> str: ...
     def to_gts(self, profile: str = ...) -> bytes: ...
 
 # ── Native SSSOM codec (bindings/python/src/py_sssom.rs, #848) ──────────────────

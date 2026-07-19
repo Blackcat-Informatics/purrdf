@@ -37,7 +37,8 @@ They live under `crates/*/benches/`:
   binary64 access, and a one-million-chunk catalog.
 - `crates/rdf-core/benches/purremb_alloc.rs` — one-shot allocation traffic and
   live-byte high-water probes over the same deterministic `.purremb` fixtures.
-- `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput.
+- `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput,
+  including separate context compilation and expanded/caller/derived paths.
 - `crates/rdf/benches/projections.rs` — RDF-to-LPG mapping, all four LPG
   carrier writers/readers, exact CSVW write/read, OBO Graphs, SKOS, the shared
   research-object model, and all five research-object carriers, with
@@ -57,6 +58,8 @@ They live under `crates/*/benches/`:
   `SERVICE ?g` evaluated as a LATERAL join vs. a fixed-IRI `SERVICE <ep>`.
 - `crates/shapes/benches/validate.rs` — SHACL validation plus JSON Schema and
   LinkML import/lowering throughput and one-operation allocation traffic.
+- `crates/shapes/benches/schema_surface.rs` — complete ontology-aware schema
+  compilation for shaped-only, sparse, and dense property surfaces.
 - `crates/entail/benches/chase.rs` — RDFS forward-materialization chase scaling.
 - `crates/gts/benches/authoring.rs` — GTS container authoring.
 - `crates/rdf-wasm/benches/query_engine_reuse.rs` — package-root
@@ -82,7 +85,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
 | `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, and a one-million-chunk hierarchy. |
 | `crates/rdf-core/benches/purremb_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for PURREMB fixture construction, verification, and streaming. |
-| `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers. |
+| `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers; JSON-LD context compilation and expanded/caller/derived modes are reported separately. |
 | `crates/rdf/benches/projections.rs` | Graph, tabular, and research-object mapping/carrier throughput plus allocation counts over deterministic fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
@@ -90,6 +93,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/sparql-eval/benches/exists_decorrelation.rs` | `FILTER NOT EXISTS` inner-pattern re-evaluation and index-rebuild cost with/without memoization. |
 | `crates/sparql-eval/benches/lateral_service.rs` | `SERVICE ?g` LATERAL substitute-and-forward cost as the number of distinct endpoint bindings grows. |
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
+| `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense ontology-complete class/property relation plus JSON Schema/OpenAPI emission. |
 | `crates/entail/benches/chase.rs` | RDFS semi-naive materialization scaling on subclass chains. |
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
@@ -229,11 +233,42 @@ warmed import. Those counters represent cumulative allocation traffic, not
 retained or peak memory, and the benchmark is report-only: neither timing nor
 allocation output is a CI threshold or performance promise.
 
+The `linkml_slot_emission` group measures the forward name-planning boundary on
+matched fixtures with the same class, slot count, requiredness, and constraint
+payload. `safe` uses directly representable names, `rename` uses distinct unsafe
+locals, and `collision` gives every unsafe local one sanitized stem while a safe
+slot owns that stem. Each mode runs at 32, 1,024, and 60,000 slots (near the
+65,536 per-class limit). Schema/config construction stays outside the timed
+loop; warmup, one-operation allocation probe, and measured loop all assert the
+expected rename and collision counts. Throughput is total source slots. The
+printed allocation calls/requested bytes are traffic, not retained or peak
+memory, and no speedup claim or gate is attached to them.
+
 ```sh
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_schema_import
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_schema_import --quick
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_linkml_import
 cargo bench -p purrdf-shapes --bench validate --locked -- shacl_linkml_import --quick
+cargo bench -p purrdf-shapes --bench validate --locked -- linkml_slot_emission
+cargo bench -p purrdf-shapes --bench validate --locked -- linkml_slot_emission --quick
+```
+
+### SHACL ontology schema surface
+
+The `shacl_schema_surface` group keeps namespace configuration and parsed RDF
+fixtures outside the timed loop. Each iteration measures the complete public
+compilation contract: RDFC-1.0 input identities, property catalog, SCC-condensed
+OWL/RDFS propagation, coverage manifest, JSON Schema, and OpenAPI. Three fixed
+fixtures distinguish 128 shaped classes with 128 properties, a sparse 256 by
+256 ontology relation, and a dense domainless 128 by 256 relation. Inputs are
+generated deterministically without RNG, time, or filesystem data.
+
+The suite is report-only and carries no latency threshold. Run its compile and
+single-sample smoke forms with:
+
+```sh
+cargo bench -p purrdf-shapes --bench schema_surface --locked --no-run
+cargo bench -p purrdf-shapes --bench schema_surface --locked -- --test
 ```
 
 ### Graph, tabular, and research-object projections

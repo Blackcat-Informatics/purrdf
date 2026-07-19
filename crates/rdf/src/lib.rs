@@ -96,6 +96,15 @@ pub mod viz;
 pub use dataset_io::dataset_from_bytes;
 pub use gts_import_graph::import_gts_graph;
 pub use gts_import_sink::import_gts_events;
+pub use native_codecs::jsonld::{
+    CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextLimits,
+    JsonLdContextRegistry, JsonLdDirection, JsonLdNullable, JsonLdSerializeMode,
+    JsonLdSerializeOptions, JsonLdTermDefinition, JsonLdTermSelection, JsonLdTermSelectionKind,
+    JsonLdTypeMapping, derive_jsonld_context, serialize_dataset_to_jsonld,
+    serialize_dataset_to_jsonld_with_context, serialize_dataset_to_jsonld_with_options,
+    serialize_dataset_to_yamlld, serialize_dataset_to_yamlld_with_context,
+    serialize_dataset_to_yamlld_with_options,
+};
 pub use native_codecs::okf::{
     OkfBundle, OkfConfig, OkfError, OkfReadOutcome, OkfWriteOutcome, OkfWriter, lift_okf_bundle,
     write_okf_bundle,
@@ -103,7 +112,8 @@ pub use native_codecs::okf::{
 pub use native_codecs::{
     GtsCodecBackend, NativeRdfFormat, ParseOptions, SerializeOutcome, SpanTable, classify,
     parse_dataset, parse_dataset_with, serialize_dataset, serialize_dataset_base_only,
-    serialize_dataset_to_format,
+    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
+    serialize_dataset_with_jsonld_options,
 };
 pub use native_quads::{
     canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quad_sources,

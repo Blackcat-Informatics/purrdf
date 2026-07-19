@@ -1018,7 +1018,7 @@ class Graph:
             return src_str
         return Path(src_str).absolute().as_uri()
 
-    def _dump_bytes(self, fmt: str | None) -> bytes:
+    def _dump_bytes(self, fmt: str | None, **kwargs: object) -> bytes:
         """Serialize the store to bytes in the requested format.
 
         The format name is resolved to a serializer class through the plugin
@@ -1037,7 +1037,7 @@ class Graph:
         except plugin.PluginException as exc:
             raise ValueError(f"unsupported RDF format: {fmt!r}") from exc
         buffer = io.BytesIO()
-        serializer_cls(self).serialize(buffer)
+        serializer_cls(self).serialize(buffer, **kwargs)
         return buffer.getvalue()
 
     @overload
@@ -1079,7 +1079,7 @@ class Graph:
         **kwargs: object,
     ) -> str | bytes | None:
         """Serialize the graph; return ``str``/``bytes`` or write to ``destination``."""
-        out = self._dump_bytes(format)
+        out = self._dump_bytes(format, **kwargs)
         if destination is None:
             return out if encoding is not None else out.decode("utf-8")
         writer = getattr(destination, "write", None)

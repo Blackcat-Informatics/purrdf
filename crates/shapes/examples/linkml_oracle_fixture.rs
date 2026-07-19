@@ -192,13 +192,42 @@ fn lossy_schema() -> Value {
     })
 }
 
+fn renamed_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+            "Carrier": {
+                "type": "object",
+                "title": "Renamed identity carrier",
+                "description": "A caller-described slot-lowering oracle fixture.",
+                "additionalProperties": false,
+                "properties": {
+                    "custom:alpha/beta": { "type": "boolean" },
+                    "did:example:123": { "type": "string" },
+                    "ex:a/b": { "type": "string", "pattern": "^A" },
+                    "https://outside.example/path/external": { "type": "string" },
+                    "mailto:cat@example.org": { "type": "string" },
+                    "skos:definition": { "type": "string" },
+                    "urn:example:part": { "type": "integer" }
+                },
+                "required": ["ex:a/b"]
+            }
+        }
+    })
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let config = config()?;
+    let renamed_config = config
+        .clone()
+        .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))?;
     let import_config = import_config()?;
     let exact_schema = exact_schema();
     let lossy_schema = lossy_schema();
+    let renamed_schema = renamed_schema();
     let exact = emit_linkml(&compiled(&exact_schema)?, &config)?;
     let lossy = emit_linkml(&compiled(&lossy_schema)?, &config)?;
+    let renamed = emit_linkml(&compiled(&renamed_schema)?, &renamed_config)?;
 
     if !exact.losses.is_empty() {
         return Err(format!(
@@ -299,7 +328,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .into());
     }
 
-    for package in [&exact, &lossy] {
+    for package in [&exact, &lossy, &renamed] {
         let reparsed = parse_linkml(&package.yaml)?;
         if reparsed != package.document || write_linkml(&reparsed)? != package.yaml {
             return Err("LinkML fixture did not survive canonical read/write".into());
@@ -319,6 +348,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             "reverse": reverse_payload(&lossy, &import_config)?,
             "schema": lossy_schema,
             "yaml": lossy.yaml,
+        },
+        "renamed": {
+            "element_names": renamed.element_names,
+            "losses": serde_json::from_str::<Value>(&renamed.losses.render_json())?,
+            "reverse": reverse_payload(&renamed, &import_config)?,
+            "schema": renamed_schema,
+            "slot_diagnostics": renamed.slot_diagnostics,
+            "slot_renames": renamed.slot_renames,
+            "yaml": renamed.yaml,
         }
     });
     println!("{}", serde_json::to_string(&output)?);

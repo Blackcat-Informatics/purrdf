@@ -243,6 +243,12 @@ typedef struct PurrdfError PurrdfError;
 typedef struct PurrdfGraph PurrdfGraph;
 
 /**
+ * An immutable compiled JSON-LD context. Release with
+ * `purrdf_jsonld_context_free`; the handle is safe for concurrent reads.
+ */
+typedef struct PurrdfJsonLdContext PurrdfJsonLdContext;
+
+/**
  * A SPARQL SELECT result cursor. Owns its variable names and solution rows
  * (dataset-independent `TermValue`s).
  *
@@ -757,6 +763,47 @@ int32_t purrdf_rowcursor_term(const PurrdfRowCursor *rc,
  * `rc` must be null or a live row cursor not already freed.
  */
 void purrdf_rowcursor_free(PurrdfRowCursor *rc);
+
+/**
+ * Compile a reusable context from a versioned JSON-LD options document.
+ *
+ * # Safety
+ * `options_json` must point to `options_len` readable bytes; the output pointers
+ * must be writable. On success, free `*out_context` with
+ * `purrdf_jsonld_context_free`.
+ */
+int32_t purrdf_jsonld_context_compile(const uint8_t *options_json,
+                                      size_t options_len,
+                                      PurrdfJsonLdContext **out_context,
+                                      PurrdfError **out_error);
+
+/**
+ * Release a compiled JSON-LD context handle. No-op on null.
+ *
+ * # Safety
+ * `context` must be null or a live handle not already freed.
+ */
+void purrdf_jsonld_context_free(PurrdfJsonLdContext *context);
+
+/**
+ * Serialize JSON-LD or YAML-LD with exactly one versioned options document or
+ * reusable compiled context. `yaml_schema_url` may be null and overrides the
+ * options document for YAML-LD when supplied.
+ *
+ * # Safety
+ * `dataset` and `media_type` must be live/non-null. If `options_json` is not
+ * null it points to `options_len` readable bytes and `context` must be null; if
+ * `options_json` is null, `options_len` must be zero and `context` must be live.
+ * Output pointers must be writable.
+ */
+int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset,
+                                           const char *media_type,
+                                           const uint8_t *options_json,
+                                           size_t options_len,
+                                           const PurrdfJsonLdContext *context,
+                                           const char *yaml_schema_url,
+                                           PurrdfBuffer **out_buffer,
+                                           PurrdfError **out_error);
 
 /**
  * Serialize the frozen dataset to `media_type` (e.g. `"text/turtle"`,

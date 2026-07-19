@@ -23,7 +23,10 @@ use std::io::Write;
 use purrdf_core::{
     DatasetView, LossEntry, LossLedger, PackBuilder, dataset_from_view, pair_loss_ledger,
 };
-use purrdf_rdf::serialize_dataset_to_format;
+use purrdf_rdf::{
+    JsonLdSerializeOptions, NativeRdfFormat, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options,
+};
 
 use crate::error::CliError;
 use crate::format::CliFormat;
@@ -70,10 +73,16 @@ pub(crate) fn write_rdf<D: DatasetView>(
     target: CliFormat,
     base: Option<&str>,
     src_codec: Option<&str>,
+    jsonld_options: Option<&JsonLdSerializeOptions>,
 ) -> Result<LossLedger, CliError> {
+    validate_jsonld_options(target, jsonld_options)?;
     match target {
         CliFormat::Rdf(format) => {
-            let outcome = serialize_dataset_to_format(view, format, base)?;
+            let outcome = if let Some(options) = jsonld_options {
+                serialize_dataset_to_format_with_jsonld_options(view, format, base, options)?
+            } else {
+                serialize_dataset_to_format(view, format, base)?
+            };
             write_out(out, &outcome.bytes)?;
             Ok(build_ledger(
                 src_codec,
@@ -90,6 +99,24 @@ pub(crate) fn write_rdf<D: DatasetView>(
             Ok(LossLedger::new())
         }
     }
+}
+
+/// Reject a JSON-LD options document unless the selected sink is JSON-LD/YAML-LD.
+pub(crate) fn validate_jsonld_options(
+    target: CliFormat,
+    options: Option<&JsonLdSerializeOptions>,
+) -> Result<(), CliError> {
+    if options.is_some()
+        && !matches!(
+            target,
+            CliFormat::Rdf(NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd)
+        )
+    {
+        return Err(CliError::Usage(
+            "--jsonld-options requires a JSON-LD or YAML-LD RDF output".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Combine the contract losses for `(src_codec → dst_codec)` with the realized

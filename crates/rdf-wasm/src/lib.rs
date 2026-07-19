@@ -67,6 +67,7 @@ mod codec;
 mod convert;
 mod dataset;
 mod factory;
+mod jsonld;
 mod projection;
 mod query;
 pub mod shacl;
@@ -75,6 +76,7 @@ mod term;
 
 pub use dataset::Dataset;
 pub use factory::DataFactory;
+pub use jsonld::CompiledJsonLdContext;
 pub use projection::{ProjectionLift, ProjectionPackage, lift_projection};
 pub use query::{QueryEngine, QueryResult, SelectResult, SelectRow};
 pub use stream::Sink;

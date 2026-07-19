@@ -76,6 +76,24 @@ const names = engine.select(
 console.log(names.rows.take(0)?.message.value);
 ```
 
+Configured JSON-LD/YAML-LD calls the same Rust context engine as native PurRDF:
+
+```js
+import { CompiledJsonLdContext } from "@blackcatinformatics/purrdf";
+
+const options = JSON.stringify({
+  version: 1,
+  mode: "context",
+  prefixes: { ex: "https://ex/" },
+});
+const context = new CompiledJsonLdContext(options);
+const jsonld = reparsed.serializeWithContext("jsonld", context);
+```
+
+`serializeConfigured` handles one-shot expanded, context, registry-backed, or
+derived requests. Matching `QueryEngine.queryRawConfigured` and
+`queryRawWithContext` methods serialize CONSTRUCT/DESCRIBE graph results.
+
 ## Graph, tabular, and research-object projection archives
 
 Projection and lift run entirely in memory through the native Rust engine. The
@@ -128,6 +146,7 @@ once. A runnable Node example is
   `directionalLiteral`, `variable`, `defaultGraph`, `quad`, `quotedTriple`,
   `fromTerm`, `fromQuad`.
 - `Dataset` — `Dataset.parse(input, format, base?)`, `serialize(format)`,
+  `serializeConfigured(format, optionsJson)`, `serializeWithContext(format, context)`,
   `add` / `delete` / `has` / `match` / `quads` / `size`, iteration.
   Formats: `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml` (`serialize` also `jsonld`).
 - `Dataset.canonicalize()` / `Dataset.isomorphic(other)` — RDFC-1.0 canonical N-Quads

@@ -131,6 +131,18 @@ def test_compute_qname_generates_ns_prefixes(
         assert (cp, cl) == (op, ol)
 
 
+def test_generated_qname_prefixes_are_not_caller_jsonld_context(
+    compat: ModuleType,
+) -> None:
+    """Internal qname aliases stay out of caller-controlled JSON-LD compaction."""
+    manager = _nsm(compat)
+    generated, _namespace, _local = manager.compute_qname(f"{EX}generated")
+    assert generated not in manager.jsonld_prefixes()
+
+    manager.bind("explicit", "http://explicit.example/")
+    assert manager.jsonld_prefixes() == {"explicit": "http://explicit.example/"}
+
+
 def test_qname_and_curie(compat: ModuleType, oracle: ModuleType) -> None:
     """``qname`` and ``curie`` render identical CURIEs for bound IRIs."""
     uri = "http://xmlns.com/foaf/0.1/knows"
@@ -240,6 +252,19 @@ def test_parse_binds_jsonld_context_prefixes(compat: ModuleType) -> None:
     g = compat.Graph()
     g.parse(data=jsonld, format="json-ld")
     assert ("ex", "http://example.org/") in {(p, str(n)) for p, n in g.namespaces()}
+
+
+def test_parse_binds_expanded_jsonld_prefix_definitions(compat: ModuleType) -> None:
+    """Expanded ``@id``/``@prefix`` definitions are rebound on the graph."""
+    jsonld = (
+        '{"@context": {"ex": {"@id": "http://example.org/", "@prefix": true}}, '
+        '"@id": "ex:s", "ex:p": {"@id": "ex:o"}}'
+    )
+    graph = compat.Graph()
+    graph.parse(data=jsonld, format="json-ld")
+    assert ("ex", "http://example.org/") in {
+        (prefix, str(namespace)) for prefix, namespace in graph.namespaces()
+    }
 
 
 def test_parse_binds_rdfxml_xmlns_prefixes(compat: ModuleType) -> None:

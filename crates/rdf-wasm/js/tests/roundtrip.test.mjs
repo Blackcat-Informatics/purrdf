@@ -61,6 +61,37 @@ test("parse → serialize → reparse round-trips N-Triples", () => {
   assert.equal(reparsed.size, 1);
 });
 
+test("expanded JSON-LD and YAML-LD wasm bytes are frozen", () => {
+  const input = '<https://example.org/alice> <https://schema.org/name> "Alice" .\n';
+  const ds = Dataset.parse(input, "nquads");
+  assert.equal(
+    ds.serialize("jsonld"),
+    `{
+  "@context": {},
+  "@graph": [
+    {
+      "@id": "https://example.org/alice",
+      "https://schema.org/name": {
+        "@value": "Alice"
+      }
+    }
+  ]
+}`,
+  );
+  assert.equal(
+    ds.serialize("yamlld"),
+    `# yaml-language-server: $schema=purrdf.schema.json
+# The default reference is the bundled purrdf.schema.json; pass an explicit
+# schema_url to point editors at a hosted copy.
+'@context': {}
+'@graph':
+- '@id': https://example.org/alice
+  https://schema.org/name:
+    '@value': Alice
+`,
+  );
+});
+
 test("DatasetCore add/has/delete/match/iterate", () => {
   const f = new DataFactory();
   const q1 = f.quad(

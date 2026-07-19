@@ -1393,6 +1393,7 @@ dependencies = [
  "purrdf-validate",
  "purrdf-xsd",
  "pyo3",
+ "serde_json",
 ]
 
 [[package]]
@@ -1400,6 +1401,7 @@ name = "purrdf-rdf"
 version = "0.7.0"
 dependencies = [
  "ahash",
+ "boon",
  "ciborium",
  "criterion",
  "csv",
@@ -1474,6 +1476,7 @@ dependencies = [
  "rayon",
  "regex",
  "serde",
+ "serde_json",
  "sha2",
  "tempfile",
 ]

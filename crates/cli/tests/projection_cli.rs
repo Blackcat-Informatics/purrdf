@@ -215,6 +215,68 @@ fn stdin_stdout_paths_keep_binary_and_rdf_streams_clean() {
 }
 
 #[test]
+fn configured_jsonld_options_reach_lift_and_are_rejected_by_project() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = write(&dir.path().join("config.json"), lpg_config());
+    let options = write(
+        &dir.path().join("jsonld-options.json"),
+        br#"{"version":1,"mode":"context","prefixes":{"ex":"https://example.org/"}}"#,
+    );
+    let archive = dir.path().join("graph.tar");
+    let archive_path = archive.to_str().expect("archive path");
+    let input = write(&dir.path().join("input.ttl"), TURTLE);
+    let projected = run(&[
+        "project",
+        "--profile",
+        "lpg-csv",
+        "--config",
+        &config,
+        &input,
+        archive_path,
+    ]);
+    assert!(projected.status.success());
+
+    let lifted = run(&[
+        "--jsonld-options",
+        &options,
+        "lift",
+        "--profile",
+        "lpg-csv",
+        "--config",
+        &config,
+        "--to",
+        "jsonld",
+        archive_path,
+        "-",
+    ]);
+    assert!(
+        lifted.status.success(),
+        "lift: {}",
+        String::from_utf8_lossy(&lifted.stderr)
+    );
+    let json = String::from_utf8(lifted.stdout).expect("JSON-LD");
+    assert!(json.contains("ex:s"));
+    assert!(json.contains("ex:p"));
+
+    let rejected = run(&[
+        "--jsonld-options",
+        &options,
+        "project",
+        "--profile",
+        "lpg-csv",
+        "--config",
+        &config,
+        &input,
+        archive_path,
+    ]);
+    assert_eq!(rejected.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("cannot be used with projection carrier output")
+    );
+}
+
+#[test]
 fn malformed_config_archive_and_double_stdin_fail_closed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let input = write(&dir.path().join("input.ttl"), TURTLE);

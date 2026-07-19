@@ -8,6 +8,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   ready,
@@ -62,9 +64,36 @@ const SERIALIZE_FORMATS = [
   "trig",
   "rdfxml",
   "jsonld",
+  "yamlld",
 ];
 
 await ready();
+
+const workerMessages = [];
+let workerMessageHandler = null;
+globalThis.self = {
+  location: { origin: "https://playground.example" },
+  addEventListener(type, handler) {
+    if (type === "message") workerMessageHandler = handler;
+  },
+  postMessage(message) {
+    workerMessages.push(message);
+  },
+};
+const playgroundOut = process.env.PLAYGROUND_OUT;
+assert.ok(playgroundOut, "PLAYGROUND_OUT must point at the assembled console");
+await import(pathToFileURL(join(playgroundOut, "engine.worker.mjs")).href);
+assert.equal(typeof workerMessageHandler, "function");
+
+let workerCallId = 0;
+async function workerCall(op, args = {}) {
+  const id = `smoke-${workerCallId++}`;
+  await workerMessageHandler({ origin: "", data: { id, op, args } });
+  const message = workerMessages.find((candidate) => candidate.id === id);
+  assert.ok(message, `worker did not answer ${op}`);
+  assert.equal(message.ok, true, message.error);
+  return message.result;
+}
 
 test("version() returns a SemVer string", () => {
   const v = version();
@@ -83,26 +112,43 @@ test("parse the preloaded doc (Input pane)", () => {
 });
 
 // A plain graph (no quoted-triple object) — every serializer, incl. JSON-LD,
-// can encode it. This is the graph the "all 6 formats" claim rests on.
+// can encode it. This is the graph the "all 7 formats" claim rests on.
 const PLAIN = `@prefix ex: <http://example.org/> .
 ex:alice ex:knows ex:bob .
 ex:bob ex:name "Bob" .
 `;
 
-test("serialize a plain graph to all 6 formats (Round-trip pane)", () => {
+test("serialize a plain graph to all 7 formats (Round-trip pane)", () => {
   const ds = Dataset.parse(PLAIN, "turtle");
   for (const f of SERIALIZE_FORMATS) {
     const text = ds.serialize(f);
     assert.equal(typeof text, "string");
     assert.ok(text.length > 0, `empty serialization for ${f}`);
   }
-  // JSON-LD is a first-class bidirectional codec: it round-trips as input, too.
-  const jsonld = ds.serialize("jsonld");
-  const back = Dataset.parse(jsonld, "jsonld");
-  assert.ok(ds.isomorphic(back), "JSON-LD round-trip must be isomorphic");
+  // Both linked-data carrier syntaxes are first-class bidirectional codecs.
+  for (const format of ["jsonld", "yamlld"]) {
+    const encoded = ds.serialize(format);
+    const back = Dataset.parse(encoded, format);
+    assert.ok(ds.isomorphic(back), `${format} round-trip must be isomorphic`);
+  }
 });
 
-test("preloaded (quoted-triple) doc: all 6 formats serialize; JSON-LD round-trips", () => {
+test("configured JSON-LD and YAML-LD follow worker dispatch", async () => {
+  await workerCall("parse", { text: PLAIN, format: "turtle" });
+  const result = await workerCall("serializeAll", {
+    jsonldOptions: {
+      version: 1,
+      mode: "context",
+      prefixes: { ex: "http://example.org/" },
+    },
+  });
+  assert.equal(JSON.parse(result.formats.jsonld.text)["@graph"][0]["@id"], "ex:alice");
+  assert.match(result.formats.yamlld.text, /ex:alice/);
+  assert.equal(result.formats.jsonld.roundtrips, true);
+  assert.equal(result.formats.yamlld.roundtrips, true);
+});
+
+test("preloaded (quoted-triple) doc: all 7 formats serialize; JSON-LD round-trips", () => {
   const ds = Dataset.parse(PRELOADED, "turtle");
   for (const f of SERIALIZE_FORMATS) {
     const text = ds.serialize(f);

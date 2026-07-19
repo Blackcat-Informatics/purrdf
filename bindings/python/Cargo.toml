@@ -32,3 +32,4 @@ purrdf-sparql-eval = { workspace = true }
 purrdf-validate = { workspace = true }
 purrdf-xsd = { workspace = true }
 pyo3 = { workspace = true }
+serde_json = { workspace = true }

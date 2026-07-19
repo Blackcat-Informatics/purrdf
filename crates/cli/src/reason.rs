@@ -15,6 +15,7 @@
 //! is surfaced under `--loss-ledger`.
 
 use purrdf_entail::{Regime, materialize};
+use purrdf_rdf::JsonLdSerializeOptions;
 
 use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget};
 use crate::error::CliError;
@@ -51,6 +52,10 @@ pub(crate) fn resolve_materializable_regime(regime: CliRegime) -> Result<Regime,
 }
 
 /// Run the `reason` subcommand.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the CLI dispatcher passes the command fields and shared sink configuration explicitly"
+)]
 pub(crate) fn run(
     regime: CliRegime,
     from: Option<CliRdfFormat>,
@@ -58,6 +63,7 @@ pub(crate) fn run(
     base: Option<&str>,
     input: &str,
     output: &str,
+    jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
     let regime = resolve_materializable_regime(regime)?;
@@ -67,12 +73,20 @@ pub(crate) fn run(
     // expensive) load + materialize work has already run.
     let source_format = format::resolve(from, input)?;
     let target_format = format::resolve(to, output)?;
+    sink::validate_jsonld_options(target_format, jsonld_options)?;
 
     let dataset = source::load_dataset(input, source_format, base)?;
 
     let closure = materialize(&dataset, regime)?;
 
     let src_codec = source_format.loss_codec_name();
-    let ledger = sink::write_rdf(&*closure, output, target_format, base, src_codec)?;
+    let ledger = sink::write_rdf(
+        &*closure,
+        output,
+        target_format,
+        base,
+        src_codec,
+        jsonld_options,
+    )?;
     ledger::surface(ledger_target, &ledger)
 }

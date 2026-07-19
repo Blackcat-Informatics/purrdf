@@ -27,7 +27,9 @@
 //!
 //! Consumer-config types are surfaced at the root ([`SliceVocab`],
 //! [`Namespaces`], [`StatementMetadataVocab`]) and unified behind a single
-//! [`OntologyProfile`] a downstream builds once (see [`profile`]).
+//! [`OntologyProfile`] a downstream builds once (see [`profile`]). The explicit
+//! ontology-aware developer-schema contract ([`SchemaCompileRequest`],
+//! [`SchemaSurfaceMode`], and [`compile_schema`]) is also available at the root.
 //!
 //! # Example
 //!
@@ -83,7 +85,12 @@ pub mod columnar {
 // ── consumer-config types, surfaced directly ────────────────────────────────
 // A consumer parameterizes an emitter without reaching into a sub-crate.
 pub use purrdf_rdf::native_codecs::jsonld::StatementMetadataVocab;
-pub use purrdf_shapes::json_schema::Namespaces;
+pub use purrdf_shapes::json_schema::{
+    Namespaces, SchemaClassPropertyCoverage, SchemaCompilation, SchemaCompilationInput,
+    SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,
+    SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus, SchemaPropertyCoverage,
+    SchemaSurfaceMode, compile_schema,
+};
 pub use purrdf_slice::SliceVocab;
 
 /// GTS: the container engine ([`purrdf_gts`]) plus the RDF-level GTS adapter
@@ -171,6 +178,7 @@ mod tests {
     fn facade_exposes_rdf_slice_shapes_and_shex() {
         let _ = RdfDatasetBuilder::new();
         let _ = slice::rdf_query::DatasetAccumulator::new();
+        let _ = shapes::SanitizePolicy::Rename;
         let _ = shapes::report::ValidationReport {
             conforms: true,
             results: Vec::new(),
@@ -262,6 +270,47 @@ mod tests {
             &shapes::GraphqlPackage,
             &shapes::SchemaImportConfig,
         ) -> Result<shapes::ImportedShapes, shapes::GraphqlError> = shapes::import_graphql_package;
+
+        let module = shapes::PydanticModuleConfig::new(
+            "domain.people",
+            "Caller-owned facade module documentation.",
+        )
+        .expect("module");
+        let class = shapes::PydanticClassConfig::new(
+            "Person",
+            "domain.people",
+            "Caller-owned facade class documentation.",
+            std::collections::BTreeMap::new(),
+        )
+        .expect("class");
+        let topology = shapes::PydanticPackageTopology::new([module], [class])
+            .expect("topology through facade");
+        let stamp = shapes::PydanticVersionStamp::new(
+            "1.2.3+facade.1",
+            "Caller-owned facade version documentation.",
+        )
+        .expect("version through facade");
+        let config = shapes::PydanticConfig::new(
+            "facade_models",
+            "Caller-owned facade package documentation.",
+            "Caller-owned facade support documentation.",
+        )
+        .expect("config through facade")
+        .with_topology(topology)
+        .expect("topology config through facade")
+        .with_version_stamp(stamp)
+        .expect("version config through facade");
+        assert_eq!(config.package_name(), "facade_models");
+    }
+
+    #[test]
+    fn facade_exposes_ontology_schema_compilation_contract() {
+        let _: fn(&SchemaCompileRequest<'_>) -> Result<SchemaCompilation, SchemaCompileError> =
+            compile_schema;
+        let mode = SchemaSurfaceMode::OntologyComplete;
+        assert!(matches!(mode, SchemaSurfaceMode::OntologyComplete));
+        let _: Option<SchemaCoverageReport> = None;
+        let _: Option<SchemaCompilationKey> = None;
     }
 
     #[test]
@@ -317,5 +366,21 @@ mod tests {
         assert_eq!(sv.ns(), "https://example.org/vocab/");
         assert_eq!(ns.compact_iri("https://example.org/vocab/Cat"), "vocab:Cat");
         assert!(smv.statement_metadata.ends_with("StatementMetadata"));
+    }
+
+    #[test]
+    fn facade_exposes_configured_jsonld_serialization() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let options = JsonLdSerializeOptions::expanded();
+        let direct = serialize_dataset_to_jsonld_with_options(&dataset, &options)
+            .expect("configured JSON-LD through umbrella facade");
+        let generic = serialize_dataset_to_format_with_jsonld_options(
+            &dataset,
+            NativeRdfFormat::JsonLd,
+            None,
+            &options,
+        )
+        .expect("generic configured JSON-LD through umbrella facade");
+        assert_eq!(direct.as_bytes(), generic.bytes);
     }
 }

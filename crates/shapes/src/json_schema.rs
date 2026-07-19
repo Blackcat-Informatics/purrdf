@@ -51,10 +51,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use ::purrdf::RdfDataset;
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs};
+use crate::schema_surface::{
+    OntologyExpression, OntologyPropertyKind, SchemaSurface, SurfaceClass, SurfaceProperty,
+};
 use crate::shapes::{Constraint, NodeKindValue, Path, Shape, Shapes, Target};
 use crate::term::{NamedNode, Term};
 
@@ -125,6 +129,12 @@ pub struct Namespaces {
     primary_prefix: String,
     /// The namespace `primary_prefix` resolves to.
     primary_ns: String,
+    /// Caller-declared `(prefix, namespace)` pairs in lexical prefix order.
+    /// Builtins appear here only when the caller explicitly declared or
+    /// rebound them. Ontology-complete schema projection uses this set as its
+    /// vocabulary boundary; merely knowing a W3C builtin for compaction must
+    /// never make that vocabulary caller-owned.
+    declared_prefixes: Vec<(String, String)>,
 }
 
 impl Namespaces {
@@ -139,6 +149,7 @@ impl Namespaces {
     /// Returns `Err` when `primary_prefix` resolves in neither `doc_prefixes`
     /// nor the builtins.
     pub fn new(primary_prefix: &str, doc_prefixes: &[(String, String)]) -> Result<Self, String> {
+        let declared: BTreeMap<String, String> = doc_prefixes.iter().cloned().collect();
         let mut merged: BTreeMap<String, String> = BUILTIN_PREFIXES
             .iter()
             .map(|(p, n)| ((*p).to_owned(), (*n).to_owned()))
@@ -161,6 +172,7 @@ impl Namespaces {
             prefixes,
             primary_prefix: primary_prefix.to_owned(),
             primary_ns,
+            declared_prefixes: declared.into_iter().collect(),
         })
     }
 
@@ -290,6 +302,18 @@ impl Namespaces {
     fn is_known(&self, iri: &str) -> bool {
         self.compact_iri(iri) != iri
     }
+
+    /// Whether `iri` belongs to a namespace explicitly declared by the caller.
+    ///
+    /// This deliberately differs from the internal compaction test: W3C builtins are
+    /// always known for compaction, but are not caller-owned ontology surface
+    /// unless the caller explicitly supplied their prefix declaration.
+    #[must_use]
+    pub fn is_caller_owned(&self, iri: &str) -> bool {
+        self.declared_prefixes
+            .iter()
+            .any(|(_, namespace)| iri.starts_with(namespace))
+    }
 }
 
 /// The bare local name of an IRI: the substring after the last `#` or `/`.
@@ -329,6 +353,438 @@ pub struct CompiledSchema {
     /// runtime [`LossLedger`] built via [`LossLedger::record`], one entry per
     /// occurrence (codes from `SHACL_JSON_SCHEMA_PROFILE`).
     pub losses: LossLedger,
+}
+
+// ── Ontology-complete schema compilation contract ──────────────────────────
+
+/// Selects the property/class surface projected into developer schemas.
+///
+/// The legacy [`compile`] and [`compile_with_value_vocab`] entry points always
+/// use [`Self::ShapedOnly`]. Ontology-aware callers must choose explicitly;
+/// there is intentionally no `Default` implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaSurfaceMode {
+    /// Emit exactly the active SHACL target-class union.
+    ShapedOnly,
+    /// Also project caller-vocabulary OWL/RDFS properties and open carrier
+    /// classes according to the bounded theory documented by this module.
+    OntologyComplete,
+}
+
+impl SchemaSurfaceMode {
+    const fn key_byte(self) -> u8 {
+        match self {
+            Self::ShapedOnly => 0,
+            Self::OntologyComplete => 1,
+        }
+    }
+}
+
+/// Stable reason attached to one property/class coverage decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaCoverageStatus {
+    /// A direct SHACL predicate shape supplies the emitted property.
+    HasShape,
+    /// An ontology-declared property was emitted without a direct SHACL shape.
+    IncludedUnshaped,
+    /// The property is catalogued but shaped-only mode does not admit it.
+    ExcludedShapedOnly,
+    /// The property is outside the caller-declared vocabulary boundary.
+    ExcludedNamespace,
+    /// The class does not satisfy every effective `rdfs:domain` expression.
+    ExcludedDomain,
+    /// An authoritative `sh:closed` shape excludes the ontology-only property.
+    ExcludedClosedShape,
+}
+
+/// Precision of a schema-surface decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaCoveragePrecision {
+    /// The emitted structure follows a direct SHACL or exact RDF/RDFS rule.
+    Exact,
+    /// The representation is deliberately useful but weaker than the source
+    /// semantics, such as projecting forward functionality as a scalar field.
+    RepresentationApproximation,
+}
+
+/// One source axiom supporting a schema-surface decision.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct SchemaCoverageProvenance {
+    /// Subject IRI in the source axiom.
+    pub subject: String,
+    /// Predicate IRI in the source axiom.
+    pub predicate: String,
+    /// Canonical source-object rendering.
+    pub object: String,
+}
+
+/// One catalogued property's decision for one eligible class.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SchemaClassPropertyCoverage {
+    /// Existing caller-owned class IRI.
+    pub class_iri: String,
+    /// Whether ontology-complete compilation created an open carrier `$def`
+    /// because no active SHACL target shape existed for this class.
+    pub synthesized_open_class: bool,
+    /// Inclusion or exclusion reason.
+    pub status: SchemaCoverageStatus,
+    /// Semantic precision of the emitted representation or exclusion proof.
+    pub precision: SchemaCoveragePrecision,
+    /// Canonically sorted source axioms supporting this decision.
+    pub provenance: Vec<SchemaCoverageProvenance>,
+}
+
+/// Aggregate coverage for one ontology-declared property.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SchemaPropertyCoverage {
+    /// Full property IRI.
+    pub property_iri: String,
+    /// Canonically sorted RDF/OWL declaration or relationship kinds that made
+    /// the property a catalog entry.
+    pub declarations: Vec<String>,
+    /// Distinct inclusion/exclusion outcomes represented by the class rows.
+    /// A property with no eligible class still carries one aggregate exclusion
+    /// outcome, so its absence is always explained.
+    pub outcomes: Vec<SchemaCoverageStatus>,
+    /// Canonically sorted per-class decisions. The aggregate property appears
+    /// exactly once in a report even when this vector is empty.
+    pub classes: Vec<SchemaClassPropertyCoverage>,
+}
+
+/// Deterministic audit manifest for ontology property coverage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SchemaCoverageReport {
+    /// Surface mode used by the compilation.
+    pub mode: SchemaSurfaceMode,
+    /// Every catalogued property exactly once, sorted by full IRI.
+    pub properties: Vec<SchemaPropertyCoverage>,
+}
+
+impl SchemaCoverageReport {
+    /// Render canonical, pretty JSON with one trailing newline.
+    ///
+    /// Struct field order is fixed and every collection is sorted before the
+    /// report is constructed, so repeated rendering is byte-identical.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut canonical = self.clone();
+        canonical
+            .properties
+            .sort_by(|left, right| left.property_iri.cmp(&right.property_iri));
+        for property in &mut canonical.properties {
+            property.declarations.sort();
+            property.declarations.dedup();
+            property.outcomes.sort();
+            property.outcomes.dedup();
+            property.classes.sort_by(|left, right| {
+                left.class_iri
+                    .cmp(&right.class_iri)
+                    .then_with(|| left.status.cmp(&right.status))
+                    .then_with(|| left.precision.cmp(&right.precision))
+            });
+            for class in &mut property.classes {
+                class.provenance.sort();
+                class.provenance.dedup();
+            }
+        }
+        let value = serde_json::to_value(canonical)
+            .expect("SchemaCoverageReport contains only serializable values");
+        to_pretty(&value)
+    }
+}
+
+/// Compiler-owned cache identity for one complete schema request.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SchemaCompilationKey(String);
+
+impl SchemaCompilationKey {
+    /// Lowercase SHA-256 cache-key text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SchemaCompilationKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Which graph failed canonicalization while deriving a schema cache key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaCompilationInput {
+    /// Parsed SHACL shapes graph retained by [`Shapes`].
+    Shapes,
+    /// Caller-supplied ontology graph.
+    Ontology,
+}
+
+/// Typed failures from ontology-aware schema compilation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SchemaCompileError {
+    /// RDFC-1.0 canonicalization exceeded its fixed safety budget.
+    Canonicalization {
+        /// Graph that could not be canonicalized.
+        input: SchemaCompilationInput,
+        /// Stable diagnostic from the canonicalizer.
+        message: String,
+    },
+    /// A fixed schema-surface resource ceiling was exceeded.
+    LimitExceeded {
+        /// Resource whose ceiling was exceeded.
+        resource: &'static str,
+        /// Fixed implementation ceiling.
+        limit: usize,
+        /// Observed input size.
+        observed: usize,
+    },
+    /// An OWL/RDFS axiom is structurally invalid for the supported expression
+    /// fragment.
+    InvalidOntology {
+        /// Canonical subject rendering or IRI.
+        subject: String,
+        /// Explanation of the structural violation.
+        reason: String,
+    },
+    /// An eligible class/property cannot be represented under caller namespace
+    /// and `$defs` keying rules.
+    Namespace {
+        /// Offending IRI.
+        iri: String,
+        /// Explanation of the keying/admission violation.
+        reason: String,
+    },
+    /// Two distinct ontology resources map to the same emitted key.
+    DefinitionCollision {
+        /// Colliding `$defs` key.
+        key: String,
+        /// First resource IRI.
+        first: String,
+        /// Second resource IRI.
+        second: String,
+    },
+}
+
+impl std::fmt::Display for SchemaCompileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Canonicalization { input, message } => {
+                write!(f, "failed to canonicalize {input:?} graph: {message}")
+            }
+            Self::LimitExceeded {
+                resource,
+                limit,
+                observed,
+            } => write!(
+                f,
+                "schema surface {resource} limit exceeded: observed {observed}, limit {limit}"
+            ),
+            Self::InvalidOntology { subject, reason } => {
+                write!(f, "invalid ontology expression at {subject}: {reason}")
+            }
+            Self::Namespace { iri, reason } => {
+                write!(f, "cannot project ontology resource {iri}: {reason}")
+            }
+            Self::DefinitionCollision { key, first, second } => write!(
+                f,
+                "distinct ontology resources {first} and {second} share schema definition key {key:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SchemaCompileError {}
+
+/// Complete input contract for ontology-aware schema compilation.
+///
+/// Every request owns one ontology graph and one explicit mode. Value-vocabulary
+/// projection can only be enabled through [`Self::from_value_vocab_projection`],
+/// which reuses that projection's ontology and makes a mismatched pair
+/// unrepresentable.
+#[derive(Debug, Clone, Copy)]
+pub struct SchemaCompileRequest<'a> {
+    shapes: &'a Shapes,
+    namespaces: &'a Namespaces,
+    ontology: &'a RdfDataset,
+    mode: SchemaSurfaceMode,
+    value_vocab: Option<&'a ValueVocab>,
+}
+
+impl<'a> SchemaCompileRequest<'a> {
+    /// Construct a request without value-vocabulary enum projection.
+    #[must_use]
+    pub fn new(
+        shapes: &'a Shapes,
+        namespaces: &'a Namespaces,
+        ontology: &'a RdfDataset,
+        mode: SchemaSurfaceMode,
+    ) -> Self {
+        Self {
+            shapes,
+            namespaces,
+            ontology,
+            mode,
+            value_vocab: None,
+        }
+    }
+
+    /// Construct a request using an existing co-bound value-vocabulary marker
+    /// and ontology graph.
+    #[must_use]
+    pub fn from_value_vocab_projection(
+        shapes: &'a Shapes,
+        namespaces: &'a Namespaces,
+        projection: &'a ValueVocabProjection<'a>,
+        mode: SchemaSurfaceMode,
+    ) -> Self {
+        Self {
+            shapes,
+            namespaces,
+            ontology: projection.ontology,
+            mode,
+            value_vocab: Some(projection.vocab),
+        }
+    }
+
+    /// Parsed SHACL shapes.
+    #[must_use]
+    pub fn shapes(&self) -> &Shapes {
+        self.shapes
+    }
+
+    /// Caller namespace configuration.
+    #[must_use]
+    pub fn namespaces(&self) -> &Namespaces {
+        self.namespaces
+    }
+
+    /// Exact ontology graph used for surface derivation.
+    #[must_use]
+    pub fn ontology(&self) -> &RdfDataset {
+        self.ontology
+    }
+
+    /// Explicit surface mode.
+    #[must_use]
+    pub const fn mode(&self) -> SchemaSurfaceMode {
+        self.mode
+    }
+
+    /// Caller marker used for value-vocabulary projection, when active.
+    #[must_use]
+    pub fn value_vocab(&self) -> Option<&ValueVocab> {
+        self.value_vocab
+    }
+
+    /// Derive the exact pre-compilation cache key for this request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SchemaCompileError::Canonicalization`] if either graph exceeds
+    /// the canonicalizer's fixed safety budget.
+    pub fn compilation_key(&self) -> Result<SchemaCompilationKey, SchemaCompileError> {
+        schema_compilation_key(self)
+    }
+
+    /// Derive the deterministic ontology property coverage manifest without
+    /// serializing any developer-schema artifact.
+    ///
+    /// This uses the same internal relation consumed by full compilation, so a
+    /// cache planner can inspect both the key and coverage before emission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for malformed OWL/RDFS expressions, contradictory
+    /// property kinds/ranges, or a fixed resource ceiling breach.
+    pub fn coverage_report(&self) -> Result<SchemaCoverageReport, SchemaCompileError> {
+        Ok(crate::schema_surface::build(self)?.report)
+    }
+}
+
+/// Ontology-aware compilation output.
+#[derive(Debug, Clone)]
+pub struct SchemaCompilation {
+    /// Existing schema/OpenAPI/loss artifacts.
+    pub compiled: CompiledSchema,
+    /// Complete deterministic property coverage manifest.
+    pub coverage: SchemaCoverageReport,
+    /// Exact identity of every compilation input and policy constant.
+    pub key: SchemaCompilationKey,
+}
+
+const SCHEMA_KEY_SALT: &str = "purrdf-shapes/schema-compilation-key/v1";
+const SCHEMA_POLICY_SALT: &str =
+    "rdf12;json-schema-2020-12;openapi-3.1;surface-limits-v1;owl-rdfs-fragment-v1";
+pub(crate) const MAX_SCHEMA_PROPERTIES: usize = 65_536;
+pub(crate) const MAX_SCHEMA_CLASSES: usize = 65_536;
+pub(crate) const MAX_SCHEMA_RELATIONS: usize = 1_048_576;
+pub(crate) const MAX_OWL_EXPRESSION_DEPTH: usize = 64;
+
+fn schema_compilation_key(
+    request: &SchemaCompileRequest<'_>,
+) -> Result<SchemaCompilationKey, SchemaCompileError> {
+    let shapes =
+        ::purrdf::try_canonicalize(request.shapes.shapes_dataset.as_ref()).map_err(|error| {
+            SchemaCompileError::Canonicalization {
+                input: SchemaCompilationInput::Shapes,
+                message: error.to_string(),
+            }
+        })?;
+    let ontology = ::purrdf::try_canonicalize(request.ontology).map_err(|error| {
+        SchemaCompileError::Canonicalization {
+            input: SchemaCompilationInput::Ontology,
+            message: error.to_string(),
+        }
+    })?;
+
+    let mut bytes = Vec::with_capacity(
+        shapes.nquads.len() + ontology.nquads.len() + request.namespaces.prefixes.len() * 64 + 256,
+    );
+    append_key_part(&mut bytes, "key-salt", SCHEMA_KEY_SALT.as_bytes());
+    append_key_part(&mut bytes, "policy", SCHEMA_POLICY_SALT.as_bytes());
+    append_key_part(&mut bytes, "crate-version", crate::VERSION.as_bytes());
+    append_key_part(&mut bytes, "shapes-rdfc", shapes.nquads.as_bytes());
+    append_key_part(&mut bytes, "ontology-rdfc", ontology.nquads.as_bytes());
+    append_key_part(
+        &mut bytes,
+        "primary-prefix",
+        request.namespaces.primary_prefix.as_bytes(),
+    );
+    for (prefix, namespace) in &request.namespaces.declared_prefixes {
+        append_key_part(&mut bytes, "namespace-prefix", prefix.as_bytes());
+        append_key_part(&mut bytes, "namespace-iri", namespace.as_bytes());
+    }
+    append_key_part(&mut bytes, "surface-mode", &[request.mode.key_byte()]);
+    append_key_part(
+        &mut bytes,
+        "value-vocab-marker",
+        request
+            .value_vocab
+            .map_or(&[][..], |vocab| vocab.abstract_individual_type().as_bytes()),
+    );
+    for limit in [
+        MAX_SCHEMA_PROPERTIES,
+        MAX_SCHEMA_CLASSES,
+        MAX_SCHEMA_RELATIONS,
+        MAX_OWL_EXPRESSION_DEPTH,
+    ] {
+        append_key_part(&mut bytes, "fixed-limit", &limit.to_be_bytes());
+    }
+    Ok(SchemaCompilationKey(
+        ::purrdf::ContentDigest::of(&bytes).to_hex(),
+    ))
+}
+
+fn append_key_part(bytes: &mut Vec<u8>, label: &str, value: &[u8]) {
+    bytes.extend_from_slice(&(label.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(label.as_bytes());
+    bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(value);
 }
 
 // ── Value-vocabulary projection config ───────────────────────────────────────
@@ -413,7 +869,7 @@ struct Ctx<'ns> {
     /// Predicate IRIs whose `rdfs:range` is a value-vocabulary class → that
     /// class's `{Local}Enum` `$def` key. Drives the enum `$ref` for OPEN
     /// vocabularies that carry no `sh:class`. Empty unless a projection is active.
-    predicate_ranges: BTreeMap<String, String>,
+    predicate_ranges: BTreeMap<String, Vec<String>>,
     /// The namespace table driving ALL compaction / keying decisions.
     ns: &'ns Namespaces,
 }
@@ -422,7 +878,7 @@ impl<'ns> Ctx<'ns> {
     fn new(
         emitted_defs: BTreeSet<String>,
         value_vocab_enums: BTreeMap<String, String>,
-        predicate_ranges: BTreeMap<String, String>,
+        predicate_ranges: BTreeMap<String, Vec<String>>,
         ns: &'ns Namespaces,
     ) -> Self {
         Self {
@@ -474,6 +930,47 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
     compile_with_value_vocab(shapes, ns, None)
 }
 
+/// Compile an explicit ontology-aware schema request.
+///
+/// [`SchemaSurfaceMode::ShapedOnly`] delegates to the legacy emitter and is
+/// byte-identical for the same shapes/value-vocabulary inputs. The
+/// ontology-complete mode injects optional OWL/RDFS properties and synthesized
+/// open carrier classes from the same relation returned in
+/// [`SchemaCompilation::coverage`].
+///
+/// # Errors
+///
+/// Returns a typed error for unsafe canonicalization, malformed/contradictory
+/// ontology axioms, fixed resource ceiling breaches, or schema key collisions.
+pub fn compile_schema(
+    request: &SchemaCompileRequest<'_>,
+) -> Result<SchemaCompilation, SchemaCompileError> {
+    let key = request.compilation_key()?;
+    let surface = crate::schema_surface::build(request)?;
+    let projection = request.value_vocab().map(|vocab| ValueVocabProjection {
+        vocab,
+        ontology: request.ontology(),
+    });
+    let compiled = match request.mode() {
+        SchemaSurfaceMode::ShapedOnly => try_compile_with_value_vocab(
+            request.shapes(),
+            request.namespaces(),
+            projection.as_ref(),
+        )?,
+        SchemaSurfaceMode::OntologyComplete => compile_with_surface(
+            request.shapes(),
+            request.namespaces(),
+            projection.as_ref(),
+            &surface,
+        )?,
+    };
+    Ok(SchemaCompilation {
+        compiled,
+        coverage: surface.report,
+        key,
+    })
+}
+
 /// Compile a parsed [`Shapes`] graph, optionally projecting *value vocabularies*
 /// to enum `$defs`.
 ///
@@ -500,6 +997,15 @@ pub fn compile_with_value_vocab(
     ns: &Namespaces,
     projection: Option<&ValueVocabProjection<'_>>,
 ) -> CompiledSchema {
+    try_compile_with_value_vocab(shapes, ns, projection)
+        .unwrap_or_else(|error| panic!("json_schema: {error}"))
+}
+
+fn try_compile_with_value_vocab(
+    shapes: &Shapes,
+    ns: &Namespaces,
+    projection: Option<&ValueVocabProjection<'_>>,
+) -> Result<CompiledSchema, SchemaCompileError> {
     // Keying invariant (Gap D, fail-closed): every primary-namespace `$def`
     // is keyed by the class LOCAL NAME and the `@type` discriminator is
     // `<primary_prefix>:<LocalName>`. That is sound ONLY while every target
@@ -509,13 +1015,13 @@ pub fn compile_with_value_vocab(
     // guard protects the precondition rather than widening the keys. A target
     // class from an undeclared namespace or a colliding key HARD-fails the
     // build here instead of silently mis-discriminating or clobbering a `$def`.
-    assert_target_class_keys_are_unambiguous(shapes, ns);
+    validate_target_class_keys(shapes, ns)?;
 
     // Value-vocabulary enum `$defs` (projection-only): class IRI → (enum key,
     // `$def` body). Empty when `projection` is `None`. Enum keys are guarded for
     // collisions against each other and the class `$def` keys before use.
-    let (vocab_enums, vocab_losses) = value_vocab_enum_defs(shapes, ns, projection);
-    assert_value_vocab_enum_keys_unambiguous(shapes, ns, &vocab_enums);
+    let (vocab_enums, vocab_losses) = value_vocab_enum_defs(shapes, ns, projection)?;
+    validate_value_vocab_enum_keys(shapes, ns, &vocab_enums)?;
 
     // PASS 1: compute the set of `def_key`s that WILL receive a `$def`, using
     // the EXACT same iteration AND the EXACT same key function (`ns.def_key`)
@@ -671,11 +1177,359 @@ pub fn compile_with_value_vocab(
     let schema = root_schema(&defs, ns);
     let openapi = openapi_doc(&defs);
 
-    CompiledSchema {
+    Ok(CompiledSchema {
         schema_json: to_pretty(&schema),
         openapi_json: to_pretty(&openapi),
         losses: ctx.ledger,
+    })
+}
+
+fn compile_with_surface(
+    shapes: &Shapes,
+    ns: &Namespaces,
+    projection: Option<&ValueVocabProjection<'_>>,
+    surface: &SchemaSurface,
+) -> Result<CompiledSchema, SchemaCompileError> {
+    let (vocab_enums, vocab_losses) = value_vocab_enum_defs(shapes, ns, projection)?;
+    validate_surface_keys(surface, ns, &vocab_enums)?;
+
+    let mut emitted_defs: BTreeSet<String> = surface
+        .classes
+        .keys()
+        .map(|class_iri| ns.def_key(class_iri))
+        .collect();
+    for (key, _definition) in vocab_enums.values() {
+        emitted_defs.insert(key.clone());
     }
+    let value_vocab_enums: BTreeMap<String, String> = vocab_enums
+        .iter()
+        .map(|(class_iri, (key, _definition))| (class_iri.clone(), key.clone()))
+        .collect();
+    let predicate_ranges = value_vocab_predicate_ranges(shapes, projection, &vocab_enums);
+    let mut ctx = Ctx::new(emitted_defs, value_vocab_enums, predicate_ranges, ns);
+    ctx.record_entries(vocab_losses);
+
+    let mut defs: Map<String, Value> = Map::new();
+    for shape in &shapes.node_shapes {
+        if shape.deactivated {
+            continue;
+        }
+        let body = compile_object_schema(shape, &mut ctx);
+        let shape_iri = shape.id.to_string();
+        for target in &shape.targets {
+            match target {
+                Target::Class(class) => {
+                    let class_iri = class.as_str();
+                    let name = ns.def_key(class_iri);
+                    let augmented =
+                        augment_object_schema(body.clone(), surface.classes.get(class_iri), &ctx);
+                    defs.entry(name).or_insert(augmented);
+                }
+                Target::ImplicitClass(term) => {
+                    let class_iri = implicit_class_iri(term);
+                    let name = ns.def_key(class_iri);
+                    let augmented =
+                        augment_object_schema(body.clone(), surface.classes.get(class_iri), &ctx);
+                    defs.entry(name).or_insert(augmented);
+                }
+                Target::Sparql { .. } => ctx.record(
+                    "sh:SPARQLTarget",
+                    &shape_iri,
+                    "SHACL-AF SPARQL target (sh:target/sh:SPARQLTarget) selects focus \
+                     nodes via an arbitrary SPARQL query with no closed-world JSON \
+                     Schema equivalent; the shape's SPARQL-selected instances are not \
+                     enforced by the emitted schema",
+                ),
+                Target::Node(_) => ctx.record(
+                    "sh:targetNode",
+                    &shape_iri,
+                    "A shape targeted only via sh:targetNode selects specific focus \
+                     nodes, not a class extension; it has no closed-world JSON Schema \
+                     $def and its constraints are not enforced by the emitted schema.",
+                ),
+                Target::SubjectsOf(_) => ctx.record(
+                    "sh:targetSubjectsOf",
+                    &shape_iri,
+                    "A shape targeted only via sh:targetSubjectsOf selects focus nodes \
+                     by a predicate's subject position, not a class extension; no \
+                     closed-world JSON Schema $def can be keyed and its constraints are \
+                     not enforced.",
+                ),
+                Target::ObjectsOf(_) => ctx.record(
+                    "sh:targetObjectsOf",
+                    &shape_iri,
+                    "A shape targeted only via sh:targetObjectsOf selects focus nodes \
+                     by a predicate's object position, not a class extension; no \
+                     closed-world JSON Schema $def can be keyed and its constraints are \
+                     not enforced.",
+                ),
+            }
+        }
+    }
+
+    for (class_iri, class) in &surface.classes {
+        let key = ns.def_key(class_iri);
+        if class.synthesized_open {
+            defs.entry(key)
+                .or_insert_with(|| open_surface_class_schema(class, &ctx));
+        } else {
+            debug_assert!(
+                defs.contains_key(&key),
+                "every non-synthesized surface class has an active SHACL target"
+            );
+        }
+    }
+
+    defs.insert("Annotation".to_owned(), annotation_def());
+    let class_names: Vec<String> = defs
+        .keys()
+        .filter(|key| *key != "Annotation")
+        .cloned()
+        .collect();
+    defs.insert("Node".to_owned(), node_def(&class_names, ns));
+    for (key, definition) in vocab_enums.values() {
+        defs.insert(key.clone(), definition.clone());
+    }
+
+    Ok(CompiledSchema {
+        schema_json: to_pretty(&root_schema(&defs, ns)),
+        openapi_json: to_pretty(&openapi_doc(&defs)),
+        losses: ctx.ledger,
+    })
+}
+
+fn validate_surface_keys(
+    surface: &SchemaSurface,
+    ns: &Namespaces,
+    vocab_enums: &BTreeMap<String, (String, Value)>,
+) -> Result<(), SchemaCompileError> {
+    let mut keys: BTreeMap<String, String> = BTreeMap::new();
+    keys.insert(
+        "Annotation".to_owned(),
+        "JSON Schema reserved definition".to_owned(),
+    );
+    keys.insert(
+        "Node".to_owned(),
+        "JSON Schema reserved definition".to_owned(),
+    );
+    for class_iri in surface.classes.keys() {
+        if !ns.is_known(class_iri) {
+            return Err(SchemaCompileError::Namespace {
+                iri: class_iri.clone(),
+                reason: "class has no caller-declared prefix for discriminator/key emission"
+                    .to_owned(),
+            });
+        }
+        insert_definition_key(&mut keys, ns.def_key(class_iri), class_iri)?;
+    }
+    for (class_iri, (key, _definition)) in vocab_enums {
+        if !ns.is_known(class_iri) {
+            return Err(SchemaCompileError::Namespace {
+                iri: class_iri.clone(),
+                reason: "value-vocabulary class has no caller-declared prefix".to_owned(),
+            });
+        }
+        insert_definition_key(&mut keys, key.clone(), class_iri)?;
+    }
+    for (class_iri, class) in &surface.classes {
+        let mut property_keys: BTreeMap<String, String> = BTreeMap::new();
+        for property_iri in class.properties.keys() {
+            let key = ns.compact_iri(property_iri);
+            if let Some(first) = property_keys.insert(key.clone(), property_iri.clone())
+                && first != *property_iri
+            {
+                return Err(SchemaCompileError::DefinitionCollision {
+                    key: format!("{}::{key}", ns.def_key(class_iri)),
+                    first,
+                    second: property_iri.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn insert_definition_key(
+    keys: &mut BTreeMap<String, String>,
+    key: String,
+    resource: &str,
+) -> Result<(), SchemaCompileError> {
+    if let Some(first) = keys.insert(key.clone(), resource.to_owned())
+        && first != resource
+    {
+        return Err(SchemaCompileError::DefinitionCollision {
+            key,
+            first,
+            second: resource.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn augment_object_schema(mut body: Value, class: Option<&SurfaceClass>, ctx: &Ctx<'_>) -> Value {
+    let Some(class) = class else {
+        return body;
+    };
+    let properties = body
+        .as_object_mut()
+        .and_then(|object| object.get_mut("properties"))
+        .and_then(Value::as_object_mut)
+        .expect("compiled class object always has a properties map");
+    for property in class.properties.values() {
+        properties
+            .entry(ctx.ns.compact_iri(&property.iri))
+            .or_insert_with(|| ontology_property_schema(property, ctx));
+    }
+    body
+}
+
+fn open_surface_class_schema(class: &SurfaceClass, ctx: &Ctx<'_>) -> Value {
+    let body = json!({
+        "type": "object",
+        "properties": {
+            "@id": { "type": "string" },
+            "@type": {
+                "anyOf": [
+                    { "type": "string" },
+                    { "type": "array", "items": { "type": "string" } }
+                ]
+            },
+            "@annotation": { "$ref": "#/$defs/Annotation" }
+        }
+    });
+    augment_object_schema(body, Some(class), ctx)
+}
+
+fn ontology_property_schema(property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value {
+    let mut single = if property.ranges.is_empty() {
+        match property.kind {
+            OntologyPropertyKind::Object => node_ref_schema(),
+            OntologyPropertyKind::Datatype => general_literal_schema(),
+            OntologyPropertyKind::Generic | OntologyPropertyKind::Annotation => {
+                general_rdf_value_schema()
+            }
+        }
+    } else {
+        let mut conjuncts: Vec<Value> = property
+            .ranges
+            .iter()
+            .map(|range| range_expression_schema(range, property, ctx))
+            .collect();
+        if conjuncts.len() == 1 {
+            conjuncts.pop().expect("one range expression")
+        } else {
+            json!({ "allOf": conjuncts })
+        }
+    };
+    if let Value::Object(schema) = &mut single {
+        schema.insert(
+            "$comment".to_owned(),
+            Value::String(if property.functional {
+                "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
+                    .to_owned()
+            } else {
+                "Optional OWL/RDFS-derived property; multiple values remain permitted.".to_owned()
+            }),
+        );
+    }
+    if property.functional {
+        single
+    } else {
+        json!({
+            "anyOf": [
+                single.clone(),
+                { "type": "array", "items": single }
+            ]
+        })
+    }
+}
+
+fn range_expression_schema(
+    expression: &OntologyExpression,
+    property: &SurfaceProperty,
+    ctx: &Ctx<'_>,
+) -> Value {
+    match expression {
+        OntologyExpression::Named(iri) => named_range_schema(iri, property, ctx),
+        OntologyExpression::Union(members) => json!({
+            "anyOf": members
+                .iter()
+                .map(|member| range_expression_schema(member, property, ctx))
+                .collect::<Vec<_>>()
+        }),
+        OntologyExpression::Intersection(members) => json!({
+            "allOf": members
+                .iter()
+                .map(|member| range_expression_schema(member, property, ctx))
+                .collect::<Vec<_>>()
+        }),
+    }
+}
+
+fn named_range_schema(iri: &str, property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value {
+    if let Some(enum_key) = ctx.value_vocab_enums.get(iri) {
+        return json!({ "$ref": format!("#/$defs/{enum_key}") });
+    }
+    if iri == "http://www.w3.org/2000/01/rdf-schema#Literal" {
+        return general_literal_schema();
+    }
+    if iri == RDF_LANG_STRING {
+        return json!({
+            "type": "object",
+            "properties": {
+                "@value": { "type": "string" },
+                "@language": { "type": "string" }
+            },
+            "required": ["@value", "@language"]
+        });
+    }
+    if property.kind == OntologyPropertyKind::Datatype
+        || property.datatype_iris.contains(iri)
+        || iri.starts_with(XSD_NS)
+    {
+        return datatype_value_schema(iri);
+    }
+    let key = ctx.ns.def_key(iri);
+    if ctx.emitted_defs.contains(&key) {
+        json!({
+            "anyOf": [
+                node_ref_schema(),
+                { "$ref": format!("#/$defs/{key}") }
+            ]
+        })
+    } else if property.kind == OntologyPropertyKind::Annotation {
+        general_rdf_value_schema()
+    } else {
+        node_ref_schema()
+    }
+}
+
+fn general_literal_schema() -> Value {
+    json!({
+        "anyOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" },
+            typed_literal_schema(),
+            {
+                "type": "object",
+                "properties": {
+                    "@value": { "type": "string" },
+                    "@language": { "type": "string" }
+                },
+                "required": ["@value", "@language"]
+            }
+        ]
+    })
+}
+
+fn general_rdf_value_schema() -> Value {
+    json!({
+        "anyOf": [
+            general_literal_schema(),
+            node_ref_schema()
+        ]
+    })
 }
 
 /// A single value-vocabulary member: its compacted CURIE (the `enum` value id),
@@ -688,6 +1542,9 @@ struct VocabMember {
     description: String,
 }
 
+type ValueVocabDefinitions = BTreeMap<String, (String, Value)>;
+type ValueVocabDerivation = (ValueVocabDefinitions, Vec<LossEntry>);
+
 /// Derive the value-vocabulary enum `$defs`: `class IRI → (enum key, $def body)`.
 ///
 /// Enumerates value-vocabulary classes (`?V rdf:type <marker>`) and each one's
@@ -699,11 +1556,11 @@ fn value_vocab_enum_defs(
     shapes: &Shapes,
     ns: &Namespaces,
     projection: Option<&ValueVocabProjection<'_>>,
-) -> (BTreeMap<String, (String, Value)>, Vec<LossEntry>) {
+) -> Result<ValueVocabDerivation, SchemaCompileError> {
     let mut out: BTreeMap<String, (String, Value)> = BTreeMap::new();
     let mut losses: Vec<LossEntry> = Vec::new();
     let Some(proj) = projection else {
-        return (out, losses);
+        return Ok((out, losses));
     };
 
     let datasets: [&RdfDataset; 2] = [proj.ontology, shapes.shapes_dataset.as_ref()];
@@ -728,12 +1585,13 @@ fn value_vocab_enum_defs(
     }
 
     for class_iri in &class_iris {
-        assert!(
-            ns.is_known(class_iri),
-            "json_schema: value-vocabulary class {class_iri:?} has no declared namespace \
-             prefix — its `{{Local}}Enum` `$def` key and members derive from a prefix CURIE; \
-             declare its prefix in the shapes document / Namespaces before marking it"
-        );
+        if !ns.is_known(class_iri) {
+            return Err(SchemaCompileError::Namespace {
+                iri: class_iri.clone(),
+                reason: "value-vocabulary class has no declared namespace prefix for its enum definition key"
+                    .to_owned(),
+            });
+        }
         let key = format!("{}Enum", local_name(class_iri));
         let (members, member_losses) = members_of(&datasets, class_iri, ns);
         losses.extend(member_losses);
@@ -747,7 +1605,7 @@ fn value_vocab_enum_defs(
         out.insert(class_iri.clone(), (key, build_enum_def(&members)));
     }
 
-    (out, losses)
+    Ok((out, losses))
 }
 
 /// Map each predicate whose `rdfs:range` is a value-vocabulary class to that
@@ -757,26 +1615,23 @@ fn value_vocab_enum_defs(
 ///
 /// A single `(?P, rdfs:range, ?O)` scan per dataset is performed — O(1) queries
 /// in the number of vocab classes, rather than one scan per class — filtering
-/// each matched object against `vocab_enums` by IRI string. When a predicate's
-/// `rdfs:range` is declared over multiple distinct vocab classes, the class
-/// with the lexicographically largest IRI wins, matching the deterministic
-/// last-write-wins tiebreak of a sorted-by-`class_iri` resolution.
+/// each matched object against `vocab_enums` by IRI string. Multiple ranges are
+/// retained in lexical class-IRI order because RDFS range axioms are
+/// conjunctive; discarding all but one would weaken the ontology.
 fn value_vocab_predicate_ranges(
     shapes: &Shapes,
     projection: Option<&ValueVocabProjection<'_>>,
     vocab_enums: &BTreeMap<String, (String, Value)>,
-) -> BTreeMap<String, String> {
-    let mut out: BTreeMap<String, String> = BTreeMap::new();
+) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let Some(proj) = projection else {
-        return out;
+        return BTreeMap::new();
     };
     if vocab_enums.is_empty() {
-        return out;
+        return BTreeMap::new();
     }
     let datasets: [&RdfDataset; 2] = [proj.ontology, shapes.shapes_dataset.as_ref()];
     let range_term = Term::NamedNode(NamedNode::from(rdfs::RANGE));
-    // predicate -> (winning class_iri, enum_key); on conflict the larger class_iri wins.
-    let mut winners: BTreeMap<String, (&str, &str)> = BTreeMap::new();
     for ds in datasets {
         for (subject, _pred, object) in
             native_quads(ds, None, Some(&range_term), None, GraphFilter::AnyGraph)
@@ -790,20 +1645,14 @@ fn value_vocab_predicate_ranges(
             let Some((class_iri, (enum_key, _def))) = vocab_enums.get_key_value(o.as_str()) else {
                 continue;
             };
-            winners
-                .entry(p.as_str().to_owned())
-                .and_modify(|winner| {
-                    if class_iri.as_str() > winner.0 {
-                        *winner = (class_iri.as_str(), enum_key.as_str());
-                    }
-                })
-                .or_insert((class_iri.as_str(), enum_key.as_str()));
+            out.entry(p.as_str().to_owned())
+                .or_default()
+                .insert(class_iri.clone(), enum_key.clone());
         }
     }
-    for (predicate, (_class_iri, enum_key)) in winners {
-        out.insert(predicate, enum_key.to_owned());
-    }
-    out
+    out.into_iter()
+        .map(|(predicate, ranges)| (predicate, ranges.into_values().collect()))
+        .collect()
 }
 
 /// Enumerate the named individuals of `class_iri` (`?x rdf:type class_iri`) across
@@ -936,40 +1785,27 @@ fn build_enum_def(members: &[VocabMember]) -> Value {
 /// (build-time, fail-closed): no two value-vocabulary classes share a
 /// `{Local}Enum` key (cross-namespace local-name twins), and no enum key clashes
 /// with a class `$def` key.
-fn assert_value_vocab_enum_keys_unambiguous(
+fn validate_value_vocab_enum_keys(
     shapes: &Shapes,
     ns: &Namespaces,
     vocab_enums: &BTreeMap<String, (String, Value)>,
-) {
+) -> Result<(), SchemaCompileError> {
     // The class `$def` keys (every active target class, explicit or implicit),
     // which enum keys must not clash with.
-    let mut class_keys: BTreeSet<String> = BTreeSet::new();
-    for shape in &shapes.node_shapes {
-        if shape.deactivated {
-            continue;
-        }
-        for target in &shape.targets {
-            if let Some(iri) = class_def_target_iri(target) {
-                class_keys.insert(ns.def_key(iri));
-            }
-        }
-    }
+    let class_keys = target_definition_keys(shapes, ns)?;
 
     let mut key_to_class: BTreeMap<String, String> = BTreeMap::new();
     for (class_iri, (key, _def)) in vocab_enums {
-        assert!(
-            !class_keys.contains(key),
-            "json_schema: value-vocabulary enum key {key:?} (from {class_iri}) collides with a \
-             class `$def` key — disambiguate before projecting"
-        );
-        if let Some(prev) = key_to_class.insert(key.clone(), class_iri.clone()) {
-            panic!(
-                "json_schema: distinct value-vocabulary classes share the enum `$def` key \
-                 {key:?} ({prev} vs {class_iri}) — cross-namespace local-name twins; \
-                 disambiguate before projecting"
-            );
+        if let Some(first) = class_keys.get(key) {
+            return Err(SchemaCompileError::DefinitionCollision {
+                key: key.clone(),
+                first: first.clone(),
+                second: class_iri.clone(),
+            });
         }
+        insert_definition_key(&mut key_to_class, key.clone(), class_iri)?;
     }
+    Ok(())
 }
 
 /// The class IRI a `Target::ImplicitClass` carries. [`Shapes::parse_targets`]
@@ -1005,35 +1841,44 @@ fn class_def_target_iri(target: &Target) -> Option<&str> {
 /// Enforce the keying precondition (Gap D): every active `sh:targetClass` /
 /// implicit-class target is in a DECLARED namespace (so [`Namespaces::def_key`]
 /// yields a stable `$defs` key and [`node_def`] can rebuild its `@type` const)
-/// and those keys are collision-free. Panics with a descriptive message
-/// otherwise (build-time, fail-closed).
-fn assert_target_class_keys_are_unambiguous(shapes: &Shapes, ns: &Namespaces) {
-    let mut key_to_iri: BTreeMap<String, String> = BTreeMap::new();
+/// and those keys are collision-free. Returns the public typed compilation
+/// error so ontology-aware callers never cross a panic boundary.
+fn validate_target_class_keys(shapes: &Shapes, ns: &Namespaces) -> Result<(), SchemaCompileError> {
+    target_definition_keys(shapes, ns).map(drop)
+}
+
+fn target_definition_keys(
+    shapes: &Shapes,
+    ns: &Namespaces,
+) -> Result<BTreeMap<String, String>, SchemaCompileError> {
+    let mut key_to_iri = BTreeMap::from([
+        (
+            "Annotation".to_owned(),
+            "JSON Schema reserved definition".to_owned(),
+        ),
+        (
+            "Node".to_owned(),
+            "JSON Schema reserved definition".to_owned(),
+        ),
+    ]);
     for shape in &shapes.node_shapes {
         if shape.deactivated {
             continue;
         }
         for target in &shape.targets {
             if let Some(iri) = class_def_target_iri(target) {
-                assert!(
-                    ns.is_known(iri),
-                    "json_schema: target class {iri:?} has no declared namespace prefix — \
-                     the @type discriminator and `$defs` keys derive from a prefix CURIE; \
-                     declare its prefix in the shapes document / Namespaces (and confirm \
-                     OpenAPI key encoding) before introducing target classes from it"
-                );
-                let key = ns.def_key(iri);
-                if let Some(prev) = key_to_iri.insert(key.clone(), iri.to_owned()) {
-                    assert_eq!(
-                        prev, iri,
-                        "json_schema: distinct target classes share the `$defs` key \
-                         {key:?} ({prev} vs {iri}) — their `$defs`/OpenAPI keys would \
-                         collide; disambiguate before keying"
-                    );
+                if !ns.is_known(iri) {
+                    return Err(SchemaCompileError::Namespace {
+                        iri: iri.to_owned(),
+                        reason: "target class has no declared namespace prefix for its discriminator and definition key"
+                            .to_owned(),
+                    });
                 }
+                insert_definition_key(&mut key_to_iri, ns.def_key(iri), iri)?;
             }
         }
     }
+    Ok(key_to_iri)
 }
 
 // ── Root envelope ────────────────────────────────────────────────────────────
@@ -1807,18 +2652,19 @@ fn compile_property(
     // always wins. Only a property with NO `sh:class` takes the range-derived enum
     // `$ref`; a `sh:class` that coexists with a value-vocabulary range records a
     // conflict loss (the range enum is suppressed).
-    if let Some(range_key) = ctx.predicate_ranges.get(pred_iri).cloned() {
+    if let Some(range_keys) = ctx.predicate_ranges.get(pred_iri).cloned() {
         match (&class_enum_key, had_any_class) {
             (Some(class_key), _) => {
                 // A vocab `sh:class` already emitted its enum `$ref`; it wins.
-                if *class_key != range_key {
+                if range_keys.iter().any(|range_key| range_key != class_key) {
                     ctx.record(
                         "rdfs:range",
                         shape_iri,
                         &format!(
                             "predicate {pred_iri} has a value-vocabulary sh:class ({class_key}) \
-                             and a conflicting value-vocabulary rdfs:range ({range_key}); \
-                             sh:class wins, range enum suppressed"
+                             and conflicting value-vocabulary rdfs:ranges ({}); \
+                             sh:class wins, range enum suppressed",
+                            range_keys.join(", ")
                         ),
                     );
                 }
@@ -1830,13 +2676,22 @@ fn compile_property(
                     shape_iri,
                     &format!(
                         "predicate {pred_iri} has a sh:class and a value-vocabulary \
-                         rdfs:range ({range_key}); sh:class wins, range enum suppressed"
+                         rdfs:range ({}); sh:class wins, range enum suppressed",
+                        range_keys.join(", ")
                     ),
                 );
             }
             (None, false) => {
-                // Open vocabulary (no sh:class): the enum `$ref` is the value schema.
-                alts.push(json!({ "$ref": format!("#/$defs/{range_key}") }));
+                // Open vocabulary (no sh:class): every range is conjunctive.
+                let mut refs: Vec<Value> = range_keys
+                    .into_iter()
+                    .map(|range_key| json!({ "$ref": format!("#/$defs/{range_key}") }))
+                    .collect();
+                alts.push(if refs.len() == 1 {
+                    refs.pop().expect("one range ref")
+                } else {
+                    json!({ "allOf": refs })
+                });
             }
         }
     }
@@ -2094,6 +2949,29 @@ mod tests {
         compile(&shapes, &fixture_ns())
     }
 
+    fn compile_ontology(
+        shapes_body: &str,
+        ontology_body: &str,
+        mode: SchemaSurfaceMode,
+    ) -> SchemaCompilation {
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> .\n{shapes_body}"
+        ))
+        .expect("shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> .\n{ontology_body}"
+        ))
+        .expect("ontology Turtle");
+        compile_schema(&SchemaCompileRequest::new(
+            &shapes,
+            &fixture_ns(),
+            ontology.as_ref(),
+            mode,
+        ))
+        .expect("ontology schema compilation")
+    }
+
     fn schema_of(c: &CompiledSchema) -> Value {
         serde_json::from_str(&c.schema_json).expect("schema is valid JSON")
     }
@@ -2137,7 +3015,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "declare its prefix in the shapes document / Namespaces")]
+    #[should_panic(expected = "target class has no declared namespace prefix")]
     fn unknown_namespace_target_class_hard_fails() {
         // A target class from an UNDECLARED namespace has no prefix CURIE to key
         // its `$defs`/discriminator by; the keying guard must reject it loudly
@@ -2151,6 +3029,36 @@ mod tests {
                 sh:property [ sh:path meta:name ; sh:minCount 1 ] .
         ",
         );
+    }
+
+    #[test]
+    fn ontology_request_returns_typed_target_key_errors_in_both_modes() {
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}@prefix und: <https://undeclared.example/> .
+             meta:Shape a sh:NodeShape ; sh:targetClass und:Person ."
+        ))
+        .expect("shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
+        let ontology =
+            crate::text_ingest::parse_turtle_to_dataset(PREFIXES).expect("ontology Turtle");
+
+        for mode in [
+            SchemaSurfaceMode::ShapedOnly,
+            SchemaSurfaceMode::OntologyComplete,
+        ] {
+            let error = compile_schema(&SchemaCompileRequest::new(
+                &shapes,
+                &fixture_ns(),
+                ontology.as_ref(),
+                mode,
+            ))
+            .expect_err("unknown target namespace must be typed");
+            assert!(matches!(
+                error,
+                SchemaCompileError::Namespace { iri, .. }
+                    if iri == "https://undeclared.example/Person"
+            ));
+        }
     }
 
     #[test]
@@ -2273,6 +3181,481 @@ mod tests {
         );
         assert_eq!(ctx.get("xsd"), Some(&json!(XSD_NS)));
         assert_eq!(ctx.get("sh"), Some(&json!(SH_NS)));
+    }
+
+    #[test]
+    fn caller_owned_namespaces_exclude_implicit_builtins() {
+        let ns = Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                ("aux".to_owned(), "https://example.org/aux/".to_owned()),
+            ],
+        )
+        .expect("caller namespace declarations are valid");
+        assert!(ns.is_caller_owned("https://example.org/meta/Person"));
+        assert!(ns.is_caller_owned("https://example.org/aux/Claim"));
+        assert!(!ns.is_caller_owned("http://www.w3.org/2002/07/owl#DatatypeProperty"));
+
+        let explicit = Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                ("owl".to_owned(), OWL_NS.to_owned()),
+            ],
+        )
+        .expect("explicit builtin declaration is valid");
+        assert!(explicit.is_caller_owned("http://www.w3.org/2002/07/owl#DatatypeProperty"));
+    }
+
+    #[test]
+    fn schema_compilation_key_covers_every_request_input() {
+        let shapes_a_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}\nmeta:ThingShape a sh:NodeShape ; sh:targetClass meta:Thing ."
+        ))
+        .expect("shape graph A");
+        let shapes_b_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}\nmeta:ThingShape a sh:NodeShape ; sh:targetClass meta:Thing ; sh:closed true ."
+        ))
+        .expect("shape graph B");
+        let shapes_a = from_dataset(&shapes_a_dataset).expect("parse shape graph A");
+        let shapes_b = from_dataset(&shapes_b_dataset).expect("parse shape graph B");
+
+        let ontology_a = crate::text_ingest::parse_turtle_to_dataset(
+            r"
+                @prefix owl: <http://www.w3.org/2002/07/owl#> .
+                @prefix meta: <https://example.org/meta/> .
+                meta:p a owl:DatatypeProperty .
+            ",
+        )
+        .expect("ontology A");
+        let ontology_a_shuffled = crate::text_ingest::parse_turtle_to_dataset(
+            r"
+                @prefix meta: <https://example.org/meta/> .
+                @prefix owl: <http://www.w3.org/2002/07/owl#> .
+                meta:p a owl:DatatypeProperty .
+            ",
+        )
+        .expect("shuffled ontology A");
+        let ontology_b = crate::text_ingest::parse_turtle_to_dataset(
+            r"
+                @prefix owl: <http://www.w3.org/2002/07/owl#> .
+                @prefix meta: <https://example.org/meta/> .
+                meta:q a owl:DatatypeProperty .
+            ",
+        )
+        .expect("ontology B");
+
+        let shaped = SchemaCompileRequest::new(
+            &shapes_a,
+            &fixture_ns(),
+            ontology_a.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("shaped key");
+        let shuffled = SchemaCompileRequest::new(
+            &shapes_a,
+            &fixture_ns(),
+            ontology_a_shuffled.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("shuffled key");
+        assert_eq!(shaped, shuffled, "RDF load order is not key material");
+        assert_eq!(shaped.as_str().len(), 64);
+        assert!(shaped.as_str().bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+        let complete = SchemaCompileRequest::new(
+            &shapes_a,
+            &fixture_ns(),
+            ontology_a.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        )
+        .compilation_key()
+        .expect("complete key");
+        assert_ne!(shaped, complete, "surface mode is key material");
+
+        let changed_ontology = SchemaCompileRequest::new(
+            &shapes_a,
+            &fixture_ns(),
+            ontology_b.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("changed ontology key");
+        assert_ne!(
+            shaped, changed_ontology,
+            "ontology identity is key material"
+        );
+
+        let changed_shapes = SchemaCompileRequest::new(
+            &shapes_b,
+            &fixture_ns(),
+            ontology_a.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("changed shapes key");
+        assert_ne!(shaped, changed_shapes, "shapes identity is key material");
+
+        let alternate_ns = Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                ("extra".to_owned(), "https://example.org/extra/".to_owned()),
+            ],
+        )
+        .expect("alternate namespaces");
+        let changed_namespaces = SchemaCompileRequest::new(
+            &shapes_a,
+            &alternate_ns,
+            ontology_a.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("changed namespace key");
+        assert_ne!(
+            shaped, changed_namespaces,
+            "namespace config is key material"
+        );
+
+        let vocab = ValueVocab::new("https://example.org/meta/ValueVocabulary");
+        let projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: ontology_a.as_ref(),
+        };
+        let with_vocab = SchemaCompileRequest::from_value_vocab_projection(
+            &shapes_a,
+            &fixture_ns(),
+            &projection,
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("value-vocabulary key");
+        assert_ne!(
+            shaped, with_vocab,
+            "value-vocabulary marker is key material"
+        );
+    }
+
+    #[test]
+    fn coverage_report_json_canonicalizes_public_collection_order() {
+        let provenance = SchemaCoverageProvenance {
+            subject: "https://example.org/meta/p".to_owned(),
+            predicate: rdfs::RANGE.to_owned(),
+            object: "<http://www.w3.org/2001/XMLSchema#string>".to_owned(),
+        };
+        let property = |iri: &str| SchemaPropertyCoverage {
+            property_iri: iri.to_owned(),
+            declarations: vec!["rdfs:range".to_owned(), "owl:DatatypeProperty".to_owned()],
+            outcomes: vec![SchemaCoverageStatus::IncludedUnshaped],
+            classes: vec![SchemaClassPropertyCoverage {
+                class_iri: "https://example.org/meta/Thing".to_owned(),
+                synthesized_open_class: false,
+                status: SchemaCoverageStatus::IncludedUnshaped,
+                precision: SchemaCoveragePrecision::Exact,
+                provenance: vec![provenance.clone()],
+            }],
+        };
+        let forward = SchemaCoverageReport {
+            mode: SchemaSurfaceMode::OntologyComplete,
+            properties: vec![
+                property("https://example.org/meta/a"),
+                property("https://example.org/meta/z"),
+            ],
+        };
+        let reverse = SchemaCoverageReport {
+            mode: SchemaSurfaceMode::OntologyComplete,
+            properties: vec![
+                property("https://example.org/meta/z"),
+                property("https://example.org/meta/a"),
+            ],
+        };
+        assert_eq!(forward.to_json(), reverse.to_json());
+        assert!(forward.to_json().ends_with('\n'));
+    }
+
+    #[test]
+    fn ontology_complete_compilation_emits_optional_open_carriers() {
+        let compilation = compile_ontology(
+            r"
+                meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person ;
+                    sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+            r"
+                meta:Person a owl:Class .
+                meta:EmailMessage a owl:Class .
+                meta:resentDate a owl:DatatypeProperty ;
+                    rdfs:domain meta:EmailMessage ; rdfs:range xsd:dateTime .
+                meta:resentMessageId a owl:DatatypeProperty ;
+                    rdfs:domain meta:EmailMessage ; rdfs:range rdfs:Literal .
+                meta:messageCode a owl:DatatypeProperty, owl:FunctionalProperty ;
+                    rdfs:domain meta:EmailMessage ; rdfs:range xsd:string .
+                meta:latestMessage a owl:ObjectProperty ;
+                    rdfs:domain meta:Person ; rdfs:range meta:EmailMessage .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let email = def(&schema, "EmailMessage");
+        assert!(
+            email.is_object(),
+            "unshaped ontology class gets a carrier $def"
+        );
+        assert!(
+            email.get("additionalProperties").is_none(),
+            "carrier remains open"
+        );
+        assert!(
+            email.get("required").is_none(),
+            "ontology properties stay optional"
+        );
+        for property in [
+            "meta:resentDate",
+            "meta:resentMessageId",
+            "meta:messageCode",
+        ] {
+            assert!(
+                email["properties"][property].is_object(),
+                "{property} must be present on the synthesized carrier"
+            );
+        }
+        assert!(
+            email["properties"]["meta:resentDate"]["anyOf"]
+                .as_array()
+                .is_some_and(|forms| forms.iter().any(|form| form["type"] == "array")),
+            "non-functional property accepts multiple values"
+        );
+        assert_eq!(
+            email["properties"]["meta:messageCode"]["$comment"],
+            "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
+        );
+        let latest_message =
+            &def(&schema, "Person")["properties"]["meta:latestMessage"]["anyOf"][0]["anyOf"];
+        assert!(
+            latest_message
+                .as_array()
+                .is_some_and(|forms| forms.iter().any(|form| {
+                    form["$ref"] == "#/$defs/EmailMessage"
+                        && form.as_object().is_some_and(|object| object.len() == 1)
+                })),
+            "ontology class range retains the direct class definition reference"
+        );
+
+        let openapi: Value =
+            serde_json::from_str(&compilation.compiled.openapi_json).expect("OpenAPI is JSON");
+        assert_eq!(
+            openapi["components"]["schemas"]["EmailMessage"], schema["$defs"]["EmailMessage"],
+            "OpenAPI embeds the exact shared carrier definition"
+        );
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:EmailMessage",
+                "meta:resentDate": ["2026-07-17T00:00:00Z"],
+                "meta:resentMessageId": "message-1",
+                "meta:messageCode": "code-1"
+            })
+        ));
+    }
+
+    #[test]
+    fn ontology_request_shaped_only_is_legacy_byte_exact() {
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person ; \
+             sh:property [ sh:path meta:name ; sh:datatype xsd:string ] ."
+        ))
+        .expect("shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> . \
+             meta:extra a owl:DatatypeProperty ."
+        ))
+        .expect("ontology Turtle");
+        let legacy = compile(&shapes, &fixture_ns());
+        let requested = compile_schema(&SchemaCompileRequest::new(
+            &shapes,
+            &fixture_ns(),
+            ontology.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        ))
+        .expect("shaped-only request");
+        assert_eq!(legacy.schema_json, requested.compiled.schema_json);
+        assert_eq!(legacy.openapi_json, requested.compiled.openapi_json);
+        assert_eq!(
+            legacy.losses.render_json(),
+            requested.compiled.losses.render_json()
+        );
+    }
+
+    #[test]
+    fn ontology_surface_preserves_direct_shacl_and_closed_shape_authority() {
+        let compilation = compile_ontology(
+            r"
+                meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person ;
+                    sh:closed true ; sh:ignoredProperties ( meta:allowed ) ;
+                    sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+            r"
+                meta:Person a owl:Class .
+                meta:name a owl:DatatypeProperty ; rdfs:domain meta:Person ; rdfs:range rdfs:Literal .
+                meta:blocked a owl:DatatypeProperty ; rdfs:domain meta:Person .
+                meta:allowed a owl:DatatypeProperty ; rdfs:domain meta:Person .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let person = def(&schema, "Person");
+        assert_eq!(person["additionalProperties"], false);
+        assert!(person["properties"]["meta:blocked"].is_null());
+        assert_eq!(person["properties"]["meta:allowed"], true);
+        assert!(
+            person["required"]
+                .as_array()
+                .is_some_and(|required| required.contains(&json!("meta:name"))),
+            "direct SHACL minCount remains authoritative"
+        );
+    }
+
+    #[test]
+    fn ontology_range_union_and_conjunction_remain_load_bearing() {
+        let compilation = compile_ontology(
+            "",
+            r"
+                meta:A a owl:Class .
+                meta:B a owl:Class .
+                meta:Holder a owl:Class .
+                meta:choice a owl:ObjectProperty ; rdfs:domain meta:Holder ;
+                    rdfs:range [ owl:unionOf ( meta:A meta:B ) ] .
+                meta:both a owl:ObjectProperty ; rdfs:domain meta:Holder ;
+                    rdfs:range meta:A, meta:B .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let holder = def(&schema, "Holder");
+        let choice = &holder["properties"]["meta:choice"]["anyOf"][0];
+        assert_eq!(choice["anyOf"].as_array().map(Vec::len), Some(2));
+        let both = &holder["properties"]["meta:both"]["anyOf"][0];
+        assert_eq!(both["allOf"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn ontology_class_range_accepts_identifier_only_or_full_class_values() {
+        let compilation = compile_ontology(
+            r"
+                meta:HolderShape a sh:NodeShape ; sh:targetClass meta:Holder .
+                meta:RequiredShape a sh:NodeShape ; sh:targetClass meta:Required ;
+                    sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+            r"
+                meta:Holder a owl:Class .
+                meta:Required a owl:Class .
+                meta:target a owl:ObjectProperty, owl:FunctionalProperty ;
+                    rdfs:domain meta:Holder ; rdfs:range meta:Required .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let target = &def(&schema, "Holder")["properties"]["meta:target"];
+        let alternatives = target["anyOf"].as_array().expect("node or class value");
+        assert!(
+            alternatives
+                .iter()
+                .any(|form| form["$ref"] == "#/$defs/Required"),
+            "the full class definition remains directly referenced"
+        );
+        assert!(
+            alternatives
+                .iter()
+                .any(|form| form["properties"]["@id"].is_object()),
+            "the normal identifier-only node carrier remains available"
+        );
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:target": { "@id": "https://example.org/meta/required-1" }
+            })
+        ));
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:target": { "meta:name": "complete value" }
+            })
+        ));
+    }
+
+    #[test]
+    fn generic_properties_preserve_declared_custom_datatype_ranges() {
+        let compilation = compile_ontology(
+            "",
+            r"
+                meta:Holder a owl:Class .
+                meta:Related a owl:Class .
+                meta:Code a rdfs:Datatype .
+                meta:Token a owl:DataRange .
+                meta:code a rdf:Property ;
+                    rdfs:domain meta:Holder ; rdfs:range meta:Code .
+                meta:token a rdf:Property ;
+                    rdfs:domain meta:Holder ; rdfs:range meta:Token .
+                meta:mixed a rdf:Property ;
+                    rdfs:domain meta:Holder ;
+                    rdfs:range [ owl:unionOf ( meta:Code meta:Related ) ] .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let holder = def(&schema, "Holder");
+        for property in ["meta:code", "meta:token"] {
+            assert!(
+                holder["properties"][property]
+                    .to_string()
+                    .contains("string"),
+                "{property} retains its declared literal carrier"
+            );
+        }
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:code": "C-1",
+                "meta:token": "T-1",
+                "meta:mixed": "literal branch"
+            })
+        ));
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:mixed": { "@id": "https://example.org/meta/related-1" }
+            })
+        ));
+    }
+
+    #[test]
+    fn ontology_class_collision_is_a_typed_error() {
+        let shapes_dataset =
+            crate::text_ingest::parse_turtle_to_dataset(PREFIXES).expect("empty shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("empty shapes graph");
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> . \
+             meta:Node a owl:Class ."
+        ))
+        .expect("ontology Turtle");
+        let error = compile_schema(&SchemaCompileRequest::new(
+            &shapes,
+            &fixture_ns(),
+            ontology.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        ))
+        .expect_err("reserved Node definition must collide");
+        assert!(matches!(
+            error,
+            SchemaCompileError::DefinitionCollision { key, .. } if key == "Node"
+        ));
     }
 
     #[test]
@@ -4329,7 +5712,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "cross-namespace local-name twins")]
+    #[should_panic(expected = "share schema definition key")]
     fn value_vocab_local_name_twins_hard_fail() {
         // Two vocab classes with the same local name in different declared
         // namespaces both key to `ColorEnum` — the collision guard must reject it.
@@ -4356,7 +5739,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "collides with a class `$def` key")]
+    #[should_panic(expected = "share schema definition key")]
     fn value_vocab_enum_key_class_def_key_clash_hard_fails() {
         // A vocab class `logic:Color` enum-keys to `ColorEnum`, which is the SAME
         // `$def` key a primary-namespace target class `meta:ColorEnum` receives
@@ -4373,6 +5756,82 @@ mod tests {
                 sh:property [ sh:path meta:name ; sh:minCount 1 ] .
         ",
         );
+    }
+
+    #[test]
+    fn ontology_request_returns_typed_value_vocab_key_errors_in_both_modes() {
+        const MARKER_IRI: &str = "https://example.org/marker/AbstractIndividualType";
+
+        let shapes_dataset =
+            crate::text_ingest::parse_turtle_to_dataset(PREFIXES).expect("empty shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("empty shapes graph");
+        let vocab = ValueVocab::new(MARKER_IRI);
+
+        let unknown = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}
+             @prefix marker: <https://example.org/marker/> .
+             @prefix und: <https://undeclared.example/> .
+             und:Color a marker:AbstractIndividualType ."
+        ))
+        .expect("unknown-namespace vocabulary Turtle");
+        let unknown_projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: unknown.as_ref(),
+        };
+        for mode in [
+            SchemaSurfaceMode::ShapedOnly,
+            SchemaSurfaceMode::OntologyComplete,
+        ] {
+            let error = compile_schema(&SchemaCompileRequest::from_value_vocab_projection(
+                &shapes,
+                &fixture_ns(),
+                &unknown_projection,
+                mode,
+            ))
+            .expect_err("unknown vocabulary namespace must be typed");
+            assert!(matches!(
+                error,
+                SchemaCompileError::Namespace { iri, .. }
+                    if iri == "https://undeclared.example/Color"
+            ));
+        }
+
+        let collision = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}
+             @prefix marker: <https://example.org/marker/> .
+             @prefix aux: <https://example.org/aux/> .
+             meta:Color a marker:AbstractIndividualType .
+             aux:Color a marker:AbstractIndividualType ."
+        ))
+        .expect("colliding vocabulary Turtle");
+        let collision_namespaces = Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                ("aux".to_owned(), "https://example.org/aux/".to_owned()),
+            ],
+        )
+        .expect("collision namespace config");
+        let collision_projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: collision.as_ref(),
+        };
+        for mode in [
+            SchemaSurfaceMode::ShapedOnly,
+            SchemaSurfaceMode::OntologyComplete,
+        ] {
+            let error = compile_schema(&SchemaCompileRequest::from_value_vocab_projection(
+                &shapes,
+                &collision_namespaces,
+                &collision_projection,
+                mode,
+            ))
+            .expect_err("colliding vocabulary keys must be typed");
+            assert!(matches!(
+                error,
+                SchemaCompileError::DefinitionCollision { key, .. } if key == "ColorEnum"
+            ));
+        }
     }
 
     // ── Referencing $ref (Task 3) ────────────────────────────────────────────
@@ -4484,10 +5943,9 @@ mod tests {
     }
 
     #[test]
-    fn value_vocab_multi_range_picks_largest_class_iri_deterministically() {
-        // When ONE predicate declares rdfs:range over TWO distinct value-vocab
-        // classes, the winner is the class with the lexicographically LARGEST
-        // class IRI (".../logic/Beta" > ".../logic/Alpha"), not load order.
+    fn value_vocab_multi_range_is_conjunctive_and_deterministic() {
+        // Multiple rdfs:range axioms are a conjunction, retained in stable
+        // class-IRI order rather than reduced to one lexical winner.
         let forward = schema_of(&compile_vocab(
             r"
             logic:Alpha a logic:AbstractIndividualType .
@@ -4502,8 +5960,13 @@ mod tests {
         ));
         assert_eq!(
             def(&forward, "Thing")["properties"]["meta:choice"],
-            json!({ "$ref": "#/$defs/BetaEnum" }),
-            "the larger class IRI (logic:Beta) wins the multi-range tiebreak"
+            json!({
+                "allOf": [
+                    { "$ref": "#/$defs/AlphaEnum" },
+                    { "$ref": "#/$defs/BetaEnum" }
+                ]
+            }),
+            "both declared ranges remain load-bearing"
         );
 
         // Reversed triple order (Beta declared before Alpha) must yield the
@@ -4522,8 +5985,8 @@ mod tests {
         ));
         assert_eq!(
             def(&reversed, "Thing")["properties"]["meta:choice"],
-            json!({ "$ref": "#/$defs/BetaEnum" }),
-            "the winner is order-independent: still logic:Beta when declared first"
+            def(&forward, "Thing")["properties"]["meta:choice"],
+            "the conjunctive range order is independent of triple load order"
         );
     }
 

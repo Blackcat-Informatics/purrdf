@@ -58,6 +58,72 @@ cargo build -p purrdf-shapes
 cargo test -p purrdf-shapes
 ```
 
+## Ontology-complete developer schemas
+
+`compile_schema` makes the developer-schema surface an explicit choice.
+`SchemaSurfaceMode::ShapedOnly` preserves the existing active
+`sh:targetClass` union. `SchemaSurfaceMode::OntologyComplete` also emits
+caller-vocabulary classes and optional properties justified by a bounded,
+deterministic OWL/RDFS schema theory. Both modes return the same JSON Schema
+draft 2020-12 and OpenAPI 3.1 carrier, plus a coverage manifest and cache key.
+The resulting `CompiledSchema` can be passed unchanged to the LinkML 1.11,
+TypeScript 7.0, GraphQL September 2025, and Pydantic v2 emitters.
+
+The request binds parsed SHACL, the exact ontology dataset, caller-owned
+`Namespaces`, and the mode. The compiler never discovers or invents a
+vocabulary. Only IRIs under prefixes explicitly supplied to `Namespaces::new`
+are eligible for synthesized definitions and fields; builtin prefixes known for
+compaction do not become caller-owned implicitly.
+
+The supported schema theory is deliberately finite:
+
+- the property catalog is formed from direct IRI `sh:path` predicates,
+  `rdf:Property` and OWL property types, `rdfs:domain`/`rdfs:range`, and both
+  endpoints of `rdfs:subPropertyOf`, `owl:equivalentProperty`, and
+  `owl:inverseOf`; predicates seen only in instance assertions are not schema
+  declarations;
+- named classes come from class declarations, named domain/range members,
+  direct SHACL target classes, `rdfs:subClassOf`, and `owl:equivalentClass`;
+- subclass and equivalent-class closure drives domain membership. Multiple
+  effective domain axioms are conjunctive, while an `owl:unionOf` domain matches
+  any member and an `owl:intersectionOf` domain matches every member. A
+  domainless property applies to every eligible class;
+- subproperties inherit superproperty domains, ranges, and forward
+  functionality; equivalent properties propagate both ways; inverse properties
+  swap domain and range. Legal cycles are condensed before propagation;
+- multiple effective ranges are conjunctive. Union ranges become `anyOf`,
+  intersection ranges become `allOf`, and contradictory object/datatype
+  declarations fail with `SchemaCompileError`;
+- direct SHACL constraints remain authoritative. Unshaped ontology properties
+  are optional, `owl:FunctionalProperty` is represented as a scalar and marked
+  as a representation approximation, and `owl:InverseFunctionalProperty` never
+  implies scalar cardinality. An active `sh:closed` shape excludes an unshaped
+  property unless the shape or its ignored-properties list admits it;
+- an ontology class without a target shape receives an open carrier definition.
+  It is never made closed merely because PurRDF synthesized it.
+
+This is schema projection, not ABox entailment or unrestricted OWL reasoning.
+Property chains and axioms outside the fragment do not drive fields. Malformed
+union/intersection RDF lists, namespace/key collisions, incompatible property
+kinds or ranges, and fixed limit breaches fail with typed errors. The fixed
+ceilings are 65,536 properties, 65,536 classes, 1,048,576 relation or coverage
+cells, and OWL expression depth 64.
+
+Every catalogued property appears exactly once in `SchemaCoverageReport`, with
+sorted class decisions, inclusion/exclusion reasons, precision, and source
+axiom provenance. `SchemaCompileRequest::coverage_report` computes that audit
+surface without serializing language artifacts. `compilation_key` hashes the
+RDFC-1.0 identities of both input graphs together with declared namespaces,
+mode, value-vocabulary marker, compiler/policy salts, and fixed limits, so the
+key can be computed before expensive emission and used directly for caching.
+
+The runnable example compares both modes, prints the report and cache key, and
+passes the complete result through all four language emitters:
+
+```bash
+cargo run -p purrdf-shapes --example ontology_schema_surface --locked
+```
+
 ## Schema → SHACL imports
 
 The schema-projection family is bidirectional. `SchemaImportConfig` requires a
@@ -120,6 +186,58 @@ assert_eq!(
 );
 ```
 
+Callers that need a distribution-ready package can supply a total topology,
+class documentation and arbitrary sorted JSON linkage metadata, plus an exact
+PEP 440 version. Every `$defs` key must occur exactly once and every declared
+leaf module must own a class:
+
+```rust,ignore
+use std::collections::BTreeMap;
+use purrdf_shapes::{
+    PydanticClassConfig, PydanticModuleConfig, PydanticPackageTopology,
+    PydanticVersionStamp,
+};
+use serde_json::json;
+
+let topology = PydanticPackageTopology::new(
+    [PydanticModuleConfig::new(
+        "domain.people",
+        "Caller-owned people module.",
+    )?],
+    [PydanticClassConfig::new(
+        "Person",
+        "domain.people",
+        "Caller-owned Person documentation.",
+        BTreeMap::from([
+            ("definitionDigest".to_owned(), json!("sha256:...")),
+            ("docs".to_owned(), json!("https://example.org/docs/person")),
+        ]),
+    )?],
+)?;
+let config = config
+    .with_topology(topology)?
+    .with_version_stamp(PydanticVersionStamp::new(
+        "1.2.3+portable.1",
+        "Caller-owned version module.",
+    )?)?;
+let package = emit_pydantic(&compiled_schema, &config)?;
+
+assert!(package.artifacts.contains_key("example_models/domain/people.py"));
+assert_eq!(
+    package.model_paths.get("Person").map(String::as_str),
+    Some("example_models.domain.people.Person"),
+);
+```
+
+Routed packages share one schema table and one runtime base, create required
+intermediate `__init__.py` files, rebuild cross-module references once at the
+package root, and export explicit symbol maps. Missing or stale routes,
+path/symbol collisions, malformed versions, and fixed schema/config/output
+resource-limit violations fail before any artifacts are returned. Omitting both
+the topology and version stamp retains the original flat package byte-for-byte.
+Version stamping is independently available in either layout; in the flat
+layout it adds `__about__.py` and updates the `__init__.py` exports.
+
 Generated classes validate the representable JSON Schema subset and expose the
 originating definition through Pydantic v2's standard
 `model_json_schema(by_alias=True)` surface. Assertions without an exact
@@ -128,12 +246,22 @@ pointer locations, in `package.losses`; the source SHACL-to-JSON-Schema losses
 remain separately available on `CompiledSchema::losses`. The checked
 `json-schema` → `pydantic-v2` loss profile makes every widening auditable.
 
-The dev-only executable oracle imports an emitted package, compares its live
-`model_json_schema()` output with the source definitions, and probes validation
-and alias round trips:
+The dev-only executable oracle imports both flat and routed packages, runs
+strict mypy over the routed package, compares live `model_json_schema()` output
+with the source definitions, and probes validation, metadata/version linkage,
+aliases, and verified reverse round trips:
 
 ```bash
 make pydantic-oracle
+```
+
+Report-only timing and allocation instruments share the same deterministic
+32/1,024/16,384-definition fixture family across flat, rich single-module,
+40-module, and one-module-per-definition layouts:
+
+```bash
+cargo bench -p purrdf-shapes --bench pydantic_package --locked -- --noplot
+cargo run --release -p purrdf-shapes --example pydantic_allocations --locked
 ```
 
 `import_pydantic_package` is the schema reverse API. It verifies the fixed
@@ -151,8 +279,10 @@ description, default prefix, and complete prefix map; there is deliberately no
 `Default` configuration.
 
 ```rust,ignore
-use std::collections::BTreeMap;
-use purrdf_shapes::{LinkmlConfig, emit_linkml, parse_linkml, write_linkml};
+use std::collections::{BTreeMap, BTreeSet};
+use purrdf_shapes::{
+    LinkmlConfig, SanitizePolicy, emit_linkml, parse_linkml, write_linkml,
+};
 
 let config = LinkmlConfig::new(
     "https://example.org/schema/linkml",
@@ -163,7 +293,12 @@ let config = LinkmlConfig::new(
         ("ex".into(), "https://example.org/".into()),
         ("linkml".into(), "https://w3id.org/linkml/".into()),
     ]),
-)?;
+)?
+.with_sanitize_policy(SanitizePolicy::Rename)
+.with_slot_rehomes(BTreeSet::from([
+    // This exact undeclared token is caller-owned shorthand, not a custom IRI.
+    "skos:definition".to_owned(),
+]))?;
 let package = emit_linkml(&compiled_schema, &config)?;
 
 let parsed = parse_linkml(&package.yaml)?;
@@ -172,12 +307,17 @@ assert_eq!(
     package.element_names.get("Person").map(String::as_str),
     Some("Person"),
 );
+for rename in &package.slot_renames {
+    let (class, old_slot_uri, new_slot_name) = rename.audit_tuple();
+    println!("{class}: {old_slot_uri:?} -> {new_slot_name}");
+}
 ```
 
 `LinkmlPackage` returns the validated document tree, canonical YAML, a
-reversible source-`$defs`-key to LinkML-element map, and the always-computed
-`json-schema` → `linkml-1.11` loss ledger. The YAML writer sorts every mapping
-and emits exactly one trailing newline. The reader preserves every
+reversible source-`$defs`-key to LinkML-element map, ordered slot rename and
+skip-diagnostic reports, and the always-computed `json-schema` → `linkml-1.11`
+loss ledger. The YAML writer sorts every mapping and emits exactly one trailing
+newline. The reader preserves every
 JSON-compatible LinkML field, including metamodel extensions PurRDF does not
 author, while rejecting duplicate keys, YAML tags, non-string mapping keys,
 non-finite numbers, and resource-limit violations. Thus read → write and write
@@ -186,9 +326,49 @@ language-neutral boundary.
 
 `import_linkml` interprets any validated native `LinkmlDocument` through the
 shared SHACL import model. `import_linkml_package` additionally verifies that an
-emitted package's canonical YAML and reversible element map still match its
-typed document. Native metamodel annotations and schema identity are ledgered
+emitted package's canonical YAML, element map, slot reports, policy losses,
+aliases, and `slot_uri` values still agree. A declared CURIE or absolute IRI
+therefore reverses to its original predicate even when its LinkML attribute name
+was changed. Native metamodel annotations and schema identity are ledgered
 instead of being mistaken for SHACL validation terms.
+
+`LinkmlConfig::new` selects `SanitizePolicy::Rename`. The renderer plans every
+class before emitting it, so an unsafe property cannot consume an already-safe
+name and insertion order cannot change collision ownership:
+
+- `Rename` emits a deterministic caller-prefixed NCName, retains the exact
+  source spelling in `alias`, and appends a `LinkmlSlotRename`. For a declared
+  CURIE only the local spelling changes; its exact original CURIE remains in
+  `slot_uri`. Every parser-valid absolute IRI (`http`, `https`, `urn`, `did`,
+  `mailto`, or another scheme) likewise remains byte-exact in `slot_uri`.
+- `Skip` omits only the unsafe property, appends a located
+  `LinkmlSlotDiagnostic`, and records `slot-name-policy-dropped`.
+- `Fail` rejects the projection with the source class, emitted class, property,
+  and JSON Pointer.
+
+An unmatched absolute IRI uses its trailing local segment under the caller's
+default prefix only for the generated attribute name; its absolute semantic
+identity is preserved. An unsafe bare token has no pre-existing RDF identity
+and is explicitly assigned one under the caller's default prefix, recorded as
+`slot-identity-rehomed`. `with_slot_rehomes` provides the same explicit
+assignment for exact unresolved tokens such as an undeclared `skos:definition`.
+Valid custom-scheme IRIs are never guessed to be unresolved CURIEs. Hints that
+target declared prefixes or the five supported JSON-LD carriers (`@annotation`,
+`@id`, `@language`, `@type`, and `@value`) are rejected, and every configured
+hint must occur in the source.
+
+Generated-name collisions receive a fixed hash suffix and bounded ordinal
+fallback. Semantic `slot_uri` collisions fail unless the colliding identity is
+being explicitly re-homed, in which case allocation chooses another reported
+caller-default identity. Source schema bytes, source-key bytes, slots per class,
+total slots, report rows, generated-name bytes, and collision attempts all have
+fixed fail-closed limits.
+
+Code that previously rewrote `properties` and `required` keys before LinkML
+emission should remove that pre-pass. Pass the shared `CompiledSchema` unchanged,
+configure any exact semantic re-homes on `LinkmlConfig`, and use
+`package.slot_renames` as the reversible migration record. This keeps every
+other emitter on the same deterministic schema carrier.
 
 The projection grammar is:
 
@@ -197,7 +377,7 @@ The projection grammar is:
 | object `$defs` | named `classes` with caller-prefix-derived `class_uri` |
 | scalar `$defs` | named `types` |
 | string and `{"@id": ...}` enum `$defs` | named `enums` and `permissible_values` |
-| `properties` | class-scoped `attributes`; the exact JSON key remains the attribute key and `alias` |
+| `properties` | class-scoped `attributes`; safe keys remain exact, while unsafe keys use the selected policy and always retain the source key in `alias` when emitted |
 | local `$ref` | class, type, or enum `range`; class aliases use `is_a` |
 | inline object | deterministic synthesized class with `inlined: true` |
 | `required` | attribute `required` |
@@ -214,15 +394,16 @@ conditional/dependency/contains/unevaluated rules, tuple widening, string and
 property counts, exclusive and multiple-of bounds, format differences,
 non-scalar enum carriers, and a closed catch-all. Malformed values,
 external/dynamic/dangling references, inconsistent `required` declarations,
-unknown caller prefixes, reserved names, and normalized-name collisions hard
-fail instead of entering the ledger. Source SHACL → JSON Schema losses remain
-separate on `CompiledSchema::losses`.
+stale/ambiguous re-home hints, semantic identity collisions, and fixed-limit
+breaches hard fail instead of entering the ledger. Source SHACL → JSON Schema
+losses remain separate on `CompiledSchema::losses`.
 
 The production emitter has no Python dependency and remains wasm-clean. The
 dev-only oracle pins the official `linkml` and `linkml-runtime` packages to
 1.11.1, loads the emitted YAML through `SchemaDefinition` and `SchemaView`,
 regenerates JSON Schema, compares the exact fixture's `$defs` and accept/reject
-corpus, and probes every lossy family:
+corpus, verifies renamed aliases and `slot_uri` values across seven identity
+forms, checks reverse predicates, and probes every lossy family:
 
 ```bash
 make linkml-oracle
