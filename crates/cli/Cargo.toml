@@ -49,3 +49,5 @@ clap = { workspace = true }
 tempfile = { workspace = true }
 # Parse the machine-readable runtime ledger in projection CLI integration tests.
 serde_json = { workspace = true }
+# Pin complete attached-carrier bytes at the process boundary.
+sha2 = { workspace = true }

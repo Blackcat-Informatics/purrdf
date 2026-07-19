@@ -8,8 +8,11 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
 use purrdf_rdf::{ProjectionConfig, ProjectionPackage};
+use sha2::{Digest, Sha256};
 
 const PURRDF: &str = env!("CARGO_BIN_EXE_purrdf");
+const ATTACHED_ARCHIVE_SHA256: &str =
+    "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
 
 fn run(args: &[&str]) -> Output {
     Command::new(PURRDF)
@@ -456,6 +459,10 @@ fn attached_ro_crate_carries_payload_and_preview_through_the_cli() {
     }
     let first_bytes = std::fs::read(&first).expect("first crate");
     assert_eq!(first_bytes, std::fs::read(&second).expect("second crate"));
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&first_bytes)),
+        ATTACHED_ARCHIVE_SHA256
+    );
     let package =
         ProjectionPackage::from_ustar(&first_bytes, parsed.limits()).expect("attached package");
     assert_eq!(package.get("data/train.csv"), Some(b"cat".as_slice()));

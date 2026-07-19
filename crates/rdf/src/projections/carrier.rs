@@ -601,6 +601,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use purrdf_core::{RdfDatasetBuilder, datasets_isomorphic};
+    use sha2::{Digest, Sha256};
 
     use super::*;
     use crate::{CsvwContext, CsvwMode, CsvwVocabulary};
@@ -620,6 +621,8 @@ mod tests {
     );
     const CSVW_TERMS_CONFIG: &[u8] = include_bytes!("../../tests/fixtures/csvw-terms.json");
     const OKF_TERMS_CONFIG: &[u8] = include_bytes!("../../tests/fixtures/okf-terms.json");
+    const ATTACHED_ARCHIVE_SHA256: &str =
+        "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
     fn limits() -> ProjectionLimits {
         ProjectionLimits::new(16, 1_000_000, 4_000_000, 5_000_000, 16).expect("limits")
     }
@@ -855,5 +858,48 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn attached_ro_crate_archive_matches_the_cross_host_golden() {
+        let source = String::from_utf8(RESEARCH_SOURCE.to_vec())
+            .expect("research source UTF-8")
+            .replace("files/train.csv", "data/train.csv")
+            .replace(
+                "\"42\"^^<https://example.org/rdf/role-50>",
+                "\"3\"^^<https://example.org/rdf/role-50>",
+            );
+        let config_bytes = String::from_utf8(RO_CRATE_CONFIG.to_vec())
+            .expect("RO-Crate config UTF-8")
+            .replace("\"metadata-only\"", "\"attached\"");
+        let config = ProjectionConfig::from_json(config_bytes.as_bytes()).expect("attached config");
+        let dataset =
+            crate::parse_dataset(source.as_bytes(), "text/turtle", None).expect("attached source");
+        let assets =
+            RoCrateAssets::from_artifacts(config.limits(), [("data/train.csv", b"cat".as_slice())])
+                .expect("attached assets");
+
+        let first = project_archive_with_assets(
+            dataset.as_ref(),
+            ProjectionProfile::RoCrate13,
+            &config,
+            &assets,
+        )
+        .expect("attached project");
+        let second = project_archive_with_assets(
+            dataset.as_ref(),
+            ProjectionProfile::RoCrate13,
+            &config,
+            &assets,
+        )
+        .expect("repeat attached project");
+        assert_eq!(first.archive, second.archive);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&first.archive)),
+            ATTACHED_ARCHIVE_SHA256
+        );
+        let lifted = lift_archive(&first.archive, LiftProfile::RoCrate13, &config)
+            .expect("lift attached crate");
+        assert!(lifted.dataset.quad_count() > 0);
     }
 }

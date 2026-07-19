@@ -31,6 +31,32 @@ const CONFIG = JSON.stringify({
   },
 });
 
+const ATTACHED_ARCHIVE_SHA256 =
+  "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
+
+function canonicalAttachedAssets() {
+  const archive = new Uint8Array(2_048);
+  const writeAscii = (offset, value) => {
+    archive.set(Buffer.from(value, "ascii"), offset);
+  };
+  writeAscii(0, "data/train.csv");
+  writeAscii(100, "0000644\0");
+  writeAscii(108, "0000000\0");
+  writeAscii(116, "0000000\0");
+  writeAscii(124, "00000000003\0");
+  writeAscii(136, "00000000000\0");
+  writeAscii(148, "        ");
+  writeAscii(156, "0");
+  writeAscii(257, "ustar\0");
+  writeAscii(263, "00");
+  const checksum = archive
+    .subarray(0, 512)
+    .reduce((total, byte) => total + byte, 0);
+  writeAscii(148, `${checksum.toString(8).padStart(6, "0")}\0 `);
+  archive.set(Buffer.from("cat"), 512);
+  return archive;
+}
+
 test("projection archive matches the shared Rust/Python bytes", () => {
   const dataset = Dataset.parse(
     "@prefix ex: <https://example.org/> .\nex:s ex:p ex:o .\n",
@@ -90,4 +116,33 @@ test("all research-object profiles execute through the shared WASM carrier", asy
     const lifted = liftProjection(first.archive, profile, config);
     assert.ok(lifted.takeDataset().size > 0);
   }
+});
+
+test("attached RO-Crate matches the cross-host archive through generated WASM", async () => {
+  const fixture = (name) => new URL(
+    `../../../rdf/tests/fixtures/research-objects/carrier/${name}`,
+    import.meta.url,
+  );
+  const source = (await readFile(fixture("shared.ttl"), "utf8"))
+    .replaceAll("files/train.csv", "data/train.csv")
+    .replace(
+      '"42"^^<https://example.org/rdf/role-50>',
+      '"3"^^<https://example.org/rdf/role-50>',
+    );
+  const config = JSON.parse(await readFile(fixture("ro-crate-1.3.json"), "utf8"));
+  config.config.packaging = "attached";
+  const configJson = JSON.stringify(config);
+  const assets = canonicalAttachedAssets();
+  const dataset = Dataset.parse(source, "turtle");
+  const first = dataset.projectWithAssets("ro-crate-1.3", configJson, assets);
+  const second = dataset.projectWithAssets("ro-crate-1.3", configJson, assets);
+
+  assert.deepEqual(first.archive, second.archive);
+  assert.equal(
+    createHash("sha256").update(first.archive).digest("hex"),
+    ATTACHED_ARCHIVE_SHA256,
+  );
+  assert.equal(JSON.parse(first.lossLedgerJson).schema_version, 1);
+  const lifted = liftProjection(first.archive, "ro-crate-1.3", configJson);
+  assert.ok(lifted.takeDataset().size > 0);
 });

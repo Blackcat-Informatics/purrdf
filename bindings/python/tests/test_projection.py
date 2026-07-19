@@ -37,6 +37,7 @@ _CONFIG = """{
 
 _TURTLE = b"@prefix ex: <https://example.org/> .\nex:s ex:p ex:o .\n"
 _RUST_ARCHIVE_SHA256 = "656066450fa23c55976f5434840169452c36324b943435e2f7ae55f8e9b6ef4e"
+_ATTACHED_ARCHIVE_SHA256 = "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b"
 _REPO = Path(__file__).resolve().parents[3]
 _RESEARCH_FIXTURES = _REPO / "crates/rdf/tests/fixtures/research-objects/carrier"
 _CSVW_TERMS_CONFIG = _REPO / "crates/rdf/tests/fixtures/csvw-terms.json"
@@ -255,6 +256,7 @@ def test_attached_ro_crate_carries_exact_payload_and_preview() -> None:
         assets=assets,
     )
     assert first.archive == second.archive
+    assert hashlib.sha256(first.archive).hexdigest() == _ATTACHED_ARCHIVE_SHA256
     with tarfile.open(fileobj=io.BytesIO(first.archive), mode="r:") as archive:
         members = {member.name: archive.extractfile(member).read() for member in archive}
     assert members["data/train.csv"] == b"cat"

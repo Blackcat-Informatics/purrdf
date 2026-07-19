@@ -2069,6 +2069,8 @@ mod tests {
     const ATTACHED_PREVIEW: &[u8] = include_bytes!(
         "../../../tests/fixtures/research-objects/ro-crate-1.3/attached-preview.html"
     );
+    const SHARED_SOURCE: &str =
+        include_str!("../../../tests/fixtures/research-objects/carrier/shared.ttl");
 
     fn config() -> RoCrateConfig {
         config_with_packaging(RoCratePackaging::MetadataOnly)
@@ -2341,6 +2343,70 @@ mod tests {
                 .expect("asset archive"),
             assets.to_ustar().expect("input asset archive")
         );
+    }
+
+    #[test]
+    fn attached_crate_orders_nested_utf8_and_binary_assets_deterministically() {
+        const BINARY_PAYLOAD: &[u8] = &[0x00, 0xff, 0x7f, 0x80];
+
+        let config = config_with_packaging(RoCratePackaging::Attached);
+        let mut source = SHARED_SOURCE
+            .replace("files/train.csv", "data/train.csv")
+            .replace(
+                "\"42\"^^<https://example.org/rdf/role-50>",
+                "\"3\"^^<https://example.org/rdf/role-50>",
+            );
+        source.push_str(
+            r#"
+<https://example.org/datasets/cats>
+    <https://example.org/rdf/role-13> <https://example.org/entities/nested/猫.bin> .
+
+<https://example.org/entities/nested/猫.bin>
+    <https://example.org/rdf/role-0> <https://example.org/rdf/role-18> ;
+    <https://example.org/rdf/role-19> "Résumé 🐈"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-21> "nested/猫.bin"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-23> "application/octet-stream"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-25> "4"^^<https://example.org/rdf/role-50> .
+"#,
+        );
+        let dataset = crate::parse_dataset(source.as_bytes(), "text/turtle", None)
+            .expect("nested attached source");
+        let reverse_assets = RoCrateAssets::from_artifacts(
+            config.common().limits(),
+            [
+                ("nested/猫.bin", BINARY_PAYLOAD),
+                ("data/train.csv", b"cat".as_slice()),
+            ],
+        )
+        .expect("reverse assets");
+        let forward_assets = RoCrateAssets::from_artifacts(
+            config.common().limits(),
+            [
+                ("data/train.csv", b"cat".as_slice()),
+                ("nested/猫.bin", BINARY_PAYLOAD),
+            ],
+        )
+        .expect("forward assets");
+
+        let reverse = project_ro_crate_with_assets(dataset.as_ref(), &config, &reverse_assets)
+            .expect("reverse-order project");
+        let forward = project_ro_crate_with_assets(dataset.as_ref(), &config, &forward_assets)
+            .expect("forward-order project");
+        assert_eq!(reverse.package, forward.package);
+        assert_eq!(
+            reverse.package.to_ustar().expect("reverse archive"),
+            forward.package.to_ustar().expect("forward archive")
+        );
+        assert_eq!(reverse.package.get("nested/猫.bin"), Some(BINARY_PAYLOAD));
+        let preview = std::str::from_utf8(
+            reverse
+                .package
+                .get(RO_CRATE_PREVIEW_ARTIFACT)
+                .expect("preview"),
+        )
+        .expect("preview UTF-8");
+        assert!(preview.contains("Résumé 🐈"));
+        assert!(preview.contains("nested/猫.bin"));
     }
 
     #[test]

@@ -8,6 +8,8 @@
 
 use std::ffi::CString;
 
+use sha2::{Digest, Sha256};
+
 use purrdf::buffer::{PurrdfBuffer, purrdf_buffer_data, purrdf_buffer_free};
 use purrdf::cursor::{
     PurrdfCursor, purrdf_cursor_free, purrdf_cursor_next, purrdf_quads_for_pattern,
@@ -40,6 +42,9 @@ use purrdf::term::{
 use purrdf::version::{
     PURRDF_ABI_MAJOR, PURRDF_ABI_MINOR, PURRDF_ABI_PATCH, purrdf_abi_version, purrdf_capabilities,
 };
+
+const ATTACHED_ARCHIVE_SHA256: &str =
+    "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
 
 /// A zeroed output term view the cursor fills.
 fn out_view() -> PurrdfTermView {
@@ -304,6 +309,10 @@ fn attached_ro_crate_payload_round_trips_through_owned_c_handles() {
         );
         assert!(error.is_null());
         let archive_bytes = buffer_bytes(archive);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&archive_bytes)),
+            ATTACHED_ARCHIVE_SHA256
+        );
         let package = purrdf_rs::ProjectionPackage::from_ustar(&archive_bytes, parsed.limits())
             .expect("attached package");
         assert_eq!(package.get("data/train.csv"), Some(b"cat".as_slice()));
