@@ -4,9 +4,9 @@
 //! Public-surface round trips for deterministic generic and Neo4j LPG CSV packages.
 
 use purrdf_rdf::{
-    LpgConfig, ProjectionLimits, RdfDatasetBuilder, RdfLiteral, datasets_isomorphic, lift_lpg,
-    project_lpg_csv, project_neo4j_csv, read_lpg_csv, read_neo4j_csv, write_lpg_csv,
-    write_neo4j_csv,
+    LpgConfig, LpgExecutionLimits, LpgScope, ProjectionLimits, RdfDatasetBuilder, RdfLiteral,
+    datasets_isomorphic, lift_lpg, project_lpg_csv, project_neo4j_csv, read_lpg_csv,
+    read_neo4j_csv, write_lpg_csv, write_neo4j_csv,
 };
 
 const TYPE: &str = "http://example.org/type";
@@ -34,7 +34,13 @@ fn public_csv_surfaces_round_trip_without_hidden_vocabulary() {
     let dataset = builder.freeze().expect("dataset");
 
     let limits = ProjectionLimits::new(64, 1_000_000, 4_000_000, 6_000_000, 16).expect("limits");
-    let config = LpgConfig::new(TYPE, limits, 100).expect("config");
+    let config = LpgConfig::new(
+        TYPE,
+        LpgScope::all(),
+        limits,
+        LpgExecutionLimits::new(100, 100, 100, 100).expect("execution limits"),
+    )
+    .expect("config");
 
     let generic = project_lpg_csv(dataset.as_ref(), &config).expect("generic projection");
     assert!(!generic.loss_ledger.is_empty());

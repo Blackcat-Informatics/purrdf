@@ -4,9 +4,9 @@
 //! Public-surface round trips for deterministic openCypher and GraphML LPG packages.
 
 use purrdf_rdf::{
-    LpgConfig, ProjectionLimits, ProjectionPackage, RdfDatasetBuilder, RdfLiteral,
-    datasets_isomorphic, lift_lpg, project_lpg_cypher, project_lpg_graphml, read_lpg_cypher,
-    read_lpg_graphml, write_lpg_cypher, write_lpg_graphml,
+    LpgConfig, LpgExecutionLimits, LpgScope, ProjectionLimits, ProjectionPackage,
+    RdfDatasetBuilder, RdfLiteral, datasets_isomorphic, lift_lpg, project_lpg_cypher,
+    project_lpg_graphml, read_lpg_cypher, read_lpg_graphml, write_lpg_cypher, write_lpg_graphml,
 };
 
 const TYPE: &str = "http://example.org/type";
@@ -31,7 +31,13 @@ fn public_graph_carriers_round_trip_without_hidden_vocabulary() {
     let dataset = builder.freeze().expect("dataset");
 
     let limits = ProjectionLimits::new(32, 1_000_000, 3_000_000, 5_000_000, 16).expect("limits");
-    let config = LpgConfig::new(TYPE, limits, 100).expect("config");
+    let config = LpgConfig::new(
+        TYPE,
+        LpgScope::all(),
+        limits,
+        LpgExecutionLimits::new(100, 100, 100, 100).expect("execution limits"),
+    )
+    .expect("config");
 
     let cypher = project_lpg_cypher(dataset.as_ref(), &config).expect("Cypher projection");
     assert!(!cypher.loss_ledger.is_empty());

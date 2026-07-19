@@ -452,6 +452,7 @@ fn element_text<'a>(node: Node<'a, '_>) -> Result<&'a str, ProjectionError> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::{LpgExecutionLimits, LpgScope};
     use std::sync::Arc;
 
     use purrdf_core::{
@@ -467,8 +468,10 @@ mod tests {
     fn test_config(max_records: usize) -> LpgConfig {
         LpgConfig::new(
             TYPE,
+            LpgScope::all(),
             ProjectionLimits::new(32, 3_000_000, 6_000_000, 8_000_000, 16).expect("limits"),
-            max_records,
+            LpgExecutionLimits::new(max_records, max_records, max_records, max_records)
+                .expect("execution limits"),
         )
         .expect("config")
     }

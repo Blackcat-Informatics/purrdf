@@ -45,6 +45,7 @@ fn lpg_config() -> &'static [u8] {
   "profile": "lpg-csv",
   "config": {
     "rdf_type": "https://example.org/type",
+    "scope": {"mode": "all"},
     "limits": {
       "max_artifacts": 16,
       "max_artifact_bytes": 1000000,
@@ -52,7 +53,12 @@ fn lpg_config() -> &'static [u8] {
       "max_archive_bytes": 5000000,
       "max_term_depth": 16
     },
-    "max_records": 1000
+    "execution_limits": {
+      "max_input_records": 1000,
+      "max_model_records": 1000,
+      "max_nodes": 1000,
+      "max_edges": 1000
+    }
   }
 }"#
 }

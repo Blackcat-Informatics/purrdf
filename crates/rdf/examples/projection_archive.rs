@@ -9,8 +9,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use purrdf_rdf::{
-    LiftProfile, LpgConfig, ProjectionConfig, ProjectionLimits, ProjectionProfile,
-    datasets_isomorphic, lift_archive, parse_dataset, project_archive,
+    LiftProfile, LpgConfig, LpgExecutionLimits, LpgScope, ProjectionConfig, ProjectionLimits,
+    ProjectionProfile, datasets_isomorphic, lift_archive, parse_dataset, project_archive,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -25,8 +25,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,
     )?;
     let limits = ProjectionLimits::new(16, 1_000_000, 4_000_000, 5_000_000, 16)?;
-    let config =
-        ProjectionConfig::LpgCsv(LpgConfig::new("https://example.org/type", limits, 1_000)?);
+    let config = ProjectionConfig::LpgCsv(LpgConfig::new(
+        "https://example.org/type",
+        LpgScope::all(),
+        limits,
+        LpgExecutionLimits::new(1_000, 1_000, 1_000, 1_000)?,
+    )?);
 
     let projected = project_archive(dataset.as_ref(), ProjectionProfile::LpgCsv, &config)?;
     fs::write(&output, &projected.archive)?;

@@ -16,13 +16,15 @@ const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 /// Mandatory policy and resource boundary for the canonical LPG mapping.
 ///
 /// There is deliberately no `Default`: the caller identifies the predicate whose
-/// IRI-object statements become native labels and chooses an explicit total-record
-/// ceiling. Every other predicate remains a full source IRI.
+/// IRI-object statements become native labels, chooses an explicit input scope, and
+/// supplies separate scan/model/node/edge ceilings. Every other predicate remains a
+/// full source IRI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LpgConfig {
     rdf_type: String,
+    scope: LpgScope,
     limits: ProjectionLimits,
-    max_records: usize,
+    execution_limits: LpgExecutionLimits,
 }
 
 impl LpgConfig {
@@ -30,29 +32,22 @@ impl LpgConfig {
     ///
     /// # Errors
     ///
-    /// Returns a configuration error when `rdf_type` is not an absolute IRI or
-    /// `max_records` is zero or wider than the portable `u32` record space.
+    /// Returns a configuration error when `rdf_type`, `scope`, or the execution
+    /// limits are invalid.
     pub fn new(
         rdf_type: impl Into<String>,
+        scope: LpgScope,
         limits: ProjectionLimits,
-        max_records: usize,
+        execution_limits: LpgExecutionLimits,
     ) -> Result<Self, ProjectionError> {
         let rdf_type = rdf_type.into();
         validate_absolute_iri(&rdf_type, "LPG rdf_type predicate")?;
-        if max_records == 0 {
-            return Err(ProjectionError::configuration(
-                "LPG max_records must be greater than zero",
-            ));
-        }
-        if u32::try_from(max_records).is_err() {
-            return Err(ProjectionError::configuration(
-                "LPG max_records exceeds the portable u32 record ceiling",
-            ));
-        }
+        scope.validate(limits)?;
         Ok(Self {
             rdf_type,
+            scope,
             limits,
-            max_records,
+            execution_limits,
         })
     }
 
@@ -61,14 +56,27 @@ impl LpgConfig {
         &self.rdf_type
     }
 
+    /// Mandatory all-data or selective RDF input scope.
+    pub const fn scope(&self) -> &LpgScope {
+        &self.scope
+    }
+
     /// Shared artifact and recursive-term limits.
     pub const fn limits(&self) -> ProjectionLimits {
         self.limits
     }
 
+    /// Explicit scan/model/node/edge execution ceilings.
+    pub const fn execution_limits(&self) -> LpgExecutionLimits {
+        self.execution_limits
+    }
+
     /// Maximum total canonical records, including nested labels and properties.
+    ///
+    /// This accessor also bounds strict carrier readers, which consume the same
+    /// canonical model record space.
     pub const fn max_records(&self) -> usize {
-        self.max_records
+        self.execution_limits.max_model_records()
     }
 }
 
@@ -76,8 +84,9 @@ impl LpgConfig {
 #[serde(deny_unknown_fields)]
 struct RawLpgConfig {
     rdf_type: String,
+    scope: LpgScope,
     limits: ProjectionLimits,
-    max_records: usize,
+    execution_limits: LpgExecutionLimits,
 }
 
 impl<'de> Deserialize<'de> for LpgConfig {
@@ -86,7 +95,380 @@ impl<'de> Deserialize<'de> for LpgConfig {
         D: Deserializer<'de>,
     {
         let raw = RawLpgConfig::deserialize(deserializer)?;
-        Self::new(raw.rdf_type, raw.limits, raw.max_records).map_err(serde::de::Error::custom)
+        Self::new(raw.rdf_type, raw.scope, raw.limits, raw.execution_limits)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Mandatory fail-fast execution bounds for RDF-to-LPG mapping.
+///
+/// Artifact, archive, and recursive-term byte/depth bounds remain in
+/// [`ProjectionLimits`]. These bounds cover the semantic mapping before bytes are
+/// emitted. There is deliberately no `Default`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct LpgExecutionLimits {
+    #[serde(rename = "max_input_records")]
+    input_records: usize,
+    #[serde(rename = "max_model_records")]
+    model_records: usize,
+    #[serde(rename = "max_nodes")]
+    nodes: usize,
+    #[serde(rename = "max_edges")]
+    edges: usize,
+}
+
+impl LpgExecutionLimits {
+    /// Construct validated portable execution bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when any bound is zero or exceeds the
+    /// portable `u32` counter space used by every host surface.
+    pub fn new(
+        max_input_records: usize,
+        max_model_records: usize,
+        max_nodes: usize,
+        max_edges: usize,
+    ) -> Result<Self, ProjectionError> {
+        for (name, value) in [
+            ("max_input_records", max_input_records),
+            ("max_model_records", max_model_records),
+            ("max_nodes", max_nodes),
+            ("max_edges", max_edges),
+        ] {
+            if value == 0 {
+                return Err(ProjectionError::configuration(format!(
+                    "LPG {name} must be greater than zero"
+                )));
+            }
+            if u32::try_from(value).is_err() {
+                return Err(ProjectionError::configuration(format!(
+                    "LPG {name} exceeds the portable u32 counter ceiling"
+                )));
+            }
+        }
+        Ok(Self {
+            input_records: max_input_records,
+            model_records: max_model_records,
+            nodes: max_nodes,
+            edges: max_edges,
+        })
+    }
+
+    /// Maximum declarations/statements/reifiers/annotations scanned from a view.
+    pub const fn max_input_records(self) -> usize {
+        self.input_records
+    }
+
+    /// Maximum records in the canonical LPG model.
+    pub const fn max_model_records(self) -> usize {
+        self.model_records
+    }
+
+    /// Maximum canonical LPG nodes.
+    pub const fn max_nodes(self) -> usize {
+        self.nodes
+    }
+
+    /// Maximum canonical LPG edges.
+    pub const fn max_edges(self) -> usize {
+        self.edges
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLpgExecutionLimits {
+    #[serde(rename = "max_input_records")]
+    input_records: usize,
+    #[serde(rename = "max_model_records")]
+    model_records: usize,
+    #[serde(rename = "max_nodes")]
+    nodes: usize,
+    #[serde(rename = "max_edges")]
+    edges: usize,
+}
+
+impl<'de> Deserialize<'de> for LpgExecutionLimits {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawLpgExecutionLimits::deserialize(deserializer)?;
+        Self::new(raw.input_records, raw.model_records, raw.nodes, raw.edges)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Exact allow/deny selection over absolute IRIs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum LpgIriSelection {
+    /// Admit every IRI except the explicit deny set.
+    All {
+        /// Absolute IRIs excluded from the selection.
+        deny: BTreeSet<String>,
+    },
+    /// Admit only the explicit allow set, minus the explicit deny set.
+    Only {
+        /// Absolute IRIs eligible for selection.
+        allow: BTreeSet<String>,
+        /// Absolute IRIs excluded from the allow set.
+        deny: BTreeSet<String>,
+    },
+}
+
+impl LpgIriSelection {
+    /// Select every IRI.
+    pub const fn all() -> Self {
+        Self::All {
+            deny: BTreeSet::new(),
+        }
+    }
+
+    /// Select every IRI except the supplied deny set.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error for a non-absolute IRI.
+    pub fn all_except<I, S>(deny: I) -> Result<Self, ProjectionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let selection = Self::All {
+            deny: deny.into_iter().map(Into::into).collect(),
+        };
+        selection.validate("IRI selection")?;
+        Ok(selection)
+    }
+
+    /// Select the supplied allow set, minus the deny set.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error for a non-absolute IRI or an IRI present in
+    /// both sets.
+    pub fn only<AI, AS, DI, DS>(allow: AI, deny: DI) -> Result<Self, ProjectionError>
+    where
+        AI: IntoIterator<Item = AS>,
+        AS: Into<String>,
+        DI: IntoIterator<Item = DS>,
+        DS: Into<String>,
+    {
+        let selection = Self::Only {
+            allow: allow.into_iter().map(Into::into).collect(),
+            deny: deny.into_iter().map(Into::into).collect(),
+        };
+        selection.validate("IRI selection")?;
+        Ok(selection)
+    }
+
+    fn validate(&self, description: &str) -> Result<(), ProjectionError> {
+        let (allow, deny) = match self {
+            Self::All { deny } => (None, deny),
+            Self::Only { allow, deny } => (Some(allow), deny),
+        };
+        for value in allow.into_iter().flatten().chain(deny) {
+            validate_absolute_iri(value, description)?;
+        }
+        if allow.is_some_and(|allow| !allow.is_disjoint(deny)) {
+            return Err(ProjectionError::configuration(format!(
+                "{description} allow and deny sets must be disjoint"
+            )));
+        }
+        Ok(())
+    }
+
+    pub(super) fn contains(&self, value: &str) -> bool {
+        match self {
+            Self::All { deny } => !deny.contains(value),
+            Self::Only { allow, deny } => allow.contains(value) && !deny.contains(value),
+        }
+    }
+
+    pub(super) fn contains_types(&self, values: Option<&BTreeSet<String>>) -> bool {
+        match self {
+            Self::All { deny } => values.is_none_or(|values| values.is_disjoint(deny)),
+            Self::Only { allow, deny } => {
+                values.is_some_and(|values| !values.is_disjoint(allow) && values.is_disjoint(deny))
+            }
+        }
+    }
+}
+
+/// Exact include/exclude selection over RDF named-graph terms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum LpgNamedGraphSelection {
+    /// Admit every named graph except the explicit exclude set.
+    All {
+        /// Exact named-graph terms excluded from the selection.
+        exclude: BTreeSet<ProjectionTerm>,
+    },
+    /// Admit only the include set, minus the exclude set.
+    Only {
+        /// Exact named-graph terms eligible for selection.
+        include: BTreeSet<ProjectionTerm>,
+        /// Exact named-graph terms excluded from the include set.
+        exclude: BTreeSet<ProjectionTerm>,
+    },
+}
+
+impl LpgNamedGraphSelection {
+    /// Select every named graph.
+    pub const fn all() -> Self {
+        Self::All {
+            exclude: BTreeSet::new(),
+        }
+    }
+
+    /// Select every named graph except the supplied exact terms.
+    pub fn all_except<I>(exclude: I) -> Self
+    where
+        I: IntoIterator<Item = ProjectionTerm>,
+    {
+        Self::All {
+            exclude: exclude.into_iter().collect(),
+        }
+    }
+
+    /// Select the supplied exact named graphs, minus the exclude set.
+    pub fn only<I, E>(include: I, exclude: E) -> Self
+    where
+        I: IntoIterator<Item = ProjectionTerm>,
+        E: IntoIterator<Item = ProjectionTerm>,
+    {
+        Self::Only {
+            include: include.into_iter().collect(),
+            exclude: exclude.into_iter().collect(),
+        }
+    }
+
+    fn validate(&self, limits: ProjectionLimits) -> Result<(), ProjectionError> {
+        let (include, exclude) = match self {
+            Self::All { exclude } => (None, exclude),
+            Self::Only { include, exclude } => (Some(include), exclude),
+        };
+        for term in include.into_iter().flatten().chain(exclude) {
+            validate_graph_name(term, limits, "LPG scope named graph")?;
+        }
+        if include.is_some_and(|include| !include.is_disjoint(exclude)) {
+            return Err(ProjectionError::configuration(
+                "LPG named-graph include and exclude sets must be disjoint",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn contains(&self, graph: &ProjectionTerm) -> bool {
+        match self {
+            Self::All { exclude } => !exclude.contains(graph),
+            Self::Only { include, exclude } => include.contains(graph) && !exclude.contains(graph),
+        }
+    }
+}
+
+/// Mandatory RDF input scope for LPG projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum LpgScope {
+    /// Explicitly project the complete dataset view.
+    All,
+    /// Apply exact graph, predicate, node-type, and edge-type selection.
+    Select {
+        /// Whether default-graph statements are eligible.
+        include_default_graph: bool,
+        /// Exact named-graph include/exclude policy.
+        named_graphs: Box<LpgNamedGraphSelection>,
+        /// Ordinary-statement and annotation-predicate policy.
+        predicates: Box<LpgIriSelection>,
+        /// Subject/relationship-endpoint policy over caller-supplied RDF types.
+        node_types: Box<LpgIriSelection>,
+        /// Native LPG edge predicate policy.
+        edge_types: Box<LpgIriSelection>,
+    },
+}
+
+impl LpgScope {
+    /// Explicitly project every graph and predicate.
+    pub const fn all() -> Self {
+        Self::All
+    }
+
+    /// Construct a selective input scope.
+    ///
+    /// Validation against the configured recursive-term bound occurs when the scope
+    /// is installed in [`LpgConfig`].
+    pub fn select(
+        include_default_graph: bool,
+        named_graphs: LpgNamedGraphSelection,
+        predicates: LpgIriSelection,
+        node_types: LpgIriSelection,
+        edge_types: LpgIriSelection,
+    ) -> Self {
+        Self::Select {
+            include_default_graph,
+            named_graphs: Box::new(named_graphs),
+            predicates: Box::new(predicates),
+            node_types: Box::new(node_types),
+            edge_types: Box::new(edge_types),
+        }
+    }
+
+    fn validate(&self, limits: ProjectionLimits) -> Result<(), ProjectionError> {
+        if let Self::Select {
+            named_graphs,
+            predicates,
+            node_types,
+            edge_types,
+            ..
+        } = self
+        {
+            named_graphs.validate(limits)?;
+            predicates.validate("LPG predicate scope")?;
+            node_types.validate("LPG node-type scope")?;
+            edge_types.validate("LPG edge-type scope")?;
+        }
+        Ok(())
+    }
+
+    pub(super) const fn includes_default_graph(&self) -> bool {
+        match self {
+            Self::All => true,
+            Self::Select {
+                include_default_graph,
+                ..
+            } => *include_default_graph,
+        }
+    }
+
+    pub(super) fn includes_named_graph(&self, graph: &ProjectionTerm) -> bool {
+        match self {
+            Self::All => true,
+            Self::Select { named_graphs, .. } => named_graphs.contains(graph),
+        }
+    }
+
+    pub(super) fn includes_predicate(&self, predicate: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Select { predicates, .. } => predicates.contains(predicate),
+        }
+    }
+
+    pub(super) fn includes_node_types(&self, types: Option<&BTreeSet<String>>) -> bool {
+        match self {
+            Self::All => true,
+            Self::Select { node_types, .. } => node_types.contains_types(types),
+        }
+    }
+
+    pub(super) fn includes_edge_type(&self, edge_type: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Select { edge_types, .. } => edge_types.contains(edge_type),
+        }
     }
 }
 
@@ -539,6 +921,21 @@ impl LpgGraph {
     }
 
     fn validate_record_budget(&self, config: &LpgConfig) -> Result<(), ProjectionError> {
+        let execution_limits = config.execution_limits();
+        if self.nodes.len() > execution_limits.max_nodes() {
+            return Err(ProjectionError::limit(format!(
+                "LPG model contains {} nodes; limit is {}",
+                self.nodes.len(),
+                execution_limits.max_nodes()
+            )));
+        }
+        if self.edges.len() > execution_limits.max_edges() {
+            return Err(ProjectionError::limit(format!(
+                "LPG model contains {} edges; limit is {}",
+                self.edges.len(),
+                execution_limits.max_edges()
+            )));
+        }
         let mut count = 0usize;
         for amount in [
             self.nodes.len(),
@@ -557,10 +954,10 @@ impl LpgGraph {
                 .and_then(|value| value.checked_add(node.properties.len()))
                 .ok_or_else(|| ProjectionError::limit("LPG record count overflow"))?;
         }
-        if count > config.max_records() {
+        if count > execution_limits.max_model_records() {
             return Err(ProjectionError::limit(format!(
                 "LPG model contains {count} records; limit is {}",
-                config.max_records()
+                execution_limits.max_model_records()
             )));
         }
         Ok(())
@@ -911,7 +1308,13 @@ mod tests {
 
     #[test]
     fn config_round_trip_revalidates_and_rejects_unknown_fields() {
-        let config = LpgConfig::new("http://example.org/type", limits(), 1_000).expect("config");
+        let config = LpgConfig::new(
+            "http://example.org/type",
+            LpgScope::all(),
+            limits(),
+            LpgExecutionLimits::new(1_000, 1_000, 1_000, 1_000).expect("execution limits"),
+        )
+        .expect("config");
         let json = serde_json::to_string(&config).expect("serialize");
         assert_eq!(
             serde_json::from_str::<LpgConfig>(&json).expect("parse"),
@@ -923,6 +1326,36 @@ mod tests {
             .expect("config object")
             .insert("unknown".to_owned(), serde_json::Value::Bool(true));
         assert!(serde_json::from_value::<LpgConfig>(unknown).is_err());
+
+        let mut missing_scope: serde_json::Value = serde_json::from_str(&json).expect("JSON value");
+        missing_scope
+            .as_object_mut()
+            .expect("config object")
+            .remove("scope");
+        assert!(serde_json::from_value::<LpgConfig>(missing_scope).is_err());
+
+        assert!(
+            LpgIriSelection::only(["http://example.org/p"], ["http://example.org/p"],).is_err()
+        );
+        let graph = ProjectionTerm::Iri {
+            value: "http://example.org/graph".to_owned(),
+        };
+        let overlapping_graph_scope = LpgScope::select(
+            true,
+            LpgNamedGraphSelection::only([graph.clone()], [graph]),
+            LpgIriSelection::all(),
+            LpgIriSelection::all(),
+            LpgIriSelection::all(),
+        );
+        assert!(
+            LpgConfig::new(
+                "http://example.org/type",
+                overlapping_graph_scope,
+                limits(),
+                LpgExecutionLimits::new(1, 1, 1, 1).expect("execution limits"),
+            )
+            .is_err()
+        );
     }
 
     #[test]

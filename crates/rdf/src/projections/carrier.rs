@@ -498,6 +498,7 @@ fn lift_lpg_package(
 
 #[cfg(test)]
 mod tests {
+    use super::super::{LpgExecutionLimits, LpgScope};
     use std::collections::BTreeMap;
 
     use purrdf_core::{RdfDatasetBuilder, datasets_isomorphic};
@@ -523,7 +524,13 @@ mod tests {
     }
 
     fn lpg_config(profile: ProjectionProfile) -> ProjectionConfig {
-        let config = LpgConfig::new("https://example.org/type", limits(), 1_000).expect("LPG");
+        let config = LpgConfig::new(
+            "https://example.org/type",
+            LpgScope::all(),
+            limits(),
+            LpgExecutionLimits::new(1_000, 1_000, 1_000, 1_000).expect("execution limits"),
+        )
+        .expect("LPG");
         match profile {
             ProjectionProfile::LpgCsv => ProjectionConfig::LpgCsv(config),
             ProjectionProfile::Neo4jCsv => ProjectionConfig::Neo4jCsv(config),
@@ -605,7 +612,7 @@ mod tests {
         assert!(ProjectionConfig::from_json(br#"{"profile":"skos","config":{}}"#).is_err());
         assert!(
             ProjectionConfig::from_json(
-                br#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"max_records":1000},"extra":true}"#,
+                br#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","scope":{"mode":"all"},"limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"execution_limits":{"max_input_records":1000,"max_model_records":1000,"max_nodes":1000,"max_edges":1000}},"extra":true}"#,
             )
             .is_err()
         );

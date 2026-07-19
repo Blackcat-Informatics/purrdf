@@ -252,6 +252,7 @@ fn push_string_literal(output: &mut BoundedText, value: &str) -> Result<(), Proj
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::{LpgExecutionLimits, LpgScope};
     use std::sync::Arc;
 
     use purrdf_core::{
@@ -267,8 +268,10 @@ mod tests {
     fn test_config(max_records: usize) -> LpgConfig {
         LpgConfig::new(
             TYPE,
+            LpgScope::all(),
             ProjectionLimits::new(32, 2_000_000, 5_000_000, 7_000_000, 16).expect("limits"),
-            max_records,
+            LpgExecutionLimits::new(max_records, max_records, max_records, max_records)
+                .expect("execution limits"),
         )
         .expect("config")
     }
@@ -421,7 +424,13 @@ mod tests {
         let builder = RdfDatasetBuilder::new();
         let dataset = builder.freeze().expect("empty dataset");
         let limits = ProjectionLimits::new(8, 32, 128, 2_048, 16).expect("small limits");
-        let config = LpgConfig::new(TYPE, limits, 10).expect("small config");
+        let config = LpgConfig::new(
+            TYPE,
+            LpgScope::all(),
+            limits,
+            LpgExecutionLimits::new(10, 10, 10, 10).expect("execution limits"),
+        )
+        .expect("small config");
         let graph = project_lpg(dataset.as_ref(), &config)
             .expect("empty projection")
             .graph;

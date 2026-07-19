@@ -18,6 +18,7 @@ pub use cypher::{project_lpg_cypher, read_lpg_cypher, write_lpg_cypher};
 pub use graphml::{project_lpg_graphml, read_lpg_graphml, write_lpg_graphml};
 pub use mapping::{LpgLiftOutcome, LpgProjection, lift_lpg, project_lpg};
 pub use model::{
-    LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgGraphContext, LpgLabel, LpgNode, LpgProperty,
-    LpgPropertyAtom, LpgRdfQuad, LpgReifier,
+    LpgAnnotation, LpgConfig, LpgEdge, LpgExecutionLimits, LpgGraph, LpgGraphContext,
+    LpgIriSelection, LpgLabel, LpgNamedGraphSelection, LpgNode, LpgProperty, LpgPropertyAtom,
+    LpgRdfQuad, LpgReifier, LpgScope,
 };

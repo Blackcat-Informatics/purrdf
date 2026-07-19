@@ -184,6 +184,7 @@ fn projection_archive_and_ledger_round_trip_through_owned_c_handles() {
       "profile": "lpg-csv",
       "config": {
         "rdf_type": "https://example.org/type",
+        "scope": {"mode": "all"},
         "limits": {
           "max_artifacts": 16,
           "max_artifact_bytes": 1000000,
@@ -191,7 +192,12 @@ fn projection_archive_and_ledger_round_trip_through_owned_c_handles() {
           "max_archive_bytes": 5000000,
           "max_term_depth": 16
         },
-        "max_records": 1000
+        "execution_limits": {
+          "max_input_records": 1000,
+          "max_model_records": 1000,
+          "max_nodes": 1000,
+          "max_edges": 1000
+        }
       }
     }"#;
 
@@ -341,7 +347,7 @@ fn every_research_object_profile_executes_through_the_c_abi() {
 
 #[test]
 fn projection_c_surface_rejects_write_only_lift_and_aliasing_outputs() {
-    const CONFIG: &str = r#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"max_records":1000}}"#;
+    const CONFIG: &str = r#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","scope":{"mode":"all"},"limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"execution_limits":{"max_input_records":1000,"max_model_records":1000,"max_nodes":1000,"max_edges":1000}}}"#;
     unsafe {
         let dataset = parse("text/turtle", "<http://a> <http://b> <http://c> .");
         let profile = CString::new("lpg-csv").unwrap();

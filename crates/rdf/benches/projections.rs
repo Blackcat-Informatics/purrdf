@@ -12,15 +12,15 @@ use std::sync::Arc;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_rdf::{
-    CsvwConfig, CsvwContext, CsvwMode, CsvwVocabulary, LiftProfile, LpgConfig, OboGraphsConfig,
-    OboGraphsVocabulary, OboMetadataRoles, OboOwlRoles, OboRdfRoles, ProjectionConfig,
-    ProjectionLimits, ProjectionProfile, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    ResearchObjectConfig, SkosClassRoles, SkosConfig, SkosDocumentationRoles, SkosGraphSelection,
-    SkosLabelRoles, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles, lift_archive,
-    parse_dataset, project_archive, project_csvw_exact, project_lpg, project_obo_graphs,
-    project_research_object, project_skos, read_csvw_exact, read_lpg_csv, read_lpg_cypher,
-    read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher, write_lpg_graphml,
-    write_neo4j_csv,
+    CsvwConfig, CsvwContext, CsvwMode, CsvwVocabulary, LiftProfile, LpgConfig, LpgExecutionLimits,
+    LpgScope, OboGraphsConfig, OboGraphsVocabulary, OboMetadataRoles, OboOwlRoles, OboRdfRoles,
+    ProjectionConfig, ProjectionLimits, ProjectionProfile, RdfDataset, RdfDatasetBuilder,
+    RdfLiteral, ResearchObjectConfig, SkosClassRoles, SkosConfig, SkosDocumentationRoles,
+    SkosGraphSelection, SkosLabelRoles, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles,
+    lift_archive, parse_dataset, project_archive, project_csvw_exact, project_lpg,
+    project_obo_graphs, project_research_object, project_skos, read_csvw_exact, read_lpg_csv,
+    read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher,
+    write_lpg_graphml, write_neo4j_csv,
 };
 
 thread_local! {
@@ -215,7 +215,13 @@ fn skos_dataset() -> Arc<RdfDataset> {
 }
 
 fn lpg_config() -> LpgConfig {
-    LpgConfig::new(format!("{EX}type"), limits(), 20_000).expect("LPG config")
+    LpgConfig::new(
+        format!("{EX}type"),
+        LpgScope::all(),
+        limits(),
+        LpgExecutionLimits::new(20_000, 20_000, 20_000, 20_000).expect("execution limits"),
+    )
+    .expect("LPG config")
 }
 
 fn csvw_config() -> CsvwConfig {
