@@ -423,6 +423,7 @@ export type ProjectionProfile =
   | "open-cypher"
   | "graphml"
   | "csvw-exact"
+  | "csvw-terms"
   | "obo-graphs"
   | "skos"
   | "croissant-1.1"
@@ -431,7 +432,10 @@ export type ProjectionProfile =
   | "dcat-3"
   | "frictionless-data-package-1";
 
-export type LiftProfile = Exclude<ProjectionProfile, "obo-graphs" | "skos">;
+export type LiftProfile = Exclude<
+  ProjectionProfile,
+  "csvw-terms" | "obo-graphs" | "skos"
+>;
 
 export interface ProjectionLossLedger {
   schema_version: 1;

@@ -44,7 +44,7 @@ loss ledger) and adds what the kernel deliberately leaves out:
   whose embedded JSON preserves assertions, triple terms, reifiers, annotations,
   graph context, dialect diagnostics, and element-to-model identities.
 - **Graph, tabular, and research-object carriers** — deterministic LPG CSV,
-  Neo4j CSV, openCypher, GraphML, exact CSVW, OBO Graphs 0.3.2, SKOS,
+  Neo4j CSV, openCypher, GraphML, exact and curated CSVW, OBO Graphs 0.3.2, SKOS,
   Croissant 1.1, RO-Crate 1.3, DataCite 4.6, DCAT 3, and Frictionless Data
   Package v1 over one caller-configured, resource-bounded archive API with an
   always-computed loss ledger.
@@ -141,7 +141,7 @@ entries; ambiguous profile data hard-fails.
 
 ### Graph, tabular, and research-object projection archives
 
-All twelve profiles use the same canonical USTAR package surface and strict,
+All thirteen profiles use the same canonical USTAR package surface and strict,
 profile-tagged configuration. PurRDF does not choose vocabulary, identity,
 profile context, or resource limits for the caller.
 
@@ -152,6 +152,7 @@ profile context, or resource limits for the caller.
 | `open-cypher` | yes | yes | Injection-safe closed `CREATE` grammar |
 | `graphml` | yes | yes | GraphML 1.0 with strict XML validation |
 | `csvw-exact` | yes | yes | Lossless RDF 1.2 tables and CSVW metadata |
+| `csvw-terms` | yes | no | Caller-declared scoped entity tables with located losses |
 | `obo-graphs` | yes | no | OBO Graphs 0.3.2 view with located losses |
 | `skos` | yes | no | SKOS Turtle view with located losses |
 | `croissant-1.1` | yes | yes | Croissant 1.1 through the shared research-object model |
@@ -164,8 +165,18 @@ The LPG carriers include exact RDF sideband for reconstruction, while their
 native property-graph interpretation remains a semantic lowering and is
 therefore ledgered. `csvw-exact` preserves terms, graph placement, recursive
 triple terms, reifier bindings, annotations, language, direction, and datatype
-with an empty ledger. OBO Graphs and SKOS are structurally write-only:
-`LiftProfile` has no variants for them.
+with an empty ledger. Curated CSVW terms, OBO Graphs, and SKOS are structurally
+write-only: `LiftProfile` has no variants for them.
+
+`csvw-terms` is a generic caller-authored entity-table lens, not an ontology
+model. Its mandatory configuration explicitly selects source graphs, row
+membership by type and subject IRI, ordered predicate columns, exact IRI or
+literal facets, one/many cardinality, artifact identities, and all limits. Rows
+and multivalues are canonically sorted; ambiguous single values and separator
+collisions fail. Every unrepresented RDF 1.2 row receives a source-located loss
+entry, including named-graph placement, empty graphs, reifiers, and annotations.
+Use `csvw-exact` for archival or reverse mapping and `csvw-terms` for compact,
+human-facing tables.
 
 LPG scope is mandatory. `LpgScope::all()` explicitly requests the complete
 dataset; selective scope can include/exclude exact named graphs and predicates
@@ -212,6 +223,8 @@ The runnable version is
 [`examples/projection_archive.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/projection_archive.rs).
 All five research-object round trips are runnable in
 [`examples/research_object_roundtrip.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/research_object_roundtrip.rs).
+The caller-configured classes/properties/individuals CSVW view is runnable in
+[`examples/csvw_terms.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/csvw_terms.rs).
 
 ## Part of PurRDF
 

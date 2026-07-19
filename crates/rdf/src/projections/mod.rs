@@ -17,6 +17,7 @@
 //! | openCypher | RDF ↔ carrier | Strict reader accepts the complete grammar emitted by PurRDF |
 //! | GraphML 1.0 | RDF ↔ carrier | Strict namespaced XML reader; exact RDF sideband remains authoritative |
 //! | CSVW exact | RDF ↔ carrier | Lossless RDF 1.2 term, quad, reifier, and annotation tables |
+//! | CSVW terms | RDF → view | Caller-declared wide entity tables with located losses |
 //! | OBO Graphs 0.3.2 | RDF → view | Deliberately write-only and loss-ledgered |
 //! | SKOS Turtle | RDF → view | Deliberately write-only and loss-ledgered |
 //! | Croissant 1.1 | RDF ↔ carrier | Shared research-object model with located profile losses |
@@ -27,7 +28,7 @@
 //!
 //! [`project_archive`] provides the profile-tagged production entry point.
 //! [`lift_archive`] accepts only [`LiftProfile`], so the type system cannot pretend
-//! that the two lossy views round-trip. Every operation computes a deterministic
+//! that the three write-only views round-trip. Every operation computes a deterministic
 //! [`purrdf_core::LossLedger`]; deciding whether to display it is a host concern.
 //!
 //! # Configuration and packages
@@ -61,13 +62,16 @@ pub use carrier::{
     lift_archive, project_archive, project_lpg_artifacts_to_sink,
 };
 pub use csvw::{
-    CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig, CsvwContext, CsvwDatatype,
-    CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection, CsvwExactReadOutcome, CsvwForeignKey,
-    CsvwInheritedProperties, CsvwInput, CsvwMappedTableGroup, CsvwMode, CsvwNaturalLanguage,
-    CsvwNumericFormat, CsvwRdfTableMapping, CsvwReadOutcome, CsvwReference, CsvwRow, CsvwSchema,
-    CsvwTable, CsvwTableDirection, CsvwTableGroup, CsvwTextDirection, CsvwTransformation, CsvwTrim,
-    CsvwValue, CsvwVocabulary, CsvwWarning, CsvwWarningKind, CsvwWriteOutcome, CsvwWritePlan,
-    project_csvw, project_csvw_exact, read_csvw, read_csvw_exact, write_csvw,
+    CSVW_TERMS_PROFILE, CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig, CsvwContext,
+    CsvwDatatype, CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection, CsvwExactReadOutcome,
+    CsvwForeignKey, CsvwInheritedProperties, CsvwInput, CsvwMappedTableGroup, CsvwMode,
+    CsvwNaturalLanguage, CsvwNumericFormat, CsvwRdfTableMapping, CsvwReadOutcome, CsvwReference,
+    CsvwRow, CsvwSchema, CsvwTable, CsvwTableDirection, CsvwTableGroup, CsvwTermsCardinality,
+    CsvwTermsColumn, CsvwTermsConfig, CsvwTermsGraphSelection, CsvwTermsIdentityColumn,
+    CsvwTermsLimits, CsvwTermsProjection, CsvwTermsReport, CsvwTermsSelector, CsvwTermsTable,
+    CsvwTermsValueMode, CsvwTextDirection, CsvwTransformation, CsvwTrim, CsvwValue, CsvwVocabulary,
+    CsvwWarning, CsvwWarningKind, CsvwWriteOutcome, CsvwWritePlan, project_csvw,
+    project_csvw_exact, project_csvw_terms, read_csvw, read_csvw_exact, write_csvw,
 };
 pub use error::{ProjectionError, ProjectionErrorKind};
 pub use lpg::{

@@ -66,6 +66,7 @@ fn lpg_config() -> &'static [u8] {
 const TURTLE: &[u8] = b"@prefix ex: <https://example.org/> .\nex:s ex:p ex:o .\n";
 const RESEARCH_SOURCE: &[u8] =
     include_bytes!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl");
+const CSVW_TERMS_CONFIG: &[u8] = include_bytes!("../../rdf/tests/fixtures/csvw-terms.json");
 const RESEARCH_CONFIGS: &[(&str, &[u8])] = &[
     (
         "croissant-1.1",
@@ -393,4 +394,47 @@ fn all_research_object_profiles_project_lift_and_repeat_through_the_cli() {
             "{profile} lifted dataset identity"
         );
     }
+}
+
+#[test]
+fn curated_csvw_terms_projects_deterministically_and_is_absent_from_lift() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write(
+        &dir.path().join("terms.ttl"),
+        b"<https://example.org/term> <https://example.org/label> \"Term\" .\n",
+    );
+    let config = write(&dir.path().join("csvw-terms.json"), CSVW_TERMS_CONFIG);
+    let first = dir.path().join("terms-first.tar");
+    let second = dir.path().join("terms-second.tar");
+    for output in [&first, &second] {
+        let result = run(&[
+            "project",
+            "--profile",
+            "csvw-terms",
+            "--config",
+            &config,
+            &input,
+            output.to_str().expect("archive path"),
+        ]);
+        assert!(
+            result.status.success(),
+            "CSVW terms project failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    assert_eq!(
+        std::fs::read(&first).expect("first archive"),
+        std::fs::read(&second).expect("second archive")
+    );
+    let lifted = run(&[
+        "lift",
+        "--profile",
+        "csvw-terms",
+        "--config",
+        &config,
+        first.to_str().expect("first path"),
+        "-",
+    ]);
+    assert_eq!(lifted.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&lifted.stderr).contains("invalid value 'csvw-terms'"));
 }

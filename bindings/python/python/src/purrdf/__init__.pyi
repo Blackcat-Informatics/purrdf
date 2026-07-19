@@ -32,6 +32,7 @@ type ProjectionProfile = Literal[
     "open-cypher",
     "graphml",
     "csvw-exact",
+    "csvw-terms",
     "obo-graphs",
     "skos",
     "croissant-1.1",

@@ -7,24 +7,26 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_rdf::{
-    CsvwConfig, CsvwContext, CsvwMode, CsvwVocabulary, LiftProfile, LpgConfig, LpgExecutionLimits,
-    LpgIriSelection, LpgNamedGraphSelection, LpgPackageProjection, LpgProgress, LpgScope,
-    LpgStreamProjection, OboGraphsConfig, OboGraphsVocabulary, OboMetadataRoles, OboOwlRoles,
-    OboRdfRoles, ProjectionArtifactSink, ProjectionConfig, ProjectionError, ProjectionLimits,
-    ProjectionProfile, ProjectionTerm, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    CsvwConfig, CsvwContext, CsvwDatatype, CsvwMode, CsvwTermsCardinality, CsvwTermsColumn,
+    CsvwTermsConfig, CsvwTermsGraphSelection, CsvwTermsIdentityColumn, CsvwTermsLimits,
+    CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, CsvwVocabulary, LiftProfile, LpgConfig,
+    LpgExecutionLimits, LpgIriSelection, LpgNamedGraphSelection, LpgPackageProjection, LpgProgress,
+    LpgScope, LpgStreamProjection, OboGraphsConfig, OboGraphsVocabulary, OboMetadataRoles,
+    OboOwlRoles, OboRdfRoles, ProjectionArtifactSink, ProjectionConfig, ProjectionError,
+    ProjectionLimits, ProjectionProfile, ProjectionTerm, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     ResearchObjectConfig, SkosClassRoles, SkosConfig, SkosDocumentationRoles, SkosGraphSelection,
     SkosLabelRoles, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles, lift_archive,
-    parse_dataset, project_archive, project_csvw_exact, project_lpg, project_lpg_csv,
-    project_lpg_csv_to_sink, project_lpg_cypher, project_lpg_cypher_to_sink, project_lpg_graphml,
-    project_lpg_graphml_to_sink, project_neo4j_csv, project_neo4j_csv_to_sink, project_obo_graphs,
-    project_research_object, project_skos, read_csvw_exact, read_lpg_csv, read_lpg_cypher,
-    read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher, write_lpg_graphml,
-    write_neo4j_csv,
+    parse_dataset, project_archive, project_csvw_exact, project_csvw_terms, project_lpg,
+    project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher, project_lpg_cypher_to_sink,
+    project_lpg_graphml, project_lpg_graphml_to_sink, project_neo4j_csv, project_neo4j_csv_to_sink,
+    project_obo_graphs, project_research_object, project_skos, read_csvw_exact, read_lpg_csv,
+    read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher,
+    write_lpg_graphml, write_neo4j_csv,
 };
 
 thread_local! {
@@ -388,9 +390,94 @@ fn csvw_config() -> CsvwConfig {
         CsvwVocabulary::new("http://www.w3.org/ns/csvw#", RDF, RDFS, XSD).expect("CSVW vocabulary"),
         CsvwMode::Standard,
         limits(),
-        20_000,
+        100_000,
     )
     .expect("CSVW config")
+}
+
+fn csvw_datatype(base: impl Into<String>) -> CsvwDatatype {
+    CsvwDatatype {
+        id: None,
+        base: base.into(),
+        format: None,
+        length: None,
+        min_length: None,
+        max_length: None,
+        minimum: None,
+        maximum: None,
+        min_inclusive: None,
+        max_inclusive: None,
+        min_exclusive: None,
+        max_exclusive: None,
+    }
+}
+
+fn csvw_terms_config(graph_selection: CsvwTermsGraphSelection) -> CsvwTermsConfig {
+    let iri = || csvw_datatype(format!("{XSD}anyURI"));
+    let string = || csvw_datatype(format!("{XSD}string"));
+    let column = |name: &str, predicate: String, mode: CsvwTermsValueMode| {
+        CsvwTermsColumn::new(
+            name,
+            BTreeMap::new(),
+            predicate,
+            mode,
+            CsvwTermsCardinality::One,
+            true,
+        )
+        .expect("terms column")
+    };
+    let table = CsvwTermsTable::new(
+        "resources",
+        format!("{EX}catalog/resources.csv"),
+        "resources.csv",
+        CsvwTermsSelector::new(
+            None,
+            BTreeSet::new(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            BTreeSet::from([EX.to_owned()]),
+        )
+        .expect("terms selector"),
+        CsvwTermsIdentityColumn::new(
+            "iri",
+            BTreeMap::from([(String::new(), vec!["IRI".to_owned()])]),
+            iri(),
+        )
+        .expect("identity column"),
+        vec![
+            column(
+                "kind",
+                format!("{EX}type"),
+                CsvwTermsValueMode::iri(iri()).expect("IRI mode"),
+            ),
+            column(
+                "relation",
+                format!("{EX}relation"),
+                CsvwTermsValueMode::iri(iri()).expect("IRI mode"),
+            ),
+            column(
+                "label",
+                format!("{EX}label"),
+                CsvwTermsValueMode::literal(string(), None, None).expect("literal mode"),
+            ),
+        ],
+    )
+    .expect("terms table");
+    CsvwTermsConfig::new(
+        csvw_config(),
+        "csvw-metadata.json",
+        graph_selection,
+        vec![table],
+        CsvwTermsLimits::new(5_000, 20_000, 8).expect("terms limits"),
+    )
+    .expect("terms config")
+}
+
+fn scoped_csvw_terms_config() -> CsvwTermsConfig {
+    csvw_terms_config(
+        CsvwTermsGraphSelection::include(false, BTreeSet::from([format!("{EX}graph-0")]))
+            .expect("one-graph scope"),
+    )
 }
 
 fn obo_config() -> OboGraphsConfig {
@@ -558,6 +645,8 @@ fn benchmark(c: &mut Criterion) {
     let lpg_config = lpg_config();
     let scoped_lpg_config = scoped_lpg_config();
     let csvw_config = csvw_config();
+    let csvw_terms_all_config = csvw_terms_config(CsvwTermsGraphSelection::All);
+    let csvw_terms_scoped_config = scoped_csvw_terms_config();
     let obo_config = obo_config();
     let skos_config = skos_config();
     let research_dataset =
@@ -606,6 +695,25 @@ fn benchmark(c: &mut Criterion) {
     let _ = project_lpg(large_graph_dataset.as_ref(), &lpg_config).expect("large all-scope LPG");
     let _ = project_lpg(large_graph_dataset.as_ref(), &scoped_lpg_config)
         .expect("large selective-scope LPG");
+    let large_csvw_exact =
+        project_csvw_exact(large_graph_dataset.as_ref(), &csvw_config).expect("large exact CSVW");
+    let large_csvw_terms_all =
+        project_csvw_terms(large_graph_dataset.as_ref(), &csvw_terms_all_config)
+            .expect("large all-graph terms CSVW");
+    let large_csvw_terms_scoped =
+        project_csvw_terms(large_graph_dataset.as_ref(), &csvw_terms_scoped_config)
+            .expect("large scoped terms CSVW");
+    assert_eq!(
+        large_csvw_terms_all.report.rows,
+        LARGE_GRAPHS * LARGE_ROWS_PER_GRAPH
+    );
+    assert_eq!(large_csvw_terms_scoped.report.rows, LARGE_ROWS_PER_GRAPH);
+    println!(
+        "[projections] csvw_large_bodies exact={} terms_all={} terms_one_graph={}",
+        large_csvw_exact.package.total_bytes(),
+        large_csvw_terms_all.package.total_bytes(),
+        large_csvw_terms_scoped.package.total_bytes()
+    );
     for carrier in LpgCarrier::ALL {
         let _ = carrier.materialize(large_graph_dataset.as_ref(), &lpg_config);
         let _ = carrier.stream(large_graph_dataset.as_ref(), &lpg_config);
@@ -642,6 +750,17 @@ fn benchmark(c: &mut Criterion) {
     }));
     black_box(report_allocations("csvw_exact_read", || {
         read_csvw_exact(&csvw.package, &csvw_config).expect("CSVW read")
+    }));
+    black_box(report_allocations("csvw_large_exact", || {
+        project_csvw_exact(large_graph_dataset.as_ref(), &csvw_config).expect("large exact CSVW")
+    }));
+    black_box(report_allocations("csvw_terms_all", || {
+        project_csvw_terms(large_graph_dataset.as_ref(), &csvw_terms_all_config)
+            .expect("large all-graph terms CSVW")
+    }));
+    black_box(report_allocations("csvw_terms_one_graph", || {
+        project_csvw_terms(large_graph_dataset.as_ref(), &csvw_terms_scoped_config)
+            .expect("large scoped terms CSVW")
     }));
     black_box(report_allocations("obo_graphs_write", || {
         project_obo_graphs(obo_dataset.as_ref(), &obo_config).expect("OBO write")
@@ -797,6 +916,45 @@ fn benchmark(c: &mut Criterion) {
             });
         });
         exact.finish();
+    }
+
+    {
+        let mut scope = c.benchmark_group("csvw_terms_scope");
+        scope.throughput(Throughput::Elements(LARGE_QUADS as u64));
+        scope.bench_function("exact_20_graphs_12000_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_csvw_exact(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&csvw_config),
+                    )
+                    .expect("large exact CSVW"),
+                );
+            });
+        });
+        scope.bench_function("terms_all_12000_scanned_4000_rows", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_csvw_terms(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&csvw_terms_all_config),
+                    )
+                    .expect("large all-graph terms CSVW"),
+                );
+            });
+        });
+        scope.bench_function("terms_one_graph_12000_scanned_200_rows", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_csvw_terms(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&csvw_terms_scoped_config),
+                    )
+                    .expect("large scoped terms CSVW"),
+                );
+            });
+        });
+        scope.finish();
     }
 
     {

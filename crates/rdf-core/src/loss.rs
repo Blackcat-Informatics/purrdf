@@ -343,6 +343,26 @@ pub const LOSS_SKOS_REIFIER_DROPPED: &str = "skos-reifier-dropped";
 /// RDF→SKOS loss code: a statement annotation is outside the concept view.
 pub const LOSS_SKOS_ANNOTATION_DROPPED: &str = "skos-annotation-dropped";
 
+/// RDF→curated CSVW loss code: a source graph is outside caller scope.
+pub const LOSS_CSVW_TERMS_GRAPH_UNSELECTED: &str = "csvw-terms-graph-unselected";
+/// RDF→curated CSVW loss code: an explicitly empty named graph has no table row.
+pub const LOSS_CSVW_TERMS_EMPTY_GRAPH_DROPPED: &str = "csvw-terms-empty-graph-dropped";
+/// RDF→curated CSVW loss code: an RDF subject cannot be a stable IRI row identity.
+pub const LOSS_CSVW_TERMS_SUBJECT_UNREPRESENTABLE: &str = "csvw-terms-subject-unrepresentable";
+/// RDF→curated CSVW loss code: an IRI subject matches no declared table.
+pub const LOSS_CSVW_TERMS_SUBJECT_UNSELECTED: &str = "csvw-terms-subject-unselected";
+/// RDF→curated CSVW loss code: a selected subject's predicate has no declared column.
+pub const LOSS_CSVW_TERMS_PREDICATE_UNMAPPED: &str = "csvw-terms-predicate-unmapped";
+/// RDF→curated CSVW loss code: an object does not match its column's declared RDF facets.
+pub const LOSS_CSVW_TERMS_OBJECT_UNREPRESENTABLE: &str = "csvw-terms-object-unrepresentable";
+/// RDF→curated CSVW loss code: mapped content omits source named-graph placement.
+pub const LOSS_CSVW_TERMS_NAMED_GRAPH_PLACEMENT_DROPPED: &str =
+    "csvw-terms-named-graph-placement-dropped";
+/// RDF→curated CSVW loss code: an RDF 1.2 reifier binding has no table slot.
+pub const LOSS_CSVW_TERMS_REIFIER_DROPPED: &str = "csvw-terms-reifier-dropped";
+/// RDF→curated CSVW loss code: an RDF 1.2 statement annotation has no table slot.
+pub const LOSS_CSVW_TERMS_ANNOTATION_DROPPED: &str = "csvw-terms-annotation-dropped";
+
 /// RDF→research-object loss code: source named-graph placement is not carried.
 pub const LOSS_RESEARCH_NAMED_GRAPH_DROPPED: &str = "research-object-named-graph-dropped";
 /// RDF→research-object loss code: an explicitly empty named graph is not carried.
@@ -523,6 +543,45 @@ const RDF_SKOS_PROFILE: &[(&str, &str)] = &[
     ),
 ];
 
+const RDF_CSVW_TERMS_PROFILE: &[(&str, &str)] = &[
+    (
+        LOSS_CSVW_TERMS_ANNOTATION_DROPPED,
+        "An RDF 1.2 statement annotation has no caller-declared curated CSVW column and is omitted.",
+    ),
+    (
+        LOSS_CSVW_TERMS_EMPTY_GRAPH_DROPPED,
+        "An explicitly empty named graph has no row or cell in a curated CSVW table and is omitted.",
+    ),
+    (
+        LOSS_CSVW_TERMS_GRAPH_UNSELECTED,
+        "A source quad belongs to a graph outside the caller's explicit curated-table graph scope and is omitted.",
+    ),
+    (
+        LOSS_CSVW_TERMS_NAMED_GRAPH_PLACEMENT_DROPPED,
+        "A represented statement came from a selected named graph; its subject, predicate, and object remain while named-graph placement is absent from the wide table.",
+    ),
+    (
+        LOSS_CSVW_TERMS_OBJECT_UNREPRESENTABLE,
+        "A mapped predicate's object does not match the column's caller-declared IRI or exact literal datatype/language/direction facets and is omitted.",
+    ),
+    (
+        LOSS_CSVW_TERMS_PREDICATE_UNMAPPED,
+        "A statement about a selected row subject uses no predicate column declared for that table and is omitted.",
+    ),
+    (
+        LOSS_CSVW_TERMS_REIFIER_DROPPED,
+        "An RDF 1.2 reifier binding has no row or cell in the caller-declared curated CSVW tables and is omitted.",
+    ),
+    (
+        LOSS_CSVW_TERMS_SUBJECT_UNREPRESENTABLE,
+        "A blank-node or quoted-triple subject cannot serve as an exact stable IRI row identity and is omitted rather than assigned a fabricated identity.",
+    ),
+    (
+        LOSS_CSVW_TERMS_SUBJECT_UNSELECTED,
+        "An IRI subject does not match any caller-declared table selector and its statements are omitted.",
+    ),
+];
+
 const RDF_RESEARCH_OBJECT_PROFILE: &[(&str, &str)] = &[
     (
         LOSS_RESEARCH_ANNOTATION_DROPPED,
@@ -626,6 +685,11 @@ pub fn rdf_to_obo_graphs_loss_ledger() -> LossLedger {
 /// Closed RDF 1.2 dataset→SKOS concept-scheme view contract.
 pub fn rdf_to_skos_loss_ledger() -> LossLedger {
     contract_profile("rdf-1.2-dataset", "skos", RDF_SKOS_PROFILE)
+}
+
+/// Closed RDF 1.2 dataset→caller-declared curated CSVW terms contract.
+pub fn rdf_to_csvw_terms_loss_ledger() -> LossLedger {
+    contract_profile("rdf-1.2-dataset", "csvw-terms", RDF_CSVW_TERMS_PROFILE)
 }
 
 /// Closed RDF 1.2 dataset→versioned research-object projection contract.
@@ -1668,6 +1732,7 @@ fn static_str(cow: &Cow<'static, str>) -> &'static str {
 /// ([`rdf_to_okf_loss_ledger`] / [`okf_to_rdf_loss_ledger`]), RDF↔LPG
 /// ([`rdf_to_lpg_loss_ledger`] / [`lpg_to_rdf_loss_ledger`]), RDF→OBO Graphs
 /// ([`rdf_to_obo_graphs_loss_ledger`]), RDF→SKOS ([`rdf_to_skos_loss_ledger`]),
+/// RDF→curated CSVW terms ([`rdf_to_csvw_terms_loss_ledger`]),
 /// every bidirectional versioned research-object profile, plus
 /// [`transcode_and_shapes_entries`] (the full
 /// syntax/projection transcode matrix over `SYNTAX_CODECS` × `(SYNTAX_CODECS ∪
@@ -1689,6 +1754,7 @@ fn registry_entries() -> Vec<LossEntry> {
     entries.extend_from_slice(lpg_to_rdf_loss_ledger().entries());
     entries.extend_from_slice(rdf_to_obo_graphs_loss_ledger().entries());
     entries.extend_from_slice(rdf_to_skos_loss_ledger().entries());
+    entries.extend_from_slice(rdf_to_csvw_terms_loss_ledger().entries());
     for profile in RESEARCH_OBJECT_CODECS {
         entries.extend_from_slice(rdf_to_research_object_loss_ledger(profile).entries());
         entries.extend_from_slice(research_object_to_rdf_loss_ledger(profile).entries());
@@ -2307,6 +2373,12 @@ mod tests {
                 rdf_to_skos_loss_ledger(),
                 RDF_SKOS_PROFILE,
             ),
+            (
+                "rdf-1.2-dataset",
+                "csvw-terms",
+                rdf_to_csvw_terms_loss_ledger(),
+                RDF_CSVW_TERMS_PROFILE,
+            ),
         ];
 
         for (from, to, ledger, declared) in contracts {
@@ -2334,6 +2406,7 @@ mod tests {
                 RDF_OBO_GRAPHS_PROFILE,
             ),
             ("rdf-1.2-dataset", "skos", RDF_SKOS_PROFILE),
+            ("rdf-1.2-dataset", "csvw-terms", RDF_CSVW_TERMS_PROFILE),
         ] {
             assert!(json.contains(&format!("\"from\": \"{from}\"")));
             assert!(json.contains(&format!("\"to\": \"{to}\"")));

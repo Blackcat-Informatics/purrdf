@@ -1967,6 +1967,69 @@
     "note": "An RDF statement outside the complete caller-configured research-object role map is omitted from the native document."
   },
   {
+    "code": "csvw-terms-annotation-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "csvw-terms",
+    "intentional": true,
+    "note": "An RDF 1.2 statement annotation has no caller-declared curated CSVW column and is omitted."
+  },
+  {
+    "code": "csvw-terms-empty-graph-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "csvw-terms",
+    "intentional": true,
+    "note": "An explicitly empty named graph has no row or cell in a curated CSVW table and is omitted."
+  },
+  {
+    "code": "csvw-terms-graph-unselected",
+    "from": "rdf-1.2-dataset",
+    "to": "csvw-terms",
+    "intentional": true,
+    "note": "A source quad belongs to a graph outside the caller's explicit curated-table graph scope and is omitted."
+  },
+  {
+    "code": "csvw-terms-named-graph-placement-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "csvw-terms",
+    "intentional": true,
+    "note": "A represented statement came from a selected named graph; its subject, predicate, and object remain while named-graph placement is absent from the wide table."
+  },
+  {
+    "code": "csvw-terms-object-unrepresentable",
+    "from": "rdf-1.2-dataset",
+    "to": "csvw-terms",
+    "intentional": true,
+    "note": "A mapped predicate's object does not match the column's caller-declared IRI or exact literal datatype/language/direction facets and is omitted."
+  },
+  {
+    "code": "csvw-terms-predicate-unmapped",
+    "from": "rdf-1.2-dataset",
+    "to": "csvw-terms",
+    "intentional": true,
+    "note": "A statement about a selected row subject uses no predicate column declared for that table and is omitted."
+  },
+  {
+    "code": "csvw-terms-reifier-dropped",
+    "from": "rdf-1.2-dataset",
+    "to": "csvw-terms",
+    "intentional": true,
+    "note": "An RDF 1.2 reifier binding has no row or cell in the caller-declared curated CSVW tables and is omitted."
+  },
+  {
+    "code": "csvw-terms-subject-unrepresentable",
+    "from": "rdf-1.2-dataset",
+    "to": "csvw-terms",
+    "intentional": true,
+    "note": "A blank-node or quoted-triple subject cannot serve as an exact stable IRI row identity and is omitted rather than assigned a fabricated identity."
+  },
+  {
+    "code": "csvw-terms-subject-unselected",
+    "from": "rdf-1.2-dataset",
+    "to": "csvw-terms",
+    "intentional": true,
+    "note": "An IRI subject does not match any caller-declared table selector and its statements are omitted."
+  },
+  {
     "code": "research-object-annotation-dropped",
     "from": "rdf-1.2-dataset",
     "to": "datacite-4.6",
