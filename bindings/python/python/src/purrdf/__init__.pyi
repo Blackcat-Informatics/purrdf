@@ -33,6 +33,7 @@ type ProjectionProfile = Literal[
     "graphml",
     "csvw-exact",
     "csvw-terms",
+    "okf-terms",
     "obo-graphs",
     "skos",
     "croissant-1.1",

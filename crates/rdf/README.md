@@ -141,7 +141,7 @@ entries; ambiguous profile data hard-fails.
 
 ### Graph, tabular, and research-object projection archives
 
-All thirteen profiles use the same canonical USTAR package surface and strict,
+All fourteen profiles use the same canonical USTAR package surface and strict,
 profile-tagged configuration. PurRDF does not choose vocabulary, identity,
 profile context, or resource limits for the caller.
 
@@ -153,6 +153,7 @@ profile context, or resource limits for the caller.
 | `graphml` | yes | yes | GraphML 1.0 with strict XML validation |
 | `csvw-exact` | yes | yes | Lossless RDF 1.2 tables and CSVW metadata |
 | `csvw-terms` | yes | no | Caller-declared scoped entity tables with located losses |
+| `okf-terms` | yes | no | Caller-declared OKF v0.1 concept bundle with located losses |
 | `obo-graphs` | yes | no | OBO Graphs 0.3.2 view with located losses |
 | `skos` | yes | no | SKOS Turtle view with located losses |
 | `croissant-1.1` | yes | yes | Croissant 1.1 through the shared research-object model |
@@ -165,7 +166,7 @@ The LPG carriers include exact RDF sideband for reconstruction, while their
 native property-graph interpretation remains a semantic lowering and is
 therefore ledgered. `csvw-exact` preserves terms, graph placement, recursive
 triple terms, reifier bindings, annotations, language, direction, and datatype
-with an empty ledger. Curated CSVW terms, OBO Graphs, and SKOS are structurally
+with an empty ledger. Curated CSVW/OKF terms, OBO Graphs, and SKOS are structurally
 write-only: `LiftProfile` has no variants for them.
 
 `csvw-terms` is a generic caller-authored entity-table lens, not an ontology
@@ -177,6 +178,15 @@ collisions fail. Every unrepresented RDF 1.2 row receives a source-located loss
 entry, including named-graph placement, empty graphs, reifiers, and annotations.
 Use `csvw-exact` for archival or reverse mapping and `csvw-terms` for compact,
 human-facing tables.
+
+`okf-terms` is a generic caller-authored concept-document lens. Its mandatory
+configuration supplies graph scope, category classifiers, paths, every standard
+and extension field mapping, body/link layout, index prose, the in-band fidelity
+declaration, and all limits. Concept documents carry OKF frontmatter; reserved
+category/root `index.md` files are navigation Markdown without concept
+frontmatter. Ambiguous categories, unsafe or colliding paths, incompatible
+values, and limit breaches hard-fail. Uncarried RDF 1.2 rows receive located
+losses.
 
 LPG scope is mandatory. `LpgScope::all()` explicitly requests the complete
 dataset; selective scope can include/exclude exact named graphs and predicates

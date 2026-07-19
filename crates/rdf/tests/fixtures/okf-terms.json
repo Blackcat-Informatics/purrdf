@@ -1,0 +1,180 @@
+{
+  "profile": "okf-terms",
+  "config": {
+    "graph_selection": {
+      "kind": "all"
+    },
+    "categories": {
+      "class": {
+        "directory": "classes",
+        "document_type": "Class",
+        "index_heading": "Classes",
+        "index_description": "Terms classified as example classes.",
+        "selector": {
+          "type_predicate": "https://example.org/type",
+          "any_types": [
+            "https://example.org/Class"
+          ],
+          "all_types": [],
+          "none_types": [],
+          "iri_prefixes": [
+            "https://example.org/"
+          ]
+        }
+      },
+      "property": {
+        "directory": "properties",
+        "document_type": "Property",
+        "index_heading": "Properties",
+        "index_description": "Terms classified as example properties.",
+        "selector": {
+          "type_predicate": "https://example.org/type",
+          "any_types": [
+            "https://example.org/Property"
+          ],
+          "all_types": [],
+          "none_types": [],
+          "iri_prefixes": [
+            "https://example.org/"
+          ]
+        }
+      }
+    },
+    "path_strategy": {
+      "kind": "subject-local-name"
+    },
+    "frontmatter": {
+      "title": {
+        "predicates": [
+          "https://example.org/label"
+        ],
+        "cardinality": "zero-or-one",
+        "value_mode": {
+          "kind": "text",
+          "rendering": "lexical"
+        }
+      },
+      "description": {
+        "predicates": [
+          "https://example.org/description"
+        ],
+        "cardinality": "zero-or-one",
+        "value_mode": {
+          "kind": "text",
+          "rendering": "lexical"
+        }
+      },
+      "resource": {
+        "kind": "subject"
+      },
+      "tags": {
+        "predicates": [
+          "https://example.org/tag"
+        ],
+        "cardinality": "many",
+        "value_mode": {
+          "kind": "text",
+          "rendering": "lexical"
+        }
+      },
+      "timestamp": {
+        "predicates": [
+          "https://example.org/updated"
+        ],
+        "cardinality": "zero-or-one",
+        "value_mode": {
+          "kind": "date-time"
+        }
+      },
+      "extensions": {
+        "active": {
+          "predicates": [
+            "https://example.org/active"
+          ],
+          "cardinality": "zero-or-one",
+          "value_mode": {
+            "kind": "boolean"
+          }
+        },
+        "count": {
+          "predicates": [
+            "https://example.org/count"
+          ],
+          "cardinality": "zero-or-one",
+          "value_mode": {
+            "kind": "integer"
+          }
+        },
+        "identity": {
+          "predicates": [
+            "https://example.org/type"
+          ],
+          "cardinality": "many",
+          "value_mode": {
+            "kind": "iri"
+          }
+        },
+        "score": {
+          "predicates": [
+            "https://example.org/score"
+          ],
+          "cardinality": "zero-or-one",
+          "value_mode": {
+            "kind": "decimal"
+          }
+        }
+      }
+    },
+    "body_sections": [
+      {
+        "heading": "Definition",
+        "predicates": [
+          "https://example.org/description"
+        ],
+        "style": "paragraphs",
+        "value_mode": {
+          "kind": "text",
+          "rendering": "lexical"
+        }
+      },
+      {
+        "heading": "Notes",
+        "predicates": [
+          "https://example.org/note"
+        ],
+        "style": "bullets",
+        "value_mode": {
+          "kind": "markdown-literal"
+        }
+      }
+    ],
+    "link_sections": [
+      {
+        "heading": "Relations",
+        "predicates": [
+          "https://example.org/related"
+        ],
+        "relation_label": "related",
+        "style": "bullets",
+        "path_style": "relative",
+        "targets": "include-external-iris"
+      }
+    ],
+    "index": {
+      "root_heading": "Example knowledge",
+      "categories_heading": "Categories",
+      "fidelity_heading": "Projection fidelity",
+      "loss_declaration": "This bundle carries only the caller-configured concept view; consult the located loss ledger for omitted RDF 1.2 records."
+    },
+    "limits": {
+      "max_artifacts": 16,
+      "max_artifact_bytes": 1000000,
+      "max_total_bytes": 4000000,
+      "max_archive_bytes": 5000000,
+      "max_term_depth": 16
+    },
+    "max_records": 1000,
+    "max_concepts": 10,
+    "max_values_per_field": 100
+  }
+}

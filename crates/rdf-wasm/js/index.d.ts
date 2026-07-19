@@ -424,6 +424,7 @@ export type ProjectionProfile =
   | "graphml"
   | "csvw-exact"
   | "csvw-terms"
+  | "okf-terms"
   | "obo-graphs"
   | "skos"
   | "croissant-1.1"
@@ -434,7 +435,7 @@ export type ProjectionProfile =
 
 export type LiftProfile = Exclude<
   ProjectionProfile,
-  "csvw-terms" | "obo-graphs" | "skos"
+  "csvw-terms" | "okf-terms" | "obo-graphs" | "skos"
 >;
 
 export interface ProjectionLossLedger {

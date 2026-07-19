@@ -12,14 +12,15 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     CroissantConfig, CsvwConfig, CsvwTermsConfig, DataCiteConfig, DcatConfig, FrictionlessConfig,
-    LpgConfig, LpgProgressObserver, LpgStreamProjection, OboGraphsConfig, ProjectionArtifactSink,
-    ProjectionError, ProjectionLimits, ProjectionPackage, RoCrateConfig, SkosConfig, lift_lpg,
-    project_croissant, project_csvw_exact, project_csvw_terms, project_datacite, project_dcat,
-    project_frictionless, project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher,
-    project_lpg_cypher_to_sink, project_lpg_graphml, project_lpg_graphml_to_sink,
-    project_neo4j_csv, project_neo4j_csv_to_sink, project_obo_graphs, project_ro_crate,
-    project_skos, read_croissant, read_csvw_exact, read_datacite, read_dcat, read_frictionless,
-    read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, read_ro_crate,
+    LpgConfig, LpgProgressObserver, LpgStreamProjection, OboGraphsConfig, OkfGenerationConfig,
+    ProjectionArtifactSink, ProjectionError, ProjectionLimits, ProjectionPackage, RoCrateConfig,
+    SkosConfig, lift_lpg, project_croissant, project_csvw_exact, project_csvw_terms,
+    project_datacite, project_dcat, project_frictionless, project_lpg_csv, project_lpg_csv_to_sink,
+    project_lpg_cypher, project_lpg_cypher_to_sink, project_lpg_graphml,
+    project_lpg_graphml_to_sink, project_neo4j_csv, project_neo4j_csv_to_sink, project_obo_graphs,
+    project_okf_terms, project_ro_crate, project_skos, read_croissant, read_csvw_exact,
+    read_datacite, read_dcat, read_frictionless, read_lpg_csv, read_lpg_cypher, read_lpg_graphml,
+    read_neo4j_csv, read_ro_crate,
 };
 
 const OBO_GRAPHS_PATH: &str = "obo-graphs.json";
@@ -41,6 +42,8 @@ pub enum ProjectionProfile {
     CsvwExact,
     /// Caller-declared curated CSVW terms view (write-only).
     CsvwTerms,
+    /// Caller-declared OKF v0.1 concept-bundle view (write-only).
+    OkfTerms,
     /// OBO Graphs 0.3.2 JSON view (write-only).
     OboGraphs,
     /// SKOS Turtle concept-scheme view (write-only).
@@ -72,6 +75,7 @@ impl ProjectionProfile {
             Self::Graphml => "graphml",
             Self::CsvwExact => "csvw-exact",
             Self::CsvwTerms => "csvw-terms",
+            Self::OkfTerms => "okf-terms",
             Self::OboGraphs => "obo-graphs",
             Self::Skos => "skos",
             Self::Croissant11 => "croissant-1.1",
@@ -117,6 +121,7 @@ impl FromStr for ProjectionProfile {
             "graphml" => Ok(Self::Graphml),
             "csvw-exact" => Ok(Self::CsvwExact),
             "csvw-terms" => Ok(Self::CsvwTerms),
+            "okf-terms" => Ok(Self::OkfTerms),
             "obo-graphs" => Ok(Self::OboGraphs),
             "skos" => Ok(Self::Skos),
             "croissant-1.1" => Ok(Self::Croissant11),
@@ -133,7 +138,7 @@ impl FromStr for ProjectionProfile {
 
 /// Closed set of profiles accepted by the lift operation.
 ///
-/// Curated CSVW terms, OBO Graphs, and SKOS cannot be constructed as this type:
+/// Curated CSVW/OKF terms, OBO Graphs, and SKOS cannot be constructed as this type:
 /// they are deliberately write-only views rather than pretend round-trip carriers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -242,6 +247,8 @@ pub enum ProjectionConfig {
     CsvwExact(CsvwConfig),
     /// Caller-declared curated CSVW terms configuration.
     CsvwTerms(Box<CsvwTermsConfig>),
+    /// Caller-declared OKF v0.1 concept-bundle configuration.
+    OkfTerms(Box<OkfGenerationConfig>),
     /// OBO Graphs 0.3.2 configuration.
     OboGraphs(Box<OboGraphsConfig>),
     /// SKOS concept-scheme configuration.
@@ -297,6 +304,7 @@ impl ProjectionConfig {
             Self::Graphml(_) => ProjectionProfile::Graphml,
             Self::CsvwExact(_) => ProjectionProfile::CsvwExact,
             Self::CsvwTerms(_) => ProjectionProfile::CsvwTerms,
+            Self::OkfTerms(_) => ProjectionProfile::OkfTerms,
             Self::OboGraphs(_) => ProjectionProfile::OboGraphs,
             Self::Skos(_) => ProjectionProfile::Skos,
             Self::Croissant11(_) => ProjectionProfile::Croissant11,
@@ -316,6 +324,7 @@ impl ProjectionConfig {
             | Self::Graphml(config) => config.limits(),
             Self::CsvwExact(config) => config.limits(),
             Self::CsvwTerms(config) => config.limits(),
+            Self::OkfTerms(config) => config.limits(),
             Self::OboGraphs(config) => config.limits(),
             Self::Skos(config) => config.limits(),
             Self::Croissant11(config) => config.common().limits(),
@@ -392,6 +401,10 @@ pub fn project_archive<D: DatasetView>(
         }
         ProjectionConfig::CsvwTerms(config) => {
             let outcome = project_csvw_terms(view, config)?;
+            (outcome.package, outcome.loss_ledger)
+        }
+        ProjectionConfig::OkfTerms(config) => {
+            let outcome = project_okf_terms(view, config)?;
             (outcome.package, outcome.loss_ledger)
         }
         ProjectionConfig::OboGraphs(config) => {
@@ -482,7 +495,7 @@ where
 ///
 /// Rejects malformed/non-canonical archives, a profile/config mismatch, a carrier
 /// outside its closed grammar, inconsistent sideband data, or an invalid lifted
-/// dataset. Curated CSVW terms, OBO Graphs, and SKOS are unrepresentable as
+/// dataset. Curated CSVW/OKF terms, OBO Graphs, and SKOS are unrepresentable as
 /// [`LiftProfile`].
 pub fn lift_archive(
     archive: &[u8],
@@ -576,6 +589,7 @@ mod tests {
         "../../tests/fixtures/research-objects/carrier/frictionless-data-package-1.json"
     );
     const CSVW_TERMS_CONFIG: &[u8] = include_bytes!("../../tests/fixtures/csvw-terms.json");
+    const OKF_TERMS_CONFIG: &[u8] = include_bytes!("../../tests/fixtures/okf-terms.json");
     fn limits() -> ProjectionLimits {
         ProjectionLimits::new(16, 1_000_000, 4_000_000, 5_000_000, 16).expect("limits")
     }
@@ -676,6 +690,7 @@ mod tests {
         assert!("skos".parse::<LiftProfile>().is_err());
         assert!("obo-graphs".parse::<LiftProfile>().is_err());
         assert!("csvw-terms".parse::<LiftProfile>().is_err());
+        assert!("okf-terms".parse::<LiftProfile>().is_err());
     }
 
     #[test]
@@ -700,6 +715,23 @@ mod tests {
                 .entries()
                 .iter()
                 .all(|entry| entry.location.is_some())
+        );
+    }
+
+    #[test]
+    fn curated_okf_terms_has_a_strict_unified_write_only_profile() {
+        let config = ProjectionConfig::from_json(OKF_TERMS_CONFIG).expect("OKF terms config");
+        assert_eq!(config.profile(), ProjectionProfile::OkfTerms);
+        assert!(!ProjectionProfile::OkfTerms.is_bidirectional());
+        assert_eq!(
+            "okf-terms".parse::<ProjectionProfile>(),
+            Ok(ProjectionProfile::OkfTerms)
+        );
+        assert!("okf-terms".parse::<LiftProfile>().is_err());
+        let encoded = config.to_json().expect("serialize OKF terms config");
+        assert_eq!(
+            ProjectionConfig::from_json(&encoded).expect("reparse OKF terms config"),
+            config
         );
     }
 

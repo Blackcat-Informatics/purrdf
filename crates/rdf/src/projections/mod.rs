@@ -18,6 +18,7 @@
 //! | GraphML 1.0 | RDF ↔ carrier | Strict namespaced XML reader; exact RDF sideband remains authoritative |
 //! | CSVW exact | RDF ↔ carrier | Lossless RDF 1.2 term, quad, reifier, and annotation tables |
 //! | CSVW terms | RDF → view | Caller-declared wide entity tables with located losses |
+//! | OKF terms | RDF → view | Caller-declared concept documents and indexes with located losses |
 //! | OBO Graphs 0.3.2 | RDF → view | Deliberately write-only and loss-ledgered |
 //! | SKOS Turtle | RDF → view | Deliberately write-only and loss-ledgered |
 //! | Croissant 1.1 | RDF ↔ carrier | Shared research-object model with located profile losses |
@@ -28,7 +29,7 @@
 //!
 //! [`project_archive`] provides the profile-tagged production entry point.
 //! [`lift_archive`] accepts only [`LiftProfile`], so the type system cannot pretend
-//! that the three write-only views round-trip. Every operation computes a deterministic
+//! that the four write-only views round-trip. Every operation computes a deterministic
 //! [`purrdf_core::LossLedger`]; deciding whether to display it is a host concern.
 //!
 //! # Configuration and packages

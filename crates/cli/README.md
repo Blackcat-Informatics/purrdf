@@ -239,6 +239,7 @@ profile/config mismatch, an unknown field, or a breached limit is a hard error.
 | `graphml` | GraphML 1.0 | yes |
 | `csvw-exact` | Exact RDF 1.2 CSVW table group | yes |
 | `csvw-terms` | Caller-declared curated CSVW entity tables | no |
+| `okf-terms` | Caller-declared OKF v0.1 concept bundle | no |
 | `obo-graphs` | OBO Graphs 0.3.2 JSON | no |
 | `skos` | SKOS Turtle concept-scheme view | no |
 
@@ -276,7 +277,7 @@ purrdf --loss-ledger=project.loss.json project \
 The archive bytes are deterministic for the same dataset and configuration.
 LPG profiles retain exact RDF sideband for reconstruction, while the semantic
 lowering into a property graph remains visible in the ledger. `csvw-exact` is
-lossless. Curated CSVW terms, OBO Graphs, and SKOS are intentionally lossy views.
+lossless. Curated CSVW/OKF terms, OBO Graphs, and SKOS are intentionally lossy views.
 
 ## `lift`
 
