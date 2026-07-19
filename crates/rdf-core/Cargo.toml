@@ -117,6 +117,13 @@ name = "intern_content_id"
 harness = false
 
 [[bench]]
+# SSSOM document-layout hot paths: validated column construction and sparse
+# deterministic serialization over a retained source layout. Report-only; no
+# timing threshold is asserted.
+name = "sssom"
+harness = false
+
+[[bench]]
 # Succinct `pack` codec end-to-end harness: `PackBuilder::build_bytes`
 # (encode), `PackView::from_bytes` (open), `quads_for_pattern` over a
 # `PackView` for subject/predicate/object-bound and full-scan shapes, and

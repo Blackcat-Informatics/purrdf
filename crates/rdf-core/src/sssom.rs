@@ -390,7 +390,6 @@ impl SssomColumnLayout {
         S: Into<String>,
     {
         let mut retained = Vec::new();
-        let mut seen = BTreeSet::new();
         for column in columns {
             let column = column.into();
             if column.is_empty() {
@@ -399,7 +398,7 @@ impl SssomColumnLayout {
             if column.contains(['\t', '\r', '\n']) {
                 return Err(SssomColumnLayoutError::InvalidDelimiter(column));
             }
-            if !seen.insert(column.clone()) {
+            if retained.contains(&column) {
                 return Err(SssomColumnLayoutError::DuplicateName(column));
             }
             retained.push(column);
@@ -762,7 +761,7 @@ fn parse_body(
         .iter()
         .map(str::to_owned)
         .collect();
-    let column_layout = SssomColumnLayout::new(columns.clone()).map_err(|error| {
+    let column_layout = SssomColumnLayout::new(columns).map_err(|error| {
         RdfDiagnostic::error(
             "sssom-tsv-parse",
             format!("invalid TSV column declaration: {error}"),
@@ -782,7 +781,7 @@ fn parse_body(
             RdfDiagnostic::error("sssom-tsv-parse", format!("malformed TSV row: {e}"))
                 .with_location(RdfLocation::default().with_line(line_no))
         })?;
-        mappings.push(parse_row(&columns, &record, line_no)?);
+        mappings.push(parse_row(column_layout.columns(), &record, line_no)?);
     }
     Ok((column_layout, mappings))
 }
@@ -1057,82 +1056,59 @@ pub fn serialize_tsv(set: &SssomMappingSet) -> String {
 /// Choose retained or inferred columns, appending newly introduced data in a
 /// deterministic order without discarding a parsed zero-row declaration.
 fn serialization_columns(set: &SssomMappingSet) -> Vec<String> {
+    let mut populated = [false; SSSOM_ORDER.len()];
+    let mut extra_columns = BTreeSet::new();
+    for mapping in &set.mappings {
+        populated[0] |= !mapping.subject_id.is_empty();
+        populated[1] |= mapping
+            .subject_label
+            .as_deref()
+            .is_some_and(|value| !value.is_empty());
+        populated[2] |= !mapping.predicate_id.is_empty();
+        populated[3] |= !mapping.object_id.is_empty();
+        populated[4] |= mapping
+            .object_label
+            .as_deref()
+            .is_some_and(|value| !value.is_empty());
+        populated[5] |= !mapping.mapping_justification.is_empty();
+        populated[6] |= mapping.confidence.is_some();
+        populated[7] |= mapping
+            .comment
+            .as_deref()
+            .is_some_and(|value| !value.is_empty());
+        extra_columns.extend(mapping.extras.keys().map(String::as_str));
+    }
+
     let mut columns = if set.column_layout.is_inferred() {
         SSSOM_ORDER
             .iter()
-            .copied()
-            .filter(|column| {
-                SSSOM_ALWAYS.contains(column)
-                    || set
-                        .mappings
-                        .iter()
-                        .any(|mapping| cell_is_populated(mapping, column))
+            .enumerate()
+            .filter_map(|(index, column)| {
+                (SSSOM_ALWAYS.contains(column) || populated[index]).then_some(*column)
             })
             .map(str::to_owned)
             .collect()
     } else {
         set.column_layout.columns().to_vec()
     };
-    let mut seen: BTreeSet<String> = columns.iter().cloned().collect();
 
     // A caller may populate a known field that was absent from a retained source
     // layout. Append such fields in the canonical SSSOM order.
-    for column in SSSOM_ORDER {
-        if !seen.contains(*column)
-            && set
-                .mappings
-                .iter()
-                .any(|mapping| cell_is_populated(mapping, column))
-        {
-            let column = (*column).to_owned();
-            seen.insert(column.clone());
-            columns.push(column);
+    for (index, column) in SSSOM_ORDER.iter().enumerate() {
+        if populated[index] && !columns.iter().any(|candidate| candidate == column) {
+            columns.push((*column).to_owned());
         }
     }
 
     // Extension columns absent from the retained declaration follow known
     // fields in lexical order. Presence in `extras` is itself a declared caller
     // intent, even when every current value is blank.
-    let extra_columns: BTreeSet<&str> = set
-        .mappings
-        .iter()
-        .flat_map(|mapping| mapping.extras.keys().map(String::as_str))
-        .collect();
     for column in extra_columns {
-        if !seen.contains(column) {
-            let column = column.to_owned();
-            seen.insert(column.clone());
-            columns.push(column);
+        if !columns.iter().any(|candidate| candidate == column) {
+            columns.push(column.to_owned());
         }
     }
     columns
-}
-
-/// Whether a named SSSOM cell carries a value.
-fn cell_is_populated(mapping: &SssomMapping, column: &str) -> bool {
-    match column {
-        "subject_id" => !mapping.subject_id.is_empty(),
-        "subject_label" => mapping
-            .subject_label
-            .as_deref()
-            .is_some_and(|value| !value.is_empty()),
-        "predicate_id" => !mapping.predicate_id.is_empty(),
-        "object_id" => !mapping.object_id.is_empty(),
-        "object_label" => mapping
-            .object_label
-            .as_deref()
-            .is_some_and(|value| !value.is_empty()),
-        "mapping_justification" => !mapping.mapping_justification.is_empty(),
-        "confidence" => mapping.confidence.is_some(),
-        "comment" => mapping
-            .comment
-            .as_deref()
-            .is_some_and(|value| !value.is_empty()),
-        other => mapping
-            .extras
-            .get(other)
-            .is_some_and(|value| !value.is_empty()),
-    }
 }
 
 /// Push a `# key: value` header line when the scalar is present.
@@ -1726,6 +1702,56 @@ ex:A\tskos:exactMatch\tex:B
         assert_eq!(
             table_lines.next(),
             Some("ex:B\toriginal\tex:A\tskos:exactMatch\tnew comment\tfirst\t")
+        );
+    }
+
+    #[test]
+    fn inferred_layout_unions_sparse_known_and_extension_columns() {
+        let mappings = vec![
+            SssomMapping {
+                subject_id: "ex:A".to_owned(),
+                subject_label: Some("subject label".to_owned()),
+                predicate_id: "skos:exactMatch".to_owned(),
+                object_id: "ex:B".to_owned(),
+                mapping_justification: "semapv:ManualMappingCuration".to_owned(),
+                extras: BTreeMap::from([
+                    ("x_shared".to_owned(), "one".to_owned()),
+                    ("z_last".to_owned(), "z".to_owned()),
+                ]),
+                ..SssomMapping::default()
+            },
+            SssomMapping {
+                subject_id: "ex:C".to_owned(),
+                predicate_id: "skos:exactMatch".to_owned(),
+                object_id: "ex:D".to_owned(),
+                object_label: Some("object label".to_owned()),
+                mapping_justification: "semapv:ManualMappingCuration".to_owned(),
+                comment: Some("row comment".to_owned()),
+                extras: BTreeMap::from([
+                    ("a_first".to_owned(), "a".to_owned()),
+                    ("x_shared".to_owned(), "two".to_owned()),
+                ]),
+                ..SssomMapping::default()
+            },
+            SssomMapping {
+                subject_id: "ex:E".to_owned(),
+                predicate_id: "skos:exactMatch".to_owned(),
+                object_id: "ex:F".to_owned(),
+                mapping_justification: "semapv:ManualMappingCuration".to_owned(),
+                confidence: Some(0.5),
+                extras: BTreeMap::from([("x_blank".to_owned(), String::new())]),
+                ..SssomMapping::default()
+            },
+        ];
+        let set = SssomMappingSet::new(SssomMeta::default(), mappings);
+
+        assert_eq!(
+            serialize_tsv(&set).lines().next(),
+            Some(concat!(
+                "subject_id\tsubject_label\tpredicate_id\tobject_id\tobject_label\t",
+                "mapping_justification\tconfidence\tcomment\t",
+                "a_first\tx_blank\tx_shared\tz_last"
+            ))
         );
     }
 
