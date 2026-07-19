@@ -23,7 +23,7 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // JSON-LD context engine, and scoped LPG mapper account for earlier reviewed
 // increases. The always-on curated CSVW and OKF terms mappers, their closed
 // located-loss contracts, and shared host dispatch account for this one. Node
-// 26/npm 12 measured a 2_492_041-byte tarball and 7_353_335 unpacked bytes.
+// 26/npm 12 measured a 2_491_001-byte tarball and 7_350_572 unpacked bytes.
 // Both ceilings retain about 3% headroom for supported packagers.
 const MAX_TARBALL_BYTES = 2_570_000;
 const MAX_UNPACKED_BYTES = 7_580_000;

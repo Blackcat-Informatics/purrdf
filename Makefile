@@ -4,7 +4,7 @@
 # Match Cargo's effective target directory, including `build.target-dir` from
 # host/workspace configuration. An explicit environment or command-line value
 # still wins through `?=`.
-CARGO_TARGET_DIR ?= $(shell cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+CARGO_TARGET_DIR ?= $(or $(shell cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null),target)
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
 .PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
@@ -30,7 +30,7 @@ BINARYEN_VERSION := 130
 # engines, the native format registry (now including JSON-LD/YAML-LD),
 # deterministic layout, SVG export, and all fourteen graph/tabular/research-object
 # projection profiles and the compiled JSON-LD context/options/registry engine
-# — measures 7_195_436 bytes; 7_420_000 keeps 3.12% headroom. The always-on,
+# — measures 7_192_673 bytes; 7_420_000 keeps 3.16% headroom. The always-on,
 # caller-configured curated CSVW and OKF terms mappers, closed located-loss
 # contracts, and shared host dispatch are the capabilities responsible for this
 # reviewed increase. The artifact's size is a joint function of
