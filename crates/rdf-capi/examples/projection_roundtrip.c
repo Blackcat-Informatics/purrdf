@@ -62,10 +62,13 @@ int main(int argc, char **argv) {
         "@prefix ex: <https://example.org/> . ex:alice ex:knows ex:bob .\n";
     const char *config =
         "{\"profile\":\"lpg-csv\",\"config\":{\"rdf_type\":"
-        "\"https://example.org/type\",\"limits\":{\"max_artifacts\":16,"
+        "\"https://example.org/type\",\"scope\":{\"mode\":\"all\"},"
+        "\"limits\":{\"max_artifacts\":16,"
         "\"max_artifact_bytes\":1000000,\"max_total_bytes\":4000000,"
         "\"max_archive_bytes\":5000000,\"max_term_depth\":16},"
-        "\"max_records\":1000}}";
+        "\"execution_limits\":{\"max_input_records\":1000,"
+        "\"max_model_records\":1000,\"max_nodes\":1000,"
+        "\"max_edges\":1000}}}";
     PurrdfDataset *dataset = NULL;
     PurrdfDataset *lifted = NULL;
     PurrdfBuffer *archive = NULL;
