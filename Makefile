@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-CARGO_TARGET_DIR ?= target
+# Match Cargo's effective target directory, including `build.target-dir` from
+# host/workspace configuration. An explicit environment or command-line value
+# still wins through `?=`.
+CARGO_TARGET_DIR ?= $(shell cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
 .PHONY: help metadata fmt check book book-samples check-issue-refs changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance rdf-core-hygiene wasm wasm-pkg wasm-pkg-size wasm-pkg-test wasm-pkg-bench playground playground-smoke \
@@ -25,12 +28,12 @@ BINARYEN_VERSION := 130
 # -Oz). `make wasm-pkg-size` (and both CI and the npm release) fail if the built
 # artifact exceeds this. The shipped bundle — RDF 1.2 model, SPARQL/SHACL/ShEx
 # engines, the native format registry (now including JSON-LD/YAML-LD),
-# deterministic layout, SVG export, and all thirteen graph/tabular/research-object
+# deterministic layout, SVG export, and all fourteen graph/tabular/research-object
 # projection profiles and the compiled JSON-LD context/options/registry engine
-# — measures 6_902_478 bytes; 7_120_000 keeps 3.15% headroom. The always-on,
-# caller-configured curated CSVW terms mapper, closed located-loss contract, and
-# shared host dispatch are the capabilities responsible for this reviewed
-# increase. The artifact's size is a joint function of
+# — measures 7_195_436 bytes; 7_420_000 keeps 3.12% headroom. The always-on,
+# caller-configured curated CSVW and OKF terms mappers, closed located-loss
+# contracts, and shared host dispatch are the capabilities responsible for this
+# reviewed increase. The artifact's size is a joint function of
 # rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
 # (pinned via BINARYEN_VERSION), so a moved number is attributable.
 #
@@ -40,7 +43,7 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 7120000
+WASM_SIZE_BUDGET_BYTES := 7420000
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -261,7 +264,7 @@ wasm-pkg-size: wasm-pkg ## Gate the optimized wasm artifact byte size against WA
 	 size=$$(wc -c < "$$art" | awk '{print $$1}'); \
 	 gz=$$(gzip -9nc < "$$art" | wc -c | awk '{print $$1}'); \
 	 pct=$$(( size * 100 / budget )); \
-	 raw=target/wasm32-unknown-unknown/release/purrdf_wasm.wasm; \
+	 raw=$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm; \
 	 if [ -s "$$raw" ]; then rawsz=$$(wc -c < "$$raw" | awk '{print $$1}'); reduc=$$(( (rawsz - size) * 100 / rawsz )); \
 	   ratio="cargo release wasm $$rawsz B -> optimized $$size B (-$$reduc%)"; \
 	 else ratio="cargo release wasm size unavailable (pre-opt module not on disk)"; fi; \
