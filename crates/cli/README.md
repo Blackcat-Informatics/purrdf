@@ -284,11 +284,13 @@ lossless. Curated CSVW terms, OBO Graphs, and SKOS are intentionally lossy views
 purrdf lift --profile <P> --config <PATH> --to <F> [--base <IRI>] [IN] [OUT]
 ```
 
-Lift one canonical archive into a native RDF syntax. Only `lpg-csv`,
-`neo4j-csv`, `open-cypher`, `graphml`, and `csvw-exact` are accepted; the CLI
-does not offer curated CSVW terms, OBO Graphs, or SKOS as pretend reverse mappings. The reader
-rejects non-canonical USTAR, unexpected members, malformed carrier data,
-sideband inconsistencies, and resource-limit violations.
+Lift one canonical archive into a native RDF syntax. The accepted profiles are
+`lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`, `csvw-exact`,
+`croissant-1.1`, `ro-crate-1.3`, `datacite-4.6`, `dcat-3`, and
+`frictionless-data-package-1`. The CLI does not offer curated CSVW terms, OBO
+Graphs, or SKOS as pretend reverse mappings. The reader rejects non-canonical
+USTAR, unexpected members, malformed carrier data, sideband inconsistencies,
+and resource-limit violations.
 
 ```sh
 purrdf --loss-ledger=lift.loss.json lift \
