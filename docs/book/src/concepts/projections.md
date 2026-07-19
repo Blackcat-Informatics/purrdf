@@ -158,9 +158,11 @@ triple-term subjects, unmapped predicates, facet-mismatched objects, selected
 named-graph placement, empty named graphs, reifier bindings, and annotations
 produce stable source-located ledger entries. The generated tables themselves
 can be read with the normative `read_csvw` API, but they cannot reconstruct
-omitted source RDF. `csvw-terms` consequently has no `LiftProfile` variant and
-contains no hidden exact sideband; use `csvw-exact` whenever archival fidelity
-or an RDF round trip is required.
+omitted source RDF. RDF 1.2 direction remains exact in the annotated CSVW value
+and `textDirection` metadata; the W3C CSVW-to-RDF algorithm itself targets RDF
+1.1 and therefore returns the language literal without direction. `csvw-terms`
+consequently has no `LiftProfile` variant and contains no hidden exact sideband;
+use `csvw-exact` whenever archival fidelity or an RDF round trip is required.
 
 ## Research-object carriers
 

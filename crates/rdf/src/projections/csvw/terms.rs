@@ -2056,6 +2056,15 @@ mod tests {
             PARENT,
             &format!("{VOCAB}ParentB"),
         ));
+        let note_column = &first.table_group.tables[0].schema.columns[3];
+        assert_eq!(
+            note_column.inherited.text_direction,
+            Some(CsvwTextDirection::Ltr)
+        );
+        assert_eq!(
+            first.table_group.tables[0].rows[0].cells[3].values[0].direction,
+            Some(CsvwTextDirection::Ltr)
+        );
         assert!(read.dataset.quads().any(|quad| {
             matches!(read.dataset.resolve(quad.s), TermRef::Iri(value) if value == format!("{VOCAB}ClassA"))
                 && matches!(read.dataset.resolve(quad.p), TermRef::Iri(value) if value == NOTE)
@@ -2064,7 +2073,7 @@ mod tests {
                     TermRef::Literal {
                         lexical: "Curated note",
                         language: Some("en"),
-                        direction: Some(RdfTextDirection::Ltr),
+                        direction: None,
                         ..
                     }
                 )

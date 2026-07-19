@@ -338,12 +338,10 @@ impl Converter<'_> {
             lexical_form: value.lexical.clone(),
             datatype: value.language.is_none().then(|| value.datatype.clone()),
             language: value.language.clone(),
-            direction: value.direction.and_then(|direction| match direction {
-                super::model::CsvwTextDirection::Ltr => Some(purrdf_core::RdfTextDirection::Ltr),
-                super::model::CsvwTextDirection::Rtl => Some(purrdf_core::RdfTextDirection::Rtl),
-                super::model::CsvwTextDirection::Auto
-                | super::model::CsvwTextDirection::Inherit => None,
-            }),
+            // The CSVW Recommendation's RDF conversion targets RDF 1.1 and has no
+            // directional-literal mapping. Direction remains exact in CsvwValue and
+            // the annotated table model instead of silently changing W3C output.
+            direction: None,
         })
     }
 
