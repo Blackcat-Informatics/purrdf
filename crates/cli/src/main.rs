@@ -126,6 +126,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         Command::Project {
             profile,
             config,
+            assets,
             from,
             base,
             input,
@@ -133,6 +134,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
         } => projection::run_project(
             *profile,
             config,
+            assets.as_deref(),
             *from,
             base.as_deref(),
             input,

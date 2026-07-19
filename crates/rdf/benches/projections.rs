@@ -19,14 +19,15 @@ use purrdf_rdf::{
     LpgScope, LpgStreamProjection, OboGraphsConfig, OboGraphsVocabulary, OboMetadataRoles,
     OboOwlRoles, OboRdfRoles, ProjectionArtifactSink, ProjectionConfig, ProjectionError,
     ProjectionLimits, ProjectionProfile, ProjectionTerm, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    ResearchObjectConfig, SkosClassRoles, SkosConfig, SkosDocumentationRoles, SkosGraphSelection,
-    SkosLabelRoles, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles, lift_archive,
-    parse_dataset, project_archive, project_csvw_exact, project_csvw_terms, project_lpg,
-    project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher, project_lpg_cypher_to_sink,
-    project_lpg_graphml, project_lpg_graphml_to_sink, project_neo4j_csv, project_neo4j_csv_to_sink,
-    project_obo_graphs, project_okf_terms, project_research_object, project_skos, read_csvw_exact,
-    read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, write_lpg_csv,
-    write_lpg_cypher, write_lpg_graphml, write_neo4j_csv,
+    ResearchObjectConfig, RoCrateAssets, SkosClassRoles, SkosConfig, SkosDocumentationRoles,
+    SkosGraphSelection, SkosLabelRoles, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles,
+    lift_archive, parse_dataset, project_archive, project_archive_with_assets, project_csvw_exact,
+    project_csvw_terms, project_lpg, project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher,
+    project_lpg_cypher_to_sink, project_lpg_graphml, project_lpg_graphml_to_sink,
+    project_neo4j_csv, project_neo4j_csv_to_sink, project_obo_graphs, project_okf_terms,
+    project_research_object, project_skos, read_csvw_exact, read_lpg_csv, read_lpg_cypher,
+    read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher, write_lpg_graphml,
+    write_neo4j_csv,
 };
 
 thread_local! {
@@ -669,6 +670,32 @@ fn benchmark(c: &mut Criterion) {
             )
         })
         .collect();
+    let attached_source = String::from_utf8(RESEARCH_SOURCE.to_vec())
+        .expect("research source UTF-8")
+        .replace("files/train.csv", "data/train.csv")
+        .replace(
+            "\"42\"^^<https://example.org/rdf/role-50>",
+            "\"3\"^^<https://example.org/rdf/role-50>",
+        );
+    let attached_dataset = parse_dataset(attached_source.as_bytes(), "text/turtle", None)
+        .expect("attached research-object dataset");
+    let attached_config_bytes = String::from_utf8(RESEARCH_CONFIGS[1].2.to_vec())
+        .expect("RO-Crate config UTF-8")
+        .replace("\"metadata-only\"", "\"attached\"");
+    let attached_config = ProjectionConfig::from_json(attached_config_bytes.as_bytes())
+        .expect("attached RO-Crate config");
+    let attached_assets = RoCrateAssets::from_artifacts(
+        attached_config.limits(),
+        [("data/train.csv", b"cat".as_slice())],
+    )
+    .expect("attached RO-Crate assets");
+    let attached_archive = project_archive_with_assets(
+        attached_dataset.as_ref(),
+        ProjectionProfile::RoCrate13,
+        &attached_config,
+        &attached_assets,
+    )
+    .expect("attached RO-Crate projection");
     let lpg = project_lpg(graph_dataset.as_ref(), &lpg_config).expect("LPG projection");
     let generic = write_lpg_csv(&lpg.graph, &lpg_config).expect("generic CSV");
     let neo4j = write_neo4j_csv(&lpg.graph, &lpg_config).expect("Neo4j CSV");
@@ -708,6 +735,12 @@ fn benchmark(c: &mut Criterion) {
     for ((_, lift, config), archive) in research_configs.iter().zip(&research_archives) {
         let _ = lift_archive(&archive.archive, *lift, config).expect("research-object lift");
     }
+    let _ = lift_archive(
+        &attached_archive.archive,
+        LiftProfile::RoCrate13,
+        &attached_config,
+    )
+    .expect("attached RO-Crate lift");
     let _ = project_lpg(large_graph_dataset.as_ref(), &lpg_config).expect("large all-scope LPG");
     let _ = project_lpg(large_graph_dataset.as_ref(), &scoped_lpg_config)
         .expect("large selective-scope LPG");
@@ -817,6 +850,23 @@ fn benchmark(c: &mut Criterion) {
             || lift_archive(&archive.archive, *lift, config).expect("research-object read"),
         ));
     }
+    black_box(report_allocations("ro-crate-1.3_attached_write", || {
+        project_archive_with_assets(
+            attached_dataset.as_ref(),
+            ProjectionProfile::RoCrate13,
+            &attached_config,
+            &attached_assets,
+        )
+        .expect("attached RO-Crate write")
+    }));
+    black_box(report_allocations("ro-crate-1.3_attached_read", || {
+        lift_archive(
+            &attached_archive.archive,
+            LiftProfile::RoCrate13,
+            &attached_config,
+        )
+        .expect("attached RO-Crate read")
+    }));
 
     {
         let mut mapping = c.benchmark_group("projection_mapping");
@@ -1068,6 +1118,31 @@ fn benchmark(c: &mut Criterion) {
                 });
             });
         }
+        research.bench_function("ro-crate-1.3_attached_write", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_archive_with_assets(
+                        black_box(attached_dataset.as_ref()),
+                        ProjectionProfile::RoCrate13,
+                        black_box(&attached_config),
+                        black_box(&attached_assets),
+                    )
+                    .expect("attached RO-Crate write"),
+                );
+            });
+        });
+        research.bench_function("ro-crate-1.3_attached_read", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    lift_archive(
+                        black_box(&attached_archive.archive),
+                        LiftProfile::RoCrate13,
+                        black_box(&attached_config),
+                    )
+                    .expect("attached RO-Crate read"),
+                );
+            });
+        });
         research.finish();
     }
 }

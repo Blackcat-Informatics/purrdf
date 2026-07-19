@@ -14,7 +14,8 @@ use crate::py_store::PyRdfFormat;
 use crate::{
     LiftProfile, LossEntry, LossLedger, LpgProgress, LpgProgressObserver, LpgProjectionReport,
     ProjectionArtifactSink, ProjectionConfig, ProjectionError, ProjectionProfile, RdfDataset,
-    lift_archive, parse_dataset, project_archive, project_lpg_artifacts_to_sink,
+    RoCrateAssets, lift_archive, parse_dataset, project_archive, project_archive_with_assets,
+    project_lpg_artifacts_to_sink,
 };
 
 /// One immutable, structured runtime loss record.
@@ -268,16 +269,20 @@ impl PyProjectionLift {
 
 /// Project RDF bytes into a deterministic graph, tabular, or research-object USTAR package.
 #[pyfunction(name = "project")]
-#[pyo3(signature = (data, *, format, profile, config))]
+#[pyo3(signature = (data, *, format, profile, config, assets=None))]
 fn project_py(
     py: Python<'_>,
     data: &Bound<'_, PyAny>,
     format: PyRdfFormat,
     profile: &str,
     config: &Bound<'_, PyAny>,
+    assets: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PyProjectionPackage> {
     let data = read_bytes(data, "data")?;
     let config_bytes = read_bytes(config, "config")?;
+    let assets = assets
+        .map(|assets| read_bytes(assets, "assets"))
+        .transpose()?;
     let profile = profile
         .parse::<ProjectionProfile>()
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
@@ -287,7 +292,15 @@ fn project_py(
         .detach(move || {
             let dataset = parse_dataset(&data, format.to_native().media_type(), None)
                 .map_err(|error| error.to_string())?;
-            project_archive(dataset.as_ref(), profile, &config).map_err(|error| error.to_string())
+            if let Some(archive) = assets {
+                let assets = RoCrateAssets::from_ustar(&archive, config.limits())
+                    .map_err(|error| error.to_string())?;
+                project_archive_with_assets(dataset.as_ref(), profile, &config, &assets)
+                    .map_err(|error| error.to_string())
+            } else {
+                project_archive(dataset.as_ref(), profile, &config)
+                    .map_err(|error| error.to_string())
+            }
         })
         .map_err(PyValueError::new_err)?;
     Ok(PyProjectionPackage {

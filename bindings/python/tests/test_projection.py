@@ -51,6 +51,31 @@ _RESEARCH_PROFILES = (
 )
 
 
+def _attached_ro_crate_inputs() -> tuple[bytes, bytes, bytes]:
+    source = (_RESEARCH_FIXTURES / "shared.ttl").read_text()
+    source = source.replace("files/train.csv", "data/train.csv").replace(
+        '"42"^^<https://example.org/rdf/role-50>',
+        '"3"^^<https://example.org/rdf/role-50>',
+    )
+    config = json.loads((_RESEARCH_FIXTURES / "ro-crate-1.3.json").read_text())
+    config["config"]["packaging"] = "attached"
+
+    header = bytearray(512)
+    header[0 : len(b"data/train.csv")] = b"data/train.csv"
+    header[100:108] = b"0000644\0"
+    header[108:116] = b"0000000\0"
+    header[116:124] = b"0000000\0"
+    header[124:136] = b"00000000003\0"
+    header[136:148] = b"00000000000\0"
+    header[148:156] = b"        "
+    header[156:157] = b"0"
+    header[257:263] = b"ustar\0"
+    header[263:265] = b"00"
+    header[148:156] = f"{sum(header):06o}\0 ".encode()
+    assets = bytes(header) + b"cat" + bytes(509 + 1024)
+    return source.encode(), json.dumps(config).encode(), assets
+
+
 def test_project_matches_rust_bytes_and_returns_immutable_structured_losses() -> None:
     package = purrdf.project(
         _TURTLE,
@@ -211,6 +236,42 @@ def test_all_research_object_profiles_execute_through_the_shared_carrier() -> No
         assert first.archive == second.archive
         lifted = purrdf.lift(first.archive, profile=profile, config=config)
         assert lifted.dataset.quad_count() > 0
+
+
+def test_attached_ro_crate_carries_exact_payload_and_preview() -> None:
+    source, config, assets = _attached_ro_crate_inputs()
+    first = purrdf.project(
+        source,
+        format=purrdf.RdfFormat.TURTLE,
+        profile="ro-crate-1.3",
+        config=config,
+        assets=assets,
+    )
+    second = purrdf.project(
+        source,
+        format=purrdf.RdfFormat.TURTLE,
+        profile="ro-crate-1.3",
+        config=config,
+        assets=assets,
+    )
+    assert first.archive == second.archive
+    with tarfile.open(fileobj=io.BytesIO(first.archive), mode="r:") as archive:
+        members = {member.name: archive.extractfile(member).read() for member in archive}
+    assert members["data/train.csv"] == b"cat"
+    assert members["ro-crate-metadata.json"].startswith(b'{"@context"')
+    assert members["ro-crate-preview.html"].startswith(b"<!doctype html>\n")
+    assert b'href="data/train.csv"' in members["ro-crate-preview.html"]
+    lifted = purrdf.lift(first.archive, profile="ro-crate-1.3", config=config)
+    assert lifted.dataset.quad_count() > 0
+
+    with pytest.raises(ValueError, match="does not accept a payload carrier"):
+        purrdf.project(
+            _TURTLE,
+            format=purrdf.RdfFormat.TURTLE,
+            profile="lpg-csv",
+            config=_CONFIG,
+            assets=assets,
+        )
 
 
 def test_curated_csvw_terms_projects_and_is_structurally_write_only() -> None:

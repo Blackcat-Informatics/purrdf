@@ -157,7 +157,7 @@ profile context, or resource limits for the caller.
 | `obo-graphs` | yes | no | OBO Graphs 0.3.2 view with located losses |
 | `skos` | yes | no | SKOS Turtle view with located losses |
 | `croissant-1.1` | yes | yes | Croissant 1.1 through the shared research-object model |
-| `ro-crate-1.3` | yes | yes | RO-Crate 1.3 flattened JSON-LD graph |
+| `ro-crate-1.3` | yes | yes | RO-Crate 1.3 metadata-only or attached payload package |
 | `datacite-4.6` | yes | yes | Namespace-aware DataCite Metadata Schema 4.6 XML |
 | `dcat-3` | yes | yes | DCAT 3 over the native offline JSON-LD engine |
 | `frictionless-data-package-1` | yes | yes | Frictionless Data Package v1 JSON |
@@ -204,6 +204,16 @@ schema, controlled value, or profile identity. JSON-LD context interpretation
 is offline and caller-complete; native readers reject drift and record every
 unsupported construct in a located runtime ledger.
 
+RO-Crate packaging is explicit. `metadata-only` preserves the single
+`ro-crate-metadata.json` carrier. `attached` requires `RoCrateAssets` and
+`project_archive_with_assets`; it emits that descriptor, a deterministic
+self-contained `ro-crate-preview.html`, and every payload byte. Local File
+identities own payload paths one-to-one. Missing, unowned, reserved, multiply
+declared, or size-inconsistent payloads hard-fail, and the strict reader verifies
+the preview against normalized metadata. All members remain bounded by caller
+`ProjectionLimits` and canonically ordered in USTAR, so metadata, preview, and
+whole-crate bytes are directly gateable.
+
 ```rust
 use purrdf_rdf::{
     LiftProfile, LpgConfig, LpgExecutionLimits, LpgScope, ProjectionConfig,
@@ -233,6 +243,8 @@ The runnable version is
 [`examples/projection_archive.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/projection_archive.rs).
 All five research-object round trips are runnable in
 [`examples/research_object_roundtrip.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/research_object_roundtrip.rs).
+Attached payload packaging is runnable in
+[`examples/attached_ro_crate.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/attached_ro_crate.rs).
 The caller-configured classes/properties/individuals CSVW view is runnable in
 [`examples/csvw_terms.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/csvw_terms.rs).
 

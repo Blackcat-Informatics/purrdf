@@ -96,6 +96,24 @@ const RESEARCH_CONFIGS: &[(&str, &[u8])] = &[
     ),
 ];
 
+fn attached_ro_crate_config() -> Vec<u8> {
+    let mut config: serde_json::Value =
+        serde_json::from_slice(RESEARCH_CONFIGS[1].1).expect("RO-Crate configuration JSON");
+    config["config"]["packaging"] = serde_json::Value::String("attached".to_owned());
+    serde_json::to_vec(&config).expect("attached configuration JSON")
+}
+
+fn attached_research_source() -> Vec<u8> {
+    String::from_utf8(RESEARCH_SOURCE.to_vec())
+        .expect("research fixture UTF-8")
+        .replace("files/train.csv", "data/train.csv")
+        .replace(
+            "\"42\"^^<https://example.org/rdf/role-50>",
+            "\"3\"^^<https://example.org/rdf/role-50>",
+        )
+        .into_bytes()
+}
+
 #[test]
 fn project_is_byte_deterministic_and_lift_round_trips_with_ledgers() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -398,6 +416,69 @@ fn all_research_object_profiles_project_lift_and_repeat_through_the_cli() {
             "{profile} lifted dataset identity"
         );
     }
+}
+
+#[test]
+fn attached_ro_crate_carries_payload_and_preview_through_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_bytes = attached_ro_crate_config();
+    let parsed = ProjectionConfig::from_json(&config_bytes).expect("attached configuration");
+    let input = write(
+        &dir.path().join("attached.ttl"),
+        &attached_research_source(),
+    );
+    let config = write(&dir.path().join("attached.json"), &config_bytes);
+    let assets =
+        ProjectionPackage::from_artifacts(parsed.limits(), [("data/train.csv", b"cat".as_slice())])
+            .expect("payload package")
+            .to_ustar()
+            .expect("payload archive");
+    let assets = write(&dir.path().join("assets.tar"), &assets);
+    let first = dir.path().join("attached-first.tar");
+    let second = dir.path().join("attached-second.tar");
+    for output in [&first, &second] {
+        let result = run(&[
+            "project",
+            "--profile",
+            "ro-crate-1.3",
+            "--config",
+            &config,
+            "--assets",
+            &assets,
+            &input,
+            output.to_str().expect("output path"),
+        ]);
+        assert!(
+            result.status.success(),
+            "attached project failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    let first_bytes = std::fs::read(&first).expect("first crate");
+    assert_eq!(first_bytes, std::fs::read(&second).expect("second crate"));
+    let package =
+        ProjectionPackage::from_ustar(&first_bytes, parsed.limits()).expect("attached package");
+    assert_eq!(package.get("data/train.csv"), Some(b"cat".as_slice()));
+    assert!(package.get("ro-crate-metadata.json").is_some());
+    assert!(package.get("ro-crate-preview.html").is_some());
+
+    let lifted = run(&[
+        "lift",
+        "--profile",
+        "ro-crate-1.3",
+        "--config",
+        &config,
+        "--to",
+        "nquads",
+        first.to_str().expect("crate path"),
+        "-",
+    ]);
+    assert!(
+        lifted.status.success(),
+        "attached lift failed: {}",
+        String::from_utf8_lossy(&lifted.stderr)
+    );
+    assert!(String::from_utf8_lossy(&lifted.stdout).contains("data/train.csv"));
 }
 
 #[test]

@@ -22,7 +22,7 @@
 //! | OBO Graphs 0.3.2 | RDF → view | Deliberately write-only and loss-ledgered |
 //! | SKOS Turtle | RDF → view | Deliberately write-only and loss-ledgered |
 //! | Croissant 1.1 | RDF ↔ carrier | Shared research-object model with located profile losses |
-//! | RO-Crate 1.3 | RDF ↔ carrier | Shared research-object model with located profile losses |
+//! | RO-Crate 1.3 | RDF ↔ carrier | Shared model plus explicit metadata-only/attached payload contract and located profile losses |
 //! | DataCite 4.6 | RDF ↔ carrier | Shared research-object model with located profile losses |
 //! | DCAT 3 | RDF ↔ carrier | Shared research-object model with located profile losses |
 //! | Frictionless Data Package v1 | RDF ↔ carrier | Shared research-object model with located profile losses |
@@ -61,7 +61,7 @@ mod util;
 
 pub use carrier::{
     LiftProfile, ProjectionArchive, ProjectionConfig, ProjectionLift, ProjectionProfile,
-    lift_archive, project_archive, project_lpg_artifacts_to_sink,
+    lift_archive, project_archive, project_archive_with_assets, project_lpg_artifacts_to_sink,
 };
 pub use csvw::{
     CSVW_TERMS_PROFILE, CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig, CsvwContext,

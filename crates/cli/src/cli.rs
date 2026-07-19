@@ -173,6 +173,9 @@ pub(crate) enum Command {
         /// Profile-tagged mandatory JSON configuration path, or `-` for stdin.
         #[arg(long, value_name = "PATH")]
         config: String,
+        /// Canonical payload-only USTAR path for attached RO-Crate output.
+        #[arg(long, value_name = "PATH")]
+        assets: Option<String>,
         /// Input RDF/pack format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,

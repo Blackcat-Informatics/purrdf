@@ -127,6 +127,7 @@ def project(
     format: RdfFormat,
     profile: ProjectionProfile,
     config: bytes | str,
+    assets: bytes | None = ...,
 ) -> ProjectionPackage: ...
 
 def project_artifacts(

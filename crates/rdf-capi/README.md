@@ -74,6 +74,11 @@ loss-ledger JSON. Lift returns a caller-owned `PurrdfDataset` plus an independen
 ledger buffer. Free every buffer with `purrdf_buffer_free` and the dataset with
 `purrdf_dataset_free`.
 
+`purrdf_project_with_assets` is the attached RO-Crate entry point. It accepts a
+canonical payload-only USTAR under the configuration limits and routes it through
+the same Rust ownership, byte-size, preview, and determinism checks. The profile
+must be `ro-crate-1.3` and its configuration must declare `packaging: "attached"`.
+
 The complete compiled
 [`projection_roundtrip.c`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/examples/projection_roundtrip.c)
 example parses Turtle, projects LPG CSV, writes the archive, lifts it, verifies

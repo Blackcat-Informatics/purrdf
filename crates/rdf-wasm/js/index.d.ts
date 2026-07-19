@@ -393,6 +393,11 @@ export class Dataset implements Iterable<Quad> {
   ): Dataset;
   quads(): Quad[];
   project(profile: ProjectionProfile, configJson: string): ProjectionPackage;
+  projectWithAssets(
+    profile: "ro-crate-1.3",
+    configJson: string,
+    assetsArchive: Uint8Array,
+  ): ProjectionPackage;
   visualModel(options?: VisualizationOptions | null): VisualModel;
   visualExport(options?: VisualizationOptions | null): VisualExport;
   visualSvg(options?: VisualizationOptions | null): VisualSvgDocument;

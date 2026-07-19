@@ -6,8 +6,8 @@
 use std::os::raw::c_char;
 
 use purrdf_rs::{
-    LiftProfile, ProjectionConfig, ProjectionError, ProjectionProfile, lift_archive,
-    project_archive,
+    LiftProfile, ProjectionConfig, ProjectionError, ProjectionProfile, RoCrateAssets, lift_archive,
+    project_archive, project_archive_with_assets,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -74,6 +74,79 @@ pub unsafe extern "C" fn purrdf_project(
                 .map_err(|error| projection_error(&error))?;
             let outcome = project_archive(PurrdfDataset::dataset(dataset), profile, &config)
                 .map_err(|error| projection_error(&error))?;
+
+            let archive = Box::new(PurrdfBuffer(outcome.archive));
+            let ledger = Box::new(PurrdfBuffer(outcome.loss_ledger.render_json().into_bytes()));
+            *out_archive = Box::into_raw(archive);
+            *out_loss_ledger_json = Box::into_raw(ledger);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Project a frozen RDF dataset and payload-only USTAR into an attached RO-Crate.
+///
+/// `assets_archive` is a canonical PurRDF USTAR containing payload members only;
+/// metadata and preview names are reserved to the engine. The profile and tagged
+/// configuration must select attached `ro-crate-1.3` packaging. Output ownership
+/// matches [`purrdf_project`].
+///
+/// # Safety
+/// `dataset` must be a live handle; `profile` must be a valid C string;
+/// `config_json` and `assets_archive` must be readable for their respective lengths;
+/// the two output pointers must be non-null, distinct, and writable. `out_error` may
+/// be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_project_with_assets(
+    dataset: *const PurrdfDataset,
+    profile: *const c_char,
+    config_json: *const u8,
+    config_len: usize,
+    assets_archive: *const u8,
+    assets_len: usize,
+    out_archive: *mut *mut PurrdfBuffer,
+    out_loss_ledger_json: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null()
+                || profile.is_null()
+                || config_json.is_null()
+                || assets_archive.is_null()
+                || out_archive.is_null()
+                || out_loss_ledger_json.is_null()
+            {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_project_with_assets",
+                ));
+            }
+            if out_archive == out_loss_ledger_json {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::InvalidArgument,
+                    "purrdf_project_with_assets output pointers must be distinct",
+                ));
+            }
+            *out_archive = std::ptr::null_mut();
+            *out_loss_ledger_json = std::ptr::null_mut();
+
+            let profile = cstr_to_str(profile)?
+                .parse::<ProjectionProfile>()
+                .map_err(|error| projection_error(&error))?;
+            let config_bytes = std::slice::from_raw_parts(config_json, config_len);
+            let config = ProjectionConfig::from_json(config_bytes)
+                .map_err(|error| projection_error(&error))?;
+            let assets_bytes = std::slice::from_raw_parts(assets_archive, assets_len);
+            let assets = RoCrateAssets::from_ustar(assets_bytes, config.limits())
+                .map_err(|error| projection_error(&error))?;
+            let outcome = project_archive_with_assets(
+                PurrdfDataset::dataset(dataset),
+                profile,
+                &config,
+                &assets,
+            )
+            .map_err(|error| projection_error(&error))?;
 
             let archive = Box::new(PurrdfBuffer(outcome.archive));
             let ledger = Box::new(PurrdfBuffer(outcome.loss_ledger.render_json().into_bytes()));

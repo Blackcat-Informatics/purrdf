@@ -98,6 +98,9 @@ impl RoCrateAssets {
     ///
     /// Enforces canonical USTAR, package limits, and reserved-name ownership.
     pub fn from_ustar(archive: &[u8], limits: ProjectionLimits) -> Result<Self, ProjectionError> {
+        if archive.len() == 1_024 && archive.iter().all(|byte| *byte == 0) {
+            return Ok(Self::new(limits));
+        }
         Self::from_package(ProjectionPackage::from_ustar(archive, limits)?)
     }
 
@@ -131,12 +134,16 @@ impl RoCrateAssets {
         self.package.limits()
     }
 
-    /// Encode a non-empty payload set as canonical USTAR.
+    /// Encode the payload set as canonical USTAR.
     ///
     /// # Errors
     ///
-    /// Returns the underlying package error for an empty set or size breach.
+    /// An empty set is the standard two-zero-block USTAR terminator. Non-empty
+    /// sets return the underlying package error on a size breach.
     pub fn to_ustar(&self) -> Result<Vec<u8>, ProjectionError> {
+        if self.is_empty() {
+            return Ok(vec![0; 1_024]);
+        }
         self.package.to_ustar()
     }
 
@@ -2057,6 +2064,12 @@ mod tests {
         include_bytes!("../../../tests/fixtures/research-objects/ro-crate-1.3/input.json");
     const GOLDEN: &[u8] =
         include_bytes!("../../../tests/fixtures/research-objects/ro-crate-1.3/golden.json");
+    const ATTACHED_GOLDEN: &[u8] = include_bytes!(
+        "../../../tests/fixtures/research-objects/ro-crate-1.3/attached-golden.json"
+    );
+    const ATTACHED_PREVIEW: &[u8] = include_bytes!(
+        "../../../tests/fixtures/research-objects/ro-crate-1.3/attached-preview.html"
+    );
 
     fn config() -> RoCrateConfig {
         config_with_packaging(RoCratePackaging::MetadataOnly)
@@ -2311,12 +2324,12 @@ mod tests {
             .expect("attached project repeat");
         assert_eq!(first.package, second.package);
         assert_eq!(first.package.get("data/train.csv"), Some(b"cat".as_slice()));
+        assert_eq!(first.package.get(RO_CRATE_ARTIFACT), Some(ATTACHED_GOLDEN));
         let preview = first
             .package
             .get(RO_CRATE_PREVIEW_ARTIFACT)
             .expect("preview");
-        assert!(preview.starts_with(b"<!doctype html>\n"));
-        assert!(String::from_utf8_lossy(preview).contains("href=\"data/train.csv\""));
+        assert_eq!(preview, ATTACHED_PREVIEW);
 
         let read = read_ro_crate(&first.package, &config).expect("attached read");
         let rewritten = project_ro_crate_with_assets(read.dataset.as_ref(), &config, &assets)
@@ -2336,6 +2349,14 @@ mod tests {
         let config = config_with_packaging(RoCratePackaging::Attached);
         let source = attached_source();
         let missing = RoCrateAssets::new(config.common().limits());
+        assert_eq!(
+            RoCrateAssets::from_ustar(
+                &missing.to_ustar().expect("empty asset archive"),
+                config.common().limits()
+            )
+            .expect("empty asset round trip"),
+            missing
+        );
         assert!(project_ro_crate_with_assets(source.as_ref(), &config, &missing).is_err());
 
         let extra = RoCrateAssets::from_artifacts(
