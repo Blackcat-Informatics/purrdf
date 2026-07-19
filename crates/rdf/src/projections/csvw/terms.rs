@@ -999,10 +999,10 @@ impl<'a> TermsProjector<'a> {
         index
     }
 
-    fn table_memberships(
+    fn table_memberships<'index>(
         &self,
-        index: &BTreeMap<String, BTreeMap<String, BTreeSet<ProjectionTerm>>>,
-    ) -> Vec<BTreeSet<String>> {
+        index: &'index BTreeMap<String, BTreeMap<String, BTreeSet<ProjectionTerm>>>,
+    ) -> Vec<Vec<&'index str>> {
         self.config
             .tables
             .iter()
@@ -1012,7 +1012,7 @@ impl<'a> TermsProjector<'a> {
                     .filter(|(subject, predicates)| {
                         selector_matches(&table.selector, subject, predicates)
                     })
-                    .map(|(subject, _)| subject.clone())
+                    .map(|(subject, _)| subject.as_str())
                     .collect()
             })
             .collect()
@@ -1021,14 +1021,14 @@ impl<'a> TermsProjector<'a> {
     fn build_table_group(
         &self,
         index: &BTreeMap<String, BTreeMap<String, BTreeSet<ProjectionTerm>>>,
-        memberships: &[BTreeSet<String>],
+        memberships: &[Vec<&str>],
     ) -> Result<(CsvwTableGroup, usize, usize), ProjectionError> {
         let mut tables = Vec::with_capacity(self.config.tables.len());
         let mut row_count = 0usize;
         let mut value_count = 0usize;
         for (declaration, subjects) in self.config.tables.iter().zip(memberships) {
             let mut rows = Vec::with_capacity(subjects.len());
-            for subject in subjects {
+            for &subject in subjects {
                 row_count = row_count
                     .checked_add(1)
                     .ok_or_else(|| ProjectionError::limit("CSVW terms row count overflow"))?;
@@ -1094,7 +1094,7 @@ impl<'a> TermsProjector<'a> {
                     number,
                     source_number: number,
                     url: row_url(&declaration.table_url, number)?,
-                    titles: vec![subject.clone()],
+                    titles: vec![subject.to_owned()],
                     cells,
                 });
             }
@@ -1112,10 +1112,7 @@ impl<'a> TermsProjector<'a> {
         ))
     }
 
-    fn record_quad_losses(
-        &mut self,
-        memberships: &[BTreeSet<String>],
-    ) -> Result<(), ProjectionError> {
+    fn record_quad_losses(&mut self, memberships: &[Vec<&str>]) -> Result<(), ProjectionError> {
         for index in 0..self.quads.len() {
             let quad = &self.quads[index];
             if !self.graph_selected(quad.graph.as_ref()) {
@@ -1130,7 +1127,7 @@ impl<'a> TermsProjector<'a> {
             let mut mapped_predicate = false;
             let mut represented = false;
             for (table_index, subjects) in memberships.iter().enumerate() {
-                if !subjects.contains(subject) {
+                if subjects.binary_search(&subject.as_str()).is_err() {
                     continue;
                 }
                 has_matching_table = true;
