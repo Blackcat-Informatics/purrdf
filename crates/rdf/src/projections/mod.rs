@@ -50,6 +50,7 @@ mod csvw;
 mod error;
 mod lpg;
 mod obo_graphs;
+mod okf;
 mod package;
 mod research_object;
 mod sink;
@@ -92,6 +93,12 @@ pub use obo_graphs::{
     OboLogicalDefinitionAxiom, OboMeta, OboMetadataRoles, OboNode, OboNodeType, OboOwlRoles,
     OboPropertyChainAxiom, OboPropertyType, OboPropertyValue, OboRdfRoles, OboSynonym, OboXref,
     project_obo_graphs,
+};
+pub use okf::{
+    OKF_TERMS_PROFILE, OkfBodySection, OkfBodyStyle, OkfBodyValueMode, OkfCardinality, OkfCategory,
+    OkfConceptSelector, OkfFieldMapping, OkfFrontmatterMappings, OkfGenerationConfig,
+    OkfGraphSelection, OkfIndexConfig, OkfLinkPathStyle, OkfLinkSection, OkfLinkStyle,
+    OkfLinkTargetMode, OkfPathStrategy, OkfResourceMapping, OkfTermRendering, OkfValueMode,
 };
 pub use package::{ProjectionLimits, ProjectionPackage};
 pub use research_object::{
