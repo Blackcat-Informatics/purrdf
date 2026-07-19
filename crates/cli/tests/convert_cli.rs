@@ -51,6 +51,8 @@ use std::io::Write as _;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+use purrdf_rdf::JsonLdContextLimits;
+
 /// The nine native RDF syntaxes, by their `--from`/`--to` token. Every format appears
 /// as BOTH a source and a destination in the matrix.
 const FORMATS: [&str; 9] = [
@@ -557,6 +559,33 @@ fn configured_jsonld_cli_modes_registry_yaml_and_errors_share_one_schema() {
     ]);
     assert_eq!(unused.status.code(), Some(2));
     assert!(stderr(&unused).contains("requires a JSON-LD or YAML-LD RDF output"));
+}
+
+#[test]
+fn jsonld_options_file_is_rejected_at_the_shared_byte_ceiling() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_file(dir.path(), "input.nq", SEED_A);
+    let options = path(dir.path(), "oversized-options.json");
+    let limit = JsonLdContextLimits::default().max_options_bytes();
+    std::fs::write(&options, vec![b' '; limit + 1]).expect("write oversized options");
+
+    let result = run(&[
+        "--jsonld-options",
+        &options,
+        "convert",
+        "--from",
+        "nquads",
+        "--to",
+        "jsonld",
+        &input,
+        &path(dir.path(), "output.jsonld"),
+    ]);
+    assert_eq!(result.status.code(), Some(1));
+    assert!(
+        stderr(&result).contains(&format!("exceeds the {limit}-byte limit")),
+        "{}",
+        stderr(&result)
+    );
 }
 
 /// SEED C to a `carries_star = false` target (RDF/XML, TriX, HexTuples) PROJECTS the
