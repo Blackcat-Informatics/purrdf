@@ -7,9 +7,11 @@ use std::collections::BTreeMap;
 
 use purrdf_rdf::{
     LpgConfig, LpgExecutionLimits, LpgProgress, LpgProgressPhase, LpgScope, ProjectionArtifactSink,
-    ProjectionError, ProjectionLimits, ProjectionPackage, RdfDatasetBuilder, RdfLiteral,
-    project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher, project_lpg_cypher_to_sink,
-    project_lpg_graphml, project_lpg_graphml_to_sink, project_neo4j_csv, project_neo4j_csv_to_sink,
+    ProjectionConfig, ProjectionError, ProjectionLimits, ProjectionPackage, ProjectionPackageSink,
+    ProjectionProfile, RdfDatasetBuilder, RdfLiteral, project_archive,
+    project_lpg_artifacts_to_sink, project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher,
+    project_lpg_cypher_to_sink, project_lpg_graphml, project_lpg_graphml_to_sink,
+    project_neo4j_csv, project_neo4j_csv_to_sink,
 };
 
 const TYPE: &str = "https://example.org/type";
@@ -239,6 +241,60 @@ fn every_lpg_sink_is_chunked_transactional_and_byte_identical() {
     let graphml_package = project_lpg_graphml(dataset.as_ref(), &config).expect("GraphML package");
     assert_artifacts_equal(&graphml_sink, &graphml_package.package);
     assert_progress(&graphml_progress);
+}
+
+#[test]
+fn unified_profile_dispatcher_uses_the_same_sink_engine() {
+    let dataset = dataset();
+    for profile in [
+        ProjectionProfile::LpgCsv,
+        ProjectionProfile::Neo4jCsv,
+        ProjectionProfile::OpenCypher,
+        ProjectionProfile::Graphml,
+    ] {
+        let config = match profile {
+            ProjectionProfile::LpgCsv => ProjectionConfig::LpgCsv(config()),
+            ProjectionProfile::Neo4jCsv => ProjectionConfig::Neo4jCsv(config()),
+            ProjectionProfile::OpenCypher => ProjectionConfig::OpenCypher(config()),
+            ProjectionProfile::Graphml => ProjectionConfig::Graphml(config()),
+            _ => unreachable!("closed LPG profile list"),
+        };
+        let mut sink = ProjectionPackageSink::new(config.limits());
+        let mut progress = Vec::new();
+        let streamed = project_lpg_artifacts_to_sink(
+            dataset.as_ref(),
+            profile,
+            &config,
+            &mut sink,
+            &mut |row: &LpgProgress| {
+                progress.push(row.clone());
+                Ok(())
+            },
+        )
+        .expect("unified streaming projection");
+        let package = sink.into_package().expect("committed package");
+        let materialized = project_archive(dataset.as_ref(), profile, &config)
+            .expect("unified materialized projection");
+        assert_eq!(
+            package.to_ustar().expect("canonical USTAR"),
+            materialized.archive,
+            "{profile}"
+        );
+        assert_eq!(progress.last().map(|row| row.report), Some(streamed.report));
+    }
+
+    let config = ProjectionConfig::LpgCsv(config());
+    let mut sink = ProjectionPackageSink::new(config.limits());
+    let error = project_lpg_artifacts_to_sink(
+        dataset.as_ref(),
+        ProjectionProfile::Graphml,
+        &config,
+        &mut sink,
+        &mut |_row: &LpgProgress| Ok(()),
+    )
+    .expect_err("profile mismatch");
+    assert!(error.message().contains("does not match"));
+    assert!(sink.into_package().is_err());
 }
 
 #[test]

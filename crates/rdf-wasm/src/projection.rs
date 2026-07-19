@@ -9,6 +9,10 @@ use wasm_bindgen::prelude::*;
 
 use crate::dataset::{Dataset, diag_to_err};
 
+fn parse_projection_config(config_json: &str) -> Result<ProjectionConfig, String> {
+    ProjectionConfig::from_json(config_json.as_bytes()).map_err(|error| error.to_string())
+}
+
 /// A deterministic USTAR projection package and its canonical runtime ledger.
 #[wasm_bindgen]
 #[derive(Debug)]
@@ -70,8 +74,7 @@ impl Dataset {
         let profile = profile
             .parse::<ProjectionProfile>()
             .map_err(|error| JsError::new(&error.to_string()))?;
-        let config = ProjectionConfig::from_json(config_json.as_bytes())
-            .map_err(|error| JsError::new(&error.to_string()))?;
+        let config = parse_projection_config(config_json).map_err(|error| JsError::new(&error))?;
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
         let outcome = project_archive(frozen.as_ref(), profile, &config)
             .map_err(|error| JsError::new(&error.to_string()))?;
@@ -114,6 +117,25 @@ mod tests {
       "config": {
         "rdf_type": "https://example.org/type",
         "scope": {"mode": "all"},
+        "limits": {
+          "max_artifacts": 16,
+          "max_artifact_bytes": 1000000,
+          "max_total_bytes": 4000000,
+          "max_archive_bytes": 5000000,
+          "max_term_depth": 16
+        },
+        "execution_limits": {
+          "max_input_records": 1000,
+          "max_model_records": 1000,
+          "max_nodes": 1000,
+          "max_edges": 1000
+        }
+      }
+    }"#;
+    const MISSING_SCOPE_CONFIG: &str = r#"{
+      "profile": "lpg-csv",
+      "config": {
+        "rdf_type": "https://example.org/type",
         "limits": {
           "max_artifacts": 16,
           "max_artifact_bytes": 1000000,
@@ -174,6 +196,9 @@ mod tests {
         let lifted_dataset = lifted.take_dataset().expect("dataset");
         assert_eq!(lifted_dataset.size(), 1);
         assert!(lifted.take_dataset().is_none());
+
+        let error = parse_projection_config(MISSING_SCOPE_CONFIG).expect_err("missing scope");
+        assert!(error.contains("scope"));
     }
 
     #[test]

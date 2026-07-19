@@ -58,7 +58,7 @@ mod util;
 
 pub use carrier::{
     LiftProfile, ProjectionArchive, ProjectionConfig, ProjectionLift, ProjectionProfile,
-    lift_archive, project_archive,
+    lift_archive, project_archive, project_lpg_artifacts_to_sink,
 };
 pub use csvw::{
     CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig, CsvwContext, CsvwDatatype,

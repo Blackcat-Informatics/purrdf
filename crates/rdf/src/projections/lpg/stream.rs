@@ -34,6 +34,19 @@ pub enum LpgProgressPhase {
     Aborted,
 }
 
+impl LpgProgressPhase {
+    /// Stable lowercase machine label for this phase.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scanning => "scanning",
+            Self::Building => "building",
+            Self::Writing => "writing",
+            Self::Complete => "complete",
+            Self::Aborted => "aborted",
+        }
+    }
+}
+
 /// Exact counters from one RDF-to-LPG mapping.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

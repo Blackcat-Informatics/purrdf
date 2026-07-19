@@ -54,8 +54,11 @@ def test_engines_expose_expected_surface() -> None:
     assert hasattr(purrdf.slice, "SliceCatalog")
     assert hasattr(purrdf.gts, "gts_from_quads")
     assert callable(purrdf.project)
+    assert callable(purrdf.project_artifacts)
     assert callable(purrdf.lift)
     assert hasattr(purrdf, "ProjectionPackage")
+    assert hasattr(purrdf, "ProjectionProgress")
+    assert hasattr(purrdf, "ProjectionStream")
     assert hasattr(purrdf, "ProjectionLoss")
     assert set(purrdf.gts.__all__) <= set(dir(purrdf.gts))
 

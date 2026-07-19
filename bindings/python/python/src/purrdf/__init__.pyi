@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import builtins
-from typing import IO, Any, Literal, TypedDict, overload
+from typing import IO, Any, Callable, Literal, TypedDict, overload
 
 # ── Statement codec (bindings/python/src/rdf.rs) ────────────────────────────────
 
@@ -52,6 +52,14 @@ type LiftProfile = Literal[
     "dcat-3",
     "frictionless-data-package-1",
 ]
+type ArtifactEvent = Literal[
+    "begin-package",
+    "begin-artifact",
+    "chunk",
+    "finish-artifact",
+    "commit-package",
+    "abort-package",
+]
 
 class ProjectionLoss:
     @property
@@ -73,6 +81,38 @@ class ProjectionPackage:
     @property
     def losses(self) -> list[ProjectionLoss]: ...
 
+class ProjectionProgress:
+    @property
+    def phase(self) -> str: ...
+    @property
+    def input_records(self) -> int: ...
+    @property
+    def model_records(self) -> int: ...
+    @property
+    def nodes(self) -> int: ...
+    @property
+    def edges(self) -> int: ...
+    @property
+    def artifacts(self) -> int: ...
+    @property
+    def bytes(self) -> int: ...
+    @property
+    def path(self) -> str | None: ...
+
+class ProjectionStream:
+    @property
+    def profile(self) -> str: ...
+    @property
+    def losses(self) -> list[ProjectionLoss]: ...
+    @property
+    def input_records(self) -> int: ...
+    @property
+    def model_records(self) -> int: ...
+    @property
+    def nodes(self) -> int: ...
+    @property
+    def edges(self) -> int: ...
+
 class ProjectionLift:
     @property
     def dataset(self) -> RdfDataset: ...
@@ -86,6 +126,16 @@ def project(
     profile: ProjectionProfile,
     config: bytes | str,
 ) -> ProjectionPackage: ...
+
+def project_artifacts(
+    data: bytes | str,
+    *,
+    format: RdfFormat,
+    profile: Literal["lpg-csv", "neo4j-csv", "open-cypher", "graphml"],
+    config: bytes | str,
+    artifact_callback: Callable[[ArtifactEvent, str | None, bytes], None],
+    progress_callback: Callable[[ProjectionProgress], None] | None = ...,
+) -> ProjectionStream: ...
 
 def lift(
     archive: bytes,

@@ -348,6 +348,7 @@ fn every_research_object_profile_executes_through_the_c_abi() {
 #[test]
 fn projection_c_surface_rejects_write_only_lift_and_aliasing_outputs() {
     const CONFIG: &str = r#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","scope":{"mode":"all"},"limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"execution_limits":{"max_input_records":1000,"max_model_records":1000,"max_nodes":1000,"max_edges":1000}}}"#;
+    const MISSING_SCOPE_CONFIG: &str = r#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"execution_limits":{"max_input_records":1000,"max_model_records":1000,"max_nodes":1000,"max_edges":1000}}}"#;
     unsafe {
         let dataset = parse("text/turtle", "<http://a> <http://b> <http://c> .");
         let profile = CString::new("lpg-csv").unwrap();
@@ -366,6 +367,28 @@ fn projection_c_surface_rejects_write_only_lift_and_aliasing_outputs() {
             PurrdfStatus::InvalidArgument as i32
         );
         assert!(!error.is_null());
+        purrdf_error_free(error);
+
+        let mut archive: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut project_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        error = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_project(
+                dataset,
+                profile.as_ptr(),
+                MISSING_SCOPE_CONFIG.as_ptr(),
+                MISSING_SCOPE_CONFIG.len(),
+                &raw mut archive,
+                &raw mut project_ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert!(archive.is_null());
+        assert!(project_ledger.is_null());
+        assert!(!error.is_null());
+        let message = std::ffi::CStr::from_ptr(purrdf_error_message(error));
+        assert!(message.to_bytes().windows(5).any(|bytes| bytes == b"scope"));
         purrdf_error_free(error);
 
         let skos = CString::new("skos").unwrap();
