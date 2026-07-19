@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define CHECK(cond, msg)                                                        \
@@ -18,7 +19,29 @@
         }                                                                       \
     } while (0)
 
-int main(void) {
+static uint8_t *read_file(const char *path, size_t *length) {
+    FILE *stream = fopen(path, "rb");
+    if (stream == NULL || fseek(stream, 0, SEEK_END) != 0) {
+        return NULL;
+    }
+    long size = ftell(stream);
+    if (size < 0 || fseek(stream, 0, SEEK_SET) != 0) {
+        fclose(stream);
+        return NULL;
+    }
+    uint8_t *bytes = malloc((size_t)size);
+    if (bytes == NULL || fread(bytes, 1, (size_t)size, stream) != (size_t)size) {
+        free(bytes);
+        fclose(stream);
+        return NULL;
+    }
+    fclose(stream);
+    *length = (size_t)size;
+    return bytes;
+}
+
+int main(int argc, char **argv) {
+    CHECK(argc == 3, "shared OKF fixture and config arguments");
     /* ABI version */
     PurrdfAbiVersion version;
     CHECK(purrdf_abi_version(&version) == PURRDF_STATUS_OK, "abi_version");
@@ -181,6 +204,38 @@ int main(void) {
           "project csvw-terms");
     purrdf_buffer_free(terms_ledger);
     purrdf_buffer_free(terms_projection);
+
+    /* the shared strict OKF terms fixture reaches the exact same Rust engine */
+    size_t okf_source_len = 0;
+    size_t okf_config_len = 0;
+    uint8_t *okf_source = read_file(argv[1], &okf_source_len);
+    uint8_t *okf_config = read_file(argv[2], &okf_config_len);
+    CHECK(okf_source != NULL && okf_config != NULL, "read shared OKF fixtures");
+    PurrdfDataset *okf_dataset = NULL;
+    rc = purrdf_parse(okf_source, okf_source_len, "application/trig", NULL, NULL,
+                      &okf_dataset, &error);
+    CHECK(rc == PURRDF_STATUS_OK && okf_dataset != NULL, "parse shared OKF source");
+    PurrdfBuffer *okf_projection = NULL;
+    PurrdfBuffer *okf_ledger = NULL;
+    rc = purrdf_project(okf_dataset, "okf-terms", okf_config, okf_config_len,
+                        &okf_projection, &okf_ledger, &error);
+    CHECK(rc == PURRDF_STATUS_OK && okf_projection != NULL && okf_ledger != NULL,
+          "project shared OKF terms fixture");
+    const uint8_t *okf_projection_bytes = NULL;
+    size_t okf_projection_len = 0;
+    purrdf_buffer_data(okf_projection, &okf_projection_bytes, &okf_projection_len);
+    CHECK(okf_projection_bytes != NULL && okf_projection_len == 6144,
+          "shared OKF archive has exact canonical size");
+    const uint8_t *okf_ledger_bytes = NULL;
+    size_t okf_ledger_len = 0;
+    purrdf_buffer_data(okf_ledger, &okf_ledger_bytes, &okf_ledger_len);
+    CHECK(okf_ledger_bytes != NULL && okf_ledger_len > 0,
+          "shared OKF projection carries its loss ledger");
+    purrdf_buffer_free(okf_ledger);
+    purrdf_buffer_free(okf_projection);
+    purrdf_dataset_free(okf_dataset);
+    free(okf_config);
+    free(okf_source);
 
     /* SPARQL JSON */
     PurrdfBuffer *json = NULL;

@@ -7,6 +7,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+use purrdf_rdf::{ProjectionConfig, ProjectionPackage};
+
 const PURRDF: &str = env!("CARGO_BIN_EXE_purrdf");
 
 fn run(args: &[&str]) -> Output {
@@ -67,6 +69,8 @@ const TURTLE: &[u8] = b"@prefix ex: <https://example.org/> .\nex:s ex:p ex:o .\n
 const RESEARCH_SOURCE: &[u8] =
     include_bytes!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl");
 const CSVW_TERMS_CONFIG: &[u8] = include_bytes!("../../rdf/tests/fixtures/csvw-terms.json");
+const OKF_TERMS_CONFIG: &[u8] = include_bytes!("../../rdf/tests/fixtures/okf-terms.json");
+const OKF_TERMS_SOURCE: &[u8] = include_bytes!("../../rdf/tests/fixtures/okf-terms.trig");
 const RESEARCH_CONFIGS: &[(&str, &[u8])] = &[
     (
         "croissant-1.1",
@@ -437,4 +441,81 @@ fn curated_csvw_terms_projects_deterministically_and_is_absent_from_lift() {
     ]);
     assert_eq!(lifted.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&lifted.stderr).contains("invalid value 'csvw-terms'"));
+}
+
+#[test]
+fn curated_okf_terms_projects_the_shared_exact_bundle_and_is_absent_from_lift() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write(&dir.path().join("okf-terms.trig"), OKF_TERMS_SOURCE);
+    let config = write(&dir.path().join("okf-terms.json"), OKF_TERMS_CONFIG);
+    let first = dir.path().join("okf-first.tar");
+    let second = dir.path().join("okf-second.tar");
+    let ledger = dir.path().join("okf-loss.json");
+    let ledger_arg = format!("--loss-ledger={}", ledger.display());
+    let first_result = run(&[
+        &ledger_arg,
+        "project",
+        "--profile",
+        "okf-terms",
+        "--config",
+        &config,
+        "--from",
+        "trig",
+        &input,
+        first.to_str().expect("first path"),
+    ]);
+    assert!(
+        first_result.status.success(),
+        "OKF terms project failed: {}",
+        String::from_utf8_lossy(&first_result.stderr)
+    );
+    let second_result = run(&[
+        "project",
+        "--profile",
+        "okf-terms",
+        "--config",
+        &config,
+        "--from",
+        "trig",
+        &input,
+        second.to_str().expect("second path"),
+    ]);
+    assert!(
+        second_result.status.success(),
+        "repeat OKF terms project failed: {}",
+        String::from_utf8_lossy(&second_result.stderr)
+    );
+    let first_bytes = std::fs::read(&first).expect("first archive");
+    assert_eq!(first_bytes, std::fs::read(&second).expect("second archive"));
+    let parsed_config = ProjectionConfig::from_json(OKF_TERMS_CONFIG).expect("fixture config");
+    let package = ProjectionPackage::from_ustar(&first_bytes, parsed_config.limits())
+        .expect("canonical archive");
+    assert_eq!(
+        package
+            .artifacts()
+            .map(|(path, _)| path)
+            .collect::<Vec<_>>(),
+        [
+            "classes/A.md",
+            "classes/index.md",
+            "index.md",
+            "properties/B.md",
+            "properties/index.md",
+        ]
+    );
+    let loss_json = std::fs::read_to_string(ledger).expect("loss ledger");
+    assert_eq!(loss_json.matches("named-graph-dropped").count(), 2);
+    assert!(loss_json.contains("okf-non-profile-quad-dropped"));
+
+    let lifted = run(&[
+        "lift",
+        "--profile",
+        "okf-terms",
+        "--config",
+        &config,
+        first.to_str().expect("first path"),
+        "-",
+    ]);
+    assert_eq!(lifted.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&lifted.stderr).contains("invalid value 'okf-terms'"));
 }

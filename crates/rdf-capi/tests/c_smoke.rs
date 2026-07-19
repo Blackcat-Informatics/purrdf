@@ -36,19 +36,16 @@ fn c_abi_smoke() {
         std::env::consts::DLL_SUFFIX
     );
     let lib = profile_dir.join(&lib_name);
-    if !lib.exists() {
-        // The cdylib is a separate build artifact that `cargo test` / `cargo
-        // nextest` do NOT build as a dependency of this test binary. Build it on
-        // demand so the smoke is hermetic in EVERY lane (the workspace
-        // `cargo nextest` run and the dedicated `make capi-check`), not only when
-        // some earlier step happened to build the cdylib first.
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-        let status = Command::new(&cargo)
-            .args(["build", "-p", "purrdf-capi"])
-            .status()
-            .expect("failed to invoke cargo to build the libpurrdf cdylib");
-        assert!(status.success(), "cargo build -p purrdf-capi failed");
-    }
+    // The cdylib is a separate build artifact that `cargo test` / `cargo
+    // nextest` do NOT build as a dependency of this test binary. Always build
+    // it before linkage: existence alone is insufficient because a prior test
+    // run may have left a stale shared library for older Rust sources.
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let status = Command::new(&cargo)
+        .args(["build", "-p", "purrdf-capi"])
+        .status()
+        .expect("failed to invoke cargo to build the libpurrdf cdylib");
+    assert!(status.success(), "cargo build -p purrdf-capi failed");
     assert!(
         lib.exists(),
         "{lib_name} not found at {} even after building purrdf-capi",
@@ -80,6 +77,8 @@ fn c_abi_smoke() {
         "LD_LIBRARY_PATH"
     };
     let run = Command::new(&bin)
+        .arg(format!("{manifest}/../rdf/tests/fixtures/okf-terms.trig"))
+        .arg(format!("{manifest}/../rdf/tests/fixtures/okf-terms.json"))
         .env(loader_path_var, &profile_dir)
         .status()
         .expect("failed to run the C smoke binary");

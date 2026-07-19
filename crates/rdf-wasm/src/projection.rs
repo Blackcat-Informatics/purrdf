@@ -154,6 +154,8 @@ mod tests {
     const RESEARCH_SOURCE: &str =
         include_str!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl");
     const CSVW_TERMS_CONFIG: &str = include_str!("../../rdf/tests/fixtures/csvw-terms.json");
+    const OKF_TERMS_CONFIG: &str = include_str!("../../rdf/tests/fixtures/okf-terms.json");
+    const OKF_TERMS_SOURCE: &str = include_str!("../../rdf/tests/fixtures/okf-terms.trig");
     const RESEARCH_CONFIGS: &[(&str, &str)] = &[
         (
             "croissant-1.1",
@@ -233,5 +235,20 @@ mod tests {
         assert_eq!(first.profile, "csvw-terms");
         assert_eq!(first.archive, second.archive);
         assert!("csvw-terms".parse::<LiftProfile>().is_err());
+    }
+
+    #[test]
+    fn wasm_projection_shim_exposes_write_only_curated_okf_terms() {
+        let dataset = Dataset::parse(OKF_TERMS_SOURCE, "trig", None).expect("parse terms source");
+        let first = dataset
+            .project("okf-terms", OKF_TERMS_CONFIG)
+            .expect("project OKF terms");
+        let second = dataset
+            .project("okf-terms", OKF_TERMS_CONFIG)
+            .expect("repeat OKF terms");
+        assert_eq!(first.profile, "okf-terms");
+        assert_eq!(first.archive, second.archive);
+        assert!(first.loss_ledger_json.contains("named-graph-dropped"));
+        assert!("okf-terms".parse::<LiftProfile>().is_err());
     }
 }
