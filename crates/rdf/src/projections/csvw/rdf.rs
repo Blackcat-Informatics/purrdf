@@ -3,6 +3,7 @@
 
 //! Normative CSVW-to-RDF conversion.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -152,9 +153,15 @@ impl Converter<'_> {
                     let object = self.builder.intern_iri(&value);
                     self.quad(subject, predicate, object);
                 } else {
+                    let mut component_variables = cell_variables.clone();
                     for component in &cell.values {
-                        let mut component_variables = cell_variables.clone();
-                        component_variables.insert(column.name.clone(), component.source.clone());
+                        let component_variable =
+                            component_variables.get_mut(&column.name).ok_or_else(|| {
+                                ProjectionError::integrity(
+                                    "CSVW component variable is absent from its row",
+                                )
+                            })?;
+                        component_variable.clone_from(&component.source);
                         let value =
                             expand_url(template, &component_variables, &table.url, self.config)?;
                         let object = self.builder.intern_iri(&value);
@@ -420,20 +427,16 @@ fn expand_url(
             },
             |name| (Some('#'), name),
         );
-        let value = if name == "_name" {
-            variables.get("_name").cloned().unwrap_or_default()
-        } else {
-            variables.get(name).cloned().unwrap_or_default()
-        };
+        let value = variables.get(name).map_or("", String::as_str);
         if operator == Some('#') && !value.is_empty() {
             output.push('#');
         }
         if name == "_name" {
-            output.push_str(&value);
+            output.push_str(value);
         } else if operator == Some('+') {
-            output.push_str(&percent_encode_reserved(&value));
+            output.push_str(&percent_encode_reserved(value));
         } else {
-            output.push_str(&percent_encode(&value));
+            output.push_str(&percent_encode(value));
         }
         rest = &after[close + 1..];
     }
@@ -453,43 +456,50 @@ fn expand_url(
         .map_err(|error| ProjectionError::term(format!("invalid expanded CSVW URL: {error}")))
 }
 
-fn percent_encode_reserved(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric()
-            || matches!(
-                byte,
-                b'-' | b'.'
-                    | b'_'
-                    | b'~'
-                    | b':'
-                    | b'/'
-                    | b'?'
-                    | b'#'
-                    | b'['
-                    | b']'
-                    | b'@'
-                    | b'!'
-                    | b'$'
-                    | b'&'
-                    | b'\''
-                    | b'('
-                    | b')'
-                    | b'*'
-                    | b'+'
-                    | b','
-                    | b';'
-                    | b'='
-                    | b'%'
-            )
-        {
+fn percent_encode_reserved(value: &str) -> Cow<'_, str> {
+    let Some(first_escape) = value.bytes().position(|byte| !reserved_byte(byte)) else {
+        return Cow::Borrowed(value);
+    };
+    let mut output = String::with_capacity(value.len() + 2);
+    output.push_str(&value[..first_escape]);
+    for &byte in &value.as_bytes()[first_escape..] {
+        if reserved_byte(byte) {
             output.push(char::from(byte));
         } else {
             use std::fmt::Write as _;
             let _ = write!(output, "%{byte:02X}");
         }
     }
-    output
+    Cow::Owned(output)
+}
+
+const fn reserved_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'-' | b'.'
+                | b'_'
+                | b'~'
+                | b':'
+                | b'/'
+                | b'?'
+                | b'#'
+                | b'['
+                | b']'
+                | b'@'
+                | b'!'
+                | b'$'
+                | b'&'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b';'
+                | b'='
+                | b'%'
+        )
 }
 
 fn fragment_iri(table_url: &str, name: &str) -> Result<String, ProjectionError> {
@@ -530,4 +540,24 @@ fn expand_jsonld_iri(value: &str, config: &CsvwConfig) -> Result<String, Project
     base.resolve(value)
         .map(|iri| iri.as_str().to_owned())
         .map_err(|error| ProjectionError::term(format!("invalid CSVW JSON-LD IRI: {error}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::percent_encode_reserved;
+    use std::borrow::Cow;
+
+    #[test]
+    fn reserved_expansion_borrows_unchanged_iris_and_encodes_only_on_demand() {
+        let unchanged = "https://example.org/a/b?x=y#fragment";
+        assert!(matches!(
+            percent_encode_reserved(unchanged),
+            Cow::Borrowed(value) if value == unchanged
+        ));
+
+        assert_eq!(
+            percent_encode_reserved("https://example.org/na\u{ef}ve path"),
+            Cow::<str>::Owned("https://example.org/na%C3%AFve%20path".to_owned())
+        );
+    }
 }
