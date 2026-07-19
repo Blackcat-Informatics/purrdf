@@ -316,6 +316,38 @@ fn bench_jsonld_derived_many_namespaces(c: &mut Criterion) {
     group.finish();
 }
 
+/// Named-graph usage accounting and multivalue ordering are independent carrier
+/// hot paths, so keep adversarial shapes for both in the report-only benchmark.
+fn bench_jsonld_carrier_stress(c: &mut Criterion) {
+    let context = std::sync::Arc::new(
+        CompiledJsonLdContext::from_prefixes([("bench", "https://bench.example/")])
+            .expect("compile benchmark context"),
+    );
+    let options = JsonLdSerializeOptions::compiled(context);
+    let mut group = c.benchmark_group("jsonld_carrier_stress");
+    group.sample_size(10);
+    for (name, dataset) in [
+        (
+            "named_graphs_512",
+            jsonld_fixture::build_many_named_graph_dataset(512),
+        ),
+        (
+            "multivalue_4096",
+            jsonld_fixture::build_multivalue_dataset(4_096),
+        ),
+    ] {
+        group.bench_with_input(name, &dataset, |bencher, dataset| {
+            bencher.iter(|| {
+                black_box(
+                    serialize_dataset_to_jsonld_with_options(black_box(dataset), &options)
+                        .expect("serialize carrier stress fixture"),
+                );
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_parse_nquads,
@@ -324,6 +356,7 @@ criterion_group!(
     bench_serialize_nquads,
     bench_jsonld_expanded,
     bench_jsonld_configured,
-    bench_jsonld_derived_many_namespaces
+    bench_jsonld_derived_many_namespaces,
+    bench_jsonld_carrier_stress
 );
 criterion_main!(benches);

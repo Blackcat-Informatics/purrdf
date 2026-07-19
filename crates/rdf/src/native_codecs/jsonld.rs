@@ -27,8 +27,9 @@ pub use context::{
     JsonLdTypeMapping,
 };
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
+use std::hash::BuildHasherDefault;
 use std::io::Write as IoWrite;
 use std::sync::Arc;
 
@@ -114,6 +115,8 @@ struct Indexes<'a> {
 type QuadGroups = BTreeMap<Option<usize>, BTreeMap<usize, Vec<(usize, usize)>>>;
 /// Reifier id to every `(subject, predicate, object, graph)` binding it owns.
 type BindingsByReifier = BTreeMap<usize, Vec<(usize, usize, usize, Option<usize>)>>;
+type FixedHashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<ahash::AHasher>>;
+type FixedHashSet<T> = HashSet<T, BuildHasherDefault<ahash::AHasher>>;
 
 // ── serialize-side helpers over the first-party SerGraph ────────────────────────────
 
@@ -902,28 +905,38 @@ fn fold_document_rdf_lists(document: &mut CarrierDocument) {
     for (index, graph) in document.named_graphs.iter().enumerate() {
         graph_usage[index + 1].insert(graph.id.clone());
     }
+    let mut usage_counts: FixedHashMap<String, usize> = FixedHashMap::default();
+    for usage in &graph_usage {
+        for id in usage {
+            *usage_counts.entry(id.clone()).or_default() += 1;
+        }
+    }
 
-    let external_for = |index: usize| -> BTreeSet<String> {
-        graph_usage
-            .iter()
-            .enumerate()
-            .filter(|(other, _)| *other != index)
-            .flat_map(|(_, usage)| usage.iter().cloned())
-            .collect()
-    };
-    fold_rdf_lists(&mut document.default_nodes, &external_for(0));
+    fold_rdf_lists(&mut document.default_nodes, |id| {
+        used_in_another_graph(id, &graph_usage[0], &usage_counts)
+    });
     for (index, graph) in document.named_graphs.iter_mut().enumerate() {
-        let mut externally_used = external_for(index + 1);
+        let current_usage = &graph_usage[index + 1];
         // A graph name and a node/list identifier inhabit the same RDF blank-node
         // identity space.  Keep that identity explicit even when the only other use
         // of the identifier is as the name of the graph currently being folded.
-        externally_used.insert(graph.id.clone());
-        fold_rdf_lists(&mut graph.nodes, &externally_used);
+        let graph_id = graph.id.as_str();
+        fold_rdf_lists(&mut graph.nodes, |id| {
+            id == graph_id || used_in_another_graph(id, current_usage, &usage_counts)
+        });
     }
 }
 
-fn carrier_node_usage(nodes: &[CarrierNode]) -> BTreeSet<String> {
-    let mut usage = BTreeSet::new();
+fn used_in_another_graph(
+    id: &str,
+    current_usage: &FixedHashSet<String>,
+    usage_counts: &FixedHashMap<String, usize>,
+) -> bool {
+    usage_counts.get(id).copied().unwrap_or_default() > usize::from(current_usage.contains(id))
+}
+
+fn carrier_node_usage(nodes: &[CarrierNode]) -> FixedHashSet<String> {
+    let mut usage = FixedHashSet::default();
     for node in nodes {
         usage.insert(node.id.clone());
         for values in node.properties.values() {
@@ -937,7 +950,7 @@ fn carrier_node_usage(nodes: &[CarrierNode]) -> BTreeSet<String> {
 
 fn collect_carrier_value_ids(
     value: &CarrierValue,
-    output: &mut BTreeSet<String>,
+    output: &mut FixedHashSet<String>,
     annotation_subjects: bool,
 ) {
     collect_carrier_term_ids(&value.term, output);
@@ -953,7 +966,7 @@ fn collect_carrier_value_ids(
     }
 }
 
-fn collect_carrier_term_ids(term: &CarrierTerm, output: &mut BTreeSet<String>) {
+fn collect_carrier_term_ids(term: &CarrierTerm, output: &mut FixedHashSet<String>) {
     match term {
         CarrierTerm::Id(id) => {
             output.insert(id.clone());
@@ -971,21 +984,21 @@ fn collect_carrier_term_ids(term: &CarrierTerm, output: &mut BTreeSet<String>) {
     }
 }
 
-fn fold_rdf_lists(nodes: &mut Vec<CarrierNode>, externally_used: &BTreeSet<String>) {
+fn fold_rdf_lists(nodes: &mut Vec<CarrierNode>, externally_used: impl Fn(&str) -> bool) {
     let mut annotation_subjects = BTreeSet::new();
     for node in nodes.iter() {
         collect_annotation_subjects(node, &mut annotation_subjects);
     }
-    let node_by_id: BTreeMap<String, usize> = nodes
+    let node_by_id: FixedHashMap<&str, usize> = nodes
         .iter()
         .enumerate()
-        .map(|(index, node)| (node.id.clone(), index))
+        .map(|(index, node)| (node.id.as_str(), index))
         .collect();
     let candidates: BTreeSet<String> = nodes
         .iter()
         .filter(|node| {
             node.id.starts_with("_:")
-                && !externally_used.contains(&node.id)
+                && !externally_used(&node.id)
                 && !annotation_subjects.contains(&node.id)
                 && node.types.is_empty()
                 && node.properties.len() == 2
@@ -1031,7 +1044,10 @@ fn fold_rdf_lists(nodes: &mut Vec<CarrierNode>, externally_used: &BTreeSet<Strin
             if !seen.insert(current.clone()) || incoming.get(&current) != Some(&1) {
                 break false;
             }
-            let Some(node) = node_by_id.get(&current).and_then(|index| nodes.get(*index)) else {
+            let Some(node) = node_by_id
+                .get(current.as_str())
+                .and_then(|index| nodes.get(*index))
+            else {
                 break false;
             };
             let Some(first) = node.properties.get(RDF_FIRST).and_then(|rows| rows.first()) else {
@@ -1302,7 +1318,7 @@ fn term_to_value(graph: &SerGraph, term: &SerTerm) -> Result<CarrierTerm, RdfDia
             {
                 None
             } else {
-                Some(absolute_iri(&datatype))
+                Some(datatype)
             };
             Ok(CarrierTerm::Literal(CarrierLiteral {
                 lexical: term.value.clone().unwrap_or_default(),
@@ -1426,37 +1442,6 @@ fn term_sort_key(graph: &SerGraph, term: &SerTerm) -> String {
 /// Preserve a source IRI verbatim at the vocabulary-free serialization boundary.
 fn absolute_iri(iri: &str) -> String {
     iri.to_string()
-}
-
-/// Deterministic comparison of JSON-LD value objects.
-fn cmp_value(a: &Value, b: &Value) -> std::cmp::Ordering {
-    let key = |v: &Value| -> String {
-        if let Some(s) = v.as_str() {
-            return format!("0:{s}");
-        }
-        if let Some(obj) = v.as_object() {
-            let mut parts: Vec<String> = Vec::new();
-            if let Some(id) = obj.get("@id").and_then(Value::as_str) {
-                parts.push(format!("id={id}"));
-            }
-            if let Some(val) = obj.get("@value").and_then(Value::as_str) {
-                parts.push(format!("value={val}"));
-            }
-            if let Some(lang) = obj.get("@language").and_then(Value::as_str) {
-                parts.push(format!("lang={lang}"));
-            }
-            if let Some(dir) = obj.get("@direction").and_then(Value::as_str) {
-                parts.push(format!("dir={dir}"));
-            }
-            if let Some(dt) = obj.get("@type").and_then(Value::as_str) {
-                parts.push(format!("dt={dt}"));
-            }
-            parts.sort();
-            return format!("1:{}", parts.join("|"));
-        }
-        format!("2:{v}")
-    };
-    key(a).cmp(&key(b))
 }
 
 // ── parse side: JSON-LD-star → native carrier ───────────────────────────────────────

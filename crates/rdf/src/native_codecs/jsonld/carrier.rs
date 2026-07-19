@@ -18,8 +18,8 @@ use serde_json::Value as JsonValue;
 
 use super::{
     CompiledJsonLdContext, JsonLdContainer, JsonLdDirection, JsonLdNullable, JsonLdTermDefinition,
-    JsonLdTermSelection, JsonLdTermSelectionKind, JsonLdTypeMapping, RdfDiagnostic, cmp_value,
-    decode, to_json_object,
+    JsonLdTermSelection, JsonLdTermSelectionKind, JsonLdTypeMapping, RdfDiagnostic, decode,
+    to_json_object,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -816,10 +816,10 @@ impl Node {
     pub(super) fn sort_values(&mut self) {
         self.types.sort();
         for values in self.properties.values_mut() {
-            values.sort_by(|left, right| cmp_value(&left.expanded_json(), &right.expanded_json()));
+            values.sort_by(compare_values);
         }
         for values in self.reverse_properties.values_mut() {
-            values.sort_by(|left, right| cmp_value(&left.expanded_json(), &right.expanded_json()));
+            values.sort_by(compare_values);
         }
     }
 
@@ -1034,6 +1034,72 @@ fn relocate_reverse_properties(
 pub(super) struct Value {
     pub(super) term: Term,
     pub(super) annotations: Vec<Node>,
+}
+
+#[derive(Clone, Copy)]
+struct ValueSortPart<'a> {
+    label: &'static str,
+    value: &'a str,
+}
+
+const EMPTY_VALUE_SORT_PART: ValueSortPart<'static> = ValueSortPart {
+    label: "",
+    value: "",
+};
+
+struct ValueSortKey<'a> {
+    parts: [ValueSortPart<'a>; 4],
+    len: usize,
+}
+
+impl<'a> ValueSortKey<'a> {
+    fn new(value: &'a Value) -> Self {
+        let mut key = Self {
+            parts: [EMPTY_VALUE_SORT_PART; 4],
+            len: 0,
+        };
+        match &value.term {
+            Term::Id(id) => key.push("id=", id),
+            Term::Literal(literal) => {
+                if let Some(direction) = &literal.direction {
+                    key.push("dir=", direction);
+                }
+                if let Some(datatype) = &literal.datatype {
+                    key.push("dt=", datatype);
+                }
+                if let Some(language) = &literal.language {
+                    key.push("lang=", language);
+                }
+                key.push("value=", &literal.lexical);
+            }
+            Term::Triple(_) | Term::List(_) => {}
+        }
+        key
+    }
+
+    fn push(&mut self, label: &'static str, value: &'a str) {
+        self.parts[self.len] = ValueSortPart { label, value };
+        self.len += 1;
+    }
+
+    fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
+        self.parts[..self.len]
+            .iter()
+            .enumerate()
+            .flat_map(|(index, part)| {
+                (index > 0)
+                    .then_some(b'|')
+                    .into_iter()
+                    .chain(part.label.bytes())
+                    .chain(part.value.bytes())
+            })
+    }
+}
+
+fn compare_values(left: &Value, right: &Value) -> std::cmp::Ordering {
+    ValueSortKey::new(left)
+        .bytes()
+        .cmp(ValueSortKey::new(right).bytes())
 }
 
 impl Value {
@@ -1587,4 +1653,69 @@ fn insert_unique(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn materialized_sort_key(value: &Value) -> String {
+        let object = value.expanded_json();
+        let object = object.as_object().expect("carrier value object");
+        let mut parts = Vec::new();
+        for (keyword, label) in [
+            ("@id", "id"),
+            ("@value", "value"),
+            ("@language", "lang"),
+            ("@direction", "dir"),
+            ("@type", "dt"),
+        ] {
+            if let Some(value) = object.get(keyword).and_then(JsonValue::as_str) {
+                parts.push(format!("{label}={value}"));
+            }
+        }
+        parts.sort();
+        format!("1:{}", parts.join("|"))
+    }
+
+    fn literal(
+        lexical: &str,
+        datatype: Option<&str>,
+        language: Option<&str>,
+        direction: Option<&str>,
+    ) -> Value {
+        Value::plain(Term::Literal(Literal {
+            lexical: lexical.to_owned(),
+            datatype: datatype.map(str::to_owned),
+            language: language.map(str::to_owned),
+            direction: direction.map(str::to_owned),
+        }))
+    }
+
+    #[test]
+    fn allocation_free_value_order_matches_the_materialized_json_key() {
+        let values = [
+            Value::plain(Term::List(Vec::new())),
+            Value::plain(Term::Triple(Box::new(Triple {
+                subject: Box::new(Term::Id("urn:s".to_owned())),
+                predicate: "urn:p".to_owned(),
+                object: Box::new(Term::Id("urn:o".to_owned())),
+            }))),
+            Value::plain(Term::Id("https://example.org/a".to_owned())),
+            Value::plain(Term::Id("https://example.org/aZ".to_owned())),
+            literal("a", None, None, None),
+            literal("aZ", None, Some("en"), None),
+            literal("z", Some("urn:datatype"), None, Some("a")),
+            literal("z", Some("urn:datatype"), None, Some("aZ")),
+            literal("é", None, Some("fr"), Some("ltr")),
+        ];
+        for left in &values {
+            for right in &values {
+                assert_eq!(
+                    compare_values(left, right),
+                    materialized_sort_key(left).cmp(&materialized_sort_key(right))
+                );
+            }
+        }
+    }
 }
