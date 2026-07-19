@@ -11,7 +11,8 @@ SHA-256 checksums in `vectors.json` or `compaction_vectors.json`.
 - Upstream: <https://github.com/w3c/json-ld-api>
 - Tag: `REC-2020-07-16`
 - Revision: `3e7fa5377b2b3c5176eacf8bde8e01fdb7c4a062`
-- Upstream paths: `tests/toRdf-manifest.jsonld` and `tests/toRdf/`
+- Upstream paths: `tests/toRdf-manifest.jsonld`, `tests/toRdf/`,
+  `tests/compact-manifest.jsonld`, and `tests/compact/`
 - Imported: 2026-07-17
 - Upstream terms: W3C Test Suite License, referenced in `LICENSE.md`
 

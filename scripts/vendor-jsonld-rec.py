@@ -53,8 +53,13 @@ def read_text(tests: Path, relative: object) -> str:
     return (tests / str(relative)).read_text(encoding="utf-8")
 
 
+def write_json(output: Path, document: object) -> None:
+    with output.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+
+
 def vendor_to_rdf(tests: Path, output: Path) -> None:
-    manifest = json.loads((tests / "toRdf-manifest.jsonld").read_text())
+    manifest = json.loads((tests / "toRdf-manifest.jsonld").read_text(encoding="utf-8"))
     cases = cases_by_id(manifest)
     vectors = []
     for identifier in TO_RDF_IDS:
@@ -79,11 +84,11 @@ def vendor_to_rdf(tests: Path, output: Path) -> None:
         "expected_vector_count": len(vectors),
         "vectors": vectors,
     }
-    output.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+    write_json(output, document)
 
 
 def vendor_compaction(tests: Path, output: Path) -> None:
-    manifest = json.loads((tests / "compact-manifest.jsonld").read_text())
+    manifest = json.loads((tests / "compact-manifest.jsonld").read_text(encoding="utf-8"))
     cases = cases_by_id(manifest)
     vectors = []
     for identifier in COMPACTION_IDS:
@@ -111,7 +116,7 @@ def vendor_compaction(tests: Path, output: Path) -> None:
         "expected_vector_count": len(vectors),
         "vectors": vectors,
     }
-    output.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+    write_json(output, document)
 
 
 def main() -> None:
