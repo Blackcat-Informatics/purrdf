@@ -135,10 +135,10 @@ pub use loss::{
     LossEntry, LossLedger, PROJECTION_CODECS, RESEARCH_OBJECT_CODECS, SCHEMA_IMPORT_CODECS,
     assert_ledger_complete, assert_ledger_sound, check_ledger_complete, check_ledger_sound,
     gts_to_rdf_loss_ledger, loss_matrix_json, lpg_to_rdf_loss_ledger, okf_to_rdf_loss_ledger,
-    pair_loss_ledger, profile_for, rdf_gts_loss_matrix_json, rdf_to_gts_loss_ledger,
-    rdf_to_lpg_loss_ledger, rdf_to_obo_graphs_loss_ledger, rdf_to_okf_loss_ledger,
-    rdf_to_research_object_loss_ledger, rdf_to_skos_loss_ledger, registered_pairs,
-    research_object_to_rdf_loss_ledger, schema_to_shacl_loss_ledger,
+    pair_loss_ledger, profile_for, rdf_gts_loss_matrix_json, rdf_to_csvw_terms_loss_ledger,
+    rdf_to_gts_loss_ledger, rdf_to_lpg_loss_ledger, rdf_to_obo_graphs_loss_ledger,
+    rdf_to_okf_loss_ledger, rdf_to_research_object_loss_ledger, rdf_to_skos_loss_ledger,
+    registered_pairs, research_object_to_rdf_loss_ledger, schema_to_shacl_loss_ledger,
 };
 pub use model::{
     RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTermKind, RdfTextDirection,

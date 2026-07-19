@@ -61,13 +61,16 @@ pub use carrier::{
     lift_archive, project_archive, project_lpg_artifacts_to_sink,
 };
 pub use csvw::{
-    CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig, CsvwContext, CsvwDatatype,
-    CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection, CsvwExactReadOutcome, CsvwForeignKey,
-    CsvwInheritedProperties, CsvwInput, CsvwMappedTableGroup, CsvwMode, CsvwNaturalLanguage,
-    CsvwNumericFormat, CsvwRdfTableMapping, CsvwReadOutcome, CsvwReference, CsvwRow, CsvwSchema,
-    CsvwTable, CsvwTableDirection, CsvwTableGroup, CsvwTextDirection, CsvwTransformation, CsvwTrim,
-    CsvwValue, CsvwVocabulary, CsvwWarning, CsvwWarningKind, CsvwWriteOutcome, CsvwWritePlan,
-    project_csvw, project_csvw_exact, read_csvw, read_csvw_exact, write_csvw,
+    CSVW_TERMS_PROFILE, CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig, CsvwContext,
+    CsvwDatatype, CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection, CsvwExactReadOutcome,
+    CsvwForeignKey, CsvwInheritedProperties, CsvwInput, CsvwMappedTableGroup, CsvwMode,
+    CsvwNaturalLanguage, CsvwNumericFormat, CsvwRdfTableMapping, CsvwReadOutcome, CsvwReference,
+    CsvwRow, CsvwSchema, CsvwTable, CsvwTableDirection, CsvwTableGroup, CsvwTermsCardinality,
+    CsvwTermsColumn, CsvwTermsConfig, CsvwTermsGraphSelection, CsvwTermsIdentityColumn,
+    CsvwTermsLimits, CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, CsvwTextDirection,
+    CsvwTransformation, CsvwTrim, CsvwValue, CsvwVocabulary, CsvwWarning, CsvwWarningKind,
+    CsvwWriteOutcome, CsvwWritePlan, project_csvw, project_csvw_exact, read_csvw, read_csvw_exact,
+    write_csvw,
 };
 pub use error::{ProjectionError, ProjectionErrorKind};
 pub use lpg::{

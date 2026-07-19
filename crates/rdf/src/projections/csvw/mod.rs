@@ -11,6 +11,7 @@ mod metadata;
 mod model;
 mod rdf;
 mod table;
+mod terms;
 mod writer;
 
 pub use config::{CsvwConfig, CsvwContext, CsvwMode, CsvwVocabulary};
@@ -22,6 +23,11 @@ pub use model::{
     CsvwForeignKey, CsvwInheritedProperties, CsvwNaturalLanguage, CsvwNumericFormat, CsvwReference,
     CsvwRow, CsvwSchema, CsvwTable, CsvwTableDirection, CsvwTableGroup, CsvwTextDirection,
     CsvwTransformation, CsvwTrim, CsvwValue,
+};
+pub use terms::{
+    CSVW_TERMS_PROFILE, CsvwTermsCardinality, CsvwTermsColumn, CsvwTermsConfig,
+    CsvwTermsGraphSelection, CsvwTermsIdentityColumn, CsvwTermsLimits, CsvwTermsSelector,
+    CsvwTermsTable, CsvwTermsValueMode,
 };
 pub use writer::{
     CsvwMappedTableGroup, CsvwRdfTableMapping, CsvwWriteOutcome, CsvwWritePlan, project_csvw,
