@@ -55,9 +55,9 @@
     ></div>
 
     <p class="jsonld-note" role="note">
-      Note: JSON-LD is a <strong>first-class bidirectional</strong> codec here — it
-      both parses and serializes, and its JSON-LD-star <code>@triple</code> encoding
-      round-trips object-position quoted triples losslessly.
+      Note: JSON-LD and YAML-LD are <strong>first-class bidirectional</strong> codecs
+      here. Their JSON-LD-star <code>@triple</code> encoding round-trips
+      object-position quoted triples losslessly.
     </p>
 
     <nav class="tabs" aria-label="Console panes">
@@ -85,6 +85,7 @@
             <option value="trig">TriG</option>
             <option value="rdfxml">RDF/XML</option>
             <option value="jsonld">JSON-LD</option>
+            <option value="yamlld">YAML-LD</option>
           </select>
         </div>
         <div class="field">
@@ -101,7 +102,7 @@
       <section id="pane-roundtrip" class="pane" role="tabpanel" aria-labelledby="tab-roundtrip" hidden>
         <h2>Round-trip &amp; differential</h2>
         <p class="muted">
-          Render the current graph in all six serialize formats side-by-side. The
+          Render the current graph in all seven serialize formats side-by-side. The
           canonical RDFC-1.0 N-Quads form is the graph's deterministic identity.
         </p>
         <div class="actions">
@@ -173,6 +174,7 @@
                 <option value="trig">TriG</option>
                 <option value="rdfxml">RDF/XML</option>
                 <option value="jsonld">JSON-LD</option>
+                <option value="yamlld">YAML-LD</option>
               </select>
             </div>
             <div class="field">
@@ -190,6 +192,7 @@
                 <option value="trig">TriG</option>
                 <option value="rdfxml">RDF/XML</option>
                 <option value="jsonld">JSON-LD</option>
+                <option value="yamlld">YAML-LD</option>
               </select>
             </div>
             <div class="field">

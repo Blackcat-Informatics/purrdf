@@ -16,9 +16,17 @@ import {
 
 const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
 
-/** The 6 codecs that can PARSE (JSON-LD is a first-class bidirectional codec). */
-const PARSE_FORMATS = ["turtle", "ntriples", "nquads", "trig", "rdfxml", "jsonld"];
-/** The 6 codecs that can SERIALIZE. */
+/** The 7 codecs that can PARSE (JSON-LD and YAML-LD are bidirectional codecs). */
+const PARSE_FORMATS = [
+  "turtle",
+  "ntriples",
+  "nquads",
+  "trig",
+  "rdfxml",
+  "jsonld",
+  "yamlld",
+];
+/** The 7 codecs that can SERIALIZE. */
 const SERIALIZE_FORMATS = [
   "turtle",
   "ntriples",
@@ -26,6 +34,7 @@ const SERIALIZE_FORMATS = [
   "trig",
   "rdfxml",
   "jsonld",
+  "yamlld",
 ];
 
 /** @type {Dataset|null} The single source of truth for the console's graph. */
@@ -142,7 +151,7 @@ const HANDLERS = {
       let text = null;
       try {
         text =
-          f === "jsonld" && jsonldOptions != null
+          (f === "jsonld" || f === "yamlld") && jsonldOptions != null
             ? ds.serializeConfigured(
                 f,
                 typeof jsonldOptions === "string"

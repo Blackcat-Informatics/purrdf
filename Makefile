@@ -311,8 +311,8 @@ playground: wasm-pkg ## Assemble the standalone RDF-1.2 console into $(CARGO_TAR
 	@echo "OK: console assembled at $(PLAYGROUND_OUT)"
 	@echo "    preview: (cd $(PLAYGROUND_OUT) && python3 -m http.server 8080) then open http://localhost:8080/"
 
-playground-smoke: wasm-pkg ## Smoke the console's engine calls (every pane's package call, Node-side; a CI gate).
-	node --test docs/playground/smoke/*.test.mjs
+playground-smoke: playground ## Smoke the assembled console's worker dispatch and every pane's package calls (Node-side; a CI gate).
+	PLAYGROUND_OUT="$(abspath $(PLAYGROUND_OUT))" node --test docs/playground/smoke/*.test.mjs
 
 capi-build: ## Build libpurrdf (cdylib + staticlib + header + pkg-config) via cargo-c.
 	cargo capi build -p purrdf-capi

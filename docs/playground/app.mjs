@@ -333,7 +333,15 @@ async function doParse() {
 // Pane: Round-trip / differential
 // ---------------------------------------------------------------------------
 
-const SER_ORDER = ["turtle", "ntriples", "nquads", "trig", "rdfxml", "jsonld"];
+const SER_ORDER = [
+  "turtle",
+  "ntriples",
+  "nquads",
+  "trig",
+  "rdfxml",
+  "jsonld",
+  "yamlld",
+];
 const MIME = {
   turtle: "text/turtle",
   ntriples: "application/n-triples",
@@ -341,6 +349,7 @@ const MIME = {
   trig: "application/trig",
   rdfxml: "application/rdf+xml",
   jsonld: "application/ld+json",
+  yamlld: "application/ld+yaml",
 };
 const EXT = {
   turtle: "ttl",
@@ -349,6 +358,7 @@ const EXT = {
   trig: "trig",
   rdfxml: "rdf",
   jsonld: "jsonld",
+  yamlld: "yamlld",
 };
 
 async function doSerializeAll() {
