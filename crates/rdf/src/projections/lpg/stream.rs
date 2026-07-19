@@ -296,6 +296,8 @@ where
             artifact_bytes: 0,
             total_before: self.total_bytes,
             next_progress_bytes: PROGRESS_BYTE_STRIDE,
+            buffer: [0; SINK_CHUNK_BYTES],
+            buffered: 0,
             failure: None,
         };
         let encode_result = encode(&mut writer);
@@ -303,6 +305,7 @@ where
             return Err(error);
         }
         encode_result?;
+        writer.flush_buffer()?;
         let artifact_bytes = writer.artifact_bytes;
         self.total_bytes = self
             .total_bytes
@@ -379,6 +382,8 @@ pub(super) struct LpgArtifactWriter<'a, S, O> {
     artifact_bytes: usize,
     total_before: usize,
     next_progress_bytes: usize,
+    buffer: [u8; SINK_CHUNK_BYTES],
+    buffered: usize,
     failure: Option<ProjectionError>,
 }
 
@@ -404,11 +409,12 @@ where
         Ok(())
     }
 
-    pub(super) fn write_bytes(&mut self, chunk: &[u8]) -> Result<(), ProjectionError> {
-        for bounded_chunk in chunk.chunks(SINK_CHUNK_BYTES) {
+    pub(super) fn write_bytes(&mut self, mut chunk: &[u8]) -> Result<(), ProjectionError> {
+        while !chunk.is_empty() {
+            let chunk_bytes = chunk.len().min(SINK_CHUNK_BYTES - self.buffered);
             let artifact_bytes = self
                 .artifact_bytes
-                .checked_add(bounded_chunk.len())
+                .checked_add(chunk_bytes)
                 .ok_or_else(|| ProjectionError::limit("artifact byte count overflow"))?;
             if artifact_bytes > self.limits.max_artifact_bytes() {
                 return Err(ProjectionError::limit(format!(
@@ -428,21 +434,41 @@ where
                 ))
                 .at_path(self.path));
             }
-            self.sink.write_chunk(bounded_chunk)?;
+
+            let buffered = self.buffered + chunk_bytes;
+            self.buffer[self.buffered..buffered].copy_from_slice(&chunk[..chunk_bytes]);
+            self.buffered = buffered;
             self.artifact_bytes = artifact_bytes;
-            if self.artifact_bytes >= self.next_progress_bytes {
-                self.observer.observe(&LpgProgress {
-                    phase: LpgProgressPhase::Writing,
-                    report: self.report,
-                    artifacts: self.finished_artifacts,
-                    bytes: total_bytes,
-                    path: Some(self.path.to_owned()),
-                })?;
-                self.next_progress_bytes = self
-                    .artifact_bytes
-                    .checked_add(PROGRESS_BYTE_STRIDE)
-                    .ok_or_else(|| ProjectionError::limit("progress byte count overflow"))?;
+            chunk = &chunk[chunk_bytes..];
+            if self.buffered == SINK_CHUNK_BYTES {
+                self.flush_buffer()?;
             }
+        }
+        Ok(())
+    }
+
+    fn flush_buffer(&mut self) -> Result<(), ProjectionError> {
+        if self.buffered == 0 {
+            return Ok(());
+        }
+        self.sink.write_chunk(&self.buffer[..self.buffered])?;
+        self.buffered = 0;
+        if self.artifact_bytes >= self.next_progress_bytes {
+            let total_bytes = self
+                .total_before
+                .checked_add(self.artifact_bytes)
+                .ok_or_else(|| ProjectionError::limit("package byte count overflow"))?;
+            self.observer.observe(&LpgProgress {
+                phase: LpgProgressPhase::Writing,
+                report: self.report,
+                artifacts: self.finished_artifacts,
+                bytes: total_bytes,
+                path: Some(self.path.to_owned()),
+            })?;
+            self.next_progress_bytes = self
+                .artifact_bytes
+                .checked_add(PROGRESS_BYTE_STRIDE)
+                .ok_or_else(|| ProjectionError::limit("progress byte count overflow"))?;
         }
         Ok(())
     }
@@ -480,6 +506,14 @@ where
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        match self.flush_buffer() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.failure = Some(error);
+                Err(io::Error::other(
+                    "projection artifact sink rejected a chunk",
+                ))
+            }
+        }
     }
 }

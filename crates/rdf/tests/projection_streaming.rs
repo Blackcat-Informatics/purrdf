@@ -15,6 +15,7 @@ use purrdf_rdf::{
 };
 
 const TYPE: &str = "https://example.org/type";
+const SINK_CHUNK_BYTES: usize = 16 * 1_024;
 
 #[derive(Debug, Default)]
 struct RecordingSink {
@@ -55,6 +56,8 @@ impl ProjectionArtifactSink for RecordingSink {
     }
 
     fn write_chunk(&mut self, chunk: &[u8]) -> Result<(), ProjectionError> {
+        assert!(!chunk.is_empty());
+        assert!(chunk.len() <= SINK_CHUNK_BYTES);
         if self
             .fail_after_chunks
             .is_some_and(|maximum| self.chunks >= maximum)
@@ -138,7 +141,12 @@ fn assert_artifacts_equal(sink: &RecordingSink, package: &ProjectionPackage) {
             .collect::<Vec<_>>(),
         package.artifacts().collect::<Vec<_>>()
     );
-    assert!(sink.chunks > sink.artifacts.len());
+    let expected_chunks = sink
+        .artifacts
+        .values()
+        .map(|bytes| bytes.len().div_ceil(SINK_CHUNK_BYTES))
+        .sum::<usize>();
+    assert_eq!(sink.chunks, expected_chunks);
     assert!(sink.path_order.windows(2).all(|pair| pair[0] < pair[1]));
 }
 
