@@ -342,23 +342,27 @@ impl<'a> Projector<'a> {
             .collect();
         let mut documents = Vec::new();
         for subject in candidates {
-            let matching: Vec<&str> = self
+            let mut matching = self
                 .config
                 .categories()
                 .iter()
                 .filter(|(_, category)| self.selector_matches(category.selector(), &subject))
-                .map(|(key, _)| key.as_str())
-                .collect();
-            if matching.len() > 1 {
+                .map(|(key, _)| key.as_str());
+            let Some(category_key) = matching.next() else {
+                continue;
+            };
+            if let Some(second_key) = matching.next() {
+                let mut matching_keys = format!("{category_key}, {second_key}");
+                for key in matching {
+                    write!(matching_keys, ", {key}")
+                        .expect("writing category keys to a String cannot fail");
+                }
                 return Err(ProjectionError::integrity(format!(
                     "OKF subject {} matches multiple categories: {}",
                     term_text(&subject, OkfTermRendering::Canonical, self.config)?,
-                    matching.join(", ")
+                    matching_keys
                 )));
             }
-            let Some(category_key) = matching.first().copied() else {
-                continue;
-            };
             if documents.len() >= self.config.max_concepts() {
                 return Err(ProjectionError::limit(format!(
                     "OKF projection exceeds its {}-concept limit",
@@ -402,35 +406,28 @@ impl<'a> Projector<'a> {
         let Some(type_predicate) = selector.type_predicate() else {
             return true;
         };
-        let types = self.types_for(subject, type_predicate);
         (selector.any_types().is_empty()
             || selector
                 .any_types()
                 .iter()
-                .any(|value| types.contains(value.as_str())))
+                .any(|value| self.subject_has_type(subject, type_predicate, value)))
             && selector
                 .all_types()
                 .iter()
-                .all(|value| types.contains(value.as_str()))
+                .all(|value| self.subject_has_type(subject, type_predicate, value))
             && selector
                 .none_types()
                 .iter()
-                .all(|value| !types.contains(value.as_str()))
+                .all(|value| !self.subject_has_type(subject, type_predicate, value))
     }
 
-    fn types_for<'b>(&'b self, subject: &ProjectionTerm, predicate: &str) -> BTreeSet<&'b str> {
-        self.subject_indices(subject)
-            .iter()
-            .filter_map(|&index| {
-                let quad = &self.quads[index];
-                (self.graph_selected(quad.graph.as_ref()) && quad.predicate == predicate)
-                    .then_some(&quad.object)
-            })
-            .filter_map(|term| match term {
-                ProjectionTerm::Iri { value } => Some(value.as_str()),
-                _ => None,
-            })
-            .collect()
+    fn subject_has_type(&self, subject: &ProjectionTerm, predicate: &str, expected: &str) -> bool {
+        self.subject_indices(subject).iter().any(|&index| {
+            let quad = &self.quads[index];
+            self.graph_selected(quad.graph.as_ref())
+                && quad.predicate == predicate
+                && matches!(&quad.object, ProjectionTerm::Iri { value } if value == expected)
+        })
     }
 
     fn consume_classifier_evidence(&mut self, subject: &ProjectionTerm, category_key: &str) {
@@ -438,19 +435,22 @@ impl<'a> Projector<'a> {
         let Some(predicate) = selector.type_predicate() else {
             return;
         };
-        let required: BTreeSet<&str> = selector
-            .any_types()
-            .iter()
-            .chain(selector.all_types())
-            .map(String::as_str)
-            .collect();
-        for index in self.subject_indices(subject).to_vec() {
-            let quad = &self.quads[index];
-            if self.graph_selected(quad.graph.as_ref())
+        let selection = self.config.graph_selection();
+        let indices = self.by_subject.get(subject).map_or(&[][..], Vec::as_slice);
+        let quads = &self.quads;
+        let consumed = &mut self.consumed_quads;
+        for &index in indices {
+            let quad = &quads[index];
+            if Self::graph_is_selected(selection, quad.graph.as_ref())
                 && quad.predicate == predicate
-                && matches!(&quad.object, ProjectionTerm::Iri { value } if required.contains(value.as_str()))
+                && matches!(
+                    &quad.object,
+                    ProjectionTerm::Iri { value }
+                        if selector.any_types().contains(value)
+                            || selector.all_types().contains(value)
+                )
             {
-                self.consumed_quads[index] = true;
+                consumed[index] = true;
             }
         }
     }
@@ -491,11 +491,20 @@ impl<'a> Projector<'a> {
         predicate: &str,
         rendering: OkfTermRendering,
     ) -> Result<String, ProjectionError> {
-        let indices = self.matching_indices(subject, &BTreeSet::from([predicate.to_owned()]));
-        let values: BTreeSet<ProjectionTerm> = indices
-            .iter()
-            .map(|&index| self.quads[index].object.clone())
-            .collect();
+        let selection = self.config.graph_selection();
+        let indices = self.by_subject.get(subject).map_or(&[][..], Vec::as_slice);
+        let quads = &self.quads;
+        let consumed = &mut self.consumed_quads;
+        let mut values = BTreeSet::new();
+        for &index in indices {
+            let quad = &quads[index];
+            if Self::graph_is_selected(selection, quad.graph.as_ref())
+                && quad.predicate == predicate
+            {
+                values.insert(quad.object.clone());
+                consumed[index] = true;
+            }
+        }
         if values.len() != 1 {
             return Err(ProjectionError::integrity(format!(
                 "OKF path predicate `{predicate}` for {} must have exactly one distinct value; found {}",
@@ -508,9 +517,6 @@ impl<'a> Projector<'a> {
             rendering,
             self.config,
         )?;
-        for index in indices {
-            self.consumed_quads[index] = true;
-        }
         Ok(value)
     }
 
@@ -787,7 +793,11 @@ impl<'a> Projector<'a> {
     }
 
     fn graph_selected(&self, graph: Option<&ProjectionTerm>) -> bool {
-        match self.config.graph_selection() {
+        Self::graph_is_selected(self.config.graph_selection(), graph)
+    }
+
+    fn graph_is_selected(selection: &OkfGraphSelection, graph: Option<&ProjectionTerm>) -> bool {
+        match selection {
             OkfGraphSelection::All => true,
             selection @ OkfGraphSelection::Include { .. } => match graph {
                 None => selection.includes_default_graph(),
