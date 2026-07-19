@@ -109,7 +109,7 @@ impl JsonLdSerializeOptions {
     /// codes.
     pub fn from_json(bytes: &[u8]) -> Result<Self, RdfDiagnostic> {
         let limits = JsonLdContextLimits::default();
-        let value = parse_strict_json(bytes, limits.strict_json(), "JSON-LD options")?;
+        let value = parse_strict_json(bytes, limits.strict_options_json(), "JSON-LD options")?;
         decode_options(&value, limits)
     }
 
@@ -170,6 +170,48 @@ impl JsonLdSerializeOptions {
                 "version": {"const": JSON_LD_SERIALIZE_OPTIONS_VERSION},
                 "yaml_schema_url": {"type": "string"}
             },
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"mode": {"enum": ["expanded", "derived"]}},
+                        "required": ["mode"]
+                    },
+                    "then": {
+                        "not": {
+                            "anyOf": [
+                                {"required": ["context"]},
+                                {"required": ["document_iri"]},
+                                {"required": ["prefixes"]},
+                                {"required": ["registry"]}
+                            ]
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {"mode": {"const": "context"}},
+                        "required": ["mode"]
+                    },
+                    "then": {
+                        "oneOf": [
+                            {
+                                "required": ["context"],
+                                "not": {"required": ["prefixes"]}
+                            },
+                            {
+                                "required": ["prefixes"],
+                                "not": {
+                                    "anyOf": [
+                                        {"required": ["context"]},
+                                        {"required": ["document_iri"]},
+                                        {"required": ["registry"]}
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
             "required": ["version", "mode"],
             "type": "object"
         })

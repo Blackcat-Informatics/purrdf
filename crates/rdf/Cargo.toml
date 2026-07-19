@@ -131,6 +131,8 @@ name = "gen_streamable_vectors"
 path = "src/bin/gen_streamable_vectors.rs"
 
 [dev-dependencies]
+# Trusted draft-2020-12 oracle for the public JSON-LD options schema.
+boon = { workspace = true }
 # Rich colored line-diffs on assert_eq! failure. Drop-in: a shadowing
 # `use pretty_assertions::assert_eq;` per test file; identical on pass.
 pretty_assertions = { workspace = true }

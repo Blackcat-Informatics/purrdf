@@ -169,7 +169,7 @@ pub(super) fn apply_context(
     let mut compiler = Compiler {
         registry: &parent.registry,
         limits,
-        initial_base: parent.active.base_iri.clone(),
+        initial_base: parent.active.original_base_iri.clone(),
         budget: Budget::default(),
         remote_stack: Vec::new(),
         remote_cache: BTreeMap::new(),
@@ -1787,10 +1787,16 @@ fn select_inverse_term<'a>(
         let Some(candidate) = by_container.get(&container) else {
             continue;
         };
+        if kind == JsonLdTermSelectionKind::Any {
+            if let Some(term) = candidate.fallback.get("@none") {
+                return Some(term);
+            }
+            continue;
+        }
         let table = match kind {
             JsonLdTermSelectionKind::Type => &candidate.types,
             JsonLdTermSelectionKind::Language => &candidate.languages,
-            JsonLdTermSelectionKind::Any => &candidate.fallback,
+            JsonLdTermSelectionKind::Any => unreachable!("handled above"),
         };
         for value in &preferred {
             if let Some(term) = table.get(value) {

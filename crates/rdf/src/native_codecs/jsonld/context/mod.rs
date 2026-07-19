@@ -70,6 +70,16 @@ impl JsonLdContextLimits {
         self.registry_bytes
     }
 
+    /// Maximum UTF-8 bytes accepted by the shared serialization-options document.
+    ///
+    /// The envelope may contain one local context, the full aggregate offline
+    /// registry, and bounded registry keys/JSON structure.
+    pub const fn max_options_bytes(self) -> usize {
+        self.context_bytes
+            .saturating_add(self.registry_bytes)
+            .saturating_add(self.context_bytes)
+    }
+
     /// Maximum compiled term definitions across one compilation.
     pub const fn max_terms(self) -> usize {
         self.terms
@@ -93,6 +103,14 @@ impl JsonLdContextLimits {
     fn strict_json(self) -> StrictJsonLimits {
         StrictJsonLimits {
             bytes: self.context_bytes,
+            depth: self.nesting,
+            values: self.expansion_work,
+        }
+    }
+
+    fn strict_options_json(self) -> StrictJsonLimits {
+        StrictJsonLimits {
+            bytes: self.max_options_bytes(),
             depth: self.nesting,
             values: self.expansion_work,
         }
@@ -324,6 +342,7 @@ impl JsonLdTermDefinition {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ActiveContext {
+    original_base_iri: Option<String>,
     base_iri: Option<String>,
     vocab_mapping: Option<String>,
     default_language: Option<String>,
@@ -336,6 +355,7 @@ struct ActiveContext {
 impl ActiveContext {
     fn new(base_iri: Option<String>) -> Self {
         Self {
+            original_base_iri: base_iri.clone(),
             base_iri,
             vocab_mapping: None,
             default_language: None,
@@ -391,7 +411,7 @@ impl JsonLdContextRegistry {
         let mut total_bytes = 0usize;
         for (iri, bytes) in documents {
             if retained.len() == limits.max_registry_documents() {
-                return Err(context_error(format!(
+                return Err(context_limit(format!(
                     "offline context registry exceeds {} documents",
                     limits.max_registry_documents()
                 )));
@@ -400,7 +420,7 @@ impl JsonLdContextRegistry {
             validate_absolute_iri(&iri, "offline context document IRI")?;
             let bytes = bytes.into();
             if bytes.len() > limits.max_context_bytes() {
-                return Err(context_error(format!(
+                return Err(context_limit(format!(
                     "offline context document `{iri}` is {} bytes; limit is {}",
                     bytes.len(),
                     limits.max_context_bytes()

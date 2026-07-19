@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
 
@@ -468,6 +468,123 @@ fn options_decoder_is_versioned_closed_and_mode_explicit() {
 }
 
 #[test]
+fn options_schema_and_decoder_have_identical_mode_field_constraints() {
+    fn schema_accepts(instance: &Value) -> bool {
+        let location = "mem:///jsonld-options.schema.json";
+        let mut schemas = boon::Schemas::new();
+        let mut compiler = boon::Compiler::new();
+        compiler
+            .add_resource(location, JsonLdSerializeOptions::json_schema())
+            .expect("register options schema");
+        let compiled = compiler
+            .compile(location, &mut schemas)
+            .expect("compile options schema");
+        schemas.validate(instance, compiled).is_ok()
+    }
+
+    let cases = [
+        (json!({"mode": "expanded", "version": 1}), true),
+        (json!({"mode": "derived", "version": 1}), true),
+        (
+            json!({"context": {}, "mode": "context", "version": 1}),
+            true,
+        ),
+        (
+            json!({
+                "context": {},
+                "document_iri": "https://example.org/document",
+                "mode": "context",
+                "registry": {
+                    "https://example.org/context": {"@context": {}}
+                },
+                "version": 1
+            }),
+            true,
+        ),
+        (
+            json!({
+                "mode": "context",
+                "prefixes": {"ex": "https://example.org/"},
+                "version": 1
+            }),
+            true,
+        ),
+        (
+            json!({"context": {}, "mode": "expanded", "version": 1}),
+            false,
+        ),
+        (
+            json!({
+                "document_iri": "https://example.org/",
+                "mode": "derived",
+                "version": 1
+            }),
+            false,
+        ),
+        (json!({"mode": "context", "version": 1}), false),
+        (
+            json!({
+                "context": {},
+                "mode": "context",
+                "prefixes": {"ex": "https://example.org/"},
+                "version": 1
+            }),
+            false,
+        ),
+        (
+            json!({
+                "document_iri": "https://example.org/",
+                "mode": "context",
+                "prefixes": {"ex": "https://example.org/"},
+                "version": 1
+            }),
+            false,
+        ),
+        (
+            json!({
+                "mode": "context",
+                "prefixes": {"ex": "https://example.org/"},
+                "registry": {},
+                "version": 1
+            }),
+            false,
+        ),
+    ];
+    for (instance, expected) in cases {
+        let bytes = serde_json::to_vec(&instance).expect("encode options case");
+        assert_eq!(
+            JsonLdSerializeOptions::from_json(&bytes).is_ok(),
+            expected,
+            "decoder parity for {instance}"
+        );
+        assert_eq!(
+            schema_accepts(&instance),
+            expected,
+            "schema parity for {instance}"
+        );
+    }
+}
+
+#[test]
+fn options_input_can_carry_more_than_one_context_ceiling_of_registry_data() {
+    let padding = "x".repeat(600_000);
+    let options = json!({
+        "context": {},
+        "mode": "context",
+        "registry": {
+            "https://example.org/first": {"@context": null, "padding": padding},
+            "https://example.org/second": {"@context": null, "padding": padding}
+        },
+        "version": 1
+    });
+    let bytes = serde_json::to_vec(&options).expect("encode registry-bearing options");
+    let limits = JsonLdContextLimits::default();
+    assert!(bytes.len() > limits.max_context_bytes());
+    assert!(bytes.len() < limits.max_options_bytes());
+    JsonLdSerializeOptions::from_json(&bytes).expect("decode aggregate registry options");
+}
+
+#[test]
 fn fixed_limits_accept_exact_boundaries_and_reject_one_over() {
     let exact_registry_limits = JsonLdContextLimits {
         context_bytes: 4,
@@ -481,13 +598,21 @@ fn fixed_limits_accept_exact_boundaries_and_reject_one_over() {
     )
     .expect("exact registry byte/count limits");
     assert_eq!(registry.total_bytes(), 4);
-    assert!(
-        JsonLdContextRegistry::new_with_limits(
-            [("https://example.org/context", b"null ".to_vec())],
-            exact_registry_limits,
-        )
-        .is_err()
-    );
+    let byte_error = JsonLdContextRegistry::new_with_limits(
+        [("https://example.org/context", b"null ".to_vec())],
+        exact_registry_limits,
+    )
+    .expect_err("one byte over per-document limit");
+    assert_eq!(byte_error.code, "jsonld-context-limit");
+    let count_error = JsonLdContextRegistry::new_with_limits(
+        [
+            ("https://example.org/first", b"null".to_vec()),
+            ("https://example.org/second", b"null".to_vec()),
+        ],
+        exact_registry_limits,
+    )
+    .expect_err("one document over registry limit");
+    assert_eq!(count_error.code, "jsonld-context-limit");
     assert!(
         JsonLdContextRegistry::new_with_limits(
             [
@@ -749,6 +874,53 @@ fn inverse_context_uses_exact_language_direction_and_any_keys() {
             expected
         );
     }
+}
+
+#[test]
+fn any_inverse_selection_ignores_coercion_preferences() {
+    let iri = "https://example.org/p";
+    let compiled = CompiledJsonLdContext::compile(
+        &json!({
+            "plain": iri,
+            "typed": {"@id": iri, "@type": "@id"}
+        }),
+        None,
+    )
+    .expect("inverse context");
+    let selection = JsonLdTermSelection::new(
+        [Vec::<JsonLdContainer>::new()],
+        JsonLdTermSelectionKind::Any,
+        ["@id"],
+    );
+    assert_eq!(
+        compiled
+            .compact_iri_with_selection(iri, true, Some(&selection))
+            .expect("fallback selection"),
+        "plain"
+    );
+}
+
+#[test]
+fn null_local_context_resets_to_original_document_base() {
+    let compiled = CompiledJsonLdContext::compile(
+        &json!({"@base": "nested/"}),
+        Some("https://example.org/root/document"),
+    )
+    .expect("mutated active base");
+    assert_eq!(
+        compiled.base_iri(),
+        Some("https://example.org/root/nested/")
+    );
+
+    let reset = compiled
+        .apply_local_context(&Value::Null)
+        .expect("reset local context");
+    assert_eq!(
+        reset
+            .expand_iri("item", false, true)
+            .expect("expand against reset base"),
+        Some("https://example.org/root/item".to_owned())
+    );
 }
 
 #[test]

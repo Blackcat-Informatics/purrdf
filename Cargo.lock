@@ -1401,6 +1401,7 @@ name = "purrdf-rdf"
 version = "0.7.0"
 dependencies = [
  "ahash",
+ "boon",
  "ciborium",
  "criterion",
  "csv",
