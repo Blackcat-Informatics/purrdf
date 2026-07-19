@@ -27,7 +27,7 @@ BINARYEN_VERSION := 130
 # engines, the native format registry (now including JSON-LD/YAML-LD),
 # deterministic layout, SVG export, and all thirteen graph/tabular/research-object
 # projection profiles and the compiled JSON-LD context/options/registry engine
-# — measures 6_905_968 bytes; 7_120_000 keeps 3.10% headroom. The always-on,
+# — measures 6_902_478 bytes; 7_120_000 keeps 3.15% headroom. The always-on,
 # caller-configured curated CSVW terms mapper, closed located-loss contract, and
 # shared host dispatch are the capabilities responsible for this reviewed
 # increase. The artifact's size is a joint function of
