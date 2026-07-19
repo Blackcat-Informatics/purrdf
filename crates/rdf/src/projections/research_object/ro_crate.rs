@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use purrdf_core::loss::{
     LOSS_RESEARCH_INLINE_PAYLOAD_DROPPED, LOSS_RESEARCH_LOCAL_ID_RESOLVED,
@@ -708,15 +709,13 @@ fn validate_attached_assets(
             ))
             .at_path(&native_id));
         }
-        if local_resources
-            .insert(native_id.clone(), resource)
-            .is_some()
-        {
+        if local_resources.contains_key(&native_id) {
             return Err(ProjectionError::integrity(
                 "multiple RO-Crate resources claim one payload path",
             )
             .at_path(native_id));
         }
+        local_resources.insert(native_id, resource);
     }
     for (path, _) in assets.artifacts() {
         if !local_resources.contains_key(path) {
@@ -777,7 +776,7 @@ fn encode_preview(
             html.push_str("\">");
             html.push_str(&escape_xml_text(label)?);
             html.push_str("</a> <span>(");
-            html.push_str(&bytes.len().to_string());
+            write!(&mut html, "{}", bytes.len()).expect("writing to a String cannot fail");
             html.push_str(" bytes)</span></li>\n");
         }
         html.push_str("</ul>\n");
