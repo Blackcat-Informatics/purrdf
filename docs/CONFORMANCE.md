@@ -49,7 +49,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 | 0 | 0 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 85 | 1 | 1 | 0 | GREEN |
-| purrdf.compat parity | first-party (differential vs rdflib) | 386 | 4 | 4 | 0 | GREEN |
+| purrdf.compat parity | first-party (differential vs rdflib) | 387 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
 
 The `Budget` column is the ledger ratchet's committed ceiling (see
