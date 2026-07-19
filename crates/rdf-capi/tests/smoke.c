@@ -21,7 +21,11 @@
 
 static uint8_t *read_file(const char *path, size_t *length) {
     FILE *stream = fopen(path, "rb");
-    if (stream == NULL || fseek(stream, 0, SEEK_END) != 0) {
+    if (stream == NULL) {
+        return NULL;
+    }
+    if (fseek(stream, 0, SEEK_END) != 0) {
+        fclose(stream);
         return NULL;
     }
     long size = ftell(stream);
