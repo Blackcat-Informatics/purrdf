@@ -27,10 +27,10 @@ BINARYEN_VERSION := 130
 # engines, the native format registry (now including JSON-LD/YAML-LD),
 # deterministic layout, SVG export, and all thirteen graph/tabular/research-object
 # projection profiles and the compiled JSON-LD context/options/registry engine
-# — measures 6_594_083 bytes; 6_800_000 keeps 3.12% headroom. The mandatory
-# scoped/limited LPG mapper and shared transactional carrier encoders are the
-# capabilities responsible for the latest reviewed increase. The artifact's
-# size is a joint function of
+# — measures 6_905_968 bytes; 7_120_000 keeps 3.10% headroom. The always-on,
+# caller-configured curated CSVW terms mapper, closed located-loss contract, and
+# shared host dispatch are the capabilities responsible for this reviewed
+# increase. The artifact's size is a joint function of
 # rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
 # (pinned via BINARYEN_VERSION), so a moved number is attributable.
 #
@@ -40,7 +40,7 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 6800000
+WASM_SIZE_BUDGET_BYTES := 7120000
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
