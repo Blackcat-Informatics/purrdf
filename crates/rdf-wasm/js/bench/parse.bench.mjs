@@ -22,7 +22,7 @@
 //   BENCH_ITERS    timed iterations after warm-up     (default 7)
 //   BENCH_WARMUP   warm-up iterations (discarded)     (default 2)
 
-import { ready, Dataset } from "../index.mjs";
+import { ready, CompiledJsonLdContext, Dataset } from "../index.mjs";
 
 await ready();
 
@@ -102,4 +102,47 @@ console.log(
   `BENCH parse ntriples: triples=${TRIPLES} bytes=${bytes} ` +
     `iters=${ITERS} median_ms=${fmt(med)} min_ms=${fmt(min)} ` +
     `triples_per_s=${fmt(triplesPerSec, 0)} MB_per_s=${fmt(mbPerSec)}`,
+);
+
+const contextOptions = JSON.stringify({
+  version: 1,
+  mode: "context",
+  prefixes: {
+    s: "https://example.org/s/",
+    p: "https://example.org/p/",
+    o: "https://example.org/o/",
+  },
+});
+const compileSamples = [];
+for (let i = 0; i < ITERS; i++) {
+  const t0 = process.hrtime.bigint();
+  const context = new CompiledJsonLdContext(contextOptions);
+  const t1 = process.hrtime.bigint();
+  compileSamples.push(Number(t1 - t0) / 1e6);
+  context.free();
+}
+const dataset = Dataset.parse(corpus, "ntriples");
+const context = new CompiledJsonLdContext(contextOptions);
+const serializeSamples = [];
+let compacted = "";
+for (let i = 0; i < ITERS; i++) {
+  const t0 = process.hrtime.bigint();
+  compacted = dataset.serializeWithContext("jsonld", context);
+  const t1 = process.hrtime.bigint();
+  serializeSamples.push(Number(t1 - t0) / 1e6);
+}
+const parseSamples = [];
+for (let i = 0; i < ITERS; i++) {
+  const t0 = process.hrtime.bigint();
+  const reparsed = Dataset.parse(compacted, "jsonld");
+  const t1 = process.hrtime.bigint();
+  if (reparsed.size !== TRIPLES) throw new Error("configured JSON-LD size mismatch");
+  parseSamples.push(Number(t1 - t0) / 1e6);
+  reparsed.free();
+}
+console.log(
+  `BENCH jsonld configured: triples=${TRIPLES} output_bytes=${Buffer.byteLength(compacted)} ` +
+    `compile_median_ms=${fmt(median(compileSamples), 4)} ` +
+    `serialize_median_ms=${fmt(median(serializeSamples))} ` +
+    `parse_median_ms=${fmt(median(parseSamples))}`,
 );

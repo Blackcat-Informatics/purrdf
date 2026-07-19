@@ -37,6 +37,7 @@ use crate::bundle::{RdfBundle, UnitMetadata};
 use crate::gts_compose::{BlobRow, DEFAULT_RSYNCABLE_THRESHOLD, SnapshotBuilder, emit_gts};
 use crate::ir::RdfDataset;
 use crate::provenance::{DatasetProvenance, OriginKind};
+use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::py_store::{PyRdfFormat, parse_quads};
 use crate::{NativeRdfFormat, RdfQuad, flat_dataset_from_quads};
 
@@ -303,13 +304,32 @@ fn gts_from_rdf12_bytes(
 /// in-repo `native_codecs::jsonld` serializer — no longer the external purrdf-gts JSON-LD
 /// codec. This is the RDF-1.2-first JSON-LD form the published `*.jsonld` artifacts emit.
 #[pyfunction]
-#[pyo3(signature = (data, *, format))]
-fn to_json_ld(py: Python<'_>, data: &Bound<'_, PyBytes>, format: PyRdfFormat) -> PyResult<String> {
+#[pyo3(signature = (data, *, format, options_json=None, context=None))]
+fn to_json_ld(
+    py: Python<'_>,
+    data: &Bound<'_, PyBytes>,
+    format: PyRdfFormat,
+    options_json: Option<&str>,
+    context: Option<&PyCompiledJsonLdContext>,
+) -> PyResult<String> {
     let raw = data.as_bytes();
+    let configured = if options_json.is_some() || context.is_some() {
+        Some(options_from_inputs(options_json, context, None)?)
+    } else {
+        None
+    };
     py.detach(|| {
         let dataset = parse_rdf_dataset(raw, format)?;
-        crate::native_codecs::jsonld::serialize_dataset_to_jsonld(&dataset)
+        if let Some(options) = &configured {
+            crate::native_codecs::jsonld::serialize_dataset_to_jsonld_with_options(
+                &dataset, options,
+            )
             .map_err(|e| PyValueError::new_err(format!("json-ld-star serialization error: {e}")))
+        } else {
+            crate::native_codecs::jsonld::serialize_dataset_to_jsonld(&dataset).map_err(|e| {
+                PyValueError::new_err(format!("json-ld-star serialization error: {e}"))
+            })
+        }
     })
 }
 

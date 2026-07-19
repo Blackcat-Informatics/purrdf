@@ -42,6 +42,30 @@ quads = purrdf.parse(
 `purrdf.to_rdf_xml` converters. All codecs are first-party with
 byte-deterministic output.
 
+Configured JSON-LD and YAML-LD use one strict versioned options document. Compile
+a reusable context when serializing several datasets:
+
+```python
+import json
+import purrdf
+
+options = json.dumps({
+    "version": 1,
+    "mode": "context",
+    "prefixes": {"ex": "https://example.org/", "schema": "https://schema.org/"},
+})
+context = purrdf.CompiledJsonLdContext(options)
+jsonld = purrdf.serialize_jsonld(
+    nquads,
+    format=purrdf.RdfFormat.N_QUADS,
+    output_format="jsonld",
+    context=context,
+)
+```
+
+`expanded`, `context`, and deterministic dataset-IRI `derived` modes are
+explicit. PurRDF never infers a caller vocabulary or fetches a remote context.
+
 ## Project graph, tabular, and research-object carriers
 
 `purrdf.project` and `purrdf.lift` are thin calls into the same Rust projection

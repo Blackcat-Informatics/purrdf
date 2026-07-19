@@ -31,6 +31,19 @@ make capi-header                # regenerate the committed include/purrdf.h afte
 The committed header `include/purrdf.h` **is the ABI contract**; CI fails if it
 drifts from the crate (`make capi-check`).
 
+## Configured JSON-LD and YAML-LD
+
+`purrdf_jsonld_context_compile` decodes the shared versioned options document
+and returns an immutable, thread-safe `PurrdfJsonLdContext`. Reuse that handle
+with `purrdf_serialize_jsonld_configured`, then free it with
+`purrdf_jsonld_context_free`. The serializer accepts exactly one options byte
+slice or compiled handle and preserves an optional caller YAML schema URL.
+
+The three modes are explicit: byte-frozen `expanded`, caller-owned `context`,
+and deterministic dataset-IRI `derived`. Context IRI and `@import` resolution is
+restricted to the immutable registry in the options document; libpurrdf never
+performs network context loading.
+
 ## Graph, tabular, and research-object projection carriers
 
 `purrdf_project` and `purrdf_lift` expose the same canonical archive engine as
@@ -122,6 +135,7 @@ executes that example against the generated shared library and committed header.
 | Handle | Safety |
 |--------|--------|
 | `PurrdfDataset` | `Send + Sync` — frozen; may be read concurrently from many threads |
+| `PurrdfJsonLdContext` | `Send + Sync` — immutable compiled context; may be reused concurrently |
 | `PurrdfGraph` | single-threaded mutable (COW delta); external locking required to share |
 | `PurrdfCursor` / `PurrdfRowCursor` | single-threaded |
 | `PurrdfBuffer` / `PurrdfError` | immutable once returned; read from any thread, free once |

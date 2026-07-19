@@ -34,6 +34,7 @@
 
 use purrdf_core::{DatasetView, LossLedger, SparqlResult};
 use purrdf_entail::materialize;
+use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery};
 use purrdf_sparql_results::{ResultProvenance, serialize};
 
@@ -70,10 +71,17 @@ fn emit_result(
     result: &SparqlResult,
     results_format: QueryFormat,
     base: Option<&str>,
+    jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
     match result {
         SparqlResult::Solutions { .. } | SparqlResult::Boolean(_) => {
+            if jsonld_options.is_some() {
+                return Err(CliError::Usage(
+                    "--jsonld-options requires an RDF graph result serialized as JSON-LD or YAML-LD"
+                        .to_owned(),
+                ));
+            }
             let Some(fmt) = results_format.to_results_format() else {
                 let kind = match result {
                     SparqlResult::Boolean(_) => "an ASK boolean",
@@ -106,7 +114,14 @@ fn emit_result(
             // projects the RDF-1.2 statement layer and records the drop in the ledger.
             // The graph is freshly constructed, so there is no source codec to seed the
             // contract-loss half (`None`); only the realized dropped-row counts appear.
-            let ledger = sink::write_rdf(&**graph, "-", CliFormat::Rdf(fmt), base, None)?;
+            let ledger = sink::write_rdf(
+                &**graph,
+                "-",
+                CliFormat::Rdf(fmt),
+                base,
+                None,
+                jsonld_options,
+            )?;
             ledger::surface(ledger_target, &ledger)
         }
     }
@@ -119,6 +134,7 @@ pub(crate) fn run(
     entailment: Option<CliRegime>,
     results_format: QueryFormat,
     query: &str,
+    jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
     let data_format = format::resolve(None, data)?;
@@ -147,5 +163,5 @@ pub(crate) fn run(
         )?,
     };
 
-    emit_result(&result, results_format, base, ledger_target)
+    emit_result(&result, results_format, base, jsonld_options, ledger_target)
 }

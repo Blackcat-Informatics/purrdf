@@ -12,7 +12,9 @@ use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Number, Value};
 
-use crate::native_codecs::jsonld::{parse_jsonld, serialize_dataset_to_jsonld};
+use crate::native_codecs::jsonld::{
+    CompiledJsonLdContext, parse_jsonld, serialize_dataset_to_jsonld,
+};
 
 use super::super::{ProjectionError, ProjectionLimits, ProjectionPackage, validate_absolute_iri};
 use super::{ResearchObjectConfig, ResearchObjectModel};
@@ -26,6 +28,8 @@ use super::{ResearchObjectConfig, ResearchObjectModel};
 pub struct OfflineJsonLdContext {
     value: Value,
     definitions: BTreeMap<String, String>,
+    #[serde(skip)]
+    compiled: Arc<CompiledJsonLdContext>,
 }
 
 impl OfflineJsonLdContext {
@@ -64,7 +68,26 @@ impl OfflineJsonLdContext {
                 )));
             }
         }
-        Ok(Self { value, definitions })
+        let compiled_value = Value::Object(
+            definitions
+                .iter()
+                // Profile lookup tables historically permit colon-bearing role keys
+                // whose expansion is not CURIE concatenation. Those remain explicit
+                // profile rules; plain JSON-LD terms use the shared context engine.
+                .filter(|(term, _)| !term.contains(':'))
+                .map(|(term, iri)| (term.clone(), Value::String(iri.clone())))
+                .collect(),
+        );
+        let compiled = CompiledJsonLdContext::compile(&compiled_value, None).map_err(|error| {
+            ProjectionError::configuration(format!(
+                "compile offline JSON-LD term definitions: {error}"
+            ))
+        })?;
+        Ok(Self {
+            value,
+            definitions,
+            compiled: Arc::new(compiled),
+        })
     }
 
     /// Exact JSON value emitted as `@context`.
@@ -77,9 +100,25 @@ impl OfflineJsonLdContext {
         &self.definitions
     }
 
+    /// Reusable compiled active context backing this compatibility adapter.
+    pub fn compiled_context(&self) -> &CompiledJsonLdContext {
+        &self.compiled
+    }
+
     /// Resolve a configured compact term to its absolute vocabulary IRI.
     pub fn expand(&self, term: &str) -> Option<&str> {
-        self.definitions.get(term).map(String::as_str)
+        let expanded = self.definitions.get(term).map(String::as_str);
+        if !term.contains(':') {
+            debug_assert_eq!(
+                self.compiled
+                    .expand_iri(term, true, false)
+                    .ok()
+                    .flatten()
+                    .as_deref(),
+                expanded
+            );
+        }
+        expanded
     }
 }
 
@@ -462,6 +501,14 @@ mod tests {
         )
         .expect("context");
         assert_eq!(valid.expand("name"), Some("https://example.org/name"));
+        assert_eq!(
+            valid
+                .compiled_context()
+                .expand_iri("name", true, false)
+                .expect("expand configured term")
+                .as_deref(),
+            Some("https://example.org/name")
+        );
 
         assert!(
             OfflineJsonLdContext::new(

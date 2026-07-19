@@ -20,6 +20,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
+use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs, serialize_frozen};
 use crate::py_store::PyRdfFormat;
 use crate::{NativeRdfFormat, RdfDataset, RdfLookaside, dataset_from_bytes, gts_write};
 
@@ -62,6 +63,20 @@ impl PyRdfDataset {
 
     fn __len__(&self) -> usize {
         self.inner.quad_count()
+    }
+
+    /// Serialize this immutable dataset as configured JSON-LD or YAML-LD.
+    #[pyo3(signature = (output_format, *, options_json=None, context=None, yaml_schema_url=None))]
+    fn serialize_jsonld(
+        &self,
+        py: Python<'_>,
+        output_format: &str,
+        options_json: Option<&str>,
+        context: Option<&PyCompiledJsonLdContext>,
+        yaml_schema_url: Option<&str>,
+    ) -> PyResult<String> {
+        let options = options_from_inputs(options_json, context, yaml_schema_url)?;
+        py.detach(|| serialize_frozen(&self.inner, output_format, &options))
     }
 
     /// Emit a GTS byte stream for this dataset under `profile`. Uses the

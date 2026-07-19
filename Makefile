@@ -26,10 +26,11 @@ BINARYEN_VERSION := 130
 # artifact exceeds this. The shipped bundle — RDF 1.2 model, SPARQL/SHACL/ShEx
 # engines, the native format registry (now including JSON-LD/YAML-LD),
 # deterministic layout, SVG export, and all twelve graph/tabular/research-object
-# projection profiles — measures 6_042_985 bytes; 6_225_000 keeps about 3%
-# headroom. The five strict bidirectional research-object codecs are the
-# capability responsible for this reviewed increase. The artifact's size is a
-# joint function of
+# projection profiles and the compiled JSON-LD context/options/registry engine
+# — measures 6_418_213 bytes; 6_610_000 keeps 2.99% headroom. Exposing reusable
+# configured JSON-LD/YAML-LD serialization to JavaScript is the capability
+# responsible for the latest reviewed increase. The artifact's size is a joint
+# function of
 # rustc (tracks stable), wasm-bindgen (pinned in Cargo.toml), and binaryen
 # (pinned via BINARYEN_VERSION), so a moved number is attributable.
 #
@@ -39,7 +40,7 @@ BINARYEN_VERSION := 130
 # artifact grew: a new capability or dependency, or a routine rustc-stable /
 # binaryen bump (a valid, must-be-explained reason). Never raise it merely to
 # turn a red gate green.
-WASM_SIZE_BUDGET_BYTES := 6225000
+WASM_SIZE_BUDGET_BYTES := 6610000
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -310,8 +311,8 @@ playground: wasm-pkg ## Assemble the standalone RDF-1.2 console into $(CARGO_TAR
 	@echo "OK: console assembled at $(PLAYGROUND_OUT)"
 	@echo "    preview: (cd $(PLAYGROUND_OUT) && python3 -m http.server 8080) then open http://localhost:8080/"
 
-playground-smoke: wasm-pkg ## Smoke the console's engine calls (every pane's package call, Node-side; a CI gate).
-	node --test docs/playground/smoke/*.test.mjs
+playground-smoke: playground ## Smoke the assembled console's worker dispatch and every pane's package calls (Node-side; a CI gate).
+	PLAYGROUND_OUT="$(abspath $(PLAYGROUND_OUT))" node --test docs/playground/smoke/*.test.mjs
 
 capi-build: ## Build libpurrdf (cdylib + staticlib + header + pkg-config) via cargo-c.
 	cargo capi build -p purrdf-capi

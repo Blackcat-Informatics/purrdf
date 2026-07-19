@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 
+use super::jsonld::JsonLdSerializeOptions;
 use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
 use crate::ir::TermRef;
@@ -43,6 +44,35 @@ pub fn serialize_dataset<D: DatasetView>(
     selection: SerializeGraph<'_>,
 ) -> Result<Vec<u8>, RdfDiagnostic> {
     serialize_dataset_inner(dataset, media_type, selection, true)
+}
+
+/// Serialize JSON-LD or YAML-LD through the generic media-type surface under an
+/// explicit configured mode.
+///
+/// Supplying JSON-LD options for another syntax is a hard error instead of silently
+/// ignoring caller policy. Existing [`serialize_dataset`] calls retain their frozen
+/// expanded compatibility behavior.
+pub fn serialize_dataset_with_jsonld_options<D: DatasetView>(
+    dataset: &D,
+    media_type: &str,
+    selection: SerializeGraph<'_>,
+    options: &JsonLdSerializeOptions,
+) -> Result<Vec<u8>, RdfDiagnostic> {
+    let format = classify(media_type)?;
+    if !matches!(format, NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd) {
+        return Err(jsonld_options_unused(format));
+    }
+    let graph = build_ser_graph(dataset, format, selection, true)?;
+    let text = match format {
+        NativeRdfFormat::JsonLd => {
+            super::jsonld::serialize_ser_graph_with_options(&graph, options)?
+        }
+        NativeRdfFormat::YamlLd => {
+            super::jsonld::serialize_ser_graph_to_yamlld_with_options(&graph, options)?
+        }
+        _ => unreachable!("format was restricted to JSON-LD/YAML-LD"),
+    };
+    Ok(text.into_bytes())
 }
 
 /// Serialize a frozen [`RdfDataset`](crate::RdfDataset) to RDF text of `media_type`, emitting ONLY the
@@ -155,6 +185,43 @@ pub fn serialize_dataset_to_format<D: DatasetView>(
             directional_literals_dropped,
         })
     }
+}
+
+/// Serialize through the generic format surface with explicit JSON-LD/YAML-LD
+/// configuration.
+///
+/// The function accepts only the two JSON-LD family formats and reports zero loss for
+/// their RDF 1.2-capable carrier. Passing another format is a stable hard failure.
+pub fn serialize_dataset_to_format_with_jsonld_options<D: DatasetView>(
+    dataset: &D,
+    format: NativeRdfFormat,
+    _base_iri: Option<&str>,
+    options: &JsonLdSerializeOptions,
+) -> Result<SerializeOutcome, RdfDiagnostic> {
+    if !matches!(format, NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd) {
+        return Err(jsonld_options_unused(format));
+    }
+    let bytes = serialize_dataset_with_jsonld_options(
+        dataset,
+        format.media_type(),
+        SerializeGraph::Dataset,
+        options,
+    )?;
+    Ok(SerializeOutcome {
+        bytes,
+        statement_rows_dropped: 0,
+        directional_literals_dropped: 0,
+    })
+}
+
+fn jsonld_options_unused(format: NativeRdfFormat) -> RdfDiagnostic {
+    RdfDiagnostic::error(
+        "jsonld-options-unused",
+        format!(
+            "JSON-LD serialization options cannot be used with `{}`",
+            format.media_type()
+        ),
+    )
 }
 
 /// Count the base-quad OBJECT literals whose resolved term carries an RDF-1.2 base

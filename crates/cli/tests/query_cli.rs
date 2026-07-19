@@ -519,3 +519,41 @@ fn select_writes_results_to_a_captured_stdout_pipe() {
         stdout(&out)
     );
 }
+
+#[test]
+fn configured_jsonld_options_reach_graph_results_and_reject_select_results() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(dir, "data.ttl", DATA_TTL);
+    let options = write_file(
+        dir,
+        "jsonld-options.json",
+        r#"{"version":1,"mode":"context","prefixes":{"ex":"http://example.org/"}}"#,
+    );
+    let graph = run(&[
+        "--jsonld-options",
+        &options,
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "jsonld",
+        "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+    ]);
+    assert!(graph.status.success(), "graph: {}", stderr(&graph));
+    assert!(stdout(&graph).contains("ex:alice"));
+    assert!(stdout(&graph).contains("ex:knows"));
+
+    let select = run(&[
+        "--jsonld-options",
+        &options,
+        "query",
+        "--data",
+        &ttl,
+        "--results-format",
+        "json",
+        "SELECT ?s WHERE { ?s ?p ?o }",
+    ]);
+    assert_eq!(select.status.code(), Some(2));
+    assert!(stderr(&select).contains("requires an RDF graph result"));
+}

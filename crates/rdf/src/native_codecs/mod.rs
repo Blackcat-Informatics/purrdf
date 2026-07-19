@@ -71,6 +71,7 @@ pub use span::{ParseOptions, SpanTable};
 pub use parse::parse_dataset_forced_sequential;
 pub use serialize::{
     SerializeOutcome, serialize_dataset, serialize_dataset_base_only, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_with_jsonld_options,
 };
 
 use std::io::Write;

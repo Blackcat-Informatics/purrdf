@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::native_codecs::jsonld::CompiledJsonLdContext;
 
 use super::super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
 
@@ -129,6 +132,8 @@ impl<'de> Deserialize<'de> for CsvwVocabulary {
 pub struct CsvwContext {
     iri: String,
     prefixes: BTreeMap<String, String>,
+    #[serde(skip)]
+    compiled: Arc<CompiledJsonLdContext>,
 }
 
 impl CsvwContext {
@@ -148,7 +153,19 @@ impl CsvwContext {
             validate_prefix(prefix)?;
             validate_namespace(namespace.clone(), "CSVW context prefix")?;
         }
-        Ok(Self { iri, prefixes })
+        let compiled = CompiledJsonLdContext::from_prefixes(
+            prefixes
+                .iter()
+                .map(|(prefix, namespace)| (prefix.clone(), namespace.clone())),
+        )
+        .map_err(|error| {
+            ProjectionError::configuration(format!("compile CSVW JSON-LD context: {error}"))
+        })?;
+        Ok(Self {
+            iri,
+            prefixes,
+            compiled: Arc::new(compiled),
+        })
     }
 
     /// Context identity serialized into generated metadata.
@@ -167,29 +184,34 @@ impl CsvwContext {
     ///
     /// Returns an input failure for an unknown prefix or malformed expanded IRI.
     pub fn expand_iri(&self, value: &str) -> Result<String, ProjectionError> {
-        if let Some((prefix, suffix)) = value.split_once(':')
-            && let Some(namespace) = self.prefixes.get(prefix)
+        if let Some((prefix, _)) = value.split_once(':')
+            && self.prefixes.contains_key(prefix)
         {
-            let expanded = format!("{namespace}{suffix}");
+            let expanded = self
+                .compiled
+                .expand_iri(value, true, false)
+                .map_err(|error| {
+                    ProjectionError::syntax(format!("expand CSVW compact IRI `{value}`: {error}"))
+                })?
+                .ok_or_else(|| {
+                    ProjectionError::syntax(format!(
+                        "CSVW compact IRI `{value}` has a null mapping"
+                    ))
+                })?;
             validate_absolute_iri(&expanded, "expanded CSVW IRI")?;
             return Ok(expanded);
         }
         if validate_absolute_iri(value, "CSVW IRI").is_ok() {
             return Ok(value.to_owned());
         }
-        let (prefix, suffix) = value.split_once(':').ok_or_else(|| {
+        let (prefix, _) = value.split_once(':').ok_or_else(|| {
             ProjectionError::syntax(format!(
                 "CSVW compact IRI `{value}` has no caller-supplied prefix"
             ))
         })?;
-        let namespace = self.prefixes.get(prefix).ok_or_else(|| {
-            ProjectionError::syntax(format!(
-                "CSVW compact IRI `{value}` uses unknown prefix `{prefix}`"
-            ))
-        })?;
-        let expanded = format!("{namespace}{suffix}");
-        validate_absolute_iri(&expanded, "expanded CSVW IRI")?;
-        Ok(expanded)
+        Err(ProjectionError::syntax(format!(
+            "CSVW compact IRI `{value}` uses unknown prefix `{prefix}`"
+        )))
     }
 }
 

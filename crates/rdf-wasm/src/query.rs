@@ -27,7 +27,7 @@
 use std::rc::Rc;
 
 use purrdf::ir::MutableDataset;
-use purrdf::{SerializeGraph, serialize_dataset};
+use purrdf::{JsonLdSerializeOptions, SerializeGraph, serialize_dataset};
 use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::NativeSparqlEngine;
 use purrdf_sparql_results::{
@@ -38,6 +38,7 @@ use wasm_bindgen::prelude::*;
 use crate::codec::resolve_media_type;
 use crate::convert::term_value_into_rdf_term;
 use crate::dataset::{Dataset, diag_to_err};
+use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::term::Term;
 
 /// The typed result kind exposed to the package-root JavaScript wrapper.
@@ -326,6 +327,42 @@ impl QueryEngine {
         let result = self.run_query(dataset, sparql, base.as_deref())?;
         serialize_query_result(&result, format.as_deref())
     }
+
+    /// Serialize a CONSTRUCT/DESCRIBE result with configured JSON-LD/YAML-LD.
+    #[wasm_bindgen(js_name = queryRawConfigured)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn query_raw_configured(
+        &self,
+        dataset: &Dataset,
+        sparql: &str,
+        base: Option<String>,
+        format: &str,
+        options_json: &str,
+    ) -> Result<String, JsError> {
+        let options = decode_options(options_json)?;
+        self.query_raw_with_options(dataset, sparql, base.as_deref(), format, &options)
+    }
+
+    /// Serialize a CONSTRUCT/DESCRIBE result with a reusable compiled context.
+    #[wasm_bindgen(js_name = queryRawWithContext)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn query_raw_with_context(
+        &self,
+        dataset: &Dataset,
+        sparql: &str,
+        base: Option<String>,
+        format: &str,
+        context: &CompiledJsonLdContext,
+        yaml_schema_url: Option<String>,
+    ) -> Result<String, JsError> {
+        let mut options = context_options(context);
+        if let Some(url) = yaml_schema_url {
+            options = options
+                .with_yaml_schema_url(&url)
+                .map_err(|error| JsError::new(&error.to_string()))?;
+        }
+        self.query_raw_with_options(dataset, sparql, base.as_deref(), format, &options)
+    }
 }
 
 impl Default for QueryEngine {
@@ -345,6 +382,26 @@ impl QueryEngine {
         self.inner
             .query(&frozen, sparql_request(sparql, base))
             .map_err(|e| diag_to_err(&e))
+    }
+
+    fn query_raw_with_options(
+        &self,
+        dataset: &Dataset,
+        sparql: &str,
+        base: Option<&str>,
+        format: &str,
+        options: &JsonLdSerializeOptions,
+    ) -> Result<String, JsError> {
+        match self.run_query(dataset, sparql, base)? {
+            SparqlResult::Graph(graph) => Dataset {
+                inner: MutableDataset::new(graph),
+            }
+            .serialize_with_options(format, options),
+            other => Err(kind_mismatch(
+                "CONSTRUCT/DESCRIBE graph for configured JSON-LD serialization",
+                &other,
+            )),
+        }
     }
 }
 

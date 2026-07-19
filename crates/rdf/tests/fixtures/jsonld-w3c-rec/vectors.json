@@ -1,0 +1,665 @@
+{
+  "schema_version": 1,
+  "upstream_revision": "3e7fa5377b2b3c5176eacf8bde8e01fdb7c4a062",
+  "upstream_tag": "REC-2020-07-16",
+  "expected_vector_count": 73,
+  "vectors": [
+    {
+      "id": "0001",
+      "name": "Plain literal with URIs",
+      "purpose": "Tests generation of a triple using full URIs and a plain literal.",
+      "input_sha256": "93c5c11512f2e711c6e2a5b4690a4c1279f0e498b98d0a01231292f78a21f676",
+      "expected_sha256": "f8e7ec19fc3a3a0e4d82dbd02c2175fcaf278ac0c643ae3b1223c5939f82d105",
+      "input": "{\n  \"@id\": \"http://greggkellogg.net/foaf#me\",\n  \"http://xmlns.com/foaf/0.1/name\": \"Gregg Kellogg\"\n}",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/name> \"Gregg Kellogg\" .\n"
+    },
+    {
+      "id": "0002",
+      "name": "Plain literal with CURIE from default context",
+      "purpose": "Tests generation of a triple using a CURIE defined in the default context.",
+      "input_sha256": "46f10214ab1f9e974dbff56b05f84fa522d7364bc0da88e5ae4b3a5810706c4d",
+      "expected_sha256": "f8e7ec19fc3a3a0e4d82dbd02c2175fcaf278ac0c643ae3b1223c5939f82d105",
+      "input": "{\n  \"@context\": {\"foaf\": \"http://xmlns.com/foaf/0.1/\"},\n  \"@id\": \"http://greggkellogg.net/foaf#me\",\n  \"foaf:name\": \"Gregg Kellogg\"\n}",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/name> \"Gregg Kellogg\" .\n"
+    },
+    {
+      "id": "0003",
+      "name": "Default subject is BNode",
+      "purpose": "Tests that a BNode is created if no explicit subject is set.",
+      "input_sha256": "d045268199b7afb6be50ea6cd720bb5806f68a8998e73d4572efb25490fc5caa",
+      "expected_sha256": "b53d014a5125e0b025e3512666746f7cf5b5ce3e245b76a7089f9f05134cfdec",
+      "input": "{\n  \"@context\": {\"foaf\": \"http://xmlns.com/foaf/0.1/\"},\n  \"@type\": \"foaf:Person\"\n}",
+      "expected_nquads": "_:b0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .\n"
+    },
+    {
+      "id": "0004",
+      "name": "Literal with language tag",
+      "purpose": "Tests that a plain literal is created with a language tag.",
+      "input_sha256": "7851d3ed2ae40a4beb443ed24a26ce573f323336d4e487338ad8cc43e3471a69",
+      "expected_sha256": "e34f31d45901ae5c0d03660fd1357c057da476bedb900488d09818de4b8aacea",
+      "input": "{\n  \"http://www.w3.org/2000/01/rdf-schema#label\": {\n    \"@value\": \"A plain literal with a lang tag.\",\n    \"@language\": \"en-us\"\n  }\n}",
+      "expected_nquads": "_:b0 <http://www.w3.org/2000/01/rdf-schema#label> \"A plain literal with a lang tag.\"@en-us .\n"
+    },
+    {
+      "id": "0005",
+      "name": "Extended character set literal",
+      "purpose": "Tests that a literal may be created using extended characters.",
+      "input_sha256": "ff52947453c21e2fd115fd98258d1cd4e32ed536abb0e21d75dabcdbbab38e9f",
+      "expected_sha256": "63b0c11fddc102b52c567f822b2c3b9e4e611678ff45a2001fe23b4c8a195f6c",
+      "input": "{\n  \"@id\": \"http://greggkellogg.net/foaf#me\",\n  \"http://xmlns.com/foaf/0.1/knows\": {\n    \"http://xmlns.com/foaf/0.1/name\": {\"@value\": \"Herman Iván\", \"@language\": \"hu\"}\n  }\n}\n",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/knows> _:b0 .\n_:b0 <http://xmlns.com/foaf/0.1/name> \"Herman Iván\"@hu .\n"
+    },
+    {
+      "id": "0006",
+      "name": "Typed literal",
+      "purpose": "Tests creation of a literal with a datatype.",
+      "input_sha256": "0e76879ffb969c7e44f3a5a51d8774aa3dec7ff82ec3f7a1dc90d035ba66302e",
+      "expected_sha256": "0c9e9df81c4fa0bec6b0bbc55c08d5f0497823bd349e69d68cd4f1086fe5c8bb",
+      "input": "{\n  \"@id\":  \"http://greggkellogg.net/foaf#me\",\n  \"http://purl.org/dc/terms/created\":  {\n    \"@value\": \"1957-02-27\",\n    \"@type\": \"http://www.w3.org/2001/XMLSchema#date\"\n  }\n}\n",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://purl.org/dc/terms/created> \"1957-02-27\"^^<http://www.w3.org/2001/XMLSchema#date> .\n"
+    },
+    {
+      "id": "0007",
+      "name": "Tests 'a' generates rdf:type and object is implicit IRI",
+      "purpose": "Verify that 'a' is an alias for rdf:type, and the object is created as an IRI.",
+      "input_sha256": "07e5a2f9c0890055774800246c4c04b0b07af403278152bf7f5c9d5e59dda8a6",
+      "expected_sha256": "ace843033fc185afad1e08f993e65bd61c63360c9739949fe9dbbab92a2ed390",
+      "input": "{\n  \"@id\": \"http://greggkellogg.net/foaf#me\",\n  \"@type\": \"http://xmlns.com/foaf/0.1/Person\"\n}",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Person> .\n"
+    },
+    {
+      "id": "0008",
+      "name": "Test prefix defined in @context",
+      "purpose": "Generate an IRI using a prefix defined within an @context.",
+      "input_sha256": "747966f3c89ec9db8c0aed8477fb54beddcfaf1360c5770b2a0ae0ba55bd64b5",
+      "expected_sha256": "e0a9b2166565157ae013504509c8ecf54bd4ac68157ef6437b3eb4aea02c310e",
+      "input": "{\n  \"@context\": {\"d\": \"http://example.com/default#\"},\n  \"d:foo\": \"bar\"\n}\n",
+      "expected_nquads": "_:b0 <http://example.com/default#foo> \"bar\" .\n"
+    },
+    {
+      "id": "0009",
+      "name": "Test using an empty suffix",
+      "purpose": "An empty suffix may be used.",
+      "input_sha256": "c2c3c248f77d4927bc4e8f1e7847bae80f24ed559ec08d479be945aca22adb01",
+      "expected_sha256": "dac36a49c297327f39b63d5cc3119a06f0e30a1f79b132a20fd822cdd90fafd9",
+      "input": "{\n  \"@context\": {\"foo\": \"http://example.com/default#\"},\n  \"foo:\": \"bar\"\n}\n",
+      "expected_nquads": "_:b0 <http://example.com/default#> \"bar\" .\n"
+    },
+    {
+      "id": "0010",
+      "name": "Test object processing defines object",
+      "purpose": "A property referencing an associative array gets object from subject of array.",
+      "input_sha256": "8fc65dcdd95694c5e5e24fbcc69fddc55520b0eb56e2f17e7a071d40383f79be",
+      "expected_sha256": "312cb29a4348d5118cab2b3f46c3eece4c21668a6cd9b4670908bc4e69bee459",
+      "input": "{\n  \"@context\": {\"foaf\": \"http://xmlns.com/foaf/0.1/\"},\n  \"@id\": \"http://greggkellogg.net/foaf#me\",\n  \"foaf:knows\": {\n    \"@id\": \"http://manu.sporny.org/#me\",\n    \"foaf:name\": \"Manu Sporny\"\n  }\n}\n",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/knows> <http://manu.sporny.org/#me> .\n<http://manu.sporny.org/#me> <http://xmlns.com/foaf/0.1/name> \"Manu Sporny\" .\n"
+    },
+    {
+      "id": "0011",
+      "name": "Test object processing defines object with implicit BNode",
+      "purpose": "If no @ is specified, a BNode is created, and will be used as the object of an enclosing property.",
+      "input_sha256": "c8b5656b4447685c719542b3672759ca59cac5d9b523720e6a18d905c204eef7",
+      "expected_sha256": "218eb4b0477629b7ab848d022e107708c043a99389a764f12e257fc82b9563cb",
+      "input": "{\n  \"@context\": {\n    \"foaf\": \"http://xmlns.com/foaf/0.1/\"\n  },\n  \"@id\": \"http://greggkellogg.net/foaf#me\",\n  \"foaf:knows\": {\n    \"foaf:name\": \"Dave Longley\"\n  }\n}\n",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/knows> _:b0 .\n_:b0 <http://xmlns.com/foaf/0.1/name> \"Dave Longley\" .\n"
+    },
+    {
+      "id": "0012",
+      "name": "Multiple Objects for a Single Property",
+      "purpose": "Tests that Multiple Objects are for a Single Property using array syntax.",
+      "input_sha256": "9dd6ac87e3d8bd7f9599bfc7b2b6d03f9bc27ccea48657491525b6260a2e709e",
+      "expected_sha256": "ef8bcba32299d64959640502482efe33dee559b6e007ae8771d4ba3f9de30328",
+      "input": "{\n  \"@context\": {\n    \"foaf\": \"http://xmlns.com/foaf/0.1/\"\n  },\n  \"@id\": \"http://greggkellogg.net/foaf#me\",\n  \"foaf:knows\": [\"Manu Sporny\", \"Dave Longley\"]\n}",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/knows> \"Dave Longley\" .\n<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/knows> \"Manu Sporny\" .\n"
+    },
+    {
+      "id": "0013",
+      "name": "Creation of an empty list",
+      "purpose": "Tests that @list: [] generates an empty list.",
+      "input_sha256": "1281d583f894b9a66aed7883623e75e6811f04ab0dcb3dbbf2851555c57f78e3",
+      "expected_sha256": "4097f1a25593a6bf7b08a062cb51ab018b19a4a75abb698e181aec79ced16f04",
+      "input": "{\n  \"@context\": {\n    \"foaf\": \"http://xmlns.com/foaf/0.1/\"\n  },\n  \"@id\": \"http://greggkellogg.net/foaf#me\",\n  \"foaf:knows\": {\"@list\": []}\n}\n",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/knows> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n"
+    },
+    {
+      "id": "0014",
+      "name": "Creation of a list with single element",
+      "purpose": "Tests that @list generates a list.",
+      "input_sha256": "3771f90524dad33b4c68c706ca6cf8cc17c429fef4872b4f2b214b8216755704",
+      "expected_sha256": "c4f4e8a9b1238ba6c93e0a9434e560a72e1fd41ba4399df2a86e1b37660f2f12",
+      "input": "{\n  \"@context\": {\n    \"foaf\": \"http://xmlns.com/foaf/0.1/\"\n  },\n  \"@id\": \"http://greggkellogg.net/foaf#me\",\n  \"foaf:knows\": {\"@list\": [\"Manu Sporny\"]}\n}\n",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/knows> _:b0 .\n_:b0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> \"Manu Sporny\" .\n_:b0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n"
+    },
+    {
+      "id": "0015",
+      "name": "Creation of a list with multiple elements",
+      "purpose": "Tests that list with multiple elements.",
+      "input_sha256": "b2935191a0e0d8d2ca94bbcad0972a03b18b05162ebd81c64df4776f19e56df2",
+      "expected_sha256": "ba620b0183eb5d5e1055d954f3e29794e901ba0defb3723c67eebe0c8bedb024",
+      "input": "{\n  \"@context\": {\n    \"foaf\": \"http://xmlns.com/foaf/0.1/\"\n  },\n  \"@id\": \"http://greggkellogg.net/foaf#me\",\n  \"foaf:knows\": {\"@list\": [\"Manu Sporny\", \"Dave Longley\"]}\n}\n",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/knows> _:b0 .\n_:b0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> \"Manu Sporny\" .\n_:b0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:b1 .\n_:b1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> \"Dave Longley\" .\n_:b1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n"
+    },
+    {
+      "id": "0019",
+      "name": "Test type coercion to anyURI",
+      "purpose": "Tests coercion of object to anyURI when specified.",
+      "input_sha256": "f3797143a6d61178963f6748b5ac06e5f5fa7aee52d8a0a8382eaa8c2d03f8de",
+      "expected_sha256": "fa3051c4e7a84467e96c7b3b33613240de8b64aedcaf0116b3b19bee64795381",
+      "input": "{\n  \"@context\": {\n    \"foaf\": \"http://xmlns.com/foaf/0.1/\",\n    \"knows\": {\"@id\": \"http://xmlns.com/foaf/0.1/knows\", \"@type\": \"@id\"}\n  },\n  \"@id\":    \"http://greggkellogg.net/foaf#me\",\n  \"knows\":  \"http://manu.sporny.org/#me\"\n}\n",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/knows> <http://manu.sporny.org/#me> .\n"
+    },
+    {
+      "id": "0020",
+      "name": "Test type coercion to typed literal",
+      "purpose": "Tests coercion of object to a typed literal when specified.",
+      "input_sha256": "1336270a081c0f085f397c746b515fbc4cf93aeee872ff7e5f998ad908de47c0",
+      "expected_sha256": "0c9e9df81c4fa0bec6b0bbc55c08d5f0497823bd349e69d68cd4f1086fe5c8bb",
+      "input": "{\n  \"@context\": {\n    \"xsd\": \"http://www.w3.org/2001/XMLSchema#\",\n    \"created\": {\"@id\": \"http://purl.org/dc/terms/created\", \"@type\": \"xsd:date\"}\n  },\n  \"@id\":  \"http://greggkellogg.net/foaf#me\",\n  \"created\":  \"1957-02-27\"\n}\n",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://purl.org/dc/terms/created> \"1957-02-27\"^^<http://www.w3.org/2001/XMLSchema#date> .\n"
+    },
+    {
+      "id": "0022",
+      "name": "Test coercion of double value",
+      "purpose": "Tests that a decimal value generates a xsd:double typed literal;.",
+      "input_sha256": "a0b92e2f339e61db9772920a7c5da68aaf74a574a4b9a4830c1e6118b2d649da",
+      "expected_sha256": "56d0eef997db3874546c66194314eb9096159a97a6975d6d9343cf5f7f112d2d",
+      "input": "{\n  \"@context\": { \"measure\": \"http://example/measure#\"},\n  \"measure:cups\": 5.3\n}\n",
+      "expected_nquads": "_:b0 <http://example/measure#cups> \"5.3E0\"^^<http://www.w3.org/2001/XMLSchema#double> .\n"
+    },
+    {
+      "id": "0023",
+      "name": "Test coercion of integer value",
+      "purpose": "Tests that a decimal value generates a xsd:integer typed literal.",
+      "input_sha256": "a4cd9a52716840a800f4b9f3d0a57a73ffec67aab86c6899ba9f3607d73f1f9e",
+      "expected_sha256": "4b8476be40e2e7d149ee3a0ed942f2094dae39eaf6c0e7335b20eac5c53f90ee",
+      "input": "{\n  \"@context\": { \"chem\": \"http://example/chem#\"},\n  \"chem:protons\": 12\n}",
+      "expected_nquads": "_:b0 <http://example/chem#protons> \"12\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n"
+    },
+    {
+      "id": "0024",
+      "name": "Test coercion of boolean value",
+      "purpose": "Tests that a decimal value generates a xsd:boolean typed literal.",
+      "input_sha256": "71a52ea280119e4df5423020c62072756817860c845aa3d1403fdaed0b64f3f4",
+      "expected_sha256": "6388fda7da6769c71922c2c75e9a37daa9fa57923c72bdb73800bedc667e5eff",
+      "input": "{\n  \"@context\": { \"sensor\": \"http://example/sensor#\"},\n  \"sensor:active\": true\n}",
+      "expected_nquads": "_:b0 <http://example/sensor#active> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n"
+    },
+    {
+      "id": "0025",
+      "name": "Test list coercion with single element",
+      "purpose": "Tests that an array with a single element on a property with @list coercion creates an RDF Collection.",
+      "input_sha256": "617fdee5df2080f424ca02b4bf2fd0f5470930927e86238d0be6e8c872e61aca",
+      "expected_sha256": "c4f4e8a9b1238ba6c93e0a9434e560a72e1fd41ba4399df2a86e1b37660f2f12",
+      "input": "{\n  \"@context\": {\n    \"knows\": {\"@id\": \"http://xmlns.com/foaf/0.1/knows\", \"@container\": \"@list\"}\n  },\n  \"@id\": \"http://greggkellogg.net/foaf#me\",\n  \"knows\": [\"Manu Sporny\"]\n}\n",
+      "expected_nquads": "<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/knows> _:b0 .\n_:b0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> \"Manu Sporny\" .\n_:b0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n"
+    },
+    {
+      "id": "0026",
+      "name": "Test creation of multiple types",
+      "purpose": "Tests that @type with an array of types creates multiple types.",
+      "input_sha256": "2ccfb90310efec7d1676fdbeed362105700bed71f0a91e427b947dc9769761dd",
+      "expected_sha256": "c8b95c1588cb0cde34073231a02d67879612ed032a1e9c67ed9447d7dce91dfa",
+      "input": "{\n  \"@context\": {\"rdfs\": \"http://www.w3.org/2000/01/rdf-schema#\"},\n  \"@type\": [\"rdfs:Resource\", \"rdfs:Class\"]\n}\n",
+      "expected_nquads": "_:b0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Class> .\n_:b0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2000/01/rdf-schema#Resource> .\n"
+    },
+    {
+      "id": "0027",
+      "name": "Simple named graph (Wikidata)",
+      "purpose": "Using @graph with other keys places triples in a named graph.",
+      "input_sha256": "e5b967ee36604b4b02d499eb64609de7b7353a7a03eecaa5478a2fb04b12529c",
+      "expected_sha256": "707c56204bc4ca2f75fab260ac0267624b3aeb52f5c0c9723b375a3fdd2a3654",
+      "input": "{\n  \"@context\": {\n    \"rdf\": \"http://www.w3.org/1999/02/22-rdf-syntax-ns#\",\n    \"ex\": \"http://example.org/\",\n    \"xsd\": \"http://www.w3.org/2001/XMLSchema#\",\n    \"ex:locatedIn\": {\"@type\": \"@id\"},\n    \"ex:hasPopulaton\": {\"@type\": \"xsd:integer\"},\n    \"ex:hasReference\": {\"@type\": \"@id\"}\n  },\n  \"@graph\": [\n    {\n      \"@id\": \"http://example.org/ParisFact1\",\n      \"@type\": \"rdf:Graph\",\n      \"@graph\": {\n        \"@id\": \"http://example.org/location/Paris#this\",\n        \"ex:locatedIn\": \"http://example.org/location/France#this\"\n      },\n      \"ex:hasReference\": [\"http://www.britannica.com/\", \"http://www.wikipedia.org/\", \"http://www.brockhaus.de/\"]\n    },\n    {\n      \"@id\": \"http://example.org/ParisFact2\",\n      \"@type\": \"rdf:Graph\",\n      \"@graph\": {\n        \"@id\": \"http://example.org/location/Paris#this\",\n        \"ex:hasPopulation\": 7000000\n      },\n      \"ex:hasReference\": \"http://www.wikipedia.org/\"\n    }\n  ]\n}\n",
+      "expected_nquads": "<http://example.org/ParisFact1> <http://example.org/hasReference> <http://www.britannica.com/> .\n<http://example.org/ParisFact1> <http://example.org/hasReference> <http://www.brockhaus.de/> .\n<http://example.org/ParisFact1> <http://example.org/hasReference> <http://www.wikipedia.org/> .\n<http://example.org/ParisFact1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Graph> .\n<http://example.org/ParisFact2> <http://example.org/hasReference> <http://www.wikipedia.org/> .\n<http://example.org/ParisFact2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Graph> .\n<http://example.org/location/Paris#this> <http://example.org/hasPopulation> \"7000000\"^^<http://www.w3.org/2001/XMLSchema#integer> <http://example.org/ParisFact2> .\n<http://example.org/location/Paris#this> <http://example.org/locatedIn> <http://example.org/location/France#this> <http://example.org/ParisFact1> .\n"
+    },
+    {
+      "id": "0028",
+      "name": "Simple named graph",
+      "purpose": "Signing a graph.",
+      "input_sha256": "08ec1e259a93b64f41fdf43239a6ab4754f17cc07e825cb4f4401fe4f0b747b4",
+      "expected_sha256": "ddcc710898f9b30a56a3369afcde16757f8343011c009915523050abb1b82870",
+      "input": "{\n  \"@context\": {\n    \"sec\": \"http://purl.org/security#\",\n    \"xsd\": \"http://www.w3.org/2001/XMLSchema#\",\n    \"rdf\": \"http://www.w3.org/1999/02/22-rdf-syntax-ns#\",\n    \"dcterms\": \"http://purl.org/dc/terms/\",\n    \"sec:signer\": {\"@type\": \"@id\"},\n    \"dcterms:created\": {\"@type\": \"xsd:dateTime\"}\n  },\n  \"@id\": \"http://example.org/sig1\",\n  \"@type\": [\"rdf:Graph\", \"sec:SignedGraph\"],\n  \"dcterms:created\": \"2011-09-23T20:21:34Z\",\n  \"sec:signer\": \"http://payswarm.example.com/i/john/keys/5\",\n  \"sec:signatureValue\": \"OGQzNGVkMzVm4NTIyZTkZDYMmMzQzNmExMgoYzI43Q3ODIyOWM32NjI=\",\n  \"@graph\": {\n    \"@id\": \"http://example.org/fact1\",\n    \"dcterms:title\": \"Hello World!\"\n  }\n}",
+      "expected_nquads": "<http://example.org/fact1> <http://purl.org/dc/terms/title> \"Hello World!\" <http://example.org/sig1> .\n<http://example.org/sig1> <http://purl.org/dc/terms/created> \"2011-09-23T20:21:34Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime> .\n<http://example.org/sig1> <http://purl.org/security#signatureValue> \"OGQzNGVkMzVm4NTIyZTkZDYMmMzQzNmExMgoYzI43Q3ODIyOWM32NjI=\" .\n<http://example.org/sig1> <http://purl.org/security#signer> <http://payswarm.example.com/i/john/keys/5> .\n<http://example.org/sig1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://purl.org/security#SignedGraph> .\n<http://example.org/sig1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Graph> .\n"
+    },
+    {
+      "id": "0029",
+      "name": "named graph with embedded named graph",
+      "purpose": "Tests that named graphs containing named graphs flatten to single level of graph naming.",
+      "input_sha256": "47eda412ffc3bda303bb761080d80f8801cb1d2c2e5034a5ce905abeb0de81e9",
+      "expected_sha256": "81076f94edba3ed1fdf9d83d99b3f49bee0ca5da3fccd7c38c660d840a9b5c82",
+      "input": "{\n  \"@context\": {\n    \"wd\": \"http://data.wikipedia.org/vocab#\",\n    \"ws\": \"http://data.wikipedia.org/snaks/\",\n    \"wp\": \"http://en.wikipedia.org/wiki/\"\n  },\n  \"@id\": \"ws:Assertions\",\n  \"@type\": \"wd:SnakSet\",\n  \"@graph\": {\n    \"@id\": \"ws:BerlinFact\",\n    \"@type\": \"wd:Snak\",\n    \"@graph\": {\n      \"@id\": \"wp:Berlin\",\n      \"wd:population\": 3499879\n    },\n    \"wd:assertedBy\": \"http://www.statistik-berlin-brandenburg.de/\"\n  }\n}\n",
+      "expected_nquads": "<http://data.wikipedia.org/snaks/Assertions> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://data.wikipedia.org/vocab#SnakSet> .\n<http://data.wikipedia.org/snaks/BerlinFact> <http://data.wikipedia.org/vocab#assertedBy> \"http://www.statistik-berlin-brandenburg.de/\" <http://data.wikipedia.org/snaks/Assertions> .\n<http://data.wikipedia.org/snaks/BerlinFact> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://data.wikipedia.org/vocab#Snak> <http://data.wikipedia.org/snaks/Assertions> .\n<http://en.wikipedia.org/wiki/Berlin> <http://data.wikipedia.org/vocab#population> \"3499879\"^^<http://www.w3.org/2001/XMLSchema#integer> <http://data.wikipedia.org/snaks/BerlinFact> .\n"
+    },
+    {
+      "id": "0030",
+      "name": "top-level graph with string subject reference",
+      "purpose": "Tests graphs containing subject references as strings.",
+      "input_sha256": "399f5433a79f5fb7792fa724b1ba9bd76ede76640b203fd151d850d8291ff908",
+      "expected_sha256": "316b442616500a0c57112958f5dceef66dda921a39bb79842e8b88217129a893",
+      "input": "{\n  \"@context\": {\n    \"xsd\": \"http://www.w3.org/2001/XMLSchema#\",\n    \"knows\": \"http://xmlns.com/foaf/0.1/knows\",\n    \"name\": \"http://xmlns.com/foaf/0.1/name\",\n    \"asOf\": \"http://example.org/asOf\"\n  },\n  \"@id\": \"http://example.org/linked-data-graph\",\n  \"asOf\": {\"@value\": \"2012-04-09\", \"@type\": \"xsd:date\"},\n  \"@graph\":\n  [\n    {\n      \"@id\": \"http://manu.sporny.org/i/public\",\n      \"@type\": \"foaf:Person\",\n      \"name\": \"Manu Sporny\",\n      \"knows\": \"http://greggkellogg.net/foaf#me\"\n    },\n    {\n      \"@id\": \"http://greggkellogg.net/foaf#me\",\n      \"@type\": \"foaf:Person\",\n      \"name\": \"Gregg Kellogg\",\n      \"knows\": \"http://manu.sporny.org/i/public\"\n    },\n    {\n      \"@id\": \"http://www.markus-lanthaler.com/\"\n    }\n  ]\n}\n",
+      "expected_nquads": "<http://example.org/linked-data-graph> <http://example.org/asOf> \"2012-04-09\"^^<http://www.w3.org/2001/XMLSchema#date> .\n<http://greggkellogg.net/foaf#me> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <foaf:Person> <http://example.org/linked-data-graph> .\n<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/knows> \"http://manu.sporny.org/i/public\" <http://example.org/linked-data-graph> .\n<http://greggkellogg.net/foaf#me> <http://xmlns.com/foaf/0.1/name> \"Gregg Kellogg\" <http://example.org/linked-data-graph> .\n<http://manu.sporny.org/i/public> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <foaf:Person> <http://example.org/linked-data-graph> .\n<http://manu.sporny.org/i/public> <http://xmlns.com/foaf/0.1/knows> \"http://greggkellogg.net/foaf#me\" <http://example.org/linked-data-graph> .\n<http://manu.sporny.org/i/public> <http://xmlns.com/foaf/0.1/name> \"Manu Sporny\" <http://example.org/linked-data-graph> .\n"
+    },
+    {
+      "id": "0031",
+      "name": "Reverse property",
+      "purpose": "Tests conversion of reverse properties.",
+      "input_sha256": "9f57eb26433a36ba57a677fd780b22c6da5535b51adac89858397dbb28202356",
+      "expected_sha256": "cee78d890d92f3b4aa79235e34e45955cf9183c3635dd9372852b4a861a10a4b",
+      "input": "{\n  \"@context\": {\n    \"rdfs\": \"http://www.w3.org/2000/01/rdf-schema#\",\n    \"defines\": { \"@reverse\": \"rdfs:definedBy\" },\n    \"label\": \"rdfs:label\"\n  },\n  \"@id\": \"http://example.com/vocab\",\n  \"label\": \"My vocabulary\",\n  \"defines\": [\n    {\n      \"@id\": \"http://example.com/vocab#property\",\n      \"label\": \"A property\"\n    }\n  ]\n}\n",
+      "expected_nquads": "<http://example.com/vocab#property> <http://www.w3.org/2000/01/rdf-schema#definedBy> <http://example.com/vocab> .\n<http://example.com/vocab#property> <http://www.w3.org/2000/01/rdf-schema#label> \"A property\" .\n<http://example.com/vocab> <http://www.w3.org/2000/01/rdf-schema#label> \"My vocabulary\" .\n"
+    },
+    {
+      "id": "0032",
+      "name": "@context reordering",
+      "purpose": "Tests that generated triples do not depend on order of @context.",
+      "input_sha256": "4c5cb08798db3f4506d2e996bc7623a4b867ef0937cf753a33b39c7c2aa22331",
+      "expected_sha256": "917e13944778fab53300a53d54e1e27ddd82bb6d12c3a1fbbebba1eba2665b50",
+      "input": "{\n  \"@id\": \"ex:node1\",\n  \"owl:sameAs\": {\n    \"@id\": \"ex:node2\",\n    \"rdfs:label\": \"Node 2\",\n    \"link\": \"ex:node3\",\n    \"@context\": {\n      \"rdfs\": \"http://www.w3.org/2000/01/rdf-schema#\"\n    }\n  },\n  \"@context\": {\n    \"ex\": \"http://example.org/\",\n    \"owl\": \"http://www.w3.org/2002/07/owl#\",\n    \"link\": { \"@id\": \"ex:link\", \"@type\": \"@id\" }\n  }\n}\n",
+      "expected_nquads": "<http://example.org/node1> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/node2> .\n<http://example.org/node2> <http://example.org/link> <http://example.org/node3> .\n<http://example.org/node2> <http://www.w3.org/2000/01/rdf-schema#label> \"Node 2\" .\n"
+    },
+    {
+      "id": "0033",
+      "name": "@id reordering",
+      "purpose": "Tests that generated triples do not depend on order of @id.",
+      "input_sha256": "7df95c233422bf9bf8c2aa0e0180426fac82669759e3f688acccc438ab2d136c",
+      "expected_sha256": "917e13944778fab53300a53d54e1e27ddd82bb6d12c3a1fbbebba1eba2665b50",
+      "input": "{\n  \"@context\": {\n    \"ex\": \"http://example.org/\",\n    \"owl\": \"http://www.w3.org/2002/07/owl#\",\n    \"link\": {\n      \"@id\": \"ex:link\",\n      \"@type\": \"@id\"\n    }\n  },\n  \"owl:sameAs\": {\n    \"@context\": {\n      \"rdfs\": \"http://www.w3.org/2000/01/rdf-schema#\"\n    },\n    \"rdfs:label\": \"Node 2\",\n    \"link\": \"ex:node3\",\n    \"@id\": \"ex:node2\"\n  },\n  \"@id\": \"ex:node1\"\n}\n",
+      "expected_nquads": "<http://example.org/node1> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/node2> .\n<http://example.org/node2> <http://example.org/link> <http://example.org/node3> .\n<http://example.org/node2> <http://www.w3.org/2000/01/rdf-schema#label> \"Node 2\" .\n"
+    },
+    {
+      "id": "0034",
+      "name": "context properties reordering",
+      "purpose": "Tests that generated triples do not depend on order of properties inside @context.",
+      "input_sha256": "224b0222191366db43eb2ac8cee18df5a7de08228f2fe10b4f25190e04e1fbd6",
+      "expected_sha256": "917e13944778fab53300a53d54e1e27ddd82bb6d12c3a1fbbebba1eba2665b50",
+      "input": "{\n  \"@context\": {\n    \"link\": { \"@id\": \"ex:link\", \"@type\": \"@id\" },\n    \"ex\": \"http://example.org/\",\n    \"owl\": \"http://www.w3.org/2002/07/owl#\"\n  },\n  \"@id\": \"ex:node1\",\n  \"owl:sameAs\": {\n    \"@context\": {\n      \"rdfs\": \"http://www.w3.org/2000/01/rdf-schema#\"\n    },\n    \"@id\": \"ex:node2\",\n    \"rdfs:label\": \"Node 2\",\n    \"link\": \"ex:node3\"\n  }\n}\n",
+      "expected_nquads": "<http://example.org/node1> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/node2> .\n<http://example.org/node2> <http://example.org/link> <http://example.org/node3> .\n<http://example.org/node2> <http://www.w3.org/2000/01/rdf-schema#label> \"Node 2\" .\n"
+    },
+    {
+      "id": "0035",
+      "name": "non-fractional numbers converted to xsd:double",
+      "purpose": "xsd:double's canonical lexical is used when converting numbers without fraction that are coerced to xsd:double",
+      "input_sha256": "4c76faa16f22754969f5a2f1480dcee5da9c68e1d460ee446a3bf968ca8ac1b7",
+      "expected_sha256": "226d130927f198d87aa8962a46aae953a4a75b83d17a9b420b9a882cd0e7f733",
+      "input": "{\n  \"@context\": {\n    \"double\": {\n      \"@id\": \"http://example.com/double\",\n      \"@type\": \"http://www.w3.org/2001/XMLSchema#double\"\n    },\n    \"integer\": {\n      \"@id\": \"http://example.com/integer\",\n      \"@type\": \"http://www.w3.org/2001/XMLSchema#integer\"\n    }\n  },\n  \"double\": [1, 2.2 ],\n  \"integer\": [8, 9.9 ]\n}\n",
+      "expected_nquads": "_:b0 <http://example.com/double> \"1.0E0\"^^<http://www.w3.org/2001/XMLSchema#double> .\n_:b0 <http://example.com/double> \"2.2E0\"^^<http://www.w3.org/2001/XMLSchema#double> .\n_:b0 <http://example.com/integer> \"8\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n_:b0 <http://example.com/integer> \"9.9E0\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n"
+    },
+    {
+      "id": "0036",
+      "name": "Use nodeMapGeneration bnode labels",
+      "purpose": "The toRDF algorithm does not relabel blank nodes; it reuses the counter from the nodeMapGeneration to generate new ones",
+      "input_sha256": "2f8300e0bdce0840fc073d27c47216ba811e31d0520a44416bb98c1d56c18c10",
+      "expected_sha256": "d28605c8490cded4bc7ba31f64462b1097e07a86e76e1183d9b7aa7608118424",
+      "input": "{\n  \"@id\": \"http://example.com/\",\n  \"ex:prop1\": {\n    \"@list\": [ { \"@id\": \"_:x1\" }, { \"@id\": \"_:x2\" } ]\n  },\n  \"ex:prop2\": { \"@id\": \"_:x3\" }\n}\n",
+      "expected_nquads": "<http://example.com/> <ex:prop1> _:b3 .\n<http://example.com/> <ex:prop2> _:b2 .\n_:b3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> _:b0 .\n_:b3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:b4 .\n_:b4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> _:b1 .\n_:b4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n"
+    },
+    {
+      "id": "0113",
+      "name": "Dataset with a IRI named graph",
+      "purpose": "Basic use of creating a named graph using an IRI name",
+      "input_sha256": "71c0f0205599e66d448b25cef2e851193e9f23b31bc31567aa635ec21dd0375c",
+      "expected_sha256": "ca5fbc6e086a1e95201ae3b9319eb1a7451323eab1b8a1887d957b9c07d511ca",
+      "input": "{\n  \"@id\": \"http://example/g\",\n  \"@graph\": {\n    \"@id\": \"http://example/s\",\n    \"http://example/p\": {\"@id\": \"http://example/o\"}\n  }\n}",
+      "expected_nquads": "<http://example/s> <http://example/p> <http://example/o> <http://example/g> .\n"
+    },
+    {
+      "id": "0114",
+      "name": "Dataset with a IRI named graph",
+      "purpose": "Basic use of creating a named graph using a BNode name",
+      "input_sha256": "2cd57c8b7525c7fec0e39ca75af3619734a4cc3cd64842bf1f3bcb24b1e2b6a9",
+      "expected_sha256": "31b79d184bf9b04d3934f690fa821d3b53cfb2dcd14fb7a48be66988ae9a48f3",
+      "input": "{\n  \"@id\": \"_:g\",\n  \"@graph\": {\n    \"@id\": \"http://example/s\",\n    \"http://example/p\": {\"@id\": \"http://example/o\"}\n  }\n}",
+      "expected_nquads": "<http://example/s> <http://example/p> <http://example/o> _:b0 .\n"
+    },
+    {
+      "id": "0115",
+      "name": "Dataset with a default and two named graphs",
+      "purpose": "Dataset with a default and two named graphs (IRI and BNode)",
+      "input_sha256": "acbd626f3b0a39c6a0f48aa626a4a4eac5292b189bd1c525897e2e8c015fe64a",
+      "expected_sha256": "036e7ff8e756a6e2b124c3943f9b80e087b8d61da71ba5e311ec7039111b4b4a",
+      "input": "{\n  \"@graph\": [{\n    \"@id\": \"http://example/s0\",\n    \"http://example/p0\": {\"@id\": \"http://example/o0\"}\n  },\n  {\n    \"@id\": \"http://example/g\",\n    \"@graph\": {\n      \"@id\": \"http://example/s1\",\n      \"http://example/p1\": {\"@id\": \"http://example/o1\"}\n    }\n  },\n  {\n    \"@id\": \"_:g\",\n    \"@graph\": {\n      \"@id\": \"http://example/s2\",\n      \"http://example/p2\": {\"@id\": \"http://example/o2\"}\n    }\n  }]\n}",
+      "expected_nquads": "<http://example/s0> <http://example/p0> <http://example/o0> .\n<http://example/s1> <http://example/p1> <http://example/o1> <http://example/g> .\n<http://example/s2> <http://example/p2> <http://example/o2> _:b0 .\n"
+    },
+    {
+      "id": "0116",
+      "name": "Dataset from node with embedded named graph",
+      "purpose": "Embedding @graph in a node creates a named graph",
+      "input_sha256": "bca60facf901288b8e0c60aeb7f3c6d8e9c458ce1724255920a21351644b87cb",
+      "expected_sha256": "06995aa41cadad268f44735e7fe93f1ac927420e654ea8e768edf778756adf21",
+      "input": "{\n  \"@id\": \"http://example/s0\",\n  \"http://example/p0\": {\"@id\": \"http://example/o0\"},\n  \"@graph\": {\n    \"@id\": \"http://example/s1\",\n    \"http://example/p1\": {\"@id\": \"http://example/o1\"}\n  }\n}",
+      "expected_nquads": "<http://example/s0> <http://example/p0> <http://example/o0> .\n<http://example/s1> <http://example/p1> <http://example/o1> <http://example/s0> .\n"
+    },
+    {
+      "id": "0117",
+      "name": "Dataset from node with embedded named graph (bnode)",
+      "purpose": "Embedding @graph in a node creates a named graph. Graph name is created if there is no subject",
+      "input_sha256": "4d8342ec69007040c6dcdaded310f0303e307e9189cae3677241db7a891b12a1",
+      "expected_sha256": "803c61be54a4065275d1e21aafc2d71cc5e8a99ad37f59a336c55d8189fa69de",
+      "input": "{\n  \"http://example/p0\": {\"@id\": \"http://example/o0\"},\n  \"@graph\": {\n    \"@id\": \"http://example/s1\",\n    \"http://example/p1\": {\"@id\": \"http://example/o1\"}\n  }\n}\n",
+      "expected_nquads": "<http://example/s1> <http://example/p1> <http://example/o1> _:b0 .\n_:b0 <http://example/p0> <http://example/o0> .\n"
+    },
+    {
+      "id": "0119",
+      "name": "Blank nodes with reverse properties",
+      "purpose": "Proper (re-)labeling of blank nodes if used with reverse properties.",
+      "input_sha256": "c69c7a93f8d793afe66f1ad824195e1487818204352396a1b559c44c0db410b0",
+      "expected_sha256": "c92af09ae4d25be0709b463c2d787e4660fdc03bcca79720047702b9a9d1f1a9",
+      "input": "{\n  \"@context\": {\n    \"foo\": \"http://example.org/foo\",\n    \"bar\": { \"@reverse\": \"http://example.org/bar\", \"@type\": \"@id\" }\n  },\n  \"foo\": \"Foo\",\n  \"bar\": [ \"http://example.org/origin\", \"_:b0\" ]\n}\n",
+      "expected_nquads": "<http://example.org/origin> <http://example.org/bar> _:b0 .\n_:b0 <http://example.org/foo> \"Foo\" .\n_:b1 <http://example.org/bar> _:b0 .\n"
+    },
+    {
+      "id": "0120",
+      "name": "IRI Resolution (0)",
+      "purpose": "IRI resolution according to RFC3986.",
+      "input_sha256": "c587c6fc81c61df6add3f05d085c491bb34abdaf4b25dfa7d3c4dabd1aa0a92b",
+      "expected_sha256": "61d2931577323b0499e92e3bd8529393823a0cd5e4d45dac800c54f8a6daaf8c",
+      "input": "{\n  \"@context\": {\"@base\": \"http://a/bb/ccc/d;p?q\", \"urn:ex:p\": {\"@type\": \"@id\"}},\n  \"@graph\": [\n    {\"@id\": \"urn:ex:s001\", \"urn:ex:p\": \"g:h\"},\n    {\"@id\": \"urn:ex:s002\", \"urn:ex:p\": \"g\"},\n    {\"@id\": \"urn:ex:s003\", \"urn:ex:p\": \"./g\"},\n    {\"@id\": \"urn:ex:s004\", \"urn:ex:p\": \"g/\"},\n    {\"@id\": \"urn:ex:s005\", \"urn:ex:p\": \"/g\"},\n    {\"@id\": \"urn:ex:s006\", \"urn:ex:p\": \"//g\"},\n    {\"@id\": \"urn:ex:s007\", \"urn:ex:p\": \"?y\"},\n    {\"@id\": \"urn:ex:s008\", \"urn:ex:p\": \"g?y\"},\n    {\"@id\": \"urn:ex:s009\", \"urn:ex:p\": \"#s\"},\n    {\"@id\": \"urn:ex:s010\", \"urn:ex:p\": \"g#s\"},\n    {\"@id\": \"urn:ex:s011\", \"urn:ex:p\": \"g?y#s\"},\n    {\"@id\": \"urn:ex:s012\", \"urn:ex:p\": \";x\"},\n    {\"@id\": \"urn:ex:s013\", \"urn:ex:p\": \"g;x\"},\n    {\"@id\": \"urn:ex:s014\", \"urn:ex:p\": \"g;x?y#s\"},\n    {\"@id\": \"urn:ex:s015\", \"urn:ex:p\": \"\"},\n    {\"@id\": \"urn:ex:s016\", \"urn:ex:p\": \".\"},\n    {\"@id\": \"urn:ex:s017\", \"urn:ex:p\": \"./\"},\n    {\"@id\": \"urn:ex:s018\", \"urn:ex:p\": \"..\"},\n    {\"@id\": \"urn:ex:s019\", \"urn:ex:p\": \"../\"},\n    {\"@id\": \"urn:ex:s020\", \"urn:ex:p\": \"../g\"},\n    {\"@id\": \"urn:ex:s021\", \"urn:ex:p\": \"../..\"},\n    {\"@id\": \"urn:ex:s022\", \"urn:ex:p\": \"../../\"},\n    {\"@id\": \"urn:ex:s023\", \"urn:ex:p\": \"../../g\"},\n    {\"@id\": \"urn:ex:s024\", \"urn:ex:p\": \"../../../g\"},\n    {\"@id\": \"urn:ex:s025\", \"urn:ex:p\": \"../../../../g\"},\n    {\"@id\": \"urn:ex:s026\", \"urn:ex:p\": \"/./g\"},\n    {\"@id\": \"urn:ex:s027\", \"urn:ex:p\": \"/../g\"},\n    {\"@id\": \"urn:ex:s028\", \"urn:ex:p\": \"g.\"},\n    {\"@id\": \"urn:ex:s029\", \"urn:ex:p\": \".g\"},\n    {\"@id\": \"urn:ex:s030\", \"urn:ex:p\": \"g..\"},\n    {\"@id\": \"urn:ex:s031\", \"urn:ex:p\": \"..g\"},\n    {\"@id\": \"urn:ex:s032\", \"urn:ex:p\": \"./../g\"},\n    {\"@id\": \"urn:ex:s033\", \"urn:ex:p\": \"./g/.\"},\n    {\"@id\": \"urn:ex:s034\", \"urn:ex:p\": \"g/./h\"},\n    {\"@id\": \"urn:ex:s035\", \"urn:ex:p\": \"g/../h\"},\n    {\"@id\": \"urn:ex:s036\", \"urn:ex:p\": \"g;x=1/./y\"},\n    {\"@id\": \"urn:ex:s037\", \"urn:ex:p\": \"g;x=1/../y\"},\n    {\"@id\": \"urn:ex:s038\", \"urn:ex:p\": \"g?y/./x\"},\n    {\"@id\": \"urn:ex:s039\", \"urn:ex:p\": \"g?y/../x\"},\n    {\"@id\": \"urn:ex:s040\", \"urn:ex:p\": \"g#s/./x\"},\n    {\"@id\": \"urn:ex:s041\", \"urn:ex:p\": \"g#s/../x\"},\n    {\"@id\": \"urn:ex:s042\", \"urn:ex:p\": \"http:g\"}\n  ]\n}",
+      "expected_nquads": "<urn:ex:s001> <urn:ex:p> <g:h> .\n<urn:ex:s002> <urn:ex:p> <http://a/bb/ccc/g> .\n<urn:ex:s003> <urn:ex:p> <http://a/bb/ccc/g> .\n<urn:ex:s004> <urn:ex:p> <http://a/bb/ccc/g/> .\n<urn:ex:s005> <urn:ex:p> <http://a/g> .\n<urn:ex:s006> <urn:ex:p> <http://g> .\n<urn:ex:s007> <urn:ex:p> <http://a/bb/ccc/d;p?y> .\n<urn:ex:s008> <urn:ex:p> <http://a/bb/ccc/g?y> .\n<urn:ex:s009> <urn:ex:p> <http://a/bb/ccc/d;p?q#s> .\n<urn:ex:s010> <urn:ex:p> <http://a/bb/ccc/g#s> .\n<urn:ex:s011> <urn:ex:p> <http://a/bb/ccc/g?y#s> .\n<urn:ex:s012> <urn:ex:p> <http://a/bb/ccc/;x> .\n<urn:ex:s013> <urn:ex:p> <http://a/bb/ccc/g;x> .\n<urn:ex:s014> <urn:ex:p> <http://a/bb/ccc/g;x?y#s> .\n<urn:ex:s015> <urn:ex:p> <http://a/bb/ccc/d;p?q> .\n<urn:ex:s016> <urn:ex:p> <http://a/bb/ccc/> .\n<urn:ex:s017> <urn:ex:p> <http://a/bb/ccc/> .\n<urn:ex:s018> <urn:ex:p> <http://a/bb/> .\n<urn:ex:s019> <urn:ex:p> <http://a/bb/> .\n<urn:ex:s020> <urn:ex:p> <http://a/bb/g> .\n<urn:ex:s021> <urn:ex:p> <http://a/> .\n<urn:ex:s022> <urn:ex:p> <http://a/> .\n<urn:ex:s023> <urn:ex:p> <http://a/g> .\n<urn:ex:s024> <urn:ex:p> <http://a/g> .\n<urn:ex:s025> <urn:ex:p> <http://a/g> .\n<urn:ex:s026> <urn:ex:p> <http://a/g> .\n<urn:ex:s027> <urn:ex:p> <http://a/g> .\n<urn:ex:s028> <urn:ex:p> <http://a/bb/ccc/g.> .\n<urn:ex:s029> <urn:ex:p> <http://a/bb/ccc/.g> .\n<urn:ex:s030> <urn:ex:p> <http://a/bb/ccc/g..> .\n<urn:ex:s031> <urn:ex:p> <http://a/bb/ccc/..g> .\n<urn:ex:s032> <urn:ex:p> <http://a/bb/g> .\n<urn:ex:s033> <urn:ex:p> <http://a/bb/ccc/g/> .\n<urn:ex:s034> <urn:ex:p> <http://a/bb/ccc/g/h> .\n<urn:ex:s035> <urn:ex:p> <http://a/bb/ccc/h> .\n<urn:ex:s036> <urn:ex:p> <http://a/bb/ccc/g;x=1/y> .\n<urn:ex:s037> <urn:ex:p> <http://a/bb/ccc/y> .\n<urn:ex:s038> <urn:ex:p> <http://a/bb/ccc/g?y/./x> .\n<urn:ex:s039> <urn:ex:p> <http://a/bb/ccc/g?y/../x> .\n<urn:ex:s040> <urn:ex:p> <http://a/bb/ccc/g#s/./x> .\n<urn:ex:s041> <urn:ex:p> <http://a/bb/ccc/g#s/../x> .\n<urn:ex:s042> <urn:ex:p> <http:g> .\n"
+    },
+    {
+      "id": "0121",
+      "name": "IRI Resolution (1)",
+      "purpose": "IRI resolution according to RFC3986.",
+      "input_sha256": "c310c597e2e23cd2e75fcbeb96a9f67a264b23dac5a1bdfc325fcd1eb12c4774",
+      "expected_sha256": "b14a2d667a916f29f296a14064a1a1da8a06df1c56097c904a4d3fdaab68f307",
+      "input": "{\n  \"@context\": {\"@base\": \"http://a/bb/ccc/d/\", \"urn:ex:p\": {\"@type\": \"@id\"}},\n  \"@graph\": [\n    {\"@id\": \"urn:ex:s043\", \"urn:ex:p\": \"g:h\"},\n    {\"@id\": \"urn:ex:s044\", \"urn:ex:p\": \"g\"},\n    {\"@id\": \"urn:ex:s045\", \"urn:ex:p\": \"./g\"},\n    {\"@id\": \"urn:ex:s046\", \"urn:ex:p\": \"g/\"},\n    {\"@id\": \"urn:ex:s047\", \"urn:ex:p\": \"/g\"},\n    {\"@id\": \"urn:ex:s048\", \"urn:ex:p\": \"//g\"},\n    {\"@id\": \"urn:ex:s049\", \"urn:ex:p\": \"?y\"},\n    {\"@id\": \"urn:ex:s050\", \"urn:ex:p\": \"g?y\"},\n    {\"@id\": \"urn:ex:s051\", \"urn:ex:p\": \"#s\"},\n    {\"@id\": \"urn:ex:s052\", \"urn:ex:p\": \"g#s\"},\n    {\"@id\": \"urn:ex:s053\", \"urn:ex:p\": \"g?y#s\"},\n    {\"@id\": \"urn:ex:s054\", \"urn:ex:p\": \";x\"},\n    {\"@id\": \"urn:ex:s055\", \"urn:ex:p\": \"g;x\"},\n    {\"@id\": \"urn:ex:s056\", \"urn:ex:p\": \"g;x?y#s\"},\n    {\"@id\": \"urn:ex:s057\", \"urn:ex:p\": \"\"},\n    {\"@id\": \"urn:ex:s058\", \"urn:ex:p\": \".\"},\n    {\"@id\": \"urn:ex:s059\", \"urn:ex:p\": \"./\"},\n    {\"@id\": \"urn:ex:s060\", \"urn:ex:p\": \"..\"},\n    {\"@id\": \"urn:ex:s061\", \"urn:ex:p\": \"../\"},\n    {\"@id\": \"urn:ex:s062\", \"urn:ex:p\": \"../g\"},\n    {\"@id\": \"urn:ex:s063\", \"urn:ex:p\": \"../..\"},\n    {\"@id\": \"urn:ex:s064\", \"urn:ex:p\": \"../../\"},\n    {\"@id\": \"urn:ex:s065\", \"urn:ex:p\": \"../../g\"},\n    {\"@id\": \"urn:ex:s066\", \"urn:ex:p\": \"../../../g\"},\n    {\"@id\": \"urn:ex:s067\", \"urn:ex:p\": \"../../../../g\"},\n    {\"@id\": \"urn:ex:s068\", \"urn:ex:p\": \"/./g\"},\n    {\"@id\": \"urn:ex:s069\", \"urn:ex:p\": \"/../g\"},\n    {\"@id\": \"urn:ex:s070\", \"urn:ex:p\": \"g.\"},\n    {\"@id\": \"urn:ex:s071\", \"urn:ex:p\": \".g\"},\n    {\"@id\": \"urn:ex:s072\", \"urn:ex:p\": \"g..\"},\n    {\"@id\": \"urn:ex:s073\", \"urn:ex:p\": \"..g\"},\n    {\"@id\": \"urn:ex:s074\", \"urn:ex:p\": \"./../g\"},\n    {\"@id\": \"urn:ex:s075\", \"urn:ex:p\": \"./g/.\"},\n    {\"@id\": \"urn:ex:s076\", \"urn:ex:p\": \"g/./h\"},\n    {\"@id\": \"urn:ex:s077\", \"urn:ex:p\": \"g/../h\"},\n    {\"@id\": \"urn:ex:s078\", \"urn:ex:p\": \"g;x=1/./y\"},\n    {\"@id\": \"urn:ex:s079\", \"urn:ex:p\": \"g;x=1/../y\"},\n    {\"@id\": \"urn:ex:s080\", \"urn:ex:p\": \"g?y/./x\"},\n    {\"@id\": \"urn:ex:s081\", \"urn:ex:p\": \"g?y/../x\"},\n    {\"@id\": \"urn:ex:s082\", \"urn:ex:p\": \"g#s/./x\"},\n    {\"@id\": \"urn:ex:s083\", \"urn:ex:p\": \"g#s/../x\"},\n    {\"@id\": \"urn:ex:s084\", \"urn:ex:p\": \"http:g\"}\n  ]\n}",
+      "expected_nquads": "<urn:ex:s043> <urn:ex:p> <g:h> .\n<urn:ex:s044> <urn:ex:p> <http://a/bb/ccc/d/g> .\n<urn:ex:s045> <urn:ex:p> <http://a/bb/ccc/d/g> .\n<urn:ex:s046> <urn:ex:p> <http://a/bb/ccc/d/g/> .\n<urn:ex:s047> <urn:ex:p> <http://a/g> .\n<urn:ex:s048> <urn:ex:p> <http://g> .\n<urn:ex:s049> <urn:ex:p> <http://a/bb/ccc/d/?y> .\n<urn:ex:s050> <urn:ex:p> <http://a/bb/ccc/d/g?y> .\n<urn:ex:s051> <urn:ex:p> <http://a/bb/ccc/d/#s> .\n<urn:ex:s052> <urn:ex:p> <http://a/bb/ccc/d/g#s> .\n<urn:ex:s053> <urn:ex:p> <http://a/bb/ccc/d/g?y#s> .\n<urn:ex:s054> <urn:ex:p> <http://a/bb/ccc/d/;x> .\n<urn:ex:s055> <urn:ex:p> <http://a/bb/ccc/d/g;x> .\n<urn:ex:s056> <urn:ex:p> <http://a/bb/ccc/d/g;x?y#s> .\n<urn:ex:s057> <urn:ex:p> <http://a/bb/ccc/d/> .\n<urn:ex:s058> <urn:ex:p> <http://a/bb/ccc/d/> .\n<urn:ex:s059> <urn:ex:p> <http://a/bb/ccc/d/> .\n<urn:ex:s060> <urn:ex:p> <http://a/bb/ccc/> .\n<urn:ex:s061> <urn:ex:p> <http://a/bb/ccc/> .\n<urn:ex:s062> <urn:ex:p> <http://a/bb/ccc/g> .\n<urn:ex:s063> <urn:ex:p> <http://a/bb/> .\n<urn:ex:s064> <urn:ex:p> <http://a/bb/> .\n<urn:ex:s065> <urn:ex:p> <http://a/bb/g> .\n<urn:ex:s066> <urn:ex:p> <http://a/g> .\n<urn:ex:s067> <urn:ex:p> <http://a/g> .\n<urn:ex:s068> <urn:ex:p> <http://a/g> .\n<urn:ex:s069> <urn:ex:p> <http://a/g> .\n<urn:ex:s070> <urn:ex:p> <http://a/bb/ccc/d/g.> .\n<urn:ex:s071> <urn:ex:p> <http://a/bb/ccc/d/.g> .\n<urn:ex:s072> <urn:ex:p> <http://a/bb/ccc/d/g..> .\n<urn:ex:s073> <urn:ex:p> <http://a/bb/ccc/d/..g> .\n<urn:ex:s074> <urn:ex:p> <http://a/bb/ccc/g> .\n<urn:ex:s075> <urn:ex:p> <http://a/bb/ccc/d/g/> .\n<urn:ex:s076> <urn:ex:p> <http://a/bb/ccc/d/g/h> .\n<urn:ex:s077> <urn:ex:p> <http://a/bb/ccc/d/h> .\n<urn:ex:s078> <urn:ex:p> <http://a/bb/ccc/d/g;x=1/y> .\n<urn:ex:s079> <urn:ex:p> <http://a/bb/ccc/d/y> .\n<urn:ex:s080> <urn:ex:p> <http://a/bb/ccc/d/g?y/./x> .\n<urn:ex:s081> <urn:ex:p> <http://a/bb/ccc/d/g?y/../x> .\n<urn:ex:s082> <urn:ex:p> <http://a/bb/ccc/d/g#s/./x> .\n<urn:ex:s083> <urn:ex:p> <http://a/bb/ccc/d/g#s/../x> .\n<urn:ex:s084> <urn:ex:p> <http:g> .\n"
+    },
+    {
+      "id": "0122",
+      "name": "IRI Resolution (2)",
+      "purpose": "IRI resolution according to RFC3986.",
+      "input_sha256": "44c44f3b9308e7cd6e1a5f238eb2e7012c958a587f32757334a92fb1348424cc",
+      "expected_sha256": "0f5633737d01594a0967e162ff1513acadc89f6e7fccde643b489cd0781c1140",
+      "input": "{\n  \"@context\": {\"@base\": \"http://a/bb/ccc/./d;p?q\", \"urn:ex:p\": {\"@type\": \"@id\"}},\n  \"@graph\": [\n    {\"@id\": \"urn:ex:s085\", \"urn:ex:p\": \"g:h\"},\n    {\"@id\": \"urn:ex:s086\", \"urn:ex:p\": \"g\"},\n    {\"@id\": \"urn:ex:s087\", \"urn:ex:p\": \"./g\"},\n    {\"@id\": \"urn:ex:s088\", \"urn:ex:p\": \"g/\"},\n    {\"@id\": \"urn:ex:s089\", \"urn:ex:p\": \"/g\"},\n    {\"@id\": \"urn:ex:s090\", \"urn:ex:p\": \"//g\"},\n    {\"@id\": \"urn:ex:s091\", \"urn:ex:p\": \"?y\"},\n    {\"@id\": \"urn:ex:s092\", \"urn:ex:p\": \"g?y\"},\n    {\"@id\": \"urn:ex:s093\", \"urn:ex:p\": \"#s\"},\n    {\"@id\": \"urn:ex:s094\", \"urn:ex:p\": \"g#s\"},\n    {\"@id\": \"urn:ex:s095\", \"urn:ex:p\": \"g?y#s\"},\n    {\"@id\": \"urn:ex:s096\", \"urn:ex:p\": \";x\"},\n    {\"@id\": \"urn:ex:s097\", \"urn:ex:p\": \"g;x\"},\n    {\"@id\": \"urn:ex:s098\", \"urn:ex:p\": \"g;x?y#s\"},\n    {\"@id\": \"urn:ex:s099\", \"urn:ex:p\": \"\"},\n    {\"@id\": \"urn:ex:s100\", \"urn:ex:p\": \".\"},\n    {\"@id\": \"urn:ex:s101\", \"urn:ex:p\": \"./\"},\n    {\"@id\": \"urn:ex:s102\", \"urn:ex:p\": \"..\"},\n    {\"@id\": \"urn:ex:s103\", \"urn:ex:p\": \"../\"},\n    {\"@id\": \"urn:ex:s104\", \"urn:ex:p\": \"../g\"},\n    {\"@id\": \"urn:ex:s105\", \"urn:ex:p\": \"../..\"},\n    {\"@id\": \"urn:ex:s106\", \"urn:ex:p\": \"../../\"},\n    {\"@id\": \"urn:ex:s107\", \"urn:ex:p\": \"../../g\"},\n    {\"@id\": \"urn:ex:s108\", \"urn:ex:p\": \"../../../g\"},\n    {\"@id\": \"urn:ex:s109\", \"urn:ex:p\": \"../../../../g\"},\n    {\"@id\": \"urn:ex:s110\", \"urn:ex:p\": \"/./g\"},\n    {\"@id\": \"urn:ex:s111\", \"urn:ex:p\": \"/../g\"},\n    {\"@id\": \"urn:ex:s112\", \"urn:ex:p\": \"g.\"},\n    {\"@id\": \"urn:ex:s113\", \"urn:ex:p\": \".g\"},\n    {\"@id\": \"urn:ex:s114\", \"urn:ex:p\": \"g..\"},\n    {\"@id\": \"urn:ex:s115\", \"urn:ex:p\": \"..g\"},\n    {\"@id\": \"urn:ex:s116\", \"urn:ex:p\": \"./../g\"},\n    {\"@id\": \"urn:ex:s117\", \"urn:ex:p\": \"./g/.\"},\n    {\"@id\": \"urn:ex:s118\", \"urn:ex:p\": \"g/./h\"},\n    {\"@id\": \"urn:ex:s119\", \"urn:ex:p\": \"g/../h\"},\n    {\"@id\": \"urn:ex:s120\", \"urn:ex:p\": \"g;x=1/./y\"},\n    {\"@id\": \"urn:ex:s121\", \"urn:ex:p\": \"g;x=1/../y\"},\n    {\"@id\": \"urn:ex:s122\", \"urn:ex:p\": \"g?y/./x\"},\n    {\"@id\": \"urn:ex:s123\", \"urn:ex:p\": \"g?y/../x\"},\n    {\"@id\": \"urn:ex:s124\", \"urn:ex:p\": \"g#s/./x\"},\n    {\"@id\": \"urn:ex:s125\", \"urn:ex:p\": \"g#s/../x\"},\n    {\"@id\": \"urn:ex:s126\", \"urn:ex:p\": \"http:g\"}\n  ]\n}",
+      "expected_nquads": "<urn:ex:s085> <urn:ex:p> <g:h> .\n<urn:ex:s086> <urn:ex:p> <http://a/bb/ccc/g> .\n<urn:ex:s087> <urn:ex:p> <http://a/bb/ccc/g> .\n<urn:ex:s088> <urn:ex:p> <http://a/bb/ccc/g/> .\n<urn:ex:s089> <urn:ex:p> <http://a/g> .\n<urn:ex:s090> <urn:ex:p> <http://g> .\n<urn:ex:s091> <urn:ex:p> <http://a/bb/ccc/./d;p?y> .\n<urn:ex:s092> <urn:ex:p> <http://a/bb/ccc/g?y> .\n<urn:ex:s093> <urn:ex:p> <http://a/bb/ccc/./d;p?q#s> .\n<urn:ex:s094> <urn:ex:p> <http://a/bb/ccc/g#s> .\n<urn:ex:s095> <urn:ex:p> <http://a/bb/ccc/g?y#s> .\n<urn:ex:s096> <urn:ex:p> <http://a/bb/ccc/;x> .\n<urn:ex:s097> <urn:ex:p> <http://a/bb/ccc/g;x> .\n<urn:ex:s098> <urn:ex:p> <http://a/bb/ccc/g;x?y#s> .\n<urn:ex:s099> <urn:ex:p> <http://a/bb/ccc/./d;p?q> .\n<urn:ex:s100> <urn:ex:p> <http://a/bb/ccc/> .\n<urn:ex:s101> <urn:ex:p> <http://a/bb/ccc/> .\n<urn:ex:s102> <urn:ex:p> <http://a/bb/> .\n<urn:ex:s103> <urn:ex:p> <http://a/bb/> .\n<urn:ex:s104> <urn:ex:p> <http://a/bb/g> .\n<urn:ex:s105> <urn:ex:p> <http://a/> .\n<urn:ex:s106> <urn:ex:p> <http://a/> .\n<urn:ex:s107> <urn:ex:p> <http://a/g> .\n<urn:ex:s108> <urn:ex:p> <http://a/g> .\n<urn:ex:s109> <urn:ex:p> <http://a/g> .\n<urn:ex:s110> <urn:ex:p> <http://a/g> .\n<urn:ex:s111> <urn:ex:p> <http://a/g> .\n<urn:ex:s112> <urn:ex:p> <http://a/bb/ccc/g.> .\n<urn:ex:s113> <urn:ex:p> <http://a/bb/ccc/.g> .\n<urn:ex:s114> <urn:ex:p> <http://a/bb/ccc/g..> .\n<urn:ex:s115> <urn:ex:p> <http://a/bb/ccc/..g> .\n<urn:ex:s116> <urn:ex:p> <http://a/bb/g> .\n<urn:ex:s117> <urn:ex:p> <http://a/bb/ccc/g/> .\n<urn:ex:s118> <urn:ex:p> <http://a/bb/ccc/g/h> .\n<urn:ex:s119> <urn:ex:p> <http://a/bb/ccc/h> .\n<urn:ex:s120> <urn:ex:p> <http://a/bb/ccc/g;x=1/y> .\n<urn:ex:s121> <urn:ex:p> <http://a/bb/ccc/y> .\n<urn:ex:s122> <urn:ex:p> <http://a/bb/ccc/g?y/./x> .\n<urn:ex:s123> <urn:ex:p> <http://a/bb/ccc/g?y/../x> .\n<urn:ex:s124> <urn:ex:p> <http://a/bb/ccc/g#s/./x> .\n<urn:ex:s125> <urn:ex:p> <http://a/bb/ccc/g#s/../x> .\n<urn:ex:s126> <urn:ex:p> <http:g> .\n"
+    },
+    {
+      "id": "0123",
+      "name": "IRI Resolution (3)",
+      "purpose": "IRI resolution according to RFC3986.",
+      "input_sha256": "8bb0b609056bf4636548ae3e4a84696d11541f041de13f841bff17c3cea221f3",
+      "expected_sha256": "4fda9bcf043398470a6af8a36e6a5a5e093e398bc634baa156199bc94b489645",
+      "input": "{\n  \"@context\": {\"@base\": \"http://a/bb/ccc/../d;p?q\", \"urn:ex:p\": {\"@type\": \"@id\"}},\n  \"@graph\": [\n    {\"@id\": \"urn:ex:s127\", \"urn:ex:p\": \"g:h\"},\n    {\"@id\": \"urn:ex:s128\", \"urn:ex:p\": \"g\"},\n    {\"@id\": \"urn:ex:s129\", \"urn:ex:p\": \"./g\"},\n    {\"@id\": \"urn:ex:s130\", \"urn:ex:p\": \"g/\"},\n    {\"@id\": \"urn:ex:s131\", \"urn:ex:p\": \"/g\"},\n    {\"@id\": \"urn:ex:s132\", \"urn:ex:p\": \"//g\"},\n    {\"@id\": \"urn:ex:s133\", \"urn:ex:p\": \"?y\"},\n    {\"@id\": \"urn:ex:s134\", \"urn:ex:p\": \"g?y\"},\n    {\"@id\": \"urn:ex:s135\", \"urn:ex:p\": \"#s\"},\n    {\"@id\": \"urn:ex:s136\", \"urn:ex:p\": \"g#s\"},\n    {\"@id\": \"urn:ex:s137\", \"urn:ex:p\": \"g?y#s\"},\n    {\"@id\": \"urn:ex:s138\", \"urn:ex:p\": \";x\"},\n    {\"@id\": \"urn:ex:s139\", \"urn:ex:p\": \"g;x\"},\n    {\"@id\": \"urn:ex:s140\", \"urn:ex:p\": \"g;x?y#s\"},\n    {\"@id\": \"urn:ex:s141\", \"urn:ex:p\": \"\"},\n    {\"@id\": \"urn:ex:s142\", \"urn:ex:p\": \".\"},\n    {\"@id\": \"urn:ex:s143\", \"urn:ex:p\": \"./\"},\n    {\"@id\": \"urn:ex:s144\", \"urn:ex:p\": \"..\"},\n    {\"@id\": \"urn:ex:s145\", \"urn:ex:p\": \"../\"},\n    {\"@id\": \"urn:ex:s146\", \"urn:ex:p\": \"../g\"},\n    {\"@id\": \"urn:ex:s147\", \"urn:ex:p\": \"../..\"},\n    {\"@id\": \"urn:ex:s148\", \"urn:ex:p\": \"../../\"},\n    {\"@id\": \"urn:ex:s149\", \"urn:ex:p\": \"../../g\"},\n    {\"@id\": \"urn:ex:s150\", \"urn:ex:p\": \"../../../g\"},\n    {\"@id\": \"urn:ex:s151\", \"urn:ex:p\": \"../../../../g\"},\n    {\"@id\": \"urn:ex:s152\", \"urn:ex:p\": \"/./g\"},\n    {\"@id\": \"urn:ex:s153\", \"urn:ex:p\": \"/../g\"},\n    {\"@id\": \"urn:ex:s154\", \"urn:ex:p\": \"g.\"},\n    {\"@id\": \"urn:ex:s155\", \"urn:ex:p\": \".g\"},\n    {\"@id\": \"urn:ex:s156\", \"urn:ex:p\": \"g..\"},\n    {\"@id\": \"urn:ex:s157\", \"urn:ex:p\": \"..g\"},\n    {\"@id\": \"urn:ex:s158\", \"urn:ex:p\": \"./../g\"},\n    {\"@id\": \"urn:ex:s159\", \"urn:ex:p\": \"./g/.\"},\n    {\"@id\": \"urn:ex:s160\", \"urn:ex:p\": \"g/./h\"},\n    {\"@id\": \"urn:ex:s161\", \"urn:ex:p\": \"g/../h\"},\n    {\"@id\": \"urn:ex:s162\", \"urn:ex:p\": \"g;x=1/./y\"},\n    {\"@id\": \"urn:ex:s163\", \"urn:ex:p\": \"g;x=1/../y\"},\n    {\"@id\": \"urn:ex:s164\", \"urn:ex:p\": \"g?y/./x\"},\n    {\"@id\": \"urn:ex:s165\", \"urn:ex:p\": \"g?y/../x\"},\n    {\"@id\": \"urn:ex:s166\", \"urn:ex:p\": \"g#s/./x\"},\n    {\"@id\": \"urn:ex:s167\", \"urn:ex:p\": \"g#s/../x\"},\n    {\"@id\": \"urn:ex:s168\", \"urn:ex:p\": \"http:g\"}\n  ]\n}",
+      "expected_nquads": "<urn:ex:s127> <urn:ex:p> <g:h> .\n<urn:ex:s128> <urn:ex:p> <http://a/bb/g> .\n<urn:ex:s129> <urn:ex:p> <http://a/bb/g> .\n<urn:ex:s130> <urn:ex:p> <http://a/bb/g/> .\n<urn:ex:s131> <urn:ex:p> <http://a/g> .\n<urn:ex:s132> <urn:ex:p> <http://g> .\n<urn:ex:s133> <urn:ex:p> <http://a/bb/ccc/../d;p?y> .\n<urn:ex:s134> <urn:ex:p> <http://a/bb/g?y> .\n<urn:ex:s135> <urn:ex:p> <http://a/bb/ccc/../d;p?q#s> .\n<urn:ex:s136> <urn:ex:p> <http://a/bb/g#s> .\n<urn:ex:s137> <urn:ex:p> <http://a/bb/g?y#s> .\n<urn:ex:s138> <urn:ex:p> <http://a/bb/;x> .\n<urn:ex:s139> <urn:ex:p> <http://a/bb/g;x> .\n<urn:ex:s140> <urn:ex:p> <http://a/bb/g;x?y#s> .\n<urn:ex:s141> <urn:ex:p> <http://a/bb/ccc/../d;p?q> .\n<urn:ex:s142> <urn:ex:p> <http://a/bb/> .\n<urn:ex:s143> <urn:ex:p> <http://a/bb/> .\n<urn:ex:s144> <urn:ex:p> <http://a/> .\n<urn:ex:s145> <urn:ex:p> <http://a/> .\n<urn:ex:s146> <urn:ex:p> <http://a/g> .\n<urn:ex:s147> <urn:ex:p> <http://a/> .\n<urn:ex:s148> <urn:ex:p> <http://a/> .\n<urn:ex:s149> <urn:ex:p> <http://a/g> .\n<urn:ex:s150> <urn:ex:p> <http://a/g> .\n<urn:ex:s151> <urn:ex:p> <http://a/g> .\n<urn:ex:s152> <urn:ex:p> <http://a/g> .\n<urn:ex:s153> <urn:ex:p> <http://a/g> .\n<urn:ex:s154> <urn:ex:p> <http://a/bb/g.> .\n<urn:ex:s155> <urn:ex:p> <http://a/bb/.g> .\n<urn:ex:s156> <urn:ex:p> <http://a/bb/g..> .\n<urn:ex:s157> <urn:ex:p> <http://a/bb/..g> .\n<urn:ex:s158> <urn:ex:p> <http://a/g> .\n<urn:ex:s159> <urn:ex:p> <http://a/bb/g/> .\n<urn:ex:s160> <urn:ex:p> <http://a/bb/g/h> .\n<urn:ex:s161> <urn:ex:p> <http://a/bb/h> .\n<urn:ex:s162> <urn:ex:p> <http://a/bb/g;x=1/y> .\n<urn:ex:s163> <urn:ex:p> <http://a/bb/y> .\n<urn:ex:s164> <urn:ex:p> <http://a/bb/g?y/./x> .\n<urn:ex:s165> <urn:ex:p> <http://a/bb/g?y/../x> .\n<urn:ex:s166> <urn:ex:p> <http://a/bb/g#s/./x> .\n<urn:ex:s167> <urn:ex:p> <http://a/bb/g#s/../x> .\n<urn:ex:s168> <urn:ex:p> <http:g> .\n"
+    },
+    {
+      "id": "0126",
+      "name": "IRI Resolution (6)",
+      "purpose": "IRI resolution according to RFC3986.",
+      "input_sha256": "fac64097bf1fcf12ee4086e530431d64d88906d0378d64b7a156290d0294ac77",
+      "expected_sha256": "18be386124ef657ac3408f14ec4ae73b14f454cb9ee39043531dc8faadeb401d",
+      "input": "{\n  \"@context\": {\"@base\": \"file:///a/bb/ccc/d;p?q\", \"urn:ex:p\": {\"@type\": \"@id\"}},\n  \"@graph\": [\n    {\"@id\": \"urn:ex:s253\", \"urn:ex:p\": \"g:h\"},\n    {\"@id\": \"urn:ex:s254\", \"urn:ex:p\": \"g\"},\n    {\"@id\": \"urn:ex:s255\", \"urn:ex:p\": \"./g\"},\n    {\"@id\": \"urn:ex:s256\", \"urn:ex:p\": \"g/\"},\n    {\"@id\": \"urn:ex:s257\", \"urn:ex:p\": \"/g\"},\n    {\"@id\": \"urn:ex:s258\", \"urn:ex:p\": \"//g\"},\n    {\"@id\": \"urn:ex:s259\", \"urn:ex:p\": \"?y\"},\n    {\"@id\": \"urn:ex:s260\", \"urn:ex:p\": \"g?y\"},\n    {\"@id\": \"urn:ex:s261\", \"urn:ex:p\": \"#s\"},\n    {\"@id\": \"urn:ex:s262\", \"urn:ex:p\": \"g#s\"},\n    {\"@id\": \"urn:ex:s263\", \"urn:ex:p\": \"g?y#s\"},\n    {\"@id\": \"urn:ex:s264\", \"urn:ex:p\": \";x\"},\n    {\"@id\": \"urn:ex:s265\", \"urn:ex:p\": \"g;x\"},\n    {\"@id\": \"urn:ex:s266\", \"urn:ex:p\": \"g;x?y#s\"},\n    {\"@id\": \"urn:ex:s267\", \"urn:ex:p\": \"\"},\n    {\"@id\": \"urn:ex:s268\", \"urn:ex:p\": \".\"},\n    {\"@id\": \"urn:ex:s269\", \"urn:ex:p\": \"./\"},\n    {\"@id\": \"urn:ex:s270\", \"urn:ex:p\": \"..\"},\n    {\"@id\": \"urn:ex:s271\", \"urn:ex:p\": \"../\"},\n    {\"@id\": \"urn:ex:s272\", \"urn:ex:p\": \"../g\"},\n    {\"@id\": \"urn:ex:s273\", \"urn:ex:p\": \"../..\"},\n    {\"@id\": \"urn:ex:s274\", \"urn:ex:p\": \"../../\"},\n    {\"@id\": \"urn:ex:s275\", \"urn:ex:p\": \"../../g\"},\n    {\"@id\": \"urn:ex:s276\", \"urn:ex:p\": \"../../../g\"},\n    {\"@id\": \"urn:ex:s277\", \"urn:ex:p\": \"../../../../g\"},\n    {\"@id\": \"urn:ex:s278\", \"urn:ex:p\": \"/./g\"},\n    {\"@id\": \"urn:ex:s279\", \"urn:ex:p\": \"/../g\"},\n    {\"@id\": \"urn:ex:s280\", \"urn:ex:p\": \"g.\"},\n    {\"@id\": \"urn:ex:s281\", \"urn:ex:p\": \".g\"},\n    {\"@id\": \"urn:ex:s282\", \"urn:ex:p\": \"g..\"},\n    {\"@id\": \"urn:ex:s283\", \"urn:ex:p\": \"..g\"},\n    {\"@id\": \"urn:ex:s284\", \"urn:ex:p\": \"./../g\"},\n    {\"@id\": \"urn:ex:s285\", \"urn:ex:p\": \"./g/.\"},\n    {\"@id\": \"urn:ex:s286\", \"urn:ex:p\": \"g/./h\"},\n    {\"@id\": \"urn:ex:s287\", \"urn:ex:p\": \"g/../h\"},\n    {\"@id\": \"urn:ex:s288\", \"urn:ex:p\": \"g;x=1/./y\"},\n    {\"@id\": \"urn:ex:s289\", \"urn:ex:p\": \"g;x=1/../y\"},\n    {\"@id\": \"urn:ex:s290\", \"urn:ex:p\": \"g?y/./x\"},\n    {\"@id\": \"urn:ex:s291\", \"urn:ex:p\": \"g?y/../x\"},\n    {\"@id\": \"urn:ex:s292\", \"urn:ex:p\": \"g#s/./x\"},\n    {\"@id\": \"urn:ex:s293\", \"urn:ex:p\": \"g#s/../x\"},\n    {\"@id\": \"urn:ex:s294\", \"urn:ex:p\": \"http:g\"}\n  ]\n}\n",
+      "expected_nquads": "<urn:ex:s253> <urn:ex:p> <g:h> .\n<urn:ex:s254> <urn:ex:p> <file:///a/bb/ccc/g> .\n<urn:ex:s255> <urn:ex:p> <file:///a/bb/ccc/g> .\n<urn:ex:s256> <urn:ex:p> <file:///a/bb/ccc/g/> .\n<urn:ex:s257> <urn:ex:p> <file:///g> .\n<urn:ex:s258> <urn:ex:p> <file://g> .\n<urn:ex:s259> <urn:ex:p> <file:///a/bb/ccc/d;p?y> .\n<urn:ex:s260> <urn:ex:p> <file:///a/bb/ccc/g?y> .\n<urn:ex:s261> <urn:ex:p> <file:///a/bb/ccc/d;p?q#s> .\n<urn:ex:s262> <urn:ex:p> <file:///a/bb/ccc/g#s> .\n<urn:ex:s263> <urn:ex:p> <file:///a/bb/ccc/g?y#s> .\n<urn:ex:s264> <urn:ex:p> <file:///a/bb/ccc/;x> .\n<urn:ex:s265> <urn:ex:p> <file:///a/bb/ccc/g;x> .\n<urn:ex:s266> <urn:ex:p> <file:///a/bb/ccc/g;x?y#s> .\n<urn:ex:s267> <urn:ex:p> <file:///a/bb/ccc/d;p?q> .\n<urn:ex:s268> <urn:ex:p> <file:///a/bb/ccc/> .\n<urn:ex:s269> <urn:ex:p> <file:///a/bb/ccc/> .\n<urn:ex:s270> <urn:ex:p> <file:///a/bb/> .\n<urn:ex:s271> <urn:ex:p> <file:///a/bb/> .\n<urn:ex:s272> <urn:ex:p> <file:///a/bb/g> .\n<urn:ex:s273> <urn:ex:p> <file:///a/> .\n<urn:ex:s274> <urn:ex:p> <file:///a/> .\n<urn:ex:s275> <urn:ex:p> <file:///a/g> .\n<urn:ex:s276> <urn:ex:p> <file:///g> .\n<urn:ex:s277> <urn:ex:p> <file:///g> .\n<urn:ex:s278> <urn:ex:p> <file:///g> .\n<urn:ex:s279> <urn:ex:p> <file:///g> .\n<urn:ex:s280> <urn:ex:p> <file:///a/bb/ccc/g.> .\n<urn:ex:s281> <urn:ex:p> <file:///a/bb/ccc/.g> .\n<urn:ex:s282> <urn:ex:p> <file:///a/bb/ccc/g..> .\n<urn:ex:s283> <urn:ex:p> <file:///a/bb/ccc/..g> .\n<urn:ex:s284> <urn:ex:p> <file:///a/bb/g> .\n<urn:ex:s285> <urn:ex:p> <file:///a/bb/ccc/g/> .\n<urn:ex:s286> <urn:ex:p> <file:///a/bb/ccc/g/h> .\n<urn:ex:s287> <urn:ex:p> <file:///a/bb/ccc/h> .\n<urn:ex:s288> <urn:ex:p> <file:///a/bb/ccc/g;x=1/y> .\n<urn:ex:s289> <urn:ex:p> <file:///a/bb/ccc/y> .\n<urn:ex:s290> <urn:ex:p> <file:///a/bb/ccc/g?y/./x> .\n<urn:ex:s291> <urn:ex:p> <file:///a/bb/ccc/g?y/../x> .\n<urn:ex:s292> <urn:ex:p> <file:///a/bb/ccc/g#s/./x> .\n<urn:ex:s293> <urn:ex:p> <file:///a/bb/ccc/g#s/../x> .\n<urn:ex:s294> <urn:ex:p> <http:g> .\n"
+    },
+    {
+      "id": "0127",
+      "name": "IRI Resolution (7)",
+      "purpose": "IRI resolution according to RFC3986.",
+      "input_sha256": "bb6ace0e176126515e9c1a0131f9fc4e0213f7265c6605c1ab7e275ee1b78568",
+      "expected_sha256": "5b31a2d349839e6bbf97a8c2fc9642f513b77ed80cad3b3a6880e00b40e609c8",
+      "input": "{\n  \"@context\": {\"@base\": \"http://abc/def/ghi\", \"urn:ex:p\": {\"@type\": \"@id\"}},\n  \"@graph\": [\n    {\"@id\": \"urn:ex:s295\", \"urn:ex:p\": \".\"},\n    {\"@id\": \"urn:ex:s296\", \"urn:ex:p\": \".?a=b\"},\n    {\"@id\": \"urn:ex:s297\", \"urn:ex:p\": \".#a=b\"},\n    {\"@id\": \"urn:ex:s298\", \"urn:ex:p\": \"..\"},\n    {\"@id\": \"urn:ex:s299\", \"urn:ex:p\": \"..?a=b\"},\n    {\"@id\": \"urn:ex:s300\", \"urn:ex:p\": \"..#a=b\"}\n  ]\n}\n",
+      "expected_nquads": "<urn:ex:s295> <urn:ex:p> <http://abc/def/> .\n<urn:ex:s296> <urn:ex:p> <http://abc/def/?a=b> .\n<urn:ex:s297> <urn:ex:p> <http://abc/def/#a=b> .\n<urn:ex:s298> <urn:ex:p> <http://abc/> .\n<urn:ex:s299> <urn:ex:p> <http://abc/?a=b> .\n<urn:ex:s300> <urn:ex:p> <http://abc/#a=b> .\n"
+    },
+    {
+      "id": "0128",
+      "name": "IRI Resolution (8)",
+      "purpose": "IRI resolution according to RFC3986.",
+      "input_sha256": "2976b3b1f06603175bab793780c7f63693d24f5c40d89a33ac5226374d3f6b69",
+      "expected_sha256": "dcff8021f5a6fbf5ac01ca7c93a9a3a62b7ba7173f735c00d43b414596cc6af4",
+      "input": "{\n  \"@context\": {\"@base\": \"http://ab//de//ghi\", \"urn:ex:p\": {\"@type\": \"@id\"}},\n  \"@graph\": [\n    {\"@id\": \"urn:ex:s301\", \"urn:ex:p\": \"xyz\"},\n    {\"@id\": \"urn:ex:s302\", \"urn:ex:p\": \"./xyz\"},\n    {\"@id\": \"urn:ex:s303\", \"urn:ex:p\": \"../xyz\"}\n  ]\n}\n",
+      "expected_nquads": "<urn:ex:s301> <urn:ex:p> <http://ab//de//xyz> .\n<urn:ex:s302> <urn:ex:p> <http://ab//de//xyz> .\n<urn:ex:s303> <urn:ex:p> <http://ab//de/xyz> .\n"
+    },
+    {
+      "id": "0129",
+      "name": "IRI Resolution (9)",
+      "purpose": "IRI resolution according to RFC3986.",
+      "input_sha256": "fce1db61dd9ea3f5ee662fde1445c18a2a547658bfdc828133bcf78d0cbdd933",
+      "expected_sha256": "009224fc6a4692515effae6a240110b4eb0e86c71703f0a8d57518cdccf309e5",
+      "input": "{\n  \"@context\": {\"@base\": \"http://abc/d:f/ghi\", \"urn:ex:p\": {\"@type\": \"@id\"}},\n  \"@graph\": [\n    {\"@id\": \"urn:ex:s304\", \"urn:ex:p\": \"xyz\"},\n    {\"@id\": \"urn:ex:s305\", \"urn:ex:p\": \"./xyz\"},\n    {\"@id\": \"urn:ex:s306\", \"urn:ex:p\": \"../xyz\"}\n  ]\n}\n",
+      "expected_nquads": "<urn:ex:s304> <urn:ex:p> <http://abc/d:f/xyz> .\n<urn:ex:s305> <urn:ex:p> <http://abc/d:f/xyz> .\n<urn:ex:s306> <urn:ex:p> <http://abc/xyz> .\n"
+    },
+    {
+      "id": "0130",
+      "name": "IRI Resolution (10)",
+      "purpose": "IRI resolution according to RFC3986.",
+      "input_sha256": "2c50a8070a06a3928fb299fda100a912a4e867cddf1bc2becfef8d180b8ceb9c",
+      "expected_sha256": "98023182ae8624883559e2623b70108a56ba21b98333059aaa1337d2e977b40d",
+      "input": "{\n  \"@context\": {\"@base\": \"tag:example\", \"urn:ex:p\": {\"@type\": \"@id\"}},\n  \"@graph\": [\n    {\"@id\": \"urn:ex:s307\", \"urn:ex:p\": \"a\"}\n  ]\n}\n",
+      "expected_nquads": "<urn:ex:s307> <urn:ex:p> <tag:a> .\n"
+    },
+    {
+      "id": "0131",
+      "name": "IRI Resolution (11)",
+      "purpose": "IRI resolution according to RFC3986.",
+      "input_sha256": "4081a4627519a44f4b5c00a7b9e5e6a56ea4c51cc794419ca834fa267eb79de2",
+      "expected_sha256": "f96db63e0966f2032d737986af4fc11e530304a3d58de07b283075e4f3322662",
+      "input": "{\n  \"@context\": {\"@base\": \"tag:example/foo\", \"urn:ex:p\": {\"@type\": \"@id\"}},\n  \"@graph\": [\n    {\"@id\": \"urn:ex:s308\", \"urn:ex:p\": \"a\"}\n  ]\n}\n",
+      "expected_nquads": "<urn:ex:s308> <urn:ex:p> <tag:example/a> .\n"
+    },
+    {
+      "id": "0132",
+      "name": "IRI Resolution (12)",
+      "purpose": "IRI resolution according to RFC3986.",
+      "input_sha256": "dc41f3d6b3decd5fd2d8f6059561d26a063461060578b242a894d82c7bfc46d7",
+      "expected_sha256": "0da30e14b9c40081b79750d72ca2c7190caff5905e28e8f7c7e2a74282bef311",
+      "input": "{\n  \"@context\": {\"@base\": \"tag:example/foo/\", \"urn:ex:p\": {\"@type\": \"@id\"}},\n  \"@graph\": [\n    {\"@id\": \"urn:ex:s309\", \"urn:ex:p\": \"a\"}\n  ]\n}\n",
+      "expected_nquads": "<urn:ex:s309> <urn:ex:p> <tag:example/foo/a> .\n"
+    },
+    {
+      "id": "c001",
+      "name": "adding new term",
+      "purpose": "Expansion using a scoped context uses term scope for selecting proper term",
+      "input_sha256": "029db7bb402f77645c1ef51dff7a74adbd6d8674a35c2be2319263820ddc5d85",
+      "expected_sha256": "1286591fd05d43f179570b2c41918ca37db67f2e48a2e62b9a6c8099753de793",
+      "input": "{\n  \"@context\": {\n    \"@vocab\": \"http://example/\",\n    \"foo\": {\"@context\": {\"bar\": \"http://example.org/bar\"}}\n  },\n  \"foo\": {\n    \"bar\": \"baz\"\n  }\n}",
+      "expected_nquads": "_:b0 <http://example/foo> _:b1 .\n_:b1 <http://example.org/bar> \"baz\" .\n"
+    },
+    {
+      "id": "c002",
+      "name": "overriding a term",
+      "purpose": "Expansion using a scoped context uses term scope for selecting proper term",
+      "input_sha256": "d516553d197a6f21664ea348cbbfb5ef87bae6c4d5192bd706caa34e8e2d9c4f",
+      "expected_sha256": "56bacde410fee84ab07e92099ae47a009841c5de6fcab5fe95f290a4da5c674e",
+      "input": "{\n  \"@context\": {\n    \"@vocab\": \"http://example/\",\n    \"foo\": {\"@context\": {\"bar\": {\"@type\": \"@id\"}}},\n    \"bar\": {\"@type\": \"http://www.w3.org/2001/XMLSchema#string\"}\n  },\n  \"foo\": {\n    \"bar\": \"http://example/baz\"\n  }\n}",
+      "expected_nquads": "_:b0 <http://example/foo> _:b1 .\n_:b1 <http://example/bar> <http://example/baz> .\n"
+    },
+    {
+      "id": "c004",
+      "name": "deep @context affects nested nodes",
+      "purpose": "Expansion using a scoped context uses term scope for selecting proper term",
+      "input_sha256": "b365166151b98df6a0cb7aaf2c857ce90a22d38c09e97c750a5d18f74fe024fe",
+      "expected_sha256": "e118ca5d403b417ce64944e1cf2dd20349903669c36733e6bdad8e045f2ee53e",
+      "input": "{\n  \"@context\": {\n    \"@vocab\": \"http://example/\",\n    \"foo\": {\"@context\": {\"baz\": {\"@type\": \"@vocab\"}}}\n  },\n  \"foo\": {\n    \"bar\": {\n      \"baz\": \"buzz\"\n    }\n  }\n}",
+      "expected_nquads": "_:b0 <http://example/foo> _:b1 .\n_:b1 <http://example/bar> _:b2 .\n_:b2 <http://example/baz> <http://example/buzz> .\n"
+    },
+    {
+      "id": "c005",
+      "name": "scoped context layers on intemediate contexts",
+      "purpose": "Expansion using a scoped context uses term scope for selecting proper term",
+      "input_sha256": "cec78b957e3d2bb4cfa5205e7104c63651ae3abd9afb8b151962290b285b41e1",
+      "expected_sha256": "98c60736053b0a6de0577a4f9f909b805b0cc067533c4f350ed7f962010b8cda",
+      "input": "{\n  \"@context\": {\n    \"@vocab\": \"http://example/\",\n    \"b\": {\"@context\": {\"c\": \"http://example.org/c\"}}\n  },\n  \"a\": {\n    \"@context\": {\"@vocab\": \"http://example.com/\"},\n    \"b\": {\n      \"a\": \"A in example.com\",\n      \"c\": \"C in example.org\"\n    },\n    \"c\": \"C in example.com\"\n  },\n  \"c\": \"C in example\"\n}",
+      "expected_nquads": "_:b0 <http://example/a> _:b1 .\n_:b0 <http://example/c> \"C in example\" .\n_:b1 <http://example.com/c> \"C in example.com\" .\n_:b1 <http://example/b> _:b2 .\n_:b2 <http://example.com/a> \"A in example.com\" .\n_:b2 <http://example.org/c> \"C in example.org\" .\n"
+    },
+    {
+      "id": "c035",
+      "name": "Term scoping with embedded contexts.",
+      "purpose": "Terms should make use of @vocab relative to the scope in which the term was defined.",
+      "input_sha256": "100bd5626db4cc3a29fc4d5bf675d752b86a0631a21fdd2208d97c79b80075e4",
+      "expected_sha256": "b7cedbcb1e0704c85734e001dbfacd354c8704ddd550a0e38d9d4c4fcc48aeee",
+      "input": "{\n  \"@context\": {\n    \"@vocab\": \"http://vocab.org/\",\n    \"prop1\": {}\n  },\n  \"@id\": \"ex:outer\",\n  \"foo\": {\n    \"@context\": {\n      \"@vocab\": \"http://vocab.override.org/\"\n    },\n    \"@id\": \"ex:inner\",\n    \"prop1\": \"baz1\",\n    \"prop2\": \"baz2\"\n  }\n}\n",
+      "expected_nquads": "<ex:inner> <http://vocab.org/prop1> \"baz1\" .\n<ex:inner> <http://vocab.override.org/prop2> \"baz2\" .\n<ex:outer> <http://vocab.org/foo> <ex:inner> .\n"
+    },
+    {
+      "id": "c036",
+      "name": "Expansion with empty property-scoped context.",
+      "purpose": "Adding a minimal/empty property-scoped context should not affect expansion of terms defined in the outer scope.",
+      "input_sha256": "4a077e19780454b04bd988dc7d7479c53977a306defce2a64c4b4e7c192924f3",
+      "expected_sha256": "8d7e21212b9a6af089b52d328d4ccdee7cf88ea1d00469d81f81c05530501a2d",
+      "input": "{\n  \"@context\": {\n    \"thing\": {\n      \"@id\": \"ex:thing\",\n      \"@context\": {}\n    },\n    \"title\": \"ex:title\"\n  },\n  \"title\": \"top\",\n  \"thing\": {\n    \"title\": \"sub\"\n  }\n}",
+      "expected_nquads": "_:b0 <ex:thing> _:b1 .\n_:b0 <ex:title> \"top\" .\n_:b1 <ex:title> \"sub\" .\n"
+    },
+    {
+      "id": "di07",
+      "name": "simple language map with mismatching term direction",
+      "purpose": "Term selection with language maps and @direction.",
+      "input_sha256": "664f9ea72a851b8149e2c63dc321a59d7cae74a27837b9455088af4ea17be382",
+      "expected_sha256": "ba0c22579ed756d871ec4eae1333f62a465859df4d30b2486bce4438d156020a",
+      "input": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"vocab\": \"http://example.com/vocab/\",\n    \"@direction\": \"rtl\",\n    \"label\": {\n      \"@id\": \"vocab:label\",\n      \"@direction\": null,\n      \"@container\": \"@language\"\n    }\n  },\n  \"@id\": \"http://example.com/queen\",\n  \"label\": {\n    \"en\": \"The Queen\",\n    \"de\": [ \"Die Königin\", \"Ihre Majestät\" ]\n  }\n}",
+      "expected_nquads": "<http://example.com/queen> <http://example.com/vocab/label> \"The Queen\"@en .\n<http://example.com/queen> <http://example.com/vocab/label> \"Die Königin\"@de .\n<http://example.com/queen> <http://example.com/vocab/label> \"Ihre Majestät\"@de .\n"
+    },
+    {
+      "id": "e030",
+      "name": "Language maps",
+      "purpose": "RDF version of expand-0030",
+      "input_sha256": "d31dac5dda5a8293ad36c13d2de9b3824d64887c5857990eca2fdf05e189e288",
+      "expected_sha256": "c06c17ceed4205ecba1c1179a6e8d779b3f637885e5b293cbc1e154a68a14593",
+      "input": "{\n  \"@context\": {\n    \"vocab\": \"http://example.com/vocab/\",\n    \"label\": {\n      \"@id\": \"vocab:label\",\n      \"@container\": \"@language\"\n    }\n  },\n  \"@id\": \"http://example.com/queen\",\n  \"label\": {\n    \"en\": \"The Queen\",\n    \"de\": [ \"Die Königin\", \"Ihre Majestät\" ]\n  }\n}\n",
+      "expected_nquads": "<http://example.com/queen> <http://example.com/vocab/label> \"Die Königin\"@de .\n<http://example.com/queen> <http://example.com/vocab/label> \"Ihre Majestät\"@de .\n<http://example.com/queen> <http://example.com/vocab/label> \"The Queen\"@en .\n"
+    },
+    {
+      "id": "e034",
+      "name": "Multiple properties expanding to the same IRI",
+      "purpose": "RDF version of expand-0034",
+      "input_sha256": "23188ae0b7caf1a447b06f419499c4373024123f513b270ea08fe147ae799bc4",
+      "expected_sha256": "b8e8df33261aa40b9835dbbf8e52cf5c49a387a69da4960488701eb792f878e8",
+      "input": "{\n  \"@context\": {\n    \"@vocab\": \"http://example.com/vocab/\",\n    \"colliding\": \"http://example.com/vocab/collidingTerm\"\n  },\n  \"@id\": \"http://example.com/IriCollissions\",\n  \"colliding\": [\n    \"value 1\",\n    2\n  ],\n  \"collidingTerm\": [\n    3,\n    \"four\"\n  ],\n  \"http://example.com/vocab/collidingTerm\": 5\n}\n",
+      "expected_nquads": "<http://example.com/IriCollissions> <http://example.com/vocab/collidingTerm> \"2\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n<http://example.com/IriCollissions> <http://example.com/vocab/collidingTerm> \"3\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n<http://example.com/IriCollissions> <http://example.com/vocab/collidingTerm> \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n<http://example.com/IriCollissions> <http://example.com/vocab/collidingTerm> \"four\" .\n<http://example.com/IriCollissions> <http://example.com/vocab/collidingTerm> \"value 1\" .\n"
+    },
+    {
+      "id": "e037",
+      "name": "Expanding @reverse",
+      "purpose": "RDF version of expand-0037",
+      "input_sha256": "5e3e4c6500c86d90b95c8a414eca1edc37f1aee303db48b6ab4a152aaa1e7aea",
+      "expected_sha256": "9718670dc8c18fe4bd0a6e1bb45762489d4034de510b261bffa470e22fcf26e7",
+      "input": "{\n  \"@context\": {\n    \"name\": \"http://xmlns.com/foaf/0.1/name\"\n  },\n  \"@id\": \"http://example.com/people/markus\",\n  \"name\": \"Markus Lanthaler\",\n  \"@reverse\": {\n    \"http://xmlns.com/foaf/0.1/knows\": {\n      \"@id\": \"http://example.com/people/dave\",\n      \"name\": \"Dave Longley\"\n    }\n  }\n}\n",
+      "expected_nquads": "<http://example.com/people/dave> <http://xmlns.com/foaf/0.1/knows> <http://example.com/people/markus> .\n<http://example.com/people/dave> <http://xmlns.com/foaf/0.1/name> \"Dave Longley\" .\n<http://example.com/people/markus> <http://xmlns.com/foaf/0.1/name> \"Markus Lanthaler\" .\n"
+    },
+    {
+      "id": "e079",
+      "name": "expand @graph container",
+      "purpose": "Use of @graph containers",
+      "input_sha256": "b83c57d12cb9efad8b588b1b2ca228d815c1b57bfce430562eade26c59227f30",
+      "expected_sha256": "e3cf8e056ebdb47fc675f52385e4d5edce62935c84ea093f197da6bf210baaa3",
+      "input": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"input\": {\"@id\": \"foo:input\", \"@container\": \"@graph\"},\n    \"value\": \"foo:value\"\n  },\n  \"input\": {\n    \"value\": \"x\"\n  }\n}\n",
+      "expected_nquads": "_:b2 <foo:value> \"x\" _:b1 .\n_:b0 <foo:input> _:b1 .\n"
+    },
+    {
+      "id": "e080",
+      "name": "expand [@graph, @set] container",
+      "purpose": "Use of [@graph, @set] containers",
+      "input_sha256": "3c0e1237f69649a9755ac79e5b4467cc8776bbf964ea22e62232ab33c26a1672",
+      "expected_sha256": "4e173fd8cd7c4a3af0663ae8d0808585f5d0f0c6522c1c608a0445ba07e4c99c",
+      "input": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"input\": {\"@id\": \"foo:input\", \"@container\": [\"@graph\", \"@set\"]},\n    \"value\": \"foo:value\"\n  },\n  \"input\": [{\n    \"value\": \"x\"\n  }]\n}\n",
+      "expected_nquads": "_:b0 <foo:input> _:b1 .\n_:b2 <foo:value> \"x\" _:b1 .\n"
+    },
+    {
+      "id": "e085",
+      "name": "expand [@graph, @id] container",
+      "purpose": "Use of @graph containers with @id",
+      "input_sha256": "a0673af1155212dd3b3c8db053ad600068d92c45f4662938e71ff891efe29086",
+      "expected_sha256": "c0b4c74a2a7b79b325f2b17e1bb3709c97c844788ed1266a3845c76654b3bb3f",
+      "input": "{\n  \"@context\": {\n    \"@vocab\": \"http://example.org/\",\n    \"input\": {\"@container\": [\"@graph\", \"@id\"]}\n  },\n  \"input\": {\n    \"http://example.com/g1\": {\"value\": \"x\"}\n  }\n}",
+      "expected_nquads": "_:b0 <http://example.org/value> \"x\" <http://example.com/g1> .\n_:b1 <http://example.org/input> <http://example.com/g1> .\n"
+    },
+    {
+      "id": "e086",
+      "name": "expand [@graph, @id, @set] container",
+      "purpose": "Use of @graph containers with @id and @set",
+      "input_sha256": "f5eda042f7180367a7510792107e7860917bbb195efb2af9a6115ca7a25676fc",
+      "expected_sha256": "c0b4c74a2a7b79b325f2b17e1bb3709c97c844788ed1266a3845c76654b3bb3f",
+      "input": "{\n  \"@context\": {\n    \"@vocab\": \"http://example.org/\",\n    \"input\": {\"@container\": [\"@graph\", \"@id\", \"@set\"]}\n  },\n  \"input\": {\n    \"http://example.com/g1\": {\"value\": \"x\"}\n  }\n}",
+      "expected_nquads": "_:b0 <http://example.org/value> \"x\" <http://example.com/g1> .\n_:b1 <http://example.org/input> <http://example.com/g1> .\n"
+    },
+    {
+      "id": "e099",
+      "name": "expand [@graph, @id] container (multiple objects)",
+      "purpose": "Use of @graph containers with @id",
+      "input_sha256": "66d8c9d882371a23d739eb5f869f60d29a584138b384955eea5c28f498bb8372",
+      "expected_sha256": "7255cf34a9968f2f5161f24e035b87443d11318c44f05d0a79cea4adff26d301",
+      "input": "{\n  \"@context\": {\n    \"@vocab\": \"http://example.org/\",\n    \"input\": {\"@container\": [\"@graph\", \"@id\"]}\n  },\n  \"input\": {\n    \"http://example.com/g1\": {\"value\": \"x\"},\n    \"http://example.com/g2\": {\"value\": \"y\"}\n  }\n}",
+      "expected_nquads": "_:b1 <http://example.org/value> \"x\" <http://example.com/g1> .\n_:b2 <http://example.org/value> \"y\" <http://example.com/g2> .\n_:b0 <http://example.org/input> <http://example.com/g1> .\n_:b0 <http://example.org/input> <http://example.com/g2> .\n"
+    },
+    {
+      "id": "e100",
+      "name": "expand [@graph, @id, @set] container (multiple objects)",
+      "purpose": "Use of @graph containers with @id and @set",
+      "input_sha256": "91871817201c64ea7f1dba8c83cfcfb6ea968f177f9ac5c76ae7450efe6f3eca",
+      "expected_sha256": "7255cf34a9968f2f5161f24e035b87443d11318c44f05d0a79cea4adff26d301",
+      "input": "{\n  \"@context\": {\n    \"@vocab\": \"http://example.org/\",\n    \"input\": {\"@container\": [\"@graph\", \"@id\", \"@set\"]}\n  },\n  \"input\": {\n    \"http://example.com/g1\": {\"value\": \"x\"},\n    \"http://example.com/g2\": {\"value\": \"y\"}\n  }\n}",
+      "expected_nquads": "_:b1 <http://example.org/value> \"x\" <http://example.com/g1> .\n_:b2 <http://example.org/value> \"y\" <http://example.com/g2> .\n_:b0 <http://example.org/input> <http://example.com/g1> .\n_:b0 <http://example.org/input> <http://example.com/g2> .\n"
+    },
+    {
+      "id": "js06",
+      "name": "Transform JSON literal (object)",
+      "purpose": "Tests transforming property with @type @json to a JSON literal (object).",
+      "input_sha256": "362747c2c82488ed18b2fa593098e1b875f347f9f9c7f970f03a980a62546284",
+      "expected_sha256": "d029f52ac30bb672aafabbcc9da73084104ca341ea9c8f61790d3ff157febd58",
+      "input": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"e\": {\"@id\": \"http://example.org/vocab#object\", \"@type\": \"@json\"}\n  },\n  \"e\": {\"foo\": \"bar\"}\n}",
+      "expected_nquads": "_:b0 <http://example.org/vocab#object> \"{\\\"foo\\\":\\\"bar\\\"}\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> ."
+    },
+    {
+      "id": "js07",
+      "name": "Transform JSON literal (array)",
+      "purpose": "Tests transforming property with @type @json to a JSON literal (array).",
+      "input_sha256": "b57985b0590dbaa50c3a763c4f0faf470459f0e6f407bee4aa43453696b169ec",
+      "expected_sha256": "f77ecea70bd6a04aa07a8e5db8b9fac74f3b9ab2041f0da26a52aa863069c1c0",
+      "input": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"e\": {\"@id\": \"http://example.org/vocab#array\", \"@type\": \"@json\"}\n  },\n  \"e\": [{\"foo\": \"bar\"}]\n}",
+      "expected_nquads": "_:b0 <http://example.org/vocab#array> \"[{\\\"foo\\\":\\\"bar\\\"}]\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> ."
+    },
+    {
+      "id": "m001",
+      "name": "Adds @id to object not having an @id",
+      "purpose": "Expansion using @container: @id",
+      "input_sha256": "e2300684747a2200659e5348a848d285c854de71d6697669b67834c3305a9d39",
+      "expected_sha256": "e2b6d37979c1a8befebf2bc2098c5efc5fe458ed4def8d89d46d1b9e5ce16578",
+      "input": "{\n  \"@context\": {\n    \"@vocab\": \"http://example/\",\n    \"idmap\": {\"@container\": \"@id\"}\n  },\n  \"idmap\": {\n    \"http://example.org/foo\": {\"label\": \"Object with @id <foo>\"},\n    \"_:bar\": {\"label\": \"Object with @id _:bar\"}\n  }\n}",
+      "expected_nquads": "<http://example.org/foo> <http://example/label> \"Object with @id <foo>\" .\n_:b1 <http://example/label> \"Object with @id _:bar\" .\n_:b0 <http://example/idmap> <http://example.org/foo> .\n_:b0 <http://example/idmap> _:b1 .\n"
+    },
+    {
+      "id": "m006",
+      "name": "Adds vocabulary expanded @type to object",
+      "purpose": "Expansion using @container: @type",
+      "input_sha256": "4840a8b79728f8615177db02a6f5e74e00157088e5addbb7dd314c00c5df82ee",
+      "expected_sha256": "f51341c79c1a859ef5b38b6a4b4c41c9d9870d5260d4246ebf5624c25c11f9eb",
+      "input": "{\n  \"@context\": {\n    \"@vocab\": \"http://example/\",\n    \"typemap\": {\"@container\": \"@type\"}\n  },\n  \"typemap\": {\n    \"Foo\": {\"label\": \"Object with @type <foo>\"}\n  }\n}",
+      "expected_nquads": "_:b1 <http://example/label> \"Object with @type <foo>\" .\n_:b1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example/Foo> .\n_:b0 <http://example/typemap> _:b1 .\n"
+    },
+    {
+      "id": "m009",
+      "name": "language map with @none",
+      "purpose": "index on @language",
+      "input_sha256": "4eed3256b6bf2f07692de5e42c172e357217d1cae6ca818f61c85e152ac8d9a8",
+      "expected_sha256": "84590dfd8ccc7cbcebbbbce8a28a368e70973a12be19023a874b8f2056656275",
+      "input": "{\n  \"@context\": {\n    \"vocab\": \"http://example.com/vocab/\",\n    \"label\": {\n      \"@id\": \"vocab:label\",\n      \"@container\": \"@language\"\n    }\n  },\n  \"@id\": \"http://example.com/queen\",\n  \"label\": {\n    \"en\": \"The Queen\",\n    \"de\": [ \"Die Königin\", \"Ihre Majestät\" ],\n    \"@none\": \"The Queen\"\n  }\n}",
+      "expected_nquads": "<http://example.com/queen> <http://example.com/vocab/label> \"Ihre Majestät\"@de .\n<http://example.com/queen> <http://example.com/vocab/label> \"Die Königin\"@de .\n<http://example.com/queen> <http://example.com/vocab/label> \"The Queen\"@en .\n<http://example.com/queen> <http://example.com/vocab/label> \"The Queen\" .\n"
+    },
+    {
+      "id": "n001",
+      "name": "Expands input using @nest",
+      "purpose": "Expansion using @nest",
+      "input_sha256": "07d160e95f7191770aac4a63a246756c1ce61171285a38013ab849855260f7ba",
+      "expected_sha256": "f0d3317e58cf1ac90c68353fe6b5fa142427c9210c7db88177341b6869ecd973",
+      "input": "{\n  \"@context\": {\"@vocab\": \"http://example.org/\"},\n  \"p1\": \"v1\",\n  \"@nest\": {\n    \"p2\": \"v2\"\n  }\n}",
+      "expected_nquads": "_:b0 <http://example.org/p2> \"v2\" .\n_:b0 <http://example.org/p1> \"v1\" .\n"
+    },
+    {
+      "id": "pi11",
+      "name": "property-valued index adds property to graph object",
+      "purpose": "Expanding index maps where index is a property.",
+      "input_sha256": "735aba3fb37cd579ae284036482080dd3bba697599c1964a76c11a06a5230abb",
+      "expected_sha256": "44f3fd0426b0639ee617abd99535dbb22606981658383469dd89682886f08f53",
+      "input": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"@vocab\": \"http://example.org/\",\n    \"input\": {\"@container\": [\"@graph\", \"@index\"], \"@index\": \"prop\"}\n  },\n  \"input\": {\n    \"g1\": {\"value\": \"x\"}\n  }\n}",
+      "expected_nquads": "_:b1 <http://example.org/prop> \"g1\" .\n_:b0 <http://example.org/input> _:b1 .\n_:b2 <http://example.org/value> \"x\" _:b1 .\n"
+    },
+    {
+      "id": "pr10",
+      "name": "Simple protected and unprotected terms.",
+      "purpose": "Simple protected and unprotected terms.",
+      "input_sha256": "22432cc071e219ca3fc2e5d973172c3428e9041724f894fb3bd346bec87b547b",
+      "expected_sha256": "4d816eb5f8d5841b849bd3b976dd61b862bf117a0e1ed151b04bf7d9e72d1693",
+      "input": "{\n  \"@context\": {\n    \"@version\": 1.1,\n    \"protected\": {\n      \"@id\": \"ex:protected\",\n      \"@protected\": true\n    },\n    \"unprotected\": \"ex:unprotected\"\n  },\n  \"protected\": \"p === ex:protected\",\n  \"unprotected\": {\n    \"protected\": \"p === ex:protected\"\n  }\n}\n",
+      "expected_nquads": "_:b1 <ex:protected> \"p === ex:protected\" .\n_:b0 <ex:protected> \"p === ex:protected\" .\n_:b0 <ex:unprotected> _:b1 .\n"
+    }
+  ]
+}

@@ -82,18 +82,43 @@ pub fn emit_core_prefixes(vocab: &SliceVocab) -> String {
 /// builder produced.
 pub fn emit_jsonld_context(vocab: &SliceVocab) -> String {
     let registry = effective_registry(vocab);
+    let mut source = serde_json::Map::new();
+    source.insert(
+        "@vocab".to_owned(),
+        serde_json::Value::String(vocab.ns().to_owned()),
+    );
+    for (prefix, namespace) in &registry {
+        source.insert(prefix.clone(), serde_json::Value::String(namespace.clone()));
+    }
+    let compiled = purrdf::native_codecs::jsonld::CompiledJsonLdContext::compile(
+        &serde_json::Value::Object(source),
+        None,
+    )
+    .expect("validated slice prefix authority must compile as a JSON-LD context");
+    let canonical = compiled
+        .canonical_context()
+        .as_object()
+        .expect("compiled slice context is an object");
     let mut out = String::new();
     out.push_str("{\n");
     out.push_str("  \"@context\": {\n");
-    let _ = writeln!(out, "    \"@vocab\": {},", json_string(vocab.ns()));
+    let canonical_vocab = canonical
+        .get("@vocab")
+        .and_then(serde_json::Value::as_str)
+        .expect("compiled slice context retains @vocab");
+    let _ = writeln!(out, "    \"@vocab\": {},", json_string(canonical_vocab));
     let last = registry.len() - 1;
-    for (i, (prefix, ns)) in registry.iter().enumerate() {
+    for (i, (prefix, _)) in registry.iter().enumerate() {
         let comma = if i == last { "" } else { "," };
+        let namespace = canonical
+            .get(prefix)
+            .and_then(serde_json::Value::as_str)
+            .expect("compiled slice context retains prefix mapping");
         let _ = writeln!(
             out,
             "    {}: {}{comma}",
             json_string(prefix),
-            json_string(ns)
+            json_string(namespace)
         );
     }
     out.push_str("  }\n");

@@ -21,6 +21,7 @@ SPDX-License-Identifier: CC-BY-4.0
 - [RDF 1.2 Visualization](concepts/visualization.md)
 - [Graph, Tabular & Research-Object Projections](concepts/projections.md)
 - [Codecs & Determinism](concepts/codecs.md)
+- [JSON-LD Contexts & Compaction](concepts/jsonld.md)
 - [Canonicalization & Diff](concepts/canonicalization.md)
 
 # SPARQL

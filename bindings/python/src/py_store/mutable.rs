@@ -16,9 +16,11 @@ use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads, read_inpu
 use super::query::{build_engine, materialize_results};
 use super::store::PyQuadIter;
 use super::term::{PyQuad, PyVariable, extract_graph_name, extract_term};
+use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::{
     BlankScope, DatasetMut, GraphMatchValue, RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfTerm,
     RdfTriple, SerializeGraph, SparqlEngine, SparqlRequest, TermValue, serialize_dataset,
+    serialize_dataset_with_jsonld_options,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -123,13 +125,20 @@ impl PyMutableDataset {
     }
 
     /// Dump the effective dataset (or one graph) in `format`.
-    #[pyo3(signature = (output=None, format=None, *, from_graph=None))]
+    #[pyo3(signature = (output=None, format=None, *, from_graph=None, jsonld_options=None, jsonld_context=None, yaml_schema_url=None))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Python dump names graph selection and JSON-LD configuration explicitly"
+    )]
     fn dump(
         &self,
         py: Python<'_>,
         output: Option<&Bound<'_, PyAny>>,
         format: Option<PyRdfFormat>,
         from_graph: Option<&Bound<'_, PyAny>>,
+        jsonld_options: Option<&str>,
+        jsonld_context: Option<&PyCompiledJsonLdContext>,
+        yaml_schema_url: Option<&str>,
     ) -> PyResult<Option<Py<PyBytes>>> {
         let format = format.ok_or_else(|| PyValueError::new_err("dump: format is required"))?;
         let native = format.to_native();
@@ -139,6 +148,16 @@ impl PyMutableDataset {
             None => None,
         };
         let explicit_from_graph = from_graph.is_some();
+        let configured =
+            if jsonld_options.is_some() || jsonld_context.is_some() || yaml_schema_url.is_some() {
+                Some(options_from_inputs(
+                    jsonld_options,
+                    jsonld_context,
+                    yaml_schema_url,
+                )?)
+            } else {
+                None
+            };
         let inner = &self.inner;
         // Materialize the effective set into the IR verbatim, then serialize through
         // the native codec — literal lexical forms are preserved. Both steps
@@ -157,8 +176,18 @@ impl PyMutableDataset {
                 (None, false) if native.supports_datasets() => SerializeGraph::Dataset,
                 (None, false) => SerializeGraph::DefaultGraph,
             };
-            serialize_dataset(&dataset, native.media_type(), selection)
+            if let Some(options) = &configured {
+                serialize_dataset_with_jsonld_options(
+                    &dataset,
+                    native.media_type(),
+                    selection,
+                    options,
+                )
                 .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
+            } else {
+                serialize_dataset(&dataset, native.media_type(), selection)
+                    .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
+            }
         })?;
         match output {
             Some(output) => {

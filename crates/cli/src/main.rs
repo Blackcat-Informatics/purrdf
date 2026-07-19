@@ -31,7 +31,11 @@ mod reason;
 mod sink;
 mod source;
 
+use std::fs::File;
+use std::io::Read as _;
+
 use clap::Parser;
+use purrdf_rdf::{JsonLdContextLimits, JsonLdSerializeOptions};
 
 use crate::cli::{Cli, Command};
 use crate::error::CliError;
@@ -48,6 +52,23 @@ fn main() {
 /// `--loss-ledger` target through.
 fn dispatch(cli: &Cli) -> Result<(), CliError> {
     let ledger_target = cli.ledger_target();
+    let jsonld_options = cli
+        .jsonld_options
+        .as_ref()
+        .map(|path| {
+            let limit = JsonLdContextLimits::default().max_options_bytes();
+            let mut bytes = Vec::new();
+            File::open(path)?
+                .take(u64::try_from(limit).expect("options byte limit fits u64") + 1)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() > limit {
+                return Err(CliError::Runtime(format!(
+                    "JSON-LD options document exceeds the {limit}-byte limit"
+                )));
+            }
+            JsonLdSerializeOptions::from_json(&bytes).map_err(CliError::from)
+        })
+        .transpose()?;
     match &cli.cmd {
         Command::Convert {
             from,
@@ -64,6 +85,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
                 base: base.as_deref(),
                 entailment: *entailment,
                 canonical: *canonical,
+                jsonld_options: jsonld_options.as_ref(),
             },
             input,
             output,
@@ -81,6 +103,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             *entailment,
             *results_format,
             query,
+            jsonld_options.as_ref(),
             &ledger_target,
         ),
         Command::Reason {
@@ -97,6 +120,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             base.as_deref(),
             input,
             output,
+            jsonld_options.as_ref(),
             &ledger_target,
         ),
         Command::Project {
@@ -113,6 +137,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             base.as_deref(),
             input,
             output,
+            jsonld_options.as_ref(),
             &ledger_target,
         ),
         Command::Lift {
@@ -129,6 +154,7 @@ fn dispatch(cli: &Cli) -> Result<(), CliError> {
             base.as_deref(),
             input,
             output,
+            jsonld_options.as_ref(),
             &ledger_target,
         ),
     }

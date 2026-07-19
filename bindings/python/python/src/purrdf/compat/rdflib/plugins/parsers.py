@@ -163,10 +163,17 @@ class JsonLDParser(Parser):
             for prefix, value in ctx.items():
                 if prefix in self._RESERVED_CONTEXT_KEYS:
                     continue
-                if not isinstance(value, str):
-                    continue
-                if value.endswith(("/", "#", ":")):
-                    sink.bind(prefix, URIRef(value))
+                namespace: str | None = None
+                if isinstance(value, str):
+                    namespace = value
+                elif (
+                    isinstance(value, dict)
+                    and value.get("@prefix") is True
+                    and isinstance(value.get("@id"), str)
+                ):
+                    namespace = value["@id"]
+                if namespace is not None and namespace.endswith(("/", "#", ":")):
+                    sink.bind(prefix, URIRef(namespace))
 
 
 class RDFXMLParser(Parser):

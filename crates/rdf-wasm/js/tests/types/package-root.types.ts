@@ -3,6 +3,7 @@
 
 import {
   ready,
+  CompiledJsonLdContext,
   DataFactory,
   Dataset,
   liftProjection,
@@ -53,6 +54,18 @@ for (const item of matched) {
 
 const stream: AsyncIterableIterator<Quad> = matched.toStream();
 const serialized: string = matched.serialize("nquads");
+const configured: string = matched.serializeConfigured(
+  "jsonld",
+  JSON.stringify({ version: 1, mode: "derived" }),
+);
+const compiledContext = new CompiledJsonLdContext(
+  JSON.stringify({
+    version: 1,
+    mode: "context",
+    prefixes: { ex: "https://example.org/" },
+  }),
+);
+const compacted: string = matched.serializeWithContext("jsonld", compiledContext);
 const canonical: string = matched.canonicalize();
 const same: boolean = matched.isomorphic(Dataset.parse(serialized, "nquads"));
 const projection: ProjectionPackage = matched.project("lpg-csv", JSON.stringify({

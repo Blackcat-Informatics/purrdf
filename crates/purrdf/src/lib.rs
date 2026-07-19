@@ -349,4 +349,20 @@ mod tests {
         assert_eq!(ns.compact_iri("https://example.org/vocab/Cat"), "vocab:Cat");
         assert!(smv.statement_metadata.ends_with("StatementMetadata"));
     }
+
+    #[test]
+    fn facade_exposes_configured_jsonld_serialization() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let options = JsonLdSerializeOptions::expanded();
+        let direct = serialize_dataset_to_jsonld_with_options(&dataset, &options)
+            .expect("configured JSON-LD through umbrella facade");
+        let generic = serialize_dataset_to_format_with_jsonld_options(
+            &dataset,
+            NativeRdfFormat::JsonLd,
+            None,
+            &options,
+        )
+        .expect("generic configured JSON-LD through umbrella facade");
+        assert_eq!(direct.as_bytes(), generic.bytes);
+    }
 }

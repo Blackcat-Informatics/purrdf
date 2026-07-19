@@ -454,6 +454,8 @@ fn percent_encode(value: &str) -> String {
 }
 
 fn expand_jsonld_iri(value: &str, config: &CsvwConfig) -> Result<String, ProjectionError> {
+    // CSVW's fixed class names and metadata-base fallback are profile rules layered
+    // above the caller-supplied context; compact-IRI processing stays in CsvwContext.
     if matches!(
         value,
         "TableGroup" | "Table" | "Schema" | "Column" | "Dialect" | "Template"

@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use purrdf_core::{DatasetView, LossLedger, RdfDataset, verify_pack};
 use purrdf_entail::materialize;
+use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::canonical_flat_nquads;
 
 use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget};
@@ -45,13 +46,21 @@ struct ConvertOp<'a> {
     target: CliFormat,
     base: Option<&'a str>,
     src_codec: Option<&'a str>,
+    jsonld_options: Option<&'a JsonLdSerializeOptions>,
 }
 
 impl ViewOp for ConvertOp<'_> {
     type Output = LossLedger;
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<LossLedger, CliError> {
-        sink::write_rdf(view, self.out, self.target, self.base, self.src_codec)
+        sink::write_rdf(
+            view,
+            self.out,
+            self.target,
+            self.base,
+            self.src_codec,
+            self.jsonld_options,
+        )
     }
 }
 
@@ -69,6 +78,8 @@ pub(crate) struct ConvertOptions<'a> {
     pub(crate) entailment: Option<CliRegime>,
     /// Whether `--canonical` was set (emit RDFC-1.0 canonical N-Quads).
     pub(crate) canonical: bool,
+    /// Explicit JSON-LD/YAML-LD serialization configuration.
+    pub(crate) jsonld_options: Option<&'a JsonLdSerializeOptions>,
 }
 
 /// Run the `convert` subcommand.
@@ -79,6 +90,11 @@ pub(crate) fn run(
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
     let source_format = format::resolve(options.from, input)?;
+    if options.canonical && options.jsonld_options.is_some() {
+        return Err(CliError::Usage(
+            "--jsonld-options cannot be combined with --canonical".to_owned(),
+        ));
+    }
 
     // The transform lane: either `--entailment` or `--canonical` needs a concrete
     // owned dataset, so reconstruct one and apply the transforms in order.
@@ -90,6 +106,7 @@ pub(crate) fn run(
     // pack is mmap-borrowed (no `Vec<u8>` copy of the pack contents); stdin has no
     // file to map, so it still buffers into a `Vec`.
     let target_format = format::resolve(options.to, output)?;
+    sink::validate_jsonld_options(target_format, options.jsonld_options)?;
     if matches!(source_format, CliFormat::Pack) && matches!(target_format, CliFormat::Pack) {
         if input == "-" {
             let bytes = source::read_bytes(input)?;
@@ -112,6 +129,7 @@ pub(crate) fn run(
             target: target_format,
             base: options.base,
             src_codec,
+            jsonld_options: options.jsonld_options,
         },
     )?;
     ledger::surface(ledger_target, &ledger)
@@ -127,6 +145,13 @@ fn run_with_transforms(
     output: &str,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
+    let target_format = if options.canonical {
+        None
+    } else {
+        let target = format::resolve(options.to, output)?;
+        sink::validate_jsonld_options(target, options.jsonld_options)?;
+        Some(target)
+    };
     let dataset = source::load_dataset(input, source_format, options.base)?;
 
     // Entail first: materialize the regime's closure (rejecting the
@@ -149,8 +174,15 @@ fn run_with_transforms(
     }
 
     // No `--canonical`: serialize the (possibly entailed) closure to `--to`.
-    let target_format = format::resolve(options.to, output)?;
+    let target_format = target_format.expect("non-canonical branch resolved a target format");
     let src_codec = source_format.loss_codec_name();
-    let ledger = sink::write_rdf(&*dataset, output, target_format, options.base, src_codec)?;
+    let ledger = sink::write_rdf(
+        &*dataset,
+        output,
+        target_format,
+        options.base,
+        src_codec,
+        options.jsonld_options,
+    )?;
     ledger::surface(ledger_target, &ledger)
 }
