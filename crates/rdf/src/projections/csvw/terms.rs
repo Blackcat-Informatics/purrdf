@@ -1126,19 +1126,14 @@ impl<'a> TermsProjector<'a> {
                 self.record_quad_loss(index, LOSS_CSVW_TERMS_SUBJECT_UNREPRESENTABLE)?;
                 continue;
             };
-            let matching_tables = memberships
-                .iter()
-                .enumerate()
-                .filter(|(_, subjects)| subjects.contains(subject))
-                .map(|(table, _)| table)
-                .collect::<Vec<_>>();
-            if matching_tables.is_empty() {
-                self.record_quad_loss(index, LOSS_CSVW_TERMS_SUBJECT_UNSELECTED)?;
-                continue;
-            }
+            let mut has_matching_table = false;
             let mut mapped_predicate = false;
             let mut represented = false;
-            for table_index in matching_tables {
+            for (table_index, subjects) in memberships.iter().enumerate() {
+                if !subjects.contains(subject) {
+                    continue;
+                }
+                has_matching_table = true;
                 if let Some(column) = self.config.tables[table_index]
                     .columns
                     .iter()
@@ -1147,8 +1142,13 @@ impl<'a> TermsProjector<'a> {
                     mapped_predicate = true;
                     if cell_value(&quad.object, &column.value_mode, &self.config.csvw).is_some() {
                         represented = true;
+                        break;
                     }
                 }
+            }
+            if !has_matching_table {
+                self.record_quad_loss(index, LOSS_CSVW_TERMS_SUBJECT_UNSELECTED)?;
+                continue;
             }
             if represented {
                 if quad.graph.is_some() {
@@ -1284,30 +1284,26 @@ fn selector_matches(
     let Some(type_predicate) = selector.type_predicate.as_ref() else {
         return true;
     };
-    let types = predicates
-        .get(type_predicate)
-        .into_iter()
-        .flatten()
-        .filter_map(|term| match term {
-            ProjectionTerm::Iri { value } => Some(value.as_str()),
-            ProjectionTerm::Blank { .. }
-            | ProjectionTerm::Literal { .. }
-            | ProjectionTerm::Triple { .. } => None,
-        })
-        .collect::<BTreeSet<_>>();
-    (selector.any_types.is_empty()
-        || selector
-            .any_types
-            .iter()
-            .any(|required| types.contains(required.as_str())))
-        && selector
-            .all_types
-            .iter()
-            .all(|required| types.contains(required.as_str()))
-        && selector
-            .none_types
-            .iter()
-            .all(|excluded| !types.contains(excluded.as_str()))
+    let Some(types) = predicates.get(type_predicate) else {
+        return selector.any_types.is_empty() && selector.all_types.is_empty();
+    };
+    let mut any_matched = selector.any_types.is_empty();
+    let mut all_remaining = selector.all_types.len();
+    for term in types {
+        let ProjectionTerm::Iri { value } = term else {
+            continue;
+        };
+        if selector.none_types.contains(value.as_str()) {
+            return false;
+        }
+        if !any_matched && selector.any_types.contains(value.as_str()) {
+            any_matched = true;
+        }
+        if selector.all_types.contains(value.as_str()) {
+            all_remaining -= 1;
+        }
+    }
+    any_matched && all_remaining == 0
 }
 
 fn identity_cell(subject: &str, identity: &CsvwTermsIdentityColumn) -> CsvwCell {
@@ -2218,5 +2214,45 @@ mod tests {
         let mut value = serde_json::to_value(config).expect("value");
         value["tables"][0]["mystery"] = serde_json::json!(true);
         assert!(serde_json::from_value::<CsvwTermsConfig>(value).is_err());
+    }
+
+    #[test]
+    fn selector_type_sets_preserve_any_all_and_none_semantics() {
+        let subject = format!("{VOCAB}resource");
+        let selector = CsvwTermsSelector::new(
+            Some(TYPE.to_owned()),
+            BTreeSet::from([CLASS.to_owned()]),
+            BTreeSet::from([CLASS.to_owned(), PROPERTY.to_owned()]),
+            BTreeSet::from([PERSON.to_owned()]),
+            BTreeSet::from([VOCAB.to_owned()]),
+        )
+        .expect("selector");
+        let mut types = BTreeSet::from([
+            ProjectionTerm::Iri {
+                value: CLASS.to_owned(),
+            },
+            ProjectionTerm::Iri {
+                value: PROPERTY.to_owned(),
+            },
+        ]);
+        let predicates = BTreeMap::from([(TYPE.to_owned(), types.clone())]);
+        assert!(selector_matches(&selector, &subject, &predicates));
+
+        types.insert(ProjectionTerm::Iri {
+            value: PERSON.to_owned(),
+        });
+        let predicates = BTreeMap::from([(TYPE.to_owned(), types)]);
+        assert!(!selector_matches(&selector, &subject, &predicates));
+
+        let none_only = CsvwTermsSelector::new(
+            Some(TYPE.to_owned()),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            BTreeSet::from([PERSON.to_owned()]),
+            BTreeSet::new(),
+        )
+        .expect("none-only selector");
+        assert!(selector_matches(&none_only, &subject, &BTreeMap::new()));
+        assert!(!selector_matches(&selector, &subject, &BTreeMap::new()));
     }
 }
