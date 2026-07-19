@@ -26,8 +26,8 @@ pub use model::{
 };
 pub use terms::{
     CSVW_TERMS_PROFILE, CsvwTermsCardinality, CsvwTermsColumn, CsvwTermsConfig,
-    CsvwTermsGraphSelection, CsvwTermsIdentityColumn, CsvwTermsLimits, CsvwTermsSelector,
-    CsvwTermsTable, CsvwTermsValueMode,
+    CsvwTermsGraphSelection, CsvwTermsIdentityColumn, CsvwTermsLimits, CsvwTermsProjection,
+    CsvwTermsReport, CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, project_csvw_terms,
 };
 pub use writer::{
     CsvwMappedTableGroup, CsvwRdfTableMapping, CsvwWriteOutcome, CsvwWritePlan, project_csvw,

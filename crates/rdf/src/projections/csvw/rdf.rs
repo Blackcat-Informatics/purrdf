@@ -147,9 +147,20 @@ impl Converter<'_> {
                 continue;
             }
             if let Some(template) = &column.inherited.value_url {
-                let value = expand_url(template, &cell_variables, &table.url, self.config)?;
-                let object = self.builder.intern_iri(&value);
-                self.quad(subject, predicate, object);
+                if cell.values.is_empty() {
+                    let value = expand_url(template, &cell_variables, &table.url, self.config)?;
+                    let object = self.builder.intern_iri(&value);
+                    self.quad(subject, predicate, object);
+                } else {
+                    for component in &cell.values {
+                        let mut component_variables = cell_variables.clone();
+                        component_variables.insert(column.name.clone(), component.source.clone());
+                        let value =
+                            expand_url(template, &component_variables, &table.url, self.config)?;
+                        let object = self.builder.intern_iri(&value);
+                        self.quad(subject, predicate, object);
+                    }
+                }
             } else if column.inherited.separator.is_some() && column.inherited.ordered {
                 if !cell.values.is_empty() {
                     let head = self.emit_list(cell, table_index, row.number, column.number);
@@ -327,7 +338,12 @@ impl Converter<'_> {
             lexical_form: value.lexical.clone(),
             datatype: value.language.is_none().then(|| value.datatype.clone()),
             language: value.language.clone(),
-            direction: None,
+            direction: value.direction.and_then(|direction| match direction {
+                super::model::CsvwTextDirection::Ltr => Some(purrdf_core::RdfTextDirection::Ltr),
+                super::model::CsvwTextDirection::Rtl => Some(purrdf_core::RdfTextDirection::Rtl),
+                super::model::CsvwTextDirection::Auto
+                | super::model::CsvwTextDirection::Inherit => None,
+            }),
         })
     }
 
@@ -398,19 +414,26 @@ fn expand_url(
             .find('}')
             .ok_or_else(|| ProjectionError::syntax("unterminated CSVW URI-template expression"))?;
         let expression = &after[..close];
-        let (fragment, name) = expression
-            .strip_prefix('#')
-            .map_or((false, expression), |name| (true, name));
+        let (operator, name) = expression.strip_prefix('#').map_or_else(
+            || {
+                expression
+                    .strip_prefix('+')
+                    .map_or((None, expression), |name| (Some('+'), name))
+            },
+            |name| (Some('#'), name),
+        );
         let value = if name == "_name" {
             variables.get("_name").cloned().unwrap_or_default()
         } else {
             variables.get(name).cloned().unwrap_or_default()
         };
-        if fragment && !value.is_empty() {
+        if operator == Some('#') && !value.is_empty() {
             output.push('#');
         }
         if name == "_name" {
             output.push_str(&value);
+        } else if operator == Some('+') {
+            output.push_str(&percent_encode_reserved(&value));
         } else {
             output.push_str(&percent_encode(&value));
         }
@@ -430,6 +453,45 @@ fn expand_url(
     base.resolve(&output)
         .map(|iri| iri.as_str().to_owned())
         .map_err(|error| ProjectionError::term(format!("invalid expanded CSVW URL: {error}")))
+}
+
+fn percent_encode_reserved(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b':'
+                    | b'/'
+                    | b'?'
+                    | b'#'
+                    | b'['
+                    | b']'
+                    | b'@'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b'%'
+            )
+        {
+            output.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(output, "%{byte:02X}");
+        }
+    }
+    output
 }
 
 fn fragment_iri(table_url: &str, name: &str) -> Result<String, ProjectionError> {

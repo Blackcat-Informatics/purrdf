@@ -67,10 +67,10 @@ pub use csvw::{
     CsvwNaturalLanguage, CsvwNumericFormat, CsvwRdfTableMapping, CsvwReadOutcome, CsvwReference,
     CsvwRow, CsvwSchema, CsvwTable, CsvwTableDirection, CsvwTableGroup, CsvwTermsCardinality,
     CsvwTermsColumn, CsvwTermsConfig, CsvwTermsGraphSelection, CsvwTermsIdentityColumn,
-    CsvwTermsLimits, CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, CsvwTextDirection,
-    CsvwTransformation, CsvwTrim, CsvwValue, CsvwVocabulary, CsvwWarning, CsvwWarningKind,
-    CsvwWriteOutcome, CsvwWritePlan, project_csvw, project_csvw_exact, read_csvw, read_csvw_exact,
-    write_csvw,
+    CsvwTermsLimits, CsvwTermsProjection, CsvwTermsReport, CsvwTermsSelector, CsvwTermsTable,
+    CsvwTermsValueMode, CsvwTextDirection, CsvwTransformation, CsvwTrim, CsvwValue, CsvwVocabulary,
+    CsvwWarning, CsvwWarningKind, CsvwWriteOutcome, CsvwWritePlan, project_csvw,
+    project_csvw_exact, project_csvw_terms, read_csvw, read_csvw_exact, write_csvw,
 };
 pub use error::{ProjectionError, ProjectionErrorKind};
 pub use lpg::{
