@@ -16,7 +16,7 @@ import { parsePackument } from "./npm-pack-output.mjs";
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // The wasm package ships the RDF 1.2 model, SPARQL/SHACL/ShEx engines, the
 // native format registry (Turtle/N-Quads/TriG/JSON-LD/YAML-LD/…), layout, the
-// SVG renderer, and all twelve graph/tabular/research-object projection
+// SVG renderer, and all thirteen graph/tabular/research-object projection
 // profiles. Both ceilings track the optimized wasm artifact (see the Makefile
 // WASM_SIZE_BUDGET_BYTES note); each is the measured size plus about 3%
 // headroom. The five strict bidirectional research-object codecs are the

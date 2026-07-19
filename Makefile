@@ -25,7 +25,7 @@ BINARYEN_VERSION := 130
 # -Oz). `make wasm-pkg-size` (and both CI and the npm release) fail if the built
 # artifact exceeds this. The shipped bundle — RDF 1.2 model, SPARQL/SHACL/ShEx
 # engines, the native format registry (now including JSON-LD/YAML-LD),
-# deterministic layout, SVG export, and all twelve graph/tabular/research-object
+# deterministic layout, SVG export, and all thirteen graph/tabular/research-object
 # projection profiles and the compiled JSON-LD context/options/registry engine
 # — measures 6_594_083 bytes; 6_800_000 keeps 3.12% headroom. The mandatory
 # scoped/limited LPG mapper and shared transactional carrier encoders are the

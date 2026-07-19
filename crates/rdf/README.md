@@ -44,7 +44,7 @@ loss ledger) and adds what the kernel deliberately leaves out:
   whose embedded JSON preserves assertions, triple terms, reifiers, annotations,
   graph context, dialect diagnostics, and element-to-model identities.
 - **Graph, tabular, and research-object carriers** — deterministic LPG CSV,
-  Neo4j CSV, openCypher, GraphML, exact CSVW, OBO Graphs 0.3.2, SKOS,
+  Neo4j CSV, openCypher, GraphML, exact and curated CSVW, OBO Graphs 0.3.2, SKOS,
   Croissant 1.1, RO-Crate 1.3, DataCite 4.6, DCAT 3, and Frictionless Data
   Package v1 over one caller-configured, resource-bounded archive API with an
   always-computed loss ledger.
@@ -168,6 +168,16 @@ triple terms, reifier bindings, annotations, language, direction, and datatype
 with an empty ledger. Curated CSVW terms, OBO Graphs, and SKOS are structurally
 write-only: `LiftProfile` has no variants for them.
 
+`csvw-terms` is a generic caller-authored entity-table lens, not an ontology
+model. Its mandatory configuration explicitly selects source graphs, row
+membership by type and subject IRI, ordered predicate columns, exact IRI or
+literal facets, one/many cardinality, artifact identities, and all limits. Rows
+and multivalues are canonically sorted; ambiguous single values and separator
+collisions fail. Every unrepresented RDF 1.2 row receives a source-located loss
+entry, including named-graph placement, empty graphs, reifiers, and annotations.
+Use `csvw-exact` for archival or reverse mapping and `csvw-terms` for compact,
+human-facing tables.
+
 LPG scope is mandatory. `LpgScope::all()` explicitly requests the complete
 dataset; selective scope can include/exclude exact named graphs and predicates
 and filter node/edge types. Independent input-record, model-record, node, edge,
@@ -213,6 +223,8 @@ The runnable version is
 [`examples/projection_archive.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/projection_archive.rs).
 All five research-object round trips are runnable in
 [`examples/research_object_roundtrip.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/research_object_roundtrip.rs).
+The caller-configured classes/properties/individuals CSVW view is runnable in
+[`examples/csvw_terms.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/csvw_terms.rs).
 
 ## Part of PurRDF
 

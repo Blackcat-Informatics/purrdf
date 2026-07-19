@@ -28,6 +28,7 @@ Every operation has four non-negotiable properties:
 | `open-cypher` | deterministic `CREATE` program | RDF ↔ carrier | strict reader accepts exactly the emitted grammar |
 | `graphml` | GraphML 1.0 XML | RDF ↔ carrier | exact RDF sideband; strict namespace/key validation |
 | `csvw-exact` | CSVW metadata plus RDF 1.2 tables | RDF ↔ carrier | lossless |
+| `csvw-terms` | CSVW metadata plus caller-declared entity tables | RDF → view | located, closed loss ledger |
 | `obo-graphs` | OBO Graphs 0.3.2 JSON | RDF → view | located, closed loss ledger |
 | `skos` | SKOS Turtle | RDF → view | located, closed loss ledger |
 | `croissant-1.1` | `croissant.json` | RDF ↔ carrier | shared model; profile loss is located |
@@ -37,8 +38,8 @@ Every operation has four non-negotiable properties:
 | `frictionless-data-package-1` | `datapackage.json` | RDF ↔ carrier | shared model; profile loss is located |
 
 The type distinction between `ProjectionProfile` and `LiftProfile` matters:
-OBO Graphs and SKOS cannot even be named as lift profiles. They are useful views,
-not pretend interchange formats.
+curated CSVW terms, OBO Graphs, and SKOS cannot even be named as lift profiles.
+They are useful views, not pretend interchange formats.
 
 ## One canonical LPG model
 
@@ -111,6 +112,55 @@ The `csvw-exact` archive profile uses that machinery to carry RDF 1.2 without
 loss. Its canonical tables preserve terms, quads, named graph placement,
 recursive triple terms, reifier bindings, annotations, datatypes, language,
 direction, and blank-node scope. A valid exact round trip has an empty ledger.
+
+The separate `csvw-terms` profile is a deliberately curated wide-table view.
+It is for compact catalogs such as classes, properties, individuals, business
+entities, or release inventories. Those names have no built-in meaning: every
+table, selector, predicate, datatype, and identity rule is supplied by the
+caller. The profile never imports an ontology model or assumes RDF, RDFS, OWL,
+or any application vocabulary.
+
+A `CsvwTermsConfig` contains only mandatory policy:
+
+- `csvw` is the complete normative CSVW context, vocabulary, processing mode,
+  record bound, and package limits;
+- `metadata_path` is the safe package-relative metadata member;
+- `graph_selection` is either explicit `all` or an exact default-graph flag and
+  set of named-graph IRIs;
+- each ordered table declaration supplies a stable name, absolute table URL,
+  artifact path, row selector, visible subject-IRI column, and one or more
+  ordered predicate columns;
+- a selector may constrain any/all/none RDF types through an explicitly named
+  type predicate and may constrain subject IRI prefixes; the type predicate is
+  present exactly when a type set is non-empty, while an empty prefix set means
+  no subject-namespace constraint;
+- a predicate column accepts either exact IRI objects or literals with exact
+  datatype, language, and RDF 1.2 direction facets, plus requiredness and an
+  explicit one-or-many cardinality;
+- `execution_limits` bounds total output rows, represented values, and values
+  in one cell independently of the package and input-record bounds.
+
+Table overlap is intentional. A subject may appear in several views when it
+matches several selectors. Duplicate table identities, paths, column names, or
+mapped predicates are rejected. `One` fails on a second matching value.
+`Many` sorts RDF terms canonically and joins them with the caller's separator;
+an actual value containing that separator fails instead of creating an
+ambiguous cell. RDF direct-value statements do not carry a source sequence, so
+the profile does not fabricate CSVW ordered-list semantics.
+
+Rows are ordered by subject IRI, values by canonical RDF term order, columns and
+tables by their declaration order, and archive members by lexical path. The
+same dataset and configuration therefore produce the same CSV, metadata, and
+USTAR bytes regardless of source interning or statement insertion order.
+
+Every source row is accounted for. Unselected graphs or subjects, blank or
+triple-term subjects, unmapped predicates, facet-mismatched objects, selected
+named-graph placement, empty named graphs, reifier bindings, and annotations
+produce stable source-located ledger entries. The generated tables themselves
+can be read with the normative `read_csvw` API, but they cannot reconstruct
+omitted source RDF. `csvw-terms` consequently has no `LiftProfile` variant and
+contains no hidden exact sideband; use `csvw-exact` whenever archival fidelity
+or an RDF round trip is required.
 
 ## Research-object carriers
 
@@ -223,6 +273,37 @@ configurations for all five profiles are under
 `crates/rdf/tests/fixtures/research-objects/carrier/`; they are examples, never
 library defaults.
 
+The complete strict tagged-JSON shape for curated CSVW is exercised by
+`crates/rdf/tests/fixtures/csvw-terms.json`. Its graph selector is explicit:
+
+```json
+{
+  "kind": "include",
+  "default_graph": true,
+  "named_graphs": ["https://example.org/business"]
+}
+```
+
+Each table selector then names its own caller vocabulary and row population:
+
+```json
+{
+  "type_predicate": "https://example.org/type",
+  "any_types": ["https://example.org/Class"],
+  "all_types": [],
+  "none_types": ["https://example.org/Retired"],
+  "iri_prefixes": ["https://example.org/vocab/"]
+}
+```
+
+The runnable `csvw_terms` Rust example constructs the complete configuration
+with three ordinary table declarations—classes, properties, and individuals—
+and writes the canonical archive:
+
+```sh
+cargo run -p purrdf-rdf --example csvw_terms -- /tmp/terms.tar
+```
+
 ## Rust archive API
 
 ```rust,ignore
@@ -273,6 +354,7 @@ The surface names follow the same profile/config/archive contract:
 Runnable examples live at:
 
 - `crates/rdf/examples/projection_archive.rs`
+- `crates/rdf/examples/csvw_terms.rs`
 - `crates/rdf/examples/research_object_roundtrip.rs`
 - `crates/cli/examples/projection-roundtrip.sh`
 - `bindings/python/examples/projection_roundtrip.py`
@@ -301,6 +383,8 @@ cargo bench -p purrdf-rdf --bench projections -- --quick
 The benchmark is report-only. It measures RDF-to-LPG mapping, scoped versus
 explicit-all mapping over a 20-graph carrier, materialized package versus direct
 sink output for every LPG syntax, every LPG read path, exact CSVW write/read,
-OBO Graphs and SKOS projection, the shared research-object model, and all five
-research-object write/read paths. It also reports allocation observations over
-deterministic fixtures.
+exact-versus-curated CSVW over the same 12,000-quad carrier, one-graph versus
+all-graph curated scope, OBO Graphs and SKOS projection, the shared
+research-object model, and all five research-object write/read paths. It also
+reports allocation and artifact-body-size observations over deterministic
+fixtures.
