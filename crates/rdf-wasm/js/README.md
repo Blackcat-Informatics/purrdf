@@ -134,11 +134,11 @@ const roundTrip = lifted.takeDataset();
 console.log(roundTrip?.size, JSON.parse(projected.lossLedgerJson));
 ```
 
-`lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`, `csvw-exact`,
-`croissant-1.1`, `ro-crate-1.3`, `datacite-4.6`, `dcat-3`, and
-`frictionless-data-package-1` are bidirectional. `obo-graphs` and `skos` are
-write-only, loss-ledgered views and are excluded from the `LiftProfile`
-TypeScript union. Research-object contexts, vocabularies, identities, and
+`lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`, `csvw-exact`, `croissant-1.1`,
+`ro-crate-1.3`, `datacite-4.6`, `dcat-3`, and `frictionless-data-package-1` are
+bidirectional. `csvw-terms`, `obo-graphs`, and `skos` are write-only,
+loss-ledgered views and are excluded from the `LiftProfile` TypeScript union.
+Research-object contexts, vocabularies, identities, and
 profiles are mandatory caller configuration. Archives are canonical
 deterministic USTAR bytes. Package/lift objects own wasm memory; call `free()`
 when finished, and remember that `takeDataset()` transfers its dataset exactly

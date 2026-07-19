@@ -222,6 +222,8 @@ pub(crate) enum CliProjectionProfile {
     Graphml,
     /// Exact lossless RDF 1.2 CSVW.
     CsvwExact,
+    /// Caller-declared curated CSVW terms view.
+    CsvwTerms,
     /// OBO Graphs 0.3.2 JSON view.
     OboGraphs,
     /// SKOS Turtle concept-scheme view.
@@ -252,6 +254,7 @@ impl CliProjectionProfile {
             Self::OpenCypher => ProjectionProfile::OpenCypher,
             Self::Graphml => ProjectionProfile::Graphml,
             Self::CsvwExact => ProjectionProfile::CsvwExact,
+            Self::CsvwTerms => ProjectionProfile::CsvwTerms,
             Self::OboGraphs => ProjectionProfile::OboGraphs,
             Self::Skos => ProjectionProfile::Skos,
             Self::Croissant11 => ProjectionProfile::Croissant11,

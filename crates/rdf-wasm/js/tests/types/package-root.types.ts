@@ -7,6 +7,8 @@ import {
   DataFactory,
   Dataset,
   liftProjection,
+  type LiftProfile,
+  type ProjectionProfile,
   type ProjectionLift,
   type ProjectionLossLedger,
   type ProjectionPackage,
@@ -89,6 +91,9 @@ const projection: ProjectionPackage = matched.project("lpg-csv", JSON.stringify(
   },
 }));
 const projectionLedger: ProjectionLossLedger = JSON.parse(projection.lossLedgerJson);
+const curatedProfile: ProjectionProfile = "csvw-terms";
+// @ts-expect-error curated CSVW terms cannot reconstruct arbitrary source RDF
+const invalidCuratedLift: LiftProfile = "csvw-terms";
 const researchProjection: ProjectionPackage = matched.project(
   "frictionless-data-package-1",
   "{}",
@@ -158,6 +163,8 @@ void stream;
 void canonical;
 void same;
 void projectionLedger;
+void curatedProfile;
+void invalidCuratedLift;
 void researchProjection;
 void projectedDataset;
 void visualModel;

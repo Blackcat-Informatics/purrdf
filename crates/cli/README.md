@@ -238,6 +238,7 @@ profile/config mismatch, an unknown field, or a breached limit is a hard error.
 | `open-cypher` | Closed deterministic `CREATE` grammar | yes |
 | `graphml` | GraphML 1.0 | yes |
 | `csvw-exact` | Exact RDF 1.2 CSVW table group | yes |
+| `csvw-terms` | Caller-declared curated CSVW entity tables | no |
 | `obo-graphs` | OBO Graphs 0.3.2 JSON | no |
 | `skos` | SKOS Turtle concept-scheme view | no |
 
@@ -275,7 +276,7 @@ purrdf --loss-ledger=project.loss.json project \
 The archive bytes are deterministic for the same dataset and configuration.
 LPG profiles retain exact RDF sideband for reconstruction, while the semantic
 lowering into a property graph remains visible in the ledger. `csvw-exact` is
-lossless. OBO Graphs and SKOS are intentionally lossy views.
+lossless. Curated CSVW terms, OBO Graphs, and SKOS are intentionally lossy views.
 
 ## `lift`
 
@@ -285,7 +286,7 @@ purrdf lift --profile <P> --config <PATH> --to <F> [--base <IRI>] [IN] [OUT]
 
 Lift one canonical archive into a native RDF syntax. Only `lpg-csv`,
 `neo4j-csv`, `open-cypher`, `graphml`, and `csvw-exact` are accepted; the CLI
-does not offer OBO Graphs or SKOS as pretend reverse mappings. The reader
+does not offer curated CSVW terms, OBO Graphs, or SKOS as pretend reverse mappings. The reader
 rejects non-canonical USTAR, unexpected members, malformed carrier data,
 sideband inconsistencies, and resource-limit violations.
 

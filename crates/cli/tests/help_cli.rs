@@ -49,6 +49,7 @@ fn project_and_lift_help_enumerate_truthful_profiles() {
         "open-cypher",
         "graphml",
         "csvw-exact",
+        "csvw-terms",
         "obo-graphs",
         "skos",
         "croissant-1.1",
@@ -87,6 +88,7 @@ fn project_and_lift_help_enumerate_truthful_profiles() {
     }
     assert!(!lift.contains("obo-graphs"));
     assert!(!lift.contains("skos"));
+    assert!(!lift.contains("csvw-terms"));
     for field in ["--profile", "--config", "--to", "IN", "OUT"] {
         assert!(lift.contains(field), "lift help missing `{field}`");
     }

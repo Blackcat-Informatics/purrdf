@@ -86,8 +86,8 @@ pub unsafe extern "C" fn purrdf_project(
 
 /// Lift a canonical USTAR carrier into a fresh frozen RDF dataset.
 ///
-/// Only the closed bidirectional profiles are accepted; OBO Graphs and SKOS
-/// fail as invalid arguments instead of pretending to round-trip. All five
+/// Only the closed bidirectional profiles are accepted; curated CSVW terms, OBO
+/// Graphs, and SKOS fail as invalid arguments instead of pretending to round-trip. All five
 /// research-object profiles are bidirectional. On success, `*out_dataset` is
 /// released with `purrdf_dataset_free` and
 /// `*out_loss_ledger_json` with `purrdf_buffer_free`.

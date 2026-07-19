@@ -141,7 +141,7 @@ entries; ambiguous profile data hard-fails.
 
 ### Graph, tabular, and research-object projection archives
 
-All twelve profiles use the same canonical USTAR package surface and strict,
+All thirteen profiles use the same canonical USTAR package surface and strict,
 profile-tagged configuration. PurRDF does not choose vocabulary, identity,
 profile context, or resource limits for the caller.
 
@@ -152,6 +152,7 @@ profile context, or resource limits for the caller.
 | `open-cypher` | yes | yes | Injection-safe closed `CREATE` grammar |
 | `graphml` | yes | yes | GraphML 1.0 with strict XML validation |
 | `csvw-exact` | yes | yes | Lossless RDF 1.2 tables and CSVW metadata |
+| `csvw-terms` | yes | no | Caller-declared scoped entity tables with located losses |
 | `obo-graphs` | yes | no | OBO Graphs 0.3.2 view with located losses |
 | `skos` | yes | no | SKOS Turtle view with located losses |
 | `croissant-1.1` | yes | yes | Croissant 1.1 through the shared research-object model |
@@ -164,8 +165,8 @@ The LPG carriers include exact RDF sideband for reconstruction, while their
 native property-graph interpretation remains a semantic lowering and is
 therefore ledgered. `csvw-exact` preserves terms, graph placement, recursive
 triple terms, reifier bindings, annotations, language, direction, and datatype
-with an empty ledger. OBO Graphs and SKOS are structurally write-only:
-`LiftProfile` has no variants for them.
+with an empty ledger. Curated CSVW terms, OBO Graphs, and SKOS are structurally
+write-only: `LiftProfile` has no variants for them.
 
 LPG scope is mandatory. `LpgScope::all()` explicitly requests the complete
 dataset; selective scope can include/exclude exact named graphs and predicates

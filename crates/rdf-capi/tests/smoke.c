@@ -139,6 +139,49 @@ int main(void) {
     purrdf_buffer_free(project_ledger);
     purrdf_buffer_free(projection);
 
+    /* caller-declared curated CSVW terms is projected through the same C ABI */
+    const char *terms_config =
+        "{\"profile\":\"csvw-terms\",\"config\":{"
+        "\"csvw\":{\"metadata_base_iri\":\"https://example.org/catalog/metadata.json\","
+        "\"context\":{\"iri\":\"http://www.w3.org/ns/csvw\",\"prefixes\":{}},"
+        "\"table_group_iri\":\"https://example.org/catalog\","
+        "\"vocabulary\":{\"csvw_namespace\":\"http://www.w3.org/ns/csvw#\","
+        "\"rdf_namespace\":\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\","
+        "\"rdfs_namespace\":\"http://www.w3.org/2000/01/rdf-schema#\","
+        "\"xsd_namespace\":\"http://www.w3.org/2001/XMLSchema#\"},"
+        "\"mode\":\"minimal\",\"limits\":{\"max_artifacts\":8,"
+        "\"max_artifact_bytes\":1000000,\"max_total_bytes\":4000000,"
+        "\"max_archive_bytes\":5000000,\"max_term_depth\":16},\"max_records\":1000},"
+        "\"metadata_path\":\"csvw-metadata.json\","
+        "\"graph_selection\":{\"kind\":\"all\"},\"tables\":[{"
+        "\"name\":\"terms\",\"table_url\":\"https://example.org/catalog/terms.csv\","
+        "\"artifact_path\":\"terms.csv\",\"selector\":{\"type_predicate\":null,"
+        "\"any_types\":[],\"all_types\":[],\"none_types\":[],"
+        "\"iri_prefixes\":[\"https://example.org/\"]},\"identity\":{"
+        "\"name\":\"iri\",\"titles\":{},\"datatype\":{\"id\":null,"
+        "\"base\":\"http://www.w3.org/2001/XMLSchema#anyURI\",\"format\":null,"
+        "\"length\":null,\"min_length\":null,\"max_length\":null,"
+        "\"minimum\":null,\"maximum\":null,\"min_inclusive\":null,"
+        "\"max_inclusive\":null,\"min_exclusive\":null,\"max_exclusive\":null}},"
+        "\"columns\":[{\"name\":\"object\",\"titles\":{},"
+        "\"predicate\":\"https://example.org/p\",\"value_mode\":{\"kind\":\"iri\","
+        "\"datatype\":{\"id\":null,\"base\":\"http://www.w3.org/2001/XMLSchema#anyURI\","
+        "\"format\":null,\"length\":null,\"min_length\":null,\"max_length\":null,"
+        "\"minimum\":null,\"maximum\":null,\"min_inclusive\":null,"
+        "\"max_inclusive\":null,\"min_exclusive\":null,\"max_exclusive\":null}},"
+        "\"cardinality\":{\"kind\":\"one\"},\"required\":false}]}],"
+        "\"execution_limits\":{\"max_rows\":100,\"max_values\":1000,"
+        "\"max_values_per_cell\":10}}}";
+    PurrdfBuffer *terms_projection = NULL;
+    PurrdfBuffer *terms_ledger = NULL;
+    rc = purrdf_project(dataset, "csvw-terms", (const uint8_t *)terms_config,
+                        strlen(terms_config), &terms_projection, &terms_ledger,
+                        &error);
+    CHECK(rc == PURRDF_STATUS_OK && terms_projection != NULL && terms_ledger != NULL,
+          "project csvw-terms");
+    purrdf_buffer_free(terms_ledger);
+    purrdf_buffer_free(terms_projection);
+
     /* SPARQL JSON */
     PurrdfBuffer *json = NULL;
     rc = purrdf_query_json(dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, &json,

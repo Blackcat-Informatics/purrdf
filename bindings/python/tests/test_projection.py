@@ -39,6 +39,7 @@ _TURTLE = b"@prefix ex: <https://example.org/> .\nex:s ex:p ex:o .\n"
 _RUST_ARCHIVE_SHA256 = "656066450fa23c55976f5434840169452c36324b943435e2f7ae55f8e9b6ef4e"
 _REPO = Path(__file__).resolve().parents[3]
 _RESEARCH_FIXTURES = _REPO / "crates/rdf/tests/fixtures/research-objects/carrier"
+_CSVW_TERMS_CONFIG = _REPO / "crates/rdf/tests/fixtures/csvw-terms.json"
 _RESEARCH_PROFILES = (
     "croissant-1.1",
     "ro-crate-1.3",
@@ -208,3 +209,33 @@ def test_all_research_object_profiles_execute_through_the_shared_carrier() -> No
         assert first.archive == second.archive
         lifted = purrdf.lift(first.archive, profile=profile, config=config)
         assert lifted.dataset.quad_count() > 0
+
+
+def test_curated_csvw_terms_projects_and_is_structurally_write_only() -> None:
+    source = b"""@prefix ex: <https://example.org/> .
+ex:term ex:label "Term" ; ex:other ex:value .
+"""
+    config = _CSVW_TERMS_CONFIG.read_bytes()
+    first = purrdf.project(
+        source,
+        format=purrdf.RdfFormat.TURTLE,
+        profile="csvw-terms",
+        config=config,
+    )
+    second = purrdf.project(
+        source,
+        format=purrdf.RdfFormat.TURTLE,
+        profile="csvw-terms",
+        config=config,
+    )
+    assert first.profile == "csvw-terms"
+    assert first.archive == second.archive
+    with tarfile.open(fileobj=io.BytesIO(first.archive), mode="r:") as archive:
+        assert [member.name for member in archive.getmembers()] == [
+            "csvw-metadata.json",
+            "terms.csv",
+        ]
+    assert any(loss.code == "csvw-terms-predicate-unmapped" for loss in first.losses)
+    assert all(loss.location is not None for loss in first.losses)
+    with pytest.raises(ValueError, match="not a bidirectional"):
+        purrdf.lift(first.archive, profile="csvw-terms", config=config)

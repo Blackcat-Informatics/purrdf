@@ -1,0 +1,109 @@
+{
+  "profile": "csvw-terms",
+  "config": {
+    "csvw": {
+      "metadata_base_iri": "https://example.org/catalog/csvw-metadata.json",
+      "context": {
+        "iri": "http://www.w3.org/ns/csvw",
+        "prefixes": {
+          "xsd": "http://www.w3.org/2001/XMLSchema#"
+        }
+      },
+      "table_group_iri": "https://example.org/catalog",
+      "vocabulary": {
+        "csvw_namespace": "http://www.w3.org/ns/csvw#",
+        "rdf_namespace": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+        "rdfs_namespace": "http://www.w3.org/2000/01/rdf-schema#",
+        "xsd_namespace": "http://www.w3.org/2001/XMLSchema#"
+      },
+      "mode": "minimal",
+      "limits": {
+        "max_artifacts": 8,
+        "max_artifact_bytes": 1000000,
+        "max_total_bytes": 4000000,
+        "max_archive_bytes": 5000000,
+        "max_term_depth": 16
+      },
+      "max_records": 1000
+    },
+    "metadata_path": "csvw-metadata.json",
+    "graph_selection": {
+      "kind": "include",
+      "default_graph": true,
+      "named_graphs": []
+    },
+    "tables": [
+      {
+        "name": "terms",
+        "table_url": "https://example.org/catalog/terms.csv",
+        "artifact_path": "terms.csv",
+        "selector": {
+          "type_predicate": null,
+          "any_types": [],
+          "all_types": [],
+          "none_types": [],
+          "iri_prefixes": [
+            "https://example.org/"
+          ]
+        },
+        "identity": {
+          "name": "iri",
+          "titles": {
+            "": [
+              "IRI"
+            ]
+          },
+          "datatype": {
+            "id": null,
+            "base": "http://www.w3.org/2001/XMLSchema#anyURI",
+            "format": null,
+            "length": null,
+            "min_length": null,
+            "max_length": null,
+            "minimum": null,
+            "maximum": null,
+            "min_inclusive": null,
+            "max_inclusive": null,
+            "min_exclusive": null,
+            "max_exclusive": null
+          }
+        },
+        "columns": [
+          {
+            "name": "label",
+            "titles": {},
+            "predicate": "https://example.org/label",
+            "value_mode": {
+              "kind": "literal",
+              "datatype": {
+                "id": null,
+                "base": "http://www.w3.org/2001/XMLSchema#string",
+                "format": null,
+                "length": null,
+                "min_length": null,
+                "max_length": null,
+                "minimum": null,
+                "maximum": null,
+                "min_inclusive": null,
+                "max_inclusive": null,
+                "min_exclusive": null,
+                "max_exclusive": null
+              },
+              "language": null,
+              "direction": null
+            },
+            "cardinality": {
+              "kind": "one"
+            },
+            "required": false
+          }
+        ]
+      }
+    ],
+    "execution_limits": {
+      "max_rows": 100,
+      "max_values": 1000,
+      "max_values_per_cell": 10
+    }
+  }
+}

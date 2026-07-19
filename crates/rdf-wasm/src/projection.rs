@@ -153,6 +153,7 @@ mod tests {
     }"#;
     const RESEARCH_SOURCE: &str =
         include_str!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl");
+    const CSVW_TERMS_CONFIG: &str = include_str!("../../rdf/tests/fixtures/csvw-terms.json");
     const RESEARCH_CONFIGS: &[(&str, &str)] = &[
         (
             "croissant-1.1",
@@ -213,5 +214,24 @@ mod tests {
                 lift_projection(&first.archive, profile, config).expect("lift profile");
             assert!(lifted.take_dataset().is_some());
         }
+    }
+
+    #[test]
+    fn wasm_projection_shim_exposes_write_only_curated_csvw_terms() {
+        let dataset = Dataset::parse(
+            "<https://example.org/term> <https://example.org/label> \"Term\" .\n",
+            "ntriples",
+            None,
+        )
+        .expect("parse terms source");
+        let first = dataset
+            .project("csvw-terms", CSVW_TERMS_CONFIG)
+            .expect("project terms");
+        let second = dataset
+            .project("csvw-terms", CSVW_TERMS_CONFIG)
+            .expect("repeat terms");
+        assert_eq!(first.profile, "csvw-terms");
+        assert_eq!(first.archive, second.archive);
+        assert!("csvw-terms".parse::<LiftProfile>().is_err());
     }
 }
