@@ -288,10 +288,11 @@ purrdf lift --profile <P> --config <PATH> --to <F> [--base <IRI>] [IN] [OUT]
 Lift one canonical archive into a native RDF syntax. The accepted profiles are
 `lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`, `csvw-exact`,
 `croissant-1.1`, `ro-crate-1.3`, `datacite-4.6`, `dcat-3`, and
-`frictionless-data-package-1`. The CLI does not offer curated CSVW terms, OBO
-Graphs, or SKOS as pretend reverse mappings. The reader rejects non-canonical
-USTAR, unexpected members, malformed carrier data, sideband inconsistencies,
-and resource-limit violations.
+`frictionless-data-package-1`. The CLI does not offer curated CSVW terms,
+`okf-terms`, OBO Graphs, or SKOS as pretend reverse mappings;
+`purrdf lift --profile okf-terms` is rejected instead of fabricating one. The
+reader rejects non-canonical USTAR, unexpected members, malformed carrier data,
+sideband inconsistencies, and resource-limit violations.
 
 ```sh
 purrdf --loss-ledger=lift.loss.json lift \
