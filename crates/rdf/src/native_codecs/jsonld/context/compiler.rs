@@ -641,7 +641,10 @@ impl Compiler<'_> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the JSON-LD term-definition algorithm keeps its recursive state explicit"
+    )]
     fn define_term(
         &mut self,
         active: &mut ActiveContext,
@@ -726,7 +729,10 @@ impl Compiler<'_> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the JSON-LD term-definition algorithm keeps its inputs explicit"
+    )]
     fn compile_term_definition(
         &mut self,
         active: &mut ActiveContext,
@@ -1027,7 +1033,10 @@ impl Compiler<'_> {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "derived term mapping shares the compiler's bounded recursive state"
+    )]
     fn derive_term_mapping(
         &mut self,
         active: &mut ActiveContext,
@@ -1092,7 +1101,10 @@ impl Compiler<'_> {
         )))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "IRI expansion keeps every JSON-LD algorithm flag and recursion input explicit"
+    )]
     fn expand_local_iri(
         &mut self,
         active: &mut ActiveContext,
@@ -1191,7 +1203,10 @@ impl Compiler<'_> {
         )))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "type mapping compilation shares the compiler's bounded recursive state"
+    )]
     fn compile_type_mapping(
         &mut self,
         active: &mut ActiveContext,

@@ -770,7 +770,10 @@ impl Builder {
         Ok(result)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "container expansion keeps independent id, type, and index injections explicit"
+    )]
     fn expand_container_node(
         &mut self,
         raw: &JsonValue,

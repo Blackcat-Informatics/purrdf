@@ -7,8 +7,6 @@
 //! latency measurements. It reports allocation count, requested bytes, retained bytes,
 //! peak working bytes, and output bytes for the exact fixtures used by the timed bench.
 
-#![allow(missing_docs)]
-
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
