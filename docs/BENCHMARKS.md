@@ -39,9 +39,10 @@ They live under `crates/*/benches/`:
   live-byte high-water probes over the same deterministic `.purremb` fixtures.
 - `crates/rdf/benches/native_codecs.rs` — text/XML/JSON-LD codec throughput,
   including separate context compilation and expanded/caller/derived paths.
-- `crates/rdf/benches/projections.rs` — RDF-to-LPG mapping, all four LPG
-  carrier writers/readers, exact CSVW write/read, OBO Graphs, SKOS, the shared
-  research-object model, and all five research-object carriers, with
+- `crates/rdf/benches/projections.rs` — RDF-to-LPG mapping, selective versus
+  explicit-all scope, materialized-package versus direct-sink output for all
+  four LPG carriers, carrier readers, exact CSVW write/read, OBO Graphs, SKOS,
+  the shared research-object model, and all five research-object carriers, with
   per-operation allocation observations.
 - `crates/sparql-algebra/benches/tokenize.rs` — SPARQL/Turtle lexer hot path
   (`IRIREF`, string literals, comments).
@@ -86,7 +87,7 @@ Additional benches are run package-by-package, e.g.
 | `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, and a one-million-chunk hierarchy. |
 | `crates/rdf-core/benches/purremb_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for PURREMB fixture construction, verification, and streaming. |
 | `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers; JSON-LD context compilation and expanded/caller/derived modes are reported separately. |
-| `crates/rdf/benches/projections.rs` | Graph, tabular, and research-object mapping/carrier throughput plus allocation counts over deterministic fixtures. |
+| `crates/rdf/benches/projections.rs` | Graph, tabular, and research-object mapping/carrier throughput plus LPG scope and materialized-package/direct-sink allocation comparisons over deterministic fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
 | `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | Planner regression watch: cost-based BGP ordering vs. the retired structural heuristic. |
@@ -273,12 +274,15 @@ cargo bench -p purrdf-shapes --bench schema_surface --locked -- --test
 
 ### Graph, tabular, and research-object projections
 
-`crates/rdf/benches/projections.rs` builds four deterministic `example.org`
-datasets without RNG: a 600-quad general graph, a 600-quad OBO/OWL graph, an
-800-quad SKOS source graph, and a 29-quad research-object intersection. The
-canonical LPG projection contains 408 nodes plus edges. Criterion measures the
-complete mapping/serialization/parser operations; fixture construction and
-strict profile-config parsing stay outside the timed loops. A counting global
+`crates/rdf/benches/projections.rs` builds five deterministic `example.org`
+datasets without RNG: a 600-quad general graph, a 12,000-quad graph split evenly
+across 20 named graphs, a 600-quad OBO/OWL graph, an 800-quad SKOS source graph,
+and a 29-quad research-object intersection. The small canonical LPG projection
+contains 408 nodes plus edges. The large scope comparison either retains all 20
+graphs or scans the same trust boundary while retaining one 600-quad graph.
+Criterion measures complete mapping/serialization/parser operations and all
+four large LPG materialized-package/direct-sink pairs; fixture construction and
+strict profile-config parsing stay outside timed loops. A counting global
 allocator also reports calls and requested bytes for representative single
 operations. Those counts are cumulative allocation traffic, not retained or
 peak memory.
@@ -344,6 +348,47 @@ Representative one-operation allocation traffic from the same run:
 | DCAT 3 read | 3,524 | 435,850 |
 | Frictionless Data Package v1 write | 1,025 | 99,013 |
 | Frictionless Data Package v1 read | 2,183 | 259,794 |
+
+The large LPG scope and sink extension was measured on 2026-07-19 with rustc
+1.97.1, Linux 7.1.4, and the same AMD Ryzen AI MAX+ 395. The fixture contains
+12,000 quads split evenly across 20 named graphs. The selective case scans the
+same 12,000-quad trust boundary and retains one 600-quad graph. The carrier rows
+all project the explicit-all fixture; the sink is an in-process discard sink, so
+the comparison includes encoding and callback dispatch but no storage I/O.
+
+| Operation | Input policy | Time | Throughput over records scanned |
+| --- | --- | ---: | ---: |
+| Canonical LPG, explicit all | 20 graphs / 12,000 quads retained | 142.94 ms | 83.95 Kquad/s |
+| Canonical LPG, selective | 12,000 quads scanned / 600 retained | 5.06 ms | 2.37 Mquad/s |
+| Generic CSV package | explicit all / materialized | 193.85 ms | 61.90 Kquad/s |
+| Generic CSV sink | explicit all / discard sink | 219.62 ms | 54.64 Kquad/s |
+| Neo4j CSV package | explicit all / materialized | 248.10 ms | 48.37 Kquad/s |
+| Neo4j CSV sink | explicit all / discard sink | 218.43 ms | 54.94 Kquad/s |
+| openCypher package | explicit all / materialized | 257.62 ms | 46.58 Kquad/s |
+| openCypher sink | explicit all / discard sink | 244.62 ms | 49.06 Kquad/s |
+| GraphML package | explicit all / materialized | 306.88 ms | 39.10 Kquad/s |
+| GraphML sink | explicit all / discard sink | 246.94 ms | 48.59 Kquad/s |
+
+One-operation cumulative allocation traffic from that run was:
+
+| Mapping scope | Allocation calls | Requested bytes |
+| --- | ---: | ---: |
+| Explicit all (20 graphs) | 1,150,971 | 119,746,351 |
+| Selective (one graph) | 80,928 | 6,991,783 |
+
+| Carrier | Package calls / bytes | Sink calls / bytes | Requested-byte reduction |
+| --- | ---: | ---: | ---: |
+| Generic CSV | 1,801,685 / 197,732,907 | 1,801,762 / 172,580,710 | 12.7% |
+| Neo4j CSV | 1,918,106 / 207,065,143 | 1,918,131 / 181,972,457 | 12.1% |
+| openCypher | 1,849,539 / 229,176,302 | 1,849,751 / 187,501,253 | 18.2% |
+| GraphML | 1,957,891 / 254,192,805 | 1,958,303 / 185,519,770 | 27.0% |
+
+These are allocation-traffic observations, not retained or peak-memory
+measurements. Mapping the bounded canonical graph dominates the call count, and
+chunk/progress dispatch can add small calls. The requested-byte reductions are
+consistent with the direct sink avoiding complete artifact bodies and a USTAR
+buffer; they do not imply that every sink is faster, as the generic CSV timing
+demonstrates.
 
 This baseline makes carrier/parser and allocation regressions visible without
 asserting that any format should outrun another; their grammars and validation

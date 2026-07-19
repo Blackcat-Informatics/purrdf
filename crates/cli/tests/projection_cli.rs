@@ -45,6 +45,7 @@ fn lpg_config() -> &'static [u8] {
   "profile": "lpg-csv",
   "config": {
     "rdf_type": "https://example.org/type",
+    "scope": {"mode": "all"},
     "limits": {
       "max_artifacts": 16,
       "max_artifact_bytes": 1000000,
@@ -52,7 +53,12 @@ fn lpg_config() -> &'static [u8] {
       "max_archive_bytes": 5000000,
       "max_term_depth": 16
     },
-    "max_records": 1000
+    "execution_limits": {
+      "max_input_records": 1000,
+      "max_model_records": 1000,
+      "max_nodes": 1000,
+      "max_edges": 1000
+    }
   }
 }"#
 }
@@ -282,7 +288,7 @@ fn malformed_config_archive_and_double_stdin_fail_closed() {
     let input = write(&dir.path().join("input.ttl"), TURTLE);
     let bad_config = write(
         &dir.path().join("bad.json"),
-        br#"{"profile":"lpg-csv","config":{"rdf_type":"relative"}}"#,
+        br#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"execution_limits":{"max_input_records":1000,"max_model_records":1000,"max_nodes":1000,"max_edges":1000}}}"#,
     );
     let output = run(&[
         "project",
@@ -295,6 +301,7 @@ fn malformed_config_archive_and_double_stdin_fail_closed() {
     ]);
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("configuration JSON"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("scope"));
 
     let config = write(&dir.path().join("config.json"), lpg_config());
     let corrupt = write(&dir.path().join("corrupt.tar"), b"not an archive");

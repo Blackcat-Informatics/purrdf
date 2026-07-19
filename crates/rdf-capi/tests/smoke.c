@@ -98,10 +98,13 @@ int main(void) {
     /* deterministic graph/tabular/research-object carrier surface + explicit ledger */
     const char *projection_config =
         "{\"profile\":\"lpg-csv\",\"config\":{\"rdf_type\":"
-        "\"https://example.org/type\",\"limits\":{\"max_artifacts\":16,"
+        "\"https://example.org/type\",\"scope\":{\"mode\":\"all\"},"
+        "\"limits\":{\"max_artifacts\":16,"
         "\"max_artifact_bytes\":1000000,\"max_total_bytes\":4000000,"
         "\"max_archive_bytes\":5000000,\"max_term_depth\":16},"
-        "\"max_records\":1000}}";
+        "\"execution_limits\":{\"max_input_records\":1000,"
+        "\"max_model_records\":1000,\"max_nodes\":1000,"
+        "\"max_edges\":1000}}}";
     PurrdfBuffer *projection = NULL;
     PurrdfBuffer *project_ledger = NULL;
     rc = purrdf_project(dataset, "lpg-csv",

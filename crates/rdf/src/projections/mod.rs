@@ -51,13 +51,14 @@ mod lpg;
 mod obo_graphs;
 mod package;
 mod research_object;
+mod sink;
 mod skos;
 mod term;
 mod util;
 
 pub use carrier::{
     LiftProfile, ProjectionArchive, ProjectionConfig, ProjectionLift, ProjectionProfile,
-    lift_archive, project_archive,
+    lift_archive, project_archive, project_lpg_artifacts_to_sink,
 };
 pub use csvw::{
     CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig, CsvwContext, CsvwDatatype,
@@ -70,11 +71,16 @@ pub use csvw::{
 };
 pub use error::{ProjectionError, ProjectionErrorKind};
 pub use lpg::{
-    LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgGraphContext, LpgLabel, LpgLiftOutcome,
-    LpgNode, LpgPackageProjection, LpgProjection, LpgProperty, LpgPropertyAtom, LpgRdfQuad,
-    LpgReifier, lift_lpg, project_lpg, project_lpg_csv, project_lpg_cypher, project_lpg_graphml,
-    project_neo4j_csv, read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv,
-    write_lpg_csv, write_lpg_cypher, write_lpg_graphml, write_neo4j_csv,
+    LpgAnnotation, LpgConfig, LpgEdge, LpgExecutionLimits, LpgGraph, LpgGraphContext,
+    LpgIriSelection, LpgLabel, LpgLiftOutcome, LpgNamedGraphSelection, LpgNode,
+    LpgPackageProjection, LpgProgress, LpgProgressObserver, LpgProgressPhase, LpgProjection,
+    LpgProjectionReport, LpgProperty, LpgPropertyAtom, LpgRdfQuad, LpgReifier, LpgScope,
+    LpgStreamProjection, lift_lpg, project_lpg, project_lpg_csv, project_lpg_csv_to_sink,
+    project_lpg_cypher, project_lpg_cypher_to_sink, project_lpg_graphml,
+    project_lpg_graphml_to_sink, project_lpg_with_progress, project_neo4j_csv,
+    project_neo4j_csv_to_sink, read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv,
+    write_lpg_csv, write_lpg_csv_to_sink, write_lpg_cypher, write_lpg_cypher_to_sink,
+    write_lpg_graphml, write_lpg_graphml_to_sink, write_neo4j_csv, write_neo4j_csv_to_sink,
 };
 pub use obo_graphs::{
     OboDomainRangeAxiom, OboEdge, OboEquivalentNodesSet, OboExistentialRestriction, OboGraph,
@@ -98,6 +104,7 @@ pub use research_object::{
     project_dcat, project_frictionless, project_research_object, project_ro_crate, read_croissant,
     read_datacite, read_dcat, read_frictionless, read_ro_crate,
 };
+pub use sink::{ProjectionArtifactSink, ProjectionPackageSink};
 pub use skos::{
     SkosClassRoles, SkosConfig, SkosDocumentationRoles, SkosGraphSelection, SkosLabelRoles,
     SkosProjection, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles, project_skos,

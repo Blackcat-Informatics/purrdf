@@ -22,11 +22,13 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // headroom. The five strict bidirectional research-object codecs are the
 // capability responsible for the earlier reviewed increase. The configured
 // JSON-LD context engine is now also public in wasm (strict options/registry
-// decoding plus reusable compiled contexts), which is the capability responsible
-// for this reviewed increase. Measured: gzipped tarball 2_265_551 bytes;
-// unpacked 6_575_869 bytes. Both ceilings retain about 3% headroom.
-const MAX_TARBALL_BYTES = 2_335_000;
-const MAX_UNPACKED_BYTES = 6_780_000;
+// decoding plus reusable compiled contexts). The mandatory scoped/limited LPG
+// mapper and shared transactional carrier encoders are the capabilities
+// responsible for this reviewed increase. CI on Node 24/npm 11 measured a
+// 2_340_892-byte tarball; Node 26/npm 12 measured 6_753_627 unpacked bytes.
+// Both ceilings retain about 3% headroom across those supported packagers.
+const MAX_TARBALL_BYTES = 2_415_000;
+const MAX_UNPACKED_BYTES = 6_960_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TIMEOUT_MS = 180_000;
 const SMOKE_TIMEOUT_MS = 60_000;

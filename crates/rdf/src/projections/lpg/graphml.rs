@@ -4,18 +4,26 @@
 //! Deterministic GraphML 1.0 carrier for canonical LPG.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io;
 
 use purrdf_core::DatasetView;
 use roxmltree::{Document, Node};
 
-use super::super::{ProjectionError, ProjectionPackage, escape_xml_attribute, escape_xml_text};
+use super::super::{
+    ProjectionArtifactSink, ProjectionError, ProjectionPackage, ProjectionPackageSink,
+    escape_xml_attribute, escape_xml_text,
+};
 use super::carrier_util::{
-    BoundedText, hex_decode, json_string, read_manifest, require_canonical_package,
+    BoundedText, LpgTextWriter, hex_decode, json_string, read_manifest, require_canonical_package,
     required_artifact, validate_package_bounds, write_manifest,
 };
 use super::csv::{LpgPackageProjection, native_labels, native_property_cell, property_token};
-use super::mapping::{LpgProjection, project_lpg};
+use super::mapping::{LpgProjection, project_lpg, project_lpg_with_progress};
 use super::model::{LpgConfig, LpgGraph};
+use super::stream::{
+    IgnoreProgress, LpgProgressObserver, LpgProjectionReport, LpgSinkSession, LpgStreamProjection,
+    graph_report,
+};
 
 const PROFILE: &str = "purrdf-lpg-graphml-1.0";
 const MANIFEST_PATH: &str = "graphml/manifest.json";
@@ -55,11 +63,28 @@ pub fn write_lpg_graphml(
     graph: &LpgGraph,
     config: &LpgConfig,
 ) -> Result<ProjectionPackage, ProjectionError> {
-    graph.validate(config)?;
-    let mut package = ProjectionPackage::new(config.limits());
-    package.insert(GRAPHML_PATH, render_graphml(graph, config)?)?;
-    package.insert(MANIFEST_PATH, write_manifest(PROFILE, graph, config)?)?;
-    Ok(package)
+    let mut sink = ProjectionPackageSink::new(config.limits());
+    write_lpg_graphml_to_sink(graph, config, &mut sink, &mut IgnoreProgress)?;
+    sink.into_package()
+}
+
+/// Encode canonical GraphML artifacts incrementally into a transactional sink.
+///
+/// # Errors
+///
+/// Returns a typed model, sink, observer, XML, serialization, or resource-limit
+/// failure. The sink transaction is aborted on every failure.
+pub fn write_lpg_graphml_to_sink<S, O>(
+    graph: &LpgGraph,
+    config: &LpgConfig,
+    sink: &mut S,
+    observer: &mut O,
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    stream_lpg_graphml(graph, config, sink, observer, graph_report(graph)?)
 }
 
 /// Project any RDF dataset view directly into deterministic GraphML 1.0.
@@ -71,13 +96,68 @@ pub fn project_lpg_graphml<D: DatasetView>(
     view: &D,
     config: &LpgConfig,
 ) -> Result<LpgPackageProjection, ProjectionError> {
-    let LpgProjection { graph, loss_ledger } = project_lpg(view, config)?;
+    let LpgProjection {
+        graph,
+        loss_ledger,
+        report,
+    } = project_lpg(view, config)?;
     let package = write_lpg_graphml(&graph, config)?;
     Ok(LpgPackageProjection {
         graph,
         package,
         loss_ledger,
+        report,
     })
+}
+
+/// Project RDF directly into incrementally emitted GraphML artifacts.
+///
+/// # Errors
+///
+/// Returns a typed mapping, sink, observer, XML, serialization, or resource-limit
+/// failure. The sink transaction is aborted on every failure.
+pub fn project_lpg_graphml_to_sink<D, S, O>(
+    view: &D,
+    config: &LpgConfig,
+    sink: &mut S,
+    observer: &mut O,
+) -> Result<LpgStreamProjection, ProjectionError>
+where
+    D: DatasetView,
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    let LpgProjection {
+        graph,
+        loss_ledger,
+        report,
+    } = project_lpg_with_progress(view, config, observer)?;
+    stream_lpg_graphml(&graph, config, sink, observer, report)?;
+    Ok(LpgStreamProjection {
+        loss_ledger,
+        report,
+    })
+}
+
+fn stream_lpg_graphml<S, O>(
+    graph: &LpgGraph,
+    config: &LpgConfig,
+    sink: &mut S,
+    observer: &mut O,
+    report: LpgProjectionReport,
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    graph.validate(config)?;
+    let mut session = LpgSinkSession::new(sink, observer, config.limits(), report)?;
+    session.write_artifact(GRAPHML_PATH, |output| {
+        render_graphml_into(output, graph, config)
+    })?;
+    let manifest = write_manifest(PROFILE, graph, config)?;
+    session.write_artifact(MANIFEST_PATH, |output| output.write_bytes(&manifest))?;
+    session.commit()
 }
 
 /// Decode the strict GraphML 1.0 profile emitted by PurRDF.
@@ -268,6 +348,15 @@ pub fn read_lpg_graphml(
 
 fn render_graphml(graph: &LpgGraph, config: &LpgConfig) -> Result<Vec<u8>, ProjectionError> {
     let mut output = BoundedText::new(config.limits(), "GraphML XML", GRAPHML_PATH);
+    render_graphml_into(&mut output, graph, config)?;
+    Ok(output.finish())
+}
+
+fn render_graphml_into<W: LpgTextWriter + ?Sized>(
+    output: &mut W,
+    graph: &LpgGraph,
+    config: &LpgConfig,
+) -> Result<(), ProjectionError> {
     output.push("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")?;
     output.push(&format!(
         "<graphml xmlns=\"{GRAPHML_NS}\" xmlns:xsi=\"{XSI_NS}\" xsi:schemaLocation=\"{SCHEMA_LOCATION}\">\n"
@@ -281,9 +370,10 @@ fn render_graphml(graph: &LpgGraph, config: &LpgConfig) -> Result<Vec<u8>, Proje
         ))?;
     }
     output.push("  <graph id=\"G\" edgedefault=\"directed\">\n")?;
-    let graph_json = graph.to_canonical_json(config)?;
     output.push(&format!("    <data key=\"{GRAPH_JSON}\">"))?;
-    output.push_hex(&graph_json)?;
+    serde_json::to_writer(HexWriter(output), graph).map_err(|error| {
+        ProjectionError::integrity(format!("serialize GraphML LPG JSON payload: {error}"))
+    })?;
     output.push("</data>\n")?;
     for node in &graph.nodes {
         output.push(&format!(
@@ -291,22 +381,22 @@ fn render_graphml(graph: &LpgGraph, config: &LpgConfig) -> Result<Vec<u8>, Proje
             escape_xml_attribute(&node.id)?
         ))?;
         push_hex_data(
-            &mut output,
+            output,
             NODE_IDENTITY,
             json_string(&node.identity, config, "GraphML node identity")?.as_bytes(),
         )?;
         push_hex_data(
-            &mut output,
+            output,
             NODE_LABELS,
             json_string(&node.labels, config, "GraphML node labels")?.as_bytes(),
         )?;
         push_hex_data(
-            &mut output,
+            output,
             NODE_PROPERTIES,
             json_string(&node.properties, config, "GraphML node properties")?.as_bytes(),
         )?;
         push_hex_data(
-            &mut output,
+            output,
             NODE_NATIVE_LABELS,
             json_string(
                 &native_labels(&node.labels)?,
@@ -328,7 +418,7 @@ fn render_graphml(graph: &LpgGraph, config: &LpgConfig) -> Result<Vec<u8>, Proje
         }
         for (token, iri) in properties {
             let value = native_property_cell(&node.properties, iri, config)?;
-            push_hex_data(&mut output, &token, value.as_bytes())?;
+            push_hex_data(output, &token, value.as_bytes())?;
         }
         output.push("    </node>\n")?;
     }
@@ -344,14 +434,14 @@ fn render_graphml(graph: &LpgGraph, config: &LpgConfig) -> Result<Vec<u8>, Proje
             escape_xml_text(&edge.edge_type)?
         ))?;
         push_hex_data(
-            &mut output,
+            output,
             EDGE_RDF,
             json_string(&edge.rdf, config, "GraphML edge RDF sideband")?.as_bytes(),
         )?;
         output.push("    </edge>\n")?;
     }
     output.push("  </graph>\n</graphml>\n")?;
-    Ok(output.finish())
+    Ok(())
 }
 
 fn graphml_keys(graph: &LpgGraph) -> Result<Vec<KeyDecl>, ProjectionError> {
@@ -391,13 +481,32 @@ fn key(id: &str, target: &str, name: &str) -> KeyDecl {
     }
 }
 
-fn push_hex_data(output: &mut BoundedText, key: &str, bytes: &[u8]) -> Result<(), ProjectionError> {
+fn push_hex_data<W: LpgTextWriter + ?Sized>(
+    output: &mut W,
+    key: &str,
+    bytes: &[u8],
+) -> Result<(), ProjectionError> {
     output.push(&format!(
         "      <data key=\"{}\">",
         escape_xml_attribute(key)?
     ))?;
     output.push_hex(bytes)?;
     output.push("</data>\n")
+}
+
+struct HexWriter<'a, W: ?Sized>(&'a mut W);
+
+impl<W: LpgTextWriter + ?Sized> io::Write for HexWriter<'_, W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.0
+            .push_hex(buffer)
+            .map(|()| buffer.len())
+            .map_err(|error| io::Error::other(error.to_string()))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn require_element(node: Node<'_, '_>, local: &str) -> Result<(), ProjectionError> {
@@ -452,6 +561,7 @@ fn element_text<'a>(node: Node<'a, '_>) -> Result<&'a str, ProjectionError> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::{LpgExecutionLimits, LpgScope};
     use std::sync::Arc;
 
     use purrdf_core::{
@@ -467,8 +577,10 @@ mod tests {
     fn test_config(max_records: usize) -> LpgConfig {
         LpgConfig::new(
             TYPE,
+            LpgScope::all(),
             ProjectionLimits::new(32, 3_000_000, 6_000_000, 8_000_000, 16).expect("limits"),
-            max_records,
+            LpgExecutionLimits::new(max_records, max_records, max_records, max_records)
+                .expect("execution limits"),
         )
         .expect("config")
     }

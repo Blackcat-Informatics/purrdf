@@ -5,6 +5,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import json
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -15,6 +18,7 @@ _CONFIG = """{
   "profile": "lpg-csv",
   "config": {
     "rdf_type": "https://example.org/type",
+    "scope": {"mode": "all"},
     "limits": {
       "max_artifacts": 16,
       "max_artifact_bytes": 1000000,
@@ -22,7 +26,12 @@ _CONFIG = """{
       "max_archive_bytes": 5000000,
       "max_term_depth": 16
     },
-    "max_records": 1000
+    "execution_limits": {
+      "max_input_records": 1000,
+      "max_model_records": 1000,
+      "max_nodes": 1000,
+      "max_edges": 1000
+    }
   }
 }"""
 
@@ -68,6 +77,98 @@ def test_project_matches_rust_bytes_and_returns_immutable_structured_losses() ->
         package.profile = "other"
     with pytest.raises(AttributeError):
         edge_loss.code = "other"
+
+
+def test_project_artifacts_streams_archive_identical_chunks_and_typed_progress() -> None:
+    events: list[tuple[str, str | None, bytes]] = []
+    artifacts: dict[str, bytearray] = {}
+    progress: list[purrdf.ProjectionProgress] = []
+
+    def accept_artifact(event: str, path: str | None, chunk: bytes) -> None:
+        events.append((event, path, chunk))
+        if event == "begin-artifact":
+            assert path is not None
+            artifacts[path] = bytearray()
+        elif event == "chunk":
+            assert path is not None
+            artifacts[path].extend(chunk)
+
+    streamed = purrdf.project_artifacts(
+        _TURTLE,
+        format=purrdf.RdfFormat.TURTLE,
+        profile="lpg-csv",
+        config=_CONFIG,
+        artifact_callback=accept_artifact,
+        progress_callback=progress.append,
+    )
+    materialized = purrdf.project(
+        _TURTLE,
+        format=purrdf.RdfFormat.TURTLE,
+        profile="lpg-csv",
+        config=_CONFIG,
+    )
+    with tarfile.open(fileobj=io.BytesIO(materialized.archive), mode="r:") as archive:
+        expected = {
+            member.name: archive.extractfile(member).read()
+            for member in archive.getmembers()
+        }
+
+    assert {path: bytes(body) for path, body in artifacts.items()} == expected
+    assert events[0] == ("begin-package", None, b"")
+    assert events[-1] == ("commit-package", None, b"")
+    assert [path for event, path, _ in events if event == "begin-artifact"] == sorted(
+        artifacts
+    )
+    assert streamed.profile == "lpg-csv"
+    assert streamed.input_records == 1
+    assert streamed.nodes == 2
+    assert streamed.edges == 1
+    assert streamed.model_records > 0
+    assert streamed.losses
+    assert progress[0].phase == "scanning"
+    assert progress[-1].phase == "complete"
+    assert all(
+        before.input_records <= after.input_records
+        and before.model_records <= after.model_records
+        and before.nodes <= after.nodes
+        and before.edges <= after.edges
+        and before.artifacts <= after.artifacts
+        and before.bytes <= after.bytes
+        for before, after in zip(progress, progress[1:], strict=False)
+    )
+    with pytest.raises(AttributeError):
+        progress[-1].phase = "other"
+
+
+def test_project_artifacts_aborts_and_preserves_callback_errors() -> None:
+    events: list[str] = []
+
+    def reject_chunk(event: str, _path: str | None, _chunk: bytes) -> None:
+        events.append(event)
+        if event == "chunk":
+            raise RuntimeError("injected artifact callback failure")
+
+    with pytest.raises(RuntimeError, match="injected artifact callback failure"):
+        purrdf.project_artifacts(
+            _TURTLE,
+            format=purrdf.RdfFormat.TURTLE,
+            profile="lpg-csv",
+            config=_CONFIG,
+            artifact_callback=reject_chunk,
+        )
+    assert events[-1] == "abort-package"
+    assert "commit-package" not in events
+
+    missing_scope = json.loads(_CONFIG)
+    del missing_scope["config"]["scope"]
+    with pytest.raises(ValueError, match="missing field.*scope"):
+        purrdf.project_artifacts(
+            _TURTLE,
+            format=purrdf.RdfFormat.TURTLE,
+            profile="lpg-csv",
+            config=json.dumps(missing_scope),
+            artifact_callback=lambda *_args: None,
+        )
 
 
 def test_lift_returns_a_frozen_dataset_and_write_only_profiles_fail_typed() -> None:

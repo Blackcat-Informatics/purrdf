@@ -4,8 +4,8 @@
 //! A downstream reaches the complete projection carrier through `purrdf` alone.
 
 use purrdf::{
-    LiftProfile, LpgConfig, ProjectionConfig, ProjectionLimits, ProjectionProfile,
-    datasets_isomorphic, lift_archive, parse_dataset, project_archive,
+    LiftProfile, LpgConfig, LpgExecutionLimits, LpgScope, ProjectionConfig, ProjectionLimits,
+    ProjectionProfile, datasets_isomorphic, lift_archive, parse_dataset, project_archive,
 };
 
 #[test]
@@ -19,7 +19,13 @@ fn umbrella_facade_projects_and_lifts_without_subcrate_imports() {
     let limits =
         ProjectionLimits::new(16, 1_000_000, 4_000_000, 5_000_000, 16).expect("portable limits");
     let config = ProjectionConfig::LpgCsv(
-        LpgConfig::new("https://example.org/type", limits, 1_000).expect("LPG config"),
+        LpgConfig::new(
+            "https://example.org/type",
+            LpgScope::all(),
+            limits,
+            LpgExecutionLimits::new(1_000, 1_000, 1_000, 1_000).expect("execution limits"),
+        )
+        .expect("LPG config"),
     );
 
     let first =

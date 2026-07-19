@@ -25,6 +25,7 @@ use super::model::{
     LpgRdfQuad, LpgReifier, annotation_identifier, collect_node_terms, edge_identifier,
     node_identifier, property_atom, reifier_identifier, statement_identifier,
 };
+use super::stream::{IgnoreProgress, LpgProgressObserver, LpgProjectionReport, MappingProgress};
 
 /// Result of RDF→LPG projection.
 #[derive(Debug, Clone)]
@@ -33,6 +34,8 @@ pub struct LpgProjection {
     pub graph: LpgGraph,
     /// Always-computed, located semantic-lowering ledger.
     pub loss_ledger: LossLedger,
+    /// Exact scanned/model/node/edge counters for this projection.
+    pub report: LpgProjectionReport,
 }
 
 /// Result of canonical LPG→RDF lifting.
@@ -58,52 +61,120 @@ pub fn project_lpg<D: DatasetView>(
     view: &D,
     config: &LpgConfig,
 ) -> Result<LpgProjection, ProjectionError> {
-    let mut budget = RecordBudget::new(config.max_records());
+    project_lpg_with_progress(view, config, &mut IgnoreProgress)
+}
+
+/// Project an RDF dataset view while reporting monotonic mapping progress.
+///
+/// # Errors
+///
+/// Returns the same typed mapping failures as [`project_lpg`]. An observer error
+/// also fails the operation immediately and produces a final best-effort aborted
+/// snapshot.
+pub fn project_lpg_with_progress<D, O>(
+    view: &D,
+    config: &LpgConfig,
+    observer: &mut O,
+) -> Result<LpgProjection, ProjectionError>
+where
+    D: DatasetView,
+    O: LpgProgressObserver,
+{
+    let mut progress = MappingProgress::new(observer)?;
+    let result = project_lpg_inner(view, config, &mut progress);
+    if result.is_err() {
+        progress.abort();
+    }
+    result
+}
+
+fn project_lpg_inner<D, O>(
+    view: &D,
+    config: &LpgConfig,
+    progress: &mut MappingProgress<'_, O>,
+) -> Result<LpgProjection, ProjectionError>
+where
+    D: DatasetView,
+    O: LpgProgressObserver,
+{
+    let execution_limits = config.execution_limits();
+    let mut input_budget = RecordBudget::new(execution_limits.max_input_records());
+    let mut model_budget = RecordBudget::new(execution_limits.max_model_records());
     let mut cache = BTreeMap::new();
     let mut named_graphs = BTreeSet::new();
+    let mut declared_graphs = BTreeSet::new();
 
     for graph in view.named_graphs() {
+        input_budget.consume("RDF input")?;
+        progress.scanned()?;
         let term = resolve_term(view, graph, config.limits(), &mut cache)?;
-        if !named_graphs.insert(term) {
+        if !declared_graphs.insert(term.clone()) {
             return Err(ProjectionError::integrity(
                 "dataset view exposed a duplicate named graph declaration",
             ));
         }
-        budget.consume("named graph declaration")?;
+        if config.scope().includes_named_graph(&term) {
+            insert_named_graph(&mut named_graphs, term, &mut model_budget)?;
+        }
+    }
+
+    // Node-type selection is defined over graph-selected rdf:type statements, not
+    // over the predicate-filtered output. DatasetView iterators are repeatable, so
+    // this value-indexed pass avoids backend-local ids and preserves deterministic
+    // behavior without constructing a temporary dataset.
+    let mut node_types: BTreeMap<ProjectionTerm, BTreeSet<String>> = BTreeMap::new();
+    for quad in view.quads() {
+        input_budget.consume("RDF input")?;
+        progress.scanned()?;
+        if context_in_scope(view, quad.g, config, &mut cache)?.is_none() {
+            continue;
+        }
+        let predicate = resolve_predicate(view, quad.p, config.limits(), &mut cache)?;
+        if predicate != config.rdf_type() {
+            continue;
+        }
+        let object = resolve_term(view, quad.o, config.limits(), &mut cache)?;
+        let ProjectionTerm::Iri { value } = object else {
+            continue;
+        };
+        let subject = resolve_term(view, quad.s, config.limits(), &mut cache)?;
+        node_types.entry(subject).or_default().insert(value);
     }
 
     let mut quads = Vec::new();
     for quad in view.quads() {
-        budget.consume("RDF statement")?;
-        let subject = resolve_term(view, quad.s, config.limits(), &mut cache)?;
-        let predicate = resolve_term(view, quad.p, config.limits(), &mut cache)?;
-        let ProjectionTerm::Iri { value: predicate } = predicate else {
-            return Err(ProjectionError::integrity(
-                "RDF view exposed a non-IRI predicate",
-            ));
+        let Some(graph) = context_in_scope(view, quad.g, config, &mut cache)? else {
+            continue;
         };
+        let predicate = resolve_predicate(view, quad.p, config.limits(), &mut cache)?;
+        let subject = resolve_term(view, quad.s, config.limits(), &mut cache)?;
         let object = resolve_term(view, quad.o, config.limits(), &mut cache)?;
-        let graph = context_from_id(
-            view,
-            quad.g,
-            config.limits(),
-            &mut cache,
-            &mut named_graphs,
-            &mut budget,
-        )?;
-        quads.push(LpgRdfQuad {
+        let candidate = LpgRdfQuad {
             subject,
             predicate,
             object,
             graph,
-        });
+        };
+        if !quad_in_scope(&candidate, config, &node_types) {
+            continue;
+        }
+        if let LpgGraphContext::Named { name } = &candidate.graph {
+            insert_named_graph(&mut named_graphs, name.clone(), &mut model_budget)?;
+        }
+        model_budget.consume("LPG model")?;
+        quads.push(candidate);
     }
     quads.sort();
     reject_duplicates(&quads, "RDF statements")?;
 
     let mut reifiers = Vec::new();
+    let mut selected_reifiers = BTreeSet::new();
     for quad in view.reifier_quads() {
-        budget.consume("RDF reifier")?;
+        input_budget.consume("RDF input")?;
+        progress.scanned()?;
+        let Some(graph) = context_in_scope(view, quad.g, config, &mut cache)? else {
+            continue;
+        };
         let predicate = resolve_term(view, quad.p, config.limits(), &mut cache)?;
         if predicate
             != (ProjectionTerm::Iri {
@@ -116,21 +187,21 @@ pub fn project_lpg<D: DatasetView>(
         }
         let reifier = resolve_term(view, quad.s, config.limits(), &mut cache)?;
         let statement = resolve_term(view, quad.o, config.limits(), &mut cache)?;
-        let graph = context_from_id(
-            view,
-            quad.g,
-            config.limits(),
-            &mut cache,
-            &mut named_graphs,
-            &mut budget,
-        )?;
+        if !quad_in_scope(&reified_quad(&statement, &graph)?, config, &node_types) {
+            continue;
+        }
+        if let LpgGraphContext::Named { name } = &graph {
+            insert_named_graph(&mut named_graphs, name.clone(), &mut model_budget)?;
+        }
+        model_budget.consume("LPG model")?;
         let mut row = LpgReifier {
             id: String::new(),
-            reifier,
+            reifier: reifier.clone(),
             statement,
-            graph,
+            graph: graph.clone(),
         };
         row.id = reifier_identifier(&row, config.limits())?;
+        selected_reifiers.insert((reifier, graph));
         reifiers.push(row);
     }
     reifiers.sort_by(|left, right| left.id.cmp(&right.id));
@@ -138,23 +209,24 @@ pub fn project_lpg<D: DatasetView>(
 
     let mut annotations = Vec::new();
     for quad in view.annotation_quads() {
-        budget.consume("RDF annotation")?;
-        let reifier = resolve_term(view, quad.s, config.limits(), &mut cache)?;
-        let predicate = resolve_term(view, quad.p, config.limits(), &mut cache)?;
-        let ProjectionTerm::Iri { value: predicate } = predicate else {
-            return Err(ProjectionError::integrity(
-                "RDF view exposed a non-IRI annotation predicate",
-            ));
+        input_budget.consume("RDF input")?;
+        progress.scanned()?;
+        let Some(graph) = context_in_scope(view, quad.g, config, &mut cache)? else {
+            continue;
         };
+        let reifier = resolve_term(view, quad.s, config.limits(), &mut cache)?;
+        if !selected_reifiers.contains(&(reifier.clone(), graph.clone())) {
+            continue;
+        }
+        let predicate = resolve_predicate(view, quad.p, config.limits(), &mut cache)?;
+        if !config.scope().includes_predicate(&predicate) {
+            continue;
+        }
         let object = resolve_term(view, quad.o, config.limits(), &mut cache)?;
-        let graph = context_from_id(
-            view,
-            quad.g,
-            config.limits(),
-            &mut cache,
-            &mut named_graphs,
-            &mut budget,
-        )?;
+        if let LpgGraphContext::Named { name } = &graph {
+            insert_named_graph(&mut named_graphs, name.clone(), &mut model_budget)?;
+        }
+        model_budget.consume("LPG model")?;
         let mut row = LpgAnnotation {
             id: String::new(),
             reifier,
@@ -185,10 +257,18 @@ pub fn project_lpg<D: DatasetView>(
         collect_node_terms(&row.object, &mut node_terms);
     }
 
+    if node_terms.len() > execution_limits.max_nodes() {
+        return Err(ProjectionError::limit(format!(
+            "LPG projection requires {} nodes; limit is {}",
+            node_terms.len(),
+            execution_limits.max_nodes()
+        )));
+    }
     let mut term_to_node = BTreeMap::new();
     let mut nodes = BTreeMap::new();
     for term in node_terms {
-        budget.consume("LPG node")?;
+        model_budget.consume("LPG model")?;
+        progress.node()?;
         let id = node_identifier(&term, config.limits())?;
         if let Some(existing) = nodes.get(&id) {
             let existing: &LpgNode = existing;
@@ -242,6 +322,13 @@ pub fn project_lpg<D: DatasetView>(
                     rdf: quad.clone(),
                 });
         } else {
+            if edges.len() >= execution_limits.max_edges() {
+                return Err(ProjectionError::limit(format!(
+                    "LPG projection exceeds the {}-edge limit",
+                    execution_limits.max_edges()
+                )));
+            }
+            progress.edge()?;
             let target = term_to_node.get(&quad.object).ok_or_else(|| {
                 ProjectionError::integrity("RDF statement object has no canonical LPG node")
             })?;
@@ -352,9 +439,13 @@ pub fn project_lpg<D: DatasetView>(
     }
     ensure_sound(&ledger, "rdf-1.2-dataset", "lpg")?;
 
+    progress.set_model_records(model_budget.used);
+    let report = progress.finish()?;
+
     Ok(LpgProjection {
         graph,
         loss_ledger: ledger,
+        report,
     })
 }
 
@@ -505,20 +596,88 @@ fn resolve_term<D: DatasetView>(
     Ok(term)
 }
 
-fn context_from_id<D: DatasetView>(
+fn resolve_predicate<D: DatasetView>(
     view: &D,
-    id: Option<D::Id>,
+    id: D::Id,
     limits: ProjectionLimits,
     cache: &mut BTreeMap<D::Id, ProjectionTerm>,
-    named_graphs: &mut BTreeSet<ProjectionTerm>,
-    budget: &mut RecordBudget,
-) -> Result<LpgGraphContext, ProjectionError> {
-    let Some(id) = id else {
-        return Ok(LpgGraphContext::Default);
+) -> Result<String, ProjectionError> {
+    let predicate = resolve_term(view, id, limits, cache)?;
+    let ProjectionTerm::Iri { value } = predicate else {
+        return Err(ProjectionError::integrity(
+            "RDF view exposed a non-IRI predicate",
+        ));
     };
-    let name = resolve_term(view, id, limits, cache)?;
-    insert_named_graph(named_graphs, name.clone(), budget)?;
-    Ok(LpgGraphContext::named(name))
+    Ok(value)
+}
+
+fn context_in_scope<D: DatasetView>(
+    view: &D,
+    id: Option<D::Id>,
+    config: &LpgConfig,
+    cache: &mut BTreeMap<D::Id, ProjectionTerm>,
+) -> Result<Option<LpgGraphContext>, ProjectionError> {
+    let Some(id) = id else {
+        return Ok(config
+            .scope()
+            .includes_default_graph()
+            .then_some(LpgGraphContext::Default));
+    };
+    let name = resolve_term(view, id, config.limits(), cache)?;
+    Ok(config
+        .scope()
+        .includes_named_graph(&name)
+        .then(|| LpgGraphContext::named(name)))
+}
+
+fn reified_quad(
+    statement: &ProjectionTerm,
+    graph: &LpgGraphContext,
+) -> Result<LpgRdfQuad, ProjectionError> {
+    let ProjectionTerm::Triple {
+        subject,
+        predicate,
+        object,
+    } = statement
+    else {
+        return Err(ProjectionError::integrity(
+            "RDF reifier object is not an RDF 1.2 triple term",
+        ));
+    };
+    let ProjectionTerm::Iri { value: predicate } = predicate.as_ref() else {
+        return Err(ProjectionError::integrity(
+            "RDF reifier triple has a non-IRI predicate",
+        ));
+    };
+    Ok(LpgRdfQuad {
+        subject: subject.as_ref().clone(),
+        predicate: predicate.clone(),
+        object: object.as_ref().clone(),
+        graph: graph.clone(),
+    })
+}
+
+fn quad_in_scope(
+    quad: &LpgRdfQuad,
+    config: &LpgConfig,
+    node_types: &BTreeMap<ProjectionTerm, BTreeSet<String>>,
+) -> bool {
+    if !config.scope().includes_predicate(&quad.predicate)
+        || !config
+            .scope()
+            .includes_node_types(node_types.get(&quad.subject))
+    {
+        return false;
+    }
+    let is_label =
+        quad.predicate == config.rdf_type() && matches!(quad.object, ProjectionTerm::Iri { .. });
+    let is_property = matches!(quad.object, ProjectionTerm::Literal { .. });
+    is_label
+        || is_property
+        || (config.scope().includes_edge_type(&quad.predicate)
+            && config
+                .scope()
+                .includes_node_types(node_types.get(&quad.object)))
 }
 
 fn insert_named_graph(
@@ -692,6 +851,9 @@ fn intern_term(
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::{
+        LpgExecutionLimits, LpgIriSelection, LpgNamedGraphSelection, LpgScope,
+    };
     use proptest::prelude::*;
     use purrdf_core::loss::{
         LOSS_LPG_ANNOTATION_SIDEBAND, LOSS_LPG_BLANK_SCOPE_SIDEBAND, LOSS_LPG_EDGE_ID_DROPPED,
@@ -710,10 +872,19 @@ mod tests {
     const TYPE: &str = "http://example.org/type";
 
     fn config(max_records: usize) -> LpgConfig {
+        config_with_limits(
+            LpgScope::all(),
+            LpgExecutionLimits::new(max_records, max_records, max_records, max_records)
+                .expect("execution limits"),
+        )
+    }
+
+    fn config_with_limits(scope: LpgScope, execution_limits: LpgExecutionLimits) -> LpgConfig {
         LpgConfig::new(
             TYPE,
+            scope,
             ProjectionLimits::new(64, 4_000_000, 8_000_000, 9_000_000, 16).expect("limits"),
-            max_records,
+            execution_limits,
         )
         .expect("config")
     }
@@ -839,6 +1010,165 @@ mod tests {
         assert_eq!(
             first_projection.loss_ledger.render_json(),
             packed_projection.loss_ledger.render_json()
+        );
+    }
+
+    #[test]
+    fn selective_scope_closes_graph_predicate_type_edge_and_rdf_star_rows() {
+        const CUSTOMER: &str = "http://example.org/Customer";
+        const INTERNAL: &str = "http://example.org/Internal";
+        const NAME: &str = "http://example.org/name";
+        const KNOWS: &str = "http://example.org/knows";
+        const AUDIT: &str = "http://example.org/audit";
+        const CONFIDENCE: &str = "http://example.org/confidence";
+        const BUSINESS: &str = "http://example.org/business";
+
+        let mut builder = RdfDatasetBuilder::new();
+        let alice = builder.intern_iri("http://example.org/alice");
+        let bob = builder.intern_iri("http://example.org/bob");
+        let secret = builder.intern_iri("http://example.org/secret");
+        let customer = builder.intern_iri(CUSTOMER);
+        let internal = builder.intern_iri(INTERNAL);
+        let rdf_type = builder.intern_iri(TYPE);
+        let name = builder.intern_iri(NAME);
+        let knows = builder.intern_iri(KNOWS);
+        let audit = builder.intern_iri(AUDIT);
+        let confidence = builder.intern_iri(CONFIDENCE);
+        let business = builder.intern_iri(BUSINESS);
+        let system = builder.intern_iri("http://example.org/system");
+        let alice_name = builder.intern_literal(RdfLiteral::simple("Alice"));
+        let classified = builder.intern_literal(RdfLiteral::simple("classified"));
+        builder.push_quad(alice, rdf_type, customer, Some(business));
+        builder.push_quad(bob, rdf_type, customer, Some(business));
+        builder.push_quad(secret, rdf_type, internal, Some(business));
+        builder.push_quad(alice, name, alice_name, Some(business));
+        builder.push_quad(alice, knows, bob, Some(business));
+        builder.push_quad(alice, audit, secret, Some(business));
+        builder.push_quad(secret, name, classified, Some(system));
+        builder.push_quad(alice, audit, secret, None);
+
+        let quoted = builder.intern_triple(alice, knows, bob);
+        let reifier = builder.intern_iri("http://example.org/reifier");
+        let high = builder.intern_iri("http://example.org/high");
+        builder.push_reifier_in_graph(reifier, quoted, Some(business));
+        builder.push_annotation_in_graph(reifier, confidence, high, Some(business));
+        let dataset = builder.freeze().expect("scoped fixture");
+
+        let scope = LpgScope::select(
+            false,
+            LpgNamedGraphSelection::only(
+                [ProjectionTerm::Iri {
+                    value: BUSINESS.to_owned(),
+                }],
+                std::iter::empty::<ProjectionTerm>(),
+            ),
+            LpgIriSelection::only(
+                [TYPE, NAME, KNOWS, AUDIT, CONFIDENCE],
+                std::iter::empty::<&str>(),
+            )
+            .expect("predicate scope"),
+            LpgIriSelection::only([CUSTOMER], std::iter::empty::<&str>()).expect("node scope"),
+            LpgIriSelection::only([KNOWS], std::iter::empty::<&str>()).expect("edge scope"),
+        );
+        let config = config_with_limits(
+            scope,
+            LpgExecutionLimits::new(100, 100, 100, 100).expect("execution limits"),
+        );
+        let projected = project_lpg(dataset.as_ref(), &config).expect("scoped projection");
+
+        assert_eq!(
+            projected.graph.named_graphs,
+            vec![ProjectionTerm::Iri {
+                value: BUSINESS.to_owned()
+            }]
+        );
+        assert_eq!(projected.graph.edges.len(), 1);
+        assert_eq!(projected.graph.edges[0].edge_type, KNOWS);
+        assert_eq!(
+            projected
+                .graph
+                .nodes
+                .iter()
+                .flat_map(|node| &node.labels)
+                .map(|label| label.value.as_str())
+                .collect::<Vec<_>>(),
+            [CUSTOMER, CUSTOMER]
+        );
+        assert_eq!(
+            projected
+                .graph
+                .nodes
+                .iter()
+                .flat_map(|node| &node.properties)
+                .map(|property| property.key.as_str())
+                .collect::<Vec<_>>(),
+            [NAME]
+        );
+        assert_eq!(projected.graph.reifiers.len(), 1);
+        assert_eq!(projected.graph.annotations.len(), 1);
+        assert_eq!(projected.graph.annotations[0].predicate, CONFIDENCE);
+
+        let lifted = lift_lpg(&projected.graph, &config).expect("lift scoped graph");
+        assert_eq!(lifted.dataset.quads().count(), 4);
+        assert_eq!(lifted.dataset.reifier_quads().count(), 1);
+        assert_eq!(lifted.dataset.annotation_quads().count(), 1);
+    }
+
+    #[test]
+    fn execution_limits_accept_exact_boundaries_and_reject_the_next_record() {
+        let dataset = fixture(false);
+        let wide = project_lpg(dataset.as_ref(), &config(1_000)).expect("wide projection");
+        let graph = &wide.graph;
+        let model_records = graph.nodes.len()
+            + graph.edges.len()
+            + graph.reifiers.len()
+            + graph.annotations.len()
+            + graph.named_graphs.len()
+            + graph
+                .nodes
+                .iter()
+                .map(|node| node.labels.len() + node.properties.len())
+                .sum::<usize>();
+        let exact = LpgExecutionLimits::new(6, model_records, graph.nodes.len(), graph.edges.len())
+            .expect("exact limits");
+        project_lpg(
+            dataset.as_ref(),
+            &config_with_limits(LpgScope::all(), exact),
+        )
+        .expect("exact boundary");
+
+        for too_small in [
+            LpgExecutionLimits::new(5, model_records, graph.nodes.len(), graph.edges.len())
+                .expect("input limit"),
+            LpgExecutionLimits::new(6, model_records - 1, graph.nodes.len(), graph.edges.len())
+                .expect("model limit"),
+            LpgExecutionLimits::new(6, model_records, graph.nodes.len() - 1, graph.edges.len())
+                .expect("node limit"),
+        ] {
+            assert!(
+                project_lpg(
+                    dataset.as_ref(),
+                    &config_with_limits(LpgScope::all(), too_small)
+                )
+                .is_err()
+            );
+        }
+
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/source");
+        let predicate = builder.intern_iri("http://example.org/edge");
+        let first = builder.intern_iri("http://example.org/first");
+        let second = builder.intern_iri("http://example.org/second");
+        builder.push_quad(subject, predicate, first, None);
+        builder.push_quad(subject, predicate, second, None);
+        let two_edges = builder.freeze().expect("two-edge fixture");
+        let edge_limit = LpgExecutionLimits::new(2, 5, 3, 1).expect("edge limit");
+        assert!(
+            project_lpg(
+                two_edges.as_ref(),
+                &config_with_limits(LpgScope::all(), edge_limit)
+            )
+            .is_err()
         );
     }
 

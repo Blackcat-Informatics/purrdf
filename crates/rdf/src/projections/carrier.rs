@@ -12,12 +12,14 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     CroissantConfig, CsvwConfig, DataCiteConfig, DcatConfig, FrictionlessConfig, LpgConfig,
-    OboGraphsConfig, ProjectionError, ProjectionLimits, ProjectionPackage, RoCrateConfig,
-    SkosConfig, lift_lpg, project_croissant, project_csvw_exact, project_datacite, project_dcat,
-    project_frictionless, project_lpg_csv, project_lpg_cypher, project_lpg_graphml,
-    project_neo4j_csv, project_obo_graphs, project_ro_crate, project_skos, read_croissant,
-    read_csvw_exact, read_datacite, read_dcat, read_frictionless, read_lpg_csv, read_lpg_cypher,
-    read_lpg_graphml, read_neo4j_csv, read_ro_crate,
+    LpgProgressObserver, LpgStreamProjection, OboGraphsConfig, ProjectionArtifactSink,
+    ProjectionError, ProjectionLimits, ProjectionPackage, RoCrateConfig, SkosConfig, lift_lpg,
+    project_croissant, project_csvw_exact, project_datacite, project_dcat, project_frictionless,
+    project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher, project_lpg_cypher_to_sink,
+    project_lpg_graphml, project_lpg_graphml_to_sink, project_neo4j_csv, project_neo4j_csv_to_sink,
+    project_obo_graphs, project_ro_crate, project_skos, read_croissant, read_csvw_exact,
+    read_datacite, read_dcat, read_frictionless, read_lpg_csv, read_lpg_cypher, read_lpg_graphml,
+    read_neo4j_csv, read_ro_crate,
 };
 
 const OBO_GRAPHS_PATH: &str = "obo-graphs.json";
@@ -421,6 +423,47 @@ pub fn project_archive<D: DatasetView>(
     })
 }
 
+/// Project one LPG profile directly into a transactional artifact sink.
+///
+/// This is the profile-tagged host boundary for generic CSV, Neo4j Admin Import
+/// CSV, openCypher, and GraphML. Other projection profiles fail rather than silently
+/// materializing an archive or selecting a different engine.
+///
+/// # Errors
+///
+/// Returns a typed profile/configuration, mapping, sink, observer, encoding, or
+/// resource-limit failure. The sink transaction is aborted on every post-begin
+/// failure.
+pub fn project_lpg_artifacts_to_sink<D, S, O>(
+    view: &D,
+    profile: ProjectionProfile,
+    config: &ProjectionConfig,
+    sink: &mut S,
+    observer: &mut O,
+) -> Result<LpgStreamProjection, ProjectionError>
+where
+    D: DatasetView,
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    config.require_profile(profile)?;
+    match config {
+        ProjectionConfig::LpgCsv(config) => project_lpg_csv_to_sink(view, config, sink, observer),
+        ProjectionConfig::Neo4jCsv(config) => {
+            project_neo4j_csv_to_sink(view, config, sink, observer)
+        }
+        ProjectionConfig::OpenCypher(config) => {
+            project_lpg_cypher_to_sink(view, config, sink, observer)
+        }
+        ProjectionConfig::Graphml(config) => {
+            project_lpg_graphml_to_sink(view, config, sink, observer)
+        }
+        _ => Err(ProjectionError::configuration(format!(
+            "projection profile `{profile}` is not an LPG artifact-sink profile"
+        ))),
+    }
+}
+
 /// Lift one strict bidirectional carrier archive into RDF 1.2.
 ///
 /// # Errors
@@ -498,6 +541,7 @@ fn lift_lpg_package(
 
 #[cfg(test)]
 mod tests {
+    use super::super::{LpgExecutionLimits, LpgScope};
     use std::collections::BTreeMap;
 
     use purrdf_core::{RdfDatasetBuilder, datasets_isomorphic};
@@ -523,7 +567,13 @@ mod tests {
     }
 
     fn lpg_config(profile: ProjectionProfile) -> ProjectionConfig {
-        let config = LpgConfig::new("https://example.org/type", limits(), 1_000).expect("LPG");
+        let config = LpgConfig::new(
+            "https://example.org/type",
+            LpgScope::all(),
+            limits(),
+            LpgExecutionLimits::new(1_000, 1_000, 1_000, 1_000).expect("execution limits"),
+        )
+        .expect("LPG");
         match profile {
             ProjectionProfile::LpgCsv => ProjectionConfig::LpgCsv(config),
             ProjectionProfile::Neo4jCsv => ProjectionConfig::Neo4jCsv(config),
@@ -605,7 +655,7 @@ mod tests {
         assert!(ProjectionConfig::from_json(br#"{"profile":"skos","config":{}}"#).is_err());
         assert!(
             ProjectionConfig::from_json(
-                br#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"max_records":1000},"extra":true}"#,
+                br#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","scope":{"mode":"all"},"limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"execution_limits":{"max_input_records":1000,"max_model_records":1000,"max_nodes":1000,"max_edges":1000}},"extra":true}"#,
             )
             .is_err()
         );

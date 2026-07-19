@@ -14,6 +14,7 @@ const CONFIG = JSON.stringify({
   profile: "lpg-csv",
   config: {
     rdf_type: "https://example.org/type",
+    scope: { mode: "all" },
     limits: {
       max_artifacts: 16,
       max_artifact_bytes: 1_000_000,
@@ -21,7 +22,12 @@ const CONFIG = JSON.stringify({
       max_archive_bytes: 5_000_000,
       max_term_depth: 16,
     },
-    max_records: 1_000,
+    execution_limits: {
+      max_input_records: 1_000,
+      max_model_records: 1_000,
+      max_nodes: 1_000,
+      max_edges: 1_000,
+    },
   },
 });
 

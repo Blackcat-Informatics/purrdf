@@ -8,15 +8,20 @@ use std::collections::BTreeMap;
 use purrdf_core::DatasetView;
 
 use super::super::{
-    ProjectionError, ProjectionPackage, escape_cypher_identifier, escape_cypher_string,
+    ProjectionArtifactSink, ProjectionError, ProjectionPackage, ProjectionPackageSink,
+    escape_cypher_identifier, escape_cypher_string,
 };
 use super::carrier_util::{
-    BoundedText, require_canonical_package, required_artifact, validate_package_bounds,
-    write_manifest,
+    BoundedText, LpgTextWriter, require_canonical_package, required_artifact,
+    validate_package_bounds, write_manifest,
 };
 use super::csv::{LpgPackageProjection, native_labels, property_token, relationship_token};
-use super::mapping::{LpgProjection, project_lpg};
+use super::mapping::{LpgProjection, project_lpg, project_lpg_with_progress};
 use super::model::{LpgConfig, LpgGraph, LpgNode, LpgProperty, LpgPropertyAtom};
+use super::stream::{
+    IgnoreProgress, LpgProgressObserver, LpgProjectionReport, LpgSinkSession, LpgStreamProjection,
+    graph_report,
+};
 
 const PROFILE: &str = "purrdf-lpg-open-cypher";
 const MANIFEST_PATH: &str = "open-cypher/manifest.json";
@@ -40,12 +45,28 @@ pub fn write_lpg_cypher(
     graph: &LpgGraph,
     config: &LpgConfig,
 ) -> Result<ProjectionPackage, ProjectionError> {
-    graph.validate(config)?;
-    let mut package = ProjectionPackage::new(config.limits());
-    package.insert(CYPHER_PATH, render_cypher(graph, config)?)?;
-    package.insert(LPG_PATH, graph.to_canonical_json(config)?)?;
-    package.insert(MANIFEST_PATH, write_manifest(PROFILE, graph, config)?)?;
-    Ok(package)
+    let mut sink = ProjectionPackageSink::new(config.limits());
+    write_lpg_cypher_to_sink(graph, config, &mut sink, &mut IgnoreProgress)?;
+    sink.into_package()
+}
+
+/// Encode canonical LPG artifacts incrementally into a transactional sink.
+///
+/// # Errors
+///
+/// Returns a typed model, sink, observer, serialization, or resource-limit failure.
+/// The sink transaction is aborted on every failure.
+pub fn write_lpg_cypher_to_sink<S, O>(
+    graph: &LpgGraph,
+    config: &LpgConfig,
+    sink: &mut S,
+    observer: &mut O,
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    stream_lpg_cypher(graph, config, sink, observer, graph_report(graph)?)
 }
 
 /// Project any RDF dataset view directly into the deterministic openCypher package.
@@ -57,13 +78,73 @@ pub fn project_lpg_cypher<D: DatasetView>(
     view: &D,
     config: &LpgConfig,
 ) -> Result<LpgPackageProjection, ProjectionError> {
-    let LpgProjection { graph, loss_ledger } = project_lpg(view, config)?;
+    let LpgProjection {
+        graph,
+        loss_ledger,
+        report,
+    } = project_lpg(view, config)?;
     let package = write_lpg_cypher(&graph, config)?;
     Ok(LpgPackageProjection {
         graph,
         package,
         loss_ledger,
+        report,
     })
+}
+
+/// Project RDF directly into incrementally emitted openCypher artifacts.
+///
+/// # Errors
+///
+/// Returns a typed mapping, sink, observer, serialization, or resource-limit
+/// failure. The sink transaction is aborted on every failure.
+pub fn project_lpg_cypher_to_sink<D, S, O>(
+    view: &D,
+    config: &LpgConfig,
+    sink: &mut S,
+    observer: &mut O,
+) -> Result<LpgStreamProjection, ProjectionError>
+where
+    D: DatasetView,
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    let LpgProjection {
+        graph,
+        loss_ledger,
+        report,
+    } = project_lpg_with_progress(view, config, observer)?;
+    stream_lpg_cypher(&graph, config, sink, observer, report)?;
+    Ok(LpgStreamProjection {
+        loss_ledger,
+        report,
+    })
+}
+
+fn stream_lpg_cypher<S, O>(
+    graph: &LpgGraph,
+    config: &LpgConfig,
+    sink: &mut S,
+    observer: &mut O,
+    report: LpgProjectionReport,
+) -> Result<(), ProjectionError>
+where
+    S: ProjectionArtifactSink,
+    O: LpgProgressObserver,
+{
+    graph.validate(config)?;
+    let mut session = LpgSinkSession::new(sink, observer, config.limits(), report)?;
+    session.write_artifact(CYPHER_PATH, |output| {
+        render_cypher_into(output, graph, config)
+    })?;
+    session.write_artifact(LPG_PATH, |output| {
+        serde_json::to_writer(output, graph).map_err(|error| {
+            ProjectionError::integrity(format!("serialize canonical LPG JSON: {error}"))
+        })
+    })?;
+    let manifest = write_manifest(PROFILE, graph, config)?;
+    session.write_artifact(MANIFEST_PATH, |output| output.write_bytes(&manifest))?;
+    session.commit()
 }
 
 /// Read the complete closed openCypher grammar emitted by PurRDF.
@@ -112,6 +193,15 @@ pub fn read_lpg_cypher(
 
 fn render_cypher(graph: &LpgGraph, config: &LpgConfig) -> Result<Vec<u8>, ProjectionError> {
     let mut output = BoundedText::new(config.limits(), "openCypher script", CYPHER_PATH);
+    render_cypher_into(&mut output, graph, config)?;
+    Ok(output.finish())
+}
+
+fn render_cypher_into<W: LpgTextWriter + ?Sized>(
+    output: &mut W,
+    graph: &LpgGraph,
+    config: &LpgConfig,
+) -> Result<(), ProjectionError> {
     output.push(HEADER)?;
     let pattern_count = graph
         .nodes
@@ -119,13 +209,13 @@ fn render_cypher(graph: &LpgGraph, config: &LpgConfig) -> Result<Vec<u8>, Projec
         .checked_add(graph.edges.len())
         .ok_or_else(|| ProjectionError::limit("openCypher pattern count overflow"))?;
     if pattern_count == 0 {
-        return Ok(output.finish());
+        return Ok(());
     }
     output.push("CREATE\n")?;
     let mut written = 0usize;
     for node in &graph.nodes {
         output.push("  ")?;
-        push_node_pattern(&mut output, node, config)?;
+        push_node_pattern(output, node, config)?;
         written += 1;
         output.push(if written == pattern_count {
             ";\n"
@@ -156,11 +246,11 @@ fn render_cypher(graph: &LpgGraph, config: &LpgConfig) -> Result<Vec<u8>, Projec
             ",\n"
         })?;
     }
-    Ok(output.finish())
+    Ok(())
 }
 
-fn push_node_pattern(
-    output: &mut BoundedText,
+fn push_node_pattern<W: LpgTextWriter + ?Sized>(
+    output: &mut W,
     node: &LpgNode,
     config: &LpgConfig,
 ) -> Result<(), ProjectionError> {
@@ -196,8 +286,8 @@ fn push_node_pattern(
     output.push("})")
 }
 
-fn push_native_property(
-    output: &mut BoundedText,
+fn push_native_property<W: LpgTextWriter + ?Sized>(
+    output: &mut W,
     properties: &[LpgProperty],
     iri: &str,
 ) -> Result<(), ProjectionError> {
@@ -221,8 +311,8 @@ fn push_native_property(
     Ok(())
 }
 
-fn push_native_atom(
-    output: &mut BoundedText,
+fn push_native_atom<W: LpgTextWriter + ?Sized>(
+    output: &mut W,
     atom: &LpgPropertyAtom,
 ) -> Result<(), ProjectionError> {
     match atom {
@@ -244,7 +334,10 @@ fn push_native_atom(
     }
 }
 
-fn push_string_literal(output: &mut BoundedText, value: &str) -> Result<(), ProjectionError> {
+fn push_string_literal<W: LpgTextWriter + ?Sized>(
+    output: &mut W,
+    value: &str,
+) -> Result<(), ProjectionError> {
     output.push("'")?;
     output.push(&escape_cypher_string(value))?;
     output.push("'")
@@ -252,6 +345,7 @@ fn push_string_literal(output: &mut BoundedText, value: &str) -> Result<(), Proj
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::{LpgExecutionLimits, LpgScope};
     use std::sync::Arc;
 
     use purrdf_core::{
@@ -267,8 +361,10 @@ mod tests {
     fn test_config(max_records: usize) -> LpgConfig {
         LpgConfig::new(
             TYPE,
+            LpgScope::all(),
             ProjectionLimits::new(32, 2_000_000, 5_000_000, 7_000_000, 16).expect("limits"),
-            max_records,
+            LpgExecutionLimits::new(max_records, max_records, max_records, max_records)
+                .expect("execution limits"),
         )
         .expect("config")
     }
@@ -421,7 +517,13 @@ mod tests {
         let builder = RdfDatasetBuilder::new();
         let dataset = builder.freeze().expect("empty dataset");
         let limits = ProjectionLimits::new(8, 32, 128, 2_048, 16).expect("small limits");
-        let config = LpgConfig::new(TYPE, limits, 10).expect("small config");
+        let config = LpgConfig::new(
+            TYPE,
+            LpgScope::all(),
+            limits,
+            LpgExecutionLimits::new(10, 10, 10, 10).expect("execution limits"),
+        )
+        .expect("small config");
         let graph = project_lpg(dataset.as_ref(), &config)
             .expect("empty projection")
             .graph;

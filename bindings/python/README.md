@@ -80,6 +80,7 @@ config = json.dumps({
     "profile": "lpg-csv",
     "config": {
         "rdf_type": "https://example.org/type",
+        "scope": {"mode": "all"},
         "limits": {
             "max_artifacts": 16,
             "max_artifact_bytes": 1_000_000,
@@ -87,7 +88,12 @@ config = json.dumps({
             "max_archive_bytes": 5_000_000,
             "max_term_depth": 16,
         },
-        "max_records": 1_000,
+        "execution_limits": {
+            "max_input_records": 1_000,
+            "max_model_records": 1_000,
+            "max_nodes": 1_000,
+            "max_edges": 1_000,
+        },
     },
 })
 package = purrdf.project(
@@ -110,6 +116,15 @@ structured loss records. Research-object contexts, vocabularies, identities,
 and profiles are all mandatory caller configuration. See the runnable
 [`projection_roundtrip.py`](https://github.com/Blackcat-Informatics/purrdf/blob/main/bindings/python/examples/projection_roundtrip.py)
 file-producing example.
+
+For large LPG carriers, `purrdf.project_artifacts(...)` invokes a transactional
+artifact callback with package/artifact begin, bounded chunk, artifact finish,
+commit, and abort events. An optional progress callback receives immutable
+`ProjectionProgress` snapshots; callback exceptions abort the package and are
+returned unchanged. This path retains the selected canonical LPG model but not
+complete artifact bodies or USTAR bytes. See the runnable atomic-directory
+[`projection_stream.py`](https://github.com/Blackcat-Informatics/purrdf/blob/main/bindings/python/examples/projection_stream.py)
+example.
 
 ## Validate with SHACL
 
