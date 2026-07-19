@@ -11,17 +11,47 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+fn cdylib_artifact(messages: &[u8], lib_name: &str) -> Option<PathBuf> {
+    let messages = std::str::from_utf8(messages).ok()?;
+    for line in messages.lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if message.get("reason").and_then(serde_json::Value::as_str) != Some("compiler-artifact")
+            || !message
+                .pointer("/target/kind")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "cdylib"))
+        {
+            continue;
+        }
+        let Some(filenames) = message
+            .get("filenames")
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        for filename in filenames.iter().filter_map(serde_json::Value::as_str) {
+            let path = PathBuf::from(filename);
+            if path.file_name().and_then(|name| name.to_str()) == Some(lib_name) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
 #[test]
 fn c_abi_smoke() {
     let manifest = env!("CARGO_MANIFEST_DIR");
     let smoke_c = format!("{manifest}/tests/smoke.c");
     let header_dir = format!("{manifest}/include");
 
-    // The integration-test binary lives at `<target>/<profile>/deps/<name>-<hash>`,
-    // so its grandparent is the profile dir where the cdylib is emitted. This is
-    // robust to a custom `CARGO_TARGET_DIR`.
+    // The integration-test binary lives under `<profile>/deps/<name>-<hash>`,
+    // including when Cargo routes intermediates through a separate build dir,
+    // so its grandparent still names the active profile.
     let test_exe = std::env::current_exe().expect("current_exe");
-    let profile_dir: PathBuf = test_exe
+    let test_profile_dir: PathBuf = test_exe
         .parent()
         .and_then(|deps| deps.parent())
         .expect("profile dir")
@@ -35,17 +65,41 @@ fn c_abi_smoke() {
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     );
-    let lib = profile_dir.join(&lib_name);
     // The cdylib is a separate build artifact that `cargo test` / `cargo
     // nextest` do NOT build as a dependency of this test binary. Always build
     // it before linkage: existence alone is insufficient because a prior test
     // run may have left a stale shared library for older Rust sources.
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let status = Command::new(&cargo)
-        .args(["build", "-p", "purrdf-capi"])
-        .status()
+    let profile = test_profile_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("Cargo profile directory name");
+    let mut cargo_build = Command::new(&cargo);
+    cargo_build.args([
+        "build",
+        "-p",
+        "purrdf-capi",
+        "--message-format=json-render-diagnostics",
+    ]);
+    if profile != "debug" {
+        cargo_build.args(["--profile", profile]);
+    }
+    let output = cargo_build
+        .output()
         .expect("failed to invoke cargo to build the libpurrdf cdylib");
-    assert!(status.success(), "cargo build -p purrdf-capi failed");
+    assert!(
+        output.status.success(),
+        "cargo build -p purrdf-capi for profile `{profile}` failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lib = cdylib_artifact(&output.stdout, &lib_name).unwrap_or_else(|| {
+        panic!(
+            "Cargo did not report {lib_name} for profile `{profile}`:\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    let profile_dir = lib.parent().expect("cdylib profile directory");
     assert!(
         lib.exists(),
         "{lib_name} not found at {} even after building purrdf-capi",
@@ -79,7 +133,7 @@ fn c_abi_smoke() {
     let run = Command::new(&bin)
         .arg(format!("{manifest}/../rdf/tests/fixtures/okf-terms.trig"))
         .arg(format!("{manifest}/../rdf/tests/fixtures/okf-terms.json"))
-        .env(loader_path_var, &profile_dir)
+        .env(loader_path_var, profile_dir)
         .status()
         .expect("failed to run the C smoke binary");
     assert!(run.success(), "C smoke binary returned a failure exit code");
@@ -106,7 +160,7 @@ fn c_abi_smoke() {
     );
     let run_example = Command::new(&example_bin)
         .arg(&example_archive)
-        .env(loader_path_var, &profile_dir)
+        .env(loader_path_var, profile_dir)
         .status()
         .expect("failed to run the C projection example");
     assert!(

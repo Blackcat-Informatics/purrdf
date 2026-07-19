@@ -53,6 +53,9 @@ purrdf-sparql-results = { workspace = true }
 # ../rdf-core so `SparqlRequest`/`SparqlResult` unify.
 purrdf-sparql-eval = { workspace = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 # The lone feature the whole workspace is permitted to declare. `cargo capi`
 # (cargo-c >= 0.10) unconditionally enables a feature literally named `capi`
 # when it builds the C-ABI target and hard-errors if the crate does not declare
