@@ -45,3 +45,24 @@ pub(crate) fn build_dataset(rows: usize) -> Arc<RdfDataset> {
 
     builder.freeze().expect("deterministic JSON-LD fixture")
 }
+
+#[allow(
+    dead_code,
+    reason = "native_codecs uses this shared fixture; jsonld_alloc does not"
+)]
+pub(crate) fn build_many_namespace_dataset(
+    namespace_count: usize,
+    iris_per_namespace: usize,
+) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri("urn:subject");
+    let object = builder.intern_iri("urn:object");
+    for namespace in 0..namespace_count {
+        for local in 0..iris_per_namespace {
+            let predicate =
+                builder.intern_iri(&format!("https://bench.example/ns/{namespace}/term{local}"));
+            builder.push_quad(subject, predicate, object, None);
+        }
+    }
+    builder.freeze().expect("many-namespace JSON-LD fixture")
+}

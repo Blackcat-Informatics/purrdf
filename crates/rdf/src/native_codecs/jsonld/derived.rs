@@ -3,7 +3,8 @@
 
 //! Deterministic, vocabulary-neutral context derivation from typed carrier IRI slots.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashSet};
+use std::hash::BuildHasherDefault;
 
 use super::carrier::{Document, Node, Term, Value};
 use super::{CompiledJsonLdContext, RdfDiagnostic};
@@ -13,7 +14,8 @@ const MAX_NAMESPACE_CANDIDATES: usize = 4_096;
 const MAX_DERIVED_TERMS: usize = 4_096;
 const MAX_DERIVED_CONTEXT_BYTES: usize = 1_048_576;
 const MAX_DERIVATION_WORK: usize = 262_144;
-const CONSERVATIVE_ALIAS: &str = "ns4095";
+
+type FixedHashSet<T> = HashSet<T, BuildHasherDefault<ahash::AHasher>>;
 
 #[derive(Debug, Clone, Copy)]
 struct DerivationLimits {
@@ -60,13 +62,13 @@ impl CandidateStats {
         Ok(())
     }
 
-    fn is_profitable(self, namespace: &str) -> Result<bool, RdfDiagnostic> {
+    fn is_profitable(self, alias: &str, namespace: &str) -> Result<bool, RdfDiagnostic> {
         let compacted_bytes = self
             .occurrences
-            .checked_mul(CONSERVATIVE_ALIAS.len() + 1)
+            .checked_mul(alias.len() + 1)
             .and_then(|bytes| bytes.checked_add(self.suffix_bytes))
             .ok_or_else(|| derived_limit("derived namespace compacted-byte count overflow"))?;
-        let context_cost = prefix_definition_cost(CONSERVATIVE_ALIAS, namespace)?;
+        let context_cost = prefix_definition_cost(alias, namespace)?;
         Ok(self
             .expanded_bytes
             .checked_sub(compacted_bytes)
@@ -76,7 +78,8 @@ impl CandidateStats {
 
 struct Collector {
     limits: DerivationLimits,
-    distinct: BTreeSet<String>,
+    distinct: FixedHashSet<String>,
+    reserved_schemes: FixedHashSet<String>,
     candidates: BTreeMap<String, CandidateStats>,
     work: usize,
 }
@@ -85,7 +88,8 @@ impl Collector {
     fn new(limits: DerivationLimits) -> Self {
         Self {
             limits,
-            distinct: BTreeSet::new(),
+            distinct: FixedHashSet::default(),
+            reserved_schemes: FixedHashSet::default(),
             candidates: BTreeMap::new(),
             work: 0,
         }
@@ -121,6 +125,12 @@ impl Collector {
                 )));
             }
             self.distinct.insert(iri.to_owned());
+            self.reserved_schemes.insert(
+                parsed
+                    .scheme()
+                    .expect("absolute IRI has a scheme")
+                    .to_ascii_lowercase(),
+            );
         }
         let Some(namespace) = namespace_boundary(iri) else {
             return Ok(());
@@ -142,24 +152,41 @@ impl Collector {
     }
 
     fn finish(self) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
-        let mut selected = Vec::new();
+        let mut prefixes = Vec::new();
+        let mut alias_index = 0usize;
         for (namespace, stats) in self.candidates {
-            if stats.is_profitable(&namespace)? {
-                selected.push(namespace);
+            while self.reserved_schemes.contains(&format!("ns{alias_index}")) {
+                alias_index = alias_index
+                    .checked_add(1)
+                    .ok_or_else(|| derived_limit("derived alias index overflow"))?;
+            }
+            let alias = format!("ns{alias_index}");
+            if stats.is_profitable(&alias, &namespace)? {
+                prefixes.push((alias, namespace));
+                alias_index = alias_index
+                    .checked_add(1)
+                    .ok_or_else(|| derived_limit("derived alias index overflow"))?;
             }
         }
-        if selected.len() > self.limits.terms {
+        if prefixes.len() > self.limits.terms {
             return Err(derived_limit(format!(
                 "derived context requires {} terms; limit is {}",
-                selected.len(),
+                prefixes.len(),
                 self.limits.terms
             )));
         }
-        let prefixes = selected
-            .into_iter()
-            .enumerate()
-            .map(|(index, namespace)| (format!("ns{index}"), namespace))
-            .collect::<Vec<_>>();
+        let validation_work = self
+            .distinct
+            .len()
+            .checked_mul(prefixes.len())
+            .and_then(|work| work.checked_add(self.work))
+            .ok_or_else(|| derived_limit("derived-context validation work count overflow"))?;
+        if validation_work > self.limits.work {
+            return Err(derived_limit(format!(
+                "derived-context analysis and validation require {validation_work} operations; limit is {}",
+                self.limits.work
+            )));
+        }
         let context = CompiledJsonLdContext::from_prefixes(prefixes)?;
         let bytes = context.canonical_json().len();
         if bytes > self.limits.context_bytes {
@@ -168,7 +195,9 @@ impl Collector {
                 self.limits.context_bytes
             )));
         }
-        for iri in &self.distinct {
+        let mut distinct = self.distinct.iter().collect::<Vec<_>>();
+        distinct.sort_unstable();
+        for iri in distinct {
             let compacted = context.compact_iri(iri, true)?;
             let expanded = context
                 .expand_iri(&compacted, true, false)?
@@ -414,5 +443,46 @@ mod tests {
             let error = derive_from(iris.iter().copied(), limits).expect_err("one over limit");
             assert_eq!(error.code, "jsonld-derived-limit");
         }
+    }
+
+    #[test]
+    fn aliases_skip_schemes_present_in_the_dataset() {
+        let mut iris = repeated("https://example.org/vocab/", 32);
+        iris.push("ns0:external".to_owned());
+        let context = derive_from(iris.iter().map(String::as_str), DerivationLimits::default())
+            .expect("derive collision-free context");
+        assert!(context.canonical_context().get("ns0").is_none());
+        assert_eq!(
+            context.canonical_context()["ns1"]["@id"],
+            "https://example.org/vocab/"
+        );
+        assert_eq!(
+            context
+                .expand_iri(
+                    &context
+                        .compact_iri("ns0:external", true)
+                        .expect("compact absolute IRI"),
+                    true,
+                    false,
+                )
+                .expect("expand compact IRI"),
+            Some("ns0:external".to_owned())
+        );
+    }
+
+    #[test]
+    fn validation_work_limit_charges_every_iri_prefix_pair() {
+        let iris = repeated("https://example.org/vocab/", 32);
+        let exact = DerivationLimits {
+            work: 64,
+            ..DerivationLimits::default()
+        };
+        derive_from(iris.iter().map(String::as_str), exact).expect("exact work boundary");
+        let error = derive_from(
+            iris.iter().map(String::as_str),
+            DerivationLimits { work: 63, ..exact },
+        )
+        .expect_err("validation work exceeds limit by one");
+        assert_eq!(error.code, "jsonld-derived-limit");
     }
 }

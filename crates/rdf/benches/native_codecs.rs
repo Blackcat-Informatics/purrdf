@@ -13,8 +13,8 @@
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_rdf::native_codecs::jsonld::{
-    CompiledJsonLdContext, JsonLdSerializeOptions, parse_jsonld, serialize_dataset_to_jsonld,
-    serialize_dataset_to_jsonld_with_options,
+    CompiledJsonLdContext, JsonLdSerializeOptions, derive_jsonld_context, parse_jsonld,
+    serialize_dataset_to_jsonld, serialize_dataset_to_jsonld_with_options,
 };
 use purrdf_rdf::{
     ParseOptions, SerializeGraph, parse_dataset, parse_dataset_with, serialize_dataset,
@@ -299,6 +299,23 @@ fn bench_jsonld_configured(c: &mut Criterion) {
     group.finish();
 }
 
+/// Context derivation has an explicit work ceiling; this adversarial shape keeps
+/// many profitable namespaces and distinct IRIs below it while exposing scaling.
+fn bench_jsonld_derived_many_namespaces(c: &mut Criterion) {
+    const NAMESPACES: usize = 64;
+    const IRIS_PER_NAMESPACE: usize = 32;
+
+    let dataset = jsonld_fixture::build_many_namespace_dataset(NAMESPACES, IRIS_PER_NAMESPACE);
+    let mut group = c.benchmark_group("jsonld_derived_context");
+    group.sample_size(10);
+    group.bench_function("64_namespaces_32_iris", |bencher| {
+        bencher.iter(|| {
+            black_box(derive_jsonld_context(black_box(&dataset)).expect("derive bounded context"));
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_parse_nquads,
@@ -306,6 +323,7 @@ criterion_group!(
     bench_parse_nquads_span_tracking,
     bench_serialize_nquads,
     bench_jsonld_expanded,
-    bench_jsonld_configured
+    bench_jsonld_configured,
+    bench_jsonld_derived_many_namespaces
 );
 criterion_main!(benches);
