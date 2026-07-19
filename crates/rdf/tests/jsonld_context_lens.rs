@@ -160,6 +160,27 @@ fn safe_rdf_lists_use_list_containers_and_reconstruct_isomorphically() {
 }
 
 #[test]
+fn explicit_list_items_inherit_active_property_id_coercion() {
+    let source = br#"{
+      "@context": {
+        "ex": {"@id": "https://example.org/", "@prefix": true},
+        "items": {"@id": "ex:items", "@type": "@id"}
+      },
+      "@id": "ex:s",
+      "items": {"@list": ["ex:a", null, "ex:b"]}
+    }"#;
+    let expected = parse_nquads(concat!(
+        "<https://example.org/s> <https://example.org/items> _:head .\n",
+        "_:head <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <https://example.org/a> .\n",
+        "_:head <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:tail .\n",
+        "_:tail <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <https://example.org/b> .\n",
+        "_:tail <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n",
+    ));
+    let actual = parse_jsonld(source).expect("expand explicit coerced list");
+    assert!(datasets_isomorphic(&expected, &actual));
+}
+
+#[test]
 fn duplicate_members_and_unmapped_index_metadata_fail_closed() {
     let duplicate = br#"{"@context":{},"@graph":[],"@graph":[]}"#;
     let error = parse_jsonld(duplicate).expect_err("duplicate JSON member");
@@ -337,6 +358,41 @@ fn mapped_index_type_and_set_containers_preserve_rdf() {
 }
 
 #[test]
+fn null_entries_in_graph_id_type_and_index_containers_are_ignored() {
+    let source = br#"{
+      "@context": {
+        "ex": {"@id": "https://example.org/", "@prefix": true},
+        "graphs": {"@id": "ex:graph", "@container": ["@graph", "@id"]},
+        "ids": {"@id": "ex:id", "@container": "@id"},
+        "indexed": {"@id": "ex:indexed", "@container": "@index", "@index": "ex:key"},
+        "name": "ex:name",
+        "types": {"@id": "ex:typed", "@container": "@type"}
+      },
+      "@id": "ex:s",
+      "graphs": {"ex:g": [null, {"@id": "ex:inside", "name": "Inside"}]},
+      "ids": {"ex:ignored": null, "ex:kept": [null, {}]},
+      "indexed": {"ignored": null, "row-1": [null, {"@id": "ex:indexed-node"}]},
+      "types": {"ex:Ignored": null, "ex:Thing": [null, {"@id": "ex:typed-node"}]}
+    }"#;
+    let expected = parse_nquads(concat!(
+        "<https://example.org/s> <https://example.org/graph> <https://example.org/g> .\n",
+        "<https://example.org/inside> <https://example.org/name> \"Inside\" <https://example.org/g> .\n",
+        "<https://example.org/s> <https://example.org/id> <https://example.org/kept> .\n",
+        "<https://example.org/s> <https://example.org/indexed> <https://example.org/indexed-node> .\n",
+        "<https://example.org/indexed-node> <https://example.org/key> \"row-1\" .\n",
+        "<https://example.org/s> <https://example.org/typed> <https://example.org/typed-node> .\n",
+        "<https://example.org/typed-node> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/Thing> .\n",
+    ));
+    let actual = parse_jsonld(source).expect("expand containers with null entries");
+    assert!(
+        datasets_isomorphic(&expected, &actual),
+        "expected:\n{}\nactual:\n{}",
+        canonical_flat_nquads(&expected).expect("canonical expected"),
+        canonical_flat_nquads(&actual).expect("canonical actual")
+    );
+}
+
+#[test]
 fn graph_id_and_mapped_graph_index_containers_preserve_named_graph_scope() {
     let source = br#"{
       "@context": {
@@ -397,6 +453,32 @@ fn named_graph_references_compact_into_graph_id_maps() {
     assert_eq!(value["@graph"].as_array().expect("graph").len(), 1);
 
     let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand graph id map");
+    assert!(datasets_isomorphic(&dataset, &reparsed));
+}
+
+#[test]
+fn a_standalone_named_graph_is_not_embedded_again_by_a_later_graph() {
+    let source = concat!(
+        "<https://example.org/item> <https://example.org/name> \"A\" <https://example.org/a> .\n",
+        "<https://example.org/catalog> <https://example.org/containsGraph> <https://example.org/a> <https://example.org/z> .\n",
+    );
+    let context = json!({
+        "ex": {"@id": "https://example.org/", "@prefix": true},
+        "graphs": {"@id": "ex:containsGraph", "@container": ["@graph", "@id"]},
+        "name": "ex:name"
+    });
+    let (dataset, compacted) = serialize_with_context(source, &context);
+    let value: Value = serde_json::from_str(&compacted).expect("JSON output");
+    let top_level = value["@graph"].as_array().expect("top-level graph");
+    assert_eq!(top_level.len(), 2);
+    assert_eq!(
+        top_level
+            .iter()
+            .filter(|entry| entry["@id"] == "ex:a" && entry.get("@graph").is_some())
+            .count(),
+        1
+    );
+    let reparsed = parse_jsonld(compacted.as_bytes()).expect("expand named graphs");
     assert!(datasets_isomorphic(&dataset, &reparsed));
 }
 

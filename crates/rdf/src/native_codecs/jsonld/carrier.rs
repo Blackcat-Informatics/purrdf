@@ -206,15 +206,17 @@ impl Serialize for CompactedGraph<'_> {
             graph.serialize_element(&compacted)?;
         }
         for named in &self.document.named_graphs {
-            if !embedded_graphs.borrow().contains(&named.id) {
-                graph.serialize_element(&CompactedNamedGraph {
-                    graph: named,
-                    document: self.document,
-                    context: self.context,
-                    graph_index_plans: self.graph_index_plans,
-                    embedded_graphs: &embedded_graphs,
-                })?;
+            if embedded_graphs.borrow().contains(&named.id) {
+                continue;
             }
+            embedded_graphs.borrow_mut().insert(named.id.clone());
+            graph.serialize_element(&CompactedNamedGraph {
+                graph: named,
+                document: self.document,
+                context: self.context,
+                graph_index_plans: self.graph_index_plans,
+                embedded_graphs: &embedded_graphs,
+            })?;
         }
         graph.end()
     }

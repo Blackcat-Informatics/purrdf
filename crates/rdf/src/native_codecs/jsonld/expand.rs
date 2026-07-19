@@ -453,7 +453,7 @@ impl Builder {
             )?;
             let mut items = Vec::new();
             for item in as_values(list.value) {
-                if let Some(value) = self.expand_value(item, graph, &active, None)? {
+                if let Some(value) = self.expand_value(item, graph, &active, definition)? {
                     items.push(value);
                 }
             }
@@ -534,7 +534,7 @@ impl Builder {
         };
 
         if let Some(annotation) = member(&members, "@annotation") {
-            for annotation in as_values(annotation.value) {
+            for annotation in non_null_values(annotation.value) {
                 value.annotations.push(self.expand_node(
                     annotation,
                     graph,
@@ -562,7 +562,7 @@ impl Builder {
                 .ok_or_else(|| decode("@graph map container value must be an object"))?;
             let mut values = Vec::new();
             for (key, entries) in map {
-                for entry in as_values(entries) {
+                for entry in non_null_values(entries) {
                     let graph_id = if containers.contains(&JsonLdContainer::Id) && key != "@none" {
                         expand_required(context, key, false, true)?
                     } else {
@@ -592,7 +592,7 @@ impl Builder {
         }
 
         let mut values = Vec::new();
-        for entry in as_values(raw) {
+        for entry in non_null_values(raw) {
             let graph_id = self.fresh_blank_node();
             self.expand_graph_contents(entry, &graph_id, context)?;
             values.push(Value::plain(Term::Id(graph_id)));
@@ -607,7 +607,7 @@ impl Builder {
         context: &CompiledJsonLdContext,
     ) -> Result<(), RdfDiagnostic> {
         self.graphs.entry(Some(graph_id.to_owned())).or_default();
-        for entry in as_values(raw) {
+        for entry in non_null_values(raw) {
             self.expand_graph_entry(entry, Some(graph_id), &context.child_context())?;
         }
         Ok(())
@@ -682,7 +682,7 @@ impl Builder {
             .ok_or_else(|| decode("@id container value must be an object"))?;
         let mut result = Vec::new();
         for (key, entries) in object {
-            for entry in as_values(entries) {
+            for entry in non_null_values(entries) {
                 let id = if key == "@none" {
                     None
                 } else {
@@ -717,7 +717,7 @@ impl Builder {
             let rdf_type = (key != "@none")
                 .then(|| expand_required(context, key, true, false))
                 .transpose()?;
-            for entry in as_values(entries) {
+            for entry in non_null_values(entries) {
                 result.push(self.expand_container_node(
                     entry,
                     graph,
@@ -750,7 +750,7 @@ impl Builder {
                     "data-bearing @index metadata has no RDF dataset representation",
                 ));
             }
-            for entry in as_values(entries) {
+            for entry in non_null_values(entries) {
                 result.push(
                     self.expand_container_node(
                         entry,
@@ -783,7 +783,6 @@ impl Builder {
     ) -> Result<Value, RdfDiagnostic> {
         let mut object = match raw {
             JsonValue::Object(object) => object.clone(),
-            JsonValue::Null => Map::new(),
             _ => {
                 return self
                     .expand_value(raw, graph, context, definition)?
@@ -840,7 +839,7 @@ fn expand_language_map(
     let direction = effective_direction(context, definition);
     let mut values = Vec::new();
     for (language, entries) in object {
-        for entry in as_values(entries) {
+        for entry in non_null_values(entries) {
             let lexical = entry
                 .as_str()
                 .ok_or_else(|| decode("language-map values must be strings"))?;
@@ -1158,11 +1157,15 @@ fn expand_id_value(
     }
 }
 
-fn as_values(value: &JsonValue) -> Vec<&JsonValue> {
+fn as_values(value: &JsonValue) -> &[JsonValue] {
     match value {
-        JsonValue::Array(values) => values.iter().collect(),
-        value => vec![value],
+        JsonValue::Array(values) => values,
+        value => std::slice::from_ref(value),
     }
+}
+
+fn non_null_values(value: &JsonValue) -> impl Iterator<Item = &JsonValue> {
+    as_values(value).iter().filter(|value| !value.is_null())
 }
 
 fn insert_expanded_control(

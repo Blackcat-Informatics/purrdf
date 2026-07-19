@@ -728,16 +728,7 @@ fn graph_id(value: &Value) -> &str {
 }
 
 fn validate_semantic_jsonld(value: &Value, config: &DcatConfig) -> Result<(), ProjectionError> {
-    let mut expanded = value.clone();
-    expanded
-        .as_object_mut()
-        .expect("DCAT writer constructs an object document")
-        .remove("@context");
-    let bytes = canonical_json(
-        &expanded,
-        config.common().limits(),
-        "expanded DCAT semantic JSON-LD",
-    )?;
+    let bytes = canonical_json(value, config.common().limits(), "DCAT semantic JSON-LD")?;
     crate::native_codecs::jsonld::parse_jsonld_with_context(
         &bytes,
         config.context().compiled_context(),
