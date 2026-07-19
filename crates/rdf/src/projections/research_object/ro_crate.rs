@@ -12,7 +12,10 @@ use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
-use super::super::{ProjectionError, ProjectionPackage, validate_absolute_iri};
+use super::super::{
+    ProjectionError, ProjectionLimits, ProjectionPackage, escape_xml_attribute, escape_xml_text,
+    validate_absolute_iri,
+};
 use super::json::{
     ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json, ensure_sound,
     json_pointer, normalize_lifted_jsonld, parse_strict_json, record_loss, require_artifact,
@@ -27,6 +30,159 @@ use super::{
 pub const RO_CRATE_PROFILE: &str = "ro-crate-1.3";
 /// Sole artifact path in the canonical RO-Crate package.
 pub const RO_CRATE_ARTIFACT: &str = "ro-crate-metadata.json";
+/// Self-contained HTML5 preview path in an attached RO-Crate package.
+pub const RO_CRATE_PREVIEW_ARTIFACT: &str = "ro-crate-preview.html";
+/// Reserved prefix for external preview support files.
+pub const RO_CRATE_PREVIEW_FILES_PREFIX: &str = "ro-crate-preview_files/";
+
+/// Explicit RO-Crate package shape selected by the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RoCratePackaging {
+    /// Metadata descriptor only, preserving the original codec contract.
+    MetadataOnly,
+    /// Metadata, self-contained preview, and caller-supplied payload artifacts.
+    Attached,
+}
+
+/// Bounded payload artifacts supplied by reference to the RO-Crate engine.
+///
+/// The carrier owns no filesystem or network capability. Paths and bytes are held in
+/// the same deterministic package primitive used by every PurRDF projection, while
+/// RO-Crate metadata and preview names remain reserved for the engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoCrateAssets {
+    package: ProjectionPackage,
+}
+
+impl RoCrateAssets {
+    /// Construct an empty payload set under explicit resource limits.
+    pub fn new(limits: ProjectionLimits) -> Self {
+        Self {
+            package: ProjectionPackage::new(limits),
+        }
+    }
+
+    /// Validate a payload-only package.
+    ///
+    /// # Errors
+    ///
+    /// Rejects metadata and preview paths reserved to the RO-Crate engine.
+    pub fn from_package(package: ProjectionPackage) -> Result<Self, ProjectionError> {
+        for (path, _) in package.artifacts() {
+            reject_reserved_asset_path(path)?;
+        }
+        Ok(Self { package })
+    }
+
+    /// Construct a payload set from artifact pairs.
+    ///
+    /// # Errors
+    ///
+    /// Enforces package limits, safe paths, uniqueness, and reserved-name ownership.
+    pub fn from_artifacts<I, P, B>(
+        limits: ProjectionLimits,
+        artifacts: I,
+    ) -> Result<Self, ProjectionError>
+    where
+        I: IntoIterator<Item = (P, B)>,
+        P: Into<String>,
+        B: Into<Vec<u8>>,
+    {
+        Self::from_package(ProjectionPackage::from_artifacts(limits, artifacts)?)
+    }
+
+    /// Decode a canonical payload-only USTAR archive.
+    ///
+    /// # Errors
+    ///
+    /// Enforces canonical USTAR, package limits, and reserved-name ownership.
+    pub fn from_ustar(archive: &[u8], limits: ProjectionLimits) -> Result<Self, ProjectionError> {
+        Self::from_package(ProjectionPackage::from_ustar(archive, limits)?)
+    }
+
+    /// Borrow payload artifacts in deterministic lexical path order.
+    pub fn artifacts(&self) -> impl ExactSizeIterator<Item = (&str, &[u8])> {
+        self.package.artifacts()
+    }
+
+    /// Borrow one payload body by its crate-relative path.
+    pub fn get(&self, path: &str) -> Option<&[u8]> {
+        self.package.get(path)
+    }
+
+    /// Number of payload artifacts.
+    pub fn len(&self) -> usize {
+        self.package.len()
+    }
+
+    /// Whether the payload set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.package.is_empty()
+    }
+
+    /// Sum of payload body bytes.
+    pub const fn total_bytes(&self) -> usize {
+        self.package.total_bytes()
+    }
+
+    /// Resource limits governing this payload set.
+    pub const fn limits(&self) -> ProjectionLimits {
+        self.package.limits()
+    }
+
+    /// Encode a non-empty payload set as canonical USTAR.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying package error for an empty set or size breach.
+    pub fn to_ustar(&self) -> Result<Vec<u8>, ProjectionError> {
+        self.package.to_ustar()
+    }
+
+    /// Extract payload artifacts from a complete attached RO-Crate package.
+    ///
+    /// # Errors
+    ///
+    /// Requires the canonical metadata and self-contained preview members and
+    /// rejects external preview support files.
+    pub fn from_attached_package(package: &ProjectionPackage) -> Result<Self, ProjectionError> {
+        if package.get(RO_CRATE_ARTIFACT).is_none() {
+            return Err(
+                ProjectionError::package("RO-Crate metadata artifact is missing")
+                    .at_path(RO_CRATE_ARTIFACT),
+            );
+        }
+        if package.get(RO_CRATE_PREVIEW_ARTIFACT).is_none() {
+            return Err(
+                ProjectionError::package("RO-Crate preview artifact is missing")
+                    .at_path(RO_CRATE_PREVIEW_ARTIFACT),
+            );
+        }
+        let mut assets = ProjectionPackage::new(package.limits());
+        for (path, bytes) in package.artifacts() {
+            if matches!(path, RO_CRATE_ARTIFACT | RO_CRATE_PREVIEW_ARTIFACT) {
+                continue;
+            }
+            reject_reserved_asset_path(path)?;
+            assets.insert(path, bytes)?;
+        }
+        Ok(Self { package: assets })
+    }
+}
+
+fn reject_reserved_asset_path(path: &str) -> Result<(), ProjectionError> {
+    if path == RO_CRATE_ARTIFACT
+        || path == RO_CRATE_PREVIEW_ARTIFACT
+        || path.starts_with(RO_CRATE_PREVIEW_FILES_PREFIX)
+    {
+        return Err(ProjectionError::package(
+            "RO-Crate payload path is reserved to the metadata or preview engine",
+        )
+        .at_path(path));
+    }
+    Ok(())
+}
 
 /// Semantic compact term required by the RO-Crate 1.3 adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -231,6 +387,7 @@ pub struct RoCrateConfig {
     profile_iri: String,
     metadata_descriptor_id: String,
     root_dataset_id: String,
+    packaging: RoCratePackaging,
 }
 
 impl RoCrateConfig {
@@ -247,6 +404,7 @@ impl RoCrateConfig {
         profile_iri: impl Into<String>,
         metadata_descriptor_id: impl Into<String>,
         root_dataset_id: impl Into<String>,
+        packaging: RoCratePackaging,
     ) -> Result<Self, ProjectionError> {
         let profile_iri = profile_iri.into();
         let metadata_descriptor_id = metadata_descriptor_id.into();
@@ -273,6 +431,7 @@ impl RoCrateConfig {
             profile_iri,
             metadata_descriptor_id,
             root_dataset_id,
+            packaging,
         })
     }
 
@@ -300,6 +459,10 @@ impl RoCrateConfig {
     pub fn root_dataset_id(&self) -> &str {
         &self.root_dataset_id
     }
+    /// Explicit metadata-only or attached package contract.
+    pub const fn packaging(&self) -> RoCratePackaging {
+        self.packaging
+    }
 
     fn native_id(&self, iri: &str) -> String {
         if iri == self.common.identity().dataset_iri() {
@@ -320,6 +483,7 @@ struct RawRoCrateConfig {
     profile_iri: String,
     metadata_descriptor_id: String,
     root_dataset_id: String,
+    packaging: RoCratePackaging,
 }
 
 impl<'de> Deserialize<'de> for RoCrateConfig {
@@ -335,6 +499,7 @@ impl<'de> Deserialize<'de> for RoCrateConfig {
             raw.profile_iri,
             raw.metadata_descriptor_id,
             raw.root_dataset_id,
+            raw.packaging,
         )
         .map_err(serde::de::Error::custom)
     }
@@ -347,6 +512,49 @@ impl<'de> Deserialize<'de> for RoCrateConfig {
 /// Returns a typed configuration, RDF interpretation, resource-limit, or JSON
 /// encoding failure with every representational loss in the outcome.
 pub fn project_ro_crate<D: DatasetView>(
+    view: &D,
+    config: &RoCrateConfig,
+) -> Result<ResearchObjectPackageProjection, ProjectionError> {
+    if config.packaging() != RoCratePackaging::MetadataOnly {
+        return Err(ProjectionError::configuration(
+            "attached RO-Crate projection requires an explicit payload carrier",
+        ));
+    }
+    project_ro_crate_metadata(view, config)
+}
+
+/// Project RDF 1.2 plus bounded payload artifacts into an attached RO-Crate 1.3.
+///
+/// # Errors
+///
+/// Requires attached packaging, standard crate-root identities, complete one-to-one
+/// local resource ownership, exact declared sizes, and sufficient package limits.
+pub fn project_ro_crate_with_assets<D: DatasetView>(
+    view: &D,
+    config: &RoCrateConfig,
+    assets: &RoCrateAssets,
+) -> Result<ResearchObjectPackageProjection, ProjectionError> {
+    require_attached_config(config)?;
+    let projection = project_research_object(view, RO_CRATE_PROFILE, config.common())?;
+    let document = encode_document(&projection.model, config)?;
+    validate_attached_assets(&projection.model, assets, config)?;
+    ensure_sound(&projection.loss_ledger, "rdf-1.2-dataset", RO_CRATE_PROFILE)?;
+    let bytes = canonical_json(&document, config.common().limits(), "RO-Crate 1.3 JSON-LD")?;
+    let preview = encode_preview(&document, assets, config)?;
+    let mut package = ProjectionPackage::new(config.common().limits());
+    package.insert(RO_CRATE_ARTIFACT, bytes)?;
+    package.insert(RO_CRATE_PREVIEW_ARTIFACT, preview)?;
+    for (path, asset) in assets.artifacts() {
+        package.insert(path, asset)?;
+    }
+    Ok(ResearchObjectPackageProjection {
+        package,
+        model: projection.model,
+        loss_ledger: projection.loss_ledger,
+    })
+}
+
+fn project_ro_crate_metadata<D: DatasetView>(
     view: &D,
     config: &RoCrateConfig,
 ) -> Result<ResearchObjectPackageProjection, ProjectionError> {
@@ -374,7 +582,18 @@ pub fn read_ro_crate(
     package: &ProjectionPackage,
     config: &RoCrateConfig,
 ) -> Result<ResearchObjectReadOutcome, ProjectionError> {
-    let bytes = require_artifact(package, RO_CRATE_ARTIFACT, config.common())?;
+    let bytes = match config.packaging() {
+        RoCratePackaging::MetadataOnly => {
+            require_artifact(package, RO_CRATE_ARTIFACT, config.common())?
+        }
+        RoCratePackaging::Attached => {
+            require_attached_config(config)?;
+            package.get(RO_CRATE_ARTIFACT).ok_or_else(|| {
+                ProjectionError::package("RO-Crate metadata artifact is missing")
+                    .at_path(RO_CRATE_ARTIFACT)
+            })?
+        }
+    };
     let value = parse_strict_json(
         bytes,
         config.common(),
@@ -385,6 +604,21 @@ pub fn read_ro_crate(
     let mut ledger = LossLedger::new();
     let model = decode_document(value, config, &contract, &mut ledger)?
         .normalize(config.common().policy())?;
+    if config.packaging() == RoCratePackaging::Attached {
+        let assets = RoCrateAssets::from_attached_package(package)?;
+        validate_attached_assets(&model, &assets, config)?;
+        let document = encode_document(&model, config)?;
+        let expected_preview = encode_preview(&document, &assets, config)?;
+        let actual_preview = package
+            .get(RO_CRATE_PREVIEW_ARTIFACT)
+            .expect("attached package extraction verified the preview member");
+        if actual_preview != expected_preview {
+            return Err(ProjectionError::integrity(
+                "RO-Crate preview does not match its deterministic metadata rendering",
+            )
+            .at_path(RO_CRATE_PREVIEW_ARTIFACT));
+        }
+    }
     ensure_sound(&ledger, RO_CRATE_PROFILE, "rdf-1.2-dataset")?;
     let dataset = lift_research_object(model.clone(), config.common())?;
     let dataset = normalize_lifted_jsonld(&dataset)?;
@@ -393,6 +627,170 @@ pub fn read_ro_crate(
         model,
         loss_ledger: ledger,
     })
+}
+
+fn require_attached_config(config: &RoCrateConfig) -> Result<(), ProjectionError> {
+    if config.packaging() != RoCratePackaging::Attached {
+        return Err(ProjectionError::configuration(
+            "payload projection requires attached RO-Crate packaging",
+        ));
+    }
+    if config.metadata_descriptor_id() != RO_CRATE_ARTIFACT {
+        return Err(ProjectionError::configuration(format!(
+            "attached RO-Crate metadata identity must be `{RO_CRATE_ARTIFACT}`"
+        )));
+    }
+    if config.root_dataset_id() != "./" {
+        return Err(ProjectionError::configuration(
+            "attached RO-Crate root dataset identity must be `./`",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_attached_assets(
+    model: &ResearchObjectModel,
+    assets: &RoCrateAssets,
+    config: &RoCrateConfig,
+) -> Result<(), ProjectionError> {
+    let mut local_resources = BTreeMap::<String, &ResearchResource>::new();
+    for resource in &model.resources {
+        let native_id = config.native_id(&resource.id);
+        if validate_absolute_iri(&native_id, "RO-Crate external resource identity").is_ok() {
+            if !resource.paths.is_empty() {
+                return Err(ProjectionError::integrity(format!(
+                    "attached RO-Crate external resource `{}` declares a local package path",
+                    resource.id
+                )));
+            }
+            continue;
+        }
+        validate_data_path(&native_id)?;
+        reject_reserved_asset_path(&native_id)?;
+        if !model.dataset.resources.contains(&resource.id) {
+            return Err(ProjectionError::integrity(format!(
+                "attached RO-Crate payload resource `{}` is absent from root hasPart",
+                resource.id
+            )));
+        }
+        if resource.paths.len() > 1
+            || resource
+                .paths
+                .first()
+                .is_some_and(|path| path != &native_id)
+        {
+            return Err(ProjectionError::integrity(format!(
+                "attached RO-Crate resource `{}` must declare at most its native payload path `{native_id}`",
+                resource.id
+            )));
+        }
+        let bytes = assets.get(&native_id).ok_or_else(|| {
+            ProjectionError::integrity(format!(
+                "attached RO-Crate resource `{}` has no payload artifact",
+                resource.id
+            ))
+            .at_path(&native_id)
+        })?;
+        if let Some(declared) = resource.byte_size
+            && declared != bytes.len() as u64
+        {
+            return Err(ProjectionError::integrity(format!(
+                "attached RO-Crate resource `{}` declares {declared} bytes but carries {}",
+                resource.id,
+                bytes.len()
+            ))
+            .at_path(&native_id));
+        }
+        if local_resources
+            .insert(native_id.clone(), resource)
+            .is_some()
+        {
+            return Err(ProjectionError::integrity(
+                "multiple RO-Crate resources claim one payload path",
+            )
+            .at_path(native_id));
+        }
+    }
+    for (path, _) in assets.artifacts() {
+        if !local_resources.contains_key(path) {
+            return Err(ProjectionError::integrity(
+                "RO-Crate payload artifact has no owning File entity",
+            )
+            .at_path(path));
+        }
+    }
+    Ok(())
+}
+
+fn encode_preview(
+    document: &Value,
+    assets: &RoCrateAssets,
+    config: &RoCrateConfig,
+) -> Result<Vec<u8>, ProjectionError> {
+    let graph = document
+        .get("@graph")
+        .and_then(Value::as_array)
+        .expect("RO-Crate encoder constructs an array graph");
+    let root = graph
+        .iter()
+        .find(|node| node.get("@id").and_then(Value::as_str) == Some(config.root_dataset_id()))
+        .expect("RO-Crate encoder constructs the configured root");
+    let title =
+        preview_text(root.get(config.vocabulary().term(RoCrateRole::Name))).unwrap_or("RO-Crate");
+    let description = preview_text(root.get(config.vocabulary().term(RoCrateRole::Description)));
+    let escaped_title = escape_xml_text(title)?;
+    let mut html = String::with_capacity(512 + assets.total_bytes().min(8_192));
+    html.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
+    html.push_str(
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>",
+    );
+    html.push_str(&escaped_title);
+    html.push_str(" - RO-Crate</title>\n<link rel=\"alternate\" type=\"application/ld+json\" href=\"ro-crate-metadata.json\">\n</head>\n<body>\n<main>\n<h1>");
+    html.push_str(&escaped_title);
+    html.push_str("</h1>\n");
+    if let Some(description) = description {
+        html.push_str("<p>");
+        html.push_str(&escape_xml_text(description)?);
+        html.push_str("</p>\n");
+    }
+    html.push_str("<h2>Data entities</h2>\n");
+    if assets.is_empty() {
+        html.push_str("<p>This crate has no attached data entities.</p>\n");
+    } else {
+        html.push_str("<ul>\n");
+        for (path, bytes) in assets.artifacts() {
+            let node = graph
+                .iter()
+                .find(|node| node.get("@id").and_then(Value::as_str) == Some(path))
+                .expect("attached asset validation matches every payload to a graph entity");
+            let label =
+                preview_text(node.get(config.vocabulary().term(RoCrateRole::Name))).unwrap_or(path);
+            html.push_str("<li><a href=\"");
+            html.push_str(&escape_xml_attribute(path)?);
+            html.push_str("\">");
+            html.push_str(&escape_xml_text(label)?);
+            html.push_str("</a> <span>(");
+            html.push_str(&bytes.len().to_string());
+            html.push_str(" bytes)</span></li>\n");
+        }
+        html.push_str("</ul>\n");
+    }
+    html.push_str("</main>\n</body>\n</html>\n");
+    Ok(html.into_bytes())
+}
+
+fn preview_text(value: Option<&Value>) -> Option<&str> {
+    let value = value?;
+    match value {
+        Value::String(text) => Some(text),
+        Value::Array(values) => values.first().and_then(|value| match value {
+            Value::String(text) => Some(text.as_str()),
+            Value::Object(object) => object.get("@value").and_then(Value::as_str),
+            _ => None,
+        }),
+        Value::Object(object) => object.get("@value").and_then(Value::as_str),
+        _ => None,
+    }
 }
 
 fn validate_native_id(value: &str, allow_dot_root: bool) -> Result<(), ProjectionError> {
@@ -1661,6 +2059,10 @@ mod tests {
         include_bytes!("../../../tests/fixtures/research-objects/ro-crate-1.3/golden.json");
 
     fn config() -> RoCrateConfig {
+        config_with_packaging(RoCratePackaging::MetadataOnly)
+    }
+
+    fn config_with_packaging(packaging: RoCratePackaging) -> RoCrateConfig {
         let roles = RESEARCH_ROLES
             .iter()
             .copied()
@@ -1706,8 +2108,26 @@ mod tests {
             "https://example.org/profiles/ro-crate-1.3",
             "ro-crate-metadata.json",
             "./",
+            packaging,
         )
         .expect("RO-Crate config")
+    }
+
+    fn attached_source() -> std::sync::Arc<purrdf_core::RdfDataset> {
+        let config = config();
+        let input = String::from_utf8(INPUT.to_vec())
+            .expect("fixture UTF-8")
+            .replace("files/train.csv", "data/train.csv");
+        let mut value: Value = serde_json::from_str(&input).expect("fixture JSON");
+        let graph = value["@graph"].as_array_mut().expect("graph");
+        for node in graph {
+            if node["@id"] == "data/train.csv" {
+                node["contentSize"] = Value::Number(3_u64.into());
+            }
+        }
+        read_ro_crate(&package(serde_json::to_vec(&value).expect("JSON")), &config)
+            .expect("attached source")
+            .dataset
     }
 
     fn test_term(role: RoCrateRole) -> &'static str {
@@ -1823,6 +2243,7 @@ mod tests {
                 config.profile_iri(),
                 "../metadata.json",
                 "./",
+                config.packaging(),
             )
             .is_err()
         );
@@ -1838,6 +2259,7 @@ mod tests {
                 config.profile_iri(),
                 config.metadata_descriptor_id(),
                 config.root_dataset_id(),
+                config.packaging(),
             )
             .is_err()
         );
@@ -1871,5 +2293,107 @@ mod tests {
             "https://example.org/profiles/wrong",
         );
         assert!(read_ro_crate(&package(drift), &config).is_err());
+    }
+
+    #[test]
+    fn attached_crate_is_byte_stable_self_contained_and_round_trips() {
+        let config = config_with_packaging(RoCratePackaging::Attached);
+        let source = attached_source();
+        let assets = RoCrateAssets::from_artifacts(
+            config.common().limits(),
+            [("data/train.csv", b"cat".as_slice())],
+        )
+        .expect("assets");
+
+        let first = project_ro_crate_with_assets(source.as_ref(), &config, &assets)
+            .expect("attached project");
+        let second = project_ro_crate_with_assets(source.as_ref(), &config, &assets)
+            .expect("attached project repeat");
+        assert_eq!(first.package, second.package);
+        assert_eq!(first.package.get("data/train.csv"), Some(b"cat".as_slice()));
+        let preview = first
+            .package
+            .get(RO_CRATE_PREVIEW_ARTIFACT)
+            .expect("preview");
+        assert!(preview.starts_with(b"<!doctype html>\n"));
+        assert!(String::from_utf8_lossy(preview).contains("href=\"data/train.csv\""));
+
+        let read = read_ro_crate(&first.package, &config).expect("attached read");
+        let rewritten = project_ro_crate_with_assets(read.dataset.as_ref(), &config, &assets)
+            .expect("attached rewrite");
+        assert_eq!(first.package, rewritten.package);
+        assert_eq!(
+            RoCrateAssets::from_attached_package(&first.package)
+                .expect("extract assets")
+                .to_ustar()
+                .expect("asset archive"),
+            assets.to_ustar().expect("input asset archive")
+        );
+    }
+
+    #[test]
+    fn attached_crate_rejects_payload_contract_drift() {
+        let config = config_with_packaging(RoCratePackaging::Attached);
+        let source = attached_source();
+        let missing = RoCrateAssets::new(config.common().limits());
+        assert!(project_ro_crate_with_assets(source.as_ref(), &config, &missing).is_err());
+
+        let extra = RoCrateAssets::from_artifacts(
+            config.common().limits(),
+            [
+                ("data/train.csv", b"cat".as_slice()),
+                ("data/extra.csv", b"x".as_slice()),
+            ],
+        )
+        .expect("extra assets");
+        assert!(project_ro_crate_with_assets(source.as_ref(), &config, &extra).is_err());
+
+        let wrong_size = RoCrateAssets::from_artifacts(
+            config.common().limits(),
+            [("data/train.csv", b"cats".as_slice())],
+        )
+        .expect("wrong-size asset");
+        assert!(project_ro_crate_with_assets(source.as_ref(), &config, &wrong_size).is_err());
+
+        for reserved in [
+            RO_CRATE_ARTIFACT,
+            RO_CRATE_PREVIEW_ARTIFACT,
+            "ro-crate-preview_files/style.css",
+        ] {
+            assert!(
+                RoCrateAssets::from_artifacts(
+                    config.common().limits(),
+                    [(reserved, b"x".as_slice())]
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn attached_reader_rejects_preview_drift() {
+        let config = config_with_packaging(RoCratePackaging::Attached);
+        let source = attached_source();
+        let assets = RoCrateAssets::from_artifacts(
+            config.common().limits(),
+            [("data/train.csv", b"cat".as_slice())],
+        )
+        .expect("assets");
+        let projected = project_ro_crate_with_assets(source.as_ref(), &config, &assets)
+            .expect("attached project");
+        let mut drifted = ProjectionPackage::new(config.common().limits());
+        for (path, bytes) in projected.package.artifacts() {
+            drifted
+                .insert(
+                    path,
+                    if path == RO_CRATE_PREVIEW_ARTIFACT {
+                        b"<!doctype html>\n".as_slice()
+                    } else {
+                        bytes
+                    },
+                )
+                .expect("drift package");
+        }
+        assert!(read_ro_crate(&drifted, &config).is_err());
     }
 }

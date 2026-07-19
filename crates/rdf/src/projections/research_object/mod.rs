@@ -40,6 +40,7 @@ pub use model::{
     ResearchObjectModel, ResearchRecordSet, ResearchResource, ResearchText, ResearchValue,
 };
 pub use ro_crate::{
-    RO_CRATE_ARTIFACT, RO_CRATE_PROFILE, RO_CRATE_ROLES, RoCrateConfig, RoCrateRole,
-    RoCrateVocabulary, project_ro_crate, read_ro_crate,
+    RO_CRATE_ARTIFACT, RO_CRATE_PREVIEW_ARTIFACT, RO_CRATE_PREVIEW_FILES_PREFIX, RO_CRATE_PROFILE,
+    RO_CRATE_ROLES, RoCrateAssets, RoCrateConfig, RoCratePackaging, RoCrateRole, RoCrateVocabulary,
+    project_ro_crate, project_ro_crate_with_assets, read_ro_crate,
 };
